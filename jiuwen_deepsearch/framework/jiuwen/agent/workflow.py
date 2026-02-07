@@ -585,7 +585,7 @@ def parse_endnode_content(chunk: CustomSchema) -> dict | None:
     if getattr(chunk, "agent", None) != NodeId.END.value:
         return {}
     content = getattr(chunk, "content", "")
-    if not content or content == "ALL END":
+    if not content or content == "ALL END" or content == "SECTION END":
         return {}
 
     try:

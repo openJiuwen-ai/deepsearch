@@ -7,6 +7,9 @@ from typing import Optional
 
 from jiuwen_deepsearch.common.exception import CustomValueException
 from jiuwen_deepsearch.common.status_code import StatusCode
+from jiuwen_deepsearch.config.config import Config
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NODE_DEBUG_LOGGER
+from jiuwen_deepsearch.utils.debug_utils.node_debug import setup_debug_logger
 from jiuwen_deepsearch.utils.log_utils.log_common import setup_common_logger
 from jiuwen_deepsearch.utils.log_utils.log_metrics import setup_metrics_logger
 from jiuwen_deepsearch.utils.log_utils.log_interface import setup_interface_logger
@@ -57,6 +60,16 @@ class LogManager:
             max_bytes=max_bytes,
             backup_count=backup_count
         )
+        # 节点格式化debug日志
+        node_debug_enable = Config().service_config.model_dump().get("node_debug_enable", False)
+        if node_debug_enable:
+            setup_debug_logger(
+                name=NODE_DEBUG_LOGGER,
+                log_dir=log_dir,
+                max_bytes=max_bytes,
+                backup_count=backup_count,
+                is_sensitive=is_sensitive
+            )
 
         cls._is_sensitive = is_sensitive
         cls._initialized = True

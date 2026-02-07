@@ -22,7 +22,7 @@ from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode, init_ro
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder import build_info_collector_sub_graph
 from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.section_state import SectionState
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Message, StepType, Step, SubReportContent, Plan
-from jiuwen_deepsearch.utils.debug_utils.debug_logger import add_debug_log_wrapper, NodeType
+from jiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType
 from jiuwen_deepsearch.common.common_constants import CHINESE
 from jiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager

@@ -47,3 +47,6 @@ class NodeId(enum.Enum):
 
     # 模板流程
     TEMPLATE = "template"
+
+
+NODE_DEBUG_LOGGER = "node_debug_logger"

@@ -18,7 +18,7 @@ from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.editor_tea
     build_editor_team_workflow
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Section, Outline, Report, SubReport, \
     SubReportContent
-from jiuwen_deepsearch.utils.debug_utils.debug_logger import add_debug_log, LogType, NodeType
+from jiuwen_deepsearch.utils.debug_utils.node_debug import NodeType, add_debug_log_wrapper
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from jiuwen_deepsearch.utils.common_utils.stream_utils import StreamEvent, MessageType
@@ -105,26 +105,24 @@ class EditorTeamNode(BaseNode):
         results = self._post_handle(inputs, updated_state, runtime, context)
         return results
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
-        updating_results = {
-            "search_context.current_report": algorithm_output.get("report"),
-            "search_context.current_outline": algorithm_output.get("outline"),
-            "search_context.history_outlines": algorithm_output.get("history_outlines"),
-            "search_context.history_reports": algorithm_output.get("history_reports"),
+    def _post_handle(self, inputs: Input, state: dict, runtime: Runtime, context: Context):
+        algorithm_output = {
+            "search_context.current_report": state.get("report"),
+            "search_context.current_outline": state.get("outline"),
+            "search_context.history_outlines": state.get("history_outlines"),
+            "search_context.history_reports": state.get("history_reports"),
         }
-        runtime.update_global_state(updating_results)
+        runtime.update_global_state(algorithm_output)
 
         # 添加debug日志
-        pre_node_debug = runtime.get_global_state("search_context.debug_pre_step") or ""
-        cur_node = NodeId.EDITOR_TEAM.value
-        add_debug_log(pre_node_debug, cur_node, 0, LogType.OUTPUT.value, NodeType.MAIN.value,
-                      str(updating_results).replace("\\n", "\n"))
-        runtime.update_global_state({"search_context.debug_pre_step": cur_node})
+        add_debug_log_wrapper(runtime, NodeId.EDITOR_TEAM.value, 0, NodeType.MAIN.value,
+                              output_content=str(algorithm_output).replace("\\n", "\n"))
 
         next_node = NodeId.REPORTER.value
-        warning_info = algorithm_output.get('warning_info', '')
-        exception_info = algorithm_output.get('exception_info', '')
-        current_report = algorithm_output.get("report")
+        current_report: Report = state.get("report")
+        warning_info = state.get('warning_info', '')
+        exception_info = state.get('exception_info', '')
+
         if not current_report or not current_report.sub_reports or not any(
                 sub_report.content.sub_report_content_text.strip() for sub_report in current_report.sub_reports
         ):

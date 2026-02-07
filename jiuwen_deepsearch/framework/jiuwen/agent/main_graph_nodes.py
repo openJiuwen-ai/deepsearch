@@ -21,7 +21,7 @@ from jiuwen_deepsearch.common.status_code import StatusCode
 from jiuwen_deepsearch.config.config import Config, WebSearchEngineConfig, LocalSearchEngineConfig
 from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import SearchContext, Message, Outline
-from jiuwen_deepsearch.utils.debug_utils.debug_logger import add_debug_log_wrapper, NodeType
+from jiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType
 from jiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH, MAX_QUERY_LENGTH, \
     FINISH_TASK_FEEDBACK
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager

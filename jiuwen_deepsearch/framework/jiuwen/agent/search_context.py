@@ -156,4 +156,4 @@ class SearchContext(BaseModel):
 
     # 4、其他参数
     final_result: FinalResult = Field(default_factory=FinalResult, description="最终返回前端的结果")
-    debug_pre_step: str = Field(default="", description="前一节点的debug日志")
+    debug_pre_node: str = Field(default="", description="添加格式化debug日志的前一节点")

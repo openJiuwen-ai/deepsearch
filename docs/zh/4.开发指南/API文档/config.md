@@ -273,7 +273,6 @@ class jiuwen_deepsearch.config.config.ServiceConfig()
 
 ### Debug参数
 - **debug_enable**(bool, 可选)：节点调试开关。默认值：`False`。
-- **debug_log_file_dir**(str, 可选)：节点debug日志存储路径。默认值：`"./logs/debug_log"`。
 
 ### Visualization参数
 - **visualization_enable**(bool, 可选)：报告插图可视化开关。默认值：`True`。
