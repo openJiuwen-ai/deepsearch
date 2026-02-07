@@ -284,16 +284,7 @@ class XYChartMermaidGenerator:
         raw = (str(label) if label is not None else "").strip().replace('"', "'")
         if not raw:
             return "Item"
-        if re.search(r"[\u4e00-\u9fff]", raw):
-            return raw
-        normalized = re.sub(r"\s+", " ", raw).strip()
-        if re.search(r"[A-Za-z]", normalized) and len(normalized) > cls.LABEL_MAX_LEN:
-            words = [w for w in normalized.split(" ") if w]
-            abbr = "".join(
-                w[0].upper() if w[0].isalpha() else w[0] for w in words
-            ).strip()
-            return (abbr or normalized)[: cls.LABEL_MAX_LEN]
-        return normalized
+        return raw
 
     @classmethod
     def _label_weight_length(cls, label: str) -> float:
