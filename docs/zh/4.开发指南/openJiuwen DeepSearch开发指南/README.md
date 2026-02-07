@@ -1,0 +1,237 @@
+# 初始化DeepResearchAgent配置
+---
+配置参数类`Config`包括两种类型的参数变量，一是`AgentConfig`类，这些参数是通过对外接口，用户可修改的配置参数；二是`ServiceConfig`类，这些参数涵盖系统各模块的主要核心配置参数，且已配置默认值。
+
+初始化配置参数时，可根据功能需求，对`AgentConfig`的参数，进行赋值。
+
+```python
+from jiuwen_deepsearch.config.config import Config
+# 实例化AgentConfig
+agent_config = Config().agent_config.model_dump()
+# 对必填项进行赋值
+# 1. 配置LLM
+agent_config["llm_config"]["model_name"] = ""
+agent_config["llm_config"]["model_type"] = ""
+agent_config["llm_config"]["base_url"] = ""
+agent_config["llm_config"]["api_key"] = ""
+# 2. 配置网络搜索引擎
+agent_config["web_search_engine_config"]["search_engine_name"] = ""
+agent_config["web_search_engine_config"]["search_url"] = ""
+agent_config["web_search_engine_config"]["search_api_key"] = ""
+# 3. 配置本地搜索引擎（本地知识库）
+agent_config["local_search_engine_config"]["search_engine_name"] = ""
+agent_config["local_search_engine_config"]["search_url"] = ""
+agent_config["local_search_engine_config"]["search_api_key"] = ""
+```
+
+## 大模型配置说明
+---
+
+openJiuwen-DeepSearch 支持接入两种类型模型：
+
+ - 硅基流动厂商系列模型，且遵循OpenAI接口格式。`llm_config`的`model_type`参数必须赋值为siliconflow。
+ - OpenAI格式模型，模型服务按照标准OpenAI格式封装实现。`llm_config`的`model_type`参数必须赋值为openai。
+
+> 说明：接入的系列模型，需要支持关闭思考模式能力，或者具备非思考模式能力。
+
+> 说明：用户需要自行前往硅基流动或者OpenAI的官网注册账号，以便获取模型广场中可用模型的api_key、模型名称model_name和模型调用的URL请求地址base_url。
+
+## 网络搜索引擎配置说明
+---
+
+openJiuwen-DeepSearch 支持接入两种类型网络搜索引擎：
+
+ - Google搜索引擎。`web_search_engine_config`的`search_engine_name`参数必须赋值为google。
+ - Tavily搜索引擎。`web_search_engine_config`的`search_engine_name`参数必须赋值为tavily。
+
+> 说明：用户需要自行前往谷歌搜索或者Tavily的官网注册账号，以便获取可用搜索引擎的search_api_key和搜索引擎调用的URL请求地址search_url。
+
+## 本地搜索引擎配置说明
+---
+
+openJiuwen-DeepSearch 支持接入一种类型本地搜索引擎：
+
+ - openJiuwen-core提供的本地知识库搜索引擎。`web_search_engine_config`的`search_engine_name`参数必须赋值为native。【TODO链接到core的本地知识库文档】
+
+## ssl证书配置说明
+---
+在访问LLM大模型服务、以及网络搜索引擎服务时，openJiuwen-DeepSearch提供ssl证书配置能力，如需启用，需要在环境变量中，打开`LLM_SSL_VERIFY`设置为`true`，并提供大模型服务访问的证书`LLM_SSL_CERT`。同理，打开`TOOL_SSL_VERIFY`设置为`true`时，需要提供网络搜索服务访问的证书`LLM_SSL_CERT`。
+
+如果不需要启用ssl功能，需显式关闭环境变量中`LLM_SSL_VERIFY`和`TOOL_SSL_VERIFY`，设置为`false`，此时不需要提供对应的证书。
+
+```python
+import os
+os.environ["LLM_SSL_VERIFY"] = "false"
+os.environ["LLM_SSL_CERT"] = ""
+os.environ["TOOL_SSL_VERIFY"] = "false"
+os.environ["LLM_SSL_CERT"] = ""
+```
+
+# 实例化DeepResearchAgent类
+---
+`DeepResearchAgent`是系统基于openJiuwen开发框架，开发并预置的深度研究智能体。能够根据用户查询进行研究报告生成。
+
+## 通过AgentFactory方式创建
+---
+
+`AgentFactory`类支持根据配置`agent_config`，实例化`DeepResearchAgent`类，获取`DeepResearchAgent`对象。
+
+```python
+from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+agent_factory = AgentFactory()
+agent = agent_factory.create_agent(agent_config)
+```
+
+获取的agent是一个`DeepResearchAgent`实例。
+
+## 通过构造函数方式创建
+---
+直接通过`DeepResearchAgent`的构造函数，获取实例化对象。
+
+```python
+from jiuwen_deepsearch.framework.jiuwen.agent.workflow import DeepResearchAgent
+agent = DeepResearchAgent(agent_config)
+```
+
+# 生成研究报告
+---
+
+`DeepResearchAgent`可以根据用户查询，进行深度研究和分析规划，通过网络搜索等任务完成信息收集，并生成研究报告。用户的输入，可以分为三种情况：
+ - 用户查询，描述用户的需求或者问题。
+ - 用户查询和用户已有模板，期望系统遵循已有模板进行研究报告生成。
+ - 用户查询和用户已有报告，期望系统遵循已有报告的章节格式进行研究报告生成。
+
+## 根据用户查询生成研究报告
+---
+
+`DeepResearchAgent`的`run`函数，可接收用户查询`message`，数据类型是`str`。`conversation_id`参数是会话标识id。深度研究过程，遵循`agent_config`的参数配置。
+
+`run`函数按照流式数据的模式，逐帧输出系统内部结果。每帧数据是`dict`类型，key值`agent`记录当前帧数据的生产者角色；key值`content`来记录当前帧数据的具体内容。最终的研究报告生产者角色为`NodeId.END.value`。
+
+```python
+import json
+import uuid
+from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+
+agent_factory = AgentFactory()
+agent = agent_factory.create_agent(agent_config)
+
+message = "用户原始查询问题"
+conversation_id = str(uuid.uuid4())
+
+async for chunk in agent.run(message=message, conversation_id=conversation_id, agent_config=agent_config):
+    chunk_content = json.loads(chunk)
+    if chunk.get("agent") == NodeId.END.value:
+        final_result = json.loads(chunk.get("content", ""))
+        # 获取最终研究报告内容
+        report = final_result.get("response_content")
+```
+
+## 根据用户查询和用户已有模板生成研究报告
+---
+
+当配置参数`agent_config`中，开启遵从模板模式时，用户同时输入已准备好的模板文件内容，系统生成的研究报告，可以遵从用户提供的模板文件的要求。
+
+用户提供的模板文件，是期望生成研究报告的章节大纲以及各章节的核心内容规范。模板文件格式支持markdown类型，模板内容需遵循以下要求：
+ - 各一级标题的内容是对目标研究报告的一级章节内容的简要描述。
+ - 各二级标题的内容是对目标研究报告中二级章节的内容简要描述。
+ - 功能概述是对目标研究报告的具体内容的进一步描述。
+ - 是否核心章节是对目标研究报告的当前章节是否关键章节的标识，核心章节为系统重点撰写的章节。
+
+以下是模板文件实例：
+```markdown
+# 企业基本情况
+> 功能概述：详细阐述目标企业的具体情况
+> 是否核心章节：true
+
+## 1.1 基础信息
+> 功能概述：罗列该企业的各项基础信息。
+
+## 1.2 经营范围和主营业务
+> 功能概述：详细列示并解析企业经核准的法定经营范围，并在此基础上精准识别其实际从事的核心主营业务。
+
+## 1.3 股权结构与关联企业
+> 功能概述：详细列明各股东的持股比例、出资方式及股东性质，梳理并披露重要关联企业。
+
+# 企业经营与行业分析
+> 功能概述：详细阐述目标企业经营与所在的行业分析
+> 是否核心章节：true
+
+## 2.1 宏观环境与区域经济分析
+> 功能概述：行业宏观环境（所在行业大类和中类行业宏观环境分析）、区域经济与产业集群。
+
+## 2.2 行业发展现状与前景
+> 功能概述：所在行业大类和中类的行业发展现状与前景分析。
+
+## 2.3 企业竞争力分析
+> 功能概述：包括生产能力与规模、技术研发实力、市场地位与品牌、核心客户结构
+
+## 2.4 上下游产业链分析
+> 功能概述：上游供应链分析和下游客户结构分析
+```
+
+配置参数`agent_config`中，由`has_template`控制是否开启模板模式，默认值`False`，需要显式开启。
+
+`DeepResearchAgent`的`generate_template`函数，可以对用户提供的模板文件进行规范化校验和处理。其中，入参`is_template`标识用户提供的文件是否为模板文件，此处取值为`True`。
+
+```python
+import base64
+import os
+from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+
+file_name = "用户提供的模板文件名，以md后缀结尾"
+file_stream = "用户提供的模板文件内容的base64编码"
+
+# 配置开启模板模式
+agent_config["has_template"] = True
+
+agent_factory = AgentFactory()
+agent = agent_factory.create_agent(agent_config)
+
+result = await agent.generate_template(file_name=file_name, file_stream=file_stream, is_template=True, agent_config=agent_config)
+
+user_template_content = result["template_content"]
+```
+
+`DeepResearchAgent`的`run`函数，参数`report_template`可接收系统规范化后的模板文件内容`user_template_content`，数据类型是`str`。
+
+```python
+import json
+import uuid
+from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+
+message = "用户原始查询问题"
+conversation_id = str(uuid.uuid4())
+
+# 配置开启模板模式
+agent_config["has_template"] = True
+
+agent_factory = AgentFactory()
+agent = agent_factory.create_agent(agent_config)
+
+async for chunk in agent.run(message=message, conversation_id=conversation_id, agent_config=agent_config,
+                             report_template=user_template_content):
+    chunk_content = json.loads(chunk)
+    if chunk.get("agent") == NodeId.END.value:
+        final_result = json.loads(chunk.get("content", ""))
+        # 获取最终研究报告内容
+        report = final_result.get("response_content")
+```
+
+## 根据用户查询和用户已有报告生成研究报告
+---
+
+当配置参数`agent_config`中，开启遵从模板模式时，用户同时输入已准备好的样例报告文件内容，系统可以先根据用户提供的样例报告文件，提取出模板内容，再遵从模板内容要求，进行研究报告生成。
+
+用户提供的样例报告文件，与期望生成研究报告遵循相同模板。样例报告文件格式支持markdown、docx、pdf、html。
+
+与上一小节“根据用户查询和用户已有模板生成研究报告”不同的是，`DeepResearchAgent`的`generate_template`函数，入参`is_template`标识应取值为`False`，标识用户提供的文件为样例报告文件。
+```python
+result = await agent.generate_template(file_name=file_name, file_stream=file_stream, is_template=False, agent_config=agent_config)
+
+user_template_content = result["template_content"]
+```
+
+提取出规范化后的模板文件内容`user_template_content`之后，继续通过`DeepResearchAgent`的`run`函数，进行研究报告生成。

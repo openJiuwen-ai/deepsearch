@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>流程图可视化（支持 node_type）</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #f9f9f9;
+    }
+    #fileInput {
+      margin-bottom: 15px;
+    }
+    #error {
+      color: red;
+      margin-top: 10px;
+      display: none;
+    }
+    .graph-container {
+      position: relative;
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    .lines {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
+    #levels {
+      position: relative;
+      z-index: 2;
+    }
+    .level {
+      display: flex;
+      gap: 30px;
+      margin-bottom: 50px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .node {
+      flex: 1;
+      min-width: 240px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      position: relative;
+      transition: background-color 0.2s;
+    }
+
+    /* 根据 node_type 设置背景色 */
+    .node.node-main {
+      background-color: #e3f2fd; /* 浅蓝 */
+      border-left: 4px solid #2196f3;
+    }
+    .node.node-sub {
+      background-color: #f1f8e9; /* 浅绿 */
+      border-left: 4px solid #7cb342;
+    }
+
+    .node-title {
+      font-weight: bold;
+      margin-bottom: 6px;
+      color: #333;
+      text-align: center;
+      font-size: 16px;
+    }
+
+    /* 新增：节点类型标识文字 */
+    .node-type-label {
+      font-size: 12px;
+      margin-bottom: 8px;
+      text-align: center;
+      font-weight: normal;
+    }
+    .node-type-label.default {
+      color: #1976d2;
+    }
+    .node-type-label.subnode {
+      color: #689f38;
+    }
+
+    details > summary {
+      list-style: none;
+      cursor: pointer;
+      text-align: center;
+      color: #007bff;
+      text-decoration: underline;
+      margin: 6px 0;
+      font-size: 14px;
+    }
+    details > summary::-webkit-details-marker {
+      display: none;
+    }
+    .content-area {
+      margin-top: 8px;
+    }
+    .log-item {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 14px;
+      line-height: 1.6;
+      margin: 8px 0;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      background: #f8f9fa;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+    .tab {
+      margin-right: 8px;
+      padding: 6px 12px;
+      background: #e9ecef;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .tab.active {
+      background: #007bff;
+      color: white;
+      border-color: #007bff;
+    }
+  </style>
+</head>
+<body>
+
+<input type="file" id="fileInput" accept=".txt,.log" />
+<div id="error"></div>
+<div id="tabs"></div>
+
+<div class="graph-container">
+  <svg class="lines" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div id="levels"></div>
+</div>
+
+<script>
+  let graphs = [];
+  let currentGraphIndex = -1;
+  let nodeMap = new Map();
+  let resizeObserver = null;
+
+  function getValidPreStep(pre_step) {
+    if (pre_step == null || pre_step === '' || pre_step === 'null' || pre_step === 'undefined') {
+      return 'start';
+    }
+    return String(pre_step);
+  }
+
+  function clearAll() {
+    graphs = [];
+    currentGraphIndex = -1;
+    nodeMap.clear();
+    document.getElementById('tabs').innerHTML = '';
+    document.getElementById('levels').innerHTML = '';
+    const svg = document.querySelector('.lines');
+    if (svg) svg.innerHTML = '';
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
+  }
+
+  document.getElementById('fileInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    clearAll();
+
+    const errorDiv = document.getElementById('error');
+    errorDiv.style.display = 'none';
+
+    try {
+      const text = await file.text();
+      const lines = text.split('\n').filter(line => line.trim() !== '');
+
+      const groups = {};
+
+      for (const line of lines) {
+        let log;
+        try {
+          log = JSON.parse(line);
+        } catch (err) {
+          throw new Error(`JSON 解析失败: ${line.substring(0, 60)}...`);
+        }
+
+        const { pre_step, cur_step, message_id, type, timestamp, content, node_type } = log;
+        if (cur_step == null || message_id == null || type == null || content == null) {
+          throw new Error(`缺少必要字段: ${JSON.stringify(log)}`);
+        }
+
+        const normalizedNodeType = (node_type === 'sub') ? 'sub' : 'main';
+
+        if (type !== 'input' && type !== 'output') continue;
+
+        const key = `${String(cur_step)}|${String(type)}|${String(message_id)}`;
+        if (!groups[key]) {
+          groups[key] = {
+            cur_step: String(cur_step),
+            type: String(type),
+            pre_step: getValidPreStep(pre_step),
+            node_type: normalizedNodeType,
+            parts: []
+          };
+        }
+        groups[key].parts.push({
+          ts: Number(timestamp),
+          content: String(content)
+        });
+      }
+
+      const stepData = {};
+
+      const allSteps = new Set();
+      for (const group of Object.values(groups)) {
+        allSteps.add(group.cur_step);
+      }
+
+      for (const step of allSteps) {
+        stepData[step] = { from: 'start', inputs: [], outputs: [], node_type: 'main' };
+      }
+
+      for (const group of Object.values(groups)) {
+        const fullContent = group.parts
+          .sort((a, b) => a.ts - b.ts)
+          .map(p => p.content)
+          .join('');
+
+        stepData[group.cur_step].from = group.pre_step;
+        stepData[group.cur_step].node_type = group.node_type;
+
+        if (group.type === 'input') {
+          stepData[group.cur_step].inputs.push(fullContent);
+        } else if (group.type === 'output') {
+          stepData[group.cur_step].outputs.push(fullContent);
+        }
+      }
+
+      const allFroms = new Set();
+      for (const data of Object.values(stepData)) {
+        if (data.from && data.from !== 'start') {
+          allFroms.add(data.from);
+        }
+      }
+      for (const from of allFroms) {
+        if (!stepData[from]) {
+          stepData[from] = { from: 'start', inputs: [], outputs: [], node_type: 'main' };
+        }
+      }
+      if (!stepData['start']) {
+        stepData['start'] = { from: null, inputs: [], outputs: [], node_type: 'main' };
+      }
+
+      const allNodes = Object.keys(stepData);
+      const graph = {};
+      allNodes.forEach(node => graph[node] = []);
+      for (const [node, data] of Object.entries(stepData)) {
+        if (data.from && stepData[data.from]) {
+          graph[data.from].push(node);
+        }
+      }
+
+      const levelMap = new Map();
+      const queue = ['start'];
+      levelMap.set('start', 0);
+      while (queue.length > 0) {
+        const node = queue.shift();
+        for (const child of graph[node] || []) {
+          if (!levelMap.has(child)) {
+            levelMap.set(child, levelMap.get(node) + 1);
+            queue.push(child);
+          }
+        }
+      }
+
+      let maxLevel = Math.max(...levelMap.values());
+      for (const node of allNodes) {
+        if (!levelMap.has(node)) {
+          levelMap.set(node, ++maxLevel);
+        }
+      }
+
+      const levels = {};
+      for (const [node, level] of levelMap.entries()) {
+        if (!levels[level]) levels[level] = [];
+        levels[level].push({
+          id: node,
+          name: node,
+          from: stepData[node]?.from || null,
+          inputs: stepData[node]?.inputs || [],
+          outputs: stepData[node]?.outputs || [],
+          node_type: stepData[node]?.node_type || 'main'
+        });
+      }
+
+      const sortedLevels = Object.entries(levels)
+        .map(([level, nodes]) => ({ level: parseInt(level), nodes }))
+        .sort((a, b) => a.level - b.level);
+
+      graphs = [{ id: 'graph-1', name: '流程图 1', levels: sortedLevels }];
+      renderTabs();
+      if (graphs.length > 0) switchGraph(0);
+
+      e.target.value = '';
+
+    } catch (err) {
+      console.error(err);
+      errorDiv.textContent = '错误: ' + (err.message || err);
+      errorDiv.style.display = 'block';
+    }
+  });
+
+  function renderTabs() {
+    const tabsDiv = document.getElementById('tabs');
+    tabsDiv.innerHTML = '';
+    graphs.forEach((graph, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'tab';
+      btn.textContent = graph.name;
+      btn.onclick = () => switchGraph(i);
+      if (i === currentGraphIndex) btn.classList.add('active');
+      tabsDiv.appendChild(btn);
+    });
+  }
+
+  function switchGraph(index) {
+    currentGraphIndex = index;
+    renderGraph(graphs[index]);
+    renderTabs();
+  }
+
+  function renderGraph(graphData) {
+    const levelsDiv = document.getElementById('levels');
+    const svg = document.querySelector('.lines');
+    levelsDiv.innerHTML = '';
+    svg.innerHTML = '';
+    nodeMap.clear();
+
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+    }
+
+    if (!graphData || !graphData.levels) {
+      levelsDiv.innerHTML = '<p>无数据</p>';
+      return;
+    }
+
+    resizeObserver = new ResizeObserver(() => {
+      drawLines(graphData);
+    });
+
+    graphData.levels.forEach(levelGroup => {
+      const levelDiv = document.createElement('div');
+      levelDiv.className = 'level';
+      levelGroup.nodes.forEach(node => {
+        const nodeDiv = document.createElement('div');
+        const nodeTypeClass = node.node_type === 'sub' ? 'node-sub' : 'node-main';
+        nodeDiv.className = `node ${nodeTypeClass}`;
+        nodeDiv.dataset.id = node.id;
+
+        let contentHtml = '';
+        if (node.inputs.length === 0 && node.outputs.length === 0) {
+          contentHtml = '<div class="content-area"><div class="log-item">（无内容）</div></div>';
+        } else {
+          contentHtml = '<div class="content-area">';
+          node.inputs.forEach((input, i) => {
+            contentHtml += `<div class="log-item"> input ${i + 1}:\n${input}</div>`;
+          });
+          node.outputs.forEach((output, i) => {
+            contentHtml += `<div class="log-item"> output ${i + 1}:\n${output}</div>`;
+          });
+          contentHtml += '</div>';
+        }
+
+        // 添加“主节点”/“子节点”标签
+        const nodeTypeLabel = node.node_type === 'sub' ? '子节点' : '主节点';
+        const nodeTypeLabelClass = node.node_type === 'sub' ? 'sub' : 'main';
+
+        nodeDiv.innerHTML = `
+          <div class="node-title">${node.name}</div>
+          <div class="node-type-label ${nodeTypeLabelClass}">${nodeTypeLabel}</div>
+          <details>
+            <summary>查看日志</summary>
+            ${contentHtml}
+          </details>
+        `;
+
+        levelDiv.appendChild(nodeDiv);
+        nodeMap.set(node.id, nodeDiv);
+        resizeObserver.observe(nodeDiv);
+
+        const details = nodeDiv.querySelector('details');
+        if (details) {
+          details.addEventListener('toggle', () => {
+            setTimeout(() => drawLines(graphData), 0);
+          });
+        }
+      });
+      levelsDiv.appendChild(levelDiv);
+    });
+
+    setTimeout(() => drawLines(graphData), 100);
+  }
+
+  function drawLines(graphData) {
+    const svg = document.querySelector('.lines');
+    svg.innerHTML = '';
+
+    const container = svg.parentElement;
+    const containerRect = container.getBoundingClientRect();
+    const containerTop = containerRect.top + window.scrollY;
+    const containerLeft = containerRect.left + window.scrollX;
+
+    const edges = [];
+    graphData.levels.forEach(levelGroup => {
+      levelGroup.nodes.forEach(node => {
+        if (node.from && nodeMap.has(node.from) && nodeMap.has(node.id)) {
+          edges.push({ from: node.from, to: node.id });
+        }
+      });
+    });
+
+    edges.forEach(edge => {
+      const fromEl = nodeMap.get(edge.from);
+      const toEl = nodeMap.get(edge.to);
+      if (!fromEl || !toEl) return;
+
+      const fromRect = fromEl.getBoundingClientRect();
+      const toRect = toEl.getBoundingClientRect();
+
+      const x1 = fromRect.left + fromRect.width / 2 - containerLeft;
+      const y1 = fromRect.bottom - containerTop;
+      const x2 = toRect.left + toRect.width / 2 - containerLeft;
+      const y2 = toRect.top - containerTop;
+
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', x1);
+      line.setAttribute('y1', y1);
+      line.setAttribute('x2', x2);
+      line.setAttribute('y2', y2);
+      line.setAttribute('stroke', '#6c757d');
+      line.setAttribute('stroke-width', '2');
+      svg.appendChild(line);
+    });
+  }
+</script>
+
+</body>
+</html>

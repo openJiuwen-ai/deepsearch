@@ -1,0 +1,85 @@
+[project]
+name = "openjiuwen-deepsearch"
+version = "0.2.0"
+requires-python = "==3.11.*"
+
+# SDK依赖
+dependencies = [
+    'Jinja2==3.1.6',
+    'json_repair==0.52.4',
+    'python-docx==1.2.0',
+    'tenacity==8.5.0',
+    'pypdfium2==4.30.0',
+    'openjiuwen==0.1.3',
+    'pyvis==0.3.2',
+    'networkx==3.4.2',
+]
+
+# 1. 告诉 setuptools 把 jiuwen_deepsearch 当成一个「命名空间包」
+#    这样无论子目录有没有 __init__.py 都会被收录
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["jiuwen_deepsearch*"]          # 星号通配子目录
+
+# 2. 如果 jiuwen_deepsearch 里还有非 .py 文件（yaml、json、模板等），一起打包
+[tool.setuptools.package-data]
+jiuwen_deepsearch = ["**/*"]  # 递归收录所有文件，包括 .md、.json、.yaml 等
+
+# pytest configuration
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "strict"
+addopts = "-ra -q"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::pytest.PytestDeprecationWarning",
+    "ignore::pydantic.PydanticDeprecatedSince20",
+    "ignore:.*SwigPyPacked.*:DeprecationWarning",
+    "ignore:.*SwigPyObject.*:DeprecationWarning",
+    "ignore:.*swigvarlink.*:DeprecationWarning"
+]
+
+# 捕获所有日志级别
+log_cli = true
+log_cli_level = "DEBUG"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
+
+# pytest-asyncio configuration
+[tool.pytest.asyncio]
+default_fixture_loop_scope = "function"
+default_test_loop_scope = "function"
+
+[tool.pytest_env]
+LLM_SSL_VERIFY = "false"
+TOOL_SSL_VERIFY = "false"
+
+[dependency-groups]
+# 后端依赖，使用uv sync --group backend安装SDK依赖和后端依赖
+backend = [
+    "fastapi==0.115.11",
+    "uvicorn[standard]>=0.35",
+    "pydantic==2.11.7",
+    "python-dotenv==1.1.1",
+    "sqlalchemy==2.0.41",
+    "pydantic-settings==2.5.2",
+    "requests==2.32.3",
+    "pycryptodome==3.23.0",
+    "markdown2==2.5.4",
+    "beautifulsoup4==4.14.3",
+    "latex2mathml==3.78.1",
+    "mathml2omml-as==0.1.0",
+    "aiomysql==0.2.0",
+    "aiosqlite==0.21.0",
+]
+# 开发依赖
+dev = [
+    "pytest==8.3.5",
+    "fastapi",
+    "uvicorn==0.38.0",
+    "pytest-cov==6.0.0",
+    "pytest-env",
+    "pytest_asyncio==1.2.0",
+    "coverage==7.8.0",
+    "pytest-mock==3.15.1",
+]

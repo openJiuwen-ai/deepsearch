@@ -1,0 +1,170 @@
+/**
+ * -*- coding: UTF-8 -*-
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+ */
+
+body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    line-height: 1.6;
+    color: #333;
+}
+
+/* 页面容器 */
+.report-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+/* 标题样式 */
+h1 {
+    font-size: 2rem;
+    color: #1a365d;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 0.5rem;
+    margin: 2rem 0 1rem;
+}
+
+h2 {
+    font-size: 1.75rem;
+    color: #2c5282;
+    margin: 1.75rem 0 0.75rem;
+}
+
+h3 {
+    font-size: 1.5rem;
+    color: #4299e1;
+    margin: 1.5rem 0 0.5rem;
+}
+
+h4 {
+    font-size: 1.25rem;
+    color: #3182ce;
+    margin: 1.25rem 0 0.5rem;
+}
+
+/* 表格容器 */
+.table-container {
+    margin: 1.5rem 0;
+}
+
+.table-header {
+    text-align: center;
+    margin-bottom: 0.5rem;
+}
+
+.table-header p {
+    font-size: 0.875rem;
+    color: #666;
+}
+
+.table-responsive {
+    overflow-x: auto;
+    margin-bottom: 1rem;
+}
+
+/* 表格样式 */
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th, td {
+    padding: 0.75rem;
+    border: 1px solid #ccc;
+    text-align: left;
+}
+
+thead {
+    background-color: #f1f5f9;
+}
+
+th {
+    font-weight: 600;
+    color: #4a5568;
+}
+
+tbody tr:hover {
+    background-color: #f8fafc;
+}
+
+/* 图片容器 */
+.figure-wrapper {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    background-color: #f9fafb;
+    border-radius: 0.5rem;
+    text-align: center;
+}
+
+.figure-wrapper img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.375rem;
+}
+
+.figure-caption {
+    font-size: 0.875rem;
+    color: #666;
+    margin-top: 0.5rem;
+    text-align: center;
+}
+
+/* 引用块 */
+blockquote {
+    border-left: 4px solid #4299e1;
+    margin: 1.5rem 0;
+    padding: 0.5rem 1rem;
+    background-color: #ebf8ff;
+    color: #2c5282;
+}
+
+/* 代码块 */
+code {
+    font-family: 'Consolas', monospace;
+    background-color: #f3f4f6;
+    padding: 0.2em 0.4em;
+    border-radius: 0.25rem;
+    font-size: 0.9em;
+}
+
+pre {
+    background-color: #f3f4f6;
+    padding: 1rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    margin: 1rem 0;
+}
+
+/* 链接 */
+a {
+    color: #3182ce;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* 参考文献 */
+.reference-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.reference-item span {
+    font-weight: bold;
+    margin-right: 0.5rem;
+    color: #333;
+}
+
+.reference-backlink {
+    font-size: 0.875rem;
+    color: #777;
+    margin-left: 0.5rem;
+}
+
+.reference-backlink:hover {
+    color: #333;
+}
