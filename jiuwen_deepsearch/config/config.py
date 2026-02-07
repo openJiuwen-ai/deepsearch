@@ -161,9 +161,8 @@ class ServiceConfig(BaseModel):
     # 大模型超时参数
     llm_timeout: int = Field(default=300, description="大模型调用超时时间，单位秒")
 
-    # 节点debug日志参数
-    debug_enable: bool = Field(default=False, description="节点debug日志开关")
-    debug_log_file_dir: str = Field(default="./logs/debug_log", description="节点debug日志存储路径")
+    # debug辅助工具参数
+    node_debug_enable: bool = Field(default=False, description="节点格式化记录debug日志开关")
 
 
 class Config(BaseModel):
