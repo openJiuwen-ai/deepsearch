@@ -573,7 +573,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         return flow
 
 
-def parse_endnode_content(chunk: CustomSchema) -> dict | None:
+def parse_endnode_content(chunk: CustomSchema | dict) -> dict:
     """
     解析 EndNode 返回的content, 返回可能得exception_info
     仅处理 agent == NodeId.END.value 且content非 "ALL END" 的情况。
@@ -582,9 +582,15 @@ def parse_endnode_content(chunk: CustomSchema) -> dict | None:
     Returns:
         dict: 如果解析到异常信息，返回 {"exception_info": ...}，否则返回 空
     """
-    if getattr(chunk, "agent", None) != NodeId.END.value:
+    if isinstance(chunk, CustomSchema):
+        chunk = chunk.model_dump()
+    elif isinstance(chunk, dict):
+        chunk = chunk
+    else:
         return {}
-    content = getattr(chunk, "content", "")
+    if chunk.get("agent", None) != NodeId.END.value:
+        return {}
+    content = chunk.get("content", "")
     if not content or content == "ALL END" or content == "SECTION END":
         return {}
 
@@ -592,8 +598,11 @@ def parse_endnode_content(chunk: CustomSchema) -> dict | None:
         parsed_result = json.loads(content)
         if isinstance(parsed_result, dict) and "exception_info" in parsed_result:
             return parsed_result
+        else:
+            return {}
     except json.JSONDecodeError:
         logger.debug("[DeepResearchAgent.run] EndNode returned non-JSON content.")
+        return {}
     except Exception as parse_err:
         if not LogManager.is_sensitive():
             logger.warning(f"[DeepResearchAgent.run] Failed to parse endnode content: {parse_err}")
