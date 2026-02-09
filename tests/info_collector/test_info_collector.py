@@ -3,11 +3,13 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import pytest
 
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, llm_context
+from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQuery
 from jiuwen_deepsearch.framework.jiuwen.config.tools import SearchEngine, LocalSearch
 
 
 class TestInfoCollectorNode:
     """测试 InfoCollectorNode"""
+
     def setup_method(self):
         """每个测试方法运行前都会执行"""
         self.module_path = "jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.info_collector"
@@ -26,7 +28,8 @@ class TestInfoCollectorNode:
     def _mock_get_global_state(self, key):
         """模拟全局状态获取"""
         state_map = {
-            "collector_context.search_query": ["查询1", "查询2"],
+            "collector_context.search_queries": [RetrievalQuery(query="查询1"), RetrievalQuery(query="查询2")],
+            "collector_context.history_queries": [],
             "collector_context.max_tool_steps": 3,
             "collector_context.section_idx": 0,
             "collector_context.step_title": "测试步骤",
@@ -35,11 +38,11 @@ class TestInfoCollectorNode:
             "collector_context.gathered_info": []
         }
         return state_map.get(key)
-    
+
     @pytest.fixture
     def mock_context(self):
         return Mock()
-    
+
     @pytest.fixture
     def sample_web_record(self):
         """返回示例的网页搜索记录"""
@@ -55,7 +58,7 @@ class TestInfoCollectorNode:
                 "content": "示例内容2"
             }
         ]
-    
+
     @pytest.fixture
     def sample_local_record(self):
         """返回示例的本地搜索记录"""
@@ -86,7 +89,7 @@ class TestInfoCollectorNode:
             llm_context.reset(token)
 
         expected_state = {
-            "search_query": ["查询1", "查询2"],
+            "search_queries": [RetrievalQuery(query="查询1"), RetrievalQuery(query="查询2")],
             "max_tool_steps": 3,
             "section_idx": 0,
             "step_title": "测试步骤",
@@ -97,7 +100,7 @@ class TestInfoCollectorNode:
         assert result == expected_state
 
         # 验证正确的全局状态被获取
-        mock_runtime.get_global_state.assert_any_call("collector_context.search_query")
+        mock_runtime.get_global_state.assert_any_call("collector_context.search_queries")
         mock_runtime.get_global_state.assert_any_call("collector_context.max_tool_steps")
 
     @pytest.mark.asyncio
@@ -200,15 +203,11 @@ class TestInfoCollectorNode:
 
             result = info_collector_node._post_handle(inputs, algorithm_output, mock_runtime, mock_context)
 
-
             # 验证全局状态更新
             mock_runtime.update_global_state.assert_any_call({
                 "collector_context.doc_infos": [{"url": "http://example.com/1", "title": "标题1"}]
             })
-            mock_runtime.update_global_state.assert_any_call({
-                "collector_context.gathered_info": [{"url": "http://example.com/1", "title": "标题1"}]
-            })
-            
+
             # 验证返回结果
             assert result == {}
 
@@ -237,10 +236,9 @@ class TestInfoCollectorNode:
 
             # Mock 结构化结果
             mock_structure.return_value = (
-                sample_web_record + sample_local_record,  # gathered_info
                 [{"url": "http://example.com/1", "title": "标题1"}],  # doc_infos
                 [{"content": "0", "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7}}]
-            # scored_result
+                # scored_result
             )
 
             # Mock 后处理
@@ -250,7 +248,6 @@ class TestInfoCollectorNode:
 
             # 验证返回结构
             assert "messages" in result
-            assert "gathered_info" in result
             assert "doc_infos" in result
             assert "web_record" in result
             assert "local_record" in result
@@ -351,12 +348,11 @@ class TestInfoCollectorNode:
                 }
             ]
 
-            gathered_info, doc_infos, scored_result = await info_collector_node._structure_result(
+            doc_infos, scored_result = await info_collector_node._structure_result(
                 web_record, local_record, query
             )
 
             # 验证返回结果
-            assert len(gathered_info) == 2
             assert len(doc_infos) == 2
             assert len(scored_result) == 2
 
@@ -377,12 +373,11 @@ class TestInfoCollectorNode:
         local_record = []
         query = "测试查询"
 
-        gathered_info, doc_infos, scored_result = await info_collector_node._structure_result(
+        doc_infos, scored_result = await info_collector_node._structure_result(
             web_record, local_record, query
         )
 
         # 验证返回空结果
-        assert gathered_info == []
         assert doc_infos == []
         assert scored_result == []
 
@@ -414,7 +409,7 @@ class TestInfoCollectorNode:
         assert "task_relevance" in result[0]
         assert "information_richness" in result[0]
         assert "doc_time" in result[0]
-        
+
         # 验证分数被正确格式化
         assert "0.8" in result[0]["source_authority"]
         assert "0.9" in result[0]["task_relevance"]
@@ -435,7 +430,7 @@ class TestInfoCollectorNode:
 
         # 验证即使索引无效也不会崩溃
         assert len(result) == 1
-        
+
     def test_prepare_collector_tool_web(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - web 搜索"""
         state = {"search_method": "web"}
@@ -445,11 +440,11 @@ class TestInfoCollectorNode:
             mock_web_tool = Mock()
             mock_web_tool.get_tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
-            
+
             mock_local_tool = Mock()
             mock_local_tool.get_tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
-            
+
             tool_list, tool_dict = info_collector_node._prepare_collector_tool(state)
 
             # 验证只包含 web 工具
@@ -466,11 +461,11 @@ class TestInfoCollectorNode:
             mock_web_tool = Mock()
             mock_web_tool.get_tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
-            
+
             mock_local_tool = Mock()
             mock_local_tool.get_tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
-            
+
             tool_list, tool_dict = info_collector_node._prepare_collector_tool(state)
 
             # 验证只包含 local 工具
@@ -487,11 +482,11 @@ class TestInfoCollectorNode:
             mock_web_tool = Mock()
             mock_web_tool.get_tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
-            
+
             mock_local_tool = Mock()
             mock_local_tool.get_tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
-            
+
             tool_list, tool_dict = info_collector_node._prepare_collector_tool(state)
 
             # 验证包含两种工具
@@ -513,7 +508,6 @@ class TestInfoCollectorNode:
         }
 
         with patch(f'{self.module_path}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
-
             mock_llm_call.return_value = {"tool_calls": [{"name": "tool1"}]}
 
             response = await info_collector_node._invoke_llm_with_retry(tool_prompt, tool_list, state)
@@ -534,7 +528,6 @@ class TestInfoCollectorNode:
         }
 
         with patch(f'{self.module_path}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
-
             # Mock 前两次失败，第三次成功
             mock_llm_call.side_effect = [
                 Exception("第一次失败"),
@@ -598,4 +591,3 @@ class TestInfoCollectorNode:
 
         # 验证返回原始输入
         assert result == agent_input
-    

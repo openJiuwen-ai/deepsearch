@@ -17,8 +17,9 @@ from openjiuwen.core.workflow.base import Workflow
 from openjiuwen.core.utils.llm.messages import AIMessage
 
 from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode, init_router
-from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.collector_state import CollectorState
+from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.collector_context import CollectorContext
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
+from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQuery
 from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from jiuwen_deepsearch.config.config import ServiceConfig
 from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
@@ -35,7 +36,7 @@ max_retries = ServiceConfig().info_collector_max_retry_num
 
 
 class SearchQueryList(BaseModel):
-    query: List[str] = Field(
+    queries: List[str] = Field(
         description="A list of search queries to be used for web research."
     )
     description: str = Field(
@@ -65,6 +66,9 @@ class Summary(BaseModel):
     info_summary: str = Field(
         description="A concise summary of the collected information relevant to the research topic."
     )
+    evaluation: str = Field(
+        description="A detailed description of the evaluating the gathered information for task."
+    )
 
 
 def get_research_record(messages: List[dict]) -> str:
@@ -93,7 +97,7 @@ class StartNode(Start):
         inputs = self._fill_default_values(inputs)
 
         # 初始化search_context
-        collector_context = CollectorState(
+        collector_context = CollectorContext(
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
             section_idx=inputs.get("section_idx", 0),
@@ -104,7 +108,6 @@ class StartNode(Start):
             initial_search_query_count=inputs.get("initial_search_query_count", 1),
             max_research_loops=inputs.get("max_research_loops", 1),
             max_react_recursion_limit=inputs.get("max_react_recursion_limit", 5),
-            research_loop_count=0,
         )
         runtime.update_global_state({"collector_context": collector_context.model_dump()})
 
@@ -156,23 +159,28 @@ class GenerateQueryNode(BaseNode):
 
         result: SearchQueryList = await self._invoke_llm_with_retry(formatted_prompt, section_idx, step_title)
 
-        if len(result.query) > number_queries:
-            result.query = result.query[:number_queries]
+        if len(result.queries) > number_queries:
+            result.queries = result.queries[:number_queries]
 
         if not LogManager.is_sensitive():
             logger.debug("section_idx: %s | step title %s | [GenerateQueryNode] Generated search queries: %s",
-                         section_idx, step_title, result.query)
+                         section_idx, step_title, result.queries)
             logger.info(f"section_idx: {section_idx} | step title {step_title} | "
-                        f"[GenerateQueryNode] Initial queries count: {len(result.query)}")
+                        f"[GenerateQueryNode] Initial queries count: {len(result.queries)}")
         else:
             logger.info(f"section_idx: {section_idx} |"
-                        f"[GenerateQueryNode] Initial queries count: {len(result.query)}")
+                        f"[GenerateQueryNode] Initial queries count: {len(result.queries)}")
 
         node_output = self._post_handle(inputs, result, runtime, context)
         return node_output
 
     def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, runtime: Runtime, context: Context):
-        runtime.update_global_state({"collector_context.search_query": algorithm_output.query})
+        search_queries = [RetrievalQuery(
+            query=query,
+            description=algorithm_output.description
+        ) for query in algorithm_output.queries]
+
+        runtime.update_global_state({"collector_context.search_queries": search_queries})
         section_idx = runtime.get_global_state("collector_context.section_idx")
         logger.info(f"section_idx: {section_idx} | [GenerateQueryNode] End GenerateQueryNode.")
 
@@ -192,7 +200,7 @@ class GenerateQueryNode(BaseNode):
                                      error=e, operation=task_description)
         if result is None:
             result = SearchQueryList(
-                query=[step_title],
+                queries=[step_title],
                 description="Error when generate search query, use step title as query."
             )
 
@@ -220,8 +228,8 @@ class SupervisorNode(BaseNode):
         llm_model_name = runtime.get_global_state("config.llm_config.model_name")
         self.llm = llm_context.get().get(llm_model_name)
 
-        return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx, step_title=step_title,
-                    step_description=step_description,
+        return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx,
+                    step_title=step_title, step_description=step_description,
                     number_queries=number_queries, language=language, doc_infos=doc_infos,
                     new_doc_infos_current_loop=new_doc_infos_current_loop, research_loop_count=research_loop_count)
 
@@ -238,7 +246,7 @@ class SupervisorNode(BaseNode):
         doc_infos = state.get("doc_infos", [])
 
         for item in state.get("new_doc_infos_current_loop", []):
-            result = {
+            doc_info = {
                 "url": item.get("url", ""),
                 "title": item.get("title", ""),
                 "query": item.get("query", ""),
@@ -248,7 +256,7 @@ class SupervisorNode(BaseNode):
                 "plan_idx": str(plan_idx),
                 "step_idx": str(step_idx),
                 "agent": NodeId.COLLECTOR_INFO.value,
-                "content": json.dumps(result, ensure_ascii=False),
+                "content": json.dumps(doc_info, ensure_ascii=False),
                 "message_type": MessageType.MESSAGE_CHUNK.value,
                 "event": StreamEvent.SUMMARY_RESPONSE.value,
                 "created_time": get_current_time()
@@ -296,7 +304,11 @@ class SupervisorNode(BaseNode):
         runtime.update_global_state({"collector_context.research_loop_count": research_loop_count})
         runtime.update_global_state({"collector_context.is_sufficient": reflection.is_sufficient})
         runtime.update_global_state({"collector_context.knowledge_gap": reflection.knowledge_gap})
-        runtime.update_global_state({"collector_context.search_query": reflection.next_queries})
+        search_queries = [RetrievalQuery(
+            query=query,
+            description=reflection.knowledge_gap
+        ) for query in reflection.next_queries]
+        runtime.update_global_state({"collector_context.search_queries": search_queries})
 
         section_idx = runtime.get_global_state("collector_context.section_idx")
         step_title = algorithm_output.get("step_title", "")
@@ -314,7 +326,7 @@ class SupervisorNode(BaseNode):
 
         return dict(next_node=NodeId.COLLECTOR_INFO.value)
 
-    async def _invoke_llm_with_retry(self, formatted_prompt: list, section_idx: int, step_title: int):
+    async def _invoke_llm_with_retry(self, formatted_prompt: list, section_idx: int, step_title: str):
         result = None
         for retry_idx in range(max_retries):
             try:
@@ -392,6 +404,7 @@ class SummaryNode(BaseNode):
         runtime.update_global_state({"collector_context.need_programmer": algorithm_output.need_programmer})
         runtime.update_global_state({"collector_context.programmer_task": algorithm_output.programmer_task})
         runtime.update_global_state({"collector_context.info_summary": algorithm_output.info_summary})
+        runtime.update_global_state({"collector_context.evaluation": algorithm_output.evaluation})
         allow_programmer = runtime.get_global_state("config.info_collector_allow_programmer")
         if algorithm_output.need_programmer and allow_programmer:
             next_node = NodeId.COLLECTOR_PROGRAMMER.value
@@ -423,7 +436,8 @@ class SummaryNode(BaseNode):
             result = Summary(
                 need_programmer=False,
                 programmer_task="",
-                info_summary=""
+                info_summary="",
+                evaluation="",
             )
 
         return result
@@ -461,12 +475,9 @@ class GraphEndNode(BaseNode):
         logger.info(f"section_idx: {section_idx} | [GraphEndNode] Start GraphEndNode.")
         step_title = runtime.get_global_state("collector_context.step_title")
         info_summary = runtime.get_global_state("collector_context.info_summary")
-        doc_infos = runtime.get_global_state("collector_context.doc_infos")
-        gathered_info = runtime.get_global_state("collector_context.gathered_info")
 
-        return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx, step_title=step_title,
-                    info_summary=info_summary,
-                    doc_infos=doc_infos, gathered_info=gathered_info)
+        return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx,
+                    step_title=step_title, info_summary=info_summary)
 
     async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
         state = self._pre_handle(inputs, runtime, context)
