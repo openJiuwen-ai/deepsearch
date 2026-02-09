@@ -18,10 +18,6 @@ agent_config["llm_config"]["api_key"] = ""
 agent_config["web_search_engine_config"]["search_engine_name"] = ""
 agent_config["web_search_engine_config"]["search_url"] = ""
 agent_config["web_search_engine_config"]["search_api_key"] = ""
-# 3. 配置本地搜索引擎（本地知识库）
-agent_config["local_search_engine_config"]["search_engine_name"] = ""
-agent_config["local_search_engine_config"]["search_url"] = ""
-agent_config["local_search_engine_config"]["search_api_key"] = ""
 ```
 
 ## 大模型配置说明
@@ -46,16 +42,9 @@ openJiuwen-DeepSearch 支持接入两种类型网络搜索引擎：
 
 > 说明：用户需要自行前往谷歌搜索或者Tavily的官网注册账号，以便获取可用搜索引擎的search_api_key和搜索引擎调用的URL请求地址search_url。
 
-## 本地搜索引擎配置说明
----
-
-openJiuwen-DeepSearch 支持接入一种类型本地搜索引擎：
-
- - openJiuwen-core提供的本地知识库搜索引擎。`web_search_engine_config`的`search_engine_name`参数必须赋值为native。【TODO链接到core的本地知识库文档】
-
 ## ssl证书配置说明
 ---
-在访问LLM大模型服务、以及网络搜索引擎服务时，openJiuwen-DeepSearch提供ssl证书配置能力，如需启用，需要在环境变量中，打开`LLM_SSL_VERIFY`设置为`true`，并提供大模型服务访问的证书`LLM_SSL_CERT`。同理，打开`TOOL_SSL_VERIFY`设置为`true`时，需要提供网络搜索服务访问的证书`LLM_SSL_CERT`。
+在访问LLM大模型服务、以及网络搜索引擎服务时，openJiuwen-DeepSearch提供ssl证书配置能力，如需启用，需要在环境变量中，打开`LLM_SSL_VERIFY`设置为`true`，并提供大模型服务访问的证书`LLM_SSL_CERT`。同理，打开`TOOL_SSL_VERIFY`设置为`true`时，需要提供网络搜索服务访问的证书`TOOL_SSL_CERT`。
 
 如果不需要启用ssl功能，需显式关闭环境变量中`LLM_SSL_VERIFY`和`TOOL_SSL_VERIFY`，设置为`false`，此时不需要提供对应的证书。
 
@@ -64,7 +53,7 @@ import os
 os.environ["LLM_SSL_VERIFY"] = "false"
 os.environ["LLM_SSL_CERT"] = ""
 os.environ["TOOL_SSL_VERIFY"] = "false"
-os.environ["LLM_SSL_CERT"] = ""
+os.environ["TOOL_SSL_CERT"] = ""
 ```
 
 # 实例化DeepResearchAgent类
@@ -112,7 +101,7 @@ agent = DeepResearchAgent(agent_config)
 import json
 import uuid
 from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
 
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
@@ -120,12 +109,12 @@ agent = agent_factory.create_agent(agent_config)
 message = "用户原始查询问题"
 conversation_id = str(uuid.uuid4())
 
-async for chunk in agent.run(message=message, conversation_id=conversation_id, agent_config=agent_config):
+async for chunk in agent.run(message=message, conversation_id=str(uuid.uuid4()), agent_config=agent_config):
+    logger.debug("[Stream message from node: %s]", chunk)
     chunk_content = json.loads(chunk)
-    if chunk.get("agent") == NodeId.END.value:
-        final_result = json.loads(chunk.get("content", ""))
-        # 获取最终研究报告内容
-        report = final_result.get("response_content")
+    report_result = parse_endnode_content(chunk_content)
+    if report_result:  # 获取最终研究报告内容
+        logger.debug("[Final Report is: %s]", report_result)
 ```
 
 ## 根据用户查询和用户已有模板生成研究报告
@@ -171,53 +160,46 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 > 功能概述：上游供应链分析和下游客户结构分析
 ```
 
-配置参数`agent_config`中，由`has_template`控制是否开启模板模式，默认值`False`，需要显式开启。
-
 `DeepResearchAgent`的`generate_template`函数，可以对用户提供的模板文件进行规范化校验和处理。其中，入参`is_template`标识用户提供的文件是否为模板文件，此处取值为`True`。
 
 ```python
 import base64
-import os
 from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
 
-file_name = "用户提供的模板文件名，以md后缀结尾"
-file_stream = "用户提供的模板文件内容的base64编码"
-
-# 配置开启模板模式
-agent_config["has_template"] = True
+# 提供入参
+file_path = "用户提供的模板文件名，以md后缀结尾"
+file_stream = base64.b64encode(read_file_safely(file_path)).decode("utf-8")  # "用户提供的模板文件内容的base64编码"
+is_template = True  # 标识模板文件
 
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
-result = await agent.generate_template(file_name=file_name, file_stream=file_stream, is_template=True, agent_config=agent_config)
-
+# 执行模板文件处理操作
+result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template, agent_config=agent_config)
 user_template_content = result["template_content"]
 ```
 
-`DeepResearchAgent`的`run`函数，参数`report_template`可接收系统规范化后的模板文件内容`user_template_content`，数据类型是`str`。
+`DeepResearchAgent`的`run`函数，参数`report_template`可接收系统规范化后的模板文件内容`user_template_content`，数据类型是`str`，是一份base64编码。
 
 ```python
 import json
 import uuid
 from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
 
 message = "用户原始查询问题"
 conversation_id = str(uuid.uuid4())
-
-# 配置开启模板模式
-agent_config["has_template"] = True
 
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
 async for chunk in agent.run(message=message, conversation_id=conversation_id, agent_config=agent_config,
                              report_template=user_template_content):
+    logger.debug("[Stream message from node: %s]", chunk)
     chunk_content = json.loads(chunk)
-    if chunk.get("agent") == NodeId.END.value:
-        final_result = json.loads(chunk.get("content", ""))
-        # 获取最终研究报告内容
-        report = final_result.get("response_content")
+    report_result = parse_endnode_content(chunk_content)
+    if report_result:  # 获取最终研究报告内容
+        logger.debug("[Final Report is: %s]", report_result)
 ```
 
 ## 根据用户查询和用户已有报告生成研究报告
@@ -228,10 +210,48 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 用户提供的样例报告文件，与期望生成研究报告遵循相同模板。样例报告文件格式支持markdown、docx、pdf、html。
 
 与上一小节“根据用户查询和用户已有模板生成研究报告”不同的是，`DeepResearchAgent`的`generate_template`函数，入参`is_template`标识应取值为`False`，标识用户提供的文件为样例报告文件。
-```python
-result = await agent.generate_template(file_name=file_name, file_stream=file_stream, is_template=False, agent_config=agent_config)
 
+```python
+import base64
+from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+
+# 提供入参
+file_path = "用户提供的样例报告文件的文件名，以md/docx/pdf/html后缀结尾"
+file_stream = base64.b64encode(read_file_safely(file_path)).decode("utf-8")  # "用户提供的样例报告文件内容的base64编码"
+is_template = False  # 标识样例报告文件
+
+agent_factory = AgentFactory()
+agent = agent_factory.create_agent(agent_config)
+
+# 执行模板文件处理操作
+result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template, agent_config=agent_config)
 user_template_content = result["template_content"]
 ```
 
 提取出规范化后的模板文件内容`user_template_content`之后，继续通过`DeepResearchAgent`的`run`函数，进行研究报告生成。
+
+
+```python
+import json
+import uuid
+from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
+
+message = "用户原始查询问题"
+conversation_id = str(uuid.uuid4())
+
+agent_factory = AgentFactory()
+agent = agent_factory.create_agent(agent_config)
+
+async for chunk in agent.run(message=message, conversation_id=conversation_id, agent_config=agent_config,
+                             report_template=user_template_content):
+    logger.debug("[Stream message from node: %s]", chunk)
+    chunk_content = json.loads(chunk)
+    report_result = parse_endnode_content(chunk_content)
+    if report_result:  # 获取最终研究报告内容
+        logger.debug("[Final Report is: %s]", report_result)
+```
+
+# 更多参考
+ - 开发指南的完整示例代码，详见：https://gitcode.com/openJiuwen/deepsearch/blob/dev/main.py
+ - 更多关于openJiuwen-DeepSearch的API介绍，详见：https://gitcode.com/openJiuwen/deepsearch/tree/dev/docs/zh/4.%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97
