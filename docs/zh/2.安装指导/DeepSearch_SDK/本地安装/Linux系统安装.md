@@ -164,7 +164,7 @@
 
   > **说明**：<br>
   > HOST、BACKEND_PORT分别是DeepSearch服务的API地址和端口号。<br>
-  > DB_HOST、DB_PORT 等变量的值可替换为实际数据库信息，DB_USER、DB_PASSWORD 为上文新建的 MySQL 用户与密码。如果密码中包含特殊字符，可参考 [特殊字符转义表](#windows-special-char) 将特殊字符替换为 URL 编码。
+  > DB_HOST、DB_PORT 等变量的值可替换为实际数据库信息，DB_USER、DB_PASSWORD 为上文新建的 MySQL 用户与密码。如果密码中包含特殊字符，可参考 [特殊字符转义表](#linux-special-char) 将特殊字符替换为 URL 编码。
 
   ```env
    # 配置API地址和端口号（样例）
@@ -218,7 +218,7 @@
 
 
 ## 三、常见问题（FAQ）
-
+#linux-special-char
 <a id="linux-special-char"></a>
 ### 问题一：特殊字符转义表
 
