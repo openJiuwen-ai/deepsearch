@@ -22,7 +22,7 @@ from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_cont
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 LogManager.init(
-    log_dir="./logs/openJiuwen-DeepSearch/",
+    log_dir="./output/logs/openJiuwen-DeepSearch/",
     max_bytes=100 * 1024 * 1024,
     backup_count=20,
     level="DEBUG",

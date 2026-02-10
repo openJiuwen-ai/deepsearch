@@ -64,7 +64,7 @@ uv sync --allow-insecure-host github.com --allow-insecure-host pypi.org --allow-
 
 ## 二、日志定位问题
 ### 1. 日志路径
-openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **logs/common/** 下，系统实现了日志分流，包含两类日志：
+openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/logs/common** 下，系统实现了日志分流，包含两类日志：
 - warnning级别以上（方便快速定位错误日志）：**common_warnning.log**
 - 全部级别日志：**common.log**
 ### 2. 节点异常影响范围

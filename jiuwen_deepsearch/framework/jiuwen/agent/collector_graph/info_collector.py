@@ -12,7 +12,7 @@ from openjiuwen.core.runtime.runtime import Runtime
 
 from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
 from jiuwen_deepsearch.config.config import Config
-from jiuwen_deepsearch.framework.jiuwen.config.tools import LocalSearch, SearchEngine
+from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
 from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode
 from jiuwen_deepsearch.framework.jiuwen.tools import create_web_search_tool, create_local_search_tool
 from jiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
