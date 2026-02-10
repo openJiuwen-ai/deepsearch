@@ -7,13 +7,13 @@ from pydantic import BaseModel, Field
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Plan, Outline, SubReportContent
 
 
-class SectionBaseState(BaseModel):
+class SectionBaseContext(BaseModel):
     language: str = Field(default="", description="语言")
     messages: list = Field(default=[], description="消息列表")
     section_idx: int | str = Field(default=0, description="章节索引")
 
 
-class SectionState(SectionBaseState):
+class SectionContext(SectionBaseContext):
     # planner node
     plan_executed_num: int = Field(default=0, description="章节plan执行次数")
     current_plan: Plan = Field(default=None, description="当前执行的计划")
@@ -23,7 +23,7 @@ class SectionState(SectionBaseState):
     # sub report node
     current_outline: Union[Outline, dict, str, None] = Field(default=None, description="当前章节大纲")
     section_task: str = Field(default="", description="章节任务")
-    section_description: str = Field(default="", description="章节描述"),
+    section_description: str = Field(default="", description="章节描述")
     section_iscore: bool = Field(default=False, description="是否为核心章节")
     report_task: str = Field(default="", description="报告任务")
     report_template: str = Field(default="", description="子报告模板")

@@ -4,8 +4,9 @@ import pytest
 from openjiuwen.core.workflow.base import Workflow
 
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder import SearchQueryList, Reflection, Summary, \
-    CollectorState, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, \
+    CollectorContext, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, \
     ProgrammerNode, GraphEndNode, build_info_collector_sub_graph, get_research_record, llm_context
+from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQuery
 
 module_path = "jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder"
 
@@ -16,11 +17,11 @@ class TestSearchQueryList:
     def test_search_query_list_creation(self):
         """测试 SearchQueryList 创建"""
         query_list = SearchQueryList(
-            query=["test query 1", "test query 2"],
+            queries=["test query 1", "test query 2"],
             description="测试查询描述"
         )
 
-        assert query_list.query == ["test query 1", "test query 2"]
+        assert query_list.queries == ["test query 1", "test query 2"]
         assert query_list.description == "测试查询描述"
 
 
@@ -49,6 +50,7 @@ class TestSummary:
             need_programmer=True,
             programmer_task="编写数据处理脚本",
             info_summary="收集到的信息总结",
+            evaluation=""
         )
 
         assert summary.need_programmer is True
@@ -136,7 +138,7 @@ class TestStartNode:
         call_args = mock_runtime.update_global_state.call_args[0][0]
         assert "collector_context" in call_args
 
-        collector_context = CollectorState(**call_args["collector_context"])
+        collector_context = CollectorContext(**call_args["collector_context"])
         assert collector_context.language == "zh-CN"
         assert collector_context.section_idx == 0
         assert collector_context.research_loop_count == 0
@@ -188,9 +190,11 @@ class TestGenerateQueryNode:
         try:
             # 仅保留对 _invoke_llm_with_retry 的 patch
             with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm:
+                queries = ["查询1", "查询2", "查询3"]
+                description = "测试查询描述"
                 mock_llm.return_value = SearchQueryList(
-                    query=["查询1", "查询2", "查询3"],  # 故意超过限制数量
-                    description="测试查询描述"
+                    queries=queries,  # 故意超过限制数量
+                    description=description
                 )
 
                 result = await generate_query_node.invoke(inputs, mock_runtime, mock_context)
@@ -204,8 +208,9 @@ class TestGenerateQueryNode:
                 })
 
                 # 验证第二次调用是设置 search_query (查询被正确截断)
+                search_queries = [RetrievalQuery(query=query, description=description) for query in queries[:2]]
                 mock_runtime.update_global_state.assert_any_call({
-                    "collector_context.search_query": ["查询1", "查询2"]  # 从3个截断到2个
+                    "collector_context.search_queries": search_queries  # 从3个截断到2个
                 })
 
                 # 验证返回结果
@@ -228,9 +233,11 @@ class TestGenerateQueryNode:
 
         try:
             with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm:
+                queries = ["测试步骤"]
+                description = "Error when generate search query, use step title as query"
                 mock_llm.return_value = SearchQueryList(
-                    query=["测试步骤"],
-                    description="Error when generate search query, use step title as query"
+                    queries=queries,
+                    description=description,
                 )
 
                 await generate_query_node.invoke(inputs, mock_runtime, mock_context)
@@ -241,8 +248,9 @@ class TestGenerateQueryNode:
                 })
 
                 # 验证使用了默认查询
+                search_queries = [RetrievalQuery(query=query, description=description) for query in queries]
                 mock_runtime.update_global_state.assert_any_call({
-                    "collector_context.search_query": ["测试步骤"]
+                    "collector_context.search_queries": search_queries
                 })
         finally:
             llm_context.reset(token)
@@ -330,10 +338,12 @@ class TestSupervisorNode:
 
         try:
             with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm:
+                knowledge_gap = "需要更多技术细节"
+                next_queries = ["跟进查询1", "跟进查询2"]
                 mock_llm.return_value = Reflection(
                     is_sufficient=False,
-                    knowledge_gap="需要更多技术细节",
-                    next_queries=["跟进查询1", "跟进查询2"]
+                    knowledge_gap=knowledge_gap,
+                    next_queries=next_queries
                 )
 
                 result = await supervisor_node.invoke(inputs, mock_runtime, mock_context)
@@ -342,8 +352,9 @@ class TestSupervisorNode:
                 assert result["next_node"] == "collector_info_retrieval"
 
                 # 验证查询被更新
+                search_queries = [RetrievalQuery(query=query, description=knowledge_gap) for query in next_queries]
                 mock_runtime.update_global_state.assert_any_call({
-                    "collector_context.search_query": ["跟进查询1", "跟进查询2"],
+                    "collector_context.search_queries": search_queries,
                 })
         finally:
             # 清理 contextvar
@@ -396,6 +407,7 @@ class TestSummaryNode:
                     need_programmer=False,
                     programmer_task="",
                     info_summary="信息总结内容",
+                    evaluation=""
                 )
 
                 result = await summary_node.invoke(inputs, mock_runtime, mock_context)

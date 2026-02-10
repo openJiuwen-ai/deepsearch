@@ -20,7 +20,7 @@ from jiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
 from jiuwen_deepsearch.common.status_code import StatusCode
 from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode, init_router
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder import build_info_collector_sub_graph
-from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.section_state import SectionState
+from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.section_context import SectionContext
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Message, StepType, Step, SubReportContent, Plan
 from jiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType
 from jiuwen_deepsearch.common.common_constants import CHINESE
@@ -49,7 +49,7 @@ class SectionStartNode(Start):
         inputs = self._fill_default_values(inputs)
 
         # 初始化section_context
-        section_context = SectionState(
+        section_context = SectionContext(
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
             section_idx=inputs.get("section_idx", '1'),
@@ -303,7 +303,8 @@ class SubReporterNode(BaseNode):
         doc_infos = []
         for plan in history_plans:
             for step in plan.steps:
-                doc_infos.extend(step.doc_infos)
+                for query in step.retrieval_queries:
+                    doc_infos.extend(query.doc_infos)
         doc_infos = list({(doc["title"], doc["url"]): doc for doc in doc_infos}.values())
 
         return dict(
@@ -538,12 +539,11 @@ class InfoCollectorNode(BaseNode):
                 )
 
                 collector_context = await self._run_collector_graph(inputs, runtime)
-                step.gathered_infos = collector_context.get("gathered_info")
-                step.doc_infos = collector_context.get("doc_infos")
                 step.step_result = collector_context.get("info_summary")
                 step.evaluation = collector_context.get("evaluation")
+                step.retrieval_queries = collector_context.get("history_queries")
+                current_doc_num += len(collector_context.get("doc_infos", []))
                 collect_steps.append(step)
-                current_doc_num += len(step.doc_infos)
 
                 logger.info(
                     f"{self.log_prefix} End step {step.id}: The result is: "

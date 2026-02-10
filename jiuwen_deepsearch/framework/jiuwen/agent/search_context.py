@@ -22,6 +22,15 @@ class StepType(str, Enum):
     INFO_COLLECTING = "info_collecting"
 
 
+class RetrievalQuery(BaseModel):
+    """
+    检索query模型：步骤任务的检索query
+    """
+    query: str = Field(..., description="直接用于检索的query")
+    description: str = Field(default="", description="简要说明query为何与搜索任务相关，为何要生成当前query")
+    doc_infos: Optional[List[Dict]] = Field(default_factory=list, description="query检索的文档信息")
+
+
 class Step(BaseModel):
     """
     步骤模型：章节计划中的具体步骤
@@ -33,8 +42,7 @@ class Step(BaseModel):
     parent_ids: Optional[List[str]] = Field(default_factory=list, description="步骤执行的依赖步骤")
     relationships: Optional[List[str]] = Field(default_factory=list, description="步骤和所依赖步骤之间的关系")
     background_knowledge: Optional[List[str]] = Field(default_factory=list, description="步骤执行所需要的背景知识")
-    gathered_infos: Optional[List[Dict]] = Field(default_factory=list, description="步骤收集的原始信息")
-    doc_infos: Optional[List[Dict]] = Field(default_factory=list, description="步骤处理后的信息")
+    retrieval_queries: Optional[List[RetrievalQuery]] = Field(default_factory=list, description="步骤的query信息列表")
     step_result: Optional[str] = Field(default=None, description="步骤执行的总结结果，完成后由系统进行填充")
     evaluation: Optional[str] = Field(default="", description="步骤执行结果的评估")
 

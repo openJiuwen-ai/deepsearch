@@ -51,7 +51,7 @@ class InfoRetrievalNode(BaseNode):
         self.llm = llm_context.get().get(llm_model_name)
 
         state = dict(
-            search_query=runtime.get_global_state("collector_context.search_query"),
+            search_queries=runtime.get_global_state("collector_context.search_queries"),
             max_tool_steps=runtime.get_global_state("collector_context.max_tool_steps"),
             section_idx=section_idx,
             step_title=step_title,
@@ -66,9 +66,9 @@ class InfoRetrievalNode(BaseNode):
         runtime_context.set(runtime)
 
         tasks = []
-        for query in state.get("search_query", []):
+        for retrieval_query in state.get("search_queries", []):
             sub_state = {
-                "search_query": query,
+                "search_query": retrieval_query.query,
                 "section_idx": state.get("section_idx", 0),
                 "step_title": state.get("step_title", ""),
                 "max_tool_steps": state.get("max_tool_steps", 3),
@@ -87,13 +87,13 @@ class InfoRetrievalNode(BaseNode):
         section_idx = runtime.get_global_state("collector_context.section_idx")
         step_title = runtime.get_global_state("collector_context.step_title")
         doc_infos: list = runtime.get_global_state("collector_context.doc_infos")
-        gathered_info: list = runtime.get_global_state("collector_context.gathered_info")
+        search_queries = runtime.get_global_state("collector_context.search_queries")
+        history_queries = runtime.get_global_state("collector_context.history_queries")
 
         new_doc_infos = []
-        for result in algorithm_output:
+        for retrieval_query, result in zip(search_queries, algorithm_output):
             core_doc_info = [(doc.get("title", ""), doc.get("url", "")) for doc in doc_infos if isinstance(doc, dict)]
             task_doc_infos = result.get("doc_infos", [])
-            task_gathered_info = result.get("gathered_info", [])
             if LogManager.is_sensitive():
                 logger.info(f"section_idx: {section_idx} | gathered item count before duplicate: {len(task_doc_infos)}")
             else:
@@ -105,15 +105,15 @@ class InfoRetrievalNode(BaseNode):
                     # 记录本地新收集信息
                     new_doc_infos.append(task_doc)
 
+            retrieval_query.doc_infos = task_doc_infos
+            history_queries.append(retrieval_query)
             doc_infos.extend(task_doc_infos)
-            gathered_info.extend(task_gathered_info)
 
         doc_infos = remove_duplicate_items(doc_infos)
-        gathered_info = remove_duplicate_items(gathered_info)
 
+        runtime.update_global_state({"collector_context.history_queries": history_queries})
         runtime.update_global_state({"collector_context.new_doc_infos_current_loop": new_doc_infos})
         runtime.update_global_state({"collector_context.doc_infos": doc_infos})
-        runtime.update_global_state({"collector_context.gathered_info": gathered_info})
         if LogManager.is_sensitive():
             logger.info("section_idx: %s | [InfoRetrievalNode] End InfoRetrievalNode.", section_idx)
         else:
@@ -152,22 +152,21 @@ class InfoRetrievalNode(BaseNode):
         if len(agent_input["local_text_search_record"]) > 0:
             local_record = remove_duplicate_items(agent_input["local_text_search_record"])
 
-        gathered_info, doc_infos, scored_result = await self._structure_result(web_record, local_record, query)
+        doc_infos, scored_result = await self._structure_result(web_record, local_record, query)
 
         if LogManager.is_sensitive():
             logger.info(f"section_idx: {section_idx} | "
-                        f"[InfoRetrievalNode] Gathered {len(gathered_info)} items of information. | "
+                        f"[InfoRetrievalNode] Gathered {len(doc_infos)} items of information. | "
                         f"Starting to Update doc_infos after post process.")
         else:
             logger.info(f"section_idx: {section_idx} | step title {step_title} | "
                         f"[InfoRetrievalNode] Collecting info for query: {query} | "
-                        f"Gathered {len(gathered_info)} items of information. | "
+                        f"Gathered {len(doc_infos)} items of information. | "
                         f"Starting to Updating doc_infos after post process.")
         doc_infos = self._process_post_process_result(scored_result, doc_infos, section_idx)
 
         return {
             "messages": agent_input["messages"],
-            "gathered_info": gathered_info,
             "doc_infos": doc_infos,
             "web_record": web_record,
             "local_record": local_record,
@@ -275,7 +274,7 @@ class InfoRetrievalNode(BaseNode):
         else:
             scored_result = []
 
-        return gathered_info, doc_infos, scored_result
+        return doc_infos, scored_result
 
     def _process_post_process_result(self, scored_result: list[dict], doc_infos: list, section_idx: int):
         for idx, scored in enumerate(scored_result[:len(doc_infos)]):
@@ -290,12 +289,12 @@ class InfoRetrievalNode(BaseNode):
                 scores: dict = scored.get("scores")
                 authority = str(scores.get("authority")) if scores.get("authority") else "未提供权威性得分"
                 relevance = str(scores.get("relevance")) if scores.get("relevance") else "未提供相关性得分"
-                answerability = str(scores.get("answerability")) if scores.get("answerability") else "未提供相关性得分"
+                answerability = str(scores.get("answerability")) if scores.get("answerability") else "未提供可答性得分"
                 data_density = str(scores.get("data_density")) if scores.get("data_density") else "未提供数据密度得分"
             except Exception:
                 authority = "未提供权威性得分"
                 relevance = "未提供相关性得分"
-                answerability = "未提供相关性得分"
+                answerability = "未提供可答性得分"
                 data_density = "未提供数据密度得分"
             try:
                 doc_time = scored.get("doc_time") if scored.get("doc_time") else "未提供时间信息"

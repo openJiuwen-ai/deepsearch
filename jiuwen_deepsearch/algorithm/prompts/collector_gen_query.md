@@ -23,6 +23,6 @@ Your goal is to generate sophisticated and diverse web search queries. These que
 ```json
 {
     "description": "",  // string
-    "query": [""],  // list of string, e.g. ["Tesla battery lifespan offical statement"]
+    "queries": [""],  // list of string, e.g. ["Tesla battery lifespan offical statement"]
 }
 ```
