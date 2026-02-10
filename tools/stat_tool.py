@@ -25,7 +25,7 @@ target_threads = ["'" + tid for tid in args.threads] if args.threads else None
 # 日志文件路径（绝对路径 + 支持轮转）
 # -------------------------
 project_root = os.path.dirname(os.path.dirname(__file__))  # 项目根目录
-log_dir = os.path.join(project_root, "logs", "metrics")
+log_dir = os.path.join(project_root, "output/logs", "metrics")
 log_pattern = os.path.join(log_dir, "metrics.log*")
 log_files = glob.glob(log_pattern)
 

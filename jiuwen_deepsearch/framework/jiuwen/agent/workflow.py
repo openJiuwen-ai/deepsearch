@@ -29,7 +29,7 @@ from jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes import SourceTrac
     GenerateQuestionsNode, OutlineNode, FeedbackHandlerNode, ReporterNode, EndNode, DependencyOutlineNode
 from jiuwen_deepsearch.framework.jiuwen.tools import update_local_search_mapping, update_web_search_mapping
 from jiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
-from jiuwen_deepsearch.utils.common_utils.secure_utils import secure_clear_memory
+from jiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
 from jiuwen_deepsearch.utils.validation_utils.field_validation import validate_agent_required_field
 from jiuwen_deepsearch.utils.log_utils.log_interface import record_interface_log
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -367,9 +367,9 @@ class DeepresearchAgent(BaseAgent):
                     local_search_context.reset(local_search_token)
 
             if is_all_end:
-                secure_clear_memory(runtime_agent_config.get("web_search_engine_config", {}).get(
+                zero_secret(runtime_agent_config.get("web_search_engine_config", {}).get(
                     "search_api_key", bytearray("", encoding="utf-8")))
-                secure_clear_memory(runtime_agent_config.get("local_search_engine_config", {}).get(
+                zero_secret(runtime_agent_config.get("local_search_engine_config", {}).get(
                     "search_api_key", bytearray("", encoding="utf-8")))
                 await self.agent.clear_session(conversation_id)
                 session_id_ctx.reset(token)

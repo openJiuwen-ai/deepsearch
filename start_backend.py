@@ -14,7 +14,7 @@ from server.main import main
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 LogManager.init(
-    log_dir="./logs",
+    log_dir="./output/logs",
     max_bytes=100 * 1024 * 1024,
     backup_count=20,
     level="DEBUG",

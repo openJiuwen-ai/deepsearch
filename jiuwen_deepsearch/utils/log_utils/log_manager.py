@@ -18,7 +18,7 @@ from jiuwen_deepsearch.utils.log_utils.log_interface import setup_interface_logg
 class LogManager:
     _initialized = False
     _is_sensitive = True
-    _SAFE_BASE = os.path.realpath("./logs")
+    _SAFE_BASE = os.path.realpath("./output/logs")
 
     @classmethod
     def init(

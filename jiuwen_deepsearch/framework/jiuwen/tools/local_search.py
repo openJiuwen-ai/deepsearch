@@ -8,7 +8,7 @@ from openjiuwen.core.utils.tool.param import Param
 
 from jiuwen_deepsearch.algorithm.research_collector.tool_log import tool_invoke_log_async
 from jiuwen_deepsearch.common.status_code import StatusCode
-from jiuwen_deepsearch.framework.jiuwen.config.tools import LocalSearch
+from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch
 from jiuwen_deepsearch.framework.jiuwen.tools.Search_API import (
     LocalDatasetAPIWrapper,
     NativeLocalSearchAPIWrapper,

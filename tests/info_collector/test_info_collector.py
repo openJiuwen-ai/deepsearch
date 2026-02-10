@@ -4,7 +4,7 @@ import pytest
 
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, llm_context
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQuery
-from jiuwen_deepsearch.framework.jiuwen.config.tools import SearchEngine, LocalSearch
+from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
 
 
 class TestInfoCollectorNode:

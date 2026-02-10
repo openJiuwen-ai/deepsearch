@@ -152,11 +152,11 @@
   let nodeMap = new Map();
   let resizeObserver = null;
 
-  function getValidPreStep(pre_step) {
-    if (pre_step == null || pre_step === '' || pre_step === 'null' || pre_step === 'undefined') {
+  function getValidPreStep(pre_node) {
+    if (pre_node == null || pre_node === '' || pre_node === 'null' || pre_node === 'undefined') {
       return 'start';
     }
-    return String(pre_step);
+    return String(pre_node);
   }
 
   function clearAll() {
@@ -196,8 +196,8 @@
           throw new Error(`JSON 解析失败: ${line.substring(0, 60)}...`);
         }
 
-        const { pre_step, cur_step, message_id, type, timestamp, content, node_type } = log;
-        if (cur_step == null || message_id == null || type == null || content == null) {
+        const { pre_node, cur_node, message_id, type, timestamp, content, node_type } = log;
+        if (cur_node == null || message_id == null || type == null || content == null) {
           throw new Error(`缺少必要字段: ${JSON.stringify(log)}`);
         }
 
@@ -205,12 +205,12 @@
 
         if (type !== 'input' && type !== 'output') continue;
 
-        const key = `${String(cur_step)}|${String(type)}|${String(message_id)}`;
+        const key = `${String(cur_node)}|${String(type)}|${String(message_id)}`;
         if (!groups[key]) {
           groups[key] = {
-            cur_step: String(cur_step),
+            cur_node: String(cur_node),
             type: String(type),
-            pre_step: getValidPreStep(pre_step),
+            pre_node: getValidPreStep(pre_node),
             node_type: normalizedNodeType,
             parts: []
           };
@@ -225,7 +225,7 @@
 
       const allSteps = new Set();
       for (const group of Object.values(groups)) {
-        allSteps.add(group.cur_step);
+        allSteps.add(group.cur_node);
       }
 
       for (const step of allSteps) {
@@ -238,13 +238,13 @@
           .map(p => p.content)
           .join('');
 
-        stepData[group.cur_step].from = group.pre_step;
-        stepData[group.cur_step].node_type = group.node_type;
+        stepData[group.cur_node].from = group.pre_node;
+        stepData[group.cur_node].node_type = group.node_type;
 
         if (group.type === 'input') {
-          stepData[group.cur_step].inputs.push(fullContent);
+          stepData[group.cur_node].inputs.push(fullContent);
         } else if (group.type === 'output') {
-          stepData[group.cur_step].outputs.push(fullContent);
+          stepData[group.cur_node].outputs.push(fullContent);
         }
       }
 
