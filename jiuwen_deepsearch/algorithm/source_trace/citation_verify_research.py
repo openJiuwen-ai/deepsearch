@@ -280,13 +280,28 @@ class CitationVerifyResearch:
         # 3、结果整理阶段
         return self.reorder_batch_results(batches, batch_state["results"], batch_size, len(data))
 
+    @staticmethod
+    def is_chart_chunk(chunk: str) -> bool:
+        """判断chunk是否是图表（包含图表标题div）
+
+        Args:
+            chunk (str): 要检查的chunk文本
+
+        Returns:
+            bool: 如果chunk包含图表标题div则返回True，否则返回False
+        """
+        if not chunk:
+            return False
+        chart_title_pattern = r'<div\s+style="text-align:\s*center;">'
+        return bool(re.search(chart_title_pattern, chunk))
+
     def prepare_handle_data(self) -> tuple:
         """预处理引用数据
         过滤有效引用，提取域名信息，构建适合后续处理的数据结构
 
         Returns:
             tuple: (handle_datas, handle_index)
-                - handle_datas: 预处理后的数据列表，每个元素包含domain、citation_content、fact字段
+                - handle_datas: 预处理后的数据列表，每个元素包含domain、citation_content、fact、is_chart字段
                 - handle_index: 原始数据索引列表，用于后续结果映射
         """
         handle_datas = []
@@ -294,6 +309,20 @@ class CitationVerifyResearch:
 
         for index, data in enumerate(self.datas):
             data["valid"] = True
+            chunk = data.get("chunk", "")
+            
+            # 检查是否是图表chunk
+            is_chart = self.is_chart_chunk(chunk)
+            if is_chart:
+                data["is_chart"] = True  # 标记为图表
+                if LogManager.is_sensitive():
+                    logger.info(f"[VIZ_CITATION]: Chart chunk detected, index: {index}")
+                else:
+                    logger.info(
+                        f"[VIZ_CITATION]: Chart chunk detected, index: {index}, "
+                        f"chunk: {chunk}"
+                    )
+            
             handle_index.append(index)
             url = data.get("url", "")
             if url.startswith("http"):  # 仅处理网页引用
@@ -303,7 +332,8 @@ class CitationVerifyResearch:
             handle_datas.append(
                 {"domain": domain,
                  "citation_content": data.get("content", ""),
-                 "fact": data.get("chunk", "")}
+                 "fact": chunk,
+                 "is_chart": is_chart}
             )
         
         return handle_datas, handle_index
@@ -489,6 +519,30 @@ class CitationVerifyResearch:
                                        format(e=error_msg))
 
         for idx, ordered_result in zip(handle_index, ordered_results):
+            is_chart = handle_datas[idx].get("is_chart", False)
+            
+            # 图表数据处理
+            if is_chart:
+                self.datas[idx]["source"] = ordered_result.get(
+                    "source", "unknown source")
+                if "unknown" in self.datas[idx]["source"] or "extract_failed_reason" in ordered_result:
+                    self.datas[idx]["source"] = handle_datas[idx]["domain"]
+                marked_content = ordered_result.get("marked_citation_content", [])
+                if marked_content:
+                    content = self.datas[idx].get("content", "")
+                    self.datas[idx]["content"] = self.fuzzy_find_and_tag(content, marked_content)
+                score = ordered_result.get("score", 0)
+                self.datas[idx]["score"] = max(score, 0.85)
+                if LogManager.is_sensitive():
+                    logger.info(f"[VIZ_CITATION] Chart data processed and updated, index: {idx}")
+                else:
+                    logger.info(
+                        f"[VIZ_CITATION] Chart data processed and updated, index: {idx}, "
+                        f"ordered_result: {ordered_result}, data: {self.datas[idx]}"
+                    )
+                continue
+            
+            # 非图表数据处理
             if "extract_failed_reason" in ordered_result:
                 self.datas[idx]["valid"] = False
                 self.datas[idx]["invalid_reason"] = ordered_result["extract_failed_reason"]

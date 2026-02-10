@@ -270,6 +270,7 @@ def preprocess_report(report: str) -> Tuple[str, str]:
 def _get_citation_chunk(report: str, citation_start: int, citation_pattern: Optional[str] = None) -> str:
     """获取引用标记前的文本块，当chunk小于5时向前合并更多句子。
     在合并过程中如果遇到citation_pattern，立即终止合并。
+    如果检测到图表标题，会向前查找整个mermaid代码块。
 
     Args:
         report (str): 原始报告文本
@@ -280,8 +281,34 @@ def _get_citation_chunk(report: str, citation_start: int, citation_pattern: Opti
         str: 引用对应的文本块
     """
     # 提取citation前面的文本
-    preceding_text = report[:citation_start].strip()
-    sentences = split_into_sentences(preceding_text)
+    text_before_citation = report[:citation_start]
+    
+    # 检查是否是图表标题的情况
+    # 图表标题格式: <div style="text-align: center;">...**标题[citation:X]**\n\n</div>
+    text_after_citation = report[citation_start:]
+    chart_title_suffix_pattern = r'\[\s*citation:\s*\d+\s*\]\*\*[\s\n]*</div>'
+    if re.match(chart_title_suffix_pattern, text_after_citation, re.DOTALL):
+        # 从后向前查找最近的 ```mermaid
+        mermaid_start_pattern = r'```mermaid'
+        mermaid_matches = list(re.finditer(mermaid_start_pattern, text_before_citation))
+        mermaid_start_match = mermaid_matches[-1] if mermaid_matches else None
+        
+        if mermaid_start_match:
+            mermaid_start_pos = mermaid_start_match.start()
+            chart_content = report[mermaid_start_pos:citation_start].strip()
+            
+            if citation_pattern:
+                chart_content = re.sub(citation_pattern, '', chart_content).strip()
+            
+            if LogManager.is_sensitive():
+                logger.info("[VIZ_CITATION] Matched chart content")
+            else:
+                logger.info(f"[VIZ_CITATION] Matched chart content: {chart_content}")
+            
+            return chart_content
+    
+    # 不是图表标题则正常匹配
+    sentences = split_into_sentences(text_before_citation.strip())
 
     # 获取最后一个句子作为初始chunk
     chunk = sentences[-1] if sentences else ""
