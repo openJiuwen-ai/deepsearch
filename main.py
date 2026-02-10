@@ -18,16 +18,22 @@ os.environ["TOOL_SSL_CERT"] = ""
 from jiuwen_deepsearch.config.config import Config
 from jiuwen_deepsearch.config.method import ExecutionMethod
 from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from jiuwen_deepsearch.utils.debug_utils.result_exporter import ResultExporter
 from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 LogManager.init(
-    log_dir="./output/logs/openJiuwen-DeepSearch/",
+    log_dir="./output/logs",
     max_bytes=100 * 1024 * 1024,
     backup_count=20,
     level="DEBUG",
     is_sensitive=False
 )
+
+ResultExporter.init(
+    results_dir="./output/results"
+)
+
 logger = logging.getLogger(__name__)
 
 
