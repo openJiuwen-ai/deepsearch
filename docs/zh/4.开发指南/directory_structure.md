@@ -13,17 +13,15 @@ jiuwen_deepsearch/
 │   ├── report_template/            # 报告模板解析与生成
 │   ├── research_collector/         # 信息收集与评估
 │   ├── source_trace/               # 溯源与校验
-│   └── source_tracer_infer/         # 溯源推理
+│   └── source_tracer_infer/        # 溯源推理
 ├── framework/                      # 框架层实现
 │   └── jiuwen/
 │       ├── agent/                  # 工作流与节点
 │       ├── tools/                  # 搜索工具封装
-│       ├── config/                 # 工具配置
-│       ├── llm/                    # LLM模型工厂
-│       └── utils/                  # 框架工具函数
+│       └── llm/                    # LLM模型工厂
 ├── config/                         # 配置管理
 ├── common/                         # 公共异常与状态码
-├── utils/                          # 通用工具函数
+├── utils/                          # 工具函数
 └── llm/                            # LLM统一封装
 ```
 
@@ -85,11 +83,11 @@ jiuwen_deepsearch/
   - `editor_team_manager_node.py` - 编辑团队子图管理
   - `reasoning_writing_graph/` - 编辑团队子图节点与状态
     - `editor_team_nodes.py`
-    - `section_state.py`
+    - `section_context.py`
   - `collector_graph/` - 信息收集子图
     - `graph_builder.py`
     - `info_collector.py`
-    - `collector_state.py`
+    - `collector_context.py`
   - `agent_factory.py` - Agent工厂
   - `base_node.py` - 节点基类
   - `search_context.py` - 搜索上下文数据模型
@@ -130,26 +128,39 @@ jiuwen_deepsearch/
 ### common/ - 公共模块
 
 **主要文件**：
+- `common_constants.py` - 公共常量定义
 - `exception.py` - 自定义异常类
 - `status_code.py` - 状态码定义
 
 ---
 
-### utils/ - 通用工具函数
+### utils/ - 工具函数
 
 **主要文件**：
-- `common_constants.py`
-- `llm_utils.py`
-- `log_handlers.py`
-- `log_interface.py`
-- `log_manager.py`
-- `log_time.py`
-- `log_utils.py`
-- `node_constants.py`
-- `stream_utils.py`
-- `text_utils.py`
-- `url_utils.py`
-- `runtime_contextvars.py`
+
+- `common_utils/` - 通用工具函数
+  - `llm_utils.py`
+  - `security_utils.py`
+  - `stream_utils.py`
+  - `text_utils.py`
+  - `url_utils.py`
+- `constants_utils/` - 常量工具函数
+  - `node_constants.py`
+  - `runtime_contextvars.py`
+  - `search_engine_constants.py`
+- `debug_utils/` - 调试工具函数
+  - `node_debug.py`
+  - `outline_visualization.py`
+  - `result_exporter.py`
+- `log_utils/` - 日志工具函数
+  - `log_commmon.py`
+  - `log_handlers.py`
+  - `log_interface.py`
+  - `log_manager.py`
+  - `log_metrics.py`
+- `validation_utils/` - 校验工具函数
+  - `field_validation.py`
+  - `param_validation.py`
 
 ---
 
