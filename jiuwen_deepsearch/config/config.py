@@ -163,6 +163,7 @@ class ServiceConfig(BaseModel):
 
     # debug辅助工具参数
     node_debug_enable: bool = Field(default=False, description="节点格式化记录debug日志开关")
+    export_intermediate_results: bool = Field(default=False, description="可视化任务执行中间结果开关")
 
 
 class Config(BaseModel):

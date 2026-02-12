@@ -38,6 +38,8 @@ class StatusCode(Enum):
     PARAM_CHECK_ERROR_STRING_LENGTH = (200024, "Parameter validation failed, string length invalid")
     PARAM_CHECK_ERROR_VAL_OUT_OF_RANGE = (200025,
                                           "Parameter {param} value {value} is out of range [{min_val}, {max_val}]")
+    PARAM_CHECK_ERROR_FILE_DIR_INVALID = (200026, "Invalid file directory: {file_dir}")
+    PARAM_CHECK_ERROR_FILE_DIR_UNSAFE = (200027, "Unsafe file directory: {file_dir}, it must be within: {safe_base}")
     CONVERT_DOCX_FILE_FAILED = (200105, "Failed to convert docx file: {e}")
     FILE_NOT_FOUND_ERROR_PROMPT = (200106, "Prompt file {name}.md not found.")
     APPLY_SYSTEM_PROMPT_FAILED = (200107, "Applying system prompt template with {name}.md failed")

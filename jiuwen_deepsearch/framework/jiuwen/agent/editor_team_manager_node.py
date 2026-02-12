@@ -19,6 +19,7 @@ from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.editor_tea
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Section, Outline, Report, SubReport, \
     SubReportContent
 from jiuwen_deepsearch.utils.debug_utils.node_debug import NodeType, add_debug_log_wrapper
+from jiuwen_deepsearch.utils.debug_utils.result_exporter import ResultExporter
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from jiuwen_deepsearch.utils.common_utils.stream_utils import StreamEvent, MessageType
@@ -49,10 +50,12 @@ class EditorTeamNode(BaseNode):
         history_outlines = runtime.get_global_state("search_context.history_outlines")
         report_template = runtime.get_global_state("search_context.report_template")
         history_reports = runtime.get_global_state("search_context.history_reports")
+        session_id = runtime.get_global_state("search_context.session_id")
         config = runtime.get_global_state("config")
 
         return dict(language=language, messages=messages, outline=outline, history_outlines=history_outlines,
-                    report_template=report_template, history_reports=history_reports, config=config)
+                    report_template=report_template, history_reports=history_reports, session_id=session_id,
+                    config=config)
 
     async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
         # 1. 从上下文中获取大纲，并初始化报告
@@ -100,9 +103,14 @@ class EditorTeamNode(BaseNode):
             )
         tasks_results = await asyncio.gather(*tasks)
 
-        # 3. 结果汇聚，更新上下文
-        updated_state = self._update_state(state, sections, sub_reports, tasks_results)
-        results = self._post_handle(inputs, updated_state, runtime, context)
+        # 3. 填充结果字段，并更新在state中
+        state = self._update_state(state, sections, sub_reports, tasks_results)
+
+        # 4. 导出outline完整信息
+        ResultExporter.export_outline(state.get("outline"), state.get("session_id"))
+
+        # 5. 上下文更新
+        results = self._post_handle(inputs, state, runtime, context)
         return results
 
     def _post_handle(self, inputs: Input, state: dict, runtime: Runtime, context: Context):

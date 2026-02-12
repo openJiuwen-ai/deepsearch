@@ -349,9 +349,9 @@ class SubReporterNode(BaseNode):
         doc_infos = updating_state.get("doc_infos")
         sub_report_success = updating_state.get("success")
         generate_sub_report_msg = updating_state.get("msg")
-        classified_content = updating_state.get("classified_content")
-        sub_report_content_text = updating_state.get("sub_report_content")
-        sub_report_content_summary = updating_state.get("sub_report_summary")
+        classified_content = updating_state.get("classified_content", [])
+        sub_report_content_text = updating_state.get("sub_report_content", "")
+        sub_report_content_summary = updating_state.get("sub_report_summary", "")
 
         detail_msg = (f"{generate_sub_report_msg}, doc_infos_num:{len(doc_infos)}, "
                       f"classified_content_num:{len(classified_content)}")
