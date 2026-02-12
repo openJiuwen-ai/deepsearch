@@ -110,20 +110,6 @@ class SourceTracerNode(BaseNode)
 
 ---
 
-### class SourceTracerInferNode
-```python
-class SourceTracerInferNode(BaseNode)
-```
-**SourceTracerInferNode** 负责溯源推理（并行流程默认执行）。
-
-**功能**：
-- 若 `source_tracer_source_tracer_infer_switch` 关闭则直接返回。
-- 调用 `SourceTracerInfer.run` 生成推理信息。
-- 写入 `final_result.response_content` 与 `infer_messages`。
-- 异常时写入 `exception_info`。
-
----
-
 ### class EndNode
 ```python
 class EndNode(End)
@@ -136,7 +122,7 @@ class EndNode(End)
 
 ---
 
-## 编辑团队子图节点（Editor Team Subgraph Nodes）
+## 编辑团队子图节点（Reasoning Writing Subgraph Nodes）
 
 定义在 `reasoning_writing_graph/editor_team_nodes.py`：
 
@@ -167,7 +153,7 @@ class EndNode(End)
 ### 主工作流（并行）
 ```
 StartNode -> EntryNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
--> EditorTeamNode -> ReporterNode -> SourceTracerNode -> SourceTracerInferNode -> EndNode
+-> EditorTeamNode -> ReporterNode -> SourceTracerNode -> EndNode
 ```
 
 ### 编辑团队子图

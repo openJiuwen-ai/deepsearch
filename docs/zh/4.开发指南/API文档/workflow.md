@@ -49,7 +49,7 @@ async run(message: Optional[str] = None, conversation_id: Optional[str] = None, 
 
 **参数要点**：
 - `agent_config` 会被 `AgentConfig.model_validate` 校验。
-- `interrupt_feedback` 仅允许 `""` 或 `"accepted"`。
+- `interrupt_feedback` 仅允许 `""` 或 `"accepted"`。默认值`""`
 - `report_template` 若为 base64 字符串会自动解码，解码失败则回退原文。
 
 **返回**：

@@ -7,7 +7,7 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Message(name: str 
 **Message** 是对话消息模型。
 
 **字段**：
-- **name**(str, 可选)：消息名称。默认值：`""`。
+- **name**(str, 可选)：消息名称。默认值：`None`。
 - **role**(str, 必需)：角色（`user` / `system` / `assistant`）。
 - **content**(str, 必需)：消息内容。
 
@@ -21,6 +21,19 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.StepType(str, Enum
 
 **枚举值**：
 - **INFO_COLLECTING**：`"info_collecting"`。
+
+---
+
+## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.RetrievalQuery
+```python
+class jiuwen_deepsearch.framework.jiuwen.agent.search_context.RetrievalQuery(...)
+```
+**RetrievalQuery** 是具体步骤Step中每个query的检索信息
+
+**字段**：
+- **query**(str)：直接用于检索的query。
+- **description**(str)：简要说明query为何与搜索任务相关，为何要生成当前query。
+- **doc_infos**(Optional[List[Dict]])：query检索的文档信息。
 
 ---
 
@@ -38,8 +51,7 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Step(...)
 - **parent_ids**(List[str], 可选)：依赖步骤。
 - **relationships**(List[str], 可选)：依赖关系说明。
 - **background_knowledge**(List[str], 可选)：背景知识。
-- **gathered_infos**(List[Dict], 可选)：原始信息。
-- **doc_infos**(List[Dict], 可选)：处理后信息。
+- **retrieval_queries**(List[Dict], 可选)：每个query的检索信息。
 - **step_result**(str, 可选)：步骤总结结果。默认值：`None`。
 - **evaluation**(str, 可选)：步骤评估。默认值：`""`。
 
@@ -105,23 +117,21 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReport(...)
 - **section_id**(int)：默认值：`0`。
 - **section_task**(str)：子章节任务标题。
 - **background_knowledge**(List[Dict], 可选)：背景知识。
-- **classified_content**(List[Dict])：筛选后的文档信息。
-- **sub_report_content**(str)：子报告内容。
-- **sub_report_content_summary**(str)：子报告摘要。
-- **sub_report_trace_source_datas**(List[Dict])：子报告溯源信息。
+- **content**(SubReportContent)：子报告内容。
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReportMsg
+## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReportContent
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReportMsg(...)
+class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReportContent(...)
 ```
-**SubReportMsg** 为兼容字段，保留历史结构。
+**SubReportContent** 是子报告内容模型。
 
 **字段**：
-- **section_id**(int)：默认值：`0`。
-- **content**(str)：子报告内容。
-- **content_summary**(str)：子报告摘要。
+- **classified_content**(List[Dict])：子章节筛选的文档信息。
+- **sub_report_content**(str)：子报告内容。
+- **sub_report_content_summary**(str)：子报告摘要。
+- **sub_report_trace_source_datas**(List[Dict])：子报告溯源信息。
 
 ---
 
@@ -134,10 +144,12 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Report(...)
 **字段**：
 - **id**(str)：默认值：`""`。
 - **report_task**(str)：总报告任务。
+- **report_template**：总报告模板。
 - **sub_reports**(List[SubReport])：子报告列表。
 - **report_content**(str)：溯源前报告内容。
+- **all_classified_contents**(List[Dict])：所有子章节筛选的文档信息。
 - **merged_trace_source_datas**(List[Dict])：溯源校验前的引用信息。
-- **final_report_content**(str)：溯源后报告内容。
+- **checked_trace_source_report_content**(str)：溯源后报告内容。
 - **checked_trace_source_datas**(List[Dict])：最终溯源信息。
 
 ---
@@ -151,16 +163,16 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.FinalResult(...)
 **字段**：
 - **response_content**(str)：响应内容。
 - **citation_messages**(dict)：引用信息。
-- **infer_messages**(list)：溯源推理输出。
 - **exception_info**(str)：异常信息。
+- **warning_info**(str)：告警信息。
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.StatusContext
+## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SearchContext
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.StatusContext(...)
+class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SearchContext(...)
 ```
-**StatusContext** 是工作流运行时状态模型。
+**SearchContext** 是工作流运行时状态模型。
 
 **字段**：
 - **session_id**(str)：会话ID。默认值：`""`。
@@ -179,18 +191,3 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.StatusContext(...)
 - **history_reports**(List[Report])：历史报告。
 - **final_result**(FinalResult)：最终结果。
 - **debug_pre_step**(str)：上一步调试日志。
-
----
-
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SearchContext
-```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SearchContext(StatusContext)
-```
-
-**新增字段**：
-- **collected_infos**(List[str])
-- **sub_report_content_list**(List[SubReportMsg])
-- **report_task**(str)
-- **report**(str)
-- **all_trace_source_datas**(List[Dict])
-- **all_classified_contents**(List[List])

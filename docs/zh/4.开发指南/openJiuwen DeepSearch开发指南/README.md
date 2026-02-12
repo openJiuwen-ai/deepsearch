@@ -1,4 +1,5 @@
 # 初始化DeepResearchAgent配置
+
 ---
 配置参数类`Config`包括两种类型的参数变量，一是`AgentConfig`类，这些参数是通过对外接口，用户可修改的配置参数；二是`ServiceConfig`类，这些参数涵盖系统各模块的主要核心配置参数，且已配置默认值。
 
@@ -21,6 +22,7 @@ agent_config["web_search_engine_config"]["search_api_key"] = ""
 ```
 
 ## 大模型配置说明
+
 ---
 
 openJiuwen-DeepSearch 支持接入两种类型模型：
@@ -33,6 +35,7 @@ openJiuwen-DeepSearch 支持接入两种类型模型：
 > 说明：用户需要自行前往硅基流动或者OpenAI的官网注册账号，以便获取模型广场中可用模型的api_key、模型名称model_name和模型调用的URL请求地址base_url。
 
 ## 网络搜索引擎配置说明
+
 ---
 
 openJiuwen-DeepSearch 支持接入两种类型网络搜索引擎：
@@ -43,6 +46,7 @@ openJiuwen-DeepSearch 支持接入两种类型网络搜索引擎：
 > 说明：用户需要自行前往谷歌搜索或者Tavily的官网注册账号，以便获取可用搜索引擎的search_api_key和搜索引擎调用的URL请求地址search_url。
 
 ## ssl证书配置说明
+
 ---
 在访问LLM大模型服务、以及网络搜索引擎服务时，openJiuwen-DeepSearch提供ssl证书配置能力，如需启用，需要在环境变量中，打开`LLM_SSL_VERIFY`设置为`true`，并提供大模型服务访问的证书`LLM_SSL_CERT`。同理，打开`TOOL_SSL_VERIFY`设置为`true`时，需要提供网络搜索服务访问的证书`TOOL_SSL_CERT`。
 
@@ -57,10 +61,12 @@ os.environ["TOOL_SSL_CERT"] = ""
 ```
 
 # 实例化DeepResearchAgent类
+
 ---
 `DeepResearchAgent`是系统基于openJiuwen开发框架，开发并预置的深度研究智能体。能够根据用户查询进行研究报告生成。
 
 ## 通过AgentFactory方式创建
+
 ---
 
 `AgentFactory`类支持根据配置`agent_config`，实例化`DeepResearchAgent`类，获取`DeepResearchAgent`对象。
@@ -74,6 +80,7 @@ agent = agent_factory.create_agent(agent_config)
 获取的agent是一个`DeepResearchAgent`实例。
 
 ## 通过构造函数方式创建
+
 ---
 直接通过`DeepResearchAgent`的构造函数，获取实例化对象。
 
@@ -83,6 +90,7 @@ agent = DeepResearchAgent(agent_config)
 ```
 
 # 生成研究报告
+
 ---
 
 `DeepResearchAgent`可以根据用户查询，进行深度研究和分析规划，通过网络搜索等任务完成信息收集，并生成研究报告。用户的输入，可以分为三种情况：
@@ -91,6 +99,7 @@ agent = DeepResearchAgent(agent_config)
  - 用户查询和用户已有报告，期望系统遵循已有报告的章节格式进行研究报告生成。
 
 ## 根据用户查询生成研究报告
+
 ---
 
 `DeepResearchAgent`的`run`函数，可接收用户查询`message`，数据类型是`str`。`conversation_id`参数是会话标识id。深度研究过程，遵循`agent_config`的参数配置。
@@ -118,6 +127,7 @@ async for chunk in agent.run(message=message, conversation_id=str(uuid.uuid4()),
 ```
 
 ## 根据用户查询和用户已有模板生成研究报告
+
 ---
 
 当配置参数`agent_config`中，开启遵从模板模式时，用户同时输入已准备好的模板文件内容，系统生成的研究报告，可以遵从用户提供的模板文件的要求。
@@ -203,6 +213,7 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 ```
 
 ## 根据用户查询和用户已有报告生成研究报告
+
 ---
 
 当配置参数`agent_config`中，开启遵从模板模式时，用户同时输入已准备好的样例报告文件内容，系统可以先根据用户提供的样例报告文件，提取出模板内容，再遵从模板内容要求，进行研究报告生成。
@@ -252,6 +263,45 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
         logger.debug("[Final Report is: %s]", report_result)
 ```
 
+# 人机交互
+
+---
+
+本功能支持在规划预备阶段与用户进行自然语言式反馈交互，从而更深入理解用户意图。在配置参数`agent_config`中，开启人机交互，`workflow_human_in_the_loop=True`，此时系统会针对用户的原始查询，提出几个延伸问题，用户通过自然语言的反馈回答，为系统提供更加详细的用户需求信息。本功能默认开启。
+
+在这个过程中，系统会先触发流程中断，等待用户反馈。当用户提供回答时，会再次发起流程恢复，继续完成`DeepResearchAgent`的任务执行。
+
+在这两轮查询中，会话标识id必须保持一致，以便于系统可以实现中断恢复。
+
+人机交互的实现方式有两种，默认启用web模式：
+ - web模式：通过studio等前端界面，用户通过文本框输入，系统发送请求。此时`service_config`的`workflow_feedback_mode=web`，推荐使用此方式。
+ - cmd模式：通过cmd等命令行界面，用户直接反馈文本，系统接收用户输入。此时`service_config`的`workflow_feedback_mode=cmd`。
+
+```python
+
+# web模式示例：
+
+# 1. 第一轮发送请求
+{
+    "message": "用户原始查询问题",
+    "conversation_id": "会话标识id",
+    "agent_config": {"workflow_human_in_the_loop": True, ...}
+}
+
+# 2. 第二轮发送请求
+{
+    "message": "用户的反馈回答",
+    "conversation_id": "会话标识id，与第一轮保持一致",
+    "agent_config": {"workflow_human_in_the_loop": True, ...}
+}
+
+```
+
+
+
 # 更多参考
+
+---
+
  - 开发指南的完整示例代码，详见：https://gitcode.com/openJiuwen/deepsearch/blob/dev/main.py
  - 更多关于openJiuwen-DeepSearch的API介绍，详见：https://gitcode.com/openJiuwen/deepsearch/tree/dev/docs/zh/4.%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97
