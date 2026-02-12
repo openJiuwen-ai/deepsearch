@@ -69,7 +69,7 @@ class TestRouter:
             "go_deepsearch": False,
             "lang": "zh-CN",
             "llm_result": "",
-            "error_msg": "[211704]Error when EntryNode classify the query: TestMessage"
+            "error_msg": "[211600]Error when EntryNode classify the query: TestMessage"
         }
 
         with patch(

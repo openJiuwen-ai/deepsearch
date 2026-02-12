@@ -92,7 +92,7 @@ class TestOutliner:
         mock_llm_response = {
             'current_outline': {},
             'success_flag': False,
-            'error_msg': '[211904]Error when Outliner generate an outline: TestMessage'
+            'error_msg': '[211800]Error when Outliner generate an outline: TestMessage'
         }
 
         with patch(
