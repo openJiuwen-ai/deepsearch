@@ -1269,7 +1269,7 @@ class Reporter:
                 dict(
                     role="user",
                     content=(
-                        "Previous validation failed: "
+                        "Previously extracted data did not pass validation: "
                         f"{validation_error}\n"
                         + (
                             f"Previous extracted chart JSON: {previous_records}\n"
@@ -1326,59 +1326,78 @@ class Reporter:
             return dict(rs_success=False, visualization_content=error_msg)
 
     async def _validate_chart_compliance(
-        self, extracted_chart_json: str, section_idx: int, section_outline: str
+        self,
+        extracted_chart_json: str,
+        section_idx: int,
+        section_outline: str,
+        max_attempt_num: int,
     ) -> dict:
         """Validate extracted chart data with compliance prompt."""
-        try:
-            payload = (extracted_chart_json or "").strip()
-            llm_input = apply_system_prompt(
-                "chart_compliance_validate",
-                dict(
-                    extracted_chart_json=payload,
-                    section_outline=section_outline,
-                ),
-            )
-            llm_output = await ainvoke_llm_with_stats(
-                llm=self._llm,
-                messages=llm_input,
-                agent_name=NodeId.SUB_REPORTER.value + "_chart_compliance",
-            )
-            if not llm_output or not llm_output.get("content"):
-                return dict(valid=False, error_msg="")
-            raw = (llm_output.get("content") or "").strip()
+        payload = (extracted_chart_json or "").strip()
+        for attempt in range(max_attempt_num):
             try:
+                llm_input = apply_system_prompt(
+                    "chart_compliance_validate",
+                    dict(
+                        extracted_chart_json=payload,
+                        section_outline=section_outline,
+                    ),
+                )
+                llm_output = await ainvoke_llm_with_stats(
+                    llm=self._llm,
+                    messages=llm_input,
+                    agent_name=NodeId.SUB_REPORTER.value + "_chart_compliance",
+                )
+                if not llm_output or not llm_output.get("content"):
+                    logger.warning(
+                        "%s [validate_chart_compliance] section_idx: [%s] "
+                        "attempt %s/%s error: %s",
+                        EFFECT_SUB_REPORT_TAG,
+                        section_idx,
+                        attempt + 1,
+                        max_attempt_num,
+                        "LLM generated empty compliance content",
+                    )
+                    continue
+                raw = (llm_output.get("content") or "").strip()
                 result = json.loads(raw)
-            except json.JSONDecodeError:
-                return dict(valid=False, error_msg="")
-            except (TypeError, ValueError):
-                return dict(valid=False, error_msg="")
-            if not isinstance(result, dict):
-                return dict(valid=False, error_msg="")
-            valid = bool(result.get("valid", False))
-            error_msg = str(result.get("error_msg", "") or "").strip()
-            if valid:
-                return dict(valid=True, error_msg="")
-            return dict(valid=False, error_msg=error_msg)
-        except CustomException as e:
-            logger.warning(
-                "%s [validate_chart_compliance] section_idx: [%s] %s",
-                EFFECT_SUB_REPORT_TAG,
-                section_idx,
-                str(e),
-            )
-            return dict(valid=False, error_msg="")
-        except Exception as e:
-            if LogManager.is_sensitive():
-                error_msg = "chart compliance validation error"
-            else:
-                error_msg = f"chart compliance validation error: {str(e)}"
-            logger.warning(
-                "%s [validate_chart_compliance] section_idx: [%s] %s",
-                EFFECT_SUB_REPORT_TAG,
-                section_idx,
-                error_msg,
-            )
-            return dict(valid=False, error_msg="")
+                if not isinstance(result, dict):
+                    logger.warning(
+                        "%s [validate_chart_compliance] section_idx: [%s] "
+                        "attempt %s/%s error: %s",
+                        EFFECT_SUB_REPORT_TAG,
+                        section_idx,
+                        attempt + 1,
+                        max_attempt_num,
+                        "LLM returned non-object compliance JSON",
+                    )
+                    continue
+                valid = bool(result.get("valid", False))
+                error_msg = str(result.get("error_msg", "") or "").strip()
+                if valid:
+                    return dict(valid=True, error_msg="")
+                return dict(valid=False, error_msg=error_msg)
+            except Exception as e:
+                if isinstance(e, (json.JSONDecodeError, TypeError, ValueError)):
+                    error_msg = (
+                        "LLM returned invalid compliance JSON"
+                        if LogManager.is_sensitive()
+                        else f"LLM returned invalid compliance JSON: {str(e)}"
+                    )
+                elif LogManager.is_sensitive():
+                    error_msg = "chart compliance validation error"
+                else:
+                    error_msg = f"chart compliance validation error: {str(e)}"
+                logger.warning(
+                    "%s [validate_chart_compliance] section_idx: [%s] "
+                    "attempt %s/%s error: %s",
+                    EFFECT_SUB_REPORT_TAG,
+                    section_idx,
+                    attempt + 1,
+                    max_attempt_num,
+                    error_msg,
+                )
+        return dict(valid=False, error_msg="")
 
     async def _validate_chart_traceability(
         self,
@@ -1405,57 +1424,42 @@ class Reporter:
                     agent_name=NodeId.SUB_REPORTER.value + "_chart_traceability",
                 )
                 if not llm_output or not llm_output.get("content"):
-                    raise CustomValueException(
-                        error_code=StatusCode.LLM_RESPONSE_ERROR.code,
-                        message=(
-                            "LLM generated empty traceability content "
-                            f"for section {section_idx}"
-                        ),
+                    logger.warning(
+                        "%s [validate_chart_traceability] section_idx: [%s] "
+                        "attempt %s/%s error: %s",
+                        EFFECT_SUB_REPORT_TAG,
+                        section_idx,
+                        attempt + 1,
+                        max_attempt_num,
+                        "LLM generated empty traceability content",
                     )
+                    continue
                 raw = (llm_output.get("content") or "").strip()
-                try:
-                    result = json.loads(raw)
-                except json.JSONDecodeError as e:
-                    raise CustomValueException(
-                        error_code=StatusCode.LLM_RESPONSE_ERROR.code,
-                        message=(
-                            "LLM returned invalid traceability JSON "
-                            f"for section {section_idx}"
-                        ),
-                    ) from e
-                except (TypeError, ValueError) as e:
-                    raise CustomValueException(
-                        error_code=StatusCode.LLM_RESPONSE_ERROR.code,
-                        message=(
-                            "LLM returned invalid traceability JSON "
-                            f"for section {section_idx}"
-                        ),
-                    ) from e
+                result = json.loads(raw)
                 if not isinstance(result, dict):
-                    raise CustomValueException(
-                        error_code=StatusCode.LLM_RESPONSE_ERROR.code,
-                        message=(
-                            "LLM returned non-object traceability JSON "
-                            f"for section {section_idx}"
-                        ),
+                    logger.warning(
+                        "%s [validate_chart_traceability] section_idx: [%s] "
+                        "attempt %s/%s error: %s",
+                        EFFECT_SUB_REPORT_TAG,
+                        section_idx,
+                        attempt + 1,
+                        max_attempt_num,
+                        "LLM returned non-object traceability JSON",
                     )
+                    continue
                 valid = bool(result.get("valid", False))
                 error_msg = str(result.get("error_msg", "") or "").strip()
                 if valid:
                     return dict(valid=True, error_msg="")
                 return dict(valid=False, error_msg=error_msg)
-            except CustomException as e:
-                logger.warning(
-                    "%s [validate_chart_traceability] section_idx: [%s] "
-                    "attempt %s/%s error: %s",
-                    EFFECT_SUB_REPORT_TAG,
-                    section_idx,
-                    attempt + 1,
-                    max_attempt_num,
-                    str(e),
-                )
             except Exception as e:
-                if LogManager.is_sensitive():
+                if isinstance(e, (json.JSONDecodeError, TypeError, ValueError)):
+                    error_msg = (
+                        "LLM returned invalid traceability JSON"
+                        if LogManager.is_sensitive()
+                        else f"LLM returned invalid traceability JSON: {str(e)}"
+                    )
+                elif LogManager.is_sensitive():
                     error_msg = "chart traceability validation error"
                 else:
                     error_msg = f"chart traceability validation error: {str(e)}"
@@ -1485,9 +1489,10 @@ class Reporter:
             visualization_content = await self._extract_data_from_text(
                 visualization_dict, validation_error, previous_records
             )
-            logger.debug(
-                f"{EFFECT_SUB_REPORT_TAG} [process_visualization_task] Extract data: {visualization_content}."
-            )
+            if not LogManager.is_sensitive():
+                logger.debug(
+                    f"{EFFECT_SUB_REPORT_TAG} [process_visualization_task] Extract data: {visualization_content}."
+                )
             raw_payload = (
                 visualization_content.get("sub_section_visualization_content") or ""
             ).strip()
@@ -1526,9 +1531,10 @@ class Reporter:
                         else ""
                     )
                     validation_error += (
-                        "\nYou must extract only complete records that have clear "
-                        "holistic semantic equivalents in the original content. "
-                        "Do not fabricate any full data entries."
+                        "\nYou must only extract complete records where every field"
+                        "(category, value, unit) can be fully traced to the original content." 
+                        " Do not invent, fabricate, or infer any data that does not"
+                        " have a clear corresponding description in the source."
                     )
                     previous_records = raw_payload or None
                     extract_ok = False
@@ -1537,6 +1543,7 @@ class Reporter:
                     raw_payload,
                     section_idx,
                     visualization_dict.get("section_outline", ""),
+                    max_attempt_num,
                 )
                 if compliance.get("valid", False):
                     validation_error = ""
@@ -1544,7 +1551,7 @@ class Reporter:
                     break
                 compliance_error = (compliance.get("error_msg", "") or "").strip()
                 validation_error = (
-                    f"Compliance validation failed: {compliance_error}"
+                    f"Compliance/Relevance validation failed: {compliance_error}"
                     if compliance_error
                     else ""
                 )
@@ -2224,6 +2231,7 @@ class Reporter:
             if not mermaid_code:
                 continue
             block = [
+                context.newline,
                 f"```mermaid{context.newline}",
                 *[f"{line}{context.newline}" for line in mermaid_code.splitlines()],
                 f"```{context.newline}",
