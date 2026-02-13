@@ -11,7 +11,7 @@
 * 操作系统：Windows10及以上
 
 * 软件
-  * Git：点击 <a href="https://mirrors.huaweicloud.com/git-for-windows/v2.51.0.windows.1/Git-2.51.0-64-bit.exe" target="_blank" rel="nofollow noopener noreferrer"> 下载</a> 进行下载并安装
+  * Git：点击 <a href="https://mirrors.huaweicloud.com/git-for-windows/v2.51.0.windows.1/Git-2.51.0-64-bit.exe" target="_blank" rel="nofollow noopener noreferrer">下载链接</a>进行下载并安装
   * Docker：推荐使用 Docker Desktop 进行安装，安装方法详见下文
 
 ### 安装Docker Desktop
@@ -23,7 +23,7 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
 
 * 按下 Windows + S，输入 PowerShell 进行搜索。
 
-* 在搜索结果中，右键点击 Windows PowerShell，选择 以管理员身份运行。
+* 在搜索结果中，右键点击 Windows PowerShell，选择「以管理员身份运行」。
 
 * 在 PowerShell 执行如下命令，然后重新启动计算机。
 
@@ -38,10 +38,12 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
 * 下载：前往 <a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="nofollow noopener noreferrer"> Docker 官网</a> 下载 Windows 版本安装包（X86 机器请选择 AMD64 版本）；
 * 运行安装包：​**仅勾选​「Use WSL 2 instead of Hyper-V」、​「Add shortcut to desktop」选项**，点击​「OK」开始安装；
 * 安装完成后，请重启电脑；
-* 重启后，打开 Docker Desktop，等待加载完成（首次启动可能需要 5 ~ 10 分钟）；
-* Docker Desktop 启动后，若临时试用，可点击欢迎界面的 `Continue without signing in` 直接进入；长期使用请参考 <a href="https://docs.docker.com/desktop/setup/sign-in" target="_blank" rel="nofollow noopener noreferrer"> 官方指导</a>。
+* 重启后，打开 Docker Desktop，等待加载完成（首次启动可能需要 5-10 分钟）；
+* Docker Desktop 启动后：
+  - 若临时试用，可点击欢迎界面的 `Continue without signing in` 直接进入；
+  - 长期使用请参考 <a href="https://docs.docker.com/desktop/setup/sign-in" target="_blank" rel="nofollow noopener noreferrer">官方指导</a>。
 
-* 至此 Docker Desktop 安装完成。
+* 至此，Docker Desktop 安装完成。
 
 > **说明**：若安装过程中出现报错，或了解官方安装过程，请参考 <a href="https://docs.docker.com/desktop/setup/install/windows-install/" target="_blank" rel="nofollow noopener noreferrer"> Docker Desktop 官方安装指导</a>。
 
@@ -53,7 +55,7 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
 
 #### MySQL
 
-* **说明**：若需使用 MySQL，请在传入参数中 `DB_TYPE` 选择为 `mysql`，并按照下列步骤完成 MySQL 的安装和配置，启动命令参考[数据库配置](#mysql-相关参数db_typemysql-时生效)。
+* **说明**：若需使用 MySQL，请在传入参数中将 `DB_TYPE` 设置为 `mysql`，并按照下列步骤完成 MySQL 的安装和配置。启动命令参考[数据库配置](#mysql-相关参数db_typemysql-时生效)。
 
 * 下载 <a href="https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-8.4.7-winx64.msi" target="_blank" rel="nofollow noopener noreferrer"> MySQL 8.4</a> 安装包。
 
@@ -170,7 +172,7 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
   | `DB_PASSWORD`   | 数据库密码      |
   | `DEEPSEARCH_DB_NAME` | 数据库名称      |
 
-  **注意**：在Docker部署环境下，需要显式配置容器访问宿主机的网络地址`host.docker.internal`从而访问MySQL服务。使用示例：
+  **注意**：在 Docker 部署环境下，需要显式配置容器访问宿主机的网络地址 `host.docker.internal` 从而访问 MySQL 服务。使用示例：
 
   ```bash
   docker run \

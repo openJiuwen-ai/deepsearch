@@ -8,7 +8,7 @@
   * CPU：最低 2 核，推荐 4 核及以上
   * RAM：最低 4GB，推荐 8GB 及以上
 
-* 操作系统：MacOS14.0（Sonoma）及以上
+* 操作系统：macOS 14.0（Sonoma）及以上
 
 * 软件
   * Git：运行以下命令进行安装：
@@ -23,12 +23,12 @@
 ### 安装 Docker Desktop
 
 * 下载：访问 <a href="https://www.docker.com/products/docker-desktop/" rel="nofollow">Docker Desktop 官网</a>，点击 “Download for Mac” 获取 .dmg 安装包；
-* 双击下载的文件，将 **Docker** 图标 拖拽到 Applications 文件夹；
+* 双击下载的文件，将 **Docker** 图标拖拽到 Applications 文件夹；
 * 打开 Launchpad，找到并启动 Docker 应用；
 * 首次运行时，系统会提示输入 macOS 密码以授权安装虚拟机组件，点击 OK 继续；
 * 首次启动需等待 Docker 完成初始化（下载基础镜像，约需几分钟）。
 
-* 至此 Docker Desktop 安装完成。
+* 至此，Docker Desktop 安装完成。
 
 > **说明**：若安装过程中出现报错，请参考 <a href="https://docs.docker.com/desktop/setup/install/mac-install/" rel="nofollow">Docker Desktop 官方安装指导</a>。
 
@@ -41,7 +41,7 @@
 
 #### MySQL
 
-* **说明**：若需使用 MySQL，请在传入参数中 `DB_TYPE` 选择为 `mysql`，并按照下列步骤完成 MySQL 的安装和配置，启动命令参考[数据库配置](#mysql-相关参数db_typemysql-时生效)。
+* **说明**：若需使用 MySQL，请在传入参数中将 `DB_TYPE` 设置为 `mysql`，并按照下列步骤完成 MySQL 的安装和配置。启动命令参考[数据库配置](#mysql-相关参数db_typemysql-时生效)。
 
 * 打开 “终端”，运行以下命令安装MySQL：
 
@@ -58,7 +58,7 @@
    ```
 
 * 在 MySQL 中执行以下命令创建数据库：
-  > 说明：`your_user_name`、`your_password` 可自行设置，后续启动命令将会用到。
+  > 说明：`your_user_name`、`your_password` 需自行设置，后续启动命令将会用到。
 
   ```sql
   # 新建数据库
@@ -150,7 +150,7 @@
   | `DB_PASSWORD`   | 数据库密码      |
   | `DEEPSEARCH_DB_NAME` | 数据库名称      |
 
-  **注意**：在Docker部署环境下，需要显式配置容器访问宿主机的网络地址`host.docker.internal`从而访问MySQL服务。使用示例：
+  **注意**：在 Docker 部署环境下，需要显式配置容器访问宿主机的网络地址 `host.docker.internal` 从而访问 MySQL 服务。使用示例：
 
   ```bash
   docker run \

@@ -35,7 +35,7 @@
 
 #### MySQL
 
-* **说明**：若需使用 MySQL，请在传入参数中 `DB_TYPE` 选择为 `mysql`，并按照下列步骤完成 MySQL 的安装和配置，启动命令参考[数据库配置](#mysql-相关参数db_typemysql-时生效)。
+* **说明**：若需使用 MySQL，请在传入参数中将 `DB_TYPE` 设置为 `mysql`，并按照下列步骤完成 MySQL 的安装和配置。启动命令参考[数据库配置](#mysql-相关参数db_typemysql-时生效)。
 
 * 运行以下命令安装 MySQL：
 
@@ -144,7 +144,7 @@
   | `DB_PASSWORD`   | 数据库密码      |
   | `DEEPSEARCH_DB_NAME` | 数据库名称      |
 
-  **注意**：在Docker部署环境下，需要显式配置容器访问宿主机的网络地址`host.docker.internal`从而访问MySQL服务。使用示例：
+  **注意**：在 Docker 部署环境下，需要显式配置容器访问宿主机的网络地址 `host.docker.internal` 从而访问 MySQL 服务。使用示例：
 
   ```bash
   docker run \
