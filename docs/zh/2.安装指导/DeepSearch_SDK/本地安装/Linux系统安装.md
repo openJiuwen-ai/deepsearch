@@ -184,19 +184,14 @@
    |---------------------------------------|--------------------------------------------------------------------|---------------------------------------------------------------------------|
    | **BACKEND_PORT**                      | DeepSearch服务的API端口号。如果要搭配Studio前端使用，该端口号需要与Studio配置文件.env中的`DEEPSEARCH_AGENT_PORT`一致。       | `6000`                     |
    | **HOST**                              | DeepSearch服务的API地址。如果要搭配Studio前端使用，该地址需要与Studio配置文件.env中的`DEEPSEARCH_AGENT_HOST`一致。    | `127.0.0.1`          |
-   | **WORKER_NUM**                        |                                                  | `1`                                                              |
-   | **SERVICE_MODE**                      |                                                  | `develop`                                                              |
-   | **LLM_SSL_VERIFY**                    |                                                  | `False`                                                              |
-   | **LLM_SSL_CERT**                      |                                                  |                                                               |
-   | **TOOL_SSL_VERIFY**                   |                                                  | `False`                                                              |
-   | **TOOL_SSL_CERT**                     |                                                  |                                                               |
-   | **SERVER_AES_MASTER_KEY**             |                                                  |                                                               |
    | **DB_TYPE**                           | 数据库类型，可选：mysql/sqlite                                              | `sqlite`                                                               |
    | **DB_HOST**                           | mysql数据库的主机地址                                                       | `localhost`                                                               |
    | **DB_PORT**                           | mysql数据库的端口号                                                         | `3306`                                                                    |
    | **DB_USER**                           | mysql数据库的用户名                                                         | `your_user_name`                                                             |
    | **DB_PASSWORD**                       | mysql数据库的密码                                                           | `your_password`                                                         |
-   | **SQLITE_DB_PATH**                    | sqlite数据库的保存路径                                                      | `data/databases`                                                         |
+   | **DEEPSEARCH_DB_NAME**                | mysql数据库名                                                               | `openjiuwen_deepsearch`                                                         |
+   | **SQLITE_DB_PATH**                    | sqlite数据库的保存路径                                                       | `data/databases`                                                         |
+   | **DEEPSEARCH_SQLITE_DB**              | sqlite数据库的保存文件名                                                     | `agent.db`                                                         |
 
 * 在源码根目录下，运行以下命令启动后端服务，并耐心等待：
    
