@@ -1,3 +1,8 @@
+import os
+
+os.environ["LLM_SSL_VERIFY"] = "false"
+os.environ["TOOL_SSL_VERIFY"] = "false"
+
 from unittest.mock import Mock, patch, AsyncMock
 
 import pytest
