@@ -7,14 +7,6 @@ import logging
 import os
 import uuid
 from pathlib import Path
-
-# llm ssl verify
-os.environ["LLM_SSL_VERIFY"] = "false"
-os.environ["LLM_SSL_CERT"] = ""
-# tool ssl verify
-os.environ["TOOL_SSL_VERIFY"] = "false"
-os.environ["TOOL_SSL_CERT"] = ""
-
 from jiuwen_deepsearch.config.config import Config
 from jiuwen_deepsearch.config.method import ExecutionMethod
 from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
@@ -169,9 +161,24 @@ if __name__ == "__main__":
     parser.add_argument("--web_search_api_key", type=str, required=True, help="web 搜索引擎密钥")
     parser.add_argument("--web_search_url", type=str, required=True, help="web 搜索引擎服务地址")
     parser.add_argument("--max_web_search_results", type=int, default=5, help="web 搜索单次请求返回结果数量")
+    parser.add_argument("--llm_ssl_verify", action="store_true", help="开启 LLM SSL 校验")
+    parser.add_argument("--llm_ssl_cert", type=str, default="", help="LLM SSL 证书")
+    parser.add_argument("--tool_ssl_verify", action="store_true", help="开启 Tool SSL 校验")
+    parser.add_argument("--tool_ssl_cert", type=str, default="", help="Tool SSL 证书")
 
     args = parser.parse_args()
+    if args.llm_ssl_verify and not args.llm_ssl_cert:
+        parser.error("开启 --llm_ssl_verify 时必须提供 --llm_ssl_cert")
+
+    if args.tool_ssl_verify and not args.tool_ssl_cert:
+        parser.error("开启 --tool_ssl_verify 时必须提供 --tool_ssl_cert")
     joined_query = " ".join(args.query)
+
+    os.environ["LLM_SSL_VERIFY"] = "true" if args.llm_ssl_verify else "false"
+    os.environ["LLM_SSL_CERT"] = args.llm_ssl_cert
+
+    os.environ["TOOL_SSL_VERIFY"] = "true" if args.tool_ssl_verify else "false"
+    os.environ["TOOL_SSL_CERT"] = args.tool_ssl_cert
 
     current_agent_config = Config().agent_config.model_dump()
     current_agent_config["llm_config"]["model_name"] = args.llm_model_name

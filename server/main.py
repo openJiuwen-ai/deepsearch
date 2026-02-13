@@ -33,7 +33,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 
 @asynccontextmanager
-async def lifespan_func(app: FastAPI):
+async def lifespan_func(input_app: FastAPI):
     # Startup
     logger.info("🚀 Starting openJiuwen-DeepSearch Server...")
 

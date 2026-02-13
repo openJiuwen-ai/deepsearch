@@ -50,10 +50,6 @@ log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 default_fixture_loop_scope = "function"
 default_test_loop_scope = "function"
 
-[tool.pytest_env]
-LLM_SSL_VERIFY = "false"
-TOOL_SSL_VERIFY = "false"
-
 [dependency-groups]
 # 后端依赖，使用uv sync --group backend安装SDK依赖和后端依赖
 backend = [

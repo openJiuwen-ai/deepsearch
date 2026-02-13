@@ -34,9 +34,9 @@ def sort_key(path):
     filename = os.path.basename(path)
     if filename == "metrics.log":
         return 0
-    m = re.match(r"metrics\.log\.(\d+)", filename)
-    if m:
-        return int(m.group(1))
+    match = re.match(r"metrics\.log\.(\d+)", filename)
+    if match:
+        return int(match.group(1))
     return 0
 
 
@@ -106,11 +106,11 @@ def compute_info_parent(df: pd.DataFrame) -> str | None:
 info_collector_parent_node_value = compute_info_parent(df_node)
 
 
-def assign_parent_node_for_line(node: str) -> str:
-    if node in editor_team_nodes:
+def assign_parent_node_for_line(current_node: str) -> str:
+    if current_node in editor_team_nodes:
         return "EditorTeamNode"
-    elif node in info_collector_child_nodes:
-        return info_collector_parent_node_value if info_collector_parent_node_value else node
+    elif current_node in info_collector_child_nodes:
+        return info_collector_parent_node_value if info_collector_parent_node_value else current_node
     else:
         return "None"
 

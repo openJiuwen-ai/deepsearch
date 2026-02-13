@@ -158,7 +158,7 @@
 * 请在 *.env* 文件中根据实际情况修改以下变量的值（勿覆盖其他变量）：
 
   > **说明**：<br>
-  > HOST、BACKEND_PORT分别是DeepSearch服务的API地址和端口号。<br>
+  > HOST、BACKEND_PORT分别是DeepSearch服务的API地址和端口号。当环境变量中不填该值时，默认Host为`0.0.0.0`，端口号为`8000`。<br>
   > DB_HOST、DB_PORT 等变量的值可替换为实际数据库信息，DB_USER、DB_PASSWORD 为上文新建的 MySQL 用户与密码。如果密码中包含特殊字符，可参考 [特殊字符转义表](#windows-special-char) 将特殊字符替换为 URL 编码。
     
    ```env
