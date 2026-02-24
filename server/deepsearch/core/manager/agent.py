@@ -103,6 +103,7 @@ class DeepSearchAgentManager:
             has_template = True
 
         res = {
+            "search_mode": request.search_mode,
             "execute_mode": "commercial",
             "execution_method": "parallel",
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,

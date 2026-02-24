@@ -95,52 +95,23 @@ class EntryNode(BaseNode):
         logger.info(f"[EntryNode] Start EntryNode.")
 
         messages = session.get_global_state("search_context.messages")
-        human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
         llm_model_name = session.get_global_state("config.llm_config.model_name")
 
-        return dict(messages=messages, human_in_the_loop=human_in_the_loop, llm_model_name=llm_model_name)
+        return dict(messages=messages, llm_model_name=llm_model_name)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        # 将session set到session_context中，llm 调用时获取session，去write流式输出
-        session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
-        human_in_the_loop = current_inputs.get("human_in_the_loop")
 
         classify_query_output = await classify_query(current_inputs)
-        if classify_query_output.get("go_deepsearch"):
-            stream_content = ""
-        else:
-            stream_content = classify_query_output.get("llm_result", "")
-        stream_id = str(uuid.uuid4())
-        await session.write_custom_stream({"message_id": stream_id,
-                                           "agent": NodeId.ENTRY.value,
-                                           "content": "",
-                                           "message_type": MessageType.MESSAGE_CHUNK.value,
-                                           "event": StreamEvent.START.value,
-                                           "created_time": get_current_time()})
-        await session.write_custom_stream({"message_id": stream_id,
-                                           "agent": NodeId.ENTRY.value,
-                                           "content": stream_content,
-                                           "message_type": MessageType.MESSAGE_CHUNK.value,
-                                           "event": StreamEvent.MESSAGE.value,
-                                           "created_time": get_current_time()})
-        await session.write_custom_stream({"message_id": stream_id,
-                                           "agent": NodeId.ENTRY.value,
-                                           "content": "",
-                                           "message_type": MessageType.MESSAGE_CHUNK.value,
-                                           "event": StreamEvent.DONE.value,
-                                           "created_time": get_current_time()})
-        classify_query_output = {**classify_query_output,
-                                 "human_in_the_loop": human_in_the_loop}
+
         result = self._post_handle(inputs, classify_query_output, session, context)
         return result
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        go_deepsearch = algorithm_output.get("go_deepsearch", True)
+        human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
         lang = algorithm_output.get("lang", "zh-CN").lower()
         llm_result = algorithm_output.get("llm_result", "")
         error_msg = algorithm_output.get("error_msg", "")
-        human_in_the_loop = algorithm_output.get("human_in_the_loop", False)
 
         if "zh" in lang or "chinese" in lang or "中文" in lang:
             lang = CHINESE
@@ -148,27 +119,21 @@ class EntryNode(BaseNode):
             lang = ENGLISH
 
         # 更新session
-        session.update_global_state({"search_context.go_deepsearch": go_deepsearch})
         session.update_global_state({"search_context.language": lang})
-        session.update_global_state({"search_context.search_mode": "research"})
 
         # 决定下一个节点
-        next_node = NodeId.END.value
-        if go_deepsearch and human_in_the_loop:
-            next_node = NodeId.GENERATE_QUESTIONS.value
-        elif go_deepsearch and not human_in_the_loop:
-            next_node = NodeId.OUTLINE.value
+        next_node = NodeId.GENERATE_QUESTIONS.value if human_in_the_loop else NodeId.OUTLINE.value
 
-        if next_node == NodeId.END.value:
+        if error_msg:
             session.update_global_state({"search_context.final_result.response_content": llm_result})
             session.update_global_state({"search_context.final_result.exception_info": error_msg})
+            next_node = NodeId.END.value
 
         # 添加EntryNode debug日志
         add_debug_log_wrapper(session, NodeDebugData(NodeId.ENTRY.value, 0,
                               NodeType.MAIN.value, output_content=str(algorithm_output)))
         logger.info(f"[EntryNode] End EntryNode.")
-        return dict(go_deepsearch=go_deepsearch,
-                    language=lang,
+        return dict(language=lang,
                     human_in_the_loop=human_in_the_loop,
                     next_node=next_node)
 

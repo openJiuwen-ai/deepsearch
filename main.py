@@ -192,13 +192,14 @@ if __name__ == "__main__":
     current_agent_config["web_search_engine_config"]["max_web_search_results"] = args.max_web_search_results
 
     current_agent_config["workflow_human_in_the_loop"] = False
+    current_agent_config["search_mode"] = args.search_mode
     if args.execution_method.strip() == ExecutionMethod.DEPENDENCY_DRIVING.value:
         current_agent_config["execution_method"] = ExecutionMethod.DEPENDENCY_DRIVING.value
     else:
         current_agent_config["execution_method"] = ExecutionMethod.PARALLEL.value
 
     if args.mode == "query":
-        if not args.query or args.search_mode not in ["research"]:
+        if not args.query or args.search_mode not in ["research", "search"]:
             parser.print_help()
         else:
             asyncio.run(run_jiuwen_workflow(joined_query, current_agent_config, args.report_template))
