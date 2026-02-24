@@ -1,20 +1,23 @@
-import pytest
 import logging
 from copy import deepcopy
 from typing import Any
-from jiuwen_deepsearch.common.exception import CustomValueException
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.config.config import Config
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import DeepresearchAgent, validate_generate_template_params
+
+import pytest
+
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
 
 logger = logging.getLogger(__name__)
 
+
 async def validate_run_input_parameter(
-    param_name: str,
-    invalid_value: Any,
-    error_code: int,
-    error_msg_fragment: str,
-    base_config: dict
+        param_name: str,
+        invalid_value: Any,
+        error_code: int,
+        error_msg_fragment: str,
+        base_config: dict
 ) -> None:
     """验证 run 方法输入参数的公共逻辑"""
     current_config = deepcopy(base_config)
@@ -39,6 +42,7 @@ async def validate_run_input_parameter(
     assert exc_info.value.error_code == error_code
     assert error_msg_fragment in err_msg
 
+
 # 测试用例1: message 参数验证
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_value, error_code, error_msg_fragment", [
@@ -54,6 +58,7 @@ async def test_run_validate_message(invalid_value, error_code, error_msg_fragmen
         error_msg_fragment,
         Config().agent_config.model_dump()
     )
+
 
 # 测试用例2: conversation_id 参数验证
 @pytest.mark.asyncio
@@ -71,6 +76,7 @@ async def test_run_validate_conversation_id(invalid_value, error_code, error_msg
         Config().agent_config.model_dump()
     )
 
+
 # 测试用例3: report_template 参数验证
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_value, error_code, error_msg_fragment", [
@@ -84,6 +90,7 @@ async def test_run_validate_report_template(invalid_value, error_code, error_msg
         error_msg_fragment,
         Config().agent_config.model_dump()
     )
+
 
 # 测试用例4: interrupt_feedback 参数验证
 @pytest.mark.asyncio
@@ -100,9 +107,12 @@ async def test_run_validate_interrupt_feedback(invalid_value, error_code, error_
         Config().agent_config.model_dump()
     )
 
+
 # 测试用例5: agent_config 参数验证
 wrong_agent_config = Config().agent_config.model_dump()
 wrong_agent_config["outliner_max_section_num"] = -1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_value, error_code, error_msg_fragment", [
     (wrong_agent_config, 200009, "Parameter validation failed"),
@@ -116,6 +126,7 @@ async def test_run_validate_agent_config(invalid_value, error_code, error_msg_fr
         error_msg_fragment,
         Config().agent_config.model_dump()
     )
+
 
 # 测试用例6: 处理报告模板
 def test_handle_report_template():

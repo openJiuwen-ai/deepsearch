@@ -1,13 +1,15 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
-import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.editor_team_nodes import SubSourceTracerNode
-from jiuwen_deepsearch.framework.jiuwen.agent.search_context import SubReportContent
-from jiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+import pytest
+
+from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
+from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
+    SubSourceTracerNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SubReportContent
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 
 
 class ExposedSubSourceTracerNode(SubSourceTracerNode):
@@ -60,7 +62,8 @@ class TestSubSourceTracerNode:
         return {
             "sub_report_content": "This is a test sub report content.",
             "search_record": {
-                "web_page_search_record": [{"title": "example", "url": "https://example.com", "content": "test content"}],
+                "web_page_search_record": [
+                    {"title": "example", "url": "https://example.com", "content": "test content"}],
                 "web_image_search_record": [],
                 "local_text_search_record": [],
                 "local_image_search_record": []
@@ -218,14 +221,14 @@ class TestSubSourceTracerNode:
             elif key == "section_context.section_idx":
                 return 1
             return None
-        
+
         mock_session.get_global_state.side_effect = get_global_state_side_effect
-        
+
         # Test with trace source datas
         algorithm_output = {
             "trace_source_datas": [
                 {"id": "test_id", "content": "Test content",
-                    "url": "https://example.com"}
+                 "url": "https://example.com"}
             ],
             "modified_report": "Test modified report"
         }
@@ -263,4 +266,4 @@ class TestSubSourceTracerNode:
         updated_sub_report = call_args["section_context.sub_report_content"]
         assert isinstance(updated_sub_report, SubReportContent)
         assert updated_sub_report.sub_report_content_text == ""
-        assert updated_sub_report.sub_report_trace_source_datas == []     
+        assert updated_sub_report.sub_report_trace_source_datas == []

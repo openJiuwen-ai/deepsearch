@@ -9,7 +9,7 @@ from typing import Dict, Any
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from jiuwen_deepsearch.algorithm.report_template.template_generator import TemplateGenerator
+from openjiuwen_deepsearch.algorithm.report_template.template_generator import TemplateGenerator
 from server.core.database import milliseconds
 from server.deepsearch.common.exception.exceptions import (
     ReportTemplateBasicException,

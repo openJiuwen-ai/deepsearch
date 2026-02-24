@@ -1,8 +1,8 @@
-# jiuwen_deepsearch.framework.jiuwen.agent.workflow
+# openjiuwen_deepsearch.framework.openjiuwen.agent.workflow
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.workflow.BaseAgent
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.BaseAgent
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.workflow.BaseAgent()
+class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.BaseAgent()
 ```
 **BaseAgent** 是所有 Agent 的基类。
 
@@ -35,9 +35,9 @@ async generate_template(file_name: str, file_stream: str, is_template: bool, age
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.workflow.DeepresearchAgent
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchAgent
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.workflow.DeepresearchAgent()
+class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchAgent()
 ```
 并行执行模式的研究工作流 Agent。
 

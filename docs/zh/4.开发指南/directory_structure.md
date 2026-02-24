@@ -1,11 +1,11 @@
-# jiuwen_deepsearch 目录结构说明
+# openjiuwen_deepsearch 目录结构说明
 
-本文档基于当前 `deepsearch/jiuwen_deepsearch` 的最新代码，说明目录结构与主要模块职责。
+本文档基于当前 `deepsearch/openjiuwen_deepsearch` 的最新代码，说明目录结构与主要模块职责。
 
 ## 目录结构概览
 
 ```
-jiuwen_deepsearch/
+openjiuwen_deepsearch/
 ├── algorithm/                      # 核心算法模块
 │   ├── prompts/                    # 提示词模板
 │   ├── query_understanding/        # 查询理解（router/outliner/planner/interpreter）
@@ -15,7 +15,7 @@ jiuwen_deepsearch/
 │   ├── source_trace/               # 溯源与校验
 │   └── source_tracer_infer/        # 溯源推理
 ├── framework/                      # 框架层实现
-│   └── jiuwen/
+│   └── openjiuwen/
 │       ├── agent/                  # 工作流与节点
 │       ├── tools/                  # 搜索工具封装
 │       └── llm/                    # LLM模型工厂
@@ -77,7 +77,7 @@ jiuwen_deepsearch/
 
 **主要子目录**：
 
-- **jiuwen/agent/** - 工作流与节点
+- **openjiuwen/agent/** - 工作流与节点
   - `workflow.py` - Agent与工作流入口
   - `main_graph_nodes.py` - 主图节点（Start/Entry/Outline/Reporter/SourceTracer等）
   - `editor_team_manager_node.py` - 编辑团队子图管理
@@ -92,10 +92,10 @@ jiuwen_deepsearch/
   - `base_node.py` - 节点基类
   - `search_context.py` - 搜索上下文数据模型
 
-- **jiuwen/tools/** - 搜索工具封装
+- **openjiuwen/tools/** - 搜索工具封装
   - `web_search.py`
   - `local_search.py`
-  - `Search_API/` - 搜索引擎封装
+  - `search_api/` - 搜索引擎封装
     - `external_tool/`
     - `petal/`
     - `tavily/`
@@ -104,14 +104,14 @@ jiuwen_deepsearch/
     - `local_search_api/`
     - `native_local_search_api/`
 
-- **jiuwen/config/** - 工具配置
+- **openjiuwen/config/** - 工具配置
   - `tools.py`
 
-- **jiuwen/utils/** - 框架工具函数
+- **openjiuwen/utils/** - 框架工具函数
   - `common_utils.py`
   - `debug_logger.py`
 
-- **jiuwen/llm/** - LLM模型工厂
+- **openjiuwen/llm/** - LLM模型工厂
   - `llm_model_factory.py`
 
 ---
@@ -176,9 +176,9 @@ jiuwen_deepsearch/
 ```
 用户请求
     ↓
-framework/jiuwen/agent/workflow.py
+framework/openjiuwen/agent/workflow.py
     ↓
-framework/jiuwen/agent/main_graph_nodes.py
+framework/openjiuwen/agent/main_graph_nodes.py
     ├── StartNode 初始化上下文与配置
     ├── EntryNode → algorithm/query_understanding/router.py
     ├── [GenerateQuestionsNode -> FeedbackHandlerNode]（HITL可选）
@@ -196,12 +196,12 @@ framework/jiuwen/agent/main_graph_nodes.py
 
 ## 快速定位指南
 
-- **想了解工作流** → `framework/jiuwen/agent/`
+- **想了解工作流** → `framework/openjiuwen/agent/`
 - **想了解算法** → `algorithm/`
 - **想修改配置** → `config/config.py`
-- **想接入搜索引擎** → `framework/jiuwen/tools/Search_API/`
+- **想接入搜索引擎** → `framework/openjiuwen/tools/search_api/`
 - **想修改提示词** → `algorithm/prompts/`
-- **想了解上下文模型** → `framework/jiuwen/agent/search_context.py`
+- **想了解上下文模型** → `framework/openjiuwen/agent/search_context.py`
 
 ---
 

@@ -2,7 +2,7 @@ import logging
 import json
 from logging.handlers import RotatingFileHandler
 
-from jiuwen_deepsearch.utils.log_utils.log_interface import setup_interface_logger, record_interface_log
+from openjiuwen_deepsearch.utils.log_utils.log_interface import setup_interface_logger, record_interface_log
 
 
 def test_setup_interface_logger_stream_handler(monkeypatch):

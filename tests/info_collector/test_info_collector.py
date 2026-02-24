@@ -2,9 +2,10 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 import pytest
 
-from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, llm_context
-from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQuery
-from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, \
+    llm_context
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
+from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
 
 
 class ExposedInfoRetrievalNode(InfoRetrievalNode):
@@ -44,9 +45,7 @@ class ExposedInfoRetrievalNode(InfoRetrievalNode):
 class TestInfoCollectorNode:
     """测试 InfoCollectorNode"""
 
-    def setup_method(self):
-        """每个测试方法运行前都会执行"""
-        self.module_path = "jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.info_collector"
+    MODULE_PATH = "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector"
 
     @pytest.fixture
     def info_collector_node(self):
@@ -232,7 +231,7 @@ class TestInfoCollectorNode:
             }
         ]
 
-        with patch(f'{self.module_path}.remove_duplicate_items') as mock_remove_dup:
+        with patch(f'{self.MODULE_PATH}.remove_duplicate_items') as mock_remove_dup:
             mock_remove_dup.side_effect = lambda x: x[:1]  # 模拟去重，保留第一个
 
             result = info_collector_node.post_handle(inputs, algorithm_output, mock_session, mock_context)
@@ -367,7 +366,7 @@ class TestInfoCollectorNode:
         local_record = []
         query = "测试查询"
 
-        with patch(f'{self.module_path}.run_doc_evaluation') as mock_eval:
+        with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
             # Mock 文档评估结果
             mock_eval.return_value = [
                 {
@@ -469,8 +468,8 @@ class TestInfoCollectorNode:
         """测试 _prepare_collector_tool 方法 - web 搜索"""
         state = {"search_method": "web"}
 
-        with patch(f'{self.module_path}.create_web_search_tool') as mock_web, \
-                patch(f'{self.module_path}.create_local_search_tool') as mock_local:
+        with patch(f'{self.MODULE_PATH}.create_web_search_tool') as mock_web, \
+                patch(f'{self.MODULE_PATH}.create_local_search_tool') as mock_local:
             mock_web_tool = Mock()
             mock_web_tool.card.tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
@@ -490,8 +489,8 @@ class TestInfoCollectorNode:
         """测试 _prepare_collector_tool 方法 - local 搜索"""
         state = {"search_method": "local"}
 
-        with patch(f'{self.module_path}.create_web_search_tool') as mock_web, \
-                patch(f'{self.module_path}.create_local_search_tool') as mock_local:
+        with patch(f'{self.MODULE_PATH}.create_web_search_tool') as mock_web, \
+                patch(f'{self.MODULE_PATH}.create_local_search_tool') as mock_local:
             mock_web_tool = Mock()
             mock_web_tool.card.tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
@@ -511,8 +510,8 @@ class TestInfoCollectorNode:
         """测试 _prepare_collector_tool 方法 - 两种搜索"""
         state = {"search_method": "both"}
 
-        with patch(f'{self.module_path}.create_web_search_tool') as mock_web, \
-                patch(f'{self.module_path}.create_local_search_tool') as mock_local:
+        with patch(f'{self.MODULE_PATH}.create_web_search_tool') as mock_web, \
+                patch(f'{self.MODULE_PATH}.create_local_search_tool') as mock_local:
             mock_web_tool = Mock()
             mock_web_tool.card.tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
@@ -541,7 +540,7 @@ class TestInfoCollectorNode:
             "search_query": "测试查询"
         }
 
-        with patch(f'{self.module_path}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
+        with patch(f'{self.MODULE_PATH}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
             mock_llm_call.return_value = {"tool_calls": [{"name": "tool1"}]}
 
             response = await info_collector_node.invoke_llm_with_retry(tool_prompt, tool_list, state)
@@ -561,7 +560,7 @@ class TestInfoCollectorNode:
             "search_query": "测试查询"
         }
 
-        with patch(f'{self.module_path}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
+        with patch(f'{self.MODULE_PATH}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
             # Mock 前两次失败，第三次成功
             mock_llm_call.side_effect = [
                 Exception("第一次失败"),
@@ -596,7 +595,7 @@ class TestInfoCollectorNode:
             "search_query": "测试查询"
         }
 
-        with patch(f'{self.module_path}.process_tool_call') as mock_process:
+        with patch(f'{self.MODULE_PATH}.process_tool_call') as mock_process:
             mock_process.return_value = {
                 **agent_input,
                 "web_page_search_record": [{"url": "http://example.com"}]

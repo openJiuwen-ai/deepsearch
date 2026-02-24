@@ -6,8 +6,11 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
-from jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes import SourceTracerNode
-from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Report
+from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import SourceTracerNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report
+
+
+MODULE_PATH = "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes"
 
 
 class ExposedSourceTracerNode(SourceTracerNode):
@@ -133,7 +136,7 @@ class TestSourceTracerNode:
             "citation_messages": {"test_id": "Valid"}
         }, ensure_ascii=False)
 
-        with patch('jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes.postprocess_by_citation_checker',
+        with patch(f'{MODULE_PATH}.postprocess_by_citation_checker',
                    new_callable=AsyncMock) as mock_postprocess:
             mock_postprocess.return_value = expected_citation_result
 
@@ -168,7 +171,7 @@ class TestSourceTracerNode:
             "check_result": True, "citation_checker_result_str": '{"response_content": "Valid"}'}
 
         with patch.object(source_tracer_node, 'pre_handle') as mock_pre_handle:
-            with patch('jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes.preprocess_info') as mock_preprocess:
+            with patch(f'{MODULE_PATH}.preprocess_info') as mock_preprocess:
                 with patch.object(SourceTracerNode, 'build_citation_checker_result',
                                   new_callable=AsyncMock) as mock_build_citation:
                     with patch.object(source_tracer_node, 'post_handle') as mock_post_handle:

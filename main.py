@@ -7,12 +7,12 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from jiuwen_deepsearch.config.config import Config
-from jiuwen_deepsearch.config.method import ExecutionMethod
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.utils.debug_utils.result_exporter import ResultExporter
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.config.method import ExecutionMethod
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.utils.debug_utils.result_exporter import ResultExporter
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 LogManager.init(
     log_dir="./output/logs",

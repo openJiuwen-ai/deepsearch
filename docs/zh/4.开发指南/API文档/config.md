@@ -1,8 +1,8 @@
-# jiuwen_deepsearch.config.config
+# openjiuwen_deepsearch.config.config
 
-## class jiuwen_deepsearch.config.config.LLMConfig
+## class openjiuwen_deepsearch.config.config.LLMConfig
 ```python
-class jiuwen_deepsearch.config.config.LLMConfig()
+class openjiuwen_deepsearch.config.config.LLMConfig()
 ```
 **LLMConfig**是LLM模型配置类，用于配置大语言模型的参数。
 
@@ -18,7 +18,7 @@ class jiuwen_deepsearch.config.config.LLMConfig()
 **样例**：
 
 ```python
->>> from jiuwen_deepsearch.config.config import LLMConfig
+>>> from openjiuwen_deepsearch.config.config import LLMConfig
 
 >>> # 样例1：创建LLM配置
 >>> llm_config = LLMConfig(
@@ -35,9 +35,9 @@ gpt-4 openai
 >>> print(llm_config.model_name)
 ```
 
-## class jiuwen_deepsearch.config.config.WebSearchEngineConfig
+## class openjiuwen_deepsearch.config.config.WebSearchEngineConfig
 ```python
-class jiuwen_deepsearch.config.config.WebSearchEngineConfig()
+class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 ```
 **WebSearchEngineConfig**是网络搜索引擎配置类，用于配置网络搜索相关的参数。
 
@@ -52,7 +52,7 @@ class jiuwen_deepsearch.config.config.WebSearchEngineConfig()
 **样例**：
 
 ```python
->>> from jiuwen_deepsearch.config.config import WebSearchEngineConfig
+>>> from openjiuwen_deepsearch.config.config import WebSearchEngineConfig
 
 >>> # 样例1：创建网络搜索引擎配置
 >>> web_search_config = WebSearchEngineConfig(
@@ -69,9 +69,9 @@ petal 5
 tavily
 ```
 
-## class jiuwen_deepsearch.config.config.LocalSearchEngineConfig
+## class openjiuwen_deepsearch.config.config.LocalSearchEngineConfig
 ```python
-class jiuwen_deepsearch.config.config.LocalSearchEngineConfig()
+class openjiuwen_deepsearch.config.config.LocalSearchEngineConfig()
 ```
 **LocalSearchEngineConfig**是本地搜索引擎配置类，用于配置本地搜索相关的参数。
 
@@ -91,7 +91,7 @@ class jiuwen_deepsearch.config.config.LocalSearchEngineConfig()
 **样例**：
 
 ```python
->>> from jiuwen_deepsearch.config.config import LocalSearchEngineConfig
+>>> from openjiuwen_deepsearch.config.config import LocalSearchEngineConfig
 
 >>> # 样例1：创建本地搜索引擎配置
 >>> local_search_config = LocalSearchEngineConfig(
@@ -110,9 +110,9 @@ openapi mix
 openapi doc
 ```
 
-## class jiuwen_deepsearch.config.config.CustomWebSearchConfig
+## class openjiuwen_deepsearch.config.config.CustomWebSearchConfig
 ```python
-class jiuwen_deepsearch.config.config.CustomWebSearchConfig()
+class openjiuwen_deepsearch.config.config.CustomWebSearchConfig()
 ```
 **CustomWebSearchConfig**是自定义网络搜索配置类，用于配置自定义网络搜索工具的参数。
 
@@ -125,7 +125,7 @@ class jiuwen_deepsearch.config.config.CustomWebSearchConfig()
 **样例**：
 
 ```python
->>> from jiuwen_deepsearch.config.config import CustomWebSearchConfig
+>>> from openjiuwen_deepsearch.config.config import CustomWebSearchConfig
 
 >>> # 样例1：创建自定义网络搜索配置
 >>> custom_web_config = CustomWebSearchConfig(
@@ -140,9 +140,10 @@ class jiuwen_deepsearch.config.config.CustomWebSearchConfig()
 >>> print(custom_web_config.custom_web_search_file)
 ```
 
-## class jiuwen_deepsearch.config.config.CustomLocalSearchConfig
+
+## class openjiuwen_deepsearch.config.config.CustomLocalSearchConfig
 ```python
-class jiuwen_deepsearch.config.config.CustomLocalSearchConfig()
+class openjiuwen_deepsearch.config.config.CustomLocalSearchConfig()
 ```
 **CustomLocalSearchConfig**是自定义本地搜索配置类，用于配置自定义本地搜索工具的参数。
 
@@ -155,7 +156,7 @@ class jiuwen_deepsearch.config.config.CustomLocalSearchConfig()
 **样例**：
 
 ```python
->>> from jiuwen_deepsearch.config.config import CustomLocalSearchConfig
+>>> from openjiuwen_deepsearch.config.config import CustomLocalSearchConfig
 
 >>> # 样例1：创建自定义本地搜索配置
 >>> custom_local_config = CustomLocalSearchConfig(
@@ -170,9 +171,9 @@ class jiuwen_deepsearch.config.config.CustomLocalSearchConfig()
 >>> print(custom_local_config.custom_local_search_file)
 ```
 
-## class jiuwen_deepsearch.config.config.AgentConfig
+## class openjiuwen_deepsearch.config.config.AgentConfig
 ```python
-class jiuwen_deepsearch.config.config.AgentConfig()
+class openjiuwen_deepsearch.config.config.AgentConfig()
 ```
 **AgentConfig**是Agent配置类，用于配置Agent的执行模式和参数。
 
@@ -193,7 +194,7 @@ class jiuwen_deepsearch.config.config.AgentConfig()
 **样例**：
 
 ```python
->>> from jiuwen_deepsearch.config.config import AgentConfig, LLMConfig, WebSearchEngineConfig
+>>> from openjiuwen_deepsearch.config.config import AgentConfig, LLMConfig, WebSearchEngineConfig
 
 >>> # 样例1：创建Agent配置
 >>> llm_config = LLMConfig(model_name="gpt-4", model_type="openai")
@@ -214,9 +215,9 @@ general parallel
 commercial True
 ```
 
-## class jiuwen_deepsearch.config.config.ServiceConfig
+## class openjiuwen_deepsearch.config.config.ServiceConfig
 ```python
-class jiuwen_deepsearch.config.config.ServiceConfig()
+class openjiuwen_deepsearch.config.config.ServiceConfig()
 ```
 **ServiceConfig**是服务配置类，用于配置SDK服务的默认参数。
 
@@ -273,7 +274,7 @@ class jiuwen_deepsearch.config.config.ServiceConfig()
 **样例**：
 
 ```python
->>> from jiuwen_deepsearch.config.config import ServiceConfig
+>>> from openjiuwen_deepsearch.config.config import ServiceConfig
 
 >>> # 样例1：创建服务配置
 >>> service_config = ServiceConfig(
@@ -290,9 +291,9 @@ class jiuwen_deepsearch.config.config.ServiceConfig()
 7200 300
 ```
 
-## class jiuwen_deepsearch.config.config.Config
+## class openjiuwen_deepsearch.config.config.Config
 ```python
-class jiuwen_deepsearch.config.config.Config()
+class openjiuwen_deepsearch.config.config.Config()
 ```
 **Config**是总配置类，包含Agent配置和服务配置。
 
@@ -304,7 +305,7 @@ class jiuwen_deepsearch.config.config.Config()
 **样例**：
 
 ```python
->>> from jiuwen_deepsearch.config.config import Config, AgentConfig, ServiceConfig
+>>> from openjiuwen_deepsearch.config.config import Config, AgentConfig, ServiceConfig
 
 >>> # 样例1：创建总配置
 >>> agent_config = AgentConfig(execute_mode="general")

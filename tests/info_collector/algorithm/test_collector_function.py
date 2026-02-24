@@ -1,14 +1,14 @@
 import pytest
 import json
 from unittest.mock import Mock, AsyncMock, patch
-from jiuwen_deepsearch.algorithm.research_collector.collector_function import \
+from openjiuwen_deepsearch.algorithm.research_collector.collector_function import \
     process_tool_call, check_agent_input, handle_single_tool_call, \
     execute_tool, process_tool_result, web_search_jiuwen, \
     process_tavily_search_result, process_google_search_result, \
     process_common_search_result, process_local_search_result, \
     process_local_search_common, remove_duplicate_items, create_tool_message
 
-module_path = "jiuwen_deepsearch.algorithm.research_collector.collector_function"
+MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.collector_function"
 
 class TestProcessToolCall:
     """测试 process_tool_call 函数"""
@@ -45,8 +45,8 @@ class TestProcessToolCall:
     @pytest.mark.asyncio
     async def test_process_tool_call_success(self):
         """测试正常的工具调用处理"""
-        with patch(f"{module_path}.check_agent_input") as mock_check, \
-            patch(f"{module_path}.handle_single_tool_call", new_callable=AsyncMock) as mock_handle:
+        with patch(f"{MODULE_PATH}.check_agent_input") as mock_check, \
+            patch(f"{MODULE_PATH}.handle_single_tool_call", new_callable=AsyncMock) as mock_handle:
             mock_check.return_value = self.sample_agent_input
             mock_handle.return_value = {"modified": True}
 
@@ -84,8 +84,8 @@ class TestProcessToolCall:
 
         response = {"tool_calls": multiple_tool_calls}
 
-        with patch(f"{module_path}.check_agent_input") as mock_check, \
-                patch(f"{module_path}.handle_single_tool_call", new_callable=AsyncMock) as mock_handle:
+        with patch(f"{MODULE_PATH}.check_agent_input") as mock_check, \
+                patch(f"{MODULE_PATH}.handle_single_tool_call", new_callable=AsyncMock) as mock_handle:
             mock_check.return_value = self.sample_agent_input
             mock_handle.return_value = self.sample_agent_input
 
@@ -166,8 +166,8 @@ class TestHandleSingleToolCall:
     @pytest.mark.asyncio
     async def test_handle_single_tool_call_success(self):
         """测试成功的单个工具调用处理"""
-        with patch(f"{module_path}.execute_tool", new_callable=AsyncMock) as mock_execute, \
-                patch(f"{module_path}.create_tool_message") as mock_create:
+        with patch(f"{MODULE_PATH}.execute_tool", new_callable=AsyncMock) as mock_execute, \
+                patch(f"{MODULE_PATH}.create_tool_message") as mock_create:
             mock_execute.return_value = ["result1", "result2"]
             mock_create.return_value = {"modified": True}
 
@@ -218,7 +218,7 @@ class TestExecuteTool:
         mock_tool.invoke.return_value = {"result": "success"}
         self.tool_dict["test_tool"] = mock_tool
 
-        with patch(f"{module_path}.process_tool_result") as mock_process:
+        with patch(f"{MODULE_PATH}.process_tool_result") as mock_process:
             mock_process.return_value = ["processed_result"]
 
             result = await execute_tool(
@@ -241,7 +241,7 @@ class TestExecuteTool:
         step_info = self.step_info
         step_info["web_search_engine_name"] = "web_search_tool"
 
-        with patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.logger") as mock_logger:
             result = await execute_tool(
                 self.tool_call,
                 self.agent_input,
@@ -261,8 +261,8 @@ class TestExecuteTool:
         step_info = self.step_info
         step_info["local_search_engine_name"] = "local_search_tool"
 
-        with patch(f"{module_path}.logger") as mock_logger, \
-            patch(f"{module_path}.LogManager.is_sensitive") as mock_is_sensitive:
+        with patch(f"{MODULE_PATH}.logger") as mock_logger, \
+            patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_is_sensitive:
             # 测试两种情况： 敏感模式和非敏感模式
 
             # 情况1： 非敏感模式（会调用 logger.exception）
@@ -303,7 +303,7 @@ class TestExecuteTool:
         mock_tool.invoke.return_value = {"result": "success"}
         self.tool_dict["test_tool"] = mock_tool
 
-        with patch(f"{module_path}.process_tool_result") as mock_process:
+        with patch(f"{MODULE_PATH}.process_tool_result") as mock_process:
             mock_process.return_value = ["processed_result"]
 
             await execute_tool(
@@ -330,7 +330,7 @@ class TestProcessToolResult:
 
     def test_process_web_search_tool(self):
         """测试web搜索工具结果处理"""
-        with patch(f"{module_path}.web_search_jiuwen") as mock_web_search:
+        with patch(f"{MODULE_PATH}.web_search_jiuwen") as mock_web_search:
             mock_web_search.return_value = (["result"], {"modified": True})
 
             result = process_tool_result(
@@ -346,7 +346,7 @@ class TestProcessToolResult:
 
     def test_process_local_search_tool(self):
         """测试本地搜索工具结果处理"""
-        with patch(f"{module_path}.process_local_search_result") as mock_local_search:
+        with patch(f"{MODULE_PATH}.process_local_search_result") as mock_local_search:
             mock_local_search.return_value = (["result"], {"modified": True})
 
             result = process_tool_result(
@@ -399,7 +399,7 @@ class TestSearchResultProcessing:
             {"title": "New2", "url": "http://new2.com", "content": "Content2"}
         ]
 
-        with patch(f"{module_path}.remove_duplicate_items") as mock_remove_dup:
+        with patch(f"{MODULE_PATH}.remove_duplicate_items") as mock_remove_dup:
             mock_remove_dup.return_value = tool_content
 
             result, modified_input = process_tavily_search_result(
@@ -520,7 +520,7 @@ class TestWebSearchJiuwen:
             "search_results": [{"title": "Google Result", "link": "http://google.com", "snippet": "Snippet"}]
         }
 
-        with patch(f"{module_path}.process_google_search_result") as mock_process_google:
+        with patch(f"{MODULE_PATH}.process_google_search_result") as mock_process_google:
             mock_process_google.return_value = (["processed_result"], {"modified": True})
 
             tool_result, agent_input = web_search_jiuwen(
@@ -540,7 +540,7 @@ class TestWebSearchJiuwen:
             "search_results": [{"title": "Tavily Result", "url": "http://tavily.com", "content": "Content"}]
         }
 
-        with patch(f"{module_path}.process_tavily_search_result") as mock_process_tavily:
+        with patch(f"{MODULE_PATH}.process_tavily_search_result") as mock_process_tavily:
             mock_process_tavily.return_value = (["processed_result"], {"modified": True})
 
             tool_result, agent_input = web_search_jiuwen(
@@ -560,7 +560,7 @@ class TestWebSearchJiuwen:
             "search_results": [{"title": "Common Result", "url": "http://common.com", "content": "Content"}]
         }
 
-        with patch(f"{module_path}.process_common_search_result") as mock_process_common:
+        with patch(f"{MODULE_PATH}.process_common_search_result") as mock_process_common:
             mock_process_common.return_value = (["processed_result"], {"modified": True})
 
             tool_result, agent_input = web_search_jiuwen(
@@ -595,8 +595,8 @@ class TestProcessLocalSearchResult:
             ]
         })
 
-        with patch(f"{module_path}.process_local_search_common") as mock_process_common, \
-                patch(f"{module_path}.remove_duplicate_items") as mock_remove_dup:
+        with patch(f"{MODULE_PATH}.process_local_search_common") as mock_process_common, \
+                patch(f"{MODULE_PATH}.remove_duplicate_items") as mock_remove_dup:
             mock_agent_input = {
                 "local_text_search_record": ["new_record1", "new_record2"],
                 "modified": True
@@ -621,7 +621,7 @@ class TestProcessLocalSearchResult:
             "search_results": []
         })
 
-        with patch(f"{module_path}.process_local_search_common") as mock_process_common:
+        with patch(f"{MODULE_PATH}.process_local_search_common") as mock_process_common:
             mock_agent_input = {"modified": True}  # 缺少local_text_search_record
             mock_process_common.return_value = ([], mock_agent_input)
 
@@ -632,7 +632,7 @@ class TestProcessLocalSearchResult:
         """测试无效JSON输入"""
         tool_content = "invalid json string"
 
-        with patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.logger") as mock_logger:
             with pytest.raises(json.JSONDecodeError):
                 process_local_search_result(self.agent_input, tool_content)
 
@@ -664,7 +664,7 @@ class TestProcessLocalSearchCommon:
             }
         ]
 
-        with patch(f"{module_path}.remove_duplicate_items") as mock_remove_dup:
+        with patch(f"{MODULE_PATH}.remove_duplicate_items") as mock_remove_dup:
             # 模拟去重后的结果
             expected_records = [
                 self.agent_input["local_text_search_record"][0],
@@ -704,8 +704,8 @@ class TestProcessLocalSearchCommon:
         ]
 
         # 模拟 remove_duplicate_items 抛出异常
-        with patch(f"{module_path}.logger") as mock_logger, \
-                patch(f"{module_path}.remove_duplicate_items") as mock_remove_dup:
+        with patch(f"{MODULE_PATH}.logger") as mock_logger, \
+                patch(f"{MODULE_PATH}.remove_duplicate_items") as mock_remove_dup:
             mock_remove_dup.side_effect = Exception("Duplicate removal failed")
 
             tool_result, agent_input = process_local_search_common(
@@ -730,7 +730,7 @@ class TestProcessLocalSearchCommon:
             "string_item"  # 不是字典
         ]
 
-        with patch(f"{module_path}.remove_duplicate_items") as mock_remove_dup:
+        with patch(f"{MODULE_PATH}.remove_duplicate_items") as mock_remove_dup:
             # 只有第一个有效项目会被处理
             expected_records = [
                 self.agent_input["local_text_search_record"][0],
@@ -766,7 +766,7 @@ class TestProcessLocalSearchCommon:
             }
         ]
 
-        with patch(f"{module_path}.remove_duplicate_items") as mock_remove_dup:
+        with patch(f"{MODULE_PATH}.remove_duplicate_items") as mock_remove_dup:
             # 只有第一个项目有足够字段会被处理
             expected_records = [
                 self.agent_input["local_text_search_record"][0],

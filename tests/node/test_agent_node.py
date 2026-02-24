@@ -7,13 +7,13 @@ from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.base import WorkflowCard
 from openjiuwen.core.workflow.workflow import Workflow
 
-from jiuwen_deepsearch.framework.jiuwen.agent.editor_team_manager_node import EditorTeamNode
-from jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes import EndNode, StartNode
-from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
+from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import EditorTeamNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import EndNode, StartNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
     build_editor_team_workflow
-from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Outline, Section
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import DeepresearchAgent
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from tests.utils.mock_config import get_default_agent_config
 
 logger = logging.getLogger(__name__)

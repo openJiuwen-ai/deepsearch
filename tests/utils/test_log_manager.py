@@ -4,10 +4,10 @@ import sys
 import os
 from pathlib import Path
 
-from jiuwen_deepsearch.common.exception import CustomValueException
-from jiuwen_deepsearch.common.status_code import StatusCode
-from jiuwen_deepsearch.utils.log_utils.log_handlers import SafeRotatingFileHandler
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.utils.log_utils.log_handlers import SafeRotatingFileHandler
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 
 @pytest.fixture
@@ -58,9 +58,9 @@ def test_logmanager_init_once(clean_logs, monkeypatch):
     def mock_interface(*args, **kwargs):
         called["interface"] += 1
 
-    monkeypatch.setattr("jiuwen_deepsearch.utils.log_utils.log_manager.setup_common_logger", mock_common)
-    monkeypatch.setattr("jiuwen_deepsearch.utils.log_utils.log_manager.setup_metrics_logger", mock_metrics)
-    monkeypatch.setattr("jiuwen_deepsearch.utils.log_utils.log_manager.setup_interface_logger", mock_interface)
+    monkeypatch.setattr("openjiuwen_deepsearch.utils.log_utils.log_manager.setup_common_logger", mock_common)
+    monkeypatch.setattr("openjiuwen_deepsearch.utils.log_utils.log_manager.setup_metrics_logger", mock_metrics)
+    monkeypatch.setattr("openjiuwen_deepsearch.utils.log_utils.log_manager.setup_interface_logger", mock_interface)
 
     log_dir = str(clean_logs / "sub")
     LogManager.init(log_dir=log_dir, is_sensitive=False)

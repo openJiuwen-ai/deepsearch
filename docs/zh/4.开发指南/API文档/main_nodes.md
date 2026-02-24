@@ -1,4 +1,4 @@
-# jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes
+# openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes
 
 本文档描述 DeepSearch 工作流的主图节点与子图节点，内容与当前代码保持一致。
 

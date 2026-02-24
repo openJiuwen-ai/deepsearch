@@ -3,10 +3,10 @@ import logging
 
 import pytest
 
-from jiuwen_deepsearch.common.exception import CustomValueException
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import DeepresearchAgent
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 

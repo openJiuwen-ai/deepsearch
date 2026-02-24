@@ -1,8 +1,8 @@
-# jiuwen_deepsearch.framework.jiuwen.agent.agent_factory
+# openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.agent_factory.AgentFactory
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory.AgentFactory
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.agent_factory.AgentFactory()
+class openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory.AgentFactory()
 ```
 **AgentFactory** 是创建 Agent 实例的工厂类，会依据配置中的 `search_mode`和`execution_method` 返回不同类型的 Agent。
 
@@ -19,8 +19,9 @@ __init__()
 - `search` -> `DeepsearchAgent`
 
 **样例**：
+
 ```python
->>> from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+>>> from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 >>> factory = AgentFactory()
 >>> print(factory.agent_map)
 {...}
@@ -43,7 +44,7 @@ create_agent(agent_config: dict)
 
 **样例**：
 ```python
->>> from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+>>> from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 >>> factory = AgentFactory()
 
 >>> # 样例1：并行执行

@@ -1,11 +1,15 @@
-import pytest
-import aiohttp
-import requests
 from unittest.mock import Mock, patch, MagicMock, AsyncMock
-from pydantic import SecretStr
-from jiuwen_deepsearch.framework.jiuwen.tools.Search_API.local_search_api.api_wrapper import LocalDatasetAPIWrapper
 
-module_path = "jiuwen_deepsearch.framework.jiuwen.tools.Search_API.local_search_api.api_wrapper"
+import aiohttp
+import pytest
+import requests
+from pydantic import SecretStr
+
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.local_search_api.api_wrapper import \
+    LocalDatasetAPIWrapper
+
+MODULE_PATH = "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.local_search_api.api_wrapper"
+
 
 class TestLocalDatasetAPIWrapper:
     """测试 LocalDatasetAPIWrapper 类"""
@@ -127,8 +131,8 @@ class TestLocalDatasetAPIWrapper:
         mock_response.raise_for_status.return_value = None
 
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.requests.post") as mock_post, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config:
+                patch(f"{MODULE_PATH}.requests.post") as mock_post, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config:
             mock_build_headers.return_value = {"X-Auth-Token": "key", "Content-Type": "application/json"}
             mock_post.return_value = mock_response
             mock_ssl_config.return_value = (True, "/path/to/cert")
@@ -148,8 +152,8 @@ class TestLocalDatasetAPIWrapper:
         mock_response.raise_for_status.return_value = None
 
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.requests.post") as mock_post, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config:
+                patch(f"{MODULE_PATH}.requests.post") as mock_post, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_post.return_value = mock_response
             mock_ssl_config.return_value = (False, None)  # SSL验证关闭
@@ -164,10 +168,10 @@ class TestLocalDatasetAPIWrapper:
     def test_search_api_results_request_exception(self):
         """测试同步搜索请求异常"""
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.requests.post") as mock_post, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.requests.post") as mock_post, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_post.side_effect = requests.exceptions.RequestException("Connection failed")
             mock_ssl_config.return_value = (True, "/path/to/cert")
@@ -185,10 +189,10 @@ class TestLocalDatasetAPIWrapper:
     def test_search_api_results_request_exception_sensitive_mode(self):
         """测试敏感模式下的同步搜索请求异常"""
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.requests.post") as mock_post, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.requests.post") as mock_post, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_post.side_effect = requests.exceptions.RequestException("Connection failed")
             mock_ssl_config.return_value = (True, "/path/to/cert")
@@ -208,10 +212,10 @@ class TestLocalDatasetAPIWrapper:
         mock_response.raise_for_status.return_value = None
 
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.requests.post") as mock_post, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.requests.post") as mock_post, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_post.return_value = mock_response
             mock_ssl_config.return_value = (True, "/path/to/cert")
@@ -229,10 +233,10 @@ class TestLocalDatasetAPIWrapper:
         mock_response.raise_for_status.return_value = None
 
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.requests.post") as mock_post, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.requests.post") as mock_post, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_post.return_value = mock_response
             mock_ssl_config.return_value = (True, "/path/to/cert")
@@ -252,10 +256,10 @@ class TestLocalDatasetAPIWrapper:
         mock_response.raise_for_status.return_value = None
 
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.requests.post") as mock_post, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.requests.post") as mock_post, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_post.return_value = mock_response
             mock_ssl_config.return_value = (True, "/path/to/cert")
@@ -272,9 +276,9 @@ class TestLocalDatasetAPIWrapper:
     async def test_async_search_api_results_success(self):
         """测试异步搜索成功"""
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.aiohttp.ClientSession") as MockClientSession, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.aiohttp.ClientSession") as mock_client_session, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_ssl_config.return_value = (True, "/path/to/cert")
 
@@ -302,7 +306,7 @@ class TestLocalDatasetAPIWrapper:
             mock_session_context.__aenter__.return_value = mock_session
             mock_session_context.__aexit__.return_value = None
 
-            MockClientSession.return_value = mock_session_context
+            mock_client_session.return_value = mock_session_context
 
             result = await self.wrapper._async_search_api_results("test query", num=5)
 
@@ -313,10 +317,10 @@ class TestLocalDatasetAPIWrapper:
     async def test_async_search_api_results_with_sensitive_client_error(self):
         """测试异步搜索客户端错误"""
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.aiohttp.ClientSession") as mock_session_class, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.aiohttp.ClientSession") as mock_session_class, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_ssl_config.return_value = (True, "/path/to/cert")
             mock_sensitive.return_value = True
@@ -335,10 +339,10 @@ class TestLocalDatasetAPIWrapper:
     async def test_async_search_api_results_ssl_false_client_error(self):
         """测试异步搜索客户端错误"""
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.aiohttp.ClientSession") as mock_session_class, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.aiohttp.ClientSession") as mock_session_class, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_ssl_config.return_value = (False, "/path/to/cert")
             mock_sensitive.return_value = False
@@ -359,10 +363,10 @@ class TestLocalDatasetAPIWrapper:
     async def test_async_search_api_results_client_error(self):
         """测试异步搜索客户端错误"""
         with patch.object(self.wrapper, 'build_headers') as mock_build_headers, \
-                patch(f"{module_path}.aiohttp.ClientSession") as mock_session_class, \
-                patch(f"{module_path}.SslUtils.get_ssl_config") as mock_ssl_config, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+                patch(f"{MODULE_PATH}.aiohttp.ClientSession") as mock_session_class, \
+                patch(f"{MODULE_PATH}.SslUtils.get_ssl_config") as mock_ssl_config, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_build_headers.return_value = ({}, "https://api.example.com", {})
             mock_ssl_config.return_value = (True, "/path/to/cert")
             mock_sensitive.return_value = False

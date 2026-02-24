@@ -3,10 +3,10 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import pytest
 from openjiuwen.core.workflow.workflow import Workflow
 
-from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder import SearchQueryList, Reflection, Summary, \
-    CollectorContext, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, \
-    ProgrammerNode, GraphEndNode, build_info_collector_sub_graph, get_research_record, llm_context
-from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQuery
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import SearchQueryList, \
+    Reflection, Summary, CollectorContext, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, ProgrammerNode, \
+    GraphEndNode, build_info_collector_sub_graph, get_research_record, llm_context
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 
 
 class ExposedProgrammerNode(ProgrammerNode):
@@ -21,9 +21,6 @@ class ExposedGraphEndNode(GraphEndNode):
 
     async def do_invoke(self, *args, **kwargs):
         return await self._do_invoke(*args, **kwargs)
-
-
-module_path = "jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder"
 
 
 class TestSearchQueryList:

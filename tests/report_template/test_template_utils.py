@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.report_template.template_utils import TemplateUtils
+from openjiuwen_deepsearch.algorithm.report_template.template_utils import TemplateUtils
 
 
 def test_pdf_base64_to_markdown_from_file():

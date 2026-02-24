@@ -15,7 +15,7 @@ def router_register(app: FastAPI):
     async def health_check():
         return {
             "status": "healthy",
-            "service": "Jiuwen DeepSearch Server",
+            "service": "OpenJiuwen DeepSearch Server",
             "version": "1.0.0"
         }
 
@@ -27,7 +27,7 @@ def router_register(app: FastAPI):
     @app.get("/")
     async def root():
         return {
-            "message": "Welcome to Jiuwen DeepSearch Server",
+            "message": "Welcome to OpenJiuwen DeepSearch Server",
             "docs": "/api/docs",
             "health": "/api/health"
         }

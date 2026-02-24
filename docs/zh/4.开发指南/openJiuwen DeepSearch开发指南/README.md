@@ -6,7 +6,8 @@
 初始化配置参数时，可根据功能需求，对`AgentConfig`的参数，进行赋值。
 
 ```python
-from jiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.config.config import Config
+
 # 实例化AgentConfig
 agent_config = Config().agent_config.model_dump()
 # 对必填项进行赋值
@@ -72,7 +73,8 @@ os.environ["TOOL_SSL_CERT"] = ""
 `AgentFactory`类支持根据配置`agent_config`，实例化`DeepResearchAgent`类，获取`DeepResearchAgent`对象。
 
 ```python
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 ```
@@ -85,7 +87,8 @@ agent = agent_factory.create_agent(agent_config)
 直接通过`DeepResearchAgent`的构造函数，获取实例化对象。
 
 ```python
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import DeepResearchAgent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepResearchAgent
+
 agent = DeepResearchAgent(agent_config)
 ```
 
@@ -109,8 +112,8 @@ agent = DeepResearchAgent(agent_config)
 ```python
 import json
 import uuid
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
@@ -174,7 +177,7 @@ async for chunk in agent.run(message=message, conversation_id=str(uuid.uuid4()),
 
 ```python
 import base64
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 
 # 提供入参
 file_path = "用户提供的模板文件名，以md后缀结尾"
@@ -185,7 +188,8 @@ agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
 # 执行模板文件处理操作
-result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template, agent_config=agent_config)
+result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template,
+                                       agent_config=agent_config)
 user_template_content = result["template_content"]
 ```
 
@@ -194,8 +198,8 @@ user_template_content = result["template_content"]
 ```python
 import json
 import uuid
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
 message = "用户原始查询问题"
 conversation_id = str(uuid.uuid4())
@@ -224,7 +228,7 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 ```python
 import base64
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 
 # 提供入参
 file_path = "用户提供的样例报告文件的文件名，以md/docx/pdf/html后缀结尾"
@@ -235,18 +239,18 @@ agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
 # 执行模板文件处理操作
-result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template, agent_config=agent_config)
+result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template,
+                                       agent_config=agent_config)
 user_template_content = result["template_content"]
 ```
 
 提取出规范化后的模板文件内容`user_template_content`之后，继续通过`DeepResearchAgent`的`run`函数，进行研究报告生成。
 
-
 ```python
 import json
 import uuid
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
 message = "用户原始查询问题"
 conversation_id = str(uuid.uuid4())

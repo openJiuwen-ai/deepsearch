@@ -2,8 +2,8 @@ from unittest.mock import patch, MagicMock, ANY
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from jiuwen_deepsearch.algorithm.source_trace.content_analyzer import (
+from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.source_trace.content_analyzer import (
     recognize_content_to_cite,
     validate_and_enhance_sentences,
     find_similar_sentence
@@ -15,8 +15,8 @@ pytest_plugins = ["pytest_asyncio"]
 class TestRecognizeContentToCite:
     """Test cases for recognize_content_to_cite function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.content_analyzer.llm_context')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.content_analyzer.ainvoke_llm_with_stats')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.content_analyzer.llm_context')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.content_analyzer.ainvoke_llm_with_stats')
     @pytest.mark.asyncio
     async def test_recognize_content_to_cite_llm_invoke_error(self, mock_ainvoke, mock_llm_wrapper):
         """Test recognition when LLM invocation fails."""

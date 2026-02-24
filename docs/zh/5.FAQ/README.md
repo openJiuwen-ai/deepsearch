@@ -112,4 +112,4 @@ citation verify：某条搜索结果的溯源效验
 
 
 ## 五、附录
-包含公共类型错误、业务节点的相关错误码信息：[详细错误码链接](https://gitcode.com/openJiuwen/deepsearch/blob/dev/jiuwen_deepsearch/common/status_code.py)
+包含公共类型错误、业务节点的相关错误码信息：[详细错误码链接](https://gitcode.com/openJiuwen/deepsearch/blob/dev/openjiuwen_deepsearch/common/status_code.py)

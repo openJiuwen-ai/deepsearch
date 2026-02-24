@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 from server.core.database import get_db
 from server.core.manager.model_manager.utils import SecurityUtils
 from server.deepsearch.common.exception.exceptions import (

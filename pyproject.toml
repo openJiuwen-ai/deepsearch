@@ -15,15 +15,15 @@ dependencies = [
     'networkx==3.4.2',
 ]
 
-# 1. 告诉 setuptools 把 jiuwen_deepsearch 当成一个「命名空间包」
+# 1. 告诉 setuptools 把 openjiuwen_deepsearch 当成一个「命名空间包」
 #    这样无论子目录有没有 __init__.py 都会被收录
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["jiuwen_deepsearch*"]          # 星号通配子目录
+include = ["openjiuwen_deepsearch*"]          # 星号通配子目录
 
-# 2. 如果 jiuwen_deepsearch 里还有非 .py 文件（yaml、json、模板等），一起打包
+# 2. 如果 openjiuwen_deepsearch 里还有非 .py 文件（yaml、json、模板等），一起打包
 [tool.setuptools.package-data]
-jiuwen_deepsearch = ["**/*"]  # 递归收录所有文件，包括 .md、.json、.yaml 等
+openjiuwen_deepsearch = ["**/*"]  # 递归收录所有文件，包括 .md、.json、.yaml 等
 
 # pytest configuration
 [tool.pytest.ini_options]
