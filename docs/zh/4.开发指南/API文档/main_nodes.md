@@ -22,13 +22,12 @@ class StartNode(Start)
 ```python
 class EntryNode(BaseNode)
 ```
-**EntryNode** 负责查询分类与路由。
+**EntryNode** 负责语言识别与路由。
 
 **功能**：
-- 调用 `classify_query` 判断是否进入深搜。
-- 写入流式输出事件（START/MESSAGE/DONE）。
+- 调用 `classify_query` 判断用户需求语言类型。
 - 统一语言标识（`zh-CN` / `en-US`）。
-- 若不进入深搜，直接写入 `final_result.response_content` 并结束。
+- 失败或异常写入 `final_result.exception_info` 并结束。
 
 ---
 
