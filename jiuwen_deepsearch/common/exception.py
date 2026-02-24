@@ -1,6 +1,5 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-from openjiuwen.core.common.exception.exception import JiuWenBaseException
 
 MAGIC_CODE = "\t"
 
@@ -65,6 +64,6 @@ class CustomTypeException(CustomException, TypeError):
         super().__init__(error_code, message)
 
 
-class CustomJiuWenBaseException(CustomException, JiuWenBaseException):
+class CustomJiuWenBaseException(CustomException, Exception):
     def __init__(self, error_code: int, message: str):
         super().__init__(error_code, message)

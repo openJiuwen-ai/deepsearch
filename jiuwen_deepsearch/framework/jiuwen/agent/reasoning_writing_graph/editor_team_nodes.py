@@ -4,49 +4,45 @@ import logging
 import uuid
 from typing import Type
 
-from openjiuwen.core.common.constants.constant import CONFIG_KEY, INPUTS_KEY
-from openjiuwen.core.component.end_comp import End
-from openjiuwen.core.component.start_comp import Start
-from openjiuwen.core.component.workflow_comp import SUB_WORKFLOW_COMPONENT
-from openjiuwen.core.context_engine.base import Context
+from openjiuwen.core.context_engine.base import ModelContext
+from openjiuwen.core.graph.base import CONFIG_KEY, INPUTS_KEY
 from openjiuwen.core.graph.executable import Input, Output
-from openjiuwen.core.runtime.runtime import Runtime
-from openjiuwen.core.workflow.base import Workflow
+from openjiuwen.core.session.node import Session
+from openjiuwen.core.workflow.components.flow.end_comp import End
+from openjiuwen.core.workflow.components.flow.start_comp import Start
+from openjiuwen.core.workflow.components.flow.workflow_comp import SUB_WORKFLOW_COMPONENT
+from openjiuwen.core.workflow.workflow import Workflow
 
 from jiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerConfig
 from jiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
 from jiuwen_deepsearch.algorithm.report.report import Reporter
 from jiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
+from jiuwen_deepsearch.common.common_constants import CHINESE
 from jiuwen_deepsearch.common.status_code import StatusCode
 from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode, init_router
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder import build_info_collector_sub_graph
 from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.section_context import SectionContext
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Message, StepType, Step, SubReportContent, Plan
-from jiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType
-from jiuwen_deepsearch.common.common_constants import CHINESE
 from jiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import runtime_context
 from jiuwen_deepsearch.utils.common_utils.stream_utils import custom_stream_output
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from jiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType, NodeDebugData
+from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
 
 class SectionStartNode(Start):
     """
-    起始节点，初始化inputs到子图runtime的section_state中
+    起始节点，初始化inputs到子图session的section_state中
     """
 
-    async def invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
+    async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """执行起始节点"""
         section_idx = inputs.get("section_idx", '1')
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
-
-        # 校验input
-        self._validate_inputs(inputs)
-        inputs = self._fill_default_values(inputs)
 
         # 初始化section_context
         section_context = SectionContext(
@@ -61,7 +57,7 @@ class SectionStartNode(Start):
             report_template=inputs.get("report_template", ""),
         )
         config = inputs.get("config")
-        runtime.update_global_state({"section_context": section_context.model_dump(),
+        session.update_global_state({"section_context": section_context.model_dump(),
                                      "config": config})
 
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
@@ -77,22 +73,22 @@ class BasePlanReasoningNode(BaseNode):
         self.planner_class: Type[Planner] = Planner  # 默认planner类
         self.log_prefix = ""
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         # 获取搜索规划在运行上下文中所需信息
-        section_idx = runtime.get_global_state("section_context.section_idx") or 1
+        section_idx = session.get_global_state("section_context.section_idx") or 1
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} | Start {self.__class__.__name__}")
-        language = runtime.get_global_state("section_context.language")
-        messages = runtime.get_global_state("section_context.messages")
-        plan_executed_num = runtime.get_global_state("section_context.plan_executed_num")
-        collected_doc_num = runtime.get_global_state("section_context.collected_doc_num")
-        warning_infos = runtime.get_global_state("section_context.warning_infos")
-        exception_infos = runtime.get_global_state("section_context.exception_infos")
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        language = session.get_global_state("section_context.language")
+        messages = session.get_global_state("section_context.messages")
+        plan_executed_num = session.get_global_state("section_context.plan_executed_num")
+        collected_doc_num = session.get_global_state("section_context.collected_doc_num")
+        warning_infos = session.get_global_state("section_context.warning_infos")
+        exception_infos = session.get_global_state("section_context.exception_infos")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
 
-        max_step_num = runtime.get_global_state("config.planner_max_step_num")
-        max_retry_num = runtime.get_global_state("config.planner_max_retry_num")
-        max_plan_executed_num = runtime.get_global_state("config.workflow_max_plan_executed_num")
+        max_step_num = session.get_global_state("config.planner_max_step_num")
+        max_retry_num = session.get_global_state("config.planner_max_retry_num")
+        max_plan_executed_num = session.get_global_state("config.workflow_max_plan_executed_num")
 
         # 封装入参
         return dict(
@@ -110,9 +106,9 @@ class BasePlanReasoningNode(BaseNode):
             llm_model_name=llm_model_name,
         )
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        runtime_context.set(runtime)
-        current_input = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        current_input = self._pre_handle(inputs, session, context)
         logger.info(f"{self.log_prefix}current input: {'*' if LogManager.is_sensitive() else current_input}")
 
         # 最大plan次数
@@ -137,7 +133,7 @@ class BasePlanReasoningNode(BaseNode):
                 next_node = NodeId.END.value
                 error_msg = (f"[{StatusCode.SECTION_INFOS_EMPTY.code}] "
                              f"{self.log_prefix} {limited_msg} {StatusCode.SECTION_INFOS_EMPTY.errmsg}")
-                _handle_warning_exception_info(runtime, added_warning=error_msg, added_exception=error_msg)
+                _handle_warning_exception_info(session, added_warning=error_msg, added_exception=error_msg)
                 logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
             return dict(next_node=next_node)
 
@@ -157,7 +153,7 @@ class BasePlanReasoningNode(BaseNode):
         if planner_result.plan_success:
             plan = planner_result.plan
             stream_meta = {"plan_idx": str(plan_executed_num + 1)}
-            await custom_stream_output(runtime, str(uuid.uuid4()), plan.model_dump_json(), NodeId.PLAN_REASONING.value,
+            await custom_stream_output(session, str(uuid.uuid4()), plan.model_dump_json(), NodeId.PLAN_REASONING.value,
                                        stream_meta)
 
         # 封装算法结果
@@ -169,13 +165,13 @@ class BasePlanReasoningNode(BaseNode):
             extra_body=planner_result.extra_body,
         )
 
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
         logger.info(f"{self.log_prefix}End {self.__class__.__name__}.")
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
-        plan_executed_num = runtime.get_global_state("section_context.plan_executed_num") + 1
-        messages = runtime.get_global_state("section_context.messages")
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        plan_executed_num = session.get_global_state("section_context.plan_executed_num") + 1
+        messages = session.get_global_state("section_context.messages")
         plan = algorithm_output.get("plan")
         plan_success = algorithm_output.get("success", False)
         response_messages = algorithm_output.get("response_messages")
@@ -195,11 +191,11 @@ class BasePlanReasoningNode(BaseNode):
         else:
             error_msg = (f"[{StatusCode.PLANNER_GENERATE_ERROR.code}] {log_prefix} "
                          f"{StatusCode.PLANNER_GENERATE_ERROR.errmsg.format(e=error_detail)}")
-            _handle_warning_exception_info(runtime, added_warning=error_msg, added_exception=error_msg)
+            _handle_warning_exception_info(session, added_warning=error_msg, added_exception=error_msg)
             next_node = NodeId.END.value
 
         # 运行上下文中添加规划结果
-        runtime.update_global_state({
+        session.update_global_state({
             "section_context.current_plan": plan,
             "section_context.messages": messages + response_messages,
             "section_context.plan_executed_num": plan_executed_num,
@@ -216,21 +212,21 @@ class ResearchPlanReasoningNode(BasePlanReasoningNode):
         self.prompt = "planner"
         self.log_prefix = ""
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        current_inputs = super()._pre_handle(inputs, runtime, context)
-        section_idx = runtime.get_global_state("section_context.section_idx") or 0
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        current_inputs = super()._pre_handle(inputs, session, context)
+        section_idx = session.get_global_state("section_context.section_idx") or 0
         current_inputs["section_idx"] = section_idx
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         return current_inputs
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        result = await super()._do_invoke(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        result = await super()._do_invoke(inputs, session, context)
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
-        plan_executed_num = runtime.get_global_state("section_context.plan_executed_num") + 1
-        collected_doc_num = runtime.get_global_state("section_context.collected_doc_num")
-        messages = runtime.get_global_state("section_context.messages")
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        plan_executed_num = session.get_global_state("section_context.plan_executed_num") + 1
+        collected_doc_num = session.get_global_state("section_context.collected_doc_num")
+        messages = session.get_global_state("section_context.messages")
         plan = algorithm_output.get("plan")
         response_messages = algorithm_output.get("response_messages")
         plan_success = algorithm_output.get("success", False)
@@ -257,23 +253,23 @@ class ResearchPlanReasoningNode(BasePlanReasoningNode):
                            f"{StatusCode.PLANNER_GENERATE_ERROR.errmsg.format(e=debug_info)}")
             if collected_doc_num > 0:
                 # 已经收集到信息
-                _handle_warning_exception_info(runtime, added_warning=failed_info)
+                _handle_warning_exception_info(session, added_warning=failed_info)
                 next_node = NodeId.SUB_REPORTER.value
                 logger.info(f"{log_prefix} Section have collected {collected_doc_num} infos, go to {next_node}")
             else:
                 # 未收集到信息
-                _handle_warning_exception_info(runtime, added_warning=failed_info, added_exception=failed_info)
+                _handle_warning_exception_info(session, added_warning=failed_info, added_exception=failed_info)
                 error_msg = (f"[{StatusCode.SECTION_INFOS_EMPTY.code}] {log_prefix} "
                              f"{StatusCode.SECTION_INFOS_EMPTY.errmsg}")
-                _handle_warning_exception_info(runtime, added_warning=error_msg, added_exception=error_msg)
+                _handle_warning_exception_info(session, added_warning=error_msg, added_exception=error_msg)
                 next_node = NodeId.END.value
 
         # 添加ResearchPlanReasoningNode debug日志
-        add_debug_log_wrapper(runtime, NodeId.PLAN_REASONING.value, 0, NodeType.SUB.value,
-                              output_content=debug_info)
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.PLAN_REASONING.value, 0, NodeType.SUB.value,
+                              output_content=debug_info))
 
         # 运行上下文中添加规划结果
-        runtime.update_global_state({
+        session.update_global_state({
             "section_context.current_plan": plan,
             "section_context.messages": messages + response_messages,
             "section_context.plan_executed_num": plan_executed_num
@@ -289,16 +285,16 @@ class SubReporterNode(BaseNode):
         super().__init__()
         self.log_prefix = ""
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("section_context.section_idx") or "1"
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("section_context.section_idx") or "1"
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} Start [{self.__class__.__name__}].")
-        classify_doc_infos_single_time_num = runtime.get_global_state(
+        classify_doc_infos_single_time_num = session.get_global_state(
             "config.sub_report_classify_doc_infos_single_time_num")
         if not classify_doc_infos_single_time_num or classify_doc_infos_single_time_num <= 60:
             classify_doc_infos_single_time_num = 60
 
-        history_plans = runtime.get_global_state("section_context.history_plans")
+        history_plans = session.get_global_state("section_context.history_plans")
         # 提取doc_infos并去重
         doc_infos = []
         for plan in history_plans:
@@ -308,30 +304,30 @@ class SubReporterNode(BaseNode):
         doc_infos = list({(doc["title"], doc["url"]): doc for doc in doc_infos}.values())
 
         return dict(
-            thread_id=runtime.get_global_state("section_context.session_id"),
-            has_template=bool(runtime.get_global_state("section_context.report_template")),
-            language=runtime.get_global_state("section_context.language") or CHINESE,
-            report_template=runtime.get_global_state("section_context.report_template"),
-            report_format=runtime.get_global_state("section_context.report_format") or ReportFormat.MARKDOWN,
-            report_style=runtime.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
+            thread_id=session.get_global_state("section_context.session_id"),
+            has_template=bool(session.get_global_state("section_context.report_template")),
+            language=session.get_global_state("section_context.language") or CHINESE,
+            report_template=session.get_global_state("section_context.report_template"),
+            report_format=session.get_global_state("section_context.report_format") or ReportFormat.MARKDOWN,
+            report_style=session.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
             section_idx=section_idx,  # 章节序号,
-            report_task=runtime.get_global_state("section_context.report_task"),  # 总报告标题
-            section_task=runtime.get_global_state("section_context.section_task"),  # 当前章节标题
-            section_iscore=runtime.get_global_state("section_context.section_iscore") or False,  # 是否核心章节
-            section_description=runtime.get_global_state("section_context.section_description"),  # 章节描述
+            report_task=session.get_global_state("section_context.report_task"),  # 总报告标题
+            section_task=session.get_global_state("section_context.section_task"),  # 当前章节标题
+            section_iscore=session.get_global_state("section_context.section_iscore") or False,  # 是否核心章节
+            section_description=session.get_global_state("section_context.section_description"),  # 章节描述
             doc_infos=doc_infos,
-            current_outline=runtime.get_global_state("section_context.current_outline")
-            if runtime.get_global_state("section_context.current_outline") else "",
-            max_generate_retry_num=runtime.get_global_state("config.report_max_generate_retry_num") or 3,
-            classify_doc_infos_res_top_k_num=runtime.get_global_state(
+            current_outline=session.get_global_state("section_context.current_outline")
+            if session.get_global_state("section_context.current_outline") else "",
+            max_generate_retry_num=session.get_global_state("config.report_max_generate_retry_num") or 3,
+            classify_doc_infos_res_top_k_num=session.get_global_state(
                 "config.sub_report_classify_doc_infos_res_top_k_num") or 10,
             classify_doc_infos_single_time_num=classify_doc_infos_single_time_num,
-            llm_model_name=runtime.get_global_state("config.llm_config.model_name")
+            llm_model_name=session.get_global_state("config.llm_config.model_name")
         )
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        runtime_context.set(runtime)
-        updating_state = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        updating_state = self._pre_handle(inputs, session, context)
         logger.info(f"f{self.log_prefix} current node inputs is "
                     f"{'*' if LogManager.is_sensitive() else updating_state.get('current_outline')}")
 
@@ -343,9 +339,9 @@ class SubReporterNode(BaseNode):
                                 sub_report_content=sub_report_content)
         updating_state.update(algorithm_output)
 
-        return self._post_handle(inputs, updating_state, runtime, context)
+        return self._post_handle(inputs, updating_state, session, context)
 
-    def _post_handle(self, inputs: Input, updating_state: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, updating_state: dict, session: Session, context: ModelContext):
         doc_infos = updating_state.get("doc_infos")
         sub_report_success = updating_state.get("success")
         generate_sub_report_msg = updating_state.get("msg")
@@ -361,7 +357,7 @@ class SubReporterNode(BaseNode):
         else:
             error_msg = (f"[{StatusCode.SUB_REPORT_GENERATE_ERROR.code}] {self.log_prefix} "
                          f"{StatusCode.SUB_REPORT_GENERATE_ERROR.errmsg.format(e=detail_msg)}")
-            _handle_warning_exception_info(runtime, added_warning=error_msg, added_exception=error_msg)
+            _handle_warning_exception_info(session, added_warning=error_msg, added_exception=error_msg)
             next_node = NodeId.END.value
 
         sub_report_debug_info_input = dict(
@@ -377,12 +373,12 @@ class SubReporterNode(BaseNode):
         )
         sub_report_debug_info_output = sub_report_content.model_dump()
         # 添加SubReporterNode debug日志
-        add_debug_log_wrapper(runtime, NodeId.SUB_REPORTER.value, 0, NodeType.SUB.value,
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.SUB_REPORTER.value, 0, NodeType.SUB.value,
                               input_content=str(sub_report_debug_info_input).replace("\\n", "\n"),
-                              output_content=str(sub_report_debug_info_output).replace("\\n", "\n"))
+                              output_content=str(sub_report_debug_info_output).replace("\\n", "\n")))
 
         # 更新上下文子报告内容信息
-        runtime.update_global_state({"section_context.sub_report_content": sub_report_content})
+        session.update_global_state({"section_context.sub_report_content": sub_report_content})
 
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
         return dict(next_node=next_node)
@@ -394,16 +390,16 @@ class SubSourceTracerNode(BaseNode):
         super().__init__()
         self.log_prefix = ""
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("section_context.section_idx") or 1
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("section_context.section_idx") or 1
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} Start [{self.__class__.__name__}].")
-        research_trace_source_switch = runtime.get_global_state("config.source_tracer_research_trace_source_switch")
-        language = runtime.get_global_state("section_context.language")
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        research_trace_source_switch = session.get_global_state("config.source_tracer_research_trace_source_switch")
+        language = session.get_global_state("section_context.language")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
 
         # 获取子报告内容
-        sub_report_content_obj = runtime.get_global_state("section_context.sub_report_content")
+        sub_report_content_obj = session.get_global_state("section_context.sub_report_content")
         if sub_report_content_obj and isinstance(sub_report_content_obj, SubReportContent):
             report = sub_report_content_obj.sub_report_content_text
             classified_content = sub_report_content_obj.classified_content
@@ -419,24 +415,24 @@ class SubSourceTracerNode(BaseNode):
         )
 
     def _skip_trace_source_handle(
-            self, inputs: Input, runtime: Runtime,
-            context: Context, current_inputs: dict
+            self, inputs: Input, session: Session,
+            context: ModelContext, current_inputs: dict
     ) -> dict:
         """
         不需要溯源的场景直接跳到后处理
         """
         origin_report = current_inputs.get("report", "")
         algorithm_output = dict(trace_source_datas=[], modified_report=origin_report)
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        current_inputs = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        current_inputs = self._pre_handle(inputs, session, context)
         research_trace_source_switch = current_inputs.get("research_trace_source_switch", False)
 
         if research_trace_source_switch is False:
             logger.info(f"{self.log_prefix} research_trace_source_switch is False, skip trace source.")
-            return self._skip_trace_source_handle(inputs, runtime, context, current_inputs)
+            return self._skip_trace_source_handle(inputs, session, context, current_inputs)
 
         source_tracer = SourceTracer(current_inputs)
         await source_tracer.research_trace_source()
@@ -448,15 +444,15 @@ class SubSourceTracerNode(BaseNode):
             modified_report=modified_report,
             trace_source_datas=datas
         )
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         trace_source_datas = algorithm_output.get("trace_source_datas", [])
         modified_report = algorithm_output.get("modified_report", "")
 
         # 获取现有的 sub_report_content 对象并更新
-        sub_report_content_obj = runtime.get_global_state("section_context.sub_report_content")
+        sub_report_content_obj = session.get_global_state("section_context.sub_report_content")
         if sub_report_content_obj and isinstance(sub_report_content_obj, SubReportContent):
             sub_report_content_obj.sub_report_content_text = modified_report
             sub_report_content_obj.sub_report_trace_source_datas = trace_source_datas
@@ -467,7 +463,7 @@ class SubSourceTracerNode(BaseNode):
                 sub_report_trace_source_datas=trace_source_datas
             )
 
-        runtime.update_global_state({
+        session.update_global_state({
             "section_context.sub_report_content": sub_report_content_obj
         })
         next_node = NodeId.END.value
@@ -495,27 +491,27 @@ class InfoCollectorNode(BaseNode):
         """
         return SUB_WORKFLOW_COMPONENT
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("section_context.section_idx")
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("section_context.section_idx")
         logger.info(f"section_idx: {section_idx} | [{self.__class__.__name__}] Start {self.__class__.__name__}.")
-        language = runtime.get_global_state("section_context.language")
-        messages = runtime.get_global_state("section_context.messages")
-        current_plan = runtime.get_global_state("section_context.current_plan")
-        history_plans = runtime.get_global_state("section_context.history_plans")
-        collected_doc_num = runtime.get_global_state("section_context.collected_doc_num")
-        warning_infos = runtime.get_global_state("section_context.warning_infos")
+        language = session.get_global_state("section_context.language")
+        messages = session.get_global_state("section_context.messages")
+        current_plan = session.get_global_state("section_context.current_plan")
+        history_plans = session.get_global_state("section_context.history_plans")
+        collected_doc_num = session.get_global_state("section_context.collected_doc_num")
+        warning_infos = session.get_global_state("section_context.warning_infos")
 
-        initial_search_query_count = runtime.get_global_state("config.info_collector_initial_search_query_count")
-        max_research_loops = runtime.get_global_state("config.info_collector_max_research_loops")
-        max_react_recursion_limit = runtime.get_global_state("config.info_collector_max_react_recursion_limit")
+        initial_search_query_count = session.get_global_state("config.info_collector_initial_search_query_count")
+        max_research_loops = session.get_global_state("config.info_collector_max_research_loops")
+        max_react_recursion_limit = session.get_global_state("config.info_collector_max_react_recursion_limit")
 
         return dict(messages=messages, current_plan=current_plan, section_idx=section_idx,
                     language=language, initial_search_query_count=initial_search_query_count,
                     max_research_loops=max_research_loops, max_react_recursion_limit=max_react_recursion_limit,
                     history_plans=history_plans, doc_num=collected_doc_num, warning_infos=warning_infos)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        state = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        state = self._pre_handle(inputs, session, context)
         current_plan = state.get("current_plan")
         if not current_plan:
             return dict(next_node=NodeId.PLAN_REASONING.value)
@@ -538,7 +534,7 @@ class InfoCollectorNode(BaseNode):
                     f"{'*' if LogManager.is_sensitive() else sub_inputs}"
                 )
 
-                collector_context = await self._run_collector_graph(inputs, runtime)
+                collector_context = await self._run_collector_graph(inputs, session, context)
                 step.step_result = collector_context.get("info_summary")
                 step.evaluation = collector_context.get("evaluation")
                 step.retrieval_queries = collector_context.get("history_queries")
@@ -569,27 +565,28 @@ class InfoCollectorNode(BaseNode):
         history_plans = state.get("history_plans", [])
         history_plans.append(current_plan)
         state["messages"] = messages
-        result = self._post_handle(inputs, state, runtime, context)
+        result = self._post_handle(inputs, state, session, context)
 
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
-        runtime.update_global_state({"section_context.messages": algorithm_output.get("messages")})
-        runtime.update_global_state({"section_context.history_plans": algorithm_output.get("history_plans")})
-        runtime.update_global_state({"section_context.collected_doc_num": algorithm_output.get("collected_doc_num")})
-        runtime.update_global_state({"section_context.warning_infos": algorithm_output.get("warning_infos")})
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        session.update_global_state({"section_context.messages": algorithm_output.get("messages")})
+        session.update_global_state({"section_context.history_plans": algorithm_output.get("history_plans")})
+        session.update_global_state({"section_context.collected_doc_num": algorithm_output.get("collected_doc_num")})
+        session.update_global_state({"section_context.warning_infos": algorithm_output.get("warning_infos")})
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
 
         # InfoCollectorNode debug日志
-        add_debug_log_wrapper(runtime, NodeId.INFO_COLLECTOR.value, 0, NodeType.SUB.value,
-                              output_content=str(algorithm_output).replace("\\n", "\n"))
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.INFO_COLLECTOR.value, 0, NodeType.SUB.value,
+                              output_content=str(algorithm_output).replace("\\n", "\n")))
 
         return dict(next_node=NodeId.PLAN_REASONING.value)
 
-    async def _run_collector_graph(self, inputs: dict, runtime: Runtime):
+    async def _run_collector_graph(self, inputs: dict, session: Session, context: ModelContext):
         collector_graph = build_info_collector_sub_graph()
-        await collector_graph.sub_invoke(inputs.get(INPUTS_KEY), runtime.base(), inputs.get(CONFIG_KEY))
-        collector_context: dict = runtime.get_global_state("collector_context")
+        await collector_graph.invoke(inputs.get(INPUTS_KEY), session, context, is_sub=True,
+                                     config=inputs.get(CONFIG_KEY))
+        collector_context: dict = session.get_global_state("collector_context")
         return collector_context
 
     def _input_build(self, state: dict, step: Step):
@@ -628,44 +625,44 @@ class InfoCollectorNode(BaseNode):
 
 class SectionEndNode(End):
     """
-    子图结束节点，将子图的runtime中的section_state的内容返回到主图
+    子图结束节点，将子图的session中的section_state的内容返回到主图
     """
 
-    async def invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
+    async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """
         执行结束节点
         """
-        section_idx = runtime.get_global_state("section_context.section_idx")
+        section_idx = session.get_global_state("section_context.section_idx")
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
 
         # 从 section_context 获取 sub_report_content 对象
-        sub_report_content_obj = runtime.get_global_state("section_context.sub_report_content")
+        sub_report_content_obj = session.get_global_state("section_context.sub_report_content")
         if not sub_report_content_obj or not isinstance(sub_report_content_obj, SubReportContent):
             sub_report_content_obj = SubReportContent()
 
         section_state = {
-            "plans": runtime.get_global_state("section_context.history_plans") or [],
+            "plans": session.get_global_state("section_context.history_plans") or [],
             "sub_report_content": sub_report_content_obj,
-            "warning_infos": runtime.get_global_state("section_context.warning_infos") or [],
-            "exception_infos": runtime.get_global_state("section_context.exception_infos") or [],
+            "warning_infos": session.get_global_state("section_context.warning_infos") or [],
+            "exception_infos": session.get_global_state("section_context.exception_infos") or [],
         }
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
         return section_state
 
 
-def _handle_warning_exception_info(runtime: Runtime, added_warning: str = None, added_exception: str = None):
+def _handle_warning_exception_info(session: Session, added_warning: str = None, added_exception: str = None):
     """统一处理异常告警信息"""
     if added_warning:
-        warning_infos = runtime.get_global_state("section_context.warning_infos")
+        warning_infos = session.get_global_state("section_context.warning_infos")
         warning_infos.append(added_warning)
-        runtime.update_global_state({"section_context.warning_infos": warning_infos})
+        session.update_global_state({"section_context.warning_infos": warning_infos})
         logger.warning(f"{added_warning}")
 
     if added_exception:
-        exception_infos = runtime.get_global_state("section_context.exception_infos")
+        exception_infos = session.get_global_state("section_context.exception_infos")
         exception_infos.append(added_exception)
-        runtime.update_global_state({"section_context.exception_infos": exception_infos})
+        session.update_global_state({"section_context.exception_infos": exception_infos})
         logger.error(f"{added_exception}")
 
 
@@ -674,20 +671,7 @@ def build_editor_team_workflow():
     sub_workflow = Workflow()
     sub_workflow.set_start_comp(
         NodeId.START.value,
-        SectionStartNode(
-            {"inputs": [
-                {"id": "language", "type": "String", "required": True, "defaultvalue": "zh-CN"},
-                {"id": "messages", "type": "List", "required": True},
-                {"id": "section_idx", "type": "Integer | str", "required": True, "defaultvalue": "1"},
-                {"id": "current_outline", "type": "String", "required": True},
-                {"id": "report_task", "type": "String", "required": True},
-                {"id": "section_task", "type": "String | str", "required": True},
-                {"id": "section_description", "type": "String", "required": True},
-                {"id": "section_iscore", "type": "Bool", "required": True, "defaultvalue": False},
-                {"id": "report_template", "type": "String", "required": False},
-                {"id": "config", "type": "Dict", "required": True},
-            ]}
-        ),
+        SectionStartNode(),
         inputs_schema={
             "language": "${language}",
             "messages": "${messages}",

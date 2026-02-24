@@ -29,7 +29,7 @@ plan_response = Plan(
     ]
 )
 # 定义模拟的 functioncall 响应
-tool_name = create_plan_tool(1).name
+tool_name = create_plan_tool(1).card.name
 tool_call_id = '123'
 functioncall_response = {
     'content': '',

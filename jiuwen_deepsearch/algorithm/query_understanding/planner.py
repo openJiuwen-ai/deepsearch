@@ -2,18 +2,18 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import logging
 
-from openjiuwen.core.utils.tool.function.function import LocalFunction
-from openjiuwen.core.utils.tool.param import Param
+from openjiuwen.core.foundation.tool.base import ToolCard
+from openjiuwen.core.foundation.tool.function.function import LocalFunction
 from pydantic import BaseModel, Field
 
 from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from jiuwen_deepsearch.common.exception import CustomValueException
 from jiuwen_deepsearch.common.status_code import StatusCode
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Plan, StepType, Step
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
 from jiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json, ainvoke_llm_with_stats
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
@@ -37,64 +37,72 @@ def generate_plan(language: str, title: str, thought: str, is_research_completed
 
 def create_plan_tool(max_step_num: int):
     """获取plan生成工具"""
-    plan_tool = LocalFunction(
+
+    card = ToolCard(
+        id="generate_plan",
         name="generate_plan",
         description="Generate a research plan for one section of the Systematic Research Report.",
-        params=[
-            Param(
-                name="language",
-                description="Output language, e.g. 'zh-CN' or 'en-US'",
-                param_type="string",
-                required=True
-            ),
-            Param(
-                name="title",
-                description="Title of the plan, summarizing the overall objectives.",
-                param_type="string",
-                required=True
-            ),
-            Param(
-                name="thought",
-                description="The thought process behind the plan, explaining the "
-                            "sequence of steps and the reasons for the choices.",
-                param_type="string",
-                required=True
-            ),
-            Param(
-                name="is_research_completed",
-                description="Is the information sufficient? Has the information collection been completed?",
-                param_type="boolean",
-                required=True
-            ),
-            Param(
-                name="steps",
-                description=f"Detailed list of step-by-step tasks if information is still insufficient. "
-                            f"(Maximum number of steps: {max_step_num})",
-                param_type="array<object>",
-                required=False,
-                schema=[
-                    Param(
-                        name="type",
-                        description=f"Step Type (Enumeration Value: {StepType.INFO_COLLECTING.value})",
-                        param_type="string",
-                        required=True
+        input_params={
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "description": "Output language, e.g. 'zh-CN' or 'en-US'"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Title of the plan, summarizing the overall objectives."
+                },
+                "thought": {
+                    "type": "string",
+                    "description": (
+                        "The thought process behind the plan, explaining the sequence of steps "
+                        "and the reasons for the choices."
+                    )
+                },
+                "is_research_completed": {
+                    "type": "boolean",
+                    "description": "Is the information sufficient? Has the information collection been completed?"
+                },
+                "steps": {
+                    "type": "array",
+                    "description": (
+                        "Detailed list of step-by-step tasks if information is still insufficient. "
+                        f"(Maximum number of steps: {max_step_num})"
                     ),
-                    Param(
-                        name="title",
-                        description="The title of the task, summarizing the content of this step.",
-                        param_type="string",
-                        required=True
-                    ),
-                    Param(
-                        name="description",
-                        description="Detailed instructions for this step, clearly specifying "
-                                    "the data or content that needs to be collected.",
-                        param_type="string",
-                        required=True
-                    ),
-                ]
-            ),
-        ],
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "description": (
+                                    "Step Type (Enumeration Value: "
+                                    f"{StepType.INFO_COLLECTING.value})"
+                                )
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": (
+                                    "The title of the task, summarizing the content of this step."
+                                )
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": (
+                                    "Detailed instructions for this step, clearly specifying the data "
+                                    "or content that needs to be collected."
+                                )
+                            }
+                        },
+                        "required": ["type", "title", "description"]
+                    }
+                }
+            },
+            "required": ["language", "title", "thought", "is_research_completed"]
+        }
+    )
+    plan_tool = LocalFunction(
+        card=card,
         func=generate_plan
     )
 
@@ -128,9 +136,11 @@ class Planner:
 
     async def generate_plan(self, current_inputs: dict) -> PlannerResult:
         """Generating a complete plan."""
-        log_prefix = (f"section_idx: {current_inputs.get('section_idx')} | "
-                      f"Round {current_inputs.get('plan_executed_num', -1) + 1}/"
-                      f"{current_inputs.get('max_plan_executed_num')} | ")
+        log_prefix = (
+            f"section_idx: {current_inputs.get('section_idx')} | "
+            f"Round {current_inputs.get('plan_executed_num', -1) + 1}/"
+            f"{current_inputs.get('max_plan_executed_num')} | "
+        )
         logger.info(f"{log_prefix}Planner starting")
         prompt = apply_system_prompt(self.config.prompt, current_inputs)
         if LogManager.is_sensitive():
@@ -150,7 +160,7 @@ class Planner:
                 response = await ainvoke_llm_with_stats(
                     llm=self.config.llm,
                     messages=prompt,
-                    tools=[tool.get_tool_info()],
+                    tools=[tool.card.tool_info()],
                     agent_name=NodeId.PLAN_REASONING.value,
                     need_stream_out=False,
                     stream_meta=stream_meta
@@ -160,7 +170,7 @@ class Planner:
                 check_tool_call(tool, tool_calls)
 
                 for tool_call in tool_calls:
-                    plan = await tool.ainvoke(tool_call.get("args"))
+                    plan = await tool.invoke(tool_call.get("args"))
                     # 规划成功
                     planner_result.plan_success = True
                     planner_result.plan = plan
@@ -168,7 +178,7 @@ class Planner:
                     planner_result.response_messages.append(response)
                     planner_result.response_messages.append(
                         {
-                            "name": tool.name,
+                            "name": tool.card.name,
                             "role": "tool",
                             "content": f"{plan.model_dump_json()}",
                             "tool_call_id": tool_call.get("id"),
@@ -177,13 +187,16 @@ class Planner:
 
                     logger.info(
                         f"{log_prefix}The plan generation is completed{progress_bar}: "
-                        f"{'**' if LogManager.is_sensitive() else plan.model_dump_json(indent=4)}")
+                        f"{'**' if LogManager.is_sensitive() else plan.model_dump_json(indent=4)}"
+                    )
                     break  # only one toolcall
 
                 break  # Success, exit retry loop
             except Exception as e:
-                msg = (f"{log_prefix}Error when Planner generating a plan. retry {progress_bar}."
-                       f"error: {'**' if LogManager.is_sensitive() else e}")
+                msg = (
+                    f"{log_prefix}Error when Planner generating a plan. retry {progress_bar}."
+                    f"error: {'**' if LogManager.is_sensitive() else e}"
+                )
                 if attempt + 1 < max_retries:
                     logger.warning(msg)
                 else:
@@ -207,10 +220,10 @@ def check_tool_call(tool: LocalFunction, tool_calls: list):
     for tool_call in tool_calls:
         tool_name = tool_call.get("name", "")
         arguments = tool_call.get("args", {})
-        if tool_name != tool.name:
+        if tool_name != tool.card.name:
             # 手动纠正工具名
-            tool_call["name"] = tool.name
-            logger.error(f"Tool name is not match({tool.name}): {'**' if is_sensitive else tool_name}")
+            tool_call["name"] = tool.card.name
+            logger.error(f"Tool name is not match({tool.card.name}): {'**' if is_sensitive else tool_name}")
         if not arguments:
             raise CustomValueException(
                 StatusCode.PLANNER_GENERATE_ERROR.code,
@@ -221,11 +234,13 @@ def check_tool_call(tool: LocalFunction, tool_calls: list):
                 StatusCode.PLANNER_GENERATE_ERROR.code,
                 f"Args is not a dict in tool call: {'**' if is_sensitive else tool_call}"
             )
-        for param in tool.params:
-            if param.required and param.name not in arguments:
+        input_params = tool.card.input_params.get("properties", {})
+        for param_name, param_info in input_params.items():
+            required = param_name in tool.card.input_params.get("required", [])
+            if required and param_name not in arguments:
                 raise CustomValueException(
                     StatusCode.PLANNER_GENERATE_ERROR.code,
-                    f"Required param '{param.name}' not found in tool call: {'**' if is_sensitive else tool_call}"
+                    f"Required param '{param_name}' not found in tool call: {'**' if is_sensitive else tool_call}"
                 )
 
         # 信息不充足，但是没有详细的任务步骤
@@ -248,6 +263,12 @@ def _check_steps(arguments, tool, tool_call):
                 StatusCode.PLANNER_GENERATE_ERROR.code,
                 f"Steps is not a list in tool call: {'**' if is_sensitive else tool_call}"
             )
+        required_steps_params = (
+            tool.card.input_params.get("properties", {})
+            .get("steps", {})
+            .get("items", {})
+            .get("required", [])
+        )
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 raise CustomValueException(
@@ -255,12 +276,10 @@ def _check_steps(arguments, tool, tool_call):
                     f"Steps[{i}] is not a dict in tool call: {'**' if is_sensitive else tool_call}"
                 )
 
-            for param in tool.params:
-                if param.name == "steps":
-                    for step_param in param.schema:
-                        if step_param.required and step_param.name not in step:
-                            raise CustomValueException(
-                                StatusCode.PLANNER_GENERATE_ERROR.code,
-                                f"Required step param '{step_param.name}' not found in tool call: "
-                                f"{'**' if is_sensitive else tool_call}"
-                            )
+            for param_name in required_steps_params:
+                if param_name not in step:
+                    raise CustomValueException(
+                        StatusCode.PLANNER_GENERATE_ERROR.code,
+                        f"Required step param '{param_name}' not found in tool call: "
+                        f"{'**' if is_sensitive else tool_call}"
+                    )

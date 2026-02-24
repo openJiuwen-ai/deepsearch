@@ -6,7 +6,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from jiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId

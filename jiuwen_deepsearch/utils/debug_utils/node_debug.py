@@ -7,6 +7,7 @@ import json
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -64,19 +65,38 @@ def setup_debug_logger(
     debug_logger.addHandler(handler)
 
 
-def record_node_debug_log(pre_node, cur_node, message_id, log_type, node_type, content):
+@dataclass
+class NodeDebugLogRecord:
+    pre_node: str
+    cur_node: str
+    message_id: str
+    log_type: str
+    node_type: str
+    content: str
+
+
+@dataclass
+class NodeDebugData:
+    node_name: str
+    msg_id: str
+    node_type: str
+    input_content: str = ""
+    output_content: str = ""
+
+
+def record_node_debug_log(record: NodeDebugLogRecord):
     """
         工作流节点记录格式化 debug 日志
     """
     log_str = json.dumps(
         {
-            "pre_node": pre_node,
-            "cur_node": cur_node,
-            "message_id": message_id,
-            "type": log_type,
+            "pre_node": record.pre_node,
+            "cur_node": record.cur_node,
+            "message_id": record.message_id,
+            "type": record.log_type,
             "timestamp": str(time.time()),
-            "node_type": node_type,
-            "content": content
+            "node_type": record.node_type,
+            "content": record.content
         },
         ensure_ascii=False,
     )
@@ -85,20 +105,24 @@ def record_node_debug_log(pre_node, cur_node, message_id, log_type, node_type, c
     debug_logger.debug(log_str)
 
 
-def add_debug_log_wrapper(runtime, node_name, msg_id, node_type, input_content="", output_content=""):
+def add_debug_log_wrapper(session, debug_data: NodeDebugData):
     """
         工作流节点添加格式化 debug 日志 wrapper
     """
-    pre_node = runtime.get_global_state("search_context.debug_pre_node") or ""
-    cur_node = f"{node_name}-{uuid.uuid4()}"
+    pre_node = session.get_global_state("search_context.debug_pre_node") or ""
+    cur_node = f"{debug_data.node_name}-{uuid.uuid4()}"
 
-    if input_content:
-        record_node_debug_log(pre_node, cur_node, msg_id, LogType.INPUT.value, node_type, input_content)
+    if debug_data.input_content:
+        record_node_debug_log(NodeDebugLogRecord(
+            pre_node, cur_node, debug_data.msg_id, LogType.INPUT.value, debug_data.node_type, debug_data.input_content
+        ))
 
-    if output_content:
-        record_node_debug_log(pre_node, cur_node, msg_id, LogType.OUTPUT.value, node_type, output_content)
+    if debug_data.output_content:
+        record_node_debug_log(NodeDebugLogRecord(
+            pre_node, cur_node, debug_data.msg_id, LogType.OUTPUT.value, debug_data.node_type, debug_data.output_content
+        ))
 
-    runtime.update_global_state({"search_context.debug_pre_node": cur_node})
+    session.update_global_state({"search_context.debug_pre_node": cur_node})
 
 
 class NodeType(enum.Enum):

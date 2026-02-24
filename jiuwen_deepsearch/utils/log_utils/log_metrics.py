@@ -71,9 +71,9 @@ def async_time_logger(method_name):
                 return await func(*args, **kwargs)
 
             # get thread_id(session_id)
-            runtime = kwargs.get("runtime") if "runtime" in kwargs else (args[2] if len(args) > 2 else None)
-            thread_id = runtime.get_global_state("config.thread_id") or "default_session_id"
-            section_idx = runtime.get_global_state("search_context.section_idx")
+            session = kwargs.get("session") if "session" in kwargs else (args[2] if len(args) > 2 else None)
+            thread_id = session.get_global_state("config.thread_id") or "default_session_id"
+            section_idx = session.get_global_state("search_context.section_idx")
 
             start = time.perf_counter()
             try:

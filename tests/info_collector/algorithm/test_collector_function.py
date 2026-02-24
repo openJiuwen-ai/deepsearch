@@ -215,7 +215,7 @@ class TestExecuteTool:
     async def test_execute_tool_success(self):
         """测试成功的工具执行"""
         mock_tool = AsyncMock()
-        mock_tool.ainvoke.return_value = {"result": "success"}
+        mock_tool.invoke.return_value = {"result": "success"}
         self.tool_dict["test_tool"] = mock_tool
 
         with patch(f"{module_path}.process_tool_result") as mock_process:
@@ -228,7 +228,7 @@ class TestExecuteTool:
                 self.step_info
             )
 
-            mock_tool.ainvoke.assert_called_once_with({"key": "value", "search_engine_name": ""})
+            mock_tool.invoke.assert_called_once_with({"key": "value", "search_engine_name": ""})
             mock_process.assert_called_once_with(
                 "test_tool", '{\n    "result": "success"\n}', self.agent_input
             )
@@ -256,7 +256,7 @@ class TestExecuteTool:
     async def test_execute_tool_exception(self):
         """测试工具执行异常的情况"""
         mock_tool = AsyncMock()
-        mock_tool.ainvoke.side_effect = Exception("Tool error")
+        mock_tool.invoke.side_effect = Exception("Tool error")
         self.tool_dict["test_tool"] = mock_tool
         step_info = self.step_info
         step_info["local_search_engine_name"] = "local_search_tool"
@@ -300,7 +300,7 @@ class TestExecuteTool:
         self.tool_call["args"] = '{\"key\": \"value\"}'
 
         mock_tool = AsyncMock()
-        mock_tool.ainvoke.return_value = {"result": "success"}
+        mock_tool.invoke.return_value = {"result": "success"}
         self.tool_dict["test_tool"] = mock_tool
 
         with patch(f"{module_path}.process_tool_result") as mock_process:
@@ -314,7 +314,7 @@ class TestExecuteTool:
             )
 
             # 验证字符串参数被正确解析为字典
-            mock_tool.ainvoke.assert_called_once_with({"key": "value", "search_engine_name": ""})
+            mock_tool.invoke.assert_called_once_with({"key": "value", "search_engine_name": ""})
 
 
 class TestProcessToolResult:

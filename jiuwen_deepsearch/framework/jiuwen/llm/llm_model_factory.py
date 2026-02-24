@@ -1,18 +1,31 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-from typing import Dict, Type
+import os
 
-from openjiuwen.core.utils.llm.base import BaseModelClient
-from openjiuwen.core.utils.llm.model_library.openai import OpenAILLM
-from openjiuwen.core.utils.llm.model_library.siliconflow import Siliconflow
-from openjiuwen.core.utils.llm.model_utils.model_factory import ModelFactory
+from openjiuwen.core.foundation.llm.model import Model
+from openjiuwen.core.foundation.llm.schema.config import ModelClientConfig, ModelRequestConfig
 
 
-class LLMModelFactory(ModelFactory):
+class LLMModelFactory:
 
-    def _initialize_models(self):
-        """Register all valid subclasses of BaseChatModel"""
-        self.model_map: Dict[str, Type[BaseModelClient]] = {
-            "openai": OpenAILLM,
-            "siliconflow": Siliconflow,
+    @staticmethod
+    def get_model(model_provider: str, api_key: str, api_base: str, timeout: float = None):
+        """Get model instance based on provider"""
+
+        provider_map = {
+            "openai": "OpenAI",
+            "siliconflow": "SiliconFlow"
         }
+        actual_provider = provider_map.get(model_provider.lower(), model_provider)
+
+        # 需要 ModelRequestConfig，否则在调用时访问 temperature 会报 NoneType 错误
+        request_config = ModelRequestConfig()
+
+        client_config = ModelClientConfig(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            client_provider=actual_provider,
+            verify_ssl=os.getenv("LLM_SSL_VERIFY", "true").lower() == "true"
+        )
+        return Model(model_client_config=client_config, model_config=request_config)

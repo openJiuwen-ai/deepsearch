@@ -36,7 +36,7 @@ from jiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from jiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class VisualizationInsertRenderContext:
 class Reporter:
     def __init__(self, llm_model_name):
         # Keep consistent with other modules: workflow/template_generator registers
-        # into llm_context at runtime; fetch by model name here.
+        # into llm_context at session; fetch by model name here.
         self._llm = llm_context.get().get(llm_model_name)
         self.gen_report_context = None
 

@@ -3,7 +3,7 @@
 
 import contextvars
 
-runtime_context = contextvars.ContextVar("runtime")
+session_context = contextvars.ContextVar("session")
 llm_context = contextvars.ContextVar("llm")
 web_search_context = contextvars.ContextVar("web_search")
 local_search_context = contextvars.ContextVar("local_search")

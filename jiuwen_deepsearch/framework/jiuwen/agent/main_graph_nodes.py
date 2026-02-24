@@ -4,11 +4,11 @@ import json
 import logging
 import uuid
 
-from openjiuwen.core.component.end_comp import End
-from openjiuwen.core.component.start_comp import Start
-from openjiuwen.core.context_engine.base import Context
+from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.graph.executable import Input, Output
-from openjiuwen.core.runtime.runtime import Runtime
+from openjiuwen.core.session.node import Session
+from openjiuwen.core.workflow.components.flow.end_comp import End
+from openjiuwen.core.workflow.components.flow.start_comp import Start
 
 from jiuwen_deepsearch.algorithm.query_understanding.interpreter import query_interpreter
 from jiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
@@ -16,41 +16,38 @@ from jiuwen_deepsearch.algorithm.query_understanding.router import classify_quer
 from jiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
 from jiuwen_deepsearch.algorithm.report.report import Reporter
 from jiuwen_deepsearch.algorithm.source_trace.checker import postprocess_by_citation_checker, preprocess_info
+from jiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH, MAX_QUERY_LENGTH, \
+    FINISH_TASK_FEEDBACK
 from jiuwen_deepsearch.common.exception import CustomException
 from jiuwen_deepsearch.common.status_code import StatusCode
 from jiuwen_deepsearch.config.config import Config, WebSearchEngineConfig, LocalSearchEngineConfig
 from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import SearchContext, Message, Outline
-from jiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType
-from jiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH, MAX_QUERY_LENGTH, \
-    FINISH_TASK_FEEDBACK
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import runtime_context
 from jiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent, \
     custom_stream_output
 from jiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from jiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType, NodeDebugData
+from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
 
 class StartNode(Start):
     """
-    起始节点，初始化 Runtime global_state 中的 search_context 和 config
+    起始节点，初始化 Session global_state 中的 search_context 和 config
     """
 
-    async def invoke(self, inputs: Input, runtime: Runtime, context: Context):
+    async def invoke(self, inputs: Input, session: Session, context: ModelContext):
         """
         入口初始化节点
 
         Args:
             inputs: 节点入参
-            runtime: 运行时上下文
+            session: 会话上下文
             context: 全局上下文
         """
-        # 校验input
-        self._validate_inputs(inputs)
-        inputs = self._fill_default_values(inputs)
 
         # 初始化search_context
         search_context = SearchContext(
@@ -61,7 +58,7 @@ class StartNode(Start):
             report_template=inputs.get("report_template", "")
         )
 
-        runtime.update_global_state({"search_context": search_context.model_dump()})
+        session.update_global_state({"search_context": search_context.model_dump()})
 
         origin_agent_config = inputs.get("agent_config", {})
         agent_config = dict()
@@ -84,7 +81,7 @@ class StartNode(Start):
         service_config["thread_id"] = inputs.get("thread_id", "")
         service_config["interrupt_feedback"] = inputs.get("interrupt_feedback", "")
         merge_config = agent_config | service_config
-        runtime.update_global_state({
+        session.update_global_state({
             "config": merge_config
         })
 
@@ -94,19 +91,19 @@ class EntryNode(BaseNode):
     def __init__(self):
         super().__init__()
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info(f"[EntryNode] Start EntryNode.")
 
-        messages = runtime.get_global_state("search_context.messages")
-        human_in_the_loop = runtime.get_global_state("config.workflow_human_in_the_loop")
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        messages = session.get_global_state("search_context.messages")
+        human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
 
         return dict(messages=messages, human_in_the_loop=human_in_the_loop, llm_model_name=llm_model_name)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        # 将runtime set到runtime_context中，llm 调用时获取runtime，去write流式输出
-        runtime_context.set(runtime)
-        current_inputs = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        # 将session set到session_context中，llm 调用时获取session，去write流式输出
+        session_context.set(session)
+        current_inputs = self._pre_handle(inputs, session, context)
         human_in_the_loop = current_inputs.get("human_in_the_loop")
 
         classify_query_output = await classify_query(current_inputs)
@@ -115,19 +112,19 @@ class EntryNode(BaseNode):
         else:
             stream_content = classify_query_output.get("llm_result", "")
         stream_id = str(uuid.uuid4())
-        await runtime.write_custom_stream({"message_id": stream_id,
+        await session.write_custom_stream({"message_id": stream_id,
                                            "agent": NodeId.ENTRY.value,
                                            "content": "",
                                            "message_type": MessageType.MESSAGE_CHUNK.value,
                                            "event": StreamEvent.START.value,
                                            "created_time": get_current_time()})
-        await runtime.write_custom_stream({"message_id": stream_id,
+        await session.write_custom_stream({"message_id": stream_id,
                                            "agent": NodeId.ENTRY.value,
                                            "content": stream_content,
                                            "message_type": MessageType.MESSAGE_CHUNK.value,
                                            "event": StreamEvent.MESSAGE.value,
                                            "created_time": get_current_time()})
-        await runtime.write_custom_stream({"message_id": stream_id,
+        await session.write_custom_stream({"message_id": stream_id,
                                            "agent": NodeId.ENTRY.value,
                                            "content": "",
                                            "message_type": MessageType.MESSAGE_CHUNK.value,
@@ -135,10 +132,10 @@ class EntryNode(BaseNode):
                                            "created_time": get_current_time()})
         classify_query_output = {**classify_query_output,
                                  "human_in_the_loop": human_in_the_loop}
-        result = self._post_handle(inputs, classify_query_output, runtime, context)
+        result = self._post_handle(inputs, classify_query_output, session, context)
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         go_deepsearch = algorithm_output.get("go_deepsearch", True)
         lang = algorithm_output.get("lang", "zh-CN").lower()
         llm_result = algorithm_output.get("llm_result", "")
@@ -150,10 +147,10 @@ class EntryNode(BaseNode):
         if "en" in lang or "english" in lang or "英文" in lang:
             lang = ENGLISH
 
-        # 更新runtime
-        runtime.update_global_state({"search_context.go_deepsearch": go_deepsearch})
-        runtime.update_global_state({"search_context.language": lang})
-        runtime.update_global_state({"search_context.search_mode": "research"})
+        # 更新session
+        session.update_global_state({"search_context.go_deepsearch": go_deepsearch})
+        session.update_global_state({"search_context.language": lang})
+        session.update_global_state({"search_context.search_mode": "research"})
 
         # 决定下一个节点
         next_node = NodeId.END.value
@@ -163,12 +160,12 @@ class EntryNode(BaseNode):
             next_node = NodeId.OUTLINE.value
 
         if next_node == NodeId.END.value:
-            runtime.update_global_state({"search_context.final_result.response_content": llm_result})
-            runtime.update_global_state({"search_context.final_result.exception_info": error_msg})
+            session.update_global_state({"search_context.final_result.response_content": llm_result})
+            session.update_global_state({"search_context.final_result.exception_info": error_msg})
 
         # 添加EntryNode debug日志
-        add_debug_log_wrapper(runtime, NodeId.ENTRY.value, 0,
-                              NodeType.MAIN.value, output_content=str(algorithm_output))
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.ENTRY.value, 0,
+                              NodeType.MAIN.value, output_content=str(algorithm_output)))
         logger.info(f"[EntryNode] End EntryNode.")
         return dict(go_deepsearch=go_deepsearch,
                     language=lang,
@@ -181,65 +178,65 @@ class FeedbackHandlerNode(BaseNode):
     def __init__(self):
         super().__init__()
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info(f"[FeedbackHandlerNode] Start FeedbackHandlerNode.")
-        feedback_mode = runtime.get_global_state("config.workflow_feedback_mode")
+        feedback_mode = session.get_global_state("config.workflow_feedback_mode")
         return dict(feedback_mode=feedback_mode)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        current_inputs = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        current_inputs = self._pre_handle(inputs, session, context)
         feedback_mode = current_inputs.get("feedback_mode", "cmd")
 
-        user_feedback = await self._get_user_feedback(feedback_mode, runtime)
+        user_feedback = await self._get_user_feedback(feedback_mode, session)
         standardized_feedback = truncate_string(user_feedback, max_length=MAX_QUERY_LENGTH)
         if not standardized_feedback:
             logger.error("[FeedbackHandlerNode] Invalid feedback, length or type is invalid")
             standardized_feedback = "Invalid feedback, length is 0 or type is invalid"
 
         algorithm_output = dict(user_feedback=standardized_feedback)
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
-    async def _get_user_feedback(self, feedback_mode: str, runtime: Runtime) -> str:
+    async def _get_user_feedback(self, feedback_mode: str, session: Session) -> str:
         """获取用户反馈"""
         prompt = "\nEnter your feedback: "
 
         if feedback_mode == "cmd":
             return input(prompt)
         if feedback_mode == "web":
-            # runtime.interact本质上是raise Exception的方式，FeedbackHandlerNode内不能使用try except
-            return await runtime.interact(prompt)
+            # session.interact本质上是raise Exception的方式，FeedbackHandlerNode内不能使用try except
+            return await session.interact(prompt)
         logger.error(f"[FeedbackHandlerNode] Invalid feedback_mode: {feedback_mode}")
         return "Invalid feedback_mode"
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         user_feedback = algorithm_output.get("user_feedback", "")
 
         if user_feedback == "Invalid feedback_mode":
             exception_info = (f"[{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.code}]"
                               f"{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.errmsg}")
-            runtime.update_global_state({"search_context.final_result.exception_info": exception_info})
+            session.update_global_state({"search_context.final_result.exception_info": exception_info})
             # 添加FeedbackHandlerNode debug日志
-            add_debug_log_wrapper(runtime, NodeId.FEEDBACK_HANDLER.value, 0,
-                                  NodeType.MAIN.value, output_content=str(exception_info).replace("\\n", "\n"))
+            add_debug_log_wrapper(session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0,
+                                  NodeType.MAIN.value, output_content=str(exception_info).replace("\\n", "\n")))
             return dict(next_node=NodeId.END.value)
         if user_feedback == "Invalid feedback, length is 0 or type is invalid":
             exception_info = (f"[{StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR.code}]"
                               f"{StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR.errmsg}")
-            runtime.update_global_state({"search_context.final_result.exception_info": exception_info})
+            session.update_global_state({"search_context.final_result.exception_info": exception_info})
             # 添加FeedbackHandlerNode debug日志
-            add_debug_log_wrapper(runtime, NodeId.FEEDBACK_HANDLER.value, 0,
-                                  NodeType.MAIN.value, output_content=str(exception_info).replace("\\n", "\n"))
+            add_debug_log_wrapper(session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0,
+                                  NodeType.MAIN.value, output_content=str(exception_info).replace("\\n", "\n")))
             return dict(next_node=NodeId.END.value)
         if user_feedback == FINISH_TASK_FEEDBACK:
             logger.info(f"[FeedbackHandlerNode] user feedback is FINISH TASK, we will try to finish workflow.")
             # 这里是正常走到结束的，不需要填充exception_info
             return dict(next_node=NodeId.END.value)
 
-        runtime.update_global_state({"search_context.user_feedback": user_feedback})
+        session.update_global_state({"search_context.user_feedback": user_feedback})
 
-        add_debug_log_wrapper(runtime, NodeId.FEEDBACK_HANDLER.value, 0,
-                              NodeType.MAIN.value, output_content=user_feedback)
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0,
+                              NodeType.MAIN.value, output_content=user_feedback))
         logger.info(f"[FeedbackHandlerNode] End FeedbackHandlerNode.")
         return dict(next_node=NodeId.OUTLINE.value)
 
@@ -249,9 +246,9 @@ class ReporterNode(BaseNode):
     def __init__(self):
         super().__init__()
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info(f"[ReporterNode] Start ReporterNode.")
-        current_report = runtime.get_global_state("search_context.current_report")
+        current_report = session.get_global_state("search_context.current_report")
         report_task = ""
         all_classified_contents = []
         if current_report:
@@ -262,55 +259,55 @@ class ReporterNode(BaseNode):
                 else []
             )
         return dict(
-            thread_id=runtime.get_global_state("config.thread_id") or "",
-            report_style=runtime.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
-            report_format=runtime.get_global_state("config.report_format") or ReportFormat.MARKDOWN,
-            current_outline=runtime.get_global_state("search_context.current_outline"),
+            thread_id=session.get_global_state("config.thread_id") or "",
+            report_style=session.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
+            report_format=session.get_global_state("config.report_format") or ReportFormat.MARKDOWN,
+            current_outline=session.get_global_state("search_context.current_outline"),
             all_classified_contents=all_classified_contents,
             current_report=current_report,
-            language=runtime.get_global_state("search_context.language") or CHINESE,
+            language=session.get_global_state("search_context.language") or CHINESE,
             report_task=report_task,
-            user_query=runtime.get_global_state("search_context.query"),
-            llm_model_name=runtime.get_global_state("config.llm_config.model_name")
+            user_query=session.get_global_state("search_context.query"),
+            llm_model_name=session.get_global_state("config.llm_config.model_name")
         )
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context):
-        current_inputs = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext):
+        current_inputs = self._pre_handle(inputs, session, context)
         reporter = Reporter(current_inputs.get("llm_model_name"))
         success, report_str = await reporter.generate_report(current_inputs)
         algorithm_output = dict(success=success, report_str=report_str, report=current_inputs.get("report"),
                                 all_classified_contents=current_inputs.get("all_classified_contents"))
 
-        return self._post_handle(inputs, algorithm_output, runtime, context)
+        return self._post_handle(inputs, algorithm_output, session, context)
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         # generate fail
         if not algorithm_output.get("success"):
-            current_report = runtime.get_global_state("search_context.current_report")
+            current_report = session.get_global_state("search_context.current_report")
             if current_report:
                 current_report.report_content = "error: " + algorithm_output.get("report_str")
-                runtime.update_global_state({"search_context.current_report": current_report})
+                session.update_global_state({"search_context.current_report": current_report})
             logger.error("[ReporterNode] ReporterNode ended with fail.")
             exception_info = f"[{StatusCode.REPORT_GENERATE_ERROR.code}] {algorithm_output.get('report_str')}"
-            runtime.update_global_state({"search_context.final_result.exception_info": exception_info})
-            add_debug_log_wrapper(runtime, NodeId.REPORTER.value, 0,
-                                  NodeType.MAIN.value, output_content=exception_info)
+            session.update_global_state({"search_context.final_result.exception_info": exception_info})
+            add_debug_log_wrapper(session, NodeDebugData(NodeId.REPORTER.value, 0,
+                                  NodeType.MAIN.value, output_content=exception_info))
             return dict(next_node=NodeId.END.value)
 
         # generate success
-        current_report = runtime.get_global_state("search_context.current_report")
+        current_report = session.get_global_state("search_context.current_report")
         if current_report:
             current_report.report_content = algorithm_output.get("report", "")
             current_report.all_classified_contents = algorithm_output.get("all_classified_contents", [])
-            runtime.update_global_state({"search_context.current_report": current_report})
+            session.update_global_state({"search_context.current_report": current_report})
 
         # 添加报告debug日志
         debug_content = {
             "report_content": current_report.report_content if current_report else "",
             "all_classified_contents": current_report.all_classified_contents if current_report else []
         }
-        add_debug_log_wrapper(runtime, NodeId.REPORTER.value, 0, NodeType.MAIN.value,
-                              output_content=str(debug_content).replace("\\n", "\n"))
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.REPORTER.value, 0, NodeType.MAIN.value,
+                              output_content=str(debug_content).replace("\\n", "\n")))
         return dict(next_node=NodeId.SOURCE_TRACER.value)
 
 
@@ -319,32 +316,32 @@ class EndNode(End):
     图结束节点
     """
 
-    async def invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
+    async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """ invoke 方法"""
         logger.info(f"[EndNode] Start EndNode.")
-        final_result = runtime.get_global_state("search_context.final_result")
+        final_result = session.get_global_state("search_context.final_result")
         logger.info(f"[EndNode] Get final result: {'***' if LogManager.is_sensitive() else final_result}")
         final_result_json = json.dumps(final_result, ensure_ascii=False)
         if final_result.get("exception_info", "") == "":
-            await runtime.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
+            await session.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
                                                "content": final_result_json,
                                                "message_type": MessageType.MESSAGE_CHUNK.value,
                                                "event": StreamEvent.SUMMARY_RESPONSE.value,
                                                "created_time": get_current_time()})
         else:
-            await runtime.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
+            await session.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
                                                "content": final_result_json,
                                                "message_type": MessageType.MESSAGE_CHUNK.value,
                                                "event": StreamEvent.ERROR.value,
                                                "created_time": get_current_time()})
-        await runtime.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
+        await session.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
                                            "content": "ALL END",
                                            "message_type": MessageType.MESSAGE_CHUNK.value,
                                            "event": StreamEvent.SUMMARY_RESPONSE.value,
                                            "created_time": get_current_time()})
         # 添加End节点debug日志
-        add_debug_log_wrapper(runtime, NodeId.END.value, 0,
-                              NodeType.MAIN.value, output_content=final_result_json)
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.END.value, 0,
+                              NodeType.MAIN.value, output_content=final_result_json))
         logger.info(f"[EndNode] End EndNode.")
 
         return dict(final_result=final_result_json)
@@ -355,18 +352,18 @@ class GenerateQuestionsNode(BaseNode):
     def __init__(self):
         super().__init__()
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info(f"[GenerateQuestionsNode] Start GenerateQuestionsNode.")
-        language = runtime.get_global_state("search_context.language")
-        query = runtime.get_global_state("search_context.query")
-        max_gen_question_retry_num = runtime.get_global_state("config.workflow_max_gen_question_retry_num")
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        language = session.get_global_state("search_context.language")
+        query = session.get_global_state("search_context.query")
+        max_gen_question_retry_num = session.get_global_state("config.workflow_max_gen_question_retry_num")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
         return dict(language=language, query=query, max_gen_question_retry_num=max_gen_question_retry_num,
                     llm_model_name=llm_model_name)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        runtime_context.set(runtime)
-        current_inputs = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        current_inputs = self._pre_handle(inputs, session, context)
         current_executed_num = 0
         max_gen_question_retry_num = current_inputs.get("max_gen_question_retry_num", 5)
         algorithm_output = dict()
@@ -381,32 +378,32 @@ class GenerateQuestionsNode(BaseNode):
                 logger.warning(msg)
             else:
                 logger.error(msg)
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         if algorithm_output.get("exception_info"):
             exception_info = algorithm_output.get("exception_info")
             logger.error(f"[GenerateQuestionsNode] exception: {'*' if LogManager.is_sensitive() else exception_info}")
-            runtime.update_global_state({"search_context.final_result.exception_info": exception_info})
+            session.update_global_state({"search_context.final_result.exception_info": exception_info})
 
-            add_debug_log_wrapper(runtime, NodeId.GENERATE_QUESTIONS.value, 0,
+            add_debug_log_wrapper(session, NodeDebugData(NodeId.GENERATE_QUESTIONS.value, 0,
                                   NodeType.MAIN.value,
-                                  output_content=str(exception_info).replace("\\n", "\n"))
+                                  output_content=str(exception_info).replace("\\n", "\n")))
             return dict(next_node=NodeId.END.value)
         if not algorithm_output.get("result"):
             exception_info = "Query Interpreter result is empty."
-            runtime.update_global_state({"search_context.final_result.exception_info": exception_info})
+            session.update_global_state({"search_context.final_result.exception_info": exception_info})
             logger.error(f"[GenerateQuestionsNode] {exception_info}")
-            add_debug_log_wrapper(runtime, NodeId.GENERATE_QUESTIONS.value, 0,
+            add_debug_log_wrapper(session, NodeDebugData(NodeId.GENERATE_QUESTIONS.value, 0,
                                   NodeType.MAIN.value,
-                                  output_content=str(exception_info).replace("\\n", "\n"))
+                                  output_content=str(exception_info).replace("\\n", "\n")))
             return dict(next_node=NodeId.END.value)
 
-        runtime.update_global_state({"search_context.questions": algorithm_output.get("result")})
-        add_debug_log_wrapper(runtime, NodeId.GENERATE_QUESTIONS.value, 0,
+        session.update_global_state({"search_context.questions": algorithm_output.get("result")})
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.GENERATE_QUESTIONS.value, 0,
                               NodeType.MAIN.value,
-                              output_content=algorithm_output.get("result"))
+                              output_content=algorithm_output.get("result")))
         logger.info(f"[GenerateQuestionsNode] End GenerateQuestionsNode.")
         return dict(next_node=NodeId.FEEDBACK_HANDLER.value)
 
@@ -417,17 +414,17 @@ class OutlineNode(BaseNode):
         super().__init__()
         self.log_prefix = ""
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         self.log_prefix = f"[{self.__class__.__name__}]"
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
-        language = runtime.get_global_state("search_context.language")
-        messages = runtime.get_global_state("search_context.messages")
-        questions = runtime.get_global_state("search_context.questions")
-        user_feedback = runtime.get_global_state("search_context.user_feedback")
-        max_section_num = runtime.get_global_state("config.outliner_max_section_num")
-        max_outline_retry_num = runtime.get_global_state("config.outliner_max_generate_outline_retry_num")
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
-        report_template = runtime.get_global_state("search_context.report_template")
+        language = session.get_global_state("search_context.language")
+        messages = session.get_global_state("search_context.messages")
+        questions = session.get_global_state("search_context.questions")
+        user_feedback = session.get_global_state("search_context.user_feedback")
+        max_section_num = session.get_global_state("config.outliner_max_section_num")
+        max_outline_retry_num = session.get_global_state("config.outliner_max_generate_outline_retry_num")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        report_template = session.get_global_state("search_context.report_template")
 
         return dict(
             messages=messages,
@@ -440,9 +437,9 @@ class OutlineNode(BaseNode):
             report_template=report_template
         )
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        runtime_context.set(runtime)
-        current_inputs = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        current_inputs = self._pre_handle(inputs, session, context)
         report_template = current_inputs.get("report_template", "")
         if report_template:
             outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name="outliner_template")
@@ -477,27 +474,27 @@ class OutlineNode(BaseNode):
         if success_flag:
             outline: Outline = algorithm_output.get("current_outline")
             # 手动流式输出outline
-            await custom_stream_output(runtime, str(uuid.uuid4()), outline.model_dump_json(), NodeId.OUTLINE.value)
+            await custom_stream_output(session, str(uuid.uuid4()), outline.model_dump_json(), NodeId.OUTLINE.value)
 
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         if algorithm_output.get("success_flag"):
             next_node = NodeId.EDITOR_TEAM.value
             outline = algorithm_output.get("current_outline", None)
-            runtime.update_global_state({'search_context.current_outline': outline})
+            session.update_global_state({'search_context.current_outline': outline})
 
-            add_debug_log_wrapper(runtime, NodeId.OUTLINE.value, 0, NodeType.MAIN.value,
-                                  output_content=str(outline).replace("\\n", "\n"))
+            add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE.value, 0, NodeType.MAIN.value,
+                                  output_content=str(outline).replace("\\n", "\n")))
             logger.info(f"{self.log_prefix} Successfully generate outline, go to {next_node}.")
         else:
             next_node = NodeId.END.value
             error_msg = algorithm_output.get("error_msg")
-            runtime.update_global_state({"search_context.final_result.exception_info": error_msg})
+            session.update_global_state({"search_context.final_result.exception_info": error_msg})
 
-            add_debug_log_wrapper(runtime, NodeId.OUTLINE.value, 0, NodeType.MAIN.value,
-                                  output_content=error_msg)
+            add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE.value, 0, NodeType.MAIN.value,
+                                  output_content=error_msg))
             logger.error(f"{self.log_prefix} Failed to generate outline, go to {next_node}.")
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
 
@@ -508,7 +505,7 @@ class DependencyOutlineNode(OutlineNode):
     def __init__(self):
         super().__init__()
 
-    def _post_handle(self, inputs: Input, algorithm_output: object, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: object, session: Session, context: ModelContext):
         return dict(next_node=NodeId.DEPENDENCY_REASONING_TEAM.value)
 
 
@@ -532,21 +529,21 @@ class SourceTracerNode(BaseNode):
 
         return result_dict
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context) -> dict:
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
         logger.info(f"[SourceTracerNode] Start SourceTracerNode.")
-        search_mode = runtime.get_global_state("search_context.search_mode")
-        current_report = runtime.get_global_state("search_context.current_report")
+        search_mode = session.get_global_state("search_context.search_mode")
+        current_report = session.get_global_state("search_context.current_report")
         # 从 Report 对象中获取内容
         report = getattr(current_report, "report_content", "") if current_report else ""
         merged_trace_source_datas = getattr(
             current_report, "merged_trace_source_datas", []) if current_report else []
         all_classified_contents = getattr(
             current_report, "all_classified_contents", []) if current_report else []
-        language = runtime.get_global_state("search_context.language")
+        language = session.get_global_state("search_context.language")
 
-        research_trace_source_switch = runtime.get_global_state(
+        research_trace_source_switch = session.get_global_state(
             "config.source_tracer_research_trace_source_switch")
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
 
         need_exit = False
         if (search_mode == "research") and (research_trace_source_switch is False):
@@ -562,8 +559,8 @@ class SourceTracerNode(BaseNode):
                     language=language, llm_model_name=llm_model_name)
 
     def _skip_trace_source_handle(
-            self, inputs: Input, runtime: Runtime,
-            context: Context, current_inputs: dict
+            self, inputs: Input, session: Session,
+            context: ModelContext, current_inputs: dict
     ) -> dict:
         """
         不需要溯源的场景直接跳到后处理
@@ -572,15 +569,15 @@ class SourceTracerNode(BaseNode):
         search_mode = current_inputs.get("search_mode", "research")
         algorithm_output = dict(
             need_exit=True, origin_report=origin_report, search_mode=search_mode)
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         try:
-            current_inputs = self._pre_handle(inputs, runtime, context)
+            current_inputs = self._pre_handle(inputs, session, context)
 
             if current_inputs.get("need_exit", False):
-                return self._skip_trace_source_handle(inputs, runtime, context, current_inputs)
+                return self._skip_trace_source_handle(inputs, session, context, current_inputs)
 
             modified_report = current_inputs.get("report", "")
             datas = current_inputs.get("merged_trace_source_datas", [])
@@ -591,7 +588,7 @@ class SourceTracerNode(BaseNode):
                 modified_report, datas, language)
             need_check = citation_checker_info.get("need_check", True)
             if need_check is False:
-                return self._skip_trace_source_handle(inputs, runtime, context, current_inputs)
+                return self._skip_trace_source_handle(inputs, session, context, current_inputs)
 
             # 溯源验证
             check_result_dict = await self.build_citation_checker_result(citation_checker_info, datas,
@@ -616,11 +613,11 @@ class SourceTracerNode(BaseNode):
 
         algorithm_output = {"check_result_dict": check_result_dict,
                             "origin_report": current_inputs.get("report", "")}
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
 
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context) -> dict:
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> dict:
         origin_report = algorithm_output.get("origin_report", "")
         need_exit = algorithm_output.get("need_exit", False)
         check_result_dict = algorithm_output.get("check_result_dict", {})
@@ -635,27 +632,27 @@ class SourceTracerNode(BaseNode):
             else:
                 source_tracer_result = json.dumps(
                     {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False)
-                runtime.update_global_state({"search_context.final_result.exception_info": citation_checker_result_str})
+                session.update_global_state({"search_context.final_result.exception_info": citation_checker_result_str})
 
         source_tracer_result_dict = json.loads(source_tracer_result)
         checked_trace_source_report_content = source_tracer_result_dict.get("checked_trace_source_report_content", "")
         citation_messages = source_tracer_result_dict.get("citation_messages", {})
         checked_trace_source_datas = citation_messages.get("data", [])
 
-        current_report = runtime.get_global_state("search_context.current_report")
+        current_report = session.get_global_state("search_context.current_report")
         if not current_report:
             logger.warning("[SourceTracerNode] current_report is None, skip updating report fields.")
         else:
             current_report.checked_trace_source_report_content = checked_trace_source_report_content
             current_report.checked_trace_source_datas = checked_trace_source_datas
-            runtime.update_global_state({"search_context.current_report": current_report})
+            session.update_global_state({"search_context.current_report": current_report})
 
-        runtime.update_global_state(
+        session.update_global_state(
             {"search_context.final_result.response_content": checked_trace_source_report_content})
-        runtime.update_global_state({"search_context.final_result.citation_messages": citation_messages})
+        session.update_global_state({"search_context.final_result.citation_messages": citation_messages})
         # 添加SourceTracerNode debug日志
-        add_debug_log_wrapper(runtime, NodeId.SOURCE_TRACER.value, 0, NodeType.MAIN.value,
-                              output_content=str(source_tracer_result_dict).replace("\\n", "\n"))
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.SOURCE_TRACER.value, 0, NodeType.MAIN.value,
+                              output_content=str(source_tracer_result_dict).replace("\\n", "\n")))
 
         logger.info(f"[SourceTracerNode] End SourceTracerNode.")
         logger.info(f"[SourceTracerNode] source_tracer_result: "

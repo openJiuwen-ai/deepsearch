@@ -1,12 +1,27 @@
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 import pytest
-from openjiuwen.core.workflow.base import Workflow
+from openjiuwen.core.workflow.workflow import Workflow
 
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder import SearchQueryList, Reflection, Summary, \
     CollectorContext, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, \
     ProgrammerNode, GraphEndNode, build_info_collector_sub_graph, get_research_record, llm_context
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQuery
+
+
+class ExposedProgrammerNode(ProgrammerNode):
+    """用于测试的类，公开受保护的方法以遵循 G.CLS.11 规则"""
+
+    async def do_invoke(self, *args, **kwargs):
+        return await self._do_invoke(*args, **kwargs)
+
+
+class ExposedGraphEndNode(GraphEndNode):
+    """用于测试的类，公开受保护的方法以遵循 G.CLS.11 规则"""
+
+    async def do_invoke(self, *args, **kwargs):
+        return await self._do_invoke(*args, **kwargs)
+
 
 module_path = "jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.graph_builder"
 
@@ -84,11 +99,11 @@ class TestResearchRecord:
 
 
 @pytest.fixture
-def mock_runtime():
-    runtime = Mock()
-    runtime.get_global_state = Mock(return_value={})
-    runtime.update_global_state = Mock()
-    return runtime
+def mock_session():
+    session = Mock()
+    session.get_global_state = Mock(return_value={})
+    session.update_global_state = Mock()
+    return session
 
 
 @pytest.fixture
@@ -104,18 +119,18 @@ class TestStartNode:
         return StartNode()
 
     @pytest.fixture
-    def mock_runtime(self):
-        runtime = Mock()
-        runtime.get_global_state = Mock(return_value={})
-        runtime.update_global_state = Mock()
-        return runtime
+    def mock_session(self):
+        session = Mock()
+        session.get_global_state = Mock(return_value={})
+        session.update_global_state = Mock()
+        return session
 
     @pytest.fixture
     def mock_context(self):
         return Mock()
 
     @pytest.mark.asyncio
-    async def test_start_node_invoke_success(self, start_node, mock_runtime, mock_context):
+    async def test_start_node_invoke_success(self, start_node, mock_session, mock_context):
         """测试 StartNode 成功调用"""
         inputs = {
             "language": "zh-CN",
@@ -128,14 +143,14 @@ class TestStartNode:
             "max_react_recursion_limit": 5
         }
 
-        result = await start_node.invoke(inputs, mock_runtime, mock_context)
+        result = await start_node.invoke(inputs, mock_session, mock_context)
 
         # 验证返回结果
         assert result == inputs
 
         # 验证全局状态更新
-        mock_runtime.update_global_state.assert_called_once()
-        call_args = mock_runtime.update_global_state.call_args[0][0]
+        mock_session.update_global_state.assert_called_once()
+        call_args = mock_session.update_global_state.call_args[0][0]
         assert "collector_context" in call_args
 
         collector_context = CollectorContext(**call_args["collector_context"])
@@ -152,11 +167,11 @@ class TestGenerateQueryNode:
         return GenerateQueryNode()
 
     @pytest.fixture
-    def mock_runtime(self):
-        runtime = Mock()
-        runtime.get_global_state = Mock(side_effect=self._mock_get_global_state)
-        runtime.update_global_state = Mock()
-        return runtime
+    def mock_session(self):
+        session = Mock()
+        session.get_global_state = Mock(side_effect=self._mock_get_global_state)
+        session.update_global_state = Mock()
+        return session
 
     def _mock_get_global_state(self, key):
         """模拟全局状态获取"""
@@ -176,7 +191,7 @@ class TestGenerateQueryNode:
         return Mock()
 
     @pytest.mark.asyncio
-    async def test_generate_query_node_success(self, generate_query_node, mock_runtime, mock_context):
+    async def test_generate_query_node_success(self, generate_query_node, mock_session, mock_context):
         """测试 GenerateQueryNode 成功生成查询"""
         inputs = {}
 
@@ -197,19 +212,19 @@ class TestGenerateQueryNode:
                     description=description
                 )
 
-                result = await generate_query_node.invoke(inputs, mock_runtime, mock_context)
+                result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
                 # 验证 update_global_state 被调用了两次
-                assert mock_runtime.update_global_state.call_count == 2
+                assert mock_session.update_global_state.call_count == 2
 
                 # 验证第一次调用是设置 max_tool_steps
-                mock_runtime.update_global_state.assert_any_call({
+                mock_session.update_global_state.assert_any_call({
                     "collector_context.max_tool_steps": 1  # (6-2)//2-1 = 1
                 })
 
                 # 验证第二次调用是设置 search_query (查询被正确截断)
                 search_queries = [RetrievalQuery(query=query, description=description) for query in queries[:2]]
-                mock_runtime.update_global_state.assert_any_call({
+                mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries  # 从3个截断到2个
                 })
 
@@ -220,7 +235,7 @@ class TestGenerateQueryNode:
             llm_context.reset(token)
 
     @pytest.mark.asyncio
-    async def test_generate_query_node_llm_failure(self, generate_query_node, mock_runtime, mock_context):
+    async def test_generate_query_node_llm_failure(self, generate_query_node, mock_session, mock_context):
         """测试 GenerateQueryNode LLM 调用失败"""
         inputs = {}
 
@@ -240,16 +255,16 @@ class TestGenerateQueryNode:
                     description=description,
                 )
 
-                await generate_query_node.invoke(inputs, mock_runtime, mock_context)
+                await generate_query_node.invoke(inputs, mock_session, mock_context)
 
                 # 验证第一次调用是设置 max_tool_steps
-                mock_runtime.update_global_state.assert_any_call({
+                mock_session.update_global_state.assert_any_call({
                     "collector_context.max_tool_steps": 1  # (6-2)//2-1 = 1
                 })
 
                 # 验证使用了默认查询
                 search_queries = [RetrievalQuery(query=query, description=description) for query in queries]
-                mock_runtime.update_global_state.assert_any_call({
+                mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries
                 })
         finally:
@@ -264,12 +279,12 @@ class TestSupervisorNode:
         return SupervisorNode()
 
     @pytest.fixture
-    def mock_runtime(self):
-        runtime = Mock()
-        runtime.get_global_state = Mock(side_effect=self._mock_get_global_state)
-        runtime.update_global_state = Mock()
-        runtime.write_custom_stream = AsyncMock()
-        return runtime
+    def mock_session(self):
+        session = Mock()
+        session.get_global_state = Mock(side_effect=self._mock_get_global_state)
+        session.update_global_state = Mock()
+        session.write_custom_stream = AsyncMock()
+        return session
 
     def _mock_get_global_state(self, key):
         """模拟全局状态获取"""
@@ -292,7 +307,7 @@ class TestSupervisorNode:
         return state_map.get(key)
 
     @pytest.mark.asyncio
-    async def test_supervisor_node_sufficient(self, supervisor_node, mock_runtime, mock_context):
+    async def test_supervisor_node_sufficient(self, supervisor_node, mock_session, mock_context):
         """测试 SupervisorNode 信息充足的情况"""
         inputs = {}
 
@@ -311,13 +326,13 @@ class TestSupervisorNode:
                     next_queries=[]
                 )
 
-                result = await supervisor_node.invoke(inputs, mock_runtime, mock_context)
+                result = await supervisor_node.invoke(inputs, mock_session, mock_context)
 
                 # 验证下一个节点是 SUMMARY
                 assert result["next_node"] == "collector_summary"
 
                 # 验证研究循环计数增加
-                mock_runtime.update_global_state.assert_any_call({
+                mock_session.update_global_state.assert_any_call({
                     "collector_context.research_loop_count": 2
                 })
         finally:
@@ -325,7 +340,7 @@ class TestSupervisorNode:
             llm_context.reset(token)
 
     @pytest.mark.asyncio
-    async def test_supervisor_node_insufficient(self, supervisor_node, mock_runtime, mock_context):
+    async def test_supervisor_node_insufficient(self, supervisor_node, mock_session, mock_context):
         """测试 SupervisorNode 信息不足的情况"""
         inputs = {}
 
@@ -346,14 +361,14 @@ class TestSupervisorNode:
                     next_queries=next_queries
                 )
 
-                result = await supervisor_node.invoke(inputs, mock_runtime, mock_context)
+                result = await supervisor_node.invoke(inputs, mock_session, mock_context)
 
                 # 验证下一个节点是 INFO_COLLECTOR
                 assert result["next_node"] == "collector_info_retrieval"
 
                 # 验证查询被更新
                 search_queries = [RetrievalQuery(query=query, description=knowledge_gap) for query in next_queries]
-                mock_runtime.update_global_state.assert_any_call({
+                mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries,
                 })
         finally:
@@ -369,11 +384,11 @@ class TestSummaryNode:
         return SummaryNode()
 
     @pytest.fixture
-    def mock_runtime(self):
-        runtime = Mock()
-        runtime.get_global_state = Mock(side_effect=self._mock_get_global_state)
-        runtime.update_global_state = Mock()
-        return runtime
+    def mock_session(self):
+        session = Mock()
+        session.get_global_state = Mock(side_effect=self._mock_get_global_state)
+        session.update_global_state = Mock()
+        return session
 
     def _mock_get_global_state(self, key):
         """模拟全局状态获取"""
@@ -390,7 +405,7 @@ class TestSummaryNode:
         return state_map.get(key)
 
     @pytest.mark.asyncio
-    async def test_summary_node_without_programmer(self, summary_node, mock_runtime, mock_context):
+    async def test_summary_node_without_programmer(self, summary_node, mock_session, mock_context):
         """测试 SummaryNode 不需要程序员的情况"""
         inputs = {}
 
@@ -410,7 +425,7 @@ class TestSummaryNode:
                     evaluation=""
                 )
 
-                result = await summary_node.invoke(inputs, mock_runtime, mock_context)
+                result = await summary_node.invoke(inputs, mock_session, mock_context)
 
                 # 验证下一个节点是 END
                 assert result["next_node"] == "collector_end"
@@ -424,14 +439,14 @@ class TestProgrammerNode:
 
     @pytest.fixture
     def programmer_node(self):
-        return ProgrammerNode()
+        return ExposedProgrammerNode()
 
     @pytest.mark.asyncio
-    async def test_programmer_node(self, programmer_node, mock_runtime, mock_context):
+    async def test_programmer_node(self, programmer_node, mock_session, mock_context):
         """测试 ProgrammerNode"""
         inputs = {}
 
-        result = await programmer_node._do_invoke(inputs, mock_runtime, mock_context)
+        result = await programmer_node.do_invoke(inputs, mock_session, mock_context)
 
         assert result == {}
 
@@ -441,15 +456,15 @@ class TestGraphEndNode:
 
     @pytest.fixture
     def graph_end_node(self):
-        return GraphEndNode()
+        return ExposedGraphEndNode()
 
     @pytest.fixture
-    def mock_runtime(self):
-        runtime = Mock()
-        runtime.get_global_state = Mock(side_effect=self._mock_get_global_state)
-        runtime.update_global_state = Mock()
-        runtime.write_custom_stream = AsyncMock()
-        return runtime
+    def mock_session(self):
+        session = Mock()
+        session.get_global_state = Mock(side_effect=self._mock_get_global_state)
+        session.update_global_state = Mock()
+        session.write_custom_stream = AsyncMock()
+        return session
 
     def _mock_get_global_state(self, key):
         """模拟全局状态获取"""
@@ -464,17 +479,17 @@ class TestGraphEndNode:
         return state_map.get(key)
 
     @pytest.mark.asyncio
-    async def test_graph_end_node(self, graph_end_node, mock_runtime, mock_context):
+    async def test_graph_end_node(self, graph_end_node, mock_session, mock_context):
         """测试 GraphEndNode"""
         inputs = {}
 
-        result = await graph_end_node._do_invoke(inputs, mock_runtime, mock_context)
+        result = await graph_end_node.do_invoke(inputs, mock_session, mock_context)
 
         # 验证消息流写入
-        mock_runtime.write_custom_stream.assert_called_once()
+        mock_session.write_custom_stream.assert_called_once()
 
         # 验证消息列表更新
-        mock_runtime.update_global_state.assert_called_once()
+        mock_session.update_global_state.assert_called_once()
 
 
 def test_build_info_collector_sub_graph():

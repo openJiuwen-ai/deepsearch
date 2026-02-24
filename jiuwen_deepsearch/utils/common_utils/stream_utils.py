@@ -26,7 +26,7 @@ class StreamEvent(enum.Enum):
     ERROR = "error"
 
 
-async def custom_stream_output(runtime, stream_id, stream_content, agent_name, stream_meta: dict | None = None):
+async def custom_stream_output(session, stream_id, stream_content, agent_name, stream_meta: dict | None = None):
     async def _write_event(event: StreamEvent, content: str):
         payload = {
             "message_id": stream_id,
@@ -39,7 +39,7 @@ async def custom_stream_output(runtime, stream_id, stream_content, agent_name, s
 
         if stream_meta:
             payload.update(dict(stream_meta))
-        await runtime.write_custom_stream(payload)
+        await session.write_custom_stream(payload)
 
     await _write_event(StreamEvent.START, "")
     await _write_event(StreamEvent.MESSAGE, stream_content)

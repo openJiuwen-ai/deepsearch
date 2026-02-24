@@ -4,13 +4,12 @@ import asyncio
 import logging
 import uuid
 
-from openjiuwen.core.component.workflow_comp import SUB_WORKFLOW_COMPONENT
-from openjiuwen.core.context_engine.base import Context
+from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.runner.runner import Runner
-from openjiuwen.core.runtime.runtime import Runtime
-from openjiuwen.core.runtime.workflow import WorkflowRuntime
-from openjiuwen.core.stream.base import BaseStreamMode, CustomSchema, OutputSchema
+from openjiuwen.core.session.node import Session
+from openjiuwen.core.session.stream.base import BaseStreamMode, CustomSchema, OutputSchema
+from openjiuwen.core.workflow.components.flow.workflow_comp import SUB_WORKFLOW_COMPONENT
 
 from jiuwen_deepsearch.common.status_code import StatusCode
 from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode
@@ -18,11 +17,11 @@ from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.editor_tea
     build_editor_team_workflow
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Section, Outline, Report, SubReport, \
     SubReportContent
-from jiuwen_deepsearch.utils.debug_utils.node_debug import NodeType, add_debug_log_wrapper
+from jiuwen_deepsearch.utils.common_utils.stream_utils import StreamEvent, MessageType
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.utils.debug_utils.node_debug import NodeType, add_debug_log_wrapper, NodeDebugData
 from jiuwen_deepsearch.utils.debug_utils.result_exporter import ResultExporter
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from jiuwen_deepsearch.utils.common_utils.stream_utils import StreamEvent, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -41,25 +40,25 @@ class EditorTeamNode(BaseNode):
         """返回Jiuwen组件类型"""
         return SUB_WORKFLOW_COMPONENT
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         self.log_prefix = f"[{self.__class__.__name__}]"
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
-        language = runtime.get_global_state("search_context.language")
-        messages = runtime.get_global_state("search_context.messages")
-        outline = runtime.get_global_state("search_context.current_outline")
-        history_outlines = runtime.get_global_state("search_context.history_outlines")
-        report_template = runtime.get_global_state("search_context.report_template")
-        history_reports = runtime.get_global_state("search_context.history_reports")
-        session_id = runtime.get_global_state("search_context.session_id")
-        config = runtime.get_global_state("config")
+        language = session.get_global_state("search_context.language")
+        messages = session.get_global_state("search_context.messages")
+        outline = session.get_global_state("search_context.current_outline")
+        history_outlines = session.get_global_state("search_context.history_outlines")
+        report_template = session.get_global_state("search_context.report_template")
+        history_reports = session.get_global_state("search_context.history_reports")
+        config = session.get_global_state("config")
+        session_id = session.get_global_state("search_context.session_id")
 
         return dict(language=language, messages=messages, outline=outline, history_outlines=history_outlines,
                     report_template=report_template, history_reports=history_reports, session_id=session_id,
                     config=config)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         # 1. 从上下文中获取大纲，并初始化报告
-        state = self._pre_handle(inputs, runtime, context)
+        state = self._pre_handle(inputs, session, context)
         logger.info(f"{self.log_prefix} current_inputs: {'*' if LogManager.is_sensitive() else state}")
         current_outline = state.get("outline")
         if not current_outline:
@@ -67,7 +66,7 @@ class EditorTeamNode(BaseNode):
                 f"[{StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE.code}] "
                 f"{self.log_prefix} {StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE.errmsg}"
             )
-            self._handle_warning_exception_info(runtime, added_warning=msg, added_exception=msg)
+            self._handle_warning_exception_info(session, added_warning=msg, added_exception=msg)
             logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
             return dict(next_node=NodeId.END.value)
         sections = current_outline.sections
@@ -76,7 +75,7 @@ class EditorTeamNode(BaseNode):
                 f"[{StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION.code}] "
                 f"{self.log_prefix} {StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION.errmsg}"
             )
-            self._handle_warning_exception_info(runtime, added_warning=msg, added_exception=msg)
+            self._handle_warning_exception_info(session, added_warning=msg, added_exception=msg)
             logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
             return dict(next_node=NodeId.END.value)
         current_report = Report(
@@ -99,7 +98,7 @@ class EditorTeamNode(BaseNode):
             )
             tasks.append(
                 self._run_section_sub_graph_await(
-                    runtime, sub_workflow, section_state)
+                    session, sub_workflow, section_state)
             )
         tasks_results = await asyncio.gather(*tasks)
 
@@ -110,21 +109,21 @@ class EditorTeamNode(BaseNode):
         ResultExporter.export_outline(state.get("outline"), state.get("session_id"))
 
         # 5. 上下文更新
-        results = self._post_handle(inputs, state, runtime, context)
+        results = self._post_handle(inputs, state, session, context)
         return results
 
-    def _post_handle(self, inputs: Input, state: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, state: dict, session: Session, context: ModelContext):
         algorithm_output = {
             "search_context.current_report": state.get("report"),
             "search_context.current_outline": state.get("outline"),
             "search_context.history_outlines": state.get("history_outlines"),
             "search_context.history_reports": state.get("history_reports"),
         }
-        runtime.update_global_state(algorithm_output)
+        session.update_global_state(algorithm_output)
 
         # 添加debug日志
-        add_debug_log_wrapper(runtime, NodeId.EDITOR_TEAM.value, 0, NodeType.MAIN.value,
-                              output_content=str(algorithm_output).replace("\\n", "\n"))
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.EDITOR_TEAM.value, 0, NodeType.MAIN.value,
+                              output_content=str(algorithm_output).replace("\\n", "\n")))
 
         next_node = NodeId.REPORTER.value
         current_report: Report = state.get("report")
@@ -143,7 +142,7 @@ class EditorTeamNode(BaseNode):
             next_node = NodeId.END.value
 
         if warning_info or exception_info:
-            self._handle_warning_exception_info(runtime, added_warning=warning_info, added_exception=exception_info)
+            self._handle_warning_exception_info(session, added_warning=warning_info, added_exception=exception_info)
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
 
         return dict(next_node=next_node)
@@ -182,16 +181,14 @@ class EditorTeamNode(BaseNode):
 
         return section_state
 
-    async def _run_section_sub_graph_await(self, workflow_runtime, sub_workflow, input_state):
+    async def _run_section_sub_graph_await(self, workflow_session, sub_workflow, input_state):
         section_idx = input_state.get("section_idx", "0")
         # 执行每个子图，得到每个section的结果
         logger.info(
             f"{self.log_prefix} Start Section {section_idx}: Start the sub graph.")
-        sub_workflow_runtime = WorkflowRuntime()
         async for chunk in Runner.run_workflow_streaming(
                 workflow=sub_workflow,
                 inputs=input_state,
-                runtime=sub_workflow_runtime,
                 stream_modes=[BaseStreamMode.CUSTOM, BaseStreamMode.OUTPUT]
         ):
             if not LogManager.is_sensitive():
@@ -213,10 +210,10 @@ class EditorTeamNode(BaseNode):
                 if hasattr(chunk, "finish_reason"):
                     output_message["finish_reason"] = getattr(
                         chunk, "finish_reason")
-                await workflow_runtime.write_custom_stream(output_message)
+                await workflow_session.write_custom_stream(output_message)
             elif isinstance(chunk, OutputSchema):
                 if hasattr(chunk, "type") and getattr(chunk, "type") == "workflow_final":
-                    await workflow_runtime.write_custom_stream(
+                    await workflow_session.write_custom_stream(
                         {
                             "message_id": str(uuid.uuid4()),
                             "section_idx": str(section_idx),
@@ -281,17 +278,17 @@ class EditorTeamNode(BaseNode):
 
         return state
 
-    def _handle_warning_exception_info(self, runtime: Runtime, added_warning: str, added_exception: str):
+    def _handle_warning_exception_info(self, session: Session, added_warning: str, added_exception: str):
         """统一处理异常告警信息"""
         if added_warning:
-            warning_info = runtime.get_global_state("search_context.final_result.warning_info")
-            runtime.update_global_state(
+            warning_info = session.get_global_state("search_context.final_result.warning_info")
+            session.update_global_state(
                 {"search_context.final_result.warning_info": warning_info + '\n' + added_warning})
             logger.warning(f"{added_warning}")
 
         if added_exception:
-            exception_info = runtime.get_global_state("search_context.final_result.exception_info")
-            runtime.update_global_state(
+            exception_info = session.get_global_state("search_context.final_result.exception_info")
+            session.update_global_state(
                 {"search_context.final_result.exception_info": exception_info + '\n' + added_exception})
             logger.error(f"{added_exception}")
 
@@ -300,7 +297,7 @@ class DependencyReasoningTeamNode(EditorTeamNode):
     def __init__(self):
         super().__init__()
 
-    def _post_handle(self, inputs: Input, algorithm_output: object, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: object, session: Session, context: ModelContext):
         return dict(next_node=NodeId.DEPENDENCY_WRITING_TEAM.value)
 
 
@@ -308,5 +305,5 @@ class DependencyWritingTeamNode(EditorTeamNode):
     def __init__(self):
         super().__init__()
 
-    def _post_handle(self, inputs: Input, algorithm_output: object, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: object, session: Session, context: ModelContext):
         return dict(next_node=NodeId.REPORTER.value)

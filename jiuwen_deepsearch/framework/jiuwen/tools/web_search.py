@@ -3,13 +3,12 @@
 
 import logging
 
-from openjiuwen.core.utils.tool.function.function import LocalFunction
-from openjiuwen.core.utils.tool.param import Param
+from openjiuwen.core.foundation.tool.base import ToolCard
+from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
 from jiuwen_deepsearch.algorithm.research_collector.tool_log import tool_invoke_log_async
 from jiuwen_deepsearch.common.exception import CustomValueException
 from jiuwen_deepsearch.common.status_code import StatusCode
-from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
 from jiuwen_deepsearch.framework.jiuwen.tools.Search_API import (
     XunfeiSearchAPIWrapper,
     TavilySearchAPIWrapper,
@@ -17,8 +16,9 @@ from jiuwen_deepsearch.framework.jiuwen.tools.Search_API import (
     PetalSearchAPIWrapper,
     load_external_search_tools
 )
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import web_search_context
+from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import web_search_context
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +60,28 @@ async def run_web_search(query: str, search_engine_name: str):
 
 def create_web_search_tool():
     """获取网页搜索工具"""
-    web_search_tool = LocalFunction(
+
+    card = ToolCard(
+        id="web_search_tool",
         name="web_search_tool",
         description="Use web search engine to get web information.",
-        params=[
-            Param(name="query",
-                  description="Search query of current step.",
-                  param_type="String",
-                  required=True)
-        ],
+        input_params={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query of current step."
+                },
+                "search_engine_name": {
+                    "type": "string",
+                    "description": "Name of the search engine to use."
+                }
+            },
+            "required": ["query", "search_engine_name"]
+        }
+    )
+    web_search_tool = LocalFunction(
+        card=card,
         func=run_web_search
     )
     return web_search_tool

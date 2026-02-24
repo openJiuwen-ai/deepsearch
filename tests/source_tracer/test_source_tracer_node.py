@@ -10,21 +10,49 @@ from jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes import SourceTrac
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Report
 
 
+class ExposedSourceTracerNode(SourceTracerNode):
+    """用于测试的类，公开受保护的方法以遵循 G.CLS.11 规则"""
+
+    def _pre_handle(self, *args, **kwargs):
+        return self.pre_handle(*args, **kwargs)
+
+    def pre_handle(self, *args, **kwargs):
+        return super()._pre_handle(*args, **kwargs)
+
+    def _skip_trace_source_handle(self, *args, **kwargs):
+        return self.skip_trace_source_handle(*args, **kwargs)
+
+    def skip_trace_source_handle(self, *args, **kwargs):
+        return super()._skip_trace_source_handle(*args, **kwargs)
+
+    async def _do_invoke(self, *args, **kwargs):
+        return await self.do_invoke(*args, **kwargs)
+
+    async def do_invoke(self, *args, **kwargs):
+        return await super()._do_invoke(*args, **kwargs)
+
+    def _post_handle(self, *args, **kwargs):
+        return self.post_handle(*args, **kwargs)
+
+    def post_handle(self, *args, **kwargs):
+        return super()._post_handle(*args, **kwargs)
+
+
 class TestSourceTracerNode:
     """Test cases for SourceTracerNode class."""
 
     @pytest.fixture
     def source_tracer_node(self):
         """Fixture to create a SourceTracerNode instance."""
-        return SourceTracerNode()
+        return ExposedSourceTracerNode()
 
     @pytest.fixture
-    def mock_runtime(self):
-        """Fixture to create a mock Runtime instance."""
-        runtime = MagicMock()
-        runtime.get_global_state = MagicMock()
-        runtime.update_global_state = MagicMock()
-        return runtime
+    def mock_session(self):
+        """Fixture to create a mock Session instance."""
+        session = MagicMock()
+        session.get_global_state = MagicMock()
+        session.update_global_state = MagicMock()
+        return session
 
     @pytest.fixture
     def mock_search_context(self):
@@ -54,7 +82,8 @@ class TestSourceTracerNode:
             "source_tracer_research_trace_source_switch": True
         }
 
-    def test_pre_handle(self, source_tracer_node, mock_runtime, mock_search_context, mock_config):
+    @staticmethod
+    def test_pre_handle(source_tracer_node, mock_session, mock_search_context, mock_config):
         """Test _pre_handle method with different configurations."""
 
         # Test with research mode and trace source enabled
@@ -70,8 +99,8 @@ class TestSourceTracerNode:
                 return mock_search_context.get(key.replace("search_context.", ""))
             return None
 
-        mock_runtime.get_global_state.side_effect = get_global_state_side_effect_enabled
-        result = source_tracer_node._pre_handle(None, mock_runtime, None)
+        mock_session.get_global_state.side_effect = get_global_state_side_effect_enabled
+        result = source_tracer_node.pre_handle(None, mock_session, None)
         assert result["need_exit"] is False
         assert result["search_mode"] == "research"
         assert result["research_trace_source_switch"] is True
@@ -82,8 +111,8 @@ class TestSourceTracerNode:
                 return False
             return get_global_state_side_effect_enabled(key)
 
-        mock_runtime.get_global_state.side_effect = get_global_state_side_effect_disabled
-        result = source_tracer_node._pre_handle(None, mock_runtime, None)
+        mock_session.get_global_state.side_effect = get_global_state_side_effect_disabled
+        result = source_tracer_node.pre_handle(None, mock_session, None)
         assert result["need_exit"] is True
 
     @pytest.mark.asyncio
@@ -118,7 +147,7 @@ class TestSourceTracerNode:
             assert result["citation_checker_result_str"] == expected_citation_result
 
     @pytest.mark.asyncio
-    async def test_do_invoke(self, source_tracer_node, mock_runtime, mock_search_context, mock_config):
+    async def test_do_invoke(self, source_tracer_node, mock_session, mock_search_context, mock_config):
         """Test _do_invoke method with different scenarios."""
 
         # Setup common mock
@@ -129,7 +158,7 @@ class TestSourceTracerNode:
                 return mock_config
             return None
 
-        mock_runtime.get_global_state.side_effect = get_global_state_side_effect
+        mock_session.get_global_state.side_effect = get_global_state_side_effect
 
         mock_source_tracer_result = ("Report with citations", [
             {"id": "test_id", "content": "Test content"}])
@@ -138,11 +167,11 @@ class TestSourceTracerNode:
         mock_citation_checker_result = {
             "check_result": True, "citation_checker_result_str": '{"response_content": "Valid"}'}
 
-        with patch.object(source_tracer_node, '_pre_handle') as mock_pre_handle:
+        with patch.object(source_tracer_node, 'pre_handle') as mock_pre_handle:
             with patch('jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes.preprocess_info') as mock_preprocess:
                 with patch.object(SourceTracerNode, 'build_citation_checker_result',
                                   new_callable=AsyncMock) as mock_build_citation:
-                    with patch.object(source_tracer_node, '_post_handle') as mock_post_handle:
+                    with patch.object(source_tracer_node, 'post_handle') as mock_post_handle:
                         # Test normal flow
                         mock_pre_handle.return_value = {
                             "need_exit": False, "report": "test", "language": "zh-CN"}
@@ -151,14 +180,14 @@ class TestSourceTracerNode:
                         mock_post_handle.return_value = {
                             "next_node": "END"}
 
-                        await source_tracer_node._do_invoke(None, mock_runtime, None)
+                        await source_tracer_node.do_invoke(None, mock_session, None)
                         mock_build_citation.assert_called_once()
 
                         # Test need_exit flow
                         mock_pre_handle.return_value = {"need_exit": True}
-                        with patch.object(source_tracer_node, '_skip_trace_source_handle') as mock_skip:
+                        with patch.object(source_tracer_node, 'skip_trace_source_handle') as mock_skip:
                             mock_skip.return_value = {"next_node": "END"}
-                            await source_tracer_node._do_invoke(None, mock_runtime, None)
+                            await source_tracer_node.do_invoke(None, mock_session, None)
                             mock_skip.assert_called_once()
 
                         # Test exception handling
@@ -166,7 +195,7 @@ class TestSourceTracerNode:
                             "need_exit": False, "report": "test"}
                         # 模拟preprocess_info抛出异常，触发异常处理分支
                         mock_preprocess.side_effect = Exception("Test exception")
-                        await source_tracer_node._do_invoke(None, mock_runtime, None)
+                        await source_tracer_node.do_invoke(None, mock_session, None)
                         # Verify exception was handled by checking post_handle was called with check_result: False
                         args, kwargs = mock_post_handle.call_args
                         algorithm_output = args[1]

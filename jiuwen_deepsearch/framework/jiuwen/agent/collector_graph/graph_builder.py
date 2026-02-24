@@ -1,34 +1,32 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+import json
 import logging
 import uuid
-import json
 from typing import List, Any
 
+from openjiuwen.core.context_engine.base import ModelContext
+from openjiuwen.core.foundation.llm.schema.message import AssistantMessage
+from openjiuwen.core.graph.executable import Input, Output
+from openjiuwen.core.session.node import Session
+from openjiuwen.core.workflow.components.flow.end_comp import End
+from openjiuwen.core.workflow.components.flow.start_comp import Start
+from openjiuwen.core.workflow.workflow import Workflow
 from pydantic import BaseModel, Field
 
-from openjiuwen.core.component.end_comp import End
-from openjiuwen.core.component.start_comp import Start
-from openjiuwen.core.context_engine.base import Context
-from openjiuwen.core.graph.executable import Input, Output
-from openjiuwen.core.runtime.runtime import Runtime
-from openjiuwen.core.workflow.base import Workflow
-from openjiuwen.core.utils.llm.messages import AIMessage
-
+from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from jiuwen_deepsearch.config.config import ServiceConfig
 from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode, init_router
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.collector_context import CollectorContext
 from jiuwen_deepsearch.framework.jiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQuery
-from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from jiuwen_deepsearch.config.config import ServiceConfig
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from jiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from jiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
-
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import runtime_context
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +85,11 @@ def get_research_record(messages: List[dict]) -> str:
 
 class StartNode(Start):
     """
-    起始节点，初始化 Runtime global_state 中的 search_context 和 config
+    起始节点，初始化 Session global_state 中的 search_context 和 config
     """
 
-    async def invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
+    async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """Invoke method of StartNode."""
-        # 校验input
-        self._validate_inputs(inputs)
-        inputs = self._fill_default_values(inputs)
 
         # 初始化search_context
         collector_context = CollectorContext(
@@ -109,7 +104,7 @@ class StartNode(Start):
             max_research_loops=inputs.get("max_research_loops", 1),
             max_react_recursion_limit=inputs.get("max_react_recursion_limit", 5),
         )
-        runtime.update_global_state({"collector_context": collector_context.model_dump()})
+        session.update_global_state({"collector_context": collector_context.model_dump()})
 
         return inputs
 
@@ -120,29 +115,29 @@ class GenerateQueryNode(BaseNode):
         super().__init__()
         self.llm: Any = None
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("collector_context.section_idx")
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("collector_context.section_idx")
         logger.info(f"section_idx: {section_idx} | [GenerateQueryNode] Start GenerateQueryNode.")
-        step_title = runtime.get_global_state("collector_context.step_title")
-        messages = runtime.get_global_state("collector_context.messages")
-        number_queries = runtime.get_global_state("collector_context.initial_search_query_count")
-        language = runtime.get_global_state("collector_context.language")
-        max_research_loops = runtime.get_global_state("collector_context.max_research_loops")
-        max_react_recursion_limit = runtime.get_global_state("collector_context.max_react_recursion_limit")
+        step_title = session.get_global_state("collector_context.step_title")
+        messages = session.get_global_state("collector_context.messages")
+        number_queries = session.get_global_state("collector_context.initial_search_query_count")
+        language = session.get_global_state("collector_context.language")
+        max_research_loops = session.get_global_state("collector_context.max_research_loops")
+        max_react_recursion_limit = session.get_global_state("collector_context.max_react_recursion_limit")
 
         step_num = (max_react_recursion_limit - 2) // max_research_loops - 1
         max_tool_steps = max(int(step_num), 1)
-        runtime.update_global_state({"collector_context.max_tool_steps": max_tool_steps})
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        session.update_global_state({"collector_context.max_tool_steps": max_tool_steps})
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, step_title=step_title,
                     messages=messages, number_queries=number_queries,
                     language=language)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        state = self._pre_handle(inputs, runtime, context)
-        runtime_context.set(runtime)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        state = self._pre_handle(inputs, session, context)
+        session_context.set(session)
 
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")
@@ -171,17 +166,17 @@ class GenerateQueryNode(BaseNode):
             logger.info(f"section_idx: {section_idx} |"
                         f"[GenerateQueryNode] Initial queries count: {len(result.queries)}")
 
-        node_output = self._post_handle(inputs, result, runtime, context)
+        node_output = self._post_handle(inputs, result, session, context)
         return node_output
 
-    def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, session: Session, context: ModelContext):
         search_queries = [RetrievalQuery(
             query=query,
             description=algorithm_output.description
         ) for query in algorithm_output.queries]
 
-        runtime.update_global_state({"collector_context.search_queries": search_queries})
-        section_idx = runtime.get_global_state("collector_context.section_idx")
+        session.update_global_state({"collector_context.search_queries": search_queries})
+        section_idx = session.get_global_state("collector_context.section_idx")
         logger.info(f"section_idx: {section_idx} | [GenerateQueryNode] End GenerateQueryNode.")
 
         return dict()
@@ -213,19 +208,19 @@ class SupervisorNode(BaseNode):
         super().__init__()
         self.llm: Any = None
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("collector_context.section_idx")
-        plan_idx = runtime.get_global_state("collector_context.plan_idx")
-        step_idx = runtime.get_global_state("collector_context.step_idx")
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("collector_context.section_idx")
+        plan_idx = session.get_global_state("collector_context.plan_idx")
+        step_idx = session.get_global_state("collector_context.step_idx")
         logger.info(f"section_idx: {section_idx} | [SupervisorNode] Start SupervisorNode.")
-        step_title = runtime.get_global_state("collector_context.step_title")
-        step_description = runtime.get_global_state("collector_context.step_description")
-        number_queries = runtime.get_global_state("collector_context.initial_search_query_count")
-        language = runtime.get_global_state("collector_context.language")
-        doc_infos = runtime.get_global_state("collector_context.doc_infos")
-        new_doc_infos_current_loop = runtime.get_global_state("collector_context.new_doc_infos_current_loop")
-        research_loop_count = runtime.get_global_state("collector_context.research_loop_count")
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        step_title = session.get_global_state("collector_context.step_title")
+        step_description = session.get_global_state("collector_context.step_description")
+        number_queries = session.get_global_state("collector_context.initial_search_query_count")
+        language = session.get_global_state("collector_context.language")
+        doc_infos = session.get_global_state("collector_context.doc_infos")
+        new_doc_infos_current_loop = session.get_global_state("collector_context.new_doc_infos_current_loop")
+        research_loop_count = session.get_global_state("collector_context.research_loop_count")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx,
@@ -233,9 +228,9 @@ class SupervisorNode(BaseNode):
                     number_queries=number_queries, language=language, doc_infos=doc_infos,
                     new_doc_infos_current_loop=new_doc_infos_current_loop, research_loop_count=research_loop_count)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        state = self._pre_handle(inputs, runtime, context)
-        runtime_context.set(runtime)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        state = self._pre_handle(inputs, session, context)
+        session_context.set(session)
 
         section_idx = state.get("section_idx", 0)
         plan_idx = state.get("plan_idx", 0)
@@ -251,7 +246,7 @@ class SupervisorNode(BaseNode):
                 "title": item.get("title", ""),
                 "query": item.get("query", ""),
             }
-            await runtime.write_custom_stream({
+            await session.write_custom_stream({
                 "message_id": str(uuid.uuid4()),
                 "plan_idx": str(plan_idx),
                 "step_idx": str(step_idx),
@@ -293,24 +288,24 @@ class SupervisorNode(BaseNode):
 
         state["reflection"] = result
         state["research_loop_count"] = research_loop_count + 1
-        node_output = self._post_handle(inputs, state, runtime, context)
+        node_output = self._post_handle(inputs, state, session, context)
         return node_output
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
-        max_research_loops = runtime.get_global_state("collector_context.max_research_loops")
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        max_research_loops = session.get_global_state("collector_context.max_research_loops")
         research_loop_count = algorithm_output["research_loop_count"]
         reflection: Reflection = algorithm_output["reflection"]
 
-        runtime.update_global_state({"collector_context.research_loop_count": research_loop_count})
-        runtime.update_global_state({"collector_context.is_sufficient": reflection.is_sufficient})
-        runtime.update_global_state({"collector_context.knowledge_gap": reflection.knowledge_gap})
+        session.update_global_state({"collector_context.research_loop_count": research_loop_count})
+        session.update_global_state({"collector_context.is_sufficient": reflection.is_sufficient})
+        session.update_global_state({"collector_context.knowledge_gap": reflection.knowledge_gap})
         search_queries = [RetrievalQuery(
             query=query,
             description=reflection.knowledge_gap
         ) for query in reflection.next_queries]
-        runtime.update_global_state({"collector_context.search_queries": search_queries})
+        session.update_global_state({"collector_context.search_queries": search_queries})
 
-        section_idx = runtime.get_global_state("collector_context.section_idx")
+        section_idx = session.get_global_state("collector_context.section_idx")
         step_title = algorithm_output.get("step_title", "")
         if reflection.is_sufficient:
             logger.info("section_idx: %s | step_title: %s | [SupervisorNode] End SupervisorNode. "
@@ -355,22 +350,22 @@ class SummaryNode(BaseNode):
         super().__init__()
         self.llm: Any = None
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("collector_context.section_idx")
-        step_title = runtime.get_global_state("collector_context.step_title")
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("collector_context.section_idx")
+        step_title = session.get_global_state("collector_context.step_title")
         logger.info("section_idx: %s | step_title: %s | [SummaryNode] Start SummaryNode.", section_idx, step_title)
-        step_description = runtime.get_global_state("collector_context.step_description")
-        language = runtime.get_global_state("collector_context.language")
-        doc_infos = runtime.get_global_state("collector_context.doc_infos")
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        step_description = session.get_global_state("collector_context.step_description")
+        language = session.get_global_state("collector_context.language")
+        doc_infos = session.get_global_state("collector_context.doc_infos")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, step_title=step_title, step_description=step_description,
                     language=language, doc_infos=doc_infos)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        state = self._pre_handle(inputs, runtime, context)
-        runtime_context.set(runtime)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        state = self._pre_handle(inputs, session, context)
+        session_context.set(session)
 
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")
@@ -395,17 +390,17 @@ class SummaryNode(BaseNode):
 
         result: Summary = await self._invoke_llm_with_retry(formatted_prompt, state, doc_infos)
 
-        node_output = self._post_handle(inputs, result, runtime, context)
+        node_output = self._post_handle(inputs, result, session, context)
         return node_output
 
-    def _post_handle(self, inputs: Input, algorithm_output: Summary, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("collector_context.section_idx")
-        step_title = runtime.get_global_state("collector_context.step_title")
-        runtime.update_global_state({"collector_context.need_programmer": algorithm_output.need_programmer})
-        runtime.update_global_state({"collector_context.programmer_task": algorithm_output.programmer_task})
-        runtime.update_global_state({"collector_context.info_summary": algorithm_output.info_summary})
-        runtime.update_global_state({"collector_context.evaluation": algorithm_output.evaluation})
-        allow_programmer = runtime.get_global_state("config.info_collector_allow_programmer")
+    def _post_handle(self, inputs: Input, algorithm_output: Summary, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("collector_context.section_idx")
+        step_title = session.get_global_state("collector_context.step_title")
+        session.update_global_state({"collector_context.need_programmer": algorithm_output.need_programmer})
+        session.update_global_state({"collector_context.programmer_task": algorithm_output.programmer_task})
+        session.update_global_state({"collector_context.info_summary": algorithm_output.info_summary})
+        session.update_global_state({"collector_context.evaluation": algorithm_output.evaluation})
+        allow_programmer = session.get_global_state("config.info_collector_allow_programmer")
         if algorithm_output.need_programmer and allow_programmer:
             next_node = NodeId.COLLECTOR_PROGRAMMER.value
         else:
@@ -448,17 +443,17 @@ class ProgrammerNode(BaseNode):
     def __init__(self):
         super().__init__()
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info(f"[ProgrammerNode] Start ProgrammerNode.")
         return dict()
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         logger.info(f"[ProgrammerNode] ProgrammerNode is current not available, go to graph end.")
         algorithm_output = {}
-        result = self._post_handle(inputs, algorithm_output, runtime, context)
+        result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         logger.info(f"[ProgrammerNode] End ProgrammerNode.")
         return dict()
 
@@ -468,19 +463,19 @@ class GraphEndNode(BaseNode):
     def __init__(self):
         super().__init__()
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("collector_context.section_idx")
-        plan_idx = runtime.get_global_state("collector_context.plan_idx")
-        step_idx = runtime.get_global_state("collector_context.step_idx")
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("collector_context.section_idx")
+        plan_idx = session.get_global_state("collector_context.plan_idx")
+        step_idx = session.get_global_state("collector_context.step_idx")
         logger.info(f"section_idx: {section_idx} | [GraphEndNode] Start GraphEndNode.")
-        step_title = runtime.get_global_state("collector_context.step_title")
-        info_summary = runtime.get_global_state("collector_context.info_summary")
+        step_title = session.get_global_state("collector_context.step_title")
+        info_summary = session.get_global_state("collector_context.info_summary")
 
         return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx,
                     step_title=step_title, info_summary=info_summary)
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        state = self._pre_handle(inputs, runtime, context)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        state = self._pre_handle(inputs, session, context)
 
         section_idx = state.get("section_idx", 0)
         plan_idx = state.get("plan_idx", 0)
@@ -489,7 +484,7 @@ class GraphEndNode(BaseNode):
         info_summary = state.get("info_summary", "")
 
         if info_summary:
-            await runtime.write_custom_stream({
+            await session.write_custom_stream({
                 "message_id": str(uuid.uuid4()),
                 "plan_idx": str(plan_idx),
                 "step_idx": str(step_idx),
@@ -507,17 +502,17 @@ class GraphEndNode(BaseNode):
             logger.info(f"section_idx: {section_idx} | step title {step_title} | "
                         f"[GraphEndNode] Finalizing the info collection graph.")
 
-        node_output = self._post_handle(inputs, state, runtime, context)
+        node_output = self._post_handle(inputs, state, session, context)
         return node_output
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, runtime: Runtime, context: Context):
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         info_summary = algorithm_output.get("info_summary", "")
 
-        messages: list = runtime.get_global_state("collector_context.messages")
-        messages.append(AIMessage(content=info_summary))
+        messages: list = session.get_global_state("collector_context.messages")
+        messages.append(AssistantMessage(content=info_summary))
 
-        runtime.update_global_state({"collector_context.messages": messages})
-        section_idx = runtime.get_global_state("collector_context.section_idx")
+        session.update_global_state({"collector_context.messages": messages})
+        section_idx = session.get_global_state("collector_context.section_idx")
         logger.info(f"section_idx: {section_idx} | [GraphEndNode] End GraphEndNode.")
 
         return dict()
@@ -528,20 +523,7 @@ def build_info_collector_sub_graph() -> Workflow:
     sub_workflow = Workflow()
     sub_workflow.set_start_comp(
         NodeId.START.value,
-        StartNode(
-            {"inputs": [
-                {"id": "language", "type": "String", "required": "true", "sourceType": "ref"},
-                {"id": "messages", "type": "list", "required": "true", "sourceType": "ref"},
-                {"id": "section_idx", "type": "Integer", "required": "true", "sourceType": "ref"},
-                {"id": "plan_idx", "type": "Integer", "required": "true", "sourceType": "ref"},
-                {"id": "step_idx", "type": "Integer", "required": "true", "sourceType": "ref"},
-                {"id": "step_title", "type": "String", "required": "true", "sourceType": "ref"},
-                {"id": "step_description", "type": "String", "required": "true", "sourceType": "ref"},
-                {"id": "initial_search_query_count", "type": "Integer", "required": "true", "sourceType": "ref"},
-                {"id": "max_research_loops", "type": "Integer", "required": "true", "sourceType": "ref"},
-                {"id": "max_react_recursion_limit", "type": "Integer", "required": "true", "sourceType": "ref"}
-            ]}
-        ),
+        StartNode(),
         inputs_schema={
             "language": "${language}", "messages": "${messages}",
             "section_idx": "${section_idx}", "plan_idx": "${plan_idx}",

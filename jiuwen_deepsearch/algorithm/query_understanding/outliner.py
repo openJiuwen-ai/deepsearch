@@ -3,17 +3,17 @@
 import json
 import logging
 
-from openjiuwen.core.utils.tool.function.function import LocalFunction
-from openjiuwen.core.utils.tool.param import Param
+from openjiuwen.core.foundation.tool.base import ToolCard
+from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
 from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from jiuwen_deepsearch.common.exception import CustomValueException
 from jiuwen_deepsearch.common.status_code import StatusCode
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Outline, Section
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
 from jiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
@@ -53,55 +53,54 @@ def generate_outline(language: str, title: str, thought: str, sections: list[Sec
 
 def create_outline_tool(max_section_num: int):
     """获取outline生成工具"""
-    outline_tool = LocalFunction(
+
+    card = ToolCard(
+        id="generate_outline",
         name="generate_outline",
         description="Generating outline for a Systematic Research Report.",
-        params=[
-            Param(
-                name="language",
-                description="Output language, e.g. 'zh-CN' or 'en-US'",
-                param_type="string",
-                required=True
-            ),
-            Param(
-                name="title",
-                description="Final report title.",
-                param_type="string",
-                required=True
-            ),
-            Param(
-                name="thought",
-                description="Detailed thoughts on generating an outline.",
-                param_type="string",
-                required=True
-            ),
-            Param(
-                name="sections",
-                description=f"Section list of the final report. (Maximum number of sections: {max_section_num})",
-                param_type="array<object>",
-                required=True,
-                schema=[
-                    Param(
-                        name="title",
-                        description="Each research section title.",
-                        param_type="string",
-                        required=True
-                    ),
-                    Param(
-                        name="description",
-                        description="Detailed description of each research section.",
-                        param_type="string",
-                        required=True
-                    ),
-                    Param(
-                        name="is_core_section",
-                        description="Core section flag.",
-                        param_type="boolean",
-                        required=False
-                    ),
-                ]
-            ),
-        ],
+        input_params={
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "description": "Output language, e.g. 'zh-CN' or 'en-US'"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Final report title."
+                },
+                "thought": {
+                    "type": "string",
+                    "description": "Detailed thoughts on generating an outline."
+                },
+                "sections": {
+                    "type": "array",
+                    "description": f"Section list of the final report. (Maximum number of sections: {max_section_num})",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Each research section title."
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "Detailed description of each research section."
+                            },
+                            "is_core_section": {
+                                "type": "boolean",
+                                "description": "Core section flag."
+                            }
+                        },
+                        "required": ["title", "description"]
+                    }
+                }
+            },
+            "required": ["language", "title", "thought", "sections"]
+        }
+    )
+    outline_tool = LocalFunction(
+        card=card,
         func=generate_outline
     )
 
@@ -122,10 +121,10 @@ def check_tool_call(tool: LocalFunction, tool_calls: list):
     for tool_call in tool_calls:
         tool_name = tool_call.get("name", "")
         arguments = tool_call.get("args", {})
-        if tool_name != tool.name:
+        if tool_name != tool.card.name:
             # 手动纠正工具名
-            tool_call["name"] = tool.name
-            logger.error(f"Tool name is not match({tool.name}): {'**' if is_sensitive else tool_name}")
+            tool_call["name"] = tool.card.name
+            logger.error(f"Tool name is not match({tool.card.name}): {'**' if is_sensitive else tool_name}")
         if not arguments:
             raise CustomValueException(
                 StatusCode.OUTLINER_GENERATE_ERROR.code,
@@ -136,14 +135,16 @@ def check_tool_call(tool: LocalFunction, tool_calls: list):
                 StatusCode.OUTLINER_GENERATE_ERROR.code,
                 f"Args is not a dict in tool call: {'**' if is_sensitive else tool_call}"
             )
-        for param in tool.params:
-            if param.required and param.name not in arguments:
+        input_params = tool.card.input_params.get("properties", {})
+        for param_name, param_info in input_params.items():
+            required = param_name in tool.card.input_params.get("required", [])
+            if required and param_name not in arguments:
                 raise CustomValueException(
                     StatusCode.OUTLINER_GENERATE_ERROR.code,
-                    f"Required param '{param.name}' not found in tool call: {'**' if is_sensitive else tool_call}"
+                    f"Required param '{param_name}' not found in tool call: {'**' if is_sensitive else tool_call}"
                 )
-            if param.name == "sections":
-                sections = arguments[param.name]
+            if param_name == "sections":
+                sections = arguments[param_name]
                 if not isinstance(sections, list):
                     raise CustomValueException(
                         StatusCode.OUTLINER_GENERATE_ERROR.code,
@@ -155,13 +156,13 @@ def check_tool_call(tool: LocalFunction, tool_calls: list):
                             StatusCode.OUTLINER_GENERATE_ERROR.code,
                             f"Section[{i}] is not a dict in tool call: {'**' if is_sensitive else tool_call}"
                         )
-                    for section_param in param.schema:
-                        if section_param.required and section_param.name not in section:
-                            raise CustomValueException(
-                                StatusCode.OUTLINER_GENERATE_ERROR.code,
-                                f"Required section param '{section_param.name}' not found in tool call: "
-                                f"{'**' if is_sensitive else tool_call}"
-                            )
+                    # Check items/properties if needed, but for simplicity:
+                    if not section.get("title") or not section.get("description"):
+                        raise CustomValueException(
+                            StatusCode.OUTLINER_GENERATE_ERROR.code,
+                            f"Required section param 'title' or 'description' not found in tool call: "
+                            f"{'**' if is_sensitive else tool_call}"
+                        )
 
 
 class Outliner:
@@ -184,7 +185,7 @@ class Outliner:
                 self.llm,
                 prompt,
                 agent_name=NodeId.OUTLINE.value,
-                tools=[tool.get_tool_info()],
+                tools=[tool.card.tool_info()],
                 need_stream_out=False
             )
 
@@ -195,7 +196,7 @@ class Outliner:
             check_tool_call(tool, tool_calls)
 
             for tool_call in tool_calls:
-                outline = await tool.ainvoke(tool_call.get("args"))
+                outline = await tool.invoke(tool_call.get("args"))
                 logger.info(f"The outline generation is completed: "
                             f"{'**' if LogManager.is_sensitive() else outline.model_dump_json(indent=4)}")
                 break

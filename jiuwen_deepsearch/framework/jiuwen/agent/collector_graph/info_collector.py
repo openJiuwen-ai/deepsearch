@@ -5,23 +5,23 @@ import asyncio
 import logging
 from typing import Any
 
-from openjiuwen.core.utils.llm.messages import HumanMessage
-from openjiuwen.core.context_engine.base import Context
+from openjiuwen.core.context_engine.base import ModelContext
+from openjiuwen.core.foundation.llm.schema.message import UserMessage
 from openjiuwen.core.graph.executable import Input, Output
-from openjiuwen.core.runtime.runtime import Runtime
+from openjiuwen.core.session.node import Session
 
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
-from jiuwen_deepsearch.config.config import Config
-from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
-from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode
-from jiuwen_deepsearch.framework.jiuwen.tools import create_web_search_tool, create_local_search_tool
-from jiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
 from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from jiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_call, remove_duplicate_items
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from jiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
+from jiuwen_deepsearch.config.config import Config
+from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode
+from jiuwen_deepsearch.framework.jiuwen.tools import create_web_search_tool, create_local_search_tool
 from jiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import runtime_context
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
+from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 max_retries = Config().service_config.info_collector_max_retry_num
 logger = logging.getLogger(__name__)
@@ -33,37 +33,37 @@ class InfoRetrievalNode(BaseNode):
         super().__init__()
         self.llm: Any = None
 
-    def _pre_handle(self, inputs: Input, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("collector_context.section_idx")
-        step_title = runtime.get_global_state("collector_context.step_title")
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("collector_context.section_idx")
+        step_title = session.get_global_state("collector_context.step_title")
         if LogManager.is_sensitive():
             logger.info("section_idx: %s | [InfoRetrievalNode] Start InfoRetrievalNode.", section_idx)
         else:
             logger.info("section_idx: %s | step title: %s | [InfoRetrievalNode] Start InfoRetrievalNode.",
                         section_idx, step_title)
-        web_search_engine_config = runtime.get_global_state("config.web_search_engine_config")
+        web_search_engine_config = session.get_global_state("config.web_search_engine_config")
         web_search_engine_name = web_search_engine_config.search_engine_name if \
             web_search_engine_config else SearchEngine.PETAL.value
-        local_search_engine_config = runtime.get_global_state("config.local_search_engine_config")
+        local_search_engine_config = session.get_global_state("config.local_search_engine_config")
         local_search_engine_name = local_search_engine_config.search_engine_name if \
             local_search_engine_config else LocalSearch.OPENAPI.value
-        llm_model_name = runtime.get_global_state("config.llm_config.model_name")
+        llm_model_name = session.get_global_state("config.llm_config.model_name")
         self.llm = llm_context.get().get(llm_model_name)
 
         state = dict(
-            search_queries=runtime.get_global_state("collector_context.search_queries"),
-            max_tool_steps=runtime.get_global_state("collector_context.max_tool_steps"),
+            search_queries=session.get_global_state("collector_context.search_queries"),
+            max_tool_steps=session.get_global_state("collector_context.max_tool_steps"),
             section_idx=section_idx,
             step_title=step_title,
-            search_method=runtime.get_global_state("config.info_collector_search_method"),
+            search_method=session.get_global_state("config.info_collector_search_method"),
             web_search_engine_name=web_search_engine_name,
             local_search_engine_name=local_search_engine_name
         )
         return state
 
-    async def _do_invoke(self, inputs: Input, runtime: Runtime, context: Context) -> Output:
-        state = self._pre_handle(inputs, runtime, context)
-        runtime_context.set(runtime)
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        state = self._pre_handle(inputs, session, context)
+        session_context.set(session)
 
         tasks = []
         for retrieval_query in state.get("search_queries", []):
@@ -80,15 +80,15 @@ class InfoRetrievalNode(BaseNode):
             tasks.append(sub_task)
         tasks_results = await asyncio.gather(*tasks)
 
-        node_output = self._post_handle(inputs, tasks_results, runtime, context)
+        node_output = self._post_handle(inputs, tasks_results, session, context)
         return node_output
 
-    def _post_handle(self, inputs: Input, algorithm_output: list, runtime: Runtime, context: Context):
-        section_idx = runtime.get_global_state("collector_context.section_idx")
-        step_title = runtime.get_global_state("collector_context.step_title")
-        doc_infos: list = runtime.get_global_state("collector_context.doc_infos")
-        search_queries = runtime.get_global_state("collector_context.search_queries")
-        history_queries = runtime.get_global_state("collector_context.history_queries")
+    def _post_handle(self, inputs: Input, algorithm_output: list, session: Session, context: ModelContext):
+        section_idx = session.get_global_state("collector_context.section_idx")
+        step_title = session.get_global_state("collector_context.step_title")
+        doc_infos: list = session.get_global_state("collector_context.doc_infos")
+        search_queries = session.get_global_state("collector_context.search_queries")
+        history_queries = session.get_global_state("collector_context.history_queries")
 
         new_doc_infos = []
         for retrieval_query, result in zip(search_queries, algorithm_output):
@@ -111,9 +111,9 @@ class InfoRetrievalNode(BaseNode):
 
         doc_infos = remove_duplicate_items(doc_infos)
 
-        runtime.update_global_state({"collector_context.history_queries": history_queries})
-        runtime.update_global_state({"collector_context.new_doc_infos_current_loop": new_doc_infos})
-        runtime.update_global_state({"collector_context.doc_infos": doc_infos})
+        session.update_global_state({"collector_context.history_queries": history_queries})
+        session.update_global_state({"collector_context.new_doc_infos_current_loop": new_doc_infos})
+        session.update_global_state({"collector_context.doc_infos": doc_infos})
         if LogManager.is_sensitive():
             logger.info("section_idx: %s | [InfoRetrievalNode] End InfoRetrievalNode.", section_idx)
         else:
@@ -135,7 +135,7 @@ class InfoRetrievalNode(BaseNode):
 
         query = state.get("search_query", step_title)
         agent_input = {
-            "messages": [HumanMessage(content=f"Now deal with the Query:\n[Query]: {query}\n\n"), ],
+            "messages": [UserMessage(content=f"Now deal with the Query:\n[Query]: {query}\n\n"), ],
             "remaining_steps": None,
             "web_page_search_record": [],
             "local_text_search_record": [],
@@ -318,16 +318,16 @@ class InfoRetrievalNode(BaseNode):
         tool_dict = {}
         tool_list = []
         if search_method == "web":
-            tool_list.append(web_search_tool.get_tool_info())
+            tool_list.append(web_search_tool.card.tool_info())
             tool_dict.update({
                 "web_search_tool": web_search_tool,
             })
         elif search_method == "local":
-            tool_list.append(local_search_tool.get_tool_info())
+            tool_list.append(local_search_tool.card.tool_info())
             tool_dict.update({"local_search_tool": local_search_tool})
         else:
-            tool_list.append(web_search_tool.get_tool_info())
-            tool_list.append(local_search_tool.get_tool_info())
+            tool_list.append(web_search_tool.card.tool_info())
+            tool_list.append(local_search_tool.card.tool_info())
             tool_dict.update({
                 "web_search_tool": web_search_tool,
                 "local_search_tool": local_search_tool

@@ -4,8 +4,8 @@
 import json
 import logging
 
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.common.common_constants import MAX_URL_LENGTH, MAX_SEARCH_CONTENT_LENGTH
+from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ async def execute_tool(tool_call: dict, agent_input: dict, tool_dict: dict, step
             args["search_engine_name"] = web_search_engine_name
         else:
             args["search_engine_name"] = ""
-        result = await tool_dict[tool_name].ainvoke(args)
+        result = await tool_dict[tool_name].invoke(args)
         tool_result = json.dumps(result, ensure_ascii=False, indent=4)
         processed_results = process_tool_result(tool_name, tool_result, agent_input)
     except Exception as e:
@@ -174,7 +174,7 @@ def process_google_search_result(agent_input: dict, tool_content: any) -> (list,
                 "title": item.get("title", "")[:MAX_SEARCH_CONTENT_LENGTH],
                 "url": item.get("link", "")[:MAX_URL_LENGTH],
                 "content": item.get("snippet", "")[:MAX_SEARCH_CONTENT_LENGTH]
-                }
+            }
             added_records.append(new_item)
         combined_records = original_records + added_records
         agent_input["web_page_search_record"] = remove_duplicate_items(combined_records)

@@ -24,7 +24,7 @@ outline_response = Outline(
     ]
 )
 
-tool_name = create_outline_tool(1).name
+tool_name = create_outline_tool(1).card.name
 tool_call_id = '123'
 functioncall_response = {
     'content': '',

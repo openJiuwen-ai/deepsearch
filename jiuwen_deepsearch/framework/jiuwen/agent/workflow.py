@@ -6,15 +6,13 @@ import logging
 import time
 from typing import Optional
 
-from openjiuwen.agent.common.schema import WorkflowSchema
-from openjiuwen.agent.config.workflow_config import WorkflowAgentConfig
-from openjiuwen.agent.workflow_agent.workflow_agent import WorkflowAgent
+from openjiuwen.core.application.workflow_agent.workflow_agent import WorkflowAgent
 from openjiuwen.core.runner.runner import Runner
-from openjiuwen.core.runtime.config import WorkflowConfig
-from openjiuwen.core.runtime.interaction.interactive_input import InteractiveInput
-from openjiuwen.core.stream.base import CustomSchema, OutputSchema
-from openjiuwen.core.workflow.base import Workflow
-from openjiuwen.core.workflow.workflow_config import WorkflowMetadata
+from openjiuwen.core.session.interaction.interactive_input import InteractiveInput
+from openjiuwen.core.session.stream.base import CustomSchema, OutputSchema
+from openjiuwen.core.single_agent.legacy.config import WorkflowAgentConfig
+from openjiuwen.core.workflow.base import WorkflowCard
+from openjiuwen.core.workflow.workflow import Workflow
 from pydantic import ValidationError
 
 from jiuwen_deepsearch.algorithm.report_template.template_generator import TemplateGenerator
@@ -30,15 +28,15 @@ from jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes import SourceTrac
 from jiuwen_deepsearch.framework.jiuwen.tools import update_local_search_mapping, update_web_search_mapping
 from jiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from jiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
-from jiuwen_deepsearch.utils.validation_utils.field_validation import validate_agent_required_field
+from jiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, web_search_context, \
+    local_search_context
+from jiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from jiuwen_deepsearch.utils.log_utils.log_interface import record_interface_log
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TIME_LOGGER_TAG
-from jiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from jiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context, web_search_context, \
-    local_search_context
+from jiuwen_deepsearch.utils.validation_utils.field_validation import validate_agent_required_field
 from jiuwen_deepsearch.utils.validation_utils.param_validation import validate_run_agent_params, \
     validate_generate_template_params
 
@@ -148,11 +146,7 @@ class DeepresearchAgent(BaseAgent):
             "report_template": "${report_template}",
             "interrupt_feedback": "${interrupt_feedback}", "agent_config": "${agent_config}"
         }
-        self.startnode_valid_mode = [
-            {"id": "query", "type": "String", "required": "true", "sourceType": "ref"},
-            {"id": "thread_id", "type": "String", "required": "true", "sourceType": "ref"},
-            {"id": "agent_config", "type": "Object", "required": "true", "sourceType": "ref"}
-        ]
+
         self.research_workflow = None
         self._create_research_workflow_agent()
 
@@ -251,12 +245,12 @@ class DeepresearchAgent(BaseAgent):
         start_time = time.time()
 
         try:
-            runtime_agent_config = AgentConfig.model_validate(agent_config)
+            session_agent_config = AgentConfig.model_validate(agent_config)
             llm_token = llm_context.set(
-                {runtime_agent_config.llm_config.model_name: create_llm_obj(runtime_agent_config)}
+                {session_agent_config.llm_config.model_name: create_llm_obj(session_agent_config)}
             )
 
-            web_search_token, local_search_token = self._initialize_tools(AgentConfig.model_validate(agent_config))
+            web_search_token, local_search_token = self._initialize_tools(session_agent_config)
             for name, engine in local_search_context.get().items():
                 if hasattr(engine, "aopen"):
                     try:
@@ -290,7 +284,7 @@ class DeepresearchAgent(BaseAgent):
         final_result_info = {}
         filter_dup_flag = False
         try:
-            runtime_agent_config = runtime_agent_config.model_dump()
+            session_agent_config = session_agent_config.model_dump()
             async for chunk in Runner.run_agent_streaming(
                     agent=self.agent,
                     inputs=
@@ -299,7 +293,7 @@ class DeepresearchAgent(BaseAgent):
                      "conversation_id": conversation_id,
                      "report_template": decoded_template,
                      "interrupt_feedback": interrupt_feedback,
-                     "agent_config": runtime_agent_config}):
+                     "agent_config": session_agent_config}):
                 # 检查是否是 __interaction__ 类型，如果是则重置过滤标志
                 if getattr(chunk, "type", "") == "__interaction__":
                     filter_dup_flag = False
@@ -367,9 +361,9 @@ class DeepresearchAgent(BaseAgent):
                     local_search_context.reset(local_search_token)
 
             if is_all_end:
-                zero_secret(runtime_agent_config.get("web_search_engine_config", {}).get(
+                zero_secret(session_agent_config.get("web_search_engine_config", {}).get(
                     "search_api_key", bytearray("", encoding="utf-8")))
-                zero_secret(runtime_agent_config.get("local_search_engine_config", {}).get(
+                zero_secret(session_agent_config.get("local_search_engine_config", {}).get(
                     "search_api_key", bytearray("", encoding="utf-8")))
                 await self.agent.clear_session(conversation_id)
                 session_id_ctx.reset(token)
@@ -378,22 +372,16 @@ class DeepresearchAgent(BaseAgent):
         _id = self.research_name
         name = self.research_name
         version = self.version
-        workflow_config = WorkflowConfig(
-            metadata=WorkflowMetadata(
-                id=_id,
-                version=version,
-                name=name,
-            )
+        card = WorkflowCard(
+            id=_id,
+            version=version,
+            name=name,
         )
 
-        flow = Workflow(workflow_config=workflow_config)
+        flow = Workflow(card=card)
         flow.set_start_comp(
             start_comp_id=NodeId.START.value,
-            component=StartNode(
-                {
-                    "inputs": self.startnode_valid_mode
-                }
-            ),
+            component=StartNode(),
             inputs_schema=self.startnode_input_schema
         )
         # 主图节点
@@ -434,15 +422,15 @@ class DeepresearchAgent(BaseAgent):
     def _create_research_workflow_agent(self):
         """创建Deepresearch工作流Agent实例"""
         research_workflow = self._build_research_workflow()
-        workflow_schema = WorkflowSchema(
+        workflow_card = WorkflowCard(
             id=self.research_name,
             version=self.version,
             name=self.research_name,
             description=self.research_name,
-            inputs=self.workflow_input_schema
+            input_params=self.workflow_input_schema
         )
         workflow_config = WorkflowAgentConfig(
-            workflows=[workflow_schema]
+            workflows=[workflow_card]
         )
         self.agent = WorkflowAgent(workflow_config)
         self.agent.add_workflows([research_workflow])
@@ -493,15 +481,15 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
 
     def _create_research_workflow_agent(self):
         research_workflow = self._build_research_dependency_workflow()
-        workflow_schema = WorkflowSchema(
+        workflow_card = WorkflowCard(
             id=self.research_name,
             version=self.version,
             name=self.research_name,
             description=self.research_name,
-            inputs=self.workflow_input_schema
+            input_params=self.workflow_input_schema
         )
         workflow_config = WorkflowAgentConfig(
-            workflows=[workflow_schema]
+            workflows=[workflow_card]
         )
         self.agent = WorkflowAgent(workflow_config)
         self.agent.add_workflows([research_workflow])
@@ -511,23 +499,17 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         name = self.research_name
         version = self.version
         # workflow配置
-        workflow_config = WorkflowConfig(
-            metadata=WorkflowMetadata(
-                id=_id,
-                version=version,
-                name=name,
-            )
+        card = WorkflowCard(
+            id=_id,
+            version=version,
+            name=name,
         )
         # workflow
-        flow = Workflow(workflow_config=workflow_config)
+        flow = Workflow(card=card)
         # 添加起始node
         flow.set_start_comp(
             start_comp_id=NodeId.START.value,
-            component=StartNode(
-                {
-                    "inputs": self.startnode_valid_mode
-                }
-            ),
+            component=StartNode(),
             inputs_schema=self.startnode_input_schema
         )
         # 添加node

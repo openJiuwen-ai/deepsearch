@@ -7,6 +7,40 @@ from jiuwen_deepsearch.framework.jiuwen.agent.search_context import RetrievalQue
 from jiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
 
 
+class ExposedInfoRetrievalNode(InfoRetrievalNode):
+    """用于测试的类，公开受保护的方法以遵循 G.CLS.11 规则"""
+
+    def pre_handle(self, *args, **kwargs):
+        return self._pre_handle(*args, **kwargs)
+
+    async def do_invoke(self, *args, **kwargs):
+        return await self._do_invoke(*args, **kwargs)
+
+    def post_handle(self, *args, **kwargs):
+        return self._post_handle(*args, **kwargs)
+
+    async def collector_main(self, *args, **kwargs):
+        return await self._collector_main(*args, **kwargs)
+
+    async def collector_llm(self, *args, **kwargs):
+        return await self._collector_llm(*args, **kwargs)
+
+    async def structure_result(self, *args, **kwargs):
+        return await self._structure_result(*args, **kwargs)
+
+    def process_post_process_result(self, *args, **kwargs):
+        return self._process_post_process_result(*args, **kwargs)
+
+    def prepare_collector_tool(self, *args, **kwargs):
+        return self._prepare_collector_tool(*args, **kwargs)
+
+    async def invoke_llm_with_retry(self, *args, **kwargs):
+        return await self._invoke_llm_with_retry(*args, **kwargs)
+
+    async def process_llm_response(self, *args, **kwargs):
+        return await self._process_llm_response(*args, **kwargs)
+
+
 class TestInfoCollectorNode:
     """测试 InfoCollectorNode"""
 
@@ -16,14 +50,14 @@ class TestInfoCollectorNode:
 
     @pytest.fixture
     def info_collector_node(self):
-        return InfoRetrievalNode()
+        return ExposedInfoRetrievalNode()
 
     @pytest.fixture
-    def mock_runtime(self):
-        runtime = Mock()
-        runtime.get_global_state = Mock(side_effect=self._mock_get_global_state)
-        runtime.update_global_state = Mock()
-        return runtime
+    def mock_session(self):
+        session = Mock()
+        session.get_global_state = Mock(side_effect=self._mock_get_global_state)
+        session.update_global_state = Mock()
+        return session
 
     def _mock_get_global_state(self, key):
         """模拟全局状态获取"""
@@ -71,7 +105,7 @@ class TestInfoCollectorNode:
         ]
 
     @staticmethod
-    def test_pre_handle(info_collector_node, mock_runtime, mock_context):
+    def test_pre_handle(info_collector_node, mock_session, mock_context):
         """测试 _pre_handle 方法"""
         inputs = {}
 
@@ -83,7 +117,7 @@ class TestInfoCollectorNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            result = info_collector_node._pre_handle(inputs, mock_runtime, mock_context)
+            result = info_collector_node.pre_handle(inputs, mock_session, mock_context)
         finally:
             # 清理 contextvar，防止影响其他测试
             llm_context.reset(token)
@@ -100,11 +134,11 @@ class TestInfoCollectorNode:
         assert result == expected_state
 
         # 验证正确的全局状态被获取
-        mock_runtime.get_global_state.assert_any_call("collector_context.search_queries")
-        mock_runtime.get_global_state.assert_any_call("collector_context.max_tool_steps")
+        mock_session.get_global_state.assert_any_call("collector_context.search_queries")
+        mock_session.get_global_state.assert_any_call("collector_context.max_tool_steps")
 
     @pytest.mark.asyncio
-    async def test_do_invoke_success(self, info_collector_node, mock_runtime, mock_context):
+    async def test_do_invoke_success(self, info_collector_node, mock_session, mock_context):
         """测试 _do_invoke 方法成功执行"""
         inputs = {}
 
@@ -137,7 +171,7 @@ class TestInfoCollectorNode:
             with patch.object(info_collector_node, '_collector_main') as mock_collector:
                 mock_collector.side_effect = mock_results
 
-                result = await info_collector_node.invoke(inputs, mock_runtime, mock_context)
+                result = await info_collector_node.invoke(inputs, mock_session, mock_context)
 
                 # 验证为每个查询创建了任务
                 assert mock_collector.call_count == 2
@@ -146,18 +180,18 @@ class TestInfoCollectorNode:
                 assert result == {}
 
                 # 验证全局状态更新
-                assert mock_runtime.update_global_state.call_count >= 2
+                assert mock_session.update_global_state.call_count >= 2
         finally:
             # 清理 contextvar，避免影响其他测试
             llm_context.reset(token)
 
     @pytest.mark.asyncio
-    async def test_do_invoke_empty_queries(self, info_collector_node, mock_runtime, mock_context):
+    async def test_do_invoke_empty_queries(self, info_collector_node, mock_session, mock_context):
         """测试没有查询的情况"""
         inputs = {}
 
         # Mock 返回空查询列表
-        mock_runtime.get_global_state.return_value = []
+        mock_session.get_global_state.return_value = []
 
         # 准备 mock 的上下文字典：其 get 方法返回任意对象（因 LLM 实际未被调用）
         mock_llm_dict = MagicMock()
@@ -168,7 +202,7 @@ class TestInfoCollectorNode:
 
         try:
             # 不再 patch LLMWrapper.get_llm_model，因为它已不被调用
-            result = await info_collector_node._do_invoke(inputs, mock_runtime, mock_context)
+            result = await info_collector_node.do_invoke(inputs, mock_session, mock_context)
 
             # 验证没有创建任务
             assert result == {}
@@ -176,7 +210,7 @@ class TestInfoCollectorNode:
             # 清理 contextvar，避免影响其他测试
             llm_context.reset(token)
 
-    def test_post_handle(self, info_collector_node, mock_runtime, mock_context):
+    def test_post_handle(self, info_collector_node, mock_session, mock_context):
         """测试 _post_handle 方法"""
         inputs = {}
 
@@ -201,10 +235,10 @@ class TestInfoCollectorNode:
         with patch(f'{self.module_path}.remove_duplicate_items') as mock_remove_dup:
             mock_remove_dup.side_effect = lambda x: x[:1]  # 模拟去重，保留第一个
 
-            result = info_collector_node._post_handle(inputs, algorithm_output, mock_runtime, mock_context)
+            result = info_collector_node.post_handle(inputs, algorithm_output, mock_session, mock_context)
 
             # 验证全局状态更新
-            mock_runtime.update_global_state.assert_any_call({
+            mock_session.update_global_state.assert_any_call({
                 "collector_context.doc_infos": [{"url": "http://example.com/1", "title": "标题1"}]
             })
 
@@ -244,7 +278,7 @@ class TestInfoCollectorNode:
             # Mock 后处理
             mock_process.return_value = [{"url": "http://example.com/1", "title": "标题1", "source_authority": "0.8"}]
 
-            result = await info_collector_node._collector_main(state)
+            result = await info_collector_node.collector_main(state)
 
             # 验证返回结构
             assert "messages" in result
@@ -293,7 +327,7 @@ class TestInfoCollectorNode:
                 "web_page_search_record": [{"url": "http://example.com", "title": "测试"}]
             }
 
-            result_state, result_agent_input = await info_collector_node._collector_llm(
+            result_state, result_agent_input = await info_collector_node.collector_llm(
                 state, agent_input, tool_list, tool_dict
             )
 
@@ -319,7 +353,7 @@ class TestInfoCollectorNode:
             # Mock 没有工具调用的响应
             mock_llm.return_value = {"tool_calls": []}
 
-            result_state, result_agent_input = await info_collector_node._collector_llm(
+            result_state, result_agent_input = await info_collector_node.collector_llm(
                 state, agent_input, tool_list, tool_dict
             )
 
@@ -348,7 +382,7 @@ class TestInfoCollectorNode:
                 }
             ]
 
-            doc_infos, scored_result = await info_collector_node._structure_result(
+            doc_infos, scored_result = await info_collector_node.structure_result(
                 web_record, local_record, query
             )
 
@@ -373,7 +407,7 @@ class TestInfoCollectorNode:
         local_record = []
         query = "测试查询"
 
-        doc_infos, scored_result = await info_collector_node._structure_result(
+        doc_infos, scored_result = await info_collector_node.structure_result(
             web_record, local_record, query
         )
 
@@ -401,7 +435,7 @@ class TestInfoCollectorNode:
             {"url": "http://example.com/2", "title": "标题2"}
         ]
 
-        result = info_collector_node._process_post_process_result(scored_result, doc_infos, section_idx=0)
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
 
         # 验证文档信息被正确更新
         assert len(result) == 2
@@ -426,7 +460,7 @@ class TestInfoCollectorNode:
 
         doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
 
-        result = info_collector_node._process_post_process_result(scored_result, doc_infos, section_idx=0)
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
 
         # 验证即使索引无效也不会崩溃
         assert len(result) == 1
@@ -438,14 +472,14 @@ class TestInfoCollectorNode:
         with patch(f'{self.module_path}.create_web_search_tool') as mock_web, \
                 patch(f'{self.module_path}.create_local_search_tool') as mock_local:
             mock_web_tool = Mock()
-            mock_web_tool.get_tool_info.return_value = "web_tool_info"
+            mock_web_tool.card.tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
 
             mock_local_tool = Mock()
-            mock_local_tool.get_tool_info.return_value = "local_tool_info"
+            mock_local_tool.card.tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
 
-            tool_list, tool_dict = info_collector_node._prepare_collector_tool(state)
+            tool_list, tool_dict = info_collector_node.prepare_collector_tool(state)
 
             # 验证只包含 web 工具
             assert tool_list == ["web_tool_info"]
@@ -459,14 +493,14 @@ class TestInfoCollectorNode:
         with patch(f'{self.module_path}.create_web_search_tool') as mock_web, \
                 patch(f'{self.module_path}.create_local_search_tool') as mock_local:
             mock_web_tool = Mock()
-            mock_web_tool.get_tool_info.return_value = "web_tool_info"
+            mock_web_tool.card.tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
 
             mock_local_tool = Mock()
-            mock_local_tool.get_tool_info.return_value = "local_tool_info"
+            mock_local_tool.card.tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
 
-            tool_list, tool_dict = info_collector_node._prepare_collector_tool(state)
+            tool_list, tool_dict = info_collector_node.prepare_collector_tool(state)
 
             # 验证只包含 local 工具
             assert tool_list == ["local_tool_info"]
@@ -480,14 +514,14 @@ class TestInfoCollectorNode:
         with patch(f'{self.module_path}.create_web_search_tool') as mock_web, \
                 patch(f'{self.module_path}.create_local_search_tool') as mock_local:
             mock_web_tool = Mock()
-            mock_web_tool.get_tool_info.return_value = "web_tool_info"
+            mock_web_tool.card.tool_info.return_value = "web_tool_info"
             mock_web.return_value = mock_web_tool
 
             mock_local_tool = Mock()
-            mock_local_tool.get_tool_info.return_value = "local_tool_info"
+            mock_local_tool.card.tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
 
-            tool_list, tool_dict = info_collector_node._prepare_collector_tool(state)
+            tool_list, tool_dict = info_collector_node.prepare_collector_tool(state)
 
             # 验证包含两种工具
             assert len(tool_list) == 2
@@ -510,7 +544,7 @@ class TestInfoCollectorNode:
         with patch(f'{self.module_path}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
             mock_llm_call.return_value = {"tool_calls": [{"name": "tool1"}]}
 
-            response = await info_collector_node._invoke_llm_with_retry(tool_prompt, tool_list, state)
+            response = await info_collector_node.invoke_llm_with_retry(tool_prompt, tool_list, state)
 
             # 验证 LLM 被调用
             mock_llm_call.assert_called_once()
@@ -535,7 +569,7 @@ class TestInfoCollectorNode:
                 {"tool_calls": [{"name": "tool1"}]}
             ]
 
-            response = await info_collector_node._invoke_llm_with_retry(tool_prompt, tool_list, state)
+            response = await info_collector_node.invoke_llm_with_retry(tool_prompt, tool_list, state)
 
             # 验证重试了3次
             assert mock_llm_call.call_count == 3
@@ -568,7 +602,7 @@ class TestInfoCollectorNode:
                 "web_page_search_record": [{"url": "http://example.com"}]
             }
 
-            result = await info_collector_node._process_llm_response(response, agent_input, tool_dict, state)
+            result = await info_collector_node.process_llm_response(response, agent_input, tool_dict, state)
 
             # 验证调用了工具处理
             mock_process.assert_called_once()
@@ -587,7 +621,7 @@ class TestInfoCollectorNode:
         tool_dict = {}
         state = {}
 
-        result = await info_collector_node._process_llm_response(response, agent_input, tool_dict, state)
+        result = await info_collector_node.process_llm_response(response, agent_input, tool_dict, state)
 
         # 验证返回原始输入
         assert result == agent_input

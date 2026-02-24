@@ -10,20 +10,19 @@ import uuid
 from typing import Sequence, Any
 
 import json_repair
-from openjiuwen.core.utils.llm.base import BaseModelClient
-from openjiuwen.core.utils.llm.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+from openjiuwen.core.foundation.llm.schema.message import UserMessage, SystemMessage, AssistantMessage, ToolMessage
 from pydantic import BaseModel
 
+from jiuwen_deepsearch.common.common_constants import MAX_LLM_RESP_LENGTH
 from jiuwen_deepsearch.common.exception import CustomValueException
 from jiuwen_deepsearch.common.status_code import StatusCode
 from jiuwen_deepsearch.config.config import Config
 from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Message
-from jiuwen_deepsearch.common.common_constants import MAX_LLM_RESP_LENGTH
+from jiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from jiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from jiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TIME_LOGGER_TAG
-from jiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import runtime_context
-from jiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -116,15 +115,15 @@ async def llm_astream(llm, messages, model_name, agent_name, tools=None, need_st
     """
     full_chunk = None
     can_write_stream = True
-    runtime = None
+    session = None
     try:
-        runtime = runtime_context.get()
-        if runtime is None:
+        session = session_context.get()
+        if session is None:
             can_write_stream = False
-            logger.debug(f"runtime_context not set, can not write to stream")
+            logger.debug(f"session_context not set, can not write to stream")
     except LookupError:
         can_write_stream = False
-        logger.debug(f"runtime_context not set, can not write to stream")
+        logger.debug(f"session_context not set, can not write to stream")
 
     def _make_payload(message_id: str, event: str, content: str = "") -> dict:
         payload = {
@@ -142,10 +141,10 @@ async def llm_astream(llm, messages, model_name, agent_name, tools=None, need_st
     stream_id = None
     if can_write_stream and need_stream_out:
         stream_id = str(uuid.uuid4())
-        await runtime.write_custom_stream(_make_payload(stream_id, StreamEvent.START.value, ""))
+        await session.write_custom_stream(_make_payload(stream_id, StreamEvent.START.value, ""))
 
     try:
-        async for chunk in llm.astream(messages=messages, model_name=model_name, tools=tools):
+        async for chunk in llm.stream(messages=messages, model=model_name, tools=tools):
             if full_chunk is None:
                 full_chunk = chunk
             else:
@@ -156,14 +155,14 @@ async def llm_astream(llm, messages, model_name, agent_name, tools=None, need_st
                     full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
                     break
             if can_write_stream and need_stream_out:
-                await runtime.write_custom_stream(_make_payload(stream_id, StreamEvent.MESSAGE.value, chunk.content))
+                await session.write_custom_stream(_make_payload(stream_id, StreamEvent.MESSAGE.value, chunk.content))
     except Exception as e:
         if can_write_stream and need_stream_out:
-            await runtime.write_custom_stream(_make_payload(stream_id, StreamEvent.DONE.value, ""))
+            await session.write_custom_stream(_make_payload(stream_id, StreamEvent.DONE.value, ""))
         raise e
 
     if can_write_stream and need_stream_out:
-        await runtime.write_custom_stream(_make_payload(stream_id, StreamEvent.DONE.value, ""))
+        await session.write_custom_stream(_make_payload(stream_id, StreamEvent.DONE.value, ""))
 
     if full_chunk is None:
         logger.error(f"[llm_astream] llm response is None")
@@ -213,7 +212,11 @@ async def ainvoke_llm_with_stats(llm, messages, llm_type: str = "basic", agent_n
 
     # 真正调用llm处
     messages = transfer_to_jiuwen_messages(messages)
-    llm_model = llm.get("model", BaseModelClient("", ""))
+    llm_model = llm.get("model", None)
+    if llm_model is None:
+        raise CustomValueException(
+            error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,
+            message=StatusCode.LLM_INSTANCE_NONE_ERROR.errmsg)
     response = await llm_astream(llm=llm_model, messages=messages,
                                  model_name=model_name, agent_name=agent_name, tools=tools,
                                  need_stream_out=need_stream_out, stream_meta=stream_meta)
@@ -275,16 +278,15 @@ def transfer_to_jiuwen_messages(origin_messages: list):
             if role == "system":
                 output_messages.append(SystemMessage(content=content, name=name))
             elif role == "user":
-                output_messages.append(HumanMessage(content=content, name=name))
+                output_messages.append(UserMessage(content=content, name=name))
             elif role == "assistant":
                 output_messages.append(
-                    AIMessage(
+                    AssistantMessage(
                         content=content,
                         name=name,
                         tool_calls=message.get("tool_calls", []),
                         usage_metadata=message.get("usage_metadata", None),
-                        raw_content=message.get("raw_content", ""),
-                        reason_content=message.get("reason_content", "")
+                        reasoning_content=message.get("reason_content", "")
                     )
                 )
             elif role == "tool":

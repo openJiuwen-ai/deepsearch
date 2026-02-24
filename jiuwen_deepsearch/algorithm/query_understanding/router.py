@@ -3,33 +3,46 @@
 
 import logging
 
-from openjiuwen.core.utils.tool.function.function import LocalFunction
-from openjiuwen.core.utils.tool.param import Param
+from openjiuwen.core.foundation.tool.base import ToolCard
+from openjiuwen.core.foundation.tool.function.function import LocalFunction
+
 from jiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from jiuwen_deepsearch.utils.constants_utils.runtime_contextvars import llm_context
-from jiuwen_deepsearch.utils.common_utils import llm_utils
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from jiuwen_deepsearch.common.status_code import StatusCode
+from jiuwen_deepsearch.utils.common_utils import llm_utils
+from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from jiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
 
+async def _dummy_func(**kwargs):
+    return kwargs
+
+
 def _create_function_tool():
-    send_to_planner = LocalFunction(
+    card = ToolCard(
+        id="send_to_planner",
         name="send_to_planner",
         description="send_to_planner",
-        params=[
-            Param(name="query_title",
-                  description="The title of the query to be handed off.",
-                  param_type="string",
-                  required=True),
-            Param(name="language",
-                  description="The user's detected language locale.",
-                  param_type="string",
-                  required=True)
-        ],
-        func=None
+        input_params={
+            "type": "object",
+            "properties": {
+                "query_title": {
+                    "type": "string",
+                    "description": "The title of the query to be handed off."
+                },
+                "language": {
+                    "type": "string",
+                    "description": "The user's detected language locale."
+                }
+            },
+            "required": ["query_title", "language"]
+        }
+    )
+    send_to_planner = LocalFunction(
+        card=card,
+        func=_dummy_func
     )
     return send_to_planner
 
@@ -40,7 +53,7 @@ async def classify_query(inputs: dict) -> (bool, str):
 
         Args:
         context: Current agent context
-        config: Current runtime configuration
+        config: Current session configuration
 
         Returns:
             bool: whether to enter the deep (re)search process.
@@ -57,7 +70,7 @@ async def classify_query(inputs: dict) -> (bool, str):
                                                           prompts,
                                                           llm_type="basic",
                                                           agent_name=NodeId.ENTRY.value,
-                                                          tools=[_create_function_tool().get_tool_info()],
+                                                          tools=[_create_function_tool().card.tool_info()],
                                                           need_stream_out=False)
         tool_calls = response.get('tool_calls', [])
 
