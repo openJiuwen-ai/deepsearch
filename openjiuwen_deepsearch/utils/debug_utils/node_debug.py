@@ -11,8 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NODE_DEBUG_LOGGER
 from openjiuwen_deepsearch.utils.log_utils.log_handlers import SafeRotatingFileHandler
+
+NODE_DEBUG_ENABLE = Config().service_config.node_debug_enable
 
 
 def setup_debug_logger(
@@ -84,7 +87,7 @@ class NodeDebugData:
     output_content: str = ""
 
 
-def record_node_debug_log(record: NodeDebugLogRecord):
+def _record_node_debug_log(record: NodeDebugLogRecord):
     """
         工作流节点记录格式化 debug 日志
     """
@@ -109,16 +112,19 @@ def add_debug_log_wrapper(session, debug_data: NodeDebugData):
     """
         工作流节点添加格式化 debug 日志 wrapper
     """
+    if not NODE_DEBUG_ENABLE:
+        return
+
     pre_node = session.get_global_state("search_context.debug_pre_node") or ""
     cur_node = f"{debug_data.node_name}-{uuid.uuid4()}"
 
     if debug_data.input_content:
-        record_node_debug_log(NodeDebugLogRecord(
+        _record_node_debug_log(NodeDebugLogRecord(
             pre_node, cur_node, debug_data.msg_id, LogType.INPUT.value, debug_data.node_type, debug_data.input_content
         ))
 
     if debug_data.output_content:
-        record_node_debug_log(NodeDebugLogRecord(
+        _record_node_debug_log(NodeDebugLogRecord(
             pre_node, cur_node, debug_data.msg_id, LogType.OUTPUT.value, debug_data.node_type, debug_data.output_content
         ))
 
