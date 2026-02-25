@@ -67,6 +67,7 @@ backend = [
     "mathml2omml-as==0.1.0",
     "aiomysql==0.2.0",
     "aiosqlite==0.21.0",
+    "redis==7.1.1",
 ]
 # 开发依赖
 dev = [

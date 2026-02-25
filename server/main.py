@@ -25,6 +25,7 @@ load_dotenv(os.path.join(project_root, '.env'))
 from server.routers import register
 from server.core.database import engine, Base
 from server.core.db_sync import run_database_sync
+from server.core.runner_init import init_runner, shutdown_runner
 
 from openjiuwen.core.common.logging import logger
 
@@ -36,6 +37,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 async def lifespan_func(input_app: FastAPI):
     # Startup
     logger.info("🚀 Starting openJiuwen-DeepSearch Server...")
+    await init_runner()
 
     target_tables = [
         # Deepsearch table
@@ -73,6 +75,8 @@ async def lifespan_func(input_app: FastAPI):
 
     # Shutdown
     logger.info("🛑 Shutting down openJiuwen-DeepSearch Server...")
+    await shutdown_runner()
+    logger.info("✅ openJiuwen-DeepSearch Server shutdown completed")
 
 
 # Create FastAPI app

@@ -1,9 +1,9 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
-import json
+import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -19,19 +19,19 @@ agent_manager = DeepSearchAgentManager()
 
 async def _wrapped_agent_run(agent, run_kwargs, space_id: str, conversation_id: str):
     """
-    包装 agent.run()，在流中检测结束信号并触发清理。
+    包装 agent.run()，异常时兜底触发会话清理。
     """
     try:
         async for chunk in agent.run(**run_kwargs):
             yield chunk
-            if "end" in chunk and "ALL END" in chunk:
-                data = json.loads(chunk)
-                if data["agent"] == "end" and data["content"] == "ALL END":
-                    agent_manager._cleanup_session_cache(space_id, conversation_id)
+    except asyncio.CancelledError:
+        logger.info("Agent streaming cancelled by client, cleaning up session: %s", conversation_id)
+        await agent_manager.cleanup_session_cache(space_id, conversation_id)
+        raise
     except Exception as e:
         logger.error("Error during agent streaming: %s", str(e))
-        agent_manager._cleanup_session_cache(space_id, conversation_id)
-        raise e
+        await agent_manager.cleanup_session_cache(space_id, conversation_id)
+        raise
 
 
 @run_router.post("/")
@@ -57,21 +57,17 @@ async def run(
         agent_config = agent_manager.build_agent_config(request, db)
         agent = agent_manager.get_or_create_agent(request, db)
         template_id = request.template_id
-        interrupt_feedback = ""
         template_content = ""
         if isinstance(template_id, int) and template_id > 0:
             template_content = agent_manager.load_template_content(
                 request.space_id,
                 template_id
             )
-        if isinstance(request.interrupt_feedback, str) and request.interrupt_feedback:
-            interrupt_feedback = request.interrupt_feedback
 
         run_kwargs = {
             "message": request.message,
             "conversation_id": request.conversation_id,
             "report_template": template_content,
-            "interrupt_feedback": interrupt_feedback,
             "agent_config": agent_config,
         }
 

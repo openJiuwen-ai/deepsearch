@@ -8,6 +8,7 @@ from typing import Optional
 
 from openjiuwen.core.application.workflow_agent.workflow_agent import WorkflowAgent
 from openjiuwen.core.runner.runner import Runner
+from openjiuwen.core.session.checkpointer import CheckpointerFactory
 from openjiuwen.core.session.interaction.interactive_input import InteractiveInput
 from openjiuwen.core.session.stream.base import CustomSchema, OutputSchema
 from openjiuwen.core.single_agent.legacy.config import WorkflowAgentConfig
@@ -191,6 +192,23 @@ class DeepresearchAgent(BaseAgent):
         return json.dumps(output_message, ensure_ascii=False)
 
     @staticmethod
+    async def _release_checkpointer_session(conversation_id: str):
+        """显式释放 checkpointer 会话状态，防止分布式场景残留。"""
+        try:
+            checkpointer = CheckpointerFactory.get_checkpointer()
+            if not checkpointer:
+                return
+            release_result = checkpointer.release(conversation_id)
+            if hasattr(release_result, "__await__"):
+                await release_result
+        except Exception as e:
+            if not LogManager.is_sensitive():
+                logger.warning(f"[DeepResearchAgent.run] Failed to release checkpointer session: {e}")
+            else:
+                logger.warning("[DeepResearchAgent.run] Failed to release checkpointer session.")
+
+
+    @staticmethod
     def _register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig):
         '''注册网络搜索工具'''
         search_engine_mapping = update_web_search_mapping(
@@ -278,8 +296,7 @@ class DeepresearchAgent(BaseAgent):
         decoded_template = report_template
         if report_template:
             decoded_template = self._handle_report_template(report_template)
-        if interrupt_feedback == "accepted":
-            message = InteractiveInput(message)
+
         is_all_end = False
         final_result_info = {}
         filter_dup_flag = False
@@ -324,6 +341,7 @@ class DeepresearchAgent(BaseAgent):
                 logger.error(f"[DeepResearchAgent.run] Session closed with error.")
                 final_result_info = {"exception_info": "Session closed with error."}
             await self.agent.clear_session(conversation_id)
+            await self._release_checkpointer_session(conversation_id)
             session_id_ctx.reset(token)
         finally:
             metrics_logger.info(
@@ -365,6 +383,7 @@ class DeepresearchAgent(BaseAgent):
                 zero_secret(session_agent_config.get("local_search_engine_config", {}).get(
                     "search_api_key", bytearray("", encoding="utf-8")))
                 await self.agent.clear_session(conversation_id)
+                await self._release_checkpointer_session(conversation_id)
                 session_id_ctx.reset(token)
 
     def _build_research_workflow(self):

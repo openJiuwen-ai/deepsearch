@@ -24,6 +24,20 @@ class Settings(BaseSettings):
     sqlite_db_path: str = "data/databases"
     deepsearch_sqlite_db: str = "agent.db"
 
+    # Checkpointer 配置 (in_memory / persistence / redis)
+    checkpointer_type: str = "in_memory"
+
+    # Persistence Checkpointer 配置
+    checkpointer_db_type: str = "sqlite"
+    checkpointer_db_path: str = "data/databases/checkpointer.db"
+
+    # Redis Checkpointer 配置
+    redis_url: str = "redis://localhost:6379"
+    redis_cluster_mode: bool = False
+    redis_ttl: int = 7200
+    redis_refresh_on_read: bool = True
+
+
     class Config:
         # 从当前文件位置找到项目根目录的 .env 文件
         env_file = str(Path(__file__).parent.parent.parent / ".env")
