@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import logging
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Tuple, List, Dict
 
@@ -28,15 +29,16 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
     validate_visualization_extraction_schema,
     validate_visualization_normalization_schema,
 )
-from openjiuwen_deepsearch.common.exception import CustomException, CustomValueException
+from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
+from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,18 @@ class Reporter:
         return re.sub(
             r"^(?:\d+(?:[.\-\s]\d+)*|第?[一二三四五六七八九十\d]+[、章])\s*", "", s
         )
+
+    @staticmethod
+    def _make_payload(message_id: str, event: str, content: str = "") -> dict:
+        payload = {
+            "message_id": message_id,
+            "agent": NodeId.SUB_REPORTER.value,
+            "content": content,
+            "message_type": MessageType.MESSAGE_CHUNK.value,
+            "event": event,
+            "created_time": get_current_time()
+        }
+        return payload
 
     @staticmethod
     def clean_markdown_headers(md_text: str) -> str:
@@ -655,6 +669,8 @@ class Reporter:
                 )
                 current_inputs["visualization_result"] = []
 
+        session = session_context.get()
+        stream_id = str(uuid.uuid4())
         for attempt_num in range(max_attempt_num):
             write_res = await self._write_subsection_reports(current_inputs)
             if write_res["success"]:
@@ -668,6 +684,8 @@ class Reporter:
                         f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                         f"reports generated: {write_res['result']}"
                     )
+                await session.write_custom_stream(
+                    self._make_payload(stream_id, StreamEvent.SUMMARY_RESPONSE.value, "SUCCESS"))
                 return (
                     True,
                     write_res["result"],
@@ -677,6 +695,13 @@ class Reporter:
             logger.warning(
                 f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                 f"Warning: Generate section report failed on attempt {attempt_num + 1}/{max_attempt_num}. retry ..."
+            )
+            await session.write_custom_stream(
+                self._make_payload(
+                    stream_id,
+                    StreamEvent.SUMMARY_RESPONSE.value,
+                    "generate section report fail"
+                )
             )
             if attempt_num == max_attempt_num - 1:
                 logger.error(

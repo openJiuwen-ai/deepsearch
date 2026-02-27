@@ -4,12 +4,16 @@ import pytest
 
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.common.common_constants import CHINESE
-
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
 
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
+    mock_session = MagicMock()
+    mock_session.write_custom_stream = AsyncMock()
+    token = session_context.set(mock_session)
+
     # 设置 mock 返回值
     # mock ainvoke_llm_with_stats 返回值(定义 side_effect 函数，根据输入参数返回不同结果)
     async def mock_ainvoke_llm_with_stats(llm, messages, llm_type: str = "basic", agent_name="AI", schema=None,
