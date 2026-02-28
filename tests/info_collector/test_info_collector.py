@@ -7,6 +7,8 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_colle
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
 
+module_prefix = "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector"
+
 
 class ExposedInfoRetrievalNode(InfoRetrievalNode):
     """用于测试的类，公开受保护的方法以遵循 G.CLS.11 规则"""
@@ -116,7 +118,8 @@ class TestInfoCollectorNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            result = info_collector_node.pre_handle(inputs, mock_session, mock_context)
+            with patch(f"{module_prefix}.adapt_llm_model_name"):
+                result = info_collector_node.pre_handle(inputs, mock_session, mock_context)
         finally:
             # 清理 contextvar，防止影响其他测试
             llm_context.reset(token)
@@ -167,7 +170,8 @@ class TestInfoCollectorNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            with patch.object(info_collector_node, '_collector_main') as mock_collector:
+            with patch.object(info_collector_node, '_collector_main') as mock_collector, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
                 mock_collector.side_effect = mock_results
 
                 result = await info_collector_node.invoke(inputs, mock_session, mock_context)
@@ -200,11 +204,11 @@ class TestInfoCollectorNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            # 不再 patch LLMWrapper.get_llm_model，因为它已不被调用
-            result = await info_collector_node.do_invoke(inputs, mock_session, mock_context)
+            with patch(f"{module_prefix}.adapt_llm_model_name"):
+                result = await info_collector_node.do_invoke(inputs, mock_session, mock_context)
 
-            # 验证没有创建任务
-            assert result == {}
+                # 验证没有创建任务
+                assert result == {}
         finally:
             # 清理 contextvar，避免影响其他测试
             llm_context.reset(token)

@@ -16,6 +16,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
 from openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.framework.openjiuwen.tools import create_web_search_tool, create_local_search_tool
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
@@ -48,7 +49,7 @@ class InfoRetrievalNode(BaseNode):
         local_search_engine_config = session.get_global_state("config.local_search_engine_config")
         local_search_engine_name = local_search_engine_config.search_engine_name if \
             local_search_engine_config else LocalSearch.OPENAPI.value
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
         state = dict(

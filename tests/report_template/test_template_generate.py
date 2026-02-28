@@ -5,6 +5,7 @@ import pytest
 
 from openjiuwen_deepsearch.algorithm.report_template.template_generator import TemplateGenerator
 from openjiuwen_deepsearch.common.exception import CustomValueException
+from tests.utils.mock_config import get_default_agent_config
 
 
 @pytest.fixture
@@ -100,7 +101,6 @@ async def test_generate_template_success_report(
     with patch(f"{module_path}.ainvoke_llm_with_stats", new_callable=AsyncMock,
                side_effect=[{"content": "# structure"}, {"content": "semantic"}]):
         with (
-            patch(f"{module_path}.AgentConfig"),
             patch(f"{module_path}.create_llm_obj"),
             patch(f"{module_path}.llm_context"),
             patch(f"{module_path}.TemplateUtils.postprocess_structure", return_value="# processed"),
@@ -111,7 +111,7 @@ async def test_generate_template_success_report(
                 file_name="test.pdf",
                 file_stream=file_stream,
                 is_template=False,
-                agent_config={"llm_config": {"model_name": "qwen"}},
+                agent_config=get_default_agent_config(),
             )
 
             assert res["status"] == "success", f"Failed with: {res.get('error_message')}"
@@ -147,8 +147,7 @@ async def test_generate_template_is_template(
         mock_logger, mock_not_sensitive, mock_config, mock_pdf_convert):
     module_path = "openjiuwen_deepsearch.algorithm.report_template.template_generator"
 
-    with patch(f"{module_path}.AgentConfig"), patch(f"{module_path}.create_llm_obj"), patch(
-            f"{module_path}.llm_context"):
+    with patch(f"{module_path}.create_llm_obj"), patch(f"{module_path}.llm_context"):
         with patch(f"{module_path}.TemplateUtils.postprocess_structure_keep_content", return_value="KEPT"), \
                 patch(f"{module_path}.TemplateUtils.valid_template_suffix", return_value=".pdf"):
             file_stream = base64.b64encode(b"test file stream").decode()
@@ -157,7 +156,7 @@ async def test_generate_template_is_template(
                 file_name="test.pdf",
                 file_stream=file_stream,
                 is_template=True,
-                agent_config={"llm_config": {"model_name": "qwen"}},
+                agent_config=get_default_agent_config(),
             )
 
             assert res["status"] == "success", f"Failed with: {res.get('error_message')}"

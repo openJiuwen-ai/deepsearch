@@ -8,6 +8,8 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_buil
     GraphEndNode, build_info_collector_sub_graph, get_research_record, llm_context
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 
+module_prefix = "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder"
+
 
 class ExposedProgrammerNode(ProgrammerNode):
     """用于测试的类，公开受保护的方法以遵循 G.CLS.11 规则"""
@@ -201,7 +203,8 @@ class TestGenerateQueryNode:
 
         try:
             # 仅保留对 _invoke_llm_with_retry 的 patch
-            with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm:
+            with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
                 queries = ["查询1", "查询2", "查询3"]
                 description = "测试查询描述"
                 mock_llm.return_value = SearchQueryList(
@@ -244,7 +247,8 @@ class TestGenerateQueryNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm:
+            with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
                 queries = ["测试步骤"]
                 description = "Error when generate search query, use step title as query"
                 mock_llm.return_value = SearchQueryList(
@@ -316,7 +320,8 @@ class TestSupervisorNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm:
+            with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
                 mock_llm.return_value = Reflection(
                     is_sufficient=True,
                     knowledge_gap="",
@@ -349,7 +354,8 @@ class TestSupervisorNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm:
+            with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
                 knowledge_gap = "需要更多技术细节"
                 next_queries = ["跟进查询1", "跟进查询2"]
                 mock_llm.return_value = Reflection(
@@ -414,7 +420,8 @@ class TestSummaryNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            with patch.object(summary_node, '_invoke_llm_with_retry') as mock_llm:
+            with patch.object(summary_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
                 mock_llm.return_value = Summary(
                     need_programmer=False,
                     programmer_task="",

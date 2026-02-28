@@ -23,6 +23,7 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config, WebSearchEngineConfig, LocalSearchEngineConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SearchContext, Message, Outline
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent, \
     custom_stream_output
 from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
@@ -95,7 +96,7 @@ class EntryNode(BaseNode):
         logger.info(f"[EntryNode] Start EntryNode.")
 
         messages = session.get_global_state("search_context.messages")
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.ENTRY.value)
 
         return dict(messages=messages, llm_model_name=llm_model_name)
 
@@ -223,6 +224,7 @@ class ReporterNode(BaseNode):
                 if hasattr(current_report, 'all_classified_contents')
                 else []
             )
+        llm_model_name = adapt_llm_model_name(session, NodeId.REPORTER.value)
         return dict(
             thread_id=session.get_global_state("config.thread_id") or "",
             report_style=session.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
@@ -233,7 +235,7 @@ class ReporterNode(BaseNode):
             language=session.get_global_state("search_context.language") or CHINESE,
             report_task=report_task,
             user_query=session.get_global_state("search_context.query"),
-            llm_model_name=session.get_global_state("config.llm_config.model_name")
+            llm_model_name=llm_model_name
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext):
@@ -322,7 +324,7 @@ class GenerateQuestionsNode(BaseNode):
         language = session.get_global_state("search_context.language")
         query = session.get_global_state("search_context.query")
         max_gen_question_retry_num = session.get_global_state("config.workflow_max_gen_question_retry_num")
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.GENERATE_QUESTIONS.value)
         return dict(language=language, query=query, max_gen_question_retry_num=max_gen_question_retry_num,
                     llm_model_name=llm_model_name)
 
@@ -388,7 +390,7 @@ class OutlineNode(BaseNode):
         user_feedback = session.get_global_state("search_context.user_feedback")
         max_section_num = session.get_global_state("config.outliner_max_section_num")
         max_outline_retry_num = session.get_global_state("config.outliner_max_generate_outline_retry_num")
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.OUTLINE.value)
         report_template = session.get_global_state("search_context.report_template")
 
         return dict(
@@ -508,7 +510,7 @@ class SourceTracerNode(BaseNode):
 
         research_trace_source_switch = session.get_global_state(
             "config.source_tracer_research_trace_source_switch")
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER.value)
 
         need_exit = False
         if (search_mode == "research") and (research_trace_source_switch is False):

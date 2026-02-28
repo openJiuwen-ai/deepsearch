@@ -25,6 +25,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_buil
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.section_context import SectionContext
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message, StepType, Step, SubReportContent, \
     Plan
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import custom_stream_output
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
@@ -86,7 +87,7 @@ class BasePlanReasoningNode(BaseNode):
         collected_doc_num = session.get_global_state("section_context.collected_doc_num")
         warning_infos = session.get_global_state("section_context.warning_infos")
         exception_infos = session.get_global_state("section_context.exception_infos")
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.PLAN_REASONING.value)
 
         max_step_num = session.get_global_state("config.planner_max_step_num")
         max_retry_num = session.get_global_state("config.planner_max_retry_num")
@@ -291,19 +292,22 @@ class SubReporterNode(BaseNode):
         section_idx = session.get_global_state("section_context.section_idx") or "1"
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} Start [{self.__class__.__name__}].")
+
         classify_doc_infos_single_time_num = session.get_global_state(
             "config.sub_report_classify_doc_infos_single_time_num")
         if not classify_doc_infos_single_time_num or classify_doc_infos_single_time_num <= 60:
             classify_doc_infos_single_time_num = 60
 
-        history_plans = session.get_global_state("section_context.history_plans")
         # 提取doc_infos并去重
+        history_plans = session.get_global_state("section_context.history_plans")
         doc_infos = []
         for plan in history_plans:
             for step in plan.steps:
                 for query in step.retrieval_queries:
                     doc_infos.extend(query.doc_infos)
         doc_infos = list({(doc["title"], doc["url"]): doc for doc in doc_infos}.values())
+
+        llm_model_name = adapt_llm_model_name(session, NodeId.SUB_REPORTER.value)
 
         return dict(
             thread_id=session.get_global_state("section_context.session_id"),
@@ -324,7 +328,7 @@ class SubReporterNode(BaseNode):
             classify_doc_infos_res_top_k_num=session.get_global_state(
                 "config.sub_report_classify_doc_infos_res_top_k_num") or 10,
             classify_doc_infos_single_time_num=classify_doc_infos_single_time_num,
-            llm_model_name=session.get_global_state("config.llm_config.model_name")
+            llm_model_name=llm_model_name
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -398,7 +402,7 @@ class SubSourceTracerNode(BaseNode):
         logger.info(f"{self.log_prefix} Start [{self.__class__.__name__}].")
         research_trace_source_switch = session.get_global_state("config.source_tracer_research_trace_source_switch")
         language = session.get_global_state("section_context.language")
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.SUB_SOURCE_TRACER.value)
 
         # 获取子报告内容
         sub_report_content_obj = session.get_global_state("section_context.sub_report_content")

@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import AgentConfig, Config
 from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import LlmConfigCategory
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
@@ -28,7 +29,7 @@ class TemplateGenerator:
             file_name: str,
             file_stream: str,
             is_template: bool,
-            agent_config: dict,) -> dict:
+            agent_config: dict, ) -> dict:
         """
         Generate a report template from either a sample report or an existing template.
         Args:
@@ -46,11 +47,17 @@ class TemplateGenerator:
         """
         try:
             candidate_config = AgentConfig.model_validate(agent_config)
-            llm_model_name = candidate_config.llm_config.model_name
+            llm_configs = candidate_config.llm_config
+            if LlmConfigCategory.GENERAL.value not in llm_configs:
+                raise CustomValueException(
+                    error_code=StatusCode.LLM_CONFIG_NONE.code,
+                    message=StatusCode.LLM_CONFIG_NONE.errmsg
+                )
+            llm_config = llm_configs.get(LlmConfigCategory.GENERAL.value)
 
             # 注册模型实例
             token = llm_context.set(
-                {llm_model_name: create_llm_obj(candidate_config)}
+                {llm_config.model_name: create_llm_obj(llm_config)}
             )
 
             if is_template:
@@ -68,7 +75,7 @@ class TemplateGenerator:
             processed_output = (
                 TemplateUtils.postprocess_structure_keep_content(file_content)
                 if is_template
-                else await TemplateGenerator._extract_with_llm(file_content, llm_model_name)
+                else await TemplateGenerator._extract_with_llm(file_content, llm_config.model_name)
             )
 
             if not is_template:
@@ -122,7 +129,7 @@ class TemplateGenerator:
             extra_content=f"Step 1 extracted structure:\n{processed_structure}",
         )
         return semantic_output
-    
+
     @staticmethod
     async def _process_step(
             llm,
@@ -176,7 +183,7 @@ class TemplateGenerator:
                 )
                 if attempt < max_retries:
                     continue
-                break # 最后一次尝试内容为空，直接退出循环
+                break  # 最后一次尝试内容为空，直接退出循环
 
             if any(sig in processed for sig in TemplateGenerator.BAD_SIGNALS):
                 last_exception = ValueError("Template extract returned bad content signal")
@@ -185,11 +192,10 @@ class TemplateGenerator:
                 )
                 if attempt < max_retries:
                     continue
-                break # 最后一次尝试返回内容包含BAD_SIGNAL，直接退出循环
+                break  # 最后一次尝试返回内容包含BAD_SIGNAL，直接退出循环
 
             return processed
 
         msg = f"Template extraction failed after retry {max_retries} attempts."
         logger.error(msg)
         raise CustomValueException(StatusCode.AGENT_RETRY_FAILED_ALL_ATTEMPTS.code, msg) from last_exception
-    

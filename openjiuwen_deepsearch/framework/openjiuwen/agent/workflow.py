@@ -30,6 +30,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools import update_local_search
 from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import LlmConfigCategory
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, web_search_context, \
     local_search_context
@@ -264,9 +265,18 @@ class DeepresearchAgent(BaseAgent):
 
         try:
             session_agent_config = AgentConfig.model_validate(agent_config)
-            llm_token = llm_context.set(
-                {session_agent_config.llm_config.model_name: create_llm_obj(session_agent_config)}
-            )
+            llm_configs = session_agent_config.llm_config
+            if LlmConfigCategory.GENERAL.value not in llm_configs:
+                raise CustomValueException(
+                    error_code=StatusCode.LLM_CONFIG_NONE.code,
+                    message=StatusCode.LLM_CONFIG_NONE.errmsg
+                )
+
+            all_llms = {}
+            for _, llm_config in llm_configs.items():
+                llm_obj = create_llm_obj(llm_config)
+                all_llms[llm_config.model_name] = llm_obj
+            llm_token = llm_context.set(all_llms)
 
             web_search_token, local_search_token = self._initialize_tools(session_agent_config)
             for name, engine in local_search_context.get().items():
@@ -276,7 +286,7 @@ class DeepresearchAgent(BaseAgent):
                         logger.debug("LocalSearch engine [%s] opened.", name)
                     except Exception as e:
                         logger.warning(f"Failed to open local search engine [{name}]: {e}")
-        except ValidationError as e:
+        except (ValidationError, CustomValueException) as e:
             if "llm_token" in locals():
                 llm_context.reset(llm_token)
             if "web_search_token" in locals():

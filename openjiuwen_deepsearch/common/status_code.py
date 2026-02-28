@@ -87,6 +87,7 @@ class StatusCode(Enum):
     LLM_INSTANCE_NONE_ERROR = (211200, "llm instance is None when ainvoke, check if obtain llm first")
     LLM_RESPONSE_ERROR = (211201, "LLM response has something wrong")
     LLM_RESPONSE_NONE = (211202, "LLM response is none")
+    LLM_CONFIG_NONE = (211203, "LLM is not configured, at least the general model needs to be configured")
 
     WEB_SEARCH_INSTANCE_OBTAIN_ERROR = (211300, "web search engine instance is {name} when ainvoke, check if register")
     LOCAL_SEARCH_INSTANCE_OBTAIN_ERROR = (211301, "local search engine instance {name} when ainvoke, check if register")

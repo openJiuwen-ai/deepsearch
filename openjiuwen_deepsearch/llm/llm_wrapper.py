@@ -4,16 +4,15 @@
 import logging
 
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_model_factory import LLMModelFactory
-from openjiuwen_deepsearch.config.config import AgentConfig, Config
+from openjiuwen_deepsearch.config.config import Config, LLMConfig
 from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import validate_llm_obj_params
 
 logger = logging.getLogger(__name__)
 
 
-def create_llm_obj(agent_config: AgentConfig):
+def create_llm_obj(llm_config: LLMConfig):
     """创建自定义llm"""
-    llm_config = agent_config.llm_config
     try:
         validate_llm_obj_params(llm_config)
         model = LLMModelFactory().get_model(

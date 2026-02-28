@@ -21,6 +21,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode,
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_context import CollectorContext
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
@@ -128,7 +129,7 @@ class GenerateQueryNode(BaseNode):
         step_num = (max_react_recursion_limit - 2) // max_research_loops - 1
         max_tool_steps = max(int(step_num), 1)
         session.update_global_state({"collector_context.max_tool_steps": max_tool_steps})
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, step_title=step_title,
@@ -220,7 +221,7 @@ class SupervisorNode(BaseNode):
         doc_infos = session.get_global_state("collector_context.doc_infos")
         new_doc_infos_current_loop = session.get_global_state("collector_context.new_doc_infos_current_loop")
         research_loop_count = session.get_global_state("collector_context.research_loop_count")
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx,
@@ -357,7 +358,7 @@ class SummaryNode(BaseNode):
         step_description = session.get_global_state("collector_context.step_description")
         language = session.get_global_state("collector_context.language")
         doc_infos = session.get_global_state("collector_context.doc_infos")
-        llm_model_name = session.get_global_state("config.llm_config.model_name")
+        llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, step_title=step_title, step_description=step_description,

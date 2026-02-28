@@ -1,6 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-from typing import List, Literal
+from typing import List, Literal, Dict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -95,7 +95,9 @@ class AgentConfig(BaseModel):
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(default=5, ge=1, le=10, description="最大规划章节数量，取值范围:[1,10]")
     source_tracer_research_trace_source_switch: bool = Field(default=True, description="溯源功能开关")
-    llm_config: LLMConfig = Field(default_factory=LLMConfig)
+    llm_config: Dict[
+        Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig
+    ] = Field(default_factory=dict, description="LLM配置")
     info_collector_search_method: Literal["web", "local", "all"] = Field(default="web",
                                                                          description="搜索方式: "
                                                                                      "web: 联网搜索"
