@@ -1,7 +1,19 @@
 [project]
 name = "openjiuwen-deepsearch"
 version = "0.2.0"
+description = "Built on the openJiuwen agent-core framework, openJiuwen DeepSearch is a system supporting both deep search and research work."
+readme = "README.md"
 requires-python = "==3.11.*"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: Apache Software License",
+]
 
 # SDK依赖
 dependencies = [
