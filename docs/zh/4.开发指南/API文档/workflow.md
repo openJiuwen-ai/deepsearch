@@ -49,17 +49,22 @@ async run(message: Optional[str] = None, conversation_id: Optional[str] = None, 
 
 **参数要点**：
 - `agent_config` 会被 `AgentConfig.model_validate` 校验。
-- `interrupt_feedback` 仅允许 `""` 或 `"accepted"`。默认值`""`
+- `interrupt_feedback` 仅允许 `""`、`"accepted"` 或 `"cancel"`。默认值 `""`
+  - `""`：正常执行，返回 SSE 流式响应
+  - `"accepted"`：用于 HITL（人机交互）场景，表示用户接受中断并继续流程
+  - `"cancel"`：取消正在运行的任务，返回 JSON 响应（非 SSE 流）
 - `report_template` 若为 base64 字符串会自动解码，解码失败则回退原文。
 
 **返回**：
-- **AsyncGenerator[str]**：流式 JSON 字符串。
+- **AsyncGenerator[str]**：流式 JSON 字符串（当 `interrupt_feedback=""` 或 `"accepted"` 时）
+- **dict**：JSON 响应（当 `interrupt_feedback="cancel"` 时）
 
 **行为说明**：
 - 初始化 LLM 与搜索工具上下文。
 - `native` 本地搜索要求 `knowledge_base_configs` 非空。
 - 将互动事件包装为中断消息输出。
 - 收到 `ALL END` 视为流程完成并清理上下文。
+- 当 `interrupt_feedback="cancel"` 时，接口返回 JSON 响应而非流式输出，用于取消正在运行的任务。取消功能支持单进程和跨进程（Redis 模式）两种场景。
 
 ---
 

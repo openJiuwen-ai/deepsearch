@@ -192,6 +192,18 @@
    | **DEEPSEARCH_DB_NAME**                | mysql数据库名                                                               | `openjiuwen_deepsearch`                                                         |
    | **SQLITE_DB_PATH**                    | sqlite数据库的保存路径                                                       | `data/databases`                                                         |
    | **DEEPSEARCH_SQLITE_DB**              | sqlite数据库的保存文件名                                                     | `agent.db`                                                         |
+   | **CHECKPOINTER_TYPE**                 | Checkpointer类型，可选：`in_memory`（开发测试）/ `persistence`（单机生产）/ `redis`（分布式生产） | `in_memory`                                                         |
+   | **CHECKPOINTER_DB_TYPE**              | Persistence模式的数据库类型，可选：`sqlite` / `shelve`（仅 CHECKPOINTER_TYPE=persistence 时需要） | `sqlite`                                                         |
+   | **CHECKPOINTER_DB_PATH**               | Persistence模式的数据库路径（仅 CHECKPOINTER_TYPE=persistence 时需要） | `data/databases/checkpointer.db`                                                         |
+   | **REDIS_URL**                         | Redis连接URL（仅 CHECKPOINTER_TYPE=redis 时需要） | `redis://localhost:6379`                                                         |
+   | **REDIS_CLUSTER_MODE**                | 是否启用Redis Cluster模式（仅 CHECKPOINTER_TYPE=redis 时需要） | `false`                                                         |
+   | **REDIS_TTL**                         | Redis中会话状态的默认过期时间（仅 CHECKPOINTER_TYPE=redis 时需要） | `7200`                                                         |
+   | **REDIS_REFRESH_ON_READ**             | 每次读取会话状态时是否刷新TTL（仅 CHECKPOINTER_TYPE=redis 时需要） | `true`                                                         |
+
+  > **说明**：Checkpointer 用于管理 Agent 工作流的会话状态，支持工作流的暂停、恢复和状态持久化。
+  > - `in_memory` 模式：无需额外配置，适用于开发测试环境，不支持分布式部署
+  > - `persistence` 模式：需要确保数据库目录有写权限，适用于单机生产环境
+  > - `redis` 模式：需要先安装并启动 Redis 服务，适用于分布式生产环境
 
 * 在源码根目录下，运行以下命令启动后端服务，并耐心等待：
    
