@@ -1,6 +1,7 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+import asyncio
 import copy
 import json
 import logging
@@ -19,12 +20,25 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, cancel_context
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TIME_LOGGER_TAG
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_if_cancelled():
+    """
+    检查 cancel_context 中的取消事件，如果已设置则抛出 CancelledError。
+    
+    此函数在 LLM 调用的关键路径（llm_astream / ainvoke_llm_with_stats）中被调用，
+    用于及时响应外部取消请求，中断正在进行的 LLM 流式/非流式调用。
+    """
+    cancel_event = cancel_context.get()
+    if cancel_event and cancel_event.is_set():
+        logger.info("LLM call cancelled via cancel_event")
+        raise asyncio.CancelledError("cancelled")
 
 
 def messages_to_json(messages: Sequence[Any] | Message) -> str:
@@ -113,6 +127,7 @@ async def llm_astream(llm, messages, model_name, agent_name, tools=None, need_st
         Returns:
                 response
     """
+    _raise_if_cancelled()
     full_chunk = None
     can_write_stream = True
     session = None
@@ -145,6 +160,7 @@ async def llm_astream(llm, messages, model_name, agent_name, tools=None, need_st
 
     try:
         async for chunk in llm.stream(messages=messages, model=model_name, tools=tools):
+            _raise_if_cancelled()
             if full_chunk is None:
                 full_chunk = chunk
             else:
@@ -188,6 +204,7 @@ async def ainvoke_llm_with_stats(llm, messages, llm_type: str = "basic", agent_n
     Returns:
             dict response if schema is None, construct output if with schema
     """
+    _raise_if_cancelled()
     if not llm:
         raise CustomValueException(
             error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,

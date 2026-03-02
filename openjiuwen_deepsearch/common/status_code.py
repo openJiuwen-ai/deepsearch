@@ -52,7 +52,7 @@ class StatusCode(Enum):
     PARAM_CHECK_ERROR_FIELD_EMPTY = (
         200011, "Parameter validation failed, type of feild '{field}' must not be empty")
     PARAM_CHECK_ERROR_INTERRUPT_FEEDBACK_ERROR = (
-        200012, "Parameter 'interrupt_feedback' must be either an empty string or 'accepted'.")
+        200012, "Parameter 'interrupt_feedback' must be either an empty string or 'accepted' or 'cancel'.")
     PARAM_CHECK_ERROR_COMMON_INVALID = (200013, "Parameter {param} is invalid")
     PARAM_CHECK_ERROR_PARAM_NOT_IN_RANGE = (200014, "Parameter {param} must be one of {param_range}")
     PARAM_CHECK_ERROR_FIELD_NOT_EXIST = (200015, "Parameter validation failed, feild '{field}' not exsit in dict")

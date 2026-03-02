@@ -96,7 +96,7 @@ async def test_run_validate_report_template(invalid_value, error_code, error_msg
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_value, error_code, error_msg_fragment", [
     (123, 200010, "Parameter validation failed, type of feild 'interrupt_feedback' must be str"),
-    ("xxx", 200012, "Parameter 'interrupt_feedback' must be either an empty string or 'accepted'"),
+    ("xxx", 200012, "Parameter 'interrupt_feedback' must be either an empty string or 'accepted' or 'cancel'"),
 ])
 async def test_run_validate_interrupt_feedback(invalid_value, error_code, error_msg_fragment):
     await validate_run_input_parameter(
