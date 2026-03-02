@@ -101,6 +101,7 @@ class StartNode(Start):
             step_idx=inputs.get("step_idx", 0),
             step_title=inputs.get("step_title", ""),
             step_description=inputs.get("step_description", []),
+            step_background_knowledge=inputs.get("step_background_knowledge") or [],
             initial_search_query_count=inputs.get("initial_search_query_count", 1),
             max_research_loops=inputs.get("max_research_loops", 1),
             max_react_recursion_limit=inputs.get("max_react_recursion_limit", 5),
@@ -356,13 +357,14 @@ class SummaryNode(BaseNode):
         step_title = session.get_global_state("collector_context.step_title")
         logger.info("section_idx: %s | step_title: %s | [SummaryNode] Start SummaryNode.", section_idx, step_title)
         step_description = session.get_global_state("collector_context.step_description")
+        step_background_knowledge = session.get_global_state("collector_context.step_background_knowledge")
         language = session.get_global_state("collector_context.language")
         doc_infos = session.get_global_state("collector_context.doc_infos")
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, step_title=step_title, step_description=step_description,
-                    language=language, doc_infos=doc_infos)
+                    language=language, doc_infos=doc_infos, step_background_knowledge=step_background_knowledge)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         state = self._pre_handle(inputs, session, context)
@@ -372,6 +374,7 @@ class SummaryNode(BaseNode):
         step_title = state.get("step_title", "")
         step_description = state.get("step_description", "")
         doc_infos = state.get("doc_infos", [])
+        step_background_knowledge = state.get("step_background_knowledge", [])
 
         if LogManager.is_sensitive():
             logger.info(f"section_idx: {section_idx} | "
@@ -386,6 +389,7 @@ class SummaryNode(BaseNode):
             "research_record": f"[Task Title]: {step_title}\n[Task Description]: {step_description}",
             "doc_infos": doc_infos,
             "language": state.get("language", "zh-CN"),
+            "step_background_knowledge": step_background_knowledge,
         }
         formatted_prompt = apply_system_prompt("collector_final", agent_input)
 
@@ -530,6 +534,7 @@ def build_info_collector_sub_graph() -> Workflow:
             "section_idx": "${section_idx}", "plan_idx": "${plan_idx}",
             "step_idx": "${step_idx}", "step_title": "${step_title}",
             "step_description": "${step_description}",
+            "step_background_knowledge": "${step_background_knowledge}",
             "initial_search_query_count": "${initial_search_query_count}",
             "max_research_loops": "${max_research_loops}",
             "max_react_recursion_limit": "${max_react_recursion_limit}"

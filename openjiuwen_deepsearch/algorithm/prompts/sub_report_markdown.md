@@ -11,6 +11,7 @@ You will act based on the following inputs:
 3. **Current Chapter Outline**: The specific structure you must follow for this session.
 4. **Overall outline**: The complete outlines for the entire report, use this to understand the summary of the article and **avoid content inconsistent with other parts** during your writing. In
 short, focus on writing the current chapter 
+5. **Background Knowledge**: The background knowledge summarized from the sub-reports of the parent chapters.
 
 # Critical Constraints (NON-NEGOTIABLE)
 
@@ -53,6 +54,7 @@ short, focus on writing the current chapter
 - Ensure the content addresses the `user_query` directly.
 - Maintain logical coherence within the provided framework.
 - **Avoid Errors**: Check for common sense errors and logical gaps.
+- Based on background knowledge, generate content by combining collected information.
 
 {% if section_iscore %}
 ## Core Section Requirements (High Importance)

@@ -35,8 +35,33 @@ def generate_plan(language: str, title: str, thought: str, is_research_completed
     return plan
 
 
-def create_plan_tool(max_step_num: int):
+def generate_dependency_plan(language: str, title: str, thought: str, is_research_completed: bool,
+                             steps: list[Step] = None) -> Plan:
+    """从FunctionCall封装dependency plan"""
+    plan = Plan(
+        language=language,
+        title=title,
+        thought=thought,
+        is_research_completed=is_research_completed,
+        steps=[
+            Step(type=StepType.INFO_COLLECTING,
+                 title=step.get("title", ""),
+                 description=step.get("description", ""),
+                 id=step.get("id", ""),
+                 parent_ids=step.get("parent_ids", []),
+                 relationships=step.get("relationships", []))
+            for step in (steps or [])
+        ],
+    )
+
+    return plan
+
+
+def create_plan_tool(state: dict, prompt_template: str):
     """获取plan生成工具"""
+    section_idx = state.get("section_idx", '1')
+    max_step_num = state.get("max_step_num")
+    plan_idx = state.get("plan_executed_num", 0) + 1
 
     card = ToolCard(
         id="generate_plan",
@@ -92,6 +117,33 @@ def create_plan_tool(max_step_num: int):
                                     "Detailed instructions for this step, clearly specifying the data "
                                     "or content that needs to be collected."
                                 )
+                            },
+                            "id": {
+                                "type": "string",
+                                "description": f"Unique identifier of the step. "
+                                               f"Format: '{section_idx}-{plan_idx}-sequence_number' (e.g., 3-1-2, "
+                                               f"2-2-3). Only specify if this is a new step; do not recreate IDs "
+                                               f"already present in Background Knowledge."
+                            },
+                            "parent_ids": {
+                                "type": "array",
+                                "description": "Array of parent step IDs that this step depends on. Empty array [] "
+                                               "for root steps. Each parent ID must exist in either background "
+                                               "knowledge or the current execution steps of plan.",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "relationships": {
+                                "type": "array",
+                                "description": "Array specifying the relationship type to each corresponding parent "
+                                               "step in parent_ids. Must have the same length as parent_ids array. "
+                                               "Use terms like 'data correlation', 'causality', 'influence', "
+                                               "'temporal', 'perspective', 'methodological', or other appropriate "
+                                               "relationship descriptors.",
+                                "items": {
+                                    "type": "string"
+                                }
                             }
                         },
                         "required": ["type", "title", "description"]
@@ -103,7 +155,7 @@ def create_plan_tool(max_step_num: int):
     )
     plan_tool = LocalFunction(
         card=card,
-        func=generate_plan
+        func=generate_plan if prompt_template == "planner" else generate_dependency_plan
     )
 
     return plan_tool
@@ -149,7 +201,7 @@ class Planner:
             logger.info(f"{log_prefix}planner invoke messages: %s", messages_to_json(prompt))
 
         planner_result = PlannerResult()
-        tool = create_plan_tool(current_inputs.get("max_step_num"))
+        tool = create_plan_tool(current_inputs, self.config.prompt)
         stream_meta = {"plan_idx": str(current_inputs.get("plan_executed_num", 0) + 1)}
         # 重试机制
         max_retries = self.config.max_retry_num

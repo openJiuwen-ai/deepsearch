@@ -258,7 +258,8 @@ def _unify_responnse(response):
         for idx, tool_call in enumerate(tool_calls):
             func = tool_call.get("function")
             if not tool_call.get("args") and func and func.get("arguments"):
-                new_response.get("tool_calls")[idx]["args"] = json.loads(func.get("arguments"))
+                arguments = normalize_json_output(func.get("arguments"))
+                new_response.get("tool_calls")[idx]["args"] = json.loads(arguments)
             if func and func.get("name"):
                 new_response.get("tool_calls")[idx]["name"] = func.get("name")
             if tool_call.get("type"):

@@ -1087,6 +1087,8 @@ class Reporter:
             current_inputs.get("section_task", "")
         )  # Current section title
         doc_infos = current_inputs.get("doc_infos", [])
+        # 去重
+        doc_infos = list({(d.get("title"), d.get("url")): d for d in doc_infos}.values())
         classify_doc_infos_single_time_num = current_inputs.get(
             "classify_doc_infos_single_time_num", 60
         )
@@ -1996,7 +1998,8 @@ class Reporter:
             f"Overall outline is {current_outline_without_plans},"
             f"References is {current_inputs.get('sub_section_references', '')},"
             f"Current Chapter Outline is "
-            f"{current_inputs.get('sub_section_outline', '')}"
+            f"{current_inputs.get('sub_section_outline', '')},"
+            f"Background Knowledge is {current_inputs.get('sub_report_background_knowledge', [])}"
         )
         try:
             llm_input = apply_system_prompt(

@@ -380,6 +380,8 @@ class OutlineNode(BaseNode):
     def __init__(self):
         super().__init__()
         self.log_prefix = ""
+        self.outline_prompt = "outliner"
+        self.with_dep_driving = False
 
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         self.log_prefix = f"[{self.__class__.__name__}]"
@@ -411,7 +413,8 @@ class OutlineNode(BaseNode):
         if report_template:
             outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name="outliner_template")
         else:
-            outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name="outliner")
+            outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=self.outline_prompt)
+        outliner.with_dep_driving = self.with_dep_driving
         max_outline_retry_num = current_inputs.get("max_outline_retry_num", 1)
 
         success_flag = False
@@ -471,9 +474,15 @@ class OutlineNode(BaseNode):
 class DependencyOutlineNode(OutlineNode):
     def __init__(self):
         super().__init__()
+        self.outline_prompt = "dep_driving_outliner"
+        self.with_dep_driving = True
+        self.dep_driving_next_node = NodeId.DEPENDENCY_REASONING_TEAM.value
 
-    def _post_handle(self, inputs: Input, algorithm_output: object, session: Session, context: ModelContext):
-        return dict(next_node=NodeId.DEPENDENCY_REASONING_TEAM.value)
+    def _post_handle(self, inputs: Input, algorithm_output: object, session: Session, context: ModelContext) -> dict:
+        result = super()._post_handle(inputs, algorithm_output, session, context)
+        if result.get("next_node") == NodeId.EDITOR_TEAM.value:
+            result["next_node"] = self.dep_driving_next_node
+        return result
 
 
 class SourceTracerNode(BaseNode):

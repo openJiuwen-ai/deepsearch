@@ -16,6 +16,7 @@ class CollectorContext(BaseModel):
     step_idx: int | str = Field(default=0, description="步骤索引")  # public
     step_title: str = Field(default="", description="步骤标题")
     step_description: str = Field(default="", description="步骤描述")
+    step_background_knowledge: list[str] = Field(default=[], description="步骤做信息总结时的背景信息")
     initial_search_query_count: int = Field(default=1, description="初始查询计数")
     max_research_loops: int = Field(default=2, description="最大循环限制")
     max_react_recursion_limit: int = Field(default=8, description="最大递归限制")

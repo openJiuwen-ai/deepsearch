@@ -125,6 +125,8 @@ class BasePlanReasoningNode(BaseNode):
         # 达到最大次数
         if plan_executed_num >= max_plan_executed_num:
             limited_msg = f"Plan reasoning reached the max_plan_executed_num = {max_plan_executed_num} set."
+            if self.prompt == "dep_driving_planner":
+                return dict(next_node=NodeId.END.value)
             if collected_doc_num > 0:
                 # 已收集到信息，跳转子报告撰写
                 next_node = NodeId.SUB_REPORTER.value
@@ -302,9 +304,13 @@ class SubReporterNode(BaseNode):
         history_plans = session.get_global_state("section_context.history_plans")
         doc_infos = []
         for plan in history_plans:
-            for step in plan.steps:
-                for query in step.retrieval_queries:
-                    doc_infos.extend(query.doc_infos)
+            steps = plan.steps if hasattr(plan, 'steps') else plan.get("steps", [])
+            for step in steps:
+                retrieval_queries = step.retrieval_queries if hasattr(step, 'retrieval_queries') else step.get(
+                    "retrieval_queries", [])
+                for query in retrieval_queries:
+                    query_doc_infos = query.doc_infos if hasattr(query, 'doc_infos') else query.get("doc_infos", [])
+                    doc_infos.extend(query_doc_infos)
         doc_infos = list({(doc["title"], doc["url"]): doc for doc in doc_infos}.values())
 
         llm_model_name = adapt_llm_model_name(session, NodeId.SUB_REPORTER.value)
@@ -328,7 +334,9 @@ class SubReporterNode(BaseNode):
             classify_doc_infos_res_top_k_num=session.get_global_state(
                 "config.sub_report_classify_doc_infos_res_top_k_num") or 10,
             classify_doc_infos_single_time_num=classify_doc_infos_single_time_num,
-            llm_model_name=llm_model_name
+            llm_model_name=llm_model_name,
+            sub_report_background_knowledge=session.get_global_state(
+                "section_context.sub_report_background_knowledge") or [],
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -650,6 +658,8 @@ class SectionEndNode(End):
         section_state = {
             "plans": session.get_global_state("section_context.history_plans") or [],
             "sub_report_content": sub_report_content_obj,
+            "sub_report_background_knowledge": session.get_global_state("section_context"
+                                                                        ".sub_report_background_knowledge") or [],
             "warning_infos": session.get_global_state("section_context.warning_infos") or [],
             "exception_infos": session.get_global_state("section_context.exception_infos") or [],
         }

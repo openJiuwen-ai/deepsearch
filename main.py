@@ -141,11 +141,6 @@ if __name__ == "__main__":
         --web_search_url your_web_search_api_url \
         --file_path path_to_your_sample_report_or_template_file \
         --is_template (include this flag if the input file is already a template)
-        --web_search_engine_name your_web_search_engine_name \
-        --web_search_api_key your_web_search_api_key \
-        --web_search_url your_web_search_api_url \
-        --file_path path_to_your_sample_report_or_template_file \
-        --is_template (include this flag if the input file is already a template)
     """
     parser = argparse.ArgumentParser(description="Run deepsearch workflow")
     parser.add_argument("--query", nargs="*", default="AI手机研究报告", help="The query to process")
