@@ -114,7 +114,7 @@ class DeepSearchAgentManager:
         res = {
             "search_mode": request.search_mode,
             "execute_mode": "commercial",
-            "execution_method": "parallel",
+            "execution_method": request.execution_method,
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,
             "outliner_max_section_num": request.outliner_max_section_num,
             "source_tracer_research_trace_source_switch": request.source_tracer_research_trace_source_switch,

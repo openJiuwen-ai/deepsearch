@@ -73,6 +73,11 @@ class DependencyPlanReasoningNode(BasePlanReasoningNode):
         logger.info(f"{self.log_prefix} | Start {self.__class__.__name__}")
 
         current_inputs = super()._pre_handle(inputs, session, context)
+
+        current_inputs["plan_background_knowledge"] = session.get_global_state(
+            "section_context.plan_background_knowledge"
+        )
+        
         return current_inputs
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
