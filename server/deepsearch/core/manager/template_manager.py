@@ -83,7 +83,7 @@ class ReportTemplateManager:
             if isinstance(api_key, str):
                 params.llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
             llm_config = params.llm_config
-            agent_config_dict = {"llm_config": llm_config}
+            agent_config_dict = {"llm_config": dict(general=llm_config) if "model_name" in llm_config else llm_config}
 
             result = await TemplateGenerator.generate_template(
                 file_name=params.file_name,

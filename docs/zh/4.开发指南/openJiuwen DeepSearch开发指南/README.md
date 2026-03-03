@@ -12,10 +12,10 @@ from openjiuwen_deepsearch.config.config import Config
 agent_config = Config().agent_config.model_dump()
 # 对必填项进行赋值
 # 1. 配置LLM
-agent_config["llm_config"]["model_name"] = ""
-agent_config["llm_config"]["model_type"] = ""
-agent_config["llm_config"]["base_url"] = ""
-agent_config["llm_config"]["api_key"] = ""
+agent_config["llm_config"]["general"]["model_name"] = ""
+agent_config["llm_config"]["general"]["model_type"] = ""
+agent_config["llm_config"]["general"]["base_url"] = ""
+agent_config["llm_config"]["general"]["api_key"] = ""
 # 2. 配置网络搜索引擎
 agent_config["web_search_engine_config"]["search_engine_name"] = ""
 agent_config["web_search_engine_config"]["search_url"] = ""
@@ -26,10 +26,17 @@ agent_config["web_search_engine_config"]["search_api_key"] = ""
 
 ---
 
-openJiuwen-DeepSearch 支持接入两种类型模型：
+openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
+- **plan_understanding:** 该模型旨在能理解用户意图，生成任务规划步骤，减少幻觉，配置在Outliner、Planner模块
+- **info_collecting:** 该模型用于信息收集各个步骤，配置在InfoCollector
+- **writing_checking:** 该模型用于准确生成报告及插入图文，配置在Sub_reporter
+- **general:** 该模型为通用模型，综合能力较强，所有模块都可调用该模型 
 
- - 硅基流动厂商系列模型，且遵循OpenAI接口格式。`llm_config`的`model_type`参数必须赋值为siliconflow。
- - OpenAI格式模型，模型服务按照标准OpenAI格式封装实现。`llm_config`的`model_type`参数必须赋值为openai。
+其中，**general模型必须配置**，其他模型配置可选，其他模型未配置时，默认使用general模型，因此，建议general配置综合能力较强的模型    
+
+每个模型都支持接入两种类型模型：
+ - 硅基流动厂商系列模型，且遵循OpenAI接口格式。`LLMConfig`的`model_type`参数必须赋值为siliconflow。
+ - OpenAI格式模型，模型服务按照标准OpenAI格式封装实现。`LLMConfig`的`model_type`参数必须赋值为openai。
 
 > 说明：接入的系列模型，需要支持关闭思考模式能力，或者具备非思考模式能力。
 

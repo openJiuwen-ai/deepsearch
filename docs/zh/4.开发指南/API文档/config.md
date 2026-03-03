@@ -184,7 +184,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **workflow_human_in_the_loop**(bool, 可选)：工作流是否启用人机交互。默认值：`True`。
 - **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 10]。默认值：`5`。
 - **source_tracer_research_trace_source_switch**(bool, 可选)：溯源功能开关。默认值：`True`。
-- **llm_config**(LLMConfig, 可选)：LLM模型配置。默认值：`LLMConfig()`。
+- **llm_config**(Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig], 可选)：LLM模型配置。默认值：`dict()`。
 - **info_collector_search_method**(Literal["web", "local", "all"], 可选)：搜索方式，`web`：联网搜索，`local`：本地搜索工具搜索，`all`：联网+本地融合搜索。默认值：`"web"`。
 - **web_search_engine_config**(WebSearchEngineConfig, 可选)：网络搜索引擎配置。默认值：`WebSearchEngineConfig()`。
 - **local_search_engine_config**(LocalSearchEngineConfig, 可选)：本地搜索引擎配置。默认值：`LocalSearchEngineConfig()`。
@@ -197,12 +197,17 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 >>> from openjiuwen_deepsearch.config.config import AgentConfig, LLMConfig, WebSearchEngineConfig
 
 >>> # 样例1：创建Agent配置
->>> llm_config = LLMConfig(model_name="gpt-4", model_type="openai")
+>>> gpt_4 = LLMConfig(model_name="gpt-4", model_type="openai")
+>>> qwen3_max = LLMConfig(model_name="qwen3-max", model_type="openai")
+>>> llm_configs = {
+...    "general": gpt_4,
+...    "plan_understanding": qwen3_max,
+... }
 >>> web_search_config = WebSearchEngineConfig(search_engine_name="petal")
 >>> agent_config = AgentConfig(
 ...     execute_mode="general",
 ...     execution_method="parallel",
-...     llm_config=llm_config,
+...     llm_config=llm_configs,
 ...     web_search_engine_config=web_search_config,
 ...     info_collector_search_method="all"
 ... )
