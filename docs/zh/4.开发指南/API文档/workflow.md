@@ -86,6 +86,14 @@ _register_local_search_tool(custom_local: CustomLocalSearchConfig, search_config
 
 ---
 
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchDependencyAgent
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchDependencyAgent(DeepresearchAgent)
+```
+依赖驱动执行思维链模式的研究工作流 Agent。
+
+---
+
 ## function validate_generate_template_params
 ```python
 validate_generate_template_params(file_name: str, file_stream: str, is_template: bool)

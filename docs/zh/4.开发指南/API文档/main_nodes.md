@@ -70,6 +70,19 @@ class OutlineNode(BaseNode)
 
 ---
 
+### class DependencyOutlineNode
+```python
+class DependencyOutlineNode(OutlineNode)
+```
+**DependencyOutlineNode** 生成依赖驱动工作流报告大纲
+
+**功能**：
+- 基于 `dep_driving_outliner` 提示词生成带依赖关系的大纲。
+- 按 `outliner_max_generate_outline_retry_num` 重试。
+- 成功时流式输出大纲并写入 `search_context.current_outline`。
+
+---
+
 ### class EditorTeamNode
 ```python
 class EditorTeamNode(BaseNode)
@@ -79,6 +92,30 @@ class EditorTeamNode(BaseNode)
 **功能**：
 - 构建并发子工作流并汇聚结果。
 - 透传子图流式输出。
+
+---
+
+### class DependencyReasoningTeamNode
+```python
+class DependencyReasoningTeamNode(EditorTeamNode)
+```
+**DependencyReasoningTeamNode** 依赖驱动工作流编辑团队子图管理节点（定义在 `editor_team_manager_node.py`）。
+
+**功能**：
+- 基于前置依赖关系构建子工作流并汇聚结果。
+- 透传子图流式输出信息收集结果。
+
+---
+
+### class DependencyWritingTeamNode
+```python
+class DependencyWritingTeamNode(EditorTeamNode)
+```
+**DependencyWritingTeamNode** 依赖驱动工作流子报告撰写子图管理节点（定义在 `editor_team_manager_node.py`）。
+
+**功能**：
+- 构建子报告撰写子工作流并汇聚结果。
+- 透传子图流式输出报告内容与溯源信息。
 
 ---
 
@@ -147,6 +184,28 @@ class EndNode(End)
 
 ---
 
+## 依赖驱动工作流编辑团队子图节点（Dependency Driven Reasoning Team Subgraph Nodes）
+
+定义在 `reasoning_writing_graph/dependency_reasoning_team_nodes.py`：
+
+- `SectionReasoningStartNode`：初始化 `section_context`。
+- `DependencyPlanReasoningNode`：基于前置依赖生成章节计划并决定后续路径。
+- `DependencyInfoCollectorNode`：执行依赖驱动信息收集子图。
+- `SectionReasoningEndNode`：返回信息收集结果与章节计划。
+
+---
+
+## 依赖驱动工作流子报告撰写子图节点（Dependency Driven Writing Subgraph Nodes）
+
+定义在 `reasoning_writing_graph/dependency_writing_team_nodes.py`：
+
+- `SectionWritingStartNode`：初始化 `section_context`。
+- `SubReporterNode`：生成子报告。
+- `SubSourceTracerNode`：对子报告进行溯源标记。
+- `SectionEndNode`：返回子图结果。
+
+---
+
 ## 节点执行流程
 
 ### 主工作流（并行）
@@ -165,4 +224,15 @@ SectionStartNode -> ResearchPlanReasoningNode -> [InfoCollectorNode -> ResearchP
 ```
 StartNode -> GenerateQueryNode -> InfoRetrievalNode -> SupervisorNode
 -> [InfoRetrievalNode -> SupervisorNode]* -> SummaryNode -> GraphEndNode -> End
+```
+
+### 依赖驱动工作流编辑团队子图
+```
+SectionReasoningStartNode -> DependencyPlanReasoningNode -> [DependencyInfoCollectorNode -> DependencyPlanReasoningNode]*
+-> SectionReasoningEndNode
+```
+
+### 依赖驱动工作流子报告撰写子图
+```
+SectionWritingStartNode -> SubReporterNode -> SubSourceTracerNode -> SectionEndNode
 ```

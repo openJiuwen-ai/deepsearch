@@ -1517,9 +1517,8 @@ class Reporter:
                 visualization_dict, validation_error, previous_records
             )
             if not LogManager.is_sensitive():
-                logger.debug(
-                    f"{EFFECT_SUB_REPORT_TAG} [process_visualization_task] Extract data: {visualization_content}."
-                )
+                logger.debug("%s [process_visualization_task] Extract data: %s.", EFFECT_SUB_REPORT_TAG,
+                             visualization_content)
             raw_payload = (
                 visualization_content.get("sub_section_visualization_content") or ""
             ).strip()

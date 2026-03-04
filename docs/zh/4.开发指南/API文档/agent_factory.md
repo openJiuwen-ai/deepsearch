@@ -56,3 +56,14 @@ create_agent(agent_config: dict)
 >>> agent = factory.create_agent(agent_config)
 >>> print(type(agent).__name__)
 DeepresearchAgent
+
+>>> # 样例2：依赖驱动执行
+>>> agent_config = {
+...     "llm_config": {"model_name": "gpt-4", "model_type": "openai"},
+...     "search_mode": "research",
+...     "execution_method": "dependency_driving",
+... }
+>>> agent = factory.create_agent(agent_config)
+>>> print(type(agent).__name__)
+DeepresearchDependencyAgent
+```

@@ -131,7 +131,7 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         section_idx = session.get_global_state("section_context.section_idx")
         current_plan = session.get_global_state("section_context.current_plan")
-        self.log_prefix = f"section_idx: {section_idx} | plan_idx: {current_plan.id} | [{self.__class__.__name__}] "
+        self.log_prefix = f"section_idx: {section_idx} | plan_id: {current_plan.id} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} | Start {self.__class__.__name__}")
         added_completed_steps = session.get_global_state("section_context.added_completed_steps")
         current_plan_is_completed = session.get_global_state("section_context.current_plan_is_completed")
@@ -144,7 +144,7 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
         current_inputs["history_plans"] = session.get_global_state("section_context.history_plans")
         current_inputs["added_completed_steps"] = added_completed_steps
         current_inputs["current_plan_is_completed"] = current_plan_is_completed
-
+        
         return current_inputs
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -211,6 +211,8 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
         initial_search_query_count = state.get("initial_search_query_count", 2)
         max_research_loops = state.get("max_research_loops", 2)
         max_react_recursion_limit = state.get("max_react_recursion_limit", 8)
+        plan_idx = plan.id.split("-")[-1] if plan.id and "-" in plan.id else "1"
+        step_idx = step.id.split("-")[-1] if step.id and "-" in step.id else "1"
 
         message = f"Now deal with the task: \n"
         message += f"You should focus on [Topic]: {plan.title}\n"
@@ -229,8 +231,8 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
             "language": state.get("language", "zh-CN"),
             "messages": [Message(role="user", content=message)],
             "section_idx": state.get("section_idx", '1'),
-            "plan_idx": plan.id,
-            "step_idx": step.id,
+            "plan_idx": plan_idx,
+            "step_idx": step_idx,
             "step_title": step.title,
             "step_description": step.description,
             "step_background_knowledge": step.background_knowledge or [],
