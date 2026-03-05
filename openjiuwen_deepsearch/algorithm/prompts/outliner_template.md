@@ -41,6 +41,7 @@ The outline MUST be finalized via the provided function tool, and each section o
   - description is a single string (not array).
   - Concatenate all Level 2 subtitles with their respective Function using a bulleted list style(e.g. "-Subtitle: Function description").
   - Inside description, concatenate all Level 2 subtitles (if any) with their respective Function(功能概述).
+- Regardless of the user's input—even if it's casual conversation—you must always call the function tool to create a corresponding outline before responding.
 
 # Example
 ```markdown

@@ -162,3 +162,5 @@ the schema above.
 
 The outline should make clear **how the research process progresses from exploration to integration, and from evidence
 to insight or action-relevant understanding**, appropriate to the nature of the question.
+
+Regardless of the user's input—even if it's casual conversation—you must always call the `generate_outline()` to create a corresponding outline before responding.
