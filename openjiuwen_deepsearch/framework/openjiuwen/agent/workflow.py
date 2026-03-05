@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from typing import Optional
+import uuid
 
 from openjiuwen.core.application.workflow_agent.workflow_agent import WorkflowAgent
 from openjiuwen.core.runner.runner import Runner
@@ -29,7 +30,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import So
 from openjiuwen_deepsearch.framework.openjiuwen.tools import update_local_search_mapping, update_web_search_mapping
 from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
-from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent
+from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import LlmConfigCategory
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, web_search_context, \
@@ -350,6 +351,36 @@ class DeepresearchAgent(BaseAgent):
             else:
                 logger.error(f"[DeepResearchAgent.run] Session closed with error.")
                 final_result_info = {"exception_info": "Session closed with error."}
+
+            # 异常场景下，主动向前端发送错误事件和终止事件。
+            try:
+                error_payload = {
+                    "conversation_id": conversation_id,
+                    "message_id": str(uuid.uuid4()),
+                    "agent": NodeId.FRAMEWORK.value,
+                    "role": "assistant",
+                    "content": json.dumps(final_result_info, ensure_ascii=False),
+                    "message_type": MessageType.MESSAGE_CHUNK.value,
+                    "event": StreamEvent.ERROR.value,
+                    "created_time": get_current_time()
+                }
+                yield json.dumps(error_payload, ensure_ascii=False)
+
+                end_payload = {
+                    "conversation_id": conversation_id,
+                    "message_id": str(uuid.uuid4()),
+                    "agent": NodeId.FRAMEWORK.value,
+                    "role": "assistant",
+                    "content": "ALL END",
+                    "message_type": MessageType.MESSAGE_CHUNK.value,
+                    "event": StreamEvent.SUMMARY_RESPONSE.value,
+                    "created_time": get_current_time()
+                }
+                yield json.dumps(end_payload, ensure_ascii=False)
+            except Exception as stream_err:
+                # 若流输出本身失败，仅记录日志，避免掩盖原始异常
+                logger.warning("[DeepResearchAgent.run] Failed to emit error stream event: %s", stream_err)
+
             await self.agent.clear_session(conversation_id)
             await self._release_checkpointer_session(conversation_id)
             session_id_ctx.reset(token)

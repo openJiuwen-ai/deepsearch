@@ -6,6 +6,7 @@ import enum
 class NodeId(enum.Enum):
     START = "start"
     END = "end"
+    FRAMEWORK = "framework"
 
     # research 相关
     ENTRY = "entry"

@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 _redis_client: Redis | None = None
 _cancel_listener_task: asyncio.Task | None = None
 _CANCEL_CHANNEL = "deepsearch:cancel"
+# 重连退避：最小/最大间隔（秒），用于 Redis 断线后重试
+_RECONNECT_DELAY_MIN = 1.0
+_RECONNECT_DELAY_MAX = 60.0
 
 _cancel_handler: Optional[Callable[[str, str], Awaitable[None]]] = None
 
@@ -75,9 +78,15 @@ async def _get_redis_client() -> Redis | None:
         await _redis_client.ping()
         logger.info("Initialized Redis client for deepsearch cancel bus.")
     except Exception as e:
-        logger.warning("Failed to initialize Redis client for cancel bus: %s", e)
+        logger.error("Failed to initialize Redis client for cancel bus: %s", e)
         _redis_client = None
     return _redis_client
+
+
+def _clear_redis_client():
+    """清空全局 Redis 客户端，下次 _get_redis_client 会重新建连（用于断线重连）。"""
+    global _redis_client
+    _redis_client = None
 
 
 async def publish_remote_cancel(space_id: str, conversation_id: str) -> bool:
@@ -105,38 +114,58 @@ async def _cancel_listener_loop():
     """
     后台协程：订阅 Redis 取消频道，接收跨进程取消指令。
     收到消息后，如果已注册业务回调，则调用。
+    运行中若 Redis 断连或重启，会清空客户端并按退避时间自动重连。
     """
-    client = await _get_redis_client()
-    if client is None:
-        # 非 redis 模式或初始化失败，直接返回
-        return
+    reconnect_delay = _RECONNECT_DELAY_MIN
+    while True:
+        cp_type = (settings.checkpointer_type or "").strip().lower()
+        if cp_type != "redis":
+            return
 
-    try:
-        pubsub = client.pubsub()
-        await pubsub.subscribe(_CANCEL_CHANNEL)
-        logger.info("Subscribed to Redis cancel channel: %s", _CANCEL_CHANNEL)
+        client = await _get_redis_client()
+        if client is None:
+            logger.warning(
+                "Cancel bus Redis client unavailable, reconnecting in %.1fs...",
+                reconnect_delay,
+            )
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, _RECONNECT_DELAY_MAX)
+            continue
 
-        async for message in pubsub.listen():
-            if message is None:
-                continue
-            if message.get("type") != "message":
-                continue
-            data = message.get("data")
-            try:
-                if isinstance(data, bytes):
-                    data = data.decode("utf-8")
-                payload = json.loads(data)
-                space_id = str(payload.get("space_id", ""))
-                conversation_id = str(payload.get("conversation_id", ""))
-                if space_id and conversation_id and _cancel_handler is not None:
-                    await _cancel_handler(space_id, conversation_id)
-            except Exception as e:
-                logger.warning("Failed to process cancel bus message: %s", e)
-    except asyncio.CancelledError:
-        logger.info("Cancel listener loop cancelled, shutting down.")
-        raise
-    except Exception as e:
-        logger.warning("Cancel listener loop stopped due to error: %s", e)
+        reconnect_delay = _RECONNECT_DELAY_MIN
+        try:
+            pubsub = client.pubsub()
+            await pubsub.subscribe(_CANCEL_CHANNEL)
+            logger.info("Subscribed to Redis cancel channel: %s", _CANCEL_CHANNEL)
+
+            async for message in pubsub.listen():
+                if message is None:
+                    continue
+                if message.get("type") != "message":
+                    continue
+                data = message.get("data")
+                try:
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8")
+                    payload = json.loads(data)
+                    space_id = str(payload.get("space_id", ""))
+                    conversation_id = str(payload.get("conversation_id", ""))
+                    if space_id and conversation_id and _cancel_handler is not None:
+                        await _cancel_handler(space_id, conversation_id)
+                except Exception as e:
+                    logger.warning("Failed to process cancel bus message: %s", e)
+        except asyncio.CancelledError:
+            logger.info("Cancel listener loop cancelled, shutting down.")
+            raise
+        except Exception as e:
+            logger.warning(
+                "Cancel listener loop error (will reconnect): %s",
+                e,
+                exc_info=True,
+            )
+            _clear_redis_client()
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, _RECONNECT_DELAY_MAX)
 
 
 async def start_cancel_listener():
@@ -151,6 +180,16 @@ async def start_cancel_listener():
     cp_type = (settings.checkpointer_type or "").strip().lower()
     if cp_type != "redis":
         return
+
+    # 启动阶段强校验 Redis 连接，失败则抛异常使服务无法启动
+    client = await _get_redis_client()
+    if client is None:
+        msg = (
+            f"Redis cancel bus 初始化失败：checkpointer_type='redis'，"
+            f"但无法连接到 redis_url={settings.redis_url!r}。请检查 REDIS_URL 配置。"
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     _cancel_listener_task = asyncio.create_task(_cancel_listener_loop(), name="deepsearch_cancel_listener")
     logger.info("Started deepsearch cancel listener task.")
