@@ -8,19 +8,12 @@
 
 # Docker 方式安装
 社区提供了以下 3 种操作系统的安装指南，可快速同时启动 Studio 和 DeepSearch SDK：
-* [Windows系统安装](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.4/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/Docker%E6%96%B9%E5%BC%8F%E5%AE%89%E8%A3%85/Windows%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md)
-* [Linux系统安装](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.4/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/Docker%E6%96%B9%E5%BC%8F%E5%AE%89%E8%A3%85/Linux%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md)
-* [MacOS系统安装](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.4/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/Docker%E6%96%B9%E5%BC%8F%E5%AE%89%E8%A3%85/MacOS%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md)
+* [Windows系统安装](./Windows系统安装.md)
+* [Linux系统安装](./Linux系统安装.md)
+* [MacOS系统安装](./MacOS系统安装.md)
 
-# 本地安装
-社区提供了**一键安装**和**手动安装**两种本地安装方式。
+# 本地手动安装
 
-## 一键安装
-一键安装脚本可以自动完成基础工具检查、代码拉取、环境配置和服务启动等步骤，大幅简化安装流程。社区提供了以下 3 种操作系统的一键安装，可快速同时启动 Studio 和 DeepSearch SDK。
-
-该功能正在测试中，将在后续版本推出，敬请期待。
-
-## 手动安装
 手动安装DeepSearch完整版，需要手动完成所需依赖安装、源码获取、Studio和DeepSearch SDK安装等步骤。
 > **注意**：
 > - 本地手动安装需要同时安装 Studio 和 DeepSearch SDK；

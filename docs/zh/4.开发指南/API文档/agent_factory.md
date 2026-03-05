@@ -16,7 +16,7 @@ __init__()
 
 - `"parallel"` → `DeepresearchAgent`
 - `dependency_driving` -> `DeepresearchDependencyAgent`
-- `search` -> `DeepsearchAgent`
+- `search` -> `DeepsearchAgent`  # **当前暂不支持search模式**
 
 **样例**：
 

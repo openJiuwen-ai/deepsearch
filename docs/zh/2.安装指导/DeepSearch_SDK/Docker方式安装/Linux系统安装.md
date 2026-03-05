@@ -72,10 +72,10 @@
 
   ```
   # 下载 x86_64 架构版本包：
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
   
   # 下载 ARM64 架构版本包：
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.0
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.1
   ```
 
 ### 2. 启动 DeepSearch 服务（以 x86_64 架构为例）
@@ -88,7 +88,7 @@
     -e LLM_SSL_VERIFY=False \
     -e TOOL_SSL_VERIFY=False \ 
     -e DB_TYPE=sqlite \ 
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
   ```
 
   当出现如下信息时，表示服务已成功启动：
@@ -158,7 +158,7 @@
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
   ```
 
   ##### SQLite 相关参数（`DB_TYPE=sqlite` 时生效）
@@ -208,7 +208,7 @@
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
 
   # 单机生产环境（persistence 模式）
   docker run -p 8000:8000 \
@@ -224,7 +224,7 @@
     -e CHECKPOINTER_TYPE=persistence \
     -e CHECKPOINTER_DB_TYPE=sqlite \
     -e CHECKPOINTER_DB_PATH=data/databases/checkpointer.db \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
 
   # 分布式生产环境（redis 模式）
   docker run -p 8000:8000 \
@@ -242,7 +242,7 @@
     -e REDIS_CLUSTER_MODE=false \
     -e REDIS_TTL=7200 \
     -e REDIS_REFRESH_ON_READ=true \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
   ```
 
   **注意事项**：
