@@ -376,9 +376,16 @@ def _prepare_stream_context(
     - 不处理 cancel_event / HITL 状态，相关逻辑在 _create_streaming_response 中完成。
     - 返回的 request 是经过 model_validate 的规范化对象。
     """
-    api_key = request.llm_config.get("api_key", "")
-    if isinstance(api_key, str):
-        request.llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
+    if "general" in request.llm_config:
+        for _, llm_config in request.llm_config.items():
+            api_key = llm_config.get("api_key", "")
+            if isinstance(api_key, str):
+                llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
+    else:
+        api_key = request.llm_config.get("api_key", "")
+        if isinstance(api_key, str):
+            request.llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
+
     request = DeepSearchRequest.model_validate(request)
 
     agent_config = agent_manager.build_agent_config(request, db)
