@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Dict
 
@@ -23,8 +24,28 @@ agent_manager = DeepSearchAgentManager()
 # 以 space_id:conversation_id 为 key 跟踪当前进程内的运行中任务及其取消事件。
 _running_tasks: Dict[str, asyncio.Task] = {}
 _cancel_events: Dict[str, asyncio.Event] = {}
+_cancel_event_timestamps: Dict[str, float] = {}
 _running_agents: Dict[str, object] = {}
 _QUEUE_DONE = object()
+# 按容量清理 _cancel_events：达到最大容量后剔除最久未用的项，避免内存泄漏
+_CANCEL_EVENT_MAX_SIZE = 10
+_cleanup_lock = asyncio.Lock()
+# HITL 时 producer 等待 cancel 或「继续请求」再结束流，key 同 task_key
+_resume_requested_events: Dict[str, asyncio.Event] = {}
+
+
+def _clear_cancel_state(task_key: str) -> None:
+    """清理与取消/恢复相关的全局字典项，避免泄漏。与 _cancel_events 同步维护。"""
+    _cancel_events.pop(task_key, None)
+    _cancel_event_timestamps.pop(task_key, None)
+    _resume_requested_events.pop(task_key, None)
+
+
+def _clear_task_state(task_key: str) -> None:
+    """清理任务相关全部全局字典项（含 cancel 与 running），避免泄漏。"""
+    _clear_cancel_state(task_key)
+    _running_tasks.pop(task_key, None)
+    _running_agents.pop(task_key, None)
 
 
 @dataclass
@@ -36,6 +57,7 @@ class StreamContext:
     space_id: str
     conversation_id: str
     cancel_event: asyncio.Event
+    resume_requested: asyncio.Event
 
 
 def _build_cancel_message(conversation_id: str) -> str:
@@ -128,6 +150,7 @@ async def _handle_remote_cancel(space_id: str, conversation_id: str):
             str(e),
         )
 
+    _clear_task_state(task_key)
     logger.info(
         "Handled remote cancel in current worker for %s:%s (has_cancel_event=%s, task_done=%s, has_agent=%s)",
         space_id,
@@ -156,7 +179,6 @@ async def _wrapped_agent_run(agent, run_kwargs, space_id: str, conversation_id: 
     """
     token = cancel_context.set(cancel_event)
     agent_gen = agent.run(**run_kwargs)
-    waiting_user_input = False  # 跟踪是否已发送 waiting_user_input 事件
     try:
         async for chunk in agent_gen:
             if cancel_event.is_set():
@@ -167,22 +189,18 @@ async def _wrapped_agent_run(agent, run_kwargs, space_id: str, conversation_id: 
                 )
                 yield _build_cancel_message(conversation_id)
                 break
-            
-            # 检查是否发送了 waiting_user_input 事件
+
             if isinstance(chunk, str):
                 try:
-                    # agent.run() 返回的是 JSON 字符串（不是 SSE 格式）
                     data = json.loads(chunk)
                     if data.get("event") == "waiting_user_input":
-                        waiting_user_input = True
                         logger.debug("Detected waiting_user_input event for session %s", conversation_id)
                 except (json.JSONDecodeError, KeyError, AttributeError) as parse_err:
-                    # 不是 JSON 格式或解析失败，chunk 将作为普通字符串透传
                     logger.debug(
                         "Failed to parse chunk as JSON for waiting_user_input check in _wrapped_agent_run: %s",
                         str(parse_err),
                     )
-            
+
             yield chunk
     except asyncio.CancelledError:
         # 协程被取消，先停止 controller 任务，然后重新抛出以保持取消语义
@@ -247,6 +265,29 @@ async def _produce_stream(ctx: StreamContext):
                     # 非 JSON 或结构异常，忽略，仅作为普通 chunk 透传
                     pass
             await ctx.queue.put(chunk)
+        # HITL 时保持流不结束，等待取消或「继续」请求，以便进程 B 取消时能向进程 A 推送 CANCELLED
+        if waiting_user_input:
+            logger.debug(
+                "Waiting for cancel or resume for session %s before closing stream.",
+                ctx.conversation_id,
+            )
+            try:
+                await asyncio.wait(
+                    [ctx.cancel_event.wait(), ctx.resume_requested.wait()],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except asyncio.CancelledError:
+                logger.debug("CancelledError in HITL wait for session %s", ctx.conversation_id)
+                raise
+            if ctx.cancel_event.is_set():
+                try:
+                    await ctx.queue.put(_build_cancel_message(ctx.conversation_id))
+                except Exception as put_err:
+                    logger.debug(
+                        "Failed to put cancel message after HITL wait for %s: %s",
+                        ctx.conversation_id,
+                        str(put_err),
+                    )
     except asyncio.CancelledError:
         # 由上层（如取消接口或 HTTP 断连）驱动的协程取消，这里仅尽量补发一次取消消息，
         # 不再反向设置 cancel_event，避免将「连接中断」误认为业务层面的会话取消。
@@ -268,8 +309,7 @@ async def _produce_stream(ctx: StreamContext):
             await asyncio.shield(ctx.queue.put(_QUEUE_DONE))
             if waiting_user_input:
                 logger.debug(
-                    "QUEUE_DONE sent while in waiting_user_input for session %s "
-                    "(keeping cancel_event in _consumer for potential resume).",
+                    "QUEUE_DONE sent for session %s (after cancel/resume or HITL wait).",
                     ctx.conversation_id,
                 )
         except Exception as queue_err:
@@ -295,7 +335,8 @@ async def _handle_cancel_request(request: DeepSearchRequest) -> dict:
     - 如无本地活动任务，则在 redis 模式下通过取消总线进行跨进程通知。
 
     返回值说明：
-    - status="cancelling": 本进程内存在活动任务，已触发取消并清理会话资源；
+    - status="cancelling": 本进程内存在活动任务，或存在 HITL 挂起状态（仅 cancel_event），
+      已触发取消并清理会话资源；
     - status="forwarded": 本进程无活动任务，已通过 Redis 总线转发到其他 worker/实例；
     - status="no_active_task_or_forward_failed": 本进程无活动任务，且未能转发
       （通常发生在非 redis 模式，或 Redis 发布失败时）。
@@ -331,7 +372,28 @@ async def _handle_cancel_request(request: DeepSearchRequest) -> dict:
             has_local_state,
         )
         forwarded = await publish_remote_cancel(request.space_id, request.conversation_id)
-        status = "forwarded" if forwarded else "no_active_task_or_forward_failed"
+        if forwarded:
+            status = "forwarded"
+            # 不调用 cleanup、不 pop cancel_event，由 _handle_remote_cancel 处理
+        elif has_local_state:
+            status = "cancelling"
+            try:
+                await agent_manager.cleanup_session_cache(request.space_id, request.conversation_id)
+            except Exception as cleanup_err:
+                logger.warning(
+                    "Failed to cleanup session cache for HITL cancel %s, error: %s",
+                    task_key,
+                    str(cleanup_err),
+                )
+            # 保留 cancel_event，用户按 Enter 后 _canceled_consumer 会 pop
+            _cancel_event_timestamps[task_key] = time.monotonic()
+            _maybe_schedule_capacity_cleanup()
+        else:
+            status = "no_active_task_or_forward_failed"
+        if not has_local_state:
+            _clear_cancel_state(task_key)
+        _running_tasks.pop(task_key, None)
+        _running_agents.pop(task_key, None)
         return {
             "status": status,
             "space_id": request.space_id,
@@ -351,11 +413,55 @@ async def _handle_cancel_request(request: DeepSearchRequest) -> dict:
             task_key,
             str(cleanup_err),
         )
+    _clear_task_state(task_key)
     return {
         "status": "cancelling",
         "space_id": request.space_id,
         "conversation_id": request.conversation_id,
     }
+
+
+async def _cleanup_cancel_events_by_capacity():
+    """当 _cancel_events 数量达到上限时，按时间戳剔除最久未用的项并 release checkpointer。
+    被淘汰的会话若仍有 producer 在等待（HITL 连接未断），会先取消该任务再清理，避免任务泄漏。"""
+    async with _cleanup_lock:
+        n = len(_cancel_events)
+        if n < _CANCEL_EVENT_MAX_SIZE:
+            return
+        # 按时间戳升序，先剔除最旧的，使数量低于 _CANCEL_EVENT_MAX_SIZE
+        sorted_keys = sorted(
+            _cancel_event_timestamps.keys(),
+            key=lambda k: _cancel_event_timestamps[k],
+        )
+        num_evict = n - _CANCEL_EVENT_MAX_SIZE + 1
+        to_evict = sorted_keys[:num_evict]
+        for k in to_evict:
+            task = _running_tasks.get(k)
+            if task is not None and not task.done():
+                task.cancel()
+                logger.debug("Cancelled evicted producer task for %s (capacity limit)", k)
+            _clear_task_state(k)
+    for task_key in to_evict:
+        try:
+            parts = task_key.split(":", 1)
+            if len(parts) != 2:
+                continue
+            space_id, conversation_id = parts[0], parts[1]
+            await agent_manager.cleanup_session_cache(space_id, conversation_id)
+            logger.debug("Cleaned up cancel_event for %s (capacity limit)", task_key)
+        except Exception as e:
+            logger.warning("Failed to cleanup cancel_event %s: %s", task_key, str(e))
+
+
+def _maybe_schedule_capacity_cleanup():
+    """若 _cancel_events 已达最大容量，调度一次按容量清理（不阻塞当前请求）。"""
+    if len(_cancel_events) < _CANCEL_EVENT_MAX_SIZE:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_cleanup_cancel_events_by_capacity())
+    except RuntimeError:
+        pass
 
 
 def _prepare_stream_context(
@@ -440,14 +546,25 @@ def _create_streaming_response(
         )
 
         async def _canceled_consumer():
-            yield _build_cancel_message(request.conversation_id)
+            try:
+                yield _build_cancel_message(request.conversation_id)
+            finally:
+                _cancel_events.pop(task_key, None)
+                _cancel_event_timestamps.pop(task_key, None)
+                _resume_requested_events.pop(task_key, None)
 
         return EventSourceResponse(_canceled_consumer(), media_type="text/event-stream")
 
-    # 复用现有的 cancel_event 或创建新的。
+    # 复用现有的 cancel_event 或创建新的。若为「继续」请求（已有未 set 的 cancel_event），唤醒旧流结束。
     cancel_event = existing_cancel_event if existing_cancel_event else asyncio.Event()
-    queue: asyncio.Queue = asyncio.Queue()
+    old_resume = _resume_requested_events.pop(task_key, None)
+    if old_resume is not None:
+        old_resume.set()
+        logger.debug("Set resume_requested for task %s (continue request)", task_key)
+    resume_requested = asyncio.Event()
+    _resume_requested_events[task_key] = resume_requested
 
+    queue: asyncio.Queue = asyncio.Queue()
     stream_ctx = StreamContext(
         queue=queue,
         agent=agent,
@@ -455,11 +572,14 @@ def _create_streaming_response(
         space_id=request.space_id,
         conversation_id=request.conversation_id,
         cancel_event=cancel_event,
+        resume_requested=resume_requested,
     )
     producer_task = asyncio.create_task(_produce_stream(stream_ctx))
     _running_tasks[task_key] = producer_task
     _cancel_events[task_key] = cancel_event
+    _cancel_event_timestamps[task_key] = time.monotonic()
     _running_agents[task_key] = agent
+    _maybe_schedule_capacity_cleanup()
 
     async def _consumer():
         waiting_user_input = False
@@ -496,18 +616,31 @@ def _create_streaming_response(
                 producer_task.cancel()
             # 清理已完成的 producer_task 引用
             _running_tasks.pop(task_key, None)
-            # 如果正在等待用户输入，保留 cancel_event 以便后续请求复用
+            # 如果正在等待用户输入，保留 cancel_event 以便后续取消请求能检测到 HITL 状态
+            # 但不保留 running_agents，因为后续请求可能在其他进程运行（分布式部署）
             if not waiting_user_input:
-                _cancel_events.pop(task_key, None)
+                _clear_cancel_state(task_key)
                 _running_agents.pop(task_key, None)
+                # HTTP 断开或流结束且未到 HITL：无 checkpoint 可恢复，立即 release 避免泄漏
+                try:
+                    await agent_manager.cleanup_session_cache(request.space_id, request.conversation_id)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Failed to cleanup session on stream end %s: %s",
+                        task_key,
+                        str(cleanup_err),
+                    )
             else:
                 logger.debug(
                     "Preserving cancel_event for waiting_user_input session %s "
-                    "(cleaned up completed producer_task)",
+                    "(running_agents cleaned for distributed deployment compatibility)",
                     request.conversation_id,
                 )
-                # 清理 running_agents 和已完成的 running_tasks，只保留 cancel_event
+                # HITL 场景：只保留 cancel_event，清理 running_agents
+                # 这样取消请求会通过 Redis 总线转发到实际运行任务的进程
                 _running_agents.pop(task_key, None)
+                _cancel_event_timestamps[task_key] = time.monotonic()
+                _maybe_schedule_capacity_cleanup()
 
     return EventSourceResponse(_consumer(), media_type="text/event-stream")
 
