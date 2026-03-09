@@ -6,15 +6,16 @@
 初始化配置参数时，可根据功能需求，对`AgentConfig`的参数，进行赋值。
 
 ```python
-from jiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.config.config import Config
+
 # 实例化AgentConfig
 agent_config = Config().agent_config.model_dump()
 # 对必填项进行赋值
 # 1. 配置LLM
-agent_config["llm_config"]["model_name"] = ""
-agent_config["llm_config"]["model_type"] = ""
-agent_config["llm_config"]["base_url"] = ""
-agent_config["llm_config"]["api_key"] = ""
+agent_config["llm_config"]["general"]["model_name"] = ""
+agent_config["llm_config"]["general"]["model_type"] = ""
+agent_config["llm_config"]["general"]["base_url"] = ""
+agent_config["llm_config"]["general"]["api_key"] = ""
 # 2. 配置网络搜索引擎
 agent_config["web_search_engine_config"]["search_engine_name"] = ""
 agent_config["web_search_engine_config"]["search_url"] = ""
@@ -25,12 +26,19 @@ agent_config["web_search_engine_config"]["search_api_key"] = ""
 
 ---
 
-openJiuwen-DeepSearch 支持接入两种类型模型：
+openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
+- **plan_understanding:** 该模型旨在能理解用户意图，生成任务规划步骤，减少幻觉，配置在Outliner、Planner模块
+- **info_collecting:** 该模型用于信息收集各个步骤，配置在InfoCollector
+- **writing_checking:** 该模型用于准确生成报告及插入图文，配置在Sub_reporter
+- **general:** 该模型为通用模型，综合能力较强，所有模块都可调用该模型 
 
- - 硅基流动厂商系列模型，且遵循OpenAI接口格式。`llm_config`的`model_type`参数必须赋值为siliconflow。
- - OpenAI格式模型，模型服务按照标准OpenAI格式封装实现。`llm_config`的`model_type`参数必须赋值为openai。
+其中，**general模型必须配置**，其他模型配置可选，其他模型未配置时，默认使用general模型，因此，建议general配置综合能力较强的模型    
 
-> 说明：接入的系列模型，需要支持关闭思考模式能力，或者具备非思考模式能力。
+每个模型都支持接入两种类型模型：
+ - 硅基流动厂商系列模型，且遵循OpenAI接口格式。`LLMConfig`的`model_type`参数必须赋值为siliconflow。
+ - OpenAI格式模型，模型服务按照标准OpenAI格式封装实现。`LLMConfig`的`model_type`参数必须赋值为openai。
+
+> **说明：接入的系列模型，需要支持关闭思考模式能力，或者具备非思考模式能力。例如，qwen3-max、qwen-plus-latest等。**
 
 > 说明：用户需要自行前往硅基流动或者OpenAI的官网注册账号，以便获取模型广场中可用模型的api_key、模型名称model_name和模型调用的URL请求地址base_url。
 
@@ -72,7 +80,8 @@ os.environ["TOOL_SSL_CERT"] = ""
 `AgentFactory`类支持根据配置`agent_config`，实例化`DeepResearchAgent`类，获取`DeepResearchAgent`对象。
 
 ```python
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 ```
@@ -85,7 +94,8 @@ agent = agent_factory.create_agent(agent_config)
 直接通过`DeepResearchAgent`的构造函数，获取实例化对象。
 
 ```python
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import DeepResearchAgent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepResearchAgent
+
 agent = DeepResearchAgent(agent_config)
 ```
 
@@ -109,8 +119,8 @@ agent = DeepResearchAgent(agent_config)
 ```python
 import json
 import uuid
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
@@ -174,7 +184,7 @@ async for chunk in agent.run(message=message, conversation_id=str(uuid.uuid4()),
 
 ```python
 import base64
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 
 # 提供入参
 file_path = "用户提供的模板文件名，以md后缀结尾"
@@ -185,7 +195,8 @@ agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
 # 执行模板文件处理操作
-result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template, agent_config=agent_config)
+result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template,
+                                       agent_config=agent_config)
 user_template_content = result["template_content"]
 ```
 
@@ -194,8 +205,8 @@ user_template_content = result["template_content"]
 ```python
 import json
 import uuid
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
 message = "用户原始查询问题"
 conversation_id = str(uuid.uuid4())
@@ -224,7 +235,7 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 ```python
 import base64
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 
 # 提供入参
 file_path = "用户提供的样例报告文件的文件名，以md/docx/pdf/html后缀结尾"
@@ -235,18 +246,18 @@ agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
 # 执行模板文件处理操作
-result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template, agent_config=agent_config)
+result = await agent.generate_template(file_name=file_path, file_stream=file_stream, is_template=is_template,
+                                       agent_config=agent_config)
 user_template_content = result["template_content"]
 ```
 
 提取出规范化后的模板文件内容`user_template_content`之后，继续通过`DeepResearchAgent`的`run`函数，进行研究报告生成。
 
-
 ```python
 import json
 import uuid
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
 message = "用户原始查询问题"
 conversation_id = str(uuid.uuid4())

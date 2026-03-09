@@ -99,6 +99,11 @@ reflection：某次搜索任务的反思，只影响当次搜索的深度
 citation verify：某条搜索结果的溯源效验
 ```
 
+### 4. 使用的模型限制
++ 当前deepsearch服务**仅支持非思考模式**模型，假如使用思考模型，会在部分节点返回报错，支持思考模型已在后续需求规划表中，后续会支持。当前如果在日志中看过\<think\>相关字段，则说明是思考模型，deepsearch会运行失败
++ 由于当前deepsearch服务内的各项节点大量使用了function_call，所以不支持function_call的模型，无法使用deepsearch服务。
+
+
 ## 四、搜索引擎相关错误
 ### 1. 引擎直接访问失败
 日志中存在ERROR错误，显示 Search request failed 等信息，则表示配置的搜索引擎有问题，访问失败。
@@ -110,6 +115,12 @@ citation verify：某条搜索结果的溯源效验
 - 如果只是某一段时间的search_results都为空，则可能该时间段的搜索引擎服务不可用了
 - 如果只是某几条 search_results 空，则可能是对应query搜索不出结果，几乎没有什么影响
 
+## 五、服务相关错误
+### 1. 部署限制
+当前deepsearch服务支持分布式部署，同时限制单机单进程。如果想在单机部署多实例，也请使用redis模式进行部署。
+### 2. 调用限制
+除HITL/终止等针对同一个任务的场景外，每次调用deepsearch SDK的run接口使用服务时，需要传入不同的conversation_id，不允许使用相同conversation_id二次传入。
 
-## 五、附录
-包含公共类型错误、业务节点的相关错误码信息：[详细错误码链接](https://gitcode.com/openJiuwen/deepsearch/blob/dev/jiuwen_deepsearch/common/status_code.py)
+
+## 六、附录
+包含公共类型错误、业务节点的相关错误码信息：[详细错误码链接](https://gitcode.com/openJiuwen/deepsearch/blob/dev/openjiuwen_deepsearch/common/status_code.py)

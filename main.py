@@ -7,12 +7,12 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from jiuwen_deepsearch.config.config import Config
-from jiuwen_deepsearch.config.method import ExecutionMethod
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.utils.debug_utils.result_exporter import ResultExporter
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import parse_endnode_content
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.config.method import ExecutionMethod
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.utils.debug_utils.result_exporter import ResultExporter
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 LogManager.init(
     log_dir="./output/logs",
@@ -143,7 +143,7 @@ if __name__ == "__main__":
         --is_template (include this flag if the input file is already a template)
     """
     parser = argparse.ArgumentParser(description="Run deepsearch workflow")
-    parser.add_argument("query", nargs="*", default="AI手机研究报告", help="The query to process")
+    parser.add_argument("--query", nargs="*", default="AI手机研究报告", help="The query to process")
     parser.add_argument("--mode", choices=["query", "template", "all"], default="query",
                         help="Operation mode: query, template or all")
     parser.add_argument("--search_mode", choices=["research"], default="research", help="must be research")
@@ -153,14 +153,20 @@ if __name__ == "__main__":
                         help="Base64 encoded report template content for research mode(optional)")
     parser.add_argument("--file_path", type=str, default="", help="样例报告or模板文件路径")
     parser.add_argument("--is_template", action="store_true", help="Indicates whether the input file is a template")
+
+    # 添加llm配置参数
     parser.add_argument("--llm_model_name", type=str, required=True, help="llm 模型名称")
     parser.add_argument("--llm_model_type", type=str, required=True, help="llm 模型类型，openai or siliconflow")
     parser.add_argument("--llm_base_url", type=str, required=True, help="llm 模型服务地址")
     parser.add_argument("--llm_api_key", type=str, required=True, help="llm 模型密钥")
+
+    # 添加搜索引擎配置参数
     parser.add_argument("--web_search_engine_name", type=str, required=True, help="web 搜索引擎名称, tavily or google")
     parser.add_argument("--web_search_api_key", type=str, required=True, help="web 搜索引擎密钥")
     parser.add_argument("--web_search_url", type=str, required=True, help="web 搜索引擎服务地址")
     parser.add_argument("--max_web_search_results", type=int, default=5, help="web 搜索单次请求返回结果数量")
+
+    # 添加SSL校验和证书参数
     parser.add_argument("--llm_ssl_verify", action="store_true", help="开启 LLM SSL 校验")
     parser.add_argument("--llm_ssl_cert", type=str, default="", help="LLM SSL 证书")
     parser.add_argument("--tool_ssl_verify", action="store_true", help="开启 Tool SSL 校验")
@@ -181,10 +187,15 @@ if __name__ == "__main__":
     os.environ["TOOL_SSL_CERT"] = args.tool_ssl_cert
 
     current_agent_config = Config().agent_config.model_dump()
-    current_agent_config["llm_config"]["model_name"] = args.llm_model_name
-    current_agent_config["llm_config"]["model_type"] = args.llm_model_type
-    current_agent_config["llm_config"]["base_url"] = args.llm_base_url
-    current_agent_config["llm_config"]["api_key"] = bytearray(args.llm_api_key, encoding="utf-8")
+
+    # 解析llm配置
+    current_agent_config["llm_config"]["general"] = {}
+    current_agent_config["llm_config"]["general"]["model_name"] = args.llm_model_name
+    current_agent_config["llm_config"]["general"]["model_type"] = args.llm_model_type
+    current_agent_config["llm_config"]["general"]["base_url"] = args.llm_base_url
+    current_agent_config["llm_config"]["general"]["api_key"] = bytearray(args.llm_api_key, encoding="utf-8")
+
+    # 解析搜索引擎配置
     current_agent_config["web_search_engine_config"]["search_engine_name"] = args.web_search_engine_name
     current_agent_config["web_search_engine_config"]["search_api_key"] = bytearray(args.web_search_api_key,
                                                                                    encoding="utf-8")
@@ -192,13 +203,14 @@ if __name__ == "__main__":
     current_agent_config["web_search_engine_config"]["max_web_search_results"] = args.max_web_search_results
 
     current_agent_config["workflow_human_in_the_loop"] = False
+    current_agent_config["search_mode"] = args.search_mode
     if args.execution_method.strip() == ExecutionMethod.DEPENDENCY_DRIVING.value:
         current_agent_config["execution_method"] = ExecutionMethod.DEPENDENCY_DRIVING.value
     else:
         current_agent_config["execution_method"] = ExecutionMethod.PARALLEL.value
 
     if args.mode == "query":
-        if not args.query or args.search_mode not in ["research"]:
+        if not args.query or args.search_mode not in ["research", "search"]:
             parser.print_help()
         else:
             asyncio.run(run_jiuwen_workflow(joined_query, current_agent_config, args.report_template))

@@ -1,6 +1,6 @@
 import logging
 
-from jiuwen_deepsearch.algorithm.source_trace.add_source import (
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import (
     SourceReferenceProcessor,
     add_source_references,
     generate_source_datas,

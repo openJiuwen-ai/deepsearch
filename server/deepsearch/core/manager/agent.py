@@ -5,9 +5,10 @@ import os
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
+from openjiuwen.core.session.checkpointer import CheckpointerFactory
 from sqlalchemy.orm import Session
 
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 from server.core.database import get_db
 from server.core.manager.model_manager.utils import SecurityUtils
 from server.deepsearch.common.exception.exceptions import (
@@ -32,7 +33,8 @@ class DeepSearchAgentManager:
 
     def __init__(self, agent_factory: Optional[AgentFactory] = None):
         self._agent_factory = agent_factory or AgentFactory()
-        # 缓存格式: {agent_key: agent_instance}
+        # 缓存格式: {search_mode:execution_method: agent_instance}
+        # Agent 本身为工作流定义容器，可跨会话复用。
         self._agent_cache: Dict[str, Any] = {}
         self._security_utils = SecurityUtils()
 
@@ -63,27 +65,34 @@ class DeepSearchAgentManager:
         Returns:
             Agent 实例
         """
-        agent_key = self._generate_agent_key(request.space_id, request.conversation_id)
-
-        # 尝试从缓存命中
-        if agent_key in self._agent_cache:
-            cached_agent = self._agent_cache[agent_key]
-            return cached_agent
-
-        # 构建完整配置并创建新实例
         full_config = self.build_agent_config(request, db)
+        execution_method = full_config.get("execution_method", "parallel")
+        search_mode = full_config.get("search_mode", "research")
+        cache_key = f"{search_mode}:{execution_method}"
+
+        # 按搜索模式+执行方式缓存 agent，避免跨模式误复用
+        if cache_key in self._agent_cache:
+            return self._agent_cache[cache_key]
+
         agent = self._agent_factory.create_agent(full_config)
 
-        # 更新缓存
-        self._agent_cache[agent_key] = agent
+        self._agent_cache[cache_key] = agent
         return agent
 
-    def _cleanup_session_cache(self, space_id: str, conversation_id: str):
-        """清理指定会话的缓存"""
-        agent_key = self._generate_agent_key(space_id, conversation_id)
-        if agent_key in self._agent_cache:
-            del self._agent_cache[agent_key]
-            logger.info("Cleaned up agent cache for session: %s_%s", space_id, conversation_id)
+    async def cleanup_session_cache(self, space_id: str, conversation_id: str):
+        """清理会话状态（由 checkpointer 管理），agent 缓存不按会话删除。"""
+        del space_id  # keep signature compatible with existing caller
+        try:
+            checkpointer = CheckpointerFactory.get_checkpointer()
+            if checkpointer:
+                # conversation_id 即 openjiuwen 的 session_id
+                # release 内部会清理 workflow/agent 相关状态。
+                release_result = checkpointer.release(conversation_id)
+                if hasattr(release_result, "__await__"):
+                    await release_result
+                logger.info("Requested checkpointer release for session: %s", conversation_id)
+        except Exception as e:
+            logger.warning("Failed to release checkpointer session %s: %s", conversation_id, str(e))
 
     def build_agent_config(self, request: DeepSearchRequest, db: Session):
         """构建完整的 Agent 配置字典"""
@@ -103,13 +112,14 @@ class DeepSearchAgentManager:
             has_template = True
 
         res = {
+            "search_mode": request.search_mode,
             "execute_mode": "commercial",
-            "execution_method": "parallel",
+            "execution_method": request.execution_method,
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,
             "outliner_max_section_num": request.outliner_max_section_num,
             "source_tracer_research_trace_source_switch": request.source_tracer_research_trace_source_switch,
             "info_collector_search_method": request.info_collector_search_method,
-            "llm_config": llm_config,
+            "llm_config": dict(general=llm_config) if "model_name" in llm_config else llm_config,
             "has_template": has_template
         }
         if request.web_search_config:
@@ -118,9 +128,6 @@ class DeepSearchAgentManager:
             res["local_search_engine_config"] = self._load_local_search_config(space_id, request.local_search_config,
                                                                                db)
         return res
-
-    def _generate_agent_key(self, space_id: str, conversation_id: str) -> str:
-        return f"{space_id}_{conversation_id}"
 
     def _load_web_search_config(self, space_id: str, web_search_config: WebSearchConfig, db: Session) -> Dict[str, Any]:
         try:

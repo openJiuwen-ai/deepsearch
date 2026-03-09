@@ -1,7 +1,4 @@
-本指南介绍在 MacOS 系统采用本地方式安装 DeepSearch。本地高级安装提供两种方法：
-
-* **方法一：使用一键安装部署脚本**：自动完成大部分安装和配置工作，简化安装流程，适合快速部署。
-* **方法二：全部手动安装**：需要手动安装和配置所有依赖服务，适合需要灵活调整配置的开发者。
+本指南介绍在 MacOS 系统采用本地方式安装 DeepSearch。
 
 ## 一、环境准备
 
@@ -20,16 +17,6 @@
   * MySQL 8.0及以上
 
 ## 二、安装方法
-
-### 方法一：使用一键安装部署脚本
-
-一键安装脚本可以自动完成基础工具检查、代码拉取、环境配置和服务启动等步骤，大幅简化安装流程。
-
-该功能正在测试中，将在后续版本推出，敬请期待。
-
-### 方法二：全部手动安装
-
-> **注意**：此方法需要手动安装所有依赖服务，步骤复杂，不推荐使用。建议优先使用docker安装或方法一。
 
 进行正式安装前需先完成依赖的安装，再执行源码获取和安装等后续步骤。
 #### 1. 安装依赖
@@ -187,8 +174,20 @@
    | **DEEPSEARCH_DB_NAME**                | mysql数据库名                                                               | `openjiuwen_deepsearch`                                                         |
    | **SQLITE_DB_PATH**                    | sqlite数据库的保存路径                                                       | `data/databases`                                                         |
    | **DEEPSEARCH_SQLITE_DB**              | sqlite数据库的保存文件名                                                     | `agent.db`                                                         |
+   | **CHECKPOINTER_TYPE**                 | Checkpointer类型，可选：`in_memory`（开发测试）/ `persistence`（单机生产）/ `redis`（分布式生产） | `in_memory`                                                         |
+   | **CHECKPOINTER_DB_TYPE**              | Persistence模式的数据库类型，可选：`sqlite` / `shelve`（仅 CHECKPOINTER_TYPE=persistence 时需要） | `sqlite`                                                         |
+   | **CHECKPOINTER_DB_PATH**               | Persistence模式的数据库路径（仅 CHECKPOINTER_TYPE=persistence 时需要） | `data/databases/checkpointer.db`                                                         |
+   | **REDIS_URL**                         | Redis连接URL（仅 CHECKPOINTER_TYPE=redis 时需要） | `redis://localhost:6379`                                                         |
+   | **REDIS_CLUSTER_MODE**                | 是否启用Redis Cluster模式（仅 CHECKPOINTER_TYPE=redis 时需要） | `false`                                                         |
+   | **REDIS_TTL**                         | Redis中会话状态的默认过期时间（仅 CHECKPOINTER_TYPE=redis 时需要） | `7200`                                                         |
+   | **REDIS_REFRESH_ON_READ**             | 每次读取会话状态时是否刷新TTL（仅 CHECKPOINTER_TYPE=redis 时需要） | `true`                                                         |
 
-* 打开一个 “终端”，在源码根目录下，运行以下命令启动后端服务，并耐心等待：
+  > **说明**：Checkpointer 用于管理 Agent 工作流的会话状态，支持工作流的暂停、恢复和状态持久化。
+  > - `in_memory` 模式：无需额外配置，适用于开发测试环境，不支持分布式部署
+  > - `persistence` 模式：需要确保数据库目录有写权限，适用于单机生产环境
+  > - `redis` 模式：需要先安装并启动 Redis 服务，适用于分布式生产环境
+
+* 打开一个 "终端"，在源码根目录下，运行以下命令启动后端服务，并耐心等待：
    
   ```bash
   uv venv

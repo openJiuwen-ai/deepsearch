@@ -1,8 +1,8 @@
-# jiuwen_deepsearch.framework.jiuwen.agent.base_node
+# openjiuwen_deepsearch.framework.openjiuwen.agent.base_node
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.base_node.BaseNode
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.base_node.BaseNode
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.base_node.BaseNode()
+class openjiuwen_deepsearch.framework.openjiuwen.agent.base_node.BaseNode()
 ```
 **BaseNode** 是节点封装类，继承自 `WorkflowComponent` 与 `ComponentExecutable`。它提供统一的节点接口，但不会自动编排 `_pre_handle` / `_post_handle`。
 
@@ -34,8 +34,9 @@ async invoke(inputs: Input, runtime: Runtime, context: Context) -> Output
 - **Output**：节点输出。
 
 **样例**：
+
 ```python
->>> from jiuwen_deepsearch.framework.jiuwen.agent.base_node import BaseNode
+>>> from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 >>> from openjiuwen.core.graph.executable import Input, Output
 >>> from openjiuwen.core.runtime.runtime import Runtime
 >>> from openjiuwen.core.context_engine.base import Context

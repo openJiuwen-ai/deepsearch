@@ -1,6 +1,8 @@
-import pytest
 from unittest.mock import patch
-from jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors import (
+
+import pytest
+
+from openjiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors import (
     _need_preprocess_search_record,
     preprocess_search_record,
     _should_process_item,
@@ -18,7 +20,10 @@ from jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors import
     _build_datas_from_chunks,
     generate_origin_report_data
 )
-from jiuwen_deepsearch.utils.common_utils.text_utils import split_into_sentences
+from openjiuwen_deepsearch.utils.common_utils.text_utils import split_into_sentences
+
+
+MODULE_PATH = "openjiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors"
 
 
 class TestNeedPreprocessSearchRecord:
@@ -142,8 +147,8 @@ class TestIsDuplicateRecord:
 class TestShouldProcessItem:
     """Test cases for _should_process_item function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.has_required_fields')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.is_duplicate_record')
+    @patch(f'{MODULE_PATH}.has_required_fields')
+    @patch(f'{MODULE_PATH}.is_duplicate_record')
     def test_should_process_item_valid(self, mock_is_duplicate, mock_has_required_fields):
         """Test when item is valid and should be processed."""
         mock_has_required_fields.return_value = True
@@ -157,7 +162,7 @@ class TestShouldProcessItem:
         mock_has_required_fields.assert_called_once_with(item)
         mock_is_duplicate.assert_called_once_with(item, processed_list)
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.has_required_fields')
+    @patch(f'{MODULE_PATH}.has_required_fields')
     def test_should_process_item_not_dict(self, mock_has_required_fields):
         """Test when item is not a dict."""
         item = "not a dict"
@@ -166,8 +171,8 @@ class TestShouldProcessItem:
         assert result is False
         mock_has_required_fields.assert_not_called()
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.has_required_fields')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.is_duplicate_record')
+    @patch(f'{MODULE_PATH}.has_required_fields')
+    @patch(f'{MODULE_PATH}.is_duplicate_record')
     def test_should_process_item_missing_required_fields(self, mock_is_duplicate, mock_has_required_fields):
         """Test when item is missing required fields."""
         mock_has_required_fields.return_value = False
@@ -179,8 +184,8 @@ class TestShouldProcessItem:
         mock_has_required_fields.assert_called_once_with(item)
         mock_is_duplicate.assert_not_called()
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.has_required_fields')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.is_duplicate_record')
+    @patch(f'{MODULE_PATH}.has_required_fields')
+    @patch(f'{MODULE_PATH}.is_duplicate_record')
     def test_should_process_item_duplicate(self, mock_is_duplicate, mock_has_required_fields):
         """Test when item is a duplicate."""
         mock_has_required_fields.return_value = True
@@ -288,7 +293,7 @@ class TestHandleLongContent:
 class TestProcessSearchRecordList:
     """Test cases for process_search_record_list function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._should_process_item')
+    @patch(f'{MODULE_PATH}._should_process_item')
     def test_process_search_record_list_basic(self, mock_should_process):
         """Test basic functionality of processing search record list."""
         mock_should_process.return_value = True
@@ -308,7 +313,7 @@ class TestProcessSearchRecordList:
         assert result[1]["title"] == "test2"
         assert mock_should_process.call_count == 2
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._should_process_item')
+    @patch(f'{MODULE_PATH}._should_process_item')
     def test_process_search_record_list_skip_unprocessable(self, mock_should_process):
         """Test skipping unprocessable items."""
         mock_should_process.side_effect = [True, False, True]
@@ -316,7 +321,7 @@ class TestProcessSearchRecordList:
         items = [
             {"title": "test1", "url": "https://example1.com", "content": "content1"},
             {"title": "test2", "url": "https://example2.com",
-                "content": "content2"},  # Will be skipped
+             "content": "content2"},  # Will be skipped
             {"title": "test3", "url": "https://example3.com", "content": "content3"}
         ]
         max_content_len = 100
@@ -329,14 +334,14 @@ class TestProcessSearchRecordList:
         assert result[0]["title"] == "test1"
         assert result[1]["title"] == "test3"
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._should_process_item')
+    @patch(f'{MODULE_PATH}._should_process_item')
     def test_process_search_record_list_with_long_content(self, mock_should_process):
         """Test processing items with long content that needs chunking."""
         mock_should_process.return_value = True
 
         items = [
             {"title": "test1", "url": "https://example1.com",
-                "content": "This is a very long content that will be chunked"}
+             "content": "This is a very long content that will be chunked"}
         ]
         max_content_len = 10
 
@@ -351,14 +356,14 @@ class TestProcessSearchRecordList:
 class TestPreprocessSearchRecord:
     """Test cases for preprocess_search_record function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._need_preprocess_search_record')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.process_search_record_list')
+    @patch(f'{MODULE_PATH}._need_preprocess_search_record')
+    @patch(f'{MODULE_PATH}.process_search_record_list')
     def test_preprocess_search_record_with_preprocessing_needed(self, mock_process_list, mock_need_preprocess):
         """Test when preprocessing is needed."""
         mock_need_preprocess.return_value = True
         mock_process_list.return_value = [
             {"title": "processed", "url": "https://example.com",
-                "content": "processed content", "index": 0}
+             "content": "processed content", "index": 0}
         ]
 
         search_record = {
@@ -375,7 +380,7 @@ class TestPreprocessSearchRecord:
         mock_process_list.assert_called_once()
         mock_need_preprocess.assert_called_once_with(search_record)
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._need_preprocess_search_record')
+    @patch(f'{MODULE_PATH}._need_preprocess_search_record')
     def test_preprocess_search_record_no_preprocessing_needed(self, mock_need_preprocess):
         """Test when preprocessing is not needed."""
         mock_need_preprocess.return_value = False
@@ -388,8 +393,8 @@ class TestPreprocessSearchRecord:
         assert result == {}
         mock_need_preprocess.assert_called_once_with(search_record)
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._need_preprocess_search_record')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors.process_search_record_list')
+    @patch(f'{MODULE_PATH}._need_preprocess_search_record')
+    @patch(f'{MODULE_PATH}.process_search_record_list')
     def test_preprocess_search_record_non_list_values_unchanged(self, mock_process_list, mock_need_preprocess):
         """Test that non-list values are not processed."""
         mock_need_preprocess.return_value = True
@@ -480,7 +485,7 @@ Method content.
 class TestPreprocessReport:
     """Test cases for preprocess_report function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._remove_reference_section')
+    @patch(f'{MODULE_PATH}._remove_reference_section')
     def test_preprocess_report_basic(self, mock_remove_ref):
         """Test basic functionality of preprocess_report."""
         mock_remove_ref.return_value = ("Reference Articles", "cleaned report")
@@ -491,7 +496,7 @@ class TestPreprocessReport:
         assert result == ("Reference Articles", "cleaned report")
         mock_remove_ref.assert_called_once_with("original report")
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._remove_reference_section')
+    @patch(f'{MODULE_PATH}._remove_reference_section')
     def test_preprocess_report_exception_handling(self, mock_remove_ref):
         """Test exception handling in preprocess_report."""
         mock_remove_ref.side_effect = Exception("Test error")
@@ -583,10 +588,10 @@ class TestBuildCitationMapping:
     def test_build_citation_mapping_basic(self):
         """Test basic functionality of building citation mapping."""
         classified_contents = [
-                {"index": 1, "title": "Title 1", "url": "https://example1.com",
-                    "original_content": "Content 1"},
-                {"index": 2, "title": "Title 2", "url": "https://example2.com",
-                    "original_content": "Content 2"}
+            {"index": 1, "title": "Title 1", "url": "https://example1.com",
+             "original_content": "Content 1"},
+            {"index": 2, "title": "Title 2", "url": "https://example2.com",
+             "original_content": "Content 2"}
         ]
 
         result = _build_citation_mapping(classified_contents)
@@ -601,10 +606,10 @@ class TestBuildCitationMapping:
     def test_build_citation_mapping_duplicate_index(self):
         """Test handling of duplicate indices in classified contents."""
         classified_contents = [
-                {"index": 1, "title": "Title 1", "url": "https://example1.com",
-                    "original_content": "Content 1"},
-                {"index": 1, "title": "Title 1 again",
-                    "url": "https://example1.com", "original_content": "Content 2"}
+            {"index": 1, "title": "Title 1", "url": "https://example1.com",
+             "original_content": "Content 1"},
+            {"index": 1, "title": "Title 1 again",
+             "url": "https://example1.com", "original_content": "Content 2"}
         ]
 
         result = _build_citation_mapping(classified_contents)
@@ -617,10 +622,10 @@ class TestBuildCitationMapping:
     def test_build_citation_mapping_zero_index_ignored(self):
         """Test that indices with value 0 are ignored."""
         classified_contents = [
-                {"index": 0, "title": "Title 0", "url": "https://example0.com",
-                    "original_content": "Content 0"},
-                {"index": 1, "title": "Title 1", "url": "https://example1.com",
-                    "original_content": "Content 1"}
+            {"index": 0, "title": "Title 0", "url": "https://example0.com",
+             "original_content": "Content 0"},
+            {"index": 1, "title": "Title 1", "url": "https://example1.com",
+             "original_content": "Content 1"}
         ]
 
         result = _build_citation_mapping(classified_contents)
@@ -645,7 +650,7 @@ class TestBuildDatasFromChunks:
         """Test basic functionality of building datas from chunks."""
         citation_chunks = [
             {"citation_num": 1, "chunk": "Sample chunk text",
-                "_sentence_position": 100}
+             "_sentence_position": 100}
         ]
         citation_mapping = {
             1: {"title": "Mapped Title", "url": "https://mapped.com", "content": "Mapped content"}
@@ -665,9 +670,9 @@ class TestBuildDatasFromChunks:
         """Test handling of chunks without corresponding mapping."""
         citation_chunks = [
             {"citation_num": 1, "chunk": "Sample chunk text",
-                "_sentence_position": 100},
+             "_sentence_position": 100},
             {"citation_num": 2, "chunk": "Another chunk",
-                "_sentence_position": 200}  # No mapping for 2
+             "_sentence_position": 200}  # No mapping for 2
         ]
         citation_mapping = {
             1: {"title": "Mapped Title", "url": "https://mapped.com", "content": "Mapped content"}
@@ -693,7 +698,7 @@ class TestBuildDatasFromChunks:
 class TestProcessCitationMatch:
     """Test cases for _process_citation_match function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._get_citation_chunk')
+    @patch(f'{MODULE_PATH}._get_citation_chunk')
     def test_process_citation_match_basic(self, mock_get_citation_chunk):
         """Test basic functionality of processing citation match."""
         import re
@@ -721,7 +726,7 @@ class TestProcessCitationMatch:
         assert length_diff == len(replacement_text) - len(match.group(0))
         mock_get_citation_chunk.assert_called_once()
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._get_citation_chunk')
+    @patch(f'{MODULE_PATH}._get_citation_chunk')
     def test_process_citation_match_no_mapping(self, mock_get_citation_chunk):
         """Test processing citation match when no mapping exists."""
         import re
@@ -746,7 +751,7 @@ class TestProcessCitationMatch:
         assert chunk_info["chunk"] == "Sample chunk text"
         assert length_diff == len(replacement_text) - len(match.group(0))
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._get_citation_chunk')
+    @patch(f'{MODULE_PATH}._get_citation_chunk')
     def test_process_citation_match_empty_mapping(self, mock_get_citation_chunk):
         """Test processing citation match when mapping is empty."""
         import re
@@ -775,9 +780,10 @@ class TestProcessCitationMatch:
 class TestGenerateOriginReportData:
     """Test cases for generate_origin_report_data function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._build_citation_mapping')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._replace_citations_with_custom_mapping')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._build_datas_from_chunks')
+    @patch(f'{MODULE_PATH}._build_citation_mapping')
+    @patch(
+        f'{MODULE_PATH}._replace_citations_with_custom_mapping')
+    @patch(f'{MODULE_PATH}._build_datas_from_chunks')
     def test_generate_origin_report_data_basic(self, mock_build_datas, mock_replace_citations, mock_build_mapping):
         """Test basic functionality of generating origin report data."""
         mock_build_mapping.return_value = {
@@ -794,7 +800,7 @@ class TestGenerateOriginReportData:
         report = "Original report with [citation: 1] reference."
         classified_contents = [
             {"index": 1, "title": "Title", "url": "https://example.com",
-                "original_content": "Content"}
+             "original_content": "Content"}
         ]
 
         result = generate_origin_report_data(report, classified_contents)
@@ -802,13 +808,13 @@ class TestGenerateOriginReportData:
         assert "origin_report_data" in result
         assert "modified_report" in result
         assert result[
-            "modified_report"] == "Modified report with [source_tracer_result][Title](https://example.com)"
+                   "modified_report"] == "Modified report with [source_tracer_result][Title](https://example.com)"
         assert len(result["origin_report_data"]) == 1
         mock_build_mapping.assert_called_once_with(classified_contents)
         mock_replace_citations.assert_called_once()
         mock_build_datas.assert_called_once()
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors._build_citation_mapping')
+    @patch(f'{MODULE_PATH}._build_citation_mapping')
     def test_generate_origin_report_data_exception_handling(self, mock_build_mapping):
         """Test exception handling in generate_origin_report_data."""
         mock_build_mapping.side_effect = Exception("Test error")
@@ -816,7 +822,7 @@ class TestGenerateOriginReportData:
         report = "Original report with [citation: 1] reference."
         classified_contents = [
             [{"index": 1, "title": "Title", "url": "https://example.com",
-                "original_content": "Content"}]
+              "original_content": "Content"}]
         ]
 
         # The function should not catch exceptions, so we expect it to propagate

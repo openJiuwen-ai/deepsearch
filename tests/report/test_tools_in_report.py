@@ -2,9 +2,9 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.report.report import Reporter, _deduplicate_and_renumber_ref, \
+from openjiuwen_deepsearch.algorithm.report.report import Reporter, _deduplicate_and_renumber_ref, \
     _replace_citations_and_classified_index, _get_classified_infos
-from jiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
+from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 
 
 @pytest.mark.parametrize("input_str, expected", [
@@ -143,8 +143,8 @@ def test_add_references(content, refs, lang, expected):
 
 
 @pytest.mark.asyncio
-@patch("jiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
-@patch("jiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 async def test_generate_with_llm_returns_content(mock_llm_cls, mock_ainvoke_llm):
     # 准备 mock
     # mock ainvoke_llm_with_stats 返回值
@@ -174,7 +174,7 @@ async def test_generate_with_llm_returns_content(mock_llm_cls, mock_ainvoke_llm)
     assert any(msg["role"] == "user" for msg in kwargs["messages"])
 
 
-@patch("jiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 def test_set_context_variables_none(mock_llm_cls):
     reporter = Reporter("basic")
     result = reporter._set_context_variables(None)
@@ -182,7 +182,7 @@ def test_set_context_variables_none(mock_llm_cls):
     assert reporter.gen_report_context is None
 
 
-@patch("jiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 def test_set_context_variables_dict(mock_llm_cls):
     reporter = Reporter("basic")
     ctx = {"foo": "bar"}

@@ -1,8 +1,8 @@
 import logging
 
-from openjiuwen.core.workflow.base import Workflow
+from openjiuwen.core.workflow.workflow import Workflow
 
-from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
+from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
     build_editor_team_workflow
 
 logger = logging.getLogger(__name__)

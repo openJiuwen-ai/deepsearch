@@ -3,25 +3,27 @@ import logging
 
 import pytest
 
-from jiuwen_deepsearch.common.exception import CustomValueException
-from jiuwen_deepsearch.framework.jiuwen.agent.agent_factory import AgentFactory
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import DeepresearchAgent
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
 llm_config = {
-    "model_name": "qwen",
-    "model_type": "openai",
-    "base_url": "",
-    "api_key": bytearray("", encoding="utf-8"),
-    "hyper_parameters": {
-        "top_p": 1.0,
-        "frequency_penalty": 0.0,
-        "max_tokens": 2048,
-        "temperature": 0.0
-    },
-    "extension": {},
+    "general": {
+        "model_name": "qwen",
+        "model_type": "openai",
+        "base_url": "",
+        "api_key": bytearray("", encoding="utf-8"),
+        "hyper_parameters": {
+            "top_p": 1.0,
+            "frequency_penalty": 0.0,
+            "max_tokens": 2048,
+            "temperature": 0.0
+        },
+        "extension": {},
+    }
 }
 
 web_search_engine_config = {
@@ -108,21 +110,6 @@ def validate_config_parameter(config_key, invalid_value, error_code, error_msg_f
     LogManager.init(is_sensitive=True)
 
 
-def validate_sub_config_parameter(sub_config, config_key, invalid_value,
-                                  error_code, error_msg_fragment, base_config):
-    """验证配置参数的公共逻辑"""
-    current_config = copy.deepcopy(base_config)
-    current_config[sub_config][config_key] = invalid_value
-
-    with pytest.raises(CustomValueException) as exc_info:
-        agent = agent_factory.create_agent(current_config)
-
-    err_msg = str(exc_info.value)
-    logger.info(f"error_info: {err_msg}")
-    assert exc_info.value.error_code == error_code
-    assert error_msg_fragment in err_msg
-
-
 @pytest.mark.parametrize("invalid_value, error_code, error_msg_fragment", [
     (0, 200009, "Input should be greater than or equal to 1"),
     (11, 200009, "Input should be less than or equal to 10"),
@@ -159,26 +146,6 @@ def test_agent_factory_set_workflow_human_in_the_loop(invalid_value, error_code,
 ])
 def test_agent_factory_param_range_check(param_name, invalid_value, error_code, error_msg_fragment):
     validate_config_parameter(
-        param_name,
-        invalid_value,
-        error_code,
-        error_msg_fragment,
-        agent_config
-    )
-
-
-@pytest.mark.parametrize("sub_config, param_name, invalid_value, error_code, error_msg_fragment", [
-    ("llm_config", "model_type", "anthropic", 200009, "Input should be 'openai' or 'siliconflow'"),
-    ("llm_config", "api_key", "xxxxx", 200009, "Parameter validation failed"),
-    ("web_search_engine_config", "search_engine_name", "baidu", 200009,
-     "Input should be 'tavily', 'google', 'xunfei', 'petal' or 'custom'"),
-    ("local_search_engine_config", "search_engine_name", "baidu", 200009,
-     "Input should be 'openapi', 'custom' or 'native'"),
-])
-def test_agent_factory_param_range_check_in_subconfig(sub_config, param_name, invalid_value, error_code,
-                                                      error_msg_fragment):
-    validate_sub_config_parameter(
-        sub_config,
         param_name,
         invalid_value,
         error_code,

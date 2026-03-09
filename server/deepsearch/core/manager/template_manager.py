@@ -9,7 +9,7 @@ from typing import Dict, Any
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from jiuwen_deepsearch.algorithm.report_template.template_generator import TemplateGenerator
+from openjiuwen_deepsearch.algorithm.report_template.template_generator import TemplateGenerator
 from server.core.database import milliseconds
 from server.deepsearch.common.exception.exceptions import (
     ReportTemplateBasicException,
@@ -79,11 +79,18 @@ class ReportTemplateManager:
         try:
             self._validate_template_name(params.template_name)
 
-            api_key = params.llm_config.get("api_key", "")
-            if isinstance(api_key, str):
-                params.llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
+            if "general" in params.llm_config:
+                for _, llm_config in params.llm_config.items():
+                    api_key = llm_config.get("api_key", "")
+                    if isinstance(api_key, str):
+                        llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
+            else:
+                api_key = params.llm_config.get("api_key", "")
+                if isinstance(api_key, str):
+                    params.llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
+
             llm_config = params.llm_config
-            agent_config_dict = {"llm_config": llm_config}
+            agent_config_dict = {"llm_config": dict(general=llm_config) if "model_name" in llm_config else llm_config}
 
             result = await TemplateGenerator.generate_template(
                 file_name=params.file_name,

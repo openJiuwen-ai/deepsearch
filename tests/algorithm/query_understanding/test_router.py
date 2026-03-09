@@ -1,7 +1,7 @@
 import pytest
 import json
 from unittest.mock import Mock, AsyncMock, patch
-from jiuwen_deepsearch.algorithm.query_understanding.router import classify_query
+from openjiuwen_deepsearch.algorithm.query_understanding.router import classify_query
 
 # 定义测试数据
 test_data = {
@@ -51,10 +51,10 @@ class TestRouter:
         }
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.router.llm_context',
+                'openjiuwen_deepsearch.algorithm.query_understanding.router.llm_context',
                 return_value=setup_router
         ), patch(
-                'jiuwen_deepsearch.utils.common_utils.llm_utils.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.utils.common_utils.llm_utils.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 return_value=mock_response
         ):
@@ -73,10 +73,10 @@ class TestRouter:
         }
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.router.llm_context',
+                'openjiuwen_deepsearch.algorithm.query_understanding.router.llm_context',
                 return_value=setup_router
         ), patch(
-                'jiuwen_deepsearch.utils.common_utils.llm_utils.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.utils.common_utils.llm_utils.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 side_effect=Exception("TestMessage")
         ):
@@ -95,10 +95,10 @@ class TestRouter:
         }
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.router.llm_context',
+                'openjiuwen_deepsearch.algorithm.query_understanding.router.llm_context',
                 return_value=setup_router
         ), patch(
-                'jiuwen_deepsearch.utils.common_utils.llm_utils.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.utils.common_utils.llm_utils.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 return_value=mock_error_response
         ):

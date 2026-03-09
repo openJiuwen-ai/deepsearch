@@ -1,8 +1,8 @@
-# jiuwen_deepsearch.framework.jiuwen.agent.search_context
+# openjiuwen_deepsearch.framework.openjiuwen.agent.search_context
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Message
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Message
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Message(name: str = "", role: str, content: str)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Message(name: str = "", role: str, content: str)
 ```
 **Message** 是对话消息模型。
 
@@ -13,9 +13,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Message(name: str 
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.StepType
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.StepType
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.StepType(str, Enum)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.StepType(str, Enum)
 ```
 **StepType** 是步骤类型枚举。
 
@@ -24,9 +24,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.StepType(str, Enum
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.RetrievalQuery
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.RetrievalQuery
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.RetrievalQuery(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.RetrievalQuery(...)
 ```
 **RetrievalQuery** 是具体步骤Step中每个query的检索信息
 
@@ -37,9 +37,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.RetrievalQuery(...
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Step
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Step
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Step(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Step(...)
 ```
 **Step** 是章节计划中的具体步骤。
 
@@ -57,9 +57,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Step(...)
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Plan
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Plan
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Plan(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Plan(...)
 ```
 **Plan** 是章节计划模型。
 
@@ -74,9 +74,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Plan(...)
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Section
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Section
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Section(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Section(...)
 ```
 **Section** 是章节模型。
 
@@ -91,9 +91,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Section(...)
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Outline
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Outline
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Outline(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Outline(...)
 ```
 **Outline** 是大纲模型。
 
@@ -106,9 +106,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Outline(...)
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReport
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReport
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReport(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReport(...)
 ```
 **SubReport** 是子报告模型。
 
@@ -121,9 +121,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReport(...)
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReportContent
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReportContent
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReportContent(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReportContent(...)
 ```
 **SubReportContent** 是子报告内容模型。
 
@@ -135,9 +135,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SubReportContent(.
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Report
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Report
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Report(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Report(...)
 ```
 **Report** 是总报告模型。
 
@@ -154,9 +154,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.Report(...)
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.FinalResult
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.FinalResult
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.FinalResult(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.FinalResult(...)
 ```
 **FinalResult** 是工作流最终输出模型。
 
@@ -168,9 +168,9 @@ class jiuwen_deepsearch.framework.jiuwen.agent.search_context.FinalResult(...)
 
 ---
 
-## class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SearchContext
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchContext
 ```python
-class jiuwen_deepsearch.framework.jiuwen.agent.search_context.SearchContext(...)
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchContext(...)
 ```
 **SearchContext** 是工作流运行时状态模型。
 

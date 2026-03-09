@@ -1,10 +1,10 @@
 import pytest
 from unittest.mock import patch
-from jiuwen_deepsearch.algorithm.research_collector.tool_log import \
+from openjiuwen_deepsearch.algorithm.research_collector.tool_log import \
     is_sensitive_key, get_logged_tool, tool_invoke_log, tool_invoke_log_async
-from jiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.exception import CustomValueException
 
-module_path = "jiuwen_deepsearch.algorithm.research_collector.tool_log"
+MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.tool_log"
 
 
 class TestIsSensitiveKey:
@@ -142,9 +142,9 @@ class TestGetLoggedTool:
         LoggedTool = get_logged_tool(self.BaseTool)
         tool_instance = LoggedTool()
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.side_effect = [100.0, 100.5]  # start_time, end_time
             mock_sensitive.return_value = False
 
@@ -158,9 +158,9 @@ class TestGetLoggedTool:
         LoggedTool = get_logged_tool(self.BaseTool)
         tool_instance = LoggedTool()
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.side_effect = [100.0, 100.5]
             mock_sensitive.return_value = True
 
@@ -183,9 +183,9 @@ class TestGetLoggedTool:
         LoggedTool = get_logged_tool(FailingTool)
         tool_instance = LoggedTool()
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.return_value = 100.0
             mock_sensitive.return_value = False
 
@@ -208,9 +208,9 @@ class TestGetLoggedTool:
         LoggedTool = get_logged_tool(FailingTool)
         tool_instance = LoggedTool()
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.return_value = 100.0
             mock_sensitive.return_value = True
 
@@ -227,9 +227,9 @@ class TestGetLoggedTool:
         LoggedTool = get_logged_tool(self.BaseTool)
         tool_instance = LoggedTool()
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.side_effect = [100.0, 100.5]
             mock_sensitive.return_value = False
 
@@ -249,9 +249,9 @@ class TestGetLoggedTool:
         LoggedTool = get_logged_tool(AsyncFailingTool)
         tool_instance = LoggedTool()
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.return_value = 100.0
             mock_sensitive.return_value = False
 
@@ -275,9 +275,9 @@ class TestToolInvokeLog:
         def my_test_function(arg1, arg2, key1=None):
             return f"Result: {arg1}, {arg2}, {key1}"
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.side_effect = [100.0, 100.5]
             mock_sensitive.return_value = False
 
@@ -313,9 +313,9 @@ class TestToolInvokeLog:
         def sensitive_test_function(api_key, token, normal_arg):
             return "success"
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.side_effect = [100.0, 100.5]
             mock_sensitive.return_value = False
 
@@ -350,9 +350,9 @@ class TestToolInvokeLog:
         def different_name_function():
             return "test"
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.side_effect = [100.0, 100.5]
             mock_sensitive.return_value = False
 
@@ -377,9 +377,9 @@ class TestToolInvokeLogAsync:
         async def async_test_function(arg1, arg2, key1=None):
             return f"Async Result: {arg1}, {arg2}, {key1}"
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.side_effect = [100.0, 100.5]
             mock_sensitive.return_value = False
 
@@ -400,9 +400,9 @@ class TestToolInvokeLogAsync:
         async def async_test_function(arg1, arg2):
             return f"Async Result: {arg1}, {arg2}"
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.side_effect = [100.0, 100.5]
             mock_sensitive.return_value = True
 
@@ -424,9 +424,9 @@ class TestToolInvokeLogAsync:
         async def async_failing_function():
             raise ValueError("Async test error")
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.return_value = 100.0
             mock_sensitive.return_value = False
 
@@ -447,9 +447,9 @@ class TestToolInvokeLogAsync:
         async def async_failing_function():
             raise ValueError("Async test error")
 
-        with patch(f"{module_path}.time.time") as mock_time, \
-                patch(f"{module_path}.LogManager.is_sensitive") as mock_sensitive, \
-                patch(f"{module_path}.logger") as mock_logger:
+        with patch(f"{MODULE_PATH}.time.time") as mock_time, \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive") as mock_sensitive, \
+                patch(f"{MODULE_PATH}.logger") as mock_logger:
             mock_time.return_value = 100.0
             mock_sensitive.return_value = True
 

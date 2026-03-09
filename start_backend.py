@@ -11,7 +11,7 @@ openJiuwen-DeepSearch Server - 主入口
 
 import logging
 from server.main import main
-from jiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 LogManager.init(
     log_dir="./output/logs",

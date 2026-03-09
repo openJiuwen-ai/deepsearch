@@ -2,8 +2,8 @@ from unittest.mock import Mock, AsyncMock, patch
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerResult, create_plan_tool
-from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Plan, StepType
+from openjiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerResult, create_plan_tool
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, StepType
 
 # 定义测试数据
 test_data = {
@@ -29,7 +29,7 @@ plan_response = Plan(
     ]
 )
 # 定义模拟的 functioncall 响应
-tool_name = create_plan_tool(1).name
+tool_name = create_plan_tool(test_data, 'planner').card.name
 tool_call_id = '123'
 functioncall_response = {
     'content': '',
@@ -77,7 +77,7 @@ class TestPlanner:
 
     @pytest.fixture
     def setup_planner(self, mock_llm):
-        with patch('jiuwen_deepsearch.algorithm.query_understanding.planner.llm_context', return_value=mock_llm):
+        with patch('openjiuwen_deepsearch.algorithm.query_understanding.planner.llm_context', return_value=mock_llm):
             planner = Planner()
         return planner
 
@@ -91,7 +91,7 @@ class TestPlanner:
             error_msg='')
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 return_value=functioncall_response
         ):
@@ -110,7 +110,7 @@ class TestPlanner:
         )
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 side_effect=Exception("Test Exception")
         ):
@@ -129,7 +129,7 @@ class TestPlanner:
         )
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 side_effect=Exception("Test Exception")
         ):
@@ -148,7 +148,7 @@ class TestPlanner:
         )
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 side_effect=Exception("Test Exception")
         ):

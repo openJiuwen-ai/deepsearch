@@ -1,7 +1,7 @@
 import pytest
 
-from jiuwen_deepsearch.common.exception import CustomValueException
-from jiuwen_deepsearch.utils.common_utils.url_utils import (
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.utils.common_utils.url_utils import (
     fix_domain_path_merge,
     normalize_path,
     normalize_domain,

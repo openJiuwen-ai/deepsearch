@@ -9,7 +9,7 @@ import pytest
 import requests
 from pydantic import SecretStr
 
-from jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper import GoogleSearchAPIWrapper
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper import GoogleSearchAPIWrapper
 
 
 class TestGoogleSearchAPIWrapper:
@@ -33,8 +33,8 @@ class TestGoogleSearchAPIWrapper:
         assert self.wrapper.gl == "us"
         assert self.wrapper.hl == "en"
 
-    @patch('jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.requests.post')
-    @patch('jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.SslUtils.get_ssl_config')
+    @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.requests.post')
+    @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.SslUtils.get_ssl_config')
     def test_google_search_results_success(self, mock_ssl_config, mock_post):
         """测试同步搜索功能 - 成功情况"""
         # 模拟SSL配置
@@ -81,8 +81,8 @@ class TestGoogleSearchAPIWrapper:
         assert len(result["organic"]) == 1
         assert result["organic"][0]["title"] == "Test Result"
 
-    @patch('jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.requests.post')
-    @patch('jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.SslUtils.get_ssl_config')
+    @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.requests.post')
+    @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.SslUtils.get_ssl_config')
     def test_google_search_results_with_custom_type(self, mock_ssl_config, mock_post):
         """测试不同类型的搜索"""
         mock_ssl_config.return_value = (False, None)
@@ -107,7 +107,7 @@ class TestGoogleSearchAPIWrapper:
         call_args = mock_post.call_args
         assert call_args[1]['verify'] is False
 
-    @patch('jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.requests.post')
+    @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.requests.post')
     def test_google_search_results_with_exception(self, mock_post):
         """测试搜索时的异常处理"""
         mock_response = Mock()
@@ -118,7 +118,9 @@ class TestGoogleSearchAPIWrapper:
             self.wrapper.google_search_results("test query")
 
     @patch(
-        'jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.GoogleSearchAPIWrapper.google_search_results')
+        'openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.'
+        'GoogleSearchAPIWrapper.google_search_results'
+    )
     def test_results_method(self, mock_search_results):
         """测试results包装方法"""
         expected_result = {"organic": [{"title": "Test"}]}
@@ -140,7 +142,7 @@ class TestGoogleSearchAPIWrapper:
         assert result == expected_result
 
     @pytest.mark.asyncio
-    @patch('jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.SslUtils.get_ssl_config')
+    @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.SslUtils.get_ssl_config')
     async def test_async_google_search_results(self, mock_ssl_config):
         """测试异步搜索功能"""
         mock_ssl_config.return_value = (True, "/path/to/cert")
@@ -159,7 +161,7 @@ class TestGoogleSearchAPIWrapper:
         # 模拟post方法返回响应
         mock_client.post.return_value = mock_response
 
-        with patch('jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.httpx.AsyncClient',
+        with patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.httpx.AsyncClient',
                    return_value=mock_client):
             # 执行异步测试
             result = await self.wrapper.async_google_search_results(
@@ -194,7 +196,9 @@ class TestGoogleSearchAPIWrapper:
         """测试SSL验证为False的异步搜索"""
         # 模拟SSL配置返回False
         with patch(
-                'jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.SslUtils.get_ssl_config') as mock_ssl_config:
+                'openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.'
+                'SslUtils.get_ssl_config'
+        ) as mock_ssl_config:
             mock_ssl_config.return_value = (False, None)
 
             # 创建模拟的响应对象
@@ -207,8 +211,9 @@ class TestGoogleSearchAPIWrapper:
             mock_client.__aexit__.return_value = None
             mock_client.post.return_value = mock_response
 
-            with patch('jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.httpx.AsyncClient',
-                       return_value=mock_client):
+            with patch(
+                    'openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.httpx.AsyncClient',
+                    return_value=mock_client):
                 # 执行测试
                 result = await self.wrapper.async_google_search_results("test query")
 
@@ -221,7 +226,9 @@ class TestGoogleSearchAPIWrapper:
 
     @pytest.mark.asyncio
     @patch(
-        'jiuwen_deepsearch.framework.jiuwen.tools.Search_API.serper.api_wrapper.GoogleSearchAPIWrapper.async_google_search_results')
+        'openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.'
+        'GoogleSearchAPIWrapper.async_google_search_results'
+    )
     async def test_aresults_method(self, mock_async_search_results):
         """测试异步包装方法"""
         expected_result = {"organic": [{"title": "Async Test"}]}

@@ -2,8 +2,8 @@ from unittest.mock import Mock, AsyncMock, patch
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner, create_outline_tool
-from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Outline
+from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner, create_outline_tool
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline
 
 # 定义测试数据
 test_data = {
@@ -24,7 +24,7 @@ outline_response = Outline(
     ]
 )
 
-tool_name = create_outline_tool(1).name
+tool_name = create_outline_tool(1).card.name
 tool_call_id = '123'
 functioncall_response = {
     'content': '',
@@ -64,7 +64,7 @@ class TestOutliner:
 
     @pytest.fixture
     def setup_outliner(self, mock_llm):
-        with patch('jiuwen_deepsearch.algorithm.query_understanding.outliner.llm_context', return_value=mock_llm):
+        with patch('openjiuwen_deepsearch.algorithm.query_understanding.outliner.llm_context', return_value=mock_llm):
             outliner = Outliner("test", "outliner")
         return outliner
 
@@ -78,7 +78,7 @@ class TestOutliner:
         }
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.outliner.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.algorithm.query_understanding.outliner.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 return_value=functioncall_response
         ):
@@ -96,7 +96,7 @@ class TestOutliner:
         }
 
         with patch(
-                'jiuwen_deepsearch.algorithm.query_understanding.outliner.ainvoke_llm_with_stats',
+                'openjiuwen_deepsearch.algorithm.query_understanding.outliner.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 side_effect=Exception("TestMessage")
         ):

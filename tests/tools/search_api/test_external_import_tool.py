@@ -2,10 +2,10 @@ import pytest
 import tempfile
 import os
 from unittest import mock
-from jiuwen_deepsearch.framework.jiuwen.tools.Search_API.external_tool.tool import \
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.external_tool.tool import \
     load_external_search_tools, CustomValueException, StatusCode
 
-module_path = "jiuwen_deepsearch.framework.jiuwen.tools.Search_API.external_tool.tool"
+MODULE_PATH = "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.external_tool.tool"
 
 
 class TestLoadExternalSearchTools:
@@ -29,7 +29,7 @@ class TestLoadExternalSearchTools:
 
         try:
             # When - 模拟配置值不是字符串的情况
-            with mock.patch(f'{module_path}.importlib.util.spec_from_file_location',
+            with mock.patch(f'{MODULE_PATH}.importlib.util.spec_from_file_location',
                             return_value=None):
                 engine_name, external_mapping = load_external_search_tools(temp_path, "test_func")
 
@@ -66,7 +66,7 @@ class TestLoadExternalSearchTools:
 
         try:
             # When - 模拟导入时抛出异常
-            with mock.patch(f'{module_path}.importlib.util.module_from_spec') as mock_module:
+            with mock.patch(f'{MODULE_PATH}.importlib.util.module_from_spec') as mock_module:
                 mock_module.side_effect = Exception("Import error")
                 engine_name, external_mapping = load_external_search_tools(temp_path, "test_func")
 
@@ -122,9 +122,9 @@ def search_function():
         mock_spec.loader = mock_loader
         mock_module.test_function = mock.MagicMock(return_value="mocked result")
 
-        with mock.patch(f'{module_path}.importlib.util.spec_from_file_location',
+        with mock.patch(f'{MODULE_PATH}.importlib.util.spec_from_file_location',
                         return_value=mock_spec):
-            with mock.patch(f'{module_path}.importlib.util.module_from_spec',
+            with mock.patch(f'{MODULE_PATH}.importlib.util.module_from_spec',
                             return_value=mock_module):
                 with mock.patch.object(mock_spec, 'loader') as mock_loader:
                     # When
@@ -145,7 +145,7 @@ def search_function():
 
         try:
             # When - 模拟抛出自定义异常
-            with mock.patch(f'{module_path}.importlib.util.spec_from_file_location',
+            with mock.patch(f'{MODULE_PATH}.importlib.util.spec_from_file_location',
                             side_effect=CustomValueException(
                                 error_code=StatusCode.LOAD_EXTEND_TOOLS_FAILED.code,
                                 message=StatusCode.LOAD_EXTEND_TOOLS_FAILED.errmsg)):

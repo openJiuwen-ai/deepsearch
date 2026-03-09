@@ -1,32 +1,32 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+from contextlib import asynccontextmanager
 import io
 import os
 import sys
-from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from openjiuwen.core.common.logging import logger
+import uvicorn
+
+from server.core.cancel_bus import start_cancel_listener, stop_cancel_listener
+from server.core.database import Base, engine
+from server.core.db_sync import run_database_sync
+from server.core.runner_init import init_runner, shutdown_runner
 from server.deepsearch.core.models.report_template import ReportTemplateDB
 from server.deepsearch.core.models.web_search_engine_model import WebSearchEngineModel
+from server.routers import register
 
 # 添加项目根目录到 Python 路径，以便直接运行时能找到所有模块
 backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
-import uvicorn
-from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
 # Load environment variables from project root (上级目录)
 project_root = backend_dir
 load_dotenv(os.path.join(project_root, '.env'))
-
-from server.routers import register
-from server.core.database import engine, Base
-from server.core.db_sync import run_database_sync
-
-from openjiuwen.core.common.logging import logger
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
@@ -36,6 +36,9 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 async def lifespan_func(input_app: FastAPI):
     # Startup
     logger.info("🚀 Starting openJiuwen-DeepSearch Server...")
+    await init_runner()
+    # 启动跨进程取消监听，仅在 redis checkpointer 模式下生效
+    await start_cancel_listener()
 
     target_tables = [
         # Deepsearch table
@@ -73,6 +76,10 @@ async def lifespan_func(input_app: FastAPI):
 
     # Shutdown
     logger.info("🛑 Shutting down openJiuwen-DeepSearch Server...")
+    # 先停止取消监听，再关闭 Runner
+    await stop_cancel_listener()
+    await shutdown_runner()
+    logger.info("✅ openJiuwen-DeepSearch Server shutdown completed")
 
 
 # Create FastAPI app

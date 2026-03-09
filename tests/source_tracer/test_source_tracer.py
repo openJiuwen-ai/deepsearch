@@ -1,12 +1,42 @@
-import pytest
+from dataclasses import dataclass
+from typing import Any, List, Dict, Tuple
 from unittest.mock import patch
-from jiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
-from jiuwen_deepsearch.common.exception import CustomValueException
-from jiuwen_deepsearch.common.status_code import StatusCode
+
+import pytest
+
+from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.status_code import StatusCode
+
+MODULE_PATH = "openjiuwen_deepsearch.algorithm.source_trace.source_tracer"
+
+
+@dataclass
+class SourceTracerTestData:
+    """Dataclass to hold mock return values for SourceTracer tests."""
+    origin_report: str
+    preprocess_report_return: Tuple[str, str]
+    recognize_content_return: List[str]
+    match_sources_return: List[Dict[str, Any]]
+    generate_source_datas_return: List[Dict[str, Any]]
 
 
 class TestSourceTracer:
     """Test cases for SourceTracer class."""
+
+    @pytest.fixture
+    def source_tracer_test_data(self, origin_report_value, mock_preprocess_report_return_value,
+                                mock_recognize_content_to_cite_return_value,
+                                mock_match_sources_return_value,
+                                mock_generate_source_datas_return_value):
+        """Fixture to provide grouped mock return values."""
+        return SourceTracerTestData(
+            origin_report=origin_report_value,
+            preprocess_report_return=mock_preprocess_report_return_value,
+            recognize_content_return=mock_recognize_content_to_cite_return_value,
+            match_sources_return=mock_match_sources_return_value,
+            generate_source_datas_return=mock_generate_source_datas_return_value
+        )
 
     @pytest.fixture
     def mock_algorithm_inputs(self, origin_report_value, origin_search_record):
@@ -29,7 +59,8 @@ class TestSourceTracer:
     @pytest.fixture
     def origin_search_record(self):
         search_record = {
-            "web_page_search_record": [{"title": "example", "url": "https://example.com", "original_content": "test content"}],
+            "web_page_search_record": [
+                {"title": "example", "url": "https://example.com", "original_content": "test content"}],
             "web_image_search_record": [],
             "local_text_search_record": [],
             "local_image_search_record": []
@@ -81,10 +112,11 @@ class TestSourceTracer:
         await tracer.research_trace_source()
 
         # Assert
-        assert tracer._trace_source_datas == []
+        assert getattr(tracer, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_preprocess_search_record_empty(self, mock_algorithm_inputs, origin_report_value):
+    async def test_research_trace_source_preprocess_search_record_empty(self, mock_algorithm_inputs,
+                                                                        origin_report_value):
         """Test research_trace_source when search record preprocessing returns empty."""
         # Arrange
         mock_algorithm_inputs["search_record"] = {
@@ -99,94 +131,106 @@ class TestSourceTracer:
         await tracer.research_trace_source()
 
         # Assert
-        assert tracer._trace_source_datas == []
+        assert getattr(tracer, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_preprocess_report_called(self, source_tracer_instance, origin_report_value, mock_preprocess_report_return_value, mock_recognize_content_to_cite_return_value, mock_match_sources_return_value, mock_generate_source_datas_return_value):
+    @staticmethod
+    async def test_research_trace_source_preprocess_report_called(source_tracer_instance, source_tracer_test_data):
         """Test that preprocess_report is called in research_trace_source."""
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess:
-            mock_preprocess.return_value = mock_preprocess_report_return_value
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
+            mock_preprocess.return_value = source_tracer_test_data.preprocess_report_return
 
             # Need to patch other async dependencies
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.recognize_content_to_cite') as mock_recognize:
-                mock_recognize.return_value = mock_recognize_content_to_cite_return_value
+            with patch(
+                    f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
+                mock_recognize.return_value = source_tracer_test_data.recognize_content_return
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.match_sources') as mock_match:
-                    mock_match.return_value = mock_match_sources_return_value
+                with patch(f'{MODULE_PATH}.match_sources') as mock_match:
+                    mock_match.return_value = source_tracer_test_data.match_sources_return
 
-                    with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.generate_source_datas') as mock_generate:
-                        mock_generate.return_value = mock_generate_source_datas_return_value
+                    with patch(
+                            f'{MODULE_PATH}.generate_source_datas') as mock_generate:
+                        mock_generate.return_value = source_tracer_test_data.generate_source_datas_return
 
                         # Act
                         await source_tracer_instance.research_trace_source()
 
                         # Assert
                         mock_preprocess.assert_called_once_with(
-                            origin_report_value)
-                        assert source_tracer_instance._trace_source_datas == mock_generate_source_datas_return_value
+                            source_tracer_test_data.origin_report)
+                        assert (getattr(source_tracer_instance, '_trace_source_datas') ==
+                                source_tracer_test_data.generate_source_datas_return)
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_recognition_failure(self, source_tracer_instance, origin_report_value, mock_preprocess_report_return_value):
+    async def test_research_trace_source_recognition_failure(self, source_tracer_instance, origin_report_value,
+                                                             mock_preprocess_report_return_value):
         """Test research_trace_source when content recognition fails."""
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess:
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
             mock_preprocess.return_value = mock_preprocess_report_return_value
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.recognize_content_to_cite') as mock_recognize:
+            with patch(
+                    f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
                 mock_recognize.return_value = []
 
                 # Act
                 await source_tracer_instance.research_trace_source()
 
                 # Assert
-                assert source_tracer_instance._trace_source_datas == []
+                assert getattr(source_tracer_instance, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_matching_failure(self, source_tracer_instance, origin_report_value, mock_preprocess_report_return_value, mock_recognize_content_to_cite_return_value):
+    async def test_research_trace_source_matching_failure(self, source_tracer_instance, origin_report_value,
+                                                          mock_preprocess_report_return_value,
+                                                          mock_recognize_content_to_cite_return_value):
         """Test research_trace_source when source matching fails."""
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess:
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
             mock_preprocess.return_value = mock_preprocess_report_return_value
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.recognize_content_to_cite') as mock_recognize:
+            with patch(
+                    f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
                 mock_recognize.return_value = mock_recognize_content_to_cite_return_value
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.match_sources') as mock_match:
+                with patch(f'{MODULE_PATH}.match_sources') as mock_match:
                     mock_match.return_value = []
 
                     # Act
                     result = await source_tracer_instance.research_trace_source()
 
                     # Assert
-                    assert source_tracer_instance._trace_source_datas == []
+                    assert getattr(source_tracer_instance, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_with_trace_source_datas(self, mock_algorithm_inputs, origin_report_value, mock_preprocess_report_return_value, mock_recognize_content_to_cite_return_value, mock_match_sources_return_value, mock_generate_source_datas_return_value):
+    async def test_research_trace_source_with_trace_source_datas(self, mock_algorithm_inputs, source_tracer_test_data):
         """Test research_trace_source when merged_trace_source_datas is provided."""
         mock_algorithm_inputs["merged_trace_source_datas"] = [
             {"existing": "data"}]
         tracer = SourceTracer(mock_algorithm_inputs)
 
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess:
-            mock_preprocess.return_value = mock_preprocess_report_return_value
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
+            mock_preprocess.return_value = source_tracer_test_data.preprocess_report_return
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.recognize_content_to_cite') as mock_recognize:
-                mock_recognize.return_value = mock_recognize_content_to_cite_return_value
+            with patch(
+                    f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
+                mock_recognize.return_value = source_tracer_test_data.recognize_content_return
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.match_sources') as mock_match:
-                    mock_match.return_value = mock_match_sources_return_value
+                with patch(f'{MODULE_PATH}.match_sources') as mock_match:
+                    mock_match.return_value = source_tracer_test_data.match_sources_return
 
-                    with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.generate_source_datas') as mock_generate:
-                        mock_generate.return_value = mock_generate_source_datas_return_value
+                    with patch(
+                            f'{MODULE_PATH}.generate_source_datas') as mock_generate:
+                        mock_generate.return_value = source_tracer_test_data.generate_source_datas_return
 
                         # Act
                         await tracer.research_trace_source()
 
                         # Assert
-                        assert tracer._trace_source_datas == mock_generate_source_datas_return_value
+                        assert (getattr(tracer, '_trace_source_datas') ==
+                        source_tracer_test_data.generate_source_datas_return)
 
     @pytest.mark.asyncio
     async def test_research_trace_source_exception_handling(self, source_tracer_instance, origin_report_value):
         """Test research_trace_source exception handling."""
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess:
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
             mock_preprocess.side_effect = Exception("Test error")
 
             # Act & Assert
@@ -217,25 +261,31 @@ class TestSourceTracer:
             "datas": []
         }
 
-    def test_add_source_to_report_with_classified_content(self, mock_algorithm_inputs, mock_classified_content_value, mock_preprocess_report_return_value):
+    @staticmethod
+    def test_add_source_to_report_with_classified_content(mock_algorithm_inputs, mock_classified_content_value,
+                                                          mock_preprocess_report_return_value):
         """Test add_source_to_report with classified_content parameter."""
         # Arrange
         mock_algorithm_inputs["classified_content"] = mock_classified_content_value
         tracer = SourceTracer(mock_algorithm_inputs)
 
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess_report:
+        with patch(
+                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
             mock_preprocess_report.return_value = mock_preprocess_report_return_value
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.generate_origin_report_data') as mock_generate_origin:
+            with patch(
+                    f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
                 mock_generate_origin.return_value = {
                     "origin_report_data": [{"type": "reference", "content": "Existing reference [1]"}],
                     "modified_report": "modified report"
                 }
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.merge_source_datas') as mock_merge:
+                with patch(
+                        f'{MODULE_PATH}.merge_source_datas') as mock_merge:
                     mock_merge.return_value = [{"merged": "data"}]
 
-                    with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.add_source_references') as mock_add_source:
+                    with patch(
+                            f'{MODULE_PATH}.add_source_references') as mock_add_source:
                         mock_add_source.return_value = (
                             "final report", [{"final": "data"}])
 
@@ -251,21 +301,26 @@ class TestSourceTracer:
                         assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
                         assert len(result["datas"]) == 1
 
-    def test_add_source_to_report_normal_flow(self, source_tracer_instance, mock_preprocess_report_return_value):
+    @staticmethod
+    def test_add_source_to_report_normal_flow(source_tracer_instance, mock_preprocess_report_return_value):
         """Test normal flow of add_source_to_report."""
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess_report:
+        with patch(
+                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
             mock_preprocess_report.return_value = mock_preprocess_report_return_value
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.generate_origin_report_data') as mock_generate_origin:
+            with patch(
+                    f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
                 mock_generate_origin.return_value = {
                     "origin_report_data": [],
                     "modified_report": "modified report"
                 }
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.merge_source_datas') as mock_merge:
+                with patch(
+                        f'{MODULE_PATH}.merge_source_datas') as mock_merge:
                     mock_merge.return_value = [{"merged": "data"}]
 
-                    with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.add_source_references') as mock_add_source:
+                    with patch(
+                            f'{MODULE_PATH}.add_source_references') as mock_add_source:
                         mock_add_source.return_value = (
                             "final report", [{"final": "data"}])
 
@@ -275,35 +330,43 @@ class TestSourceTracer:
                         # Assert
                         mock_preprocess_report.assert_called_once()
                         mock_generate_origin.assert_called_once_with(
-                            mock_preprocess_report_return_value[1], source_tracer_instance._classified_content)
+                            mock_preprocess_report_return_value[1],
+                            getattr(source_tracer_instance, '_classified_content'))
                         mock_merge.assert_called_once()
                         mock_add_source.assert_called_once()
                         assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
                         assert len(result["datas"]) == 1
 
-    def test_add_source_to_report_with_existing_datas(self, mock_algorithm_inputs, origin_search_record, mock_preprocess_report_return_value):
+    @staticmethod
+    def test_add_source_to_report_with_existing_datas(mock_algorithm_inputs, origin_search_record,
+                                                      mock_preprocess_report_return_value):
         """Test add_source_to_report with existing merged_trace_source_datas."""
         # Arrange
         mock_algorithm_inputs["merged_trace_source_datas"] = [
             {"existing": "data"}]
         tracer = SourceTracer(mock_algorithm_inputs)
 
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess_report:
+        with patch(
+                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
             mock_preprocess_report.return_value = mock_preprocess_report_return_value
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_search_record') as mock_preprocess_search:
+            with patch(
+                    f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search:
                 mock_preprocess_search.return_value = origin_search_record
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.generate_origin_report_data') as mock_generate_origin:
+                with patch(
+                        f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
                     mock_generate_origin.return_value = {
                         "origin_report_data": [],
                         "modified_report": "modified report"
                     }
 
-                    with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.merge_source_datas') as mock_merge:
+                    with patch(
+                            f'{MODULE_PATH}.merge_source_datas') as mock_merge:
                         mock_merge.return_value = [{"merged": "data"}]
 
-                        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.add_source_references') as mock_add_source:
+                        with patch(
+                                f'{MODULE_PATH}.add_source_references') as mock_add_source:
                             mock_add_source.return_value = (
                                 "final report", [{"final": "data"}])
 
@@ -316,25 +379,27 @@ class TestSourceTracer:
                             # Verify that existing datas are used
                             assert result["datas"] == [{"final": "data"}]
 
-    def test_add_source_to_report_exception_handling(self, source_tracer_instance, origin_report_value):
+    @staticmethod
+    def test_add_source_to_report_exception_handling(source_tracer_instance, origin_report_value):
         """Test add_source_to_report exception handling."""
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess:
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
             mock_preprocess.side_effect = Exception("Test error")
 
             # Act & Assert
             with pytest.raises(CustomValueException) as exc_info:
                 source_tracer_instance.add_source_to_report()
-            
+
             # Verify it's the expected exception type
             assert exc_info.value.error_code == StatusCode.SOURCE_TRACER_ADD_SOURCE_ERROR.code
 
-    def test_init_with_missing_algorithm_inputs(self):
+    @staticmethod
+    def test_init_with_missing_algorithm_inputs():
         """Test initialization with missing algorithm input keys."""
         # Test with completely empty dict
         tracer_empty = SourceTracer({})
-        assert tracer_empty._report == ""
-        assert tracer_empty._search_record == {}
-        assert tracer_empty._classified_content == []
+        assert getattr(tracer_empty, '_report') == ""
+        assert getattr(tracer_empty, '_search_record') == {}
+        assert getattr(tracer_empty, '_classified_content') == []
 
         # Test with partial dict
         partial_inputs = {
@@ -342,11 +407,12 @@ class TestSourceTracer:
             # Missing other keys
         }
         tracer_partial = SourceTracer(partial_inputs)
-        assert tracer_partial._report == "partial report"
-        assert tracer_partial._search_record == {}
-        assert tracer_partial._classified_content == []
+        assert getattr(tracer_partial, '_report') == "partial report"
+        assert getattr(tracer_partial, '_search_record') == {}
+        assert getattr(tracer_partial, '_classified_content') == []
 
-    def test_init_with_none_algorithm_inputs(self):
+    @staticmethod
+    def test_init_with_none_algorithm_inputs():
         """Test initialization with None values."""
         inputs_with_nones = {
             "report": None,
@@ -354,32 +420,39 @@ class TestSourceTracer:
         }
         tracer = SourceTracer(inputs_with_nones)
         # Should handle None values gracefully
-        assert tracer._report is None
-        assert tracer._search_record == {}
-        assert tracer._classified_content is None
+        assert getattr(tracer, '_report') is None
+        assert getattr(tracer, '_search_record') == {}
+        assert getattr(tracer, '_classified_content') is None
 
-    def test_add_source_to_report_empty_all_trace_source_datas(self, mock_algorithm_inputs, origin_search_record, mock_preprocess_report_return_value):
+    @staticmethod
+    def test_add_source_to_report_empty_all_trace_source_datas(mock_algorithm_inputs, origin_search_record,
+                                                               mock_preprocess_report_return_value):
         """Test add_source_to_report with empty merged_trace_source_datas."""
         # Arrange
         mock_algorithm_inputs["merged_trace_source_datas"] = []
         tracer = SourceTracer(mock_algorithm_inputs)
 
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess_report:
+        with patch(
+                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
             mock_preprocess_report.return_value = mock_preprocess_report_return_value
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_search_record') as mock_preprocess_search:
+            with patch(
+                    f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search:
                 mock_preprocess_search.return_value = origin_search_record
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.generate_origin_report_data') as mock_generate_origin:
+                with patch(
+                        f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
                     mock_generate_origin.return_value = {
                         "origin_report_data": [],
                         "modified_report": "modified report"
                     }
 
-                    with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.merge_source_datas') as mock_merge:
+                    with patch(
+                            f'{MODULE_PATH}.merge_source_datas') as mock_merge:
                         mock_merge.return_value = []
 
-                        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.add_source_references') as mock_add_source:
+                        with patch(
+                                f'{MODULE_PATH}.add_source_references') as mock_add_source:
                             mock_add_source.return_value = (
                                 "final report", [])
 
@@ -390,24 +463,31 @@ class TestSourceTracer:
                             assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
                             assert result["datas"] == []
 
-    def test_add_source_to_report_no_datas_returned(self, source_tracer_instance, origin_search_record, mock_preprocess_report_return_value):
+    @staticmethod
+    def test_add_source_to_report_no_datas_returned(source_tracer_instance, origin_search_record,
+                                                    mock_preprocess_report_return_value):
         """Test add_source_to_report when merge_source_datas returns empty list."""
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess_report:
+        with patch(
+                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
             mock_preprocess_report.return_value = mock_preprocess_report_return_value
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_search_record') as mock_preprocess_search:
+            with patch(
+                    f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search:
                 mock_preprocess_search.return_value = origin_search_record
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.generate_origin_report_data') as mock_generate_origin:
+                with patch(
+                        f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
                     mock_generate_origin.return_value = {
                         "origin_report_data": [],
                         "modified_report": "modified report"
                     }
 
-                    with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.merge_source_datas') as mock_merge:
+                    with patch(
+                            f'{MODULE_PATH}.merge_source_datas') as mock_merge:
                         mock_merge.return_value = []  # No merged data
 
-                        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.add_source_references') as mock_add_source:
+                        with patch(
+                                f'{MODULE_PATH}.add_source_references') as mock_add_source:
                             mock_add_source.return_value = (
                                 "final report", [])
 
@@ -419,30 +499,36 @@ class TestSourceTracer:
                             assert result["datas"] == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_no_datas_generated(self, source_tracer_instance, origin_report_value, origin_search_record, mock_preprocess_report_return_value, mock_recognize_content_to_cite_return_value, mock_match_sources_return_value):
+    async def test_research_trace_source_no_datas_generated(self, source_tracer_instance, origin_search_record,
+                                                            source_tracer_test_data):
         """Test research_trace_source when generate_source_datas returns empty list."""
-        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_report') as mock_preprocess:
-            mock_preprocess.return_value = mock_preprocess_report_return_value
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
+            mock_preprocess.return_value = source_tracer_test_data.preprocess_report_return
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.preprocess_search_record') as mock_preprocess_search:
+            with patch(
+                    f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search:
                 mock_preprocess_search.return_value = origin_search_record
 
-                with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.recognize_content_to_cite') as mock_recognize:
-                    mock_recognize.return_value = mock_recognize_content_to_cite_return_value
+                with patch(
+                        f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
+                    mock_recognize.return_value = source_tracer_test_data.recognize_content_return
 
-                    with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.match_sources') as mock_match:
-                        mock_match.return_value = mock_match_sources_return_value
+                    with patch(
+                            f'{MODULE_PATH}.match_sources') as mock_match:
+                        mock_match.return_value = source_tracer_test_data.match_sources_return
 
-                        with patch('jiuwen_deepsearch.algorithm.source_trace.source_tracer.generate_source_datas') as mock_generate:
+                        with patch(
+                                f'{MODULE_PATH}.generate_source_datas') as mock_generate:
                             mock_generate.return_value = []  # No generated data
 
                             # Act
                             await source_tracer_instance.research_trace_source()
 
                             # Assert
-                            assert source_tracer_instance._trace_source_datas == []
+                            assert getattr(source_tracer_instance, '_trace_source_datas') == []
 
-    def test_transform_search_record_mixed_content(self):
+    @staticmethod
+    def test_transform_search_record_mixed_content():
         """
         测试当classified_content包含有效和无效字典项时，方法应只返回有效项。
         """

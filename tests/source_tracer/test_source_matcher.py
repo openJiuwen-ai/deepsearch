@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock, ANY
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.source_trace.source_matcher import (
+from openjiuwen_deepsearch.algorithm.source_trace.source_matcher import (
     match_sources,
     process_source_type,
     process_single_chunk,
@@ -20,9 +20,9 @@ pytest_plugins = ["pytest_asyncio"]
 class TestMatchSources:
     """Test cases for match_sources function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.validate_trace_results')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.merge_trace_results')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.process_source_type')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.validate_trace_results')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.merge_trace_results')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.process_source_type')
     @pytest.mark.asyncio
     async def test_match_sources_success(self, mock_process_source_type,
                                          mock_merge_trace_results,
@@ -55,7 +55,7 @@ class TestMatchSources:
         assert mock_validate_trace_results.called
         assert result == [{"sentence": "sentence1", "source": "web", "matched_source_indices": [0]}]
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.process_source_type')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.process_source_type')
     @pytest.mark.asyncio
     async def test_match_sources_exception_handling(self, mock_process_source_type):
         """Test matching when an exception occurs."""
@@ -77,7 +77,7 @@ class TestMatchSources:
         result = await match_sources([], {}, 5, "mock_model")
         assert result == []
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.llm_context')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.llm_context')
     @pytest.mark.asyncio
     async def test_match_sources_empty_content_recognition(self, mock_llm_wrapper):
         """Test matching with empty content recognition result."""
@@ -94,7 +94,7 @@ class TestMatchSources:
 class TestProcessSourceType:
     """Test cases for process_source_type function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.process_single_chunk')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.process_single_chunk')
     @pytest.mark.asyncio
     async def test_process_source_type_small_list(self, mock_process_single_chunk):
         """Test processing a small source list."""
@@ -114,7 +114,7 @@ class TestProcessSourceType:
             source_type, source_list, content_recognition_result, "mock_model")
         assert result == [{"sentence": "sentence1", "source": "web", "matched_source_indices": [0]}]
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.process_chunked_source')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.process_chunked_source')
     @pytest.mark.asyncio
     async def test_process_source_type_large_list(self, mock_process_chunked_source):
         """Test processing a large source list."""
@@ -138,7 +138,7 @@ class TestProcessSourceType:
 class TestProcessSingleChunk:
     """Test cases for process_single_chunk function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.call_llm_for_trace')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.call_llm_for_trace')
     @pytest.mark.asyncio
     async def test_process_single_chunk_success(self, mock_call_llm_for_trace):
         """Test processing a single chunk successfully."""
@@ -162,7 +162,7 @@ class TestProcessSingleChunk:
 class TestProcessChunkedSource:
     """Test cases for process_chunked_source function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.call_llm_for_trace')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.call_llm_for_trace')
     @pytest.mark.asyncio
     async def test_process_chunked_source_success(self, mock_call_llm_for_trace):
         """Test processing chunked source successfully."""
@@ -202,7 +202,7 @@ class TestProcessChunkedSource:
         assert {"sentence": "sentence1", "source": "web", "matched_source_indices": [0]} in result
         assert {"sentence": "sentence2", "source": "web", "matched_source_indices": [1]} in result
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.call_llm_for_trace')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.call_llm_for_trace')
     @pytest.mark.asyncio
     async def test_process_chunked_source_with_exception(self, mock_call_llm_for_trace):
         """Test processing chunked source when some chunks fail."""
@@ -230,8 +230,8 @@ class TestProcessChunkedSource:
 class TestCallLlmForTrace:
     """Test cases for call_llm_for_trace function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.llm_context')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.source_matcher.ainvoke_llm_with_stats')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.llm_context')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.source_matcher.ainvoke_llm_with_stats')
     @pytest.mark.asyncio
     async def test_call_llm_for_trace_llm_invoke_error(self, mock_ainvoke_llm_with_stats, mock_llm_wrapper):
         """Test LLM call when LLM invocation fails."""

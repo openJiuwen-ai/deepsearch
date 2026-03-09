@@ -3,19 +3,17 @@ from contextvars import Context
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from openjiuwen.core.runtime.config import WorkflowConfig
-from openjiuwen.core.runtime.workflow import WorkflowRuntime
-from openjiuwen.core.runtime.wrapper import WrappedNodeRuntime
-from openjiuwen.core.workflow.base import Workflow
-from openjiuwen.core.workflow.workflow_config import WorkflowMetadata
+from openjiuwen.core.session.node import Session
+from openjiuwen.core.workflow.base import WorkflowCard
+from openjiuwen.core.workflow.workflow import Workflow
 
-from jiuwen_deepsearch.framework.jiuwen.agent.editor_team_manager_node import EditorTeamNode
-from jiuwen_deepsearch.framework.jiuwen.agent.main_graph_nodes import EndNode, StartNode
-from jiuwen_deepsearch.framework.jiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
+from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import EditorTeamNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import EndNode, StartNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
     build_editor_team_workflow
-from jiuwen_deepsearch.framework.jiuwen.agent.search_context import Outline, Section
-from jiuwen_deepsearch.framework.jiuwen.agent.workflow import DeepresearchAgent
-from jiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from tests.utils.mock_config import get_default_agent_config
 
 logger = logging.getLogger(__name__)
@@ -92,7 +90,7 @@ async def test_agent_node_with_interrupt_feedback():
 
 
 def test_create_section_state():
-    editor_team_node = EditorTeamNode()
+    editor_team_node = TestEditorTeamNode()
     outline_section = Section(
         title='当前天气状况',
         description='提供杭州市当前的天气情况，包括天气状况描述、当前温度、风力风向、湿度等基本气象数据。',
@@ -135,57 +133,64 @@ def test_create_section_state():
                       'all_classified_contents': [], 'doc_infos': [], 'gathered_info': [],
                       'debug_pre_step': 'outline-c615f84c-d865-41f6-b7c3-354703c51732', 'go_deepsearch': True,
                       'debug_cur_step': 'outline-c615f84c-d865-41f6-b7c3-354703c51732'}
-    editor_team_node._create_section_state_from_state(search_context, outline, outline_section)
+    editor_team_node.create_section_state_from_state(search_context, outline, outline_section)
+
+
+class TestEditorTeamNode(EditorTeamNode):
+    async def run_section_sub_graph(self, workflow_session, sub_workflow, input_state):
+        return await self._run_section_sub_graph_await(
+            workflow_session, sub_workflow, input_state
+        )
+
+    def pre_handle(self, inputs, session, context):
+        return self._pre_handle(inputs, session, context)
+
+    def create_section_state_from_state(self, state, outline, section):
+        return self._create_section_state_from_state(state, outline, section)
 
 
 @pytest.mark.asyncio
 async def test_run_sub_graph():
     try:
-        editor_team_node = EditorTeamNode()
+        editor_team_node = TestEditorTeamNode()
         sub_workflow = build_editor_team_workflow()
-        workflow_runtime = WrappedNodeRuntime(WorkflowRuntime())
-        sub_workflow_runtime = WorkflowRuntime()
-        await editor_team_node._run_section_sub_graph_await(sub_workflow, workflow_runtime, sub_workflow_runtime, 1)
+
+        workflow_session = AsyncMock(spec=Session)
+        await editor_team_node.run_section_sub_graph(workflow_session, sub_workflow, {})
     except Exception as e:
-        logger.error("fail to test_pre_handle")
+        logger.error(f"fail to test_run_sub_graph: {e}")
 
 
 @pytest.mark.asyncio
 async def test_pre_handle():
     try:
-        editor_team_node = EditorTeamNode()
-        workflow_runtime = WrappedNodeRuntime(WorkflowRuntime())
-        await editor_team_node._pre_handle({}, workflow_runtime, Context())
+        editor_team_node = TestEditorTeamNode()
+        workflow_session = AsyncMock()  # Use mock for session
+        await editor_team_node.pre_handle({}, workflow_session, Context())
     except Exception as e:
-        logger.error("fail to test_pre_handle")
+        logger.error(f"fail to test_pre_handle: {e}")
 
 
 class MockAgent(DeepresearchAgent):
-    def _init_(self):
-        self._create_research_workflow_agent()
+    def __init__(self):
+        super().__init__()
 
     def _build_research_workflow(self, has_template=False):
         _id = self.research_name
         name = self.research_name
         version = self.version
         # workflow配置
-        workflow_config = WorkflowConfig(
-            metadata=WorkflowMetadata(
-                id=_id,
-                version=version,
-                name=name,
-            )
+        card = WorkflowCard(
+            id=_id,
+            version=version,
+            name=name,
         )
         # workflow
-        flow = Workflow(workflow_config=workflow_config)
+        flow = Workflow(card=card)
         # 添加node
         flow.set_start_comp(
             start_comp_id=NodeId.START.value,
-            component=StartNode(
-                {
-                    "inputs": self.startnode_valid_mode
-                }
-            ),
+            component=StartNode(),
             inputs_schema=self.startnode_input_schema
         )
         flow.add_workflow_comp(NodeId.EDITOR_TEAM.value, EditorTeamNode())

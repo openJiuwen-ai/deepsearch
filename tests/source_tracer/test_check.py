@@ -2,13 +2,13 @@ from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.source_trace.checker import (
+from openjiuwen_deepsearch.algorithm.source_trace.checker import (
     preprocess_info,
     postprocess_by_citation_checker
 )
-from jiuwen_deepsearch.common.exception import CustomException
-from jiuwen_deepsearch.common.status_code import StatusCode
-from jiuwen_deepsearch.common.common_constants import ENGLISH, CHINESE
+from openjiuwen_deepsearch.common.exception import CustomException
+from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.common_constants import ENGLISH, CHINESE
 
 pytest_plugins = ["pytest_asyncio"]
 
@@ -16,7 +16,7 @@ pytest_plugins = ["pytest_asyncio"]
 class TestPreprocessInfo:
     """Test cases for preprocess_info function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.checker.logger')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.checker.logger')
     def test_preprocess_info_empty_report(self, mock_logger):
         """Test preprocessing with empty report (both empty string and None)."""
         # Test with empty string
@@ -29,7 +29,7 @@ class TestPreprocessInfo:
             "CitationChecker: empty report, skipped citation check."
         )
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.checker.logger')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.checker.logger')
     def test_preprocess_info_empty_datas(self, mock_logger):
         """Test preprocessing with empty datas."""
         result = preprocess_info("Test report", [], CHINESE)
@@ -65,7 +65,7 @@ class TestPreprocessInfo:
 class TestPostprocessByCitationChecker:
     """Test cases for postprocess_by_citation_checker function."""
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.checker.CitationCheckerResearch')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.checker.CitationCheckerResearch')
     @pytest.mark.asyncio
     async def test_postprocess_success(self, mock_checker_class):
         """Test successful postprocessing by citation checker."""
@@ -82,7 +82,7 @@ class TestPostprocessByCitationChecker:
         assert result == '{"status": "success", "data": "processed_data"}'
         mock_checker.checker.assert_called_once_with(report, datas)
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.checker.CitationCheckerResearch')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.checker.CitationCheckerResearch')
     @pytest.mark.asyncio
     async def test_postprocess_checker_exception(self, mock_checker_class):
         """Test postprocessing when citation checker raises an exception."""

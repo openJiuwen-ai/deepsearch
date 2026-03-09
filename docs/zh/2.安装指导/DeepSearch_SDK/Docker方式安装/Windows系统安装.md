@@ -100,10 +100,10 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
 
   ```
   # 下载 x86_64 架构版本包：
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
   
   # 下载 ARM64 架构版本包：
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.0
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.1
   ```
 
 ### 2. 启动 DeepSearch 服务（以 x86_64 架构为例）
@@ -116,7 +116,7 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
     -e LLM_SSL_VERIFY=False \
     -e TOOL_SSL_VERIFY=False \ 
     -e DB_TYPE=sqlite \ 
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
   ```
 
   当出现如下信息时，表示服务已成功启动：
@@ -185,7 +185,7 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.0
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
   ```
 
   ##### SQLite 相关参数（`DB_TYPE=sqlite` 时生效）
@@ -194,3 +194,82 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
   | ----------------- | --------------- |
   | `SQLITE_DB_PATH`  | SQLite 数据文件存储目录，默认`data/databases` |
   | `DEEPSEARCH_SQLITE_DB` | SQLite 数据库文件名，默认`agent.db`   |
+
+#### Checkpointer 配置
+
+  Checkpointer 用于管理 Agent 工作流的会话状态，支持工作流的暂停、恢复和状态持久化。
+
+  ##### `CHECKPOINTER_TYPE`
+
+  * **作用**：选择 Checkpointer 类型
+  * **可选值**：`in_memory` / `persistence` / `redis`
+  * **默认值**：`in_memory`
+
+  ##### Persistence 模式相关参数（`CHECKPOINTER_TYPE=persistence` 时生效）
+
+  | 参数 | 说明 | 默认值 |
+  |------|------|--------|
+  | `CHECKPOINTER_DB_TYPE` | 数据库类型（sqlite / shelve） | `sqlite` |
+  | `CHECKPOINTER_DB_PATH` | 数据库文件路径 | `data/databases/checkpointer.db` |
+
+  ##### Redis 模式相关参数（`CHECKPOINTER_TYPE=redis` 时生效）
+
+  | 参数 | 说明 | 默认值 |
+  |------|------|--------|
+  | `REDIS_URL` | Redis 连接 URL | `redis://localhost:6379` |
+  | `REDIS_CLUSTER_MODE` | 是否启用 Redis Cluster 模式 | `false` |
+  | `REDIS_TTL` | 会话状态过期时间 | `7200` |
+  | `REDIS_REFRESH_ON_READ` | 每次读取时是否刷新 TTL | `true` |
+
+  **使用示例**：
+
+  ```bash
+  # 开发测试环境（默认配置，无需额外参数）
+  docker run -p 8000:8000 \
+    -e LLM_SSL_VERIFY=False \
+    -e TOOL_SSL_VERIFY=False \ 
+    -e DB_TYPE=mysql \
+    -e DB_HOST=host.docker.internal \
+    -e DB_PORT=3306 \
+    -e DB_USER=your_user_name \
+    -e DB_PASSWORD=your_password \
+    -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
+
+  # 单机生产环境（persistence 模式）
+  docker run -p 8000:8000 \
+    -e LLM_SSL_VERIFY=False \
+    -e TOOL_SSL_VERIFY=False \ 
+    -e DB_TYPE=mysql \
+    -e DB_HOST=host.docker.internal \
+    -e DB_PORT=3306 \
+    -e DB_USER=your_user_name \
+    -e DB_PASSWORD=your_password \
+    -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
+    -e CHECKPOINTER_TYPE=persistence \
+    -e CHECKPOINTER_DB_TYPE=sqlite \
+    -e CHECKPOINTER_DB_PATH=data/databases/checkpointer.db \
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
+
+  # 分布式生产环境（redis 模式）
+  docker run -p 8000:8000 \
+    -e LLM_SSL_VERIFY=False \
+    -e TOOL_SSL_VERIFY=False \ 
+    -e DB_TYPE=mysql \
+    -e DB_HOST=host.docker.internal \
+    -e DB_PORT=3306 \
+    -e DB_USER=your_user_name \
+    -e DB_PASSWORD=your_password \
+    -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
+    -e CHECKPOINTER_TYPE=redis \
+    -e REDIS_URL=redis://redis-host:6379 \
+    -e REDIS_CLUSTER_MODE=false \
+    -e REDIS_TTL=7200 \
+    -e REDIS_REFRESH_ON_READ=true \
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.1
+  ```
+
+  **注意事项**：
+  - `in_memory` 模式：无需额外配置，适用于开发测试环境，不支持分布式部署
+  - `persistence` 模式：需要确保数据目录有写权限，适用于单机生产环境
+  - `redis` 模式：需要先部署 Redis 服务，适用于分布式生产环境。如果 Redis 在宿主机上，可以使用 `host.docker.internal` 作为 Redis 主机地址

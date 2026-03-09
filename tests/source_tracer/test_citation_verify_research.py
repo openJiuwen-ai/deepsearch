@@ -4,9 +4,12 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.source_trace.citation_verify_research import CitationVerifyResearch
-from jiuwen_deepsearch.common.exception import CustomValueException
-from jiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import CitationVerifyResearch, BatchContext
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.status_code import StatusCode
+
+
+MODULE_PATH = "openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research"
 
 
 class TestCitationVerifyResearch:
@@ -119,7 +122,7 @@ class TestCitationVerifyResearch:
         """Set up test fixtures."""
         self.verifier = CitationVerifyResearch("mock_model")
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.citation_verify_research.LogManager')
+    @patch(f'{MODULE_PATH}.LogManager')
     def test_prepare_batch_processing(self, mock_log_manager):
         """Test prepare_batch_processing method."""
         mock_log_manager.is_sensitive.return_value = False
@@ -321,8 +324,16 @@ class TestCitationVerifyResearch:
         semaphore = asyncio.Semaphore(2)
         log_prefix = "test"
 
+        context = BatchContext(
+            batch_state=batch_state,
+            process_func=process_func,
+            error_result_func=error_result_func,
+            semaphore=semaphore,
+            log_prefix=log_prefix
+        )
+
         await self.verifier.process_batch(
-            batch_state, batch_idx, batch, process_func, error_result_func, semaphore, log_prefix
+            batch_idx, batch, context
         )
 
         assert batch_state["results"][0] == ["result1", "result2"]
@@ -348,8 +359,16 @@ class TestCitationVerifyResearch:
         semaphore = asyncio.Semaphore(2)
         log_prefix = "test"
 
+        context = BatchContext(
+            batch_state=batch_state,
+            process_func=process_func,
+            error_result_func=error_result_func,
+            semaphore=semaphore,
+            log_prefix=log_prefix
+        )
+
         await self.verifier.process_batch(
-            batch_state, batch_idx, batch, process_func, error_result_func, semaphore, log_prefix
+            batch_idx, batch, context
         )
 
         assert batch_state["results"][0] == ["error_item1"]
@@ -358,7 +377,7 @@ class TestCitationVerifyResearch:
         assert batch_idx not in batch_state["running_tasks"]
 
     @pytest.mark.asyncio
-    @patch('jiuwen_deepsearch.algorithm.source_trace.citation_verify_research.LogManager')
+    @patch(f'{MODULE_PATH}.LogManager')
     async def test_process_batch_with_logging(self, mock_log_manager):
         """Test process_batch with logging enabled."""
         mock_log_manager.is_sensitive.return_value = False
@@ -377,8 +396,16 @@ class TestCitationVerifyResearch:
         semaphore = asyncio.Semaphore(2)
         log_prefix = "test"
 
+        context = BatchContext(
+            batch_state=batch_state,
+            process_func=process_func,
+            error_result_func=error_result_func,
+            semaphore=semaphore,
+            log_prefix=log_prefix
+        )
+
         await self.verifier.process_batch(
-            batch_state, batch_idx, batch, process_func, error_result_func, semaphore, log_prefix
+            batch_idx, batch, context
         )
 
         # Verify error was logged with details
@@ -453,7 +480,7 @@ class TestCitationVerifyResearch:
         with patch.object(self.verifier, 'call_model', new_callable=AsyncMock) as mock_call_model:
             mock_call_model.return_value = json.dumps(expected_result)
             with patch(
-                    'jiuwen_deepsearch.algorithm.source_trace.citation_verify_research.apply_system_prompt') as mock_prompt:
+                    f'{MODULE_PATH}.apply_system_prompt') as mock_prompt:
                 mock_prompt.return_value = [
                     {"role": "system", "content": "test prompt"}]
 
@@ -477,7 +504,7 @@ class TestCitationVerifyResearch:
                 json.dumps(expected_result)
             ]
             with patch(
-                    'jiuwen_deepsearch.algorithm.source_trace.citation_verify_research.apply_system_prompt') as mock_prompt:
+                    f'{MODULE_PATH}.apply_system_prompt') as mock_prompt:
                 mock_prompt.return_value = [
                     {"role": "system", "content": "test prompt"}]
 
@@ -520,7 +547,7 @@ class TestCitationVerifyResearch:
         with patch.object(self.verifier, 'call_model', new_callable=AsyncMock) as mock_call_model:
             mock_call_model.side_effect = Exception("Always error")
             with patch(
-                    'jiuwen_deepsearch.algorithm.source_trace.citation_verify_research.apply_system_prompt') as mock_prompt:
+                    f'{MODULE_PATH}.apply_system_prompt') as mock_prompt:
                 mock_prompt.return_value = [
                     {"role": "system", "content": "test prompt"}]
 
@@ -591,16 +618,17 @@ class TestCitationVerifyResearch:
         expected_raw_content = '[{"source": "test_source", "score": 0.9, "marked_citation_content": ["test"]}]'
         expected_response = {"content": expected_raw_content}
 
-        with patch('jiuwen_deepsearch.algorithm.source_trace.citation_verify_research.llm_context') as mock_llm_wrapper:
+        with patch(
+                f'{MODULE_PATH}.llm_context') as mock_llm_wrapper:
             mock_llm_model = MagicMock()
             mock_llm_wrapper.get_llm_model.return_value = mock_llm_model
 
-            with patch('jiuwen_deepsearch.algorithm.source_trace.citation_verify_research.ainvoke_llm_with_stats',
+            with patch(f'{MODULE_PATH}.ainvoke_llm_with_stats',
                        new_callable=AsyncMock) as mock_ainvoke:
                 mock_ainvoke.return_value = expected_response
 
                 with patch(
-                        'jiuwen_deepsearch.algorithm.source_trace.citation_verify_research.normalize_json_output') as mock_normalize:
+                        f'{MODULE_PATH}.normalize_json_output') as mock_normalize:
                     mock_normalize.return_value = expected_raw_content
                     result = await self.verifier.call_model(user_prompt)
                     assert result == expected_raw_content

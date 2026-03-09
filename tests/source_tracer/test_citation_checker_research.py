@@ -5,9 +5,9 @@ from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from jiuwen_deepsearch.algorithm.source_trace.citation_checker_research import CitationCheckerResearch
-from jiuwen_deepsearch.common.exception import CustomIndexException
-from jiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research import CitationCheckerResearch
+from openjiuwen_deepsearch.common.exception import CustomIndexException
+from openjiuwen_deepsearch.common.status_code import StatusCode
 
 
 class MockMatch:
@@ -47,8 +47,8 @@ class TestResearchCitationChecker:
         assert result_url == url
         assert is_valid is True
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.citation_checker_research.are_similar_urls')
-    @patch('jiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.are_similar_urls')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     def test_validate_url_match_mismatch_with_logging(self, mock_log_manager, mock_are_similar_urls):
         """Test URL validation with mismatch and logging."""
         mock_log_manager.is_sensitive.return_value = False
@@ -183,7 +183,7 @@ class TestResearchCitationChecker:
         """Set up test fixtures."""
         self.checker = CitationCheckerResearch("mock_model")
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     def test_process_single_citation_with_logging(self, mock_log_manager):
         """Test processing a single citation with logging enabled."""
         mock_log_manager.is_sensitive.return_value = False
@@ -261,7 +261,7 @@ class TestResearchCitationChecker:
                 self.checker.process_single_paragraph_citations(
                     para, datas, data_index)
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     def test_preprocess_text_and_datas_with_logging(self, mock_log_manager):
         """Test preprocessing with logging enabled."""
         mock_log_manager.is_sensitive.return_value = False
@@ -288,7 +288,7 @@ class TestResearchCitationChecker:
         assert '![[' in result_text and 'https://image.com' in result_text
         assert references == OrderedDict()  # No references for images
 
-    @patch('jiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     def test_transform_references_with_logging(self, mock_log_manager):
         """Test transform references with logging enabled."""
         mock_log_manager.is_sensitive.return_value = False
@@ -321,7 +321,7 @@ class TestResearchCitationChecker:
             mock_verify.assert_called_once_with(datas)
 
     @pytest.mark.asyncio
-    @patch('jiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     async def test_checker_with_detailed_logging(self, mock_log_manager):
         """Test checker method with detailed logging enabled."""
         mock_log_manager.is_sensitive.return_value = False

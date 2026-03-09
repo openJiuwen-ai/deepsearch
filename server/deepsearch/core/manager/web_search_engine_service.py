@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 import logging
 
-from jiuwen_deepsearch.framework.jiuwen.tools.web_search import search_engine_mapping
+from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import search_engine_mapping
 from server.core.manager.model_manager.utils import SecurityUtils
 from server.deepsearch.common.exception.exceptions import WebSearchEngineExistsException, ValidationError, \
     WebSearchEngineNotFoundException, WebSearchEngineNotRegisterException, WebSearchEngineExecutionException
