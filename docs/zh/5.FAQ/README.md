@@ -100,7 +100,6 @@ citation verify：某条搜索结果的溯源效验
 ```
 
 ### 4. 使用的模型限制
-+ 当前deepsearch服务**仅支持非思考模式**模型，假如使用思考模型，会在部分节点返回报错，支持思考模型已在后续需求规划表中，后续会支持。当前如果在日志中看过\<think\>相关字段，则说明是思考模型，deepsearch会运行失败
 + 由于当前deepsearch服务内的各项节点大量使用了function_call，所以不支持function_call的模型，无法使用deepsearch服务。
 
 

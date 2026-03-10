@@ -38,7 +38,6 @@ openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
  - 硅基流动厂商系列模型，且遵循OpenAI接口格式。`LLMConfig`的`model_type`参数必须赋值为siliconflow。
  - OpenAI格式模型，模型服务按照标准OpenAI格式封装实现。`LLMConfig`的`model_type`参数必须赋值为openai。
 
-> **说明：接入的系列模型，需要支持关闭思考模式能力，或者具备非思考模式能力。例如，qwen3-max、qwen-plus-latest等。**
 
 > 说明：用户需要自行前往硅基流动或者OpenAI的官网注册账号，以便获取模型广场中可用模型的api_key、模型名称model_name和模型调用的URL请求地址base_url。
 
