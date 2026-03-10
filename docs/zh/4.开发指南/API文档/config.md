@@ -276,6 +276,9 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 ### Visualization参数
 - **visualization_enable**(bool, 可选)：报告插图可视化开关。默认值：`True`。
 
+### 搜索引擎 QPS 流控配置
+- **web_search_max_qps**(float, 可选)：搜索引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
+
 **样例**：
 
 ```python

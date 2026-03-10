@@ -19,6 +19,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import web_search_context
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_limit_async
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ def update_web_search_mapping(func_path: str, func_name: str):
 
 
 @tool_invoke_log_async
+@qps_rate_limit_async
 async def run_web_search(query: str, search_engine_name: str):
     """运行网页搜索"""
     api_wrapper = web_search_context.get().get(search_engine_name)

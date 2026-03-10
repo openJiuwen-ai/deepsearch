@@ -25,6 +25,7 @@ dependencies = [
     'openjiuwen==0.1.5',
     'pyvis==0.3.2',
     'networkx==3.4.2',
+    'aiolimiter==1.1.0',
 ]
 
 # 1. 告诉 setuptools 把 openjiuwen_deepsearch 当成一个「命名空间包」
