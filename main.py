@@ -18,7 +18,7 @@ LogManager.init(
     log_dir="./output/logs",
     max_bytes=100 * 1024 * 1024,
     backup_count=20,
-    level="DEBUG",
+    level="INFO",
     is_sensitive=False
 )
 
