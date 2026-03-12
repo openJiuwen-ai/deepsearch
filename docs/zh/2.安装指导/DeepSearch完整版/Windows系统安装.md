@@ -11,7 +11,7 @@
 * 操作系统：Windows10及以上
 
 * 软件
-  * Git：点击 <a href="https://mirrors.huaweicloud.com/git-for-windows/v2.51.0.windows.1/Git-2.51.0-64-bit.exe" target="_blank" rel="nofollow noopener noreferrer"> 下载</a> 进行下载并安装
+  * Git：点击 <a href="https://mirrors.huaweicloud.com/git-for-windows/v2.51.0.windows.1/Git-2.51.0-64-bit.exe" target="_blank" rel="nofollow noopener noreferrer"> 下载</a> 进行下载并安装，采用默认配置即可
   * Docker：推荐使用 Docker Desktop 进行安装，安装方法详见下文
 
 ### 安装Docker Desktop
