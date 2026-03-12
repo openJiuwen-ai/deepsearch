@@ -11,21 +11,22 @@
 * 操作系统：Windows10及以上
 
 * 软件
-  * Git：点击 <a href="https://mirrors.huaweicloud.com/git-for-windows/v2.51.0.windows.1/Git-2.51.0-64-bit.exe" target="_blank" rel="nofollow noopener noreferrer"> 下载</a> 进行下载并安装
+  * Git：点击 <a href="https://mirrors.huaweicloud.com/git-for-windows/v2.51.0.windows.1/Git-2.51.0-64-bit.exe" target="_blank" rel="nofollow noopener noreferrer"> 下载</a> 进行下载并安装，安装配置保持默认即可
   * Docker：推荐使用 Docker Desktop 进行安装，安装方法详见下文
 
 ### 安装Docker Desktop
-Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linux 2） 作为虚拟化后端，相比 LinuxKit 兼容性更好、资源占用更低，且能避免已知的僵尸容器 Bug。
+*Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linux 2） 作为虚拟化后端，相比 LinuxKit 兼容性更好、资源占用更低，且能避免已知的僵尸容器 Bug。*
 
-**1. 启用 WSL 2**
+**1. 安装 WSL**
 
-对于符合条件的 Windows 系统（Windows 10 版本 2004 及更高版本<内部版本 19041 及更高版本>或 Windows 11），仅运行 `wsl --install`就能一键配置、下载并安装默认的 Linux 发行版。
+对于符合条件的 Windows 系统（Windows 10 版本 2004 及更高版本<内部版本 19041 及更高版本>或 Windows 11），仅运行 `wsl --install`就能一键安装配置 WSL。
 
 * 按下 Windows + S，输入 PowerShell 进行搜索。
 
 * 在搜索结果中，右键点击 Windows PowerShell，选择 以管理员身份运行。
 
-* 在 PowerShell 执行如下命令，然后重新启动计算机。
+* 在 PowerShell 执行如下命令，当提示 *请求的操作成功，在重新启动系统前更改将不会生效* 后，重新启动计算机即可完成 WSL 安装。  
+首次安装 WSL 需要一定的时间下载必备组件，请耐心等待。
 
   ```
   wsl --install
@@ -35,14 +36,13 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
 
 **2. 安装 Docker Desktop**
 
-* 下载：前往 <a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="nofollow noopener noreferrer"> Docker 官网</a> 下载 Windows 版本安装包（X86 机器请选择 AMD64 版本）；
-* 请确保 Docker Desktop 满足以下内置组件版本要求：
+* 下载安装包：前往 <a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="nofollow noopener noreferrer"> Docker 官网</a> 下载 Docker Desktop 的 Windows 版本安装包（X86 机器请选择 AMD64 版本），建议下载最新版本以满足以下内置组件版本要求：
   * Docker Engine：20.10 版本及以上
   * Docker Compose：v2.19.1 及以上版本
 * 运行安装包：​**仅勾选​「Use WSL 2 instead of Hyper-V」、​「Add shortcut to desktop」选项**，点击​「OK」开始安装；
 * 安装完成后，请重启电脑；
 * 重启后，打开 Docker Desktop，等待加载完成（首次启动可能需要 5 ~ 10 分钟）；
-* Docker Desktop 启动后，若临时试用，可点击欢迎界面的 `Continue without signing in` 直接进入；长期使用请参考 <a href="https://docs.docker.com/desktop/setup/sign-in" target="_blank" rel="nofollow noopener noreferrer"> 官方指导</a>。
+* Docker Desktop 启动后，若临时试用，可点击欢迎界面的 `Continue without signing in` 直接进入；长期使用请参考 <a href="https://docs.docker.com/desktop/setup/sign-in" target="_blank" rel="nofollow noopener noreferrer"> 官方指导</a> 注册后使用。
 
 * 至此 Docker Desktop 安装完成。
 
@@ -61,13 +61,13 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
 
 ### 2. Docker Desktop 设置 Virtual file shares
 
-* 新建 *DeepSearch 安装目录*。
+* 新建 *DeepSearch 安装目录*，例如：`D:\DeepSearch`。
 
 * 打开 Docker Desktop，单击右上方 ⚙ 进入设置界面；
 
 * 单击左侧竖列导航栏​「Resources」，进入 Resources 配置界面；
 
-* 单击​「File sharing」，并在输入框中填写 *DeepSearch 的安装目录*（例如：`D:\DeepSearch`），最后单击右侧 ➕ 进行添加；
+* 单击​「File sharing」，并在输入框中填写 *DeepSearch 的安装目录*，最后单击右侧 ➕ 进行添加；
 
 * 点击 “Apply & restart” 重启 Docker Desktop。
 

@@ -161,6 +161,8 @@ openjiuwen_deepsearch/
 - `validation_utils/` - 校验工具函数
   - `field_validation.py`
   - `param_validation.py`
+- `rate_limiter_utils/` - QPS 限流工具
+  - `qps_limiter.py`
 
 ---
 

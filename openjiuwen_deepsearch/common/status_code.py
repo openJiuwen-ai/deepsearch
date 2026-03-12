@@ -94,6 +94,7 @@ class StatusCode(Enum):
     LOAD_EXTEND_TOOLS_FAILED = (211302, "Failed to load extend tools")
     TOOL_LOG_ERROR = (211303, "Tool log has something wrong, error: {e}")
     TOOL_EXEC_ERROR = (211304, "Tool execution has something wrong, error: {e}")
+    RATE_LIMIT_TIMEOUT_ERROR = (211305, "Rate limit timeout after {timeout:.1f}s, max_qps={max_qps}")
 
     JIUWEN_BASE_EXCEPTION_NOT_SUPPORTED = (211400, "_pre_handle is not supported")
 

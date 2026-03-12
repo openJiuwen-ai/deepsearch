@@ -167,6 +167,9 @@ class ServiceConfig(BaseModel):
     node_debug_enable: bool = Field(default=False, description="节点格式化记录debug日志开关")
     export_intermediate_results: bool = Field(default=False, description="可视化任务执行中间结果开关")
 
+    # 搜索引擎 QPS 流控配置
+    web_search_max_qps: float = Field(default=0, description="搜索引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
+
 
 class Config(BaseModel):
     '''
