@@ -41,14 +41,14 @@ openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
 
 > 说明：用户需要自行前往硅基流动或者OpenAI的官网注册账号，以便获取模型广场中可用模型的api_key、模型名称model_name和模型调用的URL请求地址base_url。
 
-## 网络搜索引擎配置说明
+## 联网增强引擎配置说明
 
 ---
 
 openJiuwen-DeepSearch 支持接入两种类型网络搜索引擎：
 
- - Google搜索引擎。`web_search_engine_config`的`search_engine_name`参数必须赋值为google。
- - Tavily搜索引擎。`web_search_engine_config`的`search_engine_name`参数必须赋值为tavily。
+ - Google `web_search_engine_config`的`search_engine_name`参数必须赋值为google。
+ - Tavily `web_search_engine_config`的`search_engine_name`参数必须赋值为tavily。
 
 > 说明：用户需要自行前往谷歌搜索或者Tavily的官网注册账号，以便获取可用搜索引擎的search_api_key和搜索引擎调用的URL请求地址search_url。
 
