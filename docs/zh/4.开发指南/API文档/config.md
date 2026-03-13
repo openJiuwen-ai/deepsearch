@@ -39,22 +39,22 @@ gpt-4 openai
 ```python
 class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 ```
-**WebSearchEngineConfig**是网络搜索引擎配置类，用于配置网络搜索相关的参数。
+**WebSearchEngineConfig**是联网增强引擎配置类，用于配置网络搜索相关的参数。
 
 **字段**：
 
-- **search_engine_name**(Literal["tavily", "google", "xunfei", "petal", "custom"], 可选)：搜索引擎名称。默认值：`"tavily"`。
-- **search_api_key**(bytearray, 可选)：搜索引擎调用密钥。默认值：`bytearray("", encoding="utf-8")`。
-- **search_url**(str, 可选)：搜索引擎调用地址。默认值：`""`。
+- **search_engine_name**(Literal["tavily", "google", "xunfei", "petal", "custom"], 可选)：联网增强引擎名称。默认值：`"tavily"`。
+- **search_api_key**(bytearray, 可选)：联网增强引擎调用密钥。默认值：`bytearray("", encoding="utf-8")`。
+- **search_url**(str, 可选)：联网增强引擎调用地址。默认值：`""`。
 - **max_web_search_results**(int, 可选)：最大搜索结果数量，取值范围：[1, 10]。默认值：`5`。
-- **extension**(dict, 可选)：搜索引擎扩展配置项，根据具体搜索引擎接口设置。默认值：`{}`。
+- **extension**(dict, 可选)：联网增强引擎扩展配置项，根据具体联网增强引擎接口设置。默认值：`{}`。
 
 **样例**：
 
 ```python
 >>> from openjiuwen_deepsearch.config.config import WebSearchEngineConfig
 
->>> # 样例1：创建网络搜索引擎配置
+>>> # 样例1：创建联网增强引擎配置
 >>> web_search_config = WebSearchEngineConfig(
 ...     search_engine_name="petal",
 ...     search_api_key=bytearray("your_api_key", encoding="utf-8"),
@@ -114,13 +114,13 @@ openapi doc
 ```python
 class openjiuwen_deepsearch.config.config.CustomWebSearchConfig()
 ```
-**CustomWebSearchConfig**是自定义网络搜索配置类，用于配置自定义网络搜索工具的参数。
+**CustomWebSearchConfig**是自定义联网增强搜索配置类，用于配置自定义联网增强搜索工具的参数。
 
 **字段**：
 
-- **custom_web_search_file**(str, 可选)：自定义Web搜索工具文件路径。默认值：`""`。
-- **custom_web_search_func**(str, 可选)：自定义Web搜索工具函数名称。默认值：`""`。
-- **extension**(dict, 可选)：自定义Web搜索工具扩展配置项，根据具体搜索引擎接口设置。默认值：`{}`。
+- **custom_web_search_file**(str, 可选)：自定义联网增强搜索工具文件路径。默认值：`""`。
+- **custom_web_search_func**(str, 可选)：自定义联网增强搜索工具函数名称。默认值：`""`。
+- **extension**(dict, 可选)：自定义联网增强搜索工具扩展配置项，根据具体联网增强引擎接口设置。默认值：`{}`。
 
 **样例**：
 
@@ -185,10 +185,10 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 10]。默认值：`5`。
 - **source_tracer_research_trace_source_switch**(bool, 可选)：溯源功能开关。默认值：`True`。
 - **llm_config**(Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig], 可选)：LLM模型配置。默认值：`dict()`。
-- **info_collector_search_method**(Literal["web", "local", "all"], 可选)：搜索方式，`web`：联网搜索，`local`：本地搜索工具搜索，`all`：联网+本地融合搜索。默认值：`"web"`。
-- **web_search_engine_config**(WebSearchEngineConfig, 可选)：网络搜索引擎配置。默认值：`WebSearchEngineConfig()`。
+- **info_collector_search_method**(Literal["web", "local", "all"], 可选)：搜索方式，`web`：联网增强搜索，`local`：本地搜索工具搜索，`all`：联网增强+本地融合搜索。默认值：`"web"`。
+- **web_search_engine_config**(WebSearchEngineConfig, 可选)：联网增强引擎配置。默认值：`WebSearchEngineConfig()`。
 - **local_search_engine_config**(LocalSearchEngineConfig, 可选)：本地搜索引擎配置。默认值：`LocalSearchEngineConfig()`。
-- **custom_web_search_config**(CustomWebSearchConfig, 可选)：自定义网络搜索配置。默认值：`CustomWebSearchConfig()`。
+- **custom_web_search_config**(CustomWebSearchConfig, 可选)：自定义联网增强引擎配置。默认值：`CustomWebSearchConfig()`。
 - **custom_local_search_config**(CustomLocalSearchConfig, 可选)：自定义本地搜索配置。默认值：`CustomLocalSearchConfig()`。
 
 **样例**：
@@ -276,8 +276,8 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 ### Visualization参数
 - **visualization_enable**(bool, 可选)：报告插图可视化开关。默认值：`True`。
 
-### 搜索引擎 QPS 流控配置
-- **web_search_max_qps**(float, 可选)：搜索引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
+### 联网增强引擎 QPS 流控配置
+- **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
 
 **样例**：
 

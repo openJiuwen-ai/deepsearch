@@ -16,7 +16,7 @@ agent_config["llm_config"]["general"]["model_name"] = ""
 agent_config["llm_config"]["general"]["model_type"] = ""
 agent_config["llm_config"]["general"]["base_url"] = ""
 agent_config["llm_config"]["general"]["api_key"] = ""
-# 2. 配置网络搜索引擎
+# 2. 配置联网增强引擎
 agent_config["web_search_engine_config"]["search_engine_name"] = ""
 agent_config["web_search_engine_config"]["search_url"] = ""
 agent_config["web_search_engine_config"]["search_api_key"] = ""
@@ -45,17 +45,20 @@ openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
 
 ---
 
-openJiuwen-DeepSearch 支持接入两种类型网络搜索引擎：
+openJiuwen-DeepSearch 支持接入两种类型联网增强引擎：
 
  - Google `web_search_engine_config`的`search_engine_name`参数必须赋值为google。
  - Tavily `web_search_engine_config`的`search_engine_name`参数必须赋值为tavily。
+ - 讯飞搜索 `web_search_engine_config`的`search_engine_name`参数必须赋值为xunfei。
+ - 花瓣搜索 `web_search_engine_config`的`search_engine_name`参数必须赋值为petal。
 
-> 说明：用户需要自行前往谷歌搜索或者Tavily的官网注册账号，以便获取可用搜索引擎的search_api_key和搜索引擎调用的URL请求地址search_url。
+
+> 说明：用户需要自行前往相应的联网增强引擎的官网注册账号，以便获取可用的search_api_key和联网增强引擎调用的URL请求地址search_url。
 
 ## ssl证书配置说明
 
 ---
-在访问LLM大模型服务、以及网络搜索引擎服务时，openJiuwen-DeepSearch提供ssl证书配置能力，如需启用，需要在环境变量中，打开`LLM_SSL_VERIFY`设置为`true`，并提供大模型服务访问的证书`LLM_SSL_CERT`。同理，打开`TOOL_SSL_VERIFY`设置为`true`时，需要提供网络搜索服务访问的证书`TOOL_SSL_CERT`。
+在访问LLM大模型服务、以及联网增强引擎服务时，openJiuwen-DeepSearch提供ssl证书配置能力，如需启用，需要在环境变量中，打开`LLM_SSL_VERIFY`设置为`true`，并提供大模型服务访问的证书`LLM_SSL_CERT`。同理，打开`TOOL_SSL_VERIFY`设置为`true`时，需要提供网络搜索服务访问的证书`TOOL_SSL_CERT`。
 
 如果不需要启用ssl功能，需显式关闭环境变量中`LLM_SSL_VERIFY`和`TOOL_SSL_VERIFY`，设置为`false`，此时不需要提供对应的证书。
 
