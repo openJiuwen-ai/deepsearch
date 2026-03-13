@@ -125,6 +125,7 @@ class DeepSearchAgentManager:
             # 大纲交互配置
             "outline_interaction_enabled": request.outline_interaction_enabled,
             "outline_interaction_max_rounds": request.outline_interaction_max_rounds,
+            "web_search_max_qps": request.web_search_max_qps
         }
         if request.web_search_config:
             res["web_search_engine_config"] = self._load_web_search_config(

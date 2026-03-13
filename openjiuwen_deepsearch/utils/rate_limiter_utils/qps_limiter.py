@@ -10,7 +10,6 @@ from aiolimiter import AsyncLimiter
 
 from openjiuwen_deepsearch.common.exception import CustomRuntimeException
 from openjiuwen_deepsearch.common.status_code import StatusCode
-from openjiuwen_deepsearch.config.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +26,7 @@ class QPSRateLimiter:
     def __init__(self):
         """初始化限流器，从配置中读取 QPS 限制"""
         self._limiter: Optional[AsyncLimiter] = None
-        self._max_qps: Optional[float] = self._load_max_qps_from_config()
-
-    @staticmethod
-    def _load_max_qps_from_config() -> Optional[float]:
-        """从配置中加载 QPS 限制"""
-        try:
-            config = Config()
-            if hasattr(config, 'service_config') and hasattr(config.service_config, 'web_search_max_qps'):
-                return config.service_config.web_search_max_qps
-        except Exception as e:
-            logger.warning(f"[QPSRateLimiter] Failed to load max_qps from config: {e}")
-        return None
+        self._max_qps: Optional[float] = None
 
     def get_max_qps(self) -> Optional[float]:
         """获取当前 QPS 限制值"""
@@ -47,6 +35,7 @@ class QPSRateLimiter:
     def set_max_qps(self, max_qps: Optional[Union[int, float]]) -> None:
         """设置 QPS 限制值"""
         self._max_qps = float(max_qps) if max_qps is not None else None
+        logger.info(f"[QPSRateLimiter] Set max_qps to {self._max_qps}")
 
     def _get_limiter(self) -> Optional[AsyncLimiter]:
         """获取或创建限流器实例，当 max_qps 变化时重建"""

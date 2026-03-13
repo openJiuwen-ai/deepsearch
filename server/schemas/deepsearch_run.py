@@ -45,3 +45,4 @@ class DeepSearchRequest(BaseModel):
                                                                          description="执行方法："
                                                                                      "parallel: 并行工作流执行"
                                                                                      "dependency_driving: 依赖驱动工作流执行")
+    web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")

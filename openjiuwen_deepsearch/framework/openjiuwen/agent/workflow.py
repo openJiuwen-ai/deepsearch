@@ -41,6 +41,7 @@ from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from openjiuwen_deepsearch.utils.log_utils.log_interface import record_interface_log
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TIME_LOGGER_TAG
+from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_limiter
 from openjiuwen_deepsearch.utils.validation_utils.field_validation import validate_agent_required_field
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import validate_run_agent_params, \
     validate_generate_template_params
@@ -537,6 +538,10 @@ class DeepresearchAgent(BaseAgent):
         local_search_token = local_search_context.set(
             {local_engine_name: local_mapping[local_engine_name](**local_search_config.model_dump())}
         )
+
+        # 注册QPS限流器
+        qps_limiter = qps_rate_limiter
+        qps_limiter.set_max_qps(agent_config.web_search_max_qps)
 
         return web_search_token, local_search_token
 

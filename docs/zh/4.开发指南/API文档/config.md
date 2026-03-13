@@ -190,6 +190,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **local_search_engine_config**(LocalSearchEngineConfig, 可选)：本地搜索引擎配置。默认值：`LocalSearchEngineConfig()`。
 - **custom_web_search_config**(CustomWebSearchConfig, 可选)：自定义联网增强引擎配置。默认值：`CustomWebSearchConfig()`。
 - **custom_local_search_config**(CustomLocalSearchConfig, 可选)：自定义本地搜索配置。默认值：`CustomLocalSearchConfig()`。
+- **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
 
 **样例**：
 
@@ -275,9 +276,6 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 
 ### Visualization参数
 - **visualization_enable**(bool, 可选)：报告插图可视化开关。默认值：`True`。
-
-### 联网增强引擎 QPS 流控配置
-- **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
 
 **样例**：
 
