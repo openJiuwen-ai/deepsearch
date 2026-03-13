@@ -13,6 +13,7 @@ class NodeId(enum.Enum):
     GENERATE_QUESTIONS = "generate_questions"
     FEEDBACK_HANDLER = "feedback_handler"
     OUTLINE = "outline"
+    OUTLINE_INTERACTION = "outline_interaction"
     EDITOR_TEAM = "editor_team"
     REPORTER = "reporter"
     EVALUATOR = "evaluator"

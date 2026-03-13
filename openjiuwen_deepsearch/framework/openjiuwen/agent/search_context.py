@@ -138,6 +138,15 @@ class FinalResult(BaseModel):
     exception_info: str = Field(default="", description="主图WorkFlow异常退出时的异常信息")
 
 
+class OutlineInteraction(BaseModel):
+    """
+    大纲交互模型：用户与系统进行大纲交互时的输入输出结构
+    """
+    feedback: str = Field(default="", description="用户反馈")
+    interaction_mode: str = Field(default="", description="大纲交互模式: revise_comment, revise_outline")
+    outline_before: Union[Outline, Dict, str, None] = Field(default=None, description="用户反馈前的outline")
+
+
 class SearchContext(BaseModel):
     """
     上下文状态模型：工作流运行时的状态上下文
@@ -152,7 +161,8 @@ class SearchContext(BaseModel):
 
     # 2、feedback相关参数
     questions: str = Field(default="", description="系统基于用户问题提出的问题")
-    user_feedback: str = Field(default="", description="用户基于问题的反馈结果内容")
+    user_feedback: str = Field(default="", description="用户问题的反馈结果")
+    outline_interactions: List[OutlineInteraction] = Field(default_factory=list, description="大纲多轮交互历史记录")
 
     # 3、运行时上下文状态存储
     outline_executed_num: int = Field(default=0, description="大纲执行次数")

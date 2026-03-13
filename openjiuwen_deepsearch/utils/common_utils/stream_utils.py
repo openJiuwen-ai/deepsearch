@@ -23,6 +23,7 @@ class StreamEvent(enum.Enum):
     MESSAGE = "message"
     SUMMARY_RESPONSE = "summary_response"
     WAITING_USER_INPUT = "waiting_user_input"
+    USER_INPUT_ENDED = "user_input_ended"
     ERROR = "error"
 
 

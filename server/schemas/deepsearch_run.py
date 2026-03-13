@@ -34,7 +34,11 @@ class DeepSearchRequest(BaseModel):
     local_search_config: LocalSearchConfig = Field(default=None,
                                                    description="本地知识库配置，和联网增强引擎配置至少选择一个")
     template_id: int = Field(default=-1, description="报告模板ID（可选）")
-    interrupt_feedback: Literal["", "accepted", "cancel"] = Field(default="", description="中断反馈标识（可选）")
+    interrupt_feedback: Literal[
+        "", "accepted", "cancel", "revise_outline", "revise_comment"
+    ] = Field(default="", description="中断反馈标识（可选）")
+    outline_interaction_enabled: bool = Field(default=True, description="大纲交互开关")
+    outline_interaction_max_rounds: int = Field(default=3, ge=1, le=100, description="大纲交互最大轮次")
     search_mode: Literal["research", "search"] = Field(default="research", description="生成研究报告还是生成答案")
     execution_method: Literal["parallel", "dependency_driving"] = Field(default="parallel",
                                                                          description="执行方法："
