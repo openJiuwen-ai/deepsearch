@@ -134,6 +134,7 @@ class FinalResult(BaseModel):
     """
     response_content: str = Field(default="", description="响应内容")
     citation_messages: dict = Field(default={}, description="引用信息")
+    infer_messages: dict = Field(default={}, description="溯源推理信息")
     warning_info: str = Field(default="", description="主图WorkFlow执行过程中的告警信息")
     exception_info: str = Field(default="", description="主图WorkFlow异常退出时的异常信息")
 

@@ -16,6 +16,7 @@ from openjiuwen_deepsearch.algorithm.query_understanding.router import classify_
 from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.source_trace.checker import postprocess_by_citation_checker, preprocess_info
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTracerInfer
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH, MAX_QUERY_LENGTH, \
     FINISH_TASK_FEEDBACK
 from openjiuwen_deepsearch.common.exception import CustomException
@@ -73,6 +74,7 @@ class StartNode(Start):
             agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 5)
             agent_config["source_tracer_research_trace_source_switch"] = origin_agent_config.get(
                 "source_tracer_research_trace_source_switch", True)
+            agent_config["source_tracer_infer_switch"] = origin_agent_config.get("source_tracer_infer_switch", True)
             agent_config["llm_config"] = origin_agent_config.get("llm_config", {})
             agent_config["info_collector_search_method"] = origin_agent_config.get(
                 "info_collector_search_method", "web")
@@ -703,7 +705,8 @@ class SourceTracerNode(BaseNode):
         logger.info(f"[SourceTracerNode] source_tracer_result: "
                     f"{'*' if LogManager.is_sensitive() else source_tracer_result}")
 
-        return dict(next_node=NodeId.END.value)
+        return dict(next_node=NodeId.SOURCE_TRACER_INFER.value)
+
 
 
 class OutlineInteractionNode(BaseNode):
@@ -838,3 +841,121 @@ class DependencyOutlineInteractionNode(OutlineInteractionNode):
         if result.get("next_node") == NodeId.EDITOR_TEAM.value:
             result["next_node"] = NodeId.DEPENDENCY_REASONING_TEAM.value
         return result
+    
+
+class SourceTracerInferNode(BaseNode):
+    def __init__(self) -> None:
+        super().__init__()
+        self.log_prefix = '[SourceTracerInferNode]'
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
+        logger.info(f"{self.log_prefix} Start SourceTracerInferNode.")
+        search_mode = session.get_global_state("search_context.search_mode")
+        llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER_INFER.value)
+        source_tracer_infer_switch = session.get_global_state(
+            "config.source_tracer_infer_switch")
+
+        language = session.get_global_state("search_context.language")
+        current_report = session.get_global_state("search_context.current_report")
+        source_tracer_response = getattr(
+            current_report, "checked_trace_source_report_content", "") if current_report else ""
+        all_classified_contents = getattr(
+            current_report, "all_classified_contents", []) if current_report else []
+
+        # 封装本节点的Input对象
+        return dict(source_tracer_infer_switch=source_tracer_infer_switch,
+                    search_mode=search_mode,
+                    llm_model_name=llm_model_name, language=language,
+                    source_tracer_response=source_tracer_response,
+                    all_classified_contents=all_classified_contents)
+
+    def _post_handle(self, inputs, algorithm_output: dict, session: Session, context: ModelContext):
+        infer_success = algorithm_output.get("infer_success", False)
+        source_tracer_infer_switch = algorithm_output.get("source_tracer_infer_switch", False)
+        if not source_tracer_infer_switch:
+            logger.info(f"{self.log_prefix} Skip Infer! Please turn on the source_tracer_infer_switch.")
+        else:
+            if infer_success:
+                logger.info(f"{self.log_prefix} Infer Success!")
+            else:
+                logger.info(f"{self.log_prefix} Infer Fail!")
+        error_msg = algorithm_output.get("error_msg", "")
+        response = algorithm_output.get("response", "")
+        infer_messages = algorithm_output.get("infer_messages", [])
+        scores = algorithm_output.get("scores", [(0, 0)])
+
+        source_tracer_infer_result_dict = dict(response=response,
+                                               infer_messages=infer_messages,
+                                               scores=scores)
+
+        session.update_global_state({"search_context.final_result.response_content": response,
+                                     "search_context.final_result.infer_messages": infer_messages})
+
+        if error_msg:
+            session.update_global_state({"search_context.final_result.exception_info": error_msg})
+
+        # 添加SourceTracerInferNode debug日志
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.SOURCE_TRACER.value, 0, NodeType.MAIN.value,
+                              output_content=str(source_tracer_infer_result_dict).replace("\\n", "\n")))
+
+        logger.info(f"{self.log_prefix} End SourceTracerInferNode.")
+        logger.info(f"{self.log_prefix} source_tracer_infer_result:"
+                    f"{'*' if LogManager.is_sensitive() else source_tracer_infer_result_dict}")
+
+        return dict(next_node=NodeId.END.value)
+
+    @staticmethod
+    async def build_source_tracer_infer_result(infer_infos):
+        """调用溯源推理模块生成溯源推理图
+        Returns:
+            dict = (response, infer_messages, check_infos)
+        """
+        infer = SourceTracerInfer(infer_infos)
+        response, infer_messages, check_infos, error_message = await infer.run()
+        if error_message:
+            raise Exception(error_message)
+        return dict(response=response, infer_messages=infer_messages, check_infos=check_infos)
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext):
+
+        scores = [(0, 0)]
+        try:
+            current_inputs = self._pre_handle(inputs, session, context)
+
+            source_tracer_infer_switch = current_inputs.get("source_tracer_infer_switch", False)
+            if not source_tracer_infer_switch:
+                algorithm_output = dict(source_tracer_infer_switch=source_tracer_infer_switch,
+                                        response=current_inputs.get("source_tracer_response", ""))
+                return self._post_handle(inputs, algorithm_output, session, context)
+
+            # 溯源推理
+            infer_result_dict = await self.build_source_tracer_infer_result(current_inputs)
+
+            # 溯源推理校验
+            check_infos = infer_result_dict.get("check_infos", {})
+            check_infos["llm_model_name"] = current_inputs.get("llm_model_name", "")
+            check_infos["language"] = current_inputs.get("language", "zh")
+
+            # 这里添加溯源推理校验模块
+            infer_result_dict["scores"] = scores
+            infer_result_dict["source_tracer_infer_switch"] = current_inputs.get("source_tracer_infer_switch", False)
+            infer_result_dict["infer_success"] = True
+
+        except Exception as e:
+            error_msg = f"source_tracer_infer failed."
+            if LogManager.is_sensitive():
+                logger.error(f"{self.log_prefix} {error_msg}")
+            else:
+                logger.error(f"{self.log_prefix} {error_msg} {e}")
+            errcode = StatusCode.SOURCE_TRACER_INFER_ERROR.code
+            errmsg = StatusCode.SOURCE_TRACER_INFER_ERROR.errmsg.format(e=e)
+            infer_result_dict = dict(infer_success=False, response=current_inputs.get("source_tracer_response", ""),
+                                     infer_messages=[], scores=[(0, 0)], error_msg=f"[{errcode}] {errmsg}", 
+                                     source_tracer_infer_switch=current_inputs.get("source_tracer_infer_switch", False)
+                                     )
+
+        algorithm_output = infer_result_dict
+        result = self._post_handle(inputs, algorithm_output, session, context)
+        return result
+
+    

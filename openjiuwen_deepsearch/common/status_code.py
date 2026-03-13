@@ -34,6 +34,7 @@ class StatusCode(Enum):
     |      20      |  报告撰写模块错误         |  子章节筛选文档失败、子报告生成失败、图表异常、总报告生成失败等            |
     |      21      |  溯源引用模块错误         |  溯源生成失败、溯源校验失败等                                        |
     |      22      |  模板功能模块错误         |  模板提取失败异常等                                                |
+    |      23      |  溯源推理模块错误         |  溯源推理生成失败等                                                |
 
     """
 
@@ -127,6 +128,10 @@ class StatusCode(Enum):
 
     TEMPLATE_NAME_INVALID = (212201, "Invalid template name: {name}. Only Chinese/English letters, numbers,"
                                      "underscores (_), hyphens (-), and dots (.) are allowed.")
+    
+    SOURCE_TRACER_INFER_ERROR = (212300, "Source tracer infer error {e}")
+    SOURCE_TRACER_INFER_DATA_TYPE_ERROR = (212301, "Source tracer infer data type error {e}")
+    SOURCE_TRACER_INFER_DATA_LEN_ERROR = (212302, "Source tracer infer data length error {e}")
 
     @property
     def errmsg(self):

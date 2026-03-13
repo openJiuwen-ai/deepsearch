@@ -19,6 +19,7 @@ class NodeId(enum.Enum):
     EVALUATOR = "evaluator"
     HUMAN_EVALUATOR = "human_evaluator"
     SOURCE_TRACER = "source_tracer"
+    SOURCE_TRACER_INFER = "source_tracer_infer"
     PASS_SOURCE_TRACER_RESULT = "pass_source_tracer_result"
     DEPENDENCY_REASONING_TEAM = "dependency_reasoning_team"
     DEPENDENCY_WRITING_TEAM = "dependency_writing_team"

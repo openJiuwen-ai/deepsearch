@@ -97,6 +97,7 @@ class AgentConfig(BaseModel):
     outline_interaction_enabled: bool = Field(default=True, description="大纲交互开关")
     outline_interaction_max_rounds: int = Field(default=3, ge=1, le=100, description="大纲交互最大轮次")
     source_tracer_research_trace_source_switch: bool = Field(default=True, description="溯源功能开关")
+    source_tracer_infer_switch: bool = Field(default=True, description="溯源推理功能开关")
     llm_config: Dict[
         Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig
     ] = Field(default_factory=dict, description="LLM配置")

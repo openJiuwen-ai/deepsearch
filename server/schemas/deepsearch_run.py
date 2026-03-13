@@ -24,6 +24,7 @@ class DeepSearchRequest(BaseModel):
     workflow_human_in_the_loop: bool = Field(default=True, description="是否启用人机交互")
     outliner_max_section_num: int = Field(default=5, ge=1, le=10, description="最大规划章节数量，取值范围:[1,10]")
     source_tracer_research_trace_source_switch: bool = Field(default=True, description="溯源功能开关")
+    source_tracer_infer_switch: bool = Field(default=True, description="溯源推理功能开关")
     info_collector_search_method: Literal["web", "local", "all"] = Field(default="web",
                                                                          description="搜索方式："
                                                                                      "web: 联网搜索"

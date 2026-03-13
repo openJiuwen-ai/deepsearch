@@ -26,7 +26,8 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node i
     DependencyReasoningTeamNode, DependencyWritingTeamNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     SourceTracerNode, StartNode, EntryNode, GenerateQuestionsNode, OutlineNode, FeedbackHandlerNode,
-    ReporterNode, EndNode, DependencyOutlineNode, OutlineInteractionNode, DependencyOutlineInteractionNode
+    ReporterNode, EndNode, DependencyOutlineNode, OutlineInteractionNode, DependencyOutlineInteractionNode, 
+    SourceTracerInferNode
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools import update_local_search_mapping, update_web_search_mapping
 from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
@@ -460,6 +461,7 @@ class DeepresearchAgent(BaseAgent):
         flow.add_workflow_comp(NodeId.EDITOR_TEAM.value, EditorTeamNode())
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
+        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
@@ -486,7 +488,8 @@ class DeepresearchAgent(BaseAgent):
         flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
         flow.add_conditional_connection(NodeId.EDITOR_TEAM.value, router=editor_team_router)
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
-        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.END.value)
+        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
+        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.END.value)
 
         return flow
 
@@ -595,6 +598,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.DEPENDENCY_WRITING_TEAM.value, DependencyWritingTeamNode())
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
+        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边 add_connection
@@ -627,7 +631,8 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
         flow.add_conditional_connection(NodeId.DEPENDENCY_REASONING_TEAM.value, router=reasoning_team_router)
         flow.add_conditional_connection(NodeId.DEPENDENCY_WRITING_TEAM.value, router=writing_team_router)
-        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.END.value)
+        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
+        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.END.value)
 
         return flow
 
