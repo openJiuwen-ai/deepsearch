@@ -8,7 +8,7 @@ class WebSearchEngineBasicException(Exception):
 
 
 class WebSearchEngineExistsException(WebSearchEngineBasicException):
-    """搜索引擎已存在,异常"""
+    """联网增强引擎已存在,异常"""
     pass
 
 
@@ -18,22 +18,22 @@ class ValidationError(Exception):
 
 
 class WebSearchEngineNotFoundException(WebSearchEngineBasicException):
-    """web搜索引擎不存在,异常"""
+    """联网增强引擎不存在,异常"""
     pass
 
 
 class WebSearchEngineApiKeyDecryptError(Exception):
-    """搜索引擎api key解密失败异常"""
+    """联网增强引擎api key解密失败异常"""
     pass
 
 
 class WebSearchEngineNotRegisterException(WebSearchEngineBasicException):
-    """web搜索引擎未注册异常"""
+    """联网增强引擎未注册异常"""
     CODE = "WEB_SEARCH_ENGINE_NOT_REGISTER"
 
 
 class WebSearchEngineExecutionException(WebSearchEngineBasicException):
-    """web搜索引擎访问时出现错误异常"""
+    """联网增强引擎访问时出现错误异常"""
     CODE = "WEB_SEARCH_ENGINE_EXECUTION_ERROR"
 
 
@@ -60,7 +60,7 @@ class TemplateValidationError(ReportTemplateBasicException):
 
 
 class WebSearchEngineConfigGetException(Exception):
-    """获取Web搜索引擎配置信息错误异常"""
+    """获取联网增强引擎配置信息错误异常"""
     CODE = "WEB_SEARCH_ENGINE_CONFIG_GET_ERR"
 
 
@@ -80,5 +80,5 @@ class ReportTemplateNotFoundException(Exception):
 
 
 class SearchEngineConfigException(Exception):
-    """搜索引擎配置异常"""
+    """引擎配置异常"""
     CODE = "SEARCH_ENGINE_CONFIG_ERR"

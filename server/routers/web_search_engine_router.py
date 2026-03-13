@@ -27,7 +27,7 @@ def get_web_search_engine_service(db: Session = Depends(get_db)) -> WebSearchEng
 
 
 def handler_response(func):
-    """ web搜索引擎相关结果处理"""
+    """ web联网增强引擎相关结果处理"""
 
     @wraps(func)
     def wrapper(*args, **kwargs):

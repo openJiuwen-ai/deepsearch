@@ -17,37 +17,37 @@ class WebSearchEngineRepositoryInter(ABC):
 
     @abstractmethod
     def create(self, model: WebSearchEngineModel) -> int:
-        """创建web查询引擎"""
+        """创建联网增强引擎"""
         pass
 
     @abstractmethod
     def get_by_id(self, space_id: str, web_search_engine_id: int) -> type[WebSearchEngineModel]:
-        """获取指定搜索引擎"""
+        """获取指定联网增强引擎"""
         pass
 
     @abstractmethod
     def get_by_name(self, space_id: str, web_search_engine_name: str) -> type[WebSearchEngineModel]:
-        """获取用户名下指定名称的web搜索引擎"""
+        """获取用户名下指定名称的联网增强引擎"""
         pass
 
     @abstractmethod
     def get_list_by_id(self, space_id: str) -> List[type[WebSearchEngineModel]]:
-        """通过id获取搜索引擎列表"""
+        """通过id获取联网增强引擎列表"""
         pass
 
     @abstractmethod
     def delete_by_id(self, space_id: str, web_search_engine_id: int) -> None:
-        """通过id删除指定搜索引擎"""
+        """通过id删除指定联网增强引擎"""
         pass
 
     @abstractmethod
     def update(self, model: WebSearchEngineModel):
-        """更新web搜索引擎"""
+        """更新联网增强引擎"""
         pass
 
     @abstractmethod
     def get_engine_detail_by_id(self, space_id: str, web_search_engine_id: int) -> Optional[WebSearchEngineDetail]:
-        """获取搜索引擎详细信息"""
+        """获取联网增强引擎详细信息"""
         pass
 
 
@@ -70,23 +70,23 @@ class WebSearchEngineRepository(WebSearchEngineRepositoryInter):
                                                    f" not found under your space.")
 
     def get_list_by_id(self, space_id: str):
-        """查询指定用户id下所有web搜索引擎记录"""
+        """查询指定用户id下所有联网增强引擎记录"""
         return self.db.query(WebSearchEngineModel).filter(WebSearchEngineModel.space_id == space_id).all()
 
     def get_by_id(self, space_id: str, web_search_engine_id: int):
-        """通过id查询web查询引擎记录"""
+        """通过id查询联网增强引擎记录"""
         return self.db.query(WebSearchEngineModel).filter(
             WebSearchEngineModel.web_search_engine_id == web_search_engine_id,
             WebSearchEngineModel.space_id == space_id).first()
 
     def get_by_name(self, space_id: str, web_search_engine_name: str) -> type[WebSearchEngineModel]:
-        """通过引擎名称查询web查询引擎记录"""
+        """通过引擎名称查询联网增强引擎记录"""
         return self.db.query(WebSearchEngineModel).filter(
             WebSearchEngineModel.search_engine_name == web_search_engine_name,
             WebSearchEngineModel.space_id == space_id).first()
 
     def create(self, model: WebSearchEngineModel):
-        """插入web查询引擎记录"""
+        """插入联网增强引擎记录"""
         self.db.add(model)
         self.db.commit()
         self.db.refresh(model)
@@ -111,7 +111,7 @@ class WebSearchEngineRepository(WebSearchEngineRepositoryInter):
             self.db.commit()
 
     def get_engine_detail_by_id(self, space_id, engine_id):
-        """获取搜索引擎详细信息"""
+        """获取联网增强引擎详细信息"""
         try:
             record = self.get_by_id(space_id, engine_id)
             if not record:
