@@ -240,6 +240,8 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 
 ### 大纲节点基础参数
 - **outliner_max_generate_outline_retry_num**(int, 可选)：最大生成大纲重试次数。默认值：`3`。
+- **outline_interaction_enabled**(bool, 可选)：大纲交互功能开关，开启后用户可对生成的大纲进行多轮修改。默认值：`True`。
+- **outline_interaction_max_rounds**(int, 可选)：大纲交互最大轮次，取值范围：[1, 100]。默认值：`3`。
 
 ### 规划节点基础参数
 - **planner_max_step_num**(int, 可选)：最大步骤数量。默认值：`3`。

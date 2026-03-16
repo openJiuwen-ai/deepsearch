@@ -106,6 +106,21 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Outline(..
 
 ---
 
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.OutlineInteraction
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.OutlineInteraction(...)
+```
+**OutlineInteraction** 是大纲交互模型，记录用户与系统进行大纲交互时的输入输出。
+
+**字段**：
+- **feedback**(str)：用户反馈内容。默认值：`""`。
+- **interaction_mode**(str)：大纲交互模式。可选值：
+  - `"revise_comment"`：用户提供修改意见
+  - `"revise_outline"`：用户直接修改大纲
+- **outline_before**(Union[Outline, Dict, str, None])：用户反馈前的大纲状态。默认值：`None`。
+
+---
+
 ## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReport
 ```python
 class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReport(...)
@@ -183,6 +198,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 - **search_mode**(str)：默认值：`"research"`。
 - **questions**(str)：系统提问。默认值：`""`。
 - **user_feedback**(str)：用户反馈。默认值：`""`。
+- **outline_interactions**(List[OutlineInteraction])：大纲多轮交互历史记录。默认值：`[]`。
 - **outline_executed_num**(int)：默认值：`0`。
 - **current_outline**(Union[Outline, Dict, str, None])：当前大纲。
 - **history_outlines**(List[Outline])：历史大纲。

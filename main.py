@@ -203,6 +203,7 @@ if __name__ == "__main__":
     current_agent_config["web_search_engine_config"]["max_web_search_results"] = args.max_web_search_results
 
     current_agent_config["workflow_human_in_the_loop"] = False
+    current_agent_config["outline_interaction_enabled"] = False
     current_agent_config["search_mode"] = args.search_mode
     if args.execution_method.strip() == ExecutionMethod.DEPENDENCY_DRIVING.value:
         current_agent_config["execution_method"] = ExecutionMethod.DEPENDENCY_DRIVING.value
