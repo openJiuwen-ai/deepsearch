@@ -76,7 +76,8 @@ def create_plan_tool(state: dict, prompt_template: str):
                 },
                 "title": {
                     "type": "string",
-                    "description": "Title of the plan, summarizing the overall objectives."
+                    "description": "Title of the plan without numbering, summarizing the overall objectives. Never "
+                                   "include numbers, bullets, or prefixes like '1.', '2)', 'I.', '一、'."
                 },
                 "thought": {
                     "type": "string",
@@ -108,7 +109,8 @@ def create_plan_tool(state: dict, prompt_template: str):
                             "title": {
                                 "type": "string",
                                 "description": (
-                                    "The title of the task, summarizing the content of this step."
+                                    "The title of the task without numbering, summarizing the content of this step."
+                                    "Never include numbers, bullets, or prefixes like '1.', '2)', 'I.', '一、'."
                                 )
                             },
                             "description": {

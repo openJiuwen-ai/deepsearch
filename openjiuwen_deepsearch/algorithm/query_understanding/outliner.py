@@ -45,7 +45,7 @@ def generate_outline(language: str, title: str, thought: str, sections: list[Sec
         )
         for section in sections
     ]
-    
+
     outline = Outline(
         language=language,
         title=title,
@@ -61,11 +61,11 @@ def generate_outline(language: str, title: str, thought: str, sections: list[Sec
         validation = validate_section_dependencies(outline.sections)
         if not validation["is_valid"]:
             logger.error(f"Outline still has errors after fix: {validation['errors']}")
-    
+
     for section in outline.sections:
         if not validate_section_id_format(section.id):
             logger.warning(f"Section ID format may be invalid: {section.id}")
-    
+
     return outline
 
 
@@ -99,7 +99,8 @@ def create_outline_tool(max_section_num: int):
                         "properties": {
                             "title": {
                                 "type": "string",
-                                "description": "Each research section title."
+                                "description": "Pure section title without numbering. Never include numbers, bullets, "
+                                                "or prefixes like '1.', '2)', 'I.', '第一章'."
                             },
                             "description": {
                                 "type": "string",
@@ -154,7 +155,8 @@ def creat_dep_driving_outline_tool(max_section_num: int):
                         "properties": {
                             "title": {
                                 "type": "string",
-                                "description": "Each research section title."
+                                "description": "Pure section title without numbering. Never include numbers, bullets, "
+                                                "or prefixes like '1.', '2)', 'I.', '第一章'."
                             },
                             "description": {
                                 "type": "string",
