@@ -42,6 +42,16 @@ The **current user feedback always has the highest priority**.
 
 ---
 
+# Reference Report Template
+
+{{ report_template }}
+
+This template provides a **reference report structure**.  
+Use it as inspiration for section organization when relevant, but **do not force the outline to match it**.  
+The **current outline and user feedback always take priority**.
+
+---
+
 # Editing Workflow
 
 Follow the reasoning workflow below before modifying the outline.

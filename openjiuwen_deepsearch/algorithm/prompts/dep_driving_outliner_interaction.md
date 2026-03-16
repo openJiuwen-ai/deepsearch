@@ -50,6 +50,16 @@ The **current user feedback always has the highest priority**.
 
 ---
 
+# Reference Report Template
+
+{{ report_template }}
+
+This template provides a **reference report structure**.  
+Use it as inspiration for section organization when relevant, but **do not force the outline to match it**.  
+The **current outline and user feedback always take priority**.
+
+---
+
 # Primary Optimization Objective (Highest Priority)
 
 Maximize the outline’s ability to **clarify the problem space, surface key uncertainties and trade-offs, and guide the research process toward meaningful resolution of {{ questions }}.**

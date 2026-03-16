@@ -3,7 +3,7 @@ from unittest.mock import Mock, AsyncMock, patch
 import pytest
 
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner, create_outline_tool
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
 
 # 定义测试数据
 test_data = {
@@ -16,12 +16,13 @@ outline_response = Outline(
     title="中国汽车产业结构",
     thought="中国汽车产业结构分析",
     sections=[
-        {
-            'title': '1. 中国汽车产业概述',
-            'description': '中国汽车产业概述',
-            'is_core_section': False
-        }
-    ]
+        Section(
+            id="1",
+            title="1. 中国汽车产业概述",
+            description="中国汽车产业概述",
+            is_core_section=False,
+        )
+    ],
 )
 
 tool_name = create_outline_tool(1).card.name

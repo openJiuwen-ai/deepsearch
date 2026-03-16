@@ -499,7 +499,7 @@ class OutlineNode(BaseNode):
         report_template = current_inputs.get("report_template", "")
         outline_interaction_mode = current_inputs.get("outline_interaction_mode", "")
         feedback = current_inputs.get("user_feedback", "")
-        if report_template:
+        if report_template and not outline_interaction_mode:
             return "outliner_template"
         if outline_interaction_mode == "revise_comment":
             if self.with_dep_driving:
@@ -518,7 +518,24 @@ class OutlineNode(BaseNode):
         return NodeId.EDITOR_TEAM.value
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        if algorithm_output.get("success_flag"):
+        """处理大纲生成结果"""
+        success_flag = algorithm_output.get("success_flag")
+
+        # 大纲交互兜底
+        if not success_flag:
+            current_outline = session.get_global_state("search_context.current_outline")
+            outline_interactions = session.get_global_state("search_context.outline_interactions") or []
+            # 大纲交互场景且已有大纲的情况下才启用兜底
+            if current_outline and outline_interactions:
+                logger.warning(
+                    f"{self.log_prefix} Outline generation failed in interaction mode, "
+                    "fallback to previous outline."
+                )
+                algorithm_output["current_outline"] = current_outline
+                algorithm_output["success_flag"] = True
+                success_flag = True
+
+        if success_flag:
             outline = algorithm_output.get("current_outline", None)
             session.update_global_state({'search_context.current_outline': outline})
 
@@ -780,7 +797,7 @@ class OutlineInteractionNode(BaseNode):
             "message_id": str(uuid.uuid4()),
             "agent": NodeId.OUTLINE_INTERACTION.value,
             "content": message,
-            "message_type": MessageType.INTERRUPT.value,
+            "message_type": MessageType.MESSAGE_CHUNK.value,
             "event": event.value,
             "created_time": get_current_time()
         })

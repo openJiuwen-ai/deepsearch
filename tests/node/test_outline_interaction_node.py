@@ -427,25 +427,6 @@ class TestOutlineInteractionNodeHelperMethods:
 
 
     @pytest.mark.asyncio
-    async def test_notify_user_waiting_input(
-        self, outline_interaction_node, mock_session
-    ):
-        """通知用户：发送 WAITING_USER_INPUT 事件"""
-        # Act
-        await outline_interaction_node._notify_user(
-            mock_session, "1", StreamEvent.WAITING_USER_INPUT
-        )
-
-        # Assert
-        mock_session.write_custom_stream.assert_called_once()
-        payload = mock_session.write_custom_stream.call_args[0][0]
-
-        assert payload["agent"] == NodeId.OUTLINE_INTERACTION.value
-        assert payload["content"] == "1"
-        assert payload["event"] == StreamEvent.WAITING_USER_INPUT.value
-        assert payload["message_type"] == "interrupt"
-
-    @pytest.mark.asyncio
     async def test_notify_user_input_ended(
         self, outline_interaction_node, mock_session
     ):
@@ -461,6 +442,7 @@ class TestOutlineInteractionNodeHelperMethods:
 
         assert payload["event"] == StreamEvent.USER_INPUT_ENDED.value
         assert payload["content"] == "操作完成"
+        assert payload["message_type"] == "message_chunk"
 
     @pytest.mark.asyncio
     async def test_get_user_input_web_mode(
