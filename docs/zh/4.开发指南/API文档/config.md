@@ -183,6 +183,8 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **execution_method**(Literal["dependency_driving", "parallel"], 可选)：执行方法，`dependency_driving`：依赖驱动工作流执行，`parallel`：并行工作流执行。默认值：`"parallel"`。
 - **workflow_human_in_the_loop**(bool, 可选)：工作流是否启用人机交互。默认值：`True`。
 - **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 10]。默认值：`5`。
+- **outline_interaction_enabled**(bool, 可选)：大纲交互功能开关，开启后用户可对生成的大纲进行多轮修改。默认值：`True`。
+- **outline_interaction_max_rounds**(int, 可选)：大纲交互最大轮次，取值范围：[1, 100]。默认值：`3`。
 - **source_tracer_research_trace_source_switch**(bool, 可选)：溯源功能开关。默认值：`True`。
 - **llm_config**(Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig], 可选)：LLM模型配置。默认值：`dict()`。
 - **info_collector_search_method**(Literal["web", "local", "all"], 可选)：搜索方式，`web`：联网增强搜索，`local`：本地搜索工具搜索，`all`：联网增强+本地融合搜索。默认值：`"web"`。
@@ -240,8 +242,6 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 
 ### 大纲节点基础参数
 - **outliner_max_generate_outline_retry_num**(int, 可选)：最大生成大纲重试次数。默认值：`3`。
-- **outline_interaction_enabled**(bool, 可选)：大纲交互功能开关，开启后用户可对生成的大纲进行多轮修改。默认值：`True`。
-- **outline_interaction_max_rounds**(int, 可选)：大纲交互最大轮次，取值范围：[1, 100]。默认值：`3`。
 
 ### 规划节点基础参数
 - **planner_max_step_num**(int, 可选)：最大步骤数量。默认值：`3`。
