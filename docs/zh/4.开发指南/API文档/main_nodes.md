@@ -183,6 +183,20 @@ class SourceTracerNode(BaseNode)
 
 ---
 
+### class SourceTracerInferNode
+```python
+class SourceTracerInferNode(BaseNode):
+```
+**SourceTracerInferNode** 负责溯源推理。
+
+**功能**：
+- 若`source_tracer_infer_switch`关闭则跳过。
+- 系统自动选择需要进行溯源推理的报告内容，生成对应的溯源推理图。
+- 写入 `final_result.infer_messages`。
+- 当溯源推理失败时写入`exception_info`。
+
+---
+
 ### class EndNode
 ```python
 class EndNode(End)
