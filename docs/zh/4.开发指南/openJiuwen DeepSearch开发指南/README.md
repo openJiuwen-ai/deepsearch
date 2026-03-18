@@ -45,12 +45,12 @@ openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
 
 ---
 
-openJiuwen-DeepSearch 支持接入两种类型联网增强引擎：
+openJiuwen-DeepSearch 支持接入四种类型联网增强引擎：
 
  - Google `web_search_engine_config`的`search_engine_name`参数必须赋值为google。
  - Tavily `web_search_engine_config`的`search_engine_name`参数必须赋值为tavily。
  - 讯飞搜索 `web_search_engine_config`的`search_engine_name`参数必须赋值为xunfei。
- - 花瓣搜索 `web_search_engine_config`的`search_engine_name`参数必须赋值为petal。
+ - 小艺AI问答联网增强 `web_search_engine_config`的`search_engine_name`参数必须赋值为petal。
 
 
 > 说明：用户需要自行前往相应的联网增强引擎的官网注册账号，以便获取可用的search_api_key和联网增强引擎调用的URL请求地址search_url。
