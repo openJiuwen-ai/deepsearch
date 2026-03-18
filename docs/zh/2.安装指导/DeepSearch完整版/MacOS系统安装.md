@@ -42,9 +42,9 @@
 
 * 单击版本下载链接，下载对应版本包至本地。
 
-  x86_64 架构下载链接：<a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.1_amd64.zip" target="_blank" rel="nofollow noopener noreferrer">DeepSearch v0.1.1</a>
+  x86_64 架构下载链接：<a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.2_amd64.zip" target="_blank" rel="nofollow noopener noreferrer">DeepSearch v0.1.2</a>
 
-  arm 架构下载链接：<a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.1_arm64.zip" target="_blank" rel="nofollow noopener noreferrer">DeepSearch v0.1.1</a>
+  arm 架构下载链接：<a href="https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.2_arm64.zip" target="_blank" rel="nofollow noopener noreferrer">DeepSearch v0.1.2</a>
 
 ### 2. 启动 DeepSearch
 

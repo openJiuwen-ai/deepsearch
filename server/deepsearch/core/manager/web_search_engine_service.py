@@ -27,7 +27,7 @@ class WebSearchEngineService:
 
     def create_web_search_engine(self, create_request: WebSearchEngineCreateRequestDTO):
         """
-           创建web搜索引擎
+           创建联网增强引擎
         """
         try:
             model = self.repository.get_by_name(create_request.space_id, create_request.search_engine_name)
@@ -122,7 +122,7 @@ class WebSearchEngineService:
             raise ValidationError(f"Failed to update web search engine: {str(e)}") from e
 
     def post_web_search_engine(self, request: WebSearchEnginePostRequestDTO):
-        """获取指定搜索引擎并访问"""
+        """获取指定联网增强引擎并访问"""
         try:
             # 获取配置
             web_search_config: WebSearchEngineDetail = self.repository.get_engine_detail_by_id(
@@ -134,7 +134,7 @@ class WebSearchEngineService:
                 error_msg = f"Web search engine {request.web_search_engine_id} not found under your space."
                 logger.error(error_msg)
                 raise WebSearchEngineNotFoundException(error_msg)
-            # 访问搜索引擎
+            # 访问联网增强引擎
             search_results = self.run_web_search_engine(request, web_search_config)
             return WebSearchEnginePostRes.model_validate(search_results)
 
@@ -149,7 +149,7 @@ class WebSearchEngineService:
 
     @staticmethod
     def run_web_search_engine(request: WebSearchEnginePostRequestDTO, web_search_config: WebSearchEngineDetail):
-        """访问搜索引擎并返回标准化结果"""
+        """访问联网增强引擎并返回标准化结果"""
         web_engine_name = web_search_config.search_engine_name
         api_wrapper = search_engine_mapping.get(web_engine_name)
 

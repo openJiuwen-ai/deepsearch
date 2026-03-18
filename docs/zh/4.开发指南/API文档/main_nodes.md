@@ -83,6 +83,43 @@ class DependencyOutlineNode(OutlineNode)
 
 ---
 
+### class OutlineInteractionNode
+```python
+class OutlineInteractionNode(BaseNode)
+```
+**OutlineInteractionNode** 大纲交互节点，接收用户反馈并决定后续流程。
+
+**功能**：
+- 检查 `outline_interaction_enabled` 配置，禁用时直接跳转到 `EditorTeamNode`。
+- 检查当前交互轮次，达到 `outline_interaction_max_rounds` 时通知用户并跳转到 `EditorTeamNode`。
+- 通过 `workflow_feedback_mode`（`cmd`/`web`）获取用户输入, 用户输入需要为如下json格式：
+```json
+{
+  "interrupt_feedback": "accepted/revise_comment/revise_outline",
+  "feedback": "用户的反馈，action为revise_comment时为修改意见，action为revise_outline时为新的大纲格式"
+}
+```
+- 支持三种用户反馈动作：
+  - `accepted`：用户接受大纲，跳转到 `EditorTeamNode`
+  - `revise_comment`：用户提供修改意见，跳转到 `OutlineNode` 重新生成大纲
+  - `revise_outline`：用户直接修改大纲，跳转到 `OutlineNode` 重新生成大纲
+- 保存交互记录到 `search_context.outline_interactions`。
+
+---
+
+### class DependencyOutlineInteractionNode
+```python
+class DependencyOutlineInteractionNode(OutlineInteractionNode)
+```
+**DependencyOutlineInteractionNode** 依赖驱动工作流的大纲交互节点。
+
+**功能**：
+- 继承自 `OutlineInteractionNode`，交互逻辑与父类相同。
+- 区别在于：用户接受大纲时，跳转到 `DependencyReasoningTeamNode`。
+- 修改评论时，仍然跳转到 `OutlineNode`。
+
+---
+
 ### class EditorTeamNode
 ```python
 class EditorTeamNode(BaseNode)
@@ -143,6 +180,20 @@ class SourceTracerNode(BaseNode)
 - 预处理后调用校验逻辑，生成引用信息。
 - 写入 `final_result.response_content` 与 `citation_messages`。
 - 校验失败时写入 `exception_info`。
+
+---
+
+### class SourceTracerInferNode
+```python
+class SourceTracerInferNode(BaseNode):
+```
+**SourceTracerInferNode** 负责溯源推理。
+
+**功能**：
+- 若`source_tracer_infer_switch`关闭则跳过。
+- 系统自动选择需要进行溯源推理的报告内容，生成对应的溯源推理图。
+- 写入 `final_result.infer_messages`。
+- 当溯源推理失败时写入`exception_info`。
 
 ---
 
@@ -211,7 +262,7 @@ class EndNode(End)
 ### 主工作流（并行）
 ```
 StartNode -> EntryNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
--> EditorTeamNode -> ReporterNode -> SourceTracerNode -> EndNode
+-> [OutlineInteractionNode -> OutlineNode]* -> EditorTeamNode -> ReporterNode -> SourceTracerNode -> EndNode
 ```
 
 ### 编辑团队子图

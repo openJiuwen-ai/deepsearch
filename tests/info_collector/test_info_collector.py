@@ -469,7 +469,7 @@ class TestInfoCollectorNode:
         assert len(result) == 1
 
     def test_prepare_collector_tool_web(self, info_collector_node):
-        """测试 _prepare_collector_tool 方法 - web 搜索"""
+        """测试 _prepare_collector_tool 方法 - 联网增强 搜索"""
         state = {"search_method": "web"}
 
         with patch(f'{self.MODULE_PATH}.create_web_search_tool') as mock_web, \

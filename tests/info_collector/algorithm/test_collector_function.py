@@ -329,7 +329,7 @@ class TestProcessToolResult:
         }
 
     def test_process_web_search_tool(self):
-        """测试web搜索工具结果处理"""
+        """测试联网增强引擎工具结果处理"""
         with patch(f"{MODULE_PATH}.web_search_jiuwen") as mock_web_search:
             mock_web_search.return_value = (["result"], {"modified": True})
 
@@ -514,7 +514,7 @@ class TestWebSearchJiuwen:
         }
 
     def test_web_search_jiuwen_google_engine(self):
-        """测试Google搜索引擎处理"""
+        """测试Google联网增强引擎处理"""
         tool_content = {
             "search_engine": "google",
             "search_results": [{"title": "Google Result", "link": "http://google.com", "snippet": "Snippet"}]
@@ -534,7 +534,7 @@ class TestWebSearchJiuwen:
             assert agent_input == {"modified": True}
 
     def test_web_search_jiuwen_tavily_engine(self):
-        """测试Tavily搜索引擎处理"""
+        """测试Tavily联网增强引擎处理"""
         tool_content = {
             "search_engine": "tavily",
             "search_results": [{"title": "Tavily Result", "url": "http://tavily.com", "content": "Content"}]
@@ -554,7 +554,7 @@ class TestWebSearchJiuwen:
             assert agent_input == {"modified": True}
 
     def test_web_search_jiuwen_common_engine(self):
-        """测试通用搜索引擎处理"""
+        """测试通用联网增强引擎处理"""
         tool_content = {
             "search_engine": "other_engine",
             "search_results": [{"title": "Common Result", "url": "http://common.com", "content": "Content"}]

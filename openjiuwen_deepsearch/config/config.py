@@ -18,11 +18,11 @@ class LLMConfig(BaseModel):
 
 class WebSearchEngineConfig(BaseModel):
     search_engine_name: Literal["tavily", "google", "xunfei", "petal", "custom"] = Field(default="tavily",
-                                                                                         description="搜索引擎名称")
-    search_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="搜索引擎调用密钥")
-    search_url: str = Field(default="", description="搜索引擎调用地址")
+                                                                                         description="联网增强引擎名称")
+    search_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="联网增强引擎调用密钥")
+    search_url: str = Field(default="", description="联网增强引擎调用地址")
     max_web_search_results: int = Field(default=5, ge=1, le=10, description="最大搜索结果数量")
-    extension: dict = Field(default_factory=dict, description="搜索引擎扩展配置项，根据具体搜索引擎接口设置")
+    extension: dict = Field(default_factory=dict, description="联网增强引擎扩展配置项，根据具体联网增强引擎接口设置")
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -71,9 +71,9 @@ class LocalSearchEngineConfig(BaseModel):
 
 
 class CustomWebSearchConfig(BaseModel):
-    custom_web_search_file: str = Field(default="", description="自定义Web搜索工具文件路径")
-    custom_web_search_func: str = Field(default="", description="自定义Web搜索工具函数名称")
-    extension: dict = Field(default_factory=dict, description="自定义Web搜索工具扩展配置项，根据具体搜索引擎接口设置")
+    custom_web_search_file: str = Field(default="", description="自定义联网增强引擎工具文件路径")
+    custom_web_search_func: str = Field(default="", description="自定义联网增强引擎工具函数名称")
+    extension: dict = Field(default_factory=dict, description="自定义联网增强引擎工具扩展配置项，根据具体联网增强引擎接口设置")
 
 
 class CustomLocalSearchConfig(BaseModel):
@@ -91,10 +91,13 @@ class AgentConfig(BaseModel):
     execution_method: Literal["dependency_driving", "parallel"] = Field(default="parallel",
                                                                         description="执行方法: "
                                                                                     "dependency_driving: 依赖驱动工作流执行"
-                                                                                    "paralles: 并行工作流执行")
+                                                                                    "parallel: 并行工作流执行")
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(default=5, ge=1, le=10, description="最大规划章节数量，取值范围:[1,10]")
+    outline_interaction_enabled: bool = Field(default=True, description="大纲交互开关")
+    outline_interaction_max_rounds: int = Field(default=3, ge=1, le=100, description="大纲交互最大轮次")
     source_tracer_research_trace_source_switch: bool = Field(default=True, description="溯源功能开关")
+    source_tracer_infer_switch: bool = Field(default=True, description="溯源推理功能开关")
     llm_config: Dict[
         Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig
     ] = Field(default_factory=dict, description="LLM配置")
@@ -107,6 +110,9 @@ class AgentConfig(BaseModel):
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
     custom_web_search_config: CustomWebSearchConfig = Field(default_factory=CustomWebSearchConfig)
     custom_local_search_config: CustomLocalSearchConfig = Field(default_factory=CustomLocalSearchConfig)
+
+    # 联网增强引擎 QPS 流控配置
+    web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
 
 
 class ServiceConfig(BaseModel):
@@ -166,9 +172,6 @@ class ServiceConfig(BaseModel):
     # debug辅助工具参数
     node_debug_enable: bool = Field(default=False, description="节点格式化记录debug日志开关")
     export_intermediate_results: bool = Field(default=False, description="可视化任务执行中间结果开关")
-
-    # 搜索引擎 QPS 流控配置
-    web_search_max_qps: float = Field(default=0, description="搜索引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
 
 
 class Config(BaseModel):

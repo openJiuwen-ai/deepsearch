@@ -16,7 +16,7 @@ agent_config["llm_config"]["general"]["model_name"] = ""
 agent_config["llm_config"]["general"]["model_type"] = ""
 agent_config["llm_config"]["general"]["base_url"] = ""
 agent_config["llm_config"]["general"]["api_key"] = ""
-# 2. 配置网络搜索引擎
+# 2. 配置联网增强引擎
 agent_config["web_search_engine_config"]["search_engine_name"] = ""
 agent_config["web_search_engine_config"]["search_url"] = ""
 agent_config["web_search_engine_config"]["search_api_key"] = ""
@@ -45,17 +45,20 @@ openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
 
 ---
 
-openJiuwen-DeepSearch 支持接入两种类型网络搜索引擎：
+openJiuwen-DeepSearch 支持接入四种类型联网增强引擎：
 
  - Google `web_search_engine_config`的`search_engine_name`参数必须赋值为google。
  - Tavily `web_search_engine_config`的`search_engine_name`参数必须赋值为tavily。
+ - 讯飞搜索 `web_search_engine_config`的`search_engine_name`参数必须赋值为xunfei。
+ - 小艺AI问答联网增强 `web_search_engine_config`的`search_engine_name`参数必须赋值为petal。
 
-> 说明：用户需要自行前往谷歌搜索或者Tavily的官网注册账号，以便获取可用搜索引擎的search_api_key和搜索引擎调用的URL请求地址search_url。
+
+> 说明：用户需要自行前往相应的联网增强引擎的官网注册账号，以便获取可用的search_api_key和联网增强引擎调用的URL请求地址search_url。
 
 ## ssl证书配置说明
 
 ---
-在访问LLM大模型服务、以及网络搜索引擎服务时，openJiuwen-DeepSearch提供ssl证书配置能力，如需启用，需要在环境变量中，打开`LLM_SSL_VERIFY`设置为`true`，并提供大模型服务访问的证书`LLM_SSL_CERT`。同理，打开`TOOL_SSL_VERIFY`设置为`true`时，需要提供网络搜索服务访问的证书`TOOL_SSL_CERT`。
+在访问LLM大模型服务、以及联网增强引擎服务时，openJiuwen-DeepSearch提供ssl证书配置能力，如需启用，需要在环境变量中，打开`LLM_SSL_VERIFY`设置为`true`，并提供大模型服务访问的证书`LLM_SSL_CERT`。同理，打开`TOOL_SSL_VERIFY`设置为`true`时，需要提供网络搜索服务访问的证书`TOOL_SSL_CERT`。
 
 如果不需要启用ssl功能，需显式关闭环境变量中`LLM_SSL_VERIFY`和`TOOL_SSL_VERIFY`，设置为`false`，此时不需要提供对应的证书。
 
@@ -277,36 +280,183 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 ---
 
-本功能支持在规划预备阶段与用户进行自然语言式反馈交互，从而更深入理解用户意图。在配置参数`agent_config`中，开启人机交互，`workflow_human_in_the_loop=True`，此时系统会针对用户的原始查询，提出几个延伸问题，用户通过自然语言的反馈回答，为系统提供更加详细的用户需求信息。本功能默认开启。
+本功能支持在 DeepResearch 工作流执行过程中与用户进行自然语言式交互，从而更准确地理解用户需求，并允许用户参与研究规划过程。
 
-在这个过程中，系统会先触发流程中断，等待用户反馈。当用户提供回答时，会再次发起流程恢复，继续完成`DeepResearchAgent`的任务执行。
+当启用人机交互后，系统会在关键节点暂停执行流程，等待用户反馈，并在用户反馈后恢复执行。
 
-在这两轮查询中，会话标识id必须保持一致，以便于系统可以实现中断恢复。
+当前支持两种人机交互阶段：
 
-人机交互的实现方式有两种，默认启用web模式：
- - web模式：通过studio等前端界面，用户通过文本框输入，系统发送请求。此时`service_config`的`workflow_feedback_mode=web`，推荐使用此方式。
- - cmd模式：通过cmd等命令行界面，用户直接反馈文本，系统接收用户输入。此时`service_config`的`workflow_feedback_mode=cmd`。
+1. **用户查询意图交互（Clarification Interaction）**：在任务规划前，通过提问进一步理解用户需求。
+2. **大纲交互（Outline Interaction）**：在报告大纲生成后，允许用户对大纲进行多轮修改。
+
+在所有交互过程中，**会话标识 `conversation_id` 必须保持一致**，以便系统实现流程中断与恢复。
+
+---
+
+## 用户查询意图交互（Clarification Interaction）
+
+在规划预备阶段，系统会根据用户的原始查询自动生成若干延伸问题，引导用户提供更多背景信息，以便系统更准确地理解研究目标。
+
+当配置参数：
 
 ```python
+agent_config.workflow_human_in_the_loop = True
+````
 
-# web模式示例：
+系统将执行用户查询意图交互流程，该功能 **默认开启**。
 
-# 1. 第一轮发送请求
+---
+
+### 工作流程
+
+1. 用户提交原始查询
+2. 系统提出补充问题
+3. 系统中断流程等待用户回答
+4. 用户反馈后系统恢复流程并继续执行 DeepResearch
+
+---
+
+### 交互模式
+
+支持两种交互方式：
+
+#### web 模式（推荐）
+
+用户通过 Web 前端（如 Studio）输入反馈。
+
+```python
+service_config.workflow_feedback_mode = "web"
+```
+
+#### cmd 模式
+
+用户通过命令行直接输入反馈。
+
+```python
+service_config.workflow_feedback_mode = "cmd"
+```
+
+---
+
+### Web 模式示例
+
+```python
+# 第一轮请求：用户原始问题
 {
     "message": "用户原始查询问题",
     "conversation_id": "会话标识id",
     "agent_config": {"workflow_human_in_the_loop": True, ...}
 }
 
-# 2. 第二轮发送请求
+# 第二轮请求：用户回答系统问题
 {
     "message": "用户的反馈回答",
     "conversation_id": "会话标识id，与第一轮保持一致",
     "agent_config": {"workflow_human_in_the_loop": True, ...}
 }
-
 ```
 
+---
+
+## 大纲交互（Outline Interaction）
+
+在报告大纲生成后，系统支持用户对大纲进行 **多轮交互式修改**，以确保最终研究结构符合用户预期。
+
+当配置参数：
+
+```python
+outline_interaction_enabled = True
+```
+
+系统在生成大纲后会暂停执行，并等待用户反馈，该功能 **默认开启**。
+
+---
+
+### 交互模式
+
+用户可以通过以下三种方式反馈：
+
+| 动作               | 说明       | 后续流程         |
+| ---------------- | -------- | ------------ |
+| `accepted`       | 用户接受当前大纲 | 进入报告生成阶段     |
+| `revise_comment` | 用户提供修改意见 | 系统根据意见重新生成大纲 |
+| `revise_outline` | 用户直接修改大纲 | 系统基于用户修改优化大纲 |
+
+---
+
+### 配置参数
+
+大纲交互相关参数定义在 **Server 层 `DeepSearchRequest`** 中。
+
+| 参数                               | 类型   | 默认值    | 说明                  |
+| -------------------------------- | ---- | ------ | ------------------- |
+| `outline_interaction_enabled`    | bool | `True` | 是否开启大纲交互            |
+| `outline_interaction_max_rounds` | int  | `3`    | 最大交互轮次，范围 `[1,100]` |
+
+SDK 层通过 `agent_config` 接收这些参数。
+
+---
+
+### Server 层请求示例
+
+```python
+{
+    "message": "用户查询",
+    "conversation_id": "会话ID",
+    "outline_interaction_enabled": True,
+    "outline_interaction_max_rounds": 3,
+    ...
+}
+```
+
+---
+
+### Web 模式交互示例
+
+在 Web 模式下：
+
+* `interrupt_feedback` 表示用户动作
+* `message` 表示反馈内容
+
+```python
+# 第一轮：生成大纲（等待交互）
+{
+    "message": "分析中国新能源汽车市场发展趋势",
+    "conversation_id": "会话标识id",
+    "agent_config": {
+        "outline_interaction_enabled": True,
+        "outline_interaction_max_rounds": 3,
+        ...
+    }
+}
+
+# 第二轮：用户提出修改意见
+{
+    "message": "请增加充电基础设施建设的分析章节",
+    "conversation_id": "会话标识id，与第一轮保持一致",
+    "interrupt_feedback": "revise_comment",
+    "agent_config": {...}
+}
+
+# 第三轮：用户接受大纲
+{
+    "message": "",
+    "conversation_id": "会话标识id，与之前保持一致",
+    "interrupt_feedback": "accepted",
+    "agent_config": {...}
+}
+```
+
+---
+
+## 注意事项
+
+* 所有交互轮次必须保持 **`conversation_id` 一致**，否则系统无法恢复工作流。
+* 当系统进入交互阶段时，流程会 **触发中断（interrupt）并等待用户反馈**。
+* 用户反馈后，系统会根据 `interrupt_feedback` 参数恢复流程执行。
+* 大纲交互存在最大轮次限制 `outline_interaction_max_rounds`，超过后将自动进入报告生成阶段。
+
+---
 
 
 # 更多参考

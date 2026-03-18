@@ -16,13 +16,15 @@ from openjiuwen_deepsearch.algorithm.query_understanding.router import classify_
 from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.source_trace.checker import postprocess_by_citation_checker, preprocess_info
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTracerInfer
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH, MAX_QUERY_LENGTH, \
     FINISH_TASK_FEEDBACK
 from openjiuwen_deepsearch.common.exception import CustomException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config, WebSearchEngineConfig, LocalSearchEngineConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SearchContext, Message, Outline
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SearchContext, Message, Outline, \
+    OutlineInteraction
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent, \
     custom_stream_output
@@ -66,9 +68,13 @@ class StartNode(Start):
         if origin_agent_config:
             agent_config["execute_mode"] = origin_agent_config.get("execute_mode", "commercial")
             agent_config["workflow_human_in_the_loop"] = origin_agent_config.get("workflow_human_in_the_loop", True)
+            agent_config["outline_interaction_enabled"] = origin_agent_config.get("outline_interaction_enabled", True)
+            agent_config["outline_interaction_max_rounds"] = origin_agent_config.get(
+                "outline_interaction_max_rounds", 3)
             agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 5)
             agent_config["source_tracer_research_trace_source_switch"] = origin_agent_config.get(
                 "source_tracer_research_trace_source_switch", True)
+            agent_config["source_tracer_infer_switch"] = origin_agent_config.get("source_tracer_infer_switch", True)
             agent_config["llm_config"] = origin_agent_config.get("llm_config", {})
             agent_config["info_collector_search_method"] = origin_agent_config.get(
                 "info_collector_search_method", "web")
@@ -171,7 +177,12 @@ class FeedbackHandlerNode(BaseNode):
             return input(prompt)
         if feedback_mode == "web":
             # session.interact本质上是raise Exception的方式，FeedbackHandlerNode内不能使用try except
-            return await session.interact(prompt)
+            user_input = await session.interact(prompt)
+            try:
+                user_input = json.loads(user_input)
+                return user_input.get("feedback", "")
+            except json.JSONDecodeError:
+                return "Invalid feedback format, expected a JSON string with 'user_feedback' field."
         logger.error(f"[FeedbackHandlerNode] Invalid feedback_mode: {feedback_mode}")
         return "Invalid feedback_mode"
 
@@ -394,6 +405,39 @@ class OutlineNode(BaseNode):
         max_outline_retry_num = session.get_global_state("config.outliner_max_generate_outline_retry_num")
         llm_model_name = adapt_llm_model_name(session, NodeId.OUTLINE.value)
         report_template = session.get_global_state("search_context.report_template")
+        outline_interactions = session.get_global_state("search_context.outline_interactions") or []
+        outline_interaction_mode = ""
+        previous_feedback_list = []
+        current_interaction_feedback = ""
+        outline_interactions = [
+            OutlineInteraction(**i) if isinstance(i, dict) else i
+            for i in outline_interactions
+        ]
+
+        if outline_interactions:
+            last = outline_interactions[-1]
+            outline_interaction_mode = last.interaction_mode
+            current_interaction_feedback = last.feedback
+
+            previous_feedback_list = [
+                i.feedback
+                for i in outline_interactions
+                if i.interaction_mode == "revise_comment" and i.feedback
+            ]
+
+        if previous_feedback_list:
+            previous_feedback = "\n".join(
+                f"Round {i + 1} feedback: {feedback}" for i, feedback in enumerate(previous_feedback_list)
+            )
+        else:
+            previous_feedback = "No previous feedback."
+        
+        # 如果是大纲交互场景，使用交互记录中的 feedback；否则使用 user_feedback
+        if outline_interaction_mode:
+            user_feedback = current_interaction_feedback
+        
+        current_outline = session.get_global_state("search_context.current_outline")
+        outline_interaction_enabled = session.get_global_state("config.outline_interaction_enabled")
 
         return dict(
             messages=messages,
@@ -403,17 +447,18 @@ class OutlineNode(BaseNode):
             max_section_num=max_section_num,
             max_outline_retry_num=max_outline_retry_num,
             llm_model_name=llm_model_name,
-            report_template=report_template
+            report_template=report_template,
+            outline_interaction_mode=outline_interaction_mode,
+            current_outline=current_outline,
+            outline_interaction_enabled=outline_interaction_enabled,
+            previous_feedback=previous_feedback,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
-        report_template = current_inputs.get("report_template", "")
-        if report_template:
-            outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name="outliner_template")
-        else:
-            outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=self.outline_prompt)
+        prompt_name = self._select_prompt_name(current_inputs)
+        outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=prompt_name)
         outliner.with_dep_driving = self.with_dep_driving
         max_outline_retry_num = current_inputs.get("max_outline_retry_num", 1)
 
@@ -449,15 +494,61 @@ class OutlineNode(BaseNode):
         result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
+    def _select_prompt_name(self, current_inputs: dict) -> str:
+        """根据交互模式选择 prompt 名称，补充所需的输入字段"""
+        report_template = current_inputs.get("report_template", "")
+        outline_interaction_mode = current_inputs.get("outline_interaction_mode", "")
+        feedback = current_inputs.get("user_feedback", "")
+        if report_template and not outline_interaction_mode:
+            return "outliner_template"
+        if outline_interaction_mode == "revise_comment":
+            if self.with_dep_driving:
+                return "dep_driving_outliner_interaction"
+            return "outliner_interaction"
+        if outline_interaction_mode == "revise_outline":
+            try:
+                current_inputs["user_outline"] = Outline.model_validate_json(feedback)
+            except Exception as e:
+                logger.error(f"{self.log_prefix} Failed to parse user outline JSON: {e}")
+            return "outliner_user_revised"
+        return self.outline_prompt
+
+    def _get_next_node_after_outline(self) -> str:
+        """获取大纲生成成功后的下一个节点"""
+        return NodeId.EDITOR_TEAM.value
+
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        if algorithm_output.get("success_flag"):
-            next_node = NodeId.EDITOR_TEAM.value
+        """处理大纲生成结果"""
+        success_flag = algorithm_output.get("success_flag")
+
+        # 大纲交互兜底
+        if not success_flag:
+            current_outline = session.get_global_state("search_context.current_outline")
+            outline_interactions = session.get_global_state("search_context.outline_interactions") or []
+            # 大纲交互场景且已有大纲的情况下才启用兜底
+            if current_outline and outline_interactions:
+                logger.warning(
+                    f"{self.log_prefix} Outline generation failed in interaction mode, "
+                    "fallback to previous outline."
+                )
+                algorithm_output["current_outline"] = current_outline
+                algorithm_output["success_flag"] = True
+                success_flag = True
+
+        if success_flag:
             outline = algorithm_output.get("current_outline", None)
             session.update_global_state({'search_context.current_outline': outline})
 
             add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE.value, 0, NodeType.MAIN.value,
                                   output_content=str(outline).replace("\\n", "\n")))
-            logger.info(f"{self.log_prefix} Successfully generate outline, go to {next_node}.")
+            
+            outline_interaction_enabled = session.get_global_state("config.outline_interaction_enabled")
+            if outline_interaction_enabled:
+                next_node = NodeId.OUTLINE_INTERACTION.value
+                logger.info(f"{self.log_prefix} Outline generated, go to OutlineInteractionNode.")
+            else:
+                next_node = self._get_next_node_after_outline()
+                logger.info(f"{self.log_prefix} Successfully generate outline, go to {next_node}.")
         else:
             next_node = NodeId.END.value
             error_msg = algorithm_output.get("error_msg")
@@ -476,13 +567,10 @@ class DependencyOutlineNode(OutlineNode):
         super().__init__()
         self.outline_prompt = "dep_driving_outliner"
         self.with_dep_driving = True
-        self.dep_driving_next_node = NodeId.DEPENDENCY_REASONING_TEAM.value
 
-    def _post_handle(self, inputs: Input, algorithm_output: object, session: Session, context: ModelContext) -> dict:
-        result = super()._post_handle(inputs, algorithm_output, session, context)
-        if result.get("next_node") == NodeId.EDITOR_TEAM.value:
-            result["next_node"] = self.dep_driving_next_node
-        return result
+    def _get_next_node_after_outline(self) -> str:
+        """依赖驱动模式下的下一个节点"""
+        return NodeId.DEPENDENCY_REASONING_TEAM.value
 
 
 class SourceTracerNode(BaseNode):
@@ -634,4 +722,257 @@ class SourceTracerNode(BaseNode):
         logger.info(f"[SourceTracerNode] source_tracer_result: "
                     f"{'*' if LogManager.is_sensitive() else source_tracer_result}")
 
+        return dict(next_node=NodeId.SOURCE_TRACER_INFER.value)
+
+
+
+class OutlineInteractionNode(BaseNode):
+    """大纲交互节点: 接收用户反馈，保存历史，跳转到 OutlineNode 进行优化"""
+
+    def __init__(self):
+        super().__init__()
+        self.log_prefix = "[OutlineInteractionNode]"
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        logger.info(f"{self.log_prefix} Start OutlineInteractionNode.")
+        feedback_mode = session.get_global_state("config.workflow_feedback_mode")
+        outline_interaction_enabled = session.get_global_state("config.outline_interaction_enabled")
+        max_rounds = session.get_global_state("config.outline_interaction_max_rounds")
+        outline_interactions = session.get_global_state("search_context.outline_interactions") or []
+        current_round = len(outline_interactions)
+        return dict(
+            feedback_mode=feedback_mode,
+            outline_interaction_enabled=outline_interaction_enabled,
+            max_rounds=max_rounds,
+            current_round=current_round
+        )
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        current_inputs = self._pre_handle(inputs, session, context)
+
+        if not current_inputs.get("outline_interaction_enabled"):
+            logger.info(f"{self.log_prefix} Outline interaction is disabled, skip to editor team.")
+            return dict(next_node=NodeId.EDITOR_TEAM.value)
+
+        max_rounds = current_inputs.get("max_rounds", 5)
+        current_round = current_inputs.get("current_round", 0)
+
+        if current_round >= max_rounds:
+            logger.info(f"{self.log_prefix} Reached max rounds: {max_rounds}")
+            await self._notify_user(session, "Maximum interaction rounds reached.", StreamEvent.USER_INPUT_ENDED)
+            return dict(next_node=NodeId.EDITOR_TEAM.value)
+
+        feedback_mode = current_inputs.get("feedback_mode", "cmd")
+        user_input = await self._get_user_input(feedback_mode, f"{current_round+1}", session)
+
+        if not user_input:
+            logger.warning(f"{self.log_prefix} No user input received")
+            return dict(next_node=NodeId.END.value)
+
+        action = user_input.get("interrupt_feedback", "")
+        if action == "accepted":
+            await self._notify_user(session, "Outline accepted.", StreamEvent.USER_INPUT_ENDED)
+
+        result = self._post_handle(inputs, user_input, session, context)
+        return dict(next_node=result)
+
+
+    def _save_history(self, session: Session, feedback: str, interaction_mode: str):
+        """保存交互记录"""
+        current_outline = session.get_global_state("search_context.current_outline")
+        outline_interactions = session.get_global_state("search_context.outline_interactions") or []
+        new_interaction = OutlineInteraction(
+            feedback=feedback,
+            interaction_mode=interaction_mode,
+            outline_before=current_outline
+        )
+        outline_interactions.append(new_interaction)
+        session.update_global_state({
+            "search_context.outline_interactions": outline_interactions
+        })
+
+    async def _notify_user(self, session: Session, message: str, event: StreamEvent):
+        """通知用户"""
+        await session.write_custom_stream({
+            "message_id": str(uuid.uuid4()),
+            "agent": NodeId.OUTLINE_INTERACTION.value,
+            "content": message,
+            "message_type": MessageType.MESSAGE_CHUNK.value,
+            "event": event.value,
+            "created_time": get_current_time()
+        })
+
+    async def _get_user_input(self, feedback_mode: str, message: str, session: Session) -> dict:
+        """获取用户输入"""
+        prompt = f"Round {message}: waiting for user feedback."
+
+        if feedback_mode == "web":
+            user_input = await session.interact(prompt)
+        else:
+            user_input = input(prompt)
+        try:
+            logger.info(f"{self.log_prefix} Received user input: {'***' if LogManager.is_sensitive() else user_input}")
+            return json.loads(user_input)
+        except json.JSONDecodeError:
+            exception_info = (f"[{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.code}]"
+                              f"{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.errmsg}")
+            session.update_global_state({"search_context.final_result.exception_info": exception_info})
+            # 添加FeedbackHandlerNode debug日志
+            add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE_INTERACTION.value, 0,
+                                                         NodeType.MAIN.value,
+                                                         output_content=str(exception_info).replace("\\n", "\n")))
+            return {}
+
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        action = algorithm_output.get("interrupt_feedback", "")
+        feedback = algorithm_output.get("feedback", "")
+
+        if action == "accepted":
+            logger.info(f"{self.log_prefix} User accepted the outline")
+            next_node = NodeId.EDITOR_TEAM.value
+        elif action == "revise_comment":
+            logger.info(f"{self.log_prefix} User wants to revise with comments")
+            self._save_history(session, feedback, "revise_comment")
+            next_node = NodeId.OUTLINE.value
+        elif action == "revise_outline":
+            logger.info(f"{self.log_prefix} User provided revised outline")
+            self._save_history(session, feedback, "revise_outline")
+            next_node = NodeId.OUTLINE.value
+        else:
+            logger.warning(f"{self.log_prefix} Invalid user action: {action}.")
+            next_node = NodeId.END.value
+
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE_INTERACTION.value, 0,
+                              NodeType.MAIN.value, output_content=str(algorithm_output).replace("\\n", "\n")))
+        logger.info(f"{self.log_prefix} End OutlineInteractionNode.")
+        return next_node
+
+
+class DependencyOutlineInteractionNode(OutlineInteractionNode):
+    def __init__(self):
+        super().__init__()
+        self.log_prefix = "[DependencyOutlineInteractionNode]"
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        result = await super()._do_invoke(inputs, session, context)
+        if result.get("next_node") == NodeId.EDITOR_TEAM.value:
+            result["next_node"] = NodeId.DEPENDENCY_REASONING_TEAM.value
+        return result
+    
+
+class SourceTracerInferNode(BaseNode):
+    def __init__(self) -> None:
+        super().__init__()
+        self.log_prefix = '[SourceTracerInferNode]'
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
+        logger.info(f"{self.log_prefix} Start SourceTracerInferNode.")
+        search_mode = session.get_global_state("search_context.search_mode")
+        llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER_INFER.value)
+        source_tracer_infer_switch = session.get_global_state(
+            "config.source_tracer_infer_switch")
+
+        language = session.get_global_state("search_context.language")
+        current_report = session.get_global_state("search_context.current_report")
+        source_tracer_response = getattr(
+            current_report, "checked_trace_source_report_content", "") if current_report else ""
+        all_classified_contents = getattr(
+            current_report, "all_classified_contents", []) if current_report else []
+
+        # 封装本节点的Input对象
+        return dict(source_tracer_infer_switch=source_tracer_infer_switch,
+                    search_mode=search_mode,
+                    llm_model_name=llm_model_name, language=language,
+                    source_tracer_response=source_tracer_response,
+                    all_classified_contents=all_classified_contents)
+
+    def _post_handle(self, inputs, algorithm_output: dict, session: Session, context: ModelContext):
+        infer_success = algorithm_output.get("infer_success", False)
+        source_tracer_infer_switch = algorithm_output.get("source_tracer_infer_switch", False)
+        if not source_tracer_infer_switch:
+            logger.info(f"{self.log_prefix} Skip Infer! Please turn on the source_tracer_infer_switch.")
+        else:
+            if infer_success:
+                logger.info(f"{self.log_prefix} Infer Success!")
+            else:
+                logger.info(f"{self.log_prefix} Infer Fail!")
+        error_msg = algorithm_output.get("error_msg", "")
+        response = algorithm_output.get("response", "")
+        infer_messages = algorithm_output.get("infer_messages", [])
+        scores = algorithm_output.get("scores", [(0, 0)])
+
+        source_tracer_infer_result_dict = dict(response=response,
+                                               infer_messages=infer_messages,
+                                               scores=scores)
+
+        session.update_global_state({"search_context.final_result.response_content": response,
+                                     "search_context.final_result.infer_messages": infer_messages})
+
+        if error_msg:
+            session.update_global_state({"search_context.final_result.exception_info": error_msg})
+
+        # 添加SourceTracerInferNode debug日志
+        add_debug_log_wrapper(session, NodeDebugData(NodeId.SOURCE_TRACER.value, 0, NodeType.MAIN.value,
+                              output_content=str(source_tracer_infer_result_dict).replace("\\n", "\n")))
+
+        logger.info(f"{self.log_prefix} End SourceTracerInferNode.")
+        logger.info(f"{self.log_prefix} source_tracer_infer_result:"
+                    f"{'*' if LogManager.is_sensitive() else source_tracer_infer_result_dict}")
+
         return dict(next_node=NodeId.END.value)
+
+    @staticmethod
+    async def build_source_tracer_infer_result(infer_infos):
+        """调用溯源推理模块生成溯源推理图
+        Returns:
+            dict = (response, infer_messages, check_infos)
+        """
+        infer = SourceTracerInfer(infer_infos)
+        response, infer_messages, check_infos, error_message = await infer.run()
+        if error_message:
+            raise Exception(error_message)
+        return dict(response=response, infer_messages=infer_messages, check_infos=check_infos)
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext):
+
+        scores = [(0, 0)]
+        try:
+            current_inputs = self._pre_handle(inputs, session, context)
+
+            source_tracer_infer_switch = current_inputs.get("source_tracer_infer_switch", False)
+            if not source_tracer_infer_switch:
+                algorithm_output = dict(source_tracer_infer_switch=source_tracer_infer_switch,
+                                        response=current_inputs.get("source_tracer_response", ""))
+                return self._post_handle(inputs, algorithm_output, session, context)
+
+            # 溯源推理
+            infer_result_dict = await self.build_source_tracer_infer_result(current_inputs)
+
+            # 溯源推理校验
+            check_infos = infer_result_dict.get("check_infos", {})
+            check_infos["llm_model_name"] = current_inputs.get("llm_model_name", "")
+            check_infos["language"] = current_inputs.get("language", "zh")
+
+            # 这里添加溯源推理校验模块
+            infer_result_dict["scores"] = scores
+            infer_result_dict["source_tracer_infer_switch"] = current_inputs.get("source_tracer_infer_switch", False)
+            infer_result_dict["infer_success"] = True
+
+        except Exception as e:
+            error_msg = f"source_tracer_infer failed."
+            if LogManager.is_sensitive():
+                logger.error(f"{self.log_prefix} {error_msg}")
+            else:
+                logger.error(f"{self.log_prefix} {error_msg} {e}")
+            errcode = StatusCode.SOURCE_TRACER_INFER_ERROR.code
+            errmsg = StatusCode.SOURCE_TRACER_INFER_ERROR.errmsg.format(e=e)
+            infer_result_dict = dict(infer_success=False, response=current_inputs.get("source_tracer_response", ""),
+                                     infer_messages=[], scores=[(0, 0)], error_msg=f"[{errcode}] {errmsg}", 
+                                     source_tracer_infer_switch=current_inputs.get("source_tracer_infer_switch", False)
+                                     )
+
+        algorithm_output = infer_result_dict
+        result = self._post_handle(inputs, algorithm_output, session, context)
+        return result
+
+    

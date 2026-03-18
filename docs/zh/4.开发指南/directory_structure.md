@@ -95,7 +95,7 @@ openjiuwen_deepsearch/
 - **openjiuwen/tools/** - 搜索工具封装
   - `web_search.py`
   - `local_search.py`
-  - `search_api/` - 搜索引擎封装
+  - `search_api/` - 联网增强引擎封装
     - `external_tool/`
     - `petal/`
     - `tavily/`
@@ -201,7 +201,7 @@ framework/openjiuwen/agent/main_graph_nodes.py
 - **想了解工作流** → `framework/openjiuwen/agent/`
 - **想了解算法** → `algorithm/`
 - **想修改配置** → `config/config.py`
-- **想接入搜索引擎** → `framework/openjiuwen/tools/search_api/`
+- **想接入联网增强引擎** → `framework/openjiuwen/tools/search_api/`
 - **想修改提示词** → `algorithm/prompts/`
 - **想了解上下文模型** → `framework/openjiuwen/agent/search_context.py`
 

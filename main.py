@@ -160,11 +160,11 @@ if __name__ == "__main__":
     parser.add_argument("--llm_base_url", type=str, required=True, help="llm 模型服务地址")
     parser.add_argument("--llm_api_key", type=str, required=True, help="llm 模型密钥")
 
-    # 添加搜索引擎配置参数
-    parser.add_argument("--web_search_engine_name", type=str, required=True, help="web 搜索引擎名称, tavily or google")
-    parser.add_argument("--web_search_api_key", type=str, required=True, help="web 搜索引擎密钥")
-    parser.add_argument("--web_search_url", type=str, required=True, help="web 搜索引擎服务地址")
-    parser.add_argument("--max_web_search_results", type=int, default=5, help="web 搜索单次请求返回结果数量")
+    # 添加联网增强引擎配置参数
+    parser.add_argument("--web_search_engine_name", type=str, required=True, help="联网增强引擎名称, tavily or google")
+    parser.add_argument("--web_search_api_key", type=str, required=True, help="联网增强引擎密钥")
+    parser.add_argument("--web_search_url", type=str, required=True, help="联网增强引擎服务地址")
+    parser.add_argument("--max_web_search_results", type=int, default=5, help="联网增强搜索单次请求返回结果数量")
 
     # 添加SSL校验和证书参数
     parser.add_argument("--llm_ssl_verify", action="store_true", help="开启 LLM SSL 校验")
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     current_agent_config["llm_config"]["general"]["base_url"] = args.llm_base_url
     current_agent_config["llm_config"]["general"]["api_key"] = bytearray(args.llm_api_key, encoding="utf-8")
 
-    # 解析搜索引擎配置
+    # 解析联网增强引擎配置
     current_agent_config["web_search_engine_config"]["search_engine_name"] = args.web_search_engine_name
     current_agent_config["web_search_engine_config"]["search_api_key"] = bytearray(args.web_search_api_key,
                                                                                    encoding="utf-8")
@@ -203,6 +203,7 @@ if __name__ == "__main__":
     current_agent_config["web_search_engine_config"]["max_web_search_results"] = args.max_web_search_results
 
     current_agent_config["workflow_human_in_the_loop"] = False
+    current_agent_config["outline_interaction_enabled"] = False
     current_agent_config["search_mode"] = args.search_mode
     if args.execution_method.strip() == ExecutionMethod.DEPENDENCY_DRIVING.value:
         current_agent_config["execution_method"] = ExecutionMethod.DEPENDENCY_DRIVING.value

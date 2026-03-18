@@ -118,15 +118,23 @@ class DeepSearchAgentManager:
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,
             "outliner_max_section_num": request.outliner_max_section_num,
             "source_tracer_research_trace_source_switch": request.source_tracer_research_trace_source_switch,
+            "source_tracer_infer_switch": request.source_tracer_infer_switch,
             "info_collector_search_method": request.info_collector_search_method,
             "llm_config": dict(general=llm_config) if "model_name" in llm_config else llm_config,
-            "has_template": has_template
+            "has_template": has_template,
+            # 大纲交互配置
+            "outline_interaction_enabled": request.outline_interaction_enabled,
+            "outline_interaction_max_rounds": request.outline_interaction_max_rounds,
+            "web_search_max_qps": request.web_search_max_qps
         }
         if request.web_search_config:
-            res["web_search_engine_config"] = self._load_web_search_config(space_id, request.web_search_config, db)
+            res["web_search_engine_config"] = self._load_web_search_config(
+                space_id, request.web_search_config, db
+            )
         if request.local_search_config:
-            res["local_search_engine_config"] = self._load_local_search_config(space_id, request.local_search_config,
-                                                                               db)
+            res["local_search_engine_config"] = self._load_local_search_config(
+                space_id, request.local_search_config, db
+            )
         return res
 
     def _load_web_search_config(self, space_id: str, web_search_config: WebSearchConfig, db: Session) -> Dict[str, Any]:

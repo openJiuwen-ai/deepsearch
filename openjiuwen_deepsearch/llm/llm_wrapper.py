@@ -19,7 +19,8 @@ def create_llm_obj(llm_config: LLMConfig):
             model_provider=llm_config.model_type,
             api_key=bytes(llm_config.api_key).decode('utf-8'),
             api_base=llm_config.base_url,
-            timeout=Config().service_config.llm_timeout
+            timeout=Config().service_config.llm_timeout,
+            hyper_parameters=llm_config.hyper_parameters
         )
         model_name = llm_config.model_name
         return dict(model=model, model_name=model_name)

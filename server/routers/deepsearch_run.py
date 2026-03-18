@@ -510,6 +510,7 @@ def _prepare_stream_context(
         "conversation_id": request.conversation_id,
         "report_template": template_content,
         "agent_config": agent_config,
+        "interrupt_feedback": request.interrupt_feedback,
     }
     return request, agent, run_kwargs
 

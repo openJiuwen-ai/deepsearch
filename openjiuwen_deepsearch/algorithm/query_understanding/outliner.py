@@ -32,8 +32,10 @@ def normalize_sections(args: dict) -> dict:
     return args
 
 
-def generate_outline(language: str, title: str, thought: str, sections: list[Section]) -> Outline:
-    """从 FunctionCall 封装 outline """
+def generate_outline(
+    language: str, title: str, thought: str, sections: list[Section]
+) -> Outline:
+    """从 FunctionCall 封装 outline"""
     sections = [
         Section(
             title=section.get("title", ""),
@@ -45,13 +47,20 @@ def generate_outline(language: str, title: str, thought: str, sections: list[Sec
         )
         for section in sections
     ]
-    
+
     outline = Outline(
         language=language,
         title=title,
         thought=thought,
         sections=sections,
     )
+
+    # 验证 Section ID 格式是否正确
+    for section in outline.sections:
+        if not validate_section_id_format(section.id):
+            logger.warning(f"Section ID format may be invalid: {section.id}")
+
+    outline.sections = fix_section_ids(outline.sections)
 
     # 验证依赖关系是否正确
     validation = validate_section_dependencies(outline.sections)
@@ -61,11 +70,11 @@ def generate_outline(language: str, title: str, thought: str, sections: list[Sec
         validation = validate_section_dependencies(outline.sections)
         if not validation["is_valid"]:
             logger.error(f"Outline still has errors after fix: {validation['errors']}")
-    
-    for section in outline.sections:
-        if not validate_section_id_format(section.id):
-            logger.warning(f"Section ID format may be invalid: {section.id}")
-    
+            # 无法修复，最终兜底：清空所有依赖关系
+            for section in outline.sections:
+                section.parent_ids = []
+                section.relationships = []
+
     return outline
 
 
@@ -83,10 +92,7 @@ def create_outline_tool(max_section_num: int):
                     "type": "string",
                     "description": "Output language, e.g. 'zh-CN' or 'en-US'"
                 },
-                "title": {
-                    "type": "string",
-                    "description": "Final report title."
-                },
+                "title": {"type": "string", "description": "Final report title."},
                 "thought": {
                     "type": "string",
                     "description": "Detailed thoughts on generating an outline."
@@ -99,7 +105,8 @@ def create_outline_tool(max_section_num: int):
                         "properties": {
                             "title": {
                                 "type": "string",
-                                "description": "Each research section title."
+                                "description": "Pure section title without numbering. Never include numbers, bullets, "
+                                                "or prefixes like '1.', '2)', 'I.', '第一章'."
                             },
                             "description": {
                                 "type": "string",
@@ -108,12 +115,16 @@ def create_outline_tool(max_section_num: int):
                             "is_core_section": {
                                 "type": "boolean",
                                 "description": "Core section flag."
-                            }
+                            },
+                            "id": {
+                                "type": "string",
+                                "description": "Unique identifier for the section. Following the format '1', '2', etc."
+                            },
                         },
                         "required": ["title", "description"]
                     }
                 }
-            },
+                },
             "required": ["language", "title", "thought", "sections"]
         }
     )
@@ -154,7 +165,8 @@ def creat_dep_driving_outline_tool(max_section_num: int):
                         "properties": {
                             "title": {
                                 "type": "string",
-                                "description": "Each research section title."
+                                "description": "Pure section title without numbering. Never include numbers, bullets, "
+                                                "or prefixes like '1.', '2)', 'I.', '第一章'."
                             },
                             "description": {
                                 "type": "string",
@@ -172,7 +184,7 @@ def creat_dep_driving_outline_tool(max_section_num: int):
                             "parent_ids": {
                                 "type": "array",
                                 "description": "List of parent sections. Strictly ensure that parent IDs are smaller "
-                                               "than the current section's ID",
+                                "than the current section's ID",
                                 "items": {
                                     "type": "string"
                                 }
@@ -188,7 +200,7 @@ def creat_dep_driving_outline_tool(max_section_num: int):
                         "required": ["title", "description", "id", "parent_ids", "relationships"]
                     }
                 }
-            },
+                },
             "required": ["language", "title", "thought", "sections"]
         }
     )
@@ -200,16 +212,18 @@ def creat_dep_driving_outline_tool(max_section_num: int):
     return dep_driving_outline_tool
 
 
-
 def check_tool_call(tool: LocalFunction, tool_calls: list):
     """
-        Args:
-            tool: 定义的 outline FunctionCall
-            tool_calls: 模型实际的给出的 tool_calls
+    Args:
+        tool: 定义的 outline FunctionCall
+        tool_calls: 模型实际的给出的 tool_calls
     """
     is_sensitive = LogManager.is_sensitive()
     if not tool_calls:
-        raise CustomValueException(StatusCode.OUTLINER_GENERATE_ERROR.code, "No outline tool calls found in response")
+        raise CustomValueException(
+            StatusCode.OUTLINER_GENERATE_ERROR.code,
+            "No outline tool calls found in response",
+        )
     if len(tool_calls) > 1:
         logger.error("Multiple tool calls found in response")
     for tool_call in tool_calls:
@@ -218,16 +232,18 @@ def check_tool_call(tool: LocalFunction, tool_calls: list):
         if tool_name != tool.card.name:
             # 手动纠正工具名
             tool_call["name"] = tool.card.name
-            logger.error(f"Tool name is not match({tool.card.name}): {'**' if is_sensitive else tool_name}")
+            logger.error(
+                f"Tool name is not match({tool.card.name}): {'**' if is_sensitive else tool_name}"
+            )
         if not arguments:
             raise CustomValueException(
                 StatusCode.OUTLINER_GENERATE_ERROR.code,
-                f"No arguments found in tool call: {'**' if is_sensitive else tool_call}"
+                f"No arguments found in tool call: {'**' if is_sensitive else tool_call}",
             )
         if not isinstance(arguments, dict):
             raise CustomValueException(
                 StatusCode.OUTLINER_GENERATE_ERROR.code,
-                f"Args is not a dict in tool call: {'**' if is_sensitive else tool_call}"
+                f"Args is not a dict in tool call: {'**' if is_sensitive else tool_call}",
             )
         input_params = tool.card.input_params.get("properties", {})
         for param_name, param_info in input_params.items():
@@ -235,27 +251,27 @@ def check_tool_call(tool: LocalFunction, tool_calls: list):
             if required and param_name not in arguments:
                 raise CustomValueException(
                     StatusCode.OUTLINER_GENERATE_ERROR.code,
-                    f"Required param '{param_name}' not found in tool call: {'**' if is_sensitive else tool_call}"
+                    f"Required param '{param_name}' not found in tool call: {'**' if is_sensitive else tool_call}",
                 )
             if param_name == "sections":
                 sections = arguments[param_name]
                 if not isinstance(sections, list):
                     raise CustomValueException(
                         StatusCode.OUTLINER_GENERATE_ERROR.code,
-                        f"Sections is not a list in tool call: {'**' if is_sensitive else tool_call}"
+                        f"Sections is not a list in tool call: {'**' if is_sensitive else tool_call}",
                     )
                 for i, section in enumerate(sections):
                     if not isinstance(section, dict):
                         raise CustomValueException(
                             StatusCode.OUTLINER_GENERATE_ERROR.code,
-                            f"Section[{i}] is not a dict in tool call: {'**' if is_sensitive else tool_call}"
+                            f"Section[{i}] is not a dict in tool call: {'**' if is_sensitive else tool_call}",
                         )
                     # Check items/properties if needed, but for simplicity:
                     if not section.get("title") or not section.get("description"):
                         raise CustomValueException(
                             StatusCode.OUTLINER_GENERATE_ERROR.code,
                             f"Required section param 'title' or 'description' not found in tool call: "
-                            f"{'**' if is_sensitive else tool_call}"
+                            f"{'**' if is_sensitive else tool_call}",
                         )
 
 
@@ -283,10 +299,10 @@ class Outliner:
                 prompt,
                 agent_name=NodeId.OUTLINE.value,
                 tools=[tool.card.tool_info()],
-                need_stream_out=False
+                need_stream_out=False,
             )
 
-            tool_calls = response.get('tool_calls', [])
+            tool_calls = response.get("tool_calls", [])
             for tool_call in tool_calls:
                 tool_call["args"] = normalize_sections(tool_call.get("args", {}))
 
@@ -294,8 +310,10 @@ class Outliner:
 
             for tool_call in tool_calls:
                 outline = await tool.invoke(tool_call.get("args"))
-                logger.info(f"The outline generation is completed: "
-                            f"{'**' if LogManager.is_sensitive() else outline.model_dump_json(indent=4)}")
+                logger.info(
+                    f"The outline generation is completed: "
+                    f"{'**' if LogManager.is_sensitive() else outline.model_dump_json(indent=4)}"
+                )
                 break
 
         except Exception as e:
@@ -310,7 +328,7 @@ class Outliner:
         return {
             "current_outline": outline,
             "success_flag": success_flag,
-            "error_msg": error_msg
+            "error_msg": error_msg,
         }
 
 
@@ -333,9 +351,13 @@ def validate_section_dependencies(sections):
 
         for parent_id in section.parent_ids:
             if parent_id not in section_ids:
-                errors.append(f"Section '{section.id}' depends on non-existent: {parent_id}")
+                errors.append(
+                    f"Section '{section.id}' depends on non-existent: {parent_id}"
+                )
             elif int(parent_id) > int(section.id):
-                errors.append(f"Section '{section.id}' has reverse dependency: {parent_id}")
+                errors.append(
+                    f"Section '{section.id}' has reverse dependency: {parent_id}"
+                )
 
         parent_count = len(section.parent_ids) if section.parent_ids else 0
         relationship_count = len(section.relationships) if section.relationships else 0
@@ -368,7 +390,9 @@ def sync_relationships_with_parent_ids(section):
         modified = True
     elif relationship_count < parent_count:
         last_rel = relationships[-1] if relationships else "基础依赖"
-        section.relationships = relationships + [last_rel] * (parent_count - relationship_count)
+        section.relationships = relationships + [last_rel] * (
+            parent_count - relationship_count
+        )
         modified = True
     elif relationship_count > parent_count:
         section.relationships = relationships[:parent_count]
@@ -391,12 +415,15 @@ def fix_section_dependency_issues(sections):
 
         original_deps = section.parent_ids.copy()
         section.parent_ids = [
-            pid for pid in section.parent_ids
+            pid
+            for pid in section.parent_ids
             if pid in valid_ids and not _is_reverse_dependency(section.id, pid)
         ]
         removed_deps = set(original_deps) - set(section.parent_ids)
         if removed_deps:
-            logger.warning(f"Section {section.id}: removed invalid deps: {removed_deps}")
+            logger.warning(
+                f"Section {section.id}: removed invalid deps: {removed_deps}"
+            )
 
     for section in fixed_sections:
         if section.id:
@@ -408,5 +435,40 @@ def fix_section_dependency_issues(sections):
 def validate_section_id_format(section_id):
     """验证 Section ID 格式"""
     import re
-    pattern = r'^\d+(\.\d+)*$'
+
+    pattern = r"^\d+(\.\d+)*$"
     return bool(re.match(pattern, section_id)) if section_id else False
+
+
+def fix_section_ids(sections):
+    """Section ID 兜底逻辑（仅处理 id 重排 + parent_ids 去重）"""
+
+    fixed_sections = deepcopy(sections)
+    id_mapping = {}
+
+    # 1 重新编号 section.id
+    for index, section in enumerate(fixed_sections, start=1):
+        old_id = section.id
+        new_id = str(index)
+
+        if old_id:
+            id_mapping[old_id] = new_id
+
+        section.id = new_id
+
+    # 2 修复 parent_ids
+    for section in fixed_sections:
+        new_parents = []
+
+        for pid in section.parent_ids:
+            if not pid:
+                continue
+            if pid in id_mapping:
+                mapped_id = id_mapping[pid]
+                if mapped_id != section.id:
+                    new_parents.append(mapped_id)
+
+        # 去重 + 保序
+        section.parent_ids = list(dict.fromkeys(new_parents))
+
+    return fixed_sections

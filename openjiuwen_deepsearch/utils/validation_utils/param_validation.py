@@ -44,7 +44,8 @@ def validate_run_agent_params(
 
     validate_str_field("interrupt_feedback", interrupt_feedback)
 
-    if interrupt_feedback.strip() and interrupt_feedback not in ("", "accepted", "cancel"):
+    allowed_interrupt_feedback = ("", "accepted", "cancel", "revise_outline", "revise_comment")
+    if interrupt_feedback.strip() and interrupt_feedback not in allowed_interrupt_feedback:
         raise CustomValueException(StatusCode.PARAM_CHECK_ERROR_INTERRUPT_FEEDBACK_ERROR.code,
                                    StatusCode.PARAM_CHECK_ERROR_INTERRUPT_FEEDBACK_ERROR.errmsg)
 
