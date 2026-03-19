@@ -13,7 +13,8 @@ openjiuwen_deepsearch/
 │   ├── report_template/            # 报告模板解析与生成
 │   ├── research_collector/         # 信息收集与评估
 │   ├── source_trace/               # 溯源与校验
-│   └── source_tracer_infer/        # 溯源推理
+│   ├── source_tracer_infer/        # 溯源推理
+│   └── user_feedback_processor/    # 报告生成后的用户反馈局部优化
 ├── framework/                      # 框架层实现
 │   └── openjiuwen/
 │       ├── agent/                  # 工作流与节点
@@ -36,6 +37,9 @@ openjiuwen_deepsearch/
 **主要子目录**：
 
 - **prompts/** - 提示词模板（`.md`）
+  - `synonym_rewrite_expand.md` - 扩写提示词
+  - `synonym_rewrite_polish.md` - 润色提示词
+  - `synonym_rewrite_shorten.md` - 缩写提示词
 - **query_understanding/** - 查询理解
   - `interpreter.py` - 生成澄清问题
   - `outliner.py` - 生成大纲
@@ -68,6 +72,10 @@ openjiuwen_deepsearch/
   - `number_node.py`
   - `supplement_graph.py`
   - `html_template.py`
+- **user_feedback_processor/** - 用户反馈局部优化模块
+  - `action_definitions.py` - 前端 action 与统一动作定义映射
+  - `synonym_rewrite.py` - 扩写、润色、缩写执行逻辑
+  - `user_feedback_processor.py` - 反馈解析、校验、执行与结果发送
 
 ---
 
@@ -191,7 +199,8 @@ framework/openjiuwen/agent/main_graph_nodes.py
     │   └── SubReporterNode → algorithm/report/report.py
     ├── ReporterNode → algorithm/report/report.py
     ├── SourceTracerNode → algorithm/source_trace/
-    └── SourceTracerInferNode → algorithm/source_tracer_infer/
+    ├── SourceTracerInferNode → algorithm/source_tracer_infer/
+    └── UserFeedbackProcessorNode → algorithm/user_feedback_processor/
 ```
 
 ---

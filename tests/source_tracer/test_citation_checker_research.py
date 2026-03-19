@@ -381,3 +381,51 @@ class TestResearchCitationChecker:
             assert '[[2]]' in response_content
             assert '[1]. [示例1]' in response_content
             assert '[2]. [示例2]' in response_content
+
+
+class TestCitationOffsetTracking:
+    """测试引用替换后每个引用的 citation_start_offset 和 citation_end_offset 被正确记录到 datas 中"""
+
+    @pytest.fixture
+    def checker(self):
+        return CitationCheckerResearch(llm_model="mock_model")
+
+    def test_replace_inline_citations_records_offsets(self, checker):
+        """替换引用后，datas 中每条有效引用应包含 citation_start_offset 和 citation_end_offset"""
+        markdown_text = "这是一段测试文本[source_tracer_result][标题A](https://a.com)以及更多内容[source_tracer_result][标题B](https://b.com)结束。"
+        datas = [
+            {"url": "https://a.com", "title": "标题A", "valid": True, "score": 0.9},
+            {"url": "https://b.com", "title": "标题B", "valid": True, "score": 0.8},
+        ]
+        inline_ref_pattern = re.compile(
+            r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))')
+
+        transformed_text, references, datas = checker.replace_inline_citations(
+            markdown_text, datas, inline_ref_pattern)
+
+        for data in datas:
+            if data.get("valid", False):
+                assert "citation_start_offset" in data, f"缺少 citation_start_offset: {data}"
+                assert "citation_end_offset" in data, f"缺少 citation_end_offset: {data}"
+                start = data["citation_start_offset"]
+                end = data["citation_end_offset"]
+                assert start < end
+                citation_text = transformed_text[start:end]
+                assert citation_text.startswith("[[")
+
+    def test_offsets_are_correct_for_single_citation(self, checker):
+        """单个引用的偏移量应精确指向替换后的引用标记"""
+        markdown_text = "前缀文本[source_tracer_result][测试标题](https://test.com)后缀文本"
+        datas = [
+            {"url": "https://test.com", "title": "测试标题", "valid": True, "score": 0.9},
+        ]
+        inline_ref_pattern = re.compile(
+            r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))')
+
+        transformed_text, references, datas = checker.replace_inline_citations(
+            markdown_text, datas, inline_ref_pattern)
+
+        assert len(datas) == 1
+        start = datas[0]["citation_start_offset"]
+        end = datas[0]["citation_end_offset"]
+        assert transformed_text[start:end] == "[[1]](https://test.com)"

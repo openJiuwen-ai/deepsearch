@@ -27,7 +27,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node i
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     SourceTracerNode, StartNode, EntryNode, GenerateQuestionsNode, OutlineNode, FeedbackHandlerNode,
     ReporterNode, EndNode, DependencyOutlineNode, OutlineInteractionNode, DependencyOutlineInteractionNode, 
-    SourceTracerInferNode
+    SourceTracerInferNode, UserFeedbackProcessorNode
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools import update_local_search_mapping, update_web_search_mapping
 from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
@@ -158,9 +158,10 @@ class DeepresearchAgent(BaseAgent):
 
     @staticmethod
     def _build_interrupt_message(thread_id: str, chunk: OutputSchema):
+        payload_id = getattr(getattr(chunk, "payload", None), "id", "")
         interrupt_message = {
             "conversation_id": thread_id,
-            "agent": chunk.payload.id,
+            "agent": payload_id,
             "section_idx": getattr(chunk, "section_idx", "0"),
             "plan_idx": getattr(chunk, "plan_idx", "0"),
             "step_idx": getattr(chunk, "step_idx", "0"),
@@ -463,6 +464,7 @@ class DeepresearchAgent(BaseAgent):
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
+        flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
@@ -482,6 +484,8 @@ class DeepresearchAgent(BaseAgent):
         feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value,
                                                                               NodeId.END.value])
         editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
+        user_feedback_processor_router = init_router(NodeId.USER_FEEDBACK_PROCESSOR.value,
+                                                     [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value])
         flow.add_conditional_connection(NodeId.ENTRY.value, router=entry_router)
         flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
         flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
@@ -490,7 +494,8 @@ class DeepresearchAgent(BaseAgent):
         flow.add_conditional_connection(NodeId.EDITOR_TEAM.value, router=editor_team_router)
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
         flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.END.value)
+        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
 
         return flow
 
@@ -604,6 +609,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
+        flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边 add_connection
@@ -628,6 +634,8 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
                                             [NodeId.DEPENDENCY_WRITING_TEAM.value, NodeId.END.value])
         writing_team_router = init_router(NodeId.DEPENDENCY_WRITING_TEAM.value,
                                           [NodeId.REPORTER.value, NodeId.END.value])
+        user_feedback_processor_router = init_router(NodeId.USER_FEEDBACK_PROCESSOR.value,
+                                                     [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value])
         flow.add_conditional_connection(NodeId.ENTRY.value, router=entry_router)
         flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
         flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
@@ -637,7 +645,8 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_conditional_connection(NodeId.DEPENDENCY_REASONING_TEAM.value, router=reasoning_team_router)
         flow.add_conditional_connection(NodeId.DEPENDENCY_WRITING_TEAM.value, router=writing_team_router)
         flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.END.value)
+        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
 
         return flow
 

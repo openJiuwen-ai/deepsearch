@@ -35,6 +35,7 @@ class StatusCode(Enum):
     |      21      |  溯源引用模块错误         |  溯源生成失败、溯源校验失败等                                        |
     |      22      |  模板功能模块错误         |  模板提取失败异常等                                                |
     |      23      |  溯源推理模块错误         |  溯源推理生成失败等                                                |
+    |      24      |  用户反馈处理模块错误      |  UserFeedbackProcessorNode模块异常：改写失败、偏移量不匹配等          |
 
     """
 
@@ -132,6 +133,20 @@ class StatusCode(Enum):
     SOURCE_TRACER_INFER_ERROR = (212300, "Source tracer infer error {e}")
     SOURCE_TRACER_INFER_DATA_TYPE_ERROR = (212301, "Source tracer infer data type error {e}")
     SOURCE_TRACER_INFER_DATA_LEN_ERROR = (212302, "Source tracer infer data length error {e}")
+
+    USER_FEEDBACK_PROCESSOR_DISABLED = (212400, "User feedback processor is disabled")
+    USER_FEEDBACK_PROCESSOR_MAX_INTERACTIONS_REACHED = (212401, "Max interaction limit reached: {max_interactions}")
+    USER_FEEDBACK_PROCESSOR_TEXT_TOO_LONG = (212402, "Selected text exceeds max length: {max_length}")
+    USER_FEEDBACK_PROCESSOR_OFFSET_MISMATCH = (
+        212403, "Selected text does not match content at offset range [{start}, {end})"
+    )
+    USER_FEEDBACK_PROCESSOR_INVALID_ACTION = (212404, "Invalid action: {action}")
+    USER_FEEDBACK_PROCESSOR_REWRITE_ERROR = (212405, "Rewrite failed: {e}")
+    USER_FEEDBACK_PROCESSOR_INVALID_JSON = (212406, "Invalid JSON format in user feedback: {e}")
+    USER_FEEDBACK_PROCESSOR_INVALID_PARAM_TYPE = (
+        212407, "Invalid parameter type for {param}, expected {expected_type}"
+    )
+    USER_FEEDBACK_PROCESSOR_INVALID_OFFSET_RANGE = (212408, "Invalid offset range [{start}, {end})")
 
     @property
     def errmsg(self):

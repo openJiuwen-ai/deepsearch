@@ -118,7 +118,12 @@ citation verify：某条搜索结果的溯源效验
 ### 1. 部署限制
 当前deepsearch服务支持分布式部署，同时限制单机单进程。如果想在单机部署多实例，也请使用redis模式进行部署。
 ### 2. 调用限制
-除HITL/终止等针对同一个任务的场景外，每次调用deepsearch SDK的run接口使用服务时，需要传入不同的conversation_id，不允许使用相同conversation_id二次传入。
+除同一个任务内的中断恢复场景外，每次调用 deepsearch SDK 的 `run` 接口时，都应使用新的 `conversation_id`，不允许复用旧会话。
+
+以下场景必须复用同一个 `conversation_id`：
+- HITL（澄清问题）恢复。
+- 大纲交互恢复。
+- 报告生成完成后的局部优化交互。
 
 
 ## 六、附录

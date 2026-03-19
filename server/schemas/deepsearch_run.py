@@ -46,3 +46,5 @@ class DeepSearchRequest(BaseModel):
                                                                                      "parallel: 并行工作流执行"
                                                                                      "dependency_driving: 依赖驱动工作流执行")
     web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
+    user_feedback_processor_enable: bool = Field(default=False, description="是否启用用户反馈优化功能")
+    user_feedback_processor_max_interactions: int = Field(default=3, ge=1, le=5, description="最大交互次数")

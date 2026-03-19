@@ -114,6 +114,10 @@ class AgentConfig(BaseModel):
     # 联网增强引擎 QPS 流控配置
     web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
 
+    # 用户反馈局部优化参数
+    user_feedback_processor_enable: bool = Field(default=False, description="是否启用用户反馈优化功能")
+    user_feedback_processor_max_interactions: int = Field(default=3, ge=1, le=5, description="最大交互次数")
+
 
 class ServiceConfig(BaseModel):
     '''
@@ -160,6 +164,9 @@ class ServiceConfig(BaseModel):
     # 溯源节点参数
     source_tracer_citation_verify_max_concurrency_num: int = Field(default=30, description="溯源校验最大并发数量")
     source_tracer_citation_verify_batch_size: int = Field(default=1, description="溯源校验批次大小")
+
+    # 用户反馈优化节点参数
+    user_feedback_processor_max_text_length: int = Field(default=2000, ge=1, le=10000, description="选中文本最大长度")
 
     # 统计性能信息参数
     stats_info_node_duration: bool = Field(default=False, description="节点持续时间统计")

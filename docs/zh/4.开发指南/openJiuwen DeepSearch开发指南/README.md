@@ -116,7 +116,7 @@ agent = DeepResearchAgent(agent_config)
 
 `DeepResearchAgent`的`run`函数，可接收用户查询`message`，数据类型是`str`。`conversation_id`参数是会话标识id。深度研究过程，遵循`agent_config`的参数配置。
 
-`run`函数按照流式数据的模式，逐帧输出系统内部结果。每帧数据是`dict`类型，key值`agent`记录当前帧数据的生产者角色；key值`content`来记录当前帧数据的具体内容。最终的研究报告生产者角色为`NodeId.END.value`。
+`run`函数按照流式数据的模式，逐帧输出系统内部结果。每帧数据是`dict`类型，key值`agent`记录当前帧数据的生产者角色；key值`content`来记录当前帧数据的具体内容。默认情况下，最终结果由`NodeId.END.value`输出；当开启报告后局部优化能力时，`user_feedback_processor`节点会在结束前额外承担一轮交互。
 
 ```python
 import json
@@ -457,6 +457,74 @@ SDK 层通过 `agent_config` 接收这些参数。
 * 大纲交互存在最大轮次限制 `outline_interaction_max_rounds`，超过后将自动进入报告生成阶段。
 
 ---
+# 报告后局部优化
+
+---
+
+本功能支持在报告生成完成后，针对用户选中的局部文本继续进行扩写、润色或缩写。开启方式是在`agent_config`中设置：
+
+```python
+agent_config["user_feedback_processor_enable"] = True
+agent_config["user_feedback_processor_max_interactions"] = 3
+```
+
+该功能与前置 HITL 不同，它发生在报告和溯源结果已经生成之后。工作流会在内部进入`UserFeedbackProcessorNode`：
+- 首次进入时，系统会先向前端发送完整的`final_result`快照。
+- 后续前端继续使用同一个`conversation_id`，把用户动作作为 JSON 字符串传给`message`。
+- 每次改写成功后，系统会返回局部替换信息和最新的`final_result`，前端可据此增量刷新内容。
+- 当用户发送`finish`或达到最大交互次数时，流程结束。
+
+当前支持的动作如下：
+- `expand`：扩写选中文本。
+- `polish`：润色选中文本。
+- `shorten`：缩写选中文本。
+- `finish`：结束当前局部优化会话。
+
+其中，前三种动作的请求体建议包含以下字段：
+- `action`：动作类型。
+- `selected_text`：用户当前选中的原始文本。
+- `start_offset`：选中文本在当前报告中的起始偏移。
+- `end_offset`：选中文本在当前报告中的结束偏移。
+- `user_instruction`：附加改写要求，可选。
+
+```python
+import json
+import uuid
+from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+
+agent_factory = AgentFactory()
+agent = agent_factory.create_agent(agent_config)
+
+conversation_id = str(uuid.uuid4())
+message = "请生成一份某行业研究报告"
+
+# 第一轮：正常生成报告
+async for chunk in agent.run(message=message, conversation_id=conversation_id, agent_config=agent_config):
+    logger.debug("[Stream message from node: %s]", chunk)
+
+# 第二轮：对报告局部内容执行扩写
+feedback_message = json.dumps({
+    "action": "expand",
+    "selected_text": "需要扩写的原文片段",
+    "start_offset": 120,
+    "end_offset": 136,
+    "user_instruction": "补充行业背景和数据解释"
+}, ensure_ascii=False)
+
+async for chunk in agent.run(message=feedback_message, conversation_id=conversation_id, agent_config=agent_config):
+    logger.debug("[Rewrite stream message: %s]", chunk)
+
+# 第三轮：结束局部优化
+finish_message = json.dumps({"action": "finish"}, ensure_ascii=False)
+async for chunk in agent.run(message=finish_message, conversation_id=conversation_id, agent_config=agent_config):
+    logger.debug("[Finish stream message: %s]", chunk)
+```
+
+说明：
+- `selected_text`必须与当前报告中`[start_offset, end_offset)`范围内的文本完全一致，否则会返回偏移校验错误。
+- 选中文本最大长度受`service_config.user_feedback_processor_max_text_length`控制，默认值为`2000`。
+- 局部改写会同步维护引用和溯源推理的偏移信息，因此前端应始终以最新返回的`final_result`为准继续交互。
+
 
 
 # 更多参考

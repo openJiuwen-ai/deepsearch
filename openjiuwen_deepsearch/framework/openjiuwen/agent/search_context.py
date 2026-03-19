@@ -173,6 +173,10 @@ class SearchContext(BaseModel):
     current_report: Union[Report, Dict, str, None] = None
     history_reports: List[Report] = Field(default_factory=list, description="多轮报告生成时，保存历史report列表")
 
-    # 4、其他参数
+    # 4、用户反馈优化相关参数
+    feedback_interaction_count: int = Field(default=0, description="用户反馈优化交互次数")
+    rewrite_history: List[Dict] = Field(default_factory=list, description="用户反馈优化历史记录")
+
+    # 5、其他参数
     final_result: FinalResult = Field(default_factory=FinalResult, description="最终返回前端的结果")
     debug_pre_node: str = Field(default="", description="添加格式化debug日志的前一节点")

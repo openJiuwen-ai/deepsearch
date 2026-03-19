@@ -206,6 +206,8 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **custom_web_search_config**(CustomWebSearchConfig, 可选)：自定义联网增强引擎配置。默认值：`CustomWebSearchConfig()`。
 - **custom_local_search_config**(CustomLocalSearchConfig, 可选)：自定义本地搜索配置。默认值：`CustomLocalSearchConfig()`。
 - **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
+- **user_feedback_processor_enable**(bool, 可选)：是否启用报告生成后的局部优化能力。默认值：`False`。
+- **user_feedback_processor_max_interactions**(int, 可选)：局部优化最大交互次数。默认值：`3`,可设置范围为1~5。
 
 **样例**：
 
@@ -277,6 +279,9 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 ### 溯源节点参数
 - **source_tracer_citation_verify_max_concurrency_num**(int, 可选)：溯源校验最大并发数量。默认值：`30`。
 - **source_tracer_citation_verify_batch_size**(int, 可选)：溯源校验批次大小。默认值：`1`。
+
+### 用户反馈优化节点参数
+- **user_feedback_processor_max_text_length**(int, 可选)：单次选中文本最大长度。默认值：`2000`。
 
 ### 统计信息参数
 - **stats_info_node_duration**(bool, 可选)：节点持续时间统计。默认值：`False`。

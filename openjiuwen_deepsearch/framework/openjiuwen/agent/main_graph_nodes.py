@@ -17,14 +17,17 @@ from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFor
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.source_trace.checker import postprocess_by_citation_checker, preprocess_info
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTracerInfer
+from openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor import (
+    UserFeedbackProcessor,
+)
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH, MAX_QUERY_LENGTH, \
     FINISH_TASK_FEEDBACK
-from openjiuwen_deepsearch.common.exception import CustomException
+from openjiuwen_deepsearch.common.exception import CustomException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config, WebSearchEngineConfig, LocalSearchEngineConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SearchContext, Message, Outline, \
-    OutlineInteraction
+    OutlineInteraction, Report
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent, \
     custom_stream_output
@@ -83,6 +86,10 @@ class StartNode(Start):
             agent_config["local_search_engine_config"] = LocalSearchEngineConfig(
                 search_engine_name=origin_agent_config.get(
                     "local_search_engine_config", {}).get("search_engine_name", ""))
+            agent_config["user_feedback_processor_enable"] = origin_agent_config.get(
+                "user_feedback_processor_enable", False)
+            agent_config["user_feedback_processor_max_interactions"] = origin_agent_config.get(
+                "user_feedback_processor_max_interactions", 3)
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -975,4 +982,192 @@ class SourceTracerInferNode(BaseNode):
         result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
-    
+
+class UserFeedbackProcessorNode(BaseNode):
+    """在报告生成完成后，处理用户对局部文本的迭代改写请求。"""
+
+    def __init__(self):
+        super().__init__()
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
+        logger.info("[UserFeedbackProcessorNode] Start UserFeedbackProcessorNode.")
+        enable = session.get_global_state("config.user_feedback_processor_enable")
+        if not enable:
+            return dict(disabled=True)
+
+        return dict(
+            disabled=False,
+            max_interactions=session.get_global_state("config.user_feedback_processor_max_interactions"),
+            max_text_length=session.get_global_state("config.user_feedback_processor_max_text_length"),
+            feedback_mode=session.get_global_state("config.workflow_feedback_mode"),
+            interaction_count=session.get_global_state("search_context.feedback_interaction_count") or 0,
+            language=session.get_global_state("search_context.language"),
+            final_result=session.get_global_state("search_context.final_result"),
+            llm_model_name=adapt_llm_model_name(session, NodeId.USER_FEEDBACK_PROCESSOR.value),
+        )
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        current_inputs = self._pre_handle(inputs, session, context)
+
+        # 确定 algorithm_output，包含 next_node 以供 _post_handle 路由
+        algorithm_output = await self._build_algorithm_output(current_inputs, session)
+
+        return self._post_handle(inputs, algorithm_output, session, context)
+
+    async def _build_algorithm_output(self, current_inputs: dict, session: Session) -> dict:
+        """执行业务逻辑，并返回包含路由信息的节点输出。"""
+        if current_inputs.get("disabled"):
+            logger.info("[UserFeedbackProcessorNode] Feature disabled, routing to EndNode.")
+            return dict(next_node=NodeId.END.value)
+
+        interaction_count = current_inputs["interaction_count"]
+        max_interactions = current_inputs["max_interactions"]
+        if interaction_count >= max_interactions:
+            logger.info(f"[UserFeedbackProcessorNode] Max interactions reached: {max_interactions}")
+            await self._notify_user(session, "Maximum interaction rounds reached.", StreamEvent.USER_INPUT_ENDED)
+            return dict(next_node=NodeId.END.value)
+
+        final_result = current_inputs["final_result"]
+
+        # 首次进入用户反馈阶段时，先把当前完整报告推给前端。
+        if interaction_count == 0:
+            if final_result:
+                final_result_json = json.dumps(final_result, ensure_ascii=False)
+                await custom_stream_output(session, str(uuid.uuid4()), final_result_json,
+                NodeId.USER_FEEDBACK_PROCESSOR.value)
+            else:
+                logger.error("[UserFeedbackProcessorNode] Final result not found")
+                return dict(next_node=NodeId.END.value)
+
+        report_content = final_result.get("response_content", "") or ""
+
+        raw_feedback = await self._get_user_feedback(current_inputs["feedback_mode"], session)
+        try:
+            feedback = UserFeedbackProcessor.parse_feedback(raw_feedback)
+            UserFeedbackProcessor.validate(feedback, report_content, current_inputs["max_text_length"])
+
+            action = feedback.get("action", "")
+            if action == "finish":
+                logger.info("[UserFeedbackProcessorNode] User finished feedback, routing to EndNode.")
+                await self._notify_user(session, "User feedback finished.", StreamEvent.USER_INPUT_ENDED)
+                return dict(next_node=NodeId.END.value)
+
+            processor = UserFeedbackProcessor(current_inputs["llm_model_name"])
+            action_result = await processor.execute(
+                feedback=feedback,
+                final_result=final_result,
+                language=current_inputs["language"],
+            )
+        except CustomException as e:
+            logger.warning(f"[UserFeedbackProcessorNode] User feedback failed: {e}")
+            await UserFeedbackProcessor.send_error(session, e)
+            return dict(
+                next_node=NodeId.USER_FEEDBACK_PROCESSOR.value,
+                interaction_count=interaction_count,
+                exception_info=str(e),
+            )
+        except Exception as e:
+            logger.error(f"[UserFeedbackProcessorNode] Action failed: {e}")
+            wrapped_error = CustomValueException(
+                StatusCode.USER_FEEDBACK_PROCESSOR_REWRITE_ERROR.code,
+                StatusCode.USER_FEEDBACK_PROCESSOR_REWRITE_ERROR.errmsg.format(e=str(e)),
+            )
+            await UserFeedbackProcessor.send_error(session, wrapped_error)
+            return dict(
+                next_node=NodeId.USER_FEEDBACK_PROCESSOR.value,
+                interaction_count=interaction_count,
+                exception_info=str(wrapped_error),
+            )
+
+        stream_result = UserFeedbackProcessor.build_stream_result(feedback, action_result)
+        updated_final_result = dict(final_result or {})
+        updated_final_result.update({
+            "response_content": action_result["new_report"],
+            "citation_messages": action_result["updated_citation_messages"],
+            "infer_messages": action_result["updated_infer_messages"],
+        })
+        await UserFeedbackProcessor.send_result(
+            session=session,
+            feedback=feedback,
+            result=stream_result,
+            final_result=updated_final_result,
+        )
+
+        return dict(
+            next_node=NodeId.USER_FEEDBACK_PROCESSOR.value,
+            interaction_count=interaction_count,
+            feedback=feedback,
+            **action_result,
+        )
+
+    async def _get_user_feedback(self, feedback_mode: str, session: Session) -> str:
+        """按交互模式获取原始用户反馈。"""
+        prompt = "\nProvide your feedback: "
+        if feedback_mode == "cmd":
+            return input(prompt)
+        if feedback_mode == "web":
+            return await session.interact(prompt)
+        logger.error(f"[UserFeedbackProcessorNode] Invalid feedback_mode: {feedback_mode}")
+        return ""
+
+    async def _notify_user(self, session: Session, message: str, event: StreamEvent):
+        await session.write_custom_stream({
+            "message_id": str(uuid.uuid4()),
+            "agent": NodeId.USER_FEEDBACK_PROCESSOR.value,
+            "content": message,
+            "message_type": MessageType.MESSAGE_CHUNK.value,
+            "event": event.value,
+            "created_time": get_current_time()
+        })
+
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session,
+                     context: ModelContext) -> dict:
+        next_node = algorithm_output["next_node"]
+        interaction_count = algorithm_output.get("interaction_count")
+        if next_node == NodeId.USER_FEEDBACK_PROCESSOR.value and interaction_count is not None:
+            session.update_global_state({"search_context.feedback_interaction_count": interaction_count + 1})
+
+        exception_info = algorithm_output.get("exception_info")
+        if exception_info is not None:
+            session.update_global_state({"search_context.final_result.exception_info": exception_info})
+
+        # 非改写成功路径（disabled / finish / error）不需要更新报告状态，直接按 next_node 路由。
+        if "new_report" not in algorithm_output:
+            return dict(next_node=next_node)
+
+        new_report = algorithm_output["new_report"]
+        rewritten_text = algorithm_output["rewritten_text"]
+        rewritten_start_offset = algorithm_output["start_offset"]
+        rewritten_end_offset = algorithm_output["new_end_offset"]
+        updated_citation_messages = algorithm_output["updated_citation_messages"]
+        updated_infer_messages = algorithm_output.get("updated_infer_messages")
+        feedback = algorithm_output["feedback"]
+        selected_text_clean = algorithm_output.get("original_text_clean", feedback.get("selected_text"))
+
+        session.update_global_state({"search_context.final_result.response_content": new_report})
+        session.update_global_state({"search_context.final_result.citation_messages": updated_citation_messages})
+        session.update_global_state({"search_context.final_result.infer_messages": updated_infer_messages})
+
+        # 记录每次局部改写的关键信息，便于问题排查和后续审计。
+        history = session.get_global_state("search_context.rewrite_history") or []
+        history.append({
+            "action": feedback.get("action"),
+            "selected_text": feedback.get("selected_text"),
+            "selected_text_clean": selected_text_clean,
+            "original_start_offset": feedback.get("start_offset"),
+            "original_end_offset": feedback.get("end_offset"),
+            "rewritten_text": rewritten_text,
+            "rewritten_start_offset": rewritten_start_offset,
+            "rewritten_end_offset": rewritten_end_offset,
+            "user_instruction": feedback.get("user_instruction", ""),
+        })
+        session.update_global_state({"search_context.rewrite_history": history})
+
+        add_debug_log_wrapper(session, NodeDebugData(
+            NodeId.USER_FEEDBACK_PROCESSOR.value, 0, NodeType.MAIN.value,
+            output_content=json.dumps({"start_offset": rewritten_start_offset, "end_offset": rewritten_end_offset},
+                                      ensure_ascii=False)
+        ))
+
+        logger.info("[UserFeedbackProcessorNode] Rewrite completed, loop back for next interaction.")
+        return dict(next_node=next_node)

@@ -8,6 +8,7 @@ import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import SourceTracerNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 
 
 MODULE_PATH = "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes"
@@ -117,6 +118,21 @@ class TestSourceTracerNode:
         mock_session.get_global_state.side_effect = get_global_state_side_effect_disabled
         result = source_tracer_node.pre_handle(None, mock_session, None)
         assert result["need_exit"] is True
+
+    @staticmethod
+    def test_post_handle_routes_research_need_exit_to_source_tracer_infer(source_tracer_node, mock_session):
+        algorithm_output = {
+            "need_exit": True,
+            "origin_report": "test report",
+            "search_mode": "research",
+        }
+
+        mock_session.get_global_state.return_value = None
+
+        with patch(f"{MODULE_PATH}.add_debug_log_wrapper"):
+            result = source_tracer_node.post_handle(None, algorithm_output, mock_session, None)
+
+        assert result["next_node"] == NodeId.SOURCE_TRACER_INFER.value
 
     @pytest.mark.asyncio
     async def test_build_citation_checker_result(self, source_tracer_node):

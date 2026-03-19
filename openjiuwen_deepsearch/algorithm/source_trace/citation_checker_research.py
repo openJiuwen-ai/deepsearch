@@ -54,6 +54,8 @@ class CitationCheckerResearch:
                 "from": "web" if data.get("url", "").startswith("http") else "local",
                 "id": idx,
                 "reference_index": data.get("reference_index", -1),
+                "citation_start_offset": data.get("citation_start_offset", -1),
+                "citation_end_offset": data.get("citation_end_offset", -1),
             }
 
         frontend_citations_data = {}
@@ -478,46 +480,67 @@ class CitationCheckerResearch:
             tuple: 返回处理后的结果
                 - transformed_text (str): 处理后的Markdown文本，包含标准格式的引用
                 - references (OrderedDict): 按出现顺序排序的参考文献字典，键为URL，值为引用信息
-                - datas (list): 更新后的引用数据列表
+                - datas (list): 更新后的引用数据列表，有效文本引用会新增 citation_start_offset / citation_end_offset 字段
         """
-        # 用于存储引用信息并保持顺序和去重
         references = OrderedDict()
         ref_counter = 1
         cur_citation_index = -1
 
-        def replace_inline_citation(match):
-            nonlocal ref_counter
-            nonlocal references
-            nonlocal cur_citation_index
+        new_parts = []
+        last_pos = 0
+        current_new_offset = 0
 
+        for match in inline_ref_pattern.finditer(markdown_text):
             is_image = match.group(1) is not None
             title = match.group(2)
             url = match.group(3) or match.group(4)
+
             if url is None:
-                return ''
+                # 无法识别 URL，原样保留该匹配段
+                before_text = markdown_text[last_pos:match.end()]
+                new_parts.append(before_text)
+                current_new_offset += len(before_text)
+                last_pos = match.end()
+                continue
+
             url = url.strip()
             cur_citation_index += 1
 
+            # 追加匹配之前的非引用文本
+            before_text = markdown_text[last_pos:match.start()]
+            new_parts.append(before_text)
+            current_new_offset += len(before_text)
+
             url, is_valid = self.validate_url_match(url, datas, cur_citation_index)
             if not is_valid:
-                return ''
-            # 是图片，不记录引用序号，直接返回 title + url
+                # 无效引用，替换为空字符串
+                last_pos = match.end()
+                continue
+
             if is_image:
-                return f'![[{title}]]({url})'
+                replacement = f'![[{title}]]({url})'
+                new_parts.append(replacement)
+                current_new_offset += len(replacement)
+            else:
+                text_citation, ref_counter, current_idx = self.format_text_citation(
+                    url, title, references, ref_counter)
+                datas[cur_citation_index]["reference_index"] = current_idx
 
-            # 处理文本引用，获取序号
-            text_citation, ref_counter, current_idx = self.format_text_citation(
-                url, title, references, ref_counter
-            )
+                # 这里记录的是“替换完成后的新文本坐标”，
+                # 后续用户做局部改写时会基于这个 offset 精确删除/平移引用实例。
+                citation_start = current_new_offset
+                new_parts.append(text_citation)
+                current_new_offset += len(text_citation)
+                citation_end = current_new_offset
 
-            # 将序号添加到 datas
-            datas[cur_citation_index]["reference_index"] = current_idx
+                datas[cur_citation_index]["citation_start_offset"] = citation_start
+                datas[cur_citation_index]["citation_end_offset"] = citation_end
 
-            return text_citation
+            last_pos = match.end()
 
-        # 替换所有行内引用
-        transformed_text = inline_ref_pattern.sub(
-            replace_inline_citation, markdown_text)
+        # 追加剩余文本
+        new_parts.append(markdown_text[last_pos:])
+        transformed_text = ''.join(new_parts)
 
         # 检查引用数量是否匹配
         if cur_citation_index + 1 != len(datas):

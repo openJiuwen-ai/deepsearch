@@ -179,7 +179,25 @@ class SourceTracerNode(BaseNode)
 - 若 `source_tracer_research_trace_source_switch` 关闭则跳过。
 - 预处理后调用校验逻辑，生成引用信息。
 - 写入 `final_result.response_content` 与 `citation_messages`。
+- 引用结果中的文本引用会携带 `citation_start_offset` 与 `citation_end_offset`，供后续局部改写使用。
 - 校验失败时写入 `exception_info`。
+
+
+---
+
+### class UserFeedbackProcessorNode
+```python
+class UserFeedbackProcessorNode(BaseNode)
+```
+**UserFeedbackProcessorNode** 在报告生成完成后，处理用户对局部文本的迭代改写请求。
+
+**功能**：
+- 根据 `user_feedback_processor_enable` 决定是否启用报告后局部优化。
+- 首次进入时先向前端发送完整的 `final_result` 快照。
+- 读取用户 JSON 反馈，支持 `expand`、`shorten`、`polish`、`finish`。
+- 调用 `UserFeedbackProcessor` 完成局部改写，并同步更新 `citation_messages` 与 `infer_messages`。
+- 维护 `search_context.feedback_interaction_count` 与 `search_context.rewrite_history`。
+- 达到 `user_feedback_processor_max_interactions` 或收到 `finish` 后结束流程。
 
 ---
 
@@ -263,6 +281,15 @@ class EndNode(End)
 ```
 StartNode -> EntryNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
 -> [OutlineInteractionNode -> OutlineNode]* -> EditorTeamNode -> ReporterNode -> SourceTracerNode -> EndNode
+-> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
+```
+
+### 主工作流（依赖驱动）
+```text
+StartNode -> EntryNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> DependencyOutlineNode
+-> [DependencyOutlineInteractionNode] -> DependencyReasoningTeamNode
+-> DependencyWritingTeamNode -> ReporterNode -> SourceTracerNode
+-> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
 ```
 
 ### 编辑团队子图

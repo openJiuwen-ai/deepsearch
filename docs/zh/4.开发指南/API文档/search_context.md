@@ -208,3 +208,5 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 - **history_reports**(List[Report])：历史报告。
 - **final_result**(FinalResult)：最终结果。
 - **debug_pre_step**(str)：上一步调试日志。
+- **feedback_interaction_count**(int)：报告生成后局部优化的交互次数。默认值：`0`。
+- **rewrite_history**(List[Dict])：局部改写历史记录。
