@@ -280,7 +280,7 @@ def _unify_responnse(response):
             if func and func.get("name"):
                 new_response.get("tool_calls")[idx]["name"] = func.get("name")
             if tool_call.get("type"):
-                new_response.get("tool_calls")[idx]["type"] = "tool_call"
+                new_response.get("tool_calls")[idx]["type"] = "function"
             new_response.get("tool_calls")[idx].pop("index", None)
     return new_response
 
