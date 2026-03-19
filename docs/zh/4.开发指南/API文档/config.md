@@ -33,6 +33,18 @@ gpt-4 openai
 >>> # 样例2：使用默认配置
 >>> llm_config = LLMConfig()
 >>> print(llm_config.model_name)
+
+>>> # 样例3：使用extension配置
+>>> llm_config = LLMConfig(
+...     model_name="gpt-4",
+...     model_type="openai",
+...     base_url="https://api.openai.com/v1",
+...     api_key=bytearray("your_api_key", encoding="utf-8"),
+...     extension={
+            'extra_headers': {...} # 假设使用openai的extra_headers参数，还支持extra_body等
+...     }
+... )
+
 ```
 
 ## class openjiuwen_deepsearch.config.config.WebSearchEngineConfig

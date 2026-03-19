@@ -56,15 +56,11 @@ def validate_llm_obj_params(input_config: LLMConfig):
     """
     llm_config = input_config.model_dump()
     model_provider = llm_config.get("model_type", "")
-    api_key = llm_config.get("api_key", "")
     api_base = llm_config.get("base_url", "")
     model_name = llm_config.get("model_name", "")
 
     validate_not_empty_field("model_provider", model_provider)
     validate_str_field("model_provider", model_provider)
-
-    validate_not_empty_field("api_key", api_key)
-    validate_bytearray_field("api_key", api_key)
 
     validate_not_empty_field("api_base", api_base)
     validate_str_field("api_base", api_base)
