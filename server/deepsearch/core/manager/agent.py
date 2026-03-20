@@ -4,7 +4,6 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-from fastapi import HTTPException
 from openjiuwen.core.session.checkpointer import CheckpointerFactory
 from sqlalchemy.orm import Session
 
@@ -49,7 +48,7 @@ class DeepSearchAgentManager:
         milvus_uri = f"http://{milvus_host}:{milvus_port}"
 
         return {
-            "collection_name": f"kb_{kb_id}_chunks",
+            "collection_name": f"ds_kb_{kb_id}_chunks",
             "uri": milvus_uri,
             "token": milvus_token
         }
@@ -163,10 +162,42 @@ class DeepSearchAgentManager:
 
     def _load_local_search_config(self, space_id: str, local_search_config: LocalSearchConfig, db: Session) -> Dict[
         str, Any]:
+        """从请求中的 LocalSearchConfig 构建本地搜索配置"""
         try:
-            return {}
-        except HTTPException as e:
-            raise e
+            if local_search_config.embed_model_config is None:
+                raise SearchEngineConfigException(
+                    "local_search_config.embed_model_config is required when using local search."
+                )
+            em = local_search_config.embed_model_config
+            api_key = em.api_key
+            if not isinstance(api_key, (bytes, bytearray)):
+                api_key = bytearray(str(api_key).encode("utf-8"))
+            else:
+                api_key = bytearray(api_key)
+            embed_model_config_dict = {
+                "model_name": em.model_name,
+                "api_key": api_key,
+                "base_url": em.base_url,
+                "max_batch_size": em.max_batch_size,
+            }
+
+            kb_configs = []
+            for kb_id in local_search_config.local_search_config_ids:
+                kb_configs.append({
+                    "id": kb_id,
+                    "embed_model_config": embed_model_config_dict,
+                    "vector_store": self._create_vector_store_param(kb_id),
+                    "index_type": "vector"
+                })
+
+            return {
+                "search_engine_name": "native",
+                "max_local_search_results": local_search_config.max_local_search_results,
+                "recall_threshold": local_search_config.recall_threshold,
+                "knowledge_base_configs": kb_configs
+            }
+        except SearchEngineConfigException:
+            raise
         except Exception as e:
             logger.error("Failed to load local search config: %s", str(e))
             raise LocalSearchEngineConfigGetException(f"Failed to build config: {str(e)}") from e

@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 from fastapi import FastAPI, APIRouter
 
-from server.routers import deepsearch_run, report, report_template, web_search_engine_router
+from server.routers import deepsearch_run, report, report_template, web_search_engine_router, knowledge_base
 
 api_router = APIRouter()
 
@@ -23,6 +23,8 @@ def router_register(app: FastAPI):
 
     deepsearch_router = register_deepsearch_router()
     app.include_router(deepsearch_router)
+    knowledge_base_router = register_knowledge_base_router()
+    app.include_router(knowledge_base_router)
 
     @app.get("/")
     async def root():
@@ -41,3 +43,10 @@ def register_deepsearch_router():
     deepsearch_router.include_router(report.reports_router, prefix="/reports", tags=["Reports"])
     deepsearch_router.include_router(report_template.router, prefix="/template", tags=["Report Template"])
     return deepsearch_router
+
+
+def register_knowledge_base_router():
+    """Register knowledge base router."""
+    knowledge_base_router = APIRouter(prefix="/api/kb")
+    knowledge_base_router.include_router(knowledge_base.knowledge_base_router, tags=["Knowledge Base"])
+    return knowledge_base_router

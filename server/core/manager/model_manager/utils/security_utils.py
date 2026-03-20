@@ -8,7 +8,7 @@ including key storage, validation, and format checking.
 import base64
 import logging
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
@@ -164,6 +164,54 @@ class SecurityUtils:
             return "*" * len(api_key)
 
         return "*" * (len(api_key) - visible_chars) + api_key[-visible_chars:]
+
+    @staticmethod
+    def get_decrypted_secret(env_key: str, default: Optional[str] = None) -> Optional[str]:
+        """
+        Retrieve decrypted sensitive configuration items (Supports automatic decryption in KMS mode)
+
+        This is a general-purpose method for obtaining sensitive configuration values
+        from environment variables across all scenarios requiring sensitive data access.
+
+        - KMS mode: Always treats the value as AES-GCM encrypted ciphertext and decrypts it
+        - Non-KMS mode: Returns raw environment variable value (maintains legacy behavior)
+
+        Args:
+            env_key (str): Environment variable key name
+            default (str, optional): Default value to return if environment variable is not found
+
+        Returns:
+            str: Decrypted plaintext key (in KMS mode) or original raw value (in non-KMS mode)
+        """
+        encrypted_value = os.getenv(env_key, default)
+        if not encrypted_value:
+            return default
+
+        use_kms = os.getenv('HUAWEICLOUD_KMS_ENABLED', 'false').lower() == 'true'
+
+        if not use_kms:
+            # Non-KMS mode: return raw value
+            return encrypted_value
+
+        # KMS mode: always treat the value as ciphertext and attempt decryption
+        try:
+            security_utils = SecurityUtils()
+            decrypted = security_utils.decrypt_api_key(encrypted_value)
+
+            if decrypted == encrypted_value:
+                raise ValueError(
+                    f"Secret '{env_key}' appears to be plaintext, but KMS mode requires encrypted values. "
+                    f"Please encrypt the value using the encryption tool before setting it in environment variables."
+                )
+
+            return decrypted
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to decrypt secret '{env_key}' in KMS mode: {str(e)}")
+            raise ValueError(
+                f"Failed to decrypt secret '{env_key}' in KMS mode"
+            ) from e
 
     @staticmethod
     def validate_api_key_format(api_key: str, provider: str) -> Dict[str, Any]:

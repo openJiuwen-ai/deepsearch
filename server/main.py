@@ -17,6 +17,8 @@ from server.core.db_sync import run_database_sync
 from server.core.runner_init import init_runner, shutdown_runner
 from server.deepsearch.core.models.report_template import ReportTemplateDB
 from server.deepsearch.core.models.web_search_engine_model import WebSearchEngineModel
+from server.local_retrieval.models.knowledge_base import KnowledgeBaseDB
+from server.local_retrieval.models.knowledge_base_document import KnowledgeBaseDocumentDB
 from server.routers import register
 
 # 添加项目根目录到 Python 路径，以便直接运行时能找到所有模块
@@ -44,6 +46,9 @@ async def lifespan_func(input_app: FastAPI):
         # Deepsearch table
         WebSearchEngineModel.__table__,
         ReportTemplateDB.__table__,
+        # Local retrieval table
+        KnowledgeBaseDB.__table__,
+        KnowledgeBaseDocumentDB.__table__,
     ]
 
     if engine.url.drivername == "sqlite":

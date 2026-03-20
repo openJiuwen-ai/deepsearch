@@ -5,6 +5,8 @@ from typing import Literal, List
 
 from pydantic import BaseModel, Field
 
+from server.schemas.knowledge_base import EmbedModelConfig
+
 
 class WebSearchConfig(BaseModel):
     web_search_config_id: int = Field(description="联网增强引擎ID")
@@ -15,6 +17,7 @@ class LocalSearchConfig(BaseModel):
     local_search_config_ids: List[str] = Field(default=[], description="本地知识库ID列表")
     max_local_search_results: int = Field(default=5, ge=1, le=10, description="最大本地搜索结果数量")
     recall_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="知识库检索阈值")
+    embed_model_config: EmbedModelConfig = Field(..., description="Embedding 模型配置")
 
 
 class DeepSearchRequest(BaseModel):
