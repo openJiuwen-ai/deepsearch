@@ -170,6 +170,7 @@ class KnowledgeBaseRepository:
     param {str} kb_id  知识库ID
     param {str} name  新的名字
     param {str} description  新的描述
+    param {dict} config  合并后的知识库配置（含 embed_model_config、llm_config 等）
     return {*}
     '''
     @with_exception_handling
@@ -179,6 +180,7 @@ class KnowledgeBaseRepository:
         kb_id: str,
         name: str,
         description: str | None,
+        config: dict | None = None,
     ) -> ResponseModel[None]:
         try:
             record = self._query_kb(space_id, kb_id).first()
@@ -187,6 +189,8 @@ class KnowledgeBaseRepository:
 
             record.name = name
             record.description = None if description is None else description
+            if config is not None:
+                record.config = config
             record.update_time = milliseconds()
             self.db.commit()
             return ResponseModel(code=status.HTTP_200_OK, message="Dl update successfully.")

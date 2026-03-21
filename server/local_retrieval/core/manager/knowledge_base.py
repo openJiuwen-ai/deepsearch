@@ -538,6 +538,30 @@ def with_exception_handling(func):
     return wrapper
 
 
+def _make_json_serializable_dict(d: dict) -> dict:
+    out: Dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, (bytes, bytearray)):
+            out[k] = v.decode("utf-8") if v else ""
+        elif isinstance(v, dict):
+            out[k] = _make_json_serializable_dict(v)
+        else:
+            out[k] = v
+    return out
+
+
+def _build_kb_stored_config(
+    embed_model_config: EmbedModelConfig,
+    llm_config: LLMConfig,
+    extra: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """与创建逻辑一致：合并扩展 config 并写入 embed / llm 配置"""
+    config: Dict[str, Any] = dict(extra) if extra else {}
+    config["embed_model_config"] = _make_json_serializable_dict(embed_model_config.model_dump())
+    config["llm_config"] = _make_json_serializable_dict(llm_config.model_dump())
+    return config
+
+
 @with_exception_handling
 def knowledge_base_create(req: KnowledgeBaseCreate) -> ResponseModel:
     """创建新的知识库"""
@@ -575,24 +599,10 @@ def knowledge_base_create(req: KnowledgeBaseCreate) -> ResponseModel:
     kb_id = uuid.uuid4().hex
     logger.info(f"[KB_CREATE] Generated KB ID: {kb_id}")
 
-    # 4. 将 embed_model_config、llm_config 序列化为可写入 JSON 的 dict，并合并到 config
-    config = dict(req.config) if req.config else {}
-    embed_dict = req.embed_model_config.model_dump()
-    llm_dict = req.llm_config.model_dump()
-
-    def _make_json_serializable(d: dict) -> dict:
-        out = {}
-        for k, v in d.items():
-            if isinstance(v, (bytes, bytearray)):
-                out[k] = v.decode("utf-8") if v else ""
-            elif isinstance(v, dict):
-                out[k] = _make_json_serializable(v)
-            else:
-                out[k] = v
-        return out
-
-    config["embed_model_config"] = _make_json_serializable(embed_dict)
-    config["llm_config"] = _make_json_serializable(llm_dict)
+    # 4. 将 embed_model_config、llm_config 序列化并合并到 config
+    config = _build_kb_stored_config(
+        req.embed_model_config, req.llm_config, req.config
+    )
 
     # 5. 准备知识库数据
     kb_data = {
@@ -756,11 +766,17 @@ def knowledge_base_update(req: KnowledgeBaseUpdateRequest) -> ResponseModel:
                 message=f"知识库名称 '{req.name}' 已存在",
             )
 
-    # 3. 更新知识库
-    # 如果 desc 是空字符串，转换为 None 以便正确清空数据库字段
+    # 3. 合并配置并更新知识库（与创建时写入 DB 的 config 结构一致）
     description_value = req.desc if req.desc else None
+    stored_config = _build_kb_stored_config(
+        req.embed_model_config, req.llm_config, req.config
+    )
     update_result = knowledge_base_repository.knowledge_base_update(
-        space_id=req.space_id, kb_id=req.kb_id, name=req.name, description=description_value
+        space_id=req.space_id,
+        kb_id=req.kb_id,
+        name=req.name,
+        description=description_value,
+        config=stored_config,
     )
 
     if update_result.code != status.HTTP_200_OK:

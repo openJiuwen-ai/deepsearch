@@ -88,6 +88,9 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     kb_id: str = Field(..., min_length=1, max_length=100, description="知识库ID")
     name: str = Field(..., min_length=1, max_length=100, description="新的名字")
     desc: str = Field(..., description="新的描述")
+    embed_model_config: EmbedModelConfig = Field(..., description="Embedding 模型配置")
+    llm_config: LLMConfig = Field(..., description="LLM 模型配置")
+    config: Optional[Dict[str, Any]] = Field(None, description="知识库配置信息")
 
     @field_validator('name')
     @classmethod
