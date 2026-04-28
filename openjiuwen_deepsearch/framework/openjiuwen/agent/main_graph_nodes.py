@@ -1658,7 +1658,7 @@ class VLMChartGeneratorNode(BaseNode):
                 logger.error(f"[VLMChartGeneratorNode] {error_msg}")
                 raise ValueError(error_msg)
 
-            vlm_chart_generator_output = await self._run_vlm_chart_generator_handle(inputs)
+            vlm_chart_generator_output = await self._run_vlm_chart_generator_handle(current_inputs)
 
         except CustomException as e:
             if LogManager.is_sensitive():
