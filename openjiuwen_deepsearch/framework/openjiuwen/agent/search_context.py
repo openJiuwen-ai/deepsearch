@@ -16,7 +16,7 @@ class Message(BaseModel):
 
 
 class StepType(str, Enum):
-    """
+    """  
     步骤类型枚举
     """
     INFO_COLLECTING = "info_collecting"
@@ -164,6 +164,7 @@ class SearchContext(BaseModel):
     language: str = Field(default="zh-CN", description="语言")
     report_template: str = Field(default="", description="模板内容")
     search_mode: str = Field(default="research", description="搜索类型，research 或 search 对应研究或深搜模式")
+    entry_search_results: List[Dict] = Field(default_factory=list, description="Entry节点预搜索结果")
 
     # 2、feedback相关参数
     questions: str = Field(default="", description="系统基于用户问题提出的问题")
@@ -186,3 +187,136 @@ class SearchContext(BaseModel):
     # 5、其他参数
     final_result: FinalResult = Field(default_factory=FinalResult, description="最终返回前端的结果")
     debug_pre_node: str = Field(default="", description="添加格式化debug日志的前一节点")
+
+
+class ValidationResult(Enum):
+    passed: str = "pass"
+    pending: str = "pending"
+    failed: str = "fail"
+
+
+class SearchFinalResult(BaseModel):
+    question: str
+    termination: str
+    completion_time: float
+    current_date_time: str
+    prediction: str | None = None
+    gold_answer: str | None = Field(
+        default=None,
+        description="Optional gold label from benchmark JSON (for final_result.json comparison).",
+    )
+    messages: List[Dict] | None = None
+    config: Dict | None = None
+    retrieved_evidence_ids: List[Any] = Field(default_factory=list)
+
+
+class VerifiedClueResult(BaseModel):
+    text: str
+    status: ValidationResult  # pass|fail|pending
+    reason: str = ""
+
+
+class Variable(BaseModel):
+    model_config = dict(validate_assignment=True)
+    id: int
+    type: str  # Ex: City
+    question_clues: List[
+        str
+    ]  # Clues derived from the question itself (immutable after initialization)
+    discovered_clues: List[
+        str
+    ]  # Clues discovered during research (can be added incrementally)
+    candidate: Optional[str]
+    candidate_strength: Optional[float] = Field(
+        ge=0, le=1
+    )  # An optional estimate produced by the llm on "How likely the candidate is to the the true value"
+
+
+class State(BaseModel):
+    state: List[Variable]
+    depth: int = 0
+    id: str = '0'
+    retrieved_evidence_ids: List[Any] = Field(default_factory=list)
+    answer_variable: int
+    verify_result: Optional[List["VerifiedVariableResult"]] = None
+
+    def __str__(self):
+        return f"State(state={self.state})"
+
+    def __repr__(self):
+        return f"State(state={self.state}, depth={self.depth}, id={self.id}, answer_variable={self.answer_variable})"
+
+    def str_to_verify_result(self):
+        return f"State(state={self.state}, verify_result={self.verify_result})"
+
+
+class CandidateVerifiedClues(BaseModel):
+    """
+    Structured verification report returned by the verifier tool.
+
+    Expected shape (from verifier tool):
+    {
+      "value": "...",
+      "clues": [{"text": "...", "status": "pass|fail|pending", "reason": "..."}],
+      "overall": "pass|fail|pending",
+      "evidence": "..."
+    }
+    """
+
+    value: Optional[str] = None
+    clues: List[VerifiedClueResult] = Field(default_factory=list)
+    overall: Optional[ValidationResult] = None
+    evidence: Optional[str] = None
+
+
+class VerifiedVariableResult(BaseModel):
+    id: int
+    type: str
+    candidate_verified_clues: CandidateVerifiedClues = Field(
+        default_factory=CandidateVerifiedClues
+    )
+
+
+class Result(BaseModel):
+    messages: List[Dict]
+    previous_action_id: str
+    new_states: List[State]
+    found_answer: str | None
+    summary: str | None = None
+    retrieved_evidence_ids: List[Any] = Field(default_factory=list)
+
+    def __str__(self):
+        return f"Result(messages={self.messages}, new_states={self.new_states}, found_answer={self.found_answer})"
+
+    def __repr__(self):
+        return (
+            "Result("
+            f"messages={self.messages}, "
+            f"new_states={self.new_states}, "
+            f"found_answer={self.found_answer}, "
+            f"retrieved_evidence_ids={self.retrieved_evidence_ids}"
+            ")"
+        )
+    
+    def get_summary(self):
+        if self.summary:
+            return f"Research Agent's summary: {self.summary}"
+        else:
+            last_entry = self.messages[-1]
+            last_msg = last_entry.get("content", str(last_entry)) if isinstance(last_entry, dict) else str(last_entry)
+            return f"Research Agent's final message output: {last_msg[:500]}"
+
+
+
+
+class ActionProposal(BaseModel):
+    direction: str
+    score: float = Field(ge=0, le=1)
+
+
+class Action(BaseModel):
+    id: str
+    question: str
+    state: State
+    proposal: ActionProposal
+    messages: List[Dict]

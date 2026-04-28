@@ -12,7 +12,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
 MAX_LLM_RETRY_TIMES = 3
@@ -69,7 +69,7 @@ def is_equal_length(result, target):
 
 async def call_model(model_name: str, prompt: str, user_input: dict, 
                      detection_func_and_args: dict = None, 
-                     agent_name: str = NodeId.SOURCE_TRACER_INFER.value):
+                     agent_name: str = AgentLlmName.SOURCE_TRACER_INFER.value):
     """调用LLM模型处理请求
     调用指定的LLM模型处理用户提示，并返回标准化的JSON格式输出
     Args:

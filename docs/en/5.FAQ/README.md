@@ -88,6 +88,8 @@ Messages mentioning **stream error**, **timeout**, **OpenAI API**, or **Client c
 
 ![Context overflow](../images/FAQ/超上下文.png)
 
+If logs show `LLM wall-clock timeout after ...`, that is the outer business-layer timeout from `agent_llm_timeouts`, not the same thing as the underlying `service_config.llm_timeout`. In that case, check whether `agent_llm_timeouts` includes `default`, whether the matched rule is too small, or whether a rule was unintentionally set to `0`.
+
 ### 3.2 “Retry” / format non-compliance
 
 **retry** in logs often indicates the model output failed validation; DeepSearch retries internally until it errors out (or stays at WARN).

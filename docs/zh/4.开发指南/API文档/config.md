@@ -266,6 +266,14 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **api_tools_config**(ApiToolsConfig，可选)：运行时 HTTP API 工具配置，用于在默认工具之外注入可调用工具。默认值：`ApiToolsConfig`。
 - **vlm_chart_generator_enable**(bool, 可选)：vlm迭代生成图功能开关，与`visualization_enable`功能互斥。
 - **vlm_chart_generator_max_iterations**(int, 可选)：vlm生成图迭代优化最大次数。默认值：`1`，可设置范围为0~3，0表示生成的图表不进行迭代优化，数值越大，耗时越长。
+- **agent_llm_timeouts**(Dict[str, int], 可选)：按 `agent_name` / 节点级 key 配置的 LLM 总墙钟超时。命中优先级为 `agent_name` 精确匹配 > 节点级 key 前缀匹配 > `default`。仅当字典非空且包含 `default` 时生效；命中值为 `0` 时表示对该规则禁用业务层总超时。默认值：`dict()`。
+
+**说明**：
+
+- HTTP 服务入口 `DeepSearchRequest.agent_llm_timeouts` 会透传到 `AgentConfig.agent_llm_timeouts`，并在运行时进入 session 全局配置。
+- 该配置只控制业务层对整次 LLM 流式调用施加的 wall-clock timeout，不替代底层 provider/request 级超时。
+- 当前可配置的 `agent_name` / key 清单详见openjiuwen_deepsearch/utils/constants_utils/node_constants.py的AgentLlmName定义，`default` 用于兜底规则。
+
 
 **样例**：
 
@@ -374,7 +382,12 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **stats_info_search**(bool, 可选)：搜索工具调用统计。默认值：`False`。
 
 ### 大模型超时参数
-- **llm_timeout**(int, 可选)：大模型调用超时时间，单位秒。默认值：`300`。
+- **llm_timeout**(int, 可选)：底层 provider/request 级的大模型调用超时时间，单位秒。默认值：`300`。
+
+**说明**：
+
+- `service_config.llm_timeout` 会继续传给底层 LLM client。
+- 若同时配置 `agent_llm_timeouts`，业务层会在整次流式调用外再包一层总墙钟超时；命中新机制时会抛出 `LLM_WALL_CLOCK_TIMEOUT`（状态码 `211204`）。
 
 ### Debug参数
 - **node_debug_enable**(bool, 可选)：节点格式化记录debug日志开关。默认值：`False`。

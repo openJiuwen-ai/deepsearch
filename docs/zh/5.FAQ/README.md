@@ -80,6 +80,7 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 - 输入超过了模型上下文长度
 ![超上下文](../images/FAQ/超上下文.png)
 - 调用公有云模型的时候可能存在敏感信息过滤，导致模型调用失败
+- 如果日志中出现 `LLM wall-clock timeout after ...`，表示命中了业务层外层总超时，来源于 `agent_llm_timeouts`，与底层 `service_config.llm_timeout` 不是同一层语义。此时应重点检查 `agent_llm_timeouts` 是否包含 `default`、对应节点规则是否过小，或是否误将某条规则配置为 `0`。
 
 ### 2. 模型返回结果不遵从
 含有 **retry** 字眼，都是模型调用失败或者模型结果不遵从导致的。当遇到这种异常的时候，DS内部有重试机制，重试次数达到阈值才会出现 ERROR 失败，否则是 WARNNING 级别。

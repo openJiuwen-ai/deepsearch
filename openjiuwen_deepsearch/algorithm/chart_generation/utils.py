@@ -13,7 +13,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
 MAX_LLM_RETRY_TIMES = 3
@@ -41,7 +41,7 @@ class CallModelInput(BaseModel):
     model_name: str = Field(default="", description="模型名称")
     prompt: str = Field(default="", description="prompt文件名")
     user_input: dict = Field(default={}, description="需要处理的输入数据")
-    agent_name: str = Field(default=NodeId.VLM_CHART_GENERATOR.value, description="agent名称")
+    agent_name: str = Field(default=AgentLlmName.VLM_CHART_GENERATOR.value, description="agent名称")
 
 
 async def call_model(call_model_input: CallModelInput, 

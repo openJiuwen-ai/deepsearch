@@ -28,7 +28,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SubR
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import custom_stream_output
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
 from openjiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType, NodeDebugData
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -117,7 +117,7 @@ class BasePlanReasoningNode(BaseNode):
             "collected_doc_num": session.get_global_state("section_context.collected_doc_num"),
             "warning_infos": session.get_global_state("section_context.warning_infos"),
             "exception_infos": session.get_global_state("section_context.exception_infos"),
-            "agent_name": NodeId.PLAN_REASONING.value,
+            "agent_name": AgentLlmName.PLAN_REASONING.value,
             "llm_model_name": adapt_llm_model_name(session, NodeId.PLAN_REASONING.value),
             "api_tools_config": session.get_global_state("config.api_tools_config") or {},
         }
@@ -307,6 +307,8 @@ class SubReporterNode(BaseNode):
         section_idx = session.get_global_state("section_context.section_idx") or "1"
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} Start [{self.__class__.__name__}].")
+
+        llm_model_name = adapt_llm_model_name(session, NodeId.SUB_REPORTER.value)
 
         return dict(
             thread_id=session.get_global_state("section_context.session_id"),

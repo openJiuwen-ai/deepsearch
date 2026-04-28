@@ -6,7 +6,7 @@ MAGIC_CODE = "\t"
 
 class CustomException(Exception):
     def __init__(self, error_code: int, message: str) -> None:
-        super().__init__()
+        super().__init__(error_code, message)
         self._error_code = error_code
         self._message = message
 

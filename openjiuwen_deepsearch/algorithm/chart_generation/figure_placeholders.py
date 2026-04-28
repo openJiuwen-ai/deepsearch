@@ -15,7 +15,7 @@ import logging
 import re
 from typing import Dict, List, Any, Tuple
 
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.algorithm.chart_generation.utils import call_model, CallModelInput
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -314,7 +314,7 @@ class FigurePlaceholderGenerator:
                 model_name=self._llm_model, 
                 prompt="vlm_find_inser_point_prompt", 
                 user_input={"section_contents": section_with_anchor}, 
-                agent_name=NodeId.VLM_CHART_GENERATOR.value + "find_inserPoint"
+                agent_name=AgentLlmName.VLM_CHART_GENERATOR_FIND_INSERT_POINT.value
                 )
             response = await call_model(call_model_input)
 

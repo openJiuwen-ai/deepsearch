@@ -6,7 +6,7 @@ import networkx as nx
 
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import call_model, is_equal_length, GraphInfo
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class SupplementGraph:
         detection_func_and_args = {"detection_func": is_equal_length, "args": 3} # 需要添加检测函数，检测输出的每个结构为三元组
         new_tuples = await call_model(self.model_name, "infer_supplement_prompt",
                                       {"graphs": llm_input}, detection_func_and_args,
-                                      agent_name=NodeId.SOURCE_TRACER_INFER.value + "_supplement_graph")
+                                      agent_name=AgentLlmName.SOURCE_TRACER_INFER_SUPPLEMENT_GRAPH.value)
         # 去除可能存在的来自同一连通分量的新关系
         del_tuple_index = []
         for index, new_tuple in enumerate(new_tuples):

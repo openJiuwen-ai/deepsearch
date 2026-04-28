@@ -78,7 +78,6 @@ async def execute_tool(tool_call: dict, agent_input: dict, tool_dict: dict, step
             args["search_engine_name"] = local_search_engine_name
         elif tool_name == "web_search_tool":
             args["search_engine_name"] = web_search_engine_name
-
         result = await tool_dict[tool_name].invoke(args)
         tool_result = json.dumps(result, ensure_ascii=False, indent=4)
         processed_results = process_tool_result(tool_name, tool_result, agent_input)

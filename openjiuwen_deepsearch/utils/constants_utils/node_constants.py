@@ -34,8 +34,14 @@ class NodeId(enum.Enum):
     SEARCH_PLAN_REASONING = "search_plan_reasoning"
 
     # search 相关
-    SEARCH_TEAM = "search_team"
-    ANSWER = "answer"
+    END_NODE = "end_node"
+    FIND_ACTION_SPACE = "find_action_space"
+    INITIAL_STATE = "initial_state"
+    RUN_ACTION = "run_action"
+    START_NODE = "start_node"
+    TOOL = "tool"
+    VALIDATE_NEW_STATE = "validate_new_state"
+    SIMPLE_REACT_SEARCH = "simple_react_search"
 
     # info collector 子图相关
     COLLECTOR_QUERY_GEN = "collector_query_generation"
@@ -50,6 +56,74 @@ class NodeId(enum.Enum):
 
     # 模板流程
     TEMPLATE = "template"
+
+
+class AgentLlmName(enum.Enum):
+    """可用于 agent_llm_timeouts 的 LLM 调用点名称清单。
+
+    该枚举只用于集中维护 ``ainvoke_llm_with_stats`` 的 ``agent_name`` 取值，
+    方便配置文档和测试从同一个事实源获取可配置名称。
+    """
+
+    QUESTION_MODEL_ROUTER = "question_model_router"
+    TEMPLATE = NodeId.TEMPLATE.value
+
+    COLLECTOR_QUERY_GENERATION = NodeId.COLLECTOR_QUERY_GEN.value
+    COLLECTOR_INFO_RETRIEVAL = NodeId.COLLECTOR_INFO.value
+    COLLECTOR_SUPERVISOR = NodeId.COLLECTOR_SUPERVISOR.value
+    COLLECTOR_SUMMARY = NodeId.COLLECTOR_SUMMARY.value
+
+    ENTRY = NodeId.ENTRY.value
+    GENERATE_QUESTIONS = NodeId.GENERATE_QUESTIONS.value
+    OUTLINE = NodeId.OUTLINE.value
+    PLAN_REASONING = NodeId.PLAN_REASONING.value
+    DOC_EVALUATOR = NodeId.DOC_EVALUATOR.value
+
+    REPORTER_ABSTRACT = "reporter_abstract"
+    REPORTER_CONCLUSION = "reporter_conclusion"
+    REPORTER_TRANSACTION = "reporter_transaction"
+
+    SUB_REPORTER = NodeId.SUB_REPORTER.value
+    SUB_REPORTER_CLASSIFY_DOC_INFOS = "sub_reporter_classify_doc_infos"
+    SUB_REPORTER_OUTLINE = "sub_reporter_outline"
+    SUB_REPORTER_VISUALIZATION_CONTENT = "sub_reporter_visualization_content"
+    SUB_REPORTER_CHART_COMPLIANCE = "sub_reporter_chart_compliance"
+    SUB_REPORTER_CHART_TRACEABILITY = "sub_reporter_chart_traceability"
+    SUB_REPORTER_VISUALIZATION_NORMALIZE = "sub_reporter_visualization_normalize"
+    SUB_REPORTER_SUMMARY = "sub_reporter_summary"
+
+    SOURCE_TRACER_CONTENT_RECOGNITION = "source_tracer_content_recognition"
+    SOURCE_TRACER_SOURCE_MATCHING = "source_tracer_source_matching"
+    SOURCE_TRACER_EXTRACT_MESSAGES = "source_tracer_extract_messages"
+    SOURCE_TRACER_INFER = NodeId.SOURCE_TRACER_INFER.value
+    SOURCE_TRACER_INFER_EXTRACT_CONCLUSION = "source_tracer_infer_extract_conclusion"
+    SOURCE_TRACER_INFER_EXTRACT_REFERENCE = "source_tracer_infer_extract_reference"
+    SOURCE_TRACER_INFER_INFER = "source_tracer_infer_infer"
+    SOURCE_TRACER_INFER_FILTER_INVALID_INFER = "source_tracer_infer_filter_invalid_infer"
+    SOURCE_TRACER_INFER_STRUCTURED_INFER = "source_tracer_infer_structured_infer"
+    SOURCE_TRACER_INFER_SUPPLEMENT_GRAPH = "source_tracer_infer_supplement_graph"
+
+    USER_FEEDBACK_PROCESSOR_SYNONYM_REWRITER = "user_feedback_processor_synonym_rewriter"
+    USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_TASK = "user_feedback_processor_supplementary_search_task"
+    USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_ONLY = (
+        "user_feedback_processor_supplementary_search_rewrite_selected_only"
+    )
+    USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_AND_RELATED = (
+        "user_feedback_processor_supplementary_search_rewrite_selected_and_related"
+    )
+
+    VLM_CHART_GENERATOR = NodeId.VLM_CHART_GENERATOR.value
+    VLM_CHART_GENERATOR_FIND_INSERT_POINT = "vlm_chart_generator_find_inserPoint"
+    VLM_CHART_GENERATOR_GENERATE_CHART_CODE = "vlm_chart_generator_generate_chart_code"
+    VLM_CHART_GENERATOR_VLM_ITERATE = "vlm_chart_generator_vlm_iterate"
+    VLM_CHART_GENERATOR_COLLECT_DATA_FOR_CHART = "vlm_chart_generator_collect_data_for_chart"
+
+    FIND_ACTION_SPACE = NodeId.FIND_ACTION_SPACE.value
+    INITIAL_STATE = NodeId.INITIAL_STATE.value
+    RUN_ACTION = NodeId.RUN_ACTION.value
+    TOOL = NodeId.TOOL.value
+    VALIDATE_NEW_STATE = NodeId.VALIDATE_NEW_STATE.value
+    SIMPLE_REACT_SEARCH = NodeId.SIMPLE_REACT_SEARCH.value
 
 
 NODE_DEBUG_LOGGER = "node_debug_logger"

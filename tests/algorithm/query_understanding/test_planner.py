@@ -106,7 +106,7 @@ class TestPlanner:
             plan_success=False,
             plan=None,
             response_messages=[],
-            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (1/1).error: **'
+            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (1/1).error: Test Exception'
         )
 
         with patch(
@@ -125,7 +125,7 @@ class TestPlanner:
             plan_success=False,
             plan=None,
             response_messages=[],
-            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (1/1).error: **'
+            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (1/1).error: Test Exception'
         )
 
         with patch(
@@ -144,7 +144,7 @@ class TestPlanner:
             plan_success=False,
             plan=None,
             response_messages=[],
-            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (3/3).error: **'
+            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (3/3).error: Test Exception'
         )
 
         with patch(

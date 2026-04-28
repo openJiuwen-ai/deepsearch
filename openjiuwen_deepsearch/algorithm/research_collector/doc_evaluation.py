@@ -10,7 +10,7 @@ from pydantic import Field
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import normalize_json_output, ainvoke_llm_with_stats, \
     record_llm_retry_log
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -154,7 +154,7 @@ async def invoke_llm_with_retry(prompt: list, llm: Any, max_retries=5):
     for retry_idx in range(max_retries):
         try:
             response = await ainvoke_llm_with_stats(
-                llm, prompt, agent_name=NodeId.DOC_EVALUATOR.value)
+                llm, prompt, agent_name=AgentLlmName.DOC_EVALUATOR.value)
             return response
         except Exception as e:
             current_try = retry_idx + 1

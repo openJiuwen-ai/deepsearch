@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from server.schemas.deepsearch_run import DeepSearchRequest
 
 
@@ -29,6 +30,68 @@ def _build_request() -> DeepSearchRequest:
         search_mode="research",
         execution_method="parallel",
     )
+
+
+def test_deep_search_request_accepts_agent_llm_timeouts():
+    """验证请求模型允许传入按 agent 配置的 LLM 总超时。
+
+    Returns:
+        None.
+    """
+    request = DeepSearchRequest(
+        space_id="space-1",
+        conversation_id="conversation-1",
+        message="hello",
+        llm_config={
+            "general": {
+                "model_name": "mock-model",
+                "model_type": "openai",
+                "base_url": "https://example.com/v1",
+                "api_key": "secret",
+            }
+        },
+        web_search_config={
+            "web_search_config_id": 1,
+            "max_web_search_results": 5,
+        },
+        info_collector_search_method="web",
+        search_mode="research",
+        execution_method="parallel",
+        agent_llm_timeouts={"default": 300, "sub_reporter": 120},
+    )
+
+    assert request.agent_llm_timeouts == {"default": 300, "sub_reporter": 120}
+
+
+def test_agent_llm_timeouts_no_longer_validate_at_request_boundary():
+    """验证请求模型不再在入口层校验 agent_llm_timeouts。
+
+    Returns:
+        None.
+    """
+    request = DeepSearchRequest(
+        space_id="space-1",
+        conversation_id="conversation-1",
+        message="hello",
+        llm_config={
+            "general": {
+                "model_name": "mock-model",
+                "model_type": "openai",
+                "base_url": "https://example.com/v1",
+                "api_key": "secret",
+            }
+        },
+        web_search_config={
+            "web_search_config_id": 1,
+            "max_web_search_results": 5,
+        },
+        info_collector_search_method="web",
+        search_mode="research",
+        execution_method="parallel",
+        agent_llm_timeouts={"sub_reporter": -120},
+    )
+
+    assert request.agent_llm_timeouts == {"sub_reporter": -120}
 
 
 def test_prepare_stream_context_builds_agent_config_once(monkeypatch):

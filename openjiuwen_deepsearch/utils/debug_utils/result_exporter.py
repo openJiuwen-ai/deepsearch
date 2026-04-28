@@ -43,8 +43,16 @@ class ResultExporter:
                 cls._validated_dir = ensure_safe_directory(
                     cls._results_dir or cls._SAFE_BASE, cls._SAFE_BASE
                 )
-            except Exception:
+            except Exception as e:
                 cls._validated_dir = None
+                logger.warning(
+                    "[ResultExporter] ensure_safe_directory failed while export_intermediate_results "
+                    "is enabled; intermediate export is disabled. requested_dir=%s safe_base=%s error=%s",
+                    cls._results_dir or cls._SAFE_BASE,
+                    cls._SAFE_BASE,
+                    e,
+                    exc_info=True,
+                )
 
         cls._initialized = True
 

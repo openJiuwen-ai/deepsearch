@@ -20,6 +20,24 @@ jinja_env = Environment(
 )
 
 
+def get_prompt_section(prompt_template_file: str, context_vars: dict | None = None) -> str:
+    context_vars = context_vars or {}
+    try:
+        prompt_file_path = f"{prompt_template_file}.md"
+        prompt_template = jinja_env.get_template(prompt_file_path)
+        return prompt_template.render(**context_vars)
+    except FileNotFoundError as e:
+        raise CustomValueException(
+            error_code=StatusCode.FILE_NOT_FOUND_ERROR_PROMPT.code,
+            message=StatusCode.FILE_NOT_FOUND_ERROR_PROMPT.errmsg.format(name=prompt_template_file)
+        ) from e
+    except Exception as e:
+        raise CustomValueException(
+            error_code=StatusCode.APPLY_SYSTEM_PROMPT_FAILED.code,
+            message=StatusCode.APPLY_SYSTEM_PROMPT_FAILED.errmsg.format(name=prompt_template_file)
+        ) from e
+
+
 def apply_system_prompt(prompt_template_file: str, context_vars: dict) -> list:
     """apply system prompt template"""
 

@@ -10,6 +10,13 @@ toward resolving the research problem**, rather than toward formal completeness 
 The outline should be capable of supporting **reasoned judgment, strategic insight, or informed action**, depending on
 the nature of the research question.
 
+# Pre-search Results
+
+The following web search results were obtained from a preliminary search on the user's query. Use these results to better 
+understand the context and generate a more accurate outline:
+
+{{ entry_search_results }}
+
 ## **Primary Optimization Objective (Highest Priority)**
 
 Maximize the outline's ability to **clarify the problem space, surface key uncertainties and trade-offs, and guide the

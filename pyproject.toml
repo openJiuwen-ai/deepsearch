@@ -57,6 +57,11 @@ filterwarnings = [
     "ignore:.*SwigPyObject.*:DeprecationWarning",
     "ignore:.*swigvarlink.*:DeprecationWarning"
 ]
+markers = [
+    "unit: fast tests without external services",
+    "integration: orchestration tests with mocked Runner/workflows",
+    "llm: real LLM and search_fetch tools (requires env and RUN_LLM_TESTS=1)",
+]
 
 # 捕获所有日志级别
 log_cli = true

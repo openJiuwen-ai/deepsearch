@@ -13,7 +13,7 @@ import asyncio
 import logging
 from typing import Dict, List, Tuple, Any, Optional
 
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.algorithm.chart_generation.utils import call_model, is_equal_length, CallModelInput
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -315,7 +315,7 @@ class ChartDataCollector:
                 model_name=self._llm_name, 
                 prompt="vlm_collect_data_prompt", 
                 user_input={"tasks": batch_tasks, "data_sources": data_sources},
-                agent_name=NodeId.VLM_CHART_GENERATOR.value + "collect_data_for_chart"
+                agent_name=AgentLlmName.VLM_CHART_GENERATOR_COLLECT_DATA_FOR_CHART.value
                 )
             results = await call_model(call_model_input, 
                                        detection_func_and_args=detection_func_and_args)

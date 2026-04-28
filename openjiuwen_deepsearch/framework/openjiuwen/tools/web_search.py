@@ -56,7 +56,8 @@ async def run_web_search(query: str, search_engine_name: str):
             logger.error(f"Error when run web search {search_engine_name}")
         else:
             logger.exception(f"Error when run web search {search_engine_name}: {e}")
-        return dict(search_engine=search_engine_name, search_results=[repr(e)])
+        return dict(search_engine=search_engine_name, 
+                    search_results=[f"Error when run web search {search_engine_name}: {e}"])
     return dict(search_engine=search_engine_name, search_results=result)
 
 

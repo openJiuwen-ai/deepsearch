@@ -37,7 +37,7 @@ from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
 
 logger = logging.getLogger(__name__)
@@ -781,10 +781,17 @@ class Reporter:
             logger.debug(
                 "llm input when generating %s with llm: %s", task_type, llm_input
             )
+        agent_name_by_task_type = {
+            "abstract": AgentLlmName.REPORTER_ABSTRACT.value,
+            "conclusion": AgentLlmName.REPORTER_CONCLUSION.value,
+        }
+        agent_name = agent_name_by_task_type.get(task_type)
+        if agent_name is None:
+            raise KeyError(f"Unsupported report task type: {task_type}")
         llm_output = await ainvoke_llm_with_stats(
             llm=self._llm,
             messages=llm_input,
-            agent_name=NodeId.REPORTER.value + "_" + task_type,
+            agent_name=agent_name,
         )
         if not LogManager.is_sensitive():
             logger.debug(
@@ -877,7 +884,7 @@ class Reporter:
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
-                    agent_name=NodeId.REPORTER.value + "_" + "transaction",
+                    agent_name=AgentLlmName.REPORTER_TRANSACTION.value,
                 )
                 if LogManager.is_sensitive():
                     logger.debug(
@@ -1096,7 +1103,7 @@ class Reporter:
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
-                    agent_name=NodeId.SUB_REPORTER.value + "_classify_doc_infos",
+                    agent_name=AgentLlmName.SUB_REPORTER_CLASSIFY_DOC_INFOS.value,
                 )
                 if not LogManager.is_sensitive():
                     logger.debug(
@@ -1312,7 +1319,7 @@ class Reporter:
             llm_output = await ainvoke_llm_with_stats(
                 llm=self._llm,
                 messages=llm_input,
-                agent_name=NodeId.SUB_REPORTER.value + "_outline",
+                agent_name=AgentLlmName.SUB_REPORTER_OUTLINE.value,
             )
             if not LogManager.is_sensitive():
                 logger.debug(
@@ -1385,7 +1392,7 @@ class Reporter:
             llm_output = await ainvoke_llm_with_stats(
                 llm=self._llm,
                 messages=llm_input,
-                agent_name=NodeId.SUB_REPORTER.value + "_visualization_content",
+                agent_name=AgentLlmName.SUB_REPORTER_VISUALIZATION_CONTENT.value,
             )
             if not LogManager.is_sensitive():
                 logger.debug(
@@ -1435,7 +1442,7 @@ class Reporter:
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
-                    agent_name=NodeId.SUB_REPORTER.value + "_chart_compliance",
+                    agent_name=AgentLlmName.SUB_REPORTER_CHART_COMPLIANCE.value,
                 )
                 if not llm_output or not llm_output.get("content"):
                     logger.warning(
@@ -1510,7 +1517,7 @@ class Reporter:
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
-                    agent_name=NodeId.SUB_REPORTER.value + "_chart_traceability",
+                    agent_name=AgentLlmName.SUB_REPORTER_CHART_TRACEABILITY.value,
                 )
                 if not llm_output or not llm_output.get("content"):
                     logger.warning(
@@ -1742,7 +1749,7 @@ class Reporter:
             normalize_output = await ainvoke_llm_with_stats(
                 llm=self._llm,
                 messages=normalize_input,
-                agent_name=NodeId.SUB_REPORTER.value + "_visualization_normalize",
+                agent_name=AgentLlmName.SUB_REPORTER_VISUALIZATION_NORMALIZE.value,
             )
             if not normalize_output or not normalize_output.get("content"):
                 continue
@@ -1953,7 +1960,7 @@ class Reporter:
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
-                    agent_name=NodeId.SUB_REPORTER.value + "_" + "summary",
+                    agent_name=AgentLlmName.SUB_REPORTER_SUMMARY.value,
                 )
                 if LogManager.is_sensitive():
                     logger.debug(
@@ -2098,7 +2105,7 @@ class Reporter:
             llm_output = await ainvoke_llm_with_stats(
                 llm=self._llm,
                 messages=llm_input,
-                agent_name=NodeId.SUB_REPORTER.value,
+                agent_name=AgentLlmName.SUB_REPORTER.value,
                 need_stream_out=True,
             )
             if not LogManager.is_sensitive():
@@ -2257,7 +2264,7 @@ class Reporter:
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
-                    agent_name=NodeId.SUB_REPORTER.value,
+                    agent_name=AgentLlmName.SUB_REPORTER.value,
                     need_stream_out=False,
                 )
             except Exception as e:

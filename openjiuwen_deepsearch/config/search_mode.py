@@ -6,3 +6,4 @@ import enum
 class SearchMode(enum.Enum):
     RESEARCH = "research"
     SEARCH = "search"
+    REACT = "react"

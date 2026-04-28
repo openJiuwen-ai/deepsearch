@@ -14,8 +14,15 @@ class LLMConfig(BaseModel):
     api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="模型调用密钥")
     hyper_parameters: dict = Field(default_factory=dict, description="模型调用超参数设置，根据具体模型接口设置")
     extension: dict = Field(default_factory=dict, description="模型扩展配置项，根据具体模型接口设置")
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+    )
+    timeout: int = Field(default=600, description="请求超时时间（秒）")
+    max_tries: int = Field(default=4, description="最大重试次数")
+    append_think_tags_to_messages: bool = Field(
+        default=False,
+        description="是否在消息中追加 think 标签"
+    )
 
 
 class WebSearchEngineConfig(BaseModel):
@@ -84,10 +91,187 @@ class CustomLocalSearchConfig(BaseModel):
     extension: dict = Field(default_factory=dict, description="自定义本地搜索工具扩展配置项，根据具体搜索引擎接口设置")
 
 
+class ActionSamplingConfig(BaseModel):
+    """
+    Action 采样策略配置
+    """
+    depth_weight: bool = Field(default=True, description="是否使用深度权重")
+    promote_unique_states: bool = Field(default=False, description="是否提升唯一状态")
+    random_sample: bool = Field(default=False, description="是否随机采样")
+
+
+class PerQuestionParams(BaseModel):
+    """
+    单个问题（一次搜索 / 推理过程）的控制参数
+    """
+
+    max_workers: int = Field(default=5, description="并发执行 action 的最大协程数")
+    retry_count_on_empty_action_space: int = Field(
+        default=3,
+        description=(
+            "When the action pool has no runnable actions and no workers are busy, re-run find_action "
+            "this many times before stopping (each attempt decrements the counter)."
+        ),
+    )
+    time_limit: int = Field(default=4800, description="单个问题最大运行时间（秒）")
+    tool_map: Literal["search_fetch", "retrieve"] = Field(default="search_fetch", description="工具映射")
+    actions_explored_limit: int = Field(default=200, description="最大探索 action 数量，200=无限制")
+    fail_limit: int = Field(default=0, description="最大连续失败次数，0=无限制")
+    answer_mode_top_k: int = Field(
+        default=1,
+        description=(
+            "Number of candidate answers to collect before selecting the best. "
+            "<=1 returns on the first answer found (original behaviour). "
+            ">1 collects that many answers and returns the one with the highest candidate score; "
+            "on timeout the best answer collected so far is returned."
+        ),
+    )
+    provide_best_guess: bool = Field(
+        default=False,
+        description=(
+            "When True and the search times out without a confirmed answer, "
+            "scan all completed actions for the one whose answer variable has the "
+            "highest candidate_strength and return it as a best-guess prediction "
+            "(termination reason: timeout_guess)."
+        ),
+    )
+
+
+class MilvusConfig(BaseModel):
+    """
+    Milvus 配置。
+    Embedding 当前仅支持：qwen3-embedding-0.6b、qwen3-embedding-8b。
+    """
+
+    milvus_host: str = Field(default="localhost", description="Milvus 主机地址")
+    milvus_port: int = Field(default=19530, description="Milvus 端口")
+    database_name: str = Field(default="deepsearch_benchmarks", description="数据库名称")
+    collection_name: str = Field(default="browsecompplus_with_bm25", description="集合名称")
+    embedder_model_name: str = Field(
+        default="qwen3-embedding-8b",
+        description="Embedding 模型名称，当前仅支持：qwen3-embedding-0.6b、qwen3-embedding-8b",
+    )
+    embedder_api_key: bytearray = Field(
+        default=bytearray("", encoding="utf-8"),
+        description="Embedding 模型密钥",
+    )
+    embedder_base_url: str = Field(
+        default="",
+        description="Embedding 服务地址，例如：http://localhost:11450/v1/embeddings",
+    )
+    embedder_timeout: int = Field(default=100, description="Embedding 请求超时时间（秒），例如：100")
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class InitStateAgentConfig(BaseModel):
+    """
+    Init State Agent
+    """
+
+    max_tries: int = Field(default=10, description="最大重试次数")
+    llm_config: Dict[
+        Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig
+    ] = Field(default_factory=dict, description="LLM配置")
+
+
+class FindActionAgentConfig(BaseModel):
+    """
+    Find Action Agent
+    """
+
+    llm_config: Dict[
+        Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig
+    ] = Field(default_factory=dict, description="LLM配置")
+    action_proposals_limit: int = Field(default=5, description="最大 action 提案数")
+    action_pool_depleted_strategy: Literal["simple_retry", "dependent_retry"] = Field(
+        default="dependent_retry",
+        description="Strategy when action pool is depleted: "
+                    "simple_retry re-runs find_action with no context; "
+                    "dependent_retry includes previously explored directions",
+    )
+
+
+class ValidatorAgentConfig(BaseModel):
+    """
+    State / Answer 校验 Agent
+    """
+
+    validate_new_states: bool = Field(default=False, description="是否验证新状态")
+    validate_answer: bool = Field(default=False, description="是否验证答案")
+    llm_config: Dict[
+        Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig
+    ] = Field(default_factory=dict, description="LLM配置")
+
+
+class RetrievalSettingsConfig(BaseModel):
+    """
+    Retrieval Settings
+    """
+
+    retrieval_prompt: Literal["retrieve", "retrieve_given_multihop_query"] = Field(
+        default="retrieve", description="检索提示"
+    )
+    top_k: int = Field(default=3, description="最大检索结果数量")
+    top_k_multiply_factor: int = Field(default=5, description="最大检索结果数量乘数因子")
+    add_instruction: bool = Field(default=True, description="是否添加指令")
+    mode: Literal["dense", "sparse", "hybrid"] = Field(default="hybrid", description="检索模式")    
+
+
+class StateCreationAgentConfig(BaseModel):
+    """
+    State 扩展与评估策略
+    """
+
+    log_fetch: bool = Field(default=False, description="是否记录检索日志")
+    log_search: bool = Field(default=False, description="是否记录搜索日志")
+
+    web_fetch_log_file: str = Field(default="gnosis/tool_log/web_fetch_log.jsonl", description="检索日志文件路径")
+    web_search_log_file: str = Field(default="gnosis/tool_log/web_search_log.jsonl", description="搜索日志文件路径")
+
+    use_candidate_strength: bool = Field(default=True, description="是否使用候选强度")
+    discovered_clues_mode: Literal["report", "blacklist"] = Field(default="blacklist", description="发现线索模式")
+
+    max_llm_calls_per_run: int = Field(default=100, description="单次 state creation 最大 LLM 调用数")
+    context_limit_reached_strategy: Literal[
+        "fail",
+        "reduced_retrieval_request",
+        "delete_tool_responses",
+        "delete_tool_input_and_responses",
+    ] = Field(
+        default="reduced_retrieval_request",
+        description=(
+            "Strategy when the LLM context limit is hit during a run-action call. "
+            "'fail' terminates the action immediately. "
+            "'reduced_retrieval_request' halves top_k / top_k_multiply_factor and retries "
+            "(only effective when retrieval tool is in use). "
+            "'delete_tool_responses' strips all tool result messages from the conversation "
+            "and retries with the reduced context. "
+            "'delete_tool_input_and_responses' strips both assistant tool_calls and "
+            "tool result messages, then retries."
+        ),
+    )
+    llm_config: Dict[
+        Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig
+    ] = Field(default_factory=dict, description="LLM配置")
+    retrieval_settings: RetrievalSettingsConfig = Field(default_factory=RetrievalSettingsConfig)
+    validator_agent: ValidatorAgentConfig = Field(default_factory=ValidatorAgentConfig)
+
+
+class SearchWorkflowConfig(BaseModel):
+    """
+    Search Workflow
+    """
+    action_sampling: ActionSamplingConfig = Field(default_factory=ActionSamplingConfig)
+    init_state_agent: InitStateAgentConfig = Field(default_factory=InitStateAgentConfig)
+    find_action_agent: FindActionAgentConfig = Field(default_factory=FindActionAgentConfig)
+    state_creation_agent: StateCreationAgentConfig = Field(default_factory=StateCreationAgentConfig)
+
+
 class AgentConfig(BaseModel):
-    '''
+    """
     Agent配置类
-    '''
+    """
     execute_mode: Literal["commercial", "general"] = Field(default="commercial",
                                                            description='执行模式，可选值: ["commercial", "general"]')
     execution_method: Literal["dependency_driving", "parallel"] = Field(default="parallel",
@@ -114,6 +298,22 @@ class AgentConfig(BaseModel):
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
     custom_web_search_config: CustomWebSearchConfig = Field(default_factory=CustomWebSearchConfig)
     custom_local_search_config: CustomLocalSearchConfig = Field(default_factory=CustomLocalSearchConfig)
+    search_mode: Literal["research", "search", "react"] = Field(
+        default="research",
+        description="research: 研究报告; search: DeepSearch 图; react: 简单 ReAct + 与 search 相同的工具",
+    )
+    enable_question_router: bool = Field(
+        default=False,
+        description="为 True 且 search_mode 为 search 时，先经 LLM 路由：0→react，1→search（DeepSearch）",
+    )
+    search_workflow_per_question_params: PerQuestionParams = Field(default_factory=PerQuestionParams)
+    search_workflow_milvus_config: MilvusConfig = Field(default_factory=MilvusConfig)
+    jina_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="Jina API密钥")
+    serper_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="Serper API密钥")
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # 联网增强引擎 QPS 流控配置
+    web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
     api_tools_config: ApiToolsConfig = Field(default_factory=ApiToolsConfig, description="API tools config")
 
     # 联网增强引擎 QPS 流控配置
@@ -130,11 +330,14 @@ class AgentConfig(BaseModel):
     vlm_chart_generator_enable: bool = Field(default=False, description="vlm迭代生成图开关")
     vlm_chart_generator_max_iterations: int = Field(default=1, ge=0, le=3, description="vlm迭代生成图最大迭代次数，0表示不进行迭代")
 
+    agent_llm_timeouts: Dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
+
 
 class ServiceConfig(BaseModel):
-    '''
+    """
     服务配置类
-    '''
+    """
+
     # 服务基础配置
     service_allow_origins: List[str] = Field(default_factory=list, description="允许的ip范围")
 
@@ -148,6 +351,9 @@ class ServiceConfig(BaseModel):
     workflow_recursion_limit: int = Field(default=30, description="递归限制")
     workflow_max_gen_question_retry_num: int = Field(default=3, description="最大生成问题执行数量")
     workflow_feedback_mode: str = Field(default="web", description='用户反馈途径, 可选值: ["web", "cmd"]')
+
+    # Search mode 相关参数
+    search_workflow: SearchWorkflowConfig = Field(default_factory=SearchWorkflowConfig)
 
     # 大纲节点基础参数
     outliner_max_generate_outline_retry_num: int = Field(default=3, description="最大生成大纲重试次数")
@@ -188,8 +394,8 @@ class ServiceConfig(BaseModel):
 
 
 class Config(BaseModel):
-    '''
+    """
     总配置类
-    '''
+    """
     agent_config: AgentConfig = Field(default_factory=AgentConfig, description="对外开放的Agent参数")
     service_config: ServiceConfig = Field(default_factory=ServiceConfig, description="SDK服务默认参数")

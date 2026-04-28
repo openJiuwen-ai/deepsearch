@@ -3,14 +3,20 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
+    _resolve_agent_llm_timeout,
+    _resolve_node_agent_key,
     _install_usage_only_chunk_parser,
     ainvoke_llm_with_stats,
     add_workflow_llm_usage,
     get_workflow_llm_usage,
+    llm_astream,
     pop_workflow_llm_usage,
     save_workflow_llm_usage_to_session,
 )
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 
 
 class _DummyModelConfig:
@@ -67,6 +73,278 @@ class _FakeResponse:
             与业务代码兼容的最小响应字典。
         """
         return {"content": self.content, "tool_calls": None}
+
+
+class _StreamingChunk:
+    """模拟可聚合的流式 chunk。"""
+
+    def __init__(self, content: str, usage_metadata=None):
+        """初始化流式 chunk。
+
+        Args:
+            content: 当前 chunk 的文本内容。
+            usage_metadata: 可选的 token 统计信息。
+        """
+        self.content = content
+        self.usage_metadata = usage_metadata or {}
+
+    def __add__(self, other: "_StreamingChunk") -> "_StreamingChunk":
+        """模拟 SDK chunk 的可加和行为。
+
+        Args:
+            other: 另一个待拼接 chunk。
+
+        Returns:
+            _StreamingChunk: 拼接后的新 chunk。
+        """
+        return _StreamingChunk(self.content + other.content, other.usage_metadata or self.usage_metadata)
+
+
+class _SlowStreamingModel:
+    """模拟可控耗时的流式 LLM。"""
+
+    def __init__(self, delay: float):
+        """初始化模拟模型。
+
+        Args:
+            delay: 首个 chunk 后额外等待的秒数。
+        """
+        self.delay = delay
+
+    async def stream(self, **kwargs):
+        """按固定节奏输出两个 chunk。
+
+        Args:
+            **kwargs: 与真实模型保持兼容的占位参数。
+
+        Yields:
+            _StreamingChunk: 模拟产生的流式输出块。
+        """
+        del kwargs
+        yield _StreamingChunk("a")
+        await asyncio.sleep(self.delay)
+        yield _StreamingChunk("b", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+
+
+def test_resolve_node_agent_key_uses_longest_known_prefix():
+    """验证节点级匹配会选择最长的已知前缀。
+
+    Returns:
+        None.
+    """
+    assert _resolve_node_agent_key("source_tracer_infer_structured_infer") == NodeId.SOURCE_TRACER_INFER.value
+    assert _resolve_node_agent_key("vlm_chart_generatorgenerate_chart_code") == NodeId.VLM_CHART_GENERATOR.value
+
+
+def test_resolve_agent_llm_timeout_prefers_exact_match_over_node_key():
+    """验证超时规则优先精确命中 agent_name。
+
+    Returns:
+        None.
+    """
+    fake_session = SimpleNamespace(
+        get_global_state=lambda key: {
+            "default": 300,
+            "sub_reporter": 600,
+            "sub_reporter_classify_doc_infos": 120,
+        }
+        if key == "config.agent_llm_timeouts"
+        else None
+    )
+
+    resolved = _resolve_agent_llm_timeout("sub_reporter_classify_doc_infos", fake_session)
+
+    assert resolved.timeout == 120
+    assert resolved.matched_by == "agent_name"
+    assert resolved.matched_key == "sub_reporter_classify_doc_infos"
+    assert resolved.resolved_node_key == "sub_reporter"
+
+
+def test_resolve_agent_llm_timeout_falls_back_to_node_key_then_default():
+    """验证超时规则会先回退到节点级 key，再回退到 default。
+
+    Returns:
+        None.
+    """
+    fake_session = SimpleNamespace(
+        get_global_state=lambda key: {
+            "default": 300,
+            "sub_reporter": 600,
+        }
+        if key == "config.agent_llm_timeouts"
+        else None
+    )
+
+    node_level = _resolve_agent_llm_timeout("sub_reporter_outline", fake_session)
+    default_level = _resolve_agent_llm_timeout("unknown_agent_name", fake_session)
+
+    assert (node_level.timeout, node_level.matched_by, node_level.matched_key) == (600, "node_key", "sub_reporter")
+    assert (default_level.timeout, default_level.matched_by, default_level.matched_key) == (300, "default", "default")
+
+
+def test_resolve_agent_llm_timeout_returns_zero_when_disable_rule_matches():
+    """验证命中值为 0 的规则时会原样返回，表示关闭 wall-clock timeout。
+
+    Returns:
+        None.
+    """
+    fake_session = SimpleNamespace(
+        get_global_state=lambda key: {"default": 300, "source_tracer_infer": 0}
+        if key == "config.agent_llm_timeouts"
+        else None
+    )
+
+    resolved = _resolve_agent_llm_timeout("source_tracer_infer_structured_infer", fake_session)
+
+    assert resolved.timeout == 0
+    assert resolved.matched_by == "node_key"
+
+
+def test_resolve_agent_llm_timeout_disables_feature_without_default():
+    """验证缺少 default 时会整体禁用 agent LLM timeout 功能。
+
+    Returns:
+        None.
+    """
+    fake_session = SimpleNamespace(
+        get_global_state=lambda key: {"sub_reporter": 120} if key == "config.agent_llm_timeouts" else None
+    )
+
+    resolved = _resolve_agent_llm_timeout("sub_reporter", fake_session)
+
+    assert resolved is None
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_allows_default_ai_agent_name():
+    """验证未显式传入或传入 None 时保留默认 AI 调用名。
+
+    Returns:
+        None.
+    """
+    llm_obj = {"model": object(), "model_name": "demo-model"}
+    with patch(
+        "openjiuwen_deepsearch.utils.common_utils.llm_utils.llm_astream",
+        new=AsyncMock(return_value=_FakeResponse()),
+    ) as mock_llm_astream:
+        await ainvoke_llm_with_stats(
+            llm=llm_obj,
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        await ainvoke_llm_with_stats(
+            llm=llm_obj,
+            messages=[{"role": "user", "content": "hello"}],
+            agent_name=None,
+        )
+
+    assert mock_llm_astream.await_args_list[0].kwargs["agent_name"] == "AI"
+    assert mock_llm_astream.await_args_list[1].kwargs["agent_name"] == "AI"
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_defaults_blank_agent_name_and_allows_declared_agent_names():
+    """验证空白 agent_name 归一为默认值，AgentLlmName 中定义的调用名可通过校验。
+
+    Returns:
+        None.
+    """
+    llm_obj = {"model": object(), "model_name": "demo-model"}
+    with patch(
+        "openjiuwen_deepsearch.utils.common_utils.llm_utils.llm_astream",
+        new=AsyncMock(return_value=_FakeResponse()),
+    ) as mock_llm_astream:
+        await ainvoke_llm_with_stats(
+            llm=llm_obj,
+            messages=[{"role": "user", "content": "hello"}],
+            agent_name="  ",
+        )
+        await ainvoke_llm_with_stats(
+            llm=llm_obj,
+            messages=[{"role": "user", "content": "hello"}],
+            agent_name=AgentLlmName.ENTRY.value,
+        )
+
+    assert mock_llm_astream.await_args_list[0].kwargs["agent_name"] == "AI"
+    assert mock_llm_astream.await_args_list[1].kwargs["agent_name"] == AgentLlmName.ENTRY.value
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_rejects_undeclared_agent_name():
+    """验证未在 AgentLlmName 中定义的 agent_name 会被拒绝。
+
+    Returns:
+        None.
+    """
+    llm_obj = {"model": object(), "model_name": "demo-model"}
+
+    with pytest.raises(CustomValueException) as exc_info:
+        await ainvoke_llm_with_stats(
+            llm=llm_obj,
+            messages=[{"role": "user", "content": "hello"}],
+            agent_name="not_declared_agent",
+        )
+
+    assert exc_info.value.error_code == StatusCode.PARAM_CHECK_ERROR_COMMON_INVALID.code
+    assert "agent_name" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_llm_astream_raises_custom_timeout_when_wall_clock_limit_is_hit():
+    """验证命中 wall-clock timeout 时会抛出专用业务异常。
+
+    Returns:
+        None.
+    """
+    fake_session = SimpleNamespace(
+        get_global_state=lambda key: {"default": 1} if key == "config.agent_llm_timeouts" else None,
+        write_custom_stream=AsyncMock(),
+    )
+
+    from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+
+    token = session_context.set(fake_session)
+    try:
+        with pytest.raises(CustomValueException) as exc_info:
+            await llm_astream(
+                llm=_SlowStreamingModel(delay=1.2),
+                messages=[{"role": "user", "content": "hello"}],
+                model_name="demo-model",
+                agent_name="sub_reporter",
+            )
+    finally:
+        session_context.reset(token)
+
+    assert exc_info.value.error_code == StatusCode.LLM_WALL_CLOCK_TIMEOUT.code
+    assert "agent sub_reporter" in exc_info.value.message
+    assert "matched_by=default" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_llm_astream_skips_wall_clock_timeout_when_rule_is_zero():
+    """验证命中值为 0 的规则时会跳过 wall-clock timeout。
+
+    Returns:
+        None.
+    """
+    fake_session = SimpleNamespace(
+        get_global_state=lambda key: {"default": 1, "sub_reporter": 0} if key == "config.agent_llm_timeouts" else None,
+        write_custom_stream=AsyncMock(),
+    )
+
+    from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+
+    token = session_context.set(fake_session)
+    try:
+        response = await llm_astream(
+            llm=_SlowStreamingModel(delay=0.05),
+            messages=[{"role": "user", "content": "hello"}],
+            model_name="demo-model",
+            agent_name="sub_reporter_outline",
+        )
+    finally:
+        session_context.reset(token)
+
+    assert response.content == "ab"
 
 
 @pytest.mark.asyncio

@@ -8,8 +8,9 @@ from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_search
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -69,7 +70,7 @@ async def classify_query(inputs: dict) -> (bool, str):
         response = await llm_utils.ainvoke_llm_with_stats(llm,
                                                           prompts,
                                                           llm_type="basic",
-                                                          agent_name=NodeId.ENTRY.value,
+                                                          agent_name=AgentLlmName.ENTRY.value,
                                                           tools=[_create_function_tool().card.tool_info()],
                                                           need_stream_out=False)
         tool_calls = response.get('tool_calls', [])
@@ -100,5 +101,41 @@ async def classify_query(inputs: dict) -> (bool, str):
         "go_deepsearch": False,
         "lang": "zh-CN",
         "llm_result": response.get("content", ""),
+        "error_msg": error_msg
+    }
+
+
+async def web_search_for_query(inputs: dict) -> dict:
+    """
+    Perform web search for user query and return results.
+
+    Args:
+        inputs: dict containing:
+            - query: str - user's search query
+            - web_search_engine_name: str - search engine name (e.g., "tavily", "petal")
+
+    Returns:
+        dict containing:
+            - search_results: list - search results from web search
+            - error_msg: str - error message if failed
+    """
+    logger.info("[web_search_for_query] Begin web search for query.")
+    query = inputs.get("query", "")
+    search_engine_name = inputs.get("web_search_engine_name", "petal")
+
+    error_msg = ""
+    search_results = []
+    try:
+        result = await run_web_search(query, search_engine_name)
+        search_results = result.get("search_results", [])
+        if "Error when run web search" in search_results:
+            search_results = []
+    except Exception as e:
+        error_msg = f"Web search failed: {e}"
+        logger.error(error_msg)
+
+    logger.info(f"[web_search_for_query] End web search, got {len(search_results)} results.")
+    return {
+        "search_results": search_results,
         "error_msg": error_msg
     }

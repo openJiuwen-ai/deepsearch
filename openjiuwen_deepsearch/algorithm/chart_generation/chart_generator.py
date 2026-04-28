@@ -17,7 +17,7 @@ import json
 import textwrap
 from typing import Dict, List, Tuple, Optional, Any
 
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.algorithm.chart_generation.utils import (
     call_model,
     CallModelInput,
@@ -385,7 +385,7 @@ class ChartGenerator:
                 model_name=self._llm_model,
                 prompt="vlm_generate_chart_code_prompt",
                 user_input=gen_chart_input,
-                agent_name=NodeId.VLM_CHART_GENERATOR.value + "generate_chart_code",
+                agent_name=AgentLlmName.VLM_CHART_GENERATOR_GENERATE_CHART_CODE.value,
             )
             response = await call_model(
                 call_model_input, detection_func_and_args=detect_func_and_args
@@ -484,7 +484,7 @@ class ChartGenerator:
                 model_name=self._vlm_model,
                 prompt="vlm_iterate_prompt",
                 user_input=vlm_llm_input,
-                agent_name=NodeId.VLM_CHART_GENERATOR.value + "vlm_iterate",
+                agent_name=AgentLlmName.VLM_CHART_GENERATOR_VLM_ITERATE.value,
             )
             response = await call_model(call_model_input, use_vlm=True)
             if not response:

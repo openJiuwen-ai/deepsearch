@@ -9,7 +9,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ async def call_llm_for_trace(source_type: str, search_record: Dict[str, Any],
         llm_input = apply_system_prompt(
             "source_matching", source_tracer_context)
         llm_output = await ainvoke_llm_with_stats(llm, llm_input,
-                                                  agent_name=NodeId.SOURCE_TRACER.value + "_source_matching")
+                                                  agent_name=AgentLlmName.SOURCE_TRACER_SOURCE_MATCHING.value)
         llm_result = llm_output.get("content", "")
 
         # 解析并处理结果

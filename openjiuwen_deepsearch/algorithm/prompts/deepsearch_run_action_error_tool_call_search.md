@@ -1,0 +1,1 @@
+Error: Tool call failed. The web_search tool requires a valid 'query' field (array of strings). The web_fetch tool requires a valid 'url' field (array of strings) and a 'goal' field (string). Please try again using the provided tools with the correct arguments.

@@ -10,7 +10,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.common_utils.text_utils import split_into_sentences
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ async def recognize_content_to_cite(modified_report: str, similarity_threshold: 
         llm_input = apply_system_prompt(
             "content_recognition", source_tracer_context)
         llm_output = await ainvoke_llm_with_stats(llm, llm_input,
-                                                  agent_name=NodeId.SOURCE_TRACER.value + "_content_recognition")
+                                                  agent_name=AgentLlmName.SOURCE_TRACER_CONTENT_RECOGNITION.value)
         llm_result = llm_output.get("content", "")
         llm_result = normalize_json_output(llm_result)
 

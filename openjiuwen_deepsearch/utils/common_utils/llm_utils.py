@@ -3,11 +3,14 @@
 
 import asyncio
 import copy
+import inspect
 import json
 import logging
+import os
 import re
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Sequence, Any
 
 import json_repair
@@ -27,14 +30,112 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, cancel_context
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TIME_LOGGER_TAG
 
 logger = logging.getLogger(__name__)
+DEFAULT_AGENT_NAME = "AI"
+_ALLOWED_AGENT_NAMES = frozenset({DEFAULT_AGENT_NAME, *(item.value for item in AgentLlmName)})
+
+
+def format_llm_log_correlation_suffix() -> str:
+    """Suffix for LLM logs: per-run directory basename (e.g. result_<conversation_id>) and absolute path."""
+    try:
+        rt = session_context.get()
+    except LookupError:
+        return ""
+    if rt is None:
+        return ""
+    ld = rt.get_global_state("log_dir")
+    if not ld:
+        cfg = rt.get_global_state("config") or {}
+        if isinstance(cfg, dict):
+            ld = cfg.get("log_dir") or ""
+    if not ld:
+        return ""
+    if LogManager.is_sensitive():
+        return " result_run=***"
+    base = os.path.basename(os.path.normpath(str(ld)))
+    return f" result_run={base} log_dir={os.path.abspath(str(ld))}"
+
+
+_DEEPSEARCH_NODE_IDS = frozenset({
+    NodeId.INITIAL_STATE.value,
+    NodeId.FIND_ACTION_SPACE.value,
+    NodeId.RUN_ACTION.value,
+    NodeId.VALIDATE_NEW_STATE.value,
+    NodeId.TOOL.value,
+    NodeId.SIMPLE_REACT_SEARCH.value,
+})
+
+
 _WORKFLOW_LLM_USAGE: dict[str, dict[str, Any]] = {}
 _USAGE_ONLY_PARSER_PATCHES: dict[int, dict[str, Any]] = {}
+
+
+def normalize_agent_llm_timeouts(value: Any) -> dict[str, int]:
+    """规范化按 agent 配置的 LLM 总超时字典。
+
+    Args:
+        value: 原始超时配置。
+
+    Returns:
+        dict[str, int]: 规范化后的超时配置；缺少 ``default`` 时返回空字典表示未启用。
+    """
+    if not isinstance(value, dict) or not value or "default" not in value:
+        return {}
+    normalized_value: dict[str, int] = {}
+    for agent_key, timeout in value.items():
+        try:
+            normalized_value[agent_key] = max(int(timeout), 0)
+        except (TypeError, ValueError):
+            normalized_value[agent_key] = 0
+    return normalized_value
+
+
+@dataclass(frozen=True)
+class ResolvedAgentTimeout:
+    """描述一次 agent LLM 总超时的解析结果。
+
+    Attributes:
+        timeout: 最终命中的超时时间，单位秒。
+        matched_by: 命中来源，取值为 ``agent_name``、``node_key`` 或 ``default``。
+        matched_key: 实际命中的配置 key。
+        resolved_node_key: 从 ``agent_name`` 解析出的节点级 key；无法解析时为 ``None``。
+    """
+
+    timeout: int
+    matched_by: str
+    matched_key: str
+    resolved_node_key: str | None
+
+
+@dataclass(frozen=True)
+class _ConsumeLlmStreamRequest:
+    """封装流消费阶段所需的上下文参数。
+
+    Attributes:
+        llm: LLM 对象。
+        stream_kwargs: 传给 ``llm.stream`` 的参数。
+        can_write_stream: 是否允许写自定义流。
+        need_stream_out: 是否需要输出流式消息。
+        session: 当前 session。
+        stream_id: 当前流 ID。
+        stream_meta: 附加流元数据。
+        agent_name: 当前 agent 名称。
+    """
+
+    llm: Any
+    stream_kwargs: dict[str, Any]
+    can_write_stream: bool
+    need_stream_out: bool
+    session: Any
+    stream_id: str | None
+    stream_meta: dict[str, Any] | None
+    agent_name: str
 
 
 def _normalize_agent_name(agent_name: Any) -> str:
@@ -50,6 +151,101 @@ def _normalize_agent_name(agent_name: Any) -> str:
         return "unknown"
     normalized_name = agent_name.strip()
     return normalized_name if normalized_name else "unknown"
+
+
+def _validate_invoke_agent_name(agent_name: Any) -> str:
+    """校验并规范化 LLM 调用入口的 agent_name。
+
+    Args:
+        agent_name: 调用方传入的原始 agent_name。
+
+    Returns:
+        规范化后的 agent_name；None 或空白字符串返回默认值。
+
+    Raises:
+        CustomValueException: agent_name 既不是空值，也不是默认值或 AgentLlmName 中定义的值时抛出。
+    """
+    if agent_name is None:
+        return DEFAULT_AGENT_NAME
+    if not isinstance(agent_name, str):
+        raise CustomValueException(
+            error_code=StatusCode.PARAM_CHECK_ERROR_COMMON_INVALID.code,
+            message=StatusCode.PARAM_CHECK_ERROR_COMMON_INVALID.errmsg.format(param="agent_name"),
+        )
+
+    normalized_name = agent_name.strip()
+    if not normalized_name:
+        return DEFAULT_AGENT_NAME
+    if normalized_name in _ALLOWED_AGENT_NAMES:
+        return normalized_name
+    raise CustomValueException(
+        error_code=StatusCode.PARAM_CHECK_ERROR_COMMON_INVALID.code,
+        message=StatusCode.PARAM_CHECK_ERROR_COMMON_INVALID.errmsg.format(param="agent_name"),
+    )
+
+
+def _resolve_node_agent_key(agent_name: str) -> str | None:
+    """按最长前缀从 agent_name 中解析节点级 key。
+
+    Args:
+        agent_name: 原始 agent_name。
+
+    Returns:
+        str | None: 解析得到的 ``NodeId.value``；无法匹配时返回 ``None``。
+    """
+    normalized_agent_name = _normalize_agent_name(agent_name)
+    for node_key in sorted((item.value for item in NodeId), key=len, reverse=True):
+        if normalized_agent_name.startswith(node_key):
+            return node_key
+    return None
+
+
+def _resolve_agent_llm_timeout(agent_name: str, session: Any = None) -> ResolvedAgentTimeout | None:
+    """解析当前 agent 应使用的 wall-clock timeout。
+
+    Args:
+        agent_name: 原始 agent_name。
+        session: 当前 session 对象。
+
+    Returns:
+        ResolvedAgentTimeout | None: 命中的超时解析结果；未配置时返回 ``None``。
+    """
+    if session is None:
+        return None
+    try:
+        timeout_config = session.get_global_state("config.agent_llm_timeouts")
+    except Exception:
+        return None
+    timeout_config = normalize_agent_llm_timeouts(timeout_config)
+    if not timeout_config:
+        return None
+
+    normalized_agent_name = _normalize_agent_name(agent_name)
+    if normalized_agent_name in timeout_config:
+        return ResolvedAgentTimeout(
+            timeout=timeout_config[normalized_agent_name],
+            matched_by="agent_name",
+            matched_key=normalized_agent_name,
+            resolved_node_key=_resolve_node_agent_key(normalized_agent_name),
+        )
+
+    resolved_node_key = _resolve_node_agent_key(normalized_agent_name)
+    if resolved_node_key and resolved_node_key in timeout_config:
+        return ResolvedAgentTimeout(
+            timeout=timeout_config[resolved_node_key],
+            matched_by="node_key",
+            matched_key=resolved_node_key,
+            resolved_node_key=resolved_node_key,
+        )
+
+    if "default" in timeout_config:
+        return ResolvedAgentTimeout(
+            timeout=timeout_config["default"],
+            matched_by="default",
+            matched_key="default",
+            resolved_node_key=resolved_node_key,
+        )
+    return None
 
 
 def _build_empty_agent_name_usage(agent_name: str) -> dict[str, Any]:
@@ -221,9 +417,9 @@ def save_workflow_llm_usage_to_session(session: Any, session_id: str) -> dict[st
         return usage
     try:
         session.update_global_state({"search_context.final_result.workflow_llm_token_usage": usage})
-    except Exception:
+    except Exception as e:
         # 持久化失败时仅降级，不影响主流程执行。
-        pass
+        logger.debug("Exception when updating session's global state: %s", e, exc_info=True)
     return usage
 
 
@@ -399,12 +595,10 @@ def _is_llm_stats_enabled() -> bool:
             session_flag = session.get_global_state("config.stats_info_llm")
             if session_flag is not None:
                 return bool(session_flag)
-    except LookupError:
+    except Exception as e:
         # 非 workflow 会话场景，走全局默认配置兜底。
-        pass
-    except Exception:
         # 避免统计开关读取异常影响主流程。
-        pass
+        logger.debug("Exception when checking whether llm stats is enabled: %s", e, exc_info=True)
 
     return bool(Config().agent_config.stats_info_llm)
 
@@ -490,6 +684,115 @@ def normalize_json_output(input_data: str) -> str:
 def _extract_json(text: str) -> str:
     # 去除 ```json 或 ``` 包裹
     return re.sub(r"^```(?:json)?\n|\n```$", "", text.strip())
+
+
+def _single_provider_error_detail(
+    exc: BaseException, *, max_response_text: int = 16_000
+) -> dict[str, Any]:
+    """Same fields the OpenAI Python SDK exposes on API errors (cf. openai.APIStatusError).
+
+    Mirrors ``test.test._error_detail`` so logs match direct ``OpenAI()`` calls.
+    """
+    out: dict[str, Any] = {
+        "exception_type": type(exc).__name__,
+        "exception_str": str(exc),
+    }
+    body = getattr(exc, "body", None)
+    if body is not None:
+        out["exception_body"] = body
+
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", None)
+        if status is not None:
+            out["response_status"] = status
+        try:
+            text = getattr(response, "text", None)
+            if isinstance(text, str) and text.strip():
+                frag = text.strip()
+                if len(frag) > max_response_text:
+                    frag = frag[:max_response_text] + "...(truncated)"
+                out["response_text"] = frag
+        except Exception as e:
+            logger.debug("Exception when extracting response text: %s", e, exc_info=True)
+
+    # Common on openai.APIStatusError / BadRequestError
+    for attr in ("request_id", "code", "param", "type"):
+        val = getattr(exc, attr, None)
+        if val is not None:
+            out[f"exception_{attr}"] = val
+
+    return out
+
+
+def _format_llm_invoke_exception(
+    exc: BaseException,
+    *,
+    max_response_text: int = 16_000,
+    max_formatted_len: int = 48_000,
+) -> str:
+    """JSON matching normal OpenAI client errors: structured body + optional cause chain."""
+    chain: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    for _ in range(8):
+        if cur is None or id(cur) in seen:
+            break
+        seen.add(id(cur))
+        chain.append(
+            _single_provider_error_detail(cur, max_response_text=max_response_text)
+        )
+        cur = cur.__cause__
+
+    if not chain:
+        payload: dict[str, Any] = {
+            "exception_type": type(exc).__name__,
+            "exception_str": str(exc),
+        }
+    elif len(chain) == 1:
+        payload = chain[0]
+    else:
+        payload = {"error_chain": chain}
+
+    raw = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    if len(raw) > max_formatted_len:
+        raw = raw[:max_formatted_len] + "\n...(truncated)"
+    return raw
+
+
+def llm_error_chain_blob(exc: BaseException | None, *, max_depth: int = 8) -> str:
+    """Concatenate ``str(exc)`` along ``__cause__`` and the root's ``__context__`` chain.
+
+    Used for substring heuristics (e.g. context-limit phrases) when the wrapper message
+    only says "status code is 400".
+    """
+    if exc is None:
+        return ""
+    parts: list[str] = []
+    seen: set[int] = set()
+
+    def walk_chain(start: BaseException | None) -> None:
+        cur = start
+        for _ in range(max_depth):
+            if cur is None or id(cur) in seen:
+                break
+            seen.add(id(cur))
+            parts.append(str(cur))
+            cur = cur.__cause__
+
+    walk_chain(exc)
+    ctx = exc.__context__
+    if ctx is not None and id(ctx) not in seen:
+        walk_chain(ctx)
+    return " ".join(parts)
+
+
+async def _call_model_method(method, primary_kwargs: dict):
+    """Invoke sync or async model methods without losing awaitables."""
+    if inspect.iscoroutinefunction(method):
+        return await method(**primary_kwargs)
+
+    return await asyncio.to_thread(method, **primary_kwargs)
 
 
 def _extract_usage_payload_from_stream_chunk(raw_chunk: Any) -> Any:
@@ -651,6 +954,47 @@ def _resolve_stream_options(llm_model: Any, need_include_usage: bool) -> dict | 
     return merged_options or None
 
 
+async def _consume_llm_stream(
+    request: _ConsumeLlmStreamRequest,
+) -> Any:
+    """消费流式 LLM 输出并聚合完整结果。
+
+    Args:
+        request: 流消费阶段的具名上下文参数。
+
+    Returns:
+        Any: 聚合后的完整响应块。
+    """
+    full_chunk = None
+    async for chunk in request.llm.stream(**request.stream_kwargs):
+        _raise_if_cancelled()
+        if full_chunk is None:
+            full_chunk = chunk
+        else:
+            full_chunk += chunk
+            if len(full_chunk.content) >= MAX_LLM_RESP_LENGTH:
+                logger.warning(
+                    "[llm_astream] llm response is too long, "
+                    "truncate to %s characters", MAX_LLM_RESP_LENGTH
+                )
+                full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
+                break
+        chunk_content = getattr(chunk, "content", "")
+        if request.can_write_stream and request.need_stream_out and chunk_content:
+            payload = {
+                "message_id": request.stream_id,
+                "agent": request.agent_name,
+                "content": chunk_content,
+                "message_type": MessageType.MESSAGE_CHUNK.value,
+                "event": StreamEvent.MESSAGE.value,
+                "created_time": get_current_time(),
+            }
+            if request.stream_meta:
+                payload.update(dict(request.stream_meta))
+            await request.session.write_custom_stream(payload)
+    return full_chunk
+
+
 async def llm_astream(*args, **kwargs):
     """以流式方式调用 LLM 并返回完整响应。
 
@@ -708,6 +1052,7 @@ async def llm_astream(*args, **kwargs):
         await session.write_custom_stream(_make_payload(stream_id, StreamEvent.START.value, ""))
 
     restore_usage_parser = None
+    resolved_timeout = None
     if isinstance(stream_options, dict) and bool(stream_options.get("include_usage")):
         restore_usage_parser = _install_usage_only_chunk_parser(llm)
 
@@ -720,20 +1065,62 @@ async def llm_astream(*args, **kwargs):
         if stream_options is not None:
             stream_kwargs["stream_options"] = stream_options
 
-        async for chunk in llm.stream(**stream_kwargs):
-            _raise_if_cancelled()
-            if full_chunk is None:
-                full_chunk = chunk
-            else:
-                full_chunk += chunk
-                if len(full_chunk.content) >= MAX_LLM_RESP_LENGTH:
-                    logger.warning(
-                        f"[llm_astream] llm response is too long, truncate to {MAX_LLM_RESP_LENGTH} characters")
-                    full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
-                    break
-            chunk_content = getattr(chunk, "content", "")
-            if can_write_stream and need_stream_out and chunk_content:
-                await session.write_custom_stream(_make_payload(stream_id, StreamEvent.MESSAGE.value, chunk_content))
+        resolved_timeout = _resolve_agent_llm_timeout(agent_name=agent_name, session=session)
+        if resolved_timeout is not None and resolved_timeout.timeout > 0:
+            logger.info(
+                "[llm_astream] applying wall-clock timeout agent_name=%s "
+                "node_key=%s matched_by=%s matched_key=%s timeout=%s",
+                agent_name,
+                resolved_timeout.resolved_node_key,
+                resolved_timeout.matched_by,
+                resolved_timeout.matched_key,
+                resolved_timeout.timeout,
+            )
+            full_chunk = await asyncio.wait_for(
+                _consume_llm_stream(_ConsumeLlmStreamRequest(
+                    llm=llm,
+                    stream_kwargs=stream_kwargs,
+                    can_write_stream=can_write_stream,
+                    need_stream_out=need_stream_out,
+                    session=session,
+                    stream_id=stream_id,
+                    stream_meta=stream_meta,
+                    agent_name=agent_name,
+                )),
+                timeout=resolved_timeout.timeout,
+            )
+        else:
+            full_chunk = await _consume_llm_stream(_ConsumeLlmStreamRequest(
+                llm=llm,
+                stream_kwargs=stream_kwargs,
+                can_write_stream=can_write_stream,
+                need_stream_out=need_stream_out,
+                session=session,
+                stream_id=stream_id,
+                stream_meta=stream_meta,
+                agent_name=agent_name,
+            ))
+    except asyncio.TimeoutError as exc:
+        if can_write_stream and need_stream_out:
+            await session.write_custom_stream(_make_payload(stream_id, StreamEvent.DONE.value, ""))
+        logger.warning(
+            "[llm_astream] wall-clock timeout agent_name=%s node_key=%s matched_by=%s matched_key=%s timeout=%s",
+            agent_name,
+            resolved_timeout.resolved_node_key if resolved_timeout else None,
+            resolved_timeout.matched_by if resolved_timeout else None,
+            resolved_timeout.matched_key if resolved_timeout else None,
+            resolved_timeout.timeout if resolved_timeout else None,
+        )
+        raise CustomValueException(
+            error_code=StatusCode.LLM_WALL_CLOCK_TIMEOUT.code,
+            message=StatusCode.LLM_WALL_CLOCK_TIMEOUT.errmsg.format(
+                timeout=resolved_timeout.timeout,
+                agent_name=agent_name,
+                matched_by=resolved_timeout.matched_by,
+                matched_key=resolved_timeout.matched_key,
+                node_key=resolved_timeout.resolved_node_key,
+            ),
+        ) from exc
     except Exception as e:
         if can_write_stream and need_stream_out:
             await session.write_custom_stream(_make_payload(stream_id, StreamEvent.DONE.value, ""))
@@ -751,6 +1138,19 @@ async def llm_astream(*args, **kwargs):
             error_code=StatusCode.LLM_RESPONSE_NONE.code,
             message=StatusCode.LLM_RESPONSE_NONE.errmsg)
     return full_chunk
+
+
+def _parse_invoke_llm_args(args, kwargs) -> dict:
+    return {
+        "llm": kwargs.get("llm", args[0] if len(args) > 0 else None),
+        "messages": kwargs.get("messages", args[1] if len(args) > 1 else None),
+        "llm_type": kwargs.get("llm_type", "basic"),
+        "agent_name": kwargs.get("agent_name", DEFAULT_AGENT_NAME),
+        "schema": kwargs.get("schema", None),
+        "tools": kwargs.get("tools", None),
+        "need_stream_out": kwargs.get("need_stream_out", False),
+        "stream_meta": kwargs.get("stream_meta", None),
+    }
 
 
 async def ainvoke_llm_with_stats(*args, **kwargs):
@@ -772,7 +1172,7 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     llm = invoke_args["llm"]
     messages = invoke_args["messages"]
     llm_type = invoke_args["llm_type"]
-    agent_name = invoke_args["agent_name"]
+    agent_name = _validate_invoke_agent_name(invoke_args["agent_name"])
     schema = invoke_args["schema"]
     tools = invoke_args["tools"]
     need_stream_out = invoke_args["need_stream_out"]
@@ -816,22 +1216,84 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
         raise CustomValueException(
             error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,
             message=StatusCode.LLM_INSTANCE_NONE_ERROR.errmsg)
-
     resolved_stream_options = (
         _resolve_stream_options(llm_model=llm_model, need_include_usage=True)
         if stats_info_llm
         else None
     )
-    response = await llm_astream(
-        llm=llm_model,
-        messages=messages,
-        model_name=model_name,
-        agent_name=agent_name,
-        tools=tools,
-        need_stream_out=need_stream_out,
-        stream_meta=stream_meta,
-        stream_options=resolved_stream_options,
-    )
+
+    if agent_name in _DEEPSEARCH_NODE_IDS:
+        processed_messages = []
+        for m in messages:
+            if isinstance(m, (SystemMessage, UserMessage, AssistantMessage, ToolMessage)):
+                name = getattr(m, "name", None)
+                if name == "" or name is None:
+                    msg_dict = m.model_dump()
+                    msg_dict.pop("name", None)
+                    if isinstance(m, SystemMessage):
+                        processed_messages.append(SystemMessage(**msg_dict))
+                    elif isinstance(m, UserMessage):
+                        processed_messages.append(UserMessage(**msg_dict))
+                    elif isinstance(m, AssistantMessage):
+                        processed_messages.append(AssistantMessage(**msg_dict))
+                    elif isinstance(m, ToolMessage):
+                        processed_messages.append(ToolMessage(**msg_dict))
+                else:
+                    processed_messages.append(m)
+            else:
+                processed_messages.append(m)
+        messages = processed_messages
+        invoke_kw = {
+            "model": model_name,
+            "messages": messages,
+            "tools": tools,
+        }
+        try:
+            if hasattr(llm_model, "invoke"):
+                response = await _call_model_method(llm_model.invoke, invoke_kw)
+            elif hasattr(llm_model, "_ainvoke"):
+                ainvoke_method = getattr(llm_model, "_ainvoke", None)
+                if ainvoke_method:
+                    response = await _call_model_method(ainvoke_method, invoke_kw)
+            elif hasattr(llm_model, "ainvoke"):
+                response = await _call_model_method(llm_model.ainvoke, invoke_kw)
+            else:
+                response = await llm_astream(
+                    llm=llm_model,
+                    messages=messages,
+                    model_name=model_name,
+                    agent_name=agent_name,
+                    tools=tools,
+                    need_stream_out=False,
+                    stream_meta=stream_meta,
+                    stream_options=resolved_stream_options,
+                )
+        except Exception as e:
+            detail = _format_llm_invoke_exception(e)
+            corr = format_llm_log_correlation_suffix()
+            logger.warning(
+                "[ainvoke_llm_with_stats] LLM invoke failed%s agent=%s: %s",
+                corr,
+                agent_name or "-",
+                "*" if LogManager.is_sensitive() else detail,
+                exc_info=not LogManager.is_sensitive(),
+            )
+            raise CustomValueException(
+                StatusCode.LLM_CALL_FAILED.code,
+                StatusCode.LLM_CALL_FAILED.errmsg.format(e=detail),
+            ) from e
+
+    else:
+        response = await llm_astream(
+            llm=llm_model,
+            messages=messages,
+            model_name=model_name,
+            agent_name=agent_name,
+            tools=tools,
+            need_stream_out=need_stream_out,
+            stream_meta=stream_meta,
+            stream_options=resolved_stream_options,
+        )
 
     if stats_info_llm:
         duration = time.time() - start
@@ -864,19 +1326,6 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     return _unify_responnse(response)
 
 
-def _parse_invoke_llm_args(args, kwargs) -> dict:
-    return {
-        "llm": kwargs.get("llm", args[0] if len(args) > 0 else None),
-        "messages": kwargs.get("messages", args[1] if len(args) > 1 else None),
-        "llm_type": kwargs.get("llm_type", "basic"),
-        "agent_name": kwargs.get("agent_name", "AI"),
-        "schema": kwargs.get("schema", None),
-        "tools": kwargs.get("tools", None),
-        "need_stream_out": kwargs.get("need_stream_out", False),
-        "stream_meta": kwargs.get("stream_meta", None),
-    }
-
-
 def _unify_responnse(response):
     temp_response = response.model_dump()
     new_response = copy.deepcopy(temp_response)
@@ -889,8 +1338,10 @@ def _unify_responnse(response):
                 new_response.get("tool_calls")[idx]["args"] = json.loads(arguments)
             if func and func.get("name"):
                 new_response.get("tool_calls")[idx]["name"] = func.get("name")
-            if tool_call.get("type"):
-                new_response.get("tool_calls")[idx]["type"] = "function"
+            # OpenAI Chat Completions requires tool_calls[].type == "function". A previous
+            # bug stored "tool_call" here, which causes 400 on the next request when the
+            # conversation is replayed.
+            new_response.get("tool_calls")[idx]["type"] = "function"
             new_response.get("tool_calls")[idx].pop("index", None)
     return new_response
 
@@ -908,11 +1359,23 @@ def transfer_to_jiuwen_messages(origin_messages: list):
             elif role == "user":
                 output_messages.append(UserMessage(content=content, name=name))
             elif role == "assistant":
+                raw_tcs = message.get("tool_calls", []) or []
+                fixed_tcs = []
+                for tc in raw_tcs:
+                    if isinstance(tc, dict):
+                        tc = dict(tc)
+                        if tc.get("type") == "tool_call":
+                            tc["type"] = "function"
+                        elif not tc.get("type"):
+                            tc["type"] = "function"
+                        fixed_tcs.append(tc)
+                    else:
+                        fixed_tcs.append(tc)
                 output_messages.append(
                     AssistantMessage(
                         content=content,
                         name=name,
-                        tool_calls=message.get("tool_calls", []),
+                        tool_calls=fixed_tcs,
                         usage_metadata=message.get("usage_metadata", None),
                         reasoning_content=message.get("reason_content", "")
                     )

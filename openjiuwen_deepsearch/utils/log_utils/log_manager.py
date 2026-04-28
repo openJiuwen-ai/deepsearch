@@ -17,7 +17,7 @@ from openjiuwen_deepsearch.utils.log_utils.log_interface import setup_interface_
 
 class LogManager:
     _initialized = False
-    _is_sensitive = True
+    _is_sensitive = False
     _SAFE_BASE = os.path.realpath("./output/logs")
     _THIRD_PARTY_LOGGERS = (
         "openai",
@@ -83,6 +83,7 @@ class LogManager:
 
         cls._configure_known_third_party_loggers()
         cls._is_sensitive = is_sensitive
+        cls._current_log_dir = log_dir
         cls._initialized = True
 
     @classmethod
@@ -91,6 +92,15 @@ class LogManager:
         获取敏感信息设置
         """
         return cls._is_sensitive
+
+    @classmethod
+    def get_log_dir(cls) -> Optional[str]:
+        """
+        获取当前日志目录
+        Returns:
+            当前日志目录路径，如果未初始化则返回None
+        """
+        return cls._current_log_dir
 
     @classmethod
     def _configure_known_third_party_loggers(cls):

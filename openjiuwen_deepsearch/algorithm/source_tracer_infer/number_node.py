@@ -120,13 +120,11 @@ class NumberNode:
         intersection_str = ' '.join(sorted(intersection))
         union_str1 = ' '.join(sorted(tokens1))
         union_str2 = ' '.join(sorted(tokens2))
-
         # 计算交集字符串与两个并集字符串的相似度
         ratio1 = difflib.SequenceMatcher(
             None, intersection_str, union_str1).ratio() * 100 if union_str1 else 0
         ratio2 = difflib.SequenceMatcher(
             None, intersection_str, union_str2).ratio() * 100 if union_str2 else 0
-
         # 综合Jaccard相似度和字符串相似度
         return (jaccard + (ratio1 + ratio2) / 2) / 2
 
@@ -138,7 +136,6 @@ class NumberNode:
         """
         if not choices:
             return []
-
         # 计算每个候选的相似度分数
         scored_choices = []
         for choice in choices:

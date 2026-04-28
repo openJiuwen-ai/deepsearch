@@ -74,6 +74,12 @@ class StatusCode(Enum):
         200025, "Parameter {param} value {value} is out of range [{min_val}, {max_val}]")
     PARAM_CHECK_ERROR_FILE_DIR_INVALID = (200026, "Invalid file directory: {file_dir}")
     PARAM_CHECK_ERROR_FILE_DIR_UNSAFE = (200027, "Unsafe file directory: {file_dir}, it must be within: {safe_base}")
+    PARAM_CHECK_ERROR_STATE_QUERY_REQUIRED = (200028, "Parameter validation failed: state/query is required")
+    PARAM_CHECK_ERROR_EMBED_DIMENSION_MODEL_MISMATCH = (
+        200029,
+        "Embedding dimension is not matched with the model, dimension: {dimension}, "
+        "model: {model}, API HTTP status code: {status_code}.",
+    )
 
     FILE_NOT_FOUND_ERROR_PROMPT = (200100, "Prompt file {name}.md not found.")
     APPLY_SYSTEM_PROMPT_FAILED = (200101, "Applying system prompt template with {name}.md failed")
@@ -101,6 +107,12 @@ class StatusCode(Enum):
     LLM_RESPONSE_ERROR = (211201, "LLM response has something wrong")
     LLM_RESPONSE_NONE = (211202, "LLM response is none")
     LLM_CONFIG_NONE = (211203, "LLM is not configured, at least the general model needs to be configured")
+    LLM_CALL_FAILED = (211204, "LLM call failed: {e}")
+    LLM_WALL_CLOCK_TIMEOUT = (
+        211205,
+        "LLM wall-clock timeout after {timeout}s for agent {agent_name}, "
+        "matched_by={matched_by}, matched_key={matched_key}, node_key={node_key}",
+    )
 
     WEB_SEARCH_INSTANCE_OBTAIN_ERROR = (211300, "web search engine instance is {name} when ainvoke, check if register")
     LOCAL_SEARCH_INSTANCE_OBTAIN_ERROR = (211301, "local search engine instance {name} when ainvoke, check if register")
@@ -144,6 +156,18 @@ class StatusCode(Enum):
     SOURCE_TRACER_INFER_ERROR = (212300, "Source tracer infer error {e}")
     SOURCE_TRACER_INFER_DATA_TYPE_ERROR = (212301, "Source tracer infer data type error {e}")
     SOURCE_TRACER_INFER_DATA_LEN_ERROR = (212302, "Source tracer infer data length error {e}")
+
+    AGENT_INIT_STATE_ERROR = (212400, "Agent init state failed or invalid result")
+    AGENT_FIND_ACTION_RESULT_ERROR = (212401, "Agent find action result invalid: {e}")
+    FIND_ACTION_PARSE_ERROR = (212402, "Find action: parse or validation failed: {e}")
+    RUN_ACTION_PARSE_ERROR = (212403, "Run action: parse or apply LLM result failed: {e}")
+    INIT_STATE_FAILED = (212404, "Failed to init state: {e}")
+    INIT_STATE_PLACEHOLDER_ERROR = (212405, "Failed to init state [placeholder]")
+    VALIDATE_NEW_STATE_ERROR = (212406, "Validate new state failed: {e}")
+    EMBED_API_CALL_FAILED = (
+        212407,
+        "Embedding API call failed, HTTP status code: {status_code}. {detail}",
+    )
 
     USER_FEEDBACK_PROCESSOR_DISABLED = (212400, "User feedback processor is disabled")
     USER_FEEDBACK_PROCESSOR_MAX_INTERACTIONS_REACHED = (212401, "Max interaction limit reached: {max_interactions}")

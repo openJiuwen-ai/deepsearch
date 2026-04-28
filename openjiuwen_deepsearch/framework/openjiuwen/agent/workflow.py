@@ -1,60 +1,143 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+import asyncio
 import base64
+import copy
 import json
 import logging
+import os
+from pathlib import Path
 import time
-from typing import Optional
 import uuid
+from typing import Any, AsyncGenerator, Optional
 
+from openjiuwen.core.application.workflow_agent.workflow_agent import (
+    WorkflowAgent as LegacyWorkflowAgent,
+)
 from openjiuwen.core.runner.runner import Runner
 from openjiuwen.core.session.checkpointer import CheckpointerFactory
 from openjiuwen.core.session.stream.base import CustomSchema, OutputSchema
+from openjiuwen.core.single_agent.legacy.agent import WorkflowFactory
+from openjiuwen.core.single_agent.legacy.config import WorkflowAgentConfig
 from openjiuwen.core.single_agent.schema.agent_card import AgentCard
-from openjiuwen.core.workflow.base import WorkflowCard
-from openjiuwen.core.workflow.workflow import Workflow
+from openjiuwen.core.workflow import Workflow, WorkflowCard, WorkflowOutput
 from pydantic import ValidationError
 
+from openjiuwen_deepsearch.algorithm.prompts.template import get_prompt_section
 from openjiuwen_deepsearch.algorithm.report_template.template_generator import TemplateGenerator
-from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions import _is_report_feedback_payload
+from openjiuwen_deepsearch.algorithm.search_agent.action_pool import ActionPool
+from openjiuwen_deepsearch.algorithm.search_agent.deepsearch_agent import (
+    parse_and_validate_find_action_result,
+    parse_and_validate_init_state_result,
+    parse_and_validate_state_creation_result,
+)
+from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import _run_llm_via_ainvoke
+from openjiuwen_deepsearch.algorithm.search_nodes.run_action import (
+    _parse_one_native_tool_call,
+    get_tool_definitions,
+)
+from openjiuwen_deepsearch.algorithm.search_nodes.tool_node import (
+    ExecuteToolConfig,
+    execute_tool,
+    format_tool_result_for_message,
+)
+from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
+    SaveSearchFinalResultConfig,
+    Termination,
+    _save_and_return_search_final_result,
+    to_dict_safe,
+    to_json_safe,
+)
+from openjiuwen_deepsearch.algorithm.search_tools.retriever_tool import RetrieveBrowsecompPlus
+from openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool import WebFetch
+from openjiuwen_deepsearch.algorithm.search_tools.web_search_tool import WebSearch
+from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions import (
+    _is_report_feedback_payload,
+)
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
-from openjiuwen_deepsearch.config.config import AgentConfig, WebSearchEngineConfig, LocalSearchEngineConfig, \
-    CustomWebSearchConfig, CustomLocalSearchConfig
+from openjiuwen_deepsearch.config.config import (
+    AgentConfig,
+    CustomLocalSearchConfig,
+    CustomWebSearchConfig,
+    LocalSearchEngineConfig,
+    PerQuestionParams,
+    SearchWorkflowConfig,
+    WebSearchEngineConfig,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import init_router
-from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent.workflow_agent import WorkflowAgent
-from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent import WorkflowControllerConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import (
-    EditorTeamNode,
     DependencyEditorTeamNode,
+    EditorTeamNode,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
-    SourceTracerNode, StartNode, EntryNode, GenerateQuestionsNode, OutlineNode, FeedbackHandlerNode,
-    ReporterNode, EndNode, DependencyOutlineNode, OutlineInteractionNode, DependencyOutlineInteractionNode,
-    SourceTracerInferNode, UserFeedbackProcessorNode, VLMChartGeneratorNode
+    DependencyOutlineInteractionNode,
+    DependencyOutlineNode,
+    EndNode,
+    EntryNode,
+    FeedbackHandlerNode,
+    FindActionSpaceNode,
+    GenerateQuestionsNode,
+    InitializeStateNode,
+    OutlineInteractionNode,
+    OutlineNode,
+    ReporterNode,
+    RunActionNode,
+    SearchEndNode,
+    SearchStartNode,
+    SourceTracerInferNode,
+    SourceTracerNode,
+    StartNode,
+    ToolNode,
+    UserFeedbackProcessorNode,
+    ValidateNewStateNode,
+    VLMChartGeneratorNode,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.tools import update_local_search_mapping, update_web_search_mapping
-from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
-from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
-from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    Action,
+    Result,
+    SearchFinalResult,
+    State,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent import WorkflowControllerConfig
+from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent.workflow_agent import WorkflowAgent
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import LlmConfigCategory
+from openjiuwen_deepsearch.framework.openjiuwen.tools import (
+    update_local_search_mapping,
+    update_web_search_mapping,
+)
+from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     get_effective_workflow_llm_usage,
     is_workflow_llm_usage_empty,
     pop_workflow_llm_usage,
 )
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, web_search_context, \
-    local_search_context, session_context
+from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
+from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
+    MessageType,
+    StreamEvent,
+    get_current_time,
+)
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    llm_context,
+    local_search_context,
+    session_context,
+    web_search_context,
+)
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from openjiuwen_deepsearch.utils.log_utils.log_interface import record_interface_log
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TIME_LOGGER_TAG
+from openjiuwen_deepsearch.utils.log_utils.log_metrics import TIME_LOGGER_TAG, metrics_logger
 from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_limiter
-from openjiuwen_deepsearch.utils.validation_utils.field_validation import validate_agent_required_field, \
-    validate_vlm_chart_generator_field
-from openjiuwen_deepsearch.utils.validation_utils.param_validation import validate_run_agent_params, \
-    validate_generate_template_params
+from openjiuwen_deepsearch.utils.validation_utils.field_validation import (
+    validate_agent_required_field,
+    validate_vlm_chart_generator_field,
+)
+from openjiuwen_deepsearch.utils.validation_utils.param_validation import (
+    validate_generate_template_params,
+    validate_run_agent_params,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +147,14 @@ class BaseAgent:
     base agent: agent基类
     """
 
-    async def run(self,
-                  message: str,
-                  conversation_id: str,
-                  agent_config: dict,
-                  report_template: str = "",
-                  interrupt_feedback: str = ""):
+    async def run(
+        self,
+        message: str,
+        conversation_id: str,
+        agent_config: dict,
+        report_template: str = "",
+        interrupt_feedback: str = "",
+    ):
         """
         运行agent的抽象方法
 
@@ -84,14 +169,9 @@ class BaseAgent:
             Async generator that yields StreamEvent objects.
 
         """
-        raise CustomValueException(StatusCode.AGENT_RUN_NOT_SUPPORT.code,
-                                   StatusCode.AGENT_RUN_NOT_SUPPORT.errmsg)
+        raise CustomValueException(StatusCode.AGENT_RUN_NOT_SUPPORT.code, StatusCode.AGENT_RUN_NOT_SUPPORT.errmsg)
 
-    async def generate_template(self,
-                                file_name: str,
-                                file_stream: str,
-                                is_template: bool,
-                                agent_config: dict):
+    async def generate_template(self, file_name: str, file_stream: str, is_template: bool, agent_config: dict):
         """
         生成报告模板的抽象方法
 
@@ -113,10 +193,7 @@ class BaseAgent:
             validate_agent_required_field(agent_config)
             validate_vlm_chart_generator_field(agent_config)
             result = await TemplateGenerator.generate_template(
-                file_name=file_name,
-                file_stream=file_stream,
-                is_template=is_template,
-                agent_config=agent_config
+                file_name=file_name, file_stream=file_stream, is_template=is_template, agent_config=agent_config
             )
             success = result.get("status", "").lower() == "success"
             response_info = {} if success else {"exception_info": result.get("error_message", "")}
@@ -140,28 +217,46 @@ class BaseAgent:
                 api_name="generate_template",
                 duration_min=duration_min,
                 success=success,
-                response_info=response_info
+                response_info=response_info,
             )
 
 
 class DeepresearchAgent(BaseAgent):
-    '''
+    """
     Deepresearch agent: 生成报告 Agent，通用模型，并行执行任务，不带模板
-    '''
+    """
 
     def __init__(self):
         self.research_name = self._get_default_research_name()
         self.version = "1"
         self.agent = None
         self.workflow_input_schema = {
-            "query": {"type": "string", }, "thread_id": {"type": "string", }, "conversation_id": {"type": "string", },
-            "report_template": {"type": "string", }, "interrupt_feedback": {"type": "string", },
-            "agent_config": {"type": "object", }
+            "query": {
+                "type": "string",
+            },
+            "thread_id": {
+                "type": "string",
+            },
+            "conversation_id": {
+                "type": "string",
+            },
+            "report_template": {
+                "type": "string",
+            },
+            "interrupt_feedback": {
+                "type": "string",
+            },
+            "agent_config": {
+                "type": "object",
+            },
         }
         self.startnode_input_schema = {
-            "query": "${query}", "thread_id": "${thread_id}", "conversation_id": "${conversation_id}",
+            "query": "${query}",
+            "thread_id": "${thread_id}",
+            "conversation_id": "${conversation_id}",
             "report_template": "${report_template}",
-            "interrupt_feedback": "${interrupt_feedback}", "agent_config": "${agent_config}"
+            "interrupt_feedback": "${interrupt_feedback}",
+            "agent_config": "${agent_config}",
         }
 
         self.research_workflow = None
@@ -206,7 +301,7 @@ class DeepresearchAgent(BaseAgent):
             "content": chunk.payload.value,
             "message_type": MessageType.INTERRUPT.value,
             "event": StreamEvent.WAITING_USER_INPUT.value,
-            "created_time": getattr(chunk, "created_time", "")
+            "created_time": getattr(chunk, "created_time", ""),
         }
         if not LogManager.is_sensitive():
             logger.debug("[OUTPUT] Interrupt event: %s", json.dumps(interrupt_message, ensure_ascii=False))
@@ -225,7 +320,7 @@ class DeepresearchAgent(BaseAgent):
             "content": getattr(chunk, "content", ""),
             "message_type": getattr(chunk, "message_type", ""),
             "event": getattr(chunk, "event", ""),
-            "created_time": getattr(chunk, "created_time", "")
+            "created_time": getattr(chunk, "created_time", ""),
         }
         if hasattr(chunk, "finish_reason"):
             output_message["finish_reason"] = getattr(chunk, "finish_reason")
@@ -249,12 +344,12 @@ class DeepresearchAgent(BaseAgent):
             else:
                 logger.warning("[DeepResearchAgent.run] Failed to release checkpointer session.")
 
-
     @staticmethod
     def _register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig):
-        '''注册网络搜索工具'''
+        """注册网络搜索工具"""
         search_engine_mapping = update_web_search_mapping(
-            custom_web.custom_web_search_file, custom_web.custom_web_search_func)
+            custom_web.custom_web_search_file, custom_web.custom_web_search_func
+        )
         web_engine_name = search_config.search_engine_name
         if web_engine_name not in search_engine_mapping:
             error_msg = f"Failed to register web engine: {web_engine_name}, engine is not found in the registry."
@@ -264,7 +359,7 @@ class DeepresearchAgent(BaseAgent):
 
     @staticmethod
     def _register_local_search_tool(custom_local: CustomLocalSearchConfig, search_config: LocalSearchEngineConfig):
-        '''注册本地搜索工具'''
+        """注册本地搜索工具"""
         local_engine_mapping = update_local_search_mapping(
             custom_local.custom_local_search_file,
             custom_local.custom_local_search_func,
@@ -281,10 +376,7 @@ class DeepresearchAgent(BaseAgent):
                 )
 
         if engine_name not in local_engine_mapping:
-            error_msg = (
-                f"Failed to register local engine: {engine_name}, "
-                f"engine is not found in the registry."
-            )
+            error_msg = f"Failed to register local engine: {engine_name}, " f"engine is not found in the registry."
             logger.error(f"[Tool Init] {error_msg}")
             raise CustomValueException(
                 StatusCode.LOCAL_SEARCH_INSTANCE_OBTAIN_ERROR.code,
@@ -331,7 +423,7 @@ class DeepresearchAgent(BaseAgent):
             "content": json.dumps(final_result_info, ensure_ascii=False),
             "message_type": MessageType.MESSAGE_CHUNK.value,
             "event": StreamEvent.ERROR.value,
-            "created_time": get_current_time()
+            "created_time": get_current_time(),
         }
 
     @staticmethod
@@ -344,14 +436,15 @@ class DeepresearchAgent(BaseAgent):
             "content": "ALL END",
             "message_type": MessageType.MESSAGE_CHUNK.value,
             "event": StreamEvent.SUMMARY_RESPONSE.value,
-            "created_time": get_current_time()
+            "created_time": get_current_time(),
         }
 
     @staticmethod
     async def _emit_error_and_end_stream(conversation_id: str, final_result_info: dict):
         try:
-            yield json.dumps(DeepresearchAgent._build_stream_error_payload(conversation_id, final_result_info),
-                             ensure_ascii=False)
+            yield json.dumps(
+                DeepresearchAgent._build_stream_error_payload(conversation_id, final_result_info), ensure_ascii=False
+            )
             yield json.dumps(DeepresearchAgent._build_stream_end_payload(conversation_id), ensure_ascii=False)
         except Exception as stream_err:
             logger.warning("[DeepResearchAgent.run] Failed to emit error stream event: %s", stream_err)
@@ -360,19 +453,16 @@ class DeepresearchAgent(BaseAgent):
     def _prepare_stream_query(message: str, interrupt_feedback: str):
         is_report_feedback = _is_report_feedback_payload(message)
         if interrupt_feedback and not is_report_feedback:
-            return json.dumps({
-                "interrupt_feedback": interrupt_feedback,
-                "feedback": message
-            }), is_report_feedback
+            return json.dumps({"interrupt_feedback": interrupt_feedback, "feedback": message}), is_report_feedback
         return message, is_report_feedback
 
     async def _consume_stream_chunks(
-            self,
-            conversation_id: str,
-            message: str,
-            decoded_template: str,
-            interrupt_feedback: str,
-            session_agent_config: dict,
+        self,
+        conversation_id: str,
+        message: str,
+        decoded_template: str,
+        interrupt_feedback: str,
+        session_agent_config: dict,
     ):
         is_all_end = False
         final_result_info = {}
@@ -380,14 +470,17 @@ class DeepresearchAgent(BaseAgent):
         stream_query, is_report_feedback = self._prepare_stream_query(message, interrupt_feedback)
 
         async for chunk in Runner.run_agent_streaming(
-                agent=self.agent,
-                inputs={"query": stream_query,
-                        "thread_id": conversation_id,
-                        "conversation_id": conversation_id,
-                        "report_template": decoded_template,
-                        "interrupt_feedback": interrupt_feedback,
-                        "resume_interaction": is_report_feedback,
-                        "agent_config": session_agent_config}):
+            agent=self.agent,
+            inputs={
+                "query": stream_query,
+                "thread_id": conversation_id,
+                "conversation_id": conversation_id,
+                "report_template": decoded_template,
+                "interrupt_feedback": interrupt_feedback,
+                "resume_interaction": is_report_feedback,
+                "agent_config": session_agent_config,
+            },
+        ):
             if getattr(chunk, "type", "") == "__interaction__":
                 filter_dup_flag = False
                 yield self._build_interrupt_message(conversation_id, chunk), is_all_end, final_result_info
@@ -406,13 +499,14 @@ class DeepresearchAgent(BaseAgent):
                     is_all_end = True
                 yield self._build_output_message(conversation_id, chunk), is_all_end, final_result_info
 
-    async def run(self,
-                  message: Optional[str] = None,
-                  conversation_id: Optional[str] = None,
-                  agent_config: Optional[dict] = None,
-                  report_template: str = "",
-                  interrupt_feedback: str = "",
-                  ):
+    async def run(
+        self,
+        message: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        agent_config: Optional[dict] = None,
+        report_template: str = "",
+        interrupt_feedback: str = "",
+    ):
         """执行一次 workflow 并以流式方式返回消息。
 
         Args:
@@ -442,8 +536,7 @@ class DeepresearchAgent(BaseAgent):
             llm_configs = session_agent_config.llm_config
             if LlmConfigCategory.GENERAL.value not in llm_configs:
                 raise CustomValueException(
-                    error_code=StatusCode.LLM_CONFIG_NONE.code,
-                    message=StatusCode.LLM_CONFIG_NONE.errmsg
+                    error_code=StatusCode.LLM_CONFIG_NONE.code, message=StatusCode.LLM_CONFIG_NONE.errmsg
                 )
 
             all_llms = {}
@@ -462,10 +555,11 @@ class DeepresearchAgent(BaseAgent):
             if LogManager.is_sensitive():
                 raise CustomValueException(
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR_NO_PRINT.code,
-                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR_NO_PRINT.errmsg) from e
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR_NO_PRINT.errmsg,
+                ) from e
             raise CustomValueException(
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
-                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(e))
+                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(e)),
             ) from e
 
         token = session_id_ctx.set(conversation_id)
@@ -479,11 +573,12 @@ class DeepresearchAgent(BaseAgent):
         try:
             session_agent_config = session_agent_config.model_dump()
             async for payload, stream_end, stream_info in self._consume_stream_chunks(
-                    conversation_id=conversation_id,
-                    message=message,
-                    decoded_template=decoded_template,
-                    interrupt_feedback=interrupt_feedback,
-                    session_agent_config=session_agent_config):
+                conversation_id=conversation_id,
+                message=message,
+                decoded_template=decoded_template,
+                interrupt_feedback=interrupt_feedback,
+                session_agent_config=session_agent_config,
+            ):
                 is_all_end = stream_end
                 final_result_info = stream_info
                 yield payload
@@ -518,7 +613,8 @@ class DeepresearchAgent(BaseAgent):
         finally:
             metrics_logger.info(
                 f"{TIME_LOGGER_TAG} thread_id: {conversation_id} ------ [DeepResearchAgent[0].run]"
-                f" executed time: {(time.time() - start_time) :.2f} s")
+                f" executed time: {(time.time() - start_time) :.2f} s"
+            )
 
             record_interface_log(
                 role="SVR",
@@ -526,7 +622,7 @@ class DeepresearchAgent(BaseAgent):
                 api_name="run",
                 duration_min=(time.time() - start_time) / 60,
                 success=not bool(final_result_info.get("exception_info")),
-                response_info=final_result_info if bool(final_result_info.get("exception_info")) else {}
+                response_info=final_result_info if bool(final_result_info.get("exception_info")) else {},
             )
             try:
                 await self._aclose_local_search_engines()
@@ -539,10 +635,16 @@ class DeepresearchAgent(BaseAgent):
                 self._reset_context_tokens(llm_token, web_search_token, local_search_token)
 
             if is_all_end:
-                zero_secret(session_agent_config.get("web_search_engine_config", {}).get(
-                    "search_api_key", bytearray("", encoding="utf-8")))
-                zero_secret(session_agent_config.get("local_search_engine_config", {}).get(
-                    "search_api_key", bytearray("", encoding="utf-8")))
+                zero_secret(
+                    session_agent_config.get("web_search_engine_config", {}).get(
+                        "search_api_key", bytearray("", encoding="utf-8")
+                    )
+                )
+                zero_secret(
+                    session_agent_config.get("local_search_engine_config", {}).get(
+                        "search_api_key", bytearray("", encoding="utf-8")
+                    )
+                )
                 await self.agent.release_session(conversation_id)
                 await self._release_checkpointer_session(conversation_id)
                 session_id_ctx.reset(token)
@@ -561,9 +663,7 @@ class DeepresearchAgent(BaseAgent):
 
         flow = Workflow(card=card)
         flow.set_start_comp(
-            start_comp_id=NodeId.START.value,
-            component=StartNode(),
-            inputs_schema=self.startnode_input_schema
+            start_comp_id=NodeId.START.value, component=StartNode(), inputs_schema=self.startnode_input_schema
         )
         # 主图节点
         flow.add_workflow_comp(NodeId.ENTRY.value, EntryNode())
@@ -584,21 +684,24 @@ class DeepresearchAgent(BaseAgent):
         flow.add_connection(NodeId.START.value, NodeId.ENTRY.value)
 
         # 添加条件边
-        entry_router = init_router(NodeId.ENTRY.value, [NodeId.OUTLINE.value,
-                                                        NodeId.GENERATE_QUESTIONS.value, NodeId.END.value])
-        generate_questions_router = init_router(NodeId.GENERATE_QUESTIONS.value,
-                                                [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value])
-        outline_router = init_router(NodeId.OUTLINE.value,
-                                     [NodeId.OUTLINE_INTERACTION.value, NodeId.EDITOR_TEAM.value, NodeId.END.value])
-        outline_interaction_router = init_router(NodeId.OUTLINE_INTERACTION.value,
-                                                 [NodeId.OUTLINE.value, NodeId.EDITOR_TEAM.value, NodeId.END.value])
-        reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value,
-                                                              NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value,
-                                                                              NodeId.END.value])
+        entry_router = init_router(
+            NodeId.ENTRY.value, [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value]
+        )
+        generate_questions_router = init_router(
+            NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
+        )
+        outline_router = init_router(
+            NodeId.OUTLINE.value, [NodeId.OUTLINE_INTERACTION.value, NodeId.EDITOR_TEAM.value, NodeId.END.value]
+        )
+        outline_interaction_router = init_router(
+            NodeId.OUTLINE_INTERACTION.value, [NodeId.OUTLINE.value, NodeId.EDITOR_TEAM.value, NodeId.END.value]
+        )
+        reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
+        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
         editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
-        user_feedback_processor_router = init_router(NodeId.USER_FEEDBACK_PROCESSOR.value,
-                                                     [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value])
+        user_feedback_processor_router = init_router(
+            NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
+        )
         flow.add_conditional_connection(NodeId.ENTRY.value, router=entry_router)
         flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
         flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
@@ -620,7 +723,7 @@ class DeepresearchAgent(BaseAgent):
             version=self.version,
             name=self.research_name,
             description=self.research_name,
-            input_params=self.workflow_input_schema
+            input_params=self.workflow_input_schema,
         )
 
         card = AgentCard(
@@ -635,14 +738,12 @@ class DeepresearchAgent(BaseAgent):
             workflows=[workflow_card],
         )
         self.agent = WorkflowAgent(card=card, config=config)
-        self.agent.add_workflows([
-            self._build_workflow_provider(self._build_research_workflow, workflow_card)
-        ])
+        self.agent.add_workflows([self._build_workflow_provider(self._build_research_workflow, workflow_card)])
 
     def _handle_report_template(self, report_template):
         decoded_template = None
         try:
-            decoded_template = base64.b64decode(report_template).decode('utf-8')
+            decoded_template = base64.b64decode(report_template).decode("utf-8")
             logging.debug("[DeepresearchAgent.run] Successfully decoded base64 report_template")
         except Exception as e:
             if not LogManager.is_sensitive():
@@ -653,7 +754,7 @@ class DeepresearchAgent(BaseAgent):
         return decoded_template
 
     def _initialize_tools(self, agent_config: AgentConfig):
-        '''初始化搜索工具'''
+        """初始化搜索工具"""
         custom_web = agent_config.custom_web_search_config
         custom_local = agent_config.custom_local_search_config
         web_search_config = agent_config.web_search_engine_config
@@ -689,7 +790,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
             version=self.version,
             name=self.research_name,
             description=self.research_name,
-            input_params=self.workflow_input_schema
+            input_params=self.workflow_input_schema,
         )
 
         card = AgentCard(
@@ -704,9 +805,9 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
             workflows=[workflow_card],
         )
         self.agent = WorkflowAgent(card=card, config=config)
-        self.agent.add_workflows([
-            self._build_workflow_provider(self._build_research_dependency_workflow, workflow_card)
-        ])
+        self.agent.add_workflows(
+            [self._build_workflow_provider(self._build_research_dependency_workflow, workflow_card)]
+        )
 
     def _build_research_dependency_workflow(self):
         _id = self.research_name
@@ -722,9 +823,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow = Workflow(card=card)
         # 添加起始node
         flow.set_start_comp(
-            start_comp_id=NodeId.START.value,
-            component=StartNode(),
-            inputs_schema=self.startnode_input_schema
+            start_comp_id=NodeId.START.value, component=StartNode(), inputs_schema=self.startnode_input_schema
         )
         # 添加node
         flow.add_workflow_comp(NodeId.ENTRY.value, EntryNode())
@@ -745,24 +844,28 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_connection(NodeId.START.value, NodeId.ENTRY.value)
 
         # 添加条件边
-        entry_router = init_router(NodeId.ENTRY.value, [NodeId.OUTLINE.value,
-                                                        NodeId.GENERATE_QUESTIONS.value, NodeId.END.value])
-        generate_questions_router = init_router(NodeId.GENERATE_QUESTIONS.value,
-                                                [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value])
+        entry_router = init_router(
+            NodeId.ENTRY.value, [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value]
+        )
+        generate_questions_router = init_router(
+            NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
+        )
         outline_router = init_router(
             NodeId.OUTLINE.value,
-            [NodeId.OUTLINE_INTERACTION.value, NodeId.DEPENDENCY_EDITOR_TEAM.value, NodeId.END.value])
+            [NodeId.OUTLINE_INTERACTION.value, NodeId.DEPENDENCY_EDITOR_TEAM.value, NodeId.END.value],
+        )
         outline_interaction_router = init_router(
             NodeId.OUTLINE_INTERACTION.value,
-            [NodeId.OUTLINE.value, NodeId.DEPENDENCY_EDITOR_TEAM.value, NodeId.END.value])
-        reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value,
-                                                              NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value,
-                                                                              NodeId.END.value])
-        dependency_editor_router = init_router(NodeId.DEPENDENCY_EDITOR_TEAM.value,
-                                               [NodeId.REPORTER.value, NodeId.END.value])
-        user_feedback_processor_router = init_router(NodeId.USER_FEEDBACK_PROCESSOR.value,
-                                                     [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value])
+            [NodeId.OUTLINE.value, NodeId.DEPENDENCY_EDITOR_TEAM.value, NodeId.END.value],
+        )
+        reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
+        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        dependency_editor_router = init_router(
+            NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]
+        )
+        user_feedback_processor_router = init_router(
+            NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
+        )
         flow.add_conditional_connection(NodeId.ENTRY.value, router=entry_router)
         flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
         flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
@@ -778,7 +881,936 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         return flow
 
 
-def parse_endnode_content(chunk: CustomSchema | dict) -> dict:
+class DeepSearchAgent(BaseAgent):
+    def __init__(self) -> None:
+        self.version: str = "1"
+        self.action_pool: ActionPool = ActionPool()
+        self.completed_actions: list[tuple[Action, Result | None]] = []
+        self.final_answer: str | None = None
+
+        self.fail_count: int = 0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+
+        self.log_dir: str = ""
+        self.time_limit: int = 0
+        self.query: str = ""
+        self.gold_answer: str | None = None
+        self.tool_map: dict[str, Any] = {}
+        self.agent_config: AgentConfig | None = None
+        self.per_question_params: PerQuestionParams | None = None
+        self.search_config: SearchWorkflowConfig | None = None
+
+    def setup_log_directory(self, save_as: str) -> None:
+        """Create a timestamp-based log directory with Action and Result subfolders"""
+        base_log_dir: str | None = LogManager.get_log_dir()
+
+        self.log_dir = os.path.join(base_log_dir, save_as)
+
+        os.makedirs(os.path.join(self.log_dir, "Action"), exist_ok=True)
+        os.makedirs(os.path.join(self.log_dir, "Result"), exist_ok=True)
+
+        self.action_pool.log_dir = self.log_dir
+
+    def _build_init_state_workflow(self) -> Workflow:
+        card = WorkflowCard(id="init_state", version="1", name="init_state")
+        wf = Workflow(card=card)
+
+        wf.set_start_comp(
+            start_comp_id=NodeId.START_NODE.value,
+            component=SearchStartNode(),
+            inputs_schema={
+                "workflow_name": "init_state_workflow",
+                "agent_config": to_dict_safe(self.agent_config),
+            },
+        )
+
+        wf.add_workflow_comp(NodeId.INITIAL_STATE.value, InitializeStateNode())
+        wf.set_end_comp(NodeId.END_NODE.value, SearchEndNode())
+
+        wf.add_connection(NodeId.START_NODE.value, NodeId.INITIAL_STATE.value)
+        wf.add_connection(NodeId.INITIAL_STATE.value, NodeId.END_NODE.value)
+        return wf
+
+    def _build_find_action_workflow(self) -> Workflow:
+        card = WorkflowCard(id="find_action", version="1", name="find_action")
+        wf = Workflow(card=card)
+
+        wf.set_start_comp(
+            start_comp_id=NodeId.START_NODE.value,
+            component=SearchStartNode(),
+            inputs_schema={
+                "workflow_name": "find_action_workflow",
+                "agent_config": to_dict_safe(self.agent_config),
+            },
+        )
+
+        wf.add_workflow_comp(NodeId.FIND_ACTION_SPACE.value, FindActionSpaceNode())
+        wf.set_end_comp(NodeId.END_NODE.value, SearchEndNode())
+
+        wf.add_connection(NodeId.START_NODE.value, NodeId.FIND_ACTION_SPACE.value)
+        wf.add_connection(NodeId.FIND_ACTION_SPACE.value, NodeId.END_NODE.value)
+        return wf
+
+    def _build_state_creation_workflow(self) -> Workflow:
+        card = WorkflowCard(id="state_creation", version="1", name="state_creation")
+        wf = Workflow(card=card)
+
+        wf.set_start_comp(
+            start_comp_id=NodeId.START_NODE.value,
+            component=SearchStartNode(),
+            inputs_schema={"workflow_name": "state_creation_workflow", "agent_config": to_dict_safe(self.agent_config)},
+        )
+
+        wf.add_workflow_comp(NodeId.TOOL.value, ToolNode())
+        wf.add_workflow_comp(NodeId.RUN_ACTION.value, RunActionNode())
+        wf.add_workflow_comp(NodeId.VALIDATE_NEW_STATE.value, ValidateNewStateNode())
+        wf.set_end_comp(NodeId.END_NODE.value, SearchEndNode())
+
+        wf.add_connection(NodeId.START_NODE.value, NodeId.RUN_ACTION.value)
+        wf.add_connection(NodeId.TOOL.value, NodeId.RUN_ACTION.value)
+
+        run_iter = init_router(
+            NodeId.RUN_ACTION.value,
+            [
+                NodeId.TOOL.value,
+                NodeId.RUN_ACTION.value,
+                NodeId.VALIDATE_NEW_STATE.value,
+                NodeId.END_NODE.value,
+            ],
+        )
+        validator_router = init_router(
+            NodeId.VALIDATE_NEW_STATE.value,
+            [NodeId.RUN_ACTION.value, NodeId.END_NODE.value],
+        )
+        wf.add_conditional_connection(NodeId.RUN_ACTION.value, router=run_iter)
+        wf.add_conditional_connection(NodeId.VALIDATE_NEW_STATE.value, router=validator_router)
+
+        return wf
+
+    def _build_agent(self):
+        schemas = [
+            WorkflowCard(
+                id="init_state",
+                version=self.version,
+                name="init_state",
+                description="init_state",
+                input_params={"query": str, "total_input_tokens": int, "total_output_tokens": int, "log_dir": str},
+            ),
+            WorkflowCard(
+                id="find_action",
+                version=self.version,
+                name="find_action",
+                description="find_action",
+                input_params={
+                    "state": State,
+                    "result": Result,
+                    "query": str,
+                    "log_dir": str,
+                    "total_input_tokens": int,
+                    "total_output_tokens": int,
+                },
+            ),
+            WorkflowCard(
+                id="state_creation",
+                version=self.version,
+                name="state_creation",
+                description="state_creation",
+                input_params={
+                    "action": Action,
+                    "tool_map": dict,
+                    "log_dir": str,
+                    "fail_count": int,
+                    "retrieval_tool_only": bool,
+                    "total_input_tokens": int,
+                    "total_output_tokens": int,
+                },
+            ),
+        ]
+
+        self.agent = LegacyWorkflowAgent(
+            WorkflowAgentConfig(
+                id="deepsearch_sub_workflows",
+                description="DeepSearch init/find/state_creation subgraphs",
+                workflows=schemas,
+            )
+        )
+
+        state_creation_factory = WorkflowFactory(
+            workflow_id="state_creation",
+            workflow_version="1",
+            factory=self._build_state_creation_workflow,
+            workflow_name="state_creation",
+            workflow_description="state_creation",
+            input_schema={
+                "action": Action,
+                "tool_map": dict,
+                "log_dir": str,
+                "fail_count": int,
+                "retrieval_tool_only": bool,
+                "total_input_tokens": int,
+                "total_output_tokens": int,
+            },
+        )
+
+        self.agent.add_workflows(
+            [
+                self._build_init_state_workflow(),
+                self._build_find_action_workflow(),
+                state_creation_factory,
+            ]
+        )
+
+    async def _cancel_running_tasks(
+        self,
+        running_tasks: set[asyncio.Task],
+        task_to_action: dict[asyncio.Task, Action],
+    ) -> None:
+        """Cancel all in-flight state_creation tasks and mark them as completed."""
+        if not running_tasks:
+            return
+        count = len(running_tasks)
+        for task in running_tasks:
+            task.cancel()
+        await asyncio.gather(*running_tasks, return_exceptions=True)
+        for task in list(running_tasks):
+            action = task_to_action.pop(task, None)
+            if action is not None:
+                self.action_pool.record_completed(action, None)
+        running_tasks.clear()
+        logger.info("[DeepSearchAgent] cancelled %d remaining tasks", count)
+
+    async def run_state_creation_workflow(
+        self,
+        action: Any,
+        semaphore: asyncio.Semaphore,
+    ) -> Any:
+        async with semaphore:
+            return await Runner.run_workflow(
+                workflow="state_creation_1",
+                inputs={
+                    "action": to_dict_safe(action),
+                    "tool_map": self.tool_map,
+                    "retrieval_tool_only": "retrieve" in self.tool_map,
+                    "total_input_tokens": self.total_input_tokens,
+                    "total_output_tokens": self.total_output_tokens,
+                    "log_dir": self.log_dir,
+                    "fail_count": self.fail_count,
+                },
+            )
+
+    async def _run_internal(self) -> SearchFinalResult:
+        start_time: float = time.time()
+
+        max_workers: int = self.per_question_params.max_workers
+        sem = asyncio.Semaphore(max_workers)
+
+        max_tries: int = self.search_config.init_state_agent.max_tries
+        init_state_result: dict[str, Any] | None = None
+        last_exception: Exception | None = None
+
+        try:
+            init_result: WorkflowOutput = await Runner.run_workflow(
+                workflow="init_state_1",
+                inputs={
+                    "query": self.query,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "log_dir": self.log_dir,
+                },
+            )
+            init_state_result = parse_and_validate_init_state_result(init_result)
+        except Exception as e:
+            last_exception = e
+            logger.error(f"[DeepSearchAgent] init_state error, failed all {max_tries} attempts: {e}")
+
+        if init_state_result is None:
+            raise CustomValueException(
+                StatusCode.AGENT_INIT_STATE_ERROR.code,
+                StatusCode.AGENT_INIT_STATE_ERROR.errmsg,
+            ) from last_exception
+
+        self.total_input_tokens += init_state_result.get("total_input_tokens", 0)
+        self.total_output_tokens += init_state_result.get("total_output_tokens", 0)
+
+        init_state: State = init_state_result.get("init_state")
+        logger.info(f"[DeepSearchAgent] initial state: %s", "***" if LogManager.is_sensitive() else init_state)
+
+        actions_result: WorkflowOutput = await Runner.run_workflow(
+            workflow="find_action_1",
+            inputs={
+                "state": init_state,
+                "query": self.query,
+                "result": None,
+                "log_dir": self.log_dir,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+            },
+        )
+        actions_dict: dict[str, Any] = parse_and_validate_find_action_result(actions_result.result)
+
+        logger.info(
+            f"[DeepSearchAgent] initial actions: %s",
+            "***" if LogManager.is_sensitive() else [a.proposal.direction for a in actions_dict.get("actions", [])],
+        )
+
+        self.total_input_tokens += actions_dict.get("total_input_tokens", 0)
+        self.total_output_tokens += actions_dict.get("total_output_tokens", 0)
+
+        self.action_pool.add(actions_dict.get("actions", []))
+
+        actions_explored: int = 0
+        actions_explored_limit: int = self.per_question_params.actions_explored_limit
+        fail_limit: int = self.per_question_params.fail_limit
+        answer_mode_top_k: int = self.per_question_params.answer_mode_top_k
+        provide_best_guess: bool = self.per_question_params.provide_best_guess
+
+        running_tasks: set[asyncio.Task[WorkflowOutput]] = set()
+        task_to_action: dict[asyncio.Task[WorkflowOutput], Action] = {}
+        config: dict = {}
+
+        termination_reason: Termination = Termination.ACTION_POOL_DEPLETED
+
+        find_action_pool_depleted_retries_left: int = self.per_question_params.retry_count_on_empty_action_space
+
+        while not self.final_answer:
+            if (time.time() - start_time) > self.time_limit:
+                termination_reason = Termination.TIME_LIMIT
+                logger.info("[DeepSearchAgent] %s", termination_reason.log_message)
+                break
+            if actions_explored_limit > 0 and actions_explored >= actions_explored_limit:
+                termination_reason = Termination.ACTIONS_EXPLORED_LIMIT
+                logger.info("[DeepSearchAgent] %s (%d)", termination_reason.log_message, actions_explored_limit)
+                break
+            if fail_limit > 0 and self.fail_count >= fail_limit:
+                termination_reason = Termination.FAIL_LIMIT
+                logger.info("[DeepSearchAgent] %s (%d)", termination_reason.log_message, fail_limit)
+                break
+            available_slots: int = max_workers - len(running_tasks)
+
+            # If there is idle workers, assign them a task by sampling from the action pool
+            if available_slots > 0 and self.action_pool.size() > 0:
+                sampled: list[Action] = self.action_pool.sample(available_slots)
+                logger.info(
+                    f"[DeepSearchAgent] sampled actions (dynamic): %s",
+                    "***" if LogManager.is_sensitive() else [a.proposal.direction for a in sampled],
+                )
+
+                for action in sampled:
+                    task = asyncio.create_task(
+                        self.run_state_creation_workflow(
+                            action=action,
+                            semaphore=sem,
+                        )
+                    )
+                    running_tasks.add(task)
+                    task_to_action[task] = action
+
+            # If there is no running tasks (meaning that the action_pool has no actions to sample and give to workers)
+            if not running_tasks:
+                if find_action_pool_depleted_retries_left <= 0:
+                    logger.info(
+                        "[DeepSearchAgent] action pool empty and no running tasks; "
+                        "find_action retries exhausted (retry_count_on_empty_action_space=%d)",
+                        self.per_question_params.retry_count_on_empty_action_space,
+                    )
+                    break
+
+                find_action_pool_depleted_retries_left -= 1
+                logger.info(
+                    "[DeepSearchAgent] action pool empty; re-running find_action "
+                    "(retries remaining after this call: %d)",
+                    find_action_pool_depleted_retries_left,
+                )
+                retry_strategy = self.search_config.find_action_agent.action_pool_depleted_strategy
+
+                retry_result = None
+                if retry_strategy == "dependent_retry" and self.action_pool.completed_actions:
+                    failed_summaries: list[str] = []
+                    for i, (action, action_result) in enumerate(self.action_pool.completed_actions, 1):
+                        entry = f"{i}. Direction: {action.proposal.direction}"
+                        if isinstance(action_result, Result) and action_result.messages:
+                            entry += action_result.get_summary()
+                        failed_summaries.append(entry)
+
+                    prompt_content: str = get_prompt_section(
+                        "deepsearch_dependent_retry_find_action",
+                        {
+                            "failed_count": len(failed_summaries),
+                            "failed_summaries": "\n\n".join(failed_summaries),
+                        },
+                    )
+                    retry_result = Result(
+                        messages=[{"role": "user", "content": prompt_content}],
+                        new_states=[],
+                        found_answer=None,
+                        previous_action_id=action.id,
+                    )
+
+                actions_result = await Runner.run_workflow(
+                    workflow="find_action_1",
+                    inputs={
+                        "state": init_state,
+                        "query": self.query,
+                        "result": retry_result,
+                        "log_dir": self.log_dir,
+                        "total_input_tokens": 0,
+                        "total_output_tokens": 0,
+                    },
+                )
+                actions_dict = parse_and_validate_find_action_result(actions_result.result)
+                self.action_pool.add(actions_dict.get("actions", []))
+                continue
+
+            done: set[asyncio.Task[WorkflowOutput]]
+            done, _ = await asyncio.wait(
+                running_tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # if a worker signals that their task is complete
+            for task in done:
+                running_tasks.remove(task)
+                completed_action: Action = task_to_action.pop(task)
+                actions_explored += 1
+
+                states: WorkflowOutput = await task
+                logger.info(f"[DeepSearchAgent] action result: %s", "***" if LogManager.is_sensitive() else states)
+
+                state_result: dict[str, Any] = parse_and_validate_state_creation_result(states.result)
+                self.total_input_tokens += state_result.get("total_input_tokens", 0)
+                self.total_output_tokens += state_result.get("total_output_tokens", 0)
+
+                result: Result | None = state_result.get("result")
+                config = state_result.get("config", {})
+                self.fail_count += config.get("fail_count", self.fail_count)
+
+                self.action_pool.record_completed(completed_action, result)
+
+                if not isinstance(result, Result):
+                    continue
+
+                if result.found_answer:
+                    if answer_mode_top_k <= 1:
+                        self.final_answer = result.found_answer
+                        logger.info(
+                            f"[DeepSearchAgent] found final answer! %s",
+                            "***" if LogManager.is_sensitive() else self.final_answer,
+                        )
+                        await self._cancel_running_tasks(running_tasks, task_to_action)
+                        return _save_and_return_search_final_result(
+                            SaveSearchFinalResultConfig(
+                                question=self.query,
+                                messages=result.messages,
+                                prediction=result.found_answer,
+                                gold_answer=self.gold_answer,
+                                termination=Termination.ANSWER,
+                                retrieved_evidence_ids=result.retrieved_evidence_ids,
+                                params={
+                                    "total_input_tokens": self.total_input_tokens,
+                                    "total_output_tokens": self.total_output_tokens,
+                                    "start_time": start_time,
+                                    "log_dir": self.log_dir,
+                                },
+                                config=config,
+                            )
+                        )
+                    else:
+                        self.action_pool.record_successful_answer(completed_action, result)
+                        collected = self.action_pool.successful_answer_count()
+                        logger.info(
+                            "[DeepSearchAgent] top-k mode: collected %d/%d answers%s",
+                            collected,
+                            answer_mode_top_k,
+                            " ***" if LogManager.is_sensitive() else f" (latest: {result.found_answer})",
+                        )
+                        if collected >= answer_mode_top_k:
+                            best_action, best_result = self.action_pool.get_best_answer()
+                            self.final_answer = best_result.found_answer
+                            logger.info(
+                                "[DeepSearchAgent] top-k mode: returning best answer%s",
+                                " ***" if LogManager.is_sensitive() else f": {self.final_answer}",
+                            )
+                            await self._cancel_running_tasks(running_tasks, task_to_action)
+                            return _save_and_return_search_final_result(
+                                SaveSearchFinalResultConfig(
+                                    question=self.query,
+                                    messages=best_result.messages,
+                                    prediction=best_result.found_answer,
+                                    gold_answer=self.gold_answer,
+                                    termination=Termination.ANSWER,
+                                    retrieved_evidence_ids=best_result.retrieved_evidence_ids,
+                                    params={
+                                        "total_input_tokens": self.total_input_tokens,
+                                        "total_output_tokens": self.total_output_tokens,
+                                        "start_time": start_time,
+                                        "log_dir": self.log_dir,
+                                    },
+                                    config=config,
+                                )
+                            )
+                        continue
+
+                if result.new_states:
+                    all_new_actions: list[Action] = []
+                    for new_state in result.new_states:
+                        new_actions_result: WorkflowOutput = await Runner.run_workflow(
+                            workflow="find_action_1",
+                            inputs={
+                                "state": new_state,
+                                "query": self.query,
+                                "result": result,
+                                "log_dir": self.log_dir,
+                                "total_input_tokens": 0,
+                                "total_output_tokens": 0,
+                            },
+                        )
+                        new_actions_dict: dict[str, Any] = parse_and_validate_find_action_result(
+                            new_actions_result.result
+                        )
+                        new_actions: list[Action] = new_actions_dict.get("actions", [])
+                        all_new_actions.extend(new_actions)
+
+                        self.total_input_tokens += new_actions_dict.get("total_input_tokens", 0)
+                        self.total_output_tokens += new_actions_dict.get("total_output_tokens", 0)
+
+                        logger.info(
+                            f"[DeepSearchAgent] new actions: %s",
+                            "***" if LogManager.is_sensitive() else [a.proposal.direction for a in new_actions],
+                        )
+
+                    self.action_pool.add(all_new_actions)
+
+        await self._cancel_running_tasks(running_tasks, task_to_action)
+
+        best_pair = self.action_pool.get_best_answer()
+        if best_pair is not None:
+            best_action, best_result = best_pair
+            self.final_answer = best_result.found_answer
+            effective_termination = (
+                Termination.TIMEOUT_ANSWER if termination_reason == Termination.TIME_LIMIT else termination_reason
+            )
+            logger.info(
+                "[DeepSearchAgent] %s: returning best collected answer%s",
+                effective_termination.name,
+                " ***" if LogManager.is_sensitive() else f": {self.final_answer}",
+            )
+            return _save_and_return_search_final_result(
+                SaveSearchFinalResultConfig(
+                    question=self.query,
+                    messages=best_result.messages,
+                    prediction=best_result.found_answer,
+                    gold_answer=self.gold_answer,
+                    termination=effective_termination,
+                    retrieved_evidence_ids=best_result.retrieved_evidence_ids,
+                    params={
+                        "total_input_tokens": self.total_input_tokens,
+                        "total_output_tokens": self.total_output_tokens,
+                        "start_time": start_time,
+                        "log_dir": self.log_dir,
+                    },
+                    config=config,
+                )
+            )
+
+        if termination_reason == Termination.TIME_LIMIT and provide_best_guess:
+            guess_triple = self.action_pool.get_best_guess()
+            if guess_triple is not None:
+                guess_action, guess_result, guess_candidate = guess_triple
+                self.final_answer = guess_candidate
+                logger.info(
+                    "[DeepSearchAgent] TIMEOUT_GUESS: returning best-guess candidate%s",
+                    " ***" if LogManager.is_sensitive() else f": {self.final_answer}",
+                )
+                return _save_and_return_search_final_result(
+                    SaveSearchFinalResultConfig(
+                        question=self.query,
+                        messages=guess_result.messages if guess_result else [],
+                        prediction=guess_candidate,
+                        gold_answer=self.gold_answer,
+                        termination=Termination.TIMEOUT_GUESS,
+                        retrieved_evidence_ids=(guess_result.retrieved_evidence_ids if guess_result else []),
+                        params={
+                            "total_input_tokens": self.total_input_tokens,
+                            "total_output_tokens": self.total_output_tokens,
+                            "start_time": start_time,
+                            "log_dir": self.log_dir,
+                        },
+                        config=config,
+                    )
+                )
+
+        return _save_and_return_search_final_result(
+            SaveSearchFinalResultConfig(
+                question=self.query,
+                messages=[],
+                prediction=self.final_answer,
+                gold_answer=self.gold_answer,
+                termination=termination_reason,
+                retrieved_evidence_ids=[],
+                params={
+                    "total_input_tokens": self.total_input_tokens,
+                    "total_output_tokens": self.total_output_tokens,
+                    "start_time": start_time,
+                    "log_dir": self.log_dir,
+                },
+                config=config,
+            )
+        )
+
+    async def run(
+        self,
+        message: str,
+        conversation_id: str,
+        agent_config: dict,
+        report_template: str = "",
+        interrupt_feedback: str = "",
+    ) -> AsyncGenerator[str, None]:
+        """Run DeepSearch with the same surface as ``BaseAgent.run``.
+
+        Optional per-run fields may be supplied inside ``agent_config`` and are
+        removed before ``AgentConfig`` validation: ``service_config`` (dict, e.g.
+        ``{"search_workflow": ...}``) and ``gold_answer`` (str | None).
+        """
+        validate_run_agent_params(message, conversation_id, report_template, interrupt_feedback)
+
+        agent_config_for_model = copy.deepcopy(agent_config)
+        service_config: Optional[dict] = agent_config_for_model.pop("service_config", None)
+        gold_answer: str | None = agent_config_for_model.pop("gold_answer", None)
+
+        validate_agent_required_field(agent_config_for_model)
+
+        llm_token = None
+        try:
+            session_agent_config = AgentConfig.model_validate(agent_config_for_model)
+            self.agent_config = copy.deepcopy(session_agent_config)
+            self.setup_log_directory(f"result_{conversation_id}")
+            logger.info(f"[DeepSearchAgent] agent_config: {self.agent_config}")
+
+            try:
+                self.search_config = SearchWorkflowConfig.model_validate(
+                    (service_config or {}).get("search_workflow", {})
+                )
+            except Exception as e:
+                logger.warning(
+                    "[DeepSearchAgent] Invalid or missing search_workflow in service_config; "
+                    "using default SearchWorkflowConfig. Error: %s",
+                    "*" if LogManager.is_sensitive() else e,
+                    exc_info=not LogManager.is_sensitive(),
+                )
+                self.search_config = SearchWorkflowConfig()
+
+            self.per_question_params = self.agent_config.search_workflow_per_question_params
+            self.time_limit = int(self.per_question_params.time_limit)
+            os.environ["WORKFLOW_EXECUTE_TIMEOUT"] = str(self.time_limit)
+            logger.info(f"[DeepSearchAgent] per_question_params: {self.per_question_params}")
+
+            llm_configs = session_agent_config.llm_config
+            if LlmConfigCategory.GENERAL.value not in llm_configs:
+                raise CustomValueException(
+                    error_code=StatusCode.LLM_CONFIG_NONE.code, message=StatusCode.LLM_CONFIG_NONE.errmsg
+                )
+
+            all_llms = {}
+            for _, llm_config in llm_configs.items():
+                llm_obj = create_llm_obj(llm_config)
+                all_llms[llm_config.model_name] = llm_obj
+
+            general_cfg = llm_configs[LlmConfigCategory.GENERAL.value]
+            init_llm_map = self.search_config.init_state_agent.llm_config
+            init_llm = init_llm_map.get("general") if init_llm_map else None
+            if init_llm is not None and init_llm.model_name and init_llm.model_name != general_cfg.model_name:
+                base_llm = all_llms.get(general_cfg.model_name)
+                if base_llm is not None:
+                    all_llms[init_llm.model_name] = {
+                        "model": base_llm["model"],
+                        "model_name": init_llm.model_name,
+                    }
+                    logger.info(
+                        "[DeepSearchAgent] registered extra LLM for init_state_agent: %s",
+                        init_llm.model_name,
+                    )
+
+            llm_token = llm_context.set(all_llms)
+
+            tool_class: list[Any] = []
+            if self.per_question_params.tool_map == "search_fetch":
+                tool_class.append(WebFetch({"jina_api_key": self.agent_config.jina_api_key}))
+                tool_class.append(WebSearch({"serper_api_key": self.agent_config.serper_api_key}))
+                zero_secret(self.agent_config.jina_api_key)
+                zero_secret(self.agent_config.serper_api_key)
+            elif self.per_question_params.tool_map == "retrieve":
+                milvus_cfg = self.agent_config.search_workflow_milvus_config
+                tool_class.append(
+                    RetrieveBrowsecompPlus(
+                        {
+                            "milvus_host": milvus_cfg.milvus_host,
+                            "milvus_port": milvus_cfg.milvus_port,
+                            "database_name": milvus_cfg.database_name,
+                            "collection_name": milvus_cfg.collection_name,
+                            "embedder_model_name": milvus_cfg.embedder_model_name,
+                            "embedder_api_key": milvus_cfg.embedder_api_key,
+                            "embedder_base_url": milvus_cfg.embedder_base_url,
+                            "embedder_timeout": milvus_cfg.embedder_timeout,
+                        }
+                    )
+                )
+                zero_secret(milvus_cfg.embedder_api_key)
+            else:
+                raise CustomValueException(
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
+                        e=f"Invalid tool map: {self.per_question_params.tool_map}"
+                    ),
+                )
+
+            self.tool_map = {tool.name: tool for tool in tool_class}
+            self.query = message
+            self.gold_answer = gold_answer
+            self._build_agent()
+
+            result: SearchFinalResult = await self._run_internal()
+            if hasattr(result, "model_dump"):
+                yield json.dumps(to_json_safe(result.model_dump()), ensure_ascii=False)
+            elif isinstance(result, dict):
+                yield json.dumps(to_json_safe(result), ensure_ascii=False)
+            else:
+                yield json.dumps({"result": str(result)}, ensure_ascii=False)
+        finally:
+            if llm_token is not None:
+                llm_context.reset(llm_token)
+
+
+class SimpleReactSearchAgent(BaseAgent):
+    _cached_system_prompt: str | None = None
+
+    @classmethod
+    def _load_system_prompt(cls) -> str:
+        if cls._cached_system_prompt is None:
+            path = (
+                Path(__file__).resolve().parents[3] / "algorithm" / "prompts" / "simple_react_search.md"
+            )
+            cls._cached_system_prompt = path.read_text(encoding="utf-8").strip()
+        return cls._cached_system_prompt
+
+    async def run(
+        self,
+        message: str,
+        conversation_id: str,
+        agent_config: dict,
+        *,
+        report_template: str = "",
+        interrupt_feedback: str = "",
+        service_config: Optional[dict] = None,
+        gold_answer: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        validate_run_agent_params(
+            message, conversation_id, report_template, interrupt_feedback
+        )
+        validate_agent_required_field(agent_config)
+        session_agent_config = copy.deepcopy(AgentConfig.model_validate(agent_config))
+        try:
+            search_config = SearchWorkflowConfig.model_validate(
+                (service_config or {}).get("search_workflow", {})
+            )
+        except Exception:
+            search_config = SearchWorkflowConfig()
+
+        general = session_agent_config.llm_config.get("general")
+        if general is None:
+            raise CustomValueException(
+                error_code=StatusCode.LLM_CONFIG_NONE.code,
+                message=StatusCode.LLM_CONFIG_NONE.errmsg,
+            )
+        llm_registry = {general.model_name: create_llm_obj(copy.deepcopy(general))}
+
+        llm_token = llm_context.set(llm_registry)
+        try:
+            per_question_params: PerQuestionParams = (
+                session_agent_config.search_workflow_per_question_params
+            )
+            if per_question_params.tool_map == "search_fetch":
+                tool_class = [
+                    WebFetch({"jina_api_key": session_agent_config.jina_api_key}),
+                    WebSearch({"serper_api_key": session_agent_config.serper_api_key}),
+                ]
+                zero_secret(session_agent_config.jina_api_key)
+                zero_secret(session_agent_config.serper_api_key)
+            elif per_question_params.tool_map == "retrieve":
+                milvus_cfg = session_agent_config.search_workflow_milvus_config
+                tool_class = [
+                    RetrieveBrowsecompPlus(
+                        {
+                            "milvus_host": milvus_cfg.milvus_host,
+                            "milvus_port": milvus_cfg.milvus_port,
+                            "database_name": milvus_cfg.database_name,
+                            "collection_name": milvus_cfg.collection_name,
+                            "embedder_model_name": milvus_cfg.embedder_model_name,
+                            "embedder_api_key": milvus_cfg.embedder_api_key,
+                            "embedder_base_url": milvus_cfg.embedder_base_url,
+                            "embedder_timeout": milvus_cfg.embedder_timeout,
+                        }
+                    )
+                ]
+                zero_secret(milvus_cfg.embedder_api_key)
+            else:
+                raise CustomValueException(
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
+                        e=f"Invalid tool map: {per_question_params.tool_map}"
+                    ),
+                )
+            tool_map = {tool.name: tool for tool in tool_class}
+
+            retrieval_only = per_question_params.tool_map == "retrieve"
+            tools_list = get_tool_definitions(retrieval_tool_only=retrieval_only)
+
+            sc_dict = to_dict_safe(search_config.state_creation_agent) or {}
+            retrieval_settings = to_dict_safe(sc_dict.get("retrieval_settings") or {})
+            tool_exec_config_base = dict(sc_dict)
+
+            base_log_dir = LogManager.get_log_dir() or "./output/logs"
+            log_dir = os.path.join(base_log_dir, f"result_{conversation_id}")
+            os.makedirs(log_dir, exist_ok=True)
+
+            max_steps = 1000
+            # _run_llm_via_ainvoke reads top-level model_name; agent_config nests it under llm_config.
+            llm_invoke_cfg = {
+                **agent_config,
+                "model_name": general.model_name,
+            }
+
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": self._load_system_prompt()},
+                {"role": "user", "content": message},
+            ]
+
+            start_time = time.time()
+            total_in_tok = 0
+            total_out_tok = 0
+            prediction: str | None = None
+            new_found_evidence_ids: list[Any] = []
+
+            for _step in range(max_steps):
+                try:
+                    raw, _reasoning, in_tok, out_tok = await _run_llm_via_ainvoke(
+                        messages=messages,
+                        config=llm_invoke_cfg,
+                        agent_name=AgentLlmName.SIMPLE_REACT_SEARCH.value,
+                        tools=tools_list,
+                    )
+                except Exception as e:
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": f"Error: {e}",
+                        }
+                    )
+                    break
+
+                total_in_tok += int(in_tok or 0)
+                total_out_tok += int(out_tok or 0)
+
+                if isinstance(raw, dict):
+                    resp_content = raw.get("content") or ""
+                    tool_calls = raw.get("tool_calls") or []
+                else:
+                    resp_content = raw if isinstance(raw, str) else str(raw)
+                    tool_calls = []
+
+                if not tool_calls:
+                    prediction = (resp_content or "").strip() or None
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": resp_content or "",
+                        }
+                    )
+                    break
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": resp_content or "",
+                        "tool_calls": tool_calls,
+                    }
+                )
+
+                for tc in tool_calls:
+                    parsed, err = _parse_one_native_tool_call(tc)
+                    if err or not parsed:
+                        raw_id = tc.get("id") if isinstance(tc, dict) else None
+                        tid = raw_id or str(uuid.uuid4().hex[:24])
+                        nm = (
+                            (tc.get("name") if isinstance(tc, dict) else None)
+                            or (tc.get("function") or {}).get("name")
+                            if isinstance(tc, dict)
+                            else None
+                        ) or "unknown"
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tid,
+                                "name": nm,
+                                "content": f"Tool call error: {err or 'parse failed'}",
+                            }
+                        )
+                        continue
+
+                    tool_name = parsed["name"]
+                    tool_args = dict(parsed["arguments"])
+                    call_id = parsed.get("tool_call_id") or str(uuid.uuid4().hex[:24])
+                    try:
+                        tool_result, new_found_evidence_ids = await execute_tool(
+                            ExecuteToolConfig(
+                                tool_map=tool_map,
+                                tool_name=tool_name,
+                                tool_args=tool_args,
+                                config=tool_exec_config_base,
+                                retrieval_settings=retrieval_settings,
+                                action={},
+                                new_found_evidence_ids=new_found_evidence_ids,
+                            )
+                        )
+                        content = format_tool_result_for_message(tool_result)
+                    except CustomValueException as e:
+                        content = str(e)
+                    except Exception as e:
+                        content = f"Tool execution error: {e}"
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": tool_name,
+                            "content": content,
+                        }
+                    )
+
+
+            result = _save_and_return_search_final_result(
+                SaveSearchFinalResultConfig(
+                    question=message,
+                    messages=messages,
+                    prediction=prediction or "No answer found",
+                    gold_answer=gold_answer,
+                    termination=Termination.ANSWER if prediction else Termination.FAIL_LIMIT,
+                    retrieved_evidence_ids=new_found_evidence_ids,
+                    params={
+                        "total_input_tokens": total_in_tok,
+                        "total_output_tokens": total_out_tok,
+                        "start_time": start_time,
+                        "log_dir": log_dir,
+                    },
+                    config={"agent": "simple_react_search"},
+                )
+            )
+            yield json.dumps(to_json_safe(result.model_dump()), ensure_ascii=False)
+        finally:
+            llm_context.reset(llm_token)
+
+
+def parse_endnode_content(chunk: CustomSchema) -> dict | None:
     """
     解析 EndNode 返回的content, 返回可能得exception_info
     仅处理 agent == NodeId.END.value 且content非 "ALL END" 的情况。

@@ -13,7 +13,7 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.supplement_graph import
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.generate_html import GenerateHTML
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (call_model, is_equal_length, 
                                                                               type_check, GraphInfo)
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,7 @@ class SourceTracerInfer:
         logger.info(f"[SOURCE TRACER INFER] async_run starting...")
         checked_infer_graphs = None
         infer_message = {}
+        inferences: Dict = {}
         try:
             # search_records中筛选与结论有关的引用
             conclusion_and_evidences = await self.extract_reference(datas)
@@ -175,7 +176,7 @@ class SourceTracerInfer:
         detection_func_and_args = {"detection_func": type_check, "args": list}
         results = await call_model(self.model_name, "infer_validate_prompt", handle_datas, 
                                    detection_func_and_args=detection_func_and_args, 
-                                   agent_name=NodeId.SOURCE_TRACER_INFER.value + "_extract_reference")
+                                   agent_name=AgentLlmName.SOURCE_TRACER_INFER_EXTRACT_REFERENCE.value)
         if not results:
             logger.warning("[SOURCE TRACER INFER] No supported reference.")
             return {}
@@ -218,7 +219,7 @@ class SourceTracerInfer:
         detection_func_and_args = {"detection_func": type_check, "args": list}
         results = await call_model(self.model_name, "infer_conclusion_prompt", evidences, 
                                    detection_func_and_args=detection_func_and_args, 
-                                   agent_name=NodeId.SOURCE_TRACER_INFER.value + "_infer")
+                                   agent_name=AgentLlmName.SOURCE_TRACER_INFER_INFER.value)
         inference = results[0] if (isinstance(results, list) and results) else ""
         results = {"conclusion": evidences.get("conclusion", ""), "inference": inference}
         logger.debug("[SOURCE TRACER INFER] infer result:\n %s", json.dumps(results, ensure_ascii=False, indent=4))
@@ -234,7 +235,7 @@ class SourceTracerInfer:
         detection_func_and_args = {"detection_func": type_check, "args": str}
         results = await call_model(self.model_name, "infer_filter_inference_prompt", {"input": [input_inferences]}, 
                                    detection_func_and_args=detection_func_and_args, 
-                                   agent_name=NodeId.SOURCE_TRACER_INFER.value + "_filter_invalid_infer")
+                                   agent_name=AgentLlmName.SOURCE_TRACER_INFER_FILTER_INVALID_INFER.value)
         if not results:
             if LogManager.is_sensitive():
                 logger.warning(f"[SOURCE TRACER INFER] filter invalid inference: ***")
@@ -252,7 +253,7 @@ class SourceTracerInfer:
         detection_func_and_args = {"detection_func": is_equal_length, "args": 3} # 需要添加检测函数，检测输出的每个结构为三元组
         result = await call_model(self.model_name, "infer_structured_prompt", inference, 
                                   detection_func_and_args=detection_func_and_args, 
-                                  agent_name=NodeId.SOURCE_TRACER_INFER.value + "_structured_infer")
+                                  agent_name=AgentLlmName.SOURCE_TRACER_INFER_STRUCTURED_INFER.value)
         if not result:
             raise ValueError(f"unstructured inference!")
         logger.debug("[SOURCE TRACER INFER] structured_infer result:\n %s", 

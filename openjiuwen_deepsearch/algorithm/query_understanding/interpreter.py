@@ -6,7 +6,7 @@ import logging
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -28,7 +28,7 @@ async def query_interpreter(current_inputs: dict) -> dict:
     try:
         llm = llm_context.get().get(current_inputs.get("llm_model_name"))
         response = await ainvoke_llm_with_stats(llm, prompt, llm_type="basic",
-                                                agent_name=NodeId.GENERATE_QUESTIONS.value, need_stream_out=True)
+                                                agent_name=AgentLlmName.GENERATE_QUESTIONS.value, need_stream_out=True)
         if not LogManager.is_sensitive():
             logger.debug("[query_interpreter] algorithm output: %s.", response.get("content"))
         else:

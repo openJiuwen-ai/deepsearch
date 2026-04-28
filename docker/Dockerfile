@@ -28,7 +28,7 @@ COPY pyproject.toml uv.lock* ./
 COPY . .
 
 # 使用 uv 安装项目及其依赖
-RUN uv pip install --system -e . --group backend --index-url ${INDEX_URL}
+RUN uv pip install --system -e . --group backend --index-url ${INDEX_URL} --prerelease allow
 
 # 创建必要的目录
 RUN mkdir -p data/databases logs

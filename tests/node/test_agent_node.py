@@ -211,6 +211,36 @@ async def test_pre_handle():
 
 
 @pytest.mark.asyncio
+async def test_start_node_merges_agent_llm_timeouts_into_session_config():
+    """验证 StartNode 会将 agent_llm_timeouts 合并进 session 配置快照。
+
+    Returns:
+        None.
+    """
+    node = StartNode()
+    session = Mock()
+    session.update_global_state = Mock()
+
+    await node.invoke(
+        {
+            "query": "hello",
+            "thread_id": "thread-1",
+            "agent_config": {
+                "llm_config": {"general": {"model_name": "demo"}},
+                "web_search_engine_config": {"search_engine_name": "tavily"},
+                "local_search_engine_config": {"search_engine_name": "openapi"},
+                "agent_llm_timeouts": {"default": 300, "sub_reporter": 120},
+            },
+        },
+        session,
+        Context(),
+    )
+
+    merged_config = session.update_global_state.call_args_list[-1][0][0]["config"]
+    assert merged_config["agent_llm_timeouts"] == {"default": 300, "sub_reporter": 120}
+
+
+@pytest.mark.asyncio
 async def test_end_node_writes_workflow_llm_usage_when_stats_enabled():
     """验证 EndNode 在开启统计时会写入 workflow 级 token 汇总。"""
     session = AsyncMock(spec=Session)

@@ -20,7 +20,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm
 from openjiuwen_deepsearch.framework.openjiuwen.tools import create_web_search_tool, create_local_search_tool, \
     build_runtime_api_tools
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
@@ -187,7 +187,8 @@ class InfoRetrievalNode(BaseNode):
         for retry_idx in range(max_retries):
             try:
                 response = await ainvoke_llm_with_stats(
-                    self.llm, tool_prompt, llm_type="basic", agent_name=NodeId.COLLECTOR_INFO.value, tools=tool_list)
+                    self.llm, tool_prompt, llm_type="basic",
+                    agent_name=AgentLlmName.COLLECTOR_INFO_RETRIEVAL.value, tools=tool_list)
                 break
             except Exception as e:
                 current_try = retry_idx + 1

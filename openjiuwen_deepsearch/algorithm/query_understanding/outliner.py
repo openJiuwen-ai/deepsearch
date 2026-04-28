@@ -14,7 +14,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_r
     merge_runtime_api_tools
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -347,7 +347,7 @@ class Outliner:
             response = await ainvoke_llm_with_stats(
                 self.llm,
                 prompt,
-                agent_name=NodeId.OUTLINE.value,
+                agent_name=AgentLlmName.OUTLINE.value,
                 tools=[tool.card.tool_info() for tool in tools],
                 need_stream_out=False,
             )

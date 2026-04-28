@@ -11,7 +11,7 @@ from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import LlmConfigCategory
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,7 @@ class TemplateGenerator:
                     messages.append({"role": "user", "content": extra_content})
 
                 response = await ainvoke_llm_with_stats(
-                    llm, messages, llm_type="basic", agent_name=NodeId.TEMPLATE.value
+                    llm, messages, llm_type="basic", agent_name=AgentLlmName.TEMPLATE.value
                 )
                 processed = response["content"]
                 processed = processed.strip() if processed else ""

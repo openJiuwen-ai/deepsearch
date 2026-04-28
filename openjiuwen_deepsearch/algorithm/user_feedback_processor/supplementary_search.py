@@ -17,7 +17,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, Step, StepType
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, model_context, session_context
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,7 @@ class SupplementarySearcher:
                 "selected_text_clean": selected_text_clean,
                 "section_text_clean": section_text_clean,
             },
-            "supplementary_search_task",
+            AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_TASK.value,
         )
         return response.strip()
 
@@ -402,7 +402,7 @@ class SupplementarySearcher:
                 "collector_summary": rewrite_context.collector_summary,
                 "doc_infos": rewrite_context.doc_infos,
             },
-            "supplementary_search_rewrite_selected_only",
+            AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_ONLY.value,
         )
         return response.strip()
 
@@ -428,7 +428,7 @@ class SupplementarySearcher:
                 "collector_summary": rewrite_context.collector_summary,
                 "doc_infos": rewrite_context.doc_infos,
             },
-            "supplementary_search_rewrite_selected_and_related",
+            AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_AND_RELATED.value,
         )
         return response.strip()
 
@@ -461,13 +461,13 @@ class SupplementarySearcher:
             return f"{normalized_section}{match.group(1)}"
         return rewritten_section
 
-    async def _invoke_prompt(self, prompt_name: str, context_vars: dict, agent_suffix: str) -> str:
+    async def _invoke_prompt(self, prompt_name: str, context_vars: dict, agent_name: str) -> str:
         """应用系统模板并调用 LLM，返回文本内容。
 
         Args:
             prompt_name: 模板名称。
             context_vars: 模板上下文变量字典。
-            agent_suffix: 用于构造 agent_name 的后缀。
+            agent_name: 本次 LLM 调用的 agent_name。
 
         Returns:
             str: LLM 返回的文本内容。
@@ -477,6 +477,6 @@ class SupplementarySearcher:
         response = await ainvoke_llm_with_stats(
             llm=llm,
             messages=messages,
-            agent_name=f"{NodeId.USER_FEEDBACK_PROCESSOR.value}_{agent_suffix}",
+            agent_name=agent_name,
         )
         return response.get("content", "") if isinstance(response, dict) else str(response)

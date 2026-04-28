@@ -174,6 +174,26 @@ async def test_generate_with_llm_returns_content(mock_llm_cls, mock_ainvoke_llm)
     assert any(msg["role"] == "user" for msg in kwargs["messages"])
 
 
+@pytest.mark.asyncio
+@patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+async def test_generate_with_llm_rejects_unknown_task_type(mock_llm_cls, mock_ainvoke_llm):
+    mock_llm_instance = MagicMock()
+    mock_llm_cls.return_value = mock_llm_instance
+
+    reporter = Reporter("basic")
+    reporter.gen_report_context = {}
+
+    with pytest.raises(KeyError, match="Unsupported report task type"):
+        await reporter._generate_with_llm(
+            task_type="summary",
+            prompt="report_abstract_markdown",
+            content="test content"
+        )
+
+    mock_ainvoke_llm.assert_not_awaited()
+
+
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 def test_set_context_variables_none(mock_llm_cls):
     reporter = Reporter("basic")

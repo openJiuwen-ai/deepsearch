@@ -13,7 +13,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_r
     merge_runtime_api_tools
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, StepType, Step
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json, ainvoke_llm_with_stats
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -223,7 +223,7 @@ class Planner:
                     llm=self.config.llm,
                     messages=prompt,
                     tools=[tool.card.tool_info() for tool in tools],
-                    agent_name=NodeId.PLAN_REASONING.value,
+                    agent_name=AgentLlmName.PLAN_REASONING.value,
                     need_stream_out=False,
                     stream_meta=stream_meta
                 )

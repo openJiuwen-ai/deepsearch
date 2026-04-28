@@ -90,3 +90,65 @@ async def test_cleanup_session_cache_evicts_agent_cache(monkeypatch):
     assert fake_checkpointer.released == ["conversation-a"]
     assert recreated_agent_a is not agent_a
     assert manager.get_or_create_agent(request_b, object(), agent_config={"b": 2}) is agent_b
+
+
+def test_build_agent_config_preserves_agent_llm_timeouts(monkeypatch):
+    """验证构建的 agent 配置会透传请求里的 agent_llm_timeouts。
+
+    Args:
+        monkeypatch: pytest 运行时打桩工具。
+
+    Returns:
+        None.
+    """
+    factory = _FakeAgentFactory()
+    manager = DeepSearchAgentManager(agent_factory=factory)
+    request = _build_request("conversation-a")
+    request.agent_llm_timeouts = {"default": 300, "sub_reporter": -120}
+
+    monkeypatch.setattr(
+        manager,
+        "_load_web_search_config",
+        lambda space_id, web_search_config, db: {
+            "search_engine_name": "mock",
+            "search_api_key": bytearray(b"secret"),
+            "search_url": "https://example.com/search",
+            "max_web_search_results": 5,
+            "extension": {},
+        },
+    )
+
+    config = manager.build_agent_config(request, object())
+
+    assert config["agent_llm_timeouts"] == {"default": 300, "sub_reporter": -120}
+
+
+def test_build_agent_config_disables_agent_llm_timeouts_without_default(monkeypatch):
+    """验证构建配置时不会提前根据 default 缺失禁用 agent LLM timeout。
+
+    Args:
+        monkeypatch: pytest 运行时打桩工具。
+
+    Returns:
+        None.
+    """
+    factory = _FakeAgentFactory()
+    manager = DeepSearchAgentManager(agent_factory=factory)
+    request = _build_request("conversation-a")
+    request.agent_llm_timeouts = {"sub_reporter": 120}
+
+    monkeypatch.setattr(
+        manager,
+        "_load_web_search_config",
+        lambda space_id, web_search_config, db: {
+            "search_engine_name": "mock",
+            "search_api_key": bytearray(b"secret"),
+            "search_url": "https://example.com/search",
+            "max_web_search_results": 5,
+            "extension": {},
+        },
+    )
+
+    config = manager.build_agent_config(request, object())
+
+    assert config["agent_llm_timeouts"] == {"sub_reporter": 120}

@@ -24,7 +24,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Retr
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -188,7 +188,8 @@ class GenerateQueryNode(BaseNode):
         for retry_idx in range(max_retries):
             try:
                 result = await ainvoke_llm_with_stats(
-                    self.llm, formatted_prompt, agent_name=NodeId.COLLECTOR_QUERY_GEN.value, schema=SearchQueryList)
+                    self.llm, formatted_prompt, agent_name=AgentLlmName.COLLECTOR_QUERY_GENERATION.value,
+                    schema=SearchQueryList)
                 break
             except Exception as e:
                 current_try = retry_idx + 1
@@ -328,7 +329,7 @@ class SupervisorNode(BaseNode):
         for retry_idx in range(max_retries):
             try:
                 result = await ainvoke_llm_with_stats(
-                    self.llm, formatted_prompt, agent_name=NodeId.COLLECTOR_SUPERVISOR.value, schema=Reflection)
+                    self.llm, formatted_prompt, agent_name=AgentLlmName.COLLECTOR_SUPERVISOR.value, schema=Reflection)
                 break
             except Exception as e:
                 current_try = retry_idx + 1
@@ -422,7 +423,7 @@ class SummaryNode(BaseNode):
         for retry_idx in range(max_retries):
             try:
                 result = await ainvoke_llm_with_stats(
-                    self.llm, formatted_prompt, agent_name=NodeId.COLLECTOR_SUMMARY.value, schema=Summary)
+                    self.llm, formatted_prompt, agent_name=AgentLlmName.COLLECTOR_SUMMARY.value, schema=Summary)
                 break
             except Exception as e:
                 current_try = retry_idx + 1

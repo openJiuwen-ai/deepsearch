@@ -9,7 +9,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.exception import CustomException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -118,7 +118,7 @@ class SynonymRewriter:
             response = await ainvoke_llm_with_stats(
                 llm=llm,
                 messages=messages,
-                agent_name=NodeId.USER_FEEDBACK_PROCESSOR.value + "_synonym_rewriter",
+                agent_name=AgentLlmName.USER_FEEDBACK_PROCESSOR_SYNONYM_REWRITER.value,
             )
         except CustomException:
             raise

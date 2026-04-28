@@ -7,7 +7,7 @@ import asyncio
 
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import call_model, type_check
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +134,8 @@ class ResearchInferPreprocess():
         detection_func_and_args = {"detection_func": type_check, "args": list}
         tasks = [call_model(self.llm_model, "infer_extract_conclusion_prompt", {"input": section.get("content", "")},
                             detection_func_and_args=detection_func_and_args,
-                            agent_name=NodeId.SOURCE_TRACER_INFER.value +
-                            "_extract_conclusion") for section in sections]
+                            agent_name=AgentLlmName.SOURCE_TRACER_INFER_EXTRACT_CONCLUSION.value)
+                 for section in sections]
         results = await asyncio.gather(*tasks)
         if LogManager.is_sensitive():
             logger.info(f"[INFERENCE INFO EXTRACT]: Extracted conclusions: *")

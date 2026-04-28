@@ -84,7 +84,6 @@ class DependencyPlanReasoningNode(BasePlanReasoningNode):
         current_inputs["plan_background_knowledge"] = session.get_global_state(
             "section_context.plan_background_knowledge"
         )
-
         return current_inputs
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):

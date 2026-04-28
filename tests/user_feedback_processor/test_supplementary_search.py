@@ -6,6 +6,7 @@ from openjiuwen_deepsearch.algorithm.user_feedback_processor.supplementary_searc
     SupplementaryRewriteContext,
     SupplementarySearcher,
 )
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 @pytest.mark.asyncio
 async def test_supplementary_search_selected_only_replaces_only_span_and_preserves_metadata():
@@ -220,13 +221,31 @@ async def test_run_collection_returns_summary_and_doc_infos_from_collector_servi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method_name", "prompt_name"),
+    ("method_name", "prompt_name", "agent_name"),
     [
-        ("_rewrite_selected_only", "supplementary_search_rewrite_selected_only"),
-        ("_rewrite_selected_and_related", "supplementary_search_rewrite_selected_and_related"),
+        (
+            "_rewrite_selected_only",
+            "supplementary_search_rewrite_selected_only",
+            AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_ONLY.value,
+        ),
+        (
+            "_rewrite_selected_and_related",
+            "supplementary_search_rewrite_selected_and_related",
+            AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_AND_RELATED.value,
+        ),
     ],
 )
-async def test_rewrite_methods_accept_named_context_and_forward_prompt_vars(method_name, prompt_name):
+async def test_rewrite_methods_accept_named_context_and_forward_prompt_vars(method_name, prompt_name, agent_name):
+    """验证补充搜索改写方法会转发 prompt 变量和完整 agent_name。
+
+    Args:
+        method_name: 待测试的改写方法名。
+        prompt_name: 期望传给底层 prompt 调用的模板名称。
+        agent_name: 期望传给底层 LLM 调用的完整 agent_name。
+
+    Returns:
+        None.
+    """
     searcher = SupplementarySearcher(llm_model_name="mock")
     rewrite_context = SupplementaryRewriteContext(
         user_instruction="补充数据",
@@ -256,5 +275,5 @@ async def test_rewrite_methods_accept_named_context_and_forward_prompt_vars(meth
             "collector_summary": "摘要",
             "doc_infos": [{"title": "doc"}],
         },
-        prompt_name,
+        agent_name,
     )

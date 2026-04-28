@@ -1,8 +1,14 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+import copy
+import asyncio
 import json
 import logging
+import os
+import time
 import uuid
+from datetime import datetime, timezone
+from typing import List
 
 from openjiuwen.core.common.constants.constant import INTERACTIVE_INPUT
 from openjiuwen.core.context_engine.base import ModelContext
@@ -11,40 +17,102 @@ from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
 
+from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
 from openjiuwen_deepsearch.algorithm.query_understanding.interpreter import query_interpreter
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
-from openjiuwen_deepsearch.algorithm.query_understanding.router import classify_query
-from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
+from openjiuwen_deepsearch.algorithm.query_understanding.router import classify_query, web_search_for_query
+from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
-from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
-from openjiuwen_deepsearch.algorithm.source_trace.checker import postprocess_by_citation_checker, preprocess_info
+from openjiuwen_deepsearch.algorithm.search_nodes.find_action import run_find_action_space
+from openjiuwen_deepsearch.algorithm.search_nodes.initialize_state import run_initialize_state
+from openjiuwen_deepsearch.algorithm.search_nodes.run_action import (
+    RunActionConfig,
+    run_action,
+)
+from openjiuwen_deepsearch.algorithm.search_nodes.tool_node import (
+    ExecuteToolConfig,
+    execute_tool,
+    format_tool_result_for_message,
+)
+from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
+    _save_result,
+    format_action_for_log,
+    to_dict_safe,
+    to_json_safe,
+)
+from openjiuwen_deepsearch.algorithm.search_nodes.validate_new_state import run_validations
+from openjiuwen_deepsearch.algorithm.source_trace.checker import (
+    postprocess_by_citation_checker,
+    preprocess_info,
+)
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTracerInfer
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor import (
     UserFeedbackProcessor,
 )
-from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH, MAX_QUERY_LENGTH, \
-    FINISH_TASK_FEEDBACK
-from openjiuwen_deepsearch.common.exception import CustomException, CustomValueException
+from openjiuwen_deepsearch.common.common_constants import (
+    CHINESE,
+    ENGLISH,
+    FINISH_TASK_FEEDBACK,
+    MAX_QUERY_LENGTH,
+)
+from openjiuwen_deepsearch.common.exception import (
+    CustomException,
+    CustomJiuWenBaseException,
+    CustomValueException,
+)
 from openjiuwen_deepsearch.common.status_code import StatusCode
-from openjiuwen_deepsearch.config.config import Config, WebSearchEngineConfig, LocalSearchEngineConfig
+from openjiuwen_deepsearch.config.config import (
+    Config,
+    LocalSearchEngineConfig,
+    WebSearchEngineConfig,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SearchContext, Message, Outline, \
-    OutlineInteraction
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    Action,
+    Message,
+    Outline,
+    OutlineInteraction,
+    Result,
+    SearchContext,
+    State,
+    ValidationResult,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
-from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent, \
-    custom_stream_output
-from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     get_effective_workflow_llm_usage,
     save_workflow_llm_usage_to_session,
 )
+from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
+    MessageType,
+    StreamEvent,
+    custom_stream_output,
+    get_current_time,
+)
+from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import model_context, session_context
-from openjiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType, NodeDebugData
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    model_context,
+    session_context,
+)
+from openjiuwen_deepsearch.utils.debug_utils.node_debug import (
+    NodeDebugData,
+    NodeType,
+    add_debug_log_wrapper,
+)
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
-
 logger = logging.getLogger(__name__)
+
+
+def _normalize_workflow_llm_config(raw: object) -> dict:
+    """Align session ``llm_config`` with AgentConfig shape (nested under ``general``)."""
+    if raw is None:
+        return {"general": {}}
+    if isinstance(raw, dict) and "general" in raw:
+        return raw
+    if isinstance(raw, dict):
+        return {"general": dict(raw)}
+    return {"general": {}}
 
 
 class StartNode(Start):
@@ -68,7 +136,7 @@ class StartNode(Start):
             session_id=inputs.get("thread_id", ""),
             messages=[Message(role="user", content=inputs.get("query", ""))],
             search_mode=inputs.get("search_mode", "research"),
-            report_template=inputs.get("report_template", "")
+            report_template=inputs.get("report_template", ""),
         )
 
         session.update_global_state({"search_context": search_context.model_dump()})
@@ -80,31 +148,41 @@ class StartNode(Start):
             agent_config["workflow_human_in_the_loop"] = origin_agent_config.get("workflow_human_in_the_loop", True)
             agent_config["outline_interaction_enabled"] = origin_agent_config.get("outline_interaction_enabled", True)
             agent_config["outline_interaction_max_rounds"] = origin_agent_config.get(
-                "outline_interaction_max_rounds", 3)
+                "outline_interaction_max_rounds", 3
+            )
             agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 5)
             agent_config["source_tracer_research_trace_source_switch"] = origin_agent_config.get(
-                "source_tracer_research_trace_source_switch", True)
+                "source_tracer_research_trace_source_switch", True
+            )
             agent_config["source_tracer_generated_citation_switch"] = origin_agent_config.get(
-                "source_tracer_generated_citation_switch", True)
+                "source_tracer_generated_citation_switch", True
+            )
             agent_config["source_tracer_infer_switch"] = origin_agent_config.get("source_tracer_infer_switch", True)
             agent_config["llm_config"] = origin_agent_config.get("llm_config", {})
             agent_config["info_collector_search_method"] = origin_agent_config.get(
-                "info_collector_search_method", "web")
-            agent_config["web_search_engine_config"] = WebSearchEngineConfig(search_engine_name=origin_agent_config.get(
-                "web_search_engine_config", {}).get("search_engine_name", ""))
+                "info_collector_search_method", "web"
+            )
+            agent_config["web_search_engine_config"] = WebSearchEngineConfig(
+                search_engine_name=origin_agent_config.get("web_search_engine_config", {}).get("search_engine_name", "")
+            )
             agent_config["local_search_engine_config"] = LocalSearchEngineConfig(
-                search_engine_name=origin_agent_config.get(
-                    "local_search_engine_config", {}).get("search_engine_name", ""))
+                search_engine_name=origin_agent_config.get("local_search_engine_config", {}).get(
+                    "search_engine_name", ""
+                )
+            )
             agent_config["user_feedback_processor_enable"] = origin_agent_config.get(
-                "user_feedback_processor_enable", False)
+                "user_feedback_processor_enable", False
+            )
             agent_config["user_feedback_processor_max_interactions"] = origin_agent_config.get(
-                "user_feedback_processor_max_interactions", 100)
+                "user_feedback_processor_max_interactions", 100
+            )
             agent_config["stats_info_llm"] = origin_agent_config.get("stats_info_llm", False)
             agent_config["api_tools_config"] = origin_agent_config.get("api_tools_config", {})
-            agent_config["vlm_chart_generator_enable"] = origin_agent_config.get(
-                "vlm_chart_generator_enable", False)
+            agent_config["vlm_chart_generator_enable"] = origin_agent_config.get("vlm_chart_generator_enable", False)
             agent_config["vlm_chart_generator_max_iterations"] = origin_agent_config.get(
-                "vlm_chart_generator_max_iterations", 1)
+                "vlm_chart_generator_max_iterations", 1
+            )
+            agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -113,9 +191,7 @@ class StartNode(Start):
         if agent_config.get("vlm_chart_generator_enable", False):
             service_config["visualization_enable"] = False
         merge_config = agent_config | service_config
-        session.update_global_state({
-            "config": merge_config
-        })
+        session.update_global_state({"config": merge_config})
 
 
 class EntryNode(BaseNode):
@@ -128,13 +204,26 @@ class EntryNode(BaseNode):
 
         messages = session.get_global_state("search_context.messages")
         llm_model_name = adapt_llm_model_name(session, NodeId.ENTRY.value)
+        query = session.get_global_state("search_context.query")
+        web_search_engine_config = session.get_global_state("config.web_search_engine_config")
+        web_search_engine_name = web_search_engine_config.search_engine_name if web_search_engine_config else "petal"
 
-        return dict(messages=messages, llm_model_name=llm_model_name)
+        return dict(messages=messages, llm_model_name=llm_model_name,
+                    query=query, web_search_engine_name=web_search_engine_name)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
-        classify_query_output = await classify_query(current_inputs)
+        # Parallel execution of classify_query and web_search_for_query
+        web_search_input = {
+            "query": current_inputs.get("query", ""),
+            "web_search_engine_name": current_inputs.get("web_search_engine_name", "petal")
+        }
+        classify_query_output, web_search_output = await asyncio.gather(
+            classify_query(current_inputs),
+            web_search_for_query(web_search_input)
+        )
+        classify_query_output["entry_search_results"] = web_search_output.get("search_results", [])
 
         result = self._post_handle(inputs, classify_query_output, session, context)
         return result
@@ -144,6 +233,7 @@ class EntryNode(BaseNode):
         lang = algorithm_output.get("lang", "zh-CN").lower()
         llm_result = algorithm_output.get("llm_result", "")
         error_msg = algorithm_output.get("error_msg", "")
+        entry_search_results = algorithm_output.get("entry_search_results", [])
 
         if "zh" in lang or "chinese" in lang or "中文" in lang:
             lang = CHINESE
@@ -152,6 +242,8 @@ class EntryNode(BaseNode):
 
         # 更新session
         session.update_global_state({"search_context.language": lang})
+        if entry_search_results:
+            session.update_global_state({"search_context.entry_search_results": entry_search_results})
 
         # 决定下一个节点
         next_node = NodeId.GENERATE_QUESTIONS.value if human_in_the_loop else NodeId.OUTLINE.value
@@ -162,12 +254,11 @@ class EntryNode(BaseNode):
             next_node = NodeId.END.value
 
         # 添加EntryNode debug日志
-        add_debug_log_wrapper(session, NodeDebugData(NodeId.ENTRY.value, 0,
-                              NodeType.MAIN.value, output_content=str(algorithm_output)))
+        add_debug_log_wrapper(
+            session, NodeDebugData(NodeId.ENTRY.value, 0, NodeType.MAIN.value, output_content=str(algorithm_output))
+        )
         logger.info(f"[EntryNode] End EntryNode.")
-        return dict(language=lang,
-                    human_in_the_loop=human_in_the_loop,
-                    next_node=next_node)
+        return dict(language=lang, human_in_the_loop=human_in_the_loop, next_node=next_node)
 
 
 class FeedbackHandlerNode(BaseNode):
@@ -229,20 +320,38 @@ class FeedbackHandlerNode(BaseNode):
         user_feedback = algorithm_output.get("user_feedback", "")
 
         if user_feedback == "Invalid feedback_mode":
-            exception_info = (f"[{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.code}]"
-                              f"{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.errmsg}")
+            exception_info = (
+                f"[{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.code}]"
+                f"{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.errmsg}"
+            )
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             # 添加FeedbackHandlerNode debug日志
-            add_debug_log_wrapper(session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0,
-                                  NodeType.MAIN.value, output_content=str(exception_info).replace("\\n", "\n")))
+            add_debug_log_wrapper(
+                session,
+                NodeDebugData(
+                    NodeId.FEEDBACK_HANDLER.value,
+                    0,
+                    NodeType.MAIN.value,
+                    output_content=str(exception_info).replace("\\n", "\n"),
+                ),
+            )
             return dict(next_node=NodeId.END.value)
         if user_feedback == "Invalid feedback, length is 0 or type is invalid":
-            exception_info = (f"[{StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR.code}]"
-                              f"{StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR.errmsg}")
+            exception_info = (
+                f"[{StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR.code}]"
+                f"{StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR.errmsg}"
+            )
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             # 添加FeedbackHandlerNode debug日志
-            add_debug_log_wrapper(session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0,
-                                  NodeType.MAIN.value, output_content=str(exception_info).replace("\\n", "\n")))
+            add_debug_log_wrapper(
+                session,
+                NodeDebugData(
+                    NodeId.FEEDBACK_HANDLER.value,
+                    0,
+                    NodeType.MAIN.value,
+                    output_content=str(exception_info).replace("\\n", "\n"),
+                ),
+            )
             return dict(next_node=NodeId.END.value)
         if user_feedback == FINISH_TASK_FEEDBACK:
             logger.info(f"[FeedbackHandlerNode] user feedback is FINISH TASK, we will try to finish workflow.")
@@ -251,8 +360,9 @@ class FeedbackHandlerNode(BaseNode):
 
         session.update_global_state({"search_context.user_feedback": user_feedback})
 
-        add_debug_log_wrapper(session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0,
-                              NodeType.MAIN.value, output_content=user_feedback))
+        add_debug_log_wrapper(
+            session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0, NodeType.MAIN.value, output_content=user_feedback)
+        )
         logger.info(f"[FeedbackHandlerNode] End FeedbackHandlerNode.")
         return dict(next_node=NodeId.OUTLINE.value)
 
@@ -268,11 +378,9 @@ class ReporterNode(BaseNode):
         report_task = ""
         all_classified_contents = []
         if current_report:
-            report_task = current_report.report_task if hasattr(current_report, 'report_task') else ""
+            report_task = current_report.report_task if hasattr(current_report, "report_task") else ""
             all_classified_contents = (
-                current_report.all_classified_contents
-                if hasattr(current_report, 'all_classified_contents')
-                else []
+                current_report.all_classified_contents if hasattr(current_report, "all_classified_contents") else []
             )
         llm_model_name = adapt_llm_model_name(session, NodeId.REPORTER.value)
 
@@ -295,8 +403,12 @@ class ReporterNode(BaseNode):
         current_inputs = self._pre_handle(inputs, session, context)
         reporter = Reporter(current_inputs.get("llm_model_name"))
         success, report_str = await reporter.generate_report(current_inputs)
-        algorithm_output = dict(success=success, report_str=report_str, report=current_inputs.get("report"),
-                                all_classified_contents=current_inputs.get("all_classified_contents"))
+        algorithm_output = dict(
+            success=success,
+            report_str=report_str,
+            report=current_inputs.get("report"),
+            all_classified_contents=current_inputs.get("all_classified_contents"),
+        )
 
         return self._post_handle(inputs, algorithm_output, session, context)
 
@@ -310,8 +422,9 @@ class ReporterNode(BaseNode):
             logger.error("[ReporterNode] ReporterNode ended with fail.")
             exception_info = f"[{StatusCode.REPORT_GENERATE_ERROR.code}] {algorithm_output.get('report_str')}"
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
-            add_debug_log_wrapper(session, NodeDebugData(NodeId.REPORTER.value, 0,
-                                  NodeType.MAIN.value, output_content=exception_info))
+            add_debug_log_wrapper(
+                session, NodeDebugData(NodeId.REPORTER.value, 0, NodeType.MAIN.value, output_content=exception_info)
+            )
             return dict(next_node=NodeId.END.value)
 
         # generate success
@@ -324,10 +437,14 @@ class ReporterNode(BaseNode):
         # 添加报告debug日志
         debug_content = {
             "report_content": current_report.report_content if current_report else "",
-            "all_classified_contents": current_report.all_classified_contents if current_report else []
+            "all_classified_contents": current_report.all_classified_contents if current_report else [],
         }
-        add_debug_log_wrapper(session, NodeDebugData(NodeId.REPORTER.value, 0, NodeType.MAIN.value,
-                              output_content=str(debug_content).replace("\\n", "\n")))
+        add_debug_log_wrapper(
+            session,
+            NodeDebugData(
+                NodeId.REPORTER.value, 0, NodeType.MAIN.value, output_content=str(debug_content).replace("\\n", "\n")
+            ),
+        )
         return dict(next_node=NodeId.VLM_CHART_GENERATOR.value)
 
 
@@ -357,33 +474,48 @@ class EndNode(End):
             final_result["workflow_llm_token_usage"] = workflow_usage
             session.update_global_state({"search_context.final_result.workflow_llm_token_usage": workflow_usage})
             logger.info(
-                f"[EndNode] workflow_llm_token_usage: "
-                f"{json.dumps(workflow_usage, ensure_ascii=False, indent=2)}"
+                f"[EndNode] workflow_llm_token_usage: " f"{json.dumps(workflow_usage, ensure_ascii=False, indent=2)}"
             )
         logger.info(
             f"[EndNode] Get final result: {'***' if LogManager.is_sensitive() else final_result}",
         )
         final_result_json = json.dumps(final_result, ensure_ascii=False)
         if final_result.get("exception_info", "") == "":
-            await session.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
-                                               "content": final_result_json,
-                                               "message_type": MessageType.MESSAGE_CHUNK.value,
-                                               "event": StreamEvent.SUMMARY_RESPONSE.value,
-                                               "created_time": get_current_time()})
+            await session.write_custom_stream(
+                {
+                    "message_id": str(uuid.uuid4()),
+                    "agent": NodeId.END.value,
+                    "content": final_result_json,
+                    "message_type": MessageType.MESSAGE_CHUNK.value,
+                    "event": StreamEvent.SUMMARY_RESPONSE.value,
+                    "created_time": get_current_time(),
+                }
+            )
         else:
-            await session.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
-                                               "content": final_result_json,
-                                               "message_type": MessageType.MESSAGE_CHUNK.value,
-                                               "event": StreamEvent.ERROR.value,
-                                               "created_time": get_current_time()})
-        await session.write_custom_stream({"message_id": str(uuid.uuid4()), "agent": NodeId.END.value,
-                                           "content": "ALL END",
-                                           "message_type": MessageType.MESSAGE_CHUNK.value,
-                                           "event": StreamEvent.SUMMARY_RESPONSE.value,
-                                           "created_time": get_current_time()})
+            await session.write_custom_stream(
+                {
+                    "message_id": str(uuid.uuid4()),
+                    "agent": NodeId.END.value,
+                    "content": final_result_json,
+                    "message_type": MessageType.MESSAGE_CHUNK.value,
+                    "event": StreamEvent.ERROR.value,
+                    "created_time": get_current_time(),
+                }
+            )
+        await session.write_custom_stream(
+            {
+                "message_id": str(uuid.uuid4()),
+                "agent": NodeId.END.value,
+                "content": "ALL END",
+                "message_type": MessageType.MESSAGE_CHUNK.value,
+                "event": StreamEvent.SUMMARY_RESPONSE.value,
+                "created_time": get_current_time(),
+            }
+        )
         # 添加End节点debug日志
-        add_debug_log_wrapper(session, NodeDebugData(NodeId.END.value, 0,
-                              NodeType.MAIN.value, output_content=final_result_json))
+        add_debug_log_wrapper(
+            session, NodeDebugData(NodeId.END.value, 0, NodeType.MAIN.value, output_content=final_result_json)
+        )
         logger.info(f"[EndNode] End EndNode.")
 
         return dict(final_result=final_result_json)
@@ -398,9 +530,11 @@ class GenerateQuestionsNode(BaseNode):
         logger.info(f"[GenerateQuestionsNode] Start GenerateQuestionsNode.")
         language = session.get_global_state("search_context.language")
         query = session.get_global_state("search_context.query")
+        entry_search_results = session.get_global_state("search_context.entry_search_results") or []
         max_gen_question_retry_num = session.get_global_state("config.workflow_max_gen_question_retry_num")
         llm_model_name = adapt_llm_model_name(session, NodeId.GENERATE_QUESTIONS.value)
-        return dict(language=language, query=query, max_gen_question_retry_num=max_gen_question_retry_num,
+        return dict(language=language, query=query, entry_search_results=entry_search_results,
+                    max_gen_question_retry_num=max_gen_question_retry_num,
                     llm_model_name=llm_model_name)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -414,8 +548,10 @@ class GenerateQuestionsNode(BaseNode):
             current_executed_num += 1
             if algorithm_output.get("result", ""):
                 break
-            msg = (f"[GenerateQuestionsNode] Generate questions failed, retry generating query interpretation "
-                   f"({current_executed_num}/{max_gen_question_retry_num}) times.")
+            msg = (
+                f"[GenerateQuestionsNode] Generate questions failed, retry generating query interpretation "
+                f"({current_executed_num}/{max_gen_question_retry_num}) times."
+            )
             if current_executed_num < max_gen_question_retry_num:
                 logger.warning(msg)
             else:
@@ -429,23 +565,38 @@ class GenerateQuestionsNode(BaseNode):
             logger.error(f"[GenerateQuestionsNode] exception: {'*' if LogManager.is_sensitive() else exception_info}")
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
 
-            add_debug_log_wrapper(session, NodeDebugData(NodeId.GENERATE_QUESTIONS.value, 0,
-                                  NodeType.MAIN.value,
-                                  output_content=str(exception_info).replace("\\n", "\n")))
+            add_debug_log_wrapper(
+                session,
+                NodeDebugData(
+                    NodeId.GENERATE_QUESTIONS.value,
+                    0,
+                    NodeType.MAIN.value,
+                    output_content=str(exception_info).replace("\\n", "\n"),
+                ),
+            )
             return dict(next_node=NodeId.END.value)
         if not algorithm_output.get("result"):
             exception_info = "Query Interpreter result is empty."
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             logger.error(f"[GenerateQuestionsNode] {exception_info}")
-            add_debug_log_wrapper(session, NodeDebugData(NodeId.GENERATE_QUESTIONS.value, 0,
-                                  NodeType.MAIN.value,
-                                  output_content=str(exception_info).replace("\\n", "\n")))
+            add_debug_log_wrapper(
+                session,
+                NodeDebugData(
+                    NodeId.GENERATE_QUESTIONS.value,
+                    0,
+                    NodeType.MAIN.value,
+                    output_content=str(exception_info).replace("\\n", "\n"),
+                ),
+            )
             return dict(next_node=NodeId.END.value)
 
         session.update_global_state({"search_context.questions": algorithm_output.get("result")})
-        add_debug_log_wrapper(session, NodeDebugData(NodeId.GENERATE_QUESTIONS.value, 0,
-                              NodeType.MAIN.value,
-                              output_content=algorithm_output.get("result")))
+        add_debug_log_wrapper(
+            session,
+            NodeDebugData(
+                NodeId.GENERATE_QUESTIONS.value, 0, NodeType.MAIN.value, output_content=algorithm_output.get("result")
+            ),
+        )
         logger.info(f"[GenerateQuestionsNode] End GenerateQuestionsNode.")
         return dict(next_node=NodeId.FEEDBACK_HANDLER.value)
 
@@ -473,10 +624,7 @@ class OutlineNode(BaseNode):
         outline_interaction_mode = ""
         previous_feedback_list = []
         current_interaction_feedback = ""
-        outline_interactions = [
-            OutlineInteraction(**i) if isinstance(i, dict) else i
-            for i in outline_interactions
-        ]
+        outline_interactions = [OutlineInteraction(**i) if isinstance(i, dict) else i for i in outline_interactions]
 
         if outline_interactions:
             last = outline_interactions[-1]
@@ -484,9 +632,7 @@ class OutlineNode(BaseNode):
             current_interaction_feedback = last.feedback
 
             previous_feedback_list = [
-                i.feedback
-                for i in outline_interactions
-                if i.interaction_mode == "revise_comment" and i.feedback
+                i.feedback for i in outline_interactions if i.interaction_mode == "revise_comment" and i.feedback
             ]
 
         if previous_feedback_list:
@@ -503,12 +649,15 @@ class OutlineNode(BaseNode):
         current_outline = session.get_global_state("search_context.current_outline")
         outline_interaction_enabled = session.get_global_state("config.outline_interaction_enabled")
         api_tools_config = session.get_global_state("config.api_tools_config") or {}
+        entry_search_results = session.get_global_state("search_context.entry_search_results") or []
+
 
         return dict(
             messages=messages,
             user_feedback=user_feedback,
             questions=questions,
             language=language,
+            entry_search_results=entry_search_results,
             max_section_num=max_section_num,
             max_outline_retry_num=max_outline_retry_num,
             llm_model_name=llm_model_name,
@@ -541,12 +690,14 @@ class OutlineNode(BaseNode):
                     "current_outline": None,
                     "outline_executed_num": outline_executed_num,
                     "success_flag": False,
-                    "error_msg": error_msg
+                    "error_msg": error_msg,
                 }
                 break
             if outline_executed_num > 0:
-                logger.warning(f"{self.log_prefix} Failed to generate Outline , retry generating outline for the "
-                               f"{outline_executed_num}/{max_outline_retry_num} times.")
+                logger.warning(
+                    f"{self.log_prefix} Failed to generate Outline , retry generating outline for the "
+                    f"{outline_executed_num}/{max_outline_retry_num} times."
+                )
             outline_executed_num += 1
             algorithm_output = await outliner.generate_outline(current_inputs)
             success_flag = algorithm_output.get("success_flag")
@@ -594,8 +745,7 @@ class OutlineNode(BaseNode):
             # 大纲交互场景且已有大纲的情况下才启用兜底
             if current_outline and outline_interactions:
                 logger.warning(
-                    f"{self.log_prefix} Outline generation failed in interaction mode, "
-                    "fallback to previous outline."
+                    f"{self.log_prefix} Outline generation failed in interaction mode, " "fallback to previous outline."
                 )
                 algorithm_output["current_outline"] = current_outline
                 algorithm_output["success_flag"] = True
@@ -603,10 +753,14 @@ class OutlineNode(BaseNode):
 
         if success_flag:
             outline = algorithm_output.get("current_outline", None)
-            session.update_global_state({'search_context.current_outline': outline})
+            session.update_global_state({"search_context.current_outline": outline})
 
-            add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE.value, 0, NodeType.MAIN.value,
-                                  output_content=str(outline).replace("\\n", "\n")))
+            add_debug_log_wrapper(
+                session,
+                NodeDebugData(
+                    NodeId.OUTLINE.value, 0, NodeType.MAIN.value, output_content=str(outline).replace("\\n", "\n")
+                ),
+            )
 
             outline_interaction_enabled = session.get_global_state("config.outline_interaction_enabled")
             if outline_interaction_enabled:
@@ -620,8 +774,9 @@ class OutlineNode(BaseNode):
             error_msg = algorithm_output.get("error_msg")
             session.update_global_state({"search_context.final_result.exception_info": error_msg})
 
-            add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE.value, 0, NodeType.MAIN.value,
-                                  output_content=error_msg))
+            add_debug_log_wrapper(
+                session, NodeDebugData(NodeId.OUTLINE.value, 0, NodeType.MAIN.value, output_content=error_msg)
+            )
             logger.error(f"{self.log_prefix} Failed to generate outline, go to {next_node}.")
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
 
@@ -649,13 +804,9 @@ class SourceTracerNode(BaseNode):
         构建溯源校验结果
         """
         processed_report = citation_checker_info.get("response_content", {})
-        citation_checker_result_str = await postprocess_by_citation_checker(
-            processed_report, datas, llm_model)
+        citation_checker_result_str = await postprocess_by_citation_checker(processed_report, datas, llm_model)
 
-        result_dict = dict(
-            check_result=True,
-            citation_checker_result_str=citation_checker_result_str
-        )
+        result_dict = dict(check_result=True, citation_checker_result_str=citation_checker_result_str)
 
         return result_dict
 
@@ -665,40 +816,39 @@ class SourceTracerNode(BaseNode):
         current_report = session.get_global_state("search_context.current_report")
         # 从 Report 对象中获取内容
         report = getattr(current_report, "report_content", "") if current_report else ""
-        merged_trace_source_datas = getattr(
-            current_report, "merged_trace_source_datas", []) if current_report else []
-        all_classified_contents = getattr(
-            current_report, "all_classified_contents", []) if current_report else []
+        merged_trace_source_datas = getattr(current_report, "merged_trace_source_datas", []) if current_report else []
+        all_classified_contents = getattr(current_report, "all_classified_contents", []) if current_report else []
         language = session.get_global_state("search_context.language")
 
-        research_trace_source_switch = session.get_global_state(
-            "config.source_tracer_research_trace_source_switch")
+        research_trace_source_switch = session.get_global_state("config.source_tracer_research_trace_source_switch")
         llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER.value)
 
         need_exit = False
         if (search_mode == "research") and (research_trace_source_switch is False):
-            logger.info(
-                f'[SourceTracerNode] research_trace_source_switch is False, skip trace source.')
+            logger.info(f"[SourceTracerNode] research_trace_source_switch is False, skip trace source.")
             need_exit = True
 
         # 封装为本节点的Input对象
-        return dict(need_exit=need_exit, search_mode=search_mode, report=report,
-                    merged_trace_source_datas=merged_trace_source_datas,
-                    all_classified_contents=all_classified_contents,
-                    research_trace_source_switch=research_trace_source_switch,
-                    language=language, llm_model_name=llm_model_name)
+        return dict(
+            need_exit=need_exit,
+            search_mode=search_mode,
+            report=report,
+            merged_trace_source_datas=merged_trace_source_datas,
+            all_classified_contents=all_classified_contents,
+            research_trace_source_switch=research_trace_source_switch,
+            language=language,
+            llm_model_name=llm_model_name,
+        )
 
     def _skip_trace_source_handle(
-            self, inputs: Input, session: Session,
-            context: ModelContext, current_inputs: dict
+        self, inputs: Input, session: Session, context: ModelContext, current_inputs: dict
     ) -> dict:
         """
         不需要溯源的场景直接跳到后处理
         """
         origin_report = current_inputs.get("report", "")
         search_mode = current_inputs.get("search_mode", "research")
-        algorithm_output = dict(
-            need_exit=True, origin_report=origin_report, search_mode=search_mode)
+        algorithm_output = dict(need_exit=True, origin_report=origin_report, search_mode=search_mode)
         result = self._post_handle(inputs, algorithm_output, session, context)
         return result
 
@@ -714,35 +864,32 @@ class SourceTracerNode(BaseNode):
 
             # 预处理数据结构给溯源验证使用
             language = current_inputs.get("language", "zh-CN")
-            citation_checker_info = preprocess_info(
-                modified_report, datas, language)
+            citation_checker_info = preprocess_info(modified_report, datas, language)
             need_check = citation_checker_info.get("need_check", True)
             if need_check is False:
                 return self._skip_trace_source_handle(inputs, session, context, current_inputs)
 
             # 溯源验证
-            check_result_dict = await self.build_citation_checker_result(citation_checker_info, datas,
-                                                                         current_inputs.get("llm_model_name", ""))
+            check_result_dict = await self.build_citation_checker_result(
+                citation_checker_info, datas, current_inputs.get("llm_model_name", "")
+            )
         except CustomException as e:
             # 溯源异常的情况下，设置check_result为False，让post_handle记录异常信息返回出去
             if LogManager.is_sensitive():
-                logger.error(f'[SourceTracerNode] trace source failed.')
+                logger.error(f"[SourceTracerNode] trace source failed.")
             else:
-                logger.error(f'[SourceTracerNode] trace source failed. {str(e)}')
-            check_result_dict = {"check_result": False,
-                                 "citation_checker_result_str": str(e)}
+                logger.error(f"[SourceTracerNode] trace source failed. {str(e)}")
+            check_result_dict = {"check_result": False, "citation_checker_result_str": str(e)}
         except Exception as e:
             if LogManager.is_sensitive():
-                logger.error(f'[SourceTracerNode] trace source failed.')
+                logger.error(f"[SourceTracerNode] trace source failed.")
             else:
-                logger.error(f'[SourceTracerNode] trace source failed. {str(e)}')
+                logger.error(f"[SourceTracerNode] trace source failed. {str(e)}")
             errmsg = StatusCode.SOURCE_TRACER_NODE_ERROR.errmsg.format(e=e)
             errmsg = f"[{StatusCode.SOURCE_TRACER_NODE_ERROR.code}] {errmsg}\t"
-            check_result_dict = {"check_result": False,
-                                 "citation_checker_result_str": errmsg}
+            check_result_dict = {"check_result": False, "citation_checker_result_str": errmsg}
 
-        algorithm_output = {"check_result_dict": check_result_dict,
-                            "origin_report": current_inputs.get("report", "")}
+        algorithm_output = {"check_result_dict": check_result_dict, "origin_report": current_inputs.get("report", "")}
         result = self._post_handle(inputs, algorithm_output, session, context)
 
         return result
@@ -754,13 +901,15 @@ class SourceTracerNode(BaseNode):
         check_result = check_result_dict.get("check_result", False)
         if algorithm_output.get("need_exit", False):
             source_tracer_result = json.dumps(
-                {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False)
+                {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False
+            )
         else:
             if check_result is True:
                 source_tracer_result = citation_checker_result_str
             else:
                 source_tracer_result = json.dumps(
-                    {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False)
+                    {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False
+                )
                 session.update_global_state({"search_context.final_result.exception_info": citation_checker_result_str})
 
         source_tracer_result_dict = json.loads(source_tracer_result)
@@ -777,18 +926,26 @@ class SourceTracerNode(BaseNode):
             session.update_global_state({"search_context.current_report": current_report})
 
         session.update_global_state(
-            {"search_context.final_result.response_content": checked_trace_source_report_content})
+            {"search_context.final_result.response_content": checked_trace_source_report_content}
+        )
         session.update_global_state({"search_context.final_result.citation_messages": citation_messages})
         # 添加SourceTracerNode debug日志
-        add_debug_log_wrapper(session, NodeDebugData(NodeId.SOURCE_TRACER.value, 0, NodeType.MAIN.value,
-                              output_content=str(source_tracer_result_dict).replace("\\n", "\n")))
+        add_debug_log_wrapper(
+            session,
+            NodeDebugData(
+                NodeId.SOURCE_TRACER.value,
+                0,
+                NodeType.MAIN.value,
+                output_content=str(source_tracer_result_dict).replace("\\n", "\n"),
+            ),
+        )
 
         logger.info(f"[SourceTracerNode] End SourceTracerNode.")
-        logger.info(f"[SourceTracerNode] source_tracer_result: "
-                    f"{'*' if LogManager.is_sensitive() else source_tracer_result}")
+        logger.info(
+            f"[SourceTracerNode] source_tracer_result: " f"{'*' if LogManager.is_sensitive() else source_tracer_result}"
+        )
 
         return dict(next_node=NodeId.SOURCE_TRACER_INFER.value)
-
 
 
 class OutlineInteractionNode(BaseNode):
@@ -809,7 +966,7 @@ class OutlineInteractionNode(BaseNode):
             feedback_mode=feedback_mode,
             outline_interaction_enabled=outline_interaction_enabled,
             max_rounds=max_rounds,
-            current_round=current_round
+            current_round=current_round,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -841,31 +998,28 @@ class OutlineInteractionNode(BaseNode):
         result = self._post_handle(inputs, user_input, session, context)
         return dict(next_node=result)
 
-
     def _save_history(self, session: Session, feedback: str, interaction_mode: str):
         """保存交互记录"""
         current_outline = session.get_global_state("search_context.current_outline")
         outline_interactions = session.get_global_state("search_context.outline_interactions") or []
         new_interaction = OutlineInteraction(
-            feedback=feedback,
-            interaction_mode=interaction_mode,
-            outline_before=current_outline
+            feedback=feedback, interaction_mode=interaction_mode, outline_before=current_outline
         )
         outline_interactions.append(new_interaction)
-        session.update_global_state({
-            "search_context.outline_interactions": outline_interactions
-        })
+        session.update_global_state({"search_context.outline_interactions": outline_interactions})
 
     async def _notify_user(self, session: Session, message: str, event: StreamEvent):
         """通知用户"""
-        await session.write_custom_stream({
-            "message_id": str(uuid.uuid4()),
-            "agent": NodeId.OUTLINE_INTERACTION.value,
-            "content": message,
-            "message_type": MessageType.MESSAGE_CHUNK.value,
-            "event": event.value,
-            "created_time": get_current_time()
-        })
+        await session.write_custom_stream(
+            {
+                "message_id": str(uuid.uuid4()),
+                "agent": NodeId.OUTLINE_INTERACTION.value,
+                "content": message,
+                "message_type": MessageType.MESSAGE_CHUNK.value,
+                "event": event.value,
+                "created_time": get_current_time(),
+            }
+        )
 
     async def _get_user_input(self, feedback_mode: str, message: str, session: Session) -> dict:
         """获取大纲交互阶段的用户输入。
@@ -896,13 +1050,21 @@ class OutlineInteractionNode(BaseNode):
             logger.info(f"{self.log_prefix} Received user input: {'***' if LogManager.is_sensitive() else user_input}")
             return json.loads(user_input)
         except json.JSONDecodeError:
-            exception_info = (f"[{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.code}]"
-                              f"{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.errmsg}")
+            exception_info = (
+                f"[{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.code}]"
+                f"{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.errmsg}"
+            )
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             # 添加FeedbackHandlerNode debug日志
-            add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE_INTERACTION.value, 0,
-                                                         NodeType.MAIN.value,
-                                                         output_content=str(exception_info).replace("\\n", "\n")))
+            add_debug_log_wrapper(
+                session,
+                NodeDebugData(
+                    NodeId.OUTLINE_INTERACTION.value,
+                    0,
+                    NodeType.MAIN.value,
+                    output_content=str(exception_info).replace("\\n", "\n"),
+                ),
+            )
             return {}
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
@@ -924,8 +1086,15 @@ class OutlineInteractionNode(BaseNode):
             logger.warning(f"{self.log_prefix} Invalid user action: {action}.")
             next_node = NodeId.END.value
 
-        add_debug_log_wrapper(session, NodeDebugData(NodeId.OUTLINE_INTERACTION.value, 0,
-                              NodeType.MAIN.value, output_content=str(algorithm_output).replace("\\n", "\n")))
+        add_debug_log_wrapper(
+            session,
+            NodeDebugData(
+                NodeId.OUTLINE_INTERACTION.value,
+                0,
+                NodeType.MAIN.value,
+                output_content=str(algorithm_output).replace("\\n", "\n"),
+            ),
+        )
         logger.info(f"{self.log_prefix} End OutlineInteractionNode.")
         return next_node
 
@@ -945,7 +1114,7 @@ class DependencyOutlineInteractionNode(OutlineInteractionNode):
 class SourceTracerInferNode(BaseNode):
     def __init__(self) -> None:
         super().__init__()
-        self.log_prefix = '[SourceTracerInferNode]'
+        self.log_prefix = "[SourceTracerInferNode]"
 
     @staticmethod
     async def build_source_tracer_infer_result(infer_infos):
@@ -963,22 +1132,24 @@ class SourceTracerInferNode(BaseNode):
         logger.info(f"{self.log_prefix} Start SourceTracerInferNode.")
         search_mode = session.get_global_state("search_context.search_mode")
         llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER_INFER.value)
-        source_tracer_infer_switch = session.get_global_state(
-            "config.source_tracer_infer_switch")
+        source_tracer_infer_switch = session.get_global_state("config.source_tracer_infer_switch")
 
         language = session.get_global_state("search_context.language")
         current_report = session.get_global_state("search_context.current_report")
-        source_tracer_response = getattr(
-            current_report, "checked_trace_source_report_content", "") if current_report else ""
-        all_classified_contents = getattr(
-            current_report, "all_classified_contents", []) if current_report else []
+        source_tracer_response = (
+            getattr(current_report, "checked_trace_source_report_content", "") if current_report else ""
+        )
+        all_classified_contents = getattr(current_report, "all_classified_contents", []) if current_report else []
 
         # 封装本节点的Input对象
-        return dict(source_tracer_infer_switch=source_tracer_infer_switch,
-                    search_mode=search_mode,
-                    llm_model_name=llm_model_name, language=language,
-                    source_tracer_response=source_tracer_response,
-                    all_classified_contents=all_classified_contents)
+        return dict(
+            source_tracer_infer_switch=source_tracer_infer_switch,
+            search_mode=search_mode,
+            llm_model_name=llm_model_name,
+            language=language,
+            source_tracer_response=source_tracer_response,
+            all_classified_contents=all_classified_contents,
+        )
 
     def _post_handle(self, inputs, algorithm_output: dict, session: Session, context: ModelContext):
         infer_success = algorithm_output.get("infer_success", False)
@@ -995,23 +1166,34 @@ class SourceTracerInferNode(BaseNode):
         infer_messages = algorithm_output.get("infer_messages", [])
         scores = algorithm_output.get("scores", [(0, 0)])
 
-        source_tracer_infer_result_dict = dict(response=response,
-                                               infer_messages=infer_messages,
-                                               scores=scores)
+        source_tracer_infer_result_dict = dict(response=response, infer_messages=infer_messages, scores=scores)
 
-        session.update_global_state({"search_context.final_result.response_content": response,
-                                     "search_context.final_result.infer_messages": infer_messages})
+        session.update_global_state(
+            {
+                "search_context.final_result.response_content": response,
+                "search_context.final_result.infer_messages": infer_messages,
+            }
+        )
 
         if error_msg:
             session.update_global_state({"search_context.final_result.exception_info": error_msg})
 
         # 添加SourceTracerInferNode debug日志
-        add_debug_log_wrapper(session, NodeDebugData(NodeId.SOURCE_TRACER.value, 0, NodeType.MAIN.value,
-                              output_content=str(source_tracer_infer_result_dict).replace("\\n", "\n")))
+        add_debug_log_wrapper(
+            session,
+            NodeDebugData(
+                NodeId.SOURCE_TRACER.value,
+                0,
+                NodeType.MAIN.value,
+                output_content=str(source_tracer_infer_result_dict).replace("\\n", "\n"),
+            ),
+        )
 
         logger.info(f"{self.log_prefix} End SourceTracerInferNode.")
-        logger.info(f"{self.log_prefix} source_tracer_infer_result:"
-                    f"{'*' if LogManager.is_sensitive() else source_tracer_infer_result_dict}")
+        logger.info(
+            f"{self.log_prefix} source_tracer_infer_result:"
+            f"{'*' if LogManager.is_sensitive() else source_tracer_infer_result_dict}"
+        )
 
         return dict(next_node=NodeId.END.value)
 
@@ -1022,8 +1204,10 @@ class SourceTracerInferNode(BaseNode):
         try:
             source_tracer_infer_switch = current_inputs.get("source_tracer_infer_switch", False)
             if not source_tracer_infer_switch:
-                algorithm_output = dict(source_tracer_infer_switch=source_tracer_infer_switch,
-                                        response=current_inputs.get("source_tracer_response", ""))
+                algorithm_output = dict(
+                    source_tracer_infer_switch=source_tracer_infer_switch,
+                    response=current_inputs.get("source_tracer_response", ""),
+                )
                 return self._post_handle(inputs, algorithm_output, session, context)
 
             # 溯源推理
@@ -1042,10 +1226,14 @@ class SourceTracerInferNode(BaseNode):
                 logger.error(f"{self.log_prefix} {error_msg} {e}")
             errcode = StatusCode.SOURCE_TRACER_INFER_ERROR.code
             errmsg = StatusCode.SOURCE_TRACER_INFER_ERROR.errmsg.format(e=e)
-            infer_result_dict = dict(infer_success=False, response=current_inputs.get("source_tracer_response", ""),
-                                     infer_messages=[], scores=[(0, 0)], error_msg=f"[{errcode}] {errmsg}",
-                                     source_tracer_infer_switch=current_inputs.get("source_tracer_infer_switch", False)
-                                     )
+            infer_result_dict = dict(
+                infer_success=False,
+                response=current_inputs.get("source_tracer_response", ""),
+                infer_messages=[],
+                scores=[(0, 0)],
+                error_msg=f"[{errcode}] {errmsg}",
+                source_tracer_infer_switch=current_inputs.get("source_tracer_infer_switch", False),
+            )
         else:
             # 这里添加溯源推理校验模块
             infer_result_dict["scores"] = scores
@@ -1137,8 +1325,9 @@ class UserFeedbackProcessorNode(BaseNode):
         if not current_inputs["feedback_snapshot_sent"]:
             if final_result:
                 final_result_json = json.dumps(final_result, ensure_ascii=False)
-                await custom_stream_output(session, str(uuid.uuid4()), final_result_json,
-                NodeId.USER_FEEDBACK_PROCESSOR.value)
+                await custom_stream_output(
+                    session, str(uuid.uuid4()), final_result_json, NodeId.USER_FEEDBACK_PROCESSOR.value
+                )
                 # 注意：session.interact 可能触发中断并提前结束当前轮执行，
                 # 这里需要立即持久化快照标记，避免下一轮重复发送首帧快照。
                 session.update_global_state({"search_context.feedback_snapshot_sent": True})
@@ -1221,9 +1410,11 @@ class UserFeedbackProcessorNode(BaseNode):
 
         stream_result = UserFeedbackProcessor.build_stream_result(feedback, action_result)
         updated_final_result = dict(final_result or {})
-        updated_final_result.update({
-            "response_content": action_result["new_report"],
-        })
+        updated_final_result.update(
+            {
+                "response_content": action_result["new_report"],
+            }
+        )
         await UserFeedbackProcessor.send_result(
             session=session,
             feedback=feedback,
@@ -1278,17 +1469,18 @@ class UserFeedbackProcessorNode(BaseNode):
         Returns:
             None
         """
-        await session.write_custom_stream({
-            "message_id": str(uuid.uuid4()),
-            "agent": NodeId.USER_FEEDBACK_PROCESSOR.value,
-            "content": message,
-            "message_type": MessageType.MESSAGE_CHUNK.value,
-            "event": event.value,
-            "created_time": get_current_time()
-        })
+        await session.write_custom_stream(
+            {
+                "message_id": str(uuid.uuid4()),
+                "agent": NodeId.USER_FEEDBACK_PROCESSOR.value,
+                "content": message,
+                "message_type": MessageType.MESSAGE_CHUNK.value,
+                "event": event.value,
+                "created_time": get_current_time(),
+            }
+        )
 
-    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session,
-                     context: ModelContext) -> dict:
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> dict:
         """回写用户反馈节点产生的 session 状态。
 
         Args:
@@ -1359,18 +1551,23 @@ class UserFeedbackProcessorNode(BaseNode):
         session.update_global_state({"search_context.rewrite_history": history})
 
         if not is_sync:
-            add_debug_log_wrapper(session, NodeDebugData(
-                NodeId.USER_FEEDBACK_PROCESSOR.value, 0, NodeType.MAIN.value,
-                output_content=json.dumps(
-                    {
-                        "selected_text": feedback.get("selected_text"),
-                        "rewritten_text": rewritten_text,
-                        "rewritten_start_offset": rewritten_start_offset,
-                        "rewritten_end_offset": rewritten_end_offset,
-                    },
-                    ensure_ascii=False,
-                )
-            ))
+            add_debug_log_wrapper(
+                session,
+                NodeDebugData(
+                    NodeId.USER_FEEDBACK_PROCESSOR.value,
+                    0,
+                    NodeType.MAIN.value,
+                    output_content=json.dumps(
+                        {
+                            "selected_text": feedback.get("selected_text"),
+                            "rewritten_text": rewritten_text,
+                            "rewritten_start_offset": rewritten_start_offset,
+                            "rewritten_end_offset": rewritten_end_offset,
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
 
         logger.info("[UserFeedbackProcessorNode] Rewrite completed, loop back for next interaction.")
         return dict(next_node=next_node)
@@ -1416,32 +1613,29 @@ class VLMChartGeneratorNode(BaseNode):
             visualization_enable=visualization_enable,
         )
 
-    async def _run_vlm_chart_generator_handle(
-        self,
-        current_inputs: dict
-    ) -> dict:
+    async def _run_vlm_chart_generator_handle(self, inputs: Input) -> dict:
         logger.info("[VLMChartGeneratorNode] Run VLMChartGeneratorNode.")
 
-        report_content = current_inputs.get("report_content", "")
-        all_classified_contents = current_inputs.get("all_classified_contents", [])
-        trace_source_datas = current_inputs.get("trace_source_datas", [])
+        report_content = inputs.get("report_content", "")
+        all_classified_contents = inputs.get("all_classified_contents", [])
+        trace_source_datas = inputs.get("trace_source_datas", [])
 
         vlm_chart_generator = VLMChartGenerator(
-                                    llm_model_name=current_inputs.get("llm_model_name", ""),
-                                    vlm_model_name=current_inputs.get("vlm_model_name", ""),
-                                    vlm_max_iterations=current_inputs.get("vlm_chart_generator_max_iterations", 1),
-                                    )
-        (chart_messages,
-        modified_report,
-        new_source_trace_datas) = await vlm_chart_generator.run(
-                                                            report_content=report_content,
-                                                            all_classified_contents=all_classified_contents,
-                                                            source_trace_datas=trace_source_datas
-                                                            )
+            llm_model_name=inputs.get("llm_model_name", ""),
+            vlm_model_name=inputs.get("vlm_model_name", ""),
+            vlm_max_iterations=inputs.get("vlm_chart_generator_max_iterations", 1),
+        )
+        chart_messages, modified_report, new_source_trace_datas = await vlm_chart_generator.run(
+            report_content=report_content,
+            all_classified_contents=all_classified_contents,
+            source_trace_datas=trace_source_datas,
+        )
 
-        return dict(chart_messages=chart_messages,
-                    modified_report=modified_report,
-                    new_source_trace_datas=new_source_trace_datas)
+        return dict(
+            chart_messages=chart_messages,
+            modified_report=modified_report,
+            new_source_trace_datas=new_source_trace_datas,
+        )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
 
@@ -1464,8 +1658,7 @@ class VLMChartGeneratorNode(BaseNode):
                 logger.error(f"[VLMChartGeneratorNode] {error_msg}")
                 raise ValueError(error_msg)
 
-
-            vlm_chart_generator_output = await self._run_vlm_chart_generator_handle(current_inputs)
+            vlm_chart_generator_output = await self._run_vlm_chart_generator_handle(inputs)
 
         except CustomException as e:
             if LogManager.is_sensitive():
@@ -1505,10 +1698,13 @@ class VLMChartGeneratorNode(BaseNode):
         if vlm_chart_generator_output.get("skip_node", False):
             logger.info("[VLMChartGeneratorNode] vlm_chart_generator_enable is False, skip VLMChartGeneratorNode.")
         elif vlm_chart_generator_output.get("error_msg", ""):
-            logger.warning("[VLMChartGeneratorNode] vlm_chart_generator failed: %s",
-                           vlm_chart_generator_output.get("error_msg", ""))
-            session.update_global_state({"search_context.final_result.warning_info":
-                vlm_chart_generator_output.get("error_msg", "")})
+            logger.warning(
+                "[VLMChartGeneratorNode] vlm_chart_generator failed: %s",
+                vlm_chart_generator_output.get("error_msg", ""),
+            )
+            session.update_global_state(
+                {"search_context.final_result.warning_info": vlm_chart_generator_output.get("error_msg", "")}
+            )
         else:
             # 排除开关和错误信息后，更新报告内容
             chart_messages = vlm_chart_generator_output.get("chart_messages", [])
@@ -1521,14 +1717,1058 @@ class VLMChartGeneratorNode(BaseNode):
             session.update_global_state({"search_context.current_report": current_report})
             session.update_global_state({"search_context.final_result.chart_messages": chart_messages})
 
-        add_debug_log_wrapper(session, NodeDebugData(
-            NodeId.VLM_CHART_GENERATOR.value, 0, NodeType.MAIN.value,
-            output_content=json.dumps({"chart_messages": chart_messages,
-                                       "modified_report": modified_report,
-                                       "new_source_trace_datas": new_source_trace_datas},
-                                      ensure_ascii=False)
-        ))
+        add_debug_log_wrapper(
+            session,
+            NodeDebugData(
+                NodeId.VLM_CHART_GENERATOR.value,
+                0,
+                NodeType.MAIN.value,
+                output_content=json.dumps(
+                    {
+                        "chart_messages": chart_messages,
+                        "modified_report": modified_report,
+                        "new_source_trace_datas": new_source_trace_datas,
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
 
-        output_str = '*' if LogManager.is_sensitive() else vlm_chart_generator_output
+        output_str = "*" if LogManager.is_sensitive() else vlm_chart_generator_output
         logger.debug("[VLMChartGeneratorNode] vlm_chart_generator_node result: \n%s", output_str)
         return dict(next_node=NodeId.SOURCE_TRACER.value)
+
+
+class SearchStartNode(Start):
+    async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session.update_global_state(inputs or {})
+
+        session.update_global_state(inputs or {})
+        # state_creation passes log_dir only inside agent_config; mirror to top-level for tools / LLM logs.
+        merged_log_dir = None
+        if isinstance(inputs, dict):
+            merged_log_dir = inputs.get("log_dir")
+            if not merged_log_dir:
+                ac = inputs.get("agent_config")
+                if isinstance(ac, dict):
+                    merged_log_dir = ac.get("log_dir")
+        if merged_log_dir:
+            session.update_global_state({"log_dir": merged_log_dir})
+
+        search_workflow_config = inputs.get("search_config", Config().service_config.search_workflow.model_dump())
+        logger.info(
+            "[SearchStartNode] received inputs: %s",
+            "***" if LogManager.is_sensitive() else inputs,
+        )
+        origin_agent_config = inputs.get("agent_config", {})
+        llm_config = origin_agent_config.get("llm_config", {}).get("general", {})
+        retrieval_settings = origin_agent_config.get("retrieval_settings", {})
+        workflow_name = inputs.get("workflow_name", "")
+        if workflow_name == "init_state_workflow":
+            workflow_config = search_workflow_config["init_state_agent"]
+            merged_llm_config = {**(llm_config or {})}
+            merged_llm_config.setdefault("timeout", 600)
+            merged_llm_config.setdefault("max_tries", 10)
+            merged_llm_config.setdefault("append_think_tags_to_messages", False)
+            workflow_config["llm_config"]["general"] = merged_llm_config
+        elif workflow_name == "find_action_workflow":
+            workflow_config = search_workflow_config["find_action_agent"]
+            merged_llm_config = {**(llm_config or {})}
+            merged_llm_config.setdefault("timeout", 600)
+            merged_llm_config.setdefault("max_tries", 10)
+            merged_llm_config.setdefault("append_think_tags_to_messages", False)
+            workflow_config["llm_config"]["general"] = merged_llm_config
+        elif workflow_name == "state_creation_workflow":
+            workflow_config = search_workflow_config["state_creation_agent"]
+            workflow_config["validator_agent"] = copy.deepcopy(workflow_config.get("validator_agent", {}))
+            workflow_config["validator_agent"]["llm_config"]["general"] = llm_config or {}
+            merged_llm_config = {**(llm_config or {})}
+            merged_llm_config.setdefault("timeout", 1200)
+            merged_llm_config.setdefault("max_tries", 20)
+            merged_llm_config.setdefault("append_think_tags_to_messages", True)
+            workflow_config["llm_config"]["general"] = merged_llm_config
+            old_retrieval_settings = workflow_config.get("retrieval_settings", {}) or {}
+            workflow_config["retrieval_settings"] = {
+                **old_retrieval_settings,
+                **(retrieval_settings or {}),
+            }
+            workflow_config["log_dir"] = origin_agent_config.get("log_dir", "")
+            workflow_config["fail_count"] = origin_agent_config.get("fail_count", 0)
+        else:
+            raise CustomValueException(
+                StatusCode.WORKFLOW_TYPE_NOT_EXIST_ERROR.code,
+                StatusCode.WORKFLOW_TYPE_NOT_EXIST_ERROR.errmsg.format(config=f"workflow name is {workflow_name}"),
+            )
+        session.update_global_state({"config": workflow_config})
+
+
+class SearchEndNode(End):
+    async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        logger.info("[SearchEndNode] Start SearchEndNode.")
+
+        logger.info(f"[SearchEndNode] inputs: {inputs}")
+
+        def _cache_final_result(final_result: dict) -> None:
+            inner_session = getattr(session, "_inner", None)
+            if inner_session is None:
+                return
+            state = inner_session.state()
+            if hasattr(state, "update_and_commit_workflow_state"):
+                state.update_and_commit_workflow_state({"workflow_final_result": final_result})
+
+        workflow_name = session.get_global_state("workflow_name")
+        total_input_tokens = session.get_global_state("total_input_tokens") or 0
+        total_output_tokens = session.get_global_state("total_output_tokens") or 0
+        if "init_state" in workflow_name:
+            state = session.get_global_state("init_state")
+            payload = {
+                "init_state": state,
+                "total_input_tokens": total_input_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+            final_result = dict(final_result=payload)
+            _cache_final_result(final_result)
+            logger.info("[SearchEndNode] End SearchEndNode.")
+            return final_result
+        if "find_action" in workflow_name:
+            actions = session.get_global_state("actions")
+            payload = {
+                "actions": actions,
+                "total_input_tokens": total_input_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+            final_result = dict(final_result=payload)
+            _cache_final_result(final_result)
+            logger.info("[SearchEndNode] End SearchEndNode.")
+            return final_result
+        if "state_creation" in workflow_name:
+            result = session.get_global_state("result") or {}
+            logger.info(f"[SearchEndNode] state creation result: {result}")
+            config = session.get_global_state("config") or {}
+            payload = {
+                "result": result,
+                "config": config,
+                "total_input_tokens": total_input_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+            final_result = dict(final_result=payload)
+            _cache_final_result(final_result)
+            logger.info("[SearchEndNode] End SearchEndNode.")
+            return final_result
+        logger.info("[SearchEndNode] End SearchEndNode.")
+        return dict(final_result={})
+
+
+class InitializeStateNode(BaseNode):
+    """
+    初始化状态节点
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        logger.info("[InitializeStateNode] Start InitializeStateNode.")
+        query = session.get_global_state("query") or {}
+        config = session.get_global_state("config") or {}
+        raw_llm = config.get("llm_config", None) if config else None
+        llm_config = _normalize_workflow_llm_config(raw_llm)
+        max_tries = (llm_config.get("general") or {}).get("max_tries", 4)
+        total_input_tokens = session.get_global_state("total_input_tokens") or 0
+        total_output_tokens = session.get_global_state("total_output_tokens") or 0
+        if not query:
+            raise CustomJiuWenBaseException(
+                StatusCode.PARAM_CHECK_ERROR_STATE_QUERY_REQUIRED.code,
+                StatusCode.PARAM_CHECK_ERROR_STATE_QUERY_REQUIRED.errmsg,
+            )
+
+        logger.info(
+            "[InitializeStateNode] received query: %s",
+            "***" if LogManager.is_sensitive() else query,
+        )
+
+        return dict(
+            query=query,
+            config=config,
+            llm_config=llm_config,
+            max_tries=max_tries,
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+        )
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        current_inputs = self._pre_handle(inputs, session, context)
+        query = current_inputs.get("query")
+        llm_config = current_inputs.get("llm_config")
+        total_input_tokens = current_inputs.get("total_input_tokens", 0)
+        total_output_tokens = current_inputs.get("total_output_tokens", 0)
+
+        try:
+            algorithm_output = await run_initialize_state(
+                llm_config["general"],
+                query,
+                total_input_tokens=total_input_tokens,
+                total_output_tokens=total_output_tokens,
+            )
+        except Exception as e:
+            logger.error(
+                "[InitializeStateNode] run_initialize_state failed (no fallback, flow must stop): %s",
+                "*" if LogManager.is_sensitive() else e,
+                exc_info=not LogManager.is_sensitive(),
+            )
+            raise
+
+        result = self._post_handle(inputs, algorithm_output, session, context)
+        return result
+
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        init_state: State = algorithm_output.get("init_state")
+        total_input_tokens = algorithm_output.get("total_input_tokens", 0)
+        total_output_tokens = algorithm_output.get("total_output_tokens", 0)
+        log_dir = session.get_global_state("log_dir")
+
+        with open(
+            os.path.join(log_dir, "initial_state.json"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(
+                to_dict_safe(init_state) | {"messages": algorithm_output.get("messages")},
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
+
+        session.update_global_state(
+            {
+                "init_state": init_state,
+                "total_input_tokens": total_input_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+        )
+
+        logger.info("[InitializeStateNode] End InitializeStateNode.")
+        return None
+
+
+class FindActionSpaceNode(BaseNode):
+    """
+    查找动作空间节点
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        logger.info("[FindActionSpaceNode] Start FindActionSpaceNode.")
+        query = session.get_global_state("query") or {}
+        state = session.get_global_state("state") or {}
+        result = session.get_global_state("result") or None
+        config = session.get_global_state("config") or {}
+        raw_llm = config.get("llm_config", None) if config else None
+        llm_config = _normalize_workflow_llm_config(raw_llm)
+        log_dir = session.get_global_state("log_dir")
+        total_input_tokens = session.get_global_state("total_input_tokens") or 0
+        total_output_tokens = session.get_global_state("total_output_tokens") or 0
+
+        if result:
+            result.messages = [result.messages[-1]]
+
+        logger.info(
+            "[FindActionSpaceNode] received query: %s",
+            "***" if LogManager.is_sensitive() else query,
+        )
+        logger.info(
+            "[FindActionSpaceNode] received state: %s",
+            "***" if LogManager.is_sensitive() else state,
+        )
+        logger.info(
+            "[FindActionSpaceNode] received messages: %s",
+            "***" if LogManager.is_sensitive() else result,
+        )
+
+        return dict(
+            query=query,
+            state=state,
+            result=result,
+            config=config,
+            llm_config=llm_config,
+            log_dir=log_dir,
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+        )
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        current_inputs = self._pre_handle(inputs, session, context)
+        query = current_inputs.get("query")
+        state = current_inputs.get("state")
+        result = current_inputs.get("result")
+        config = current_inputs.get("config")
+        llm_config = current_inputs.get("llm_config")
+        max_tries = (llm_config.get("general") or {}).get("max_tries", 4) if llm_config else 4
+        total_input_tokens = current_inputs.get("total_input_tokens", 0)
+        total_output_tokens = current_inputs.get("total_output_tokens", 0)
+        try:
+            algorithm_output = await run_find_action_space(
+                llm_config["general"],
+                config,
+                query,
+                state,
+                result,
+                total_input_tokens=total_input_tokens,
+                total_output_tokens=total_output_tokens,
+                max_tries=max_tries,
+            )
+            if algorithm_output is None:
+                logger.error("[FindActionSpaceNode] Error: Failed to find action.")
+                algorithm_output = dict(
+                    actions=[],
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    success=False,
+                    error="Failed to find action after all retries",
+                )
+        except Exception as e:
+            logger.error(
+                "[FindActionSpaceNode] exception (fallback to end): %s",
+                "*" if LogManager.is_sensitive() else e,
+                exc_info=not LogManager.is_sensitive(),
+            )
+            algorithm_output = dict(
+                actions=[],
+                total_input_tokens=total_input_tokens,
+                total_output_tokens=total_output_tokens,
+                success=False,
+                error=f"FindActionSpaceNode exception: {e!s}",
+            )
+        return self._post_handle(inputs, algorithm_output, session, context)
+
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        query = session.get_global_state("query")
+        state = session.get_global_state("state")
+        log_dir = session.get_global_state("log_dir")
+        if algorithm_output.get("success"):
+            actions: list[Action] = algorithm_output.get("actions", [])
+            total_input_tokens = algorithm_output.get("total_input_tokens", 0)
+            total_output_tokens = algorithm_output.get("total_output_tokens", 0)
+
+            session.update_global_state(
+                {
+                    "actions": actions,
+                    "total_input_tokens": total_input_tokens,
+                    "total_output_tokens": total_output_tokens,
+                }
+            )
+
+            id_ = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S%f")[:-3]
+            action_file = os.path.join(log_dir, "Action", f"action_{id_}_{uuid.uuid4().hex}.json")
+            payload = {
+                "question": query,
+                "state": to_dict_safe(state),
+                "proposals": [action.proposal.direction for action in actions],
+                "scores": [action.proposal.score for action in actions],
+                "action_ids": [action.id for action in actions],
+                "message": actions[0].messages if actions else [],
+            }
+
+            safe_payload = to_json_safe(payload)
+
+            with open(action_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    safe_payload,
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            logger.info("[FindActionSpaceNode] End FindActionSpaceNode.")
+            return actions
+        else:
+            error = algorithm_output.get("error", "Unknown error")
+            id_ = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S%f")[:-3]
+            action_file = os.path.join(log_dir, "Action", f"action_{id_}_{uuid.uuid4().hex}.json")
+            payload = {
+                "question": query,
+                "state": to_dict_safe(state),
+                "proposals": [f"Error: {error}"],
+                "scores": [0],
+            }
+
+            safe_payload = to_json_safe(payload)
+
+            with open(action_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    safe_payload,
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            logger.error("[FindActionSpaceNode] End FindActionSpaceNode with error.")
+            return None
+
+
+class RunActionNode(BaseNode):
+    """
+    执行动作节点
+
+    Outcomes from ``run_run_action`` (single state_creation LLM step):
+    - **Valid completion**: Parsed ``<state>`` (including ``new_states: []``) or ``<answer>`` →
+      ``success=True``; routed to validation or END. Empty state is intentional signal to the
+      orchestrator, not an error; the workflow does not re-run state_creation for it.
+    - **Context limit (recoverable)**: ``try_again=True`` → same node re-invoked with trimmed messages
+      (see ``context_limit_reached_strategy``).
+    - **Tool calls**: The LLM response carries provider-native ``tool_calls`` (ids, names, arguments).
+      After successful parse, ``run_action`` passes a normalized list as runtime
+      ``pending_tool_calls`` (``{name, arguments, tool_call_id}`` per item) for ``ToolNode`` to
+      execute. ``pending_tool_calls`` is the work queue; it is cleared after tools run.
+    - **Hard failure**: LLM/parse failures → ``success=False``, END with ``termination`` saved;
+      no outer workflow retry of state_creation for that case.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        logger.info("[RunActionNode] Start RunActionNode.")
+        action_start_time = session.get_global_state("action_start_time") or time.time()
+        config = session.get_global_state("config") or {}
+        raw_llm = config.get("llm_config", None) if config else None
+        llm_config = _normalize_workflow_llm_config(raw_llm)
+
+        validator_config = config.get("validator_agent", {})
+        validate_new_states = validator_config.get("validate_new_states", True)
+        validate_answer: bool = validator_config.get("validate_answer", True)
+
+        retrieval_settings = session.get_global_state("retrieval_settings") or config.get("retrieval_settings", {})
+        config["retrieval_settings"] = retrieval_settings
+        context_limit_reached_strategy = config.get("context_limit_reached_strategy", "fail")
+        new_found_evidence_ids = session.get_global_state("new_found_evidence_ids") or []
+        retrieval_tool_only = session.get_global_state("retrieval_tool_only") or False
+        llm_budget = session.get_global_state("max_llm_calls_per_run")
+        if llm_budget is None:
+            llm_budget = config.get("max_llm_calls_per_run", 100)
+        total_input_tokens = session.get_global_state("total_input_tokens") or 0
+        total_output_tokens = session.get_global_state("total_output_tokens") or 0
+
+        raw_messages = session.get_global_state("messages")
+        messages = list(raw_messages) if isinstance(raw_messages, list) else []
+
+        action = session.get_global_state("action")
+        query = action["question"] if action else ""
+        state = action["state"] if action else None
+
+        logger.info(
+            "[RunActionNode] received action: %s",
+            "***" if LogManager.is_sensitive() else action,
+        )
+
+        return dict(
+            action_start_time=action_start_time,
+            config=config,
+            llm_config=llm_config,
+            validate_new_states=validate_new_states,
+            validate_answer=validate_answer,
+            retrieval_settings=retrieval_settings,
+            context_limit_reached_strategy=context_limit_reached_strategy,
+            new_found_evidence_ids=new_found_evidence_ids,
+            retrieval_tool_only=retrieval_tool_only,
+            llm_budget=llm_budget,
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            messages=messages,
+            action=action,
+            query=query,
+            state=state,
+        )
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        current_inputs = self._pre_handle(inputs, session, context)
+        action_start_time = current_inputs.get("action_start_time")
+        config = current_inputs.get("config")
+        config["log_dir"] = session.get_global_state("log_dir")
+        llm_config = current_inputs.get("llm_config")
+        validate_new_states = current_inputs.get("validate_new_states")
+        validate_answer = current_inputs.get("validate_answer")
+        retrieval_settings = current_inputs.get("retrieval_settings")
+        context_limit_reached_strategy = current_inputs.get("context_limit_reached_strategy", "fail")
+        new_found_evidence_ids = current_inputs.get("new_found_evidence_ids")
+        retrieval_tool_only = current_inputs.get("retrieval_tool_only")
+        llm_budget = current_inputs.get("llm_budget")
+        total_input_tokens = current_inputs.get("total_input_tokens", 0)
+        total_output_tokens = current_inputs.get("total_output_tokens", 0)
+        messages = current_inputs.get("messages")
+        action = current_inputs.get("action")
+        query = current_inputs.get("query")
+        state = current_inputs.get("state")
+
+        session.update_global_state({"action_start_time": action_start_time})
+        session.update_global_state({"config": config})
+
+        if llm_budget <= 0:
+            error_message = "Error: Exceeded number of llm calls"
+            logger.warning(
+                "[RunActionNode] max_llm_calls_per_run exhausted — terminating " "(remaining=%s, configured limit=%s)",
+                llm_budget,
+                config.get("max_llm_calls_per_run"),
+            )
+            _save_result(
+                config,
+                action,
+                {
+                    "question": query,
+                    "messages": messages,
+                    "termination": error_message,
+                    "time_taken": time.time() - action_start_time,
+                },
+                time.time() - action_start_time,
+            )
+            messages.append({"role": "user", "content": error_message})
+            algorithm_output = dict(next_node=NodeId.END_NODE.value, messages=messages, error=error_message)
+            return self._post_handle(inputs, algorithm_output, session, context)
+        elif llm_budget <= 3:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "You are running low on remaining LLM calls. "
+                        "In your next output you MUST provide either a final <answer> or a <state> patch. "
+                        "Do NOT output an <answer> patch unless you have gather enough information to satify all the "
+                        "constraints of the variable."
+                        "Do NOT make any more tool calls. "
+                        "If you decide on outputing a state patch, first describe any promising avenues "
+                        "you would still like to explore and why. "
+                        "Follow up with the <state> patch, where for each variable, add any relevant findings "
+                        "you have made so far to its discovered_clues list."
+                    ),
+                }
+            )
+        llm_budget -= 1
+        session.update_global_state({"max_llm_calls_per_run": llm_budget})
+        session.update_global_state({"tool_call": {}, "pending_tool_calls": []})
+
+        try:
+            algorithm_output = await run_action(
+                RunActionConfig(
+                    llm_config=llm_config["general"],
+                    config=config,
+                    action=action,
+                    state=state,
+                    query=query,
+                    messages=messages,
+                    new_found_evidence_ids=new_found_evidence_ids,
+                    validate_new_states=validate_new_states,
+                    validate_answer=validate_answer,
+                    action_start_time=action_start_time,
+                    retrieval_tool_only=retrieval_tool_only,
+                    retrieval_settings=retrieval_settings,
+                    context_limit_reached_strategy=context_limit_reached_strategy,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                )
+            )
+            if algorithm_output.get("success"):
+                logger.info("[RunActionNode] run_run_action success")
+                return self._post_handle(inputs, algorithm_output, session, context)
+            if algorithm_output.get("try_again"):
+                logger.warning(
+                    "[RunActionNode] context limit hit – retrying | %s",
+                    format_action_for_log(action),
+                )
+                # Apply whichever state updates the strategy produced.
+                # reduced_retrieval_request: carries updated config + retrieval_settings.
+                if "config" in algorithm_output:
+                    session.update_global_state(
+                        {
+                            "config": algorithm_output["config"],
+                            "retrieval_settings": algorithm_output["retrieval_settings"],
+                            "new_found_evidence_ids": [],
+                            "messages": [],
+                        }
+                    )
+                # delete_tool_responses / delete_tool_input_and_responses: carries cleaned messages.
+                if "messages" in algorithm_output and "config" not in algorithm_output:
+                    session.update_global_state({"messages": algorithm_output["messages"]})
+                return self._post_handle(
+                    inputs,
+                    dict(next_node=NodeId.RUN_ACTION.value, success=True),
+                    session,
+                    context,
+                )
+            err_msg = algorithm_output.get("error", "")
+            messages_for_save = list(algorithm_output.get("messages", []))
+            messages_for_save.append({"role": "user", "content": f"Error: {err_msg}"})
+            _save_result(
+                config,
+                action,
+                {
+                    "question": query,
+                    "messages": messages_for_save,
+                    "termination": f"Error: {err_msg}",
+                    "time_taken": time.time() - action_start_time,
+                },
+                time.time() - action_start_time,
+            )
+            return self._post_handle(inputs, algorithm_output, session, context)
+        except Exception as e:
+            logger.error(
+                "[RunActionNode] exception (fallback to end): %s",
+                "*" if LogManager.is_sensitive() else e,
+                exc_info=not LogManager.is_sensitive(),
+            )
+            algorithm_output = dict(
+                success=False,
+                next_node=NodeId.END_NODE.value,
+                error=f"RunActionNode exception: {e!s}",
+            )
+            return self._post_handle(inputs, algorithm_output, session, context)
+
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        if not algorithm_output.get("success", False):
+            next_node = algorithm_output.get("next_node", NodeId.END_NODE.value)
+            return dict(next_node=next_node)
+
+        if "next_node" in algorithm_output:
+            return dict(next_node=algorithm_output.get("next_node"))
+
+        mode = algorithm_output.get("mode")
+        data = algorithm_output.get("data")
+        config = algorithm_output.get("config")
+        total_input_tokens = algorithm_output.get("total_input_tokens", 0)
+        total_output_tokens = algorithm_output.get("total_output_tokens", 0)
+        validate_new_states = algorithm_output.get("validate_new_states")
+        validate_answer = algorithm_output.get("validate_answer")
+
+        session.update_global_state({"config": config})
+        session.update_global_state(
+            {
+                "total_input_tokens": total_input_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+        )
+
+        if isinstance(data, dict):
+            _log_data = (
+                "***"
+                if LogManager.is_sensitive()
+                else {
+                    "tool_calls": data.get("tool_calls", []),
+                    "new_states": data.get("new_states", {}),
+                    "answer": data.get("answer", {}),
+                }
+            )
+            logger.info(
+                "[RunActionNode] parsed LLM result JSON! %s %s",
+                mode,
+                _log_data,
+            )
+        else:
+            logger.info(
+                "[RunActionNode] parsed LLM result JSON! %s %s",
+                mode,
+                "***" if LogManager.is_sensitive() else data,
+            )
+
+        if isinstance(data, Result):
+            session.update_global_state({"result": data})
+            session.update_global_state({"messages": data.messages})
+            if "answer" in mode:
+                if validate_answer:
+                    return dict(next_node=NodeId.VALIDATE_NEW_STATE.value)
+                else:
+                    return dict(next_node=NodeId.END_NODE.value)
+            if "state" in mode:
+                if validate_new_states:
+                    return dict(next_node=NodeId.VALIDATE_NEW_STATE.value)
+                else:
+                    return dict(next_node=NodeId.END_NODE.value)
+
+        messages = data.get("messages", [])
+        session.update_global_state({"messages": messages})
+
+        if mode is None:
+            return dict(next_node=NodeId.RUN_ACTION.value)
+        elif isinstance(data, dict):
+            if "tool_calls" in data:
+                tcalls = data.get("tool_calls") or []
+                session.update_global_state({"pending_tool_calls": tcalls})
+                return dict(next_node=NodeId.TOOL.value)
+            else:
+                return dict(next_node=NodeId.RUN_ACTION.value)
+        else:
+            return dict(next_node=NodeId.RUN_ACTION.value)
+
+
+class ToolNode(BaseNode):
+    """
+    工具调用节点
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        logger.info("[ToolNode] Start ToolNode.")
+        config = session.get_global_state("config") or {}
+        retrieval_settings = session.get_global_state("retrieval_settings") or config.get("retrieval_settings", {})
+        tool_map = session.get_global_state("tool_map") or {}
+        new_found_evidence_ids = session.get_global_state("new_found_evidence_ids") or []
+        action = session.get_global_state("action") or {}
+
+        pending = session.get_global_state("pending_tool_calls") or []
+        tool_calls_queue: list = list(pending) if pending else []
+        if not tool_calls_queue:
+            legacy = session.get_global_state("tool_call") or {}
+            if legacy:
+                tool_calls_queue = [legacy]
+
+        messages = session.get_global_state("messages") or []
+
+        logger.info(
+            "[ToolNode] executing %d tool call(s): %s",
+            len(tool_calls_queue),
+            "***" if LogManager.is_sensitive() else tool_calls_queue,
+        )
+
+        return dict(
+            config=config,
+            retrieval_settings=retrieval_settings,
+            tool_map=tool_map,
+            new_found_evidence_ids=new_found_evidence_ids,
+            action=action,
+            tool_calls_queue=tool_calls_queue,
+            messages=messages,
+        )
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        current_inputs = self._pre_handle(inputs, session, context)
+        config = current_inputs.get("config")
+        retrieval_settings = current_inputs.get("retrieval_settings")
+        tool_map = current_inputs.get("tool_map")
+        new_found_evidence_ids = list(current_inputs.get("new_found_evidence_ids") or [])
+        action = current_inputs.get("action")
+        tool_calls_queue = current_inputs.get("tool_calls_queue") or []
+        messages = list(current_inputs.get("messages") or [])
+
+        if not tool_calls_queue:
+            logger.warning("[ToolNode] no tool calls in queue; returning to RunAction")
+            session.update_global_state(
+                {
+                    "messages": messages,
+                    "tool_call": {},
+                    "tool_call_id": "",
+                    "pending_tool_calls": [],
+                }
+            )
+            return dict(next_node=NodeId.RUN_ACTION.value)
+
+        for tc in tool_calls_queue:
+            tool_name = tc.get("name") or ""
+            tool_args = dict(tc.get("arguments") or {})
+            tool_call_id = tc.get("tool_call_id") or ""
+            try:
+                tool_result, new_found_evidence_ids = await execute_tool(
+                    ExecuteToolConfig(
+                        tool_map=tool_map,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        config=config,
+                        retrieval_settings=retrieval_settings,
+                        action=action,
+                        new_found_evidence_ids=new_found_evidence_ids,
+                    )
+                )
+                if "retrieve" in tool_name.lower():
+                    logger.info(
+                        "[ToolNode] retrieved evidence ids: %s",
+                        "***" if LogManager.is_sensitive() else new_found_evidence_ids,
+                    )
+                logger.info(
+                    "[ToolNode] tool result (%s): %s",
+                    tool_name,
+                    "***" if LogManager.is_sensitive() else tool_result,
+                )
+                content = format_tool_result_for_message(tool_result)
+            except CustomValueException as e:
+                error_msg = str(e)
+                if "Available tools:" not in error_msg:
+                    available_tools = list(tool_map.keys())
+                    friendly_tool_names = []
+                    if "web_search" in available_tools:
+                        friendly_tool_names.append("search")
+                    if "web_fetch" in available_tools:
+                        friendly_tool_names.append("fetch")
+                    if "retrieve" in available_tools:
+                        friendly_tool_names.append("retrieve")
+                    if friendly_tool_names:
+                        error_msg += f" Available tools: {', '.join(friendly_tool_names)}."
+                logger.warning(
+                    "[ToolNode] %s",
+                    "*" if LogManager.is_sensitive() else error_msg,
+                )
+                content = error_msg
+            except Exception as e:
+                error_msg = f"Tool execution error: {str(e)}"
+                logger.error(
+                    "[ToolNode] %s (fallback: continue to RunAction with error in messages)",
+                    "*" if LogManager.is_sensitive() else error_msg,
+                    exc_info=not LogManager.is_sensitive(),
+                )
+                content = error_msg
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "content": content,
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                }
+            )
+
+        algorithm_output = dict(
+            messages=messages,
+            new_found_evidence_ids=new_found_evidence_ids,
+        )
+        return self._post_handle(inputs, algorithm_output, session, context)
+
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        messages = algorithm_output.get("messages", [])
+        new_found_evidence_ids = algorithm_output.get("new_found_evidence_ids", [])
+
+        session.update_global_state(
+            {
+                "messages": messages,
+                "tool_call": {},
+                "tool_call_id": "",
+                "pending_tool_calls": [],
+            }
+        )
+        if new_found_evidence_ids:
+            session.update_global_state({"new_found_evidence_ids": new_found_evidence_ids})
+
+        logger.info("[ToolNode] End ToolNode.")
+        return dict(next_node=NodeId.RUN_ACTION.value)
+
+
+class ValidateNewStateNode(BaseNode):
+    """
+    验证新状态节点
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        logger.info("[ValidateNewStateNode] Start ValidateNewStateNode.")
+        config = session.get_global_state("config") or {}
+        validator_config = config.get("validator_agent", {})
+        total_input_tokens = session.get_global_state("total_input_tokens") or 0
+        total_output_tokens = session.get_global_state("total_output_tokens") or 0
+        result = session.get_global_state("result") or {}
+        new_states = result.new_states if isinstance(result, Result) else result.get("new_states", [])
+        action = session.get_global_state("action") or {}
+        query = action.get("question", "") if action else ""
+        new_found_evidence_ids = session.get_global_state("new_found_evidence_ids") or []
+        answer = result.found_answer if isinstance(result, Result) else result.get("found_answer", None)
+        messages = session.get_global_state("messages") or []
+        mode = "answer" if answer is not None else "state"
+
+        return dict(
+            config=config,
+            validator_config=validator_config,
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            new_states=new_states,
+            action=action,
+            query=query,
+            new_found_evidence_ids=new_found_evidence_ids,
+            answer=answer,
+            messages=messages,
+            mode=mode,
+        )
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        session_context.set(session)
+        current_inputs = self._pre_handle(inputs, session, context)
+        config = current_inputs.get("config", {})
+        validator_config = current_inputs.get("validator_config")
+        validator_model_name = validator_config.get("llm_config", {}).get("general", {}).get("model_name", None)
+        total_input_tokens = current_inputs.get("total_input_tokens", 0)
+        total_output_tokens = current_inputs.get("total_output_tokens", 0)
+        new_states = current_inputs.get("new_states", [])
+        query = current_inputs.get("query")
+        new_found_evidence_ids = current_inputs.get("new_found_evidence_ids", [])
+        answer = current_inputs.get("answer")
+        messages = current_inputs.get("messages", [])
+        mode = current_inputs.get("mode")
+        action = current_inputs.get("action")
+
+        passed_merged_states: List[State] = []
+        all_merged_states: List[State] = []
+
+        try:
+            validation_results = await run_validations(new_states, validator_model_name, query)
+            for (
+                new_state,
+                verify_results,
+                input_tokens,
+                output_tokens,
+            ) in validation_results:
+                logger.info(
+                    "[ValidateNewStateNode] validating new state: %s",
+                    "***" if LogManager.is_sensitive() else new_state,
+                )
+                total_input_tokens += input_tokens
+                total_output_tokens += output_tokens
+
+                answer_validation = ValidationResult.passed
+                state_verification = ValidationResult.passed
+
+                if verify_results:
+                    logger.info(
+                        "[ValidateNewStateNode] verify results: %s",
+                        "***" if LogManager.is_sensitive() else verify_results,
+                    )
+                    labels = [(r.candidate_verified_clues.overall or "") for r in verify_results]
+                    new_state.verify_result = verify_results
+                    if mode == "answer":
+                        if ValidationResult.failed in labels:
+                            answer_validation = ValidationResult.failed
+                        elif ValidationResult.pending in labels:
+                            answer_validation = ValidationResult.pending
+
+                        if answer_validation == ValidationResult.passed:
+                            result_to_save = Result(
+                                messages=messages,
+                                new_states=[new_state],
+                                found_answer=answer,
+                                retrieved_evidence_ids=new_found_evidence_ids
+                                + action.get("state", {}).get("retrieved_evidence_ids", []),
+                                previous_action_id=action.get("id", ""),
+                            )
+                            time_taken = time.time() - session.get_global_state("action_start_time")
+                            config = _save_result(config, action, result_to_save, time_taken)
+                            algorithm_output = dict(
+                                next_node=NodeId.END_NODE.value,
+                                result_to_save=result_to_save,
+                                config=config,
+                                total_input_tokens=total_input_tokens,
+                                total_output_tokens=total_output_tokens,
+                                success=True,
+                            )
+                            return self._post_handle(inputs, algorithm_output, session, context)
+                        else:
+                            error_message = (
+                                "Error: After verifying the answer, the answer is still not valid. Verified results: "
+                                + new_state.str_to_verify_result()
+                            )
+                            logger.info(f"[ValidateNewStateNode] Answer patch error: {error_message}")
+                            messages.append({"role": "user", "content": error_message})
+                            algorithm_output = dict(
+                                next_node=NodeId.RUN_ACTION.value,
+                                messages=messages,
+                                total_input_tokens=total_input_tokens,
+                                total_output_tokens=total_output_tokens,
+                                success=False,
+                            )
+                            return self._post_handle(inputs, algorithm_output, session, context)
+
+                    else:
+                        if ValidationResult.failed in labels:
+                            answer_validation = ValidationResult.failed
+
+                        if state_verification == ValidationResult.passed:
+                            passed_merged_states.append(new_state)
+
+                        all_merged_states.append(new_state)
+            if passed_merged_states or len(all_merged_states) == 0:
+                logger.info(
+                    f"[ValidateNewStateNode] Passed merged states: %s",
+                    "***" if LogManager.is_sensitive() else passed_merged_states,
+                )
+                result_to_save = Result(
+                    messages=messages,
+                    new_states=passed_merged_states,
+                    found_answer=None,
+                    retrieved_evidence_ids=new_found_evidence_ids
+                    + action.get("state", {}).get("retrieved_evidence_ids", []),
+                    previous_action_id=action.get("id", ""),
+                )
+                time_taken = time.time() - session.get_global_state("action_start_time")
+                updated_config = _save_result(config, action, result_to_save, time_taken)
+                algorithm_output = dict(
+                    next_node=NodeId.END_NODE.value,
+                    result_to_save=result_to_save,
+                    config=updated_config,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    success=True,
+                )
+            else:
+                error_message = (
+                    "Error: After verifying the states, the states are still not valid. Verified results: "
+                    + "\n".join([state.str_to_verify_result() for state in all_merged_states])
+                )
+                logger.info(
+                    "[ValidateNewStateNode] New state patch error: %s",
+                    "***" if LogManager.is_sensitive() else error_message,
+                )
+                messages.append({"role": "user", "content": error_message})
+                algorithm_output = dict(
+                    next_node=NodeId.RUN_ACTION.value,
+                    messages=messages,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    success=False,
+                )
+
+            result = self._post_handle(inputs, algorithm_output, session, context)
+            return result
+        except Exception as e:
+            logger.error(
+                "[ValidateNewStateNode] exception (fallback to end): %s",
+                "*" if LogManager.is_sensitive() else e,
+                exc_info=not LogManager.is_sensitive(),
+            )
+            algorithm_output = dict(
+                next_node=NodeId.END_NODE.value,
+                success=False,
+                total_input_tokens=total_input_tokens,
+                total_output_tokens=total_output_tokens,
+                error=f"ValidateNewStateNode exception: {e!s}",
+            )
+            return self._post_handle(inputs, algorithm_output, session, context)
+
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
+        next_node = algorithm_output.get("next_node", NodeId.END_NODE.value)
+        total_input_tokens = algorithm_output.get("total_input_tokens", 0)
+        total_output_tokens = algorithm_output.get("total_output_tokens", 0)
+
+        session.update_global_state(
+            {
+                "total_input_tokens": total_input_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+        )
+
+        if algorithm_output.get("success"):
+            result_to_save = algorithm_output.get("result_to_save")
+            config = algorithm_output.get("config")
+            if result_to_save:
+                session.update_global_state({"result": result_to_save, "config": config})
+                logger.info(
+                    "[ValidateNewStateNode] result to save: %s",
+                    "***" if LogManager.is_sensitive() else result_to_save,
+                )
+        else:
+            messages = algorithm_output.get("messages", [])
+            session.update_global_state({"result": {}, "messages": messages})
+            err_content = messages[-1].get("content", "") if messages else ""
+            logger.info(
+                "[ValidateNewStateNode] error message: %s",
+                "***" if LogManager.is_sensitive() else err_content,
+            )
+        logger.info("[ValidateNewStateNode] End ValidateNewStateNode.")
+        return dict(next_node=next_node)

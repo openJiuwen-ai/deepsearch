@@ -12,6 +12,15 @@ Unless the feedback explicitly requires major restructuring, avoid regenerating 
 
 ---
 
+# Pre-search Results
+
+The following web search results were obtained from a preliminary search on the user's query. Use these results to better 
+understand the context and refine the outline more accurately:
+
+{{ entry_search_results }}
+
+---
+
 # Research Problem
 
 {{ questions }}
