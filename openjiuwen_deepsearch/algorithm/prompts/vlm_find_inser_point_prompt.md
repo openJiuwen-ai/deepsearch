@@ -103,9 +103,6 @@ Return a JSON array. Each element is a chart dict:
     "collection_tasks": ["string", ...],
     "placeholder_index": integer
   },
-  {
-    "NO CHART"
-  },
   ...
 ]
 ```
