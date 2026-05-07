@@ -16,7 +16,7 @@ Builds the execution-method → Agent class map:
 
 - `"parallel"` → `DeepresearchAgent`
 - `dependency_driving` → `DeepresearchDependencyAgent`
-- `search` → `DeepsearchAgent`  # **search mode not supported yet**
+- `search` → `DeepSearchAgent` (see [`deepsearch_agent`](./deepsearch_agent.md))
 
 **Example**:
 
@@ -37,7 +37,10 @@ Validates config and returns the matching Agent instance.
 - **agent_config** (dict): Passed through `validate_agent_required_field` and `AgentConfig.model_validate`.
 
 **Returns**:
-- `DeepresearchAgent` for parallel execution (default).
+- `DeepresearchAgent` when `search_mode` is `"research"` and `execution_method` is `"parallel"` (default).
+- `DeepresearchDependencyAgent` when `search_mode` is `"research"` and `execution_method` is `dependency_driving`.
+- `DeepSearchAgent` when `search_mode` is `"search"`.
+- `SimpleReactSearchAgent` when `search_mode` is `"react"`.
 
 **Raises**:
 - `CustomValueException` on validation failure or unknown execution method.
@@ -66,4 +69,13 @@ DeepresearchAgent
 >>> agent = factory.create_agent(agent_config)
 >>> print(type(agent).__name__)
 DeepresearchDependencyAgent
+
+>>> # Example 3: search (DeepSearchAgent)
+>>> agent_config = {
+...     "llm_config": {"model_name": "gpt-4", "model_type": "openai"},
+...     "search_mode": "search",
+... }
+>>> agent = factory.create_agent(agent_config)
+>>> print(type(agent).__name__)
+DeepSearchAgent
 ```

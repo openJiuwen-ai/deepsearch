@@ -725,6 +725,27 @@ class TestProcessLocalSearchCommon:
             assert records[1]["content"] == "Document content 1"
             assert records[1]["score"] == 0.92
 
+    def test_process_local_search_common_prefers_title_over_document_name(self):
+        """确保本地搜索记录来源标题优先使用 title 字段"""
+        tool_content = [
+            {
+                "knowledge_base_id": "kb_001",
+                "file_id": "file_003",
+                "title": "Readable Source Title",
+                "document_name": "doc_id_like_name_003",
+                "content": "Document content 3",
+                "score": 0.77,
+            }
+        ]
+
+        tool_result, agent_input = process_local_search_common(self.agent_input, tool_content)
+
+        assert len(tool_result) == 1
+        records = agent_input["local_text_search_record"]
+        assert len(records) == 2
+        assert records[1]["title"] == "Readable Source Title"
+        assert records[1]["url"] == "localdataset://result//kb_001//file_003"
+
     def test_process_local_search_common_exception_during_processing(self):
         """测试处理过程中出现异常的情况"""
         tool_content = [

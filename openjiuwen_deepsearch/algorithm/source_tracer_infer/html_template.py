@@ -1,7 +1,49 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
-# # 添加点击事件处理脚本
+# # 添加点击事件处理脚本和布局重置功能
 CLICK_SCRIPT = """
+// 保存初始布局快照
+var initialPositions = null;
+
+function saveInitialLayout() {
+    initialPositions = {};
+    var positions = network.getPositions();
+    for (var nodeId in positions) {
+        initialPositions[nodeId] = {
+            x: positions[nodeId].x,
+            y: positions[nodeId].y
+        };
+    }
+    // 保存后立即禁用物理引擎和层级布局，防止后续自动调整
+    network.setOptions({
+        physics: { enabled: false },
+        layout: { hierarchical: { enabled: false } }
+    });
+}
+
+function resetLayout() {
+    if (initialPositions) {
+        // 使用moveNode方法恢复每个节点的位置
+        for (var nodeId in initialPositions) {
+            network.moveNode(
+                parseInt(nodeId),
+                initialPositions[nodeId].x,
+                initialPositions[nodeId].y
+            );
+        }
+        // 禁用物理引擎和层级布局以保持位置
+        network.setOptions({
+            physics: { enabled: false },
+            layout: { hierarchical: { enabled: false } }
+        });
+    }
+}
+
+// 页面加载后保存初始布局（等待物理引擎稳定）
+setTimeout(function() {
+    saveInitialLayout();
+}, 3000);  // 等待布局完全稳定
+
 // 节点点击事件处理
 network.on("click", function(params) {
     if (params.nodes.length > 0) {
@@ -14,7 +56,8 @@ network.on("click", function(params) {
             return false; // 阻止默认行为
         }
     }
-});"""
+});
+"""
 
 # 图例样式和内容
 LEGEND_FORMAT = """
@@ -137,6 +180,23 @@ LEGEND_FORMAT = """
             float: left;
             overflow: hidden;
         }
+
+    .reset-button {
+        margin-top: 8px;
+        padding: 6px 12px;
+        background-color: #4a90d9;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: clamp(11px, calc(0.7vw + 0.7vh + 4px), 14px);
+        width: 100%;
+        transition: background-color 0.2s;
+    }
+
+    .reset-button:hover {
+        background-color: #357abd;
+    }
 """
 LEGEND_CONENT = """
 <div class="legend">
@@ -156,5 +216,6 @@ LEGEND_CONENT = """
         <div class="color-box" style="background-color: {final_conclusion_node_color};"></div>
         <span>{final_conclusion_node_name}</span>
     </div>
+    <button id="resetBtn" onclick="resetLayout()" class="reset-button">{reset_button_text}</button>
 </div>
 """

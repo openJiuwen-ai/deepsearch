@@ -51,6 +51,14 @@ Dependency-driven variant when `execution_method="dependency_driving"`. Same `ru
 
 ---
 
+## `DeepSearchAgent`
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent()
+```
+Search-mode agent when `search_mode="search"`: action-space search with parallel `state_creation` workers, `search_fetch` or `retrieve` tools, and a single JSON chunk from `run`. Full API: [`deepsearch_agent`](./deepsearch_agent.md).
+
+---
+
 ## `validate_generate_template_params` / `validate_run_params`
 Validate inputs for `generate_template` / `run`.
 

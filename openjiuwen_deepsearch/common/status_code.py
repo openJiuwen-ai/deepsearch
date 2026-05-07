@@ -51,21 +51,21 @@ class StatusCode(Enum):
     PARAM_CHECK_ERROR_INDEX_OUT_OF_RANGE = (200007, "content index {content_idx} is out of range for contents.")
     PARAM_CHECK_ERROR_INDEX_OUT_OF_RANGE_GENERIC = (200008, "Parameter validation failed: index out of range (generic)")
     PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR = (200009, "Parameter validation failed, {e}")
-    PARAM_CHECK_ERROR_FIELD_NOT_STRING = (200010, "Parameter validation failed, type of feild '{field}' must be str")
+    PARAM_CHECK_ERROR_FIELD_NOT_STRING = (200010, "Parameter validation failed, type of field '{field}' must be str")
     PARAM_CHECK_ERROR_FIELD_EMPTY = (
-        200011, "Parameter validation failed, type of feild '{field}' must not be empty")
+        200011, "Parameter validation failed, type of field '{field}' must not be empty")
     PARAM_CHECK_ERROR_INTERRUPT_FEEDBACK_ERROR = (
         200012, "Parameter 'interrupt_feedback' must be either an empty string or 'accepted' or 'cancel'.")
     PARAM_CHECK_ERROR_COMMON_INVALID = (200013, "Parameter {param} is invalid")
     PARAM_CHECK_ERROR_PARAM_NOT_IN_RANGE = (200014, "Parameter {param} must be one of {param_range}")
-    PARAM_CHECK_ERROR_FIELD_NOT_EXIST = (200015, "Parameter validation failed, feild '{field}' not exsit in dict")
+    PARAM_CHECK_ERROR_FIELD_NOT_EXIST = (200015, "Parameter validation failed, field '{field}' does not exist in dict")
     PARAM_CHECK_ERROR_SUFFIX_INVALID = (
         200016, "Unsupported {file_type} file type: {suffix}, allowed: {allowed_suffix}")
     PARAM_CHECK_ERROR_TEMPLATE_NAME_REQUIRED = (200017, "Template name is required.")
     PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR_NO_PRINT = (200018, "Parameter validation failed")
     PARAM_CHECK_ERROR_FIELD_NOT_BYTEARRAY = (
-        200019, "Parameter validation failed, type of feild '{field}' must be bytearray")
-    PARAM_CHECK_ERROR_FIELD_NOT_BOOL = (200020, "Parameter validation failed, type of feild '{field}' must be bool")
+        200019, "Parameter validation failed, type of field '{field}' must be bytearray")
+    PARAM_CHECK_ERROR_FIELD_NOT_BOOL = (200020, "Parameter validation failed, type of field '{field}' must be bool")
     PARAM_CHECK_ERROR_URL_EXCEED_LENGTH = (200021, "URL length must be less than 8192")
     PARAM_CHECK_ERROR_LOG_DIR_INVALID = (200022, "Invalid log directory: {log_dir}")
     PARAM_CHECK_ERROR_LOG_DIR_UNSAFE = (200023, "Unsafe log directory: {log_dir}, it must be within: {safe_base}")
@@ -91,7 +91,7 @@ class StatusCode(Enum):
     AGENT_RUN_NOT_SUPPORT = (211001, "Agent run is not supported")
 
     WORKFLOW_ROUTER_INIT_TYPE_ERROR = (211100, "next_nodes must be either str or list[str]")
-    WORKFLOW_TYPE_NOT_EXIST_ERROR = (211101, "Workflow doesn't exsit, config is {config}")
+    WORKFLOW_TYPE_NOT_EXIST_ERROR = (211101, "Workflow doesn't exist, config is {config}")
     WORKFLOW_CONTROLLER_ADAPTER_NOT_INIT = (211102, "WorkflowControllerAdapter not initialized (init() not called)")
     WORKFLOW_CONTROLLER_NOT_CONFIGURED = (211103, "WorkflowController not configured (setup_from_agent not called)")
     WORKFLOW_NOT_FOUND_IN_RESOURCE = (211104, "Workflow not found in resource_mgr: {workflow_key} (tag={tag})")

@@ -15,8 +15,8 @@ __init__()
 初始化工厂并构建执行方式到 Agent 类的映射：
 
 - `"parallel"` → `DeepresearchAgent`
-- `dependency_driving` -> `DeepresearchDependencyAgent`
-- `search` -> `DeepsearchAgent`  # **当前暂不支持search模式**
+- `dependency_driving` → `DeepresearchDependencyAgent`
+- `search` → `DeepSearchAgent`（详见 [`deepsearch_agent`](./deepsearch_agent.md)）
 
 **样例**：
 
@@ -37,7 +37,10 @@ create_agent(agent_config: dict)
 - **agent_config**(dict)：Agent配置字典。会经过 `validate_agent_required_field` 与 `AgentConfig.model_validate` 校验。
 
 **返回**：
-- `DeepresearchAgent`：并行执行（默认）
+- `DeepresearchAgent`：`search_mode` 为 `"research"` 且 `execution_method` 为 `"parallel"`（默认）
+- `DeepresearchDependencyAgent`：`search_mode` 为 `"research"` 且 `execution_method` 为 `dependency_driving`
+- `DeepSearchAgent`：`search_mode` 为 `"search"`
+- `SimpleReactSearchAgent`：`search_mode` 为 `"react"`
 
 **异常**：
 - `CustomValueException`：入参校验失败或 execution agent 没找到时抛出。
@@ -66,4 +69,13 @@ DeepresearchAgent
 >>> agent = factory.create_agent(agent_config)
 >>> print(type(agent).__name__)
 DeepresearchDependencyAgent
+
+>>> # 样例3：search（DeepSearchAgent）
+>>> agent_config = {
+...     "llm_config": {"model_name": "gpt-4", "model_type": "openai"},
+...     "search_mode": "search",
+... }
+>>> agent = factory.create_agent(agent_config)
+>>> print(type(agent).__name__)
+DeepSearchAgent
 ```

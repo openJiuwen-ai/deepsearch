@@ -87,10 +87,10 @@ On Windows 10 2004+ (build 19041+) or Windows 11, run:
 
   ```
   # x86_64
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.4
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
 
   # ARM64
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.4
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.5
   ```
 
 ### 2. Start DeepSearch (x86_64 example)
@@ -104,7 +104,7 @@ Minimal run with SQLite:
     -e TOOL_SSL_VERIFY=False \
     -e EMBEDDING_SSL_VERIFY=False \ 
     -e DB_TYPE=sqlite \ 
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.4
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
   ```
 
 Success looks like:
@@ -174,7 +174,7 @@ Use `-e` for DB settings.
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.4
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
   ```
 
 ##### SQLite parameters (when `DB_TYPE=sqlite`)
@@ -236,7 +236,7 @@ For distributed (Redis) deploys, knowledge-base files must go to shared object s
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.4
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
 
   # Single-node production (persistence)
   docker run -p 8000:8000 \
@@ -252,7 +252,7 @@ For distributed (Redis) deploys, knowledge-base files must go to shared object s
     -e CHECKPOINTER_TYPE=persistence \
     -e CHECKPOINTER_DB_TYPE=sqlite \
     -e CHECKPOINTER_DB_PATH=data/databases/checkpointer.db \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.4
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
 
   # Distributed production (Redis)
   docker run -p 8000:8000 \
@@ -275,7 +275,7 @@ For distributed (Redis) deploys, knowledge-base files must go to shared object s
     -e OBS_BUCKET=your-bucket \
     -e OBS_ACCESS_KEY_ID=your_access_key \
     -e OBS_SECRET_ACCESS_KEY=your_secret_key \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.4
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
   ```
 
 **Notes**:

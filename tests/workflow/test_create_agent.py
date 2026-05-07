@@ -78,9 +78,9 @@ def test_agent_factory_create_different_agent():
 
 
 @pytest.mark.parametrize("invalid_value, error_code, error_msg_fragment", [
-    ("execute_mode", 200015, "feild 'execute_mode' not exsit in dict"),
-    ("llm_config", 200015, "feild 'llm_config' not exsit in dict"),
-    ("info_collector_search_method", 200015, "feild 'info_collector_search_method' not exsit in dict"),
+    ("execute_mode", 200015, "field 'execute_mode' does not exist in dict"),
+    ("llm_config", 200015, "field 'llm_config' does not exist in dict"),
+    ("info_collector_search_method", 200015, "field 'info_collector_search_method' does not exist in dict"),
 ])
 def test_agent_factory_agent_require_field(invalid_value, error_code, error_msg_fragment):
     with pytest.raises(CustomValueException) as exc_info:

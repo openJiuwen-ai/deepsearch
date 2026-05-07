@@ -63,6 +63,8 @@ If score < 100 → output specific, code-actionable suggestion(s)
 | Text border violation | Any text is outside the chart frame (axes spines) or is cut off at figure boundaries | -15 |
 | Text size | Any text is smaller than ~10pt equivalent, appearing tiny or compressed | -15 |
 | X-axis alignment | X-axis tick labels are not center-aligned under their data points | -15 |
+| Data value duplication | Same data value appears multiple times in different formats (e.g., value labels on bars AND separate data table; annotations AND legend entries with same values; bar labels AND axis ticks showing identical values) | -15 |
+| Redundant annotations | Data point annotations repeat information already clearly shown by axis scale or legend (e.g., labeling every bar with its exact value when axis already provides precise scale) | -15 |
 
 ### P2 — Layout & Structure (Medium: -10 points each)
 
@@ -115,6 +117,8 @@ Your suggestion is a direct instruction to a code generator. It MUST be:
 | Legend-color mismatch | Build explicit `{category: color}` mapping and pass to both plotting and legend |
 | Crowded layout | Increase `figsize`, adjust `plt.subplots_adjust()`, or simplify labels |
 | Large blank gap | Reposition annotations closer to chart using `ax.annotate()` or `ax.text()` with coordinates near chart body |
+| Data value duplication | Remove redundant value display: if bar labels (`ax.bar(..., label=True)` or `ax.text()`) show values, remove duplicate annotations or data tables; if axis already shows precise scale, remove `ax.bar_label()`; keep ONE primary method for showing values |
+| Redundant annotations | For simple charts with clear axis scale, remove `ax.bar_label()` or `for i, v in enumerate(values): ax.text(i, v, str(v))`; keep annotations only for highlighting specific important points (max/min/inflection) |
 
 ---
 

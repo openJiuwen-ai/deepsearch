@@ -105,6 +105,14 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchDepe
 
 ---
 
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent()
+```
+当 **`search_mode="search"`** 时使用的 DeepSearch 图 Agent：动作空间检索、并行执行 **`state_creation`** 子图、工具映射 **`search_fetch`** 或 **`retrieve`**，**`run`** 通常 **`yield`** 一条 JSON 结果。完整说明见 [`deepsearch_agent`](./deepsearch_agent.md)。
+
+---
+
 ## function validate_generate_template_params
 ```python
 validate_generate_template_params(file_name: str, file_stream: str, is_template: bool)

@@ -22,11 +22,6 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 
 logger = logging.getLogger(__name__)
 
-# 占位符格式模板
-PLACEHOLDER_TEMPLATE = "@import:{chart_name}+figure_{id}"
-# 占位符正则匹配
-PLACEHOLDER_PATTERN = re.compile(r"@import:([^}]+)\+figure_(\d+)")
-
 
 class FigurePlaceholderGenerator:
     """图表占位符生成器"""
@@ -66,7 +61,6 @@ class FigurePlaceholderGenerator:
         
         """
         try:
-            # report_content_rm = self._remove_source_tracer_tag(report_content)
             report_content_rm = self._remove_table(report_content)
             sections = self._split_report_by_h1(report_content_rm)
             gen_chart_tasks = await self.generate_chart_tasks(sections)
@@ -76,13 +70,6 @@ class FigurePlaceholderGenerator:
             raise CustomValueException(StatusCode.CHART_PLACEHOLDER_ERROR.code,
                                       StatusCode.CHART_PLACEHOLDER_ERROR.errmsg.format(e=error_msg)) from e
         return gen_chart_tasks
-
-    @staticmethod
-    def _remove_source_tracer_tag(report_content: str) -> str:
-        """移除报告中的溯源信息"""
-        # 匹配 [source_tracer_result][text](url) 格式，支持嵌套括号
-        pattern = r"\[source_tracer_result\]\[[^\]]*(?:\[[^\]]*\][^\]]*)?\]\([^\)]*\)"
-        return re.sub(pattern, "", report_content)
 
     @staticmethod
     def _remove_table(report_content: str) -> str:
@@ -305,7 +292,7 @@ class FigurePlaceholderGenerator:
         section_title = section["title"]
         section_content = section["content"]
 
-        f"""图表修改： 这一步首先将section按照换行符划分成段，将段序列输入llm识别需要添加图表的段, 
+        """图表修改： 这一步首先将section按照换行符划分成段，将段序列输入llm识别需要添加图表的段, 
         输出与段个数和顺序对应的json sheama：[图表描述/图表类型/数据收集任务集]，如果不生成图表则返回空占位序列"""
         section_with_anchor, sub_anchor_msg = self._position_anchor(section_content)
 
@@ -351,14 +338,15 @@ class FigurePlaceholderGenerator:
         gen_chart_tasks = []
         try:
             for res in response:
-                if "NO CHART" not in res.get("description", "NO CHART"):
-                    res["context"] = section.get("content", "")
-                    res["section_index"] = section.get("index", -1)
-                    placeholder_index = res.get("placeholder_index", -1)
-                    if placeholder_index == -1 or placeholder_index not in sub_anchor_msg:
-                        continue
-                    res["anchor_match_para"] = sub_anchor_msg[placeholder_index]
-                    gen_chart_tasks.append(res)
+                if not isinstance(res, dict) or "NO CHART" in res:
+                    continue
+                res["context"] = section.get("content", "")
+                res["section_index"] = section.get("index", -1)
+                placeholder_index = res.get("placeholder_index", -1)
+                if placeholder_index == -1 or placeholder_index not in sub_anchor_msg:
+                    continue
+                res["anchor_match_para"] = sub_anchor_msg[placeholder_index]
+                gen_chart_tasks.append(res)
         except Exception as e:
             logger.error(f"[CHART GENERATION] Error parsing LLM response: {e}")
             return []

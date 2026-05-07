@@ -247,10 +247,15 @@ def process_local_search_common(agent_input: dict, tool_content: Any) -> (list, 
         for item in tool_result:
             knowledge_base_id = item.get("knowledge_base_id", "")
             file_id = item.get("file_id", "")
+            source_title = (
+                item.get("title")
+                or item.get("document_name")
+                or file_id
+            )
             result = {
                 "type": "text",
                 "url": f"localdataset://result//{knowledge_base_id}//{file_id}",
-                "title": item.get("document_name", "")[:MAX_SEARCH_CONTENT_LENGTH],
+                "title": str(source_title)[:MAX_SEARCH_CONTENT_LENGTH],
                 "content": item.get("content", "")[:MAX_SEARCH_CONTENT_LENGTH],
                 "score": item.get("score", 0.0)
             }

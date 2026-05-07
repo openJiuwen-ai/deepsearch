@@ -27,7 +27,7 @@ from openjiuwen_deepsearch.algorithm.chart_generation.data_collector import (
 from openjiuwen_deepsearch.algorithm.chart_generation.chart_generator import (
     ChartGenerator,
 )
-from openjiuwen_deepsearch.algorithm.chart_generation.inser_chart import (
+from openjiuwen_deepsearch.algorithm.chart_generation.insert_chart import (
     InsertChartNode,
 )
 
@@ -62,7 +62,7 @@ class VLMChartGenerator:
                                                vlm_max_iterations=vlm_max_iterations, 
                                                output_dir=self._output_dir
                                                )
-        self._inser_chart_node = InsertChartNode(self._output_dir)
+        self._insert_chart_node = InsertChartNode(self._output_dir)
         
     def _check_input(self, report_content: str, 
                      all_classified_contents: List[Dict[str, Any]],
@@ -126,7 +126,7 @@ class VLMChartGenerator:
                 json.dumps(chart_insert_tasks, ensure_ascii=False, indent=2))
             logger.info(f"{self._log_prefix} Finish Generation of chart.")
             # 插入图表
-            modified_report, new_source_trace_datas = self._inser_chart_node.run(self._report_content, 
+            modified_report, new_source_trace_datas = self._insert_chart_node.run(self._report_content, 
                                                          chart_insert_tasks, 
                                                          self._source_trace_datas)
             logger.debug("%s The modified report: \n%s", self._log_prefix, modified_report)

@@ -27,5 +27,6 @@
     - [main_nodes](./4.开发指南/API文档/main_nodes.md)
     - [report_convert](./4.开发指南/API文档/report_convert.md)
     - [search_context](./4.开发指南/API文档/search_context.md)
+    - [deepsearch_agent](./4.开发指南/API文档/deepsearch_agent.md)
     - [workflow](./4.开发指南/API文档/workflow.md)
 - [5.FAQ](./5.FAQ/README.md)

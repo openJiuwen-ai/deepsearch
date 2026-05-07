@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Use __file__ for robust path resolution in SDK mode
 FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "kt_font.ttf")
 # 并发控制：限制同时执行的沙箱子进程数量，避免内存耗尽和进程阻塞
-MAX_CONCURRENT_CHART_TASKS = 3
+MAX_CONCURRENT_CHART_TASKS = 5
 
 CHART_THRESHOLD = 85
 
@@ -250,13 +250,15 @@ class ChartGenerator:
                 return {"chart_base64": chart_base64, "score": 0}
 
             # ---------- Part 2: VLM评估反馈（可选） ----------
-            for _ in range(self._vlm_max_iterations):
+            iterate = 0
+            while iterate <= self._vlm_max_iterations:
                 suggestion_and_score = await self._vlm_iterate(
                     chart_base64, gen_chart_input, suggestion_list
                 )
                 
                 score = suggestion_and_score.get("score", 0)
                 suggestions = suggestion_and_score.get("suggestion", "")
+                iterate += 1
                 
                 if score >= self._chart_threshold:
                     logger.info(f"Chart generated successfully: {figure_id},"
@@ -267,7 +269,14 @@ class ChartGenerator:
                     del suggestion_list
                     del result
                     return {"chart_base64": final_base64, "score": score}
+                elif iterate > self._vlm_max_iterations:
+                    # 达到最大迭代优化次数，图分数没有达到输出阈值，返回空
+                    logger.debug("Chart generated fail: %s, chart title: %s, score: %s",
+                                 figure_id, chart_title, score)
+                    return {}
                 else:
+                    logger.debug("Chart optimization suggestions: %s, chart title: %s, suggestions: %s",
+                                 figure_id, chart_title, suggestions)
                     suggestion_list.append(suggestions)
 
                     gen_chart_input["history_messages"] = {

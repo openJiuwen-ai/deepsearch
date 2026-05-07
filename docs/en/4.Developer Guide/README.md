@@ -9,7 +9,7 @@ This chapter is for contributors and integrators: repository layout, main entry 
 - [openJiuwen DeepSearch Developer Guide](./openJiuwen%20DeepSearch%20Developer%20Guide/README.md)
   - Config initialization, agent creation, report generation, templates, HITL, and post-report local editing.
 - [API Reference](./API%20Reference/agent_factory.md)
-  - `agent_factory`, `workflow`, `main_nodes`, `base_node`, `search_context`, `config`, `report_convert`.
+  - `agent_factory`, `workflow`, `deepsearch_agent`, `main_nodes`, `base_node`, `search_context`, `config`, `report_convert`.
 
 ## Suggested reading order
 
