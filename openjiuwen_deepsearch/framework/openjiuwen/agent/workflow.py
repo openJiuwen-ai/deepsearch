@@ -31,6 +31,7 @@ from openjiuwen_deepsearch.algorithm.search_agent.deepsearch_agent import (
     parse_and_validate_init_state_result,
     parse_and_validate_state_creation_result,
 )
+from openjiuwen_deepsearch.algorithm.search_nodes.utils import anonymize_config_for_logging
 from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import _run_llm_via_ainvoke
 from openjiuwen_deepsearch.algorithm.search_nodes.run_action import (
     _parse_one_native_tool_call,
@@ -48,7 +49,7 @@ from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     to_dict_safe,
     to_json_safe,
 )
-from openjiuwen_deepsearch.algorithm.search_tools.retriever_tool import RetrieveBrowsecompPlus
+from openjiuwen_deepsearch.algorithm.search_tools.retriever_tool import RetrieveTool
 from openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool import WebFetch
 from openjiuwen_deepsearch.algorithm.search_tools.web_search_tool import WebSearch
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions import (
@@ -58,9 +59,11 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import (
     AgentConfig,
+    Config,
     CustomLocalSearchConfig,
     CustomWebSearchConfig,
     LocalSearchEngineConfig,
+    MilvusConfig,
     PerQuestionParams,
     SearchWorkflowConfig,
     WebSearchEngineConfig,
@@ -74,6 +77,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     DependencyOutlineInteractionNode,
     DependencyOutlineNode,
     EndNode,
+    IntentRecognitionNode,
     EntryNode,
     FeedbackHandlerNode,
     FindActionSpaceNode,
@@ -112,7 +116,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     is_workflow_llm_usage_empty,
     pop_workflow_llm_usage,
 )
-from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
+from openjiuwen_deepsearch.utils.common_utils.security_utils import ensure_safe_directory, zero_secret
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
     MessageType,
     StreamEvent,
@@ -123,6 +127,7 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
     session_context,
+    tool_context,
     web_search_context,
 )
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
@@ -130,16 +135,41 @@ from openjiuwen_deepsearch.utils.log_utils.log_interface import record_interface
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.log_utils.log_metrics import TIME_LOGGER_TAG, metrics_logger
 from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_limiter
+from openjiuwen_deepsearch.utils.run_telemetry import emit, emit_messages_updated
 from openjiuwen_deepsearch.utils.validation_utils.field_validation import (
     validate_agent_required_field,
-    validate_vlm_chart_generator_field,
 )
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import (
     validate_generate_template_params,
     validate_run_agent_params,
 )
 
+
+def _build_retrieve_tool(milvus_cfg: MilvusConfig) -> RetrieveTool:
+    kwargs = {}
+    if milvus_cfg.retriever_class is not None:
+        kwargs["retriever_class"] = milvus_cfg.retriever_class
+    return RetrieveTool(
+        {
+            "milvus_host": milvus_cfg.milvus_host,
+            "milvus_port": milvus_cfg.milvus_port,
+            "database_name": milvus_cfg.database_name,
+            "collection_name": milvus_cfg.collection_name,
+            "embedder_model_name": milvus_cfg.embedder_model_name,
+            "embedder_api_key": milvus_cfg.embedder_api_key,
+            "embedder_base_url": milvus_cfg.embedder_base_url,
+            "embedder_timeout": milvus_cfg.embedder_timeout,
+        },
+        **kwargs,
+    )
+
+
 logger = logging.getLogger(__name__)
+
+
+def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
+    """Build a redacted copy of agent_config for workflow logging boundaries."""
+    return anonymize_config_for_logging(copy.deepcopy(to_dict_safe(agent_config)))
 
 
 class BaseAgent:
@@ -191,7 +221,6 @@ class BaseAgent:
         try:
             validate_generate_template_params(file_name, file_stream, is_template)
             validate_agent_required_field(agent_config)
-            validate_vlm_chart_generator_field(agent_config)
             result = await TemplateGenerator.generate_template(
                 file_name=file_name, file_stream=file_stream, is_template=is_template, agent_config=agent_config
             )
@@ -468,6 +497,7 @@ class DeepresearchAgent(BaseAgent):
         final_result_info = {}
         filter_dup_flag = False
         stream_query, is_report_feedback = self._prepare_stream_query(message, interrupt_feedback)
+        workflow_agent_config = _redact_agent_config_for_workflow_inputs(session_agent_config)
 
         async for chunk in Runner.run_agent_streaming(
             agent=self.agent,
@@ -478,7 +508,7 @@ class DeepresearchAgent(BaseAgent):
                 "report_template": decoded_template,
                 "interrupt_feedback": interrupt_feedback,
                 "resume_interaction": is_report_feedback,
-                "agent_config": session_agent_config,
+                "agent_config": workflow_agent_config,
             },
         ):
             if getattr(chunk, "type", "") == "__interaction__":
@@ -524,7 +554,6 @@ class DeepresearchAgent(BaseAgent):
         """
         validate_run_agent_params(message, conversation_id, report_template, interrupt_feedback)
         validate_agent_required_field(agent_config)
-        validate_vlm_chart_generator_field(agent_config)
 
         start_time = time.time()
         llm_token = None
@@ -666,6 +695,7 @@ class DeepresearchAgent(BaseAgent):
             start_comp_id=NodeId.START.value, component=StartNode(), inputs_schema=self.startnode_input_schema
         )
         # 主图节点
+        flow.add_workflow_comp(NodeId.INTENT_RECOGNITION.value, IntentRecognitionNode())
         flow.add_workflow_comp(NodeId.ENTRY.value, EntryNode())
         flow.add_workflow_comp(NodeId.GENERATE_QUESTIONS.value, GenerateQuestionsNode())
         flow.add_workflow_comp(NodeId.FEEDBACK_HANDLER.value, FeedbackHandlerNode())
@@ -681,11 +711,14 @@ class DeepresearchAgent(BaseAgent):
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
-        flow.add_connection(NodeId.START.value, NodeId.ENTRY.value)
+        flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
 
         # 添加条件边
         entry_router = init_router(
             NodeId.ENTRY.value, [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value]
+        )
+        intent_recognition_router = init_router(
+            NodeId.INTENT_RECOGNITION.value, NodeId.ENTRY.value
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -702,6 +735,7 @@ class DeepresearchAgent(BaseAgent):
         user_feedback_processor_router = init_router(
             NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
         )
+        flow.add_conditional_connection(NodeId.INTENT_RECOGNITION.value, router=intent_recognition_router)
         flow.add_conditional_connection(NodeId.ENTRY.value, router=entry_router)
         flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
         flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
@@ -826,6 +860,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
             start_comp_id=NodeId.START.value, component=StartNode(), inputs_schema=self.startnode_input_schema
         )
         # 添加node
+        flow.add_workflow_comp(NodeId.INTENT_RECOGNITION.value, IntentRecognitionNode())
         flow.add_workflow_comp(NodeId.ENTRY.value, EntryNode())
         flow.add_workflow_comp(NodeId.GENERATE_QUESTIONS.value, GenerateQuestionsNode())
         flow.add_workflow_comp(NodeId.FEEDBACK_HANDLER.value, FeedbackHandlerNode())
@@ -841,11 +876,14 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边 add_connection
-        flow.add_connection(NodeId.START.value, NodeId.ENTRY.value)
+        flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
 
         # 添加条件边
         entry_router = init_router(
             NodeId.ENTRY.value, [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value]
+        )
+        intent_recognition_router = init_router(
+            NodeId.INTENT_RECOGNITION.value, NodeId.ENTRY.value
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -866,6 +904,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         user_feedback_processor_router = init_router(
             NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
         )
+        flow.add_conditional_connection(NodeId.INTENT_RECOGNITION.value, router=intent_recognition_router)
         flow.add_conditional_connection(NodeId.ENTRY.value, router=entry_router)
         flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
         flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
@@ -912,6 +951,24 @@ class DeepSearchAgent(BaseAgent):
 
         self.action_pool.log_dir = self.log_dir
 
+    def _subworkflow_context_inputs(self, workflow_name: str) -> dict[str, Any]:
+        """Build per-run config inputs for DeepSearch sub-workflows.
+
+        Sub-workflows are globally registered with fixed IDs, so runtime inputs must
+        carry the active request config to avoid stale model settings across runs.
+        """
+        agent_config = to_dict_safe(self.agent_config)
+        search_config = to_dict_safe(self.search_config)
+        if not isinstance(agent_config, dict):
+            agent_config = {}
+        if not isinstance(search_config, dict):
+            search_config = Config().service_config.search_workflow.model_dump()
+        return {
+            "workflow_name": workflow_name,
+            "agent_config": agent_config,
+            "search_config": search_config,
+        }
+
     def _build_init_state_workflow(self) -> Workflow:
         card = WorkflowCard(id="init_state", version="1", name="init_state")
         wf = Workflow(card=card)
@@ -921,7 +978,6 @@ class DeepSearchAgent(BaseAgent):
             component=SearchStartNode(),
             inputs_schema={
                 "workflow_name": "init_state_workflow",
-                "agent_config": to_dict_safe(self.agent_config),
             },
         )
 
@@ -941,7 +997,6 @@ class DeepSearchAgent(BaseAgent):
             component=SearchStartNode(),
             inputs_schema={
                 "workflow_name": "find_action_workflow",
-                "agent_config": to_dict_safe(self.agent_config),
             },
         )
 
@@ -959,7 +1014,7 @@ class DeepSearchAgent(BaseAgent):
         wf.set_start_comp(
             start_comp_id=NodeId.START_NODE.value,
             component=SearchStartNode(),
-            inputs_schema={"workflow_name": "state_creation_workflow", "agent_config": to_dict_safe(self.agent_config)},
+            inputs_schema={"workflow_name": "state_creation_workflow"},
         )
 
         wf.add_workflow_comp(NodeId.TOOL.value, ToolNode())
@@ -1018,7 +1073,6 @@ class DeepSearchAgent(BaseAgent):
                 description="state_creation",
                 input_params={
                     "action": Action,
-                    "tool_map": dict,
                     "log_dir": str,
                     "fail_count": int,
                     "retrieval_tool_only": bool,
@@ -1044,7 +1098,6 @@ class DeepSearchAgent(BaseAgent):
             workflow_description="state_creation",
             input_schema={
                 "action": Action,
-                "tool_map": dict,
                 "log_dir": str,
                 "fail_count": int,
                 "retrieval_tool_only": bool,
@@ -1089,8 +1142,8 @@ class DeepSearchAgent(BaseAgent):
             return await Runner.run_workflow(
                 workflow="state_creation_1",
                 inputs={
+                    **self._subworkflow_context_inputs("state_creation_workflow"),
                     "action": to_dict_safe(action),
-                    "tool_map": self.tool_map,
                     "retrieval_tool_only": "retrieve" in self.tool_map,
                     "total_input_tokens": self.total_input_tokens,
                     "total_output_tokens": self.total_output_tokens,
@@ -1113,6 +1166,7 @@ class DeepSearchAgent(BaseAgent):
             init_result: WorkflowOutput = await Runner.run_workflow(
                 workflow="init_state_1",
                 inputs={
+                    **self._subworkflow_context_inputs("init_state_workflow"),
                     "query": self.query,
                     "total_input_tokens": 0,
                     "total_output_tokens": 0,
@@ -1139,6 +1193,7 @@ class DeepSearchAgent(BaseAgent):
         actions_result: WorkflowOutput = await Runner.run_workflow(
             workflow="find_action_1",
             inputs={
+                **self._subworkflow_context_inputs("find_action_workflow"),
                 "state": init_state,
                 "query": self.query,
                 "result": None,
@@ -1250,6 +1305,7 @@ class DeepSearchAgent(BaseAgent):
                 actions_result = await Runner.run_workflow(
                     workflow="find_action_1",
                     inputs={
+                        **self._subworkflow_context_inputs("find_action_workflow"),
                         "state": init_state,
                         "query": self.query,
                         "result": retry_result,
@@ -1282,7 +1338,7 @@ class DeepSearchAgent(BaseAgent):
                 self.total_output_tokens += state_result.get("total_output_tokens", 0)
 
                 result: Result | None = state_result.get("result")
-                config = state_result.get("config", {})
+                config = anonymize_config_for_logging(state_result.get("config", {}))
                 self.fail_count += config.get("fail_count", self.fail_count)
 
                 self.action_pool.record_completed(completed_action, result)
@@ -1357,6 +1413,7 @@ class DeepSearchAgent(BaseAgent):
                         new_actions_result: WorkflowOutput = await Runner.run_workflow(
                             workflow="find_action_1",
                             inputs={
+                                **self._subworkflow_context_inputs("find_action_workflow"),
                                 "state": new_state,
                                 "query": self.query,
                                 "result": result,
@@ -1474,16 +1531,26 @@ class DeepSearchAgent(BaseAgent):
         """
         validate_run_agent_params(message, conversation_id, report_template, interrupt_feedback)
 
-        agent_config_for_model = copy.deepcopy(agent_config)
+        if not isinstance(agent_config, dict):
+            raise CustomValueException(
+                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
+                    e="agent_config must be a dict",
+                ),
+            )
+        # Shallow copy of the top-level mapping only; avoid ``copy.deepcopy`` on the raw dict
+        # so nested values that are not copyable (e.g. locks) cannot break the run entry path.
+        agent_config_for_model = dict(agent_config)
         service_config: Optional[dict] = agent_config_for_model.pop("service_config", None)
         gold_answer: str | None = agent_config_for_model.pop("gold_answer", None)
 
         validate_agent_required_field(agent_config_for_model)
 
         llm_token = None
+        tool_token = None
         try:
             session_agent_config = AgentConfig.model_validate(agent_config_for_model)
-            self.agent_config = copy.deepcopy(session_agent_config)
+            self.agent_config = session_agent_config.model_copy(deep=True)
             self.setup_log_directory(f"result_{conversation_id}")
             logger.info(f"[DeepSearchAgent] agent_config: {self.agent_config}")
 
@@ -1515,7 +1582,6 @@ class DeepSearchAgent(BaseAgent):
             for _, llm_config in llm_configs.items():
                 llm_obj = create_llm_obj(llm_config)
                 all_llms[llm_config.model_name] = llm_obj
-
             general_cfg = llm_configs[LlmConfigCategory.GENERAL.value]
             init_llm_map = self.search_config.init_state_agent.llm_config
             init_llm = init_llm_map.get("general") if init_llm_map else None
@@ -1541,20 +1607,7 @@ class DeepSearchAgent(BaseAgent):
                 zero_secret(self.agent_config.serper_api_key)
             elif self.per_question_params.tool_map == "retrieve":
                 milvus_cfg = self.agent_config.search_workflow_milvus_config
-                tool_class.append(
-                    RetrieveBrowsecompPlus(
-                        {
-                            "milvus_host": milvus_cfg.milvus_host,
-                            "milvus_port": milvus_cfg.milvus_port,
-                            "database_name": milvus_cfg.database_name,
-                            "collection_name": milvus_cfg.collection_name,
-                            "embedder_model_name": milvus_cfg.embedder_model_name,
-                            "embedder_api_key": milvus_cfg.embedder_api_key,
-                            "embedder_base_url": milvus_cfg.embedder_base_url,
-                            "embedder_timeout": milvus_cfg.embedder_timeout,
-                        }
-                    )
-                )
+                tool_class.append(_build_retrieve_tool(milvus_cfg))
                 zero_secret(milvus_cfg.embedder_api_key)
             else:
                 raise CustomValueException(
@@ -1565,6 +1618,7 @@ class DeepSearchAgent(BaseAgent):
                 )
 
             self.tool_map = {tool.name: tool for tool in tool_class}
+            tool_token = tool_context.set(self.tool_map)
             self.query = message
             self.gold_answer = gold_answer
             self._build_agent()
@@ -1579,6 +1633,8 @@ class DeepSearchAgent(BaseAgent):
         finally:
             if llm_token is not None:
                 llm_context.reset(llm_token)
+            if tool_token is not None:
+                tool_context.reset(tool_token)
 
 
 class SimpleReactSearchAgent(BaseAgent):
@@ -1608,7 +1664,8 @@ class SimpleReactSearchAgent(BaseAgent):
             message, conversation_id, report_template, interrupt_feedback
         )
         validate_agent_required_field(agent_config)
-        session_agent_config = copy.deepcopy(AgentConfig.model_validate(agent_config))
+        _parsed_agent_cfg = AgentConfig.model_validate(agent_config)
+        session_agent_config = _parsed_agent_cfg.model_copy(deep=True)
         try:
             search_config = SearchWorkflowConfig.model_validate(
                 (service_config or {}).get("search_workflow", {})
@@ -1622,7 +1679,7 @@ class SimpleReactSearchAgent(BaseAgent):
                 error_code=StatusCode.LLM_CONFIG_NONE.code,
                 message=StatusCode.LLM_CONFIG_NONE.errmsg,
             )
-        llm_registry = {general.model_name: create_llm_obj(copy.deepcopy(general))}
+        llm_registry = {general.model_name: create_llm_obj(general.model_copy(deep=True))}
 
         llm_token = llm_context.set(llm_registry)
         try:
@@ -1638,20 +1695,7 @@ class SimpleReactSearchAgent(BaseAgent):
                 zero_secret(session_agent_config.serper_api_key)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
-                tool_class = [
-                    RetrieveBrowsecompPlus(
-                        {
-                            "milvus_host": milvus_cfg.milvus_host,
-                            "milvus_port": milvus_cfg.milvus_port,
-                            "database_name": milvus_cfg.database_name,
-                            "collection_name": milvus_cfg.collection_name,
-                            "embedder_model_name": milvus_cfg.embedder_model_name,
-                            "embedder_api_key": milvus_cfg.embedder_api_key,
-                            "embedder_base_url": milvus_cfg.embedder_base_url,
-                            "embedder_timeout": milvus_cfg.embedder_timeout,
-                        }
-                    )
-                ]
+                tool_class = [_build_retrieve_tool(milvus_cfg)]
                 zero_secret(milvus_cfg.embedder_api_key)
             else:
                 raise CustomValueException(
@@ -1670,14 +1714,31 @@ class SimpleReactSearchAgent(BaseAgent):
             tool_exec_config_base = dict(sc_dict)
 
             base_log_dir = LogManager.get_log_dir() or "./output/logs"
-            log_dir = os.path.join(base_log_dir, f"result_{conversation_id}")
-            os.makedirs(log_dir, exist_ok=True)
+            log_dir = ensure_safe_directory(
+                os.path.join(base_log_dir, f"result_{conversation_id}"),
+                base_log_dir,
+            )
+
+            emit(
+                "react_run_started",
+                {
+                    "conversation_id": conversation_id,
+                    "tool_map": {k: v.__class__.__name__ for k, v in tool_map.items()},
+                    "model_name": general.model_name,
+                    "log_dir": "***" if LogManager.is_sensitive() else log_dir,
+                },
+                source="workflow.SimpleReactSearchAgent",
+                action_id=None,
+            )
 
             max_steps = 1000
-            # _run_llm_via_ainvoke reads top-level model_name; agent_config nests it under llm_config.
+            # Only pass fields read by _run_llm_via_ainvoke — never the full agent_config (API keys, URLs).
             llm_invoke_cfg = {
-                **agent_config,
                 "model_name": general.model_name,
+                "max_tries": getattr(general, "max_tries", 4),
+                "append_think_tags_to_messages": getattr(
+                    general, "append_think_tags_to_messages", False
+                ),
             }
 
             messages: list[dict[str, Any]] = [
@@ -1717,6 +1778,30 @@ class SimpleReactSearchAgent(BaseAgent):
                 else:
                     resp_content = raw if isinstance(raw, str) else str(raw)
                     tool_calls = []
+
+                n_tools = len(tool_calls) if isinstance(tool_calls, list) else 0
+                tool_names: list[str] = []
+                if isinstance(tool_calls, list) and not LogManager.is_sensitive():
+                    for tc in tool_calls:
+                        if not isinstance(tc, dict):
+                            continue
+                        nm = tc.get("name") or (
+                            (tc.get("function") or {}).get("name") if isinstance(tc.get("function"), dict) else None
+                        )
+                        if nm:
+                            tool_names.append(str(nm))
+                emit(
+                    "react_llm_turn",
+                    {
+                        "conversation_id": conversation_id,
+                        "step": _step,
+                        "tool_call_count": n_tools,
+                        "tool_names": tool_names[:16],
+                        "finished_after_turn": n_tools == 0,
+                    },
+                    source="workflow.SimpleReactSearchAgent",
+                    action_id=None,
+                )
 
                 if not tool_calls:
                     prediction = (resp_content or "").strip() or None
@@ -1787,6 +1872,17 @@ class SimpleReactSearchAgent(BaseAgent):
                         }
                     )
 
+
+            emit_messages_updated(
+                source="workflow.SimpleReactSearchAgent",
+                messages=messages,
+                action_id=None,
+                extra={
+                    "conversation_id": conversation_id,
+                    "phase": "final",
+                    "agent": "simple_react_search",
+                },
+            )
 
             result = _save_and_return_search_final_result(
                 SaveSearchFinalResultConfig(

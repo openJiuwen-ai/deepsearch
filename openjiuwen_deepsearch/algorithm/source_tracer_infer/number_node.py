@@ -85,6 +85,8 @@ class NumberNode:
     @staticmethod
     def replace_index_with_url(index: int, search_records: List[Dict]) -> Tuple[str, str]:
         """将引用索引替换为对应 URL 与展示文本。"""
+        if index < 0 or index >= len(search_records):
+            raise ValueError("[SOURCE TRACER INFER] The index of search_records is out of range.")
         record = search_records[index]
         return record.get("title", ""), record.get("url", "")
 

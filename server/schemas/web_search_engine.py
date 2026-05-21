@@ -15,7 +15,7 @@ class WebSearchEngineCreateRequestDTO(WebSearchEngineBasicRequestDTO):
     model_config = ConfigDict(from_attributes=True)
     search_engine_name: str = Field(..., min_length=1, max_length=255, description="联网增强引擎名称")
     search_api_key: str = Field(..., min_length=1, max_length=255, description="联网增强引擎访问api_key")
-    search_url: str = Field(..., min_length=1, max_length=255, description="联网增强引擎url")
+    search_url: str = Field(default="", max_length=255, description="联网增强引擎url")
     extension: dict | None = Field(default=None, description="联网增强引擎扩展配置")
     is_active: bool | None = Field(default=None, description="联网增强引擎是否激活")
 
@@ -41,7 +41,7 @@ class WebSearchEngineUpdateRequestDTO(WebSearchEngineBasicRequestDTO):
     web_search_engine_id: int = Field(..., description="联网增强引擎id")
     search_engine_name: str | None = Field(default=None, min_length=1, max_length=255, description="联网增强引擎名称")
     search_api_key: str | None = Field(default=None, min_length=1, max_length=255, description="联网增强引擎访问api_key")
-    search_url: str | None = Field(default=None, min_length=1, max_length=255, description="联网增强引擎url")
+    search_url: str | None = Field(default=None, max_length=255, description="联网增强引擎url")
     extension: dict | None = Field(default=None, description="联网增强引擎扩展配置")
     is_active: bool | None = Field(default=None, description="联网增强引擎是否激活")
 
@@ -67,7 +67,7 @@ class WebSearchEngineCreateRes(BasicResponseDTO):
 class WebSearchEngineGetRes(BasicResponseDTO):
     '''获取指定联网增强引擎'''
     search_engine_name: str = Field(..., min_length=1, max_length=255, description="联网增强引擎名称")
-    search_url: str = Field(..., min_length=1, max_length=255, description="联网增强引擎url")
+    search_url: str = Field(default="", max_length=255, description="联网增强引擎url")
     extension: dict | None = Field(default=None, description="联网增强引擎扩展配置")
     is_active: bool | None = Field(default=None, description="联网增强引擎是否激活")
 
@@ -75,7 +75,7 @@ class WebSearchEngineGetRes(BasicResponseDTO):
 class WebSearchEngineDetail(BasicResponseDTO):
     '''获取指定联网增强引擎详细信息'''
     search_engine_name: str = Field(..., min_length=1, max_length=255, description="联网增强引擎名称")
-    search_url: str = Field(..., min_length=1, max_length=255, description="联网增强引擎url")
+    search_url: str = Field(default="", max_length=255, description="联网增强引擎url")
     search_api_key: str = Field(..., min_length=1, max_length=255, description="联网增强引擎访问api_key")
     extension: dict | None = Field(default=None, description="联网增强引擎扩展配置")
     is_active: bool | None = Field(default=None, description="联网增强引擎是否激活")
@@ -85,7 +85,7 @@ class WebSearchEngineItem(BaseModel):
     '''联网增强引擎条目'''
     model_config = ConfigDict(from_attributes=True)
     search_engine_name: str = Field(..., min_length=1, max_length=255, description="联网增强引擎名称")
-    search_url: str = Field(..., min_length=1, max_length=255, description="联网增强引擎url")
+    search_url: str = Field(default="", max_length=255, description="联网增强引擎url")
     web_search_engine_id: int = Field(..., description="联网增强引擎id")
     create_time: str = Field(..., min_length=1, max_length=255, description="模板创建时间")
     extension: dict | None = Field(default=None, description="联网增强引擎扩展配置")

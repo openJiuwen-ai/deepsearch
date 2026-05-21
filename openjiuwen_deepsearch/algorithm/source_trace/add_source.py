@@ -6,6 +6,7 @@ import re
 from typing import List, Dict, Any, Tuple
 
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_and_sanitize_url
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +294,8 @@ def _merge_source_infos(ref_infos: List[Dict[str, Any]]) -> str:
         ref_info["title"] = title
         origin_url = ref_info.get("url", "")
         url = _escape_html_special_chars(origin_url)
+        # 验证URL scheme，只允许http/https
+        url = validate_and_sanitize_url(url)
         ref_info["url"] = url
 
         # 根据标题和URL构建引用信息

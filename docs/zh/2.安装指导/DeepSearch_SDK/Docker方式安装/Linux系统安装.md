@@ -72,10 +72,10 @@
 
   ```
   # 下载 x86_64 架构版本包：
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
   
   # 下载 ARM64 架构版本包：
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.5
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.6
   ```
 
 * **本地构建镜像**：若无法拉取 SWR 或需与仓库源码一致，在 DeepSearch **源码根目录**执行  
@@ -93,7 +93,7 @@
     -e TOOL_SSL_VERIFY=False \
     -e EMBEDDING_SSL_VERIFY=False \ 
     -e DB_TYPE=sqlite \ 
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
   ```
 
   当出现如下信息时，表示服务已成功启动：
@@ -164,7 +164,7 @@
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
   ```
 
   ##### SQLite 相关参数（`DB_TYPE=sqlite` 时生效）
@@ -234,8 +234,8 @@
   **镜像说明**：
 
   - **官方镜像**：从华为云 SWR 拉取，启动命令最后一行使用已 `docker pull` 的完整镜像名，例如  
-    `swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.5`（ARM64）或  
-    `swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.5`（x86_64）。拉取失败多为网络或权限问题，可检查代理、镜像加速或改用本地构建。
+    `swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.6`（ARM64）或  
+    `swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6`（x86_64）。拉取失败多为网络或权限问题，可检查代理、镜像加速或改用本地构建。
   - **本地构建 `deepsearch-full`**：在 DeepSearch **源码仓库根目录**执行  
     `docker build -t deepsearch-full -f docker/Dockerfile .`  
     其中 `deepsearch-full` 仅为示例标签（`-t` 可改为任意名称）。

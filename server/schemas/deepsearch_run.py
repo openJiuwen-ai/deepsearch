@@ -3,7 +3,16 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 from typing import Literal, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from openjiuwen_deepsearch.utils.validation_utils.param_validation import (
+    SAFE_CONVERSATION_ID_PATTERN,
+)
+
+_CONVERSATION_ID_SCHEMA_ERR = (
+    "conversation_id must be 1–128 characters and use only ASCII letters, digits, "
+    "underscore, or hyphen (^[A-Za-z0-9_-]{1,128}$)."
+)
 
 
 class WebSearchConfig(BaseModel):
@@ -95,3 +104,10 @@ class DeepSearchRequest(BaseModel):
     vlm_chart_generator_enable: bool = Field(default=False, description="vlm迭代生成图开关")
     vlm_chart_generator_max_iterations: int = Field(default=1, ge=0, le=3, description="vlm迭代生成图最大迭代次数，0表示不进行迭代")
     agent_llm_timeouts: dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
+
+    @field_validator("conversation_id")
+    @classmethod
+    def _validate_conversation_id_chars(cls, v: str) -> str:
+        if not SAFE_CONVERSATION_ID_PATTERN.fullmatch(v):
+            raise ValueError(_CONVERSATION_ID_SCHEMA_ERR)
+        return v

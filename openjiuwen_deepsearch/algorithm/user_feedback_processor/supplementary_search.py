@@ -4,7 +4,11 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.user_feedback_processor.common import (
+    UserFeedbackPromptInvoker,
+    resolve_model_context_collector as _resolve_model_context_collector,
+    resolve_session_collector as _resolve_session_collector,
+)
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.report_edit_utils import (
     strip_markup_in_range,
 )
@@ -16,9 +20,8 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_
     CollectorRunPlanConfig,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, Step, StepType
-from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, model_context, session_context
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
@@ -35,35 +38,40 @@ class SupplementaryRewriteContext:
     language: str = "zh-CN"
 
 
-def _resolve_session_collector():
-    """从上下文变量中获取当前会话对象。
-
-    Returns:
-        Session | None: 当前会话对象；当上下文中尚未注入 session 时返回 ``None``。
-    """
-    try:
-        return session_context.get()
-    except LookupError:
-        return None
-
-
-def _resolve_model_context_collector():
-    """从上下文变量中获取当前模型上下文对象。
-
-    Returns:
-        ModelContext | None: 当前模型上下文；当上下文中尚未注入时返回 ``None``。
-    """
-    try:
-        return model_context.get()
-    except LookupError:
-        return None
-
-
-class SupplementarySearcher:
+class SupplementarySearcher(UserFeedbackPromptInvoker):
     """先按选区/章节触发信息采集，再基于检索结果改写报告（补充搜索）。"""
 
     def __init__(self, llm_model_name: str):
         self.llm_model_name = llm_model_name
+
+    @staticmethod
+    def _restore_original_section_separator(
+        rewritten_section: str,
+        original_section_text: str,
+        trailing_content: str,
+    ) -> str:
+        """Restore the original section separator before trailing content.
+
+        当 ``selected_and_related`` 改写整段 section 时，原 section 末尾通常包含与下一标题
+        之间的一个或多个换行。LLM 输出经 ``strip()`` 后可能丢失这些分隔符，导致后续标题
+        直接拼接到段落末尾。本方法仅在后方仍有内容时，将原 section 末尾的连续换行原样补回。
+
+        Args:
+            rewritten_section: LLM 返回的改写 section 文本。
+            original_section_text: 原 section 去标记后的完整文本，用于提取末尾换行。
+            trailing_content: 原报告中位于 section 之后、待重新拼接的尾部内容。
+
+        Returns:
+            str: 经过边界换行修正后的 section 文本。
+        """
+        if not trailing_content:
+            return rewritten_section
+
+        match = re.search(r"(\n+)$", original_section_text)
+        if match:
+            normalized_section = rewritten_section.rstrip("\n")
+            return f"{normalized_section}{match.group(1)}"
+        return rewritten_section
 
     async def supplementary_search(
         self,
@@ -172,8 +180,14 @@ class SupplementarySearcher:
 
         # 获取原始选区文本用于返回
         original_sel = report_content[feedback["start_offset"]:feedback["end_offset"]]
-        logger.debug("[SupplementarySearcher] original_text: %s", original_sel)
-        logger.debug("[SupplementarySearcher] rewritten_text: %s", rewritten_selected)
+        logger.debug(
+            "[SupplementarySearcher] original_len=%s, rewritten_len=%s",
+            len(original_sel),
+            len(rewritten_selected),
+        )
+        if not LogManager.is_sensitive():
+            logger.debug("[SupplementarySearcher] original_text: %s", original_sel)
+            logger.debug("[SupplementarySearcher] rewritten_text: %s", rewritten_selected)
         return {
             "new_report": new_report,
             "original_text": original_sel,
@@ -431,52 +445,3 @@ class SupplementarySearcher:
             AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_AND_RELATED.value,
         )
         return response.strip()
-
-    @staticmethod
-    def _restore_original_section_separator(
-        rewritten_section: str,
-        original_section_text: str,
-        trailing_content: str,
-    ) -> str:
-        """Restore the original section separator before trailing content.
-
-        当 ``selected_and_related`` 改写整段 section 时，原 section 末尾通常包含与下一标题
-        之间的一个或多个换行。LLM 输出经 ``strip()`` 后可能丢失这些分隔符，导致后续标题
-        直接拼接到段落末尾。本方法仅在后方仍有内容时，将原 section 末尾的连续换行原样补回。
-
-        Args:
-            rewritten_section: LLM 返回的改写 section 文本。
-            original_section_text: 原 section 去标记后的完整文本，用于提取末尾换行。
-            trailing_content: 原报告中位于 section 之后、待重新拼接的尾部内容。
-
-        Returns:
-            str: 经过边界换行修正后的 section 文本。
-        """
-        if not trailing_content:
-            return rewritten_section
-
-        match = re.search(r"(\n+)$", original_section_text)
-        if match:
-            normalized_section = rewritten_section.rstrip("\n")
-            return f"{normalized_section}{match.group(1)}"
-        return rewritten_section
-
-    async def _invoke_prompt(self, prompt_name: str, context_vars: dict, agent_name: str) -> str:
-        """应用系统模板并调用 LLM，返回文本内容。
-
-        Args:
-            prompt_name: 模板名称。
-            context_vars: 模板上下文变量字典。
-            agent_name: 本次 LLM 调用的 agent_name。
-
-        Returns:
-            str: LLM 返回的文本内容。
-        """
-        messages = apply_system_prompt(prompt_name, context_vars)
-        llm = llm_context.get().get(self.llm_model_name)
-        response = await ainvoke_llm_with_stats(
-            llm=llm,
-            messages=messages,
-            agent_name=agent_name,
-        )
-        return response.get("content", "") if isinstance(response, dict) else str(response)

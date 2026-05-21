@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.html_template import (C
                                                                                LEGEND_FORMAT,
                                                                                LEGEND_CONENT)
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import GraphInfo
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_and_sanitize_url
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +246,10 @@ class GenerateHTML:
         node_map = checked_infer_graph.node_map
         citation_ids = checked_infer_graph.citation_ids
         conclusion_ids = checked_infer_graph.conclusion_ids
+        
+        if not structured_inference or not node_map:
+            logger.warning("[GenerateHTML] Empty graph detected, skip current inference.")
+            raise ValueError("[GenerateHTML] Empty graph detected, skip current inference.")
 
         # 计算层级布局
         node_positions, intermediate_nodes, new_node_start_idx = self._calculate_layer_layout(
@@ -327,9 +332,23 @@ class GenerateHTML:
                                  font={"multi": True, "align": "center"})
                     continue
                 citation_node_index += 1
-                net.add_node(node_id, label=f"ref.{citation_node_index}", url=url, title='Click to navigate',
-                            color=self.node_show_info["citation_node"].get("color", "#def0ce"),
-                            size=15, x=pos[0], y=pos[1])
+                # 验证URL scheme安全性，只允许http/https
+                safe_url = validate_and_sanitize_url(url)
+                if safe_url:
+                    net.add_node(node_id, label=f"ref.{citation_node_index}", url=safe_url,
+                                title='Click to navigate',
+                                color=self.node_show_info["citation_node"].get("color", "#def0ce"),
+                                size=15, x=pos[0], y=pos[1])
+                else:
+                    # URL不安全，添加不带链接的节点，并记录警告
+                    logger.warning(
+                        f"[GenerateHTML]: Unsafe URL scheme blocked for citation node {node_id}, "
+                        f"url: {url[:100]}"
+                    )
+                    net.add_node(node_id, label=f"ref.{citation_node_index}",
+                                title='Reference (link blocked)',
+                                color=self.node_show_info["citation_node"].get("color", "#def0ce"),
+                                size=15, x=pos[0], y=pos[1])
             else:
                 net.add_node(node_id, label=wrapped_label,
                              color=self.node_show_info["conclusion_node"].get("color", "#d2e6f4"),

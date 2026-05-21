@@ -44,6 +44,8 @@ openjiuwen_deepsearch/
   - `supplementary_search_task.md` - Prompt for supplementary-search task generation
   - `supplementary_search_rewrite_selected_only.md` - Prompt for supplementary search that rewrites only the selected span
   - `supplementary_search_rewrite_selected_and_related.md` - Prompt for supplementary search that rewrites the entire related section
+  - `new_task_assessment.md` - Prompt for assessing sufficiency of historical evidence for new-task requests
+  - `new_task_rewrite_section.md` - Prompt for rewriting sections based on new-task edit strategy
 - **query_understanding/** - Query understanding
   - `interpreter.py` - Generate clarification questions
   - `outliner.py` - Generate outlines
@@ -79,6 +81,9 @@ openjiuwen_deepsearch/
   - `supplement_graph.py`
 - **user_feedback_processor/** - User-feedback local editing module
   - `action_definitions.py` - Mapping between frontend actions and unified internal actions
+  - `common.py` - Shared utilities (session/model context resolution, LLM invocation entry)
+  - `history.py` - Rewrite history and outline update management
+  - `new_task_processor.py` - New-task action processing logic
   - `report_edit_utils.py` - Tools for stripping citation / inference markers and updating offsets
   - `section_locator.py` - Locate the smallest Markdown heading block for a selection
   - `supplementary_search.py` - Execution logic for supplementary search and local / whole-section rewriting

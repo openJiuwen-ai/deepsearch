@@ -69,7 +69,10 @@ class NativeLocalSearchAPIWrapper(BaseModel):
         instances = []
         for kb_cfg in self.knowledge_base_configs:
             try:
-                # 创建 Embedding 实例
+                # 创建 Embedding 实例（SSRF 校验在 get_embedding_requests_verify 内）
+                verify = get_embedding_requests_verify(kb_cfg.embed_model_config.base_url)
+                if isinstance(verify, str) and verify:
+                    os.environ["REQUESTS_CA_BUNDLE"] = verify
                 embed_cfg = EmbeddingConfig(
                     model_name=kb_cfg.embed_model_config.model_name,
                     api_key=kb_cfg.embed_model_config.api_key,
@@ -81,9 +84,6 @@ class NativeLocalSearchAPIWrapper(BaseModel):
                     "timeout": kb_cfg.embed_model_config.timeout,
                     "max_retries": kb_cfg.embed_model_config.max_retries,
                 }
-                verify = get_embedding_requests_verify(kb_cfg.embed_model_config.base_url)
-                if isinstance(verify, str) and verify:
-                    os.environ["REQUESTS_CA_BUNDLE"] = verify
                 embed_model = APIEmbedding(**embed_api_kwargs)
 
                 # 创建 Vector Store 实例

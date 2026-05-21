@@ -2,8 +2,13 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.report.report import Reporter, _deduplicate_and_renumber_ref, \
-    _replace_citations_and_classified_index, _get_classified_infos
+from openjiuwen_deepsearch.algorithm.report.report import (
+    Reporter,
+    VisualizationInsertRenderContext,
+    _deduplicate_and_renumber_ref,
+    _replace_citations_and_classified_index,
+    _get_classified_infos,
+)
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 
 
@@ -140,6 +145,27 @@ def test_is_valid_chapter_format(text, section_idx, expected):
 def test_add_references(content, refs, lang, expected):
     result = Reporter.add_references(content, refs, lang)
     assert result == expected
+
+
+def test_apply_visualization_insertions_escapes_image_title_html():
+    context = VisualizationInsertRenderContext(
+        report_lines=["第一段\n", "第二段\n"],
+        insertions=[{"after_row": 1, "index": 1}],
+        mermaid_map={1: "graph TD\nA-->B"},
+        title_meta_map={
+            1: {
+                "image_title": '<img src=x onerror="alert(1)">',
+                "citation_index": 7,
+            }
+        },
+        newline="\n",
+        language=CHINESE,
+    )
+
+    result = Reporter._apply_visualization_insertions(context)
+
+    assert '<img src=x onerror="alert(1)">' not in result
+    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;[citation:7]" in result
 
 
 @pytest.mark.asyncio
@@ -343,6 +369,38 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
                     {"url": "http://a.com", "title": "A", "core_content": "contentA"},
                     {"url": "http://b.com", "title": "B", "core_content": "contentB"},
                 ],
+        ),
+        (
+                [
+                    {
+                        "url": "https://example.test/",
+                        "title": "x](javascript:alert(1)) [safe",
+                        "core_content": "contentA",
+                    }
+                ],
+                ["https://example.test/"],
+                {
+                    "references": [
+                        "[x\\]\\(javascript:alert\\(1\\)\\) \\[safe](https://example.test/)"
+                    ],
+                    "core_content_list": ["contentA"],
+                },
+                [
+                    {
+                        "url": "https://example.test/",
+                        "title": "x](javascript:alert(1)) [safe",
+                        "core_content": "contentA",
+                    }
+                ],
+        ),
+        (
+                [{"url": "javascript:alert(2)", "title": "benign", "core_content": "contentB"}],
+                ["javascript:alert(2)"],
+                {
+                    "references": ["benign (javascript:alert\\(2\\))"],
+                    "core_content_list": ["contentB"],
+                },
+                [{"url": "javascript:alert(2)", "title": "benign", "core_content": "contentB"}],
         ),
     ],
 )

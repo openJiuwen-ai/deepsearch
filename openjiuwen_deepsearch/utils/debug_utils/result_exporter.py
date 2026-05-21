@@ -26,6 +26,30 @@ class ResultExporter:
     _SAFE_BASE: str = os.path.realpath("./output/results")
 
     @classmethod
+    def _sanitize_filename_component(cls, value, fallback: str) -> str:
+        """Convert untrusted text into a single safe filename component."""
+        text = str(value or "").strip()
+        chars = []
+        for char in text:
+            if char.isalnum() or char in {"-", "_", "."}:
+                chars.append(char)
+            else:
+                chars.append("_")
+
+        component = "".join(chars).strip("._")
+        return (component or fallback)[:100]
+
+    @classmethod
+    def _safe_output_path(cls, output_dir: str, filename: str) -> str:
+        output_root = os.path.realpath(output_dir)
+        candidate = os.path.realpath(os.path.join(output_root, filename))
+        if os.path.commonpath([output_root, candidate]) != output_root:
+            raise ValueError(
+                f"Unsafe export path outside outline directory: {candidate}"
+            )
+        return candidate
+
+    @classmethod
     def init(cls, results_dir: Optional[str] = None) -> None:
         """初始化导出器运行目录和基础状态。"""
 
@@ -76,24 +100,28 @@ class ResultExporter:
             # Outline 类型校验
             if isinstance(outline, Outline):
                 data = outline.model_dump()
+                outline_title = outline.title
             elif isinstance(outline, dict):
                 data = outline
+                outline_title = outline.get("title")
             else:
                 return
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-            base_name = f"{outline.title}_{session_id}_{timestamp}"
+            safe_title = cls._sanitize_filename_component(outline_title, "outline")
+            safe_session_id = cls._sanitize_filename_component(session_id, "session")
+            base_name = f"{safe_title}_{safe_session_id}_{timestamp}"
             output_dir = os.path.join(cls._validated_dir, "outline")
             os.makedirs(output_dir, exist_ok=True)
 
             # JSON
-            json_path = os.path.join(output_dir, f"{base_name}.json")
+            json_path = cls._safe_output_path(output_dir, f"{base_name}.json")
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             logger.info(f"{log_prefix} Exported Outline JSON: {json_path}")
 
             # Excel
-            excel_path = os.path.join(output_dir, f"{base_name}.xlsx")
+            excel_path = cls._safe_output_path(output_dir, f"{base_name}.xlsx")
             exporter = OutlineToExcelExporter(data)
             exporter.export_to_excel(excel_path)
             logger.info(f"{log_prefix} Exported Outline Excel: {excel_path}")

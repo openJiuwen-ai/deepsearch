@@ -25,6 +25,7 @@ class LlmConfigCategory(enum.Enum):
 
 
 NODE_LLM_MAPPING = {
+    NodeId.INTENT_RECOGNITION.value: LlmConfigCategory.PLAN_UNDERSTANDING.value,
     NodeId.OUTLINE.value: LlmConfigCategory.PLAN_UNDERSTANDING.value,
     NodeId.PLAN_REASONING.value: LlmConfigCategory.PLAN_UNDERSTANDING.value,
     NodeId.INFO_COLLECTOR.value: LlmConfigCategory.INFO_COLLECTING.value,
@@ -44,3 +45,14 @@ def adapt_llm_model_name(session: Session, node_name) -> str:
         model_category = LlmConfigCategory.GENERAL.value
     llm_model_name = session.get_global_state(f"config.llm_config.{model_category}.model_name")
     return llm_model_name
+
+
+def adapt_vlm_model_name(session: Session, node_name) -> str:
+    """获取vlm模型名称"""
+    llm_config = session.get_global_state("config.llm_config")
+    if node_name in NODE_LLM_MAPPING:
+        model_category = NODE_LLM_MAPPING.get(node_name)
+        if model_category in llm_config:
+            llm_model_name = session.get_global_state(f"config.llm_config.{model_category}.model_name")
+            return llm_model_name
+    return "NO VLM"

@@ -492,6 +492,9 @@ def _create_embed_model(embed_model_config: EmbedModelConfig) -> APIEmbedding:
         if isinstance(embed_model_config.api_key, (bytes, bytearray))
         else str(embed_model_config.api_key)
     )
+    verify = get_embedding_requests_verify(embed_model_config.base_url)
+    if isinstance(verify, str) and verify:
+        os.environ["REQUESTS_CA_BUNDLE"] = verify
     embed_config = EmbeddingConfig(
         model_name=embed_model_config.model_name,
         api_key=api_key,
@@ -503,9 +506,6 @@ def _create_embed_model(embed_model_config: EmbedModelConfig) -> APIEmbedding:
         "max_retries": embed_model_config.max_retries,
         "max_batch_size": embed_model_config.max_batch_size,
     }
-    verify = get_embedding_requests_verify(embed_model_config.base_url)
-    if isinstance(verify, str) and verify:
-        os.environ["REQUESTS_CA_BUNDLE"] = verify
     embed_model = APIEmbedding(**api_kwargs)
     logger.debug("[EMBED_MODEL] Embed model created from request config successfully")
     return embed_model

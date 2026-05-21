@@ -66,7 +66,7 @@ This guide describes a **local** install of DeepSearch on **macOS**.
   git config --global user.email your_useremail
   ```
 
-  ![image](../../../images/安装指导/gitcode-token.png)
+  ![image](../../../images/installation_guide/gitcode-token.png)
 
   ```bash
   git config --global credential.helper store

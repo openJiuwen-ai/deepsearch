@@ -9,6 +9,7 @@ from typing import Deque, List, Optional
 from openjiuwen_deepsearch.config.config import ActionSamplingConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Action, Result
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.utils.run_telemetry import emit
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,17 @@ class ActionPool:
             path = os.path.join(self.log_dir, "action_pool.json")
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(snapshot, f, indent=2, ensure_ascii=False)
+            emit(
+                "action_pool_snapshot",
+                {
+                    "pending_count": len(snapshot["pending"]),
+                    "running_count": len(snapshot["running"]),
+                    "completed_count": len(snapshot["completed"]),
+                    "snapshot": snapshot,
+                },
+                source="action_pool._save_pool_json",
+                action_id=None,
+            )
         except Exception as e:
             logger.exception("[ActionPool] _save_pool_json failed: %s", e, exc_info=True)
 

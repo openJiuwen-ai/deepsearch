@@ -1,11 +1,12 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import asyncio
+import copy
 import logging
 from typing import Any, Dict
 
 from openjiuwen.core.runner.runner import Runner
 
-from openjiuwen_deepsearch.algorithm.search_nodes.utils import to_dict_safe
+from openjiuwen_deepsearch.algorithm.search_nodes.utils import anonymize_config_for_logging, to_dict_safe
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Result, Action
@@ -110,7 +111,7 @@ def parse_and_validate_state_creation_result(states: Any) -> Dict[str, Any]:
 
     return {
         "result": action_result,
-        "config": result.get("config", {}),
+        "config": anonymize_config_for_logging(copy.deepcopy(result.get("config", {}))),
         "total_input_tokens": result.get("total_input_tokens", 0),
         "total_output_tokens": result.get("total_output_tokens", 0),
     }

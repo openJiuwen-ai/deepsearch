@@ -137,6 +137,30 @@ def get_tool_definitions(retrieval_tool_only: bool = False) -> List[Dict[str, An
     return list(_SEARCH_FETCH_TOOLS)
 
 
+# Normalized names (lower, spaces/hyphens -> underscore) -> canonical function name from ``get_tool_definitions``.
+_NATIVE_TOOL_NAME_ALIASES: dict[str, str] = {
+    "web_search": "web_search",
+    "websearch": "web_search",
+    "web_fetch": "web_fetch",
+    "webfetch": "web_fetch",
+    "retrieve": "retrieve",
+}
+
+
+def resolve_native_tool_call_name(raw_name: str, retrieval_tool_only: bool) -> str | None:
+    """Map a model-supplied tool name to a canonical tool allowed for this mode.
+
+    Only names that appear in ``get_tool_definitions`` for the given mode are accepted.
+    Prevents prompt-injection style tool names from invoking unintended handlers.
+    """
+    key = (raw_name or "").strip().lower().replace(" ", "_").replace("-", "_")
+    canonical = _NATIVE_TOOL_NAME_ALIASES.get(key)
+    if not canonical:
+        return None
+    allowed = {spec["function"]["name"] for spec in get_tool_definitions(retrieval_tool_only=retrieval_tool_only)}
+    return canonical if canonical in allowed else None
+
+
 @dataclass
 class ParseAndApplyLLMResultConfig:
     config: Dict[str, Any]
@@ -591,6 +615,7 @@ def parse_and_apply_llm_result(parse_config: ParseAndApplyLLMResultConfig):
 
     elif mode == "answer":
         failed_patches: List[dict] = []
+        answer = None
         if patch_obj and patch_obj.get("answer", "") and "new_state" in patch_obj:
             answer = patch_obj.get("answer")
             try:
@@ -650,7 +675,11 @@ def parse_and_apply_llm_result(parse_config: ParseAndApplyLLMResultConfig):
 
         return (
             mode,
-            {"new_states": patch_obj, "answer": answer, "messages": messages},
+            {
+                "new_states": patch_obj if isinstance(patch_obj, dict) else {},
+                "answer": answer if answer is not None else "",
+                "messages": messages,
+            },
             parse_config.config,
         )
     messages.append({"role": "user", "content": _get_parse_error("no_output")})

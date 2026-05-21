@@ -1,6 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-from typing import List, Literal, Dict
+from typing import Any, List, Literal, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,7 +26,17 @@ class LLMConfig(BaseModel):
 
 
 class WebSearchEngineConfig(BaseModel):
-    search_engine_name: Literal["tavily", "google", "xunfei", "petal", "custom"] = Field(default="tavily",
+    search_engine_name: Literal[
+        "tavily",
+        "google",
+        "xunfei",
+        "petal",
+        "custom",
+        "bocha",
+        "jina",
+        "perplexity",
+        "serper",
+    ] = Field(default="tavily",
                                                                                          description="联网增强引擎名称")
     search_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="联网增强引擎调用密钥")
     search_url: str = Field(default="", description="联网增强引擎调用地址")
@@ -140,7 +150,6 @@ class PerQuestionParams(BaseModel):
 class MilvusConfig(BaseModel):
     """
     Milvus 配置。
-    Embedding 当前仅支持：qwen3-embedding-0.6b、qwen3-embedding-8b。
     """
 
     milvus_host: str = Field(default="localhost", description="Milvus 主机地址")
@@ -148,8 +157,8 @@ class MilvusConfig(BaseModel):
     database_name: str = Field(default="deepsearch_benchmarks", description="数据库名称")
     collection_name: str = Field(default="browsecompplus_with_bm25", description="集合名称")
     embedder_model_name: str = Field(
-        default="qwen3-embedding-8b",
-        description="Embedding 模型名称，当前仅支持：qwen3-embedding-0.6b、qwen3-embedding-8b",
+        default="",
+        description="Embedding 模型名称（需与索引构建时所用模型一致）",
     )
     embedder_api_key: bytearray = Field(
         default=bytearray("", encoding="utf-8"),
@@ -160,6 +169,10 @@ class MilvusConfig(BaseModel):
         description="Embedding 服务地址，例如：http://localhost:11450/v1/embeddings",
     )
     embedder_timeout: int = Field(default=100, description="Embedding 请求超时时间（秒），例如：100")
+    retriever_class: Optional[Any] = Field(
+        default=None,
+        description="Optional retriever implementation class for RetrieveTool (e.g. BrowsecompPlusMilvusRetriever).",
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -315,9 +328,6 @@ class AgentConfig(BaseModel):
     # 联网增强引擎 QPS 流控配置
     web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
     api_tools_config: ApiToolsConfig = Field(default_factory=ApiToolsConfig, description="API tools config")
-
-    # 联网增强引擎 QPS 流控配置
-    web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
 
     # 用户反馈局部优化参数
     user_feedback_processor_enable: bool = Field(default=False, description="是否启用用户反馈优化功能")

@@ -182,22 +182,27 @@ def test_resolve_agent_llm_timeout_falls_back_to_node_key_then_default():
     assert (default_level.timeout, default_level.matched_by, default_level.matched_key) == (300, "default", "default")
 
 
-def test_resolve_agent_llm_timeout_returns_zero_when_disable_rule_matches():
-    """验证命中值为 0 的规则时会原样返回，表示关闭 wall-clock timeout。
+def test_resolve_agent_llm_timeout_preserves_zero_and_clamps_large_rules():
+    """验证调用方提供的 0 值被保留（关闭业务层超时），极大值被裁剪到上限。
 
     Returns:
         None.
     """
     fake_session = SimpleNamespace(
-        get_global_state=lambda key: {"default": 300, "source_tracer_infer": 0}
+        get_global_state=lambda key: {"default": 999999999, "source_tracer_infer": 0}
         if key == "config.agent_llm_timeouts"
         else None
     )
 
-    resolved = _resolve_agent_llm_timeout("source_tracer_infer_structured_infer", fake_session)
+    zero_resolved = _resolve_agent_llm_timeout("source_tracer_infer_structured_infer", fake_session)
+    large_resolved = _resolve_agent_llm_timeout("unknown_agent_name", fake_session)
 
-    assert resolved.timeout == 0
-    assert resolved.matched_by == "node_key"
+    # 0 值被保留，表示关闭业务层超时，回退到底层 SDK 控制
+    assert zero_resolved.timeout == 0
+    assert zero_resolved.matched_by == "node_key"
+    # 极大值被裁剪到上限
+    assert large_resolved.timeout == 3600
+    assert large_resolved.matched_by == "default"
 
 
 def test_resolve_agent_llm_timeout_disables_feature_without_default():
@@ -321,7 +326,7 @@ async def test_llm_astream_raises_custom_timeout_when_wall_clock_limit_is_hit():
 
 @pytest.mark.asyncio
 async def test_llm_astream_skips_wall_clock_timeout_when_rule_is_zero():
-    """验证命中值为 0 的规则时会跳过 wall-clock timeout。
+    """验证命中值为 0 的规则时会跳过业务层 wall-clock timeout，由底层 SDK 控制。
 
     Returns:
         None.
@@ -344,6 +349,7 @@ async def test_llm_astream_skips_wall_clock_timeout_when_rule_is_zero():
     finally:
         session_context.reset(token)
 
+    # 0 值表示关闭业务层超时，直接返回结果
     assert response.content == "ab"
 
 

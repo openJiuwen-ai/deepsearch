@@ -116,7 +116,7 @@ class UserFeedbackProcessorNode(BaseNode)
 **Functions**:
 - Decide whether to enable post-report local editing based on `user_feedback_processor_enable`.
 - On first entry, send a full `final_result` snapshot to the frontend and use `search_context.feedback_snapshot_sent` to ensure it is sent only once.
-- Read JSON user feedback and support `expand`, `shorten`, `polish`, `supplementary_search`, `sync`, and `finish`.
+- Read JSON user feedback and support `expand`, `shorten`, `polish`, `supplementary_search`, `new_task`, `sync`, and `finish`.
 - Parse and validate rewrite payload fields such as `action`, `rewrite_scope`, `selected_text`, and offsets.
 - Support both `selected_only` and `selected_and_related` as rewrite scopes for `supplementary_search`.
 - Return a lightweight ack for `sync`, without consuming `feedback_interaction_count`; successful sync appends a rewrite-history record only when the full report content actually changes.

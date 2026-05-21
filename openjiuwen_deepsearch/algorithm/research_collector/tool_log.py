@@ -259,7 +259,8 @@ def tool_invoke_log_async(func):
 
             if kwargs.get("search_engine_name"):
                 search_stat["search_engine"] = kwargs.get("search_engine_name")
-            if kwargs.get("query"):
+            # 敏感模式下不记录原始查询，避免敏感信息泄露
+            if kwargs.get("query") and not LogManager.is_sensitive():
                 search_stat["query"] = kwargs.get("query")
 
             if result and result.get("search_results") and isinstance(result.get("search_results"), list):

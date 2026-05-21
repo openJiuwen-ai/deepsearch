@@ -12,6 +12,11 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
+# 默认请求超时时间：30秒（防止无界等待）
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
+# 默认连接超时时间：10秒
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 10
+
 T = TypeVar("T")
 
 
@@ -90,6 +95,7 @@ class LocalDatasetAPIWrapper(BaseModel, Generic[T]):
                 params=query_params,
                 json=body_params,
                 verify=verify,
+                timeout=(DEFAULT_CONNECT_TIMEOUT_SECONDS, DEFAULT_REQUEST_TIMEOUT_SECONDS),
             )
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
@@ -128,7 +134,12 @@ class LocalDatasetAPIWrapper(BaseModel, Generic[T]):
             connector = aiohttp.TCPConnector(ssl=ssl_verify)
 
         try:
-            async with aiohttp.ClientSession(connector=connector) as session:
+            timeout = aiohttp.ClientTimeout(
+                total=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                connect=DEFAULT_CONNECT_TIMEOUT_SECONDS,
+                sock_read=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+            )
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 async with session.post(
                         url=self.search_url.get_secret_value(),
                         headers=search_headers,

@@ -1,10 +1,52 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+import html
 import logging
 from typing import List
 
 logger = logging.getLogger(__name__)
+
+
+def escape_html_text(text: str) -> str:
+    """
+    对文本进行HTML转义，防止HTML/Markdown注入
+
+    Args:
+        text: 需要转义的文本
+
+    Returns:
+        str: 转义后的安全文本
+    """
+    if not text:
+        return ""
+    # 转义HTML特殊字符
+    return html.escape(text, quote=True)
+
+
+def escape_markdown_link_text(text: str) -> str:
+    """
+    对Markdown链接文本进行转义
+
+    Markdown链接格式: [text](url)
+    需要转义的特殊字符: [ ] ( ) \
+
+    Args:
+        text: 需要转义的链接文本
+
+    Returns:
+        str: 转义后的安全文本
+    """
+    if not text:
+        return ""
+    # Markdown链接文本中需要转义的字符
+    # 使用反斜杠转义
+    escaped = text.replace('\\', '\\\\')
+    escaped = escaped.replace('[', '\\[')
+    escaped = escaped.replace(']', '\\]')
+    escaped = escaped.replace('(', '\\(')
+    escaped = escaped.replace(')', '\\)')
+    return escaped
 
 
 def split_into_sentences(text: str) -> List[str]:

@@ -18,6 +18,11 @@ async generate_template(file_name: str, file_stream: str, is_template: bool, age
 ```
 Build/normalize a report template from base64 **file_stream**; returns `{"status": "success"|"fail", "template_content": str, "error_message": str}` via `TemplateGenerator.generate_template`.
 
+- The decoded source file must be no larger than `50 MB`.
+- If `is_template=False` and the upload is a PDF, it supports up to `512` pages.
+- If `is_template=False` and the upload is a DOCX, the uncompressed package must stay within `50 MB`, and `word/document.xml` must stay within `8 MB`.
+- The normalized/parsed Markdown output is capped at `5 MB`.
+
 ---
 
 ## `DeepresearchAgent`

@@ -1,14 +1,14 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-import copy
 import asyncio
+import copy
 import json
 import logging
 import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Any
 
 from openjiuwen.core.common.constants.constant import INTERACTIVE_INPUT
 from openjiuwen.core.context_engine.base import ModelContext
@@ -18,7 +18,11 @@ from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
 
 from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
+from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
+    anonymize_config_for_logging,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.interpreter import query_interpreter
+from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import recognize_report_intent
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
 from openjiuwen_deepsearch.algorithm.query_understanding.router import classify_query, web_search_for_query
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
@@ -49,6 +53,10 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTrac
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor import (
     UserFeedbackProcessor,
 )
+from openjiuwen_deepsearch.algorithm.user_feedback_processor.history import (
+    build_current_outline_update,
+    build_rewrite_history_update,
+)
 from openjiuwen_deepsearch.common.common_constants import (
     CHINESE,
     ENGLISH,
@@ -77,7 +85,9 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     State,
     ValidationResult,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name, 
+                                                                        adapt_vlm_model_name)
+from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import apply_web_search_domain_constraints
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     get_effective_workflow_llm_usage,
     save_workflow_llm_usage_to_session,
@@ -93,6 +103,7 @@ from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     model_context,
     session_context,
+    tool_context,
 )
 from openjiuwen_deepsearch.utils.debug_utils.node_debug import (
     NodeDebugData,
@@ -100,8 +111,24 @@ from openjiuwen_deepsearch.utils.debug_utils.node_debug import (
     add_debug_log_wrapper,
 )
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.utils.run_telemetry import (
+    emit,
+    emit_messages_updated,
+    emit_state_created,
+    runtime_correlation_from,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _state_id_for_telemetry(state) -> str:
+    if state is None:
+        return ""
+    if hasattr(state, "id"):
+        return str(state.id)
+    if isinstance(state, dict):
+        return str(state.get("id", ""))
+    return ""
 
 
 def _normalize_workflow_llm_config(raw: object) -> dict:
@@ -131,10 +158,12 @@ class StartNode(Start):
         """
 
         # 初始化search_context
+        original_query = inputs.get("query", "")
         search_context = SearchContext(
-            query=inputs.get("query", ""),
+            original_query=original_query,
+            research_query=original_query,
             session_id=inputs.get("thread_id", ""),
-            messages=[Message(role="user", content=inputs.get("query", ""))],
+            messages=[Message(role="user", content=original_query)],
             search_mode=inputs.get("search_mode", "research"),
             report_template=inputs.get("report_template", ""),
         )
@@ -194,6 +223,67 @@ class StartNode(Start):
         session.update_global_state({"config": merge_config})
 
 
+class IntentRecognitionNode(BaseNode):
+    """
+    报告意图识别节点：从原始 query 中拆分研究主题和报告生成约束。
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
+        logger.info("[IntentRecognitionNode] Start IntentRecognitionNode.")
+        return dict(
+            original_query=session.get_global_state("search_context.original_query") or "",
+            messages=session.get_global_state("search_context.messages") or [],
+            llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
+        )
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        current_inputs = self._pre_handle(inputs, session, context)
+        intent_result = await recognize_report_intent(current_inputs)
+        return self._post_handle(inputs, intent_result, session, context)
+
+    def _post_handle(self, inputs: Input, algorithm_output: Any, session: Session, context: ModelContext):
+        original_q = algorithm_output.original_query
+        research_q = (algorithm_output.research_query or "").strip() or original_q
+
+        session.update_global_state({
+            "search_context.original_query": original_q,
+            "search_context.research_query": research_q,
+            "search_context.research_intent": algorithm_output.research_intent.model_dump(),
+        })
+        web_search_engine_config = session.get_global_state("config.web_search_engine_config")
+        web_search_engine_name = web_search_engine_config.search_engine_name if web_search_engine_config else ""
+        apply_web_search_domain_constraints(
+            search_engine_name=web_search_engine_name,
+            include_domains=algorithm_output.research_intent.include_domains,
+            exclude_domains=algorithm_output.research_intent.exclude_domains,
+        )
+
+        messages = list(session.get_global_state("search_context.messages") or [])
+        if messages:
+            first = messages[0]
+            if isinstance(first, dict):
+                messages[0] = {**first, "content": research_q}
+            else:
+                messages[0] = Message(
+                    role=getattr(first, "role", "user"),
+                    content=research_q,
+                    name=getattr(first, "name", None),
+                ).model_dump(exclude_none=True)
+            session.update_global_state({"search_context.messages": messages})
+
+        add_debug_log_wrapper(session, NodeDebugData(
+            NodeId.INTENT_RECOGNITION.value,
+            0,
+            NodeType.MAIN.value,
+            output_content=algorithm_output.model_dump_json(),
+        ))
+        logger.info("[IntentRecognitionNode] End IntentRecognitionNode.")
+        return dict(next_node=NodeId.ENTRY.value)
+
+
 class EntryNode(BaseNode):
 
     def __init__(self):
@@ -204,7 +294,7 @@ class EntryNode(BaseNode):
 
         messages = session.get_global_state("search_context.messages")
         llm_model_name = adapt_llm_model_name(session, NodeId.ENTRY.value)
-        query = session.get_global_state("search_context.query")
+        query = session.get_global_state("search_context.research_query")
         web_search_engine_config = session.get_global_state("config.web_search_engine_config")
         web_search_engine_name = web_search_engine_config.search_engine_name if web_search_engine_config else "petal"
 
@@ -394,7 +484,7 @@ class ReporterNode(BaseNode):
             current_report=current_report,
             language=session.get_global_state("search_context.language") or CHINESE,
             report_task=report_task,
-            user_query=session.get_global_state("search_context.query"),
+            user_query=session.get_global_state("search_context.research_query"),
             llm_model_name=llm_model_name,
             visualization_enable=visualization_enable,
         )
@@ -529,7 +619,7 @@ class GenerateQuestionsNode(BaseNode):
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info(f"[GenerateQuestionsNode] Start GenerateQuestionsNode.")
         language = session.get_global_state("search_context.language")
-        query = session.get_global_state("search_context.query")
+        query = session.get_global_state("search_context.research_query")
         entry_search_results = session.get_global_state("search_context.entry_search_results") or []
         max_gen_question_retry_num = session.get_global_state("config.workflow_max_gen_question_retry_num")
         llm_model_name = adapt_llm_model_name(session, NodeId.GENERATE_QUESTIONS.value)
@@ -1508,66 +1598,44 @@ class UserFeedbackProcessorNode(BaseNode):
         if "new_report" not in algorithm_output:
             return dict(next_node=next_node)
 
+        current_final_result = session.get_global_state("search_context.final_result") or {}
+        current_report_content = current_final_result.get("response_content", "") or ""
         new_report = algorithm_output["new_report"]
         session.update_global_state({"search_context.final_result.response_content": new_report})
-        rewritten_text = algorithm_output["rewritten_text"]
-        rewritten_start_offset = algorithm_output["rewritten_start_offset"]
-        rewritten_end_offset = algorithm_output["rewritten_end_offset"]
         feedback = algorithm_output["feedback"]
-        selected_text_clean = algorithm_output.get("original_text_clean", feedback.get("selected_text"))
+        updated_outline = build_current_outline_update(
+            current_outline=session.get_global_state("search_context.current_outline"),
+            action_result=algorithm_output,
+        )
+        if updated_outline is not None:
+            session.update_global_state({"search_context.current_outline": updated_outline})
 
         # 记录每次局部改写的关键信息，便于问题排查和后续审计。
         history = session.get_global_state("search_context.rewrite_history") or []
-        is_sync = algorithm_output.get("sync_only", False)
-        current_final_result = session.get_global_state("search_context.final_result") or {}
-        current_report_content = current_final_result.get("response_content", "") or ""
-        if is_sync and new_report == current_report_content:
+        updated_history = build_rewrite_history_update(
+            history=history,
+            feedback=feedback,
+            action_result=algorithm_output,
+            current_report_content=current_report_content,
+        )
+        if updated_history is None:
             logger.info("[UserFeedbackProcessorNode] Rewrite completed, loop back for next interaction.")
             return dict(next_node=next_node)
+        session.update_global_state({"search_context.rewrite_history": updated_history})
 
-        history_item = {
-            "action": feedback.get("action"),
-            "rewrite_scope": feedback.get("rewrite_scope"),
-            "selected_text": feedback.get("selected_text"),
-            "selected_text_clean": selected_text_clean,
-            "original_start_offset": algorithm_output["original_start_offset"],
-            "original_end_offset": algorithm_output["original_end_offset"],
-            "rewritten_text": rewritten_text,
-            "rewritten_start_offset": rewritten_start_offset,
-            "rewritten_end_offset": rewritten_end_offset,
-            "user_instruction": feedback.get("user_instruction", ""),
-        }
-        if "section_start_offset" in algorithm_output:
-            history_item["section_start_offset"] = algorithm_output.get("section_start_offset")
-        if "section_end_offset" in algorithm_output:
-            history_item["section_end_offset"] = algorithm_output.get("section_end_offset")
-        if "collector_summary" in algorithm_output:
-            history_item["collector_summary"] = algorithm_output.get("collector_summary", "")
-        history.append(history_item)
-        if is_sync:
-            non_sync_history = [item for item in history if item.get("action") != "sync"]
-            sync_history = [item for item in history if item.get("action") == "sync"]
-            history = non_sync_history + sync_history[-10:]
-        session.update_global_state({"search_context.rewrite_history": history})
-
-        if not is_sync:
-            add_debug_log_wrapper(
-                session,
-                NodeDebugData(
-                    NodeId.USER_FEEDBACK_PROCESSOR.value,
-                    0,
-                    NodeType.MAIN.value,
-                    output_content=json.dumps(
-                        {
-                            "selected_text": feedback.get("selected_text"),
-                            "rewritten_text": rewritten_text,
-                            "rewritten_start_offset": rewritten_start_offset,
-                            "rewritten_end_offset": rewritten_end_offset,
-                        },
-                        ensure_ascii=False,
-                    ),
-                ),
-            )
+        if not algorithm_output.get("sync_only", False):
+            add_debug_log_wrapper(session, NodeDebugData(
+                NodeId.USER_FEEDBACK_PROCESSOR.value, 0, NodeType.MAIN.value,
+                output_content=json.dumps(
+                    {
+                        "selected_text": feedback.get("selected_text"),
+                        "rewritten_text": algorithm_output["rewritten_text"],
+                        "rewritten_start_offset": algorithm_output["rewritten_start_offset"],
+                        "rewritten_end_offset": algorithm_output["rewritten_end_offset"],
+                    },
+                    ensure_ascii=False,
+                )
+            ))
 
         logger.info("[UserFeedbackProcessorNode] Rewrite completed, loop back for next interaction.")
         return dict(next_node=next_node)
@@ -1590,9 +1658,9 @@ class VLMChartGeneratorNode(BaseNode):
         vlm_chart_generator_max_iterations = session.get_global_state("config.vlm_chart_generator_max_iterations")
         # 使用多模态模型处理图表类数据
         if vlm_chart_generator_max_iterations > 0:
-            vlm_model_name = adapt_llm_model_name(session, NodeId.VLM_CHART_GENERATOR.value)
+            vlm_model_name = adapt_vlm_model_name(session, NodeId.VLM_CHART_GENERATOR.value)
         else:
-            # 不会进行vlm迭代
+            # 不使用迭代优化
             vlm_model_name = llm_model_name
 
         # 获取vlm输入数据
@@ -1743,27 +1811,34 @@ class SearchStartNode(Start):
     async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session.update_global_state(inputs or {})
 
-        session.update_global_state(inputs or {})
+        # The framework filters ``inputs`` against the Start component's
+        # ``inputs_schema`` before invoking, so per-run fields like
+        # ``agent_config``/``search_config`` (passed via Runner.run_workflow)
+        # are not present here. They ARE available in the session global
+        # state because the framework calls ``commit_user_inputs(inputs)``
+        # before dispatching to the first node.
+        origin_agent_config = session.get_global_state("agent_config") or {}
+        if not isinstance(origin_agent_config, dict):
+            origin_agent_config = {}
+        search_workflow_config = session.get_global_state("search_config")
+        if not isinstance(search_workflow_config, dict):
+            search_workflow_config = Config().service_config.search_workflow.model_dump()
+        workflow_name = session.get_global_state("workflow_name") or inputs.get("workflow_name", "")
+
         # state_creation passes log_dir only inside agent_config; mirror to top-level for tools / LLM logs.
-        merged_log_dir = None
-        if isinstance(inputs, dict):
-            merged_log_dir = inputs.get("log_dir")
-            if not merged_log_dir:
-                ac = inputs.get("agent_config")
-                if isinstance(ac, dict):
-                    merged_log_dir = ac.get("log_dir")
+        merged_log_dir = session.get_global_state("log_dir")
+        if not merged_log_dir:
+            merged_log_dir = origin_agent_config.get("log_dir")
         if merged_log_dir:
             session.update_global_state({"log_dir": merged_log_dir})
 
-        search_workflow_config = inputs.get("search_config", Config().service_config.search_workflow.model_dump())
         logger.info(
-            "[SearchStartNode] received inputs: %s",
-            "***" if LogManager.is_sensitive() else inputs,
+            "[SearchStartNode] resolved workflow_name=%s, agent_config=%s",
+            workflow_name,
+            "***" if LogManager.is_sensitive() else origin_agent_config,
         )
-        origin_agent_config = inputs.get("agent_config", {})
         llm_config = origin_agent_config.get("llm_config", {}).get("general", {})
         retrieval_settings = origin_agent_config.get("retrieval_settings", {})
-        workflow_name = inputs.get("workflow_name", "")
         if workflow_name == "init_state_workflow":
             workflow_config = search_workflow_config["init_state_agent"]
             merged_llm_config = {**(llm_config or {})}
@@ -1780,7 +1855,9 @@ class SearchStartNode(Start):
             workflow_config["llm_config"]["general"] = merged_llm_config
         elif workflow_name == "state_creation_workflow":
             workflow_config = search_workflow_config["state_creation_agent"]
-            workflow_config["validator_agent"] = copy.deepcopy(workflow_config.get("validator_agent", {}))
+            workflow_config["validator_agent"] = copy.deepcopy(
+                workflow_config.get("validator_agent", {})
+            )
             workflow_config["validator_agent"]["llm_config"]["general"] = llm_config or {}
             merged_llm_config = {**(llm_config or {})}
             merged_llm_config.setdefault("timeout", 1200)
@@ -1847,7 +1924,7 @@ class SearchEndNode(End):
             config = session.get_global_state("config") or {}
             payload = {
                 "result": result,
-                "config": config,
+                "config": anonymize_config_for_logging(config),
                 "total_input_tokens": total_input_tokens,
                 "total_output_tokens": total_output_tokens,
             }
@@ -1946,6 +2023,14 @@ class InitializeStateNode(BaseNode):
                 "total_input_tokens": total_input_tokens,
                 "total_output_tokens": total_output_tokens,
             }
+        )
+
+        emit_state_created(
+            source="initialize_state_node",
+            origin="initial",
+            states=[to_dict_safe(init_state)],
+            runtime=session,
+            action_id=None,
         )
 
         logger.info("[InitializeStateNode] End InitializeStateNode.")
@@ -2062,6 +2147,34 @@ class FindActionSpaceNode(BaseNode):
                 }
             )
 
+            sid = _state_id_for_telemetry(state)
+            sensitive = LogManager.is_sensitive()
+            action_rows = []
+            for action in actions:
+                aid = str(action.state.id) if action.state is not None else sid
+                action_rows.append(
+                    {
+                        "action_id": action.id,
+                        "state_id": aid,
+                        "proposal_direction": (
+                            "***" if sensitive else action.proposal.direction
+                        ),
+                        "score": action.proposal.score,
+                    }
+                )
+            emit(
+                "action_proposals_created",
+                {
+                    "success": True,
+                    "state_id": sid,
+                    "num_actions": len(actions),
+                    "actions": action_rows,
+                    **runtime_correlation_from(session),
+                },
+                source="find_action_space_node",
+                action_id=None,
+            )
+
             id_ = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S%f")[:-3]
             action_file = os.path.join(log_dir, "Action", f"action_{id_}_{uuid.uuid4().hex}.json")
             payload = {
@@ -2082,10 +2195,36 @@ class FindActionSpaceNode(BaseNode):
                     indent=2,
                     ensure_ascii=False,
                 )
+            creation_messages = algorithm_output.get("messages")
+            if creation_messages:
+                emit_messages_updated(
+                    source="find_action_space_node",
+                    messages=creation_messages,
+                    runtime=session,
+                    action_id=None,
+                    extra={
+                        "phase": "action_creation",
+                        "success": True,
+                        "num_actions": len(actions),
+                    },
+                )
             logger.info("[FindActionSpaceNode] End FindActionSpaceNode.")
             return actions
         else:
             error = algorithm_output.get("error", "Unknown error")
+            emit(
+                "action_proposals_created",
+                {
+                    "success": False,
+                    "state_id": _state_id_for_telemetry(state),
+                    "num_actions": 0,
+                    "actions": [],
+                    "error": "*" if LogManager.is_sensitive() else error,
+                    **runtime_correlation_from(session),
+                },
+                source="find_action_space_node",
+                action_id=None,
+            )
             id_ = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S%f")[:-3]
             action_file = os.path.join(log_dir, "Action", f"action_{id_}_{uuid.uuid4().hex}.json")
             payload = {
@@ -2103,6 +2242,19 @@ class FindActionSpaceNode(BaseNode):
                     f,
                     indent=2,
                     ensure_ascii=False,
+                )
+            fail_messages = algorithm_output.get("messages")
+            if fail_messages:
+                emit_messages_updated(
+                    source="find_action_space_node",
+                    messages=fail_messages,
+                    runtime=session,
+                    action_id=None,
+                    extra={
+                        "phase": "action_creation",
+                        "success": False,
+                        "error": error,
+                    },
                 )
             logger.error("[FindActionSpaceNode] End FindActionSpaceNode with error.")
             return None
@@ -2290,6 +2442,12 @@ class RunActionNode(BaseNode):
                 # delete_tool_responses / delete_tool_input_and_responses: carries cleaned messages.
                 if "messages" in algorithm_output and "config" not in algorithm_output:
                     session.update_global_state({"messages": algorithm_output["messages"]})
+                emit_messages_updated(
+                    source="run_action_node_context_retry",
+                    messages=session.get_global_state("messages"),
+                    runtime=session,
+                    extra={"kind": "context_limit"},
+                )
                 return self._post_handle(
                     inputs,
                     dict(next_node=NodeId.RUN_ACTION.value, success=True),
@@ -2373,6 +2531,20 @@ class RunActionNode(BaseNode):
         if isinstance(data, Result):
             session.update_global_state({"result": data})
             session.update_global_state({"messages": data.messages})
+            if data.new_states:
+                emit_state_created(
+                    source="run_action_node",
+                    origin="action_patch",
+                    states=[to_dict_safe(ns) for ns in data.new_states],
+                    runtime=session,
+                    extra={"run_action_mode": mode},
+                )
+            emit_messages_updated(
+                source="run_action_node",
+                messages=data.messages,
+                runtime=session,
+                extra={"mode": mode, "phase": "result"},
+            )
             if "answer" in mode:
                 if validate_answer:
                     return dict(next_node=NodeId.VALIDATE_NEW_STATE.value)
@@ -2386,6 +2558,12 @@ class RunActionNode(BaseNode):
 
         messages = data.get("messages", [])
         session.update_global_state({"messages": messages})
+        emit_messages_updated(
+            source="run_action_node",
+            messages=messages,
+            runtime=session,
+            extra={"mode": mode, "phase": "llm_turn"},
+        )
 
         if mode is None:
             return dict(next_node=NodeId.RUN_ACTION.value)
@@ -2412,7 +2590,12 @@ class ToolNode(BaseNode):
         logger.info("[ToolNode] Start ToolNode.")
         config = session.get_global_state("config") or {}
         retrieval_settings = session.get_global_state("retrieval_settings") or config.get("retrieval_settings", {})
-        tool_map = session.get_global_state("tool_map") or {}
+        # ``tool_map`` is read from the per-run ``tool_context`` ContextVar instead
+        # of session global state. Tool clients (e.g. ``MilvusClient``) hold
+        # ``_thread.RLock`` objects, and the framework deep-copies session state
+        # on every checkpoint (see ``InMemoryStore.save``) and ``asdict``-s log
+        # event metadata, both of which would crash on the lock.
+        tool_map = tool_context.get() or {}
         new_found_evidence_ids = session.get_global_state("new_found_evidence_ids") or []
         action = session.get_global_state("action") or {}
 
@@ -2547,6 +2730,13 @@ class ToolNode(BaseNode):
         )
         if new_found_evidence_ids:
             session.update_global_state({"new_found_evidence_ids": new_found_evidence_ids})
+
+        emit_messages_updated(
+            source="tool_node",
+            messages=messages,
+            runtime=session,
+            extra={"tools_executed": True},
+        )
 
         logger.info("[ToolNode] End ToolNode.")
         return dict(next_node=NodeId.RUN_ACTION.value)

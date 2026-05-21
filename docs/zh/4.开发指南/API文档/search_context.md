@@ -186,6 +186,24 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.FinalResul
 
 ---
 
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ResearchIntent
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ResearchIntent(...)
+```
+**ResearchIntent** 是从用户查询中解析出的结构化报告生成约束。
+
+**字段**：
+- **section_count**(Optional[int])：用户希望的章节数量。仅正整数会被保留。
+- **audience_role**(Optional[str])：目标读者角色。
+- **tone**(Optional[str])：写作风格，建议使用稳定英文枚举值，例如 `formal`、`analytical`。
+- **report_type**(Optional[str])：报告类型，建议使用稳定英文枚举值，例如 `standard`、`deep_research`。
+- **include_url**(List[str])：用户指定包含的链接。默认值：`[]`。
+- **exclude_url**(List[str])：用户指定排除的链接。默认值：`[]`。
+- **include_domains**(List[str])：用户指定的站点域名。默认值：`[]`。
+- **exclude_domains**(List[str])：用户排除的站点域名。默认值：`[]`。
+
+---
+
 ## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchContext
 ```python
 class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchContext(...)
@@ -194,11 +212,14 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 
 **字段**：
 - **session_id**(str)：会话ID。默认值：`""`。
-- **query**(str)：用户输入问题。默认值：`None`。
+- **original_query**(str)：用户输入的原始问题。默认值：`""`。
+- **research_query**(str)：意图识别后的研究主题，供检索与规划使用。默认值：`""`。
+- **research_intent**(ResearchIntent)：结构化报告约束。默认值：空 `ResearchIntent`。
 - **messages**(List[Message])：对话消息列表。
 - **language**(str)：默认值：`"zh-CN"`。
 - **report_template**(str)：模板内容。默认值：`""`。
 - **search_mode**(str)：默认值：`"research"`。
+- **entry_search_results**(List[Dict])：Entry节点预搜索结果。默认值：`[]`。
 - **questions**(str)：系统提问。默认值：`""`。
 - **user_feedback**(str)：用户反馈。默认值：`""`。
 - **outline_interactions**(List[OutlineInteraction])：大纲多轮交互历史记录。默认值：`[]`。
@@ -209,7 +230,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 - **current_report**(Union[Report, Dict, str, None])：当前报告。
 - **history_reports**(List[Report])：历史报告。
 - **final_result**(FinalResult)：最终结果。
-- **debug_pre_step**(str)：上一步调试日志。
 - **feedback_interaction_count**(int)：报告生成后局部优化的交互次数。默认值：`0`。
 - **feedback_snapshot_sent**(bool)：是否已经向前端推送过初始反馈快照。默认值：`False`。
 - **rewrite_history**(List[Dict])：局部改写历史记录。
+- **debug_pre_node**(str)：上一个调试节点。默认值：`""`。

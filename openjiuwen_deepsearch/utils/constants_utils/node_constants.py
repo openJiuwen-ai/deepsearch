@@ -10,6 +10,7 @@ class NodeId(enum.Enum):
 
     # research 相关
     ENTRY = "entry"
+    INTENT_RECOGNITION = "intent_recognition"
     GENERATE_QUESTIONS = "generate_questions"
     FEEDBACK_HANDLER = "feedback_handler"
     OUTLINE = "outline"
@@ -74,6 +75,7 @@ class AgentLlmName(enum.Enum):
     COLLECTOR_SUMMARY = NodeId.COLLECTOR_SUMMARY.value
 
     ENTRY = NodeId.ENTRY.value
+    INTENT_RECOGNITION = NodeId.INTENT_RECOGNITION.value
     GENERATE_QUESTIONS = NodeId.GENERATE_QUESTIONS.value
     OUTLINE = NodeId.OUTLINE.value
     PLAN_REASONING = NodeId.PLAN_REASONING.value
@@ -111,6 +113,8 @@ class AgentLlmName(enum.Enum):
     USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_AND_RELATED = (
         "user_feedback_processor_supplementary_search_rewrite_selected_and_related"
     )
+    USER_FEEDBACK_PROCESSOR_NEW_TASK_ASSESSMENT = "user_feedback_processor_new_task_assessment"
+    USER_FEEDBACK_PROCESSOR_NEW_TASK_REWRITE_SECTION = "user_feedback_processor_new_task_rewrite_section"
 
     VLM_CHART_GENERATOR = NodeId.VLM_CHART_GENERATOR.value
     VLM_CHART_GENERATOR_FIND_INSERT_POINT = "vlm_chart_generator_find_inserPoint"

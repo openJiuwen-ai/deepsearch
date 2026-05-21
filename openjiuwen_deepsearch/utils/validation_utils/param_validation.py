@@ -1,11 +1,15 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+import re
+
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import LLMConfig
 from openjiuwen_deepsearch.utils.validation_utils.field_validation import validate_not_empty_field, \
     validate_str_field, validate_bool_field
+
+SAFE_CONVERSATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def validate_generate_template_params(
@@ -41,6 +45,11 @@ def validate_run_agent_params(
 
     validate_not_empty_field("conversation_id", conversation_id)
     validate_str_field("conversation_id", conversation_id)
+    if not SAFE_CONVERSATION_ID_PATTERN.fullmatch(conversation_id):
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_COMMON_INVALID.code,
+            StatusCode.PARAM_CHECK_ERROR_COMMON_INVALID.errmsg.format(param="conversation_id"),
+        )
 
     validate_str_field("report_template", report_template)
 

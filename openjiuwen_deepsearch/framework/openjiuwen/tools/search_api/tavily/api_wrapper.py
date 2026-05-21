@@ -16,6 +16,8 @@ from openjiuwen_deepsearch.common.common_constants import (
 
 T = TypeVar("T")
 
+DEFAULT_TAVILY_SEARCH_URL = "https://api.tavily.com"
+
 
 class TavilySearchAPIWrapper(BaseModel, Generic[T]):
     """Wrapper class for Tavily Search API"""
@@ -77,7 +79,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         """Run query through Tavily Search API and return raw result."""
 
         # Build API endpoint URL
-        api_url = f"{self.search_url.get_secret_value()}/search"
+        api_url = f"{self._resolved_search_url()}/search"
 
         params = self._build_search_params(query=query)
 
@@ -103,7 +105,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
     async def raw_search_results_async(self, query: str) -> Dict:
         """Run query through Tavily Search API asynchronously."""
 
-        request_url = f"{self.search_url.get_secret_value()}/search"
+        request_url = f"{self._resolved_search_url()}/search"
 
         request_params = self._build_search_params(query=query)
 
@@ -135,10 +137,10 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
                 "score": result.get("score", 0.0),
             }
 
-            # Add raw_content if present
+            # Add raw_content if present, with length limit to prevent resource consumption
             raw_content = result.get("raw_content")
             if raw_content:
-                cleaned_result["raw_content"] = raw_content
+                cleaned_result["raw_content"] = raw_content[:MAX_SEARCH_CONTENT_LENGTH]
             cleaned_results.append(cleaned_result)
 
         return cleaned_results
@@ -164,3 +166,14 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
             "TOOL_SSL_VERIFY", "TOOL_SSL_CERT", ["false"]
         )
         return ssl_cert if ssl_verify else False
+
+    def _resolved_search_url(self) -> str:
+        """Return configured URL or Tavily's public default URL."""
+        if self.search_url is None:
+            return DEFAULT_TAVILY_SEARCH_URL
+        if hasattr(self.search_url, "get_secret_value"):
+            configured = self.search_url.get_secret_value()
+        else:
+            configured = str(self.search_url)
+        configured = (configured or "").strip().rstrip("/")
+        return configured or DEFAULT_TAVILY_SEARCH_URL

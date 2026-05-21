@@ -12,14 +12,21 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import EditorTeamNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     EndNode,
+    EntryNode,
+    IntentRecognitionNode,
     FeedbackHandlerNode,
     OutlineInteractionNode,
     StartNode,
     UserFeedbackProcessorNode,
 )
+from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import IntentRecognitionResult
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
     build_editor_team_workflow
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    Outline,
+    ResearchIntent,
+    Section,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
@@ -107,7 +114,8 @@ def test_create_section_state():
     outline = Outline(
         id="1", thought="mock though", title="mock title", sections=[outline_section]
     )
-    search_context = {'session_id': 'default_session_id', 'query': '杭州的天气怎么样', 'messages': [{...}],
+    search_context = {'session_id': 'default_session_id', 'original_query': '杭州的天气怎么样',
+                      'research_query': '杭州的天气怎么样', 'messages': [{...}],
                       'language': 'zh-CN', 'plan_executed_num': 0, 'current_plan': None,
                       'duplicated_search_queries': {}, 'duplicated_search_items': {}, 'final_report_path': '',
                       'final_result': {'response_content': '', 'citation_messages': {}, 'exception_info': ''},
@@ -200,6 +208,100 @@ async def test_base_node_invoke_injects_session_context():
     assert output["same_session"] is True
 
 
+def test_entry_node_routes_to_outline_after_intent_recognition():
+    """验证 EntryNode 保留入口逻辑，并在意图识别后按 HITL 配置路由到大纲。"""
+    session = Mock(spec=Session)
+    session.get_global_state.return_value = False
+    session.update_global_state = Mock()
+    node = EntryNode()
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.add_debug_log_wrapper"
+    ):
+        output = node._post_handle(
+            {},
+            {
+                "go_deepsearch": True,
+                "lang": "zh-CN",
+                "llm_result": "",
+                "error_msg": "",
+                "entry_search_results": [{"title": "result"}],
+            },
+            session,
+            Context(),
+        )
+
+    assert output["next_node"] == NodeId.OUTLINE.value
+    session.update_global_state.assert_any_call({
+        "search_context.entry_search_results": [{"title": "result"}]
+    })
+
+
+@pytest.mark.asyncio
+async def test_intent_recognition_node_updates_context_and_routes_to_entry():
+    """验证独立意图识别节点先写回上下文，再交给 EntryNode 保留原入口逻辑。"""
+    session = AsyncMock(spec=Session)
+    original_query = "请写一份正式报告：AI Agent 趋势"
+    messages = [{"role": "user", "content": original_query}]
+    intent_result = IntentRecognitionResult(
+        original_query=original_query,
+        research_query="AI Agent 趋势",
+        research_intent=ResearchIntent(
+            section_count=5,
+            audience_role="研发负责人",
+            tone="formal",
+            include_domains=["example.com"],
+            exclude_domains=["bad.com"],
+        ),
+    )
+    web_search_engine_config = Mock()
+    web_search_engine_config.search_engine_name = "tavily"
+
+    def _get_global_state(key):
+        return {
+            "search_context.original_query": original_query,
+            "search_context.messages": messages,
+            "config.web_search_engine_config": web_search_engine_config,
+            "config.workflow_human_in_the_loop": False,
+        }.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    session.update_global_state = Mock()
+    node = IntentRecognitionNode()
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="basic",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.recognize_report_intent",
+        new_callable=AsyncMock,
+        return_value=intent_result,
+    ) as mock_recognize, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints",
+    ) as mock_apply_domain_constraints:
+        output = await node.invoke({}, session, Context())
+
+    assert output["next_node"] == NodeId.ENTRY.value
+    mock_recognize.assert_awaited_once_with({
+        "original_query": original_query,
+        "messages": messages,
+        "llm_model_name": "basic",
+    })
+    session.update_global_state.assert_any_call({
+        "search_context.original_query": original_query,
+        "search_context.research_query": "AI Agent 趋势",
+        "search_context.research_intent": intent_result.research_intent.model_dump(),
+    })
+    session.update_global_state.assert_any_call({
+        "search_context.messages": [{"role": "user", "content": "AI Agent 趋势"}]
+    })
+    mock_apply_domain_constraints.assert_called_once_with(
+        search_engine_name="tavily",
+        include_domains=["example.com"],
+        exclude_domains=["bad.com"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_pre_handle():
     try:
@@ -235,6 +337,11 @@ async def test_start_node_merges_agent_llm_timeouts_into_session_config():
         session,
         Context(),
     )
+
+    search_context = session.update_global_state.call_args_list[0][0][0]["search_context"]
+    assert search_context["original_query"] == "hello"
+    assert search_context["research_query"] == "hello"
+    assert "query" not in search_context
 
     merged_config = session.update_global_state.call_args_list[-1][0][0]["config"]
     assert merged_config["agent_llm_timeouts"] == {"default": 300, "sub_reporter": 120}

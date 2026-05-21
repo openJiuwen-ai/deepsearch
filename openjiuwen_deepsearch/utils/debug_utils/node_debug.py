@@ -91,6 +91,14 @@ def _record_node_debug_log(record: NodeDebugLogRecord):
     """
         工作流节点记录格式化 debug 日志
     """
+    # 延迟导入 LogManager 以避免循环导入（log_manager.py 导入了本模块的 setup_debug_logger）
+    from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+
+    # 在 sensitive mode 下对 content 进行脱敏处理，避免敏感信息被持久化到日志
+    content = record.content
+    if LogManager.is_sensitive():
+        content = "***"
+
     log_str = json.dumps(
         {
             "pre_node": record.pre_node,
@@ -99,7 +107,7 @@ def _record_node_debug_log(record: NodeDebugLogRecord):
             "type": record.log_type,
             "timestamp": str(time.time()),
             "node_type": record.node_type,
-            "content": record.content
+            "content": content
         },
         ensure_ascii=False,
         default=str,

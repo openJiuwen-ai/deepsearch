@@ -1,6 +1,6 @@
 This document describes how to install **DeepSearch**.
 
-![DeepSearch installation flow](../images/安装指导/deepsearch安装流程.png)
+![DeepSearch installation flow](../images/installation_guide/deepsearch安装流程.png)
 
 
 To help you get started quickly, the community provides two installation paths:

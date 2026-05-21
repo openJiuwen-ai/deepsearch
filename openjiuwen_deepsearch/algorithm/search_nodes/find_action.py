@@ -147,6 +147,7 @@ async def run_find_action_space(
             )
             algorithm_output = dict(
                 actions=actions,
+                messages=list(messages),
                 total_input_tokens=total_input_tokens,
                 total_output_tokens=total_output_tokens,
                 success=True,

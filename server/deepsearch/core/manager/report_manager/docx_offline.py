@@ -9,6 +9,7 @@ import re
 import uuid
 from pathlib import Path
 
+import markdown
 import pypandoc
 
 from server.deepsearch.common.exception.exceptions import ReportConvertDependencyException
@@ -19,6 +20,7 @@ from server.deepsearch.core.manager.report_manager.conversion_utils import (
     make_safe_filename_component,
     normalize_docx_fonts,
     normalize_headings,
+    preprocess_markdown_text,
     read_text_with_fallback,
 )
 from server.deepsearch.core.manager.report_manager.mermaid_common import load_svg_markup
@@ -27,6 +29,7 @@ from server.deepsearch.core.manager.report_manager.mermaid_preprocess import (
     MermaidRenderOptions,
     extract_xychart_metadata,
     looks_like_mermaid_xychart,
+    normalize_whitespace_and_units,
     preprocess_mermaid_code,
 )
 from server.deepsearch.core.manager.report_manager.xychart_value_labels import (
@@ -37,6 +40,16 @@ from server.deepsearch.core.manager.report_manager.xychart_value_labels import (
 logger = logging.getLogger(__name__)
 
 MERMAID_BLOCK_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+DOCX_HTML_TEMPLATE = """<!DOCTYPE html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+</head>
+<body>
+{content}
+</body>
+</html>
+"""
 
 
 def render_mermaid_png(
@@ -213,12 +226,14 @@ def convert_md_to_docx(md_path: str | Path, docx_path: str | Path) -> None:
     docx_file.parent.mkdir(parents=True, exist_ok=True)
     safe_stem = make_safe_filename_component(docx_file.stem)
     temp_prefix = f".tmp_{safe_stem}_{uuid.uuid4().hex}"
-    temp_md = docx_file.parent / f"{temp_prefix}.md"
-    cleanup_paths: list[Path] = [temp_md]
+    temp_html = docx_file.parent / f"{temp_prefix}.html"
+    cleanup_paths: list[Path] = [temp_html]
 
     try:
         content = read_text_with_fallback(md_file)
         content = normalize_headings(content)
+        content = normalize_whitespace_and_units(content)
+        content = preprocess_markdown_text(content)
         content, mermaid_stats = replace_mermaid_blocks(
             content,
             docx_file.parent,
@@ -227,14 +242,23 @@ def convert_md_to_docx(md_path: str | Path, docx_path: str | Path) -> None:
             debug_dir=docx_file.parent,
             debug_stem=docx_file.stem,
         )
-        temp_md.write_text(content, encoding="utf-8")
+        html_body = markdown.markdown(
+            content,
+            extensions=["extra", "toc", "md_in_html"],
+            output_format="html5",
+        )
+        temp_html.write_text(
+            DOCX_HTML_TEMPLATE.format(content=html_body),
+            encoding="utf-8",
+            newline="\n",
+        )
         try:
             pypandoc.convert_file(
-                str(temp_md),
+                str(temp_html),
                 "docx",
                 outputfile=str(docx_file),
                 extra_args=[
-                    "--from=gfm",
+                    "--from=html",
                     "--resource-path",
                     str(docx_file.parent),
                 ],

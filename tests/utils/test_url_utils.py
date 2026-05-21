@@ -1,3 +1,5 @@
+import socket
+
 import pytest
 
 from openjiuwen_deepsearch.common.exception import CustomValueException
@@ -6,7 +8,8 @@ from openjiuwen_deepsearch.utils.common_utils.url_utils import (
     normalize_path,
     normalize_domain,
     normalize_url,
-    are_similar_urls
+    are_similar_urls,
+    validate_runtime_request_url,
 )
 
 # 构造一个长度超过 8192 的合法 URL
@@ -180,4 +183,27 @@ def test_are_similar_urls_invalid_urls(url1, url2):
     # 对于无效URL，函数应该返回False而不是抛出异常
     result = are_similar_urls(url1, url2)
     assert result is False
+ 
+ 
+def _mock_getaddrinfo(*addresses):
+    def resolver(host, port, type=0):
+        return [
+            (
+                socket.AF_INET6 if ":" in address else socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                (address, port),
+            )
+            for address in addresses
+        ]
+
+    return resolver
+
+
+def test_validate_runtime_request_url_blocks_dns_to_non_public_ip(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _mock_getaddrinfo("169.254.169.254"))
+
+    with pytest.raises(CustomValueException):
+        validate_runtime_request_url("http://metadata.attacker.test/latest/meta-data/")
 

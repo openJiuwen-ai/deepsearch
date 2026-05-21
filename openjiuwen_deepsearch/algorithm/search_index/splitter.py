@@ -3,7 +3,7 @@
 from typing import Callable, List, Tuple
 
 from openjiuwen.core.common.logging import logger
-from openjiuwen.core.retrieval.indexing.processor.spliter.base import Splitter
+from openjiuwen.core.retrieval.indexing.processor.splitter.base import Splitter
 from pysbd import Segmenter
 
 

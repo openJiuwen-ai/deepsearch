@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+DEFAULT_SERPER_SEARCH_URL = "https://google.serper.dev"
+
 
 class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
     """Wrapper for Serper.dev Google Search API."""
@@ -78,7 +80,7 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
             "X-API-KEY": self.search_api_key.decode("utf-8") or "",
             "Content-Type": "application/json",
         }
-        url = f"{self.search_url.get_secret_value()}/{self.type}"
+        url = f"{self._resolved_search_url()}/{self.type}"
         params: Dict[str, Any] = {
             "q": search_term,
             "gl": self.gl,
@@ -104,6 +106,17 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
             return []
         return items
 
+    def _resolved_search_url(self) -> str:
+        """Return configured URL or Serper's public default URL."""
+        if self.search_url is None:
+            return DEFAULT_SERPER_SEARCH_URL
+        if hasattr(self.search_url, "get_secret_value"):
+            configured = self.search_url.get_secret_value()
+        else:
+            configured = str(self.search_url)
+        configured = (configured or "").strip().rstrip("/")
+        return configured or DEFAULT_SERPER_SEARCH_URL
+
     def _execute_search_request(self, search_term: str, is_async: bool = False) -> Any:
         """Execute search request with optional async support."""
         headers, params, url, verify = self._prepare_search_request_data(search_term)
@@ -120,7 +133,7 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
         verify: Union[str, bool],
     ) -> List[Dict]:
         """Execute synchronous search request."""
-        response = requests.post(url, headers=headers, params=params, verify=verify)
+        response = requests.post(url, headers=headers, json=params, verify=verify)
         if response.status_code != 200:
             logger.error(f"Request search failed! Status code: {response.status_code}")
             response.raise_for_status()
@@ -135,6 +148,6 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
     ) -> List[Dict]:
         """Execute asynchronous search request."""
         async with httpx.AsyncClient(verify=verify, timeout=30) as client:
-            response = await client.post(url, params=params, headers=headers)
+            response = await client.post(url, json=params, headers=headers)
             response.raise_for_status()
             return self._parsed_results(response.json())

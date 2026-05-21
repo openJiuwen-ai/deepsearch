@@ -161,6 +161,7 @@ def create_plan_tool(state: dict, prompt_template: str):
         card=card,
         func=generate_plan if prompt_template == "planner" else generate_dependency_plan
     )
+    plan_tool.max_step_num = max_step_num
 
     return plan_tool
 
@@ -333,6 +334,12 @@ def _check_steps(arguments, tool, tool_call):
             raise CustomValueException(
                 StatusCode.PLANNER_GENERATE_ERROR.code,
                 f"Steps is not a list in tool call: {'**' if is_sensitive else tool_call}"
+            )
+        max_items = getattr(tool, "max_step_num", None)
+        if isinstance(max_items, int) and len(steps) > max_items:
+            raise CustomValueException(
+                StatusCode.PLANNER_GENERATE_ERROR.code,
+                f"Steps count exceeds max_step_num {max_items}: {'**' if is_sensitive else tool_call}"
             )
         required_steps_params = (
             tool.card.input_params.get("properties", {})

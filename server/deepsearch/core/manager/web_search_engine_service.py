@@ -41,7 +41,8 @@ class WebSearchEngineService:
         search_engine = api_wrapper(
             search_api_key=bytearray(web_search_config.search_api_key.encode('utf-8')),
             search_url=web_search_config.search_url,
-            max_web_search_results=MAX_SEARCH_RESULT_NUM
+            max_web_search_results=MAX_SEARCH_RESULT_NUM,
+            extension=web_search_config.extension or {},
         )
 
         try:
@@ -74,6 +75,7 @@ class WebSearchEngineService:
             create_request.search_api_key = encrypted_api_key
 
             patch = create_request.model_dump(exclude_unset=True)
+            patch.setdefault("search_url", create_request.search_url or "")
             dao_model = WebSearchEngineModel()
             for key, value in patch.items():
                 setattr(dao_model, key, value)

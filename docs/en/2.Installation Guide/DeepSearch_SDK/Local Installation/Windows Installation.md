@@ -79,7 +79,7 @@ Install dependencies first, then clone and configure.
   git config --global user.email your_useremail
   ```
 
-  ![image](../../../images/安装指导/gitcode-token.png)
+  ![image](../../../images/installation_guide/gitcode-token.png)
 
 * Clone (use your GitCode account and personal access token when prompted):
 

@@ -28,5 +28,6 @@
     - [report_convert](./4.Developer%20Guide/API%20Reference/report_convert.md)
     - [search_context](./4.Developer%20Guide/API%20Reference/search_context.md)
     - [deepsearch_agent](./4.Developer%20Guide/API%20Reference/deepsearch_agent.md)
+    - [deepsearch_rest_api](./4.Developer%20Guide/API%20Reference/deepsearch_rest_api.md)
     - [workflow](./4.Developer%20Guide/API%20Reference/workflow.md)
 - [5. FAQ](./5.FAQ/README.md)

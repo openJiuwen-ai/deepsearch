@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 
+import json
 import logging
 import re
 from typing import Any, Iterable
@@ -28,6 +29,10 @@ _PARAM_TYPE_JSON_SCHEMA: dict[int, dict[str, Any]] = {
     3: {"type": "number"},
     4: {"type": "boolean"},
 }
+
+MAX_RUNTIME_API_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_RUNTIME_API_JSON_DEPTH = 20
+MAX_RUNTIME_API_JSON_CONTAINER_ITEMS = 1000
 
 
 def _json_schema_property_for_param(param: Any) -> dict[str, Any]:
@@ -64,6 +69,73 @@ def _extract_response_data(payload: Any) -> Any:
     if isinstance(payload, dict) and "data" in payload:
         return payload["data"]
     return payload
+
+
+def _runtime_api_response_error(message: str) -> CustomValueException:
+    return CustomValueException(
+        StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+        StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=message),
+    )
+
+
+def _check_runtime_api_content_length(response: httpx.Response) -> None:
+    content_length = response.headers.get("content-length")
+    if not content_length:
+        return
+    try:
+        declared_size = int(content_length)
+    except ValueError:
+        return
+    if declared_size > MAX_RUNTIME_API_RESPONSE_BYTES:
+        raise _runtime_api_response_error(
+            "runtime api response exceeds max size "
+            f"{MAX_RUNTIME_API_RESPONSE_BYTES} bytes"
+        )
+
+
+async def _read_limited_json_response(response: httpx.Response) -> Any:
+    # 先调用raise_for_status检查HTTP状态码
+    response.raise_for_status()
+    _check_runtime_api_content_length(response)
+
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        if len(body) + len(chunk) > MAX_RUNTIME_API_RESPONSE_BYTES:
+            raise _runtime_api_response_error(
+                "runtime api response exceeds max size "
+                f"{MAX_RUNTIME_API_RESPONSE_BYTES} bytes"
+            )
+        body.extend(chunk)
+
+    encoding = response.encoding or "utf-8"
+    payload = json.loads(bytes(body).decode(encoding))
+    _validate_runtime_api_json_limits(payload)
+    return payload
+
+
+def _validate_runtime_api_json_limits(payload: Any, depth: int = 0) -> None:
+    if depth > MAX_RUNTIME_API_JSON_DEPTH:
+        raise _runtime_api_response_error(
+            "runtime api response JSON exceeds max depth "
+            f"{MAX_RUNTIME_API_JSON_DEPTH}"
+        )
+
+    if isinstance(payload, dict):
+        if len(payload) > MAX_RUNTIME_API_JSON_CONTAINER_ITEMS:
+            raise _runtime_api_response_error(
+                "runtime api response JSON object exceeds max item count "
+                f"{MAX_RUNTIME_API_JSON_CONTAINER_ITEMS}"
+            )
+        for value in payload.values():
+            _validate_runtime_api_json_limits(value, depth + 1)
+    elif isinstance(payload, list):
+        if len(payload) > MAX_RUNTIME_API_JSON_CONTAINER_ITEMS:
+            raise _runtime_api_response_error(
+                "runtime api response JSON array exceeds max item count "
+                f"{MAX_RUNTIME_API_JSON_CONTAINER_ITEMS}"
+            )
+        for value in payload:
+            _validate_runtime_api_json_limits(value, depth + 1)
 
 
 def _collect_request_parts(tool_config: RuntimeApiToolConfig, args: dict[str, Any]) -> tuple[dict, dict, dict]:
@@ -138,9 +210,8 @@ def create_runtime_api_tool(
             request_kwargs["json"] = body_params
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.request(**request_kwargs)
-            response.raise_for_status()
-            payload = response.json()
+            async with client.stream(**request_kwargs) as response:
+                payload = await _read_limited_json_response(response)
 
         # Collector-like paths do not use response_model, so only those paths
         # should receive wrapper-normalized search payloads.

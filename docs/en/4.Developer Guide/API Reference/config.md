@@ -14,6 +14,10 @@ class openjiuwen_deepsearch.config.config.LLMConfig()
 - **api_key** (bytearray, optional): API key. Default empty `bytearray`.
 - **hyper_parameters** (dict, optional): Extra generation parameters. Default `{}`.
 - **extension** (dict, optional): Provider-specific extras. Default `{}`.
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
+- **timeout** (int, optional): Request timeout in seconds. Default `600`.
+- **max_tries** (int, optional): Maximum retry attempts for one LLM call. Default `4`.
+- **append_think_tags_to_messages** (bool, optional): Whether to append think tags into messages. Default `False`.
 
 **Examples**
 
@@ -39,11 +43,51 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 
 **Fields**
 
-- **search_engine_name** (`Literal["tavily","google","xunfei","petal","custom"]`, optional): Engine id. Default `"tavily"`.
+- **search_engine_name** (`Literal["tavily","google","xunfei","petal","custom","bocha","jina","perplexity","serper"]`, optional): Engine id. Default `"tavily"`.
 - **search_api_key** (bytearray, optional): API key. Default empty.
-- **search_url** (str, optional): Endpoint URL. Default `""`.
+- **search_url** (str, optional): Endpoint URL. Default `""`. Public engines may leave this empty and use built-in defaults.
 - **max_web_search_results** (int, optional): Max hits, 1–10. Default `5`.
 - **extension** (dict, optional): Engine-specific options. Default `{}`.
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
+
+**Built-in engine notes**
+
+- `google` / `serper`: routed to the Google/Serper wrapper.
+- `tavily`: Tavily wrapper.
+- `xunfei`: iFlytek wrapper.
+- `petal`: Petal web augmentation wrapper.
+- `bocha` / `perplexity`: harness `web_tools` adapter wrappers.
+- `jina`: direct HTTP wrapper for Jina Search.
+- `custom`: dynamically loaded external search tool.
+
+**Examples**
+
+```python
+>>> from openjiuwen_deepsearch.config.config import WebSearchEngineConfig
+>>> web_search_config = WebSearchEngineConfig(
+...     search_engine_name="jina",
+...     search_api_key=bytearray("your_jina_key", encoding="utf-8"),
+...     search_url="",
+...     extension={
+...         "gl": "us",
+...         "hl": "en",
+...         "location": "San Francisco",
+...         "page": 2,
+...     },
+... )
+>>> web_search_config = WebSearchEngineConfig(
+...     search_engine_name="bocha",
+...     search_api_key=bytearray("your_bocha_key", encoding="utf-8"),
+...     extension={"timeout_seconds": 30, "fetch_webpage": True},
+... )
+```
+
+**Notes**
+
+- `jina` falls back to `https://s.jina.ai` when `search_url` is empty.
+- `bocha` and `perplexity` honor `search_url` only when the underlying harness provider supports URL override.
+- Search results are normalized before collector-side storage so aliases like `link`, `source_url`, `snippet`, `summary`, and `answer` are mapped into the common `title` / `url` / `content` / `type` shape.
+- Prefetched webpage content and the later collector evaluation input are both bounded by `MAX_COLLECTOR_DOC_CONTENT_LENGTH` to prevent oversized search payloads from reaching downstream LLM evaluation unchanged.
 
 ## `EmbedModelConfig`
 ```python
@@ -52,6 +96,7 @@ class openjiuwen_deepsearch.config.config.EmbedModelConfig()
 **EmbedModelConfig** configures embedding for native local KB.
 
 **Fields**: **model_name**, **api_key**, **base_url**, **max_batch_size** (required); **timeout** (default `60`); **max_retries** (default `3`).
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
 
 ## `VectorStoreConfig`
 ```python
@@ -81,6 +126,7 @@ class openjiuwen_deepsearch.config.config.LocalSearchEngineConfig()
 - **knowledge_base_type** (`internal` / `external`, default `internal`).
 - **source** (`KooSearch` / `LakeSearch`, default `KooSearch`).
 - **knowledge_base_configs** (`List[NativeKnowledgeBaseConfig]`, default `[]`).
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
 
 ## `CustomWebSearchConfig` / `CustomLocalSearchConfig`
 Custom tool hooks: **custom_*_file**, **custom_*_func**, **extension** (defaults empty).
@@ -102,12 +148,19 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **source_tracer_research_trace_source_switch** (bool, optional): Whether to enable citation tracing. Default value: `True`.
 - **source_tracer_generated_citation_switch** (bool, optional): Whether to generate new citations from search results. When disabled, the system keeps only citations already present in the original report. Default value: `True`.
 - **source_tracer_infer_switch** (bool, optional): Whether to enable provenance reasoning. Default value: `True`.
-- **llm_config** (Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking"], LLMConfig], optional): LLM model configuration. Default value: `dict()`.
+- **llm_config** (Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking", "vlm_chart_generating"], LLMConfig], optional): LLM model configuration. Default value: `dict()`.
 - **info_collector_search_method** (Literal["web", "local", "all"], optional): Search method. `web` means web augmentation search, `local` means local search tool, and `all` means hybrid web + local search. Default value: `"web"`.
 - **web_search_engine_config** (WebSearchEngineConfig, optional): Web augmentation engine configuration. Default value: `WebSearchEngineConfig()`.
 - **local_search_engine_config** (LocalSearchEngineConfig, optional): Local search engine configuration. Default value: `LocalSearchEngineConfig()`.
 - **custom_web_search_config** (CustomWebSearchConfig, optional): Custom web augmentation engine configuration. Default value: `CustomWebSearchConfig()`.
 - **custom_local_search_config** (CustomLocalSearchConfig, optional): Custom local search configuration. Default value: `CustomLocalSearchConfig()`.
+- **search_mode** (`Literal["research", "search", "react"]`, optional): Agent operating mode. `research` for report generation workflow, `search` for DeepSearch graph, `react` for simple ReAct + search tools. Default value: `"research"`.
+- **enable_question_router** (bool, optional): When `True` and `search_mode="search"`, route simple questions to `react` and complex ones to DeepSearch. Default value: `False`.
+- **search_workflow_per_question_params** (`PerQuestionParams`, optional): Per-question control knobs for search/react runs (time, workers, tool map, limits, etc.). Default value: `PerQuestionParams()`.
+- **search_workflow_milvus_config** (`MilvusConfig`, optional): Milvus/embedder settings used when retrieval tool path is selected. Default value: `MilvusConfig()`.
+- **jina_api_key** (bytearray, optional): Jina API key for `search_fetch`. Default empty `bytearray`.
+- **serper_api_key** (bytearray, optional): Serper API key for `search_fetch`. Default empty `bytearray`.
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
 - **web_search_max_qps** (float, optional): Maximum QPS for the web augmentation engine. `0` means no rate limit. Floating-point values such as `0.5` are supported and mean one request every 2 seconds. Default value: `0`.
 - **user_feedback_processor_enable** (bool, optional): Whether to enable post-report local optimization. Default value: `False`.
 - **user_feedback_processor_max_interactions** (int, optional): Maximum number of local optimization interactions. Default value: `100`. Allowed range: `1~100`.

@@ -33,7 +33,7 @@ agent_config["execution_method"] = "parallel"
 
 DeepSearch can assign up to four logical models:
 
-- **plan_understanding** — intent and planning (Outliner, Planner); reduces hallucinations.
+- **plan_understanding** — intent and planning (IntentRecognition, Outliner, Planner); reduces hallucinations.
 - **info_collecting** — information gathering (InfoCollector).
 - **writing_checking** — report body and rich content (Sub-reporter).
 - **general** — default for any stage without a specific model (**required**).
@@ -68,12 +68,29 @@ Supported backends (OpenAI-compatible):
 Supported engines (set `web_search_engine_config.search_engine_name`):
 
 - `google`
+- `serper`
 - `tavily`
 - `xunfei` (iFlytek)
 - `petal` (Petal AI web augmentation)
+- `bocha`
+- `jina`
+- `perplexity`
 - `custom`
 
-> Register with the vendor for `search_api_key` and `search_url`.
+Integration notes:
+
+- `jina` uses the built-in direct HTTP wrapper. When `search_url=""`, the runtime falls back to `https://s.jina.ai`. Provider-specific query options such as `gl`, `hl`, `location`, and `page` are carried through `extension`.
+- `bocha` and `perplexity` use the harness `web_tools` adapter layer. They support `extension.timeout_seconds` and `extension.fetch_webpage`. `search_url` is only honored when the underlying provider supports URL override in `web_tools`.
+- `serper` is exposed as a dedicated engine name so server-side configuration can use `serper`, while research-mode `web_search_tool` still reuses the Google/Serper wrapper internally.
+- Public engines may keep `search_url` empty and rely on built-in defaults or provider defaults.
+
+Search results are also bounded before they reach the collector LLM path:
+
+- Prefetched webpage bodies from the harness-based adapters are truncated to `MAX_COLLECTOR_DOC_CONTENT_LENGTH`.
+- `InfoRetrievalNode._structure_result` applies the same bound again before passing `contents` into `run_doc_evaluation`.
+- Collector-side normalization stores web results in a stable `title` / `url` / `content` / `type` shape and accepts aliases such as `link`, `source_url`, `snippet`, `summary`, and `answer`.
+
+> Register with the vendor for `search_api_key`. For public engines such as Jina, `search_url` can be left empty to use the built-in default endpoint; provide it only when you need a vendor-specific or privately deployed URL.
 
 ## TLS / SSL
 
@@ -170,6 +187,8 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 Enable template-following in `agent_config`. The template describes top-level sections, subsections, functional notes, and whether a section is “core.”
 
+When uploaded through `generate_template`, the decoded Markdown template file must be no larger than `50 MB`, and the normalized Markdown output is capped at `5 MB`.
+
 Example template (Markdown):
 
 ```markdown
@@ -243,6 +262,8 @@ async for chunk in agent.run(
 
 Same as above but upload a sample report (Markdown, DOCX, PDF, HTML) and set `is_template=False` in `generate_template`. The service extracts a template, then you call `run` with `report_template=user_template_content` as in the previous section.
 
+For uploaded sample reports, the decoded source file must be no larger than `50 MB`. PDFs support up to `512` pages. For DOCX, the uncompressed package must stay within `50 MB`, and `word/document.xml` must stay within `8 MB`. The parsed Markdown output is capped at `5 MB`.
+
 # Human-in-the-loop (HITL)
 
 ---
@@ -258,6 +279,8 @@ Supported stages:
 
 ## Clarification
 
+Before planning, the system recognizes intent from the original user query, generates `research_query`, and then uses `research_query` to create follow-up questions that help collect more context and understand the research goal more accurately.
+
 Set:
 
 ```python
@@ -266,7 +289,7 @@ agent_config["workflow_human_in_the_loop"] = True
 
 (Default is on in many deployments.)
 
-Flow: user asks → system asks follow-ups → interrupt → user answers → resume.
+Flow: user asks → system generates `research_query` after intent recognition → system asks follow-ups based on `research_query` → interrupt → user answers → resume.
 
 ### Feedback channels
 

@@ -8,6 +8,10 @@ class SearchEngine(enum.Enum):
     GOOGLE = "google"
     XUNFEI = "xunfei"
     PETAL = "petal"
+    BOCHA = "bocha"
+    JINA = "jina"
+    PERPLEXITY = "perplexity"
+    SERPER = "serper"
 
 
 class LocalSearch(enum.Enum):

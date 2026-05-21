@@ -42,15 +42,32 @@ Aggregated report: **report_task**, **report_template**, **sub_reports**, **repo
 - `infer_messages` stores source-tracing graph payloads. Report export reads `html_base64` and writes standalone HTML resources.
 - `chart_messages` stores VLM chart payloads. Report export reads `base64` and writes image resources.
 
+## `ResearchIntent`
+Structured report-generation constraints parsed from the user query.
+
+**Fields**:
+
+- **section_count**: Desired section count. Only positive integers are kept.
+- **audience_role**: Target reader role.
+- **tone**: Writing tone as a stable English enum value, such as `formal` or `analytical`.
+- **report_type**: Report type as a stable English enum value, such as `standard` or `deep_research`.
+- **include_url**: URLs the user explicitly wants to include. Default value: `[]`.
+- **exclude_url**: URLs the user wants to exclude. Default value: `[]`.
+- **include_domains**: Site domains specified by the user. Default value: `[]`.
+- **exclude_domains**: Site domains excluded by the user. Default value: `[]`.
+
 ## `SearchContext`
 **Fields**:
 
 - **session_id**: Session ID.
-- **query**: User query.
+- **original_query**: Original user query.
+- **research_query**: Research topic after intent recognition, used for retrieval and planning.
+- **research_intent**: Structured report constraints. Default value: empty `ResearchIntent`.
 - **messages**: Conversation messages.
 - **language**: Language. Default value: `zh-CN`.
 - **report_template**: Report template.
 - **search_mode**: Search mode. Default value: `research`.
+- **entry_search_results**: Entry-node pre-search results.
 - **questions**: Clarification questions.
 - **user_feedback**: User feedback.
 - **outline_interactions**: Outline interaction history.
@@ -61,7 +78,7 @@ Aggregated report: **report_task**, **report_template**, **sub_reports**, **repo
 - **current_report**: Current report.
 - **history_reports**: Historical reports.
 - **final_result**: Final result.
-- **debug_pre_step**: Previous-step debug log.
 - **feedback_interaction_count**: Number of post-report local editing interactions. Default value: `0`.
 - **feedback_snapshot_sent**: Whether the initial feedback snapshot has already been pushed to the frontend. Default value: `False`.
 - **rewrite_history**: Local rewrite history.
+- **debug_pre_node**: Previous debug node. Default value: `""`.

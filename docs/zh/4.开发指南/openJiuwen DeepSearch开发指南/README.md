@@ -33,7 +33,7 @@ agent_config["execution_method"] = "parallel"
 ---
 
 openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
-- **plan_understanding:** 该模型旨在能理解用户意图，生成任务规划步骤，减少幻觉，配置在Outliner、Planner模块
+- **plan_understanding:** 该模型旨在能理解用户意图，生成任务规划步骤，减少幻觉，配置在IntentRecognition、Outliner、Planner模块。
 - **info_collecting:** 该模型用于信息收集各个步骤，配置在InfoCollector
 - **writing_checking:** 该模型用于准确生成报告及插入图文，配置在Sub_reporter
 - **general:** 该模型为通用模型，综合能力较强，所有模块都可调用该模型 
@@ -64,15 +64,32 @@ vlm_chart_generating 多模态模型参考表
 
 ---
 
-openJiuwen-DeepSearch 支持接入四种类型联网增强引擎：
+openJiuwen-DeepSearch 当前支持以下内置联网增强引擎，均通过 `web_search_engine_config.search_engine_name` 指定：
 
- - Google `web_search_engine_config`的`search_engine_name`参数必须赋值为google。
- - Tavily `web_search_engine_config`的`search_engine_name`参数必须赋值为tavily。
- - 讯飞搜索 `web_search_engine_config`的`search_engine_name`参数必须赋值为xunfei。
- - 小艺AI问答联网增强 `web_search_engine_config`的`search_engine_name`参数必须赋值为petal。
+- `google`：Google/Serper 搜索适配。
+- `serper`：研究态复用 Google/Serper Wrapper 的别名。
+- `tavily`：Tavily 搜索。
+- `xunfei`：讯飞搜索。
+- `petal`：小艺 AI 问答联网增强。
+- `bocha`：通过 harness `web_tools` 适配的博查搜索。
+- `jina`：直接接入 Jina Search API，默认地址为 `https://s.jina.ai`。
+- `perplexity`：通过 harness `web_tools` 适配的 Perplexity 搜索。
+- `custom`：加载外部自定义联网搜索工具。
 
+不同引擎的接入方式与配置重点如下：
 
-> 说明：用户需要自行前往相应的联网增强引擎的官网注册账号，以便获取可用的search_api_key和联网增强引擎调用的URL请求地址search_url。
+- `jina` 使用项目内置的直接 HTTP API Wrapper；当 `search_url` 为空时，会自动回退到 `https://s.jina.ai`。可通过 `extension` 传入 `gl`、`hl`、`location`、`page` 等查询参数。
+- `bocha`、`perplexity` 使用 harness `web_tools` 适配层；支持通过 `extension.timeout_seconds` 控制调用超时，通过 `extension.fetch_webpage` 控制是否继续抓取网页正文。仅当底层 provider 支持 URL 覆盖时，`search_url` 才会生效。
+- `serper` 在研究态 `web_search_tool` 中映射到 Google/Serper Wrapper，便于与服务端配置名称保持一致。
+- `tavily`、`google/serper`、`xunfei`、`petal` 保持原有接入方式，其中公共引擎允许 `search_url=""`，此时使用内置默认地址或 provider 默认行为。
+
+搜索结果进入 Collector 链路前，系统还会执行统一的内容裁剪与归一化：
+
+- `bocha`、`perplexity` 在预抓取网页正文后，会先按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 裁剪，避免超长正文直接进入后续提示词。
+- Collector 在 `_structure_result` 阶段会再次按同一上限裁剪传给 `run_doc_evaluation` 的内容。
+- `web_page_search_record` 会统一保留标准化字段 `title`、`url`、`content`、`type`，兼容不同引擎返回的 `link`、`source_url`、`snippet`、`summary`、`answer` 等别名字段。
+
+> 说明：用户需要自行前往相应联网增强引擎的官网注册账号，以便获取 `search_api_key`。对于 Jina 等公共搜索接口，`search_url` 可以留空使用系统默认地址；如需私有化部署或 vendor 提供自定义地址，再显式传入 `search_url`。
 
 ## ssl证书配置说明
 
@@ -175,6 +192,8 @@ async for chunk in agent.run(message=message, conversation_id=str(uuid.uuid4()),
  - 功能概述是对目标研究报告的具体内容的进一步描述。
  - 是否核心章节是对目标研究报告的当前章节是否关键章节的标识，核心章节为系统重点撰写的章节。
 
+模板文件通过 `generate_template` 上传时，base64 解码后的原始文件大小上限为 `50 MB`；规范化后的 Markdown 内容大小上限为 `5 MB`。
+
 以下是模板文件实例：
 ```markdown
 # 企业基本情况
@@ -258,6 +277,8 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 用户提供的样例报告文件，与期望生成研究报告遵循相同模板。样例报告文件格式支持markdown、docx、pdf、html。
 
+样例报告通过 `generate_template` 上传时，base64 解码后的原始文件大小上限为 `50 MB`；若为 PDF，最多支持 `512` 页；若为 DOCX，解压后的总大小上限为 `50 MB`，且 `word/document.xml` 大小上限为 `8 MB`；解析后的 Markdown 内容大小上限为 `5 MB`。
+
 与上一小节“根据用户查询和用户已有模板生成研究报告”不同的是，`DeepresearchAgent` 的 `generate_template` 函数中，入参 `is_template` 应取值为 `False`，表示用户提供的是样例报告文件。
 
 ```python
@@ -320,7 +341,7 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 ## 用户查询意图交互（Clarification Interaction）
 
-在规划预备阶段，系统会根据用户的原始查询自动生成若干延伸问题，引导用户提供更多背景信息，以便系统更准确地理解研究目标。
+在规划预备阶段，系统会根据用户的原始查询生成 `research_query`，再依据 `research_query` 自动生成若干延伸问题，引导用户提供更多背景信息，以便系统更准确地理解研究目标。
 
 当配置参数：
 
@@ -335,9 +356,10 @@ agent_config["workflow_human_in_the_loop"] = True
 ### 工作流程
 
 1. 用户提交原始查询
-2. 系统提出补充问题
-3. 系统中断流程等待用户回答
-4. 用户反馈后系统恢复流程并继续执行 DeepResearch
+2. 系统根据用户原始查询，意图识别后生成 `research_query`
+3. 系统根据 `research_query` 提出补充问题
+4. 系统中断流程等待用户回答
+5. 用户反馈后系统恢复流程并继续执行 DeepResearch
 
 ---
 

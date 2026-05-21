@@ -4,7 +4,9 @@
 import re
 
 _CITATION_PATTERN = re.compile(
-    r'(?:\[\s*checked_citation:\s*\d+\s*\]\[\[\d+\]\]\((?:[^()]|\([^()]*\))*\)|\[\s*citation:\s*\d+\s*\])'
+    r'(?:\[\s*checked_citation:\s*\d+\s*\]\[\[\d+\]\]\((?:[^()]|\([^()]*\))*\)'
+    r'|\[\[\d+\]\]\((?:[^()]|\([^()]*\))*\)'
+    r'|\[\s*citation:\s*\d+\s*\])'
 )
 _INFERENCE_MARKER_PATTERN = re.compile(r'\[([^\]]+)\]\(#inference:(\d+)\)')
 

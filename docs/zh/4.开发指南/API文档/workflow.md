@@ -31,6 +31,10 @@ async generate_template(file_name: str, file_stream: str, is_template: bool, age
 
 **说明**：
 - 会校验入参并调用 `TemplateGenerator.generate_template`。
+- `file_stream` base64 解码后的原始文件大小上限为 `50 MB`。
+- `is_template=False` 且上传 PDF 时，最多支持 `512` 页。
+- `is_template=False` 且上传 DOCX 时，解压后的总大小上限为 `50 MB`，且 `word/document.xml` 大小上限为 `8 MB`。
+- 模板规范化/文档解析后的 Markdown 内容大小上限为 `5 MB`。
 - 异常场景会记录接口日志并返回失败信息。
 
 ---

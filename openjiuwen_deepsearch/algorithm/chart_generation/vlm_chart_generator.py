@@ -15,9 +15,12 @@ import json
 import copy
 from typing import Dict, List, Any, Optional, Tuple
 
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
-from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
+from openjiuwen_deepsearch.algorithm.chart_generation.utils import get_chart_base64
 from openjiuwen_deepsearch.algorithm.chart_generation.figure_placeholders import (
     FigurePlaceholderGenerator,
 )
@@ -64,11 +67,11 @@ class VLMChartGenerator:
                                                )
         self._insert_chart_node = InsertChartNode(self._output_dir)
         
-    def _check_input(self, report_content: str, 
+    async def _check_input(self, report_content: str, 
                      all_classified_contents: List[Dict[str, Any]],
                      source_trace_datas: List[Dict[str, Any]]):
         """
-        检查输入参数
+        检查输入参数, 检查llm是否为多模态模型
         """
         if not report_content:
             error_msg = "报告内容不能为空"
@@ -84,9 +87,56 @@ class VLMChartGenerator:
             warning_msg = "溯源信息为空"
             logger.warning(f"{self._log_prefix} {warning_msg}")
 
+        # 测试llm模型
+        if self._vlm_max_iterations > 0 and self._vlm_model_name == "NO VLM":
+            # 需要迭代优化，但没有传入vlm模型参数
+            if await self.test_llm_model(self._llm_model_name):
+                # 可用, vlm迭代优化复用llm模型
+                self._vlm_model_name = self._llm_model_name
+                self._chart_generator.set_vlm_name(self._llm_model_name)
+            else:
+                # 不可用，保留图生成，跳过图迭代优化
+                logger.info(f"{self._log_prefix} llm can not be used to vlm task. Skip chart iteration.")
+                self._chart_generator.set_vlm_iteration(0)
+
         self._report_content = report_content
         self._all_classified_contents = copy.deepcopy(all_classified_contents)
         self._source_trace_datas = copy.deepcopy(source_trace_datas)
+
+    async def test_llm_model(self, llm_model_name: str) -> bool:
+        """
+        在vlm模型没有设置时，测试llm模型是否是多模态模型，
+        如果是则用llm进行迭代优化，否则跳过vlm生成图模块
+        Args:
+            llm_model_name: 模型名称
+        Returns:
+            通过多模态任务测试则返回 True, 否则返回 Fasle
+        """
+        try:
+            test_figure_path = "openjiuwen_deepsearch/algorithm/chart_generation/fonts/test.png"
+            test_base64 = get_chart_base64(test_figure_path)
+            prompt = [{"role": "user", 
+                       "content": [
+                           {"type": "image_url", 
+                            "image_url": {"url": f"data:image/png;base64,{test_base64}"},
+                            },
+                           {"type": "text", "text": "图中描绘的是什么内容？如果无法看到图的内容，直接输出'not supported'"},
+                           ],
+                        }]
+            llm = llm_context.get().get(llm_model_name)
+            response = await ainvoke_llm_with_stats(
+                llm, prompt, 
+                agent_name=AgentLlmName.VLM_CHART_GENERATOR_GENERATE_CHART_CODE.value
+                )
+            content = response.get("content", "")
+            if content and "not supported" in content.lower():
+                raise RuntimeError
+            logger.debug("%s Test llm model for vlm task, the response: %s",
+                         self._log_prefix, response.get("content", ""))
+        except Exception as e:
+            logger.warning(f"{self._log_prefix} An error occurred while testing general llm. Error: {str(e)}")
+            return False
+        return True
 
     async def run(self, report_content: str, 
             all_classified_contents: List[Dict[str, Any]],
@@ -108,7 +158,7 @@ class VLMChartGenerator:
         """
         
         try:
-            self._check_input(report_content, all_classified_contents, source_trace_datas)
+            await self._check_input(report_content, all_classified_contents, source_trace_datas)
             # 选定图表插入锚点
             chart_data_collect_tasks = await self._figure_placeholder_generator.run(self._report_content)
             logger.debug("%s The chart data collection tasks: \n%s", self._log_prefix,

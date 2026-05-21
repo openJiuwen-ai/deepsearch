@@ -212,17 +212,10 @@ When **`tool_map == "retrieve"`**, point the agent at Milvus + the embedding HTT
 | `milvus_port` | int | `19530` | Milvus port |
 | `database_name` | str | `"deepsearch_benchmarks"` | DB name |
 | `collection_name` | str | `"browsecompplus_with_bm25"` | Collection name |
-| `embedder_model_name` | str | `"qwen3-embedding-8b"` | **Supported today:** `qwen3-embedding-0.6b`, `qwen3-embedding-8b` |
+| `embedder_model_name` | str | `""` | Embedding model id; must match the model used when the index was built |
 | `embedder_api_key` | bytearray | empty | Required for retrieve; empty breaks tool construction |
 | `embedder_base_url` | str | `""` | Embeddings URL, e.g. `http://localhost:11450/v1/embeddings` |
 | `embedder_timeout` | int | `100` | HTTP timeout (seconds) |
-
-**Supported embedding models** (same as **`RemoteQwenEmbedder`** in `openjiuwen_deepsearch/algorithm/search_tools/retrieval/embedder.py`):
-
-- `qwen3-embedding-0.6b` — 1024 dims  
-- `qwen3-embedding-8b` — 4096 dims  
-
-Other names fail at init unless you extend **`_model2embed_dim`** and **`_model2query_instruction`** in the embedder.
 
 **Retriever `mode`**
 
@@ -289,7 +282,7 @@ For each sub-agent, **`llm_config`** is a **`Dict[Literal["general", "plan_under
 | `retrieval_prompt` | Literal["retrieve", "retrieve_given_multihop_query"] | `"retrieve"` | Prompt template for LLM-generated retrieval queries. **`retrieve`**: simple keyword-style queries (BrowseComp+ default). **`retrieve_given_multihop_query`**: multi-hop style (GEAR-like; less validated). |
 | `top_k` | int | 3 | Final number of document blocks returned to the agent |
 | `top_k_multiply_factor` | int | 5 | Initial pool size multiplier: **`top_k × top_k_multiply_factor`** candidates before merge/rerank |
-| `add_instruction` | bool | True | Append extra instructions when the LLM drafts retrieval queries; recommended with **Qwen3-Embedding-8B** |
+| `add_instruction` | bool | True | Append extra instructions when the LLM drafts retrieval queries; often helps with instruction-aware embedding backends |
 | `mode` | Literal["dense", "sparse", "hybrid"] | `"hybrid"` | **`dense`** / **`sparse`** / **`hybrid`** retrieval |
 
 **`StateCreationAgentConfig`** (`search_workflow.state_creation_agent`)
@@ -466,8 +459,8 @@ Steps at a glance:
 #### Quick path
 
 1. Run Milvus per the official guide: [Milvus standalone (Docker)](https://milvus.io/docs/install_standalone-docker.md).  
-2. Run an **OpenAI-compatible embeddings** HTTP service. **Only** **`qwen3-embedding-0.6b`** and **`qwen3-embedding-8b`** are supported today (see **`RemoteQwenEmbedder`** in `openjiuwen_deepsearch/algorithm/search_tools/retrieval/embedder.py`).  
-3. Configure **`openjiuwen_deepsearch/algorithm/search_index/create_browsecompplus_index.py`** via **environment variables or module-level constants** (the script prefers **`_env(...)`**; defaults exist for many fields — **set `EMBED_API_URL` and `EMBED_API_KEY` before production runs**).  
+2. Run an **OpenAI-compatible embeddings** HTTP service compatible with **`OpenJiuwenAPIEmbedder`** (see `openjiuwen_deepsearch/algorithm/search_tools/retrieval/embedder.py`).  
+3. Configure **`openjiuwen_deepsearch/algorithm/search_index/create_browsecompplus_index.py`** via **environment variables or module-level constants** (the script prefers **`_env(...)`**). **Before indexing, set** **`EMBED_API_URL`**, **`EMBED_API_KEY`**, **`EMBED_MODEL_NAME`**, and **`HUGGINGFACE_MODEL_NAME`** (no in-code defaults for the model / tokenizer ids).  
 4. Run:
 
 ```bash
@@ -508,7 +501,7 @@ uv add datasets transformers pymilvus requests tqdm
 You also need:
 
 - A running Milvus ([install doc](https://milvus.io/docs/install_standalone-docker.md))  
-- A reachable embedding server (**`qwen3-embedding-0.6b`** or **`qwen3-embedding-8b`** only)  
+- A reachable **OpenAI-compatible** embedding server (model id must match **`EMBED_MODEL_NAME`**)  
 
 ---
 
@@ -523,7 +516,7 @@ uv run -m openjiuwen_deepsearch.algorithm.search_index.create_browsecompplus_ind
 The script:
 
 1. Connects to Milvus (default **`MILVUS_URI=http://localhost:19530`**, plus **`MILVUS_TOKEN`**, etc.) and selects / creates the database  
-2. Builds **`RemoteQwenEmbedder`** (`api_url`, `api_token`, `timeout`)  
+2. Builds **`OpenJiuwenAPIEmbedder`** (`api_url`, `api_token`, `timeout`)  
 3. Loads **`DATA_LOCATION`** JSONL  
 4. Chunks with **`BrowseCompChunker`** (**`TokenizerChunker`**, up to **2048** tokens per chunk)  
 5. Embeds in batches and writes dense + BM25 sparse rows into **`MILVUS_COLLECTION_NAME`**
@@ -532,7 +525,7 @@ The script:
 
 ### 5. Configuration table
 
-Variables in **`create_browsecompplus_index.py`** are read with **`_env("KEY", default)`**; if the env var is unset, the in-file default applies.
+Variables in **`create_browsecompplus_index.py`** are read with **`_env("KEY", default)`**; if the env var is unset, the in-file default applies (**`EMBED_MODEL_NAME`** and **`HUGGINGFACE_MODEL_NAME`** default to empty and must be set).
 
 | Variable (env name) | Meaning | Typical in-code default |
 |------|------|----------------|
@@ -542,7 +535,7 @@ Variables in **`create_browsecompplus_index.py`** are read with **`_env("KEY", d
 | `MILVUS_DB_NAME` | Database name | `deepsearch_benchmarks` |
 | `MILVUS_COLLECTION_NAME` | Collection name | `browsecompplus_with_bm25` |
 | `HUGGINGFACE_MODEL_NAME` | HF tokenizer id for chunking | `Qwen/Qwen3-Embedding-8B` |
-| `EMBED_MODEL_NAME` | Embedding model (**only** `qwen3-embedding-0.6b`, `qwen3-embedding-8b`) | `qwen3-embedding-8b` |
+| `EMBED_MODEL_NAME` | Embedding model id passed to the API | **empty** (must set) |
 | `EMBED_API_URL` | Embeddings HTTP URL | **empty** (must set or startup fails) |
 | `EMBED_API_KEY` | Embeddings API key | **empty** (must set or startup fails) |
 | `EMBED_TIMEOUT` | HTTP timeout (seconds) | `60` |
@@ -557,7 +550,7 @@ Aligned with the current script:
 
 1. **Milvus client** — **`MilvusClient(uri=MILVUS_URI, token=MILVUS_TOKEN, database=...)`**  
 2. **Database** — create **`MILVUS_DB_NAME`** if missing; **`using_database`**  
-3. **Embedder** — require **`EMBED_API_URL`** / **`EMBED_API_KEY`**; **`RemoteQwenEmbedder(...)`**; timeout falls back to **60s** if **`EMBED_TIMEOUT ≤ 0`**; tokenizer from **`HUGGINGFACE_MODEL_NAME`** for **`BrowseCompChunker`**  
+3. **Embedder** — require **`EMBED_API_URL`**, **`EMBED_API_KEY`**, **`EMBED_MODEL_NAME`**, and **`HUGGINGFACE_MODEL_NAME`**; **`OpenJiuwenAPIEmbedder(...)`**; timeout falls back to **60s** if **`EMBED_TIMEOUT ≤ 0`**; tokenizer from **`HUGGINGFACE_MODEL_NAME`** for **`BrowseCompChunker`**  
 4. **Load JSONL** — **`read_jsonl`**, build **`doc_id2doc`**, query-id maps, …  
 5. **Schema** — **`setup_milvus_collection()`**: PK **`id`**, dense **`embedding`**, **`content`**, sparse **`content_sparse`**, BM25 function, **`AUTOINDEX` + COSINE** for dense, **`SPARSE_INVERTED_INDEX`** for sparse  
 6. **Index** — **`BrowseCompChunker`** + **`index_documents_milvus()`** calling **`encoder_model.encode()`**  
@@ -566,7 +559,7 @@ Aligned with the current script:
 
 ### 7. Instruction tuning
 
-We use the **Qwen3-Embedding** family (8B tested). These models are **instruction-tuned** for retrieval.
+**`OpenJiuwenAPIEmbedder`** can prepend a fixed task instruction on the query path when **`encode(..., is_query=True)`** is used. Many **instruction-tuned** embedding models benefit from this pattern.
 
 - **Query time** — prepend a task instruction, e.g. *“Given a web search query, retrieve relevant passages that answer the query”*.  
 - **Indexing time** — **do not** prepend instructions; encode raw document text for stable vectors.
@@ -580,7 +573,7 @@ The embedder’s **`encode(..., is_query=True|False)`** flag controls this: **`T
 Matches **`setup_milvus_collection()`** in **`create_browsecompplus_index.py`**:
 
 - **`id`** — string PK (`{docid}__{chunk_idx}`)  
-- **`embedding`** — dense vector (4096 for Qwen3-8B, 1024 for Qwen3-0.6B); **COSINE**  
+- **`embedding`** — dense vector; dimension must match the embedding model used at index time; **COSINE**  
 - **`content`** — raw chunk text (BM25 analyzer input)  
 - **`content_sparse`** — Milvus BM25 sparse vector  
 - **`docid`** — source document id  

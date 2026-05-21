@@ -5,6 +5,10 @@ __all__ = [
     "PetalSearchAPIWrapper",
     "GoogleSearchAPIWrapper",
     "TavilySearchAPIWrapper",
+    "HarnessWebSearchAPIWrapper",
+    "BochaSearchAPIWrapper",
+    "JinaSearchAPIWrapper",
+    "PerplexitySearchAPIWrapper",
     "LocalDatasetAPIWrapper",
     "NativeLocalSearchAPIWrapper",
     "load_external_search_tools",
@@ -16,6 +20,12 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.local_search_ap
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.native_local_search_api.api_wrapper import \
     NativeLocalSearchAPIWrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.petal.api_wrapper import PetalSearchAPIWrapper
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
+    BochaSearchAPIWrapper,
+    HarnessWebSearchAPIWrapper,
+    PerplexitySearchAPIWrapper,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.jina.api_wrapper import JinaSearchAPIWrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper import GoogleSearchAPIWrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper import TavilySearchAPIWrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.xunfei.api_wrapper import XunfeiSearchAPIWrapper

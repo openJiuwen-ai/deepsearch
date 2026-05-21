@@ -1,5 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+import copy
 from collections import deque
 import logging
 import networkx as nx
@@ -152,12 +153,15 @@ class SupplementGraph:
         remove_nodes = set()
         del_structure_index = []
         for index, (head_ids, _, tail_id) in enumerate(structured_inference):
+            new_head_ids = copy.deepcopy(head_ids)
             for head_id in head_ids:
                 if head_id not in citation_ids and graph.in_degree(head_id) == 0:
                     if head_id in node_map:
-                        head_ids.remove(head_id)
+                        new_head_ids.remove(head_id)
                         del node_map[head_id]
                         remove_nodes.add(head_id)
+            # 更新头实体序列
+            structured_inference[index][0] = new_head_ids
             # 检测尾实体在删除头实体后是否变成新的没有入边的结论节点
             tail_node_parents = set(list(graph.predecessors(tail_id)))
             is_subset = tail_node_parents.issubset(remove_nodes)
@@ -222,6 +226,9 @@ class SupplementGraph:
              node_map, conclusion_ids) = self.remove_no_indegree_conclusion_node(new_structured_inference,
                                                                                 node_map, citation_ids,
                                                                                 conclusion_ids)
+            if not new_structured_inference:
+                logger.warning(f"[SOURCE TRACER INFER] structured_inference is empty.")
+                raise ValueError(f"[SOURCE TRACER INFER] structured_inference is empty.")
             graph, new_structured_inference = self.generate_graph(new_structured_inference)
             if nx.is_weakly_connected(graph):
                 # 连通图

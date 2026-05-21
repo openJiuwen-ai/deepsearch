@@ -44,6 +44,8 @@ openjiuwen_deepsearch/
   - `supplementary_search_task.md` - 补充检索任务生成提示词
   - `supplementary_search_rewrite_selected_only.md` - 仅改写选区的补充检索提示词
   - `supplementary_search_rewrite_selected_and_related.md` - 整章联动改写的补充检索提示词
+  - `new_task_assessment.md` - 新增任务资料充分性评估提示词
+  - `new_task_rewrite_section.md` - 新增任务章节改写提示词
 - **query_understanding/** - 查询理解
   - `interpreter.py` - 生成澄清问题
   - `outliner.py` - 生成大纲
@@ -79,6 +81,9 @@ openjiuwen_deepsearch/
   - `supplement_graph.py`
 - **user_feedback_processor/** - 用户反馈局部优化模块
   - `action_definitions.py` - 前端 action 与统一动作定义映射
+  - `common.py` - 公共工具函数（会话/模型上下文获取、LLM 调用入口）
+  - `history.py` - 改写历史与大纲更新管理
+  - `new_task_processor.py` - 新增任务动作处理逻辑
   - `report_edit_utils.py` - citation / inference 标记剥离与偏移更新工具
   - `section_locator.py` - 根据选区定位最小 Markdown 标题区块
   - `supplementary_search.py` - 补充检索与局部/整章改写执行逻辑

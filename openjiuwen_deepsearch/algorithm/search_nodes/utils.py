@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -17,6 +18,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     SearchFinalResult,
 )
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.utils.run_telemetry import emit, runtime_correlation_from
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,72 @@ def to_dict_safe(obj: Any) -> Any:
         return obj
     if hasattr(obj, "model_dump") and callable(getattr(obj, "model_dump")):
         return obj.model_dump()
+    return obj
+
+
+_SENSITIVE_HEADER_NAMES = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "x-api-key",
+        "api-key",
+        "x-auth-token",
+        "x-goog-api-key",
+    }
+)
+
+
+def _is_sensitive_config_key(name: str) -> bool:
+    lk = name.lower()
+    if lk in (
+        "api_key",
+        "apikey",
+        "token",
+        "password",
+        "passwd",
+        "secret",
+        "client_secret",
+        "consumer_secret",
+        "private_key",
+        "authorization",
+    ):
+        return True
+    if lk.endswith("_api_key") or lk.endswith("_apikey"):
+        return True
+    if lk.endswith("_token") and not lk.endswith("_tokens"):
+        return True
+    if "api_key" in lk:
+        return True
+    return False
+
+
+def anonymize_config_for_logging(obj: Any) -> Any:
+    """Deep-copy ``obj`` and replace credential-like values for logs / persisted SearchFinalResult."""
+    if obj is None:
+        return None
+    if isinstance(obj, (bytes, bytearray)):
+        return "***"
+    if isinstance(obj, dict):
+        name_raw = obj.get("name")
+        if isinstance(name_raw, str) and name_raw.lower() in _SENSITIVE_HEADER_NAMES and "value" in obj:
+            out: Dict[str, Any] = {}
+            for k, v in obj.items():
+                if k == "value":
+                    out[k] = "***"
+                else:
+                    out[k] = anonymize_config_for_logging(v)
+            return out
+        out = {}
+        for k, v in obj.items():
+            ks = k if isinstance(k, str) else str(k)
+            if _is_sensitive_config_key(ks):
+                out[ks] = "***"
+            else:
+                out[ks] = anonymize_config_for_logging(v)
+        return out
+    if isinstance(obj, (list, tuple)):
+        seq = [anonymize_config_for_logging(x) for x in obj]
+        return type(obj)(seq) if isinstance(obj, tuple) else seq
     return obj
 
 
@@ -143,6 +211,7 @@ def _save_result(
     action: Action | dict,
     result_to_save: Result | dict,
     time_taken: float,
+    runtime: Any = None,
 ) -> dict:
     id_ = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S%f")[:-3]
     action = to_dict_safe(action)
@@ -199,6 +268,53 @@ def _save_result(
             logger.warning(log_msg)
         else:
             logger.info(log_msg)
+        num_new_states = 0
+        new_state_ids: List[str] = []
+        if not saved_from_error_dict:
+            ns = getattr(result_to_save, "new_states", None) or []
+            num_new_states = len(ns)
+            for s in ns:
+                if hasattr(s, "id"):
+                    new_state_ids.append(str(s.id))
+                elif isinstance(s, dict):
+                    new_state_ids.append(str(s.get("id", "")))
+        has_answer = bool(
+            (not saved_from_error_dict)
+            and getattr(result_to_save, "found_answer", None)
+        )
+        if saved_from_error_dict:
+            result_outcome: str = "fail"
+        elif has_answer:
+            result_outcome = "answer"
+        elif num_new_states > 0:
+            result_outcome = "new_states"
+        else:
+            result_outcome = "empty_patch"
+        answer_preview: Optional[str] = None
+        if has_answer and not LogManager.is_sensitive():
+            fa = getattr(result_to_save, "found_answer", None)
+            if isinstance(fa, str):
+                answer_preview = fa[:500] + ("…" if len(fa) > 500 else "")
+            elif fa is not None:
+                answer_preview = str(fa)[:500]
+        emit_payload: Dict[str, Any] = {
+            "result_file": result_file_name,
+            "action_execution_result": _action_execution_result,
+            "result_outcome": result_outcome,
+            "num_new_states": num_new_states,
+            "new_state_ids": new_state_ids,
+            "has_answer": has_answer,
+            "saved_from_error": saved_from_error_dict,
+            **runtime_correlation_from(runtime),
+        }
+        if answer_preview is not None:
+            emit_payload["answer_preview"] = answer_preview
+        emit(
+            "action_result_saved",
+            emit_payload,
+            source="search_nodes._save_result",
+            action_id=action.get("id"),
+        )
     return config
 
 
@@ -235,7 +351,8 @@ def _save_and_return_search_final_result(
     save_config: SaveSearchFinalResultConfig,
 ) -> SearchFinalResult:
     params = save_config.params or {}
-    config = save_config.config or {}
+    raw_config = save_config.config or {}
+    config = anonymize_config_for_logging(copy.deepcopy(raw_config))
     retrieved_evidence_ids = save_config.retrieved_evidence_ids or []
     completion_time = time.time() - params.get("start_time", 0)
 
@@ -259,4 +376,14 @@ def _save_and_return_search_final_result(
             result_dict = final_result.model_dump()
 
             json.dump(to_json_safe(result_dict), f, indent=2, ensure_ascii=False)
+    emit(
+        "search_final_result",
+        {
+            "termination": str(save_config.termination),
+            "completion_time_sec": completion_time,
+            "has_prediction": save_config.prediction is not None,
+        },
+        source="search_nodes.search_final_result",
+        action_id=None,
+    )
     return final_result

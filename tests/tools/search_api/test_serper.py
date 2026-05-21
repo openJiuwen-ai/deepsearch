@@ -42,6 +42,7 @@ class TestGoogleSearchAPIWrapper:
 
         # 模拟响应
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
             "organic": [{"title": "Test Result", "link": "http://example.com"}]
@@ -63,10 +64,10 @@ class TestGoogleSearchAPIWrapper:
         assert headers['X-API-KEY'] == "test-api-key-123"
         assert headers['Content-Type'] == "application/json"
 
-        # 验证params
-        params = call_args[1]['params']
-        assert params['q'] == "test query"
-        assert params['gl'] == "us"
+        # 验证json body
+        payload = call_args[1]['json']
+        assert payload['q'] == "test query"
+        assert payload['gl'] == "us"
 
         # 验证verify参数
         assert call_args[1]['verify'] == "/path/to/cert"
@@ -78,11 +79,41 @@ class TestGoogleSearchAPIWrapper:
 
     @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.requests.post')
     @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.SslUtils.get_ssl_config')
+    def test_google_search_results_uses_default_url_when_empty(self, mock_ssl_config, mock_post):
+        """Serper should use the public default endpoint when search_url is empty."""
+        mock_ssl_config.return_value = (False, None)
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"organic": []}
+        mock_post.return_value = mock_response
+
+        wrapper = GoogleSearchAPIWrapper(
+            search_api_key=bytearray(b"test-api-key-123"),
+            search_url="",
+            max_web_search_results=3,
+        )
+
+        wrapper.google_search_results("test query")
+
+        call_args = mock_post.call_args
+        assert call_args[0][0] == "https://google.serper.dev/search"
+        assert call_args[1]["json"] == {
+            "q": "test query",
+            "gl": "us",
+            "hl": "en",
+            "num": 3,
+        }
+
+    @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.requests.post')
+    @patch('openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper.SslUtils.get_ssl_config')
     def test_google_search_results_with_custom_type(self, mock_ssl_config, mock_post):
         """测试不同类型的搜索"""
         mock_ssl_config.return_value = (False, None)
 
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
             "news": [{"title": "News Result"}]
@@ -164,11 +195,11 @@ class TestGoogleSearchAPIWrapper:
             headers = call_args[1]['headers']
             assert headers['X-API-KEY'] == "test-api-key-123"
 
-            # 验证params
-            params = call_args[1]['params']
-            assert params['q'] == "async query"
-            assert params['gl'] == "cn"
-            assert params['hl'] == "zh-cn"
+            # 验证json body
+            payload = call_args[1]['json']
+            assert payload['q'] == "async query"
+            assert payload['gl'] == "cn"
+            assert payload['hl'] == "zh-cn"
 
             # 验证结果
             assert isinstance(result, list)
@@ -273,3 +304,14 @@ class TestGoogleSearchAPIWrapper:
             extension={"type": "news"},
         )
         assert wrapper.type == "news"
+
+
+def test_web_search_mapping_uses_builtin_serper_wrapper_for_google_and_serper():
+    """Research mapping should route google/serper to the repository Serper wrapper."""
+    from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper import (
+        GoogleSearchAPIWrapper,
+    )
+    from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import search_engine_mapping
+
+    assert search_engine_mapping["google"] is GoogleSearchAPIWrapper
+    assert search_engine_mapping["serper"] is GoogleSearchAPIWrapper

@@ -2,13 +2,95 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 import ipaddress
+import logging
 import os
 import re
+import socket
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.common.common_constants import MAX_URL_LENGTH
+
+logger = logging.getLogger(__name__)
+
+# 安全相关的URL scheme白名单
+SAFE_URL_SCHEMES = frozenset(['http', 'https'])
+
+
+def validate_and_sanitize_url(url: str) -> str:
+    """
+    验证URL并确保只允许安全的scheme (http/https)
+
+    Args:
+        url: 待验证的URL
+
+    Returns:
+        str: 安全的URL，若scheme不合法则返回空字符串
+    """
+    if not url:
+        return ""
+
+    # 解析URL获取scheme
+    url_stripped = url.strip()
+
+    # 检查是否以合法scheme开头
+    # 格式: scheme://...
+    scheme_match = re.match(r'^([a-zA-Z][a-zA-Z0-9+.-]*)://', url_stripped)
+
+    if scheme_match:
+        scheme = scheme_match.group(1).lower()
+        if scheme not in SAFE_URL_SCHEMES:
+            logger.warning(
+                f"URL scheme '{scheme}' is not allowed, URL blocked: "
+                f"{url_stripped[:100]}"
+            )
+            return ""
+        return url_stripped
+    else:
+        # 没有scheme的相对路径或不完整URL，视为不安全
+        logger.warning(
+            f"URL without valid scheme blocked: {url_stripped[:100]}"
+        )
+        return ""
+
+
+def validate_url_scheme(url: str) -> tuple:
+    """
+    验证URL scheme是否在白名单中 (http/https)
+
+    Args:
+        url: 待验证的URL
+
+    Returns:
+        tuple: (safe_url, is_valid)
+            - safe_url: 验证后的URL，若scheme不合法则返回空字符串
+            - is_valid: True表示scheme合法，False表示不合法
+    """
+    if not url:
+        return "", False
+
+    url_stripped = url.strip()
+
+    # 检查是否以合法scheme开头
+    scheme_match = re.match(r'^([a-zA-Z][a-zA-Z0-9+.-]*)://', url_stripped)
+
+    if scheme_match:
+        scheme = scheme_match.group(1).lower()
+        if scheme not in SAFE_URL_SCHEMES:
+            logger.warning(
+                f"URL scheme '{scheme}' is not allowed, "
+                f"URL blocked: {url_stripped[:100]}"
+            )
+            return "", False
+        return url_stripped, True
+    else:
+        # 没有scheme的相对路径或不完整URL，视为不安全
+        logger.warning(
+            f"URL without valid scheme blocked: {url_stripped[:100]}"
+        )
+        return "", False
 
 
 def normalize_domain(domain: str) -> str:
@@ -39,6 +121,43 @@ def normalize_domain(domain: str) -> str:
         normalized = re.sub(pattern, replacement, normalized)
 
     return normalized
+
+
+def normalize_domains(domains: Any) -> list[str]:
+    """归一化域名列表."""
+    if not domains:
+        return []
+    if isinstance(domains, str):
+        domains = [domains]
+    if not isinstance(domains, (list, tuple, set)):
+        return []
+
+    normalized_domains = []
+    seen = set()
+    for domain in domains:
+        domain_str = str(domain).strip().lower()
+        parsed = urlparse(domain_str if "://" in domain_str else f"//{domain_str}")
+        domain_str = parsed.netloc or parsed.path
+        domain_str = domain_str.split("@")[-1].split(":")[0].strip(".")
+        if domain_str.startswith("www."):
+            domain_str = domain_str[4:]
+        if not domain_str or domain_str in seen:
+            continue
+        seen.add(domain_str)
+        normalized_domains.append(domain_str)
+    return normalized_domains
+
+
+def extract_domain_from_url(url: Any) -> str:
+    """从 URL 中提取域名."""
+    url_str = str(url or "").strip().lower()
+    if not url_str:
+        return ""
+    parsed = urlparse(url_str if "://" in url_str else f"//{url_str}")
+    domain = (parsed.netloc or "").split("@")[-1].split(":")[0].strip(".")
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
 
 
 def normalize_path(path: str) -> str:
@@ -170,28 +289,34 @@ def are_similar_urls(url1: str, url2: str, threshold: float = 0.9) -> bool:
         return False
 
 
-def _is_runtime_api_unsafe_url_relaxed() -> bool:
-    value = os.environ.get("RUNTIME_API_ALLOW_UNSAFE_URL", "").strip().lower()
+def _http_service_allow_unsafe_url(env_var: str) -> bool:
+    value = os.environ.get(env_var, "").strip().lower()
     return value in ("1", "true", "yes")
 
 
-def _unsafe_url_exception_detail(url: str, reason: str) -> str:
-    return f"runtime api url is not allowed ({reason}): {url!r}"
+def _is_runtime_api_unsafe_url_relaxed() -> bool:
+    return _http_service_allow_unsafe_url("RUNTIME_API_ALLOW_UNSAFE_URL")
 
 
-def validate_runtime_request_url(url: str) -> None:
-    """
-    Validate runtime API request URL to reduce SSRF risk.
-    Local debugging can bypass this check with RUNTIME_API_ALLOW_UNSAFE_URL.
-    """
-    if _is_runtime_api_unsafe_url_relaxed():
+def _unsafe_http_service_url_exception_detail(
+    url: str, reason: str, service_label: str
+) -> str:
+    return f"{service_label} is not allowed ({reason}): {url!r}"
+
+
+def _validate_http_url_for_ssrf(
+    url: str, *, relaxed: bool, service_label: str
+) -> None:
+    if relaxed:
         return
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise CustomValueException(
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
-                e=_unsafe_url_exception_detail(url, "scheme must be http or https")
+                e=_unsafe_http_service_url_exception_detail(
+                    url, "scheme must be http or https", service_label
+                )
             ),
         )
     host = parsed.hostname
@@ -199,7 +324,9 @@ def validate_runtime_request_url(url: str) -> None:
         raise CustomValueException(
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
-                e=_unsafe_url_exception_detail(url, "missing host")
+                e=_unsafe_http_service_url_exception_detail(
+                    url, "missing host", service_label
+                )
             ),
         )
     host_lower = host.lower()
@@ -207,12 +334,68 @@ def validate_runtime_request_url(url: str) -> None:
         raise CustomValueException(
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
-                e=_unsafe_url_exception_detail(url, "localhost host is blocked")
+                e=_unsafe_http_service_url_exception_detail(
+                    url, "localhost host is blocked", service_label
+                )
             ),
         )
     try:
         ip = ipaddress.ip_address(host)
-    except ValueError:
+    except ValueError as host_parse_error:
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            addr_info = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except (ValueError, socket.gaierror) as error:
+            raise CustomValueException(
+                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
+                    e=_unsafe_http_service_url_exception_detail(
+                        url, f"host resolution failed: {error}", service_label
+                    )
+                ),
+            ) from error
+
+        addresses = {entry[4][0] for entry in addr_info if entry[4]}
+        if not addresses:
+            raise CustomValueException(
+                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
+                    e=_unsafe_http_service_url_exception_detail(
+                        url, "host resolution returned no addresses", service_label
+                    )
+                ),
+            ) from host_parse_error
+
+        for address in addresses:
+            try:
+                resolved_ip = ipaddress.ip_address(address)
+            except ValueError as error:
+                raise CustomValueException(
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
+                        e=_unsafe_http_service_url_exception_detail(
+                            url, f"invalid resolved address: {address}", service_label
+                        )
+                    ),
+                ) from error
+
+            is_non_public_ip = any((
+                resolved_ip.is_private,
+                resolved_ip.is_loopback,
+                resolved_ip.is_link_local,
+                resolved_ip.is_multicast,
+                resolved_ip.is_reserved,
+                resolved_ip.is_unspecified,
+            ))
+            if is_non_public_ip:
+                raise CustomValueException(
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                    StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
+                        e=_unsafe_http_service_url_exception_detail(
+                            url, "private or non-public IP", service_label
+                        )
+                    ),
+                ) from host_parse_error
         return
 
     is_non_public_ip = any((
@@ -227,6 +410,33 @@ def validate_runtime_request_url(url: str) -> None:
         raise CustomValueException(
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
-                e=_unsafe_url_exception_detail(url, "private or non-public IP")
+                e=_unsafe_http_service_url_exception_detail(
+                    url, "private or non-public IP", service_label
+                )
             ),
         )
+
+
+def validate_runtime_request_url(url: str) -> None:
+    """
+    Validate runtime API request URL to reduce SSRF risk.
+    Local debugging can bypass this check with RUNTIME_API_ALLOW_UNSAFE_URL.
+    """
+    _validate_http_url_for_ssrf(
+        url,
+        relaxed=_is_runtime_api_unsafe_url_relaxed(),
+        service_label="runtime api url",
+    )
+
+
+def validate_embedding_service_url(url: str) -> None:
+    """
+    Validate embedding HTTP service base URL to reduce SSRF risk.
+    Local debugging can bypass with EMBEDDING_SERVICE_ALLOW_UNSAFE_URL=1
+    (same accepted values as RUNTIME_API_ALLOW_UNSAFE_URL).
+    """
+    _validate_http_url_for_ssrf(
+        url,
+        relaxed=_http_service_allow_unsafe_url("EMBEDDING_SERVICE_ALLOW_UNSAFE_URL"),
+        service_label="embedding service url",
+    )

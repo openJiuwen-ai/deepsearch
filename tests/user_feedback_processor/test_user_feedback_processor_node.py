@@ -502,6 +502,85 @@ class TestUserFeedbackProcessorNode:
         ]
 
     @pytest.mark.asyncio
+    async def test_do_invoke_new_task_success_updates_history_and_section_plans(self, node):
+        outline_section = MagicMock()
+        outline_section.id = "1"
+        outline_section.plans = []
+        outline_section.title = "第一章"
+        session = make_mock_session(search_context_overrides={
+            "current_outline": MagicMock(sections=[outline_section]),
+            "feedback_snapshot_sent": True,
+        })
+        session.interact.return_value = json.dumps(
+            {
+                "action": "new_task",
+                "selected_text": "这是一段",
+                "start_offset": 0,
+                "end_offset": 4,
+                "user_instruction": "补充行业背景",
+            }
+        )
+        incremental_plan = MagicMock(title="NEW_TASK incremental research")
+        execute_return = {
+            "new_report": "## 第一章\n新章节内容",
+            "original_text": "## 第一章\n旧章节内容",
+            "original_start_offset": 0,
+            "original_end_offset": 11,
+            "original_text_clean": "旧章节内容",
+            "rewritten_text": "## 第一章\n新章节内容",
+            "rewritten_start_offset": 0,
+            "rewritten_end_offset": 11,
+            "section_start_offset": 0,
+            "section_end_offset": 11,
+            "section_title": "第一章",
+            "matched_section_id": "1",
+            "match_mode": "title_exact",
+            "assessment_summary": "历史资料不足，已补搜",
+            "used_historical_doc_count": 1,
+            "used_new_doc_count": 1,
+            "incremental_plan": incremental_plan,
+            "incremental_doc_infos": [{"title": "文档B", "url": "https://b.com"}],
+            "missing_aspects": ["行业背景"],
+        }
+
+        with patch(f"{ALGO_CLASS_PATH}.execute", new_callable=AsyncMock, return_value=execute_return):
+            with patch(f"{ALGO_CLASS_PATH}.send_result", new_callable=AsyncMock):
+                with patch(f"{NODE_MODULE_PATH}.add_debug_log_wrapper"):
+                    result = await node._do_invoke(None, session, None)
+
+        assert result["next_node"] == NodeId.USER_FEEDBACK_PROCESSOR.value
+        assert outline_section.plans == [incremental_plan]
+        rewrite_history_updates = [
+            call.args[0]
+            for call in session.update_global_state.call_args_list
+            if "search_context.rewrite_history" in call.args[0]
+        ]
+        assert rewrite_history_updates[-1]["search_context.rewrite_history"] == [
+            {
+                "action": "new_task",
+                "rewrite_scope": "selected_only",
+                "selected_text": "这是一段",
+                "selected_text_clean": "旧章节内容",
+                "original_start_offset": 0,
+                "original_end_offset": 11,
+                "rewritten_text": "## 第一章\n新章节内容",
+                "rewritten_start_offset": 0,
+                "rewritten_end_offset": 11,
+                "section_start_offset": 0,
+                "section_end_offset": 11,
+                "section_title": "第一章",
+                "matched_section_id": "1",
+                "match_mode": "title_exact",
+                "assessment_summary": "历史资料不足，已补搜",
+                "used_historical_doc_count": 1,
+                "used_new_doc_count": 1,
+                "missing_aspects": ["行业背景"],
+                "incremental_plan_title": "NEW_TASK incremental research",
+                "user_instruction": "补充行业背景",
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_do_invoke_sync_updates_report_without_consuming_interaction(self, node):
         session = make_mock_session(search_context_overrides={"feedback_snapshot_sent": True})
         feedback_payload = {

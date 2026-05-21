@@ -14,10 +14,14 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
     TavilySearchAPIWrapper,
     GoogleSearchAPIWrapper,
     PetalSearchAPIWrapper,
+    BochaSearchAPIWrapper,
+    JinaSearchAPIWrapper,
+    PerplexitySearchAPIWrapper,
     load_external_search_tools
 )
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import web_search_context
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
+from openjiuwen_deepsearch.utils.common_utils.url_utils import normalize_domains
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_limit_async
 
@@ -28,7 +32,50 @@ search_engine_mapping = {
     SearchEngine.GOOGLE.value: GoogleSearchAPIWrapper,
     SearchEngine.XUNFEI.value: XunfeiSearchAPIWrapper,
     SearchEngine.PETAL.value: PetalSearchAPIWrapper,
+    SearchEngine.BOCHA.value: BochaSearchAPIWrapper,
+    SearchEngine.JINA.value: JinaSearchAPIWrapper,
+    SearchEngine.PERPLEXITY.value: PerplexitySearchAPIWrapper,
+    SearchEngine.SERPER.value: GoogleSearchAPIWrapper,
 }
+
+
+SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES = {
+    SearchEngine.TAVILY.value,
+}
+
+
+def apply_web_search_domain_constraints(
+        search_engine_name: str,
+        include_domains: list[str] | None = None,
+        exclude_domains: list[str] | None = None,
+) -> bool:
+    """
+    将意图识别出的域名约束合并到已初始化的搜索引擎实例.
+
+    仅修改原生支持 include_domains/exclude_domains 的搜索引擎实例。
+    实例中的现有值来自初始化配置，因此这里会保留配置域名，并追加 query 中识别出的域名。
+    """
+    if search_engine_name not in SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES:
+        return False
+
+    try:
+        web_search_engines = web_search_context.get() or {}
+    except LookupError:
+        web_search_engines = {}
+    api_wrapper = web_search_engines.get(search_engine_name)
+    if not api_wrapper:
+        return False
+
+    if search_engine_name == "tavily":
+        merged_include = normalize_domains(getattr(api_wrapper, "include_domains", None))
+        merged_include.extend(normalize_domains(include_domains))
+        api_wrapper.include_domains = normalize_domains(merged_include)
+
+        merged_exclude = normalize_domains(getattr(api_wrapper, "exclude_domains", None))
+        merged_exclude.extend(normalize_domains(exclude_domains))
+        api_wrapper.exclude_domains = normalize_domains(merged_exclude)
+
+    return True
 
 
 def update_web_search_mapping(func_path: str, func_name: str):

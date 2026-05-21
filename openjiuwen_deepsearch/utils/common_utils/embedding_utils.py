@@ -4,6 +4,8 @@ import os
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_embedding_service_url
+
 
 def get_embedding_requests_verify(base_url: Optional[str] = None) -> Any:
     """
@@ -19,6 +21,8 @@ def get_embedding_requests_verify(base_url: Optional[str] = None) -> Any:
     """
 
     api_url = (base_url or "").strip()
+    if api_url:
+        validate_embedding_service_url(api_url)
 
     scheme = urlparse(api_url).scheme.lower() if api_url else ""
 

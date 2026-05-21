@@ -86,7 +86,7 @@ Notes:
 
 Messages mentioning **stream error**, **timeout**, **OpenAI API**, or **Client connection error** usually mean the LLM call failed—network issues, bad endpoint, context overflow, or provider safety filters.
 
-![Context overflow](../images/FAQ/超上下文.png)
+![Context overflow](../images/faq/超上下文.png)
 
 If logs show `LLM wall-clock timeout after ...`, that is the outer business-layer timeout from `agent_llm_timeouts`, not the same thing as the underlying `service_config.llm_timeout`. In that case, check whether `agent_llm_timeouts` includes `default`, whether the matched rule is too small, or whether a rule was unintentionally set to `0`.
 

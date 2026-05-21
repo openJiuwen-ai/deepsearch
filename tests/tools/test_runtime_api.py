@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -13,6 +14,20 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.api_wrapper im
 
 class DemoResponse(BaseModel):
     result: str
+
+
+@pytest.fixture(autouse=True)
+def bypass_runtime_url_validation(monkeypatch):
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.runtime_api.validate_runtime_request_url",
+        lambda url: None,
+    )
+
+
+async def _make_async_iter(chunks: list):
+    """Helper function to create an async iterator from a list of chunks."""
+    for chunk in chunks:
+        yield chunk
 
 
 @pytest.mark.asyncio
@@ -35,14 +50,25 @@ async def test_runtime_api_tool_splits_request_parts():
     ])
     tool = tools[0]
 
+    # Mock response for stream mode
     mock_response = Mock()
-    mock_response.json.return_value = {"code": 0, "message": "ok", "data": {"result": "sunny"}}
+    mock_response.headers = {}  # No content-length header
+    mock_response.encoding = "utf-8"
     mock_response.raise_for_status = Mock()
+    # Mock aiter_bytes to return JSON data
+    json_data = json.dumps({"code": 0, "message": "ok", "data": {"result": "sunny"}}).encode("utf-8")
+    mock_response.aiter_bytes = Mock(return_value=_make_async_iter([json_data]))
 
-    mock_client = AsyncMock()
-    mock_client.request.return_value = mock_response
-    mock_client.__aenter__.return_value = mock_client
-    mock_client.__aexit__.return_value = None
+    # Mock stream context manager - use Mock() not AsyncMock() since it's the context manager object itself
+    mock_stream_cm = Mock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=None)
+
+    # Mock client - stream() returns context manager directly (no await needed after fix)
+    mock_client = Mock()
+    mock_client.stream = Mock(return_value=mock_stream_cm)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with patch("openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.runtime_api.httpx.AsyncClient",
                return_value=mock_client):
@@ -52,7 +78,7 @@ async def test_runtime_api_tool_splits_request_parts():
             "unit": "c",
         })
 
-    mock_client.request.assert_awaited_once_with(
+    mock_client.stream.assert_called_once_with(
         method="POST",
         url="https://example.com/weather",
         headers={"x-plugin": "plugin-token", "authorization": "Bearer token"},
@@ -78,14 +104,22 @@ async def test_runtime_api_tool_parses_response_model():
     ], response_model=DemoResponse)
     tool = tools[0]
 
+    # Mock response for stream mode
     mock_response = Mock()
-    mock_response.json.return_value = {"code": 0, "message": "ok", "data": {"result": "done"}}
+    mock_response.headers = {}
+    mock_response.encoding = "utf-8"
     mock_response.raise_for_status = Mock()
+    json_data = json.dumps({"code": 0, "message": "ok", "data": {"result": "done"}}).encode("utf-8")
+    mock_response.aiter_bytes = Mock(return_value=_make_async_iter([json_data]))
 
-    mock_client = AsyncMock()
-    mock_client.request.return_value = mock_response
-    mock_client.__aenter__.return_value = mock_client
-    mock_client.__aexit__.return_value = None
+    mock_stream_cm = Mock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=None)
+
+    mock_client = Mock()
+    mock_client.stream = Mock(return_value=mock_stream_cm)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with patch("openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.runtime_api.httpx.AsyncClient",
                return_value=mock_client):
@@ -188,26 +222,30 @@ async def test_runtime_api_tool_applies_search_result_wrapper():
     ])
     tool = tools[0]
 
+    # Mock response for stream mode
     mock_response = Mock()
-    mock_response.json.return_value = {
-        "code": 0,
-        "message": "ok",
-        "data": {
-            "items": [
-                {
-                    "title": "Wrapped title",
-                    "url": "https://example.com/item",
-                    "content": "Wrapped content",
-                }
-            ]
-        },
-    }
+    mock_response.headers = {}
+    mock_response.encoding = "utf-8"
     mock_response.raise_for_status = Mock()
+    json_data = json.dumps({
+        "search_results": [
+            {
+                "title": "Wrapped title",
+                "url": "https://example.com/item",
+                "content": "Wrapped content",
+            }
+        ],
+    }).encode("utf-8")
+    mock_response.aiter_bytes = Mock(return_value=_make_async_iter([json_data]))
 
-    mock_client = AsyncMock()
-    mock_client.request.return_value = mock_response
-    mock_client.__aenter__.return_value = mock_client
-    mock_client.__aexit__.return_value = None
+    mock_stream_cm = Mock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=None)
+
+    mock_client = Mock()
+    mock_client.stream = Mock(return_value=mock_stream_cm)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with patch("openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.runtime_api.httpx.AsyncClient",
                return_value=mock_client):
@@ -239,8 +277,12 @@ async def test_runtime_api_tool_ignores_wrapper_when_response_model_present():
     ], response_model=DemoResponse)
     tool = tools[0]
 
+    # Mock response for stream mode
     mock_response = Mock()
-    mock_response.json.return_value = {
+    mock_response.headers = {}
+    mock_response.encoding = "utf-8"
+    mock_response.raise_for_status = Mock()
+    json_data = json.dumps({
         "code": 0,
         "message": "ok",
         "data": {
@@ -253,13 +295,17 @@ async def test_runtime_api_tool_ignores_wrapper_when_response_model_present():
                 }
             ],
         },
-    }
-    mock_response.raise_for_status = Mock()
+    }).encode("utf-8")
+    mock_response.aiter_bytes = Mock(return_value=_make_async_iter([json_data]))
 
-    mock_client = AsyncMock()
-    mock_client.request.return_value = mock_response
-    mock_client.__aenter__.return_value = mock_client
-    mock_client.__aexit__.return_value = None
+    mock_stream_cm = Mock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=None)
+
+    mock_client = Mock()
+    mock_client.stream = Mock(return_value=mock_stream_cm)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with patch("openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.runtime_api.httpx.AsyncClient",
                return_value=mock_client):

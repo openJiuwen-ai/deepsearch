@@ -32,10 +32,30 @@ logger = logging.getLogger(__name__)
 
 # Use __file__ for robust path resolution in SDK mode
 FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "kt_font.ttf")
-# 并发控制：限制同时执行的沙箱子进程数量，避免内存耗尽和进程阻塞
-MAX_CONCURRENT_CHART_TASKS = 5
+# 全局并发控制：限制所有章节总共同时执行的沙箱子进程数量，避免内存耗尽和进程阻塞
+# 这是一个全局预算，防止"章节数 × 5"的扇出问题
+MAX_GLOBAL_CONCURRENT_CHART_TASKS = 10
+# 单章节并发控制：限制单个章节内的最大并发图表任务数
+MAX_SECTION_CONCURRENT_CHART_TASKS = 5
 
 CHART_THRESHOLD = 85
+
+
+# 全局信号量：跨所有ChartGenerator实例共享，确保总并发不超过全局预算
+_global_chart_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_global_chart_semaphore() -> asyncio.Semaphore:
+    """
+    获取全局图表生成信号量（懒加载，确保在asyncio事件循环中创建）
+
+    Returns:
+        asyncio.Semaphore: 全局并发控制信号量
+    """
+    global _global_chart_semaphore
+    if _global_chart_semaphore is None:
+        _global_chart_semaphore = asyncio.Semaphore(MAX_GLOBAL_CONCURRENT_CHART_TASKS)
+    return _global_chart_semaphore
 
 
 class ChartGenerator:
@@ -62,16 +82,10 @@ class ChartGenerator:
         self._vlm_max_iterations = vlm_max_iterations
         self._chart_threshold = CHART_THRESHOLD
         self._log_prefix = "[ChartGenerator]"
-        # 最大并发图表生成任务数，限制子进程数量
-        self._max_concurrent_tasks = MAX_CONCURRENT_CHART_TASKS
-
-        if self._vlm_max_iterations > 0 and not self._vlm_model:
-            error_msg = "使用VLM评估时，必须提供VLM模型名称"
-            logger.error(f"{self._log_prefix} {error_msg}")
-            raise CustomValueException(
-                StatusCode.CHART_VLM_GENERATION_ERROR.code,
-                StatusCode.CHART_VLM_GENERATION_ERROR.errmsg.format(e=error_msg),
-            )
+        # 单章节最大并发图表生成任务数
+        self._max_section_concurrent_tasks = MAX_SECTION_CONCURRENT_CHART_TASKS
+        # 全局最大并发图表生成任务数（跨所有章节）
+        self._max_global_concurrent_tasks = MAX_GLOBAL_CONCURRENT_CHART_TASKS
 
         # 确保输出目录存在
         os.makedirs(self.output_dir, exist_ok=True)
@@ -146,21 +160,33 @@ class ChartGenerator:
         self, section_chart_tasks: List[Dict[str, Any]], section_idx: int
     ) -> List[Dict[str, Any]]:
         """
-        生成同一章节中的图表，使用并发控制限制同时执行的沙箱进程数
+        生成同一章节中的图表，使用双层并发控制：
+        1. 全局信号量：限制所有章节总共的并发任务数（防止"章节数 × 5"扇出）
+        2. 筠节信号量：限制单个章节内的并发任务数
         """
 
-        # 创建信号量控制并发
-        semaphore = asyncio.Semaphore(self._max_concurrent_tasks)
+        # 获取全局信号量（跨所有章节共享）
+        global_semaphore = _get_global_chart_semaphore()
+        # 创建章节信号量（仅限本章节）
+        section_semaphore = asyncio.Semaphore(self._max_section_concurrent_tasks)
 
-        async def _generate_with_semaphore(chart_task: Dict[str, Any]):
-            """带并发控制的图表生成"""
-            async with semaphore:
-                return await self._generate_single_chart(chart_task)
+        async def _generate_with_double_semaphore(chart_task: Dict[str, Any]):
+            """
+            带双层并发控制的图表生成
+            先获取全局配额，再获取章节配额，确保：
+            - 全局总并发不超过 MAX_GLOBAL_CONCURRENT_CHART_TASKS
+            - 单章节并发不超过 MAX_SECTION_CONCURRENT_CHART_TASKS
+            """
+            # 先获取全局配额（防止多章节扇出）
+            async with global_semaphore:
+                # 再获取章节配额（防止单章节垄断）
+                async with section_semaphore:
+                    return await self._generate_single_chart(chart_task)
 
-        # 异步生成每一个图表（带并发控制）
+        # 异步生成每一个图表（带双层并发控制）
         tasks = []
         for chart_task in section_chart_tasks:
-            tasks.append(_generate_with_semaphore(chart_task))
+            tasks.append(_generate_with_double_semaphore(chart_task))
 
         # 等待所有图表生成完成
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -247,6 +273,8 @@ class ChartGenerator:
             chart_base64 = result.get("chart_base64", "")
 
             if self._vlm_max_iterations == 0:
+                logger.info(f"Chart generated successfully: {figure_id},"
+                            f"chart title: {chart_title}, without iterations.")
                 return {"chart_base64": chart_base64, "score": 0}
 
             # ---------- Part 2: VLM评估反馈（可选） ----------
@@ -507,3 +535,11 @@ class ChartGenerator:
                 StatusCode.CHART_VLM_GENERATION_ERROR.code,
                 StatusCode.CHART_VLM_GENERATION_ERROR.errmsg.format(e=error_msg),
             ) from e
+
+    def set_vlm_name(self, model_name: str):
+        """修改vlm模型名称"""
+        self._vlm_model = model_name
+    
+    def set_vlm_iteration(self, iteration: int):
+        """修改vlm迭代优化最大次数"""
+        self._vlm_max_iterations = iteration

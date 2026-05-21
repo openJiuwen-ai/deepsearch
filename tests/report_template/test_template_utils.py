@@ -1,10 +1,52 @@
-import re
 import json
+import base64
+import io
+import re
+import zipfile
 from pathlib import Path
 
+import pypdfium2 as pdfium
 import pytest
 
+from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.algorithm.report_template.template_utils import TemplateUtils
+
+
+def _build_docx_base64(paragraphs: int, chars_per_paragraph: int) -> str:
+    text = "A" * chars_per_paragraph
+    body = "".join(
+        f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for _ in range(paragraphs)
+    )
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body}</w:body></w:document>"
+    ).encode("utf-8")
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    ).encode("utf-8")
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="word/document.xml"/>'
+        "</Relationships>"
+    ).encode("utf-8")
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("word/document.xml", document_xml)
+
+    return base64.b64encode(out.getvalue()).decode("ascii")
 
 
 def test_pdf_base64_to_markdown_from_file():
@@ -83,6 +125,31 @@ def test_word_base64_to_markdown_from_file():
     assert h1 == expected_h1, f"DOCX H1 count mismatch: got {h1}, expected {expected_h1}"
     assert h2 == expected_h2, f"DOCX H2 count mismatch: got {h2}, expected {expected_h2}"
     assert h3 == expected_h3, f"DOCX H3 count mismatch: got {h3}, expected {expected_h3}"
+
+
+def test_pdf_base64_to_markdown_rejects_pdf_exceeding_page_budget(monkeypatch):
+    """pdf parsing should fail fast when page count exceeds the budget."""
+    json_path = Path(__file__).parent / "template_utils_test_cases.json"
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    pdf_b64 = data["finance_report.pdf"]
+    pdf_bytes = base64.b64decode(pdf_b64)
+    doc = pdfium.PdfDocument(pdf_bytes)
+    page_count = len(doc)
+    doc.close()
+
+    monkeypatch.setattr(TemplateUtils, "_MAX_PDF_PAGE_COUNT", page_count - 1, raising=False)
+
+    with pytest.raises(CustomValueException):
+        TemplateUtils.pdf_base64_to_markdown(pdf_b64)
+
+
+def test_word_base64_to_markdown_rejects_docx_exceeding_xml_budget(monkeypatch):
+    """docx parsing should reject oversized expanded XML before markdown assembly."""
+    docx_b64 = _build_docx_base64(paragraphs=32, chars_per_paragraph=64)
+    monkeypatch.setattr(TemplateUtils, "_MAX_DOCX_XML_BYTES", 1024, raising=False)
+
+    with pytest.raises(CustomValueException):
+        TemplateUtils.word_base64_to_markdown(docx_b64)
 
 
 def test_postprocess_structure_keep_content():

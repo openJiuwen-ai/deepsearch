@@ -70,7 +70,7 @@ class TemplateGenerator:
             elif suffix == ".docx":
                 file_content = TemplateUtils.word_base64_to_markdown(file_stream)
             else:
-                file_content = base64.b64decode(file_stream).decode("utf-8")
+                file_content = TemplateUtils.decode_text_template_base64(file_stream)
 
             processed_output = (
                 TemplateUtils.postprocess_structure_keep_content(file_content)

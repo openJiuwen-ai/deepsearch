@@ -375,7 +375,7 @@ class DeepSearchAgentManager:
                 "search_api_key": bytearray(detail.search_api_key, encoding="utf-8"),
                 "search_url": detail.search_url,
                 "max_web_search_results": web_search_config.max_web_search_results,
-                "extension": {},
+                "extension": detail.extension or {},
             }
             logger.info("Built web search config for ID: %s", config_id)
             return config

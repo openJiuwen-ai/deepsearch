@@ -11,6 +11,8 @@ from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LEN
 
 logger = logging.getLogger(__name__)
 
+MAX_RUNTIME_API_SEARCH_RESULTS = 20
+
 
 class BaseApiWrapper(ABC):
     """Base class for runtime API response wrappers."""
@@ -44,15 +46,19 @@ class SearchResultApiWrapper(BaseApiWrapper):
     @staticmethod
     def _extract_candidates(payload: Any) -> list[dict[str, Any]] | None:
         if isinstance(payload, list):
-            return payload if all(isinstance(item, dict) for item in payload) else None
+            candidates = payload[:MAX_RUNTIME_API_SEARCH_RESULTS]
+            return candidates if all(isinstance(item, dict) for item in candidates) else None
 
         if not isinstance(payload, dict):
             return None
 
         for key in ("results", "items", "records", "documents", "docs", "list"):
             value = payload.get(key)
-            if isinstance(value, list) and all(isinstance(item, dict) for item in value):
-                return value
+            if not isinstance(value, list):
+                continue
+            candidates = value[:MAX_RUNTIME_API_SEARCH_RESULTS]
+            if all(isinstance(item, dict) for item in candidates):
+                return candidates
 
         if any(
             key in payload
@@ -65,7 +71,7 @@ class SearchResultApiWrapper(BaseApiWrapper):
     @staticmethod
     def _normalize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized_items: list[dict[str, Any]] = []
-        for item in items:
+        for item in items[:MAX_RUNTIME_API_SEARCH_RESULTS]:
             title = str(
                 item.get("title")
                 or item.get("name")

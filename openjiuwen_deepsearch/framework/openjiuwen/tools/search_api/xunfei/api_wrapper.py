@@ -11,10 +11,20 @@ import requests
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 from openjiuwen.core.common.security.ssl_utils import SslUtils
+from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# 默认最大响应体大小：5MB（足够容纳搜索结果，同时防止资源耗尽）
+DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+# 默认请求超时时间：300秒
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 300
+# 默认连接超时时间：60秒
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 60
+# 响应读取块大小
+ASYNC_RESPONSE_CHUNK_SIZE = 4096
 
 
 class XunfeiSearchAPIWrapper(BaseModel, Generic[T]):
@@ -22,6 +32,8 @@ class XunfeiSearchAPIWrapper(BaseModel, Generic[T]):
     search_api_key: bytearray = None
     search_url: SecretStr = None
     max_web_search_results: int = 5
+    max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
+    request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS
     extension: dict = {}
 
     model_config = ConfigDict(
@@ -91,7 +103,13 @@ class XunfeiSearchAPIWrapper(BaseModel, Generic[T]):
         search_headers, search_url, search_data = self.build_search_headers(search_term, num, teller_id)
         ssl_verify, ssl_cert = SslUtils.get_ssl_config("TOOL_SSL_VERIFY", "TOOL_SSL_CERT", ["false"])
         verify = ssl_cert if ssl_verify else False
-        response = requests.post(search_url, headers=search_headers, json=search_data, verify=verify)
+        response = requests.post(
+            search_url,
+            headers=search_headers,
+            json=search_data,
+            verify=verify,
+            timeout=(DEFAULT_CONNECT_TIMEOUT_SECONDS, DEFAULT_REQUEST_TIMEOUT_SECONDS),
+        )
 
         if response.status_code != 200:
             logger.error(f"Request search failed! Status code: {response.status_code}")
@@ -136,29 +154,60 @@ class XunfeiSearchAPIWrapper(BaseModel, Generic[T]):
     async def _async_make_search_request(
             self, search_term: str, num: int, teller_id: str
     ) -> tuple[bool, bytes]:
-        """Make search API request asynchronously and return response content."""
+        """Make search API request asynchronously and return response content.
+        
+        该方法在读取响应时限制响应体大小，防止恶意响应耗尽内存。
+        """
         search_headers, search_url, search_data = self.build_search_headers(search_term, num, teller_id)
         ssl_verify, ssl_cert = SslUtils.get_ssl_config("TOOL_SSL_VERIFY", "TOOL_SSL_CERT", ["false"])
-        buffer = b""
+        
+        # 使用 bytearray 替代 bytes buffer，减少反复拼接的复制开销
+        buffer = bytearray()
+        
+        # 设置显式超时，防止长时间响应占用 worker
+        timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
+        
         if ssl_verify:
             connector = aiohttp.TCPConnector(limit=2 ** 32, ssl=SslUtils.create_strict_ssl_context(ssl_cert))
         else:
             connector = aiohttp.TCPConnector(limit=2 ** 32, ssl=ssl_verify)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post(
                     search_url, json=search_data, headers=search_headers, raise_for_status=False
             ) as response:
                 if response.status != 200:
                     logger.error(f"Request search failed! Status code: {response.status}")
-                    return False, buffer
-
+                    return False, b""
+                
+                # 在读取前检查 Content-Length，若超过上限直接拒绝
+                content_length = response.headers.get("Content-Length")
+                if content_length:
+                    try:
+                        response_size = int(content_length)
+                    except ValueError:
+                        response_size = 0
+                    if response_size > self.max_response_bytes:
+                        logger.error(
+                            "Xunfei search response too large: %s bytes",
+                            response_size,
+                        )
+                        return False, b""
+                
+                # 在读取过程中累计检查字节数，超过上限立即停止
                 while True:
-                    chunk = await response.content.read(4096)
+                    chunk = await response.content.read(ASYNC_RESPONSE_CHUNK_SIZE)
                     if not chunk:
                         break
-                    buffer += chunk
-
-        return True, buffer
+                    if len(buffer) + len(chunk) > self.max_response_bytes:
+                        logger.error(
+                            "Xunfei search response exceeded %s bytes",
+                            self.max_response_bytes,
+                        )
+                        return False, b""
+                    buffer.extend(chunk)
+        
+        return True, bytes(buffer)
 
     async def _async_parse_response_content(self, buffer: bytes) -> list:
         """Parse streaming response content into structured messages."""

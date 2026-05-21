@@ -70,6 +70,30 @@ class TestTavilySearchAPIWrapper:
 
     @patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper.requests.post")
     @patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper.SslUtils.get_ssl_config")
+    def test_raw_search_results_uses_default_url_when_empty(self, mock_get_ssl_config, mock_post):
+        """Tavily should use its public default endpoint when search_url is empty."""
+        from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper import (
+            TavilySearchAPIWrapper,
+        )
+
+        mock_get_ssl_config.return_value = (False, None)
+        mock_response = Mock()
+        mock_response.json.return_value = {"results": []}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        wrapper = TavilySearchAPIWrapper(
+            search_api_key=bytearray(b"fake_api_key"),
+            search_url="",
+            max_web_search_results=3,
+        )
+
+        wrapper.raw_search_results(query="test query")
+
+        assert mock_post.call_args[0][0] == "https://api.tavily.com/search"
+
+    @patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper.requests.post")
+    @patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper.SslUtils.get_ssl_config")
     def test_results(self, mock_get_ssl_config, mock_post):
         """测试 results 方法"""
         from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper import (
@@ -299,3 +323,58 @@ class TestTavilySearchAPIWrapper:
             extension={},
         )
         assert w2.search_depth == "advanced"
+
+    def test_clean_results_truncates_large_raw_content(self, wrapper):
+        """测试 clean_results 对超大 raw_content 的截断"""
+        from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH
+
+        # 创建超大的 raw_content（大于 MAX_SEARCH_CONTENT_LENGTH）
+        large_raw_content = "R" * (MAX_SEARCH_CONTENT_LENGTH + 200000)
+
+        test_results = [
+            {
+                "title": "Test Title",
+                "url": "http://example.com/test",
+                "content": "Test Content",
+                "score": 0.9,
+                "raw_content": large_raw_content,
+            }
+        ]
+
+        cleaned = wrapper.clean_results(test_results)
+
+        # 验证 raw_content 被截断到 MAX_SEARCH_CONTENT_LENGTH
+        assert len(cleaned) == 1
+        assert "raw_content" in cleaned[0]
+        assert len(cleaned[0]["raw_content"]) == MAX_SEARCH_CONTENT_LENGTH
+        assert cleaned[0]["raw_content"] == large_raw_content[:MAX_SEARCH_CONTENT_LENGTH]
+
+    def test_clean_results_handles_malicious_endpoint_large_raw_content(self, wrapper):
+        """测试恶意 endpoint 返回超大 raw_content 的场景（CVE-400 资源消耗漏洞）"""
+        from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH
+
+        # 模拟恶意 endpoint 返回超大 raw_content（即使未请求也会返回）
+        malicious_raw_content = "MALICIOUS" * 150000  # 约 1,200,000 字符
+
+        test_results = [
+            {
+                "title": "Malicious Page",
+                "url": "http://attacker-controlled.example/page",
+                "content": "Malicious content",
+                "score": 0.5,
+                "raw_content": malicious_raw_content,  # 恶意 endpoint 强制返回超大 raw_content
+            }
+        ]
+
+        cleaned = wrapper.clean_results(test_results)
+
+        # 验证即使恶意 endpoint 返回超大 raw_content，也被截断
+        assert len(cleaned) == 1
+        assert "raw_content" in cleaned[0]
+        assert len(cleaned[0]["raw_content"]) == MAX_SEARCH_CONTENT_LENGTH
+        assert len(cleaned[0]["raw_content"]) < len(malicious_raw_content)
+
+        # 验证截断后的内容长度符合预期
+        expected_max = MAX_SEARCH_CONTENT_LENGTH
+        actual_len = len(cleaned[0]["raw_content"])
+        assert actual_len == expected_max, f"raw_content 应被截断到 {expected_max}, 实际为 {actual_len}"

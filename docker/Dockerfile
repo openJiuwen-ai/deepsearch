@@ -2,6 +2,7 @@ ARG BASE_IMAGE=python:3.11-slim-bookworm
 FROM ${BASE_IMAGE}
 
 ARG INDEX_URL=https://pypi.org/simple
+ARG APT_MIRROR=deb.debian.org
 
 # 设置工作目录
 WORKDIR /app
@@ -12,10 +13,12 @@ ENV PYTHONUNBUFFERED=1 \
     UV_SYSTEM_PYTHON=1
 
 # 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    curl \
+RUN sed -i "s@deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 uv

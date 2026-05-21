@@ -14,6 +14,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_call, \
     remove_duplicate_items
 from openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
+from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
@@ -62,6 +63,7 @@ class InfoRetrievalNode(BaseNode):
             web_search_engine_name=web_search_engine_name,
             local_search_engine_name=local_search_engine_name,
             api_tools_config=session.get_global_state("config.api_tools_config") or {},
+            research_intent=session.get_global_state("search_context.research_intent") or {},
         )
         return state
 
@@ -80,6 +82,7 @@ class InfoRetrievalNode(BaseNode):
                 "web_search_engine_name": state.get("web_search_engine_name", None),
                 "local_search_engine_name": state.get("local_search_engine_name", None),
                 "api_tools_config": state.get("api_tools_config", {}),
+                "research_intent": state.get("research_intent", {}),
             }
             sub_task = self._collector_main(sub_state)
             tasks.append(sub_task)
@@ -145,6 +148,7 @@ class InfoRetrievalNode(BaseNode):
             "web_page_search_record": [],
             "local_text_search_record": [],
             "other_tool_record": [],
+            "research_intent": state.get("research_intent", {}),
         }
 
         tool_list, tool_dict = self._prepare_collector_tool(state)
@@ -248,7 +252,7 @@ class InfoRetrievalNode(BaseNode):
             {
                 "url": record.get("url", ""),
                 "title": record.get("title", "Untitled"),
-                "content": record.get("content", "")
+                "content": str(record.get("content") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
             }
             for record in web_record + local_record
         ]
@@ -286,10 +290,14 @@ class InfoRetrievalNode(BaseNode):
         for idx, scored in enumerate(scored_result[:len(doc_infos)]):
             try:
                 index = int(scored.get("content"))
-            except (KeyError, ValueError):
+            except (AttributeError, KeyError, TypeError, ValueError):
                 logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
                                f"Failed to get content form score result, using index:{idx} as fallback")
                 index = idx
+            if index < 0 or index >= len(doc_infos):
+                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
+                               f"Score result content index:{index} is out of range, skipping")
+                continue
 
             try:
                 scores: dict = scored.get("scores")

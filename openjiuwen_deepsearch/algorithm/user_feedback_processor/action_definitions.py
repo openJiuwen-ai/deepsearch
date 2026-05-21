@@ -30,6 +30,12 @@ class SupplementarySearchActionSubcategory(str, Enum):
     SUPPLEMENTARY_SEARCH = "supplementary_search"
 
 
+class NewTaskActionSubcategory(str, Enum):
+    """新增任务小类动作。"""
+
+    NEW_TASK = "new_task"
+
+
 class FinishActionSubcategory(str, Enum):
     """完成任务小类动作。"""
 
@@ -45,6 +51,7 @@ class SyncActionSubcategory(str, Enum):
 ResolvedActionSubcategory = (
     SynonymRewriteActionSubcategory
     | SupplementarySearchActionSubcategory
+    | NewTaskActionSubcategory
     | SyncActionSubcategory
     | FinishActionSubcategory
 )
@@ -101,6 +108,12 @@ USER_INPUT_ACTION_MAP: dict[str, UserInputActionMapping] = {
     "supplementary_search": UserInputActionMapping(
         action_category=UserFeedbackActionCategory.SUPPLEMENTARY_SEARCH,
         action_subcategory=SupplementarySearchActionSubcategory.SUPPLEMENTARY_SEARCH,
+    ),
+
+    # 新增任务
+    "new_task": UserInputActionMapping(
+        action_category=UserFeedbackActionCategory.NEW_TASK,
+        action_subcategory=NewTaskActionSubcategory.NEW_TASK,
     ),
 
     # 整篇同步

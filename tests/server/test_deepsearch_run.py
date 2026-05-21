@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
+
 from server.schemas.deepsearch_run import DeepSearchRequest
 
 
@@ -61,6 +63,31 @@ def test_deep_search_request_accepts_agent_llm_timeouts():
     )
 
     assert request.agent_llm_timeouts == {"default": 300, "sub_reporter": 120}
+
+
+def test_deep_search_request_rejects_invalid_conversation_id():
+    with pytest.raises(ValidationError) as exc_info:
+        DeepSearchRequest(
+            space_id="space-1",
+            conversation_id="has space",
+            message="hello",
+            llm_config={
+                "general": {
+                    "model_name": "mock-model",
+                    "model_type": "openai",
+                    "base_url": "https://example.com/v1",
+                    "api_key": "secret",
+                }
+            },
+            web_search_config={
+                "web_search_config_id": 1,
+                "max_web_search_results": 5,
+            },
+            info_collector_search_method="web",
+            search_mode="research",
+            execution_method="parallel",
+        )
+    assert "conversation_id" in str(exc_info.value)
 
 
 def test_agent_llm_timeouts_no_longer_validate_at_request_boundary():

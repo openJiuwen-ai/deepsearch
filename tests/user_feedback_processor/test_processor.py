@@ -275,7 +275,6 @@ class TestValidate:
 
         assert exc_info.value.error_code == StatusCode.USER_FEEDBACK_PROCESSOR_INVALID_ACTION.code
 
-
 class TestUserFeedbackProcessorDispatch:
     @pytest.fixture
     def processor(self):
@@ -387,6 +386,59 @@ class TestUserFeedbackProcessorDispatch:
         assert result["rewritten_text"] == "## 第二章\n新章节内容"
 
     @pytest.mark.asyncio
+    async def test_execute_dispatches_new_task_to_processor(self, processor):
+        feedback = {
+            "action": "new_task",
+            "selected_text": "原文",
+            "start_offset": 0,
+            "end_offset": 2,
+            "user_instruction": "补充行业背景",
+        }
+        final_result = {
+            "response_content": "原文后续内容",
+            "citation_messages": {},
+            "infer_messages": [],
+        }
+
+        with patch.object(
+            processor._new_task_processor,
+            "run_new_task",
+            new_callable=AsyncMock,
+        ) as mock_run_new_task:
+            mock_run_new_task.return_value = {
+                "new_report": "## 第一章\n新章节内容",
+                "original_text": "## 第一章\n旧章节内容",
+                "original_start_offset": 0,
+                "original_end_offset": 11,
+                "original_text_clean": "## 第一章\n旧章节内容",
+                "rewritten_text": "## 第一章\n新章节内容",
+                "rewritten_start_offset": 0,
+                "rewritten_end_offset": 11,
+                "section_start_offset": 0,
+                "section_end_offset": 11,
+                "section_title": "第一章",
+                "matched_section_id": "1",
+                "match_mode": "title_exact",
+                "assessment_summary": "历史资料足够",
+                "used_historical_doc_count": 2,
+                "used_new_doc_count": 0,
+                "missing_aspects": [],
+            }
+
+            result = await processor.execute(
+                feedback=feedback,
+                final_result=final_result,
+                language="zh-CN",
+            )
+
+        assert result["section_title"] == "第一章"
+        mock_run_new_task.assert_awaited_once_with(
+            feedback=feedback,
+            final_result=final_result,
+            language="zh-CN",
+        )
+
+    @pytest.mark.asyncio
     async def test_execute_sync_returns_updated_report_without_touching_metadata(self, processor):
         citation_messages = {"code": 0, "msg": "success", "data": [{"id": 0}]}
         infer_messages = [{"id": 9, "content": "保留"}]
@@ -490,6 +542,27 @@ class TestUserFeedbackProcessorDispatch:
             action_category=UserFeedbackActionCategory.SUPPLEMENTARY_SEARCH,
             action_subcategory=SupplementarySearchActionSubcategory.SUPPLEMENTARY_SEARCH,
         )
+
+    def test_build_stream_result_builds_local_edit_payload_for_new_task(self):
+        feedback = {
+            "action": "new_task",
+            "selected_text": "原文",
+            "start_offset": 3,
+            "end_offset": 5,
+        }
+        action_result = {
+            "original_text": "## 第一章\n旧章节内容",
+            "original_start_offset": 0,
+            "original_end_offset": 11,
+            "rewritten_text": "## 第一章\n新章节内容",
+            "rewritten_start_offset": 0,
+            "rewritten_end_offset": 11,
+        }
+
+        result = UserFeedbackProcessor.build_stream_result(feedback, action_result)
+
+        assert result.action_category == UserFeedbackActionCategory.NEW_TASK
+        assert result.rewritten_text == "## 第一章\n新章节内容"
 
     def test_build_stream_result_uses_rewrite_error_errmsg_for_invalid_rewrite_mapping(self):
         feedback = {

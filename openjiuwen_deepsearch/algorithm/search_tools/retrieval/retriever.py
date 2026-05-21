@@ -1,13 +1,28 @@
+import asyncio
 import json
 from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
-from pymilvus import AnnSearchRequest, WeightedRanker
+from pymilvus import AnnSearchRequest, MilvusClient, WeightedRanker
 from pymilvus.client.search_result import SearchResult
 
+from openjiuwen.core.foundation.store.base_embedding import EmbeddingConfig
+from openjiuwen.core.retrieval.common.config import (
+    KnowledgeBaseConfig,
+    RetrievalConfig,
+    VectorStoreConfig,
+)
+from openjiuwen.core.retrieval.knowledge_base import KnowledgeBase
+from openjiuwen.core.retrieval.simple_knowledge_base import SimpleKnowledgeBase
+from openjiuwen.core.retrieval.vector_store.milvus_store import MilvusVectorStore
+
 from openjiuwen_deepsearch.algorithm.search_tools.retrieval.base_retriever import (
-    BaseRetriever,
+    MilvusBaseRetriever,
     RetrieveConfig,
+)
+from openjiuwen_deepsearch.algorithm.search_tools.retrieval.embedder import (
+    AbstractEmbedder,
+    OpenJiuwenAPIEmbedder,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -56,7 +71,7 @@ class BrowsecompPlusDoc(BaseModel):
     results: List[BrowsecompPlusCombinedHits]
 
 
-class BrowsecompPlusMilvusRetriever(BaseRetriever):
+class BrowsecompPlusMilvusRetriever(MilvusBaseRetriever):
     def _merge_hits_from_same_doc(
         self,
         hits_list: List[BrowsecompPlusHit],
@@ -276,3 +291,161 @@ class BrowsecompPlusMilvusRetriever(BaseRetriever):
             to_return,
             id_list,
         )
+
+
+class KnowledgeBaseRetriever(MilvusBaseRetriever):
+    """
+    Retrieves via ``KnowledgeBase.retrieve``.
+
+    Constructor matches ``MilvusBaseRetriever`` (same positional and optional field names).
+    Builds a ``SimpleKnowledgeBase`` from Milvus and embedder settings. Milvus connection and
+    collection checks are skipped (``connect_milvus=False``); ``self.client`` is ``None``.
+    """
+
+    def __init__(
+        self,
+        milvus_host: str,
+        milvus_port: str,
+        database_name: str,
+        collection_name: str,
+        embedder: AbstractEmbedder,
+        vector_field: str = "embedding",
+        text_field: str = "content",
+        sparse_field: str = "content_sparse",
+        title_field: str = "title",
+        id_field: str = "id",
+        metric_type: str = "COSINE",
+        client: MilvusClient = None,
+        *,
+        kb_id: Optional[str] = None,
+        index_type: str = "vector",
+        milvus_token: str = "",
+    ):
+        super().__init__(
+            milvus_host,
+            milvus_port,
+            database_name,
+            collection_name,
+            embedder,
+            vector_field=vector_field,
+            text_field=text_field,
+            sparse_field=sparse_field,
+            title_field=title_field,
+            id_field=id_field,
+            metric_type=metric_type,
+            client=client,
+            connect_milvus=False,
+        )
+        self._knowledge_base = self._create_knowledge_base(
+            milvus_host=milvus_host,
+            milvus_port=milvus_port,
+            database_name=database_name,
+            collection_name=collection_name,
+            embedder=embedder,
+            kb_id=kb_id or collection_name,
+            index_type=index_type,
+            milvus_token=milvus_token,
+            vector_field=vector_field,
+            text_field=text_field,
+            sparse_field=sparse_field,
+        )
+
+    @staticmethod
+    def _embed_model_from_embedder(embedder: AbstractEmbedder):
+        if isinstance(embedder, OpenJiuwenAPIEmbedder):
+            return embedder.embedder
+        token_str = embedder.api_token.decode("utf-8")
+        embed_config = EmbeddingConfig(
+            model_name=embedder.model_name,
+            base_url=embedder.api_url,
+            api_key=token_str,
+        )
+        embed_cls = OpenJiuwenAPIEmbedder.jiuwen_embedding_class_for_url(embedder.api_url)
+        return embed_cls(config=embed_config, timeout=embedder.timeout)
+
+    @classmethod
+    def _create_knowledge_base(
+        cls,
+        *,
+        milvus_host: str,
+        milvus_port: str,
+        database_name: str,
+        collection_name: str,
+        embedder: AbstractEmbedder,
+        kb_id: str,
+        index_type: str,
+        milvus_token: str,
+        vector_field: str,
+        text_field: str,
+        sparse_field: str,
+    ) -> KnowledgeBase:
+        milvus_uri = f"http://{milvus_host}:{milvus_port}"
+        vs_config = VectorStoreConfig(
+            store_provider="milvus",
+            collection_name=collection_name,
+            database_name=database_name,
+        )
+        vector_store = MilvusVectorStore(
+            config=vs_config,
+            milvus_uri=milvus_uri,
+            milvus_token=milvus_token or None,
+            text_field=text_field,
+            vector_field=vector_field,
+            sparse_vector_field=sparse_field,
+        )
+        return SimpleKnowledgeBase(
+            config=KnowledgeBaseConfig(kb_id=kb_id, index_type=index_type),
+            vector_store=vector_store,
+            embed_model=cls._embed_model_from_embedder(embedder),
+        )
+
+    def _run_retrieve(self, query: str, retrieval_config: RetrievalConfig):
+        return asyncio.run(
+            self._knowledge_base.retrieve(query, config=retrieval_config)
+        )
+
+    @staticmethod
+    def _result_id(res) -> str:
+        if getattr(res, "chunk_id", None):
+            return str(res.chunk_id)
+        if getattr(res, "doc_id", None):
+            return str(res.doc_id)
+        meta = getattr(res, "metadata", None) or {}
+        for key in ("id", "chunk_id", "doc_id"):
+            if key in meta and meta[key] is not None:
+                return str(meta[key])
+        return ""
+
+    def retrieve(
+        self,
+        retrieve_config: RetrieveConfig,
+    ) -> Tuple[str, List[str]]:
+        top_k = retrieve_config.top_k * max(1, retrieve_config.top_k_multiply_factor)
+        retrieval_config = RetrievalConfig(top_k=top_k)
+
+        docs = []
+        id_list: List[str] = []
+        for q in retrieve_config.query:
+            results = self._run_retrieve(q, retrieval_config)
+            entry = {"query": q, "results": [r.text for r in results]}
+            if retrieve_config.save_as:
+                entry["raw_results"] = [r.model_dump() for r in results]
+            docs.append(entry)
+            for r in results:
+                rid = self._result_id(r)
+                if rid:
+                    id_list.append(rid)
+
+        if retrieve_config.save_as:
+            with open(retrieve_config.save_as, "w", encoding="utf-8") as f:
+                json.dump(docs, f, ensure_ascii=False, indent=2)
+
+        to_return = "\n\n".join(
+            json.dumps(
+                {"query": d["query"], "results": d["results"]},
+                ensure_ascii=False,
+            )
+            for d in docs
+        )
+
+        return to_return, id_list

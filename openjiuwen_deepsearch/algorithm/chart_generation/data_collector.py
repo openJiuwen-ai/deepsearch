@@ -271,6 +271,7 @@ class ChartDataCollector:
         """
         section_data = []
         data_sources = self._all_data_source_with_index[section_index]
+        data_sources_length = len(data_sources)
         for result_item in result:
             try:
                 if "NO DATA" in result_item.get("data", "NO DATA"):
@@ -285,8 +286,9 @@ class ChartDataCollector:
                 new_result_item["source_datas"] = []
                 new_result_item["data"] = result_item.get("data", "NO DATA")
                 for source_index in source_indexes:
-                    data_source = data_sources[source_index]
-                    new_result_item["source_datas"].append(data_source) # 保存相应溯源的所有信息
+                    if 0 <= source_index < data_sources_length:
+                        data_source = data_sources[source_index]
+                        new_result_item["source_datas"].append(data_source) # 保存相应溯源的所有信息
                 section_data.append(new_result_item)
             except Exception as e:
                 logger.warning(f"{self._log_prefix} Error adding section source info: {e}")

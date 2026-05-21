@@ -3,11 +3,11 @@
 
 import asyncio
 import time
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_search
+from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import apply_web_search_domain_constraints, run_web_search
 from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_limiter
 
 
@@ -57,3 +57,39 @@ class TestWebSearchRateLimit:
 
             assert len(results) == num_requests
             assert elapsed < 1.0
+
+
+class TestWebSearchDomainConstraints:
+    """搜索引擎域名约束合并测试"""
+
+    def test_apply_domain_constraints_merges_with_initialized_wrapper_config(self):
+        mock_wrapper = Mock()
+        mock_wrapper.include_domains = ["configured.com", "shared.com"]
+        mock_wrapper.exclude_domains = ["blocked.com"]
+
+        with patch('openjiuwen_deepsearch.framework.openjiuwen.tools.web_search.web_search_context') as mock_ctx:
+            mock_ctx.get.return_value = {"tavily": mock_wrapper}
+
+            applied = apply_web_search_domain_constraints(
+                "tavily",
+                include_domains=["intent.com", "shared.com"],
+                exclude_domains=["intent-blocked.com"],
+            )
+
+        assert applied is True
+        assert mock_wrapper.include_domains == ["configured.com", "shared.com", "intent.com"]
+        assert mock_wrapper.exclude_domains == ["blocked.com", "intent-blocked.com"]
+
+    def test_apply_domain_constraints_ignores_unsupported_wrapper(self):
+        mock_wrapper = Mock()
+        mock_wrapper.include_domains = []
+        mock_wrapper.exclude_domains = []
+
+        with patch('openjiuwen_deepsearch.framework.openjiuwen.tools.web_search.web_search_context') as mock_ctx:
+            mock_ctx.get.return_value = {"google": mock_wrapper}
+
+            applied = apply_web_search_domain_constraints("google", include_domains=["intent.com"])
+
+        assert applied is False
+        assert mock_wrapper.include_domains == []
+        assert mock_wrapper.exclude_domains == []

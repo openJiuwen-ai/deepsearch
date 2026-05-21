@@ -74,10 +74,35 @@ _DEEPSEARCH_NODE_IDS = frozenset({
 
 _WORKFLOW_LLM_USAGE: dict[str, dict[str, Any]] = {}
 _USAGE_ONLY_PARSER_PATCHES: dict[int, dict[str, Any]] = {}
+_AGENT_LLM_TIMEOUT_MAX_SECONDS = 3600
+
+
+def _clamp_agent_llm_timeout(timeout: Any) -> int:
+    """将调用方提供的 agent LLM timeout 限制在服务端策略上限内。
+    Args:
+        timeout: 原始超时值。
+    Returns:
+        int: 裁剪后的超时值。
+    """
+    try:
+        parsed_timeout = int(timeout)
+    except (TypeError, ValueError):
+        # 非法值转为 0，表示关闭业务层超时，回退到底层控制
+        return 0
+    # 负数转为 0，保留关闭语义
+    if parsed_timeout < 0:
+        return 0
+
+    # 裁剪上限，防止极大值绕过底层超时控制
+    return min(parsed_timeout, _AGENT_LLM_TIMEOUT_MAX_SECONDS)
 
 
 def normalize_agent_llm_timeouts(value: Any) -> dict[str, int]:
     """规范化按 agent 配置的 LLM 总超时字典。
+
+    缺少 ``default`` 时仍保持未启用语义；一旦启用：
+    - 0 值表示关闭业务层墙钟超时，回退到底层 SDK 的 ServiceConfig.llm_timeout 控制
+    - 极大值会被裁剪到上限，防止绕过底层超时控制
 
     Args:
         value: 原始超时配置。
@@ -89,10 +114,7 @@ def normalize_agent_llm_timeouts(value: Any) -> dict[str, int]:
         return {}
     normalized_value: dict[str, int] = {}
     for agent_key, timeout in value.items():
-        try:
-            normalized_value[agent_key] = max(int(timeout), 0)
-        except (TypeError, ValueError):
-            normalized_value[agent_key] = 0
+        normalized_value[agent_key] = _clamp_agent_llm_timeout(timeout)
     return normalized_value
 
 

@@ -10,7 +10,13 @@ from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research impor
 from openjiuwen_deepsearch.common.exception import CustomIndexException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.utils.common_utils.url_utils import are_similar_urls
+from openjiuwen_deepsearch.utils.common_utils.url_utils import (
+    are_similar_urls,
+    validate_url_scheme,
+)
+from openjiuwen_deepsearch.utils.common_utils.text_utils import (
+    escape_markdown_link_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +104,10 @@ class CitationCheckerResearch:
                 new_parts.append(para[last_pos:match.start()])
             if info.get("valid", False):
                 temp_str = f'{"!" if info.get("is_image", False) else ""}'
-                temp_str += f'[source_tracer_result][{info["title"]}]({info["url"]})'
+                # 对标题进行Markdown转义
+                safe_title = escape_markdown_link_text(info.get("title", ""))
+                safe_url = info.get("url", "")
+                temp_str += f'[source_tracer_result][{safe_title}]({safe_url})'
                 new_parts.append(temp_str)
             last_pos = match.end()
             datas[index]["match"] = (match.start(), match.end())
@@ -129,11 +138,13 @@ class CitationCheckerResearch:
         """
         # 如果这个引用已经存在，使用已有的序号
         if url in references:
-            title, idx = references[url]
+            safe_title, idx = references[url]
             return f"[checked_citation:{citation_id}][[{idx}]]({url})", ref_counter, idx
 
+        # 对标题进行Markdown转义，防止内容注入
+        safe_title = escape_markdown_link_text(title)
         # 否则添加新引用并递增计数器
-        references[url] = (title, ref_counter)
+        references[url] = (safe_title, ref_counter)
         current_idx = ref_counter
         ref_counter += 1
         return f"[checked_citation:{citation_id}][[{current_idx}]]({url})", ref_counter, current_idx
@@ -151,13 +162,14 @@ class CitationCheckerResearch:
         """
         reference_section = ""
         for (url, item) in references.items():
+            # item[0] 是已经转义过的标题，item[1] 是序号
             reference_section += f'[{item[1]}]. [{item[0]}]({url})\n\n'
 
         return reference_section
 
     def validate_url_match(self, url, datas, citation_index):
         """
-        验证引用URL是否与数据源中的URL匹配
+        验证引用URL是否与数据源中的URL匹配，同时验证URL scheme安全性
 
         Args:
             url (str): 待验证的URL字符串
@@ -167,12 +179,26 @@ class CitationCheckerResearch:
         Returns:
             tuple: (验证后的URL, 是否匹配)
                 - 验证后的URL (str): 如果URL被纠正，则返回纠正后的URL，否则返回原始URL
-                - 是否匹配 (bool): True表示URL匹配或可纠正，False表示URL不匹配
+                - 是否匹配 (bool): True表示URL匹配或可纠正且scheme安全，False表示URL不匹配或不安全
         """
         if not datas[citation_index].get('valid', False):
             return url, False
 
+        # 首先验证URL scheme安全性
         datas_url = datas[citation_index].get('url', '')
+        safe_url, is_safe_scheme = validate_url_scheme(datas_url)
+        if not is_safe_scheme:
+            # URL scheme不安全，标记为无效引用
+            datas[citation_index]['valid'] = False
+            invalid_reason = "unsafe url scheme"
+            datas[citation_index]["invalid_reason"] = invalid_reason
+            self.invalid_citation_counts[invalid_reason] = self.invalid_citation_counts.get(invalid_reason, 0) + 1
+            logger.warning(
+                f"[CITATION CHECKER]: delete unsafe url scheme citation: "
+                f"The {citation_index}-th url has unsafe scheme"
+            )
+            return "", False
+
         if datas_url != url:
             if are_similar_urls(url, datas_url):
                 url = datas_url
@@ -517,7 +543,9 @@ class CitationCheckerResearch:
                 continue
 
             if is_image:
-                replacement = f'![[{title}]]({url})'
+                # 对图片标题进行Markdown转义
+                safe_title = escape_markdown_link_text(title)
+                replacement = f'![[{safe_title}]]({url})'
                 new_parts.append(replacement)
             else:
                 text_citation, ref_counter, current_idx = self.format_text_citation(

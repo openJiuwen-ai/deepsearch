@@ -19,7 +19,7 @@ class WebSearchEngineModel(Base):
     space_id: Mapped[str] = mapped_column(String(255), nullable=False)
     search_engine_name: Mapped[str] = mapped_column(String(255), nullable=False)
     search_api_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    search_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    search_url: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     extension: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     is_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     create_time: Mapped[str] = mapped_column(String(255), default=_utc_now_iso)

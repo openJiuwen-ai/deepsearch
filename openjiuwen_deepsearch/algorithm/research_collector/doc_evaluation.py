@@ -59,9 +59,9 @@ def process_scored_item(scored: dict, idx: int, contents: List[str]) -> Optional
 
     if not isinstance(scored, dict):
         scored = {'content': str(idx), 'doc_time': "Unknown", 'scores': {}}
-        return scored
+    else:
+        scored = scored.copy()
 
-    original_scored = scored.copy()
     scored = ensure_content_field(scored, idx)
     try:
         validate_content_index(scored, contents)
@@ -72,7 +72,7 @@ def process_scored_item(scored: dict, idx: int, contents: List[str]) -> Optional
             logger.error(f"[POST PROCESSING] Error processing scored item")
         else:
             logger.error(f"[POST PROCESSING] Error processing scored item: {e} | Item: {scored}")
-        return original_scored
+        return None
 
 
 def extract_scores(scored: dict) -> dict:

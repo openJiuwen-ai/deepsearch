@@ -28,5 +28,6 @@
     - [report_convert](./4.开发指南/API文档/report_convert.md)
     - [search_context](./4.开发指南/API文档/search_context.md)
     - [deepsearch_agent](./4.开发指南/API文档/deepsearch_agent.md)
+    - [deepsearch_rest_api](./4.开发指南/API文档/deepsearch_rest_api.md)
     - [workflow](./4.开发指南/API文档/workflow.md)
 - [5.FAQ](./5.FAQ/README.md)

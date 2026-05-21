@@ -18,6 +18,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Step,
     StepType,
 )
+from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
 
@@ -147,6 +148,7 @@ class TestInfoCollectorNode:
             "web_search_engine_name": SearchEngine.PETAL.value,
             "local_search_engine_name": LocalSearch.OPENAPI.value,
             "api_tools_config": {},
+            "research_intent": {},
         }
         assert result == expected_state
 
@@ -432,6 +434,29 @@ class TestInfoCollectorNode:
         # 验证返回空结果
         assert doc_infos == []
         assert scored_result == []
+
+    @pytest.mark.asyncio
+    async def test_structure_result_truncates_original_content(self, info_collector_node):
+        """_structure_result should keep collector LLM input under the shared content limit."""
+        web_record = [
+            {
+                "url": "http://example.com/large",
+                "title": "Large page",
+                "content": "A" * (MAX_COLLECTOR_DOC_CONTENT_LENGTH + 1),
+            }
+        ]
+
+        with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
+            mock_eval.return_value = []
+
+            doc_infos, _ = await info_collector_node.structure_result(
+                web_record, [], "large query"
+            )
+
+        assert len(doc_infos) == 1
+        assert len(doc_infos[0]["original_content"]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
+        mock_eval.assert_called_once()
+        assert len(mock_eval.call_args.kwargs["contents"][0]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
 
     def test_process_post_process_result_success(self, info_collector_node):
         """测试 _process_post_process_result 方法成功执行"""

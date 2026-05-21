@@ -5,9 +5,51 @@ import copy
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Dict
+from typing import List, Dict, Any
 
 import pandas as pd
+
+
+def sanitize_formula_characters(value: Any) -> Any:
+    """
+    转义公式前导字符，防止 Excel 公式注入漏洞
+    
+    对以公式前导字符 (=, +, -, @) 开头的字符串添加单引号前缀，
+    使 Excel 将其视为普通文本而非公式
+    
+    Args:
+        value: 待转义的值，可以是字符串或其他类型
+        
+    Returns:
+        转义后的值，字符串类型会添加前导引号，其他类型原样返回
+    """
+    if isinstance(value, str) and value:
+        # 公式前导字符列表：=, +, -, @
+        formula_prefixes = ('=', '+', '-', '@')
+        if value.startswith(formula_prefixes):
+            # 添加单引号前缀，Excel 会将其视为文本
+            return "'" + value
+    return value
+
+
+def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    对 DataFrame 中所有字符串单元格应用公式字符转义
+    
+    Args:
+        df: 待转义的 DataFrame
+        
+    Returns:
+        转义后的 DataFrame
+    """
+    # 复制 DataFrame 避免修改原数据
+    df_sanitized = df.copy()
+    
+    # 对每个单元格应用转义
+    for col in df_sanitized.columns:
+        df_sanitized[col] = df_sanitized[col].apply(sanitize_formula_characters)
+    
+    return df_sanitized
 
 
 @dataclass
@@ -365,8 +407,12 @@ class OutlineToExcelExporter:
         # 创建DataFrame
         dataframes = self.create_dataframes(outline_data)
 
-        # 创建Excel写入器
-        with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+        # 创建Excel写入器，配置xlsxwriter禁用字符串到公式的自动转换
+        with pd.ExcelWriter(
+            output_path,
+            engine='xlsxwriter',
+            engine_kwargs={'options': {'strings_to_formulas': False}}
+        ) as writer:
             workbook = writer.book
 
             # 定义格式
@@ -434,7 +480,9 @@ class OutlineToExcelExporter:
             # 0. 写入大纲表
             if 'outlines' in dataframes:
                 df_outline = dataframes['outlines']
-                df_outline.to_excel(writer, sheet_name='大纲', index=False)
+                # 转义公式前导字符防止公式注入
+                df_outline_sanitized = sanitize_dataframe(df_outline)
+                df_outline_sanitized.to_excel(writer, sheet_name='大纲', index=False)
                 worksheet = writer.sheets['大纲']
 
                 # 设置列宽
@@ -448,17 +496,19 @@ class OutlineToExcelExporter:
                 for col_num, value in enumerate(df_outline.columns.values):
                     worksheet.write(0, col_num, value, header_format)
 
-                # 设置内容格式
-                for row_num in range(len(df_outline)):
-                    for col_num in range(len(df_outline.columns)):
+                # 设置内容格式，使用转义后的数据
+                for row_num in range(len(df_outline_sanitized)):
+                    for col_num in range(len(df_outline_sanitized.columns)):
                         worksheet.write(row_num + 1, col_num,
-                                        df_outline.iloc[row_num, col_num],
+                                        df_outline_sanitized.iloc[row_num, col_num],
                                         outline_format)
 
             # 1. 写入章节表
             if 'sections' in dataframes:
                 df_sections = dataframes['sections']
-                df_sections.to_excel(writer, sheet_name='章节', index=False)
+                # 转义公式前导字符防止公式注入
+                df_sections_sanitized = sanitize_dataframe(df_sections)
+                df_sections_sanitized.to_excel(writer, sheet_name='章节', index=False)
                 worksheet = writer.sheets['章节']
 
                 # 设置列宽
@@ -474,13 +524,13 @@ class OutlineToExcelExporter:
                 for col_num, value in enumerate(df_sections.columns.values):
                     worksheet.write(0, col_num, value, header_format)
 
-                # 设置内容格式
-                for row_num in range(len(df_sections)):
-                    is_core = df_sections.iloc[row_num]['是否核心章节'] == '⭐ 核心'
+                # 设置内容格式，使用转义后的数据
+                for row_num in range(len(df_sections_sanitized)):
+                    is_core = df_sections_sanitized.iloc[row_num]['是否核心章节'] == '⭐ 核心'
                     cell_format = core_format if is_core else normal_format
-                    for col_num in range(len(df_sections.columns)):
+                    for col_num in range(len(df_sections_sanitized.columns)):
                         worksheet.write(row_num + 1, col_num,
-                                        df_sections.iloc[row_num, col_num],
+                                        df_sections_sanitized.iloc[row_num, col_num],
                                         cell_format)
 
             # 2. 写入计划表（合并章节单元格）
@@ -488,7 +538,9 @@ class OutlineToExcelExporter:
                 df_plans = dataframes['plans']
                 # 获取合并信息
                 df_plans_raw = pd.DataFrame(outline_data['plans'])
-                df_plans.to_excel(writer, sheet_name='计划', index=False)
+                # 转义公式前导字符防止公式注入
+                df_plans_sanitized = sanitize_dataframe(df_plans)
+                df_plans_sanitized.to_excel(writer, sheet_name='计划', index=False)
                 worksheet = writer.sheets['计划']
 
                 # 设置列宽
@@ -515,15 +567,15 @@ class OutlineToExcelExporter:
                 )
                 self._merge_section_cells(worksheet, df_plans_raw, section_config)
 
-                # 设置内容格式
-                for row_num in range(len(df_plans)):
-                    status = df_plans.iloc[row_num]['研究状态']
+                # 设置内容格式，使用转义后的数据
+                for row_num in range(len(df_plans_sanitized)):
+                    status = df_plans_sanitized.iloc[row_num]['研究状态']
                     cell_format = completed_format if status == '✅ 完成' else in_progress_format
 
                     # 从第3列开始应用格式（跳过被合并的列）
-                    for col_num in range(2, len(df_plans.columns)):
+                    for col_num in range(2, len(df_plans_sanitized.columns)):
                         worksheet.write(row_num + 1, col_num,
-                                        df_plans.iloc[row_num, col_num],
+                                        df_plans_sanitized.iloc[row_num, col_num],
                                         cell_format)
 
             # 3. 写入步骤表（合并章节和计划单元格）
@@ -531,7 +583,9 @@ class OutlineToExcelExporter:
                 df_steps = dataframes['steps']
                 # 获取合并信息
                 df_steps_raw = pd.DataFrame(outline_data['steps'])
-                df_steps.to_excel(writer, sheet_name='步骤', index=False)
+                # 转义公式前导字符防止公式注入
+                df_steps_sanitized = sanitize_dataframe(df_steps)
+                df_steps_sanitized.to_excel(writer, sheet_name='步骤', index=False)
                 worksheet = writer.sheets['步骤']
 
                 # 设置列宽
@@ -571,11 +625,11 @@ class OutlineToExcelExporter:
                 )
                 self._merge_plan_cells(worksheet, df_steps_raw, plan_config)
 
-                # 设置内容格式
-                for row_num in range(len(df_steps)):
-                    for col_num in range(4, len(df_steps.columns)):
+                # 设置内容格式，使用转义后的数据
+                for row_num in range(len(df_steps_sanitized)):
+                    for col_num in range(4, len(df_steps_sanitized.columns)):
                         worksheet.write(row_num + 1, col_num,
-                                        df_steps.iloc[row_num, col_num],
+                                        df_steps_sanitized.iloc[row_num, col_num],
                                         step_format)
 
             # 4. 写入查询表（合并章节、计划、步骤单元格，并合并查询单元格）
@@ -583,7 +637,9 @@ class OutlineToExcelExporter:
                 df_queries = dataframes['retrieval_query_docs']
                 # 获取合并信息
                 df_queries_raw = pd.DataFrame(outline_data['retrieval_query_docs'])
-                df_queries.to_excel(writer, sheet_name='查询', index=False)
+                # 转义公式前导字符防止公式注入
+                df_queries_sanitized = sanitize_dataframe(df_queries)
+                df_queries_sanitized.to_excel(writer, sheet_name='查询', index=False)
                 worksheet = writer.sheets['查询']
 
                 # 设置列宽
@@ -643,17 +699,19 @@ class OutlineToExcelExporter:
                 )
                 self._merge_query_cells(worksheet, df_queries_raw, query_config)
 
-                # 设置内容格式
-                for row_num in range(len(df_queries)):
-                    for col_num in range(10, len(df_queries.columns)):  # 从文档标题开始
+                # 设置内容格式，使用转义后的数据
+                for row_num in range(len(df_queries_sanitized)):
+                    for col_num in range(10, len(df_queries_sanitized.columns)):  # 从文档标题开始
                         worksheet.write(row_num + 1, col_num,
-                                        df_queries.iloc[row_num, col_num],
+                                        df_queries_sanitized.iloc[row_num, col_num],
                                         normal_format)
 
             # 5. 写入TOC表
             if 'toc' in dataframes:
                 df_toc = dataframes['toc']
-                df_toc.to_excel(writer, sheet_name='目录', index=False)
+                # 转义公式前导字符防止公式注入
+                df_toc_sanitized = sanitize_dataframe(df_toc)
+                df_toc_sanitized.to_excel(writer, sheet_name='目录', index=False)
                 worksheet = writer.sheets['目录']
 
                 # 设置列宽
@@ -668,12 +726,12 @@ class OutlineToExcelExporter:
                 for col_num, value in enumerate(df_toc.columns.values):
                     worksheet.write(0, col_num, value, header_format)
 
-                # 设置内容格式
-                for row_num in range(len(df_toc)):
-                    row_data = df_toc.iloc[row_num]
+                # 设置内容格式，使用转义后的数据
+                for row_num in range(len(df_toc_sanitized)):
+                    row_data = df_toc_sanitized.iloc[row_num]
 
                     # 根据层级设置不同格式
-                    level = row_data['层级'].strip()
+                    level = str(row_data['层级']).strip()
                     if level == '大纲':
                         cell_format = outline_format
                     elif level == '章节':
@@ -696,7 +754,7 @@ class OutlineToExcelExporter:
                             'italic': True
                         })
 
-                    for col_num in range(len(df_toc.columns)):
+                    for col_num in range(len(df_toc_sanitized.columns)):
                         worksheet.write(row_num + 1, col_num,
                                         row_data.iloc[col_num],
                                         cell_format)
@@ -722,10 +780,11 @@ class OutlineToExcelExporter:
 
             if value != current_value:
                 if count > 1:
-                    # 合并单元格
+                    # 合并单元格，转义公式前导字符
                     for col in range(num_cols):
+                        cell_value = sanitize_formula_characters(df.iloc[start_row - 1, col])
                         worksheet.merge_range(start_row, col, start_row + count - 1, col,
-                                              df.iloc[start_row - 1, col], merged_format)
+                                              cell_value, merged_format)
                 current_value = value
                 start_row = row_num + 1
                 count = 1
@@ -735,8 +794,9 @@ class OutlineToExcelExporter:
         # 处理最后一组
         if count > 1:
             for col in range(num_cols):
+                cell_value = sanitize_formula_characters(df.iloc[start_row - 1, col])
                 worksheet.merge_range(start_row, col, start_row + count - 1, col,
-                                      df.iloc[start_row - 1, col], merged_format)
+                                      cell_value, merged_format)
 
     @staticmethod
     def _merge_plan_cells(worksheet, df, config: MergeCellsConfig):
@@ -755,11 +815,12 @@ class OutlineToExcelExporter:
 
             if value != current_value:
                 if count > 1:
-                    # 合并单元格
+                    # 合并单元格，转义公式前导字符
                     for col_offset in range(num_cols):
                         col = start_col + col_offset
+                        cell_value = sanitize_formula_characters(df.iloc[start_row - 1, col])
                         worksheet.merge_range(start_row, col, start_row + count - 1, col,
-                                              df.iloc[start_row - 1, col], merged_format)
+                                              cell_value, merged_format)
                 current_value = value
                 start_row = row_num + 1
                 count = 1
@@ -770,8 +831,9 @@ class OutlineToExcelExporter:
         if count > 1:
             for col_offset in range(num_cols):
                 col = start_col + col_offset
+                cell_value = sanitize_formula_characters(df.iloc[start_row - 1, col])
                 worksheet.merge_range(start_row, col, start_row + count - 1, col,
-                                      df.iloc[start_row - 1, col], merged_format)
+                                      cell_value, merged_format)
 
     @staticmethod
     def _merge_step_cells(worksheet, df, config: MergeCellsConfig):
@@ -790,11 +852,12 @@ class OutlineToExcelExporter:
 
             if value != current_value:
                 if count > 1:
-                    # 合并单元格
+                    # 合并单元格，转义公式前导字符
                     for col_offset in range(num_cols):
                         col = start_col + col_offset
+                        cell_value = sanitize_formula_characters(df.iloc[start_row - 1, col])
                         worksheet.merge_range(start_row, col, start_row + count - 1, col,
-                                              df.iloc[start_row - 1, col], merged_format)
+                                              cell_value, merged_format)
                 current_value = value
                 start_row = row_num + 1
                 count = 1
@@ -805,8 +868,9 @@ class OutlineToExcelExporter:
         if count > 1:
             for col_offset in range(num_cols):
                 col = start_col + col_offset
+                cell_value = sanitize_formula_characters(df.iloc[start_row - 1, col])
                 worksheet.merge_range(start_row, col, start_row + count - 1, col,
-                                      df.iloc[start_row - 1, col], merged_format)
+                                      cell_value, merged_format)
 
     @staticmethod
     def _merge_query_cells(worksheet, df, config: MergeCellsConfig):
@@ -825,11 +889,12 @@ class OutlineToExcelExporter:
 
             if value != current_value:
                 if count > 1:
-                    # 合并单元格
+                    # 合并单元格，转义公式前导字符
                     for col_offset in range(num_cols):
                         col = start_col + col_offset
+                        cell_value = sanitize_formula_characters(df.iloc[start_row - 1, col])
                         worksheet.merge_range(start_row, col, start_row + count - 1, col,
-                                              df.iloc[start_row - 1, col], merged_format)
+                                              cell_value, merged_format)
                 current_value = value
                 start_row = row_num + 1
                 count = 1
@@ -840,18 +905,21 @@ class OutlineToExcelExporter:
         if count > 1:
             for col_offset in range(num_cols):
                 col = start_col + col_offset
+                cell_value = sanitize_formula_characters(df.iloc[start_row - 1, col])
                 worksheet.merge_range(start_row, col, start_row + count - 1, col,
-                                      df.iloc[start_row - 1, col], merged_format)
+                                      cell_value, merged_format)
 
     def _create_summary_sheet(self, writer, sections_data, workbook):
         """创建汇总表"""
         summary_metrics = self._build_summary_metrics(sections_data)
         summary_data = self._build_summary_rows(summary_metrics)
 
-        # 添加章节详情
+        # 添加章节详情，对标题字段应用公式字符转义
         summary_data.append(['📋 章节详情', '计划数', '步骤数', '查询数', '文档数'])
         for section in sections_data['sections']:
             section_title = f"{'⭐ ' if '⭐' in section['is_core_section'] else ''}{section['section_title']}"
+            # 转义公式前导字符防止公式注入
+            section_title_sanitized = sanitize_formula_characters(section_title)
             plan_count = section['plan_count']
             # 计算该章节下的步骤总数
             step_count = sum(int(p['step_count']) for p in sections_data['plans']
@@ -865,11 +933,13 @@ class OutlineToExcelExporter:
             doc_count = sum(1 for p in sections_data['retrieval_query_docs']
                             if p['section_id'] == section['section_id'])
 
-            summary_data.append([section_title, plan_count, str(step_count), str(query_count), str(doc_count)])
+            summary_data.append([section_title_sanitized, plan_count, str(step_count), 
+                                 str(query_count), str(doc_count)])
 
-        # 创建DataFrame
+        # 创建DataFrame并转义所有字符串单元格
         df_summary = pd.DataFrame(summary_data)
-        df_summary.to_excel(writer, sheet_name='汇总', index=False, header=False)
+        df_summary_sanitized = sanitize_dataframe(df_summary)
+        df_summary_sanitized.to_excel(writer, sheet_name='汇总', index=False, header=False)
 
         # 设置格式
         worksheet = writer.sheets['汇总']
@@ -893,15 +963,17 @@ class OutlineToExcelExporter:
             'valign': 'vcenter'
         })
 
-        # 应用格式
+        # 应用格式，使用转义后的数据
         for row_num, row in enumerate(summary_data):
             for col_num, value in enumerate(row):
+                # 转义公式前导字符
+                sanitized_value = sanitize_formula_characters(value)
                 if row_num == 0:  # 标题
-                    worksheet.write(row_num, col_num, value, header_format)
+                    worksheet.write(row_num, col_num, sanitized_value, header_format)
                 elif row_num in [4, 10]:  # 小标题
-                    worksheet.write(row_num, col_num, value, title_format)
+                    worksheet.write(row_num, col_num, sanitized_value, title_format)
                 else:
-                    worksheet.write(row_num, col_num, value, normal_format)
+                    worksheet.write(row_num, col_num, sanitized_value, normal_format)
 
         # 设置列宽
         worksheet.set_column('A:A', 25)
@@ -934,10 +1006,12 @@ class OutlineToExcelExporter:
         total_queries = metrics["total_queries"]
         total_documents = metrics["total_documents"]
         core_sections = metrics["core_sections"]
+        # 转义大纲标题中的公式前导字符
+        outline_title = sanitize_formula_characters(self.outline.get('title', '无标题'))
         return [
             ['📊 大纲结构汇总统计', '', ''],
             ['生成时间', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), ''],
-            ['大纲标题', self.outline.get('title', '无标题'), ''],
+            ['大纲标题', outline_title, ''],
             ['', '', ''],
             ['📈 数量统计', '数值', '说明'],
             ['章节总数', str(total_sections), f'核心章节: {core_sections}'],

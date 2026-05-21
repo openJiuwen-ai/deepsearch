@@ -3,8 +3,10 @@
 
 
 import base64
+import binascii
 import logging
 import re
+import zipfile
 from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
@@ -192,6 +194,10 @@ class TemplateUtils:
     _ALLOWED_TEMPLATE_SUFFIX = [".md"]
     _ALLOWED_SOURCE_SUFFIX = [".md", ".html", ".pdf", ".docx"]
     _MAX_REPORT_SIZE = 50 * 1024 * 1024
+    _MAX_MARKDOWN_OUTPUT_CHARS = 5 * 1024 * 1024
+    _MAX_PDF_PAGE_COUNT = 512
+    _MAX_DOCX_TOTAL_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+    _MAX_DOCX_XML_BYTES = 8 * 1024 * 1024
     _MAX_TEMPLATE_COUNT = 100
     _NAME_PATTERN = re.compile(r'^[\u4e00-\u9fa5a-zA-Z0-9_\-\.]+$')
 
@@ -257,6 +263,80 @@ class TemplateUtils:
                 return f"{size:.2f}{unit}"
             size /= 1024
         return f"{size:.2f}TB"
+
+    @classmethod
+    def decode_template_base64(cls, base64_string: str, max_decoded_bytes: int | None = None) -> bytes:
+        """Decode template base64 content with strict size validation."""
+        normalized = base64_string.strip()
+        if not normalized:
+            raise CustomValueException(
+                error_code=StatusCode.PARAM_CHECK_ERROR_FIELD_EMPTY.code,
+                message=StatusCode.PARAM_CHECK_ERROR_FIELD_EMPTY.errmsg.format(field="file_stream"),
+            )
+        max_bytes = max_decoded_bytes or cls._MAX_REPORT_SIZE
+        estimated_decoded_bytes = (len(normalized) // 4) * 3
+        if estimated_decoded_bytes > max_bytes:
+            raise CustomValueException(
+                error_code=StatusCode.PARAM_CHECK_ERROR_STRING_LENGTH.code,
+                message=StatusCode.PARAM_CHECK_ERROR_STRING_LENGTH.errmsg,
+            )
+        try:
+            decoded_bytes = base64.b64decode(normalized, validate=True)
+        except ValueError as exc:
+            raise CustomValueException(
+                error_code=StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                message=StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(exc)),
+            ) from exc
+        if len(decoded_bytes) > max_bytes:
+            raise CustomValueException(
+                error_code=StatusCode.PARAM_CHECK_ERROR_STRING_LENGTH.code,
+                message=StatusCode.PARAM_CHECK_ERROR_STRING_LENGTH.errmsg,
+            )
+        return decoded_bytes
+
+    @classmethod
+    def decode_text_template_base64(cls, base64_string: str) -> str:
+        """Decode text template content under the shared size budget."""
+        decoded_bytes = cls.decode_template_base64(base64_string, cls._MAX_REPORT_SIZE)
+        try:
+            return decoded_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise CustomValueException(
+                error_code=StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                message=StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(exc)),
+            ) from exc
+
+    @classmethod
+    def _validate_docx_zip(cls, docx_bytes: bytes) -> None:
+        """Validate compressed and expanded DOCX size before xml parsing."""
+        try:
+            with zipfile.ZipFile(BytesIO(docx_bytes)) as zf:
+                infos = zf.infolist()
+                total_uncompressed = 0
+                document_xml_size = 0
+                for info in infos:
+                    total_uncompressed += info.file_size
+                    if total_uncompressed > cls._MAX_DOCX_TOTAL_UNCOMPRESSED_BYTES:
+                        raise CustomValueException(
+                            error_code=StatusCode.CONVERT_DOCX_FILE_FAILED.code,
+                            message=StatusCode.CONVERT_DOCX_FILE_FAILED.errmsg.format(
+                                e="Expanded docx exceeds size limit"
+                            ),
+                        )
+                    if info.filename == "word/document.xml":
+                        document_xml_size = info.file_size
+                if document_xml_size > cls._MAX_DOCX_XML_BYTES:
+                    raise CustomValueException(
+                        error_code=StatusCode.CONVERT_DOCX_FILE_FAILED.code,
+                        message=StatusCode.CONVERT_DOCX_FILE_FAILED.errmsg.format(
+                            e="document.xml exceeds size limit"
+                        ),
+                    )
+        except zipfile.BadZipFile as exc:
+            raise CustomValueException(
+                error_code=StatusCode.CONVERT_DOCX_FILE_FAILED.code,
+                message=StatusCode.CONVERT_DOCX_FILE_FAILED.errmsg.format(e=str(exc)),
+            ) from exc
 
     @classmethod
     def postprocess_structure(cls, headings_output: str) -> str:
@@ -359,12 +439,29 @@ class TemplateUtils:
         Args:
             base64_string (str): The base64-encoded string of the PDF document.
         """
+        pdf_doc = None
+        try:
+            pdf_bytes = cls.decode_template_base64(pdf_base64_string, cls._MAX_REPORT_SIZE)
+            pdf_doc = pdfium.PdfDocument(pdf_bytes)
+            if len(pdf_doc) > cls._MAX_PDF_PAGE_COUNT:
+                raise CustomValueException(
+                    error_code=StatusCode.CONVERT_PDF_FILE_TO_MARKDOWN_FAILED.code,
+                    message=StatusCode.CONVERT_PDF_FILE_TO_MARKDOWN_FAILED.errmsg,
+                )
+        finally:
+            if pdf_doc is not None:
+                pdf_doc.close()
 
         page_bookmarks, lines_with_size = preprocess_pdf(pdf_base64_string)
 
         if len(page_bookmarks) > 0:
             markdown_lines = process_with_bookmarks(lines_with_size, page_bookmarks)
             md_content = "\n".join(markdown_lines).strip()
+            if len(md_content) > cls._MAX_MARKDOWN_OUTPUT_CHARS:
+                raise CustomValueException(
+                    error_code=StatusCode.CONVERT_PDF_FILE_TO_MARKDOWN_FAILED.code,
+                    message=StatusCode.CONVERT_PDF_FILE_TO_MARKDOWN_FAILED.errmsg,
+                )
             return md_content
         logger.error("Failed to convert pdf file to markdown, no page_bookmarks")
         raise CustomValueException(error_code=StatusCode.CONVERT_PDF_FILE_TO_MARKDOWN_FAILED.code,
@@ -384,13 +481,10 @@ class TemplateUtils:
             str: The converted Markdown content.
         """
         try:
-            # Decode the base64 string to bytes
-            docx_bytes = base64.b64decode(base64_string)
-
+            docx_bytes = cls.decode_template_base64(base64_string, cls._MAX_REPORT_SIZE)
+            cls._validate_docx_zip(docx_bytes)
             docx_file = BytesIO(docx_bytes)
-
             doc = Document(docx_file)
-
             markdown_lines = []
 
             for element in doc.element.body:
@@ -409,8 +503,17 @@ class TemplateUtils:
                             markdown_lines.append(markdown_table)  # 表格间添加空行
 
             md_content = "\n".join(markdown_lines)
+            if len(md_content) > cls._MAX_MARKDOWN_OUTPUT_CHARS:
+                raise CustomValueException(
+                    error_code=StatusCode.CONVERT_DOCX_FILE_FAILED.code,
+                    message=StatusCode.CONVERT_DOCX_FILE_FAILED.errmsg.format(
+                        e="Markdown output exceeds limit"
+                    ),
+                )
             return md_content
 
+        except CustomValueException:
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 logger.error("Error in word_base64_to_markdown: An error occurred while processing the Word document.")

@@ -153,13 +153,29 @@ class OutlineInteraction(BaseModel):
     outline_before: Union[Outline, Dict, str, None] = Field(default=None, description="用户反馈前的outline")
 
 
+class ResearchIntent(BaseModel):
+    """
+    报告生成意图：从用户 query 中解析出的结构化约束。
+    """
+    section_count: Optional[int] = Field(default=None, description="用户希望的章节数量")
+    audience_role: Optional[str] = Field(default=None, description="目标读者角色")
+    tone: Optional[str] = Field(default=None, description="写作风格，建议使用稳定英文枚举值")
+    report_type: Optional[str] = Field(default=None, description="报告类型，建议使用稳定英文枚举值")
+    include_url: List[str] = Field(default_factory=list, description="用户指定包含的链接")
+    exclude_url: List[str] = Field(default_factory=list, description="用户指定排除的链接")
+    include_domains: List[str] = Field(default_factory=list, description="用户指定的站点域名")
+    exclude_domains: List[str] = Field(default_factory=list, description="用户排除的站点域名")
+
+
 class SearchContext(BaseModel):
     """
     上下文状态模型：工作流运行时的状态上下文
     """
     # 1、入参或必需字段
     session_id: str = Field(default="", description="会话ID")
-    query: str = Field(default=None, description="用户输入问题")
+    original_query: str = Field(default="", description="用户输入的原始问题")
+    research_query: str = Field(default="", description="意图识别后的研究主题，供检索与规划使用")
+    research_intent: ResearchIntent = Field(default_factory=ResearchIntent, description="结构化报告约束")
     messages: List[Message] = Field(default_factory=list, description="对话消息列表")
     language: str = Field(default="zh-CN", description="语言")
     report_template: str = Field(default="", description="模板内容")

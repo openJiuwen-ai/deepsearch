@@ -17,7 +17,8 @@ from openjiuwen_deepsearch.algorithm.search_index.index_utils import (
 )
 from openjiuwen_deepsearch.algorithm.search_index.tokenizer_chunker import TokenizerChunker
 from openjiuwen_deepsearch.algorithm.search_tools.retrieval.embedder import (
-    RemoteQwenEmbedder,
+    AbstractEmbedder,
+    OpenJiuwenAPIEmbedder,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -39,7 +40,7 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
-# 配置可从环境变量读取（如 docker/.env），未设置时使用下列默认值
+# 配置可从环境变量读取（如 docker/.env）；EMBED_API_*、EMBED_MODEL_NAME、HUGGINGFACE_MODEL_NAME 无代码内默认，须自行设置
 DATA_LOCATION = _env("DATA_LOCATION", "browsecompplus.jsonl")
 BATCH_SIZE = _env_int("BATCH_SIZE", 10)
 MILVUS_URI = _env("MILVUS_URI", "http://localhost:19530")
@@ -47,8 +48,7 @@ MILVUS_TOKEN = _env("MILVUS_TOKEN", "root:Milvus")
 MILVUS_DB_NAME = _env("MILVUS_DB_NAME", "deepsearch_benchmarks")
 MILVUS_COLLECTION_NAME = _env("MILVUS_COLLECTION_NAME", "browsecompplus_with_bm25")
 HUGGINGFACE_MODEL_NAME = _env("HUGGINGFACE_MODEL_NAME", "Qwen/Qwen3-Embedding-8B")
-# 当前仅支持 qwen3-embedding-0.6b、qwen3-embedding-8b
-EMBED_MODEL_NAME = _env("EMBED_MODEL_NAME", "qwen3-embedding-8b")
+EMBED_MODEL_NAME = _env("EMBED_MODEL_NAME", "")
 
 # Embedding API 配置（必填，无默认值；未填写运行时会报错）
 EMBED_API_URL = _env("EMBED_API_URL", "")
@@ -284,7 +284,7 @@ class IndexDocumentsConfig:
     input_docs: list[dict]
     milvus_client: MilvusClient
     collection_name: str
-    encoder_model: RemoteQwenEmbedder
+    encoder_model: AbstractEmbedder
     chunk_splitter: BrowseCompChunker | None = None
     doc_id2gold_query_id: dict[str, list[str]] | None = None
     doc_id2evidence_query_id: dict[str, list[str]] | None = None
@@ -447,8 +447,16 @@ if __name__ == "__main__":
             "EMBED_API_URL 与 EMBED_API_KEY 为必填项，请在 create_browsecompplus_index.py 顶部填写。"
             " 示例：EMBED_API_URL = 'http://localhost:11450/v1/embeddings'"
         )
+    if not EMBED_MODEL_NAME:
+        raise ValueError(
+            "EMBED_MODEL_NAME 为必填项，请通过环境变量 EMBED_MODEL_NAME 设置 Embedding 模型 id。"
+        )
+    if not HUGGINGFACE_MODEL_NAME:
+        raise ValueError(
+            "HUGGINGFACE_MODEL_NAME 为必填项，请通过环境变量设置用于分块的 Hugging Face tokenizer id。"
+        )
     timeout = EMBED_TIMEOUT if EMBED_TIMEOUT and EMBED_TIMEOUT > 0 else 60
-    model = RemoteQwenEmbedder(
+    model = OpenJiuwenAPIEmbedder(
         pretrained_model=EMBED_MODEL_NAME,
         api_token=EMBED_API_KEY,
         api_url=EMBED_API_URL,

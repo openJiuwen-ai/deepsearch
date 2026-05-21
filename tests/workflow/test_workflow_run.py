@@ -118,6 +118,25 @@ def test_validate_run_agent_params_allows_empty_message_for_accepted_interrupt()
     )
 
 
+@pytest.mark.parametrize("conversation_id", [
+    "x/../../escape_parent",
+    r"x\\nested",
+    "../escape",
+    "contains space",
+])
+def test_validate_run_agent_params_rejects_unsafe_conversation_id(conversation_id):
+    with pytest.raises(CustomValueException) as exc_info:
+        validate_run_agent_params(
+            message="hello",
+            conversation_id=conversation_id,
+            report_template="",
+            interrupt_feedback="",
+        )
+
+    assert exc_info.value.error_code == 200013
+    assert "conversation_id" in str(exc_info.value)
+
+
 # 测试用例5: agent_config 参数验证
 wrong_agent_config = Config().agent_config.model_dump()
 wrong_agent_config["outliner_max_section_num"] = -1
