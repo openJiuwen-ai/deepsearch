@@ -166,9 +166,7 @@ class VLMChartGeneratorNode(BaseNode)
 
 **功能**：
 - 若 `vlm_chart_generator_enable` 关闭则跳过。
-- 若 `vlm_chart_generator_enable` 开启：
-  - 且 `vlm_chart_generator_max_iterations` 等于0, 则只执行vlm图生成过程，不执行vlm迭代优化功能。
-  - 且 `vlm_chart_generator_max_iterations` 大于0, 必须传入vlm模型配置，否则系统关闭该模块开关，跳过模块。
+- 若 `vlm_chart_generator_enable` 开启, 必须传入vlm模型配置，或者llm是通用模型（可处理多模态任务），否则系统关闭该模块开关，跳过模块。
 - 系统选择图表插入位置生成图表并完成相应图表优化。
 - 写入 `final_result.chart_messages`。
 - 图表生成错误会写入 `exception_info`。

@@ -87,9 +87,7 @@ class VLMChartGeneratorNode(BaseNode)
 
 **Functions**:
 - If `vlm_chart_generator_enable` is disabled, skip this node.
-- If `vlm_chart_generator_enable` is enabled:
-  - If `vlm_chart_generator_max_iterations` equals 0, only execute VLM chart generation process without VLM iterative optimization.
-  - If `vlm_chart_generator_max_iterations` is greater than 0, VLM model configuration must be provided; otherwise the system disables this module and skips it.
+- If `vlm_chart_generator_enable` is enabled, VLM model configuration must be provided or LLM is general model; otherwise the system disables this module and skips it.
 - The system selects chart insertion positions, generates charts, and performs corresponding chart optimization.
 - Writes to `final_result.chart_messages`.
 - Chart generation errors are written to `exception_info`.

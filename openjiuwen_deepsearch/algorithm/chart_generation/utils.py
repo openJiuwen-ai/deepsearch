@@ -73,6 +73,8 @@ async def call_model(call_model_input: CallModelInput,
             response = await ainvoke_llm_with_stats(llm, user_prompt, agent_name=agent_name)
             content = response.get("content", "")
             
+            if not content:
+                raise ValueError("[CHART GENERATION] empty response of llm.")
             if not detection_func_and_args or detection_func_and_args.get("option", "") != "skip normalize":
                 content = normalize_json_output(content)
                 content = json.loads(content.replace("```json", "").replace("```", ""))

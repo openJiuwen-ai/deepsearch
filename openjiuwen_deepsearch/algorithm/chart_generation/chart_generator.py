@@ -98,7 +98,7 @@ class ChartGenerator:
     async def generate_charts(
         self,
         chart_tasks: Dict[int, List[Dict[str, Any]]],
-    ) -> Dict[str, str]:
+    ) -> List[Dict[int, Dict[str, Any]]]:
         """
         批量生成图表
 
@@ -107,7 +107,7 @@ class ChartGenerator:
             use_vlm_critic: 是否使用VLM评估反馈
 
         Returns:
-            Dict[str, str]: 图表各项信息
+            List[Dict[int, Dict[str, Any]]]: 图表各项信息
         """
         # 并行每个章节的图表生成任务
         section_coroutines: List[asyncio.Future] = []
@@ -247,6 +247,11 @@ class ChartGenerator:
             if not chart_data:
                 logger.warning(f"No data for chart: {chart_task.get('chart_id', '')}")
                 return None
+            # 筛除只有一个数据的图
+            if len(chart_data) <= 1:
+                logger.warning(f"There is only one data to show. "\
+                               f"Filtered data: {json.dumps(chart_data, ensure_ascii=False)}")
+                return None
 
             chart_title = chart_task.get("chart_title", "")
             chart_description = chart_task.get("description", "")
@@ -360,10 +365,11 @@ class ChartGenerator:
 
             # 第1步：生成代码
             code = await self._generate_chart_code(gen_chart_input)
-            if not code:
+            if not code or "no code" in code.lower():
                 # 没有生成代码，无法向下执行，本次任务失败
                 logger.warning(f"Failed to generate code for {figure_id}")
                 return {}
+            logger.debug(f"The origin code is: \n%s.", code)
 
             # 第2步：执行代码
             # 在沙箱中执行代码
@@ -428,31 +434,32 @@ class ChartGenerator:
                 call_model_input, detection_func_and_args=detect_func_and_args
             )
 
-            def extract_code(response: str) -> Optional[str]:
-                """
-                从LLM响应中提取Python代码
-                优先提取 ```python 和 ``` 之间的内容；
-                若末尾没有 ```，则提取 ```python 之后的全部内容。
-                """
-                # 先尝试匹配 ```python ... ``` 之间的内容
-                match = re.search(r"```(?:python)?\s*([\s\S]*?)\s*```", response)
-                if match:
-                    return match.group(1).strip()
-                # 若没有闭合的 ```，则提取 ```python 之后的全部内容
-                match = re.search(r"```(?:python)?\s*([\s\S]*)", response)
-                if match:
-                    return match.group(1).strip()
-                # 如果没有代码块标记，直接返回整个响应（可能是纯代码）
-                return response.strip()
-
             # 提取代码
-            code = extract_code(response)
+            code = self._extract_code(response)
             # 代码规范化
             return self._normalize_code(code)
 
         except Exception as e:
             logger.error(f"Error generating chart code: {e}")
             return None
+
+    @staticmethod
+    def _extract_code(response: str) -> Optional[str]:
+        """
+        从LLM响应中提取Python代码
+        优先提取 ```python 和 ``` 之间的内容；
+        若末尾没有 ```，则提取 ```python 之后的全部内容。
+        """
+        # 先尝试匹配 ```python ... ``` 之间的内容
+        match = re.search(r"```(?:python)?\s*([\s\S]*?)\s*```", response)
+        if match:
+            return match.group(1).strip()
+        # 若没有闭合的 ```，则提取 ```python 之后的全部内容
+        match = re.search(r"```(?:python)?\s*([\s\S]*)", response)
+        if match:
+            return match.group(1).strip()
+        # 如果没有代码块标记，直接返回整个响应（可能是纯代码）
+        return response.strip()
 
     @staticmethod
     def _normalize_code(code: str) -> str:

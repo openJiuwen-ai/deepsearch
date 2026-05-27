@@ -120,7 +120,6 @@ RESTRICTED_MODULES = frozenset(
         "gc",         # gc 可能影响内存管理
         "traceback",  # traceback.print_tb 可能泄露信息
         "dis",        # 反汇编模块
-        "inspect",    # 可用于获取源代码等
     }
 )
 
@@ -313,16 +312,28 @@ except Exception:
 
 # ── File write restriction ──────────────────────────────────────
 _write_dirs = [_working_dir, os.path.abspath(tempfile.gettempdir())]
-_home_cache = os.path.join(os.path.expanduser("~"), ".cache")
-if os.path.isdir(_home_cache):
-    _write_dirs.append(os.path.abspath(_home_cache))
+# 获取用户目录（Windows 兼容）
+try:
+    _home_dir = os.path.expanduser("~")
+    if _home_dir and os.path.isdir(_home_dir):
+        _home_cache = os.path.join(_home_dir, ".cache")
+        if os.path.isdir(_home_cache):
+            _write_dirs.append(os.path.abspath(_home_cache))
+except Exception:
+    pass  # Windows 系统可能无法获取 home 目录，跳过
 
 # ── File read restriction ──────────────────────────────────────
 # 安全读取路径白名单：只允许读取工作目录、临时目录、系统库目录等
 _read_dirs = [_working_dir, os.path.abspath(tempfile.gettempdir())]
-# 添加 matplotlib 配置目录
-if os.path.isdir(_home_cache):
-    _read_dirs.append(os.path.abspath(_home_cache))
+# 添加 matplotlib 配置目录（Windows 兼容）
+try:
+    _home_dir = os.path.expanduser("~")
+    if _home_dir and os.path.isdir(_home_dir):
+        _home_cache = os.path.join(_home_dir, ".cache")
+        if os.path.isdir(_home_cache):
+            _read_dirs.append(os.path.abspath(_home_cache))
+except Exception:
+    pass  # Windows 系统可能无法获取 home 目录，跳过
 # 添加 Python 标准库路径（允许 import 加载模块）
 _stdlib_paths = []
 # os.__file__ 指向标准库目录

@@ -167,7 +167,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **stats_info_llm** (bool, optional): Whether to collect LLM call statistics. Default value: `False`.
 - **api_tools_config** (`ApiToolsConfig`): runtime HTTP API tools injected for function calling outside built-in tools.
 - **vlm_chart_generator_enable** (bool, optional): VLM iterative chart generation toggle; mutually exclusive with `visualization_enable`.
-- **vlm_chart_generator_max_iterations** (int, optional): Max iterations for VLM chart optimization. Default `1`, range 0–3. `0` means no optimization; higher values increase latency.
+- **vlm_chart_generator_max_iterations** (int, optional): Max iterations for VLM chart optimization. Default `1`, range 1–3. Higher values increase latency.
 - **agent_llm_timeouts** (`Dict[str, int]`, optional): business-layer wall-clock timeout rules for full LLM calls, matched by exact `agent_name`, then node-level prefix key, then `default`. The feature is active only when the dict is non-empty and contains `default`; a matched value of `0` disables the outer wall-clock timeout for that rule. Default value: `dict()`.
 
 **Notes**:

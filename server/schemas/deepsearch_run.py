@@ -102,7 +102,7 @@ class DeepSearchRequest(BaseModel):
     stats_info_llm: bool = Field(default=False, description="是否开启 LLM 调用统计")
     tools: List[RuntimeApiToolRequest] = Field(default_factory=list, description="前端传入的 API 工具列表")
     vlm_chart_generator_enable: bool = Field(default=False, description="vlm迭代生成图开关")
-    vlm_chart_generator_max_iterations: int = Field(default=1, ge=0, le=3, description="vlm迭代生成图最大迭代次数，0表示不进行迭代")
+    vlm_chart_generator_max_iterations: int = Field(default=1, ge=1, le=3, description="vlm迭代生成图最大迭代次数")
     agent_llm_timeouts: dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
 
     @field_validator("conversation_id")

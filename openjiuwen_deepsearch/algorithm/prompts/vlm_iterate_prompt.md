@@ -46,22 +46,24 @@ If score < 100 → output specific, code-actionable suggestion(s)
 | Check | FAIL condition | Deduction |
 |-------|----------------|-----------|
 | Blank chart | Chart image is completely blank with no content (no axes, no data, no text) | -100 |
+| Single data point | Chart contains only ONE data value. Such content has no visualization value — text description is sufficient. | -100 |
+| Insufficient data | Data points are fewer than minimum threshold for the chart type (line < 3 points, bar < 2 bars, pie < 2 slices, scatter < 5 points). Chart cannot reveal meaningful patterns. | -100 |
 
-### P0 — Data Correctness (Critical: -20 points each)
+### P0 — Critical Issues (Critical: -20 points each)
 
 | Check | FAIL condition | Deduction |
 |-------|----------------|-----------|
 | Data accuracy | Chart values do not match `chart_data` (missing, fabricated, or wrong values) | -20 |
 | Scale accuracy | Axes scales are distorted, inverted, or inappropriate for the data range | -20 |
 | Chart type | Chart type does not match `chart_type` | -20 |
+| Text-text overlap | Any text element touches or overlaps another text element (even 1px) | -20 |
 
 ### P1 — Readability (High: -15 points each)
 
 | Check | FAIL condition | Deduction |
 |-------|----------------|-----------|
-| Text-text overlap | Any text element touches or overlaps another text element (even 1px) | -15 |
 | Text border violation | Any text is outside the chart frame (axes spines) or is cut off at figure boundaries | -15 |
-| Text size | Any text is smaller than ~10pt equivalent, appearing tiny or compressed | -15 |
+| Text size | Any text violates size limits: title > 13pt, axis labels > 8pt, legend ≠ 6pt, other text > 8pt, or any text < 4pt (unreadable) | -15 |
 | X-axis alignment | X-axis tick labels are not center-aligned under their data points | -15 |
 | Data value duplication | Same data value appears multiple times in different formats (e.g., value labels on bars AND separate data table; annotations AND legend entries with same values; bar labels AND axis ticks showing identical values) | -15 |
 | Redundant annotations | Data point annotations repeat information already clearly shown by axis scale or legend (e.g., labeling every bar with its exact value when axis already provides precise scale) | -15 |
@@ -71,10 +73,10 @@ If score < 100 → output specific, code-actionable suggestion(s)
 | Check | FAIL condition | Deduction |
 |-------|----------------|-----------|
 | Single chart | Data is split into unnecessary subplots when it could coexist in one chart (grouped bars, stacked bars, dual y-axes) | -10 |
-| Title prominence | Title is not visually the largest text element in the chart (similar size to or smaller than other text) | -10 |
-| Composition | Layout is visibly crowded, unbalanced, or has excessive empty space | -10 |
-| Element proximity | Annotations, labels, legends, or footnotes are placed far from the chart body, creating large blank gaps | -10 |
-| Legend placement | Legend obscures data marks or overlaps text | -10 |
+| Title displayed | Chart has a visible title (title should NOT be displayed — remove all `ax.set_title()` or `fig.suptitle()` calls) | -10 |
+| Legend obscures content | Legend exists but is NOT placed at the TOP of the chart, causing it to overlap or obscure chart content (data marks, axis labels, or other text). Legend should be fixed at top using `bbox_to_anchor=(0.5, 0.98), loc='upper center'` and must NOT overlap other elements | -10 |
+| Composition | Layout is visibly crowded, unbalanced | -10 |
+| Element proximity | Annotations, labels, or footnotes are placed far from the chart body, creating large gaps | -10 |
 
 ### P3 — Color & Semantics (Low: -5 points each)
 
@@ -108,15 +110,15 @@ Your suggestion is a direct instruction to a code generator. It MUST be:
 
 | Problem | Suggested fix |
 |---------|--------------|
-| Text overlap | Increase `figsize` first; then `plt.tick_params` to reduce density or `plt.xticks(rotation=30, ha='center')`; last resort: reduce `fontsize` by 1-2pt (never below 10pt) |
+| Text overlap | **Priority order of solutions:** 1) **Increase DPI**: `dpi=300` (increase resolution to reduce visual crowding); 2) **Adjust layout**: `fig.tight_layout(pad=2.0)` or `plt.subplots_adjust(left=0.15, right=0.95, top=0.9, bottom=0.15)`; 3) **Reduce tick density**: `ax.set_xticks(ax.get_xticks()[::2])` or `plt.locator_params(axis='x', nbins=6)`; 4) **Rotate labels**: `plt.xticks(rotation=30, ha='center')` or `rotation=45`; 5) **Abbreviate labels**: Truncate long labels, use abbreviations; 6) **Reduce legend size**: `legend.fontsize=6`; 7) **Offset annotations**: Use `ax.annotate()` with `xytext=(offset_x, offset_y)` to shift overlapping annotations; 8) **Adjust text position**: `ax.text(x, y, text, ha='left', va='center')` to change alignment; 9) **Last resort: reduce font**: `fontsize=fontsize-1` (axis labels max 8pt, legend fixed 6pt, others max 8pt) |
 | Text border violation | Add `bbox_inches='tight'` and increase `fig.tight_layout(pad=...)` padding; expand axis limits/margins (e.g., `ax.set_ylim(0, max_value * 1.15)`); shift labels inward |
 | Unnecessary subplots | Replace `plt.subplots(1,N)` with single `plt.figure()`. Use grouped bars / stacked bars / dual y-axes |
-| Title too small | Set `fig.suptitle(..., fontsize=20)` or `ax.set_title(..., fontsize=20)`. Title MUST be 18-22pt |
+| Title displayed | Remove all `ax.set_title()` or `fig.suptitle()` calls. Chart must have NO visible title |
+| Legend obscures content | Move legend to TOP of chart: `ax.legend(loc='upper center', ncol=..., bbox_to_anchor=(0.5, 0.98), framealpha=0.8, fontsize=6)`. Ensure legend does NOT overlap any chart content (data marks, axis labels, or other text) |
 | Same-metric multi-color | Set a single uniform color for all bars/points (e.g., `color='#5C6BC0'`) |
 | X-axis misalignment | Set `plt.xticks(ha='center')` or `ax.tick_params(axis='x', labelrotation=..., ha='center')` |
 | Legend-color mismatch | Build explicit `{category: color}` mapping and pass to both plotting and legend |
 | Crowded layout | Increase `figsize`, adjust `plt.subplots_adjust()`, or simplify labels |
-| Large blank gap | Reposition annotations closer to chart using `ax.annotate()` or `ax.text()` with coordinates near chart body |
 | Data value duplication | Remove redundant value display: if bar labels (`ax.bar(..., label=True)` or `ax.text()`) show values, remove duplicate annotations or data tables; if axis already shows precise scale, remove `ax.bar_label()`; keep ONE primary method for showing values |
 | Redundant annotations | For simple charts with clear axis scale, remove `ax.bar_label()` or `for i, v in enumerate(values): ax.text(i, v, str(v))`; keep annotations only for highlighting specific important points (max/min/inflection) |
 

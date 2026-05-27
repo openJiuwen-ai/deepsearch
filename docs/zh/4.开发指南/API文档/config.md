@@ -323,7 +323,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **stats_info_llm**(bool, 可选)：LLM调用统计开关。默认值：`False`。
 - **api_tools_config**(ApiToolsConfig，可选)：运行时 HTTP API 工具配置，用于在默认工具之外注入可调用工具。默认值：`ApiToolsConfig`。
 - **vlm_chart_generator_enable**(bool, 可选)：vlm迭代生成图功能开关，与`visualization_enable`功能互斥。
-- **vlm_chart_generator_max_iterations**(int, 可选)：vlm生成图迭代优化最大次数。默认值：`1`，可设置范围为0~3，0表示生成的图表不进行迭代优化，数值越大，耗时越长。
+- **vlm_chart_generator_max_iterations**(int, 可选)：vlm生成图迭代优化最大次数。默认值：`1`，可设置范围为1~3，数值越大，耗时越长。
 - **agent_llm_timeouts**(Dict[str, int], 可选)：按 `agent_name` / 节点级 key 配置的 LLM 总墙钟超时。命中优先级为 `agent_name` 精确匹配 > 节点级 key 前缀匹配 > `default`。仅当字典非空且包含 `default` 时生效；命中值为 `0` 时表示对该规则禁用业务层总超时。默认值：`dict()`。
 
 **说明**：

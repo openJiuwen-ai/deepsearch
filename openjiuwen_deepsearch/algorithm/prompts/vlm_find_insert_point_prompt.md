@@ -92,7 +92,7 @@ Note: DO NOT copy the Examples directly. Adapt to the specific content context.
 
 ## Output Format
 
-Return a JSON array. Each element is a chart dict:
+Return a JSON array containing ONLY chart insertion points. Each element represents one chart to be inserted:
 
 ```json
 [
@@ -107,6 +107,8 @@ Return a JSON array. Each element is a chart dict:
 ]
 ```
 
+**Important**: Only include entries for paragraphs that meet ALL chart criteria. Skip/ignore paragraphs that do NOT need charts — do NOT output anything for them.
+
 ### Field Descriptions
 
 - **`chart_title`**: Brief chart visualization title (max 20 words)
@@ -117,14 +119,14 @@ Return a JSON array. Each element is a chart dict:
 
 ## Important Instructions
 
-1. **Insertion Position**: Place chart AFTER the text describing its content. If no suitable position found, use the last placeholder index
+1. **Insertion Position**: Place chart AFTER the text describing its content. Use the paragraph's placeholder_index
 2. **Avoid Duplicates**: Check for duplicate or highly similar chart descriptions. Do NOT generate redundant charts
-3. **Apply Criteria Strictly**: Only generate charts when ALL core requirements and decision steps are satisfied
-4. **Threshold Enforcement**: Respect minimum thresholds; below threshold → text/table is preferred
-5. **Anti-Pattern Check**: Content matching any anti-pattern → output "NO CHART"
+3. **Apply Criteria Strictly**: Only include entries when ALL core requirements and decision steps are satisfied
+4. **Threshold Enforcement**: Respect minimum thresholds; below threshold → skip that paragraph
+5. **Anti-Pattern Check**: Content matching any anti-pattern → skip that paragraph
 6. **Multiple Charts**: A section may have multiple charts, each addressing ONE distinct data pattern
 7. **Valid JSON**: Return ONLY the JSON array, no explanations
-8. **No Chart**: If there is no chart to insert, return "NO CHART"
+8. **Empty Output**: If NO paragraphs meet chart criteria, return an empty array `[]`
 9. **Language**: Always use the language specified by the locale = **{{ language }}**
 
 ## Section Content

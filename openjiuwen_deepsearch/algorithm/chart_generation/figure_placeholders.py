@@ -299,7 +299,7 @@ class FigurePlaceholderGenerator:
         try:
             call_model_input = CallModelInput(
                 model_name=self._llm_model, 
-                prompt="vlm_find_inser_point_prompt", 
+                prompt="vlm_find_insert_point_prompt", 
                 user_input={"section_contents": section_with_anchor}, 
                 agent_name=AgentLlmName.VLM_CHART_GENERATOR_FIND_INSERT_POINT.value
                 )
@@ -338,7 +338,7 @@ class FigurePlaceholderGenerator:
         gen_chart_tasks = []
         try:
             for res in response:
-                if not isinstance(res, dict) or "NO CHART" in res:
+                if not isinstance(res, dict):
                     continue
                 res["context"] = section.get("content", "")
                 res["section_index"] = section.get("index", -1)

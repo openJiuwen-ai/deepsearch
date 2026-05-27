@@ -338,7 +338,7 @@ class AgentConfig(BaseModel):
 
     # vlm迭代生成图参数
     vlm_chart_generator_enable: bool = Field(default=False, description="vlm迭代生成图开关")
-    vlm_chart_generator_max_iterations: int = Field(default=1, ge=0, le=3, description="vlm迭代生成图最大迭代次数，0表示不进行迭代")
+    vlm_chart_generator_max_iterations: int = Field(default=1, ge=1, le=3, description="vlm迭代生成图最大迭代次数")
 
     agent_llm_timeouts: Dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
 
