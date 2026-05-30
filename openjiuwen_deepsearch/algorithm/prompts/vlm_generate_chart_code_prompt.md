@@ -99,7 +99,12 @@ Simply complete your plotting code. The execution environment will handle figure
 9. **Alpha 0.8**: ALL filled elements MUST use `alpha=0.8`.
 10. **No fabricated data**: Use ONLY data from `chart_data`.
 11. **Relevance filtering**: Include ONLY data relevant to `chart_title` and `chart_description`.
-12. **Legend requirements**: Legend is NOT mandatory. Only add legend when necessary. If you decide to add a legend, you MUST ensure:
+12. **No excessive blank space**: The chart content MUST occupy most of the canvas. If any continuous blank (empty) area exceeds 50% of the total canvas area, you MUST adjust layout to eliminate it. Specifically:
+    - Reduce `figsize` height to compact the chart around the data
+    - Use `plt.subplots_adjust(top=0.95, bottom=0.1)` or `constrained_layout=True` to minimize margins
+    - Set `ax.set_ylim()` to fit the data range tightly, avoid leaving large empty space above/below data marks
+    - For bar/line charts with sparse data, consider reducing figure height (e.g., `figsize=(5, 2.5)` instead of `(5, 3.5)`)
+13. **Legend requirements**: Legend is NOT mandatory. Only add legend when necessary. If you decide to add a legend, you MUST ensure:
     - **Correctness**: Legend entries MUST match exactly what is plotted (colors, labels, categories)
     - **Necessity**: Only add legend when the chart has multiple distinguishable categories that need identification. Single-color or single-category charts do NOT need legend.
     - **Completeness**: All plotted data categories MUST appear in the legend. No missing or extra entries.

@@ -8,7 +8,6 @@
 2. 执行代码生成图表
 3. 可选的VLM迭代反馈机制
 """
-
 import asyncio
 import logging
 import os
@@ -16,6 +15,10 @@ import re
 import json
 import textwrap
 from typing import Dict, List, Tuple, Optional, Any
+import base64
+import io
+from PIL import Image
+import numpy as np
 
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.algorithm.chart_generation.utils import (
@@ -294,13 +297,18 @@ class ChartGenerator:
                 iterate += 1
                 
                 if score >= self._chart_threshold:
-                    logger.info(f"Chart generated successfully: {figure_id},"
+                    del suggestion_list
+                    del result
+                    # 硬编码筛选存在大面积空白的图片
+                    if self._has_large_blank(chart_base64):
+                        logger.info(f"{self._log_prefix} Filter the chart {figure_id} with large blank.")
+                        del chart_base64
+                        return {}
+                    logger.info(f"{self._log_prefix} Chart generated successfully: {figure_id},"
                                 f"chart title: {chart_title}, score: {score}")
                     final_base64 = chart_base64
                     # 释放内存
                     del chart_base64
-                    del suggestion_list
-                    del result
                     return {"chart_base64": final_base64, "score": score}
                 elif iterate > self._vlm_max_iterations:
                     # 达到最大迭代优化次数，图分数没有达到输出阈值，返回空
@@ -550,3 +558,60 @@ class ChartGenerator:
     def set_vlm_iteration(self, iteration: int):
         """修改vlm迭代优化最大次数"""
         self._vlm_max_iterations = iteration
+        
+    @staticmethod
+    def _has_large_blank(png_base64: str) -> bool:
+        """
+        判断图片中是否存在大面积连续空白（占画布面积超过90%）
+
+        使用numpy数组运算同时检测水平方向（空白行）和垂直方向（空白列）
+        的最大连续空白面积，任一方向超过阈值即判定为大面积空白。
+
+        Args:
+            png_base64: 图片的base64编码字符串
+
+        Returns:
+            bool: True表示存在大面积连续空白，False表示不存在
+        """
+        try:
+            image_data = base64.b64decode(png_base64)
+            img = Image.open(io.BytesIO(image_data))
+            try:
+                width, height = img.size
+                if width == 0 or height == 0:
+                    return True
+
+                gray = img.convert("L")
+                arr = np.asarray(gray)
+
+                white_threshold = 245
+                blank_ratio_threshold = 0.8
+                large_blank_ratio = 0.9
+
+                white_mask = arr >= white_threshold
+                blank_rows = white_mask.mean(axis=1) >= blank_ratio_threshold
+                blank_cols = white_mask.mean(axis=0) >= blank_ratio_threshold
+
+                def _max_run(mask) -> int:
+                    max_run = 0
+                    current = 0
+                    for is_blank in mask:
+                        if is_blank:
+                            current += 1
+                        else:
+                            max_run = max(max_run, current)
+                            current = 0
+                    return max(max_run, current)
+
+                total_pixels = width * height
+                max_blank_area = max(
+                    _max_run(blank_rows) * width,
+                    _max_run(blank_cols) * height,
+                )
+
+                return max_blank_area > total_pixels * large_blank_ratio
+            finally:
+                img.close()
+        except Exception as e:
+            logger.warning(f"Error checking large blank area: {e}")
+            return True

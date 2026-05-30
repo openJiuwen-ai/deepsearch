@@ -57,6 +57,7 @@ If score < 100 → output specific, code-actionable suggestion(s)
 | Scale accuracy | Axes scales are distorted, inverted, or inappropriate for the data range | -20 |
 | Chart type | Chart type does not match `chart_type` | -20 |
 | Text-text overlap | Any text element touches or overlaps another text element (even 1px) | -20 |
+| Excessive blank space | Continuous blank (empty) area in the chart exceeds 50% of the total canvas area (e.g., chart content only occupies the top portion while the bottom half is empty, or large gaps above/below data marks). This indicates poor layout sizing or inappropriate figure dimensions. | -20 |
 
 ### P1 — Readability (High: -15 points each)
 
@@ -121,6 +122,7 @@ Your suggestion is a direct instruction to a code generator. It MUST be:
 | Crowded layout | Increase `figsize`, adjust `plt.subplots_adjust()`, or simplify labels |
 | Data value duplication | Remove redundant value display: if bar labels (`ax.bar(..., label=True)` or `ax.text()`) show values, remove duplicate annotations or data tables; if axis already shows precise scale, remove `ax.bar_label()`; keep ONE primary method for showing values |
 | Redundant annotations | For simple charts with clear axis scale, remove `ax.bar_label()` or `for i, v in enumerate(values): ax.text(i, v, str(v))`; keep annotations only for highlighting specific important points (max/min/inflection) |
+| Excessive blank space | **Reduce figure height** to compact chart around data: `figsize=(5, 2.5)` or `figsize=(5, 2)` instead of `(5, 3.5)`. Use `plt.subplots_adjust(top=0.95, bottom=0.1)` to minimize top/bottom margins. Set `ax.set_ylim()` tightly around data range (e.g., `ax.set_ylim(min_value * 0.9, max_value * 1.1)`). Ensure `constrained_layout=True` is used. |
 
 ---
 
