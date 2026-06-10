@@ -1,12 +1,18 @@
+import base64
+import re
+import zipfile
 from pathlib import Path
 
-import pypandoc
+from docx import Document
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 import pytest
 
-from server.deepsearch.common.exception.exceptions import ReportConvertDependencyException
 from server.deepsearch.core.manager.report_manager.conversion_utils import (
-    ensure_pandoc,
+    normalize_docx_tables,
+    postprocess_html,
     preprocess_markdown_text,
+    wrap_html_tables,
 )
 from server.deepsearch.core.manager.report_manager.docx_offline import convert_md_to_docx
 from server.deepsearch.core.manager.report_manager.html_offline import convert_md_to_html
@@ -20,6 +26,24 @@ from server.deepsearch.core.manager.report_manager.mermaid_preprocess import (
     preprocess_mermaid_code,
 )
 from server.deepsearch.core.manager.report_manager.report_processor import ReportHtml, ReportWord
+from server.deepsearch.core.manager.report_manager.word_utils import html_to_doc, set_global_styles
+
+
+TINY_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO"
+    "+/p9sAAAAASUVORK5CYII="
+)
+
+
+def test_set_global_styles_uses_compact_line_spacing():
+    """Validate generated DOCX paragraphs use compact line spacing."""
+    document = Document()
+
+    set_global_styles(document)
+
+    paragraph_format = document.styles["Normal"].paragraph_format
+    assert paragraph_format.line_spacing_rule == WD_LINE_SPACING.MULTIPLE
+    assert paragraph_format.line_spacing == 1.15
 
 
 def test_ensure_mermaid_cli_returns_unavailable_when_missing(monkeypatch):
@@ -69,22 +93,6 @@ def test_render_mermaid_offline_returns_false_when_cli_missing(tmp_path, monkeyp
     assert ok is False
 
 
-def test_ensure_pandoc_raises_dependency_exception_when_download_fails(monkeypatch):
-    """Validate pandoc setup failures are surfaced as dependency exceptions.
-
-    Args:
-        monkeypatch: pytest monkeypatch fixture.
-
-    Returns:
-        None.
-    """
-    monkeypatch.setattr("pypandoc.get_pandoc_version", lambda: (_ for _ in ()).throw(OSError("missing pandoc")))
-    monkeypatch.setattr("pypandoc.download_pandoc", lambda: (_ for _ in ()).throw(RuntimeError("download failed")))
-
-    with pytest.raises(ReportConvertDependencyException):
-        ensure_pandoc()
-
-
 def test_preprocess_mermaid_code_scales_xychart_and_extracts_metadata():
     """Validate xychart preprocessing keeps parity with the reference offline flow.
 
@@ -122,6 +130,335 @@ def test_preprocess_markdown_text_strips_internal_citation_markers():
     assert '[5]</a>' in processed
 
 
+def test_wrap_html_tables_adds_centering_container_once():
+    """Validate HTML table wrapping is idempotent.
+
+    Returns:
+        None.
+    """
+    html_text = "<p>intro</p><table><tr><td>A</td></tr></table>"
+
+    processed = wrap_html_tables(html_text)
+    processed_twice = wrap_html_tables(processed)
+
+    assert '<div class="table-wrap"><table>' in processed
+    assert processed.count('class="table-wrap"') == 1
+    assert processed_twice.count('class="table-wrap"') == 1
+
+
+def test_postprocess_html_wraps_tables_without_rewriting_svg():
+    """Validate table wrapping does not mutate Mermaid SVG HTML.
+
+    Returns:
+        None.
+    """
+    html_text = (
+        '<div class="mermaid-rendered"><svg viewBox="0 0 100 100"></svg></div>'
+        "<table><tr><td>A</td></tr></table>"
+    )
+
+    processed = postprocess_html(html_text)
+
+    assert 'viewBox="0 0 100 100"' in processed
+    assert '<div class="table-wrap"><table>' in processed
+
+
+def test_report_html_convert_from_markdown_wraps_tables():
+    """Validate direct HTML conversion wraps Markdown tables.
+
+    Returns:
+        None.
+    """
+    html_text = ReportHtml.convert_from_markdown("| A | B |\n|---|---|\n| 1 | 2 |")
+
+    assert 'class="table-wrap"' in html_text
+    assert "<table>" in html_text
+
+
+def test_report_word_convert_from_markdown_keeps_wrapped_tables():
+    """Validate online DOCX conversion keeps tables wrapped for HTML centering.
+
+    Returns:
+        None.
+    """
+    doc = ReportWord.convert_from_markdown("| A | B |\n|---|---|\n| 1 | 2 |")
+
+    assert len(doc.tables) == 1
+    assert doc.tables[0].cell(0, 0).text == "A"
+    assert doc.tables[0].cell(1, 1).text == "2"
+
+
+def test_report_word_convert_from_html_handles_irregular_table_rows():
+    """Validate HTML table conversion tolerates rows with different cell counts."""
+    html_text = (
+        '<div class="report-container">'
+        "<table>"
+        "<tr><th>A</th><th>B</th></tr>"
+        "<tr><td>1</td><td>2</td><td>3</td></tr>"
+        "</table>"
+        "</div>"
+    )
+
+    doc = ReportWord._html_to_word(html_text)
+
+    assert len(doc.tables) == 1
+    assert len(doc.tables[0].columns) == 3
+    assert doc.tables[0].cell(0, 2).text == ""
+    assert doc.tables[0].cell(1, 2).text == "3"
+
+
+def test_report_word_convert_from_html_limits_nested_block_depth():
+    """Validate deeply nested HTML is flattened instead of recursing indefinitely."""
+    html_text = (
+        '<div class="report-container">'
+        + "<div>" * 120
+        + "<p>深层内容</p>"
+        + "</div>" * 120
+        + "</div>"
+    )
+
+    doc = ReportWord._html_to_word(html_text)
+
+    assert any("深层内容" in paragraph.text for paragraph in doc.paragraphs)
+
+
+def test_html_to_doc_embeds_relative_images_from_base_path(tmp_path):
+    """Validate pure-Python HTML conversion embeds bundle-local image files."""
+    image_dir = tmp_path / "charts"
+    image_dir.mkdir()
+    (image_dir / "chart_0.png").write_bytes(base64.b64decode(TINY_PNG_BASE64))
+    document = Document()
+    style_map = {
+        "heading1": "heading 1",
+        "heading2": "heading 2",
+        "heading3": "heading 3",
+        "heading4": "heading 4",
+        "heading5": "heading 5",
+        "heading6": "heading 6",
+        "heading7": "heading 7",
+        "heading8": "heading 8",
+        "heading9": "heading 9",
+        "paragraph": "Normal",
+        "table": "Table Grid",
+        "default": "Normal",
+    }
+
+    html_to_doc(
+        document,
+        '<div class="report-container"><p><img src="charts/chart_0.png" alt="Chart"></p></div>',
+        style_map,
+        base_path=tmp_path,
+    )
+
+    assert len(document.inline_shapes) == 1
+
+
+def test_html_to_doc_limits_large_images_to_page_width(tmp_path):
+    """Validate pure-Python DOCX conversion scales oversized images to fit the page."""
+    image = pytest.importorskip("PIL.Image")
+    image_dir = tmp_path / "charts"
+    image_dir.mkdir()
+    image_path = image_dir / "large_chart.png"
+    image.new("RGB", (2400, 800), color="white").save(image_path)
+    document = Document()
+    style_map = {
+        "heading1": "heading 1",
+        "heading2": "heading 2",
+        "heading3": "heading 3",
+        "heading4": "heading 4",
+        "heading5": "heading 5",
+        "heading6": "heading 6",
+        "heading7": "heading 7",
+        "heading8": "heading 8",
+        "heading9": "heading 9",
+        "paragraph": "Normal",
+        "table": "Table Grid",
+        "default": "Normal",
+    }
+
+    html_to_doc(
+        document,
+        '<div class="report-container"><p><img src="charts/large_chart.png" alt="Chart"></p></div>',
+        style_map,
+        base_path=tmp_path,
+    )
+
+    max_width = document.sections[0].page_width - document.sections[0].left_margin - document.sections[0].right_margin
+    assert document.inline_shapes[0].width <= max_width
+
+
+def test_convert_md_to_docx_embeds_relative_images(tmp_path):
+    """Validate pure-Python DOCX export embeds bundle-local image files."""
+    md_path = tmp_path / "report.md"
+    image_dir = tmp_path / "charts"
+    image_dir.mkdir()
+    (image_dir / "chart_0.png").write_bytes(base64.b64decode(TINY_PNG_BASE64))
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text("# Title\n\n![Chart](charts/chart_0.png)\n", encoding="utf-8")
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    assert docx_path.exists()
+    assert len(document.inline_shapes) == 1
+
+
+def test_convert_md_to_docx_keeps_citations_as_superscript_links(tmp_path):
+    """Validate DOCX export preserves citation links as superscript text."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text("正文需要引用[[1]](https://example.com/source)。\n", encoding="utf-8")
+
+    convert_md_to_docx(md_path, docx_path)
+
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert '<w:vertAlign w:val="superscript"/>' in document_xml
+    assert "[1]" in document_xml
+
+
+def test_convert_md_to_docx_keeps_code_blocks(tmp_path):
+    """Validate DOCX export preserves fenced code block content."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text("# Title\n\n```python\nprint('hello')\n```\n", encoding="utf-8")
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    assert any("print('hello')" in paragraph.text for paragraph in document.paragraphs)
+
+
+def test_convert_md_to_docx_keeps_citation_links_in_math_paragraphs(tmp_path):
+    """Validate math paragraphs keep inline citation links and superscript formatting."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text("公式 $x^2$ 后引用[[1]](https://example.com/source)。\n", encoding="utf-8")
+
+    convert_md_to_docx(md_path, docx_path)
+
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+        document_rels = zip_file.read("word/_rels/document.xml.rels").decode("utf-8")
+    assert '<w:vertAlign w:val="superscript"/>' in document_xml
+    assert "[1]" in document_xml
+    assert "https://example.com/source" in document_rels
+
+
+def test_convert_md_to_docx_keeps_table_cell_links(tmp_path):
+    """Validate DOCX export preserves hyperlinks inside table cells."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "| Source |\n|---|\n| [link](https://example.com/source) |\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_rels = zip_file.read("word/_rels/document.xml.rels").decode("utf-8")
+    assert document.tables[0].cell(1, 0).text == "link"
+    assert "https://example.com/source" in document_rels
+
+
+def test_convert_md_to_html_keeps_indented_markdown_list_items_out_of_code_blocks(tmp_path):
+    """Validate report-style indented bullet lines render as lists, not code blocks."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "\n".join(
+            [
+                "![Chart](charts/chart.png)",
+                "<font size=2>**图表**: 说明</font>[[1]](https://example.com/source)",
+                "    - **逻辑二：软硬解耦与异构全栈底座打破算力垄断**。构建兼容异构芯片的软件栈至关重要[[1]](https://example.com/source)。",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert "<pre><code>" not in html_text
+    assert "<li>" in html_text
+    assert "逻辑二：软硬解耦" in html_text
+
+
+def test_convert_md_to_html_keeps_consecutive_indented_list_items_at_same_level(tmp_path):
+    """Validate consecutive report-style indented bullets stay sibling list items."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "\n".join(
+            [
+                "Caption line",
+                "    - first item",
+                "    - second item",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert "<pre><code>" not in html_text
+    assert html_text.count("<ul>") == 1
+    assert html_text.count("<li>") == 2
+    assert "first item" in html_text
+    assert "second item" in html_text
+
+
+def test_html_to_doc_keeps_nested_list_items_as_separate_paragraphs():
+    """Validate nested HTML lists do not collapse child item text into the parent paragraph."""
+    document = Document()
+    style_map = {
+        "heading1": "heading 1",
+        "heading2": "heading 2",
+        "heading3": "heading 3",
+        "heading4": "heading 4",
+        "heading5": "heading 5",
+        "heading6": "heading 6",
+        "heading7": "heading 7",
+        "heading8": "heading 8",
+        "heading9": "heading 9",
+        "paragraph": "Normal",
+        "table": "Table Grid",
+        "default": "Normal",
+    }
+
+    html_to_doc(
+        document,
+        (
+            '<div class="report-container">'
+            "<ul><li>first<ul><li>second</li></ul></li><li>third</li></ul>"
+            "</div>"
+        ),
+        style_map,
+    )
+
+    assert [paragraph.text for paragraph in document.paragraphs] == ["first", "second", "third"]
+
+
+def test_report_table_css_preserves_global_width_and_centers_wrapped_tables():
+    """Validate report CSS limits table centering changes to wrapped tables.
+
+    Returns:
+        None.
+    """
+    css_path = Path("server/deepsearch/core/manager/report_manager/css/style.css")
+    css_text = css_path.read_text(encoding="utf-8")
+
+    assert re.search(r"table\s*\{[^}]*width:\s*100%;", css_text, flags=re.DOTALL)
+    assert re.search(
+        r"\.table-wrap\s+table\s*\{[^}]*width:\s*auto;[^}]*max-width:\s*100%;[^}]*margin:\s*0\s+auto;",
+        css_text,
+        flags=re.DOTALL,
+    )
+
+
 def test_report_html_export_renders_mermaid_or_falls_back(tmp_path):
     """Validate HTML export renders Mermaid or preserves source as fallback.
 
@@ -144,6 +481,32 @@ def test_report_html_export_renders_mermaid_or_falls_back(tmp_path):
     assert "<html" in html_text.lower()
     assert "标题" in html_text
     assert ("<svg" in html_text) or ("language-mermaid" in html_text)
+
+
+def test_normalize_docx_tables_centers_tables_and_captions(tmp_path):
+    """Validate DOCX table normalization centers table objects and captions.
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+
+    Returns:
+        None.
+    """
+    docx_path = tmp_path / "tables.docx"
+    document = Document()
+    document.add_paragraph("普通正文段落")
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "A"
+    table.cell(0, 1).text = "B"
+    document.add_paragraph("表2-1：合肥市“三电”系统核心企业的技术实力与市场表现")
+    document.save(docx_path)
+
+    normalize_docx_tables(docx_path)
+
+    normalized = Document(docx_path)
+    assert normalized.tables[0].alignment == WD_TABLE_ALIGNMENT.CENTER
+    assert normalized.paragraphs[0].alignment is None
+    assert normalized.paragraphs[-1].alignment == WD_ALIGN_PARAGRAPH.CENTER
 
 
 def test_convert_md_to_html_annotates_xychart_value_labels(tmp_path, monkeypatch):
@@ -228,6 +591,26 @@ def test_convert_md_to_html_separates_paragraph_from_following_bullets_without_b
     assert "<li><strong>求稳与求变并存</strong>：第一条</li>" in html_text
 
 
+def test_convert_md_to_html_separates_paragraph_from_following_table_without_blank_line(tmp_path):
+    """Validate pipe tables render after a paragraph even when the source misses a blank line."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "表2-1梳理了测试数据：\n"
+        "| 列1 | 列2 |\n"
+        "| --- | --- |\n"
+        "| A | B |\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert "<p>表2-1梳理了测试数据：</p>" in html_text
+    assert '<div class="table-wrap"><table>' in html_text
+    assert "| 列1 | 列2 |" not in html_text
+
+
 def test_convert_md_to_html_centers_table_display(tmp_path):
     """Validate exported HTML uses centered table presentation styles."""
     md_path = tmp_path / "report.md"
@@ -251,48 +634,33 @@ def test_convert_md_to_html_centers_table_display(tmp_path):
     assert "text-align: center;" in html_text
 
 
-def test_report_docx_export_creates_docx_file(tmp_path, monkeypatch):
-    """Validate DOCX export writes a pandoc-generated file into the bundle.
+def test_report_docx_export_creates_docx_file(tmp_path):
+    """Validate DOCX export writes a pure-Python generated file into the bundle.
 
     Args:
         tmp_path: pytest 提供的临时目录。
-        monkeypatch: pytest monkeypatch fixture。
 
     Returns:
         None.
     """
     final_result = {
-        "response_content": "# 标题\n\n```mermaid\ngraph TD\nA-->B\n```",
+        "response_content": "# Title\n\nPlain text.",
         "infer_messages": [],
         "chart_messages": [],
         "warning_info": "",
         "exception_info": "",
     }
 
-    monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_offline.ensure_pandoc",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_offline.normalize_docx_fonts",
-        lambda *_args, **_kwargs: None,
-    )
-
-    def _fake_convert_file(*args, **kwargs):
-        outputfile = kwargs["outputfile"]
-        with open(outputfile, "wb") as file:
-            file.write(b"PK\x03\x04docx")
-
-    monkeypatch.setattr("pypandoc.convert_file", _fake_convert_file)
-
     docx_path = ReportWord.convert_from_final_result(final_result, tmp_path)
 
     assert docx_path.exists()
-    assert docx_path.read_bytes().startswith(b"PK")
+    document = Document(docx_path)
+    assert any(paragraph.text == "Title" for paragraph in document.paragraphs)
+    assert any(paragraph.text == "Plain text." for paragraph in document.paragraphs)
 
 
-def test_convert_md_to_docx_normalizes_headings_and_fonts(tmp_path, monkeypatch):
-    """Validate DOCX export uses the reference heading/font post-processing flow.
+def test_convert_md_to_docx_normalizes_headings_fonts_and_tables(tmp_path, monkeypatch):
+    """Validate DOCX export uses heading/font/table post-processing flow.
 
     Args:
         tmp_path: pytest 提供的临时目录。
@@ -303,42 +671,32 @@ def test_convert_md_to_docx_normalizes_headings_and_fonts(tmp_path, monkeypatch)
     """
     md_path = tmp_path / "report.md"
     docx_path = tmp_path / "report.docx"
-    md_path.write_text("1. 一级标题\n", encoding="utf-8")
-
-    monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_offline.ensure_pandoc",
-        lambda: None,
-    )
-
-    captured: dict[str, str] = {}
-
-    def _fake_convert_file(input_file, *_args, **kwargs):
-        captured["content"] = Path(input_file).read_text(encoding="utf-8")
-        Path(kwargs["outputfile"]).write_bytes(b"PK\x03\x04docx")
+    md_path.write_text("1. Heading\n", encoding="utf-8")
 
     font_calls = {"count": 0}
+    table_calls = {"count": 0}
 
-    monkeypatch.setattr("pypandoc.convert_file", _fake_convert_file)
     monkeypatch.setattr(
         "server.deepsearch.core.manager.report_manager.docx_offline.normalize_docx_fonts",
         lambda *_args, **_kwargs: font_calls.__setitem__("count", font_calls["count"] + 1),
         raising=False,
     )
+    monkeypatch.setattr(
+        "server.deepsearch.core.manager.report_manager.docx_offline.normalize_docx_tables",
+        lambda *_args, **_kwargs: table_calls.__setitem__("count", table_calls["count"] + 1),
+        raising=False,
+    )
 
     convert_md_to_docx(md_path, docx_path)
 
-    assert '<h1 id="1">1 一级标题</h1>' in captured["content"]
+    document = Document(docx_path)
+    assert any(paragraph.text == "1 Heading" for paragraph in document.paragraphs)
     assert font_calls["count"] == 1
+    assert table_calls["count"] == 1
 
 
 def test_convert_md_to_docx_preserves_short_bold_spans_in_long_chinese_summary(tmp_path):
     """Validate DOCX export keeps inline bold spans in long Chinese summary paragraphs."""
-    docx_module = pytest.importorskip("docx")
-    try:
-        pypandoc.get_pandoc_version()
-    except OSError:
-        pytest.skip("pandoc is unavailable in the current test environment")
-
     md_path = tmp_path / "report.md"
     docx_path = tmp_path / "report.docx"
     md_path.write_text(
@@ -358,7 +716,7 @@ def test_convert_md_to_docx_preserves_short_bold_spans_in_long_chinese_summary(t
 
     convert_md_to_docx(md_path, docx_path)
 
-    document = docx_module.Document(docx_path)
+    document = Document(docx_path)
     summary_paragraph = document.paragraphs[1]
     bold_runs = {run.text for run in summary_paragraph.runs if run.text and run.bold}
 
@@ -379,59 +737,7 @@ def test_convert_md_to_docx_preserves_short_bold_spans_in_long_chinese_summary(t
     }.issubset(bold_runs)
 
 
-def test_report_docx_export_raises_dependency_exception_when_pandoc_setup_fails(tmp_path, monkeypatch):
-    """Validate DOCX export propagates pandoc dependency failures.
-
-    Args:
-        tmp_path: pytest 提供的临时目录。
-        monkeypatch: pytest monkeypatch fixture。
-
-    Returns:
-        None.
-    """
-    final_result = {
-        "response_content": "# 标题",
-        "infer_messages": [],
-        "chart_messages": [],
-        "warning_info": "",
-        "exception_info": "",
-    }
-
-    monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_offline.ensure_pandoc",
-        lambda: (_ for _ in ()).throw(ReportConvertDependencyException("pandoc missing")),
-    )
-
-    with pytest.raises(ReportConvertDependencyException):
-        ReportWord.convert_from_final_result(final_result, tmp_path)
-
-
-def test_report_docx_export_raises_dependency_exception_when_pandoc_execution_fails(tmp_path, monkeypatch):
-    """Validate DOCX export maps pandoc runtime dependency failures.
-
-    Args:
-        tmp_path: pytest 提供的临时目录。
-        monkeypatch: pytest monkeypatch fixture。
-
-    Returns:
-        None.
-    """
-    final_result = {
-        "response_content": "# 标题",
-        "infer_messages": [],
-        "chart_messages": [],
-        "warning_info": "",
-        "exception_info": "",
-    }
-
-    monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_offline.ensure_pandoc",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        "pypandoc.convert_file",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("pandoc execution failed")),
-    )
-
-    with pytest.raises(ReportConvertDependencyException):
-        ReportWord.convert_from_final_result(final_result, tmp_path)
+def test_convert_md_to_docx_raises_file_not_found_for_missing_markdown(tmp_path):
+    """Validate DOCX export still surfaces missing Markdown input."""
+    with pytest.raises(FileNotFoundError):
+        convert_md_to_docx(tmp_path / "missing.md", tmp_path / "report.docx")

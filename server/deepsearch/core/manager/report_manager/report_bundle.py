@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import base64
+import logging
 import re
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +16,8 @@ from server.deepsearch.common.exception.exceptions import ReportConvertValidatio
 from server.deepsearch.core.manager.report_manager.conversion_utils import (
     strip_internal_citation_markers,
 )
+
+logger = logging.getLogger(__name__)
 
 
 INFERENCE_LINK_RE = re.compile(r"\[([^\]]+)\]\(#inference:(\d+)\)")
@@ -182,7 +186,15 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
     Raises:
         ReportConvertValidationException: `response_content` 为空或资源内容非法时抛出。
     """
+    start_time = time.perf_counter()
     response_content, infer_messages, chart_messages = _validate_final_result(final_result)
+    logger.info(
+        "Building report bundle workspace=%s infer_messages=%s chart_messages=%s response_length=%s",
+        workspace,
+        len(infer_messages),
+        len(chart_messages),
+        len(response_content),
+    )
 
     root_dir = workspace / "report_bundle"
     infer_dir = root_dir / "infer"
@@ -212,6 +224,13 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
     markdown_text = _rewrite_chart_placeholders(markdown_text, chart_messages)
     markdown_path = root_dir / "report.md"
     markdown_path.write_text(markdown_text, encoding="utf-8")
+    logger.info(
+        "Built report bundle root_dir=%s infer_assets=%s chart_assets=%s duration_ms=%.2f",
+        root_dir,
+        len(list(infer_dir.glob("*.html"))),
+        len(list(charts_dir.glob("*.png"))),
+        (time.perf_counter() - start_time) * 1000,
+    )
     return ReportBundle(root_dir=root_dir, markdown_path=markdown_path)
 
 
@@ -224,10 +243,21 @@ def pack_bundle_to_base64(bundle_root: Path) -> str:
     Returns:
         str: base64 编码后的 ZIP 文件内容。
     """
+    start_time = time.perf_counter()
     zip_path = bundle_root.parent / "report_bundle.zip"
+    file_count = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for file_path in bundle_root.rglob("*"):
             if file_path.is_file():
                 zip_file.write(file_path, file_path.relative_to(bundle_root.parent))
+                file_count += 1
 
-    return base64.b64encode(zip_path.read_bytes()).decode("utf-8")
+    encoded = base64.b64encode(zip_path.read_bytes()).decode("utf-8")
+    logger.info(
+        "Packed report bundle bundle_root=%s file_count=%s zip_bytes=%s duration_ms=%.2f",
+        bundle_root,
+        file_count,
+        zip_path.stat().st_size,
+        (time.perf_counter() - start_time) * 1000,
+    )
+    return encoded

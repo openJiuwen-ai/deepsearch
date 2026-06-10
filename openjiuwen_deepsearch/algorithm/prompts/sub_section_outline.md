@@ -6,6 +6,13 @@ section id is {{section_idx}}
 Based on the provided information, generate a high-quality subsection outline.
 **Crucial:** The output must start with the section title (Level 1), followed by the subsection titles (Level 2).
 
+{% if report_type == "brief" %}
+## Brief Mode (Strict)
+- This is a brief report. Keep subsection design compact and decision-oriented.
+- Subsection titles should be conclusion-oriented and high-signal; avoid decorative background splits.
+- Avoid taxonomy-style decomposition that expands scope without improving judgment value.
+{% endif %}
+
 {% if has_template %}
 ## Logic & Constraint(Strictly Adhere)
 - Strictly follow the **section_description** as the authoritative guidance for outline generation.
@@ -63,6 +70,7 @@ English output should be like:
 2.1 Sub chapter title 1
 2.2 Sub chapter title 2
 2.3 Sub chapter title 3
+2.4 Sub chapter title 4
 
 Chinese output should be like:
 2 章节标题
@@ -83,4 +91,3 @@ Chinese output should be like:
 5.1 子章节标题1
 5.2 子章节标题2
 5.3 子章节标题3
-5.4 子章节标题4

@@ -194,11 +194,19 @@
   > **注意**：若执行 `uv sync --group backend` 失败，可尝试：`uv sync --group backend --native-tls`  强制使用系统原生TLS库（解决HTTPS下载兼容问题）
 
   ```bash
-  # 启动
+  # 终端 1：主 API（默认 http://127.0.0.1:8000）
   uv run start_backend.py
   ```
 
   启动成功后，会输出 "Application startup complete"。
+
+  使用 **DeepSearch** 模式（`search_mode=search`）时，在**另一个终端**启动 Telemetry（默认 `http://127.0.0.1:8089`）：
+
+  ```bash
+  uv run python -m server.telemetry_event_server
+  ```
+
+  > Docker 安装见 [Docker 方式安装](../Docker方式安装/README.md)。仅 **DeepResearch**（`search_mode=research`）时终端 1 即可。
 
 
 ## 三、常见问题（FAQ）

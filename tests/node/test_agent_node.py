@@ -15,11 +15,14 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     EntryNode,
     IntentRecognitionNode,
     FeedbackHandlerNode,
+    GenerateQuestionsNode,
     OutlineInteractionNode,
+    OutlineNode,
     StartNode,
     UserFeedbackProcessorNode,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import IntentRecognitionResult
+from openjiuwen_deepsearch.config.config import OUTLINER_SECTION_NUM_MAX
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
     build_editor_team_workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
@@ -150,7 +153,15 @@ def test_create_section_state():
                       'all_classified_contents': [], 'doc_infos': [], 'gathered_info': [],
                       'debug_pre_step': 'outline-c615f84c-d865-41f6-b7c3-354703c51732', 'go_deepsearch': True,
                       'debug_cur_step': 'outline-c615f84c-d865-41f6-b7c3-354703c51732'}
-    editor_team_node.create_section_state_from_state(search_context, outline, outline_section)
+    search_context["research_intent"] = {
+        "section_count": 4,
+        "audience_role": "企业CTO",
+        "tone": "analytical",
+    }
+    section_state = editor_team_node.create_section_state_from_state(search_context, outline, outline_section)
+    assert section_state["research_intent"]["section_count"] == 4
+    assert section_state["research_intent"]["audience_role"] == "企业CTO"
+    assert section_state["research_intent"]["tone"] == "analytical"
 
 
 class TestEditorTeamNode(EditorTeamNode):
@@ -263,6 +274,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_entry():
             "search_context.messages": messages,
             "config.web_search_engine_config": web_search_engine_config,
             "config.workflow_human_in_the_loop": False,
+            "config.outliner_max_section_num": 10,
         }.get(key)
 
     session.get_global_state.side_effect = _get_global_state
@@ -287,11 +299,15 @@ async def test_intent_recognition_node_updates_context_and_routes_to_entry():
         "messages": messages,
         "llm_model_name": "basic",
     })
-    session.update_global_state.assert_any_call({
-        "search_context.original_query": original_query,
-        "search_context.research_query": "AI Agent 趋势",
-        "search_context.research_intent": intent_result.research_intent.model_dump(),
-    })
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    intent_update = next(
+        payload for payload in update_payloads
+        if "search_context.original_query" in payload and "search_context.research_query" in payload
+    )
+    assert intent_update["search_context.original_query"] == original_query
+    assert intent_update["search_context.research_query"] == "AI Agent 趋势"
+    assert intent_update["search_context.research_intent"] == intent_result.research_intent.model_dump()
+    assert "search_context.report_type_policy" in intent_update
     session.update_global_state.assert_any_call({
         "search_context.messages": [{"role": "user", "content": "AI Agent 趋势"}]
     })
@@ -300,6 +316,144 @@ async def test_intent_recognition_node_updates_context_and_routes_to_entry():
         include_domains=["example.com"],
         exclude_domains=["bad.com"],
     )
+
+
+def test_outline_pre_handle_resolves_max_section_num_from_section_count():
+    """OutlineNode 应从 research_intent.section_count 计算 section_num（目标章节数）。"""
+    session = Mock(spec=Session)
+    research_intent = {"section_count": 4, "audience_role": "CTO", "tone": "formal"}
+
+    def _get_global_state(key):
+        mapping = {
+            "search_context.language": "zh-CN",
+            "search_context.messages": [],
+            "search_context.questions": "",
+            "search_context.user_feedback": "",
+            "config.outliner_max_section_num": 10,
+            "config.outliner_max_generate_outline_retry_num": 1,
+            "search_context.report_template": "",
+            "search_context.outline_interactions": [],
+            "search_context.current_outline": None,
+            "config.outline_interaction_enabled": False,
+            "config.api_tools_config": {},
+            "search_context.entry_search_results": [],
+            "search_context.report_type_policy": {},
+            "search_context.research_intent": research_intent,
+        }
+        return mapping.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    node = OutlineNode()
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="basic",
+    ):
+        current_inputs = node._pre_handle({}, session, Context())
+
+    assert current_inputs["section_num"] == 4
+    assert current_inputs["max_section_num"] == OUTLINER_SECTION_NUM_MAX
+
+
+def test_generate_questions_keeps_prompt_generated_questions_when_report_type_unspecified():
+    session = Mock(spec=Session)
+    session.update_global_state = Mock()
+    node = GenerateQuestionsNode()
+    output_lines = "1. 关注哪些关键企业？\n2. 重点看哪些政策？\n3. 需要哪些数据口径？"
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.add_debug_log_wrapper"
+    ):
+        output = node._post_handle(
+            {"report_type": None, "language": "zh-CN"},
+            {"result": output_lines},
+            session,
+            Context(),
+        )
+
+    assert output["next_node"] == NodeId.FEEDBACK_HANDLER.value
+    session.update_global_state.assert_any_call({"search_context.questions": output_lines})
+
+
+def test_generate_questions_keeps_original_questions_when_report_type_present():
+    session = Mock(spec=Session)
+    session.update_global_state = Mock()
+    node = GenerateQuestionsNode()
+    output_lines = "1. 核心市场边界如何定义？\n2. 时间范围是否限定近三年？\n3. 是否需要国际对比？"
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.add_debug_log_wrapper"
+    ):
+        output = node._post_handle(
+            {"report_type": "professional", "language": "zh-CN"},
+            {"result": output_lines},
+            session,
+            Context(),
+        )
+
+    assert output["next_node"] == NodeId.FEEDBACK_HANDLER.value
+    session.update_global_state.assert_any_call({"search_context.questions": output_lines})
+
+
+def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
+    session = Mock(spec=Session)
+    session.update_global_state = Mock()
+
+    def _get_global_state(key):
+        mapping = {
+            "search_context.research_query": "低空经济发展趋势",
+            "search_context.research_intent": {
+                "section_count": 5,
+                "audience_role": "投资人",
+                "tone": "analytical",
+                "report_type": "professional",
+                "include_url": [],
+                "exclude_url": [],
+                "include_domains": ["example.com"],
+                "exclude_domains": [],
+            },
+            "config.web_search_engine_config": Mock(search_engine_name="tavily"),
+            "search_context.messages": [{"role": "user", "content": "低空经济发展趋势"}],
+        }
+        return mapping.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    node = FeedbackHandlerNode()
+    reparsed_intent = {
+        "original_query": "请研究低空经济",
+        "research_query": "低空经济发展趋势",
+        "research_intent": {
+            "section_count": None,
+            "audience_role": None,
+            "tone": None,
+            "report_type": "brief",
+            "include_url": [],
+            "exclude_url": [],
+            "include_domains": ["gov.cn"],
+            "exclude_domains": [],
+        },
+    }
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.add_debug_log_wrapper"
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints"
+    ) as mock_apply_domains:
+        output = node._post_handle(
+            {},
+            {"user_feedback": "我要精简版", "reparsed_intent": reparsed_intent},
+            session,
+            Context(),
+        )
+
+    assert output["next_node"] == NodeId.OUTLINE.value
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    merged_payload = next(
+        payload for payload in update_payloads if "search_context.research_intent" in payload
+    )
+    assert merged_payload["search_context.research_intent"]["report_type"] == "brief"
+    assert "gov.cn" in merged_payload["search_context.research_intent"]["include_domains"]
+    assert merged_payload["search_context.report_type_policy"]["report_type"] == "brief"
+    mock_apply_domains.assert_called_once()
 
 
 @pytest.mark.asyncio

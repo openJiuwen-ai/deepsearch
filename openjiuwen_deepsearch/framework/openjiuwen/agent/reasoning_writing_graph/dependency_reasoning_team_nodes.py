@@ -57,6 +57,8 @@ class SectionReasoningStartNode(Start):
             section_idx=inputs.get("section_idx", '1'),
             plan_background_knowledge=plan_background_knowledge,
             step_background_knowledge=step_background_knowledge,
+            report_type_policy=inputs.get("report_type_policy") or {},
+            research_intent=inputs.get("research_intent") or {},
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(),
@@ -151,6 +153,9 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
         current_inputs["collected_doc_num"] = session.get_global_state("section_context.collected_doc_num")
         current_inputs["added_completed_steps"] = added_completed_steps
         current_inputs["current_plan_is_completed"] = current_plan_is_completed
+        rtp = session.get_global_state("section_context.report_type_policy") or {}
+        current_inputs["report_type"] = rtp.get("report_type", "professional")
+        current_inputs["research_intent"] = session.get_global_state("section_context.research_intent") or {}
 
         return current_inputs
 
@@ -289,6 +294,8 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
             "messages": [Message(role="user", content=message)],
             "section_idx": state.get("section_idx", '1'),
             "plan_idx": plan_idx,
+            "plan_title": plan.title,
+            "plan_thought": plan.thought,
             "step_idx": step_idx,
             "step_title": step.title,
             "step_description": step.description,
@@ -296,6 +303,8 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
             "initial_search_query_count": initial_search_query_count,
             "max_research_loops": max_research_loops,
             "max_react_recursion_limit": max_react_recursion_limit,
+            "report_type": state.get("report_type", "professional"),
+            "research_intent": state.get("research_intent") or {},
         }
 
         return collector_agent_input
@@ -463,6 +472,8 @@ def build_dependency_reasoning_workflow():
             "section_idx": "${section_idx}",
             "parent_section_steps": "${parent_section_steps}",
             "config": "${config}",
+            "report_type_policy": "${report_type_policy}",
+            "research_intent": "${research_intent}",
         }
     )
 

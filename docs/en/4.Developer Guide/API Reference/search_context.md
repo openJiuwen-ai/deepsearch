@@ -42,6 +42,16 @@ Aggregated report: **report_task**, **report_template**, **sub_reports**, **repo
 - `infer_messages` stores source-tracing graph payloads. Report export reads `html_base64` and writes standalone HTML resources.
 - `chart_messages` stores VLM chart payloads. Report export reads `base64` and writes image resources.
 
+## `ReportTypePolicy`
+Runtime policy derived from `research_intent.report_type`, used to keep report-style decisions consistent across the workflow.
+
+**Fields**:
+
+- **report_type**: Report type. Currently `professional` or `brief`.
+- **paragraph_style**: Paragraph style. Currently `detailed` or `concise`.
+- **require_summary_first**: Whether summary or overview should be emphasized first.
+- **require_methodology_and_risk**: Whether methodology and risk content should be explicitly preserved.
+
 ## `ResearchIntent`
 Structured report-generation constraints parsed from the user query.
 
@@ -50,11 +60,18 @@ Structured report-generation constraints parsed from the user query.
 - **section_count**: Desired section count. Only positive integers are kept.
 - **audience_role**: Target reader role.
 - **tone**: Writing tone as a stable English enum value, such as `formal` or `analytical`.
-- **report_type**: Report type as a stable English enum value, such as `standard` or `deep_research`.
+- **report_type**: Report type as a stable English enum value: `professional` or `brief`. `professional` means a fuller professional report, while `brief` means a concise report.
 - **include_url**: URLs the user explicitly wants to include. Default value: `[]`.
 - **exclude_url**: URLs the user wants to exclude. Default value: `[]`.
 - **include_domains**: Site domains specified by the user. Default value: `[]`.
 - **exclude_domains**: Site domains excluded by the user. Default value: `[]`.
+
+**Runtime behavior**:
+
+- Outline `section_num`: when the user sets `section_count`, use `min(section_count, OUTLINER_SECTION_NUM_MAX)`; otherwise use `config.outliner_max_section_num`.
+- `audience_role` and `tone` are passed through to outline generation, section planning (Plan), sub-report writing, and final report synthesis.
+- `report_type` is passed through to outline generation, section planning (Plan), information collection, sub-report writing, and final report synthesis.
+- `include_domains` and `exclude_domains` are passed through to the information collection stage.
 
 ## `SearchContext`
 **Fields**:
@@ -63,6 +80,7 @@ Structured report-generation constraints parsed from the user query.
 - **original_query**: Original user query.
 - **research_query**: Research topic after intent recognition, used for retrieval and planning.
 - **research_intent**: Structured report constraints. Default value: empty `ResearchIntent`.
+- **report_type_policy**: Runtime policy derived from `research_intent.report_type`, consumed by outline generation, planning, information collection, sub-report writing, and final report synthesis. Default value: empty `ReportTypePolicy`.
 - **messages**: Conversation messages.
 - **language**: Language. Default value: `zh-CN`.
 - **report_template**: Report template.

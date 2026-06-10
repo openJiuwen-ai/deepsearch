@@ -1,4 +1,5 @@
 import asyncio
+import json
 import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -9,6 +10,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     _resolve_agent_llm_timeout,
     _resolve_node_agent_key,
     _install_usage_only_chunk_parser,
+    _unify_responnse,
     ainvoke_llm_with_stats,
     add_workflow_llm_usage,
     get_workflow_llm_usage,
@@ -75,6 +77,35 @@ class _FakeResponse:
         return {"content": self.content, "tool_calls": None}
 
 
+class _FakeToolCallResponse:
+    """模拟包含 function tool call 的 LLM 响应对象。"""
+
+    def __init__(self, arguments: str, args=None):
+        """初始化模拟 tool call 响应。
+
+        Args:
+            arguments: 原始 function.arguments 字符串。
+            args: 可选的已解析参数。
+        """
+        self.arguments = arguments
+        self.args = args
+
+    def model_dump(self):
+        """导出统一响应结构。"""
+        tool_call = {
+            "id": "call_test",
+            "type": "function",
+            "function": {
+                "name": "generate_plan",
+                "arguments": self.arguments,
+            },
+            "index": 0,
+        }
+        if self.args is not None:
+            tool_call["args"] = self.args
+        return {"content": "", "tool_calls": [tool_call]}
+
+
 class _StreamingChunk:
     """模拟可聚合的流式 chunk。"""
 
@@ -98,6 +129,24 @@ class _StreamingChunk:
             _StreamingChunk: 拼接后的新 chunk。
         """
         return _StreamingChunk(self.content + other.content, other.usage_metadata or self.usage_metadata)
+
+
+def test_unify_response_rewrites_repaired_tool_arguments_for_replay():
+    """验证修复后的 tool args 会同步写回 function.arguments，避免历史消息回放 400。"""
+    raw_arguments = (
+        '{"language":"zh-CN","thought":"高通/联发科/华为NPU微架构差异）。”,'
+        '"is_research_completed":false}'
+    )
+
+    result = _unify_responnse(_FakeToolCallResponse(raw_arguments))
+
+    tool_call = result["tool_calls"][0]
+    replay_arguments = json.loads(tool_call["function"]["arguments"])
+    assert tool_call["args"] == replay_arguments
+    assert replay_arguments["thought"] == "高通/联发科/华为NPU微架构差异）。”"
+    assert tool_call["name"] == "generate_plan"
+    assert tool_call["type"] == "function"
+    assert "index" not in tool_call
 
 
 class _SlowStreamingModel:

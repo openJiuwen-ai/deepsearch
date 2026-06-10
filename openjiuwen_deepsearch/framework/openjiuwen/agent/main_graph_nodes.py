@@ -21,8 +21,12 @@ from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import
 from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     anonymize_config_for_logging,
 )
+from openjiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TIME_LOGGER_TAG
 from openjiuwen_deepsearch.algorithm.query_understanding.interpreter import query_interpreter
-from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import recognize_report_intent
+from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
+    recognize_report_intent,
+    resolve_report_type_policy,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
 from openjiuwen_deepsearch.algorithm.query_understanding.router import classify_query, web_search_for_query
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
@@ -72,6 +76,7 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import (
     Config,
     LocalSearchEngineConfig,
+    OUTLINER_SECTION_NUM_MAX,
     WebSearchEngineConfig,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
@@ -80,6 +85,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Message,
     Outline,
     OutlineInteraction,
+    ResearchIntent,
     Result,
     SearchContext,
     State,
@@ -248,10 +254,19 @@ class IntentRecognitionNode(BaseNode):
         original_q = algorithm_output.original_query
         research_q = (algorithm_output.research_query or "").strip() or original_q
 
+        report_type = algorithm_output.research_intent.report_type
+        report_policy = resolve_report_type_policy(report_type)
+        logger.info(
+            "[IntentRecognitionNode] report_type=%s policy=%s",
+            report_type,
+            report_policy.model_dump(),
+        )
+
         session.update_global_state({
             "search_context.original_query": original_q,
             "search_context.research_query": research_q,
             "search_context.research_intent": algorithm_output.research_intent.model_dump(),
+            "search_context.report_type_policy": report_policy.model_dump(),
         })
         web_search_engine_config = session.get_global_state("config.web_search_engine_config")
         web_search_engine_name = web_search_engine_config.search_engine_name if web_search_engine_config else ""
@@ -271,7 +286,7 @@ class IntentRecognitionNode(BaseNode):
                     role=getattr(first, "role", "user"),
                     content=research_q,
                     name=getattr(first, "name", None),
-                ).model_dump(exclude_none=True)
+                )
             session.update_global_state({"search_context.messages": messages})
 
         add_debug_log_wrapper(session, NodeDebugData(
@@ -359,7 +374,13 @@ class FeedbackHandlerNode(BaseNode):
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info(f"[FeedbackHandlerNode] Start FeedbackHandlerNode.")
         feedback_mode = session.get_global_state("config.workflow_feedback_mode")
-        return dict(feedback_mode=feedback_mode)
+        return dict(
+            feedback_mode=feedback_mode,
+            original_query=session.get_global_state("search_context.original_query") or "",
+            messages=session.get_global_state("search_context.messages") or [],
+            questions=session.get_global_state("search_context.questions") or "",
+            llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
+        )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
@@ -372,8 +393,97 @@ class FeedbackHandlerNode(BaseNode):
             standardized_feedback = "Invalid feedback, length is 0 or type is invalid"
 
         algorithm_output = dict(user_feedback=standardized_feedback)
+        if standardized_feedback not in {
+            "Invalid feedback_mode",
+            "Invalid feedback, length is 0 or type is invalid",
+            FINISH_TASK_FEEDBACK,
+        }:
+            intent_inputs = self._build_intent_reparse_inputs(current_inputs, standardized_feedback)
+            reparsed_intent = await recognize_report_intent(intent_inputs)
+            algorithm_output["reparsed_intent"] = reparsed_intent.model_dump()
+
         result = self._post_handle(inputs, algorithm_output, session, context)
         return result
+
+    @staticmethod
+    def _merge_unique_items(base: list[str], incoming: list[str]) -> list[str]:
+        seen: set[str] = set()
+        for item in (base or []) + (incoming or []):
+            normalized = str(item or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+        return list(seen)
+
+    @staticmethod
+    def _build_feedback_messages(
+        base_messages: list[dict | Message],
+        questions: str,
+        user_feedback: str,
+    ) -> list[dict]:
+        messages: list[dict] = []
+        for message in base_messages or []:
+            if isinstance(message, dict):
+                messages.append(dict(message))
+            else:
+                messages.append(
+                    {
+                        "role": getattr(message, "role", "user"),
+                        "content": getattr(message, "content", ""),
+                        "name": getattr(message, "name", None),
+                    }
+                )
+        if questions:
+            messages.append({"role": "assistant", "content": f"Clarification questions:\n{questions}"})
+        messages.append({"role": "user", "content": user_feedback})
+        return messages
+
+    def _build_intent_reparse_inputs(self, current_inputs: dict, user_feedback: str) -> dict:
+        messages = self._build_feedback_messages(
+            base_messages=current_inputs.get("messages") or [],
+            questions=current_inputs.get("questions") or "",
+            user_feedback=user_feedback,
+        )
+
+        return {
+            "original_query": current_inputs.get("original_query", ""),
+            "messages": messages,
+            "llm_model_name": current_inputs.get("llm_model_name"),
+        }
+
+    def _merge_reparsed_intent(self, session: Session, reparsed_intent: dict) -> tuple[dict, str]:
+        current_research_query = session.get_global_state("search_context.research_query") or ""
+        current_intent = ResearchIntent.model_validate(session.get_global_state("search_context.research_intent") or {})
+        incoming_query = (reparsed_intent.get("research_query") or "").strip()
+        original_query = (reparsed_intent.get("original_query") or "").strip()
+        incoming_intent = ResearchIntent.model_validate(reparsed_intent.get("research_intent") or {})
+
+        merged_intent = current_intent.model_copy(deep=True)
+        if incoming_intent.section_count is not None:
+            merged_intent.section_count = incoming_intent.section_count
+        if incoming_intent.audience_role:
+            merged_intent.audience_role = incoming_intent.audience_role
+        if incoming_intent.tone:
+            merged_intent.tone = incoming_intent.tone
+
+        merged_intent.include_url = self._merge_unique_items(current_intent.include_url, incoming_intent.include_url)
+        merged_intent.exclude_url = self._merge_unique_items(current_intent.exclude_url, incoming_intent.exclude_url)
+        merged_intent.include_domains = self._merge_unique_items(
+            current_intent.include_domains, incoming_intent.include_domains
+        )
+        merged_intent.exclude_domains = self._merge_unique_items(
+            current_intent.exclude_domains, incoming_intent.exclude_domains
+        )
+
+        if incoming_intent.report_type is not None:
+            merged_intent.report_type = incoming_intent.report_type
+
+        is_fallback_query = bool(incoming_query and original_query and incoming_query == original_query)
+        if incoming_query and not is_fallback_query:
+            merged_query = incoming_query
+        else:
+            merged_query = current_research_query or incoming_query or original_query
+        return merged_intent.model_dump(), merged_query
 
     async def _get_user_feedback(self, feedback_mode: str, session: Session) -> str:
         """按交互模式获取用户反馈内容。
@@ -449,6 +559,40 @@ class FeedbackHandlerNode(BaseNode):
             return dict(next_node=NodeId.END.value)
 
         session.update_global_state({"search_context.user_feedback": user_feedback})
+        reparsed_intent = algorithm_output.get("reparsed_intent")
+        if reparsed_intent:
+            merged_intent_dict, merged_query = self._merge_reparsed_intent(session, reparsed_intent)
+            if not merged_intent_dict.get("report_type"):
+                merged_intent_dict["report_type"] = "professional"
+            merged_policy = resolve_report_type_policy(merged_intent_dict.get("report_type"))
+            session.update_global_state(
+                {
+                    "search_context.research_query": merged_query,
+                    "search_context.research_intent": merged_intent_dict,
+                    "search_context.report_type_policy": merged_policy.model_dump(),
+                }
+            )
+
+            web_search_engine_config = session.get_global_state("config.web_search_engine_config")
+            web_search_engine_name = web_search_engine_config.search_engine_name if web_search_engine_config else ""
+            apply_web_search_domain_constraints(
+                search_engine_name=web_search_engine_name,
+                include_domains=merged_intent_dict.get("include_domains", []),
+                exclude_domains=merged_intent_dict.get("exclude_domains", []),
+            )
+
+            messages = list(session.get_global_state("search_context.messages") or [])
+            if messages:
+                first = messages[0]
+                if isinstance(first, dict):
+                    messages[0] = {**first, "content": merged_query}
+                else:
+                    messages[0] = Message(
+                        role=getattr(first, "role", "user"),
+                        content=merged_query,
+                        name=getattr(first, "name", None),
+                    )
+                session.update_global_state({"search_context.messages": messages})
 
         add_debug_log_wrapper(
             session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0, NodeType.MAIN.value, output_content=user_feedback)
@@ -475,6 +619,10 @@ class ReporterNode(BaseNode):
         llm_model_name = adapt_llm_model_name(session, NodeId.REPORTER.value)
 
         visualization_enable = session.get_global_state("config.visualization_enable")
+        rtp = session.get_global_state("search_context.report_type_policy") or {}
+        research_intent = session.get_global_state("search_context.research_intent") or {}
+        audience_role = (research_intent.get("audience_role", "") or "").strip()
+        tone = (research_intent.get("tone", "") or "").strip()
         return dict(
             thread_id=session.get_global_state("config.thread_id") or "",
             report_style=session.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
@@ -487,6 +635,10 @@ class ReporterNode(BaseNode):
             user_query=session.get_global_state("search_context.research_query"),
             llm_model_name=llm_model_name,
             visualization_enable=visualization_enable,
+            report_type=rtp.get("report_type", "professional"),
+            paragraph_style=rtp.get("paragraph_style", "detailed"),
+            audience_role=audience_role,
+            tone=tone,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext):
@@ -566,6 +718,11 @@ class EndNode(End):
             logger.info(
                 f"[EndNode] workflow_llm_token_usage: " f"{json.dumps(workflow_usage, ensure_ascii=False, indent=2)}"
             )
+            metrics_logger.info(
+                f"{TIME_LOGGER_TAG} session_id: {session_id} ------ "
+                f"[LLM CALL STATISTICS]: "
+                f"workflow_llm_token_usage{json.dumps(workflow_usage, ensure_ascii=False, indent=2)}"
+            )
         logger.info(
             f"[EndNode] Get final result: {'***' if LogManager.is_sensitive() else final_result}",
         )
@@ -621,11 +778,14 @@ class GenerateQuestionsNode(BaseNode):
         language = session.get_global_state("search_context.language")
         query = session.get_global_state("search_context.research_query")
         entry_search_results = session.get_global_state("search_context.entry_search_results") or []
+        research_intent = session.get_global_state("search_context.research_intent") or {}
+        report_type = research_intent.get("report_type")
         max_gen_question_retry_num = session.get_global_state("config.workflow_max_gen_question_retry_num")
         llm_model_name = adapt_llm_model_name(session, NodeId.GENERATE_QUESTIONS.value)
         return dict(language=language, query=query, entry_search_results=entry_search_results,
                     max_gen_question_retry_num=max_gen_question_retry_num,
-                    llm_model_name=llm_model_name)
+                    llm_model_name=llm_model_name,
+                    report_type=report_type)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
@@ -646,7 +806,7 @@ class GenerateQuestionsNode(BaseNode):
                 logger.warning(msg)
             else:
                 logger.error(msg)
-        result = self._post_handle(inputs, algorithm_output, session, context)
+        result = self._post_handle(current_inputs, algorithm_output, session, context)
         return result
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
@@ -680,11 +840,12 @@ class GenerateQuestionsNode(BaseNode):
             )
             return dict(next_node=NodeId.END.value)
 
-        session.update_global_state({"search_context.questions": algorithm_output.get("result")})
+        questions_text = algorithm_output.get("result")
+        session.update_global_state({"search_context.questions": questions_text})
         add_debug_log_wrapper(
             session,
             NodeDebugData(
-                NodeId.GENERATE_QUESTIONS.value, 0, NodeType.MAIN.value, output_content=algorithm_output.get("result")
+                NodeId.GENERATE_QUESTIONS.value, 0, NodeType.MAIN.value, output_content=questions_text
             ),
         )
         logger.info(f"[GenerateQuestionsNode] End GenerateQuestionsNode.")
@@ -706,7 +867,7 @@ class OutlineNode(BaseNode):
         messages = session.get_global_state("search_context.messages")
         questions = session.get_global_state("search_context.questions")
         user_feedback = session.get_global_state("search_context.user_feedback")
-        max_section_num = session.get_global_state("config.outliner_max_section_num")
+        configured_section_num = session.get_global_state("config.outliner_max_section_num")
         max_outline_retry_num = session.get_global_state("config.outliner_max_generate_outline_retry_num")
         llm_model_name = adapt_llm_model_name(session, NodeId.OUTLINE.value)
         report_template = session.get_global_state("search_context.report_template")
@@ -740,7 +901,15 @@ class OutlineNode(BaseNode):
         outline_interaction_enabled = session.get_global_state("config.outline_interaction_enabled")
         api_tools_config = session.get_global_state("config.api_tools_config") or {}
         entry_search_results = session.get_global_state("search_context.entry_search_results") or []
-
+        rtp = session.get_global_state("search_context.report_type_policy") or {}
+        research_intent = session.get_global_state("search_context.research_intent") or {}
+        requested_section_num = research_intent.get("section_count")
+        if requested_section_num:
+            section_num = min(int(requested_section_num), OUTLINER_SECTION_NUM_MAX)
+        else:
+            section_num = configured_section_num
+        audience_role = research_intent.get("audience_role") or ""
+        tone = research_intent.get("tone") or ""
 
         return dict(
             messages=messages,
@@ -748,7 +917,8 @@ class OutlineNode(BaseNode):
             questions=questions,
             language=language,
             entry_search_results=entry_search_results,
-            max_section_num=max_section_num,
+            section_num=section_num,
+            max_section_num=OUTLINER_SECTION_NUM_MAX,
             max_outline_retry_num=max_outline_retry_num,
             llm_model_name=llm_model_name,
             report_template=report_template,
@@ -757,6 +927,11 @@ class OutlineNode(BaseNode):
             outline_interaction_enabled=outline_interaction_enabled,
             previous_feedback=previous_feedback,
             api_tools_config=api_tools_config,
+            report_type=rtp.get("report_type", "professional"),
+            require_summary_first=rtp.get("require_summary_first", False),
+            require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
+            audience_role=audience_role,
+            tone=tone,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:

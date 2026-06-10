@@ -5,8 +5,6 @@ import json
 import logging
 from typing import Any
 
-from Crypto.Util.number import inverse
-
 from openjiuwen_deepsearch.common.common_constants import MAX_URL_LENGTH, MAX_SEARCH_CONTENT_LENGTH
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, normalize_domains
@@ -37,6 +35,7 @@ def filter_search_results_by_exclude_domains(items: list, exclude_domains: list[
         return items
 
     filtered_items = []
+    removed_count = 0
     for item in items:
         if not isinstance(item, dict):
             filtered_items.append(item)
@@ -44,8 +43,15 @@ def filter_search_results_by_exclude_domains(items: list, exclude_domains: list[
         item_url = item.get("url") or item.get("link") or ""
         item_domain = extract_domain_from_url(item_url)
         if item_domain and any(_is_domain_match(item_domain, domain) for domain in normalized_exclude_domains):
+            removed_count += 1
             continue
         filtered_items.append(item)
+    logger.info(
+        "[COLLECTOR FUNCTION] exclude_domains filter applied. before=%s after=%s removed=%s",
+        len(items),
+        len(filtered_items),
+        removed_count,
+    )
     return filtered_items
 
 
@@ -168,6 +174,16 @@ def web_search_jiuwen(agent_input: dict, tool_content: Any) -> (list, dict):
     tool_content = json.loads(tool_content)
     engine = tool_content.get("search_engine", "")
     results = tool_content.get("search_results", "")
+
+    if tool_content.get("error") or (isinstance(results, list) and any(isinstance(item, str) for item in results)):
+        error_msg = tool_content.get("error") or (results[0] if isinstance(results, list) and
+                                                                results else "unknown error")
+        if LogManager.is_sensitive():
+            logger.error(f"[COLLECTOR FUNCTION] Search engine '{engine}' returned error")
+        else:
+            logger.error(f"[COLLECTOR FUNCTION] Search engine '{engine}' returned error: {error_msg}")
+        return [], agent_input
+
     if engine == "google":
         tool_result, agent_input = process_google_search_result(agent_input, results)
     elif engine == "tavily":
@@ -220,6 +236,7 @@ def process_tavily_search_result(agent_input: dict, tool_content: Any) -> (list,
     tool_result = []
     try:
         tool_result = tool_content if isinstance(tool_content, list) else []
+        tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
         added_records = []
         for item in tool_result:
             new_item = _normalize_web_search_item(item)
@@ -294,7 +311,17 @@ def process_local_search_result(agent_input: dict, tool_content: Any) -> (list, 
     """本地搜索工具结果处理方法"""
 
     tool_content = json.loads(tool_content)
+
     results = tool_content.get("search_results", "")
+    if tool_content.get("error") or (isinstance(results, list) and any(isinstance(item, str) for item in results)):
+        error_msg = tool_content.get("error") or (results[0] if isinstance(results, list) and
+                                                                results else "unknown error")
+        if LogManager.is_sensitive():
+            logger.error(f"[COLLECTOR FUNCTION] Local search engine returned error")
+        else:
+            logger.error(f"[COLLECTOR FUNCTION] Local search engine returned error: {error_msg}")
+        return [], agent_input
+
     tool_result, agent_input = process_local_search_common(agent_input, results)
     agent_input["local_text_search_record"] = remove_duplicate_items(agent_input["local_text_search_record"])
 
@@ -311,6 +338,8 @@ def process_local_search_common(agent_input: dict, tool_content: Any) -> (list, 
         tool_result = tool_content if isinstance(tool_content, list) else []
         added_records = []
         for item in tool_result:
+            if not isinstance(item, dict):
+                continue
             knowledge_base_id = item.get("knowledge_base_id", "")
             file_id = item.get("file_id", "")
             source_title = (
@@ -339,13 +368,28 @@ def process_local_search_common(agent_input: dict, tool_content: Any) -> (list, 
 
 
 def remove_duplicate_items(items: list[dict]) -> list[dict]:
-    """去除重复的搜索结果"""
+    """去除重复的搜索结果或 evidence 项。
+
+    Args:
+        items: 搜索结果或已结构化 evidence 列表。
+
+    Returns:
+        去重后的列表；带 source_id 的 evidence 优先按 source_id 去重，原始搜索结果按
+        title/url/content 去重，无 content 时退回 title/url。
+    """
     seen = set()
     unique_items = []
 
     for item in items:
         if isinstance(item, dict) and ('title' in item and 'url' in item):
-            key = (item['title'], item['url'])
+            source_id = item.get("source_id")
+            if source_id:
+                key = ("source_id", source_id)
+            elif "content" in item:
+                # 搜索工具可能对同一 URL/title 返回不同 query-specific snippet，需保留不同证据片段。
+                key = ("title_url_content", item['title'], item['url'], item.get("content") or "")
+            else:
+                key = ("title_url", item['title'], item['url'])
             if key not in seen:
                 seen.add(key)
                 unique_items.append(item)

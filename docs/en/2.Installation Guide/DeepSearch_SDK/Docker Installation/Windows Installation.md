@@ -87,25 +87,28 @@ On Windows 10 2004+ (build 19041+) or Windows 11, run:
 
   ```
   # x86_64
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
 
   # ARM64
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.6
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.7
   ```
 
 ### 2. Start DeepSearch (x86_64 example)
 
-Minimal run with SQLite:
+Recommended SQLite run (includes 8089 for **DeepSearch** mode, `search_mode=search`):
 
   ```
   docker run \
-    -p 8000:8000 \ 
+    -p 8000:8000 \
+    -p 8089:8089 \
     -e LLM_SSL_VERIFY=False \
     -e TOOL_SSL_VERIFY=False \
     -e EMBEDDING_SSL_VERIFY=False \ 
     -e DB_TYPE=sqlite \ 
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
   ```
+
+See [Docker overview](./README.md#two-http-services-in-one-container). For **DeepResearch** only (`search_mode=research`), omit `-p 8089:8089`.
 
 Success looks like:
 
@@ -119,16 +122,24 @@ More options: [Extended parameters](#3-extended-parameters).
 
 #### Port mapping
 
+The image exposes **8000** (DeepResearch) and **8089** (DeepSearch mode).
+
 Format:
 
   ```bash
   -p <host_port>:<container_port>
   ```
 
-Example:
+Main API:
 
   ```bash
   -p 8000:8000
+  ```
+
+Telemetry:
+
+  ```bash
+  -p 8089:8089
   ```
 
 Maps container `8000` to host `8000` → `http://localhost:8000`.
@@ -174,7 +185,7 @@ Use `-e` for DB settings.
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
   ```
 
 ##### SQLite parameters (when `DB_TYPE=sqlite`)
@@ -236,7 +247,7 @@ For distributed (Redis) deploys, knowledge-base files must go to shared object s
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
 
   # Single-node production (persistence)
   docker run -p 8000:8000 \
@@ -252,7 +263,7 @@ For distributed (Redis) deploys, knowledge-base files must go to shared object s
     -e CHECKPOINTER_TYPE=persistence \
     -e CHECKPOINTER_DB_TYPE=sqlite \
     -e CHECKPOINTER_DB_PATH=data/databases/checkpointer.db \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
 
   # Distributed production (Redis)
   docker run -p 8000:8000 \
@@ -275,7 +286,7 @@ For distributed (Redis) deploys, knowledge-base files must go to shared object s
     -e OBS_BUCKET=your-bucket \
     -e OBS_ACCESS_KEY_ID=your_access_key \
     -e OBS_SECRET_ACCESS_KEY=your_secret_key \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
   ```
 
 **Notes**:

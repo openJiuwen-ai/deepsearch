@@ -64,25 +64,30 @@ Ensure the machine meets:
 
   ```
   # x86_64
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
 
   # ARM64
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.6
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.7
   ```
 
 ### 2. Start DeepSearch (x86_64 example)
 
-Minimal SQLite run:
+Recommended SQLite run (maps 8000 and 8089 when you need **DeepSearch** mode, `search_mode=search`):
 
   ```
   docker run \
-    -p 8000:8000 \ 
+    -p 8000:8000 \
+    -p 8089:8089 \
     -e LLM_SSL_VERIFY=False \
     -e TOOL_SSL_VERIFY=False \
     -e EMBEDDING_SSL_VERIFY=False \ 
     -e DB_TYPE=sqlite \ 
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
   ```
+
+For **DeepResearch** only (`search_mode=research`), `-p 8000:8000` is enough.
+
+See [Docker overview](./README.md#two-http-services-in-one-container).
 
 Success:
 
@@ -96,21 +101,32 @@ More: [Extended parameters](#3-extended-parameters).
 
 #### Port mapping
 
+The image exposes **8000** (DeepResearch) and **8089** (DeepSearch mode / Telemetry).
+
   ```bash
   -p <host_port>:<container_port>
   ```
 
-Example:
+Main API:
 
   ```bash
   -p 8000:8000
   ```
 
-Alternate host port:
+DeepSearch mode (`search_mode=search`, e.g. `POST /runs`):
+
+  ```bash
+  -p 8089:8089
+  ```
+
+Alternate host ports:
 
   ```bash
   -p 9000:8000
+  -p 9089:8089
   ```
+
+> Later examples may show only `-p 8000:8000` for brevity. Add `-p 8089:8089` (or use the same Docker network) when using **DeepSearch** mode.
 
 
 #### Database / storage
@@ -146,7 +162,7 @@ Alternate host port:
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
   ```
 
 ##### SQLite (`DB_TYPE=sqlite`)
@@ -203,7 +219,7 @@ Alternate host port:
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
 
   docker run -p 8000:8000 \
     --add-host=host.docker.internal:host-gateway \
@@ -219,7 +235,7 @@ Alternate host port:
     -e CHECKPOINTER_TYPE=persistence \
     -e CHECKPOINTER_DB_TYPE=sqlite \
     -e CHECKPOINTER_DB_PATH=data/databases/checkpointer.db \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
 
   docker run -p 8000:8000 \
     --add-host=host.docker.internal:host-gateway \
@@ -242,7 +258,7 @@ Alternate host port:
     -e OBS_BUCKET=your-bucket \
     -e OBS_ACCESS_KEY_ID=your_access_key \
     -e OBS_SECRET_ACCESS_KEY=your_secret_key \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.6
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.7
   ```
 
 **Notes**:

@@ -306,8 +306,9 @@ class LocalGraphKnowledgeBase(GraphKnowledgeBase):
                         doc_id=triple.metadata.get("doc_id", ""),
                         metadata={
                             **triple.metadata,
-                            "triple": json.dumps([triple.subject, triple.predicate, triple.object]),
-                            "confidence": triple.confidence if triple.confidence else 0,
+                            "triple": json.dumps(
+                                [triple.subject, triple.predicate, triple.object]
+                            ),
                             "chunk_index": i,
                         },
                     )
@@ -1157,6 +1158,88 @@ def _check_index_connection() -> Union[ResponseModel, None]:
         return None
 
 
+async def _probe_embed_dimension(embed_model: APIEmbedding) -> int:
+    """探测当前 embedding 模型输出向量维度。"""
+    if getattr(embed_model, "dimension", None):
+        dim = int(embed_model.dimension)
+        if dim > 0:
+            return dim
+    test_embedding = await embed_model.embed_query("dimension_probe")
+    return len(test_embedding)
+
+
+def _milvus_uri_and_token() -> Tuple[str, str]:
+    milvus_host = os.getenv("MILVUS_HOST", "localhost")
+    milvus_port = os.getenv("MILVUS_PORT", "19530")
+    milvus_uri = f"http://{milvus_host}:{milvus_port}"
+    return milvus_uri, os.getenv("MILVUS_TOKEN") or ""
+
+
+def _milvus_collection_vector_dim_from_describe(
+    client: Any, collection_name: str
+) -> Optional[int]:
+    """从 Milvus collection schema 读取 dense 向量字段维度。"""
+    try:
+        info = client.describe_collection(collection_name=collection_name)
+    except Exception as e:
+        logger.warning(
+            f"[INDEX] Failed to describe Milvus collection {collection_name}: {e}"
+        )
+        return None
+    fields = info.get("fields") if isinstance(info, dict) else None
+    if not fields:
+        return None
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        dtype = str(field.get("type") or field.get("dtype") or "")
+        if "FLOAT_VECTOR" in dtype.upper() or field.get("type") == 101:
+            params = field.get("params") or {}
+            dim = params.get("dim")
+            if dim is not None:
+                return int(dim)
+    return None
+
+
+def _close_milvus_client(client: Any) -> None:
+    close_fn = getattr(client, "close", None)
+    if callable(close_fn):
+        try:
+            close_fn()
+        except Exception:
+            logger.debug("[INDEX] Milvus client close ignored", exc_info=True)
+
+
+async def _drop_milvus_collection_if_dim_mismatch(
+    collection_name: str,
+    embed_model: APIEmbedding,
+) -> None:
+    """维度不一致时删除 collection。使用独立 Milvus 连接，避免 drop 后拖垮共享 gRPC channel。"""
+    milvus_uri, milvus_token = _milvus_uri_and_token()
+    temp_alias = f"kb_maint_{uuid.uuid4().hex[:12]}"
+    client = MilvusVectorStore.create_client(
+        database_name="",
+        path_or_uri=milvus_uri,
+        token=milvus_token,
+        alias=temp_alias,
+    )
+    try:
+        exists = await asyncio.to_thread(client.has_collection, collection_name)
+        if not exists:
+            return
+        expected_dim = await _probe_embed_dimension(embed_model)
+        actual_dim = _milvus_collection_vector_dim_from_describe(client, collection_name)
+        if actual_dim is None or actual_dim == expected_dim:
+            return
+        logger.warning(
+            f"[INDEX] Milvus collection dimension mismatch - collection={collection_name}, "
+            f"existing_dim={actual_dim}, expected_dim={expected_dim}; dropping collection"
+        )
+        await asyncio.to_thread(client.drop_collection, collection_name=collection_name)
+    finally:
+        _close_milvus_client(client)
+
+
 def _create_index_manager(collection_name: str) -> MilvusIndexer:
     """
     Creates Milvus index manager based on the `INDEX_MANAGER_TYPE` variable set in `.env`.
@@ -1433,15 +1516,20 @@ async def _index_documents(*args, **kwargs) -> dict:
         segmentation_strategy, embed_model=embed_model if chunk_unit == "token" else None
     )
 
-    # 5.2 创建索引管理器
+    # 5.2 维度变更时先 drop 旧 collection（须在创建 indexer/vector_store 之前，且用独立连接）
+    await _drop_milvus_collection_if_dim_mismatch(chunk_index, embed_model)
+    if triple_index:
+        await _drop_milvus_collection_if_dim_mismatch(triple_index, embed_model)
+
+    # 5.3 创建索引管理器
     index_manager = _create_index_manager(collection_name=chunk_index)
 
-    # 5.3 创建向量存储
+    # 5.4 创建向量存储
     vector_store = _create_vector_store(
         collection_name=chunk_index,
     )
 
-    # 5.4 创建三元组提取器（如果使用图索引）
+    # 5.5 创建三元组提取器（如果使用图索引）
     extractor = None
     if use_graph and llm_client:
         extractor = TripleExtractor(
@@ -1449,7 +1537,7 @@ async def _index_documents(*args, **kwargs) -> dict:
             model_name=model_name,
         )
 
-    # 6. 创建知识库配置
+    # 6. 创建知识库配置（序号延续上文组件创建）
     kb_config = KnowledgeBaseConfig(
         kb_id=kb_id,
         index_type="vector",
@@ -2591,6 +2679,34 @@ async def document_process(req: DocumentProcessRequest) -> ResponseModel:
             logger.info(
                 f"[DOC_PROCESS] Applied request-level llm_config - KB ID: {req.kb_id}, "
                 f"model_type={llm_config.model_type}, model_name={llm_config.model_name}"
+            )
+
+    if getattr(req, "embed_model_config", None):
+        ecd = req.embed_model_config
+        if isinstance(ecd, dict) and ecd:
+            embed_model_config = EmbedModelConfig(
+                model_name=str(ecd.get("model_name") or embed_model_config.model_name),
+                api_key=str(
+                    ecd.get("api_key")
+                    if ecd.get("api_key") is not None
+                    else embed_model_config.api_key
+                ),
+                base_url=str(
+                    ecd.get("base_url")
+                    if ecd.get("base_url") is not None
+                    else embed_model_config.base_url
+                ),
+                max_batch_size=int(
+                    ecd.get("max_batch_size") or embed_model_config.max_batch_size
+                ),
+                timeout=int(ecd.get("timeout") or embed_model_config.timeout),
+                max_retries=int(
+                    ecd.get("max_retries") or embed_model_config.max_retries
+                ),
+            )
+            logger.info(
+                f"[DOC_PROCESS] Applied request-level embed_model_config - "
+                f"KB ID: {req.kb_id}, model_name={embed_model_config.model_name}"
             )
 
     processed_count = 0

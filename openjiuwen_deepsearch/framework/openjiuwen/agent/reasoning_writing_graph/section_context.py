@@ -17,6 +17,8 @@ class SectionBaseContext(BaseModel):
     messages: list = Field(default=[], description="消息列表")
     section_idx: str = Field(default="", description="章节索引")
     session_id: str = Field(default="", description="会话ID")
+    report_type_policy: dict = Field(default_factory=dict, description="报告类型策略")
+    research_intent: dict = Field(default_factory=dict, description="结构化报告细节约束")
 
 
 class SectionReasoningContext(SectionBaseContext):

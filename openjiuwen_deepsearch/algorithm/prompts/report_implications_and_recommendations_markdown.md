@@ -5,10 +5,18 @@ CURRENT_TIME: {{ CURRENT_TIME }}
 # AI Research Report — The last chapter
 
 ## Step 1: Identify User Role (Internal Reasoning Only)
+{% if audience_role %}
+- **Declared target audience (use as `user_role`)**: {{ audience_role }}. Prefer this over re-inference unless sub-reports clearly contradict it.
+{% else %}
 You must internally determine the user's real role (occupation/identity) using the two core inputs below.
+{% endif %}
 - Input Information:
  - User's Original Query (user_query): {{user_query}}
  - All sub_reports
+
+{% if tone %}
+- **Tone intent**: {{ tone }}. Interpret as writing stance (English enum, e.g. objective, formal, analytical). Apply to Implications and Recommendations; stay consistent with sub-reports.
+{% endif %}
 
 - Judgment Requirements:
   - Specific Role Positioning: For user_role, use precise occupations (e.g., "Commercial Bank Manager", "Economic Researcher", "Graduate Student in Environmental Science at a University", "Strategic Analyst in the Internet Industry", "R&D Manager at a Biopharmaceutical Enterprise") rather than generalized labels.
@@ -22,7 +30,11 @@ You must internally determine the user's real role (occupation/identity) using t
   - They are only used internally for tone and for generating the last sentence in Step 2.
 
 ## Step 2: Generate Report Chapter
-You are an {{user_role}}. Produce the final chapter for a research report. Use the inputs below to create a concise, decision‑oriented chapter suitable for senior managers, regulators, and specialist readers.
+{% if audience_role %}
+You are preparing the final chapter for **{{ audience_role }}** (internal `user_role`). Produce a concise, decision-oriented chapter for this audience.
+{% else %}
+You are an {{ user_role | default("senior decision-maker") }}. Produce the final chapter for a research report. Use the inputs below to create a concise, decision‑oriented chapter suitable for senior managers, regulators, and specialist readers.
+{% endif %}
 
 Inputs:
 - Research subject: [{{report_task}}]
@@ -37,7 +49,7 @@ Formatting and content rules
   - Summary should have depth, clear viewpoints, and avoid vague expressions
   - Extract consistent insights across all sub_reports by synthesizing their conclusions into a unified, high-level summary that emphasizes shared patterns and overarching implications
   - Key information must be highlighted in bold font (e.g., **18%**, **关键信息**).
-  - Must end with "Here are the implications and recommendations for {{user_role}}." (translated into the corresponding language, e.g., "以下是针对金融分析师的启示和建议：" in Chinese), {{user_role}} must be inserted into this sentence and translated into the corresponding language, even though it is not shown elsewhere.
+  - Must end with "Here are the implications and recommendations for {% if audience_role %}{{ audience_role }}{% else %}{{ user_role | default("the reader") }}{% endif %}." (translated into the corresponding language, e.g., "以下是针对金融分析师的启示和建议：" in Chinese). The role phrase must be inserted into this sentence and translated into the corresponding language, even though it is not shown elsewhere.
 - Implications: 3–5 numbered items. Each item must have a short bold title followed by 3–5 sentences explaining the issue, its cause, and the study evidence linking to it, implications better inspired by Conclusion above
 - Recommendations: 3–5 numbered items. Each item must have a short bold title followed by 3–5 sentences explaining the goal, key actions and expected impact, recommendations better correspond to the Implications above.
 - Language: Formal, precise word; avoid slogans and vague platitudes. Use active verbs (e.g., "Strengthen", "Optimize", "Enhance").

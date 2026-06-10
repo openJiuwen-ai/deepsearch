@@ -13,7 +13,10 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_runtime_api_tools, \
     merge_runtime_api_tools
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
-from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
+    ainvoke_llm_with_stats,
+    normalize_json_output,
+)
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -21,17 +24,35 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 logger = logging.getLogger(__name__)
 
 
-def normalize_sections(args: dict) -> dict:
-    """标准化大纲分节结构，统一字段与层级格式。"""
-    sections = args.get("sections")
-    if isinstance(sections, str):
+def _parse_sections_value(sections) -> list:
+    """将 LLM 可能返回的 sections 字符串/嵌套结构解析为 list。"""
+    if isinstance(sections, list):
+        return sections
+
+    parsed = sections
+    for _ in range(3):
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            if "sections" in parsed:
+                parsed = parsed["sections"]
+                continue
+            raise ValueError("sections must be a list")
+        if not isinstance(parsed, str):
+            raise ValueError("sections must be a list")
         try:
-            args["sections"] = json.loads(sections)
+            parsed = json.loads(normalize_json_output(parsed))
         except Exception as e:
             raise ValueError("sections must be a list, not a string") from e
-    if not isinstance(args.get("sections"), list):
-        raise ValueError("sections must be a list")
 
+    raise ValueError("sections must be a list")
+
+
+def normalize_sections(args: dict) -> dict:
+    """标准化大纲分节结构，统一字段与层级格式。"""
+    if "sections" not in args:
+        return args
+    args["sections"] = _parse_sections_value(args.get("sections"))
     return args
 
 
@@ -81,7 +102,7 @@ def generate_outline(
     return outline
 
 
-def create_outline_tool(max_section_num: int):
+def create_outline_tool(section_num: int):
     """获取outline生成工具"""
 
     card = ToolCard(
@@ -102,7 +123,7 @@ def create_outline_tool(max_section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": f"Section list of the final report. (Maximum number of sections: {max_section_num})",
+                    "description": f"Section list of the final report. (Target number of sections: {section_num})",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -139,7 +160,7 @@ def create_outline_tool(max_section_num: int):
     return outline_tool
 
 
-def creat_dep_driving_outline_tool(max_section_num: int):
+def creat_dep_driving_outline_tool(section_num: int):
     """获取依赖驱动大纲生成工具"""
     card = ToolCard(
         id="dep_driving_generate_outline",
@@ -162,7 +183,7 @@ def creat_dep_driving_outline_tool(max_section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": f"Section list of the final report. (Maximum number of sections: {max_section_num})",
+                    "description": f"Section list of the final report. (Target number of sections: {section_num})",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -330,11 +351,11 @@ class Outliner:
         prompt = apply_system_prompt(self.prompt, current_inputs)
         outline = {}
         error_msg = ""
-        max_section_num = current_inputs.get("max_section_num")
+        section_num = current_inputs.get("section_num")
         if self.with_dep_driving:
-            default_tool = creat_dep_driving_outline_tool(max_section_num)
+            default_tool = creat_dep_driving_outline_tool(section_num)
         else:
-            default_tool = create_outline_tool(max_section_num)
+            default_tool = create_outline_tool(section_num)
         tools = [default_tool]
         api_tools = build_runtime_api_tools(
             current_inputs.get("api_tools_config", {}).get("query_understanding_tools", []),
@@ -355,6 +376,9 @@ class Outliner:
             tool_calls = response.get("tool_calls", [])
             for tool_call in tool_calls:
                 args = tool_call.get("args", {})
+                if isinstance(args, str):
+                    args = json.loads(normalize_json_output(args))
+                    tool_call["args"] = args
                 if isinstance(args, dict) and "sections" in args:
                     tool_call["args"] = normalize_sections(args)
 

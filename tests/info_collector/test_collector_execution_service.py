@@ -5,6 +5,7 @@ import pytest
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_execution_service import (
     CollectorExecutionService,
     CollectorInputBuildConfig,
+    CollectorInputBuildParams,
     CollectorRunPlanConfig,
     run_info_collector_sub_graph,
 )
@@ -38,6 +39,7 @@ async def test_run_plan_updates_collecting_steps_and_returns_aggregate_result():
             "evaluation": "足够",
             "history_queries": [RetrievalQuery(query="q1")],
             "doc_infos": [{"title": "doc", "url": "u"}],
+            "source_store": {"web_1": "正文"},
         }
     )
     with patch(
@@ -64,6 +66,7 @@ async def test_run_plan_updates_collecting_steps_and_returns_aggregate_result():
     assert result.collect_steps[0].retrieval_queries == [RetrievalQuery(query="q1")]
     assert result.collected_doc_num == 1
     assert result.doc_infos == [{"title": "doc", "url": "u"}]
+    assert result.source_store == {"web_1": "正文"}
     assert result.messages == [Message(role="assistant", content="摘要")]
     assert result.collect_steps[0].step_result == "摘要"
 
@@ -79,15 +82,17 @@ def test_input_build_accepts_named_config_object():
     step = Step(type=StepType.INFO_COLLECTING, title="步骤1", description="收集资料")
 
     agent_input = CollectorExecutionService._input_build(
-        plan=plan,
-        step=step,
-        language="zh-CN",
-        section_idx=1,
-        build_config=CollectorInputBuildConfig(
-            initial_search_query_count=2,
-            max_research_loops=3,
-            max_react_recursion_limit=8,
-        ),
+        CollectorInputBuildParams(
+            plan=plan,
+            step=step,
+            language="zh-CN",
+            section_idx=1,
+            build_config=CollectorInputBuildConfig(
+                initial_search_query_count=2,
+                max_research_loops=3,
+                max_react_recursion_limit=8,
+            ),
+        )
     )
 
     assert agent_input["language"] == "zh-CN"
@@ -97,6 +102,34 @@ def test_input_build_accepts_named_config_object():
     assert agent_input["initial_search_query_count"] == 2
     assert agent_input["max_research_loops"] == 3
     assert agent_input["max_react_recursion_limit"] == 8
+
+
+def test_input_build_includes_research_intent():
+    plan = Plan(
+        id="1",
+        title="主题",
+        thought="思路",
+        is_research_completed=False,
+        steps=[],
+    )
+    step = Step(type=StepType.INFO_COLLECTING, title="步骤1", description="收集资料")
+
+    agent_input = CollectorExecutionService._input_build(
+        CollectorInputBuildParams(
+            plan=plan,
+            step=step,
+            language="zh-CN",
+            section_idx=1,
+            build_config=CollectorInputBuildConfig(
+                initial_search_query_count=2,
+                max_research_loops=3,
+                max_react_recursion_limit=8,
+            ),
+            research_intent={"exclude_domains": ["csdn.net"]},
+        )
+    )
+
+    assert agent_input["research_intent"] == {"exclude_domains": ["csdn.net"]}
 
 
 @pytest.mark.asyncio

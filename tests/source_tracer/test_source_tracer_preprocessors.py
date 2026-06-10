@@ -603,6 +603,21 @@ class TestBuildCitationMapping:
         assert result[1]["content"] == "Content 1"
         assert result[2]["content"] == "Content 2"
 
+    def test_build_citation_mapping_normalizes_title_whitespace(self):
+        """Test citation titles are normalized before building source tracer links."""
+        classified_contents = [
+            {
+                "index": 1,
+                "title": "Build Smarter RAG with Routing and Hybrid Retrieval\n - Milvus Blog",
+                "url": "https://milvus.io/blog/build-smarter-rag-routing-hybrid-retrieval.md",
+                "original_content": "Content 1",
+            }
+        ]
+
+        result = _build_citation_mapping(classified_contents)
+
+        assert result[1]["title"] == "Build Smarter RAG with Routing and Hybrid Retrieval - Milvus Blog"
+
     def test_build_citation_mapping_duplicate_index(self):
         """Test handling of duplicate indices in classified contents."""
         classified_contents = [

@@ -11,6 +11,11 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 logger = logging.getLogger(__name__)
 
 
+def _normalize_citation_title(title: str) -> str:
+    """Normalize citation title whitespace for single-line markdown links."""
+    return " ".join(str(title or "").split())
+
+
 def _need_preprocess_search_record(search_record: Dict[str, Any]) -> bool:
     """检查搜索记录中是否存在特定字段，如果不存在则不进行搜索记录处理。
 
@@ -459,7 +464,7 @@ def _build_citation_mapping(classified_content: List) -> Dict:
         index = content.get("index", 0)
         if index == 0:
             continue
-        title = content.get("title", "")
+        title = _normalize_citation_title(content.get("title", ""))
         url = content.get("url", "")
         content = content.get("original_content", "")
 

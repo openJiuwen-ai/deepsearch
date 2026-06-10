@@ -340,6 +340,34 @@ class TestResearchCitationChecker:
         # datas might be filtered out during processing if no citations found
         assert isinstance(result_datas, list)
 
+    def test_transform_references_normalizes_multiline_source_tracer_title(self):
+        """Test multiline source tracer titles are converted to checked citations."""
+        url = "https://milvus.io/blog/build-smarter-rag-routing-hybrid-retrieval.md"
+        text = {
+            "article": (
+                "混合检索说明[source_tracer_result]"
+                "[Build Smarter RAG with Routing and Hybrid Retrieval\n - Milvus Blog]"
+                f"({url})结束。"
+            )
+        }
+        datas = [
+            {
+                "url": url,
+                "title": "Build Smarter RAG with Routing and Hybrid Retrieval\n - Milvus Blog",
+                "content": "Content 1",
+                "valid": True,
+                "score": 0.9,
+            }
+        ]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert "[source_tracer_result]" not in result_text
+        assert "[checked_citation:0][[1]]" in result_text
+        assert "[1]. [Build Smarter RAG with Routing and Hybrid Retrieval - Milvus Blog]" in result_text
+        assert result_datas[0]["id"] == 0
+        assert result_datas[0]["reference_index"] == 1
+
     # Test main workflow
     @pytest.mark.asyncio
     async def test_checker_success(self):

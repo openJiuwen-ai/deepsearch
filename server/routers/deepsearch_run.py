@@ -246,6 +246,11 @@ async def _produce_stream(ctx: StreamContext):
     """
     cancelled_sent = False
     waiting_user_input = False
+    logger.info(
+        "DeepSearch producer started space_id=%s conversation_id=%s",
+        ctx.space_id,
+        ctx.conversation_id,
+    )
     try:
         async for chunk in _wrapped_agent_run(
             agent=ctx.agent,
@@ -261,9 +266,14 @@ async def _produce_stream(ctx: StreamContext):
                     event = data.get("event")
                     if event == "cancel":
                         cancelled_sent = True
+                        logger.info(
+                            "DeepSearch producer observed cancel event space_id=%s conversation_id=%s",
+                            ctx.space_id,
+                            ctx.conversation_id,
+                        )
                     elif event == "waiting_user_input":
                         waiting_user_input = True
-                        logger.debug(
+                        logger.info(
                             "Detected waiting_user_input in _produce_stream for session %s",
                             ctx.conversation_id,
                         )
@@ -273,8 +283,9 @@ async def _produce_stream(ctx: StreamContext):
             await ctx.queue.put(chunk)
         # HITL 时保持流不结束，等待取消或「继续」请求，以便进程 B 取消时能向进程 A 推送 CANCELLED
         if waiting_user_input:
-            logger.debug(
-                "Waiting for cancel or resume for session %s before closing stream.",
+            logger.info(
+                "DeepSearch producer waiting for cancel or resume space_id=%s conversation_id=%s",
+                ctx.space_id,
                 ctx.conversation_id,
             )
             try:
@@ -314,7 +325,7 @@ async def _produce_stream(ctx: StreamContext):
             # 以便 _consumer 能够退出循环并执行 finally 清理本地状态。
             await asyncio.shield(ctx.queue.put(_QUEUE_DONE))
             if waiting_user_input:
-                logger.debug(
+                logger.info(
                     "QUEUE_DONE sent for session %s (after cancel/resume or HITL wait).",
                     ctx.conversation_id,
                 )
@@ -325,6 +336,14 @@ async def _produce_stream(ctx: StreamContext):
                 ctx.conversation_id,
                 str(queue_err),
             )
+        logger.info(
+            "DeepSearch producer finished space_id=%s conversation_id=%s "
+            "cancelled_sent=%s waiting_user_input=%s",
+            ctx.space_id,
+            ctx.conversation_id,
+            cancelled_sent,
+            waiting_user_input,
+        )
 
 
 # 注册跨进程取消回调，使当前进程在收到 Redis 取消指令时，
@@ -484,6 +503,14 @@ def _prepare_stream_context(
         tuple[DeepSearchRequest, object, dict]: 规范化后的请求对象、可复用的 Agent 实例，
         以及用于 `agent.run(...)` 的参数字典。
     """
+    logger.info(
+        "Preparing DeepSearch stream context space_id=%s conversation_id=%s "
+        "search_mode=%s execution_method=%s",
+        request.space_id,
+        request.conversation_id,
+        request.search_mode,
+        request.execution_method,
+    )
     if "general" in request.llm_config:
         for _, llm_config in request.llm_config.items():
             api_key = llm_config.get("api_key", "")
@@ -503,6 +530,12 @@ def _prepare_stream_context(
     template_id = request.template_id
     template_content = ""
     if isinstance(template_id, int) and template_id > 0:
+        logger.info(
+            "Loading report template for DeepSearch stream space_id=%s conversation_id=%s template_id=%s",
+            request.space_id,
+            request.conversation_id,
+            template_id,
+        )
         template_content = agent_manager.load_template_content(
             request.space_id,
             template_id,
@@ -515,6 +548,14 @@ def _prepare_stream_context(
         "agent_config": agent_config,
         "interrupt_feedback": request.interrupt_feedback,
     }
+    logger.info(
+        "Prepared DeepSearch stream context space_id=%s conversation_id=%s "
+        "has_template=%s agent_class=%s",
+        request.space_id,
+        request.conversation_id,
+        bool(template_content),
+        agent.__class__.__name__,
+    )
     return request, agent, run_kwargs
 
 
@@ -538,6 +579,12 @@ def _create_streaming_response(
     - 会话级资源（checkpointer）的清理由取消路径或工作流自身控制，此处仅管理本地状态字典。
     """
     task_key = f"{request.space_id}:{request.conversation_id}"
+    logger.info(
+        "Creating DeepSearch SSE response task_key=%s search_mode=%s execution_method=%s",
+        task_key,
+        request.search_mode,
+        request.execution_method,
+    )
 
     # 检查是否已存在 cancel_event（例如 HITL 场景下的后续轮次）。
     existing_cancel_event = _cancel_events.get(task_key)
@@ -584,6 +631,12 @@ def _create_streaming_response(
     _cancel_event_timestamps[task_key] = time.monotonic()
     _running_agents[task_key] = agent
     _maybe_schedule_capacity_cleanup()
+    logger.info(
+        "Started DeepSearch producer task task_key=%s reused_cancel_event=%s running_tasks=%s",
+        task_key,
+        existing_cancel_event is not None,
+        len(_running_tasks),
+    )
 
     async def _consumer():
         waiting_user_input = False
@@ -635,7 +688,7 @@ def _create_streaming_response(
                         str(cleanup_err),
                     )
             else:
-                logger.debug(
+                logger.info(
                     "Preserving cancel_event for waiting_user_input session %s "
                     "(running_agents cleaned for distributed deployment compatibility)",
                     request.conversation_id,
@@ -645,6 +698,12 @@ def _create_streaming_response(
                 _running_agents.pop(task_key, None)
                 _cancel_event_timestamps[task_key] = time.monotonic()
                 _maybe_schedule_capacity_cleanup()
+            logger.info(
+                "Closed DeepSearch SSE consumer task_key=%s waiting_user_input=%s running_tasks=%s",
+                task_key,
+                waiting_user_input,
+                len(_running_tasks),
+            )
 
     return EventSourceResponse(_consumer(), media_type="text/event-stream")
 
@@ -656,6 +715,12 @@ async def _start_deepsearch_stream(
     """
     启动一次新的 DeepSearch 流式任务（包括 HITL 场景）。
     """
+    logger.info(
+        "Starting DeepSearch stream space_id=%s conversation_id=%s search_mode=%s",
+        request.space_id,
+        request.conversation_id,
+        request.search_mode,
+    )
     request, agent, run_kwargs = _prepare_stream_context(request, db)
     return _create_streaming_response(request, agent, run_kwargs)
 
@@ -672,7 +737,21 @@ async def run(
     - 否则启动或继续 SSE 流式任务（返回 EventSourceResponse）。
     """
     try:
+        logger.info(
+            "Received DeepSearch run request space_id=%s conversation_id=%s "
+            "search_mode=%s execution_method=%s interrupt_feedback=%s",
+            request.space_id,
+            request.conversation_id,
+            request.search_mode,
+            request.execution_method,
+            request.interrupt_feedback,
+        )
         if request.interrupt_feedback == "cancel":
+            logger.info(
+                "Routing DeepSearch run request to cancel handler space_id=%s conversation_id=%s",
+                request.space_id,
+                request.conversation_id,
+            )
             return await _handle_cancel_request(request)
         return await _start_deepsearch_stream(request, db)
     except SearchEngineConfigException as e:

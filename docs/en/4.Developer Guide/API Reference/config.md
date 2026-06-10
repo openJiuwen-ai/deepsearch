@@ -64,6 +64,20 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 
 ```python
 >>> from openjiuwen_deepsearch.config.config import WebSearchEngineConfig
+
+>>> # Example 1: configure tavily with include_domains
+>>> web_search_config = WebSearchEngineConfig(
+...     search_engine_name="tavily",
+...     search_api_key=bytearray("your_api_key", encoding="utf-8"),
+...     max_web_search_results=8,
+...     extension={
+...         "include_domains": ["www.sz.gov.cn", "www.pku.edu.cn"]
+...     }
+... )
+>>> print(web_search_config.search_engine_name, web_search_config.extension["include_domains"])
+tavily ["www.sz.gov.cn", "www.pku.edu.cn"]
+
+>>> # Example 2: configure jina with default search_url and locale options
 >>> web_search_config = WebSearchEngineConfig(
 ...     search_engine_name="jina",
 ...     search_api_key=bytearray("your_jina_key", encoding="utf-8"),
@@ -75,6 +89,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 ...         "page": 2,
 ...     },
 ... )
+>>> # Example 3: configure bocha with harness extension options
 >>> web_search_config = WebSearchEngineConfig(
 ...     search_engine_name="bocha",
 ...     search_api_key=bytearray("your_bocha_key", encoding="utf-8"),
@@ -84,6 +99,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 
 **Notes**
 
+- For `tavily`, `extension.include_domains` and `extension.exclude_domains` are forwarded to the Tavily search API to **prefer or exclude** specified sites; this is not a hard allowlist on the framework side. When relevant results are insufficient, Tavily may still return pages whose domains are outside the `include_domains` list.
 - `jina` falls back to `https://s.jina.ai` when `search_url` is empty.
 - `bocha` and `perplexity` honor `search_url` only when the underlying harness provider supports URL override.
 - Search results are normalized before collector-side storage so aliases like `link`, `source_url`, `snippet`, `summary`, and `answer` are mapped into the common `title` / `url` / `content` / `type` shape.
@@ -301,6 +317,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 ### Reporting parameters
 - **sub_report_classify_doc_infos_single_time_num** (int, optional): Number of collected documents classified by the LLM in one pass for a sub-report. Default value: `60`.
 - **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k number returned by the LLM classification in one pass for a sub-report. Default value: `10`.
+- **sub_report_doc_prefilter_multiplier** (int, optional): Candidate multiplier for deterministic sub-report document prefiltering. The maximum candidate count is `sub_report_classify_doc_infos_res_top_k_num * sub_report_doc_prefilter_multiplier`. Default value: `5`.
 - **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
 - **visualization_enable** (bool, optional): Whether to enable visualization illustrations in reports. Default value: `False`.
 
@@ -319,6 +336,14 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 
 - `service_config.llm_timeout` is still passed to the underlying LLM client.
 - If `agent_llm_timeouts` is also configured, DeepSearch adds an outer wall-clock timeout around the whole streaming call; when that outer timeout is hit, it raises `LLM_WALL_CLOCK_TIMEOUT` (`211204`).
+
+### LLM thinking mode parameter
+- **llm_thinking_enabled** (bool, optional): whether to enable model thinking mode. Default value: `False`. This SDK-internal setting is applied only when `DeepresearchAgent` initializes LLMs and injects provider-specific thinking on/off parameters for supported providers; `DeepSearchAgent`, `SimpleReactSearchAgent`, and REST API requests do not use this field.
+
+**Notes**:
+
+- `service_config.llm_thinking_enabled` is not an `LLMConfig` field and is not exposed as a REST API request parameter. For providers that do not support a thinking switch, the runtime only logs a warning and keeps the original extension parameters.
+- If thinking-related fields are manually configured in `LLMConfig.extension`, the internal unified thinking switch overrides those fields and writes a warning log.
 
 ### Debug parameters
 - **node_debug_enable** (bool, optional): Whether to enable formatted node debug logs. Default value: `False`.

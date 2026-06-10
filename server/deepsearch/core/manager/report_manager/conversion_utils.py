@@ -11,11 +11,6 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-import pypandoc
-
-from server.deepsearch.common.exception.exceptions import ReportConvertDependencyException
-
-
 logger = logging.getLogger(__name__)
 
 TEXT_READ_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk")
@@ -29,6 +24,9 @@ NUMBERED_HEADING_RE = re.compile(
     r"^(?P<indent>\s{0,3})(?P<number>\d+(?:\.\d+)*)(?:\.\s+|\s+)(?P<title>.+?)\s*$"
 )
 LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+\.\s+)")
+INDENTED_LIST_ITEM_RE = re.compile(r"^(?P<indent>[ \t]{4,})(?P<marker>(?:[-*+]\s+|\d+\.\s+).*)$")
+MARKDOWN_TABLE_ROW_RE = re.compile(r"^[ \t]{0,3}\|")
+MARKDOWN_TABLE_DELIMITER_RE = re.compile(r":?-{1,}:?")
 SENTENCE_END_RE = re.compile(r"[。！？?!…]$")
 CITATION_RE = re.compile(r"\[\[(\d+)\]\]\((https?://[^\s)]+(?:\([^\s)]+\)[^\s)]*)*)\)")
 CHECKED_CITATION_RE = re.compile(
@@ -50,6 +48,16 @@ CITATION_ANCHOR_RE = re.compile(
     r'(?<!<sup class="citation">)(<a\b[^>]*href="https?://[^"]+"[^>]*>\[(\d+)\]</a>)',
     flags=re.IGNORECASE,
 )
+HTML_TABLE_RE = re.compile(r"<table\b[^>]*>.*?</table>", flags=re.IGNORECASE | re.DOTALL)
+TABLE_WRAP_OPEN_RE = re.compile(
+    r'<div\b[^>]*\bclass=["\'][^"\']*\btable-wrap\b[^"\']*["\'][^>]*>\s*$',
+    flags=re.IGNORECASE,
+)
+DOCX_TABLE_CAPTION_RE = re.compile(
+    r"^(?:表\s*[\d一二三四五六七八九十]+(?:[-－—.][\d一二三四五六七八九十]+)*|"
+    r"Table\s+[\w]+(?:[-－—.][\w]+)*)\s*[:：]",
+    flags=re.IGNORECASE,
+)
 
 try:
     from PIL import Image, ImageEnhance
@@ -60,6 +68,8 @@ except Exception:  # pragma: no cover - optional dependency branch
 
 try:
     from docx import Document
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
@@ -81,29 +91,6 @@ class MermaidRenderStats:
     total: int = 0
     success: int = 0
     failed: int = 0
-
-
-def ensure_pandoc() -> None:
-    """Ensure that a usable pandoc binary is available.
-
-    Returns:
-        None.
-
-    Raises:
-        ReportConvertDependencyException: pandoc 不可用且自动下载失败时抛出。
-    """
-    try:
-        pypandoc.get_pandoc_version()
-        return
-    except OSError:
-        logger.info("Pandoc not found locally, downloading it now.")
-        try:
-            pypandoc.download_pandoc()
-            pypandoc.get_pandoc_version()
-        except Exception as exc:
-            raise ReportConvertDependencyException(
-                "pandoc is unavailable and automatic download failed"
-            ) from exc
 
 
 def read_text_with_fallback(path: Path) -> str:
@@ -312,6 +299,107 @@ def normalize_list_boundaries(text: str) -> str:
     return "\n".join(normalized)
 
 
+def normalize_table_boundaries(text: str) -> str:
+    """Insert a blank line before Markdown pipe tables when the source omits one.
+
+    Args:
+        text: 原始 Markdown 文本。
+
+    Returns:
+        str: 修正表格边界后的 Markdown 文本。
+    """
+
+    def _is_table_row(line: str) -> bool:
+        return bool(MARKDOWN_TABLE_ROW_RE.match(line))
+
+    def _is_table_delimiter(line: str) -> bool:
+        if not _is_table_row(line):
+            return False
+        cells = [
+            cell.strip().replace(" ", "")
+            for cell in line.strip().strip("|").split("|")
+        ]
+        return len(cells) >= 2 and all(
+            bool(MARKDOWN_TABLE_DELIMITER_RE.fullmatch(cell))
+            for cell in cells
+        )
+
+    lines = text.split("\n")
+    normalized: list[str] = []
+    in_fenced_code = False
+
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            in_fenced_code = not in_fenced_code
+            normalized.append(line)
+            continue
+
+        is_table_start = (
+            not in_fenced_code
+            and index + 1 < len(lines)
+            and _is_table_row(line)
+            and _is_table_delimiter(lines[index + 1])
+        )
+        if is_table_start and normalized and normalized[-1].strip():
+            normalized.append("")
+
+        normalized.append(line)
+
+    return "\n".join(normalized)
+
+
+def normalize_orphan_indented_list_items(text: str) -> str:
+    """Dedent report-style list items that Markdown would otherwise treat as code.
+
+    Args:
+        text: Raw Markdown text.
+
+    Returns:
+        str: Markdown text with orphan indented list items dedented.
+    """
+    lines = text.split("\n")
+    normalized: list[str] = []
+    in_fenced_code = False
+    orphan_list_indent: int | None = None
+
+    def _previous_nonempty_line() -> str:
+        for previous in reversed(normalized):
+            if previous.strip():
+                return previous
+        return ""
+
+    def _indent_width(indent: str) -> int:
+        return len(indent.expandtabs(4))
+
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            in_fenced_code = not in_fenced_code
+            normalized.append(line)
+            orphan_list_indent = None
+            continue
+
+        match = INDENTED_LIST_ITEM_RE.match(line)
+        if match and not in_fenced_code:
+            indent_width = _indent_width(match.group("indent"))
+            if orphan_list_indent == indent_width:
+                normalized.append(match.group("marker"))
+                continue
+
+            previous = _previous_nonempty_line()
+            if not LIST_ITEM_RE.match(previous) and not INDENTED_LIST_ITEM_RE.match(previous):
+                orphan_list_indent = indent_width
+                normalized.append(match.group("marker"))
+                continue
+
+            orphan_list_indent = None
+        elif line.strip():
+            orphan_list_indent = None
+
+        normalized.append(line)
+
+    return "\n".join(normalized)
+
+
 def render_mermaid_supplement(supplement_markdown: str) -> str:
     """Render timeline supplement markdown into an HTML helper block.
 
@@ -346,11 +434,27 @@ def preprocess_markdown_text(text: str) -> str:
     text = normalize_reference_lines(text)
     text = fix_center_caption_blocks(text)
     text = normalize_legacy_font_caption_blocks(text)
-    return normalize_list_boundaries(text)
+    text = normalize_orphan_indented_list_items(text)
+    text = normalize_list_boundaries(text)
+    return normalize_table_boundaries(text)
+
+
+def wrap_html_tables(html_text: str) -> str:
+    """Wrap HTML tables with a scrollable centering container."""
+    if "<table" not in html_text.lower():
+        return html_text
+
+    def _replace(match: re.Match[str]) -> str:
+        prefix = html_text[max(0, match.start() - 512): match.start()]
+        if TABLE_WRAP_OPEN_RE.search(prefix):
+            return match.group(0)
+        return f'<div class="table-wrap">{match.group(0)}</div>'
+
+    return HTML_TABLE_RE.sub(_replace, html_text)
 
 
 def postprocess_html(html_text: str) -> str:
-    """Postprocess generated HTML for external links and citations.
+    """Postprocess generated HTML for external links, citations and table wrappers.
 
     Args:
         html_text: Markdown 转换后的 HTML 文本。
@@ -372,7 +476,8 @@ def postprocess_html(html_text: str) -> str:
     html_text = EXTERNAL_LINK_RE.sub(_replace, html_text)
     html_text = CITATION_ANCHOR_RE.sub(_wrap_citation, html_text)
     html_text = re.sub(r'[ \t]+(<sup class="citation">)', r"\1", html_text)
-    return re.sub(r'(</sup>)[ \t]+(<sup class="citation">)', r"\1\2", html_text)
+    html_text = re.sub(r'(</sup>)[ \t]+(<sup class="citation">)', r"\1\2", html_text)
+    return wrap_html_tables(html_text)
 
 
 def _neighbor_numbered_line(lines: list[str], index: int, *, reverse: bool) -> str | None:
@@ -546,6 +651,65 @@ def _apply_font_to_table(table, font_name: str) -> None:
                     _set_run_font(run, font_name)
             for nested_table in cell.tables:
                 _apply_font_to_table(nested_table, font_name)
+
+
+def _center_docx_table(table) -> None:
+    """Center one docx table and its nested tables.
+
+    Args:
+        table: python-docx table 对象。
+
+    Returns:
+        None.
+    """
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for row in table.rows:
+        for cell in row.cells:
+            for nested_table in cell.tables:
+                _center_docx_table(nested_table)
+
+
+def _center_docx_table_captions(paragraphs) -> None:
+    """Center paragraphs that look like table captions.
+
+    Args:
+        paragraphs: python-docx paragraph iterable.
+
+    Returns:
+        None.
+    """
+    for paragraph in paragraphs:
+        if DOCX_TABLE_CAPTION_RE.match(paragraph.text.strip()):
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
+def normalize_docx_tables(docx_path: Path) -> None:
+    """Center tables and table-caption paragraphs in a generated DOCX file.
+
+    Args:
+        docx_path: DOCX 文件路径。
+
+    Returns:
+        None.
+    """
+    if not DOCX_STYLE_AVAILABLE:
+        logger.warning("python-docx is unavailable, skipping table normalization for %s.", docx_path)
+        return
+
+    document = Document(docx_path)
+    _center_docx_table_captions(document.paragraphs)
+    for table in document.tables:
+        _center_docx_table(table)
+
+    for section in document.sections:
+        _center_docx_table_captions(section.header.paragraphs)
+        _center_docx_table_captions(section.footer.paragraphs)
+        for table in section.header.tables:
+            _center_docx_table(table)
+        for table in section.footer.tables:
+            _center_docx_table(table)
+
+    document.save(docx_path)
 
 
 def normalize_docx_fonts(docx_path: Path, *, font_name: str = DEFAULT_DOCX_FONT) -> None:

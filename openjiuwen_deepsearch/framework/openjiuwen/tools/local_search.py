@@ -50,7 +50,9 @@ async def run_local_search(query: str, search_engine_name: str):
             logger.error(f"Error when run local search")
         else:
             logger.exception(f"Error when run local search: {e}")
-        return dict(search_engine=search_engine_name, search_results=[repr(e)])
+        return dict(search_engine=search_engine_name,
+                     search_results=[],
+                     error=f"Error when run local search {search_engine_name}: {repr(e)}")
     return dict(search_engine=search_engine_name, search_results=result)
 
 

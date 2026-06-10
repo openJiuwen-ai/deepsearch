@@ -125,7 +125,10 @@ async def knowledge_base_update(
         logger.error(
             f"[KB_UPDATE] Validation failed - Errors: {e.errors()}"
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="knowledge base update failed") from e
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.errors()[0].get("msg") if e.errors() else "knowledge base update failed",
+        ) from e
     except Exception as e:
         logger.error(
             f"[KB_UPDATE] Unexpected error - Error: {str(e)}",

@@ -7,6 +7,16 @@ You are a Lead Report Editor. Your task is to distill a detailed **Sub-Report** 
 3. **User Query**: `{{user_query}}` (The core research objective).
 4. **Section ID**: `{{section_id}}` (The position of this sub-report within the whole).
 
+{% if audience_role or tone %}
+## Report Detail Constraints
+{% if audience_role %}
+- **Target Audience**: {{ audience_role }}. Carry forward entities and conclusions this audience will need in later sections.
+{% endif %}
+{% if tone %}
+- **Tone Intent**: {{ tone }}. Keep summary wording aligned with this stance and with the sub-report body.
+{% endif %}
+{% endif %}
+
 # Goal
 Create a summary that captures the **critical information** from the current sub-report that is essential for understanding the overall story, especially
 serving as a context foundation for subsequent sections.
@@ -25,9 +35,14 @@ market size, core technologies) is **MANDATORY** in the summary.
 
 # Writing Rules
 1. **Length Control (Strict)**:
+{% if paragraph_style | default("detailed") == "concise" %}
+    * **Target Range (Brief)**: 150–280 words.
+    * **Hard Ceiling**: 320 words.
+{% else %}
     * **Target Range**: 350-450 words.
     * **Hard Ceiling**: 500 words.
-    * If the draft exceeds 500 words, you MUST delete descriptive adjectives and merge sentences. Do not sacrifice key entities, but sacrifice sentence
+{% endif %}
+    * If the draft exceeds the hard ceiling, you MUST delete descriptive adjectives and merge sentences. Do not sacrifice key entities, but sacrifice sentence
 flow for brevity.
 2. **Information Density**: Avoid vague phrases like "This section analyzes...". Instead, use concrete facts: "The Top 10 insurers, led by Ping An and
 China Life, hold 65% market share."

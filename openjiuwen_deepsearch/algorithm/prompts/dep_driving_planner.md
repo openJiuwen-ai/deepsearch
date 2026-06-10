@@ -12,6 +12,23 @@ team to ultimately produce a comprehensive report. Insufficient information will
 - **Depth Requirement**: Reject superficial data; require detailed data points + multi-source analysis
 - **Volume Standard**: Pursue information redundancy; avoid "minimum sufficient" data
 
+{% if report_type == "brief" %}
+## Report type: Brief
+- Steps must stay **tight to the decision problem**: overview, conclusion drivers, methods/limits, and material risks first.
+{% if require_summary_first %}- Early steps should lock in **scope, headline conclusions, and explicit non-goals** before any optional depth.{% endif %}
+{% if require_methodology_and_risk %}- Include explicit steps for **evidence formation & limits** and for **major uncertainties / downside scenarios**.{% endif %}
+{% endif %}
+
+{% if audience_role or tone %}
+## Report Detail Constraints
+{% if audience_role %}
+- Target audience role: {{ audience_role }}. Plan tasks should highlight this role's primary decision factors.
+{% endif %}
+{% if tone %}
+- Writing tone intent: {{ tone }}. Ensure evidence collection and task framing support this style.
+{% endif %}
+{% endif %}
+
 ## Scenario Assessment (Strict Criteria)
 
 ▸ **Terminate Research** (`is_research_completed=true` requires ALL conditions):

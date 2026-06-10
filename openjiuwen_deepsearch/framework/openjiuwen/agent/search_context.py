@@ -1,7 +1,7 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 from enum import Enum
-from typing import List, Optional, Dict, Union, Any
+from typing import List, Optional, Dict, Union, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -153,6 +153,25 @@ class OutlineInteraction(BaseModel):
     outline_before: Union[Outline, Dict, str, None] = Field(default=None, description="用户反馈前的outline")
 
 
+class ReportTypePolicy(BaseModel):
+    """
+    报告类型策略：由 research_intent.report_type 归一化后解析得到的确定性配置。
+    """
+
+    report_type: Literal["professional", "brief"] = Field(
+        default="professional", description="报告类型：professional（专业版）或 brief（精简版）"
+    )
+    paragraph_style: Literal["concise", "detailed"] = Field(
+        default="detailed", description="段落风格"
+    )
+    require_summary_first: bool = Field(
+        default=False, description="大纲/规划是否强调先摘要/总览"
+    )
+    require_methodology_and_risk: bool = Field(
+        default=False, description="大纲/规划是否强调方法论与风险"
+    )
+
+
 class ResearchIntent(BaseModel):
     """
     报告生成意图：从用户 query 中解析出的结构化约束。
@@ -160,7 +179,7 @@ class ResearchIntent(BaseModel):
     section_count: Optional[int] = Field(default=None, description="用户希望的章节数量")
     audience_role: Optional[str] = Field(default=None, description="目标读者角色")
     tone: Optional[str] = Field(default=None, description="写作风格，建议使用稳定英文枚举值")
-    report_type: Optional[str] = Field(default=None, description="报告类型，建议使用稳定英文枚举值")
+    report_type: Optional[Literal["professional", "brief"]] = Field(default=None, description="报告类型")
     include_url: List[str] = Field(default_factory=list, description="用户指定包含的链接")
     exclude_url: List[str] = Field(default_factory=list, description="用户指定排除的链接")
     include_domains: List[str] = Field(default_factory=list, description="用户指定的站点域名")
@@ -176,6 +195,10 @@ class SearchContext(BaseModel):
     original_query: str = Field(default="", description="用户输入的原始问题")
     research_query: str = Field(default="", description="意图识别后的研究主题，供检索与规划使用")
     research_intent: ResearchIntent = Field(default_factory=ResearchIntent, description="结构化报告约束")
+    report_type_policy: ReportTypePolicy = Field(
+        default_factory=ReportTypePolicy,
+        description="报告类型策略，意图识别后确认，供大纲/规划/收集/写作消费",
+    )
     messages: List[Message] = Field(default_factory=list, description="对话消息列表")
     language: str = Field(default="zh-CN", description="语言")
     report_template: str = Field(default="", description="模板内容")

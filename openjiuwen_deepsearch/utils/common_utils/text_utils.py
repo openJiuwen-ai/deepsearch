@@ -31,6 +31,9 @@ def escape_markdown_link_text(text: str) -> str:
     Markdown链接格式: [text](url)
     需要转义的特殊字符: [ ] ( ) \
 
+    使用 HTML entity 编码而非反斜杠转义，避免经过 json.dumps 时
+    反斜杠被反复叠加
+
     Args:
         text: 需要转义的链接文本
 
@@ -39,13 +42,12 @@ def escape_markdown_link_text(text: str) -> str:
     """
     if not text:
         return ""
-    # Markdown链接文本中需要转义的字符
-    # 使用反斜杠转义
-    escaped = text.replace('\\', '\\\\')
-    escaped = escaped.replace('[', '\\[')
-    escaped = escaped.replace(']', '\\]')
-    escaped = escaped.replace('(', '\\(')
-    escaped = escaped.replace(')', '\\)')
+
+    escaped = text.replace('\\', '&#92;')
+    escaped = escaped.replace('[', '&#91;')
+    escaped = escaped.replace(']', '&#93;')
+    escaped = escaped.replace('(', '&#40;')
+    escaped = escaped.replace(')', '&#41;')
     return escaped
 
 

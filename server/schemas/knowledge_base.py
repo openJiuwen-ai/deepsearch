@@ -251,6 +251,10 @@ class DocumentProcessRequest(BaseModel):
             "Studio 同步图增强建索引时在此下发解密后的 api_key 等"
         ),
     )
+    embed_model_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="请求级 Embedding 配置，覆盖知识库 config 中的 embed_model_config",
+    )
 
 
 class DocumentProcessResponse(BaseModel):

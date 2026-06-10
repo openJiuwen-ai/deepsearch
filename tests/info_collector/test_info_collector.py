@@ -18,6 +18,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Step,
     StepType,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import EvidenceLedger
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
@@ -85,7 +86,9 @@ class TestInfoCollectorNode:
             "collector_context.step_title": "测试步骤",
             "config.info_collector_search_method": "web",
             "collector_context.doc_infos": [],
-            "collector_context.gathered_info": []
+            "collector_context.gathered_info": [],
+            "collector_context.evidence_ledger": {},
+            "collector_context.source_store": {},
         }
         return state_map.get(key)
 
@@ -210,8 +213,26 @@ class TestInfoCollectorNode:
         """测试没有查询的情况"""
         inputs = {}
 
-        # Mock 返回空查询列表
-        mock_session.get_global_state.return_value = []
+        def mock_get_empty_queries(key):
+            """返回空查询列表，其他状态正常"""
+            state_map = {
+                "collector_context.search_queries": [],  # 空查询
+                "collector_context.history_queries": [],
+                "collector_context.max_tool_steps": 3,
+                "collector_context.section_idx": 0,
+                "collector_context.step_title": "测试步骤",
+                "config.info_collector_search_method": "web",
+                "collector_context.doc_infos": [],
+                "collector_context.gathered_info": [],
+                "config.web_search_engine_config": None,
+                "config.local_search_engine_config": None,
+                "config.api_tools_config": {},
+                "search_context.research_intent": {},
+            }
+            return state_map.get(key)
+
+        mock_session.get_global_state = Mock(side_effect=mock_get_empty_queries)
+        mock_session.update_global_state = Mock()
 
         # 准备 mock 的上下文字典：其 get 方法返回任意对象（因 LLM 实际未被调用）
         mock_llm_dict = MagicMock()
@@ -224,7 +245,7 @@ class TestInfoCollectorNode:
             with patch(f"{module_prefix}.adapt_llm_model_name"):
                 result = await info_collector_node.do_invoke(inputs, mock_session, mock_context)
 
-                # 验证没有创建任务
+                # 验证没有创建任务（空查询列表）
                 assert result == {}
         finally:
             # 清理 contextvar，避免影响其他测试
@@ -241,14 +262,16 @@ class TestInfoCollectorNode:
                 "gathered_info": [{"url": "http://example.com/1", "title": "标题1"}],
                 "web_record": [{"url": "http://example.com/1"}],
                 "local_record": [{"url": "local://doc1"}],
-                "search_query": "查询1"
+                "search_query": "查询1",
+                "source_store": {"web_1": "正文1"},
             },
             {
                 "doc_infos": [{"url": "http://example.com/1", "title": "标题1"}],  # 重复数据
                 "gathered_info": [{"url": "http://example.com/1", "title": "标题1"}],
                 "web_record": [{"url": "http://example.com/1"}],
                 "local_record": [],
-                "search_query": "查询2"
+                "search_query": "查询2",
+                "source_store": {"web_2": "正文2"},
             }
         ]
 
@@ -261,18 +284,130 @@ class TestInfoCollectorNode:
             mock_session.update_global_state.assert_any_call({
                 "collector_context.doc_infos": [{"url": "http://example.com/1", "title": "标题1"}]
             })
-
+            mock_session.update_global_state.assert_any_call({
+                "collector_context.source_store": {"web_1": "正文1", "web_2": "正文2"}
+            })
+            mock_session.update_global_state.assert_any_call({
+                "collector_context.evidence_ledger": EvidenceLedger(
+                    attempted_queries=["查询1", "查询2"]
+                ).model_dump()
+            })
             # 验证返回结果
             assert result == {}
 
+    def test_post_handle_deduplicates_attempted_queries(self, info_collector_node, mock_session, mock_context):
+        """Repeated executed queries should only be recorded once in the ledger."""
+        inputs = {}
+        search_queries = [RetrievalQuery(query="查询1"), RetrievalQuery(query="查询1")]
+
+        def get_state(key):
+            state_map = {
+                "collector_context.section_idx": 0,
+                "collector_context.step_title": "测试步骤",
+                "collector_context.doc_infos": [],
+                "collector_context.search_queries": search_queries,
+                "collector_context.history_queries": [],
+                "collector_context.evidence_ledger": {
+                    "attempted_queries": ["历史查询"],
+                },
+            }
+            return state_map.get(key)
+
+        mock_session.get_global_state = Mock(side_effect=get_state)
+        algorithm_output = [
+            {"doc_infos": [], "search_query": "查询1"},
+            {"doc_infos": [], "search_query": "查询1"},
+        ]
+
+        result = info_collector_node.post_handle(inputs, algorithm_output, mock_session, mock_context)
+
+        assert result == {}
+        mock_session.update_global_state.assert_any_call({
+            "collector_context.evidence_ledger": EvidenceLedger(
+                attempted_queries=["历史查询", "查询1"]
+            ).model_dump()
+        })
+
+    def test_post_handle_preserves_first_source_store_entry_on_conflict(
+        self,
+        info_collector_node,
+        mock_session,
+        mock_context,
+        caplog,
+    ):
+        """相同 source_id 的 source_store 冲突应保留首个正文并记录告警。"""
+        inputs = {}
+        algorithm_output = [
+            {
+                "doc_infos": [{"url": "http://example.com/1", "title": "标题1"}],
+                "search_query": "查询1",
+                "source_store": {"web_1": "第一版正文"},
+            },
+            {
+                "doc_infos": [{"url": "http://example.com/1", "title": "标题1"}],
+                "search_query": "查询2",
+                "source_store": {"web_1": "第二版正文"},
+            },
+        ]
+
+        with patch(f'{self.MODULE_PATH}.remove_duplicate_items') as mock_remove_dup:
+            mock_remove_dup.side_effect = lambda x: x[:1]
+
+            info_collector_node.post_handle(inputs, algorithm_output, mock_session, mock_context)
+
+        mock_session.update_global_state.assert_any_call({
+            "collector_context.source_store": {"web_1": "第一版正文"}
+        })
+        assert "source_store source_id conflict" in caplog.text
+
+    def test_post_handle_keeps_same_title_url_with_different_source_ids(
+        self,
+        info_collector_node,
+        mock_session,
+        mock_context,
+    ):
+        """同一 URL/title 的不同 source_id 应作为不同 evidence 保留。"""
+        inputs = {}
+        algorithm_output = [
+            {
+                "doc_infos": [
+                    {"url": "http://example.com/1", "title": "标题1", "source_id": "web_1_p1"},
+                    {"url": "http://example.com/1", "title": "标题1", "source_id": "web_1_p2"},
+                ],
+                "search_query": "查询1",
+                "source_store": {"web_1_p1": "第一段正文", "web_1_p2": "第二段正文"},
+            }
+        ]
+
+        info_collector_node.post_handle(inputs, algorithm_output, mock_session, mock_context)
+
+        mock_session.update_global_state.assert_any_call({
+            "collector_context.doc_infos": [
+                {"url": "http://example.com/1", "title": "标题1", "source_id": "web_1_p1"},
+                {"url": "http://example.com/1", "title": "标题1", "source_id": "web_1_p2"},
+            ]
+        })
+        mock_session.update_global_state.assert_any_call({
+            "collector_context.new_doc_infos_current_loop": [
+                {"url": "http://example.com/1", "title": "标题1", "source_id": "web_1_p1"},
+                {"url": "http://example.com/1", "title": "标题1", "source_id": "web_1_p2"},
+            ]
+        })
+
     @pytest.mark.asyncio
     async def test_collector_main_success(self, info_collector_node, sample_web_record, sample_local_record):
-        """测试 _collector_main 方法成功执行"""
+        """测试 _collector_main 方法成功执行（走 LLM tool-calling 路径）"""
         state = {
             "section_idx": 0,
             "step_title": "测试步骤",
             "search_query": "测试查询",
-            "max_tool_steps": 2
+            "max_tool_steps": 2,
+            "search_method": "web",
+            "web_search_engine_name": "tavily",
+            "api_tools_config": {
+                "collector_tools": [{"name": "custom_tool"}]
+            },
+            "research_intent": {},
         }
 
         with patch.object(info_collector_node, '_collector_llm') as mock_collector_llm, \
@@ -291,8 +426,8 @@ class TestInfoCollectorNode:
             # Mock 结构化结果
             mock_structure.return_value = (
                 [{"url": "http://example.com/1", "title": "标题1"}],  # doc_infos
-                [{"content": "0", "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7}}]
-                # scored_result
+                [{"document_index": "0", "scores": {"relevance": 0.9}}],
+                {"web_1": "正文"},
             )
 
             # Mock 后处理
@@ -306,6 +441,7 @@ class TestInfoCollectorNode:
             assert "web_record" in result
             assert "local_record" in result
             assert "search_query" in result
+            assert result["source_store"] == {"web_1": "正文"}
 
             # 验证调用了相关方法
             mock_collector_llm.assert_called_once()
@@ -391,24 +527,33 @@ class TestInfoCollectorNode:
             # Mock 文档评估结果
             mock_eval.return_value = [
                 {
-                    "content": "0",
+                    "document_index": "0",
                     "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
                     "doc_time": "2024-01-01"
                 },
                 {
-                    "content": "1",
+                    "document_index": "1",
                     "scores": {"authority": 0.7, "relevance": 0.8, "answerability": 0.6},
                     "doc_time": "2024-01-02"
                 }
             ]
 
-            doc_infos, scored_result = await info_collector_node.structure_result(
+            doc_infos, scored_result, source_store = await info_collector_node.structure_result(
                 web_record, local_record, query
             )
 
             # 验证返回结果
             assert len(doc_infos) == 2
             assert len(scored_result) == 2
+            assert "doc_id" in doc_infos[0]
+            assert "source_id" in doc_infos[0]
+            assert "content_ref" in doc_infos[0]
+            assert "snippet" not in doc_infos[0]
+            assert "summary" not in doc_infos[0]
+            assert "key_passages" in doc_infos[0]
+            assert "original_content" in doc_infos[0]
+            assert doc_infos[0]["source_id"] in source_store
+            assert "original_content" not in str(mock_eval.call_args.kwargs["documents"])
 
             # 验证文档信息结构
             for doc_info in doc_infos:
@@ -427,13 +572,14 @@ class TestInfoCollectorNode:
         local_record = []
         query = "测试查询"
 
-        doc_infos, scored_result = await info_collector_node.structure_result(
+        doc_infos, scored_result, source_store = await info_collector_node.structure_result(
             web_record, local_record, query
         )
 
         # 验证返回空结果
         assert doc_infos == []
         assert scored_result == []
+        assert source_store == {}
 
     @pytest.mark.asyncio
     async def test_structure_result_truncates_original_content(self, info_collector_node):
@@ -449,25 +595,28 @@ class TestInfoCollectorNode:
         with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
             mock_eval.return_value = []
 
-            doc_infos, _ = await info_collector_node.structure_result(
+            doc_infos, _, source_store = await info_collector_node.structure_result(
                 web_record, [], "large query"
             )
 
         assert len(doc_infos) == 1
         assert len(doc_infos[0]["original_content"]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
+        assert len(source_store[doc_infos[0]["source_id"]]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
         mock_eval.assert_called_once()
-        assert len(mock_eval.call_args.kwargs["contents"][0]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
+        assert "documents" in mock_eval.call_args.kwargs
+        assert "contents" not in mock_eval.call_args.kwargs
+        assert len(str(mock_eval.call_args.kwargs["documents"])) < MAX_COLLECTOR_DOC_CONTENT_LENGTH
 
     def test_process_post_process_result_success(self, info_collector_node):
         """测试 _process_post_process_result 方法成功执行"""
         scored_result = [
             {
-                "content": "0",
+                "document_index": "0",
                 "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
-                "doc_time": "2024-01-01"
+                "doc_time": "2024-01-01",
             },
             {
-                "content": "1",
+                "document_index": "1",
                 "scores": {"authority": 0.7, "relevance": 0.8, "answerability": 0.6},
                 "doc_time": "2024-01-02"
             }
@@ -482,7 +631,11 @@ class TestInfoCollectorNode:
 
         # 验证文档信息被正确更新
         assert len(result) == 2
+        assert result[0]["scores"]["authority"] == 0.8
+        assert result[0]["scores"]["relevance"] == 0.9
+        assert result[0]["scores"]["answerability"] == 0.7
         assert "source_authority" in result[0]
+        assert "_legacy_compatibility_fields" not in result[0]
         assert "task_relevance" in result[0]
         assert "information_richness" in result[0]
         assert "doc_time" in result[0]
@@ -492,11 +645,26 @@ class TestInfoCollectorNode:
         assert "0.9" in result[0]["task_relevance"]
         assert "0.7" in result[0]["information_richness"]
 
+    def test_process_post_process_result_prefers_publish_time(self, info_collector_node):
+        """evaluator 同时返回 publish_time 和 doc_time 时应优先使用规范字段。"""
+        scored_result = [{
+            "document_index": "0",
+            "scores": {"relevance": 0.9},
+            "publish_time": "2024-02",
+            "doc_time": "2024-01",
+        }]
+        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
+
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
+
+        assert result[0]["publish_time"] == "2024-02"
+        assert result[0]["doc_time"] == "2024-02"
+
     def test_process_post_process_result_invalid_index(self, info_collector_node):
         """测试 _process_post_process_result 方法索引无效的情况"""
         scored_result = [
             {
-                "content": "invalid",  # 无效的索引
+                "document_index": "invalid",  # 无效的索引
                 "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7}
             }
         ]
@@ -507,6 +675,49 @@ class TestInfoCollectorNode:
 
         # 验证即使索引无效也不会崩溃
         assert len(result) == 1
+        assert "scores" not in result[0]
+
+    def test_process_post_process_result_logs_non_dict_item_type(self, info_collector_node, caplog):
+        """非 dict 评分项日志应准确指出类型问题。"""
+        result = info_collector_node.process_post_process_result(
+            ["invalid"],
+            [{"url": "http://example.com/1", "title": "标题1"}],
+            section_idx=0,
+        )
+
+        assert "scores" not in result[0]
+        assert "Score result is not a dict (type=str)" in caplog.text
+
+    def test_process_post_process_result_continues_after_invalid_items(self, info_collector_node):
+        """无效评分项不应导致后续有效 document_index 被截断丢弃。"""
+        scored_result = [
+            {"document_index": "invalid", "scores": {"relevance": 1}},
+            {"document_index": "0", "scores": {"relevance": 8}},
+            {"document_index": "1", "scores": {"relevance": 9}},
+        ]
+        doc_infos = [
+            {"url": "http://example.com/1", "title": "标题1"},
+            {"url": "http://example.com/2", "title": "标题2"},
+        ]
+
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
+
+        assert result[0]["scores"]["relevance"] == 8.0
+        assert result[1]["scores"]["relevance"] == 9.0
+
+    def test_process_post_process_result_rejects_legacy_content_index(self, info_collector_node):
+        """拒绝 evaluator 返回旧 content 索引字段。"""
+        scored_result = [{
+            "content": "0",
+            "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
+            "doc_time": "2024-01-01",
+        }]
+        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
+
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
+
+        assert "scores" not in result[0]
+        assert "doc_time" not in result[0]
 
     def test_prepare_collector_tool_web(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - 联网增强 搜索"""

@@ -7,6 +7,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+import time
 import uuid
 import warnings
 from dataclasses import dataclass
@@ -156,12 +157,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 6px;
         }}
 
+        .table-wrap {{
+            width: 100%;
+            overflow-x: auto;
+            margin: 16px 0 24px;
+            text-align: center;
+        }}
+
         table {{
             border-collapse: collapse;
             width: fit-content;
             max-width: 100%;
             margin: 16px auto 24px;
             display: table;
+        }}
+
+        .table-wrap table {{
+            width: auto;
+            max-width: 100%;
+            margin: 0 auto;
         }}
 
         th, td {{
@@ -423,6 +437,8 @@ def convert_md_to_html(
     options = options or ConvertOptions()
     input_path = Path(input_md)
     output_path = Path(output_html)
+    start_time = time.perf_counter()
+    logger.info("Starting Markdown to HTML conversion input=%s output=%s", input_path, output_path)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Markdown file does not exist: {input_path}")
@@ -454,6 +470,13 @@ def convert_md_to_html(
             content=postprocess_html(html_body),
         )
         output_path.write_text(full_html, encoding="utf-8", newline="\n")
+        logger.info(
+            "Completed Markdown to HTML conversion input=%s output=%s html_bytes=%s duration_ms=%.2f",
+            input_path,
+            output_path,
+            output_path.stat().st_size if output_path.exists() else 0,
+            (time.perf_counter() - start_time) * 1000,
+        )
     finally:
         for path in cleanup_paths:
             path.unlink(missing_ok=True)

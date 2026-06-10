@@ -21,13 +21,21 @@ from openjiuwen_deepsearch.utils.common_utils.text_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _normalize_citation_title(title: str) -> str:
+    """Normalize citation title whitespace for single-line markdown links."""
+    return " ".join(str(title or "").split())
+
+
 class CitationCheckerResearch:
     def __init__(self, llm_model):
         self.citation_verifier = CitationVerifyResearch(llm_model)
         self.invalid_citation_counts = {}
         # 匹配 [source_tracer_result][title](url) 或 [source_tracer_result][title]<url> 格式的引用
         # 支持title中包含嵌套的[]或()，url中包含嵌套的()、<>或[]
-        self.citation_regex = re.compile(r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))', re.VERBOSE)
+        self.citation_regex = re.compile(
+            r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))',
+            re.VERBOSE | re.DOTALL,
+        )
 
     @staticmethod
     def organize_citations_for_frontend(datas):
@@ -485,6 +493,8 @@ class CitationCheckerResearch:
                 - datas (list): 处理后的引用数据列表，只保留了有效引用
         """
         markdown_text = text.get('article', "")
+        markdown_text = self.normalize_source_tracer_titles(markdown_text)
+        self.normalize_datas_titles(datas)
         markdown_text, datas = self.deduplicate_citations(markdown_text, datas)
         if LogManager.is_sensitive():
             logger.info(f"[CITATION CHECKER]: preprocess text and datas success.")
@@ -492,6 +502,25 @@ class CitationCheckerResearch:
             logger.info(f"[CITATION CHECKER]: preprocess text and datas success. {markdown_text}")
 
         return markdown_text, datas
+
+    def normalize_source_tracer_titles(self, markdown_text):
+        """Normalize titles in existing source tracer placeholders before paragraph splitting."""
+
+        def replace_title(match):
+            image_marker = "!" if match.group(1) else ""
+            title = _normalize_citation_title(match.group(2))
+            if match.group(3) is not None:
+                return f"[source_tracer_result]{image_marker}[{title}]<{match.group(3)}>"
+            return f"[source_tracer_result]{image_marker}[{title}]({match.group(4)})"
+
+        return self.citation_regex.sub(replace_title, markdown_text)
+
+    @staticmethod
+    def normalize_datas_titles(datas):
+        """Normalize citation titles in datas before any placeholder rebuilding."""
+        for data in datas:
+            if isinstance(data, dict) and "title" in data:
+                data["title"] = _normalize_citation_title(data.get("title", ""))
 
     def replace_inline_citations(self, markdown_text, datas, inline_ref_pattern):
         """将行内溯源标记替换为带稳定 id 的 checked citation。
@@ -588,8 +617,7 @@ class CitationCheckerResearch:
         markdown_text, datas = self.preprocess_text_and_citations(text, datas)
 
         # 匹配行内引用 [title]<url> 的正则表达式, 两种匹配模式防遗漏：[source_tracer_result][title]<url>, [source_tracer_result][title](url)
-        inline_ref_pattern = re.compile(
-            r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))')
+        inline_ref_pattern = self.citation_regex
 
         # 执行引用替换
         transformed_text, references, datas = self.replace_inline_citations(

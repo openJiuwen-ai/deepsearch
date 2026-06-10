@@ -38,13 +38,15 @@ RUN mkdir -p data/databases logs
 
 # 设置权限
 RUN chmod +x start_backend.py || true
+RUN chmod +x server/telemetry_event_server.py || true
 
 # 暴露端口
 EXPOSE 8000
+EXPOSE 8089
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health'); urllib.request.urlopen('http://localhost:8089')" || exit 1
 
-# 启动命令
-CMD ["python", "start_backend.py"]
+# 同时启动：8000 主 API（DeepResearch 等）、8089 Telemetry（DeepSearch 模式 search_mode=search）
+CMD ["sh", "-c", "python -m server.telemetry_event_server --host 0.0.0.0 & python start_backend.py"]

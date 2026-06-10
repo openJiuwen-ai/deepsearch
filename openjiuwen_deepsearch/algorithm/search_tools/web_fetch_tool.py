@@ -4,10 +4,11 @@ import logging
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Tuple, Union
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Iterable, List, Optional, Tuple, Union
 
 import requests
+from requests.exceptions import RequestException
 
 from openjiuwen_deepsearch.algorithm.prompts.template import get_prompt_section
 from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import (
@@ -21,6 +22,54 @@ from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmN
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_JINA_READER_BASE_URLS: tuple[str, ...] = (
+    "https://r.jinaai.cn",
+    "https://r.jina.ai",
+)
+
+
+def _parse_jina_reader_base_url_override(raw: str | None) -> list[str]:
+    if not raw or not str(raw).strip():
+        return []
+    return [part.strip().rstrip("/") for part in str(raw).split(",") if part.strip()]
+
+
+def _dedupe_urls_preserve_order(urls: Iterable[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            ordered.append(url)
+    return tuple(ordered)
+
+
+def resolve_jina_reader_base_urls() -> tuple[str, ...]:
+    """Reader bases for WebFetch: env override first, then China mirror, then global."""
+    override = _parse_jina_reader_base_url_override(os.getenv("JINA_READER_BASE_URL"))
+    return _dedupe_urls_preserve_order((*override, *_DEFAULT_JINA_READER_BASE_URLS))
+
+
+def build_jina_reader_url(base_url: str, target_url: str) -> str:
+    """Build Jina Reader GET URL for a target page."""
+    return f"{base_url.rstrip('/')}/{target_url}"
+
+
+def jina_reader_request_timeout() -> tuple[float, float]:
+    """(connect_timeout, read_timeout) per endpoint; endpoints are raced in parallel."""
+    connect = float(os.getenv("JINA_READER_CONNECT_TIMEOUT", "4"))
+    read = float(os.getenv("JINA_READER_READ_TIMEOUT", "8"))
+    return connect, read
+
+
+def _jina_reader_auth_failure(response: requests.Response) -> bool:
+    if response.status_code in (401, 403):
+        return True
+    if response.status_code < 500:
+        return False
+    body = (response.text or "").lower()
+    return "authenticate" in body or "authenticationrequired" in body
 
 if sys.platform == "win32":
     import msvcrt
@@ -69,6 +118,8 @@ class WebFetch:
                 self.jina_api_key = str(config.get("jina_api_key", None))
         else:
             self.jina_api_key = config.get("jina_api_key", None)
+        self._jina_reader_bases = resolve_jina_reader_base_urls()
+        self._jina_reader_timeout = jina_reader_request_timeout()
         self.web_fetch_log_file = config.get("web_fetch_log_file", "gnosis/tool_log/web_fetch_log.jsonl")
         log_dir = os.path.dirname(self.web_fetch_log_file)
         if log_dir:
@@ -195,7 +246,7 @@ class WebFetch:
         return await self._fallback(url, goal, raw_page, log_fetch)
 
     def _retrieve_page(self, url: str) -> str:
-        for _ in range(4):
+        for _ in range(2):
             content = self._read_via_jina(url)
             # Check if content is valid by splitting conditions
             has_content = content is not None and content
@@ -210,19 +261,60 @@ class WebFetch:
         return "[web_fetch] Failed to read page."
 
     def _read_via_jina(self, url: str) -> str:
-        for _ in range(3):
+        headers = {"Authorization": f"Bearer {self.jina_api_key}"}
+        bases = self._jina_reader_bases
+        if not bases:
+            return "[web_fetch] Failed to read page."
+
+        def _fetch_base(base: str) -> tuple[str, requests.Response | None, RequestException | None]:
+            reader_url = build_jina_reader_url(base, url)
             try:
                 resp = requests.get(
-                    f"https://r.jina.ai/{url}",
-                    headers={"Authorization": f"Bearer {self.jina_api_key}"},
-                    timeout=50,
+                    reader_url,
+                    headers=headers,
+                    timeout=self._jina_reader_timeout,
                 )
+                return base, resp, None
+            except RequestException as exc:
+                return base, None, exc
+
+        last_error: RequestException | None = None
+        server_error_response: requests.Response | None = None
+
+        with ThreadPoolExecutor(max_workers=len(bases)) as pool:
+            futures = [pool.submit(_fetch_base, base) for base in bases]
+            for future in as_completed(futures):
+                base, resp, err = future.result()
+                if err is not None:
+                    last_error = err
+                    logger.warning(
+                        "[WebFetch] Jina reader %s unreachable: %s",
+                        base,
+                        err,
+                    )
+                    continue
                 if resp.status_code == 200:
                     return resp.text
-            except Exception as e:
-                logger.warning("[WebFetch] _read_via_jina failed, waiting to retry: %s", e, exc_info=True)
-                time.sleep(0.5)
+                if _jina_reader_auth_failure(resp):
+                    logger.warning(
+                        "[WebFetch] Jina reader %s rejected credentials for target url",
+                        base,
+                    )
+                    return "[web_fetch] Failed to read page."
+                logger.warning(
+                    "[WebFetch] Jina reader %s returned HTTP %s for target url",
+                    base,
+                    resp.status_code,
+                )
+                if resp.status_code >= 500 and server_error_response is None:
+                    server_error_response = resp
 
+        if last_error is not None:
+            logger.warning(
+                "[WebFetch] all Jina reader endpoints failed for target url: %s",
+                last_error,
+                exc_info=True,
+            )
         return "[web_fetch] Failed to read page."
 
     @staticmethod

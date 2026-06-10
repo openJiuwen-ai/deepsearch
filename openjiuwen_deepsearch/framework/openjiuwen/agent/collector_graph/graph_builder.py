@@ -16,10 +16,20 @@ from openjiuwen.core.workflow.workflow import Workflow
 from pydantic import BaseModel, Field
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
+    build_summary_evidence_pack,
+    build_supervisor_evidence_table,
+)
 from openjiuwen_deepsearch.config.config import ServiceConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode, init_router
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_context import CollectorContext
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
+    EvidenceLedger,
+    build_ledger_brief,
+    ensure_ledger,
+    merge_ledger_update,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
@@ -35,11 +45,12 @@ max_retries = ServiceConfig().info_collector_max_retry_num
 
 
 class SearchQueryList(BaseModel):
+    missing_evidence: List[str] = Field(
+        default_factory=list,
+        description="Verifiable evidence requirements for the current collector step."
+    )
     queries: List[str] = Field(
         description="A list of search queries to be used for web research."
-    )
-    description: str = Field(
-        description="A brief explanation of why these queries are relevant to the research topic."
     )
 
 
@@ -53,15 +64,17 @@ class Reflection(BaseModel):
     next_queries: List[str] = Field(
         description="A list of follow-up queries to address the knowledge gap."
     )
+    known_facts: List[str] = Field(
+        default_factory=list,
+        description="Key facts supported by the current ledger or gathered information."
+    )
+    missing_evidence: List[str] = Field(
+        default_factory=list,
+        description="Remaining verifiable evidence requirements."
+    )
 
 
 class Summary(BaseModel):
-    need_programmer: bool = Field(
-        description="Indicates whether a programmer is needed for further assistance."
-    )
-    programmer_task: str = Field(
-        description="A detailed description of the task to be assigned to the programmer."
-    )
     info_summary: str = Field(
         description="A concise summary of the collected information relevant to the research topic."
     )
@@ -86,25 +99,30 @@ def get_research_record(messages: List[dict]) -> str:
 
 class StartNode(Start):
     """
-    起始节点，初始化 Session global_state 中的 search_context 和 config
+    起始节点，初始化 Session global_state 中的 collector_context
     """
 
     async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """Invoke method of StartNode."""
 
-        # 初始化search_context
+        # 初始化 collector_context
         collector_context = CollectorContext(
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
             section_idx=inputs.get("section_idx", 0),
             plan_idx=inputs.get("plan_idx", 0),
+            plan_title=inputs.get("plan_title", ""),
+            plan_thought=inputs.get("plan_thought", ""),
             step_idx=inputs.get("step_idx", 0),
             step_title=inputs.get("step_title", ""),
-            step_description=inputs.get("step_description", []),
+            step_description=inputs.get("step_description", ""),
             step_background_knowledge=inputs.get("step_background_knowledge") or [],
             initial_search_query_count=inputs.get("initial_search_query_count", 1),
             max_research_loops=inputs.get("max_research_loops", 1),
             max_react_recursion_limit=inputs.get("max_react_recursion_limit", 5),
+            evidence_ledger={},
+            report_type=inputs.get("report_type", "professional"),
+            research_intent=inputs.get("research_intent") or {},
         )
         session.update_global_state({"collector_context": collector_context.model_dump()})
 
@@ -120,10 +138,13 @@ class GenerateQueryNode(BaseNode):
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         section_idx = session.get_global_state("collector_context.section_idx")
         logger.info(f"section_idx: {section_idx} | [GenerateQueryNode] Start GenerateQueryNode.")
+        plan_title = session.get_global_state("collector_context.plan_title")
+        plan_thought = session.get_global_state("collector_context.plan_thought")
         step_title = session.get_global_state("collector_context.step_title")
-        messages = session.get_global_state("collector_context.messages")
+        step_description = session.get_global_state("collector_context.step_description")
         number_queries = session.get_global_state("collector_context.initial_search_query_count")
         language = session.get_global_state("collector_context.language")
+        evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         max_research_loops = session.get_global_state("collector_context.max_research_loops")
         max_react_recursion_limit = session.get_global_state("collector_context.max_react_recursion_limit")
 
@@ -133,24 +154,43 @@ class GenerateQueryNode(BaseNode):
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
-        return dict(section_idx=section_idx, step_title=step_title,
-                    messages=messages, number_queries=number_queries,
-                    language=language)
+        return dict(section_idx=section_idx, plan_title=plan_title, plan_thought=plan_thought, step_title=step_title,
+                    step_description=step_description,
+                    number_queries=number_queries,
+                    language=language, evidence_ledger=evidence_ledger)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        """根据研究记录生成当前采集轮次的检索 query。
+
+        Args:
+            inputs: 当前节点输入。
+            session: 当前运行 session。
+            context: 图执行上下文。
+
+        Returns:
+            包含下一节点 ID 的输出字典。
+        """
         state = self._pre_handle(inputs, session, context)
         session_context.set(session)
 
         section_idx = state.get("section_idx", 0)
+        plan_title = state.get("plan_title", "")
+        plan_thought = state.get("plan_thought", "")
         step_title = state.get("step_title", "")
-        messages = state.get("messages", [])
+        step_description = state.get("step_description", "")
         number_queries = state.get("number_queries", 1)
         language = state.get("language", "zh-CN")
 
+        report_type = session.get_global_state("collector_context.report_type") or "professional"
+
         agent_input = {
-            "research_record": get_research_record(messages),
+            "plan_title": plan_title,
+            "plan_thought": plan_thought,
+            "step_title": step_title,
+            "step_description": step_description,
             "number_queries": number_queries,
-            "language": language
+            "language": language,
+            "report_type": report_type,
         }
         formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
 
@@ -163,7 +203,8 @@ class GenerateQueryNode(BaseNode):
             logger.debug("section_idx: %s | step title %s | [GenerateQueryNode] Generated search queries: %s",
                          section_idx, step_title, result.queries)
             logger.info(f"section_idx: {section_idx} | step title {step_title} | "
-                        f"[GenerateQueryNode] Initial queries count: {len(result.queries)}")
+                        f"[GenerateQueryNode] Initial queries count: {len(result.queries)} | "
+                        f"missing_evidence count: {len(result.missing_evidence)}")
         else:
             logger.info(f"section_idx: {section_idx} |"
                         f"[GenerateQueryNode] Initial queries count: {len(result.queries)}")
@@ -173,10 +214,13 @@ class GenerateQueryNode(BaseNode):
 
     def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, session: Session, context: ModelContext):
         search_queries = [RetrievalQuery(
-            query=query,
-            description=algorithm_output.description
+            query=query
         ) for query in algorithm_output.queries]
+        current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
+        ledger_update = EvidenceLedger(missing_evidence=algorithm_output.missing_evidence)
+        updated_ledger = merge_ledger_update(current_ledger, ledger_update)
 
+        session.update_global_state({"collector_context.evidence_ledger": updated_ledger.model_dump()})
         session.update_global_state({"collector_context.search_queries": search_queries})
         section_idx = session.get_global_state("collector_context.section_idx")
         logger.info(f"section_idx: {section_idx} | [GenerateQueryNode] End GenerateQueryNode.")
@@ -199,7 +243,7 @@ class GenerateQueryNode(BaseNode):
         if result is None:
             result = SearchQueryList(
                 queries=[step_title],
-                description="Error when generate search query, use step title as query."
+                missing_evidence=[],
             )
 
         return result
@@ -216,34 +260,54 @@ class SupervisorNode(BaseNode):
         plan_idx = session.get_global_state("collector_context.plan_idx")
         step_idx = session.get_global_state("collector_context.step_idx")
         logger.info(f"section_idx: {section_idx} | [SupervisorNode] Start SupervisorNode.")
+        plan_title = session.get_global_state("collector_context.plan_title")
+        plan_thought = session.get_global_state("collector_context.plan_thought")
         step_title = session.get_global_state("collector_context.step_title")
         step_description = session.get_global_state("collector_context.step_description")
         number_queries = session.get_global_state("collector_context.initial_search_query_count")
         language = session.get_global_state("collector_context.language")
-        doc_infos = session.get_global_state("collector_context.doc_infos")
         new_doc_infos_current_loop = session.get_global_state("collector_context.new_doc_infos_current_loop")
+        evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         research_loop_count = session.get_global_state("collector_context.research_loop_count")
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx,
+                    plan_title=plan_title, plan_thought=plan_thought,
                     step_title=step_title, step_description=step_description,
-                    number_queries=number_queries, language=language, doc_infos=doc_infos,
-                    new_doc_infos_current_loop=new_doc_infos_current_loop, research_loop_count=research_loop_count)
+                    number_queries=number_queries, language=language,
+                    new_doc_infos_current_loop=new_doc_infos_current_loop,
+                    evidence_ledger=evidence_ledger,
+                    research_loop_count=research_loop_count)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        """根据 compact evidence table 判断信息是否充分并生成后续 query。
+
+        Args:
+            inputs: 当前节点输入。
+            session: 当前运行 session。
+            context: 图执行上下文。
+
+        Returns:
+            包含下一节点 ID 的输出字典。
+        """
         state = self._pre_handle(inputs, session, context)
         session_context.set(session)
 
         section_idx = state.get("section_idx", 0)
         plan_idx = state.get("plan_idx", 0)
         step_idx = state.get("step_idx", 0)
+        plan_title = state.get("plan_title", "")
+        plan_thought = state.get("plan_thought", "")
         step_title = state.get("step_title", "")
+        step_description = state.get("step_description", "")
         research_loop_count = state.get("research_loop_count", 1)
         number_queries = state.get("number_queries", 1)
-        doc_infos = state.get("doc_infos", [])
+        new_doc_infos = state.get("new_doc_infos_current_loop", []) or []
+        current_ledger = ensure_ledger(state.get("evidence_ledger"))
+        ledger_brief = build_ledger_brief(current_ledger)
 
-        for item in state.get("new_doc_infos_current_loop", []):
+        for item in new_doc_infos:
             doc_info = {
                 "url": item.get("url", ""),
                 "title": item.get("title", ""),
@@ -264,14 +328,25 @@ class SupervisorNode(BaseNode):
             logger.info(f"section_idx: {section_idx} | "
                         f"[SupervisorNode] Reflecting on collected information.")
         else:
-            logger.info(f"section_idx: {section_idx} | step title {step_title} | Current doc_infos item count "
-                        f"{len(doc_infos)} | [SupervisorNode] Reflecting on collected information doc_infos.")
+            logger.info(f"section_idx: {section_idx} | step title {step_title} | Current evidence_table item count "
+                        f"{len(new_doc_infos)} | [SupervisorNode] Reflecting on collected information. "
+                        f"ledger known/missing/attempted: "
+                        f"{len(current_ledger.known_facts)}/{len(current_ledger.missing_evidence)}/"
+                        f"{len(current_ledger.attempted_queries)} | ledger brief: {ledger_brief}")
+
+        evidence_table = build_supervisor_evidence_table(new_doc_infos)
+        report_type = session.get_global_state("collector_context.report_type") or "professional"
 
         agent_input = {
-            "research_record": f"[Task Title]: {step_title}\n[Task Description]: {state.get('step_description', '')}",
+            "plan_title": plan_title,
+            "plan_thought": plan_thought,
+            "step_title": step_title,
+            "step_description": step_description,
+            "ledger_brief": ledger_brief,
+            "evidence_table": evidence_table,
             "number_queries": number_queries,
             "language": state.get("language", "zh-CN"),
-            "doc_infos": doc_infos,
+            "report_type": report_type,
         }
         formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
 
@@ -302,10 +377,31 @@ class SupervisorNode(BaseNode):
         session.update_global_state({"collector_context.research_loop_count": research_loop_count})
         session.update_global_state({"collector_context.is_sufficient": reflection.is_sufficient})
         session.update_global_state({"collector_context.knowledge_gap": reflection.knowledge_gap})
+
+        missing_evidence = reflection.missing_evidence
+        if not missing_evidence and reflection.knowledge_gap:
+            missing_evidence = [reflection.knowledge_gap]
+        ledger_update = EvidenceLedger(
+            known_facts=reflection.known_facts,
+            missing_evidence=missing_evidence,
+        )
+        current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
+        updated_ledger = merge_ledger_update(
+            current_ledger,
+            ledger_update,
+            clear_missing_evidence=reflection.is_sufficient,
+        )
+        session.update_global_state({"collector_context.evidence_ledger": updated_ledger.model_dump()})
+
+        next_queries = reflection.next_queries
+        if not reflection.is_sufficient and not next_queries:
+            if updated_ledger.missing_evidence:
+                next_queries = [updated_ledger.missing_evidence[0]]
+            elif reflection.knowledge_gap:
+                next_queries = [reflection.knowledge_gap]
         search_queries = [RetrievalQuery(
-            query=query,
-            description=reflection.knowledge_gap
-        ) for query in reflection.next_queries]
+            query=query
+        ) for query in next_queries]
         session.update_global_state({"collector_context.search_queries": search_queries})
 
         section_idx = session.get_global_state("collector_context.section_idx")
@@ -318,6 +414,10 @@ class SupervisorNode(BaseNode):
             logger.info("section_idx: %s | step_title: %s | [SupervisorNode] End SupervisorNode. "
                         "cause: research_loop_count reach max loops limit %s",
                         section_idx, step_title, max_research_loops)
+            return dict(next_node=NodeId.COLLECTOR_SUMMARY.value)
+        if not search_queries:
+            logger.info("section_idx: %s | step_title: %s | [SupervisorNode] End SupervisorNode. "
+                        "cause: no follow-up query.", section_idx, step_title)
             return dict(next_node=NodeId.COLLECTOR_SUMMARY.value)
         logger.info("section_idx: %s | step_title: %s | [SupervisorNode] End SupervisorNode.",
                     section_idx, step_title)
@@ -341,7 +441,9 @@ class SupervisorNode(BaseNode):
             result = Reflection(
                 is_sufficient=True,
                 knowledge_gap="",
-                next_queries=[]
+                next_queries=[],
+                known_facts=[],
+                missing_evidence=[],
             )
 
         return result
@@ -357,25 +459,35 @@ class SummaryNode(BaseNode):
         section_idx = session.get_global_state("collector_context.section_idx")
         step_title = session.get_global_state("collector_context.step_title")
         logger.info("section_idx: %s | step_title: %s | [SummaryNode] Start SummaryNode.", section_idx, step_title)
+        plan_title = session.get_global_state("collector_context.plan_title")
+        plan_thought = session.get_global_state("collector_context.plan_thought")
         step_description = session.get_global_state("collector_context.step_description")
         step_background_knowledge = session.get_global_state("collector_context.step_background_knowledge")
         language = session.get_global_state("collector_context.language")
         doc_infos = session.get_global_state("collector_context.doc_infos")
+        evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
-        return dict(section_idx=section_idx, step_title=step_title, step_description=step_description,
-                    language=language, doc_infos=doc_infos, step_background_knowledge=step_background_knowledge)
+        return dict(section_idx=section_idx, plan_title=plan_title, plan_thought=plan_thought,
+                    step_title=step_title, step_description=step_description,
+                    language=language, doc_infos=doc_infos, step_background_knowledge=step_background_knowledge,
+                    evidence_ledger=evidence_ledger)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         state = self._pre_handle(inputs, session, context)
         session_context.set(session)
 
         section_idx = state.get("section_idx", 0)
+        plan_title = state.get("plan_title", "")
+        plan_thought = state.get("plan_thought", "")
         step_title = state.get("step_title", "")
         step_description = state.get("step_description", "")
         doc_infos = state.get("doc_infos", [])
         step_background_knowledge = state.get("step_background_knowledge", [])
+        current_ledger = ensure_ledger(state.get("evidence_ledger"))
+        ledger_brief = build_ledger_brief(current_ledger)
+        evidence_brief = ledger_brief
 
         if LogManager.is_sensitive():
             logger.info(f"section_idx: {section_idx} | "
@@ -385,12 +497,21 @@ class SummaryNode(BaseNode):
             logger.info(f"section_idx: {section_idx} | step title {step_title} | "
                         f"[SummaryNode] Gathered {len(doc_infos)} unique items of information. | "
                         f"[SummaryNode] Generating summary based on collected information.")
+        logger.debug("section_idx: %s | step title %s | [SummaryNode] evidence_brief before summary:\n%s",
+                     section_idx, step_title, evidence_brief)
+
+        evidence_pack = build_summary_evidence_pack(doc_infos)
 
         agent_input = {
-            "research_record": f"[Task Title]: {step_title}\n[Task Description]: {step_description}",
-            "doc_infos": doc_infos,
+            "plan_title": plan_title,
+            "plan_thought": plan_thought,
+            "step_title": step_title,
+            "step_description": step_description,
+            "evidence_pack": evidence_pack,
             "language": state.get("language", "zh-CN"),
             "step_background_knowledge": step_background_knowledge,
+            "ledger_brief": evidence_brief,
+            "missing_evidence": current_ledger.missing_evidence,
         }
         formatted_prompt = apply_system_prompt("collector_final", agent_input)
 
@@ -402,15 +523,9 @@ class SummaryNode(BaseNode):
     def _post_handle(self, inputs: Input, algorithm_output: Summary, session: Session, context: ModelContext):
         section_idx = session.get_global_state("collector_context.section_idx")
         step_title = session.get_global_state("collector_context.step_title")
-        session.update_global_state({"collector_context.need_programmer": algorithm_output.need_programmer})
-        session.update_global_state({"collector_context.programmer_task": algorithm_output.programmer_task})
         session.update_global_state({"collector_context.info_summary": algorithm_output.info_summary})
         session.update_global_state({"collector_context.evaluation": algorithm_output.evaluation})
-        allow_programmer = session.get_global_state("config.info_collector_allow_programmer")
-        if algorithm_output.need_programmer and allow_programmer:
-            next_node = NodeId.COLLECTOR_PROGRAMMER.value
-        else:
-            next_node = NodeId.COLLECTOR_END.value
+        next_node = NodeId.COLLECTOR_END.value
         logger.info(f"section_idx: %s | step_title %s | [SummaryNode] End SummaryNode.", section_idx, step_title)
 
         return dict(next_node=next_node)
@@ -435,33 +550,11 @@ class SummaryNode(BaseNode):
             logger.error(f"section_idx: {section_idx} | step_title {step_title} | [SummaryNode] "
                          f"Gathered {len(doc_infos)} items of information. Error when generate collector summary.")
             result = Summary(
-                need_programmer=False,
-                programmer_task="",
                 info_summary="",
                 evaluation="",
             )
 
         return result
-
-
-class ProgrammerNode(BaseNode):
-
-    def __init__(self):
-        super().__init__()
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
-        logger.info(f"[ProgrammerNode] Start ProgrammerNode.")
-        return dict()
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        logger.info(f"[ProgrammerNode] ProgrammerNode is current not available, go to graph end.")
-        algorithm_output = {}
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        logger.info(f"[ProgrammerNode] End ProgrammerNode.")
-        return dict()
 
 
 class GraphEndNode(BaseNode):
@@ -533,19 +626,21 @@ def build_info_collector_sub_graph() -> Workflow:
         inputs_schema={
             "language": "${language}", "messages": "${messages}",
             "section_idx": "${section_idx}", "plan_idx": "${plan_idx}",
+            "plan_title": "${plan_title}", "plan_thought": "${plan_thought}",
             "step_idx": "${step_idx}", "step_title": "${step_title}",
             "step_description": "${step_description}",
             "step_background_knowledge": "${step_background_knowledge}",
             "initial_search_query_count": "${initial_search_query_count}",
             "max_research_loops": "${max_research_loops}",
-            "max_react_recursion_limit": "${max_react_recursion_limit}"
+            "max_react_recursion_limit": "${max_react_recursion_limit}",
+            "report_type": "${report_type}",
+            "research_intent": "${research_intent}",
         }
     )
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_QUERY_GEN.value, GenerateQueryNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_INFO.value, InfoRetrievalNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_SUPERVISOR.value, SupervisorNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_SUMMARY.value, SummaryNode())
-    sub_workflow.add_workflow_comp(NodeId.COLLECTOR_PROGRAMMER.value, ProgrammerNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_END.value, GraphEndNode())
     sub_workflow.set_end_comp(NodeId.END.value, End())
 
@@ -556,10 +651,7 @@ def build_info_collector_sub_graph() -> Workflow:
     supervisor_router = init_router(NodeId.COLLECTOR_SUPERVISOR.value,
                                     [NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_INFO.value])
     sub_workflow.add_conditional_connection(NodeId.COLLECTOR_SUPERVISOR.value, router=supervisor_router)
-    summary_router = init_router(NodeId.COLLECTOR_SUMMARY.value,
-                                 [NodeId.COLLECTOR_PROGRAMMER.value, NodeId.COLLECTOR_END.value])
-    sub_workflow.add_conditional_connection(NodeId.COLLECTOR_SUMMARY.value, router=summary_router)
-    sub_workflow.add_connection(NodeId.COLLECTOR_PROGRAMMER.value, NodeId.COLLECTOR_END.value)
+    sub_workflow.add_connection(NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_END.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_END.value, NodeId.END.value)
 
     return sub_workflow

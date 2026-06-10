@@ -38,3 +38,9 @@ Directly output the three personalized questions, each prefixed with a number an
 - The questions should guide the user to clarify ambiguities and specify their exact interests or application scenarios. 
 - Leverage the pre-search results to identify key aspects and potential research directions
 - Always use the language specified by the language = ** {{ language }}**
+{% if report_type is none %}
+- Since research_intent.report_type is missing, this is a hard requirement:
+  - Question 1 MUST ask the user to choose report type between professional and brief.
+  - Question 1 MUST explicitly contain both choices (professional and brief, or their localized equivalents such as 专业版 and 精简版).
+  - If Question 1 does not ask report type choice, the output is invalid.
+{% endif %}

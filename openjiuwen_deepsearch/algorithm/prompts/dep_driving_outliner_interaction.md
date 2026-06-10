@@ -10,6 +10,21 @@ Your responsibility is to **incrementally refine the existing outline based on u
 
 Unless the feedback explicitly requires major restructuring, avoid regenerating the outline from scratch.
 
+{% if report_type == "brief" %}
+## Report type: Brief
+- Prefer **dependency-minimizing** refinements: fewer sibling branches, clearer **decision payoff**, and visible **risk / uncertainty** handling.
+{% endif %}
+
+{% if audience_role or tone %}
+## Report Detail Constraints
+{% if audience_role %}
+- Target audience role: {{ audience_role }}. Keep section objectives aligned with this audience's decision priorities.
+{% endif %}
+{% if tone %}
+- Writing tone intent: {{ tone }}. Keep section organization and narrative stance consistent with this tone.
+{% endif %}
+{% endif %}
+
 ---
 
 # Pre-search Results
@@ -229,13 +244,7 @@ Prefer **minimal and targeted edits**.
 
 # Section Count Constraint
 
-Maximum recommended sections: **{{ max_section_num }}**
-
-This is a **soft guideline**.
-
-You may exceed it when required by the research logic, but avoid unnecessary fragmentation.
-
-Each section must represent a **meaningful research task** for downstream research agents.
+- Max section number: **{{ max_section_num }}**. You may add/merge/remove/reorder sections to satisfy feedback, but the final number of chapters must not exceed this value.
 
 ---
 

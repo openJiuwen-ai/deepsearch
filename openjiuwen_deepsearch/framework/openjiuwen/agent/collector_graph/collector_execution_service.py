@@ -86,9 +86,46 @@ def _collector_execution_log_prefix(section_idx: int | str, plan_id: str) -> str
     return f"[CollectorExecutionService] section_idx: {section_idx} | plan_idx: {plan_id} |"
 
 
+def _merge_source_store(
+    source_store: dict,
+    step_source_store: dict,
+    log_prefix: str,
+    step_id: str,
+) -> None:
+    """合并单个采集步骤的 source store，遇到冲突时保留首个正文。
+
+    Args:
+        source_store: 当前 run_plan 已聚合的 source_id 到正文映射。
+        step_source_store: 当前采集步骤返回的 source_id 到正文映射。
+        log_prefix: 当前 collector 执行链路日志前缀。
+        step_id: 当前采集步骤 ID，用于定位冲突来源。
+    """
+    for source_id, content in step_source_store.items():
+        if source_id in source_store:
+            if source_store[source_id] != content:
+                logger.warning(
+                    "%s source_store source_id conflict. source_id=%s | step_id=%s | keeping first content.",
+                    log_prefix,
+                    source_id,
+                    step_id,
+                )
+            continue
+        source_store[source_id] = content
+
+
 @dataclass
 class CollectorExecutionResult:
-    """单次 ``run_plan`` 聚合的步骤结果、摘要、消息与引用文档列表。"""
+    """单次 ``run_plan`` 聚合的步骤结果、摘要、消息、引用文档和正文存储。
+
+    Attributes:
+        collect_steps: 本次执行完成的信息采集步骤。
+        collected_doc_num: 本次执行累计收集的文档数量。
+        info_summary: 最后一个采集步骤生成的信息摘要。
+        evaluation: 最后一个采集步骤生成的信息充分性评估。
+        messages: 需要追加到 section 上下文的消息列表。
+        doc_infos: 本次执行累计收集的兼容 doc_infos。
+        source_store: 本次执行累计收集的 source_id 到正文映射。
+    """
 
     collect_steps: list[Step]
     collected_doc_num: int = 0
@@ -96,6 +133,7 @@ class CollectorExecutionResult:
     evaluation: str | None = None
     messages: list[Message] = field(default_factory=list)
     doc_infos: list = field(default_factory=list)
+    source_store: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -105,6 +143,19 @@ class CollectorInputBuildConfig:
     initial_search_query_count: int
     max_research_loops: int
     max_react_recursion_limit: int
+
+
+@dataclass(frozen=True)
+class CollectorInputBuildParams:
+    """封装 ``_input_build`` 所需的计划、步骤与运行上下文。"""
+
+    plan: Plan
+    step: Step
+    language: str
+    section_idx: int | str
+    build_config: CollectorInputBuildConfig
+    report_type: str | None = None
+    research_intent: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -145,7 +196,7 @@ class CollectorExecutionService:
             context: 当前模型上下文对象。
 
         Returns:
-            CollectorExecutionResult: 聚合的执行结果，包含步骤、摘要、消息和文档信息。
+            CollectorExecutionResult: 聚合的执行结果，包含步骤、摘要、消息、文档信息和 source store。
         """
         collect_steps: list[Step] = []
         current_doc_num: int = 0
@@ -153,10 +204,14 @@ class CollectorExecutionService:
         info_summary: str | None = None
         evaluation: str | None = None
         all_doc_infos: list = []
+        all_source_store: dict = {}
         log_prefix = _collector_execution_log_prefix(
             section_idx=run_config.section_idx, plan_id=plan.id or ""
         )
         build_config = run_config.to_input_build_config()
+        rtp = session.get_global_state("section_context.report_type_policy") or {}
+        report_type = rtp.get("report_type", "professional") if isinstance(rtp, dict) else "professional"
+        research_intent = session.get_global_state("section_context.research_intent") or {}
 
         for idx, step in enumerate(plan.steps):
             step.id = f"{idx + 1}"
@@ -164,11 +219,15 @@ class CollectorExecutionService:
                 continue
 
             sub_inputs = self._input_build(
-                plan=plan,
-                step=step,
-                language=run_config.language,
-                section_idx=run_config.section_idx,
-                build_config=build_config,
+                CollectorInputBuildParams(
+                    plan=plan,
+                    step=step,
+                    language=run_config.language,
+                    section_idx=run_config.section_idx,
+                    build_config=build_config,
+                    report_type=report_type,
+                    research_intent=research_intent,
+                )
             )
             logger.info(
                 f"{log_prefix} Start step {step.id}: The input is"
@@ -185,12 +244,20 @@ class CollectorExecutionService:
             evaluation = collector_context.get("evaluation")
             history_queries = collector_context.get("history_queries")
             doc_infos = collector_context.get("doc_infos", [])
+            step_source_store = collector_context.get("source_store", {})
 
             step.step_result = info_summary
             step.evaluation = evaluation
             step.retrieval_queries = history_queries
             current_doc_num += len(doc_infos)
             all_doc_infos.extend(doc_infos)
+            if isinstance(step_source_store, dict):
+                _merge_source_store(
+                    source_store=all_source_store,
+                    step_source_store=step_source_store,
+                    log_prefix=log_prefix,
+                    step_id=step.id or "",
+                )
             collect_steps.append(step)
 
             messages.append(
@@ -210,28 +277,22 @@ class CollectorExecutionService:
             evaluation=evaluation,
             messages=messages,
             doc_infos=all_doc_infos,
+            source_store=all_source_store,
         )
 
     @staticmethod
-    def _input_build(
-        plan: Plan,
-        step: Step,
-        language: str,
-        section_idx: int | str,
-        build_config: CollectorInputBuildConfig,
-    ) -> dict:
+    def _input_build(params: CollectorInputBuildParams) -> dict:
         """拼装传入 ``build_info_collector_sub_graph`` 的标准 ``agent_input`` 字典。
 
         Args:
-            plan: 当前计划对象。
-            step: 当前步骤对象。
-            language: 当前报告的语言标识。
-            section_idx: 当前小节索引。
-            build_config: 子图构造和执行所需的相关配置。
+            params: 计划、步骤与子图构造所需的相关配置。
 
         Returns:
             dict: 标准化的子图输入字典。
         """
+        plan = params.plan
+        step = params.step
+        build_config = params.build_config
         message = "Now deal with the task: \n"
         message += f"You should focus on [Topic]: {plan.title}\n"
         message += f"pay attention to [Condition]: {plan.thought}"
@@ -244,14 +305,18 @@ class CollectorExecutionService:
         message += "Begin with your initial reasoning about the task."
 
         return {
-            "language": language,
+            "language": params.language,
             "messages": [Message(role="user", content=message)],
-            "section_idx": section_idx,
+            "section_idx": params.section_idx,
             "plan_idx": plan.id,
+            "plan_title": plan.title,
+            "plan_thought": plan.thought,
             "step_idx": step.id,
             "step_title": step.title,
             "step_description": step.description,
             "initial_search_query_count": build_config.initial_search_query_count,
             "max_research_loops": build_config.max_research_loops,
             "max_react_recursion_limit": build_config.max_react_recursion_limit,
+            "report_type": params.report_type or "professional",
+            "research_intent": params.research_intent or {},
         }

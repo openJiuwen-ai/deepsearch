@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -12,11 +13,21 @@ from openjiuwen.core.session.node import Session
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_call, \
-    remove_duplicate_items
+    process_tool_result, remove_duplicate_items
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
+    CollectorSourceStore,
+    build_evaluation_documents,
+    build_evidence_atom,
+    hydrate_legacy_doc_info_fields,
+    normalize_scores,
+)
 from openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
-from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
+    append_attempted_queries,
+    ensure_ledger,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.framework.openjiuwen.tools import create_web_search_tool, create_local_search_tool, \
     build_runtime_api_tools
@@ -29,6 +40,34 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 max_retries = Config().service_config.info_collector_max_retry_num
 logger = logging.getLogger(__name__)
+
+
+def _merge_source_store(
+    source_store: dict,
+    task_source_store: dict,
+    section_idx: int | str,
+    search_query: str,
+) -> None:
+    """合并单个 query 的 source store，遇到冲突时保留首个正文。
+
+    Args:
+        source_store: collector session 中已聚合的 source_id 到正文映射。
+        task_source_store: 当前 query 生成的 source_id 到正文映射。
+        section_idx: 当前章节索引，用于日志。
+        search_query: 当前检索 query，用于定位冲突来源。
+    """
+    for source_id, content in task_source_store.items():
+        if source_id in source_store:
+            if source_store[source_id] != content:
+                logger.warning(
+                    "section_idx: %s | [InfoRetrievalNode] source_store source_id conflict. "
+                    "source_id=%s | query=%s | keeping first content.",
+                    section_idx,
+                    source_id,
+                    search_query,
+                )
+            continue
+        source_store[source_id] = content
 
 
 class InfoRetrievalNode(BaseNode):
@@ -63,7 +102,7 @@ class InfoRetrievalNode(BaseNode):
             web_search_engine_name=web_search_engine_name,
             local_search_engine_name=local_search_engine_name,
             api_tools_config=session.get_global_state("config.api_tools_config") or {},
-            research_intent=session.get_global_state("search_context.research_intent") or {},
+            research_intent=session.get_global_state("collector_context.research_intent") or {},
         )
         return state
 
@@ -92,16 +131,43 @@ class InfoRetrievalNode(BaseNode):
         return node_output
 
     def _post_handle(self, inputs: Input, algorithm_output: list, session: Session, context: ModelContext):
+        """合并子查询采集结果并更新 collector session 状态。
+
+        Args:
+            inputs: 当前节点输入。
+            algorithm_output: 各 retrieval query 的采集结果。
+            session: 当前运行 session。
+            context: 图执行上下文。
+
+        Returns:
+            空输出字典。
+        """
         section_idx = session.get_global_state("collector_context.section_idx")
         step_title = session.get_global_state("collector_context.step_title")
-        doc_infos: list = session.get_global_state("collector_context.doc_infos")
+        doc_infos: list = session.get_global_state("collector_context.doc_infos") or []
         search_queries = session.get_global_state("collector_context.search_queries")
         history_queries = session.get_global_state("collector_context.history_queries")
+        current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
+        source_store = session.get_global_state("collector_context.source_store") or {}
 
         new_doc_infos = []
+        attempted_queries = []
         for retrieval_query, result in zip(search_queries, algorithm_output):
+            known_source_ids = {
+                doc.get("source_id") for doc in doc_infos
+                if isinstance(doc, dict) and doc.get("source_id")
+            }
             core_doc_info = [(doc.get("title", ""), doc.get("url", "")) for doc in doc_infos if isinstance(doc, dict)]
             task_doc_infos = result.get("doc_infos", [])
+            attempted_queries.append(retrieval_query.query)
+            task_source_store = result.get("source_store", {})
+            if isinstance(task_source_store, dict):
+                _merge_source_store(
+                    source_store=source_store,
+                    task_source_store=task_source_store,
+                    section_idx=section_idx,
+                    search_query=result.get("search_query", ""),
+                )
             if LogManager.is_sensitive():
                 logger.info(f"section_idx: {section_idx} | gathered item count before duplicate: {len(task_doc_infos)}")
             else:
@@ -109,28 +175,48 @@ class InfoRetrievalNode(BaseNode):
                             f"[InfoRetrievalNode] Query: {result.get('search_query', '')} | "
                             f"gathered item count before duplicate: {len(task_doc_infos)}")
             for task_doc in task_doc_infos:
-                if (task_doc.get("title", ""), task_doc.get("url", "")) not in core_doc_info:
+                source_id = task_doc.get("source_id")
+                is_new_source = source_id and source_id not in known_source_ids
+                legacy_doc_key = (task_doc.get("title", ""), task_doc.get("url", ""))
+                is_new_legacy_doc = not source_id and legacy_doc_key not in core_doc_info
+                if is_new_source or is_new_legacy_doc:
                     # 记录本地新收集信息
                     new_doc_infos.append(task_doc)
+                    if source_id:
+                        known_source_ids.add(source_id)
+                    else:
+                        core_doc_info.append(legacy_doc_key)
 
             retrieval_query.doc_infos = task_doc_infos
             history_queries.append(retrieval_query)
             doc_infos.extend(task_doc_infos)
 
         doc_infos = remove_duplicate_items(doc_infos)
+        updated_ledger = append_attempted_queries(current_ledger, attempted_queries)
 
         session.update_global_state({"collector_context.history_queries": history_queries})
         session.update_global_state({"collector_context.new_doc_infos_current_loop": new_doc_infos})
         session.update_global_state({"collector_context.doc_infos": doc_infos})
+        session.update_global_state({"collector_context.evidence_ledger": updated_ledger.model_dump()})
+        session.update_global_state({"collector_context.source_store": source_store})
         if LogManager.is_sensitive():
             logger.info("section_idx: %s | [InfoRetrievalNode] End InfoRetrievalNode.", section_idx)
         else:
             logger.info("section_idx: %s | step title: %s | [InfoRetrievalNode] End InfoRetrievalNode."
-                        "Get %s doc_infos item.", section_idx, step_title, len(doc_infos))
+                        "Get %s doc_infos item. attempted query count: %s",
+                        section_idx, step_title, len(doc_infos), len(updated_ledger.attempted_queries))
 
         return dict()
 
     async def _collector_main(self, state: dict):
+        """执行单个检索 query 的信息收集和后处理。
+
+        Args:
+            state: 当前 query 的 collector 子状态。
+
+        Returns:
+            包含 doc_infos、source_store、原始工具记录和 query 的结果字典。
+        """
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")
         if LogManager.is_sensitive():
@@ -153,7 +239,70 @@ class InfoRetrievalNode(BaseNode):
 
         tool_list, tool_dict = self._prepare_collector_tool(state)
 
-        state, agent_input = await self._collector_llm(state, agent_input, tool_list, tool_dict)
+        # 当 collector_tools 为空且 search_method 为 web/local 时，直接调用对应 search tool
+        collector_tools = state.get("api_tools_config", {}).get("collector_tools", [])
+        search_method = state.get("search_method", "web")
+        if not collector_tools and search_method in ("web", "local"):
+            # 直接调用对应 search tool
+            tool_name = f"{search_method}_search_tool"
+            if tool_name not in tool_dict:
+                if LogManager.is_sensitive():
+                    logger.error(f"section_idx: {section_idx} | "
+                                 f"[InfoRetrievalNode] Direct call: tool '{tool_name}' not found in tool_dict")
+                else:
+                    logger.error(f"section_idx: {section_idx} | step title: {step_title} | "
+                                 f"[InfoRetrievalNode] Direct call: tool '{tool_name}' not found in tool_dict")
+                processed_results = []
+            else:
+                processed_results = []
+                for retry_idx in range(max_retries):
+                    try:
+                        search_engine_name = state.get(f"{search_method}_search_engine_name")
+                        tool_call_args = {"query": query, "search_engine_name": search_engine_name}
+                        tool_result_raw = await tool_dict[tool_name].invoke(tool_call_args)
+
+                        if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
+                            error_msg = tool_result_raw.get("error", "")
+                            current_try = retry_idx + 1
+                            record_llm_retry_log(
+                                current_try=current_try, max_retries=max_retries,
+                                section_idx=section_idx, step_title=step_title,
+                                operation=f"direct call search tool '{tool_name}' returned error",
+                                error=error_msg, extra_info=query,
+                            )
+                            if current_try < max_retries:
+                                continue
+                            # 重试耗尽，返回空结果
+                            processed_results = []
+                            break
+
+                        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+                        processed_results = process_tool_result(tool_name, tool_result_json, agent_input)
+                        if LogManager.is_sensitive():
+                            logger.info(f"section_idx: {section_idx} | "
+                                        f"[InfoRetrievalNode] Direct tool call completed, results: "
+                                        f"{len(processed_results)}")
+                        else:
+                            logger.info(f"section_idx: {section_idx} | step title: {step_title} | "
+                                        f"[InfoRetrievalNode] Direct tool call for {tool_name}, results: "
+                                        f"{len(processed_results)}")
+                        break
+
+                    except Exception as e:
+                        current_try = retry_idx + 1
+                        record_llm_retry_log(
+                            current_try=current_try, max_retries=max_retries,
+                            section_idx=section_idx, step_title=step_title,
+                            operation=f"direct call search tool '{tool_name}'",
+                            error=e, extra_info=query,
+                        )
+                        if current_try < max_retries:
+                            continue
+                        # 重试耗尽，返回空结果
+                        processed_results = []
+        else:
+            # MCP/custom tools 或多工具复杂路由走 LLM tool-calling
+            state, agent_input = await self._collector_llm(state, agent_input, tool_list, tool_dict)
 
         web_record, local_record = [], []
         if len(agent_input["web_page_search_record"]) > 0:
@@ -161,7 +310,7 @@ class InfoRetrievalNode(BaseNode):
         if len(agent_input["local_text_search_record"]) > 0:
             local_record = remove_duplicate_items(agent_input["local_text_search_record"])
 
-        doc_infos, scored_result = await self._structure_result(web_record, local_record, query)
+        doc_infos, scored_result, source_store = await self._structure_result(web_record, local_record, query)
 
         if LogManager.is_sensitive():
             logger.info(f"section_idx: {section_idx} | "
@@ -177,6 +326,7 @@ class InfoRetrievalNode(BaseNode):
         return {
             "messages": agent_input["messages"],
             "doc_infos": doc_infos,
+            "source_store": source_store,
             "web_record": web_record,
             "local_record": local_record,
             "search_query": query,
@@ -248,78 +398,80 @@ class InfoRetrievalNode(BaseNode):
         return state, agent_input
 
     async def _structure_result(self, web_record: list, local_record: list, query: str):
-        gathered_info = [
-            {
-                "url": record.get("url", ""),
-                "title": record.get("title", "Untitled"),
-                "content": str(record.get("content") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
-            }
-            for record in web_record + local_record
-        ]
+        """把工具记录转换为 doc_infos、评分结果和 source store。
 
-        contents = []
+        Args:
+            web_record: Web 搜索记录列表。
+            local_record: 本地搜索记录列表。
+            query: 当前检索 query。
+
+        Returns:
+            `(doc_infos, scored_result, source_store)` 三元组。
+        """
+        source_store = CollectorSourceStore()
         doc_infos = []
 
-        for info in gathered_info:
-            doc_info = {
-                "doc_time": "未提供时间信息",
-                "source_authority": "未提供权威性得分",
-                "task_relevance": "未提供相关性得分",
-                "original_content": info.get("content", ""),
-                "information_richness": "未提供可答性得分",
-                "data_density": "未提供数据密度得分",
-                "url": info.get("url", ""),
-                "title": info.get("title", "Untitled"),
-                "query": query,
-            }
-            contents.append(info.get("content", ""))
+        for record in web_record + local_record:
+            _, doc_info = build_evidence_atom(record=record, query=query, source_store=source_store)
             doc_infos.append(doc_info)
 
         if len(doc_infos) != 0:
             scored_result = await run_doc_evaluation(
                 query=query,
-                contents=contents,
+                documents=build_evaluation_documents(doc_infos),
                 llm=self.llm
             )
         else:
             scored_result = []
 
-        return doc_infos, scored_result
+        return doc_infos, scored_result, source_store.to_dict()
 
     def _process_post_process_result(self, scored_result: list[dict], doc_infos: list, section_idx: int):
-        for idx, scored in enumerate(scored_result[:len(doc_infos)]):
-            try:
-                index = int(scored.get("content"))
-            except (AttributeError, KeyError, TypeError, ValueError):
+        """把 evaluator 结果合并回 doc_infos。
+
+        Args:
+            scored_result: evaluator 输出的评分结果。
+            doc_infos: 当前 query 生成的兼容 doc_infos。
+            section_idx: 当前章节索引，用于日志。
+
+        Returns:
+            已补齐结构化 scores 和兼容期字段的 doc_infos。
+        """
+        seen_indexes = set()
+        for idx, scored in enumerate(scored_result):
+            if not isinstance(scored, dict):
                 logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Failed to get content form score result, using index:{idx} as fallback")
-                index = idx
+                               f"Score result is not a dict (type={type(scored).__name__}), skipping index:{idx}")
+                continue
+            if "content" in scored:
+                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
+                               f"Score result contains deprecated content index, skipping index:{idx}")
+                continue
+            if "document_index" not in scored:
+                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
+                               f"Score result missing document_index, skipping index:{idx}")
+                continue
+            try:
+                index = int(scored.get("document_index"))
+            except (TypeError, ValueError):
+                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
+                               f"Invalid score result document_index, skipping index:{idx}")
+                continue
             if index < 0 or index >= len(doc_infos):
                 logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result content index:{index} is out of range, skipping")
+                               f"Score result document_index:{index} is out of range, skipping")
+                continue
+            if index in seen_indexes:
+                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
+                               f"Duplicate score result document_index:{index}, skipping")
                 continue
 
-            try:
-                scores: dict = scored.get("scores")
-                authority = str(scores.get("authority")) if scores.get("authority") else "未提供权威性得分"
-                relevance = str(scores.get("relevance")) if scores.get("relevance") else "未提供相关性得分"
-                answerability = str(scores.get("answerability")) if scores.get("answerability") else "未提供可答性得分"
-                data_density = str(scores.get("data_density")) if scores.get("data_density") else "未提供数据密度得分"
-            except Exception:
-                authority = "未提供权威性得分"
-                relevance = "未提供相关性得分"
-                answerability = "未提供可答性得分"
-                data_density = "未提供数据密度得分"
-            try:
-                doc_time = scored.get("doc_time") if scored.get("doc_time") else "未提供时间信息"
-            except Exception:
-                doc_time = "未提供时间信息"
-
-            doc_infos[index]["source_authority"] = f"该篇文章的信息来源权威性和可信度得分：{authority}"
-            doc_infos[index]["task_relevance"] = f"该篇文章的内容与当前任务的相关性得分：{relevance}"
-            doc_infos[index]["information_richness"] = f"该篇文章的信息丰富程度与可答性得分：{answerability}"
-            doc_infos[index]["data_density"] = f"该篇文章的数据丰富和密集程度得分：{data_density}"
-            doc_infos[index]["doc_time"] = doc_time
+            scores = normalize_scores(scored.get("scores"))
+            publish_time = scored.get("publish_time") or scored.get("doc_time") or "未提供时间信息"
+            doc_infos[index]["scores"] = scores
+            doc_infos[index]["publish_time"] = publish_time
+            hydrate_legacy_doc_info_fields(doc_infos[index])
+            seen_indexes.add(index)
 
         return doc_infos
 

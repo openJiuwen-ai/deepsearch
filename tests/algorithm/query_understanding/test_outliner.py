@@ -7,6 +7,7 @@ from openjiuwen_deepsearch.algorithm.query_understanding.outliner import (
     Outliner,
     check_tool_call,
     create_outline_tool,
+    normalize_sections,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
@@ -98,6 +99,38 @@ class TestOutliner:
             result = await setup_outliner.generate_outline(test_data)
 
         assert result == mock_llm_response
+    def test_normalize_sections_parses_json_string(self):
+        args = {
+            "language": "zh-CN",
+            "title": "test",
+            "thought": "thought",
+            "sections": '[{"title": "A", "description": "desc"}]',
+        }
+        normalized = normalize_sections(args)
+        assert isinstance(normalized["sections"], list)
+        assert normalized["sections"][0]["title"] == "A"
+
+    def test_normalize_sections_parses_markdown_wrapped_json(self):
+        args = {
+            "language": "zh-CN",
+            "title": "test",
+            "thought": "thought",
+            "sections": '```json\n[{"title": "B", "description": "desc"}]\n```',
+        }
+        normalized = normalize_sections(args)
+        assert normalized["sections"][0]["title"] == "B"
+
+    def test_normalize_sections_parses_double_encoded_json(self):
+        inner = json.dumps([{"title": "C", "description": "desc"}], ensure_ascii=False)
+        args = {
+            "language": "zh-CN",
+            "title": "test",
+            "thought": "thought",
+            "sections": json.dumps(inner, ensure_ascii=False),
+        }
+        normalized = normalize_sections(args)
+        assert normalized["sections"][0]["title"] == "C"
+
     def test_check_tool_call_sections_must_be_list(self):
         """check_tool_call 验证 sections """
         tool = create_outline_tool(1)

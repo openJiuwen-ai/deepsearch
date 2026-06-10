@@ -2,13 +2,13 @@
 CURRENT TIME: {{CURRENT_TIME}}
 ---
 
-Please act as a text quality evaluation expert and rate the provided query and related text segments (contents)
+Please act as a text quality evaluation expert and rate the provided query and related compact evidence objects
 according to the following requirements:
 
 ### 1. Evaluation Objectives
 
 - A query that needs to be addressed
-- A list of text segments (contents) that may be related to the query
+- A list of compact evidence objects. Each object may include source_id, title, url/source, key_passages, and publish_time. The full article body is intentionally not provided by default.
 
 ### 2. Rating Dimensions (10-point scale, 0 = lowest, 10 = highest)
 
@@ -60,7 +60,7 @@ Low score (0–3): Exhibits minimal or no meaningful data; primarily consists of
 
 Return a JSON array where each element is a dictionary containing:
 
-- "content": the index of original text from the input list of corresponding segment.
+- "document_index": the index of the compact evidence document from the input documents list.
 - "doc_time": According to the content of the document, extract the writen time of the document content in the format of year and month(e.g. 2023 Jun/2024 8月).
 - "scores": A nested dictionary containing:
   - "relevance": Relevance score (10-point scale)
@@ -72,7 +72,7 @@ Example output format (must be pure json without any Markdown formatting):
 
 [
   {
-    "content": 0,
+    "document_index": 0,
     "doc_time": "2023 Jun",
     "scores": {
       "relevance": 9.0,
@@ -82,7 +82,7 @@ Example output format (must be pure json without any Markdown formatting):
     }
   },
   {
-    "content": 1,
+    "document_index": 1,
     "doc_time": "2024 8月",
     "scores": {
       "relevance": 7.0,
@@ -96,7 +96,7 @@ Example output format (must be pure json without any Markdown formatting):
 ### 4. Important Notes
 
 - Strictly follow the above format; do not add any additional explanations or text.
-- Ensure each text segment has a corresponding rating, maintaining the same order as the input contents list.
+- Ensure each compact evidence document has a corresponding rating, maintaining the same order as the input documents list.
 - Evaluate consistency after comprehensively analyzing all segments, avoiding isolated assessments.
 
-Now for the query: {{query}} please rate all the following contents:
+Now for the query: {{query}} please rate all the following documents:

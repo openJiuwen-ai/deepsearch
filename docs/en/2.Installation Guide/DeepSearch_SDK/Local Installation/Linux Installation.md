@@ -150,10 +150,20 @@ Ensure the machine meets:
   > TLS issues: `uv sync --group backend --native-tls`
 
   ```bash
+  # Terminal 1: main API (default http://127.0.0.1:8000)
   uv run start_backend.py
-  ```
+```
 
-  Expect `Application startup complete`.
+For **DeepSearch** mode (`search_mode=search`, not **DeepResearch** `research`), start Telemetry in a **second terminal** (default `http://127.0.0.1:8089`):
+
+```bash
+  # Terminal 2
+  uv run python -m server.telemetry_event_server
+```
+
+Docker installs start both processes; see [Docker installation](../Docker%20Installation/README.md).
+
+Expect `Application startup complete` on the main API terminal.
 
 ## 3. FAQ
 

@@ -164,10 +164,19 @@ Install dependencies first, then clone and configure.
   > If sync fails on HTTPS, try: `uv sync --group backend --native-tls`
 
   ```bash
+  # Terminal 1: main API
   uv run start_backend.py
   ```
 
-  You should see `Application startup complete`.
+  For **DeepSearch** mode (`search_mode=search`), in a **second terminal**:
+
+  ```bash
+  uv run python -m server.telemetry_event_server
+  ```
+
+  Docker installs: see [Docker installation](../Docker%20Installation/README.md). **DeepResearch** only needs terminal 1.
+
+  You should see `Application startup complete` on the main API terminal.
 
 ## 3. FAQ
 

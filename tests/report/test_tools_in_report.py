@@ -123,6 +123,31 @@ def test_is_valid_chapter_format(text, section_idx, expected):
     assert Reporter.is_valid_chapter_format(text, section_idx) == expected
 
 
+def test_check_chapter_format_returns_reason_for_markdown_heading():
+    ok, reason = Reporter.check_chapter_format("## 1.1 子标题\n1 主标题", 1)
+    assert ok is False
+    assert "markdown heading" in reason
+
+
+def test_check_chapter_format_returns_reason_for_digit_only_line():
+    ok, reason = Reporter.check_chapter_format("1 主章节\n2025年市场规模", 1)
+    assert ok is False
+    assert "starts with digits" in reason
+
+
+def test_check_chapter_format_accepts_level1_title_starting_with_year():
+    outline = (
+        "1 2025年中国低空经济全景透视：发展现状、技术成熟度与系统性风险评估\n"
+        "1.1 政策跃迁与制度架构\n"
+        "1.2 产业现状量化画像\n"
+        "1.3 技术成熟度与核心瓶颈\n"
+        "1.4 系统性风险矩阵"
+    )
+    ok, reason = Reporter.check_chapter_format(outline, 1)
+    assert ok is True, reason
+    assert reason == ""
+
+
 @pytest.mark.parametrize("content, refs, lang, expected", [
     # 中文引用
     ("这是正文", ["参考A", "参考B"], CHINESE,
@@ -337,22 +362,22 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
         ([], ["http://a.com"], {}, []),
 
         # urls为空
-        ([{"url": "http://a.com", "title": "A", "core_content": "contentA"}], [], {}, []),
+        ([{"url": "http://a.com", "title": "A", "original_content": "contentA"}], [], {}, []),
 
         # 单个匹配
         (
-                [{"url": "http://a.com", "title": "A", "core_content": "contentA"}],
+                [{"url": "http://a.com", "title": "A", "original_content": "contentA"}],
                 ["http://a.com"],
                 {"references": ["[A](http://a.com)"], "core_content_list": ["contentA"]},
-                [{"url": "http://a.com", "title": "A", "core_content": "contentA"}],
+                [{"url": "http://a.com", "title": "A", "original_content": "contentA"}],
         ),
 
         # urls里有两个地址，doc_infos里都有
         (
                 [
-                    {"url": "http://a.com", "title": "A", "core_content": "contentA"},
-                    {"url": "http://b.com", "title": "B", "core_content": "contentB"},
-                    {"url": "http://c.com", "title": "C", "core_content": "contentC"},
+                    {"url": "http://a.com", "title": "A", "original_content": "contentA"},
+                    {"url": "http://b.com", "title": "B", "original_content": "contentB"},
+                    {"url": "http://c.com", "title": "C", "original_content": "contentC"},
                 ],
                 ["http://a.com", "http://b.com"],
                 {
@@ -366,8 +391,8 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
                     ]
                 },
                 [
-                    {"url": "http://a.com", "title": "A", "core_content": "contentA"},
-                    {"url": "http://b.com", "title": "B", "core_content": "contentB"},
+                    {"url": "http://a.com", "title": "A", "original_content": "contentA"},
+                    {"url": "http://b.com", "title": "B", "original_content": "contentB"},
                 ],
         ),
         (
@@ -375,7 +400,7 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
                     {
                         "url": "https://example.test/",
                         "title": "x](javascript:alert(1)) [safe",
-                        "core_content": "contentA",
+                        "original_content": "contentA",
                     }
                 ],
                 ["https://example.test/"],
@@ -389,18 +414,18 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
                     {
                         "url": "https://example.test/",
                         "title": "x](javascript:alert(1)) [safe",
-                        "core_content": "contentA",
+                        "original_content": "contentA",
                     }
                 ],
         ),
         (
-                [{"url": "javascript:alert(2)", "title": "benign", "core_content": "contentB"}],
+                [{"url": "javascript:alert(2)", "title": "benign", "original_content": "contentB"}],
                 ["javascript:alert(2)"],
                 {
                     "references": ["benign (javascript:alert\\(2\\))"],
                     "core_content_list": ["contentB"],
                 },
-                [{"url": "javascript:alert(2)", "title": "benign", "core_content": "contentB"}],
+                [{"url": "javascript:alert(2)", "title": "benign", "original_content": "contentB"}],
         ),
     ],
 )

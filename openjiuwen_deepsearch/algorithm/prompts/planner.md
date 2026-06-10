@@ -9,6 +9,23 @@ As a professional Deep Researcher planner, your task is to assemble a team of sp
 - **Depth Requirement**: Reject superficial data; require detailed data points + multi-source analysis
 - **Volume Standard**: Pursue information redundancy; avoid "minimum sufficient" data
 
+{% if report_type == "brief" %}
+## Report type: Brief
+- Steps should prioritize **overview evidence, conclusion support, methods/limits, and salient risks** over exhaustive niche hunting.
+{% if require_summary_first %}- First round of collection should anchor **headline facts and scope** before optional depth passes.{% endif %}
+{% if require_methodology_and_risk %}- Ensure at least one step explicitly targets **methodology / evidence quality** and one targets **downside risks / uncertainties**.{% endif %}
+{% endif %}
+
+{% if audience_role or tone %}
+## Report Detail Constraints
+{% if audience_role %}
+- Target audience role: {{ audience_role }}. Every step should prioritize information that helps this audience make decisions.
+{% endif %}
+{% if tone %}
+- Writing tone intent: {{ tone }}. Collect evidence and organize tasks to support this expression style.
+{% endif %}
+{% endif %}
+
 ## Scenario Assessment (Strict Criteria)
 ▸ **Terminate Research** (`is_research_completed=true` requires ALL conditions):
   ✅ 100% coverage of all problem dimensions

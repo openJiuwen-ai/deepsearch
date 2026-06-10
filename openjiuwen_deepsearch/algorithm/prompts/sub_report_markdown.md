@@ -13,12 +13,22 @@ You will act based on the following inputs:
 short, focus on writing the current chapter 
 5. **Background Knowledge**: The background knowledge summarized from the sub-reports of the parent chapters.
 
+{% if audience_role or tone %}
+## Report Detail Constraints
+{% if audience_role %}
+- **Target Audience**: {{ audience_role }}. Adjust explanation granularity and emphasis to this audience.
+{% endif %}
+{% if tone %}
+- **Tone Intent**: {{ tone }}. Keep language stance and argument style consistent with this tone.
+{% endif %}
+{% endif %}
+
 # Critical Constraints (NON-NEGOTIABLE)
 
 ## 1. Citation & Grounding
-- **Strict Grounding**: You can ONLY use the provided "Collected Information". Do NOT invent facts.
+- **Strict Grounding**: You can ONLY use the provided Collected Information and Background Knowledge. Do NOT invent facts.
 - **Citation Format**: 
-    - Every factual statement must be supported by a citation at the end of the sentence or clause.
+    - Every factual statement based on Collected Information must be supported by a citation at the end of the sentence or clause.
     - Format: `[citation:X]` (e.g., "Revenue grew by 20% [citation:3].").
     - Multiple sources: `[citation:3][citation:5]`.
     - **Prohibited**: Do NOT use `[webpage X]`, `(Source X)`, or list references at the end of the 
@@ -27,6 +37,15 @@ short, focus on writing the current chapter
     - If sources contradict: Use internal knowledge to identify the most authoritative fact.
     - If unsure: Adopt the consensus view (majority vote).
     - If still unresolved: Explicitly mention the controversy/different viewpoints.
+- **Cross-Section Callbacks**:
+    - Background Knowledge is internal context from prior sections, not an external source.
+    - You may refer back to prior sections in natural prose when it improves coherence.
+      Examples for Chinese output: "如第1章所述", "结合第2章分析", "这一点与前文关于...的判断相呼应".
+      Examples for English output: "As discussed in Section 1", "Building on the analysis in Section 2".
+    - Do not output any bracketed internal labels about prior-section context, including labels
+      containing "Background Knowledge", "Parent Section", "Prior Section", or "from Section".
+    - Do not use Background Knowledge as an external citation.
+    - Only Collected Information may be cited with `[citation:X]`.
 
 ## 2. Formatting & Structure (CRITICAL)
 - **Output Structure**:
@@ -42,7 +61,11 @@ short, focus on writing the current chapter
     - Avoid Chinese numbering like "（一）" or "一、" in headings. 
 
 ## 3. Content Standards
+{% if paragraph_style | default("detailed") == "concise" %}
+- **Density (Brief mode)**: Aim for **concise, high-signal prose** (roughly **800–1500** Chinese characters or **500–900** English words for the full chapter unless the outline is extremely narrow). Prefer short paragraphs and selective tables.
+{% else %}
 - **Density**: Each section should contain approximately 2500 words to ensure comprehensive coverage.
+{% endif %}
 - **Data Presentation**:
     - Try to present comparative data in the form of **Markdown Tables** as much as possible.
     - **Specifics**: When mentioning data, cite the source authority (e.g., "According to data from China Education Online...").
@@ -69,7 +92,12 @@ This is a core part of the report. You must:
 
 # Output Format Rules
 ## Markdown Table Syntax
-- Title: Centered below the table.
+- Before each Markdown table, write one natural sentence explaining the table's analytical purpose or key conclusion.
+- Do not manually number tables in the intro sentence or caption; use general references such as "下表 / 以下表格" or "the table below" when needed.
+- After each Markdown table, write one concise table caption. The caption should name only the table's subject/scope.
+- Do not repeat the introductory sentence as the caption.
+- Do not add extra table notes or blockquotes after the caption, such as "表格说明", "表说明", "Table note", or "Note".
+- Keep the table as a standard Markdown pipe table. Do not wrap the table itself in HTML.
 - Alignment: Headers centered, content left-aligned.
 - Header: Concise (keep short).
 - Structure:
@@ -98,5 +126,3 @@ Chinese Output Format Example:
 子章节内容2
 ## 1.3 子章节标题3
 子章节内容3
-## 1.4 子章节标题4
-子章节内容4

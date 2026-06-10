@@ -40,13 +40,13 @@ Ensure the machine meets:
 * x86_64:
 
     ```
-    wget https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.6_amd64.zip
+    wget https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.7_amd64.zip
     ```
 
 * ARM64:
 
     ```
-    wget https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.6_arm64.zip
+    wget https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.7_arm64.zip
     ```
 
 ### 2. Start DeepSearch
@@ -61,10 +61,10 @@ Ensure the machine meets:
 
 * Extract:
 
-  - x86_64: `unzip deployTool_0.1.6_amd64.zip`
-  - ARM64: `unzip deployTool_0.1.6_arm64.zip`
+  - x86_64: `unzip deployTool_0.1.7_amd64.zip`
+  - ARM64: `unzip deployTool_0.1.7_arm64.zip`
 
-* Enter the `deployTool_0.1.6_*64` folder and check Docker:
+* Enter the `deployTool_0.1.7_*64` folder and check Docker:
 
   ```bash
   sudo systemctl start docker

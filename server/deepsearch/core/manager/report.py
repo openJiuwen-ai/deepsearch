@@ -1,6 +1,8 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 import binascii
+import logging
+import time
 
 from fastapi import status
 
@@ -10,6 +12,8 @@ from server.deepsearch.common.exception.exceptions import (
     ReportConvertValidationException,
 )
 from server.schemas.report import ReportConvertReq, ReportConvertRes
+
+logger = logging.getLogger(__name__)
 
 
 def _raise_report_convert_error(
@@ -47,20 +51,59 @@ def report_convert(req: ReportConvertReq) -> ReportConvertRes:
         ReportConvertExecutionException: 导出流程执行失败。
     """
     processor = req.convert_type.get_processor()
+    start_time = time.perf_counter()
+    final_result = req.final_result if isinstance(req.final_result, dict) else {}
+    logger.info(
+        "Starting report convert convert_type=%s infer_messages=%s chart_messages=%s",
+        req.convert_type.value,
+        len(final_result.get("infer_messages") or []),
+        len(final_result.get("chart_messages") or []),
+    )
     try:
         b64_convert_content = processor.convert_from_final_result_to_bundle_base64(req.final_result)
     except ReportConvertBasicException:
+        logger.warning(
+            "Report convert failed with business exception convert_type=%s duration_ms=%.2f",
+            req.convert_type.value,
+            (time.perf_counter() - start_time) * 1000,
+        )
         raise
     except binascii.Error as exc:
+        logger.warning(
+            "Report convert failed on base64 validation convert_type=%s duration_ms=%.2f",
+            req.convert_type.value,
+            (time.perf_counter() - start_time) * 1000,
+        )
         _raise_report_convert_error(ReportConvertValidationException, "invalid Base64 string", exc)
     except UnicodeDecodeError as exc:
+        logger.warning(
+            "Report convert failed on UTF-8 validation convert_type=%s duration_ms=%.2f",
+            req.convert_type.value,
+            (time.perf_counter() - start_time) * 1000,
+        )
         _raise_report_convert_error(ReportConvertValidationException, "not valid UTF-8 text", exc)
     except Exception as exc:
+        logger.exception(
+            "Report convert execution failed convert_type=%s duration_ms=%.2f",
+            req.convert_type.value,
+            (time.perf_counter() - start_time) * 1000,
+        )
         _raise_report_convert_error(ReportConvertExecutionException, "convert failed", exc)
 
     if not b64_convert_content:
+        logger.warning(
+            "Report convert produced empty content convert_type=%s duration_ms=%.2f",
+            req.convert_type.value,
+            (time.perf_counter() - start_time) * 1000,
+        )
         _raise_report_convert_error(ReportConvertExecutionException, "convert failed")
 
+    logger.info(
+        "Completed report convert convert_type=%s bundle_base64_length=%s duration_ms=%.2f",
+        req.convert_type.value,
+        len(b64_convert_content),
+        (time.perf_counter() - start_time) * 1000,
+    )
     return ReportConvertRes(
         code=status.HTTP_200_OK,
         msg='success',

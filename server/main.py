@@ -14,6 +14,7 @@ import uvicorn
 from server.core.cancel_bus import start_cancel_listener, stop_cancel_listener
 from server.core.database import Base, engine
 from server.core.db_sync import run_database_sync
+from server.core.request_logging import add_request_logging_middleware
 from server.core.runner_init import init_runner, shutdown_runner
 from server.deepsearch.core.models.report_template import ReportTemplateDB
 from server.deepsearch.core.models.web_search_engine_model import WebSearchEngineModel
@@ -105,6 +106,8 @@ app = FastAPI(
         "clientId": "swagger-ui",
     }
 )
+
+add_request_logging_middleware(app)
 
 # Add CORS middleware
 app.add_middleware(

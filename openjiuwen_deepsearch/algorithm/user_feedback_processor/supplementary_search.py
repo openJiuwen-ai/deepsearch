@@ -4,6 +4,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_legacy_doc_infos_view
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.common import (
     UserFeedbackPromptInvoker,
     resolve_model_context_collector as _resolve_model_context_collector,
@@ -414,7 +415,9 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
                 "selected_text_clean": rewrite_context.selected_text_clean,
                 "section_text_clean": rewrite_context.section_text_clean,
                 "collector_summary": rewrite_context.collector_summary,
-                "doc_infos": rewrite_context.doc_infos,
+                # 中间过渡态：补充搜索 rewrite prompt 仍使用旧 doc_infos 协议。
+                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
+                "doc_infos": build_legacy_doc_infos_view(rewrite_context.doc_infos),
             },
             AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_ONLY.value,
         )
@@ -440,7 +443,9 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
                 "selected_text_clean": rewrite_context.selected_text_clean,
                 "section_text_clean": rewrite_context.section_text_clean,
                 "collector_summary": rewrite_context.collector_summary,
-                "doc_infos": rewrite_context.doc_infos,
+                # 中间过渡态：补充搜索 rewrite prompt 仍使用旧 doc_infos 协议。
+                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
+                "doc_infos": build_legacy_doc_infos_view(rewrite_context.doc_infos),
             },
             AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_AND_RELATED.value,
         )

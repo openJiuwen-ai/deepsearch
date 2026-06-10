@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from openjiuwen_deepsearch.config.runtime_api_models import ApiToolsConfig
 
+OUTLINER_SECTION_NUM_MAX = 15
+
 
 class LLMConfig(BaseModel):
     model_name: str = Field(default="", description="模型名称")
@@ -292,7 +294,12 @@ class AgentConfig(BaseModel):
                                                                                     "dependency_driving: 依赖驱动工作流执行"
                                                                                     "parallel: 并行工作流执行")
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
-    outliner_max_section_num: int = Field(default=10, ge=1, le=15, description="最大规划章节数量，取值范围:[1,15]")
+    outliner_max_section_num: int = Field(
+        default=5,
+        ge=1,
+        le=OUTLINER_SECTION_NUM_MAX,
+        description=f"大纲章节数量，取值范围:[1,{OUTLINER_SECTION_NUM_MAX}]",
+    )
     outline_interaction_enabled: bool = Field(default=True, description="大纲交互开关")
     outline_interaction_max_rounds: int = Field(default=3, ge=1, le=100, description="大纲交互最大轮次")
     source_tracer_research_trace_source_switch: bool = Field(default=True, description="溯源功能开关")
@@ -384,6 +391,8 @@ class ServiceConfig(BaseModel):
                                                                description="子报告中单次llm处理筛选收集到的数量")
     sub_report_classify_doc_infos_res_top_k_num: int = Field(default=5,
                                                              description="子报告中单次llm处理返回的top_k数量")
+    sub_report_doc_prefilter_multiplier: int = Field(default=5,
+                                                     description="子报告文档预筛保留倍数，最大候选数为top_k乘以该值")
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=False, description="报告插入图表开关")
 
@@ -397,6 +406,9 @@ class ServiceConfig(BaseModel):
 
     # 大模型超时参数
     llm_timeout: int = Field(default=300, description="大模型调用超时时间，单位秒")
+
+    # 大模型思考模式开关参数
+    llm_thinking_enabled: bool = Field(default=False, description="是否开启大模型思考模式，默认关闭")
 
     # debug辅助工具参数
     node_debug_enable: bool = Field(default=False, description="节点格式化记录debug日志开关")

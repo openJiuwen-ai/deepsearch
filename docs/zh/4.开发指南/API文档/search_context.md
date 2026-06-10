@@ -186,6 +186,20 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.FinalResul
 
 ---
 
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ReportTypePolicy
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ReportTypePolicy(...)
+```
+**ReportTypePolicy** 是由 `research_intent.report_type` 解析出的报告类型策略，用于稳定控制各阶段的报告生成策略。
+
+**字段**：
+- **report_type**(str)：报告类型，当前为 `professional` 或 `brief`。
+- **paragraph_style**(str)：段落风格，当前为 `detailed` 或 `concise`。
+- **require_summary_first**(bool)：是否强调摘要/总览前置。
+- **require_methodology_and_risk**(bool)：是否强调方法论与风险相关内容。
+
+---
+
 ## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ResearchIntent
 ```python
 class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ResearchIntent(...)
@@ -196,12 +210,17 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ResearchIn
 - **section_count**(Optional[int])：用户希望的章节数量。仅正整数会被保留。
 - **audience_role**(Optional[str])：目标读者角色。
 - **tone**(Optional[str])：写作风格，建议使用稳定英文枚举值，例如 `formal`、`analytical`。
-- **report_type**(Optional[str])：报告类型，建议使用稳定英文枚举值，例如 `standard`、`deep_research`。
+- **report_type**(Optional[str])：报告类型，建议使用稳定英文枚举值 `professional`、`brief`。其中 `professional` 表示专业版报告，`brief` 表示精简版报告。
 - **include_url**(List[str])：用户指定包含的链接。默认值：`[]`。
 - **exclude_url**(List[str])：用户指定排除的链接。默认值：`[]`。
 - **include_domains**(List[str])：用户指定的站点域名。默认值：`[]`。
 - **exclude_domains**(List[str])：用户排除的站点域名。默认值：`[]`。
 
+**运行期生效说明**：
+- 大纲阶段 `section_num`：用户指定 `section_count` 时为 `min(section_count, OUTLINER_SECTION_NUM_MAX)`，否则为 `config.outliner_max_section_num`。
+- `audience_role` 与 `tone` 会透传到大纲、章节规划（Plan）、子报告写作与总报告汇总阶段。
+- `report_type` 会透传到大纲、章节规划（Plan）、信息收集、子报告写作与总报告汇总阶段。
+- `include_domains`与`exclude_domains` 会透传到信息收集阶段。
 ---
 
 ## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchContext
@@ -215,6 +234,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 - **original_query**(str)：用户输入的原始问题。默认值：`""`。
 - **research_query**(str)：意图识别后的研究主题，供检索与规划使用。默认值：`""`。
 - **research_intent**(ResearchIntent)：结构化报告约束。默认值：空 `ResearchIntent`。
+- **report_type_policy**(ReportTypePolicy)：由 `research_intent.report_type` 解析出的运行期策略，供大纲、规划、信息收集、子报告写作和总报告汇总阶段消费。默认值：空 `ReportTypePolicy`。
 - **messages**(List[Message])：对话消息列表。
 - **language**(str)：默认值：`"zh-CN"`。
 - **report_template**(str)：模板内容。默认值：`""`。

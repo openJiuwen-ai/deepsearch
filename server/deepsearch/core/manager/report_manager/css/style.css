@@ -64,9 +64,23 @@ h4 {
 }
 
 /* 表格样式 */
-table {
+.table-wrap {
     width: 100%;
+    overflow-x: auto;
+    margin: 1.5rem 0;
+    text-align: center;
+}
+
+table {
     border-collapse: collapse;
+    width: 100%;
+    margin: 1.5rem 0;
+}
+
+.table-wrap table {
+    width: auto;
+    max-width: 100%;
+    margin: 0 auto;
 }
 
 th, td {

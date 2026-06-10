@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Any
@@ -60,6 +61,14 @@ class ReportTemplateManager:
     ) -> Dict[str, Any]:
         """Import a template, overwriting existing if name is same"""
         repo = ReportTemplateRepository(db)
+        start_time = time.perf_counter()
+        logger.info(
+            "Importing report template space_id=%s template_name=%s file_name=%s is_template=%s",
+            params.space_id,
+            params.template_name,
+            params.file_name,
+            params.is_template,
+        )
 
         try:
             self._validate_template_name(params.template_name)
@@ -83,6 +92,13 @@ class ReportTemplateManager:
                 is_template=params.is_template,
                 agent_config=agent_config_dict,
             )
+            logger.info(
+                "Generated report template content space_id=%s template_name=%s status=%s duration_ms=%.2f",
+                params.space_id,
+                params.template_name,
+                result.get("status"),
+                (time.perf_counter() - start_time) * 1000,
+            )
 
             if result.get("status") != "success":
                 error_msg = result.get("error_message", "AI Generation failed")
@@ -105,7 +121,12 @@ class ReportTemplateManager:
                 existing.update_time = milliseconds()
                 repo.commit()
                 target_id = existing.template_id
-                logger.info("Overwrote existing template: %s", params.template_name)
+                logger.info(
+                    "Overwrote existing template space_id=%s template_id=%s template_name=%s",
+                    params.space_id,
+                    target_id,
+                    params.template_name,
+                )
             else:
                 template = ReportTemplateDB(
                     space_id=params.space_id,
@@ -117,20 +138,45 @@ class ReportTemplateManager:
                 )
                 repo.create(template)
                 target_id = template.template_id
-                logger.info("Created new template: %s", params.template_name)
+                logger.info(
+                    "Created new template space_id=%s template_id=%s template_name=%s",
+                    params.space_id,
+                    target_id,
+                    params.template_name,
+                )
 
+            logger.info(
+                "Imported report template space_id=%s template_id=%s template_name=%s duration_ms=%.2f",
+                params.space_id,
+                target_id,
+                params.template_name,
+                (time.perf_counter() - start_time) * 1000,
+            )
             return {"code": status.HTTP_200_OK, "msg": "success", "template_id": target_id}
 
         except ReportTemplateBasicException:
             repo.rollback()
+            logger.warning(
+                "Report template import failed with business exception space_id=%s template_name=%s duration_ms=%.2f",
+                params.space_id,
+                params.template_name,
+                (time.perf_counter() - start_time) * 1000,
+            )
             raise
         except Exception:
             repo.rollback()
+            logger.exception(
+                "Report template import failed space_id=%s template_name=%s duration_ms=%.2f",
+                params.space_id,
+                params.template_name,
+                (time.perf_counter() - start_time) * 1000,
+            )
             raise
 
     @staticmethod
     def list_templates(db: Session, space_id: str) -> Dict[str, Any]:
         """List all templates in a space"""
+        logger.info("Listing report templates space_id=%s", space_id)
         repo = ReportTemplateRepository(db)
         templates = repo.list_by_space(space_id)
 
@@ -144,18 +190,21 @@ class ReportTemplateManager:
                 "create_time": create_time_dt.strftime("%Y-%m-%d %H:%M:%S"),
             })
 
+        logger.info("Listed report templates space_id=%s count=%s", space_id, len(data))
         return {"code": status.HTTP_200_OK, "msg": "success", "data": data}
 
     @staticmethod
     def get_template_content(db: Session, space_id: str, template_id: int) -> Dict[str, Any]:
         """Return the content of a template"""
+        logger.info("Getting report template content space_id=%s template_id=%s", space_id, template_id)
         repo = ReportTemplateRepository(db)
         template = repo.get_by_id(space_id, template_id)
 
         if not template:
-            logger.info(f"Template not found:{template_id}")
+            logger.info("Report template not found space_id=%s template_id=%s", space_id, template_id)
             raise TemplateNotFoundException(f"Template with id '{template_id}' not found")
 
+        logger.info("Got report template content space_id=%s template_id=%s", space_id, template_id)
         return {
             "code": status.HTTP_200_OK,
             "msg": "success",
@@ -165,6 +214,7 @@ class ReportTemplateManager:
     @staticmethod
     def delete_template(db: Session, space_id: str, template_id: int) -> Dict[str, Any]:
         """Delete a specific template"""
+        logger.info("Deleting report template space_id=%s template_id=%s", space_id, template_id)
         repo = ReportTemplateRepository(db)
         template = repo.get_by_id(space_id, template_id)
 
@@ -172,12 +222,18 @@ class ReportTemplateManager:
             raise TemplateNotFoundException(f"Template with id '{template_id}' not found")
 
         repo.delete(template)
-        logger.info(f"Deleted template: {template_id}")
+        logger.info("Deleted report template space_id=%s template_id=%s", space_id, template_id)
         return {"code": status.HTTP_200_OK, "msg": "success"}
 
     def update_template(self, db: Session, params: UpdateTemplateParams) -> Dict[str, Any]:
         """Update a specific template"""
         repo = ReportTemplateRepository(db)
+        logger.info(
+            "Updating report template space_id=%s template_id=%s template_name=%s",
+            params.space_id,
+            params.template_id,
+            params.template_name,
+        )
         self._validate_template_name(params.template_name)
 
         template = repo.get_by_id(params.space_id, params.template_id)
@@ -197,6 +253,12 @@ class ReportTemplateManager:
 
         try:
             repo.commit()
+            logger.info(
+                "Updated report template space_id=%s template_id=%s template_name=%s",
+                params.space_id,
+                params.template_id,
+                params.template_name,
+            )
             return {"code": status.HTTP_200_OK, "msg": "success", "template_id": params.template_id}
         except Exception as e:
             repo.rollback()

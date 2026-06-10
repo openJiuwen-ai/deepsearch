@@ -193,10 +193,19 @@
 
   ```bash
   # 启动
+  # 终端 1：主 API
   uv run start_backend.py
   ```
-  
+
+  使用 **DeepSearch** 模式（`search_mode=search`）时，在**另一终端**执行：
+
+  ```bash
+  uv run python -m server.telemetry_event_server
+  ```
+
   > **注意**：部分用户在执行`uv run start_backend.py`可能会遇到No Module named 'greenlet'的问题，请移步 [FAQ](#macos-greenlet) 查看解决方法
+
+  > Docker 安装见 [Docker 方式安装](../Docker方式安装/README.md)。仅 **DeepResearch** 时只需终端 1。
 
   启动成功后，会输出 "Application startup complete"。
 

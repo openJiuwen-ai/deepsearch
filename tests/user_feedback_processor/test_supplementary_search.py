@@ -252,7 +252,19 @@ async def test_rewrite_methods_accept_named_context_and_forward_prompt_vars(meth
         selected_text_clean="选中文本",
         section_text_clean="章节文本",
         collector_summary="摘要",
-        doc_infos=[{"title": "doc"}],
+        doc_infos=[
+            {
+                "doc_id": "web_1",
+                "source_id": "web_1_p123",
+                "title": "doc",
+                "url": "https://example.com",
+                "publish_time": "2025-05",
+                "original_content": "原文",
+                "content_ref": {"type": "source_store", "source_id": "web_1_p123"},
+                "scores": {"authority": 8},
+                "key_passages": ["关键段落"],
+            }
+        ],
         language="zh-CN",
     )
 
@@ -273,7 +285,19 @@ async def test_rewrite_methods_accept_named_context_and_forward_prompt_vars(meth
             "selected_text_clean": "选中文本",
             "section_text_clean": "章节文本",
             "collector_summary": "摘要",
-            "doc_infos": [{"title": "doc"}],
+            "doc_infos": [
+                {
+                    "doc_time": "2025-05",
+                    "source_authority": "",
+                    "task_relevance": "",
+                    "original_content": "原文",
+                    "url": "https://example.com",
+                    "information_richness": "",
+                    "data_density": "",
+                    "title": "doc",
+                    "query": "",
+                }
+            ],
         },
         agent_name,
     )

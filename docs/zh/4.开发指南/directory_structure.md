@@ -193,6 +193,7 @@ openjiuwen_deepsearch/
 
 **主要文件**：
 - `llm_wrapper.py` - LLM调用统一封装
+- `llm_request_adapter.py` - LLM 请求参数适配，包括大模型思考模式开关的厂商规则
 
 ---
 

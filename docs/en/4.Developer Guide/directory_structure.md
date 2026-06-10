@@ -157,6 +157,7 @@ openjiuwen_deepsearch/
 ### `llm/`
 
 - `llm_wrapper.py` — unified LLM calls  
+- `llm_request_adapter.py` — LLM request parameter adaptation, including provider rules for the model thinking-mode switch
 
 ---
 

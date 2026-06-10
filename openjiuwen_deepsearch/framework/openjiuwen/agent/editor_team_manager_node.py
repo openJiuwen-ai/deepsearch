@@ -59,7 +59,9 @@ class EditorTeamNode(BaseNode):
 
         return dict(language=language, messages=messages, outline=outline, history_outlines=history_outlines,
                     report_template=report_template, history_reports=history_reports, session_id=session_id,
-                    config=config)
+                    config=config,
+                    report_type_policy=session.get_global_state("search_context.report_type_policy") or {},
+                    research_intent=session.get_global_state("search_context.research_intent") or {})
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         # 1. 从上下文中获取大纲，并初始化报告
@@ -190,7 +192,9 @@ class EditorTeamNode(BaseNode):
             "config": state.get("config", {}),
             "sub_report_background_knowledge": background_knowledge if background_knowledge else [],
             "history_plans": section.plans,
-            "session_id": state.get("session_id", "")
+            "session_id": state.get("session_id", ""),
+            "report_type_policy": state.get("report_type_policy") or {},
+            "research_intent": state.get("research_intent") or {},
         }
 
         return section_state

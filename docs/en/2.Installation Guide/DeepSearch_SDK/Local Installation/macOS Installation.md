@@ -105,12 +105,21 @@ This guide describes a **local** install of DeepSearch on **macOS**.
   > Hang / TLS: same notes as Linux guide.
 
   ```bash
+  # Terminal 1: main API
   uv run start_backend.py
+  ```
+
+  For **DeepSearch** mode (`search_mode=search`), in a **second terminal**:
+
+  ```bash
+  uv run python -m server.telemetry_event_server
   ```
 
   > If you see `No module named 'greenlet'`, see the [FAQ](../../../5.FAQ/README.md).
 
-  Expect `Application startup complete`.
+  Docker installs: see [Docker installation](../Docker%20Installation/README.md). **DeepResearch** only needs terminal 1.
+
+  Expect `Application startup complete` on the main API terminal.
 
 ## 3. FAQ
 

@@ -12,26 +12,7 @@ You will be provided with some tools. Analyze the task and these tools, then sel
 
 ## Available Tools
 
-### Local Search Tool
-
-- **Description**: Perform searches within a user-specified range of files.
-- **Usage**: Provide search queries relevant to the task description. User can specify the search scope.
-- **Output**: Return the title, and content of local files related to the query.
-
-### Web Search Tool
-
-- **Description**: Perform web searches using the internet. The sources of search engines include Tavily, Bing, Google,
-  DuckDuckGo, arXiv, Brave Search, PubMed, Jina Search, etc.
-- **Usage**: Provide search queries relevant to the task description. The input parameter must be and can only be 'query',
-  with no other parameters allowed.
-- **Output**: Return the URL, title, and content of web pages related to the query.
-
-### Web Crawler
-
-- **Description**: Scrape data from specific websites.
-- **Usage**: Specify the URLs need to extract.
-- **Output**: Extracted the text information (`text_content`) and image information (`images`) from the webpage, where
-  the image information includes the image URL (`image_url`) and the image caption (`image_alt`).
+Tools are provided via the tool calling interface. Refer to each tool's schema for details.
 
 ### User-configurable tools
 
@@ -56,13 +37,6 @@ You will be provided with some tools. Analyze the task and these tools, then sel
 - **IMPORTANT** If the `web_search_tool` is not available, do not use the `web_search_tool`!
 - **IMPORTANT** If the `local_search_tool` is not available, do not use the `local_search_tool`!
 
-### Step 2: Crawl for more detail
-- If the `web_crawler` is available, use the `Web_Crawler` to crawl more detailed info from search results.
-- After using `web_search_tool`, for the list of web pages and PDFs returned by the `web_search_tool`, select a few of the more important URLs,
-  use the `web_crawler` to retrieve the full content for further detailed information.
-- Retain only task-relevant images based on their descriptions, ensuring diversity and avoiding duplicated or near-duplicates.
-- **IMPORTANT** If the `web_crawler` is not available, just skip this step !
-
 ## Task Finish Output
 
 If you think the given task can be finished with collected information, provide a response without any tool call use following content:
@@ -81,8 +55,6 @@ If you think the given task can be finished with collected information, provide 
 - Verify the accuracy of the information before including it in your final answer.
 - Prioritize reliable and up-to-date sources when collecting information.
 - Use appropriate citations and formatting for references to maintain academic integrity.
-- The web search tool input parameter must be and can only be 'query', with no other parameters allowed, avoid including 
-  any other parameter names such as args, q, kwargs, etc.
 
 ## Language Setting
 

@@ -8,6 +8,15 @@ Your task is to compare the **current outline** and the **user-edited outline**,
 
 The final outline should **primarily follow the user-edited version**, while applying minimal improvements when necessary.
 
+{% if audience_role or tone %}
+## Report Detail Constraints
+{% if audience_role %}
+- Target audience role: {{ audience_role }}. Preserve this audience orientation when refining wording and section focus.
+{% endif %}
+{% if tone %}
+- Writing tone intent: {{ tone }}. Keep title/description style consistent with this tone unless user edits explicitly override it.
+{% endif %}
+{% endif %}
 ---
 
 # Pre-search Results

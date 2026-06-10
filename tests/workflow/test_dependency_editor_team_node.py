@@ -4,7 +4,7 @@
 
 import asyncio
 import logging
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from openjiuwen.core.context_engine.base import ModelContext
@@ -20,6 +20,9 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node i
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.dependency_reasoning_team_nodes import (
     DependencyInfoCollectorNode,
     SectionReasoningStartNode,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_execution_service import (
+    CollectorExecutionResult,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import (
     InfoCollectorNode,
@@ -431,6 +434,54 @@ async def test_normal_info_collector_stays_sequential():
     assert seen_step_titles == ["Normal Step 1", "Normal Step 2"]
     assert current_plan.steps[0].step_result == "summary-Normal Step 1"
     assert current_plan.steps[1].step_result == "summary-Normal Step 2"
+
+
+@pytest.mark.asyncio
+async def test_normal_info_collector_keeps_previous_collected_doc_num_when_current_round_empty():
+    node = ExposedInfoCollectorNode()
+    session = Mock(spec=Session)
+    context = Mock(spec=ModelContext)
+    current_plan = Plan(
+        id="1",
+        language="zh-CN",
+        title="Sequential Plan",
+        thought="thought",
+        is_research_completed=False,
+        steps=[
+            Step(id="1", title="Normal Step 1", description="Desc 1", type=StepType.INFO_COLLECTING),
+        ],
+    )
+    state_map = {
+        "section_context.section_idx": "1",
+        "section_context.current_plan": current_plan,
+        "section_context.language": "zh-CN",
+        "section_context.messages": [],
+        "section_context.history_plans": [],
+        "section_context.collected_doc_num": 5,
+        "section_context.warning_infos": [],
+        "config.info_collector_initial_search_query_count": 2,
+        "config.info_collector_max_research_loops": 2,
+        "config.info_collector_max_react_recursion_limit": 8,
+    }
+    session.get_global_state.side_effect = lambda key: state_map.get(key)
+    session.update_global_state = Mock()
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes."
+        "CollectorExecutionService.run_plan",
+        new=AsyncMock(
+            return_value=CollectorExecutionResult(
+                collect_steps=current_plan.steps,
+                collected_doc_num=0,
+                messages=[],
+            )
+        ),
+    ):
+        result = await node.do_invoke({}, session, context)
+
+    assert result["next_node"] == NodeId.PLAN_REASONING.value
+    update_calls = [call.args[0] for call in session.update_global_state.call_args_list]
+    assert {"section_context.collected_doc_num": 5} in update_calls
 
 
 @pytest.mark.asyncio

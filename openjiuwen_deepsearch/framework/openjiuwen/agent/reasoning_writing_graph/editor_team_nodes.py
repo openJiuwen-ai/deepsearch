@@ -14,6 +14,7 @@ from openjiuwen.core.workflow.workflow import Workflow
 
 from openjiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerConfig
 from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
+from openjiuwen_deepsearch.algorithm.report.doc_prefilter import deduplicate_doc_infos
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
 from openjiuwen_deepsearch.common.common_constants import CHINESE
@@ -38,19 +39,29 @@ logger = logging.getLogger(__name__)
 
 def _collect_doc_infos(history_plans) -> list:
     doc_infos: list = []
-    for plan in history_plans or []:
+    for plan_idx, plan in enumerate(history_plans or []):
         steps = plan.steps if hasattr(plan, "steps") else plan.get("steps", [])
-        for step in steps:
+        for step_idx, step in enumerate(steps):
             retrieval_queries = (
                 step.retrieval_queries
                 if hasattr(step, "retrieval_queries")
                 else step.get("retrieval_queries", [])
             )
+            step_task = step.title if hasattr(step, "title") else step.get("title", "")
+            step_id = step.id if hasattr(step, "id") else step.get("id", "")
             for query in retrieval_queries:
                 query_doc_infos = query.doc_infos if hasattr(query, "doc_infos") else query.get("doc_infos", [])
-                doc_infos.extend(query_doc_infos)
-    # 去重：title+url 作为 key
-    return list({(doc["title"], doc["url"]): doc for doc in doc_infos}.values())
+                for doc_info in query_doc_infos:
+                    if not isinstance(doc_info, dict):
+                        continue
+                    enriched_doc_info = doc_info.copy()
+                    enriched_doc_info["plan_idx"] = plan_idx
+                    enriched_doc_info["step_idx"] = step_idx
+                    enriched_doc_info["step_task"] = step_task
+                    if step_id:
+                        enriched_doc_info["step_id"] = step_id
+                    doc_infos.append(enriched_doc_info)
+    return deduplicate_doc_infos(doc_infos)
 
 
 def _get_classify_doc_infos_single_time_num(session: Session) -> int:
@@ -82,6 +93,9 @@ class SectionStartNode(Start):
             section_description=inputs.get("section_description", ""),
             section_iscore=inputs.get("section_iscore", False),
             report_template=inputs.get("report_template", ""),
+            session_id=inputs.get("session_id", ""),
+            report_type_policy=inputs.get("report_type_policy") or {},
+            research_intent=inputs.get("research_intent") or {},
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(),
@@ -106,6 +120,8 @@ class BasePlanReasoningNode(BaseNode):
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} | Start {self.__class__.__name__}")
         # 封装入参
+        rtp = session.get_global_state("section_context.report_type_policy") or {}
+        research_intent = session.get_global_state("section_context.research_intent") or {}
         return {
             "section_idx": section_idx,
             "language": session.get_global_state("section_context.language"),
@@ -120,6 +136,11 @@ class BasePlanReasoningNode(BaseNode):
             "agent_name": AgentLlmName.PLAN_REASONING.value,
             "llm_model_name": adapt_llm_model_name(session, NodeId.PLAN_REASONING.value),
             "api_tools_config": session.get_global_state("config.api_tools_config") or {},
+            "report_type": rtp.get("report_type", "professional"),
+            "require_summary_first": rtp.get("require_summary_first", False),
+            "require_methodology_and_risk": rtp.get("require_methodology_and_risk", False),
+            "audience_role": research_intent.get("audience_role", ""),
+            "tone": research_intent.get("tone", ""),
         }
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -308,7 +329,8 @@ class SubReporterNode(BaseNode):
         self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
         logger.info(f"{self.log_prefix} Start [{self.__class__.__name__}].")
 
-        llm_model_name = adapt_llm_model_name(session, NodeId.SUB_REPORTER.value)
+        rtp = session.get_global_state("section_context.report_type_policy") or {}
+        research_intent = session.get_global_state("section_context.research_intent") or {}
 
         return dict(
             thread_id=session.get_global_state("section_context.session_id"),
@@ -329,10 +351,18 @@ class SubReporterNode(BaseNode):
             classify_doc_infos_res_top_k_num=session.get_global_state(
                 "config.sub_report_classify_doc_infos_res_top_k_num") or 10,
             classify_doc_infos_single_time_num=_get_classify_doc_infos_single_time_num(session),
+            classify_doc_infos_prefilter_multiplier=session.get_global_state(
+                "config.sub_report_doc_prefilter_multiplier") or 5,
             llm_model_name=adapt_llm_model_name(session, NodeId.SUB_REPORTER.value),
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],
             visualization_enable=session.get_global_state("config.visualization_enable"),
+            report_type=rtp.get("report_type", "professional"),
+            paragraph_style=rtp.get("paragraph_style", "detailed"),
+            require_summary_first=rtp.get("require_summary_first", False),
+            require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
+            audience_role=research_intent.get("audience_role", ""),
+            tone=research_intent.get("tone", ""),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -525,7 +555,7 @@ class InfoCollectorNode(BaseNode):
         return dict(messages=messages, current_plan=current_plan, section_idx=section_idx,
                     language=language, initial_search_query_count=initial_search_query_count,
                     max_research_loops=max_research_loops, max_react_recursion_limit=max_react_recursion_limit,
-                    history_plans=history_plans, doc_num=collected_doc_num, warning_infos=warning_infos)
+                    history_plans=history_plans, collected_doc_num=collected_doc_num, warning_infos=warning_infos)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         state = self._pre_handle(inputs, session, context)
@@ -646,6 +676,8 @@ def build_editor_team_workflow():
             "section_iscore": "${section_iscore}",
             "report_template": "${report_template}",
             "config": "${config}",
+            "report_type_policy": "${report_type_policy}",
+            "research_intent": "${research_intent}",
         }
     )
 

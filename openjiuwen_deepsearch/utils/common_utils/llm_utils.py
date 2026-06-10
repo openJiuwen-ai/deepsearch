@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Sequence, Any
+from typing import Sequence, Any, get_args, get_origin
 
 import json_repair
 from openjiuwen.core.foundation.llm.schema.message import (
@@ -22,7 +22,7 @@ from openjiuwen.core.foundation.llm.schema.message import (
     UsageMetadata,
 )
 from openjiuwen.core.foundation.llm.schema.message_chunk import AssistantMessageChunk
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from openjiuwen_deepsearch.common.common_constants import MAX_LLM_RESP_LENGTH
 from openjiuwen_deepsearch.common.exception import CustomValueException
@@ -75,6 +75,16 @@ _DEEPSEARCH_NODE_IDS = frozenset({
 _WORKFLOW_LLM_USAGE: dict[str, dict[str, Any]] = {}
 _USAGE_ONLY_PARSER_PATCHES: dict[int, dict[str, Any]] = {}
 _AGENT_LLM_TIMEOUT_MAX_SECONDS = 3600
+_THINKING_FALLBACK_SESSION_KEY = "llm_runtime.thinking_fallback_active_keys"
+_THINKING_SWITCH_FIELD_KEYWORDS = ("enable_thinking", "thinking")
+_THINKING_SWITCH_UNSUPPORTED_MARKERS = (
+    "invalidparameter",
+    "invalid_parameter",
+    "invalid parameter",
+    "restricted to true",
+    "not support",
+    "unsupported",
+)
 
 
 def _clamp_agent_llm_timeout(timeout: Any) -> int:
@@ -708,6 +718,63 @@ def _extract_json(text: str) -> str:
     return re.sub(r"^```(?:json)?\n|\n```$", "", text.strip())
 
 
+def _is_list_of_strings(annotation: Any) -> bool:
+    """Return whether a Pydantic field annotation is list[str]."""
+    return get_origin(annotation) is list and get_args(annotation) == (str,)
+
+
+def _stringify_json_value(value: Any) -> str:
+    """Convert a JSON value into compact text for schema repair."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        parts = []
+        for key, item_value in value.items():
+            if item_value in (None, "", [], {}):
+                continue
+            if isinstance(item_value, (dict, list)):
+                item_text = json.dumps(item_value, ensure_ascii=False)
+            else:
+                item_text = str(item_value)
+            parts.append(f"{key}: {item_text}")
+        return "; ".join(parts)
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _repair_schema_payload(payload: Any, schema: type[BaseModel]) -> Any:
+    """Repair common local JSON/schema mismatches before strict Pydantic validation."""
+    if not isinstance(payload, dict):
+        return payload
+
+    repaired_payload = copy.deepcopy(payload)
+    for field_name, field_info in schema.model_fields.items():
+        if field_name not in repaired_payload:
+            continue
+        if _is_list_of_strings(field_info.annotation) and isinstance(repaired_payload[field_name], list):
+            repaired_payload[field_name] = [
+                text
+                for text in (_stringify_json_value(item) for item in repaired_payload[field_name])
+                if text
+            ]
+    return repaired_payload
+
+
+def _model_validate_repaired_json(schema: type[BaseModel], content: str) -> BaseModel:
+    """Validate LLM JSON output, using local json repair before failing."""
+    normalized_content = normalize_json_output(content)
+    try:
+        return schema.model_validate_json(normalized_content)
+    except ValidationError as error:
+        try:
+            payload = json_repair.loads(normalized_content)
+        except Exception as repair_error:
+            raise error from repair_error
+        repaired_payload = _repair_schema_payload(payload, schema)
+        return schema.model_validate(repaired_payload)
+
+
 def _single_provider_error_detail(
     exc: BaseException, *, max_response_text: int = 16_000
 ) -> dict[str, Any]:
@@ -815,6 +882,121 @@ async def _call_model_method(method, primary_kwargs: dict):
         return await method(**primary_kwargs)
 
     return await asyncio.to_thread(method, **primary_kwargs)
+
+
+def _get_current_session() -> Any | None:
+    try:
+        return session_context.get()
+    except LookupError:
+        return None
+
+
+def _get_thinking_fallback_key(llm: dict[str, Any]) -> str | None:
+    fallback_key = llm.get("thinking_fallback_key")
+    if isinstance(fallback_key, str) and fallback_key:
+        return fallback_key
+    return None
+
+
+def _get_session_thinking_fallback_registry() -> dict[str, bool]:
+    session = _get_current_session()
+    if session is None:
+        return {}
+    getter = getattr(session, "get_global_state", None)
+    if not callable(getter):
+        return {}
+    try:
+        registry = getter(_THINKING_FALLBACK_SESSION_KEY) or {}
+    except Exception as exc:
+        logger.debug("Failed to read session thinking fallback registry: %s", exc, exc_info=True)
+        return {}
+    if not isinstance(registry, dict):
+        return {}
+    return dict(registry)
+
+
+def _mark_session_thinking_fallback_active(llm: dict[str, Any]) -> None:
+    fallback_key = _get_thinking_fallback_key(llm)
+    if fallback_key is None:
+        return
+    session = _get_current_session()
+    if session is None:
+        return
+    updater = getattr(session, "update_global_state", None)
+    if not callable(updater):
+        return
+    try:
+        updater({_THINKING_FALLBACK_SESSION_KEY: {fallback_key: True}})
+    except Exception as exc:
+        logger.debug("Failed to write session thinking fallback registry: %s", exc, exc_info=True)
+
+
+def _is_thinking_fallback_active(llm: dict[str, Any]) -> bool:
+    if llm.get("thinking_fallback_active"):
+        return True
+    fallback_key = _get_thinking_fallback_key(llm)
+    if fallback_key is None:
+        return False
+    if _get_session_thinking_fallback_registry().get(fallback_key):
+        llm["thinking_fallback_active"] = True
+        return True
+    return False
+
+
+def _select_active_llm_model(llm: dict[str, Any]) -> Any:
+    fallback_model = llm.get("thinking_fallback_model")
+    if fallback_model is not None and _is_thinking_fallback_active(llm):
+        return fallback_model
+    return llm.get("model", None)
+
+
+def _has_available_inactive_thinking_fallback(llm: dict[str, Any]) -> bool:
+    return not _is_thinking_fallback_active(llm) and llm.get("thinking_fallback_model") is not None
+
+
+def _resolve_call_stream_options(llm_model: Any, stats_info_llm: bool) -> dict | None:
+    if not stats_info_llm:
+        return None
+    return _resolve_stream_options(llm_model=llm_model, need_include_usage=True)
+
+
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    for marker in markers:
+        if marker in text:
+            return True
+    return False
+
+
+def _should_retry_without_thinking_switch(detail: str, llm: dict[str, Any]) -> bool:
+    if not _has_available_inactive_thinking_fallback(llm):
+        return False
+    lower_detail = (detail or "").lower()
+    if not _contains_any(lower_detail, _THINKING_SWITCH_FIELD_KEYWORDS):
+        return False
+    return _contains_any(lower_detail, _THINKING_SWITCH_UNSUPPORTED_MARKERS)
+
+
+def _log_thinking_fallback_retry(model_name: str, agent_name: str, removed_fields: list[str], detail: str) -> None:
+    logger.warning(
+        "Model/provider does not support disabling thinking mode; retry without thinking switch. "
+        "model=%s, agent=%s, removed_fields=%s, error=%s",
+        model_name,
+        agent_name or "-",
+        removed_fields,
+        "*" if LogManager.is_sensitive() else detail,
+    )
+
+
+def _activate_thinking_fallback(llm: dict[str, Any], model_name: str, agent_name: str) -> None:
+    llm["thinking_fallback_active"] = True
+    _mark_session_thinking_fallback_active(llm)
+    logger.warning(
+        "Thinking switch fallback activated; subsequent calls will use model without thinking switch. "
+        "model=%s, agent=%s, removed_fields=%s",
+        model_name,
+        agent_name or "-",
+        llm.get("thinking_fallback_removed_fields") or [],
+    )
 
 
 def _extract_usage_payload_from_stream_chunk(raw_chunk: Any) -> Any:
@@ -1146,7 +1328,7 @@ async def llm_astream(*args, **kwargs):
     except Exception as e:
         if can_write_stream and need_stream_out:
             await session.write_custom_stream(_make_payload(stream_id, StreamEvent.DONE.value, ""))
-        raise e
+        raise
     finally:
         if callable(restore_usage_parser):
             restore_usage_parser()
@@ -1233,18 +1415,13 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
 
     # 真正调用llm处
     messages = transfer_to_jiuwen_messages(messages)
-    llm_model = llm.get("model", None)
-    if llm_model is None:
-        raise CustomValueException(
-            error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,
-            message=StatusCode.LLM_INSTANCE_NONE_ERROR.errmsg)
-    resolved_stream_options = (
-        _resolve_stream_options(llm_model=llm_model, need_include_usage=True)
-        if stats_info_llm
-        else None
-    )
 
     if agent_name in _DEEPSEARCH_NODE_IDS:
+        llm_model = llm.get("model", None)
+        if llm_model is None:
+            raise CustomValueException(
+                error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,
+                message=StatusCode.LLM_INSTANCE_NONE_ERROR.errmsg)
         processed_messages = []
         for m in messages:
             if isinstance(m, (SystemMessage, UserMessage, AssistantMessage, ToolMessage)):
@@ -1271,6 +1448,7 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
             "tools": tools,
         }
         try:
+            resolved_stream_options = _resolve_call_stream_options(llm_model, stats_info_llm)
             if hasattr(llm_model, "invoke"):
                 response = await _call_model_method(llm_model.invoke, invoke_kw)
             elif hasattr(llm_model, "_ainvoke"):
@@ -1306,16 +1484,49 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
             ) from e
 
     else:
-        response = await llm_astream(
-            llm=llm_model,
-            messages=messages,
-            model_name=model_name,
-            agent_name=agent_name,
-            tools=tools,
-            need_stream_out=need_stream_out,
-            stream_meta=stream_meta,
-            stream_options=resolved_stream_options,
-        )
+        llm_model = _select_active_llm_model(llm)
+        if llm_model is None:
+            raise CustomValueException(
+                error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,
+                message=StatusCode.LLM_INSTANCE_NONE_ERROR.errmsg)
+
+        async def _invoke_stream_model(target_model):
+            return await llm_astream(
+                llm=target_model,
+                messages=messages,
+                model_name=model_name,
+                agent_name=agent_name,
+                tools=tools,
+                need_stream_out=need_stream_out,
+                stream_meta=stream_meta,
+                stream_options=_resolve_call_stream_options(target_model, stats_info_llm),
+            )
+
+        try:
+            response = await _invoke_stream_model(llm_model)
+        except Exception as e:
+            fallback_succeeded = False
+            if not _has_available_inactive_thinking_fallback(llm):
+                raise
+
+            detail = _format_llm_invoke_exception(e)
+            if _should_retry_without_thinking_switch(detail, llm):
+                _log_thinking_fallback_retry(
+                    model_name,
+                    agent_name,
+                    llm.get("thinking_fallback_removed_fields") or [],
+                    detail,
+                )
+                _activate_thinking_fallback(llm, model_name, agent_name)
+                try:
+                    response = await _invoke_stream_model(llm["thinking_fallback_model"])
+                except Exception as fallback_error:
+                    raise fallback_error from e
+                else:
+                    fallback_succeeded = True
+
+            if not fallback_succeeded:
+                raise
 
     if stats_info_llm:
         duration = time.time() - start
@@ -1343,8 +1554,7 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
 
     response.content = _extract_json(response.content)
     if schema is not None:
-        response = schema.model_validate_json(response.content)
-        return response
+        return _model_validate_repaired_json(schema, response.content)
     return _unify_responnse(response)
 
 
@@ -1355,9 +1565,19 @@ def _unify_responnse(response):
         tool_calls = temp_response.get("tool_calls")
         for idx, tool_call in enumerate(tool_calls):
             func = tool_call.get("function")
-            if not tool_call.get("args") and func and func.get("arguments"):
-                arguments = normalize_json_output(func.get("arguments"))
-                new_response.get("tool_calls")[idx]["args"] = json.loads(arguments)
+            if func and func.get("arguments"):
+                if not tool_call.get("args"):
+                    arguments = normalize_json_output(func.get("arguments"))
+                    parsed_args = json.loads(arguments)
+                    new_response.get("tool_calls")[idx]["args"] = parsed_args
+                else:
+                    parsed_args = tool_call.get("args")
+
+                if isinstance(parsed_args, dict):
+                    new_response.get("tool_calls")[idx]["function"]["arguments"] = json.dumps(
+                        parsed_args,
+                        ensure_ascii=False,
+                    )
             if func and func.get("name"):
                 new_response.get("tool_calls")[idx]["name"] = func.get("name")
             # OpenAI Chat Completions requires tool_calls[].type == "function". A previous

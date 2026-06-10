@@ -21,7 +21,14 @@ from tenacity import (
 )
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_legacy_doc_infos_view
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
+from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
+    build_balanced_doc_batches,
+    build_doc_variant_key,
+    extract_doc_score,
+    prefilter_doc_infos_for_classification,
+)
 from openjiuwen_deepsearch.algorithm.report.report_utils import (
     ArticlePart,
     MarkdownOutlineRenumber,
@@ -31,6 +38,7 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
     validate_visualization_extraction_schema,
     validate_visualization_normalization_schema,
 )
+from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
@@ -46,6 +54,13 @@ logger = logging.getLogger(__name__)
 
 EFFECT_SUB_REPORT_TAG = "### sub_report_tag ###"
 MAX_LOOP_ROUND = 10
+INTERNAL_CALLBACK_LABEL_PATTERN = re.compile(
+    r"\s*\["
+    r"(?=[^\]]*(?:background|knowledge|parent|section|prior|summary|背景|知识))"
+    r"[^\]]+"
+    r"\]\s*",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -271,53 +286,94 @@ class Reporter:
         return visualization_content
 
     @staticmethod
-    def is_valid_chapter_format(text, section_idx) -> bool:
-        """Check chapter format"""
+    def check_chapter_format(text, section_idx) -> tuple[bool, str]:
+        """Validate subsection outline plain-text numbering"""
         try:
             n = section_idx
             lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
             if not lines:
-                return False
+                return False, "outline is empty"
 
-            main_pat = re.compile(rf"^\s*(?:{n}\.(?!\d)\s*|{n}\s+)(?!\d).*")
+            # Subsection: "1.1 title".
+            # Section: "1 title" (title may start with digits, e.g. 2025) or "1. title" but not "1.1".
             sub_pat = re.compile(rf"^\s*{n}\.(\d+)\s*")
+            main_space_pat = re.compile(rf"^\s*{n}\s+.+")
+            main_dot_pat = re.compile(rf"^\s*{n}\.(?!\d)\s*.+")
             third_pat = re.compile(r"\d+\.\d+\.\d+")
 
             has_main = False
             sub_numbers = []
 
-            for ln in lines:
+            for line_no, ln in enumerate(lines, start=1):
+                if ln.lstrip().startswith("#"):
+                    preview = ln[:120] + ("..." if len(ln) > 120 else "")
+                    return (
+                        False,
+                        f"line {line_no}: markdown heading not allowed "
+                        f"(use plain '{n} title' / '{n}.1 title', not '#'): {preview!r}",
+                    )
                 if third_pat.search(ln):
-                    return False
-                if main_pat.match(ln):
+                    preview = ln[:120] + ("..." if len(ln) > 120 else "")
+                    return (
+                        False,
+                        f"line {line_no}: third-level numbering not allowed (e.g. {n}.1.1): {preview!r}",
+                    )
+                sub_match = sub_pat.match(ln)
+                if sub_match:
+                    sub_numbers.append(int(sub_match.group(1)))
+                elif main_space_pat.match(ln) or main_dot_pat.match(ln):
                     if has_main:
-                        return False
+                        preview = ln[:120] + ("..." if len(ln) > 120 else "")
+                        return (
+                            False,
+                            f"line {line_no}: duplicate level-1 title for section {n}: {preview!r}",
+                        )
                     has_main = True
-                elif sub_pat.match(ln):
-                    num = int(sub_pat.match(ln).group(1))
-                    sub_numbers.append(num)
                 elif re.match(r"\d+", ln):
-                    return False
+                    preview = ln[:120] + ("..." if len(ln) > 120 else "")
+                    return (
+                        False,
+                        f"line {line_no}: line starts with digits but is not a valid "
+                        f"'{n} title' or '{n}.x' subsection title: {preview!r}",
+                    )
 
             sorted_subs = sorted(set(sub_numbers))
-            if not sorted_subs or sorted_subs[0] != 1:
-                logger.error(
-                    f"{EFFECT_SUB_REPORT_TAG} No valid sub-sections found or first sub-section is not 1."
+            if not sorted_subs:
+                return (
+                    False,
+                    f"no valid subsection lines like '{n}.1 title' "
+                    f"(found {len(lines)} non-empty line(s); level-1 present={has_main})",
                 )
-                return False
-
+            if sorted_subs[0] != 1:
+                return (
+                    False,
+                    f"first subsection must be {n}.1, got {n}.{sorted_subs[0]} "
+                    f"(subsection indices found: {sorted_subs})",
+                )
             if not has_main:
-                logger.error(
-                    f"{EFFECT_SUB_REPORT_TAG} sub-section {section_idx} outline has no main chapter title."
+                return (
+                    False,
+                    f"missing level-1 title line like '{n} section title' "
+                    f"(subsection indices found: {sorted_subs})",
                 )
-            return has_main
+            return True, ""
         except Exception as e:
             if LogManager.is_sensitive():
-                error_msg = f"Error check section outliner format, section_idx: {str(section_idx)}"
-            else:
-                error_msg = f"Error check section outliner format, section_idx: {str(section_idx)}: {str(e)}"
-            logger.warning(f"[subsection] {error_msg}")
-            return False
+                return False, f"format check exception for section_idx={section_idx}"
+            return False, f"format check exception for section_idx={section_idx}: {e}"
+
+    @staticmethod
+    def is_valid_chapter_format(text, section_idx) -> bool:
+        """Check chapter format"""
+        ok, reason = Reporter.check_chapter_format(text, section_idx)
+        if not ok:
+            logger.warning(
+                "%s [is_valid_chapter_format] section_idx=%s invalid: %s",
+                EFFECT_SUB_REPORT_TAG,
+                section_idx,
+                reason,
+            )
+        return ok
 
     @staticmethod
     def add_references(sub_section_content: str, references: list, language: str):
@@ -441,7 +497,7 @@ class Reporter:
         return data if is_dict else Outline.model_validate(data)
 
     @staticmethod
-    def _get_background_knowledge_contents(background_knowledge: list) -> list[str]:
+    def _get_background_knowledge_contents(background_knowledge: list) -> list[dict[str, str]]:
         """Extract usable text snippets from dependency-writing background knowledge."""
         if not isinstance(background_knowledge, list):
             return []
@@ -454,11 +510,47 @@ class Reporter:
             if not content:
                 continue
             section_id = str(item.get("section_id", "") or "").strip()
-            if section_id:
-                content = f"[Parent Section {section_id}] {content}"
-            contents.append(content)
+            allowed_callback = (
+                f"Refer to Section {section_id} in natural prose only; do not cite this context."
+                if section_id
+                else "Refer to prior sections in natural prose only; do not cite this context."
+            )
+            contents.append(
+                {
+                    "section_id": section_id,
+                    "summary": content,
+                    "allowed_callback": allowed_callback,
+                }
+            )
 
         return contents
+
+    @staticmethod
+    def _format_background_knowledge_for_prompt(background_knowledge_contents: list[dict[str, str]]) -> str:
+        """Format prior-section background knowledge for model input without citation-like labels."""
+        if not background_knowledge_contents:
+            return (
+                "Background Knowledge / prior-section continuity context "
+                "(not citation sources): []"
+            )
+        payload = json.dumps(background_knowledge_contents, ensure_ascii=False, indent=2)
+        return (
+            "Background Knowledge / prior-section continuity context (not citation sources):\n"
+            f"{payload}\n"
+            "Rules for this context:\n"
+            "- Use it only to maintain continuity with earlier sections.\n"
+            "- You may refer to it in natural prose, such as \"as discussed in Section 2\" "
+            "or \"结合第2章分析\".\n"
+            "- Never cite it with `[citation:X]`.\n"
+            "- Never output bracketed labels about this context."
+        )
+
+    @staticmethod
+    def _clean_internal_callback_labels(content: str) -> str:
+        """Remove leaked dependency-context labels while preserving natural callbacks."""
+        if not content:
+            return ""
+        return INTERNAL_CALLBACK_LABEL_PATTERN.sub("", content)
 
     @staticmethod
     def _is_missing_subsection_report_context(
@@ -588,8 +680,16 @@ class Reporter:
     async def generate_conclusion(self, sub_reports_content: str) -> str:
         """Generate conclusion for report"""
         logger.info(f"Start to generate conclusion with llm...")
-        report_format = ReportFormat.MARKDOWN
-        prompt = f"report_implications_and_recommendations_{report_format.get_name()}"
+        report_type = "professional"
+        if isinstance(self.gen_report_context, dict):
+            report_type = self.gen_report_context.get("report_type", "professional")
+        if report_type == "brief":
+            # Brief reports should output a pure conclusion section
+            # without the implications/recommendations chapter.
+            prompt = "report_conclusion_markdown"
+        else:
+            report_format = ReportFormat.MARKDOWN
+            prompt = f"report_implications_and_recommendations_{report_format.get_name()}"
         conclusion = await self._generate_with_llm(
             "conclusion", prompt, sub_reports_content
         )
@@ -599,7 +699,14 @@ class Reporter:
     async def generate_sub_report(
         self, current_inputs: dict
     ) -> tuple[bool, str, str, list]:
-        """General subsection report"""
+        """生成子章节报告。
+
+        Args:
+            current_inputs: 子章节生成所需的上下文参数。
+
+        Returns:
+            元组，依次表示是否成功、报告内容、子报告内容和分类后的内容列表。
+        """
         section_idx = current_inputs.get("section_idx", 1)
         logger.info(
             f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] start to generate subsection report, "
@@ -616,6 +723,14 @@ class Reporter:
                 EFFECT_SUB_REPORT_TAG,
                 section_idx,
                 current_inputs.get("doc_infos", []),
+            )
+        rtp = current_inputs.get("report_type_policy") or {}
+        if isinstance(rtp, dict):
+            current_inputs.setdefault("report_type", rtp.get("report_type", "professional"))
+            current_inputs.setdefault("paragraph_style", rtp.get("paragraph_style", "detailed"))
+            current_inputs.setdefault("require_summary_first", rtp.get("require_summary_first", False))
+            current_inputs.setdefault(
+                "require_methodology_and_risk", rtp.get("require_methodology_and_risk", False)
             )
         doc_infos = current_inputs.get("doc_infos", [])
         background_contents = self._get_background_knowledge_contents(
@@ -635,6 +750,7 @@ class Reporter:
                 section_idx,
             )
             current_inputs["sub_section_core_content"] = background_contents
+            current_inputs["sub_section_core_content_from_background_knowledge"] = True
             current_inputs["sub_section_references"] = []
             current_inputs["classified_content"] = []
             classified_content = []
@@ -656,20 +772,26 @@ class Reporter:
                 )
 
             if classify_success:
-                core_content_urls = classified_content.get("core_content_url_list", [])
-                core_content_urls = list(dict.fromkeys(core_content_urls))
-                if not core_content_urls:
+                selected_urls = classified_content.get("selected_url_list", [])
+                selected_urls = list(dict.fromkeys(selected_urls))
+                if not selected_urls:
                     logger.error(
                         f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
-                        "no core content urls returned from classification"
+                        "no selected urls returned from classification"
                     )
-                    return False, "no core content urls from classification", "", []
+                    return False, "no selected urls from classification", "", []
+                classify_doc_infos_res_top_k_num = current_inputs.get(
+                    "classify_doc_infos_res_top_k_num", 10
+                )
                 classified_infos, classified_doc_infos = _get_classified_infos(
-                    doc_infos, core_content_urls
+                    doc_infos,
+                    selected_urls,
+                    max_source_id_count=classify_doc_infos_res_top_k_num,
                 )
                 current_inputs["sub_section_core_content"] = classified_infos.get(
                     "core_content_list", []
                 )
+                current_inputs["sub_section_core_content_from_background_knowledge"] = False
                 current_inputs["sub_section_references"] = classified_infos.get(
                     "references", []
                 )
@@ -698,16 +820,30 @@ class Reporter:
         max_attempt_num = current_inputs.get("max_generate_retry_num", 3)
         for attempt_num in range(max_attempt_num):
             gen_sub_res = await self._generate_sub_section_outline(current_inputs)
-            if gen_sub_res["rs_success"] and self.is_valid_chapter_format(
-                gen_sub_res["sub_section_outline"], section_idx
-            ):
-                current_inputs["sub_section_outline"] = gen_sub_res[
-                    "sub_section_outline"
-                ]
-                break
+            outline_text = gen_sub_res.get("sub_section_outline") or ""
+            if gen_sub_res["rs_success"]:
+                ok, reason = self.check_chapter_format(outline_text, section_idx)
+                if ok:
+                    current_inputs["sub_section_outline"] = outline_text
+                    break
+                fail_detail = f"outline format invalid: {reason}"
+            else:
+                fail_detail = f"LLM outline generation failed: {outline_text[:200]}"
+
+            if LogManager.is_sensitive():
+                outline_log = f"<{len(outline_text)} chars>"
+            else:
+                preview = outline_text.replace("\n", "\\n")
+                outline_log = preview[:500] + ("..." if len(preview) > 500 else "")
             logger.warning(
-                f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
-                f"Warning: Generate section outline failed on attempt {attempt_num + 1}/{max_attempt_num}. retry ..."
+                "%s [generate_sub_report] section_idx: [%s], "
+                "section outline failed on attempt %s/%s: %s | outline=%s",
+                EFFECT_SUB_REPORT_TAG,
+                section_idx,
+                attempt_num + 1,
+                max_attempt_num,
+                fail_detail,
+                outline_log,
             )
             if attempt_num == max_attempt_num - 1:
                 logger.error(
@@ -841,6 +977,16 @@ class Reporter:
         if gen_report_context is None:
             return False
         self.gen_report_context = gen_report_context
+        rtp = self.gen_report_context.get("report_type_policy")
+        if isinstance(rtp, dict):
+            self.gen_report_context.setdefault("report_type", rtp.get("report_type", "professional"))
+            self.gen_report_context.setdefault("paragraph_style", rtp.get("paragraph_style", "detailed"))
+            self.gen_report_context.setdefault(
+                "require_summary_first", rtp.get("require_summary_first", False)
+            )
+            self.gen_report_context.setdefault(
+                "require_methodology_and_risk", rtp.get("require_methodology_and_risk", False)
+            )
         return True
 
     async def _add_sub_report_transaction(self, current_inputs: dict):
@@ -1075,6 +1221,16 @@ class Reporter:
     async def _classify_with_llm(
         self, current_inputs: dict, section_task: str, doc_infos: List[Dict]
     ) -> Tuple[bool, str]:
+        """调用分类 LLM 为当前章节选择相关文档 URL。
+
+        Args:
+            current_inputs: 当前子报告生成上下文。
+            section_task: 当前章节标题。
+            doc_infos: 候选文档信息列表。
+
+        Returns:
+            元组，包含调用是否成功，以及 LLM 原始输出或失败原因。
+        """
         section_idx = current_inputs.get("section_idx", 1)
         section_description = current_inputs.get(
             "section_description", ""
@@ -1084,10 +1240,11 @@ class Reporter:
 
         for attempt in range(1, max_attempt_num + 1):
             try:
+                legacy_doc_infos = build_legacy_doc_infos_view(doc_infos)
                 infos_for_llm = (
                     f"Section title is {section_task},"
                     f"User query is {current_inputs.get('report_task', '')},"
-                    f"Document infos is {doc_infos},"
+                    f"Document infos is {legacy_doc_infos},"
                     f"Section description is {section_description},"
                     f"Subsection outline is {subsection_outline}"
                 )
@@ -1149,7 +1306,15 @@ class Reporter:
         )
 
     async def _classify_doc_infos(self, current_inputs: dict):
-        """Classify doc infos"""
+        """根据当前章节从候选文档中选择相关 URL。
+
+        Args:
+            current_inputs: 包含章节信息、候选 doc_infos 和分类配置的上下文。
+
+        Returns:
+            元组，包含分类是否成功，以及分类结果或失败原因。成功时结果使用
+            selected_url_list 表示选中的文档 URL。
+        """
         section_idx = current_inputs.get("section_idx", 1)
         logger.info(
             f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] Starting to classify doc infos, section_idx: "
@@ -1158,105 +1323,155 @@ class Reporter:
         section_task = self.strip_leading_number(
             current_inputs.get("section_task", "")
         )  # Current section title
-        doc_infos = current_inputs.get("doc_infos", [])
-        # 去重
-        doc_infos = list({(d.get("title"), d.get("url")): d for d in doc_infos}.values())
+        raw_doc_infos = current_inputs.get("doc_infos", [])
         classify_doc_infos_single_time_num = current_inputs.get(
             "classify_doc_infos_single_time_num", 60
         )
+        classify_doc_infos_res_top_k_num = current_inputs.get(
+            "classify_doc_infos_res_top_k_num", 10
+        )
+        classify_doc_infos_prefilter_multiplier = current_inputs.get(
+            "classify_doc_infos_prefilter_multiplier", 5
+        )
+        prefilter_result = prefilter_doc_infos_for_classification(
+            raw_doc_infos,
+            result_top_k=classify_doc_infos_res_top_k_num,
+            prefilter_multiplier=classify_doc_infos_prefilter_multiplier,
+        )
+        doc_infos = prefilter_result.doc_infos
+        logger.info(
+            "%s [classify_doc_infos] section_idx: [%s] prefilter stats: "
+            "original_count=%s, deduped_count=%s, filtered_count=%s, candidate_limit=%s, "
+            "url_key_count=%s, content_variant_count=%s, step_bucket_count=%s, score_stats=%s",
+            EFFECT_SUB_REPORT_TAG,
+            section_idx,
+            prefilter_result.original_count,
+            len(prefilter_result.deduped_doc_infos),
+            prefilter_result.filtered_count,
+            prefilter_result.candidate_limit,
+            prefilter_result.url_key_count,
+            prefilter_result.content_variant_count,
+            prefilter_result.step_bucket_count,
+            prefilter_result.score_stats,
+        )
+        if not LogManager.is_sensitive():
+            logger.debug(
+                "%s [classify_doc_infos] section_idx: [%s] prefilter step_bucket_stats=%s",
+                EFFECT_SUB_REPORT_TAG,
+                section_idx,
+                prefilter_result.step_bucket_stats,
+            )
 
         # Validate required fields
         if not section_task or not doc_infos:
-            error_msg = "Missing 'section_task' or 'doc_infos' in context (section title required)"
-            logger.error(
-                f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] {error_msg}"
-            )
-            return False, error_msg
+            if section_task and prefilter_result.deduped_doc_infos:
+                doc_infos = prefilter_result.deduped_doc_infos
+            else:
+                error_msg = "Missing 'section_task' or 'doc_infos' in context (section title required)"
+                logger.error(
+                    f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] {error_msg}"
+                )
+                return False, error_msg
 
-        round_count = 0
-        # Process in batches of 10 with concurrent LLM calls until results
-        # converge to 10 or max iterations reached (prevent infinite loop).
-        while round_count < MAX_LOOP_ROUND:
-            round_count += 1
-            # NOTE: keep keywords separated by spaces for readability.
-            logger.info(
-                "%s [classify_doc_infos] section_idx: [%s] start round NO. [%s]",
+        async def classify_until_converged(candidate_doc_infos: list[dict], *, is_fallback: bool = False):
+            round_count = 0
+            doc_infos_for_round = candidate_doc_infos
+            while round_count < MAX_LOOP_ROUND:
+                round_count += 1
+                logger.info(
+                    "%s [classify_doc_infos] section_idx: [%s] start round NO. [%s]",
+                    EFFECT_SUB_REPORT_TAG,
+                    section_idx,
+                    round_count,
+                )
+
+                batches = build_balanced_doc_batches(
+                    doc_infos_for_round,
+                    classify_doc_infos_single_time_num,
+                )
+
+                results = await asyncio.gather(
+                    *[
+                        self._classify_with_llm(current_inputs, section_task, batch)
+                        for batch in batches
+                    ],
+                    return_exceptions=True,
+                )
+
+                merged_urls = []
+                merged_url_set = set()
+                for res in results:
+                    if isinstance(res, Exception):
+                        logger.warning(
+                            f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
+                            f"round:[{round_count}], classify task raised exception: {str(res)}",
+                            exc_info=True,
+                        )
+                        continue
+                    res_flag, json_str = res
+                    if not res_flag:
+                        logger.warning(
+                            f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
+                            f"round:[{round_count}], partly classify doc_infos with llm failed, failed reason: "
+                            f"{json_str}"
+                        )
+                        continue
+                    try:
+                        data = json.loads(json_str)
+                    except json.JSONDecodeError as e:
+                        if LogManager.is_sensitive():
+                            logger.warning(
+                                f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
+                                f"round:[{round_count}], partly classify doc_infos with llm failed, "
+                                f"failed reason: parse classified doc information failed"
+                            )
+                        else:
+                            logger.warning(
+                                f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
+                                f"round:[{round_count}], partly classify doc_infos with llm failed, "
+                                f"failed reason: parse classified doc information failed: {e}"
+                            )
+                        continue
+                    for url in data.get("selected_url_list", []):
+                        if url in merged_url_set:
+                            continue
+                        merged_urls.append(url)
+                        merged_url_set.add(url)
+
+                if not merged_urls:
+                    logger.error(
+                        f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
+                        f"round:[{round_count}], no selected urls returned."
+                    )
+                    return False, "no selected urls from classification"
+
+                if len(merged_urls) <= classify_doc_infos_res_top_k_num:
+                    logger.info(
+                        f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] successfully "
+                        f"ended on the NO.[{round_count}] round"
+                    )
+                    return True, {"selected_url_list": merged_urls}
+
+                doc_infos_for_round = [
+                    doc for doc in doc_infos_for_round if doc.get("url") in merged_url_set
+                ]
+            suffix = " during fallback" if is_fallback else ""
+            return False, f"Exceeded max loop round{suffix}: {MAX_LOOP_ROUND}"
+
+        success, result = await classify_until_converged(doc_infos)
+        if success:
+            return success, result
+
+        fallback_doc_infos = prefilter_result.deduped_doc_infos
+        if result == "no selected urls from classification" and fallback_doc_infos:
+            logger.warning(
+                "%s [classify_doc_infos] section_idx: [%s] prefiltered classification returned no URLs, "
+                "retry with deduped full candidates.",
                 EFFECT_SUB_REPORT_TAG,
                 section_idx,
-                round_count,
             )
-
-            # Split into batches
-            batches = [
-                doc_infos[i:i + classify_doc_infos_single_time_num]
-                for i in range(0, len(doc_infos), classify_doc_infos_single_time_num)
-            ]
-
-            # Run concurrently
-            results = await asyncio.gather(
-                *[
-                    self._classify_with_llm(current_inputs, section_task, batch)
-                    for batch in batches
-                ],
-                return_exceptions=True,
-            )
-
-            # Aggregate results
-            merged_urls = set()
-            for res in results:
-                if isinstance(res, Exception):
-                    logger.warning(
-                        f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                        f"round:[{round_count}], classify task raised exception: {str(res)}",
-                        exc_info=True,
-                    )
-                    continue
-                res_flag, json_str = res
-                if not res_flag:
-                    logger.warning(
-                        f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                        f"round:[{round_count}], partly classify doc_infos with llm failed, failed reason: "
-                        f"{json_str}"
-                    )
-                    continue
-                try:
-                    data = json.loads(json_str)
-                except json.JSONDecodeError as e:
-                    if LogManager.is_sensitive():
-                        logger.warning(
-                            f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                            f"round:[{round_count}], partly classify doc_infos with llm failed, "
-                            f"failed reason: parse classified doc information failed"
-                        )
-                    else:
-                        logger.warning(
-                            f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                            f"round:[{round_count}], partly classify doc_infos with llm failed, "
-                            f"failed reason: parse classified doc information failed: {e}"
-                        )
-                    continue
-                merged_urls.update(data.get("core_content_url_list", []))
-
-            # Convergence check
-            if not merged_urls:
-                logger.error(
-                    f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                    f"round:[{round_count}], no core content urls returned."
-                )
-                return False, "no core content urls from classification"
-
-            if len(merged_urls) <= current_inputs.get(
-                "classify_doc_infos_res_top_k_num", 10
-            ):
-                logger.info(
-                    f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] successfully "
-                    f"ended on the NO.[{round_count}] round"
-                )
-                return True, {"core_content_url_list": list(merged_urls)}
-
-            # If > 10, trace back to original doc_infos and iterate on a smaller set
-            doc_infos = [doc for doc in doc_infos if doc.get("url") in merged_urls]
-        return False, f"Exceeded max loop round: {MAX_LOOP_ROUND}"
+            return await classify_until_converged(fallback_doc_infos, is_fallback=True)
+        return success, result
 
     async def _generate_sub_section_outline(self, current_inputs: dict) -> dict:
         """Generate subsection outline"""
@@ -1293,11 +1508,15 @@ class Reporter:
             )
             return dict(rs_success=False, sub_section_outline=error_msg)
         try:
+            if current_inputs.get("sub_section_core_content_from_background_knowledge"):
+                core_context = self._format_background_knowledge_for_prompt(collected_infos)
+            else:
+                core_context = f"Collected information is {collected_infos}"
             sub_content_message = (
                 f"Section id is {section_idx},"
                 f"Section title is {section_task},"
                 f"User query is {report_task},"
-                f"Collected information is {collected_infos},"
+                f"{core_context},"
                 f"Section description is {section_description},"
             )
             tmp_context = {}
@@ -1307,6 +1526,8 @@ class Reporter:
             tmp_context["has_template"] = current_inputs.get("has_template")
             tmp_context["section_title"] = section_task
             tmp_context["section_description"] = section_description
+            tmp_context["report_type"] = current_inputs.get("report_type", "professional")
+            tmp_context["paragraph_style"] = current_inputs.get("paragraph_style", "detailed")
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [generate_sub_section_outline] has_template: "
                 f"{tmp_context['has_template']}"
@@ -1949,6 +2170,10 @@ class Reporter:
                     language=current_inputs.get("language", "zh-CN"),
                     outline=current_outline_without_plans,
                     user_query=current_inputs.get("report_task", ""),
+                    report_type=current_inputs.get("report_type", "professional"),
+                    paragraph_style=current_inputs.get("paragraph_style", "detailed"),
+                    audience_role=current_inputs.get("audience_role", ""),
+                    tone=current_inputs.get("tone", ""),
                 ),
             )
             if not LogManager.is_sensitive():
@@ -2078,6 +2303,9 @@ class Reporter:
         current_outline_without_plans = Reporter.export_outline_without_plans(
             current_outline
         )
+        background_knowledge_prompt = self._format_background_knowledge_for_prompt(
+            background_knowledge_contents
+        )
         sub_content_message = (
             f"Section id is {current_inputs.get('section_idx', 1)},"
             f"Section title is {section_task},"
@@ -2087,15 +2315,27 @@ class Reporter:
             f"References is {current_inputs.get('sub_section_references', '')},"
             f"Current Chapter Outline is "
             f"{current_inputs.get('sub_section_outline', '')},"
-            f"Background Knowledge is {background_knowledge_contents}"
+            f"{background_knowledge_prompt}"
         )
         try:
+            report_type = current_inputs.get("report_type", "professional")
+            sub_report_prompt = (
+                "sub_report_brief_markdown"
+                if report_type == "brief"
+                else "sub_report_markdown"
+            )
             llm_input = apply_system_prompt(
-                "sub_report_markdown",
+                sub_report_prompt,
                 dict(
                     messages=[dict(role="user", content=sub_content_message)],
                     language=current_inputs.get("language"),
                     section_iscore=current_inputs.get("section_iscore", False),
+                    report_type=report_type,
+                    paragraph_style=current_inputs.get("paragraph_style", "detailed"),
+                    require_summary_first=current_inputs.get("require_summary_first", False),
+                    require_methodology_and_risk=current_inputs.get("require_methodology_and_risk", False),
+                    audience_role=current_inputs.get("audience_role", ""),
+                    tone=current_inputs.get("tone", ""),
                 ),
             )
 
@@ -2126,7 +2366,9 @@ class Reporter:
                     message=f"LLM returned empty content for the section {current_inputs.get('section_idx', 1)}",
                 )
 
-            current_inputs["sub_report_content"] = llm_output.get("content")
+            current_inputs["sub_report_content"] = self._clean_internal_callback_labels(
+                llm_output.get("content", "")
+            )
 
             # Insert visualization content
             if current_inputs.get("visualization_enable", True):
@@ -2179,6 +2421,12 @@ class Reporter:
                         current_inputs.get("section_idx", 1),
                         current_inputs.get("sub_report_content", ""),
                     )
+
+            current_inputs["sub_report_content"] = ensure_markdown_table_captions(
+                current_inputs["sub_report_content"],
+                current_inputs.get("language"),
+                current_inputs.get("section_idx", ""),
+            )
 
             sub_report_summary = await self._generate_sub_report_summary(current_inputs)
             current_inputs["sub_report_summary"] = sub_report_summary.get("result", "")
@@ -2591,8 +2839,16 @@ def _replace_citations_and_classified_index(
     return updated_paragraphs, updated_classified_contents
 
 
-def _get_classified_infos(doc_infos: list, urls: list):
-    """Get classified infos"""
+def _get_classified_infos(doc_infos: list, urls: list, max_source_id_count: int | None = 10):
+    """根据分类结果 URL 提取下游写作所需的信息。
+
+    Args:
+        doc_infos: 信息收集节点输出的文档信息列表。
+        urls: 分类模型选中的文档 URL 列表。
+
+    Returns:
+        元组，包含分类后的引用与原文内容，以及匹配到的文档信息列表。
+    """
     def escape_markdown_text(value: object) -> str:
         text = str(value or "")
         text = re.sub(r"[\r\n\t]+", " ", text)
@@ -2630,13 +2886,84 @@ def _get_classified_infos(doc_infos: list, urls: list):
     classified_infos = {"references": [], "core_content_list": []}
     classified_doc_infos = []
 
-    doc_dict = {item["url"]: item for item in doc_infos}
+    doc_dict: dict[str, list[dict]] = {}
+    doc_order: dict[int, int] = {}
+    for index, item in enumerate(doc_infos):
+        doc_dict.setdefault(item["url"], []).append(item)
+        doc_order[id(item)] = index
+
+    matched_items = []
+    matched_order: dict[int, int] = {}
+    matched_by_url: dict[str, list[dict]] = {}
     for url in urls:
-        item = doc_dict.get(url)
-        if item:
+        for item in doc_dict.get(url, []):
+            matched_order[id(item)] = len(matched_items)
+            matched_items.append(item)
+            matched_by_url.setdefault(url, []).append(item)
+
+    def source_key_for(item: dict) -> str:
+        # 写作阶段会回查原始 doc_infos，因此这里也复用预筛的内容变体 key；
+        # 否则无 source_id 的同正文重复项可能绕过预筛去重，重新进入写作输入。
+        return build_doc_variant_key(item)
+
+    def item_rank_key(item: dict) -> tuple[float, int, int]:
+        return (
+            extract_doc_score(item).composite,
+            len(str(item.get("original_content") or "")),
+            -matched_order.get(id(item), doc_order.get(id(item), 0)),
+        )
+
+    def best_representatives(items: list[dict]) -> list[dict]:
+        source_representatives: dict[str, dict] = {}
+        for item in items:
+            source_key = source_key_for(item)
+            current = source_representatives.get(source_key)
+            if current is None or item_rank_key(item) > item_rank_key(current):
+                source_representatives[source_key] = item
+        return sorted(source_representatives.values(), key=item_rank_key, reverse=True)
+
+    selected_items: list[dict] = []
+    selected_source_keys: set[str] = set()
+    max_count = None if max_source_id_count is None else max(0, int(max_source_id_count))
+
+    if max_count is not None:
+        for url in urls:
+            if len(selected_items) >= max_count:
+                break
+            representatives = best_representatives(matched_by_url.get(url, []))
+            if not representatives:
+                continue
+            top_item = representatives[0]
+            source_key = source_key_for(top_item)
+            if source_key in selected_source_keys:
+                continue
+            selected_items.append(top_item)
+            selected_source_keys.add(source_key)
+
+    remaining_representatives = best_representatives(matched_items)
+    if max_count is None:
+        selected_items = remaining_representatives
+    else:
+        for item in remaining_representatives:
+            if len(selected_items) >= max_count:
+                break
+            source_key = source_key_for(item)
+            if source_key in selected_source_keys:
+                continue
+            selected_items.append(item)
+            selected_source_keys.add(source_key)
+
+    if max_count is not None:
+        selected_items = selected_items[:max_count]
+
+    seen_reference_urls: set[str] = set()
+    for item in selected_items:
+        item_url = str(item.get("url") or "")
+        if item_url not in seen_reference_urls:
             classified_infos["references"].append(
-                format_reference_link(item.get("title", ""), item.get("url", ""))
+                format_reference_link(item.get("title", ""), item_url)
             )
-            classified_infos["core_content_list"].append(item.get("core_content", ""))
-            classified_doc_infos.append(item)
+            seen_reference_urls.add(item_url)
+        classified_infos["core_content_list"].append(item.get("original_content", ""))
+        classified_doc_infos.append(item)
     return classified_infos, classified_doc_infos

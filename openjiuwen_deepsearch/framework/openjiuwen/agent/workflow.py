@@ -110,6 +110,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools import (
     update_local_search_mapping,
     update_web_search_mapping,
 )
+from openjiuwen_deepsearch.llm.llm_request_adapter import resolve_llm_thinking_enabled
 from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     get_effective_workflow_llm_usage,
@@ -568,9 +569,11 @@ class DeepresearchAgent(BaseAgent):
                     error_code=StatusCode.LLM_CONFIG_NONE.code, message=StatusCode.LLM_CONFIG_NONE.errmsg
                 )
 
+            # LLM 思考开关属于 SDK 内部运行配置，默认关闭并统一作用于所有模型槽位。
+            thinking_enabled = resolve_llm_thinking_enabled()
             all_llms = {}
             for _, llm_config in llm_configs.items():
-                llm_obj = create_llm_obj(llm_config)
+                llm_obj = create_llm_obj(llm_config, thinking_enabled=thinking_enabled)
                 all_llms[llm_config.model_name] = llm_obj
             llm_token = llm_context.set(all_llms)
 

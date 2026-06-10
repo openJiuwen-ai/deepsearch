@@ -6,6 +6,8 @@ import logging
 import re
 from dataclasses import dataclass, replace
 
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_legacy_doc_infos_view
+from openjiuwen_deepsearch.algorithm.report.doc_prefilter import deduplicate_doc_infos
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.common import (
     UserFeedbackPromptInvoker,
     resolve_model_context_collector,
@@ -188,7 +190,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
 
     @staticmethod
     def _deduplicate_doc_infos(doc_infos: list) -> list:
-        """按 ``title + url`` 去重文档信息。
+        """过滤异常文档后，复用报告侧统一 doc_info 去重逻辑。
 
         Args:
             doc_infos (list): 待去重的文档信息列表。
@@ -196,19 +198,19 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
         Returns:
             list: 去重后的文档信息列表；结构异常的条目会被跳过。
         """
-        merged_doc_infos = {}
+        valid_doc_infos = []
         malformed_count = 0
         for doc in doc_infos or []:
             if not isinstance(doc, dict) or not doc.get("title") or not doc.get("url"):
                 malformed_count += 1
                 continue
-            merged_doc_infos[(doc["title"], doc["url"])] = doc
+            valid_doc_infos.append(doc)
         if malformed_count:
             logger.warning(
                 "[NewTaskProcessor] filtered malformed doc_infos while deduplicating. malformed_count=%s",
                 malformed_count,
             )
-        return list(merged_doc_infos.values())
+        return deduplicate_doc_infos(valid_doc_infos)
 
     @staticmethod
     def _extract_major_section_number(title: str) -> str:
@@ -1257,7 +1259,9 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
                 "clean_section_text": assets.current_section_text,
                 "selected_text": feedback.get("selected_text", ""),
                 "user_instruction": feedback.get("user_instruction", ""),
-                "historical_doc_infos": assets.historical_doc_infos,
+                # 中间过渡态：new_task_assessment 仍使用旧 doc_infos prompt 协议。
+                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
+                "historical_doc_infos": build_legacy_doc_infos_view(assets.historical_doc_infos),
                 "supported_edit_strategies": [
                     NEW_TASK_MODIFY_EXISTING_SUBSECTION,
                     NEW_TASK_APPEND_NEW_SUBSECTION,
@@ -1464,7 +1468,9 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
                 "clean_section_text": target.clean_section_text,
                 "clean_selected_text": target.clean_selected_text,
                 "user_instruction": feedback.get("user_instruction", ""),
-                "doc_infos": doc_infos,
+                # 中间过渡态：new_task_rewrite_section 仍使用旧 doc_infos prompt 协议。
+                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
+                "doc_infos": build_legacy_doc_infos_view(doc_infos),
             },
             AgentLlmName.USER_FEEDBACK_PROCESSOR_NEW_TASK_REWRITE_SECTION.value,
         )
@@ -1503,7 +1509,9 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
                 "clean_selected_text": target.clean_selected_text,
                 "new_subsection_title": subsection_title,
                 "user_instruction": feedback.get("user_instruction", ""),
-                "doc_infos": doc_infos,
+                # 中间过渡态：new_task_rewrite_section 仍使用旧 doc_infos prompt 协议。
+                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
+                "doc_infos": build_legacy_doc_infos_view(doc_infos),
             },
             AgentLlmName.USER_FEEDBACK_PROCESSOR_NEW_TASK_REWRITE_SECTION.value,
         )

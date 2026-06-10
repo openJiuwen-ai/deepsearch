@@ -1,8 +1,11 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+import logging
+from types import SimpleNamespace
 
 from server.schemas.web_search_engine import (
     WebSearchEngineCreateRequestDTO,
+    WebSearchEngineListRequestDTO,
     WebSearchEngineUpdateRequestDTO,
 )
 
@@ -57,3 +60,40 @@ def test_web_search_engine_create_service_defaults_omitted_search_url():
 
     assert response.web_search_engine_id == 1
     assert repository.created.search_url == ""
+
+
+def test_web_search_engine_list_logs_space_and_count(caplog):
+    """List service should log space id and result count.
+
+    Args:
+        caplog: pytest 日志捕获工具。
+
+    Returns:
+        None.
+    """
+    from server.deepsearch.core.manager.web_search_engine_service import WebSearchEngineService
+
+    class FakeRepository:
+        def get_list_by_id(self, space_id):
+            return [
+                SimpleNamespace(
+                    space_id=space_id,
+                    web_search_engine_id=1,
+                    search_engine_name="serper",
+                    search_url="",
+                    create_time="2026-06-05 12:00:00",
+                    extension=None,
+                    is_active=True,
+                )
+            ]
+
+    service = WebSearchEngineService(FakeRepository())
+    caplog.set_level(logging.INFO, logger="server.deepsearch.core.manager.web_search_engine_service")
+
+    response = service.get_web_search_engine_list(WebSearchEngineListRequestDTO(space_id="space-a"))
+
+    assert len(response.data) == 1
+    assert any(
+        "Listed web search engines space_id=space-a count=1" in record.message
+        for record in caplog.records
+    )

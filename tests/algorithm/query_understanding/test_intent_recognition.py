@@ -21,7 +21,7 @@ def sample_tool_response():
                     "section_count": 5,
                     "audience_role": "研发负责人",
                     "tone": "analytical",
-                    "report_type": "deep_research",
+                    "report_type": "professional",
                     "include_url": ["https://example.com/a", "https://example.com/b"],
                     "exclude_url": [],
                     "include_domains": [],
@@ -48,7 +48,7 @@ async def test_recognize_report_intent_success(sample_tool_response):
     ):
         result = await recognize_report_intent(
             {
-                "original_query": "写报告：AI Agent\nhttps://example.com/a",
+                "original_query": "Write a report: AI Agent\nhttps://example.com/a",
                 "llm_model_name": "basic",
                 "messages": [],
             }
@@ -59,7 +59,7 @@ async def test_recognize_report_intent_success(sample_tool_response):
     assert result.research_intent.section_count == 5
     assert result.research_intent.audience_role == "研发负责人"
     assert result.research_intent.tone == "analytical"
-    assert result.research_intent.report_type == "deep_research"
+    assert result.research_intent.report_type == "professional"
     assert "https://example.com/a" in result.research_intent.include_url
     assert "example.com" in result.research_intent.include_domains
 
@@ -80,6 +80,7 @@ async def test_recognize_report_intent_no_tool_calls_fallback():
     assert result.original_query == q
     assert result.research_query == q
     assert result.research_intent == ResearchIntent()
+    assert result.research_intent.report_type is None
 
 
 @pytest.mark.asyncio
@@ -97,6 +98,7 @@ async def test_recognize_report_intent_exception_fallback():
 
     assert result.research_query == q
     assert result.research_intent.section_count is None
+    assert result.research_intent.report_type is None
 
 
 @pytest.mark.asyncio
@@ -104,6 +106,38 @@ async def test_empty_original_query():
     result = await recognize_report_intent({"original_query": "", "llm_model_name": "basic"})
     assert result.research_query == ""
     assert result.research_intent == ResearchIntent()
+    assert result.research_intent.report_type is None
+
+
+@pytest.mark.asyncio
+async def test_normalize_invalid_report_type_defaults_none():
+    legacy_response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "topic",
+                    "report_type": "deep_research",
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=legacy_response,
+    ):
+        result = await recognize_report_intent(
+            {"original_query": "深度研究 topic", "llm_model_name": "basic"}
+        )
+
+    assert result.research_intent.report_type is None
 
 
 @pytest.mark.asyncio
@@ -133,3 +167,72 @@ async def test_normalize_invalid_section_count():
 
     assert result.research_intent.section_count is None
     assert "x.y" in result.research_intent.include_domains
+    assert result.research_intent.report_type is None
+
+
+@pytest.mark.asyncio
+async def test_report_type_brief_is_preserved():
+    brief_response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "topic",
+                    "report_type": "brief",
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=brief_response,
+    ):
+        result = await recognize_report_intent(
+            {"original_query": "我要精简版", "llm_model_name": "basic"}
+        )
+
+    assert result.research_intent.report_type == "brief"
+
+
+@pytest.mark.asyncio
+async def test_report_type_remains_none_when_tool_omits_it():
+    missing_type_response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "AI Agent 工程化落地趋势",
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=missing_type_response,
+    ):
+        result = await recognize_report_intent(
+            {
+                "original_query": "请研究 AI Agent 工程化落地趋势",
+                "llm_model_name": "basic",
+                "messages": [
+                    {"role": "assistant", "content": "Clarification questions:\n1. 你希望精简版还是专业版？"},
+                    {"role": "user", "content": "希望本次报告是精简版"},
+                ],
+            }
+        )
+
+    assert result.research_intent.report_type is None

@@ -75,6 +75,16 @@ def apply_web_search_domain_constraints(
         merged_exclude.extend(normalize_domains(exclude_domains))
         api_wrapper.exclude_domains = normalize_domains(merged_exclude)
 
+        logger.info(
+            "apply_web_search_domain_constraints [%s]: intent include_domains=%s, "
+            "exclude_domains=%s; merged include_domains=%s, exclude_domains=%s",
+            search_engine_name,
+            include_domains,
+            exclude_domains,
+            api_wrapper.include_domains,
+            api_wrapper.exclude_domains,
+        )
+
     return True
 
 
@@ -104,7 +114,8 @@ async def run_web_search(query: str, search_engine_name: str):
         else:
             logger.exception(f"Error when run web search {search_engine_name}: {e}")
         return dict(search_engine=search_engine_name, 
-                    search_results=[f"Error when run web search {search_engine_name}: {e}"])
+                    search_results=[],
+                    error=f"Error when run web search {search_engine_name}: {e}")
     return dict(search_engine=search_engine_name, search_results=result)
 
 

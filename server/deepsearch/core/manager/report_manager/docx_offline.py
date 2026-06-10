@@ -1,25 +1,26 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
-"""Offline DOCX conversion based on pandoc and Mermaid CLI."""
+"""Offline DOCX conversion based on pure-Python HTML rendering and Mermaid CLI."""
 
 from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from pathlib import Path
 
 import markdown
-import pypandoc
+from docx import Document
 
-from server.deepsearch.common.exception.exceptions import ReportConvertDependencyException
 from server.deepsearch.core.manager.report_manager.conversion_utils import (
     MermaidRenderStats,
-    ensure_pandoc,
     enhance_image,
     make_safe_filename_component,
     normalize_docx_fonts,
+    normalize_docx_tables,
     normalize_headings,
+    postprocess_html,
     preprocess_markdown_text,
     read_text_with_fallback,
 )
@@ -35,6 +36,7 @@ from server.deepsearch.core.manager.report_manager.mermaid_preprocess import (
 from server.deepsearch.core.manager.report_manager.xychart_value_labels import (
     overlay_xychart_value_labels_on_png,
 )
+from server.deepsearch.core.manager.report_manager.word_utils import html_to_doc, set_global_styles
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,20 @@ DOCX_HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+DOCX_STYLE_MAP = {
+    "heading1": "heading 1",
+    "heading2": "heading 2",
+    "heading3": "heading 3",
+    "heading4": "heading 4",
+    "heading5": "heading 5",
+    "heading6": "heading 6",
+    "heading7": "heading 7",
+    "heading8": "heading 8",
+    "heading9": "heading 9",
+    "paragraph": "Normal",
+    "table": "Table Grid",
+    "default": "Normal",
+}
 
 
 def render_mermaid_png(
@@ -204,7 +220,7 @@ def replace_mermaid_blocks(
 
 
 def convert_md_to_docx(md_path: str | Path, docx_path: str | Path) -> None:
-    """Convert Markdown into DOCX through pandoc.
+    """Convert Markdown into DOCX through the pure-Python HTML pipeline.
 
     Args:
         md_path: 输入 Markdown 文件路径。
@@ -214,12 +230,12 @@ def convert_md_to_docx(md_path: str | Path, docx_path: str | Path) -> None:
         None.
 
     Raises:
-        ReportConvertDependencyException: pandoc 依赖不可用或执行失败时抛出。
+        FileNotFoundError: Markdown input does not exist.
     """
-    ensure_pandoc()
-
     md_file = Path(md_path).resolve()
     docx_file = Path(docx_path).resolve()
+    start_time = time.perf_counter()
+    logger.info("Starting Markdown to DOCX conversion input=%s output=%s", md_file, docx_file)
     if not md_file.exists():
         raise FileNotFoundError(f"Markdown file does not exist: {md_file}")
 
@@ -247,31 +263,32 @@ def convert_md_to_docx(md_path: str | Path, docx_path: str | Path) -> None:
             extensions=["extra", "toc", "md_in_html"],
             output_format="html5",
         )
+        html_text = DOCX_HTML_TEMPLATE.format(content=postprocess_html(html_body))
         temp_html.write_text(
-            DOCX_HTML_TEMPLATE.format(content=html_body),
+            html_text,
             encoding="utf-8",
             newline="\n",
         )
-        try:
-            pypandoc.convert_file(
-                str(temp_html),
-                "docx",
-                outputfile=str(docx_file),
-                extra_args=[
-                    "--from=html",
-                    "--resource-path",
-                    str(docx_file.parent),
-                ],
-            )
-        except (OSError, RuntimeError) as exc:
-            raise ReportConvertDependencyException("pandoc execution failed during DOCX export") from exc
+
+        document = Document()
+        set_global_styles(document)
+        html_to_doc(document, html_text, DOCX_STYLE_MAP, base_path=docx_file.parent)
+        document.save(docx_file)
 
         normalize_docx_fonts(docx_file)
+        normalize_docx_tables(docx_file)
         logger.info(
             "Mermaid render stats: total=%s success=%s failed=%s",
             mermaid_stats.total,
             mermaid_stats.success,
             mermaid_stats.failed,
+        )
+        logger.info(
+            "Completed Markdown to DOCX conversion input=%s output=%s docx_bytes=%s duration_ms=%.2f",
+            md_file,
+            docx_file,
+            docx_file.stat().st_size if docx_file.exists() else 0,
+            (time.perf_counter() - start_time) * 1000,
         )
     finally:
         for cleanup_path in cleanup_paths:

@@ -1,7 +1,9 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 import base64
+import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from tempfile import TemporaryDirectory
 from io import BytesIO
@@ -13,8 +15,11 @@ from docx.document import Document
 
 from server.deepsearch.core.manager.report_manager.docx_offline import convert_md_to_docx
 from server.deepsearch.core.manager.report_manager.html_offline import convert_md_to_html
+from server.deepsearch.core.manager.report_manager.conversion_utils import postprocess_html
 from server.deepsearch.core.manager.report_manager.report_bundle import build_report_bundle, pack_bundle_to_base64
 from server.deepsearch.core.manager.report_manager.word_utils import set_global_styles, html_to_doc
+
+logger = logging.getLogger(__name__)
 
 
 class DefaultReportFormatProcessor(ABC):
@@ -71,10 +76,19 @@ class DefaultReportFormatProcessor(ABC):
         Raises:
             NotImplementedError: 当前处理器尚未实现该能力。
         """
+        start_time = time.perf_counter()
+        logger.info("Starting report bundle export processor=%s", self.__class__.__name__)
         with TemporaryDirectory(prefix="report_convert_") as tmpdir:
             workspace = Path(tmpdir)
             self.convert_from_final_result(final_result, workspace)
-            return pack_bundle_to_base64(workspace / "report_bundle")
+            encoded = pack_bundle_to_base64(workspace / "report_bundle")
+            logger.info(
+                "Completed report bundle export processor=%s bundle_base64_length=%s duration_ms=%.2f",
+                self.__class__.__name__,
+                len(encoded),
+                (time.perf_counter() - start_time) * 1000,
+            )
+            return encoded
 
     @classmethod
     @abstractmethod
@@ -172,6 +186,7 @@ class ReportHtml(DefaultReportFormatProcessor):
             extras=["tables", "fenced-code-blocks", "code-friendly"]
         )
         html_body = cls._enable_html_latex(html_body)
+        html_body = postprocess_html(html_body)
 
         default_style_block_n = cls._load_css()
         # 包裹完整 HTML
@@ -201,10 +216,19 @@ class ReportHtml(DefaultReportFormatProcessor):
         Returns:
             str: 最终导出的 HTML 文本。
         """
+        start_time = time.perf_counter()
+        logger.info("Converting final_result to HTML workspace=%s", workspace)
         bundle = build_report_bundle(final_result, workspace)
         output_html = bundle.root_dir / "report.html"
         convert_md_to_html(bundle.markdown_path, output_html)
-        return output_html.read_text(encoding="utf-8")
+        html_text = output_html.read_text(encoding="utf-8")
+        logger.info(
+            "Converted final_result to HTML output=%s html_length=%s duration_ms=%.2f",
+            output_html,
+            len(html_text),
+            (time.perf_counter() - start_time) * 1000,
+        )
+        return html_text
 
 
 class ReportWord(DefaultReportFormatProcessor):
@@ -255,7 +279,7 @@ class ReportWord(DefaultReportFormatProcessor):
 
     @classmethod
     def convert_from_final_result(cls, final_result: dict, workspace: Path) -> Path:
-        """Convert final_result into a DOCX file through the pandoc pipeline.
+        """Convert final_result into a DOCX file through the pure-Python pipeline.
 
         Args:
             final_result: 工作流最终结果字典。
@@ -264,7 +288,15 @@ class ReportWord(DefaultReportFormatProcessor):
         Returns:
             Path: 导出的 DOCX 文件路径。
         """
+        start_time = time.perf_counter()
+        logger.info("Converting final_result to DOCX workspace=%s", workspace)
         bundle = build_report_bundle(final_result, workspace)
         output_docx = bundle.root_dir / "report.docx"
         convert_md_to_docx(bundle.markdown_path, output_docx)
+        logger.info(
+            "Converted final_result to DOCX output=%s docx_bytes=%s duration_ms=%.2f",
+            output_docx,
+            output_docx.stat().st_size if output_docx.exists() else 0,
+            (time.perf_counter() - start_time) * 1000,
+        )
         return output_docx
