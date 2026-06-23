@@ -15,11 +15,10 @@
 最小栈仅启动后端容器，使用 SQLite + 内存 checkpointer，无需任何外部数据库：
 
 ```bash
-# 1. 准备环境变量（至少填入 LLM / 搜索源 API key）
+# 1. 准备环境变量（基础设施配置：DB / Milvus / Redis / SSL 等）
 cp .env.example .env
-#    编辑 .env，填写：
-#      LLM_MODEL_NAME / LLM_API_KEY / LLM_BASE_URL
-#      以及至少一个搜索源 key（JINA_API_KEY / SERPER_API_KEY / TAVILY_API_KEY 等）
+#    编辑 .env，按所选档位填写 DB_TYPE / DB_HOST / CHECKPOINTER_TYPE 等
+#    （LLM 与搜索源密钥不在 .env 中，启动后通过前端配置页或管理 API 写入并加密存库）
 
 # 2. 启动（后台）
 docker compose -f docker/docker-compose.yml up -d
@@ -199,7 +198,7 @@ docker compose -f docker/docker-compose.yml build \
 
 | 现象 | 排查 |
 |------|------|
-| 后端容器健康检查失败 | `docker compose logs deepsearch` 看启动报错；常见是 `.env` 缺 `LLM_API_KEY` 或 `SERVICE_MODE=product` 时未设 `SERVER_AES_MASTER_KEY` |
+| 后端容器健康检查失败 | `docker compose logs deepsearch` 看启动报错；常见是 `.env` 里 DB / Milvus 配置不对，或 `SERVICE_MODE=product` 时未设 `SERVER_AES_MASTER_KEY` |
 | `distributed` 起不来 | 先确认 `.env` 里 `OBS_*` 完整，distributed 模式知识库必须用 OBS |
 | Milvus 健康检查超时 | Milvus 首次启动较慢（90s+），`start_period` 已放宽；仍失败查 `docker compose logs milvus` |
 | 端口被占用 | 用 `*_PUBLISH_PORT` 环境变量改宿主映射 |

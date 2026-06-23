@@ -15,11 +15,11 @@ Orchestrate the openJiuwen DeepSearch backend together with its dependency servi
 The minimal stack launches only the backend container with SQLite and an in-memory checkpointer, requiring no external database:
 
 ```bash
-# 1. Prepare environment variables (at least LLM / search-source API keys)
+# 1. Prepare environment variables (infrastructure: DB / Milvus / Redis / SSL, etc.)
 cp .env.example .env
-#    Edit .env and fill in:
-#      LLM_MODEL_NAME / LLM_API_KEY / LLM_BASE_URL
-#      plus at least one search-source key (JINA_API_KEY / SERPER_API_KEY / TAVILY_API_KEY, etc.)
+#    Edit .env and set DB_TYPE / DB_HOST / CHECKPOINTER_TYPE, etc. for the chosen tier.
+#    (LLM and search-source keys are NOT in .env; after startup, configure them via the
+#     frontend settings page or management API, where they are encrypted and stored in DB.)
 
 # 2. Start (detached)
 docker compose -f docker/docker-compose.yml up -d
@@ -201,7 +201,7 @@ The example above uses Tsinghua mirrors; substitute any mirror reachable from yo
 
 | Symptom | What to check |
 |---------|---------------|
-| Backend container health check fails | `docker compose logs deepsearch` for startup errors; common causes are a missing `LLM_API_KEY` in `.env`, or `SERVICE_MODE=product` without `SERVER_AES_MASTER_KEY` |
+| Backend container health check fails | `docker compose logs deepsearch` for startup errors; common causes are incorrect DB / Milvus settings in `.env`, or `SERVICE_MODE=product` without `SERVER_AES_MASTER_KEY` |
 | `distributed` won't start | Confirm all `OBS_*` fields in `.env` are filled — distributed mode requires OBS for knowledge-base files |
 | Milvus health check times out | Milvus is slow to start on first run (90s+); `start_period` is already relaxed. If it still fails, inspect `docker compose logs milvus` |
 | Port already in use | Override the host mapping with the `*_PUBLISH_PORT` environment variables |
