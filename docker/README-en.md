@@ -1,6 +1,6 @@
-# Docker Compose One-Click Deployment
+**Read this in:** [简体中文](./README.md) | English
 
-> 中文文档：[README.md](./README.md)
+# Docker Compose One-Click Deployment
 
 Orchestrate the openJiuwen DeepSearch backend together with its dependency services (MySQL / Redis / Milvus) via Docker Compose, removing the need to start and wire up each service manually.
 
