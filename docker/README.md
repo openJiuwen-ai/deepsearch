@@ -1,5 +1,7 @@
 # Docker Compose 一键部署
 
+> 英文文档：[README-en.md](./README-en.md)
+
 通过 Docker Compose 一键编排 openJiuwen DeepSearch 后端及其依赖服务（MySQL / Redis / Milvus），免去手动逐个启动与配置。
 
 ## 前置要求
