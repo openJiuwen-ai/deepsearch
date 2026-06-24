@@ -364,7 +364,7 @@ class ServiceConfig(BaseModel):
     # 工作流基础参数
     workflow_execution_timeout: int = Field(default=7200, description="工作流执行超时时间")
     workflow_sub_graph_execution_timeout: int = Field(default=6000, description="子图执行超时时间")
-    workflow_max_plan_executed_num: int = Field(default=1, description="最大计划执行数量")
+    workflow_max_plan_executed_num: int = Field(default=2, description="最大计划执行数量")
     workflow_recursion_limit: int = Field(default=30, description="递归限制")
     workflow_max_gen_question_retry_num: int = Field(default=3, description="最大生成问题执行数量")
     workflow_feedback_mode: str = Field(default="web", description='用户反馈途径, 可选值: ["web", "cmd"]')
@@ -382,14 +382,14 @@ class ServiceConfig(BaseModel):
     # 信息收集节点参数
     info_collector_max_react_recursion_limit: int = Field(default=6, description="React代理最大递归限制")
     info_collector_initial_search_query_count: int = Field(default=2, description="初始搜索查询数量")
-    info_collector_max_research_loops: int = Field(default=1, description="最大研究循环次数")
+    info_collector_max_research_loops: int = Field(default=2, description="最大研究循环次数")
     info_collector_max_retry_num: int = Field(default=3, description="最大重试次数")
     info_collector_allow_programmer: bool = Field(default=False, description="")
 
     # 报告节点参数
     sub_report_classify_doc_infos_single_time_num: int = Field(default=60,
                                                                description="子报告中单次llm处理筛选收集到的数量")
-    sub_report_classify_doc_infos_res_top_k_num: int = Field(default=5,
+    sub_report_classify_doc_infos_res_top_k_num: int = Field(default=8,
                                                              description="子报告中单次llm处理返回的top_k数量")
     sub_report_doc_prefilter_multiplier: int = Field(default=5,
                                                      description="子报告文档预筛保留倍数，最大候选数为top_k乘以该值")
