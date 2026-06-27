@@ -18,14 +18,18 @@ from openjiuwen_deepsearch.algorithm.report.doc_prefilter import deduplicate_doc
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
 from openjiuwen_deepsearch.common.common_constants import CHINESE
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode, init_router
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_execution_service import (
     CollectorExecutionService,
     CollectorRunPlanConfig,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.section_context import SectionContext
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SubReportContent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    SubReportContent,
+    build_research_intent_prompt_context,
+    build_section_local_contract_prompt_context,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import custom_stream_output
@@ -96,6 +100,7 @@ class SectionStartNode(Start):
             session_id=inputs.get("session_id", ""),
             report_type_policy=inputs.get("report_type_policy") or {},
             research_intent=inputs.get("research_intent") or {},
+            section_local_contract=inputs.get("section_local_contract") or {},
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(),
@@ -122,7 +127,8 @@ class BasePlanReasoningNode(BaseNode):
         # 封装入参
         rtp = session.get_global_state("section_context.report_type_policy") or {}
         research_intent = session.get_global_state("section_context.research_intent") or {}
-        return {
+        section_local_contract = session.get_global_state("section_context.section_local_contract") or {}
+        current_inputs = {
             "section_idx": section_idx,
             "language": session.get_global_state("section_context.language"),
             "messages": session.get_global_state("section_context.messages"),
@@ -141,7 +147,17 @@ class BasePlanReasoningNode(BaseNode):
             "require_methodology_and_risk": rtp.get("require_methodology_and_risk", False),
             "audience_role": research_intent.get("audience_role", ""),
             "tone": research_intent.get("tone", ""),
+            "section_local_contract": section_local_contract,
         }
+        current_inputs.update(
+            build_section_local_contract_prompt_context(section_local_contract)
+        )
+        # Pass global research intent (task_type, comparison_targets, required_dimensions)
+        # so the planner can generate search steps that contribute evidence toward global objectives.
+        current_inputs.update(
+            build_research_intent_prompt_context(research_intent)
+        )
+        return current_inputs
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
@@ -170,8 +186,9 @@ class BasePlanReasoningNode(BaseNode):
             else:
                 # 未收集到信息，跳转到End结束工作流
                 next_node = NodeId.END.value
-                error_msg = (f"[{StatusCode.SECTION_INFOS_EMPTY.code}] "
-                             f"{self.log_prefix} {limited_msg} {StatusCode.SECTION_INFOS_EMPTY.errmsg}")
+                error_msg = format_exception_info(
+                    StatusCode.SECTION_INFOS_EMPTY, limited_msg, prefix=self.log_prefix
+                )
                 _handle_warning_exception_info(session, added_warning=error_msg, added_exception=error_msg)
                 logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
             return dict(next_node=next_node)
@@ -228,8 +245,9 @@ class BasePlanReasoningNode(BaseNode):
                 logger.info(
                     f"{log_prefix} Research completed, go to {next_node}")
         else:
-            error_msg = (f"[{StatusCode.PLANNER_GENERATE_ERROR.code}] {log_prefix} "
-                         f"{StatusCode.PLANNER_GENERATE_ERROR.errmsg.format(e=error_detail)}")
+            error_msg = error_detail or format_exception_info(
+                StatusCode.PLANNER_GENERATE_ERROR, prefix=log_prefix
+            )
             _handle_warning_exception_info(session, added_warning=error_msg, added_exception=error_msg)
             next_node = NodeId.END.value
 
@@ -288,8 +306,9 @@ class ResearchPlanReasoningNode(BasePlanReasoningNode):
         # 2. plan生成失败时
         else:
             debug_info = algorithm_output.get("error_msg")
-            failed_info = (f"[{StatusCode.PLANNER_GENERATE_ERROR.code}] {log_prefix} "
-                           f"{StatusCode.PLANNER_GENERATE_ERROR.errmsg.format(e=debug_info)}")
+            failed_info = debug_info or format_exception_info(
+                StatusCode.PLANNER_GENERATE_ERROR, prefix=log_prefix
+            )
             if collected_doc_num > 0:
                 # 已经收集到信息
                 _handle_warning_exception_info(session, added_warning=failed_info)
@@ -298,8 +317,9 @@ class ResearchPlanReasoningNode(BasePlanReasoningNode):
             else:
                 # 未收集到信息
                 _handle_warning_exception_info(session, added_warning=failed_info, added_exception=failed_info)
-                error_msg = (f"[{StatusCode.SECTION_INFOS_EMPTY.code}] {log_prefix} "
-                             f"{StatusCode.SECTION_INFOS_EMPTY.errmsg}")
+                error_msg = format_exception_info(
+                    StatusCode.SECTION_INFOS_EMPTY, failed_info, prefix=log_prefix
+                )
                 _handle_warning_exception_info(session, added_warning=error_msg, added_exception=error_msg)
                 next_node = NodeId.END.value
 
@@ -331,6 +351,7 @@ class SubReporterNode(BaseNode):
 
         rtp = session.get_global_state("section_context.report_type_policy") or {}
         research_intent = session.get_global_state("section_context.research_intent") or {}
+        section_local_contract = session.get_global_state("section_context.section_local_contract") or {}
 
         return dict(
             thread_id=session.get_global_state("section_context.session_id"),
@@ -363,6 +384,8 @@ class SubReporterNode(BaseNode):
             require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
             audience_role=research_intent.get("audience_role", ""),
             tone=research_intent.get("tone", ""),
+            research_intent=research_intent,
+            section_local_contract=section_local_contract,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -391,8 +414,13 @@ class SubReporterNode(BaseNode):
             next_node = NodeId.SUB_SOURCE_TRACER.value
             logger.info(f"{self.log_prefix} Success to generate sub_report, detail: {detail_msg}, go to {next_node}")
         else:
-            error_msg = (f"[{StatusCode.SUB_REPORT_GENERATE_ERROR.code}] {self.log_prefix} "
-                         f"{StatusCode.SUB_REPORT_GENERATE_ERROR.errmsg.format(e=detail_msg)}")
+            msg = algorithm_output.get("msg", "")
+            if msg.startswith(f"[{StatusCode.SUB_REPORT_GENERATE_ERROR.code}]"):
+                error_msg = msg
+            else:
+                error_msg = format_exception_info(
+                    StatusCode.SUB_REPORT_GENERATE_ERROR, detail_msg, prefix=self.log_prefix
+                )
             _handle_warning_exception_info(session, added_warning=error_msg, added_exception=error_msg)
             next_node = NodeId.END.value
 
@@ -406,7 +434,11 @@ class SubReporterNode(BaseNode):
             classified_content=algorithm_output.get("classified_content", []),
             sub_report_content_text=algorithm_output.get("sub_report_content", ""),
             sub_report_content_summary=algorithm_output.get("sub_report_summary", ""),
+            sub_report_chapter_sidecar=algorithm_output.get("sub_report_chapter_sidecar"),
         )
+        sidecar_warning = algorithm_output.get("sub_report_sidecar_warning", "")
+        if sidecar_warning:
+            _handle_warning_exception_info(session, added_warning=sidecar_warning)
         sub_report_debug_info_output = sub_report_content.model_dump()
         # 添加SubReporterNode debug日志
         add_debug_log_wrapper(session, NodeDebugData(NodeId.SUB_REPORTER.value, 0, NodeType.SUB.value,
@@ -477,7 +509,21 @@ class SubSourceTracerNode(BaseNode):
         source_tracer = SourceTracer(current_inputs)
         # 细粒度开关关闭时，仍保留原文已有引用，只跳过基于搜索结果生成新增引用。
         if generated_citation_switch is not False:
-            await source_tracer.research_trace_source()
+            # 预检查原文引用覆盖率
+            pre_check_result = source_tracer.pre_check_origin_coverage()
+            logger.info(f"{self.log_prefix} 溯源预检查结果: "
+                        f"need_generate={pre_check_result.get('need_generate')}, "
+                        f"origin_count={pre_check_result.get('origin_count')}, "
+                        f"total_sentences={pre_check_result.get('total_sentences')}, "
+                        f"coverage={pre_check_result.get('coverage'):.4f}, "
+                        f"reason={pre_check_result.get('reason')}")
+
+            if pre_check_result.get("need_generate") is False:
+                logger.info(f"{self.log_prefix} 原文引用覆盖率达标，跳过新增引用生成。"
+                            f"origin_count={pre_check_result.get('origin_count')}, "
+                            f"coverage={pre_check_result.get('coverage'):.4f}")
+            else:
+                await source_tracer.research_trace_source()
         else:
             logger.info(
                 f"{self.log_prefix} source_tracer_generated_citation_switch is False, "
@@ -583,8 +629,9 @@ class InfoCollectorNode(BaseNode):
 
         current_doc_num = execution_result.collected_doc_num
         if current_doc_num == 0:
-            collector_warning = (f"[{StatusCode.INFO_COLLECTING_EMPTY.code}] {self.log_prefix} "
-                                 f"{StatusCode.INFO_COLLECTING_EMPTY.errmsg}")
+            collector_warning = format_exception_info(
+                StatusCode.INFO_COLLECTING_EMPTY, prefix=self.log_prefix
+            )
             warning_infos = state.get("warning_infos", [])
             warning_infos.append(collector_warning)
             logger.warning(collector_warning)
@@ -678,6 +725,7 @@ def build_editor_team_workflow():
             "config": "${config}",
             "report_type_policy": "${report_type_policy}",
             "research_intent": "${research_intent}",
+            "section_local_contract": "${section_local_contract}",
         }
     )
 

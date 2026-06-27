@@ -398,7 +398,11 @@ class ServiceConfig(BaseModel):
 
     # 溯源节点参数
     source_tracer_citation_verify_max_concurrency_num: int = Field(default=30, description="溯源校验最大并发数量")
-    source_tracer_citation_verify_batch_size: int = Field(default=1, description="溯源校验批次大小")
+    source_tracer_citation_verify_batch_size: int = Field(default=10, ge=1, le=20, description="溯源校验批次大小")
+    source_tracer_domain_source_map_path: str = Field(
+        default="domain_source_map.json",
+        description="域名来源动态映射表JSON文件名（相对路径解析到可写数据目录，绝对路径直接使用）",
+    )
 
     # 统计性能信息参数
     stats_info_node_duration: bool = Field(default=False, description="节点持续时间统计")

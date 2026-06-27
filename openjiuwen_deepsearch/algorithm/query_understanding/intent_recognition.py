@@ -2,7 +2,8 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 import logging
-from typing import Literal
+import re
+from typing import Dict, List
 
 from pydantic import BaseModel, Field
 from openjiuwen.core.foundation.tool.base import ToolCard
@@ -10,6 +11,7 @@ from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ReportTypePolicy, ResearchIntent
+from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_search
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -20,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 EMIT_INTENT_TOOL = "emit_report_intent"
 
+_DEFAULT_WEB_SEARCH_ENGINE = "petal"
 _VALID_REPORT_TYPES = frozenset({"professional", "brief"})
 
 
@@ -69,6 +72,8 @@ class IntentRecognitionResult(BaseModel):
     original_query: str = Field(default="", description="用户原始输入，完整保留")
     research_query: str = Field(default="", description="用于检索与规划的研究主题")
     research_intent: ResearchIntent = Field(default_factory=ResearchIntent, description="结构化报告约束")
+    lang: str = Field(default="zh-CN", description="检测到的用户语言（归一化前的原始值）")
+    entry_search_results: List[Dict] = Field(default_factory=list, description="初始网络搜索结果")
 
 
 def _default_fallback(original_query: str | None) -> IntentRecognitionResult:
@@ -81,6 +86,24 @@ def _default_fallback(original_query: str | None) -> IntentRecognitionResult:
     )
 
 
+def _to_str_list(raw) -> list[str]:
+    """Safely convert a value to a list of strings.
+
+    Handles the case where LLM returns a comma-separated string instead of a list.
+    Supports Chinese punctuation: ，、；and English separators: , ; \n
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        return [item.strip() for item in re.split(r'[,，、;；\n]', raw) if item.strip()]
+    return []
+
+
 def _dedupe_preserve_order(items: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -91,6 +114,26 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
         seen.add(s)
         out.append(s)
     return out
+
+
+def _normalize_task_type(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    value = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    if not value:
+        return None
+    aliases = {
+        "compare": "comparison",
+        "comparison_analysis": "comparison",
+        "classify": "classification",
+        "categorization": "classification",
+        "trend_judgment": "trend_judgement",
+        "trend_judgement": "trend_judgement",
+        "trend_judgement_analysis": "trend_judgement",
+        "feasibility_judgement": "trend_judgement",
+        "feasibility_assessment": "trend_judgement",
+    }
+    return aliases.get(value, value)
 
 
 def _normalize_research_intent(data: dict) -> ResearchIntent:
@@ -113,13 +156,13 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
     ar_raw = data.get("audience_role")
     audience_role = str(ar_raw).strip() if ar_raw is not None and str(ar_raw).strip() else None
 
-    include_url = _dedupe_preserve_order(list(data.get("include_url") or []))
-    exclude_url = _dedupe_preserve_order(list(data.get("exclude_url") or []))
+    include_url = _dedupe_preserve_order(_to_str_list(data.get("include_url")))
+    exclude_url = _dedupe_preserve_order(_to_str_list(data.get("exclude_url")))
     include_domains = _dedupe_preserve_order(
-        [str(d).strip() for d in (data.get("include_domains") or []) if str(d).strip()]
+        [str(d).strip() for d in _to_str_list(data.get("include_domains")) if str(d).strip()]
     )
     exclude_domains = _dedupe_preserve_order(
-        [str(d).strip() for d in (data.get("exclude_domains") or []) if str(d).strip()]
+        [str(d).strip() for d in _to_str_list(data.get("exclude_domains")) if str(d).strip()]
     )
 
     for url in include_url:
@@ -129,6 +172,9 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
     include_domains = _dedupe_preserve_order(include_domains)
 
     return ResearchIntent(
+        task_type=_normalize_task_type(data.get("task_type")),
+        required_dimensions=_dedupe_preserve_order(_to_str_list(data.get("required_dimensions"))),
+        comparison_targets=_dedupe_preserve_order(_to_str_list(data.get("comparison_targets"))),
         section_count=section_count,
         audience_role=audience_role,
         tone=tone,
@@ -143,10 +189,12 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
 async def _emit_report_intent(**kwargs) -> IntentRecognitionResult:
     """将 LLM tool_call args 转换为意图识别结果。"""
     research_query = (kwargs.get("research_query") or "").strip()
+    language = kwargs.get("language") or "zh-CN"
 
     return IntentRecognitionResult(
         research_query=research_query,
         research_intent=_normalize_research_intent(kwargs),
+        lang=language,
     )
 
 
@@ -156,7 +204,7 @@ def _create_emit_intent_tool() -> LocalFunction:
         name=EMIT_INTENT_TOOL,
         description=(
             "Emit structured report constraints and the cleaned research_query. "
-            "You MUST call this tool exactly once."
+            "You MUST call this tool exactly once for research requests."
         ),
         input_params={
             "type": "object",
@@ -166,8 +214,31 @@ def _create_emit_intent_tool() -> LocalFunction:
                     "description": (
                         "The core research topic only (what to investigate). "
                         "Exclude meta instructions about chapters, audience, tone, or URLs. "
-                        "Keep the same language as the user's original query and do not translate."
+                        "Keep the same language as the user's original query — do NOT translate, "
+                        "rewrite into English keywords, or internationalize wording. "
+                        "Mixed-language entities (e.g., Jensen Huang, Blackwell/Rubin) stay as-is."
                     ),
+                },
+                "language": {
+                    "type": "string",
+                    "description": "The user's detected language locale (e.g., zh-CN, en-US, ja-JP).",
+                },
+                "task_type": {
+                    "type": "string",
+                    "description": (
+                        "Primary task type as a concise English enum-like label, such as "
+                        "comparison, classification, trend_judgement, recommendation, evaluation."
+                    ),
+                },
+                "required_dimensions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Named comparison or analysis dimensions that must be covered.",
+                },
+                "comparison_targets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Named entities, options, or categories that should be compared explicitly.",
                 },
                 "section_count": {
                     "type": "integer",
@@ -175,50 +246,109 @@ def _create_emit_intent_tool() -> LocalFunction:
                 },
                 "audience_role": {
                     "type": "string",
-                    "description": "Target reader role (keep user's wording or short label).",
+                    "description": "Target reader role as a short phrase (e.g., CTO, investor). Omit if not stated.",
                 },
                 "tone": {
                     "type": "string",
                     "description": (
-                        "Writing tone as English enum: objective, formal, analytical, informative, "
-                        "explanatory, persuasive, etc."
+                        "Writing tone as ONE English enum value: objective, formal, analytical, informative, "
+                        "explanatory, persuasive, descriptive, critical, comparative, simple, casual. "
+                        "Omit if unclear."
                     ),
                 },
                 "report_type": {
                     "type": "string",
                     "enum": ["professional", "brief"],
                     "description": (
-                        "Report type. MUST be exactly 'professional' (full deep research) "
-                        "or 'brief' (concise). Map user wording (e.g. 精简版/深度研究) to these "
-                        "values before emitting. Omit if unclear."
+                        "Report type. MUST be exactly 'professional' or 'brief'. "
+                        "Use 'professional' for full deep-research reports (专业版, 深度研究); "
+                        "use 'brief' for concise reports (精简版, 简报, 概述). "
+                        "Omit if unclear after reading context."
                     ),
                 },
                 "include_url": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Full URLs the user explicitly provided or wants to prioritize.",
+                    "description": "Full HTTP(S) URLs the user explicitly lists or asks to use. Do NOT invent URLs.",
                 },
                 "exclude_url": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "URLs the user wants to exclude.",
+                    "description": "Full HTTP(S) URLs the user explicitly asks to avoid. Do NOT invent URLs.",
                 },
                 "include_domains": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Domains to prefer (hostname only, lowercase, no scheme).",
+                    "description": (
+                        "Domains to prefer (hostname only, lowercase, no scheme). "
+                        "Infer from natural-language hints when confident (e.g., 只用维基百科 → wikipedia.org)."
+                    ),
                 },
                 "exclude_domains": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Domains to exclude.",
+                    "description": (
+                        "Domains to exclude (hostname only, lowercase, no scheme). "
+                        "Infer from natural-language hints when confident."
+                    ),
                 },
             },
-            "required": ["research_query"],
+            "required": ["research_query", "language"],
         },
     )
 
     return LocalFunction(card=card, func=_emit_report_intent)
+
+
+async def _invoke_llm_for_intent(
+    prompt_name: str,
+    original_query: str,
+    messages: list,
+    llm_model_name: str,
+) -> tuple[IntentRecognitionResult | None, dict]:
+    """公共 LLM 调用逻辑：构建提示词、调用 LLM、解析 tool_call 结果
+    """
+    prompt_ctx = {
+        "original_query": original_query,
+        "messages": messages,
+    }
+    prompts = apply_system_prompt(prompt_name, prompt_ctx)
+
+    tool = _create_emit_intent_tool()
+    llm = llm_context.get().get(llm_model_name)
+    response = await llm_utils.ainvoke_llm_with_stats(
+        llm,
+        prompts,
+        llm_type="basic",
+        agent_name=AgentLlmName.INTENT_RECOGNITION.value,
+        tools=[tool.card.tool_info()],
+        need_stream_out=False,
+    )
+    tool_calls = response.get("tool_calls") or []
+
+    if not tool_calls:
+        return (None, response)
+
+    tool_call = tool_calls[0]
+    if tool_call.get("name") and tool_call.get("name") != tool.card.name:
+        logger.warning(
+            "[_invoke_llm_for_intent] Tool name mismatch(%s): %s",
+            tool.card.name,
+            "**" if LogManager.is_sensitive() else tool_call.get("name"),
+        )
+
+    args = tool_call.get("args") or {}
+    if not isinstance(args, dict):
+        return (None, response)
+
+    tool_result = await tool.invoke(args)
+    result = tool_result.model_copy(
+        update={
+            "original_query": original_query,
+            "research_query": tool_result.research_query or original_query,
+        }
+    )
+    return (result, response)
 
 
 async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResult:
@@ -235,48 +365,16 @@ async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResu
     if not original_query:
         return _default_fallback(original_query)
 
-    prompt_ctx = {
-        "original_query": original_query,
-        "messages": current_inputs.get("messages") or [],
-    }
-    prompts = apply_system_prompt("intent_recognition", prompt_ctx)
-
-    tool = _create_emit_intent_tool()
     try:
-        llm = llm_context.get().get(current_inputs.get("llm_model_name"))
-        response = await llm_utils.ainvoke_llm_with_stats(
-            llm,
-            prompts,
-            llm_type="basic",
-            agent_name=AgentLlmName.INTENT_RECOGNITION.value,
-            tools=[tool.card.tool_info()],
-            need_stream_out=False,
+        result, response = await _invoke_llm_for_intent(
+            "intent_recognition", original_query,
+            current_inputs.get("messages") or [],
+            current_inputs.get("llm_model_name"),
         )
-        tool_calls = response.get("tool_calls") or []
-        if not tool_calls:
+        if result is None:
             logger.warning("[recognize_report_intent] No tool_calls in LLM response, using fallback.")
             return _default_fallback(original_query)
 
-        tool_call = tool_calls[0]
-        if tool_call.get("name") and tool_call.get("name") != tool.card.name:
-            logger.warning(
-                "[recognize_report_intent] Tool name is not match(%s): %s",
-                tool.card.name,
-                "**" if LogManager.is_sensitive() else tool_call.get("name"),
-            )
-
-        args = tool_call.get("args") or {}
-        if not isinstance(args, dict):
-            logger.warning("[recognize_report_intent] Invalid tool args type, using fallback.")
-            return _default_fallback(original_query)
-
-        tool_result = await tool.invoke(args)
-        result = tool_result.model_copy(
-            update={
-                "original_query": original_query,
-                "research_query": tool_result.research_query or original_query,
-            }
-        )
         if LogManager.is_sensitive():
             logger.info("[recognize_report_intent] parsed successfully (redacted).")
         else:
@@ -293,3 +391,85 @@ async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResu
         else:
             logger.warning("[recognize_report_intent] Exception, using fallback: %s", exc)
         return _default_fallback(original_query)
+
+
+async def classify_and_recognize_intent(current_inputs: dict) -> IntentRecognitionResult:
+    """
+    意图识别（入口函数）：使用 intent_recognition_entry 提示词解析报告意图与研究主题。
+
+    所有查询均进入研究报告生成流程，LLM 无 tool_calls 时回退为
+    research_query=original_query、空 intent。
+
+    Args:
+        current_inputs: 需包含 ``original_query``；可选 ``messages``、``llm_model_name``。
+
+    Returns:
+        IntentRecognitionResult: 包含研究约束的完整意图对象。
+    """
+    original_query = (current_inputs.get("original_query") or "").strip()
+    if not original_query:
+        return _default_fallback(original_query)
+
+    try:
+        result, response = await _invoke_llm_for_intent(
+            "intent_recognition_entry", original_query,
+            current_inputs.get("messages") or [],
+            current_inputs.get("llm_model_name"),
+        )
+        if result is None:
+            logger.warning("[classify_and_recognize_intent] No tool_calls in LLM response, using fallback.")
+            return _default_fallback(original_query)
+
+        if LogManager.is_sensitive():
+            logger.info("[classify_and_recognize_intent] parsed successfully (redacted).")
+        else:
+            logger.info(
+                f"[classify_and_recognize_intent] original_query={original_query}\n"
+                f"research_query={result.research_query}\n"
+                f"lang={result.lang}\n"
+                f"intent={result.research_intent.model_dump()}"
+            )
+        return result
+
+    except Exception as exc:
+        if LogManager.is_sensitive():
+            logger.warning("[classify_and_recognize_intent] Exception, using fallback.")
+        else:
+            logger.warning("[classify_and_recognize_intent] Exception, using fallback: %s", exc)
+        return _default_fallback(original_query)
+
+
+async def web_search_for_query(inputs: dict) -> dict:
+    """
+    根据用户查询执行网络搜索并返回结果。
+
+    Args:
+        inputs: dict 包含：
+            - query: str - 用户搜索查询
+            - web_search_engine_name: str - 搜索引擎名称（默认 "petal"）
+
+    Returns:
+        dict 包含：
+            - search_results: list - 网络搜索结果
+            - error_msg: str - 错误信息（失败时）
+    """
+    logger.info("[web_search_for_query] Begin web search for query.")
+    query = inputs.get("query", "")
+    search_engine_name = inputs.get("web_search_engine_name") or _DEFAULT_WEB_SEARCH_ENGINE
+
+    error_msg = ""
+    search_results = []
+    try:
+        result = await run_web_search(query, search_engine_name)
+        search_results = result.get("search_results", [])
+        if "Error when run web search" in search_results:
+            search_results = []
+    except Exception as e:
+        error_msg = f"Web search failed: {e}"
+        logger.error(error_msg)
+
+    logger.info("[web_search_for_query] End web search, got %d results.", len(search_results))
+    return {
+        "search_results": search_results,
+        "error_msg": error_msg
+    }

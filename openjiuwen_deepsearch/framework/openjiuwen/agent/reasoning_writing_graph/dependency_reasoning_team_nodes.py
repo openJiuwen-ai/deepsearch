@@ -29,7 +29,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Mess
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import init_router
 from openjiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType, NodeDebugData
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 
@@ -351,8 +351,9 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
                 logger.info(f"{self.log_prefix} | Step {step.id} have completed")
 
         if current_doc_num == 0:
-            collector_warning = (f"[{StatusCode.INFO_COLLECTING_EMPTY.code}] {self.log_prefix} "
-                                 f"{StatusCode.INFO_COLLECTING_EMPTY.errmsg}")
+            collector_warning = format_exception_info(
+                StatusCode.INFO_COLLECTING_EMPTY, prefix=self.log_prefix
+            )
             warning_infos.append(collector_warning)
             logger.warning(collector_warning)
 
@@ -394,9 +395,10 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
 
         if pending_steps:
             blocked_step_ids = [step.id for step in pending_steps if step.id]
-            blocked_msg = (
-                f"[{StatusCode.INFO_COLLECTING_EMPTY.code}] {self.log_prefix} "
-                f"依赖计划存在未满足父步骤的阻塞任务: {blocked_step_ids}"
+            blocked_msg = format_exception_info(
+                StatusCode.INFO_COLLECTING_EMPTY,
+                f"Dependency plan has blocked tasks with unsatisfied parent steps: {blocked_step_ids}",
+                prefix=self.log_prefix,
             )
             warning_infos.append(blocked_msg)
             logger.warning(blocked_msg)

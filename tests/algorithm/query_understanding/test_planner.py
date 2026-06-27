@@ -4,6 +4,7 @@ from unittest.mock import Mock, AsyncMock, patch
 import pytest
 
 from openjiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerResult, create_plan_tool
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, StepType
 
 
@@ -109,11 +110,10 @@ class TestPlanner:
     @pytest.mark.asyncio
     async def test_generate_plan_retry_failure(self, setup_planner, mock_llm):
         """测试重试失败的情况"""
-        mock_llm_response = PlannerResult(
-            plan_success=False,
-            plan=None,
-            response_messages=[],
-            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (1/1).error: Test Exception'
+        expected_error_msg = format_exception_info(
+            StatusCode.PLANNER_GENERATE_ERROR,
+            "Test Exception",
+            prefix="section_idx: 1 | Round 1/3 | retry (1/1). ",
         )
 
         with patch(
@@ -123,16 +123,16 @@ class TestPlanner:
         ):
             result = await setup_planner.generate_plan(test_data)
 
-        assert result == mock_llm_response
+        assert result.plan_success is False
+        assert result.error_msg == expected_error_msg
 
     @pytest.mark.asyncio
     async def test_generate_plan_exception(self, setup_planner, mock_llm):
         """测试生成计划时发生异常的情况"""
-        mock_llm_response = PlannerResult(
-            plan_success=False,
-            plan=None,
-            response_messages=[],
-            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (1/1).error: Test Exception'
+        expected_error_msg = format_exception_info(
+            StatusCode.PLANNER_GENERATE_ERROR,
+            "Test Exception",
+            prefix="section_idx: 1 | Round 1/3 | retry (1/1). ",
         )
 
         with patch(
@@ -142,16 +142,16 @@ class TestPlanner:
         ):
             result = await setup_planner.generate_plan(test_data)
 
-        assert result == mock_llm_response
+        assert result.plan_success is False
+        assert result.error_msg == expected_error_msg
 
     @pytest.mark.asyncio
     async def test_generate_plan_max_retries(self, setup_planner, mock_llm):
         """测试达到最大重试次数的情况"""
-        mock_llm_response = PlannerResult(
-            plan_success=False,
-            plan=None,
-            response_messages=[],
-            error_msg='section_idx: 1 | Round 1/3 | Error when Planner generating a plan. retry (3/3).error: Test Exception'
+        expected_error_msg = format_exception_info(
+            StatusCode.PLANNER_GENERATE_ERROR,
+            "Test Exception",
+            prefix="section_idx: 1 | Round 1/3 | retry (3/3). ",
         )
 
         with patch(
@@ -163,7 +163,8 @@ class TestPlanner:
             setup_planner.config.max_retry_num = 3
             result = await setup_planner.generate_plan(test_data)
 
-        assert result == mock_llm_response
+        assert result.plan_success is False
+        assert result.error_msg == expected_error_msg
 
     @pytest.mark.asyncio
     async def test_generate_plan_with_runtime_api_tool(self, setup_planner, mock_llm):

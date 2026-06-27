@@ -9,7 +9,6 @@ class NodeId(enum.Enum):
     FRAMEWORK = "framework"
 
     # research 相关
-    ENTRY = "entry"
     INTENT_RECOGNITION = "intent_recognition"
     GENERATE_QUESTIONS = "generate_questions"
     FEEDBACK_HANDLER = "feedback_handler"
@@ -74,7 +73,6 @@ class AgentLlmName(enum.Enum):
     COLLECTOR_SUPERVISOR = NodeId.COLLECTOR_SUPERVISOR.value
     COLLECTOR_SUMMARY = NodeId.COLLECTOR_SUMMARY.value
 
-    ENTRY = NodeId.ENTRY.value
     INTENT_RECOGNITION = NodeId.INTENT_RECOGNITION.value
     GENERATE_QUESTIONS = NodeId.GENERATE_QUESTIONS.value
     OUTLINE = NodeId.OUTLINE.value
@@ -93,6 +91,7 @@ class AgentLlmName(enum.Enum):
     SUB_REPORTER_CHART_TRACEABILITY = "sub_reporter_chart_traceability"
     SUB_REPORTER_VISUALIZATION_NORMALIZE = "sub_reporter_visualization_normalize"
     SUB_REPORTER_SUMMARY = "sub_reporter_summary"
+    SUB_REPORTER_SIDECAR = "sub_reporter_sidecar"
 
     SOURCE_TRACER_CONTENT_RECOGNITION = "source_tracer_content_recognition"
     SOURCE_TRACER_SOURCE_MATCHING = "source_tracer_source_matching"
@@ -115,6 +114,12 @@ class AgentLlmName(enum.Enum):
     )
     USER_FEEDBACK_PROCESSOR_NEW_TASK_ASSESSMENT = "user_feedback_processor_new_task_assessment"
     USER_FEEDBACK_PROCESSOR_NEW_TASK_REWRITE_SECTION = "user_feedback_processor_new_task_rewrite_section"
+    USER_FEEDBACK_PROCESSOR_TRUTH_VERIFICATION_ASSESSMENT = (
+        "user_feedback_processor_truth_verification_assessment"
+    )
+    USER_FEEDBACK_PROCESSOR_TRUTH_VERIFICATION_SEARCH_TASK = (
+        "user_feedback_processor_truth_verification_search_task"
+    )
 
     VLM_CHART_GENERATOR = NodeId.VLM_CHART_GENERATOR.value
     VLM_CHART_GENERATOR_FIND_INSERT_POINT = "vlm_chart_generator_find_inserPoint"

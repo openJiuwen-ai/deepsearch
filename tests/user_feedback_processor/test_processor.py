@@ -212,6 +212,16 @@ class TestValidate:
         assert exc_info.value.error_code == StatusCode.USER_FEEDBACK_PROCESSOR_INVALID_PARAM_TYPE.code
         assert "selected_text" in exc_info.value.message
 
+    def test_validate_truth_verification_requires_valid_offset_alignment(self):
+        report_content = "第一行结论\n第二行补充"
+        feedback = {
+            "action": "truth_verification",
+            "selected_text": "第一行结论\n第二行补充",
+            "start_offset": 0,
+            "end_offset": len("第一行结论\n第二行补充"),
+        }
+        assert UserFeedbackProcessor.validate(feedback, report_content) is None
+
     def test_validate_expand_no_longer_rejects_long_selection(self):
         report_content = "a" * 5000
         feedback = {
@@ -329,6 +339,91 @@ class TestUserFeedbackProcessorDispatch:
         )
 
     @pytest.mark.asyncio
+    async def test_execute_applies_local_source_trace_for_rewrite_actions(self, processor):
+        feedback = {
+            "action": "expand",
+            "selected_text": "原文",
+            "start_offset": 0,
+            "end_offset": 2,
+        }
+        final_result = {"response_content": "原文", "citation_messages": {"data": []}, "infer_messages": []}
+        rewrite_result = {
+            "new_report": "改写",
+            "original_text": "原文",
+            "original_start_offset": 0,
+            "original_end_offset": 2,
+            "original_text_clean": "原文",
+            "rewritten_text": "改写",
+            "rewritten_start_offset": 0,
+            "rewritten_end_offset": 2,
+        }
+        traced_result = {**rewrite_result, "warning_info": "local trace degraded"}
+
+        with patch.object(
+            processor._synonym_rewriter,
+            "synonym_rewrite",
+            new_callable=AsyncMock,
+            return_value=rewrite_result,
+        ):
+            with patch(
+                "openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor."
+                "apply_local_source_trace_to_action_result",
+                new_callable=AsyncMock,
+                return_value=traced_result,
+            ) as mock_apply:
+                result = await processor.execute(feedback=feedback, final_result=final_result, language="zh-CN")
+
+        assert result["warning_info"] == "local trace degraded"
+        mock_apply.assert_awaited_once_with(
+            feedback=feedback,
+            action_result=rewrite_result,
+            final_result=final_result,
+            llm_model_name=processor.llm_model_name,
+            language="zh-CN",
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_skips_local_source_trace_when_trace_source_switch_disabled(self, processor):
+        feedback = {
+            "action": "expand",
+            "selected_text": "原文",
+            "start_offset": 0,
+            "end_offset": 2,
+        }
+        final_result = {"response_content": "原文", "citation_messages": {"data": []}, "infer_messages": []}
+        rewrite_result = {
+            "new_report": "改写",
+            "original_text": "原文",
+            "original_start_offset": 0,
+            "original_end_offset": 2,
+            "original_text_clean": "原文",
+            "rewritten_text": "改写",
+            "rewritten_start_offset": 0,
+            "rewritten_end_offset": 2,
+        }
+
+        with patch.object(
+            processor._synonym_rewriter,
+            "synonym_rewrite",
+            new_callable=AsyncMock,
+            return_value=rewrite_result,
+        ):
+            with patch(
+                "openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor."
+                "apply_local_source_trace_to_action_result",
+                new_callable=AsyncMock,
+            ) as mock_apply:
+                result = await processor.execute(
+                    feedback=feedback,
+                    final_result=final_result,
+                    language="zh-CN",
+                    enable_local_source_trace=False,
+                )
+
+        assert result == rewrite_result
+        mock_apply.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_execute_rejects_unsupported_action(self, processor):
         with pytest.raises(CustomValueException) as exc_info:
             await processor.execute(
@@ -439,6 +534,50 @@ class TestUserFeedbackProcessorDispatch:
         )
 
     @pytest.mark.asyncio
+    async def test_execute_dispatches_truth_verification_to_processor(self, processor):
+        feedback = {
+            "action": "truth_verification",
+            "selected_text": "结论段落\n更多内容",
+            "start_offset": 0,
+            "end_offset": 9,
+            "user_instruction": "核验真实性",
+        }
+        final_result = {
+            "response_content": "结论段落\n更多内容",
+            "citation_messages": {},
+            "infer_messages": [],
+        }
+        mock_current_report = MagicMock()
+
+        with patch.object(
+            processor._truth_verifier,
+            "truth_verification",
+            new_callable=AsyncMock,
+        ) as mock_truth_verification:
+            mock_truth_verification.return_value = {
+                "read_only_result": True,
+                "verification_result": {
+                    "conclusion": "supported",
+                    "summary": "核验通过",
+                },
+            }
+
+            result = await processor.execute(
+                feedback=feedback,
+                final_result=final_result,
+                language="zh-CN",
+                current_report=mock_current_report,
+            )
+
+        assert result["read_only_result"] is True
+        mock_truth_verification.assert_awaited_once_with(
+            feedback=feedback,
+            final_result=final_result,
+            current_report=mock_current_report,
+            language="zh-CN",
+        )
+
+    @pytest.mark.asyncio
     async def test_execute_sync_returns_updated_report_without_touching_metadata(self, processor):
         citation_messages = {"code": 0, "msg": "success", "data": [{"id": 0}]}
         infer_messages = [{"id": 9, "content": "保留"}]
@@ -483,6 +622,18 @@ class TestUserFeedbackProcessorDispatch:
             {"action": "sync", "selected_text": "完整报告"},
             {"sync_only": True, "new_report": "完整报告"},
         ) is None
+
+    def test_build_stream_result_returns_truth_verification_payload(self):
+        result = UserFeedbackProcessor.build_stream_result(
+            {"action": "truth_verification", "selected_text": "段落"},
+            {
+                "read_only_result": True,
+                "verification_result": {
+                    "display_text": "核验通过",
+                },
+            },
+        )
+        assert result == "核验通过"
 
     def test_build_stream_result_builds_synonym_payload_from_action_result(self):
         feedback = {
@@ -594,6 +745,24 @@ class TestUserFeedbackProcessorDispatch:
         assert exc_info.value.message == StatusCode.USER_FEEDBACK_PROCESSOR_REWRITE_ERROR.errmsg.format(
             e="Rewrite stream result requires synonym_rewrite subcategory, got supplementary_search"
         )
+
+    def test_build_stream_result_raises_when_truth_result_is_not_dict(self):
+        with pytest.raises(CustomRuntimeException) as exc_info:
+            UserFeedbackProcessor.build_stream_result(
+                {"action": "truth_verification", "selected_text": "段落"},
+                {"read_only_result": True, "verification_result": "invalid"},
+            )
+
+        assert exc_info.value.error_code == StatusCode.USER_FEEDBACK_PROCESSOR_REWRITE_ERROR.code
+
+    def test_build_stream_result_raises_when_truth_display_text_is_empty(self):
+        with pytest.raises(CustomRuntimeException) as exc_info:
+            UserFeedbackProcessor.build_stream_result(
+                {"action": "truth_verification", "selected_text": "段落"},
+                {"read_only_result": True, "verification_result": {"display_text": ""}},
+            )
+
+        assert exc_info.value.error_code == StatusCode.USER_FEEDBACK_PROCESSOR_REWRITE_ERROR.code
 
 
 class TestSendResult:
@@ -717,6 +886,23 @@ class TestSendResult:
             "action_category": "sync",
             "synced": True,
         }
+
+    @pytest.mark.asyncio
+    async def test_send_result_outputs_truth_verification_payload(self):
+        session = MagicMock()
+        session.write_custom_stream = AsyncMock()
+
+        await UserFeedbackProcessor.send_result(
+            session=session,
+            feedback={"action": "truth_verification", "selected_text": "段落"},
+            result="部分支持",
+            final_result={"response_content": "旧报告"},
+            feedback_interaction_count=2,
+        )
+
+        payload = session.write_custom_stream.await_args.args[0]
+        assert payload["content"] == "部分支持"
+        assert payload["event"] == StreamEvent.SUMMARY_RESPONSE.value
 
 
 class TestSendError:

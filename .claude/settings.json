@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest *)",
+      "Bash(PYTHONDONTWRITEBYTECODE=1 uv run python -m compileall -q openjiuwen_deepsearch server)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.development)",
+      "Read(./.env.production)",
+      "Read(./.env.test)",
+      "Read(./.env.*.local)",
+      "Read(./service.yaml)",
+      "Read(./**/secrets/**)",
+      "Read(./**/credentials/**)",
+      "Bash(git push*)",
+      "Bash(git reset*)",
+      "Bash(git clean*)",
+      "Bash(git checkout*)",
+      "Bash(git restore*)",
+      "Bash(git rm*)",
+      "Bash(rm *)",
+      "Bash(sed -i*)",
+      "Bash(find * -delete*)",
+      "Bash(find * -exec*)",
+      "Bash(curl *)",
+      "Bash(wget *)"
+    ]
+  },
+  "env": {
+    "PYTHONPATH": "."
+  },
+  "language": "chinese",
+  "includeGitInstructions": true
+}

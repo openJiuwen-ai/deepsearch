@@ -76,6 +76,14 @@ The table intentionally contains key_passages and scores instead of full source 
   - if a gap has already been searched from a reasonable angle and remains unresolved, either narrow it once or stop and disclose it as a limitation;
   - do not generate queries for gaps that can be safely handled in the final evaluation.
 
+## Source Diversity Preference (Advisory — Not Blocking)
+- **The Evidence Boundary Policy above takes absolute precedence over this section.** Never set `is_sufficient` to false or generate additional `next_queries` solely because of source-type homogeneity.
+- Source types refer to **epistemic categories**: (1) primary data/statistics (government databases, company filings, census data), (2) peer-reviewed research (academic papers, journal articles), (3) expert/analyst commentary (industry reports, broker analysis, technology blogs), (4) news/journalism (media coverage, investigative reports), (5) official documentation (manuals, regulations, standards), (6) firsthand accounts or case studies.
+- When evidence is gathered from multiple independent source types, the conclusions are more robust. **Prefer** diversity when it comes naturally.
+- A single source type with strong, sufficient evidence is **ACCEPTABLE** — do NOT penalize or reject sufficiency on this basis alone.
+- For highly specialized technical or scientific topics where authoritative evidence is naturally concentrated in specific source types (e.g., academic papers + official documentation for DFT methodology), do NOT push source diversity at the expense of evidence quality.
+- When generating `next_queries` for genuine evidence gaps (not for diversity alone), consider targeting a different source type than what has already been gathered. For example: if only news articles exist for a market-sizing question, a query targeting official statistics or industry reports may be valuable.
+
 ## Query Requirements
 - Each query should be self-contained and include necessary context for web search.
 - If the topic has a clear subject, such as "Apple Inc's new product in 2025", the query must include that subject.

@@ -146,7 +146,8 @@ class TestCitationVerifyResearch:
         assert batch_state["completed_count"] == 0
         assert batch_state["started_count"] == 0
 
-    def test_prepare_handle_data(self):
+    @pytest.mark.asyncio
+    async def test_prepare_handle_data(self):
         """Test prepare_handle_data method."""
         self.verifier.datas = [
             {'url': 'https://example.com',
@@ -156,7 +157,7 @@ class TestCitationVerifyResearch:
             {'url': '', 'content': 'empty url content', 'chunk': 'empty url chunk'}
         ]
 
-        handle_datas, handle_index = self.verifier.prepare_handle_data()
+        handle_datas, handle_index = await self.verifier.prepare_handle_data()
 
         assert len(handle_datas) == 3
         assert len(handle_index) == 3

@@ -21,7 +21,12 @@ from tenacity import (
 )
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_legacy_doc_infos_view
+from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
+    build_compact_classify_doc_infos_text,
+    format_scores_inline,
+    format_key_passage_block,
+    get_numeric_score,
+)
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
     build_balanced_doc_batches,
@@ -40,11 +45,16 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
 )
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.exception import CustomValueException
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.config.config import Config
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    ChapterSidecar,
+    Outline,
+    build_research_intent_prompt_context,
+    build_section_local_contract_prompt_context,
+)
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
-from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
@@ -52,8 +62,28 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_
 
 logger = logging.getLogger(__name__)
 
+
+def _format_report_error(detail: str | BaseException) -> str:
+    return format_exception_info(StatusCode.REPORT_GENERATE_ERROR, detail)
+
+
+def _format_sub_report_error(detail: str | BaseException) -> str:
+    return format_exception_info(StatusCode.SUB_REPORT_GENERATE_ERROR, detail)
+
+
 EFFECT_SUB_REPORT_TAG = "### sub_report_tag ###"
 MAX_LOOP_ROUND = 10
+LEADING_TITLE_NUMBER_PATTERN = re.compile(
+    r"^(?:"
+    r"[\（][一二三四五六七八九十\d]{1,2}[\）]\s*|"
+    r"[\(][一二三四五六七八九十\d]{1,2}[\)]\s*|"
+    r"第?[一二三四五六七八九十\d]+章\s*|"
+    r"[一二三四五六七八九十]+、\s*|"
+    r"\d{1,2}(?:\.\d{1,2})+\s*|"
+    r"\d{1,2}[\.、]\s*|"
+    r"(?:[1-9]|1\d)\s+|"
+    r")"
+)
 INTERNAL_CALLBACK_LABEL_PATTERN = re.compile(
     r"\s*\["
     r"(?=[^\]]*(?:background|knowledge|parent|section|prior|summary|背景|知识))"
@@ -93,9 +123,7 @@ class Reporter:
     @staticmethod
     def strip_leading_number(s: str) -> str:
         """移除标题前导编号并返回清洗后的文本。"""
-        return re.sub(
-            r"^(?:\d+(?:[.\-\s]\d+)*|第?[一二三四五六七八九十\d]+[、章])\s*", "", s
-        )
+        return LEADING_TITLE_NUMBER_PATTERN.sub("", s)
 
     @staticmethod
     def _section_sort_key(section_id) -> tuple[int, int | str]:
@@ -130,8 +158,9 @@ class Reporter:
             Generic header cleanup helper.
             level is the header level (number of '#').
             """
-            pattern = rf'^\s*{"#" * level}\s*[\(\（]?[一二三四五六七八九十0-9]+[\.、\)\）]?\s*'
-            return re.sub(pattern, f'{"#" * level} ', line)
+            content = re.sub(rf'^\s*{"#" * level}\s*', "", line).strip()
+            content = Reporter.strip_leading_number(content).strip()
+            return f'{"#" * level} {content}'.rstrip()
 
         lines = md_text.splitlines()
         new_lines = []
@@ -150,10 +179,7 @@ class Reporter:
             # H4 and deeper headers
             elif re.match(r"^\s*#{4,}\s+", line):
                 content = re.sub(r"^\s*#{4,}\s+", "", line).strip()
-                # Remove numbering (same rule as H1-H3)
-                content = re.sub(
-                    r"^[\(\（]?[一二三四五六七八九十0-9]+[\.、\)\）]?\s*", "", content
-                )
+                content = Reporter.strip_leading_number(content).strip()
                 transferred_header = f"- **{content}**"
                 new_lines.append(transferred_header)
 
@@ -361,6 +387,74 @@ class Reporter:
             if LogManager.is_sensitive():
                 return False, f"format check exception for section_idx={section_idx}"
             return False, f"format check exception for section_idx={section_idx}: {e}"
+
+    @staticmethod
+    def _normalize_heading_title(title: str) -> str:
+        title = Reporter.strip_leading_number(title or "")
+        title = re.sub(r"\s+", " ", title).strip()
+        return title
+
+    @staticmethod
+    def _extract_outline_heading_pairs(sub_section_outline: str) -> list[tuple[int, str]]:
+        pairs: list[tuple[int, str]] = []
+        for line in sub_section_outline.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            level = 1 if not pairs else 2
+            pairs.append((level, Reporter._normalize_heading_title(stripped)))
+        return pairs
+
+    @staticmethod
+    def _extract_markdown_heading_pairs(content: str) -> list[tuple[int, str]]:
+        pairs: list[tuple[int, str]] = []
+        for line in content.splitlines():
+            match = re.match(r"^\s*(#{1,2})\s+(.+?)\s*$", line)
+            if not match:
+                continue
+            level = len(match.group(1))
+            pairs.append((level, Reporter._normalize_heading_title(match.group(2))))
+        return pairs
+
+    @staticmethod
+    def validate_sub_report_headings_match_outline(
+        content: str,
+        sub_section_outline: str,
+    ) -> tuple[bool, str]:
+        """Ensure generated markdown headings strictly follow the approved subsection outline."""
+        expected_pairs = Reporter._extract_outline_heading_pairs(sub_section_outline)
+        actual_pairs = Reporter._extract_markdown_heading_pairs(content)
+
+        if not expected_pairs:
+            return False, "expected subsection outline headings are empty"
+        if not actual_pairs:
+            return False, "generated report headings are empty"
+
+        if len(actual_pairs) != len(expected_pairs):
+            return (
+                False,
+                f"heading count mismatch: expected {len(expected_pairs)}, got {len(actual_pairs)}",
+            )
+
+        for index, (expected, actual) in enumerate(
+            zip(expected_pairs, actual_pairs),
+            start=1,
+        ):
+            if expected[0] != actual[0]:
+                return (
+                    False,
+                    f"heading level mismatch at position {index}: expected H{expected[0]}, got H{actual[0]}",
+                )
+            if expected[1] != actual[1]:
+                return (
+                    False,
+                    f"heading title mismatch at position {index}: expected '{expected[1]}', got '{actual[1]}'",
+                )
+
+        if len({pair for pair in actual_pairs[1:]}) != len(actual_pairs[1:]):
+            return False, "duplicate subsection headings detected in generated report"
+
+        return True, ""
 
     @staticmethod
     def is_valid_chapter_format(text, section_idx) -> bool:
@@ -587,7 +681,7 @@ class Reporter:
             )
         if not self._set_context_variables(gen_report_context):
             logger.error(f"[generate_report] Error: Set context variables failed")
-            return False, "Error: Set context variables failed"
+            return False, _format_report_error("Set context variables failed")
 
         self.gen_report_context["current_outline"] = self.export_outline_without_plans(
             self.gen_report_context.get("current_outline", {})
@@ -595,16 +689,19 @@ class Reporter:
         sub_report_res = await self._process_sub_report()
         if not sub_report_res.get("sub_reports_content"):
             logger.error(f"[generate_report] Error: No sub-reports content found")
-            return False, "Error: No sub-reports content found"
+            return False, _format_report_error("No sub-reports content found")
         gen_report_context["all_classified_contents"] = sub_report_res.get(
             "refreshed_all_classified_contents"
         )
 
+        abstract_context = self._build_reporter_compact_context("abstract")
+        conclusion_context = self._build_reporter_compact_context("conclusion")
+        sub_reports_content = sub_report_res.get("sub_reports_content")
         abstract_task = asyncio.create_task(
-            self.generate_abstract(sub_report_res.get("sub_reports_content"))
+            self.generate_abstract(abstract_context or sub_reports_content)
         )
         conclusion_task = asyncio.create_task(
-            self.generate_conclusion(sub_report_res.get("sub_reports_content"))
+            self.generate_conclusion(conclusion_context or sub_reports_content)
         )
 
         try:
@@ -614,23 +711,23 @@ class Reporter:
             logger.error(
                 f"[generate_report] Report generation failed after retries: {retry_err}"
             )
-            return False, f"Report generation failed after retries: {retry_err}"
+            return False, _format_report_error(retry_err)
         except Exception as e:
             if LogManager.is_sensitive():
                 logger.error(
                     f"[generate_report] Unexpected error during report generation"
                 )
-                return False, f"Unexpected error during report generation"
+                return False, _format_report_error("Unexpected error during report generation")
             logger.error(
                 f"[generate_report] Unexpected error during report generation: {e}"
             )
-            return False, f"Unexpected error during report generation: {e}"
+            return False, _format_report_error(e)
 
         current_outline = self.gen_report_context.get("current_outline", "")
         if not current_outline:
             error_message = "has no current outline"
             logger.error(f"[generate_report] Generate report error: {error_message}")
-            return False, error_message
+            return False, _format_report_error(error_message)
 
         report_content = (
             f"{'# ' + current_outline.title}\n\n"  # Use outline title directly for report title
@@ -652,7 +749,7 @@ class Reporter:
 
         if not report_content.strip():
             logger.error("[generate_report] md report content is empty.")
-            return False, "md report content empty."
+            return False, _format_report_error("md report content empty")
 
         return True, "success"
 
@@ -742,7 +839,7 @@ class Reporter:
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] fail to generate subsection report, "
                     f"section_idx: [{section_idx}], not found doc infos"
                 )
-                return False, "Not found doc infos", "", []
+                return False, _format_sub_report_error("Not found doc infos"), "", []
             logger.info(
                 "%s [generate_sub_report] section_idx: [%s], no doc_infos found, "
                 "use dependency background knowledge as fallback.",
@@ -779,7 +876,7 @@ class Reporter:
                         f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                         "no selected urls returned from classification"
                     )
-                    return False, "no selected urls from classification", "", []
+                    return False, _format_sub_report_error("no selected urls from classification"), "", []
                 classify_doc_infos_res_top_k_num = current_inputs.get(
                     "classify_doc_infos_res_top_k_num", 10
                 )
@@ -804,7 +901,7 @@ class Reporter:
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] Error: Classify doc information failed for "
                     f"[{classified_content}], section_idx: [{section_idx}]"
                 )
-                return False, "classify_doc_infos fail", "", []
+                return False, _format_sub_report_error("classify_doc_infos fail"), "", []
         classified_content = current_inputs.get("classified_content", [])
         if not LogManager.is_sensitive():
             logger.debug(
@@ -850,7 +947,7 @@ class Reporter:
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                     f"Error: Generate section outline failed, reach the max_attempt_num: {max_attempt_num}."
                 )
-                return False, "generate section outline fail", "", classified_content
+                return False, _format_sub_report_error("generate section outline fail"), "", classified_content
 
         if current_inputs.get("visualization_enable", True):
             try:
@@ -906,7 +1003,7 @@ class Reporter:
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                     f"Error: Generate section report failed, reach the max_attempt_num: {max_attempt_num}."
                 )
-        return False, "generate section report fail", "", classified_content
+        return False, _format_sub_report_error("generate section report fail"), "", classified_content
 
     async def _generate_with_llm(self, task_type, prompt, content):
         if isinstance(self.gen_report_context, dict):
@@ -987,6 +1084,11 @@ class Reporter:
             self.gen_report_context.setdefault(
                 "require_methodology_and_risk", rtp.get("require_methodology_and_risk", False)
             )
+        self.gen_report_context.update(
+            build_research_intent_prompt_context(
+                self.gen_report_context.get("research_intent")
+            )
+        )
         return True
 
     async def _add_sub_report_transaction(self, current_inputs: dict):
@@ -1074,6 +1176,59 @@ class Reporter:
                 exc_info=True,
             )
             return current_inputs.get("content", "")
+
+    def _build_reporter_compact_context(self, target: str) -> str:
+        """Build compact chapter context for abstract or conclusion generation."""
+        current_report = self.gen_report_context.get("current_report")
+        if not current_report or not current_report.sub_reports:
+            return ""
+
+        report_task = (
+            self.gen_report_context.get("report_task") or current_report.report_task
+        )
+        context_parts = []
+        if report_task:
+            context_parts.append(f"Report task: {report_task}")
+
+        sub_reports = sorted(
+            current_report.sub_reports,
+            key=lambda item: Reporter._section_sort_key(item.section_id),
+        )
+        for sub_report in sub_reports:
+            content = sub_report.content
+            if not content:
+                continue
+            sidecar = content.sub_report_chapter_sidecar
+            summary = (
+                sidecar.chapter_summary
+                if sidecar
+                else content.sub_report_content_summary
+            )
+            if not summary:
+                continue
+
+            summary_label = "Summary" if sidecar else "Summary (fallback)"
+            chapter_parts = [
+                f"Chapter {sub_report.section_id} {sub_report.section_task}",
+                f"{summary_label}: {summary}",
+            ]
+            if sidecar:
+                findings = sidecar.key_findings
+                if target == "abstract":
+                    findings = findings[:3]
+                if findings:
+                    chapter_parts.append(
+                        "Key findings:\n" + "\n".join(f"- {item}" for item in findings)
+                    )
+                if target == "conclusion" and sidecar.risk_points:
+                    chapter_parts.append(
+                        "Risk points:\n" + "\n".join(f"- {item}" for item in sidecar.risk_points)
+                    )
+            context_parts.append("\n".join(chapter_parts))
+
+        if not any(part.startswith("Chapter ") for part in context_parts):
+            return ""
+        return "\n\n".join(context_parts)
 
     async def _process_sub_report(self) -> dict:
         """Process sub reports"""
@@ -1240,11 +1395,11 @@ class Reporter:
 
         for attempt in range(1, max_attempt_num + 1):
             try:
-                legacy_doc_infos = build_legacy_doc_infos_view(doc_infos)
+                compact_doc_infos = build_compact_classify_doc_infos_text(doc_infos)
                 infos_for_llm = (
                     f"Section title is {section_task},"
                     f"User query is {current_inputs.get('report_task', '')},"
-                    f"Document infos is {legacy_doc_infos},"
+                    f"Document infos is {compact_doc_infos},"
                     f"Section description is {section_description},"
                     f"Subsection outline is {subsection_outline}"
                 )
@@ -1528,6 +1683,16 @@ class Reporter:
             tmp_context["section_description"] = section_description
             tmp_context["report_type"] = current_inputs.get("report_type", "professional")
             tmp_context["paragraph_style"] = current_inputs.get("paragraph_style", "detailed")
+            tmp_context.update(
+                build_section_local_contract_prompt_context(
+                    current_inputs.get("section_local_contract")
+                )
+            )
+            tmp_context.update(
+                build_research_intent_prompt_context(
+                    current_inputs.get("research_intent")
+                )
+            )
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [generate_sub_section_outline] has_template: "
                 f"{tmp_context['has_template']}"
@@ -2092,11 +2257,12 @@ class Reporter:
         # Build all async tasks
         tasks = []
         for i in range(n):
+            data_density_score = get_numeric_score(visualization_content[i], "data_density")
             visualization_dict = {
                 "section_idx": section_idx,
                 "title": visualization_content[i].get("title", ""),
                 "origin_content": visualization_content[i].get("original_content", ""),
-                "data_density": visualization_content[i].get("data_density", -1.0),
+                "data_density": data_density_score if data_density_score is not None else -1.0,
                 "language": current_inputs.get("language", "zh-CN"),
                 "section_title": section_task,
                 "section_outline": section_outline,
@@ -2227,6 +2393,118 @@ class Reporter:
             )
             return dict(rs_success=False, result="")
 
+    @staticmethod
+    def _normalize_sidecar_list(
+        payload: dict,
+        field_name: str,
+        section_idx: str | int,
+    ) -> list[str]:
+        """Normalize an optional sidecar list field without coercing values."""
+        value = payload.get(field_name, [])
+        if not isinstance(value, list):
+            logger.warning(
+                "%s [_generate_sub_report_sidecar] section_idx: %s field %s is not a list; use empty list.",
+                EFFECT_SUB_REPORT_TAG,
+                section_idx,
+                field_name,
+            )
+            return []
+        normalized = [
+            item.strip() for item in value if isinstance(item, str) and item.strip()
+        ]
+        if len(normalized) != len(value):
+            logger.warning(
+                "%s [_generate_sub_report_sidecar] section_idx: %s field %s contains invalid items; drop them.",
+                EFFECT_SUB_REPORT_TAG,
+                section_idx,
+                field_name,
+            )
+        return normalized
+
+    async def _generate_sub_report_sidecar(self, current_inputs: dict) -> dict:
+        """Generate a structured reusable summary for one chapter."""
+        section_idx = current_inputs.get("section_idx", 1)
+        sub_report_content = current_inputs.get("sub_report_content", "") or ""
+        if not sub_report_content:
+            warning = f"section {section_idx} sidecar skipped because chapter body is empty"
+            logger.warning("%s [_generate_sub_report_sidecar] %s", EFFECT_SUB_REPORT_TAG, warning)
+            return dict(sidecar=None, summary="", warning=warning)
+
+        try:
+            current_outline_without_plans = Reporter.export_outline_without_plans(
+                current_inputs.get("current_outline", {})
+            )
+            llm_input = apply_system_prompt(
+                "sub_report_sidecar",
+                dict(
+                    messages=[
+                        dict(role="user", content=f"Sub report content:\n{sub_report_content}")
+                    ],
+                    section_id=section_idx,
+                    language=current_inputs.get("language", "zh-CN"),
+                    outline=current_outline_without_plans,
+                    user_query=current_inputs.get("report_task", ""),
+                    report_type=current_inputs.get("report_type", "professional"),
+                ),
+            )
+            retry_num = max(
+                int(
+                    current_inputs.get(
+                        "max_generate_retry_num",
+                        Config().service_config.report_max_generate_retry_num,
+                    )
+                ),
+                1,
+            )
+        except Exception as error:
+            warning = (
+                f"section {section_idx} sidecar generation failed before retry: {error}; "
+                "fallback uses full pre-reference chapter body"
+            )
+            logger.warning("%s [_generate_sub_report_sidecar] %s", EFFECT_SUB_REPORT_TAG, warning)
+            return dict(sidecar=None, summary=sub_report_content, warning=warning)
+
+        last_error = "unknown sidecar error"
+        for attempt in range(retry_num):
+            try:
+                llm_output = await ainvoke_llm_with_stats(
+                    llm=self._llm,
+                    messages=llm_input,
+                    agent_name=AgentLlmName.SUB_REPORTER_SIDECAR.value,
+                )
+                raw_content = (llm_output or {}).get("content", "")
+                if not raw_content:
+                    raise ValueError("LLM returned empty sidecar content")
+                payload = json.loads(normalize_json_output(raw_content))
+                if not isinstance(payload, dict):
+                    raise ValueError("sidecar result is not a JSON object")
+                chapter_summary = payload.get("chapter_summary")
+                if not isinstance(chapter_summary, str) or not chapter_summary.strip():
+                    raise ValueError("chapter_summary is missing or empty")
+                sidecar = ChapterSidecar(
+                    chapter_summary=chapter_summary.strip(),
+                    key_findings=self._normalize_sidecar_list(payload, "key_findings", section_idx),
+                    risk_points=self._normalize_sidecar_list(payload, "risk_points", section_idx),
+                )
+                return dict(sidecar=sidecar, summary=sidecar.chapter_summary, warning="")
+            except Exception as error:
+                last_error = str(error)
+                logger.warning(
+                    "%s [_generate_sub_report_sidecar] section_idx: %s attempt %s/%s failed: %s",
+                    EFFECT_SUB_REPORT_TAG,
+                    section_idx,
+                    attempt + 1,
+                    retry_num,
+                    last_error,
+                )
+
+        warning = (
+            f"section {section_idx} sidecar generation failed after {retry_num} attempts: "
+            f"{last_error}; fallback uses full pre-reference chapter body"
+        )
+        logger.warning("%s [_generate_sub_report_sidecar] %s", EFFECT_SUB_REPORT_TAG, warning)
+        return dict(sidecar=None, summary=sub_report_content, warning=warning)
+
     async def _write_subsection_reports(self, current_inputs: dict) -> dict:
         """Write subsection report to disk"""
         if LogManager.is_sensitive():
@@ -2294,11 +2572,10 @@ class Reporter:
         infos = ""
         for item in current_inputs.get("classified_content", []):
             infos += (
-                f"\n[citation:{item.get('index', 1)} begin]网页时间: {item.get('doc_time', '')}|||"
-                f"网页权威性：{item.get('source_authority', '')}|||网页相关性：{item.get('task_relevance', '')}|||"
-                f"网页内容：{item.get('original_content', '')}[citation:{item.get('index', 1)} end]"
+                f"\n[citation:{item.get('index', 1)} begin]time: {item.get('doc_time', '')}|||"
+                f"scores: {format_scores_inline(item)}|||"
+                f"content: {item.get('original_content', '')}[citation:{item.get('index', 1)} end]"
             )
-
         current_outline = current_inputs.get("current_outline", {})
         current_outline_without_plans = Reporter.export_outline_without_plans(
             current_outline
@@ -2336,6 +2613,12 @@ class Reporter:
                     require_methodology_and_risk=current_inputs.get("require_methodology_and_risk", False),
                     audience_role=current_inputs.get("audience_role", ""),
                     tone=current_inputs.get("tone", ""),
+                    **build_section_local_contract_prompt_context(
+                        current_inputs.get("section_local_contract")
+                    ),
+                    **build_research_intent_prompt_context(
+                        current_inputs.get("research_intent")
+                    ),
                 ),
             )
 
@@ -2428,10 +2711,24 @@ class Reporter:
                 current_inputs.get("section_idx", ""),
             )
 
-            sub_report_summary = await self._generate_sub_report_summary(current_inputs)
-            current_inputs["sub_report_summary"] = sub_report_summary.get("result", "")
+            current_inputs["sub_report_content"] = self.clean_markdown_headers(
+                current_inputs["sub_report_content"]
+            )
+            ok, reason = self.validate_sub_report_headings_match_outline(
+                current_inputs["sub_report_content"],
+                current_inputs.get("sub_section_outline", ""),
+            )
+            if not ok:
+                return dict(
+                    success=False,
+                    result=f"generated report headings do not match outline: {reason}",
+                )
+            sidecar_result = await self._generate_sub_report_sidecar(current_inputs)
+            current_inputs["sub_report_chapter_sidecar"] = sidecar_result.get("sidecar")
+            current_inputs["sub_report_summary"] = sidecar_result.get("summary", "")
+            current_inputs["sub_report_sidecar_warning"] = sidecar_result.get("warning", "")
             current_inputs["sub_report_content"] = self.add_references(
-                self.clean_markdown_headers(current_inputs["sub_report_content"]),
+                current_inputs["sub_report_content"],
                 current_inputs.get("sub_section_references", []),
                 current_inputs.get("language"),
             ).strip()
@@ -2473,28 +2770,9 @@ class Reporter:
         for item in classified_content_for_visualization:
             if not isinstance(item, dict):
                 continue
-            item_data_density = item.get("data_density")
-            if item_data_density is not None:
-                try:
-                    if isinstance(item_data_density, (int, float)):
-                        point = float(item_data_density)
-                    else:
-                        density_str = str(item_data_density)
-                        if "：" in density_str:
-                            point_str = density_str.split("：", 1)[1]
-                        elif ":" in density_str:
-                            point_str = density_str.split(":", 1)[1]
-                        else:
-                            point_str = density_str
-                        point = float(point_str.strip())
-                    if point >= 9.0:
-                        selected_visualizations.append(item)
-                except (ValueError, IndexError):
-                    logger.warning(
-                        "%s [select_visualization] invalid data_density: %s",
-                        EFFECT_SUB_REPORT_TAG,
-                        item_data_density,
-                    )
+            point = get_numeric_score(item, "data_density")
+            if point is not None and point >= 9.0:
+                selected_visualizations.append(item)
         return selected_visualizations
 
     async def _request_visualization_insert_plan(
@@ -2964,6 +3242,8 @@ def _get_classified_infos(doc_infos: list, urls: list, max_source_id_count: int 
                 format_reference_link(item.get("title", ""), item_url)
             )
             seen_reference_urls.add(item_url)
-        classified_infos["core_content_list"].append(item.get("original_content", ""))
+        classified_infos["core_content_list"].append(
+            format_key_passage_block(item, len(classified_doc_infos) + 1)
+        )
         classified_doc_infos.append(item)
     return classified_infos, classified_doc_infos

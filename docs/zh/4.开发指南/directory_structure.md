@@ -46,6 +46,8 @@ openjiuwen_deepsearch/
   - `supplementary_search_rewrite_selected_and_related.md` - 整章联动改写的补充检索提示词
   - `new_task_assessment.md` - 新增任务资料充分性评估提示词
   - `new_task_rewrite_section.md` - 新增任务章节改写提示词
+  - `truth_verification_assessment.md` - 内容真实性核验评估提示词
+  - `truth_verification_search_task.md` - 内容真实性核验补充检索任务提示词
 - **query_understanding/** - 查询理解
   - `interpreter.py` - 生成澄清问题
   - `outliner.py` - 生成大纲
@@ -88,6 +90,7 @@ openjiuwen_deepsearch/
   - `section_locator.py` - 根据选区定位最小 Markdown 标题区块
   - `supplementary_search.py` - 补充检索与局部/整章改写执行逻辑
   - `synonym_rewrite.py` - 扩写、润色、缩写执行逻辑
+  - `truth_verification.py` - 内容真实性核验
   - `user_feedback_processor.py` - 反馈解析、校验、执行与结果发送
 
 ---

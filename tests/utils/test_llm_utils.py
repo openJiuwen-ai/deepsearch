@@ -315,11 +315,11 @@ async def test_ainvoke_defaults_blank_agent_name_and_allows_declared_agent_names
         await ainvoke_llm_with_stats(
             llm=llm_obj,
             messages=[{"role": "user", "content": "hello"}],
-            agent_name=AgentLlmName.ENTRY.value,
+            agent_name=AgentLlmName.INTENT_RECOGNITION.value,
         )
 
     assert mock_llm_astream.await_args_list[0].kwargs["agent_name"] == "AI"
-    assert mock_llm_astream.await_args_list[1].kwargs["agent_name"] == AgentLlmName.ENTRY.value
+    assert mock_llm_astream.await_args_list[1].kwargs["agent_name"] == AgentLlmName.INTENT_RECOGNITION.value
 
 
 @pytest.mark.asyncio
@@ -418,7 +418,7 @@ async def test_ainvoke_enables_include_usage_when_stats_llm_enabled():
         await ainvoke_llm_with_stats(
             llm=llm_obj,
             messages=[{"role": "user", "content": "hello"}],
-            agent_name="entry",
+            agent_name="intent_recognition",
         )
 
     called_kwargs = mock_llm_astream.await_args.kwargs
@@ -444,7 +444,7 @@ async def test_ainvoke_merges_existing_stream_options_when_stats_enabled():
         await ainvoke_llm_with_stats(
             llm=llm_obj,
             messages=[{"role": "user", "content": "hello"}],
-            agent_name="entry",
+            agent_name="intent_recognition",
         )
 
     stream_options = mock_llm_astream.await_args.kwargs["stream_options"]
@@ -479,7 +479,7 @@ async def test_ainvoke_stats_total_tokens_use_total_tokens_field():
         await ainvoke_llm_with_stats(
             llm=llm_obj,
             messages=[{"role": "user", "content": "hello"}],
-            agent_name="entry",
+            agent_name="intent_recognition",
         )
 
     assert mock_metrics_info.call_count == 1
@@ -506,7 +506,7 @@ async def test_ainvoke_does_not_force_include_usage_when_stats_disabled():
         await ainvoke_llm_with_stats(
             llm=llm_obj,
             messages=[{"role": "user", "content": "hello"}],
-            agent_name="entry",
+            agent_name="intent_recognition",
         )
 
     called_kwargs = mock_llm_astream.await_args.kwargs
@@ -533,7 +533,7 @@ async def test_ainvoke_prefers_session_stats_flag_over_global_default():
             await ainvoke_llm_with_stats(
                 llm=llm_obj,
                 messages=[{"role": "user", "content": "hello"}],
-                agent_name="entry",
+                agent_name="intent_recognition",
             )
     finally:
         session_context.reset(token)
@@ -602,7 +602,7 @@ async def test_workflow_llm_usage_is_stable_under_coroutine_concurrency():
                 input_tokens=1,
                 output_tokens=2,
                 total_tokens=3,
-                agent_name="entry",
+                agent_name="intent_recognition",
             )
             # 主动让出事件循环，模拟 workflow 节点并发调度下的交错调用。
             await asyncio.sleep(0)
@@ -618,7 +618,7 @@ async def test_workflow_llm_usage_is_stable_under_coroutine_concurrency():
         "llm_call_count": expected_calls,
         "agent_name_token_usage": [
             {
-                "agent_name": "entry",
+                "agent_name": "intent_recognition",
                 "input_tokens": expected_calls,
                 "output_tokens": expected_calls * 2,
                 "total_tokens": expected_calls * 3,
@@ -641,7 +641,7 @@ async def test_ainvoke_can_resume_workflow_usage_from_session_snapshot():
         "llm_call_count": 4,
         "agent_name_token_usage": [
             {
-                "agent_name": "entry",
+                "agent_name": "intent_recognition",
                 "input_tokens": 10,
                 "output_tokens": 20,
                 "total_tokens": 30,
@@ -677,7 +677,7 @@ async def test_ainvoke_can_resume_workflow_usage_from_session_snapshot():
             await ainvoke_llm_with_stats(
                 llm=llm_obj,
                 messages=[{"role": "user", "content": "hello"}],
-                agent_name="entry",
+                agent_name="intent_recognition",
             )
     finally:
         session_context.reset(session_token)
@@ -691,7 +691,7 @@ async def test_ainvoke_can_resume_workflow_usage_from_session_snapshot():
         "llm_call_count": 5,
         "agent_name_token_usage": [
             {
-                "agent_name": "entry",
+                "agent_name": "intent_recognition",
                 "input_tokens": 11,
                 "output_tokens": 22,
                 "total_tokens": 33,

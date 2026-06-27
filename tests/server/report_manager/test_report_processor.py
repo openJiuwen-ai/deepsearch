@@ -3,19 +3,23 @@ import re
 import zipfile
 from pathlib import Path
 
+from bs4 import BeautifulSoup
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+import markdown
 import pytest
 
 from server.deepsearch.core.manager.report_manager.conversion_utils import (
     normalize_docx_tables,
     postprocess_html,
     preprocess_markdown_text,
+    protect_math_spans,
+    restore_math_spans,
     wrap_html_tables,
 )
-from server.deepsearch.core.manager.report_manager.docx_offline import convert_md_to_docx
-from server.deepsearch.core.manager.report_manager.html_offline import convert_md_to_html
+from server.deepsearch.core.manager.report_manager.docx_export import convert_md_to_docx
+from server.deepsearch.core.manager.report_manager.html_export import convert_md_to_html
 from server.deepsearch.core.manager.report_manager.mermaid_offline import (
     ensure_mermaid_cli,
     render_mermaid_offline,
@@ -175,6 +179,15 @@ def test_report_html_convert_from_markdown_wraps_tables():
     assert "<table>" in html_text
 
 
+def test_report_html_convert_from_markdown_uses_shared_safe_math_handling():
+    """Validate direct HTML conversion shares offline math/currency behavior."""
+    html_text = ReportHtml.convert_from_markdown("变量 $G$ 保留为公式，价格 $4 和 $5 保持文本。")
+
+    assert r"\(G\)" in html_text
+    assert "$4 和 $5" in html_text
+    assert "inlineMath: [['$', '$']" not in html_text
+
+
 def test_report_word_convert_from_markdown_keeps_wrapped_tables():
     """Validate online DOCX conversion keeps tables wrapped for HTML centering.
 
@@ -186,6 +199,15 @@ def test_report_word_convert_from_markdown_keeps_wrapped_tables():
     assert len(doc.tables) == 1
     assert doc.tables[0].cell(0, 0).text == "A"
     assert doc.tables[0].cell(1, 1).text == "2"
+
+
+def test_report_word_convert_from_markdown_uses_shared_safe_math_handling():
+    """Validate direct DOCX conversion renders math without converting currency."""
+    doc = ReportWord.convert_from_markdown("变量 $G$ 保留为公式，价格 $4 和 $5 保持文本。")
+    paragraph_text = "\n".join(paragraph.text for paragraph in doc.paragraphs)
+
+    assert r"\(G\)" not in paragraph_text
+    assert "$4 和 $5" in paragraph_text
 
 
 def test_report_word_convert_from_html_handles_irregular_table_rows():
@@ -411,6 +433,65 @@ def test_convert_md_to_html_keeps_consecutive_indented_list_items_at_same_level(
     assert "second item" in html_text
 
 
+def test_convert_md_to_html_keeps_nested_list_level_across_chart_block(tmp_path):
+    """Validate a chart inserted between nested items does not end the nested list."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "- **开源与闭源博弈的多维透视**：\n"
+        "    - **地缘维度**：第一条\n"
+        "\n"
+        "![日本Top10](chart.png)\n"
+        "<font size=2>**日本Top10**: 图注</font>\n"
+        "    - **生态维度**：第二条\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    soup = BeautifulSoup(html_path.read_text(encoding="utf-8"), "html.parser")
+    parent_item = next(
+        item
+        for item in soup.find_all("li")
+        if "开源与闭源博弈的多维透视" in item.get_text()
+    )
+    nested_items = parent_item.find("ul", recursive=False).find_all("li", recursive=False)
+    assert len(nested_items) == 2
+    assert "地缘维度" in nested_items[0].get_text()
+    assert "生态维度" in nested_items[1].get_text()
+    assert nested_items[0].find("img", alt="日本Top10") is not None
+
+
+def test_report_converters_keep_nested_list_level_across_font_description():
+    """Validate a font description does not promote following nested items."""
+    markdown = (
+        "- **多维度协同分析**：\n"
+        "\n"
+        "<font size=2>**边缘智能体多维度协同分析**: 描述。</font>\n"
+        "    - **技术维度**：内容。\n"
+        "    - **经济维度**：内容。\n"
+    )
+
+    html = ReportHtml.convert_from_markdown(markdown)
+    soup = BeautifulSoup(html, "html.parser")
+    parent_item = next(item for item in soup.find_all("li") if "多维度协同分析" in item.get_text())
+    nested_items = parent_item.find("ul", recursive=False).find_all("li", recursive=False)
+    assert [item.get_text(strip=True) for item in nested_items] == [
+        "技术维度：内容。",
+        "经济维度：内容。",
+    ]
+
+    document = ReportWord.convert_from_markdown(markdown)
+    paragraphs = {paragraph.text: paragraph for paragraph in document.paragraphs}
+    parent = next(paragraph for paragraph in document.paragraphs if paragraph.text.startswith("多维度协同分析："))
+    parent_num_pr = parent._p.pPr.numPr
+    assert parent_num_pr.ilvl.val == 0
+    for text in ("技术维度：内容。", "经济维度：内容。"):
+        child_num_pr = paragraphs[text]._p.pPr.numPr
+        assert child_num_pr.numId.val == parent_num_pr.numId.val
+        assert child_num_pr.ilvl.val == 1
+
+
 def test_html_to_doc_keeps_nested_list_items_as_separate_paragraphs():
     """Validate nested HTML lists do not collapse child item text into the parent paragraph."""
     document = Document()
@@ -440,6 +521,64 @@ def test_html_to_doc_keeps_nested_list_items_as_separate_paragraphs():
     )
 
     assert [paragraph.text for paragraph in document.paragraphs] == ["first", "second", "third"]
+
+
+def test_html_to_doc_indents_nested_list_items():
+    """Validate DOCX paragraphs preserve nested list depth and native bullets."""
+    document = Document()
+    style_map = {
+        "paragraph": "Normal",
+        "default": "Normal",
+    }
+
+    html_to_doc(
+        document,
+        (
+            '<div class="report-container">'
+            "<ul><li>parent<ul><li>child</li></ul></li><li>sibling</li></ul>"
+            "</div>"
+        ),
+        style_map,
+    )
+
+    parent, child, sibling = document.paragraphs
+    assert parent.paragraph_format.left_indent is None
+    assert child.paragraph_format.left_indent.pt == 18
+    assert sibling.paragraph_format.left_indent is None
+    parent_num_pr = parent._p.pPr.numPr
+    child_num_pr = child._p.pPr.numPr
+    sibling_num_pr = sibling._p.pPr.numPr
+    assert parent_num_pr.numId.val == child_num_pr.numId.val == sibling_num_pr.numId.val
+    assert parent_num_pr.ilvl.val == 0
+    assert child_num_pr.ilvl.val == 1
+    assert sibling_num_pr.ilvl.val == 0
+    numbering_xml = document.part.numbering_part.element.xml
+    assert 'w:numFmt w:val="bullet"' in numbering_xml
+    assert 'w:lvlText w:val="•"' in numbering_xml
+    assert 'w:lvlText w:val="◦"' in numbering_xml
+
+
+def test_html_to_doc_uses_native_numbering_for_ordered_lists():
+    """Validate ordered HTML lists become native multilevel Word numbering."""
+    document = Document()
+
+    html_to_doc(
+        document,
+        '<div class="report-container"><ol><li>first<ol><li>child</li></ol></li><li>second</li></ol></div>',
+        {"paragraph": "Normal", "default": "Normal"},
+    )
+
+    first, child, second = document.paragraphs
+    first_num_pr = first._p.pPr.numPr
+    child_num_pr = child._p.pPr.numPr
+    second_num_pr = second._p.pPr.numPr
+    assert first_num_pr.numId.val == child_num_pr.numId.val == second_num_pr.numId.val
+    assert first_num_pr.ilvl.val == 0
+    assert child_num_pr.ilvl.val == 1
+    assert second_num_pr.ilvl.val == 0
+    numbering_xml = document.part.numbering_part.element.xml
+    assert 'w:numFmt w:val="decimal"' in numbering_xml
+    assert 'w:lvlText w:val="%1."' in numbering_xml
 
 
 def test_report_table_css_preserves_global_width_and_centers_wrapped_tables():
@@ -539,7 +678,7 @@ def test_convert_md_to_html_annotates_xychart_value_labels(tmp_path, monkeypatch
         return True
 
     monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.html_offline.render_mermaid_offline",
+        "server.deepsearch.core.manager.report_manager.html_export.render_mermaid_offline",
         _fake_render_mermaid_offline,
     )
 
@@ -677,12 +816,12 @@ def test_convert_md_to_docx_normalizes_headings_fonts_and_tables(tmp_path, monke
     table_calls = {"count": 0}
 
     monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_offline.normalize_docx_fonts",
+        "server.deepsearch.core.manager.report_manager.docx_export.normalize_docx_fonts",
         lambda *_args, **_kwargs: font_calls.__setitem__("count", font_calls["count"] + 1),
         raising=False,
     )
     monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_offline.normalize_docx_tables",
+        "server.deepsearch.core.manager.report_manager.docx_export.normalize_docx_tables",
         lambda *_args, **_kwargs: table_calls.__setitem__("count", table_calls["count"] + 1),
         raising=False,
     )
@@ -741,3 +880,493 @@ def test_convert_md_to_docx_raises_file_not_found_for_missing_markdown(tmp_path)
     """Validate DOCX export still surfaces missing Markdown input."""
     with pytest.raises(FileNotFoundError):
         convert_md_to_docx(tmp_path / "missing.md", tmp_path / "report.docx")
+
+
+def test_convert_md_to_docx_fallback_on_unconvertible_latex(tmp_path):
+    """Validate DOCX export does not crash when a LaTeX formula cannot be converted.
+
+    Instead, the raw formula text should be preserved in the output.
+    This covers cases like deeply nested unbalanced left/right delimiters
+    that latex2mathml rejects with ExtraLeftOrMissingRightError.
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+
+    Returns:
+        None.
+    """
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    # Nested unbalanced \left...\right — latex2mathml raises ExtraLeftOrMissingRightError
+    # Use raw string to avoid \t/\f etc. being interpreted as escape chars
+    md_path.write_text(
+        r"# 测试" + "\n\n"
+        r"$$\left[\left(x\right)\right) - y\right)$$" + "\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    # Should contain the raw formula text as fallback (with $$ delimiters preserved)
+    assert any(r"\left" in paragraph.text for paragraph in document.paragraphs)
+
+
+def test_convert_md_to_docx_keeps_valid_math_inline_and_block(tmp_path):
+    """Validate DOCX export keeps well-formed LaTeX formulas converted to OMML.
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+
+    Returns:
+        None.
+    """
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "# 测试\n\n"
+        "行内公式 $x^2 + y^2 = z^2$。\n\n"
+        "$$E = mc^2$$\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    # OMML namespace should be present for converted formulas
+    assert "http://schemas.openxmlformats.org/officeDocument/2006/math" in document_xml
+
+
+def test_html_export_contains_mathjax_script(tmp_path):
+    """Validate HTML export includes MathJax script for formula rendering.
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+
+    Returns:
+        None.
+    """
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "# 测试\n\n"
+        "公式：$$E = mc^2$$\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert "MathJax" in html_text
+    assert "mathjax@3" in html_text
+    assert "tex-mml-chtml" in html_text
+
+
+def test_protect_math_spans_preserves_underscores_through_markdown():
+    """Validate math placeholders survive Markdown conversion without emphasis injection.
+
+    Underscores and asterisks inside ``$...$`` / ``$$...$$`` must not be turned
+    into ``<em>``/``<strong>`` tags by Python-Markdown.
+
+    Returns:
+        None.
+    """
+    text = (
+        "正文 $$\\mathcal{J}_{GRPO}(\\theta) = \\sum_{i=1}^G \\pi_\\theta$$ "
+        "行内 $a_{i} * b_{j}$ 结束"
+    )
+
+    protected, formulas = protect_math_spans(text)
+    assert len(formulas) == 2
+    assert "$" not in protected  # 公式分隔符已被占位符取代
+
+    rendered = markdown.markdown(protected, extensions=["extra"], output_format="html5")
+    restored = restore_math_spans(rendered, formulas)
+
+    assert "$$\\mathcal{J}_{GRPO}(\\theta) = \\sum_{i=1}^G \\pi_\\theta$$" in restored
+    assert "\\(a_{i} * b_{j}\\)" in restored
+    assert "<em>" not in restored
+    assert "<strong>" not in restored
+
+
+def test_protect_math_spans_ignores_code_spans_and_fenced_blocks():
+    """Validate math placeholders do not rewrite code examples."""
+    text = (
+        "正文 $x_i$。\n\n"
+        "`price = \"$5\"`\n\n"
+        "```python\n"
+        "formula = \"$x_i$\"\n"
+        "```\n"
+    )
+
+    protected, formulas = protect_math_spans(text)
+
+    assert formulas == ["$x_i$"]
+    assert '`price = "$5"`' in protected
+    assert 'formula = "$x_i$"' in protected
+
+
+def test_protect_math_spans_skips_currency_but_keeps_simple_variables():
+    """Validate inline math protection distinguishes currency from variables."""
+    text = (
+        r"成本为 $5 到 $10，收入约 $1,200.50，"
+        r"变量 $G$ 和公式 $G = (V, E)$ 需要保留，"
+        r"转义美元 \$8 不处理。"
+    )
+
+    protected, formulas = protect_math_spans(text)
+
+    assert formulas == ["$G$", "$G = (V, E)$"]
+    assert "$5 到 $10" in protected
+    assert "$1,200.50" in protected
+    assert r"\$8" in protected
+
+
+def test_html_export_uses_safe_mathjax_delimiters_for_currency_text(tmp_path):
+    """Validate HTML MathJax does not reinterpret currency dollars as formulas."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "# 测试\n\n"
+        "其中，$G$为组内采样数量，每一组的价格分别为$4和$5。\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert r"\(G\)" in html_text
+    assert "$4和$5" in html_text
+    assert "inlineMath: [['$', '$']" not in html_text
+
+
+def test_convert_md_to_html_keeps_dollar_unit_table_intact(tmp_path):
+    """Validate dollar unit labels do not break Markdown table parsing."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "| Provider | Price ($/GPU-hr) | Note |\n"
+        "| :--- | :--- | :--- |\n"
+        "| Thunder Compute | $1.38 | fixed on-demand price |\n"
+        "\n"
+        "Later text before a parameter mention.\n"
+        "\n"
+        "Hybrid sampling parameter ($q_r$) should render as math.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    soup = BeautifulSoup(html_text, "html.parser")
+    assert soup.find("table") is not None
+    assert "Price ($/GPU-hr)" in soup.get_text()
+    assert r"\(q_r\)" in html_text
+    assert r"\(/GPU-hr" not in html_text
+
+
+def test_convert_md_to_html_protects_numeric_indicator_math_and_currency(tmp_path):
+    """Validate numeric indicator formulas are not mistaken for currency."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "| Term | Formula | Price |\n"
+        "| :--- | :--- | :--- |\n"
+        "| torque | $1(\\tau_t \\notin [\\tau_{min}, \\tau_{max}])$ | $1.38 |\n"
+        "\n"
+        "Each group costs $4 and $5.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert r"\(1(\tau_t \notin [\tau_{min}, \tau_{max}])\)" in html_text
+    assert "$1.38" in html_text
+    assert "$4 and $5" in html_text
+
+
+def test_convert_md_to_html_protects_comparison_math_before_markdown(tmp_path):
+    """Validate comparison operators inside formulas do not skip math protection."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "| Term | Formula | Price |\n"
+        "| :--- | :--- | :--- |\n"
+        "| fall | $1(F^{left}_{feet}, F^{right}_{feet} < 1)$ | $1.38 |\n"
+        "\n"
+        "Scale uses $r_{t,i} < 0$ while escaped price \\$8 remains text.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    soup_text = BeautifulSoup(html_text, "html.parser").get_text(" ", strip=True)
+    assert r"\(1(F^{left}_{feet}, F^{right}_{feet} &lt; 1)\)" in html_text
+    assert r"\(r_{t,i} &lt; 0\)" in html_text
+    assert r"\(1(F^{left}_{feet}, F^{right}_{feet} < 1)\)" in soup_text
+    assert r"\(r_{t,i} < 0\)" in soup_text
+    assert "<em" not in html_text
+    assert "$1.38" in html_text
+    assert r"\$8" in html_text
+
+
+def test_convert_md_to_html_protects_numeric_scientific_math(tmp_path):
+    """Validate numeric-leading scientific formulas are not treated as currency."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "Training converges at $4 \\times 10^4$ samples. "
+        "Plain prices $4 and $5 remain text.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert r"\(4 \times 10^4\)" in html_text
+    assert "$4 and $5" in html_text
+
+
+def test_convert_md_to_html_protects_numeric_arithmetic_math(tmp_path):
+    """Validate numeric arithmetic formulas are not treated as currency."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "Arithmetic formulas $2+2=4$, $4-3=1$, and $4−3=1$ render as math. "
+        "Plain prices $4 and $5 remain text.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert r"\(2+2=4\)" in html_text
+    assert r"\(4-3=1\)" in html_text
+    assert r"\(4−3=1\)" in html_text
+    assert "$4 and $5" in html_text
+
+
+def test_convert_md_to_html_escapes_formula_content_before_restore(tmp_path):
+    """Validate formula text containing '<' does not become HTML tags."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "Compare $x<y$ and keep price $4 and $5 as text.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    soup_text = BeautifulSoup(html_text, "html.parser").get_text(" ", strip=True)
+    assert r"\(x&lt;y\)" in html_text
+    assert r"\(x<y\)" in soup_text
+    assert "$4 and $5" in soup_text
+
+
+def test_convert_md_to_docx_renders_numeric_arithmetic_math(tmp_path):
+    """Validate DOCX export converts numeric arithmetic formulas to OMML."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "Arithmetic formulas $2+2=4$, $4-3=1$, and $4−3=1$ render as math. "
+        "Plain prices $4 and $5 remain text.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "$2+2=4$" not in paragraph_text
+    assert "$4-3=1$" not in paragraph_text
+    assert "$4−3=1$" not in paragraph_text
+    assert "$4 and $5" in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert document_xml.count("<m:oMath") >= 3
+
+
+def test_convert_md_to_docx_preserves_formula_text_with_less_than(tmp_path):
+    """Validate DOCX export does not lose formula content after '<'."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "Compare $x<y$ and keep price $4 and $5 as text.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "$x<y$" not in paragraph_text
+    assert "Compare" in paragraph_text
+    assert "$4 and $5" in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "<m:oMath" in document_xml
+    assert "<m:t>x</m:t>" in document_xml
+    assert "<m:t>y</m:t>" in document_xml
+
+
+def test_convert_md_to_html_protects_equation_references(tmp_path):
+    """Validate equation references wrapped in dollars render as inline math."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "The constraint follows $(Eq. 9)$ and the loss follows $(Equation 10)$.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert r"\((Eq. 9)\)" in html_text
+    assert r"\((Equation 10)\)" in html_text
+
+
+def test_convert_md_to_html_protects_numeric_tuples_and_prime_variables(tmp_path):
+    """Validate numeric tuples and prime variables render as inline math."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "Clamp range $(0.75, 1.5)$ and transformed variable $z'$ are formulas. "
+        "Quoted text $foo'$ remains text.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert r"\((0.75, 1.5)\)" in html_text
+    assert r"\(z'\)" in html_text
+    assert "$foo'" in html_text
+
+
+def test_convert_md_to_html_keeps_function_call_math_distinct_from_closing_dollars(tmp_path):
+    """Validate function-call formulas do not leave broken dollar delimiters."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "Advantage Function, $A(s,a)$, Value Network, $V(s)$, "
+        "and $A(s,a) = Q(s,a) - V(s)$ are formulas. Price $1.38 remains text.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert r"\(A(s,a)\)" in html_text
+    assert r"\(V(s)\)" in html_text
+    assert r"\(A(s,a) = Q(s,a) - V(s)\)" in html_text
+    assert "$A(s,a)" not in html_text
+    assert "$V(s)" not in html_text
+    assert "$1.38" in html_text
+
+
+def test_html_export_defines_bm_mathjax_macro(tmp_path):
+    """Validate MathJax can render reports that use the common \\bm command."""
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        r"Policy $\pi_{\bm{\theta}}:\mathcal{O}\rightarrow\mathcal{A}$.",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert r"\(\pi_{\bm{\theta}}:\mathcal{O}\rightarrow\mathcal{A}\)" in html_text
+    assert "bm: ['{\\\\boldsymbol{#1}}', 1]" in html_text
+
+
+def test_convert_md_to_docx_preserves_currency_dollars_next_to_inline_math(tmp_path):
+    """Validate DOCX conversion does not convert currency dollars as math."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "# 测试\n\n"
+        "其中，$G$为组内采样数量，每一组的价格分别为$4和$5。\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "$4和$5" in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "http://schemas.openxmlformats.org/officeDocument/2006/math" in document_xml
+    assert r"\(G\)" not in document_xml
+
+
+def test_convert_md_to_docx_renders_inline_math_without_currency_text(tmp_path):
+    """Validate DOCX conversion renders normalized inline math without literal slashes."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text("# Test\n\nVariable $G$ should render as math.\n", encoding="utf-8")
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert r"\(G\)" not in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "<m:oMath" in document_xml
+
+
+def test_html_export_preserves_underscore_math(tmp_path):
+    """Validate HTML export keeps underscore-heavy formulas intact for MathJax.
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+
+    Returns:
+        None.
+    """
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "# 测试\n\n"
+        "$$\\sum_{i=1}^G \\pi_\\theta(o_i|q)$$\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert "\\sum_{i=1}^G \\pi_\\theta(o_i|q)" in html_text
+    # 公式未被 Markdown 拆成斜体标签
+    assert "<em>" not in html_text
+    assert "<strong>" not in html_text
+
+
+def test_docx_export_preserves_underscore_math(tmp_path):
+    """Validate DOCX export handles underscore-heavy formulas without corruption.
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+
+    Returns:
+        None.
+    """
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "# 测试\n\n"
+        "$$x_{i}^{2} + y_{j}^{2} = z_{k}^{2}$$\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    # 公式应转为 OMML，且未残留 Markdown 注入的斜体标签
+    assert "http://schemas.openxmlformats.org/officeDocument/2006/math" in document_xml

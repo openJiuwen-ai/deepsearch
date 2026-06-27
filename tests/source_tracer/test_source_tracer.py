@@ -43,8 +43,7 @@ class TestSourceTracer:
         """Fixture to provide mock algorithm inputs."""
         return {
             "report": origin_report_value,
-            "merged_trace_source_datas": [],
-            "classified_content": origin_search_record.get("web_page_search_record", [])
+            "classified_content": origin_search_record.get("web_page_search_record", []),
         }
 
     @pytest.fixture
@@ -82,16 +81,16 @@ class TestSourceTracer:
     @pytest.fixture
     def mock_generate_source_datas_return_value(self):
         data = {
-            "name": "",  # 引用名（报告名）
-            "url": "",  # 引用链接
-            "title": "example",  # 引用网页标题
-            "content": "test content",  # 引用内容摘要
-            "source": "",  # 引用来源
-            "publish_time": "",  # 信息发布时间
-            "from": "",  # 表明是本地信息或网页信息
-            "chunk": "test",  # 报告中需要添加引用的句子
-            "score": 0.0,  # 引用内容置信度
-            "id": "",  # 行内引用唯一标识
+            "name": "",
+            "url": "",
+            "title": "example",
+            "content": "test content",
+            "source": "",
+            "publish_time": "",
+            "from": "",
+            "chunk": "test",
+            "score": 0.0,
+            "id": "",
         }
         return [data]
 
@@ -99,469 +98,362 @@ class TestSourceTracer:
     def mock_classified_content_value(self):
         return [{"index": 1, "title": "example", "url": "https://example.com", "original_content": "test content"}]
 
-    # research_trace_source tests
+    # ========== research_trace_source tests ==========
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_empty_report(self, mock_algorithm_inputs):
-        """Test research_trace_source when report is empty."""
-        # Arrange
-        mock_algorithm_inputs["report"] = ""
-        tracer = SourceTracer(mock_algorithm_inputs)
-
-        # Act
+    async def test_research_trace_source_empty_report(self):
+        """report为空时，research_trace_source应直接返回且不修改trace_source_datas。"""
+        tracer = SourceTracer({"report": "", "classified_content": []})
         await tracer.research_trace_source()
-
-        # Assert
         assert getattr(tracer, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_preprocess_search_record_empty(self, mock_algorithm_inputs,
-                                                                        origin_report_value):
-        """Test research_trace_source when search record preprocessing returns empty."""
-        # Arrange
-        mock_algorithm_inputs["search_record"] = {
-            "web_page_search_record": [],
-            "web_image_search_record": [],
-            "local_text_search_record": [],
-            "local_image_search_record": []
-        }
-        tracer = SourceTracer(mock_algorithm_inputs)
-
-        # Act
+    async def test_research_trace_source_empty_classified_content(self):
+        """classified_content为空时，搜索记录为空，research_trace_source应退出溯源。"""
+        tracer = SourceTracer({"report": "有内容的报告", "classified_content": []})
         await tracer.research_trace_source()
-
-        # Assert
         assert getattr(tracer, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    @staticmethod
-    async def test_research_trace_source_preprocess_report_called(source_tracer_instance, source_tracer_test_data):
-        """Test that preprocess_report is called in research_trace_source."""
-        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
-            mock_preprocess.return_value = source_tracer_test_data.preprocess_report_return
+    async def test_research_trace_source_recognition_failure(self, source_tracer_instance):
+        """内容识别失败时，trace_source_datas保持为空列表。"""
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess, \
+             patch(f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search, \
+             patch(f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
+            mock_preprocess.return_value = ("", "预处理后的报告")
+            mock_preprocess_search.return_value = {"search_record": [{"url": "https://a.com", "title": "A", "content": "内容"}]}
+            mock_recognize.return_value = []
 
-            # Need to patch other async dependencies
-            with patch(
-                    f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
-                mock_recognize.return_value = source_tracer_test_data.recognize_content_return
-
-                with patch(f'{MODULE_PATH}.match_sources') as mock_match:
-                    mock_match.return_value = source_tracer_test_data.match_sources_return
-
-                    with patch(
-                            f'{MODULE_PATH}.generate_source_datas') as mock_generate:
-                        mock_generate.return_value = source_tracer_test_data.generate_source_datas_return
-
-                        # Act
-                        await source_tracer_instance.research_trace_source()
-
-                        # Assert
-                        mock_preprocess.assert_called_once_with(
-                            source_tracer_test_data.origin_report)
-                        assert (getattr(source_tracer_instance, '_trace_source_datas') ==
-                                source_tracer_test_data.generate_source_datas_return)
+            await source_tracer_instance.research_trace_source()
+            assert getattr(source_tracer_instance, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_recognition_failure(self, source_tracer_instance, origin_report_value,
-                                                             mock_preprocess_report_return_value):
-        """Test research_trace_source when content recognition fails."""
-        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
-            mock_preprocess.return_value = mock_preprocess_report_return_value
+    async def test_research_trace_source_matching_failure(self, source_tracer_instance):
+        """源匹配失败时，trace_source_datas保持为空列表。"""
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess, \
+             patch(f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search, \
+             patch(f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize, \
+             patch(f'{MODULE_PATH}.match_sources') as mock_match:
+            mock_preprocess.return_value = ("", "预处理后的报告")
+            mock_preprocess_search.return_value = {"search_record": [{"url": "https://a.com", "title": "A", "content": "内容"}]}
+            mock_recognize.return_value = ["测试内容"]
+            mock_match.return_value = []
 
-            with patch(
-                    f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
-                mock_recognize.return_value = []
-
-                # Act
-                await source_tracer_instance.research_trace_source()
-
-                # Assert
-                assert getattr(source_tracer_instance, '_trace_source_datas') == []
+            await source_tracer_instance.research_trace_source()
+            assert getattr(source_tracer_instance, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_matching_failure(self, source_tracer_instance, origin_report_value,
-                                                          mock_preprocess_report_return_value,
-                                                          mock_recognize_content_to_cite_return_value):
-        """Test research_trace_source when source matching fails."""
-        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
-            mock_preprocess.return_value = mock_preprocess_report_return_value
+    async def test_research_trace_source_no_datas_generated(self, source_tracer_instance,
+                                                            origin_search_record):
+        """generate_source_datas返回空列表时，trace_source_datas保持为空列表。"""
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess, \
+             patch(f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search, \
+             patch(f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize, \
+             patch(f'{MODULE_PATH}.match_sources') as mock_match, \
+             patch(f'{MODULE_PATH}.generate_source_datas') as mock_generate:
+            mock_preprocess.return_value = ("", "预处理后的报告")
+            mock_preprocess_search.return_value = origin_search_record
+            mock_recognize.return_value = ["测试内容"]
+            mock_match.return_value = [{"sentence": "test", "matched_source_indices": [1]}]
+            mock_generate.return_value = []
 
-            with patch(
-                    f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
-                mock_recognize.return_value = mock_recognize_content_to_cite_return_value
-
-                with patch(f'{MODULE_PATH}.match_sources') as mock_match:
-                    mock_match.return_value = []
-
-                    # Act
-                    result = await source_tracer_instance.research_trace_source()
-
-                    # Assert
-                    assert getattr(source_tracer_instance, '_trace_source_datas') == []
+            await source_tracer_instance.research_trace_source()
+            assert getattr(source_tracer_instance, '_trace_source_datas') == []
 
     @pytest.mark.asyncio
-    async def test_research_trace_source_with_trace_source_datas(self, mock_algorithm_inputs, source_tracer_test_data):
-        """Test research_trace_source when merged_trace_source_datas is provided."""
-        mock_algorithm_inputs["merged_trace_source_datas"] = [
-            {"existing": "data"}]
-        tracer = SourceTracer(mock_algorithm_inputs)
-
-        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
-            mock_preprocess.return_value = source_tracer_test_data.preprocess_report_return
-
-            with patch(
-                    f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
-                mock_recognize.return_value = source_tracer_test_data.recognize_content_return
-
-                with patch(f'{MODULE_PATH}.match_sources') as mock_match:
-                    mock_match.return_value = source_tracer_test_data.match_sources_return
-
-                    with patch(
-                            f'{MODULE_PATH}.generate_source_datas') as mock_generate:
-                        mock_generate.return_value = source_tracer_test_data.generate_source_datas_return
-
-                        # Act
-                        await tracer.research_trace_source()
-
-                        # Assert
-                        assert (getattr(tracer, '_trace_source_datas') ==
-                        source_tracer_test_data.generate_source_datas_return)
-
-    @pytest.mark.asyncio
-    async def test_research_trace_source_exception_handling(self, source_tracer_instance, origin_report_value):
-        """Test research_trace_source exception handling."""
+    async def test_research_trace_source_exception_handling(self, source_tracer_instance):
+        """research_trace_source异常处理：应抛出CustomValueException。"""
         with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
             mock_preprocess.side_effect = Exception("Test error")
 
-            # Act & Assert
             with pytest.raises(CustomValueException) as exc_info:
                 await source_tracer_instance.research_trace_source()
 
-            # Verify it's the expected exception type
             assert exc_info.value.error_code == StatusCode.SOURCE_TRACER_TRACE_SOURCE_ERROR.code
 
-    # add_source_to_report tests
-    def test_add_source_to_report_empty_search_record(self, mock_algorithm_inputs, origin_report_value):
-        """Test add_source_to_report when search record preprocessing fails."""
-        # Arrange
-        mock_algorithm_inputs["search_record"] = {
-            "web_page_search_record": [],
-            "web_image_search_record": [],
-            "local_text_search_record": [],
-            "local_image_search_record": []
-        }
-        tracer = SourceTracer(mock_algorithm_inputs)
-
-        # Act
-        result = tracer.add_source_to_report()
-
-        # Assert
-        assert result == {
-            "modified_report": origin_report_value,
-            "datas": []
-        }
+    # ========== add_source_to_report tests ==========
 
     @staticmethod
-    def test_add_source_to_report_with_classified_content(mock_algorithm_inputs, mock_classified_content_value,
+    def test_add_source_to_report_with_classified_content(mock_algorithm_inputs,
+                                                          mock_classified_content_value,
                                                           mock_preprocess_report_return_value):
-        """Test add_source_to_report with classified_content parameter."""
-        # Arrange
+        """有classified_content时，add_source_to_report正常执行引用合并和添加。"""
         mock_algorithm_inputs["classified_content"] = mock_classified_content_value
         tracer = SourceTracer(mock_algorithm_inputs)
 
-        with patch(
-                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report, \
+             patch(f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin, \
+             patch(f'{MODULE_PATH}.merge_source_datas') as mock_merge, \
+             patch(f'{MODULE_PATH}.add_source_references') as mock_add_source:
             mock_preprocess_report.return_value = mock_preprocess_report_return_value
+            mock_generate_origin.return_value = {
+                "origin_report_data": [{"chunk": "Existing reference", "_sentence_position": 10}],
+                "modified_report": "modified report"
+            }
+            mock_merge.return_value = [{"merged": "data"}]
+            mock_add_source.return_value = ("final report", [{"final": "data"}])
 
-            with patch(
-                    f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
-                mock_generate_origin.return_value = {
-                    "origin_report_data": [{"type": "reference", "content": "Existing reference [1]"}],
-                    "modified_report": "modified report"
-                }
+            result = tracer.add_source_to_report()
 
-                with patch(
-                        f'{MODULE_PATH}.merge_source_datas') as mock_merge:
-                    mock_merge.return_value = [{"merged": "data"}]
-
-                    with patch(
-                            f'{MODULE_PATH}.add_source_references') as mock_add_source:
-                        mock_add_source.return_value = (
-                            "final report", [{"final": "data"}])
-
-                        # Act
-                        result = tracer.add_source_to_report()
-
-                        # Assert
-                        mock_preprocess_report.assert_called_once()
-                        mock_generate_origin.assert_called_once_with(
-                            mock_preprocess_report_return_value[1], mock_classified_content_value)
-                        mock_merge.assert_called_once()
-                        mock_add_source.assert_called_once()
-                        assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
-                        assert len(result["datas"]) == 1
+            mock_preprocess_report.assert_called_once()
+            mock_generate_origin.assert_called_once_with(
+                mock_preprocess_report_return_value[1], mock_classified_content_value)
+            mock_merge.assert_called_once()
+            mock_add_source.assert_called_once()
+            assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
+            assert len(result["datas"]) == 1
 
     @staticmethod
-    def test_add_source_to_report_normal_flow(source_tracer_instance, mock_preprocess_report_return_value):
-        """Test normal flow of add_source_to_report."""
-        with patch(
-                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
+    def test_add_source_to_report_no_datas_returned(source_tracer_instance,
+                                                     mock_preprocess_report_return_value):
+        """merge_source_datas返回空列表时，报告仍正常返回但datas为空。"""
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report, \
+             patch(f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin, \
+             patch(f'{MODULE_PATH}.merge_source_datas') as mock_merge, \
+             patch(f'{MODULE_PATH}.add_source_references') as mock_add_source:
             mock_preprocess_report.return_value = mock_preprocess_report_return_value
+            mock_generate_origin.return_value = {
+                "origin_report_data": [],
+                "modified_report": "modified report"
+            }
+            mock_merge.return_value = []
+            mock_add_source.return_value = ("final report", [])
 
-            with patch(
-                    f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
-                mock_generate_origin.return_value = {
-                    "origin_report_data": [],
-                    "modified_report": "modified report"
-                }
+            result = source_tracer_instance.add_source_to_report()
 
-                with patch(
-                        f'{MODULE_PATH}.merge_source_datas') as mock_merge:
-                    mock_merge.return_value = [{"merged": "data"}]
-
-                    with patch(
-                            f'{MODULE_PATH}.add_source_references') as mock_add_source:
-                        mock_add_source.return_value = (
-                            "final report", [{"final": "data"}])
-
-                        # Act
-                        result = source_tracer_instance.add_source_to_report()
-
-                        # Assert
-                        mock_preprocess_report.assert_called_once()
-                        mock_generate_origin.assert_called_once_with(
-                            mock_preprocess_report_return_value[1],
-                            getattr(source_tracer_instance, '_classified_content'))
-                        mock_merge.assert_called_once()
-                        mock_add_source.assert_called_once()
-                        assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
-                        assert len(result["datas"]) == 1
+            assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
+            assert result["datas"] == []
 
     @staticmethod
-    def test_add_source_to_report_with_existing_datas(mock_algorithm_inputs, origin_search_record,
-                                                      mock_preprocess_report_return_value):
-        """Test add_source_to_report with existing merged_trace_source_datas."""
-        # Arrange
-        mock_algorithm_inputs["merged_trace_source_datas"] = [
-            {"existing": "data"}]
-        tracer = SourceTracer(mock_algorithm_inputs)
-
-        with patch(
-                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
-            mock_preprocess_report.return_value = mock_preprocess_report_return_value
-
-            with patch(
-                    f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search:
-                mock_preprocess_search.return_value = origin_search_record
-
-                with patch(
-                        f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
-                    mock_generate_origin.return_value = {
-                        "origin_report_data": [],
-                        "modified_report": "modified report"
-                    }
-
-                    with patch(
-                            f'{MODULE_PATH}.merge_source_datas') as mock_merge:
-                        mock_merge.return_value = [{"merged": "data"}]
-
-                        with patch(
-                                f'{MODULE_PATH}.add_source_references') as mock_add_source:
-                            mock_add_source.return_value = (
-                                "final report", [{"final": "data"}])
-
-                            # Act
-                            result = tracer.add_source_to_report()
-
-                            # Assert
-                            assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
-                            assert len(result["datas"]) == 1
-                            # Verify that existing datas are used
-                            assert result["datas"] == [{"final": "data"}]
-
-    @staticmethod
-    def test_add_source_to_report_exception_handling(source_tracer_instance, origin_report_value):
-        """Test add_source_to_report exception handling."""
+    def test_add_source_to_report_exception_handling(source_tracer_instance):
+        """add_source_to_report异常处理：应抛出CustomValueException。"""
         with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
             mock_preprocess.side_effect = Exception("Test error")
 
-            # Act & Assert
             with pytest.raises(CustomValueException) as exc_info:
                 source_tracer_instance.add_source_to_report()
 
-            # Verify it's the expected exception type
             assert exc_info.value.error_code == StatusCode.SOURCE_TRACER_ADD_SOURCE_ERROR.code
+
+    # ========== 初始化测试 ==========
 
     @staticmethod
     def test_init_with_missing_algorithm_inputs():
-        """Test initialization with missing algorithm input keys."""
-        # Test with completely empty dict
+        """缺少算法输入键时，SourceTracer应使用默认值。"""
         tracer_empty = SourceTracer({})
         assert getattr(tracer_empty, '_report') == ""
         assert getattr(tracer_empty, '_search_record') == {}
         assert getattr(tracer_empty, '_classified_content') == []
 
-        # Test with partial dict
-        partial_inputs = {
-            "report": "partial report"
-            # Missing other keys
-        }
-        tracer_partial = SourceTracer(partial_inputs)
+        tracer_partial = SourceTracer({"report": "partial report"})
         assert getattr(tracer_partial, '_report') == "partial report"
         assert getattr(tracer_partial, '_search_record') == {}
         assert getattr(tracer_partial, '_classified_content') == []
 
     @staticmethod
     def test_init_with_none_algorithm_inputs():
-        """Test initialization with None values."""
-        inputs_with_nones = {
-            "report": None,
-            "classified_content": None
-        }
-        tracer = SourceTracer(inputs_with_nones)
-        # Should handle None values gracefully
+        """传入None值时，SourceTracer应安全处理。"""
+        tracer = SourceTracer({"report": None, "classified_content": None})
         assert getattr(tracer, '_report') is None
         assert getattr(tracer, '_search_record') == {}
         assert getattr(tracer, '_classified_content') is None
 
-    @staticmethod
-    def test_add_source_to_report_empty_all_trace_source_datas(mock_algorithm_inputs, origin_search_record,
-                                                               mock_preprocess_report_return_value):
-        """Test add_source_to_report with empty merged_trace_source_datas."""
-        # Arrange
-        mock_algorithm_inputs["merged_trace_source_datas"] = []
-        tracer = SourceTracer(mock_algorithm_inputs)
-
-        with patch(
-                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
-            mock_preprocess_report.return_value = mock_preprocess_report_return_value
-
-            with patch(
-                    f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search:
-                mock_preprocess_search.return_value = origin_search_record
-
-                with patch(
-                        f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
-                    mock_generate_origin.return_value = {
-                        "origin_report_data": [],
-                        "modified_report": "modified report"
-                    }
-
-                    with patch(
-                            f'{MODULE_PATH}.merge_source_datas') as mock_merge:
-                        mock_merge.return_value = []
-
-                        with patch(
-                                f'{MODULE_PATH}.add_source_references') as mock_add_source:
-                            mock_add_source.return_value = (
-                                "final report", [])
-
-                            # Act
-                            result = tracer.add_source_to_report()
-
-                            # Assert
-                            assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
-                            assert result["datas"] == []
-
-    @staticmethod
-    def test_add_source_to_report_no_datas_returned(source_tracer_instance, origin_search_record,
-                                                    mock_preprocess_report_return_value):
-        """Test add_source_to_report when merge_source_datas returns empty list."""
-        with patch(
-                f'{MODULE_PATH}.preprocess_report') as mock_preprocess_report:
-            mock_preprocess_report.return_value = mock_preprocess_report_return_value
-
-            with patch(
-                    f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search:
-                mock_preprocess_search.return_value = origin_search_record
-
-                with patch(
-                        f'{MODULE_PATH}.generate_origin_report_data') as mock_generate_origin:
-                    mock_generate_origin.return_value = {
-                        "origin_report_data": [],
-                        "modified_report": "modified report"
-                    }
-
-                    with patch(
-                            f'{MODULE_PATH}.merge_source_datas') as mock_merge:
-                        mock_merge.return_value = []  # No merged data
-
-                        with patch(
-                                f'{MODULE_PATH}.add_source_references') as mock_add_source:
-                            mock_add_source.return_value = (
-                                "final report", [])
-
-                            # Act
-                            result = source_tracer_instance.add_source_to_report()
-
-                            # Assert
-                            assert result["modified_report"] == "final report" + mock_preprocess_report_return_value[0]
-                            assert result["datas"] == []
-
-    @pytest.mark.asyncio
-    async def test_research_trace_source_no_datas_generated(self, source_tracer_instance, origin_search_record,
-                                                            source_tracer_test_data):
-        """Test research_trace_source when generate_source_datas returns empty list."""
-        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
-            mock_preprocess.return_value = source_tracer_test_data.preprocess_report_return
-
-            with patch(
-                    f'{MODULE_PATH}.preprocess_search_record') as mock_preprocess_search:
-                mock_preprocess_search.return_value = origin_search_record
-
-                with patch(
-                        f'{MODULE_PATH}.recognize_content_to_cite') as mock_recognize:
-                    mock_recognize.return_value = source_tracer_test_data.recognize_content_return
-
-                    with patch(
-                            f'{MODULE_PATH}.match_sources') as mock_match:
-                        mock_match.return_value = source_tracer_test_data.match_sources_return
-
-                        with patch(
-                                f'{MODULE_PATH}.generate_source_datas') as mock_generate:
-                            mock_generate.return_value = []  # No generated data
-
-                            # Act
-                            await source_tracer_instance.research_trace_source()
-
-                            # Assert
-                            assert getattr(source_tracer_instance, '_trace_source_datas') == []
+    # ========== transform_search_record 测试 ==========
 
     @staticmethod
     def test_transform_search_record_mixed_content():
-        """
-        测试当classified_content包含有效和无效字典项时，方法应只返回有效项。
-        """
+        """classified_content包含有效和无效项时，应只返回有效项。"""
         classified_content = [
-            {
-                'url': 'http://example.com',
-                'title': 'Example Title',
-                'original_content': 'Example Content'
-            },
-            {
-                'url': 'http://example2.com',
-                'title': 'Example Title 2',
-                # 缺少original_content字段
-            },
-            {
-                'url': 'http://example3.com',
-                'title': 'Example Title 3',
-                'original_content': 'Example Content 3'
-            }
+            {'url': 'http://example.com', 'title': 'Example Title', 'original_content': 'Example Content'},
+            {'url': 'http://example2.com', 'title': 'Example Title 2'},  # 缺少original_content
+            {'url': 'http://example3.com', 'title': 'Example Title 3', 'original_content': 'Example Content 3'}
         ]
         expected_result = {
             'search_record': [
-                {
-                    'url': 'http://example.com',
-                    'title': 'Example Title',
-                    'content': 'Example Content'
-                },
-                {
-                    'url': 'http://example3.com',
-                    'title': 'Example Title 3',
-                    'content': 'Example Content 3'
-                }
+                {'url': 'http://example.com', 'title': 'Example Title', 'content': 'Example Content'},
+                {'url': 'http://example3.com', 'title': 'Example Title 3', 'content': 'Example Content 3'}
             ]
         }
         result = SourceTracer.transform_search_record(classified_content)
         assert result == expected_result
+
+    # ========== _filter_meaningful_sentences 测试 ==========
+
+    @staticmethod
+    def test_filter_meaningful_sentences_removes_empty_and_structural():
+        """过滤空字符串、Markdown标题、表格分隔行、代码块标记，保留表格数据行。"""
+        sentences = [
+            "",           # 空字符串
+            "  ",         # 仅空白
+            "## 第一章",  # Markdown标题
+            "### 1.1 小节",  # Markdown标题
+            "|---|---|",  # 表格分隔行（应过滤）
+            "| 数据1 | 数据2 |",  # 表格数据行（应保留，可能含引用）
+            "```python",  # 代码块开始标记
+            "```",        # 代码块结束标记
+            "这是一段正文内容。",  # 正常句子
+            "另一段有意义的内容！",  # 正常句子
+        ]
+        result = SourceTracer._filter_meaningful_sentences(sentences)
+        assert result == ["| 数据1 | 数据2 |", "这是一段正文内容。", "另一段有意义的内容！"]
+
+    # ========== _calculate_coverage 测试 ==========
+
+    @staticmethod
+    def test_calculate_coverage_with_citations():
+        """报告含引用标记时，正确计算被覆盖句子数和覆盖率。"""
+        report = "第一句[citation:1]。第二句。第三句[citation:2]。"
+        coverage, covered_count = SourceTracer._calculate_coverage(report)
+        assert covered_count == 2
+        assert coverage == pytest.approx(2 / 3)
+
+    @staticmethod
+    def test_calculate_coverage_no_citations():
+        """报告无引用标记时，覆盖率为0。"""
+        report = "第一句。第二句。第三句。"
+        coverage, covered_count = SourceTracer._calculate_coverage(report)
+        assert covered_count == 0
+        assert coverage == 0.0
+
+    @staticmethod
+    def test_calculate_coverage_empty_report():
+        """空报告时，覆盖率为0，被覆盖句子数为0。"""
+        coverage, covered_count = SourceTracer._calculate_coverage("")
+        assert covered_count == 0
+        assert coverage == 0.0
+
+    @staticmethod
+    def test_calculate_coverage_filters_structural_before_counting():
+        """覆盖率计算时，Markdown标题和表格行不计入有意义句子总数。"""
+        report = "## 第一章\n正文[citation:1]。"
+        coverage, covered_count = SourceTracer._calculate_coverage(report)
+        # 过滤后只有"正文[citation:1]。"有意义，1/1=1.0
+        assert covered_count == 1
+        assert coverage == 1.0
+
+    # ========== pre_check_origin_coverage tests ==========
+
+    @staticmethod
+    def test_pre_check_origin_coverage_empty_report():
+        """空报告时，不需要生成溯源，reason为'empty report'。"""
+        tracer = SourceTracer({"report": "", "classified_content": []})
+        result = tracer.pre_check_origin_coverage()
+
+        assert result["need_generate"] is False
+        assert result["origin_count"] == 0
+        assert result["total_sentences"] == 0
+        assert result["coverage"] == 0.0
+        assert result["reason"] == "empty report"
+
+    @staticmethod
+    def test_pre_check_origin_coverage_no_classified_content():
+        """有报告但无classified_content时，无法生成新引用，跳过溯源。"""
+        tracer = SourceTracer({"report": "报告内容", "classified_content": []})
+        result = tracer.pre_check_origin_coverage()
+
+        assert result["need_generate"] is False
+        assert result["reason"] == "no classified content"
+        assert result["origin_count"] == 0
+        assert result["total_sentences"] == 0
+
+    def test_pre_check_origin_coverage_sufficient_coverage(self):
+        """被覆盖句子数>=10且覆盖率>=0.3时，跳过溯源生成。
+
+        13个有意义句子中11个带[citation:X]标记 → covered_count=11, coverage≈0.846。
+        """
+        tracer = SourceTracer({
+            "report": "原始报告",
+            "classified_content": [{"url": "https://a.com", "title": "文章A", "original_content": "内容A"}]
+        })
+
+        preprocessed_report = (
+            "第一句[citation:1]。第二句[citation:2]。第三句[citation:3]。"
+            "第四句[citation:4]。第五句[citation:5]。第六句[citation:6]。"
+            "第七句[citation:7]。第八句[citation:8]。第九句[citation:9]。"
+            "第十句[citation:10]。第十一句[citation:11]。第十二句。第十三句。"
+        )
+
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
+            mock_preprocess.return_value = ("参考文献章节", preprocessed_report)
+
+            result = tracer.pre_check_origin_coverage()
+
+            assert result["need_generate"] is False
+            assert result["reason"] == "coverage sufficient"
+            assert result["origin_count"] == 11
+            assert result["total_sentences"] == 13
+            assert result["coverage"] == pytest.approx(11 / 13)
+
+    def test_pre_check_origin_coverage_insufficient_origin_count(self):
+        """被覆盖句子数不足（<10）时，需要执行溯源生成。
+
+        8个有意义句子均带引用 → covered_count=8, coverage=1.0，
+        但 origin_count=8 < 10 → 需要生成溯源。
+        """
+        tracer = SourceTracer({
+            "report": "原始报告",
+            "classified_content": [{"url": "https://a.com", "title": "文章A", "original_content": "内容A"}]
+        })
+
+        preprocessed_report = (
+            "第一句[citation:1]。第二句[citation:2]。第三句[citation:3]。"
+            "第四句[citation:4]。第五句[citation:5]。第六句[citation:6]。"
+            "第七句[citation:7]。第八句[citation:8]。"
+        )
+
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
+            mock_preprocess.return_value = ("参考文献章节", preprocessed_report)
+
+            result = tracer.pre_check_origin_coverage()
+
+            assert result["need_generate"] is True
+            assert result["reason"] == "coverage insufficient"
+            assert result["origin_count"] == 8
+            assert result["total_sentences"] == 8
+            assert result["coverage"] == 1.0
+
+    def test_pre_check_origin_coverage_insufficient_coverage_ratio(self):
+        """覆盖率比例不足（<0.3）时，需要执行溯源生成。
+
+        5个有意义句子中仅1个带引用标记 → covered_count=1, coverage=0.2。
+        """
+        tracer = SourceTracer({
+            "report": "原始报告",
+            "classified_content": [{"url": "https://a.com", "title": "文章A", "original_content": "内容A"}]
+        })
+
+        preprocessed_report = "第一句[citation:1]。第二句。第三句。第四句。第五句。"
+
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
+            mock_preprocess.return_value = ("参考文献章节", preprocessed_report)
+
+            result = tracer.pre_check_origin_coverage()
+
+            assert result["need_generate"] is True
+            assert result["reason"] == "coverage insufficient"
+            assert result["origin_count"] == 1
+            assert result["total_sentences"] == 5
+            assert result["coverage"] == pytest.approx(0.2)
+
+    def test_pre_check_origin_coverage_no_citations(self):
+        """报告中有意义句子但无任何引用标记时，需要执行溯源生成。
+
+        所有句子均无引用 → covered_count=0, coverage=0.0。
+        """
+        tracer = SourceTracer({
+            "report": "原始报告",
+            "classified_content": [{"url": "https://a.com", "title": "文章A", "original_content": "内容A"}]
+        })
+
+        preprocessed_report = "第一句。第二句。第三句。第四句。第五句。"
+
+        with patch(f'{MODULE_PATH}.preprocess_report') as mock_preprocess:
+            mock_preprocess.return_value = ("参考文献章节", preprocessed_report)
+
+            result = tracer.pre_check_origin_coverage()
+
+            assert result["need_generate"] is True
+            assert result["reason"] == "coverage insufficient"
+            assert result["origin_count"] == 0
+            assert result["total_sentences"] == 5
+            assert result["coverage"] == 0.0

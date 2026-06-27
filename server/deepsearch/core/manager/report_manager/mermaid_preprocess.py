@@ -1,6 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
-"""Preprocess Mermaid source blocks for offline export."""
+"""Preprocess Mermaid source blocks for report export."""
 
 from __future__ import annotations
 

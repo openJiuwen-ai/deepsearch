@@ -1,6 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
-"""Offline HTML conversion for report export bundles."""
+"""HTML conversion for report export bundles."""
 
 from __future__ import annotations
 
@@ -18,8 +18,10 @@ import markdown
 from server.deepsearch.core.manager.report_manager.conversion_utils import (
     postprocess_html,
     preprocess_markdown_text,
+    protect_math_spans,
     read_text_with_fallback,
     render_mermaid_supplement,
+    restore_math_spans,
 )
 from server.deepsearch.core.manager.report_manager.mermaid_common import load_svg_markup
 from server.deepsearch.core.manager.report_manager.mermaid_offline import render_mermaid_offline
@@ -253,10 +255,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .timeline-notes li {{
             margin: 0.45em 0;
         }}
+
+        /* Math formula rendering */
+        mjx-container[jax="CHTML"][display="true"] {{
+            margin: 1em 0;
+        }}
     </style>
 </head>
 <body>
 {content}
+<!-- MathJax for rendering LaTeX math formulas -->
+<script>
+window.MathJax = {{
+    tex: {{
+        inlineMath: [['\\\\(', '\\\\)']],
+        displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+        macros: {{
+            bm: ['{{\\\\boldsymbol{{#1}}}}', 1]
+        }}
+    }}
+}};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
 </body>
 </html>
 """
@@ -266,7 +286,7 @@ MERMAID_BLOCK_RE = re.compile(r"(?ms)^```[ \t]*mermaid[ \t]*\r?\n(.*?)\r?\n```[ 
 
 @dataclass(slots=True)
 class ConvertOptions:
-    """Control offline HTML conversion behavior.
+    """Control HTML export conversion behavior.
 
     Attributes:
         mermaid_security_level: Mermaid 安全等级预留参数。
@@ -318,7 +338,7 @@ def replace_mermaid_blocks(
                 supplement_html = render_mermaid_supplement(supplement_markdown)
             except Exception as exc:
                 logger.warning(
-                    "Mermaid supplement rendering failed in offline HTML conversion; keeping only the source block. "
+                    "Mermaid supplement rendering failed in HTML export conversion; keeping only the source block. "
                     "error=%s",
                     exc,
                 )
@@ -370,7 +390,7 @@ def replace_mermaid_blocks(
             logger.warning("Offline Mermaid rendering failed; keeping the source block in HTML output.")
         except Exception as exc:
             logger.warning(
-                "Mermaid block processing failed in offline HTML conversion; keeping the source block. "
+                "Mermaid block processing failed in HTML export conversion; keeping the source block. "
                 "block=%s error=%s",
                 block_id,
                 exc,
@@ -424,7 +444,7 @@ def convert_md_to_html(
     *,
     options: ConvertOptions | None = None,
 ) -> None:
-    """Convert Markdown into HTML using offline Mermaid rendering.
+    """Convert Markdown into HTML using local Mermaid rendering when available.
 
     Args:
         input_md: 输入 Markdown 文件路径。
@@ -460,11 +480,13 @@ def convert_md_to_html(
             debug_dir=output_path.parent,
             debug_stem=output_path.stem,
         )
+        md_content, math_spans = protect_math_spans(md_content)
         html_body = markdown.markdown(
             md_content,
             extensions=["extra", "toc", "md_in_html"],
             output_format="html5",
         )
+        html_body = restore_math_spans(html_body, math_spans)
         full_html = HTML_TEMPLATE.format(
             title=html.escape(options.title, quote=True),
             content=postprocess_html(html_body),

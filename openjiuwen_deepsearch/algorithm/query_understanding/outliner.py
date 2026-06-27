@@ -9,7 +9,7 @@ from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.exception import CustomValueException
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_runtime_api_tools, \
     merge_runtime_api_tools
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
@@ -68,6 +68,8 @@ def generate_outline(
             id=section.get("id", ""),
             parent_ids=section.get("parent_ids", []),
             relationships=section.get("relationships", []),
+            section_focus=section.get("section_focus", ""),
+            focus_dimensions=section.get("focus_dimensions", []),
         )
         for section in sections
     ]
@@ -144,6 +146,27 @@ def create_outline_tool(section_num: int):
                                 "type": "string",
                                 "description": "Unique identifier for the section. Following the format '1', '2', etc."
                             },
+                            "section_focus": {
+                                "type": "string",
+                                "description": (
+                                    "A short label describing this section's analytical role within the report. "
+                                    "Examples: market_size_and_growth, vendors_and_supply, technology_drivers, "
+                                    "risks_and_barriers, use_cases_and_commercialization, "
+                                    "recommendation_and_ranking, section_specific_analysis. "
+                                    "Use recommendation_and_ranking ONLY for the section "
+                                    "that carries the final judgment."
+                                ),
+                            },
+                            "focus_dimensions": {
+                                "type": "array",
+                                "description": (
+                                    "The 2-4 main analytical dimensions this section should cover. "
+                                    "Other sections should NOT deeply expand these dimensions."
+                                ),
+                                "items": {
+                                    "type": "string"
+                                },
+                            },
                         },
                         "required": ["title", "description"]
                     }
@@ -219,6 +242,27 @@ def creat_dep_driving_outline_tool(section_num: int):
                                 "items": {
                                     "type": "string"
                                 }
+                            },
+                            "section_focus": {
+                                "type": "string",
+                                "description": (
+                                    "A short label describing this section's analytical role within the report. "
+                                    "Examples: market_size_and_growth, vendors_and_supply, technology_drivers, "
+                                    "risks_and_barriers, use_cases_and_commercialization, "
+                                    "recommendation_and_ranking, section_specific_analysis. "
+                                    "Use recommendation_and_ranking ONLY for the section "
+                                    "that carries the final judgment."
+                                ),
+                            },
+                            "focus_dimensions": {
+                                "type": "array",
+                                "description": (
+                                    "The 2-4 main analytical dimensions this section should cover. "
+                                    "Other sections should NOT deeply expand these dimensions."
+                                ),
+                                "items": {
+                                    "type": "string"
+                                },
                             }
                             },
                         "required": ["title", "description", "id", "parent_ids", "relationships"]
@@ -395,7 +439,7 @@ class Outliner:
                 break
 
         except Exception as e:
-            error_msg = f"[{StatusCode.OUTLINER_GENERATE_ERROR.code}]{StatusCode.OUTLINER_GENERATE_ERROR.errmsg}: {e}"
+            error_msg = format_exception_info(StatusCode.OUTLINER_GENERATE_ERROR, e)
             if LogManager.is_sensitive():
                 logger.error("Error when Outliner generating a outline")
             else:

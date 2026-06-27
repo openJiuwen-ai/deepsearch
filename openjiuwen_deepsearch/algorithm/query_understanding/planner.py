@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.exception import CustomValueException
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_runtime_api_tools, \
     merge_runtime_api_tools
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, StepType, Step
@@ -258,14 +258,15 @@ class Planner:
 
                 break  # Success, exit retry loop
             except Exception as e:
-                msg = (
-                    f"{log_prefix}Error when Planner generating a plan. retry {progress_bar}."
-                    f"error: {'**' if LogManager.is_sensitive() else e}"
+                msg = format_exception_info(
+                    StatusCode.PLANNER_GENERATE_ERROR,
+                    e,
+                    prefix=f"{log_prefix}retry {progress_bar}. ",
                 )
                 if attempt + 1 < max_retries:
-                    logger.warning(msg)
+                    logger.warning(msg if not LogManager.is_sensitive() else f"{log_prefix}Planner retry failed.")
                 else:
-                    logger.error(msg)
+                    logger.error(msg if not LogManager.is_sensitive() else f"{log_prefix}Planner failed.")
                 planner_result.error_msg = msg
 
         return planner_result

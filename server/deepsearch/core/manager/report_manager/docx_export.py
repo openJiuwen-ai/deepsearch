@@ -1,6 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
-"""Offline DOCX conversion based on pure-Python HTML rendering and Mermaid CLI."""
+"""DOCX conversion based on pure-Python HTML rendering and Mermaid CLI."""
 
 from __future__ import annotations
 
@@ -22,7 +22,9 @@ from server.deepsearch.core.manager.report_manager.conversion_utils import (
     normalize_headings,
     postprocess_html,
     preprocess_markdown_text,
+    protect_math_spans,
     read_text_with_fallback,
+    restore_math_spans,
 )
 from server.deepsearch.core.manager.report_manager.mermaid_common import load_svg_markup
 from server.deepsearch.core.manager.report_manager.mermaid_offline import render_mermaid_offline
@@ -258,11 +260,13 @@ def convert_md_to_docx(md_path: str | Path, docx_path: str | Path) -> None:
             debug_dir=docx_file.parent,
             debug_stem=docx_file.stem,
         )
+        content, math_spans = protect_math_spans(content)
         html_body = markdown.markdown(
             content,
             extensions=["extra", "toc", "md_in_html"],
             output_format="html5",
         )
+        html_body = restore_math_spans(html_body, math_spans)
         html_text = DOCX_HTML_TEMPLATE.format(content=postprocess_html(html_body))
         temp_html.write_text(
             html_text,

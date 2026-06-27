@@ -15,6 +15,7 @@ Extract formatted data from `data_sources` based on collection tasks in `tasks`.
 5. Return valid JSON only
 6. **Data fidelity**: You MUST use the exact original numerical expressions from the data sources. Do NOT estimate, round, approximate, or rewrite any numeric value. For example, if the source says "3.14%", output 3.14, NOT 3.1 or 3; if the source says "approximately 200 million", output "approximately 200 million" as a string, NOT 200000000 (which is a fabricated exact number). Preserve original wording for any value that is not an explicit exact number.
 7. **Numeric data requirement**: The collected `data` MUST contain at least one numeric field (e.g., values, percentages, amounts, rates). If the data source only provides qualitative text descriptions, narrative statements, or categorical labels without any concrete numeric values, the `data` MUST be output as `"NO DATA"`. Charts require numeric data to be meaningful — purely textual content without numbers cannot be visualized as a chart.
+8. **Language**: Always use the language specified by the locale = **{{ language }}**
 ## Output Format
 ```json
 [

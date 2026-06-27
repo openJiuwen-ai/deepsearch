@@ -41,7 +41,7 @@ Streams JSON chunks (`AsyncGenerator[str]`) for normal execution, HITL resume, o
 - **interrupt_feedback**: `""` (normal SSE stream), `"accepted"` (HITL continue), `"cancel"` (JSON cancel response), `"revise_comment"` / `"revise_outline"` (outline HITL).
 - **report_template**: if base64, decoded automatically; decode errors fall back to raw string.
 
-Behavior highlights: initializes LLM + search tools; `native` local search requires non-empty `knowledge_base_configs`; wraps interactive interrupts; `ALL END` completes and clears context; cancel works in-process and with Redis checkpointer; when `user_feedback_processor_enable=True`, flow enters `UserFeedbackProcessorNode` after `SourceTracerInferNode`.
+Behavior highlights: initializes LLM + search tools; `native` local search requires non-empty `knowledge_base_configs`; wraps interactive interrupts; `ALL END` completes and clears context; cancel works in-process and with Redis checkpointer; when `user_feedback_processor_enable=True`, flow enters `UserFeedbackProcessorNode` after `SourceTracerInferNode` for post-report local editing.
 
 ### `_register_web_search_tool` / `_register_local_search_tool`
 Static helpers to register custom/web or local tools; native local requires `knowledge_base_configs`.

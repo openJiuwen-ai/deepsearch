@@ -71,6 +71,14 @@ class Section(BaseModel):
     parent_ids: List[str] = Field(default_factory=list, description="章节执行的依赖章节")
     relationships: List[str] = Field(default_factory=list, description="章节和所依赖章节之间的关系")
     plans: List[Plan] = Field(default_factory=list, description="章节执行规划的Plan")
+    section_focus: str = Field(
+        default="",
+        description=(
+            "章节的分析职责标签，如 market_size_and_growth, vendors_and_supply, "
+            "risks_and_barriers, recommendation_and_ranking"
+        ),
+    )
+    focus_dimensions: List[str] = Field(default_factory=list, description="该章节应主展开的 2-4 个分析维度，其他章节不应深入展开这些维度")
 
 
 class Outline(BaseModel):
@@ -84,6 +92,14 @@ class Outline(BaseModel):
     sections: List[Section] = Field(default_factory=list, description="最终研究报告的章节")
 
 
+class ChapterSidecar(BaseModel):
+    """章节结构化汇总信息，供 Reporter 复用。"""
+
+    chapter_summary: str = Field(default="", description="章节摘要")
+    key_findings: List[str] = Field(default_factory=list, description="章节关键发现")
+    risk_points: List[str] = Field(default_factory=list, description="风险、限制或不确定性")
+
+
 class SubReportContent(BaseModel):
     """
     子报告内容模型：包含子报告的核心内容及其相关溯源信息
@@ -91,6 +107,10 @@ class SubReportContent(BaseModel):
     classified_content: List[Dict] = Field(default_factory=list, description="子章节筛选的文档信息")
     sub_report_content_text: str = Field(default="", description="子报告内容文本")
     sub_report_content_summary: str = Field(default="", description="子报告内容的总结")
+    sub_report_chapter_sidecar: Optional[ChapterSidecar] = Field(
+        default=None,
+        description="子报告结构化 sidecar 汇总信息",
+    )
     sub_report_trace_source_datas: List[Dict] = Field(default_factory=list, description="子报告的溯源信息")
 
 
@@ -176,6 +196,9 @@ class ResearchIntent(BaseModel):
     """
     报告生成意图：从用户 query 中解析出的结构化约束。
     """
+    task_type: Optional[str] = Field(default=None, description="任务类型，如 comparison/classification/trend_judgement")
+    required_dimensions: List[str] = Field(default_factory=list, description="必须覆盖的比较或分析维度")
+    comparison_targets: List[str] = Field(default_factory=list, description="需要显式比较的对象")
     section_count: Optional[int] = Field(default=None, description="用户希望的章节数量")
     audience_role: Optional[str] = Field(default=None, description="目标读者角色")
     tone: Optional[str] = Field(default=None, description="写作风格，建议使用稳定英文枚举值")
@@ -184,6 +207,57 @@ class ResearchIntent(BaseModel):
     exclude_url: List[str] = Field(default_factory=list, description="用户指定排除的链接")
     include_domains: List[str] = Field(default_factory=list, description="用户指定的站点域名")
     exclude_domains: List[str] = Field(default_factory=list, description="用户排除的站点域名")
+
+
+class SectionLocalContract(BaseModel):
+    """章节级局部合同：限制章节只覆盖自己负责的分析职责。"""
+
+    section_focus: str = Field(default="", description="当前章节的核心职责标签")
+    allowed_dimensions: List[str] = Field(default_factory=list, description="允许主展开的维度")
+    is_final_decision_section: bool = Field(default=False, description="是否承担最终判断/排序职责")
+
+
+def build_research_intent_prompt_context(intent: ResearchIntent | dict | None) -> dict:
+    """将 ResearchIntent 规范化为 prompt 可直接消费的上下文字段。"""
+    if intent is None:
+        model = ResearchIntent()
+    elif isinstance(intent, ResearchIntent):
+        model = intent
+    else:
+        model = ResearchIntent.model_validate(intent)
+
+    required_dimensions = [item for item in model.required_dimensions if item]
+    comparison_targets = [item for item in model.comparison_targets if item]
+
+    return {
+        "task_type": model.task_type or "",
+        "required_dimensions": required_dimensions,
+        "required_dimensions_text": ", ".join(required_dimensions),
+        "comparison_targets": comparison_targets,
+        "comparison_targets_text": ", ".join(comparison_targets),
+        "has_required_dimensions": bool(required_dimensions),
+        "has_comparison_targets": bool(comparison_targets),
+    }
+
+
+def build_section_local_contract_prompt_context(contract: SectionLocalContract | dict | None) -> dict:
+    """将 SectionLocalContract 规范化为 prompt 可直接消费的上下文字段。"""
+    if contract is None:
+        model = SectionLocalContract()
+    elif isinstance(contract, SectionLocalContract):
+        model = contract
+    else:
+        model = SectionLocalContract.model_validate(contract)
+
+    allowed_dimensions = [item for item in model.allowed_dimensions if item]
+
+    return {
+        "section_focus": model.section_focus or "",
+        "allowed_dimensions": allowed_dimensions,
+        "allowed_dimensions_text": ", ".join(allowed_dimensions),
+        "is_final_decision_section": model.is_final_decision_section,
+        "has_allowed_dimensions": bool(allowed_dimensions),
+    }
 
 
 class SearchContext(BaseModel):

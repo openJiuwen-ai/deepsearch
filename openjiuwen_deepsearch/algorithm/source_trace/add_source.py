@@ -5,10 +5,13 @@ import logging
 import re
 from typing import List, Dict, Any, Tuple
 
+from openjiuwen_deepsearch.utils.common_utils.markdown_url_utils import extract_markdown_url
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_and_sanitize_url
 
 logger = logging.getLogger(__name__)
+_SOURCE_TRACER_LINK_PREFIX_RE = re.compile(r"\s*!?\[source_tracer_result\]!?\[[^\]]*]\(")
+_MARKDOWN_LINK_PREFIX_RE = re.compile(r"\s*!?\[[^\]]*]\(")
 
 
 class SourceReferenceProcessor:
@@ -117,6 +120,56 @@ def remove_trailing_spaces_and_punctuation(text: str) -> str:
     return result
 
 
+def _strip_links_by_prefix(text: str, prefix_pattern: re.Pattern) -> str:
+    """按 Markdown URL 边界移除链接 token。
+
+    Args:
+        text: 待清理文本。
+        prefix_pattern: 匹配到 URL 左括号为止的链接前缀正则。
+
+    Returns:
+        移除 URL 成功闭合链接后的文本；未闭合链接保持原样。
+    """
+    if not text:
+        return text
+    parts = []
+    cursor = 0
+    for match in prefix_pattern.finditer(text):
+        open_paren_index = match.end() - 1
+        parsed_url = extract_markdown_url(text, open_paren_index)
+        if parsed_url is None:
+            continue
+        _, end = parsed_url
+        parts.append(text[cursor:match.start()])
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def _strip_source_tracer_references(text: str) -> str:
+    """移除 source_tracer_result Markdown 引用。
+
+    Args:
+        text: 待清理文本。
+
+    Returns:
+        移除 source_tracer_result 引用后的文本。
+    """
+    return _strip_links_by_prefix(text, _SOURCE_TRACER_LINK_PREFIX_RE)
+
+
+def _strip_markdown_references(text: str) -> str:
+    """移除普通 Markdown 链接引用。
+
+    Args:
+        text: 待清理文本。
+
+    Returns:
+        移除普通 Markdown 链接后的文本。
+    """
+    return _strip_links_by_prefix(text, _MARKDOWN_LINK_PREFIX_RE)
+
+
 def _remove_md_references_from_chunk(data_item: Dict[str, Any]):
     """
     去除data_item中chunk字段的MD格式引用内容
@@ -131,10 +184,8 @@ def _remove_md_references_from_chunk(data_item: Dict[str, Any]):
     if not isinstance(chunk, str):
         return
 
-    # 使用正则表达式匹配并去除MD格式的引用 [标题](链接)
-    cleaned_chunk = re.sub(
-        r'\s*\[source_tracer_result\]\[.*?\]\(.*?\)', '', chunk)
-    cleaned_chunk = re.sub(r'\s*\[.*?\]\(.*?\)', '', cleaned_chunk)
+    cleaned_chunk = _strip_source_tracer_references(chunk)
+    cleaned_chunk = _strip_markdown_references(cleaned_chunk)
 
     # 去除可能的多余空格
     cleaned_chunk = cleaned_chunk.strip()
@@ -442,8 +493,7 @@ def insert_source_info(report: str, sentence: str, source_info: str) -> Tuple[bo
         return False, report
 
     # 清理句子中的可能存在的引用标记
-    cleaned_sentence = re.sub(
-        r'\s*\[source_tracer_result\]\[.*?\]\(.*?\)', '', sentence).strip()
+    cleaned_sentence = _strip_source_tracer_references(sentence).strip()
 
     cleaned_sentence = remove_trailing_spaces_and_punctuation(cleaned_sentence)
 

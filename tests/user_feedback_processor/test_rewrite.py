@@ -35,7 +35,7 @@ class TestCitationHelpers:
         assert "[checked_citation:2][[3]]" in stripped_text
         assert "[checked_citation:1][[2]]" not in stripped_text
 
-    def test_strip_citations_keeps_legacy_citation_format_when_trace_source_is_disabled(self):
+    def test_strip_citations_keeps_plain_citation_format_when_trace_source_is_disabled(self):
         report = "前缀这是要改写的段落[citation: 2]结束[citation: 3]尾部"
         start = report.index("这是要改写的段落")
         end = start + len("这是要改写的段落[citation: 2]结束")
@@ -162,7 +162,7 @@ class TestRewriteFlow:
         assert result["new_report"] == "改写后的文本后续内容"
 
     @pytest.mark.asyncio
-    async def test_synonym_rewrite_strips_legacy_citation_format_without_source_tracer_metadata(self, synonym_rewriter):
+    async def test_synonym_rewrite_strips_plain_citation_format_without_source_tracer_metadata(self, synonym_rewriter):
         report = "前缀需要改写[citation: 2]的段落尾部"
         selected = "需要改写[citation: 2]的段落"
         start = report.index("需要改写")
@@ -242,9 +242,9 @@ class TestRewriteFlow:
         selected = "需要扩写[checked_citation:0][[2]](https://b.com)的段落[checked_citation:1][[3]](https://c.com)内容"
         start = report.index("需要扩写")
         end = start + len(selected)
-        citation_token_2 = "[checked_citation:0][[2]](https://b.com)"
-        citation_token_3 = "[checked_citation:1][[3]](https://c.com)"
-        citation_token_4 = "[checked_citation:2][[4]](https://d.com)"
+        citation_marker_2 = "[checked_citation:0][[2]](https://b.com)"
+        citation_marker_3 = "[checked_citation:1][[3]](https://c.com)"
+        citation_marker_4 = "[checked_citation:2][[4]](https://d.com)"
 
         with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.apply_system_prompt", return_value=[{"role": "system", "content": "prompt"}]):
             with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.get_llm_instance", return_value=object()):
@@ -267,9 +267,9 @@ class TestRewriteFlow:
                         language="zh-CN",
                     )
 
-        assert citation_token_2 not in result["new_report"]
-        assert citation_token_3 not in result["new_report"]
-        assert citation_token_4 in result["new_report"]
+        assert citation_marker_2 not in result["new_report"]
+        assert citation_marker_3 not in result["new_report"]
+        assert citation_marker_4 in result["new_report"]
 
     @pytest.mark.asyncio
     async def test_synonym_rewrite_preserves_trailing_citation_offsets(self, synonym_rewriter):

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
 from collections import deque
 from pathlib import Path
 
@@ -87,3 +90,139 @@ def test_action_pool_add_and_sample_updates_json_snapshot(
 
     assert len(sampled) == 1
     assert (tmp_log_dir / "action_pool.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_action_pool_flush_snapshot_persists_latest_async_state(
+    tmp_log_dir: Path, base_action
+) -> None:
+    pool = ActionPool()
+    pool.log_dir = str(tmp_log_dir)
+    pool.add([base_action])
+
+    sampled = pool.sample(1)
+    assert len(sampled) == 1
+
+    result = Result(messages=[], new_states=[], found_answer=None, previous_action_id=sampled[0].id)
+    pool.record_completed(sampled[0], result)
+
+    await pool.flush_snapshot()
+
+    snapshot = json.loads((tmp_log_dir / "action_pool.json").read_text(encoding="utf-8"))
+    assert snapshot["pending"] == []
+    assert snapshot["running"] == []
+    assert len(snapshot["completed"]) == 1
+    assert snapshot["completed"][0]["id"] == sampled[0].id
+    assert snapshot["completed"][0]["has_result"] is True
+
+
+@pytest.mark.asyncio
+async def test_action_pool_flush_snapshot_handles_write_failure(
+    tmp_log_dir: Path, base_action, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pool = ActionPool()
+    pool.log_dir = str(tmp_log_dir)
+
+    emitted = False
+
+    def fail_write(snapshot: dict) -> None:
+        raise OSError("boom")
+
+    def mark_emitted(snapshot: dict) -> None:
+        nonlocal emitted
+        emitted = True
+
+    monkeypatch.setattr(pool, "_write_pool_json_sync", fail_write)
+    monkeypatch.setattr(pool, "_emit_pool_snapshot", mark_emitted)
+
+    caplog.set_level("ERROR")
+    pool.add([base_action])
+
+    await pool.flush_snapshot()
+
+    assert pool._snapshot_task is None
+    assert not emitted
+    assert not (tmp_log_dir / "action_pool.json").exists()
+    assert "failed: boom" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_action_pool_save_pool_json_coalesces_rapid_async_updates(
+    tmp_log_dir: Path, base_action, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = ActionPool()
+    pool.log_dir = str(tmp_log_dir)
+
+    snapshots: list[dict] = []
+    first_write_started = threading.Event()
+    release_first_write = threading.Event()
+
+    def capture_write(snapshot: dict) -> None:
+        snapshots.append(json.loads(json.dumps(snapshot)))
+        if len(snapshots) == 1:
+            first_write_started.set()
+            assert release_first_write.wait(timeout=1)
+
+    monkeypatch.setattr(pool, "_write_pool_json_sync", capture_write)
+    monkeypatch.setattr(pool, "_emit_pool_snapshot", lambda snapshot: None)
+
+    action_two = base_action.model_copy(update={"id": "action-2"})
+    action_three = base_action.model_copy(update={"id": "action-3"})
+
+    pool.add([base_action])
+    await asyncio.to_thread(first_write_started.wait, 1)
+
+    pool.add([action_two])
+    pool.add([action_three])
+    release_first_write.set()
+
+    await pool.flush_snapshot()
+
+    assert len(snapshots) == 2
+    assert [item["id"] for item in snapshots[-1]["pending"]] == [
+        base_action.id,
+        action_two.id,
+        action_three.id,
+    ]
+    assert pool._snapshot_task is None
+
+
+@pytest.mark.asyncio
+async def test_action_pool_flush_snapshot_supports_concurrent_waiters(
+    tmp_log_dir: Path, base_action, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = ActionPool()
+    pool.log_dir = str(tmp_log_dir)
+
+    snapshots: list[dict] = []
+    first_write_started = threading.Event()
+    release_first_write = threading.Event()
+
+    def capture_write(snapshot: dict) -> None:
+        snapshots.append(json.loads(json.dumps(snapshot)))
+        if len(snapshots) == 1:
+            first_write_started.set()
+            assert release_first_write.wait(timeout=1)
+
+    monkeypatch.setattr(pool, "_write_pool_json_sync", capture_write)
+    monkeypatch.setattr(pool, "_emit_pool_snapshot", lambda snapshot: None)
+
+    pool.add([base_action])
+    await asyncio.to_thread(first_write_started.wait, 1)
+
+    sampled = pool.sample(1)
+    result = Result(messages=[], new_states=[], found_answer=None, previous_action_id=sampled[0].id)
+    pool.record_completed(sampled[0], result)
+
+    waiters = [asyncio.create_task(pool.flush_snapshot()) for _ in range(3)]
+    await asyncio.sleep(0)
+    release_first_write.set()
+    await asyncio.gather(*waiters)
+
+    assert len(snapshots) == 2
+    assert snapshots[-1]["pending"] == []
+    assert snapshots[-1]["running"] == []
+    assert len(snapshots[-1]["completed"]) == 1
+    assert snapshots[-1]["completed"][0]["id"] == sampled[0].id
+    assert snapshots[-1]["completed"][0]["has_result"] is True
+    assert pool._snapshot_task is None

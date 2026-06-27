@@ -114,6 +114,20 @@ def test_extract_doc_score_prefers_scores_and_normalizes_legacy_fields():
     assert decimal_ten_point_score.relevance == 0.08
 
 
+def test_extract_doc_score_ignores_legacy_text_score_fields():
+    score = extract_doc_score({
+        "source_authority": "该篇文章的信息来源权威性和可信度得分：10",
+        "task_relevance": "该篇文章的内容与当前任务的相关性得分：10",
+        "information_richness": "该篇文章的信息丰富程度与可答性得分：10",
+        "data_density": "该篇文章的数据丰富和密集程度得分：10",
+    })
+
+    assert score.relevance == 0
+    assert score.answerability == 0
+    assert score.authority == 0
+    assert score.data_density == 0
+
+
 def test_prefilter_limits_to_topk_multiplier_and_preserves_step_coverage():
     docs = []
     for idx in range(80):

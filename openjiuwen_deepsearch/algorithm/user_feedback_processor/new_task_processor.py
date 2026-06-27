@@ -6,7 +6,7 @@ import logging
 import re
 from dataclasses import dataclass, replace
 
-from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_legacy_doc_infos_view
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_evaluation_documents
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import deduplicate_doc_infos
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.common import (
     UserFeedbackPromptInvoker,
@@ -1075,6 +1075,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
             "used_new_doc_count": len(evidence.incremental_doc_infos),
             "incremental_plan": evidence.incremental_plan,
             "incremental_doc_infos": evidence.incremental_doc_infos,
+            "source_trace_doc_infos": evidence.merged_doc_infos,
             "missing_aspects": evidence.assessment.missing_aspects,
             "edit_strategy": evidence.assessment.edit_strategy,
             "new_subsection_title": edit_result.new_subsection_title,
@@ -1259,9 +1260,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
                 "clean_section_text": assets.current_section_text,
                 "selected_text": feedback.get("selected_text", ""),
                 "user_instruction": feedback.get("user_instruction", ""),
-                # 中间过渡态：new_task_assessment 仍使用旧 doc_infos prompt 协议。
-                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
-                "historical_doc_infos": build_legacy_doc_infos_view(assets.historical_doc_infos),
+                "historical_doc_infos": build_evaluation_documents(assets.historical_doc_infos),
                 "supported_edit_strategies": [
                     NEW_TASK_MODIFY_EXISTING_SUBSECTION,
                     NEW_TASK_APPEND_NEW_SUBSECTION,
@@ -1468,9 +1467,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
                 "clean_section_text": target.clean_section_text,
                 "clean_selected_text": target.clean_selected_text,
                 "user_instruction": feedback.get("user_instruction", ""),
-                # 中间过渡态：new_task_rewrite_section 仍使用旧 doc_infos prompt 协议。
-                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
-                "doc_infos": build_legacy_doc_infos_view(doc_infos),
+                "doc_infos": build_evaluation_documents(doc_infos),
             },
             AgentLlmName.USER_FEEDBACK_PROCESSOR_NEW_TASK_REWRITE_SECTION.value,
         )
@@ -1509,9 +1506,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
                 "clean_selected_text": target.clean_selected_text,
                 "new_subsection_title": subsection_title,
                 "user_instruction": feedback.get("user_instruction", ""),
-                # 中间过渡态：new_task_rewrite_section 仍使用旧 doc_infos prompt 协议。
-                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
-                "doc_infos": build_legacy_doc_infos_view(doc_infos),
+                "doc_infos": build_evaluation_documents(doc_infos),
             },
             AgentLlmName.USER_FEEDBACK_PROCESSOR_NEW_TASK_REWRITE_SECTION.value,
         )

@@ -4,7 +4,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_legacy_doc_infos_view
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_evaluation_documents
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.common import (
     UserFeedbackPromptInvoker,
     resolve_model_context_collector as _resolve_model_context_collector,
@@ -92,6 +92,14 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
         """
         report_content = final_result.get("response_content", "") or ""
         rewrite_scope = feedback.get("rewrite_scope") or "selected_only"
+        logger.info(
+            "[SupplementarySearcher] supplementary_search started. rewrite_scope=%s "
+            "selected_start_offset=%s selected_end_offset=%s report_len=%s",
+            rewrite_scope,
+            feedback.get("start_offset"),
+            feedback.get("end_offset"),
+            len(report_content),
+        )
         if rewrite_scope == "selected_and_related":
             return await self._run_selected_and_related(
                 feedback=feedback,
@@ -126,6 +134,14 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
         """
         # 定位包含用户选区的最小章节范围
         section = locate_section(report_content, feedback["start_offset"], feedback["end_offset"])
+        logger.info(
+            "[SupplementarySearcher] selected_only flow started. section_start_offset=%s "
+            "section_end_offset=%s selected_start_offset=%s selected_end_offset=%s",
+            section.section_start_offset,
+            section.section_end_offset,
+            feedback["start_offset"],
+            feedback["end_offset"],
+        )
 
         # 剥离选区内的标记，避免将 checked_citation / inference 标记送入重写链路
         stripped_selection_report, _, _ = strip_markup_in_range(
@@ -189,6 +205,13 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
         if not LogManager.is_sensitive():
             logger.debug("[SupplementarySearcher] original_text: %s", original_sel)
             logger.debug("[SupplementarySearcher] rewritten_text: %s", rewritten_selected)
+        logger.info(
+            "[SupplementarySearcher] selected_only flow completed. doc_count=%s "
+            "rewritten_start_offset=%s rewritten_end_offset=%s",
+            len(collection.get("doc_infos", [])),
+            feedback["start_offset"],
+            rewritten_end_offset,
+        )
         return {
             "new_report": new_report,
             "original_text": original_sel,
@@ -201,6 +224,7 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
             "section_start_offset": section.section_start_offset,
             "section_end_offset": section.section_end_offset,
             "collector_summary": collection.get("info_summary", ""),
+            "source_trace_doc_infos": collection.get("doc_infos", []),
         }
 
     async def _run_selected_and_related(
@@ -223,6 +247,14 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
         """
         # 定位包含用户选区的最小章节范围
         section = locate_section(report_content, feedback["start_offset"], feedback["end_offset"])
+        logger.info(
+            "[SupplementarySearcher] selected_and_related flow started. section_start_offset=%s "
+            "section_end_offset=%s selected_start_offset=%s selected_end_offset=%s",
+            section.section_start_offset,
+            section.section_end_offset,
+            feedback["start_offset"],
+            feedback["end_offset"],
+        )
         # 剥离整个章节内的标记，避免将 checked_citation / inference 标记送入重写链路
         stripped_report, _, _ = strip_markup_in_range(
             report_content,
@@ -280,6 +312,13 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
         )
         rewritten_end_offset = section.section_start_offset + len(rewritten_section)
 
+        logger.info(
+            "[SupplementarySearcher] selected_and_related flow completed. doc_count=%s "
+            "rewritten_start_offset=%s rewritten_end_offset=%s",
+            len(collection.get("doc_infos", [])),
+            section.section_start_offset,
+            rewritten_end_offset,
+        )
         return {
             "new_report": new_report,
             "original_text": section.section_text,
@@ -292,6 +331,7 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
             "section_start_offset": section.section_start_offset,
             "section_end_offset": section.section_end_offset,
             "collector_summary": collection.get("info_summary", ""),
+            "source_trace_doc_infos": collection.get("doc_infos", []),
         }
 
     async def _build_research_task(
@@ -354,6 +394,11 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
 
         # 获取当前反馈交互的计数，用于生成唯一的计划ID
         feedback_interaction_count = session.get_global_state("search_context.feedback_interaction_count")
+        logger.info(
+            "[SupplementarySearcher] collection started. plan_id=%s language=%s",
+            feedback_interaction_count,
+            language,
+        )
         # 构建单步信息采集计划，包含一个INFO_COLLECTING类型的步骤
         plan = Plan(
             id=str(feedback_interaction_count),
@@ -389,6 +434,12 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
             session=session,
             context=context,
         )
+        logger.info(
+            "[SupplementarySearcher] collection completed. plan_id=%s doc_count=%s summary_len=%s",
+            feedback_interaction_count,
+            len(result.doc_infos or []),
+            len(result.info_summary or ""),
+        )
         # 返回采集结果，包含信息摘要和文档信息列表
         return {
             "info_summary": result.info_summary or "",
@@ -415,9 +466,7 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
                 "selected_text_clean": rewrite_context.selected_text_clean,
                 "section_text_clean": rewrite_context.section_text_clean,
                 "collector_summary": rewrite_context.collector_summary,
-                # 中间过渡态：补充搜索 rewrite prompt 仍使用旧 doc_infos 协议。
-                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
-                "doc_infos": build_legacy_doc_infos_view(rewrite_context.doc_infos),
+                "doc_infos": build_evaluation_documents(rewrite_context.doc_infos),
             },
             AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_ONLY.value,
         )
@@ -443,9 +492,7 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
                 "selected_text_clean": rewrite_context.selected_text_clean,
                 "section_text_clean": rewrite_context.section_text_clean,
                 "collector_summary": rewrite_context.collector_summary,
-                # 中间过渡态：补充搜索 rewrite prompt 仍使用旧 doc_infos 协议。
-                # 后续该 prompt 迁移到 evidence schema 后，需要删除该转换。
-                "doc_infos": build_legacy_doc_infos_view(rewrite_context.doc_infos),
+                "doc_infos": build_evaluation_documents(rewrite_context.doc_infos),
             },
             AgentLlmName.USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_REWRITE_SELECTED_AND_RELATED.value,
         )

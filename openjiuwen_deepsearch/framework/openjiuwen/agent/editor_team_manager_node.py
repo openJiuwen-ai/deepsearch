@@ -12,7 +12,7 @@ from openjiuwen.core.session.node import Session
 from openjiuwen.core.session.stream.base import BaseStreamMode, CustomSchema, OutputSchema
 from openjiuwen.core.workflow.components.flow.workflow_comp import SUB_WORKFLOW_COMPONENT
 
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
     build_editor_team_workflow
@@ -20,8 +20,14 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.de
     build_dependency_reasoning_workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.dependency_writing_team_nodes import \
     build_dependency_writing_workflow
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Section, Outline, Report, SubReport, \
-    SubReportContent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    Section,
+    Outline,
+    Report,
+    SectionLocalContract,
+    SubReport,
+    SubReportContent,
+)
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import StreamEvent, MessageType
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.debug_utils.node_debug import NodeType, add_debug_log_wrapper, NodeDebugData
@@ -36,6 +42,37 @@ class EditorTeamNode(BaseNode):
     def __init__(self):
         super().__init__()
         self.log_prefix = ""
+
+    @staticmethod
+    def dedupe_preserve_order(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in items:
+            value = (item or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result
+
+    @staticmethod
+    def _build_section_local_contract(section: Section) -> dict:
+        """基于 Outliner LLM 生成的 section_focus 和 focus_dimensions 构建章节局部合同。
+
+        当 LLM 未输出 section_focus 时，使用空默认值。
+        """
+        dedupe = EditorTeamNode.dedupe_preserve_order
+
+        focus = (section.section_focus or "").strip() or "section_specific_analysis"
+        allowed_dimensions = dedupe([d for d in (section.focus_dimensions or []) if d])
+        is_final_decision_section = (focus == "recommendation_and_ranking")
+
+        contract = SectionLocalContract(
+            section_focus=focus,
+            allowed_dimensions=allowed_dimensions,
+            is_final_decision_section=is_final_decision_section,
+        )
+        return contract.model_dump()
 
     def graph_invoker(self) -> bool:
         """图执行器"""
@@ -69,18 +106,18 @@ class EditorTeamNode(BaseNode):
         logger.info(f"{self.log_prefix} current_inputs: {'*' if LogManager.is_sensitive() else state}")
         current_outline = state.get("outline")
         if not current_outline:
-            msg = (
-                f"[{StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE.code}] "
-                f"{self.log_prefix} {StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE.errmsg}"
+            msg = format_exception_info(
+                StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE,
+                prefix=self.log_prefix,
             )
             self._handle_warning_exception_info(session, added_warning=msg, added_exception=msg)
             logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
             return dict(next_node=NodeId.END.value)
         sections = current_outline.sections
         if not sections:
-            msg = (
-                f"[{StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION.code}] "
-                f"{self.log_prefix} {StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION.errmsg}"
+            msg = format_exception_info(
+                StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION,
+                prefix=self.log_prefix,
             )
             self._handle_warning_exception_info(session, added_warning=msg, added_exception=msg)
             logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
@@ -140,9 +177,9 @@ class EditorTeamNode(BaseNode):
         if not current_report or not current_report.sub_reports or not any(
                 sub_report.content.sub_report_content_text.strip() for sub_report in current_report.sub_reports
         ):
-            error_msg = (
-                f"[{StatusCode.EDITORTEAM_MANAGER_EMPTY_SUB_REPORT.code}] "
-                f"{self.log_prefix} {StatusCode.EDITORTEAM_MANAGER_EMPTY_SUB_REPORT.errmsg}"
+            error_msg = format_exception_info(
+                StatusCode.EDITORTEAM_MANAGER_EMPTY_SUB_REPORT,
+                prefix=self.log_prefix,
             )
             warning_info += '\n' + error_msg
             exception_info += '\n' + error_msg
@@ -195,6 +232,7 @@ class EditorTeamNode(BaseNode):
             "session_id": state.get("session_id", ""),
             "report_type_policy": state.get("report_type_policy") or {},
             "research_intent": state.get("research_intent") or {},
+            "section_local_contract": self._build_section_local_contract(section),
         }
 
         return section_state
@@ -401,18 +439,18 @@ class DependencyEditorTeamNode(EditorTeamNode):
         logger.info(f"{self.log_prefix} current_inputs: {'*' if LogManager.is_sensitive() else state}")
         current_outline = state.get("outline")
         if not current_outline:
-            msg = (
-                f"[{StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE.code}] "
-                f"{self.log_prefix} {StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE.errmsg}"
+            msg = format_exception_info(
+                StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE,
+                prefix=self.log_prefix,
             )
             self._handle_warning_exception_info(session, added_warning=msg, added_exception=msg)
             logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
             return dict(next_node=NodeId.END.value)
         sections = current_outline.sections
         if not sections:
-            msg = (
-                f"[{StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION.code}] "
-                f"{self.log_prefix} {StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION.errmsg}"
+            msg = format_exception_info(
+                StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION,
+                prefix=self.log_prefix,
             )
             self._handle_warning_exception_info(session, added_warning=msg, added_exception=msg)
             logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
@@ -432,9 +470,11 @@ class DependencyEditorTeamNode(EditorTeamNode):
         execute_sequence = self.get_task_execute_sequence(current_outline)
         logger.info(f"[DependencyEditorTeamNode] execute sequence is {execute_sequence}")
         if not execute_sequence:
-            msg = (
-                f"[{StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION.code}] "
-                f"{self.log_prefix} Invalid dependency graph or empty execution sequence."
+            detail = "Invalid dependency graph or empty execution sequence."
+            msg = format_exception_info(
+                StatusCode.EDITORTEAM_MANAGER_MISSING_OUTLINE_SECTION,
+                detail,
+                prefix=self.log_prefix,
             )
             self._handle_warning_exception_info(session, added_warning=msg, added_exception=msg)
             logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
@@ -594,9 +634,9 @@ class DependencyEditorTeamNode(EditorTeamNode):
             for sub_report in (current_report.sub_reports or [])
         )
         if not current_report or not current_report.sub_reports or not has_any_content:
-            empty_msg = (
-                f"[{StatusCode.EDITORTEAM_MANAGER_EMPTY_SUB_REPORT.code}] "
-                f"{self.log_prefix} {StatusCode.EDITORTEAM_MANAGER_EMPTY_SUB_REPORT.errmsg}"
+            empty_msg = format_exception_info(
+                StatusCode.EDITORTEAM_MANAGER_EMPTY_SUB_REPORT,
+                prefix=self.log_prefix,
             )
             warning_info = (warning_info + "\n" + empty_msg).strip()
             exception_info = (exception_info + "\n" + empty_msg).strip()

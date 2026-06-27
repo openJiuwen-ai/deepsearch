@@ -200,12 +200,7 @@ def _score_source(doc_info: dict[str, Any]) -> dict[str, Any]:
     evaluation_scores = doc_info.get("evaluation_scores")
     if isinstance(evaluation_scores, dict):
         return evaluation_scores
-    return {
-        "authority": doc_info.get("source_authority"),
-        "relevance": doc_info.get("task_relevance"),
-        "answerability": doc_info.get("information_richness"),
-        "data_density": doc_info.get("data_density"),
-    }
+    return {}
 
 
 def extract_doc_score(
@@ -215,7 +210,7 @@ def extract_doc_score(
     """提取文档评分并计算综合分。
 
     Args:
-        doc_info: 候选文档信息，优先读取 scores，兼容 evaluation_scores 和旧字段。
+        doc_info: 候选文档信息，优先读取 scores，兼容 evaluation_scores。
         score_weights: 四维评分权重；为空时使用默认权重。
 
     Returns:

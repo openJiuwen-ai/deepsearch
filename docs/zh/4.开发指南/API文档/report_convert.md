@@ -2,7 +2,7 @@
 
 ## 接口说明
 
-`/reports/convert` 用于将 DeepSearch 工作流输出的 `final_result` 转换为离线导出包。
+`/reports/convert` 用于将 DeepSearch 工作流输出的 `final_result` 转换为报告导出包。
 
 在默认后端路由注册方式下，完整接口路径为 `/api/v1/agent/deepsearch/reports/convert`。
 
@@ -95,6 +95,12 @@ report_bundle/
 - HTML 导出时，优先通过 `mmdc` 离线渲染为 SVG 并内嵌到 HTML。
 - DOCX 导出时，优先通过 `mmdc` 离线渲染为 PNG，再通过 pandoc 转入 DOCX。
 - 如果当前环境缺少 `mmdc`，则不会中断整个导出流程，而是保留 Mermaid 源代码块。
+
+### 数学公式
+
+- HTML 导出会写入 MathJax 配置来渲染 LaTeX 公式，但 MathJax 运行时代码当前从 jsDelivr CDN 加载。
+- 在离线或内网部署中，如果无法访问该 CDN，HTML 公式可能不会渲染；需要部署侧提供可访问的替代运行时。
+- DOCX 导出会在导出阶段将规范化公式转换为 Word OMML，查看时不依赖 MathJax。
 
 ### 溯源推理图
 

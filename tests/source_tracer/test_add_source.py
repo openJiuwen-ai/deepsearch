@@ -227,6 +227,29 @@ class TestRemoveMdReferencesFromChunk:
 
         assert data_item["chunk"] == "这是一个测试句子 和"
 
+    def test_remove_md_references_from_chunk_handles_nested_parentheses_urls(self):
+        """清理 chunk 中的 Markdown 引用时应完整移除嵌套括号 URL。"""
+        data_item = {
+            "chunk": (
+                "这是一个测试句子 [source_tracer_result][测试](https://example.com/a_(b_(c))) "
+                "和 [普通](https://example.com/d_(e_(f)))"
+            )
+        }
+
+        _remove_md_references_from_chunk(data_item)
+
+        assert data_item["chunk"] == "这是一个测试句子 和"
+
+    def test_remove_md_references_from_chunk_consumes_prefixed_image_source_marker(self):
+        """清理 chunk 中前置图片标记的 source_tracer_result 时不应残留 ``!``。"""
+        data_item = {
+            "chunk": "这是一个测试句子 ![source_tracer_result][图](https://example.com/a_(b))"
+        }
+
+        _remove_md_references_from_chunk(data_item)
+
+        assert data_item["chunk"] == "这是一个测试句子"
+
     def test_remove_md_references_from_chunk_no_refs(self):
         """Test handling chunk without MD references."""
         data_item = {
@@ -452,6 +475,28 @@ class TestInsertSourceInfo:
 
         assert success is True
         assert "[source_tracer_result][测试](http://test.com)" in modified_report
+
+    def test_insert_source_info_cleans_nested_parentheses_urls_from_sentence(self):
+        """定位句子前应完整清理嵌套括号 URL 的 source_tracer_result 标记。"""
+        report = "这是一个测试句子。这是另一个句子。"
+        sentence = "这是一个测试句子 [source_tracer_result][测试](https://example.com/a_(b_(c)))"
+        source_info = "[source_tracer_result][新来源](https://source.com)"
+
+        success, modified_report = insert_source_info(report, sentence, source_info)
+
+        assert success is True
+        assert modified_report == f"这是一个测试句子{source_info}。这是另一个句子。"
+
+    def test_insert_source_info_cleans_prefixed_image_source_marker_inside_sentence(self):
+        """定位句子前应完整清理中间的前置图片 source_tracer_result 标记。"""
+        report = "前半后半。这是另一个句子。"
+        sentence = "前半![source_tracer_result][图](https://example.com/a_(b))后半"
+        source_info = "[source_tracer_result][新来源](https://source.com)"
+
+        success, modified_report = insert_source_info(report, sentence, source_info)
+
+        assert success is True
+        assert modified_report == f"前半后半{source_info}。这是另一个句子。"
 
     def test_insert_source_info_sentence_not_found(self):
         """Test handling sentence not found in report."""

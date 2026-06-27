@@ -80,6 +80,107 @@ Notes:
 - `common.log` is mostly DeepSearch; third-party libs typically log only `warning`/`error` to disk (not `debug`/`info`).
 - Very long lines may be truncated except for a few high-value outputs (citations, full reports, etc.).
 
+### How to tell whether report generation succeeded and locate failures
+
+When a workflow ends, the final output is written to `final_result` (see the [search_context reference](../4.Developer%20Guide/API%20Reference/search_context.md)). Start with **`exception_info`** and **`warning_info`**, then use **`conversation_id` / `thread_id`** in the logs to follow the full request.
+
+| Field | Meaning |
+|------|---------|
+| `exception_info` | Error information that makes the workflow fail or the result unusable. Non-empty usually means failure. |
+| `warning_info` | Non-fatal warnings, such as empty section collection or chart generation failure. A report may still be generated. |
+| `response_content` | Report body. It should not be empty on success, except for partial rewrite scenarios. |
+
+Decision priority: if `exception_info` is non-empty, treat the run as failed first. `warning_info` affects completeness assessment but does not change the success state by itself.
+
+Errors use this format: `[error_code]error description: detail`, where `detail` is usually the original exception `e` or business detail. See [Appendix](#7-appendix) for shared error codes.
+
+---
+
+#### (1) If report generation succeeded, how to find the report
+
+**① Check the API / SDK stream**
+
+- In the final `final_result` pushed by `EndNode`, `exception_info` is an empty string `""`.
+- The corresponding stream event is **`SUMMARY_RESPONSE`**. If `exception_info` is non-empty, the event is usually **`ERROR`**.
+- A framework-level **`ALL END`** marker usually follows.
+- `response_content` contains the Markdown report body.
+
+**② Check logs, starting with `common_warning.log`**
+
+1. Search by the task's **`conversation_id`** (the configured `thread_id`) to narrow the log range.
+2. `common_warning.log` should not contain an `ERROR` that blocks the main workflow. A few `WARN` entries, such as model retries or a single empty search result, usually do not prevent the final report. If an `ERROR` appears in logs, still use `final_result.exception_info` as the final failure signal, and use the log to locate the cause.
+3. In `common.log`, look for **`[EndNode] Start EndNode`** and **`Get final result`** with an empty `exception_info`.
+![Get final result](../../zh/5.FAQ/img.png)
+4. Main-path nodes should have completion logs in order, for example: `EntryNode` -> `OutlineNode` / `OutlineInteractionNode` -> `EditorTeamNode` -> `ReporterNode` -> `SourceTracerNode` -> `EndNode`. If provenance reasoning or user feedback is enabled, extra nodes may appear in between.
+
+**③ Warnings can still mean success**
+
+- If `warning_info` is non-empty and `exception_info` is empty, a report may have been generated, but some sections, charts, or collection steps may have issues. Evaluate completeness based on the warning content.
+- If the business requires "zero warnings", check that both `exception_info` and `warning_info` are empty.
+
+**④ Optional node debug logs**
+
+- After enabling `node_debug_enable`, check **`output/logs/common/node_debug_log/`** for node input/output snapshots. These are useful for inspecting outlines, section plans, and sub-reports.
+
+**⑤ Quick report lookup**
+
+- In **`common.log`**, filter by `conversation_id` / `thread_id`, then search for **`Get final result`**.
+- In the matching log entry, `final_result.response_content` is the final report body. Also confirm that `exception_info` is empty so partial content from a failed run is not mistaken for a complete report.
+
+---
+
+#### (2) If generation failed, how to locate the issue
+
+**① Confirm the failure signal**
+
+**Log side: check the final result**
+
+- In **`common.log`**, search for **`Get final result`** and check `final_result.exception_info`.
+- A non-empty `exception_info` means the workflow ended with an error. Even if `response_content` has content, do not treat it as a complete success.
+- If only `warning_info` is non-empty, the run usually completed with degradation and needs manual quality assessment.
+
+**API side: check return events / HTTP response**
+
+- `EndNode` or the framework layer pushes **`event: ERROR`**, and `content` usually contains `exception_info`.
+- If the workflow crashes outside the `run` call, the HTTP response may directly contain `{"exception_info": "..."}`.
+
+**② Use the error code to locate the module / node**
+
+- The leading **`[211800]`**-style value in `exception_info` is the error code. Use [status_code.py](https://gitcode.com/openJiuwen/deepsearch/blob/dev/openjiuwen_deepsearch/common/status_code.py) to locate the related module or node.
+- The text after the colon is the concrete reason, usually an exception message or business detail. Use it as a keyword for deeper log searches.
+
+Common error code ranges:
+
+| Error code range | Typical node / phase |
+|------------------|----------------------|
+| 211600 | `EntryNode` language routing / intent detection |
+| 211700-211702 | `GenerateQuestionsNode` / `FeedbackHandlerNode` HITL interaction |
+| 211800 | `OutlineNode` outline generation |
+| 211801 | Subgraph `PlanReasoningNode` task planning |
+| 211901 | Empty section information collection |
+| 212000 | Sub-report generation |
+| 212001 | Final report `ReporterNode` |
+| 212106 / 212300 | Source tracing / provenance reasoning |
+
+**③ Search logs by `conversation_id` / `thread_id`**
+
+1. Open **`common_warning.log`** and filter by `conversation_id` / `thread_id`.
+2. Search for **`ERROR`** and note the nearby node name, such as `[OutlineNode]`, `[ReporterNode]`, `[EditorTeamNode]`, `plan_reasoning`, or `sub_reporter`.
+3. If `exception_info` contains a concrete exception message, search the same keyword in **`common.log`** to find the full stack and surrounding context.
+4. Use **3.3 Which nodes matter** to decide whether the issue is local to one section or breaks the full report.
+
+**④ Drill down through subgraph / main graph**
+
+- A subgraph error for a single section is first written to `section_context.exception_infos`, then summarized by `EditorTeamNode` into the main graph's `final_result.exception_info`.
+- If logs include section-level `section_idx` / `plan_idx`, continue tracing the corresponding Planner, InfoCollector, and SubReporter logs.
+
+**⑤ Recommended order**
+
+```
+final_result.exception_info  ->  error code table  ->  common_warning.log filtered by thread_id
+->  node name  ->  common.log exception details  ->  optional node_debug_log intermediate outputs
+```
+
 ## 3. Model errors
 
 ### 3.1 Call failures / timeouts

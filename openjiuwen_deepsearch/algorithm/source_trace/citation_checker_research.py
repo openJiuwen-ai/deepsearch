@@ -5,10 +5,12 @@ import json
 import logging
 import re
 from collections import OrderedDict
+from dataclasses import dataclass
 
 from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import CitationVerifyResearch
 from openjiuwen_deepsearch.common.exception import CustomIndexException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.utils.common_utils.markdown_url_utils import extract_markdown_url
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.common_utils.url_utils import (
     are_similar_urls,
@@ -26,16 +28,68 @@ def _normalize_citation_title(title: str) -> str:
     return " ".join(str(title or "").split())
 
 
+@dataclass(frozen=True)
+class SourceTracerCitationMarker:
+    """source_tracer_result 引用标记。
+
+    Args:
+        raw_start: 标记在原始文本中的起始偏移。
+        raw_end: 标记在原始文本中的结束偏移。
+        image_marker: 图片标记；图片引用为 ``!``，文本引用为 None。
+        title: Markdown 链接标题。
+        paren_url: ``(url)`` 格式 URL。
+    """
+
+    raw_start: int
+    raw_end: int
+    image_marker: str | None
+    title: str
+    paren_url: str
+    string: str = ""
+
+
 class CitationCheckerResearch:
     def __init__(self, llm_model):
         self.citation_verifier = CitationVerifyResearch(llm_model)
         self.invalid_citation_counts = {}
-        # 匹配 [source_tracer_result][title](url) 或 [source_tracer_result][title]<url> 格式的引用
-        # 支持title中包含嵌套的[]或()，url中包含嵌套的()、<>或[]
+        # 匹配 [source_tracer_result][title](url) 格式的引用；URL 由栈扫描器解析，避免嵌套括号被截断。
         self.citation_regex = re.compile(
-            r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))',
+            r'(?P<prefix_image>!)?\[source_tracer_result\](?P<suffix_image>!)?\[(?P<title>.*?)\]\(',
             re.VERBOSE | re.DOTALL,
         )
+
+    @staticmethod
+    def _iter_source_tracer_citation_markers(
+        text: str, prefix_pattern: re.Pattern
+    ) -> list[SourceTracerCitationMarker]:
+        """解析文本中的 source_tracer_result 引用。
+
+        Args:
+            text: 待解析文本。
+            prefix_pattern: 匹配到 URL 起始符前缀的正则对象。
+
+        Returns:
+            URL 成功闭合的引用标记列表。
+        """
+        markers = []
+        for match in prefix_pattern.finditer(text or ""):
+            open_paren_index = match.end() - 1
+            parsed_url = extract_markdown_url(text, open_paren_index)
+            if parsed_url is None:
+                continue
+            url, end = parsed_url
+
+            markers.append(
+                SourceTracerCitationMarker(
+                    raw_start=match.start(),
+                    raw_end=end,
+                    image_marker="!" if match.group("prefix_image") or match.group("suffix_image") else None,
+                    title=match.group("title"),
+                    paren_url=url,
+                    string=text,
+                )
+            )
+        return markers
 
     @staticmethod
     def organize_citations_for_frontend(datas):
@@ -103,13 +157,13 @@ class CitationCheckerResearch:
         last_pos = 0
         for index in range(cur_para_data_index, end_data_index):
             info = datas[index]
-            match = info.get("match", None)
-            if match is None:
-                logger.warning(f"[CITATION CHECKER]: the {index + 1}-th citation in the paragraph has no match.")
+            marker = info.get("citation_marker", None)
+            if marker is None:
+                logger.warning(f"[CITATION CHECKER]: the {index + 1}-th citation in the paragraph has no marker.")
                 continue
             # 添加前面的非引用内容
-            if match.start() > last_pos:
-                new_parts.append(para[last_pos:match.start()])
+            if marker.raw_start > last_pos:
+                new_parts.append(para[last_pos:marker.raw_start])
             if info.get("valid", False):
                 temp_str = f'{"!" if info.get("is_image", False) else ""}'
                 # 对标题进行Markdown转义
@@ -117,8 +171,9 @@ class CitationCheckerResearch:
                 safe_url = info.get("url", "")
                 temp_str += f'[source_tracer_result][{safe_title}]({safe_url})'
                 new_parts.append(temp_str)
-            last_pos = match.end()
-            datas[index]["match"] = (match.start(), match.end())
+            last_pos = marker.raw_end
+            datas[index]["citation_range"] = (marker.raw_start, marker.raw_end)
+            datas[index].pop("citation_marker", None)
 
         # 添加最后一段非引用内容
         if last_pos < len(para):
@@ -227,35 +282,36 @@ class CitationCheckerResearch:
 
         return url, True
 
-    def _text_between_matches_only_contains_source_citations(self, old_match, new_match):
+    def _text_between_markers_only_contains_source_citations(
+        self,
+        old_marker: SourceTracerCitationMarker,
+        new_marker: SourceTracerCitationMarker,
+    ):
         """
         判断两个引用之间的文本是否仅由其他 `[source_tracer_result]` 引用及空白构成，从而补足非严格连续的相邻判定。
 
         Args:
-            old_match (re.Match): 之前出现的引用匹配结果
-            new_match (re.Match): 当前正在处理的引用匹配结果
+            old_marker: 之前出现的引用标记。
+            new_marker: 当前正在处理的引用标记。
 
         Returns:
-            bool: 如果两个 match 位于同一字符串中，且之间只包含 `source_tracer_result` 引用（或空白），返回 True；
+            bool: 如果两个标记位于同一字符串中，且之间只包含 `source_tracer_result` 引用（或空白），返回 True；
                   否则返回 False。
         """
-        old_string = getattr(old_match, "string", None)
-        new_string = getattr(new_match, "string", None)
+        old_string = old_marker.string
+        new_string = new_marker.string
         if not old_string or old_string is not new_string:
             return False
-        between_text = old_string[old_match.end():new_match.start()]
+        between_text = old_string[old_marker.raw_end:new_marker.raw_start]
 
         pointer = 0
         found = False
         text_len = len(between_text)
-        while pointer < text_len:
-            match = self.citation_regex.search(between_text, pointer)
-            if not match:
-                break
-            if match.start() > pointer and between_text[pointer:match.start()].strip():
+        for marker in self._iter_source_tracer_citation_markers(between_text, self.citation_regex):
+            if marker.raw_start > pointer and between_text[pointer:marker.raw_start].strip():
                 return False
             found = True
-            pointer = match.end()
+            pointer = marker.raw_end
 
         if pointer < text_len and between_text[pointer:].strip():
             return False
@@ -280,19 +336,19 @@ class CitationCheckerResearch:
         del_indices = []
         current_data = datas[citation_index]
         if url in processed_citation_urls:
-            # 获取新旧引用的match对象
+            # 获取新旧引用标记
             old_data_index = processed_citation_urls[url]['data_index']
-            old_match = datas[old_data_index].get('match')
-            new_match = current_data.get('match')
+            old_marker = datas[old_data_index].get('citation_marker')
+            new_marker = current_data.get('citation_marker')
 
-            # 检查match是否存在
-            if old_match is not None and new_match is not None:
-                # 判断新data的start是否是旧data的end（即是否相邻，相差在2以内都认为是相邻,避免引用之间存在空格）
-                is_adjacent = abs(new_match.start() - old_match.end()) <= 2
+            # 检查引用标记是否存在
+            if old_marker is not None and new_marker is not None:
+                # 判断新data的起点是否接近旧data的终点（相差在2以内都认为是相邻，避免引用之间存在空格）。
+                is_adjacent = abs(new_marker.raw_start - old_marker.raw_end) <= 2
                 if not is_adjacent:
                     # 判断两个相同引用之间是否只是其他的引用
-                    is_adjacent = self._text_between_matches_only_contains_source_citations(
-                        old_match, new_match)
+                    is_adjacent = self._text_between_markers_only_contains_source_citations(
+                        old_marker, new_marker)
 
                 if is_adjacent:
                     # 相邻则保留score更高的引用
@@ -330,12 +386,18 @@ class CitationCheckerResearch:
 
         return del_indices
 
-    def validate_and_process_single_citation(self, match, datas, processed_citation_urls, data_index):
+    def validate_and_process_single_citation(
+        self,
+        marker: SourceTracerCitationMarker,
+        datas,
+        processed_citation_urls,
+        data_index,
+    ):
         """
         处理单个引用，包括提取URL、验证有效性、检查匹配度和处理重复引用
 
         Args:
-            match (re.Match): 正则表达式匹配到的引用对象
+            marker: 解析出的 source_tracer_result 引用标记。
             datas (list): 引用数据列表，每个元素是包含引用信息的字典
             processed_citation_urls (OrderedDict): 已处理的URL集合，用于检测和处理重复引用
             data_index (int): 当前引用在datas列表中的索引位置
@@ -344,8 +406,8 @@ class CitationCheckerResearch:
             del_indices (list): 需要删除的无效引用索引列表
         """
         # 提取url
-        is_image = match.group(1) is not None
-        url = match.group(3) or match.group(4)  # group(3)是()格式，group(4)是<>格式
+        is_image = marker.image_marker is not None
+        url = marker.paren_url
         url = url.strip()
 
         # 检查data_index是否有效
@@ -361,7 +423,7 @@ class CitationCheckerResearch:
             logger.info(logger_msg)
 
         datas[data_index]['is_image'] = is_image
-        datas[data_index]['match'] = match
+        datas[data_index]['citation_marker'] = marker
 
         # 如果当前引用无效，直接跳过
         if not current_data['valid']:
@@ -394,8 +456,8 @@ class CitationCheckerResearch:
                 - del_indices (list): 更新后的需要删除的无效引用索引列表
         """
         # 查找所有引用
-        matches = list(self.citation_regex.finditer(para))
-        if not matches:
+        markers = self._iter_source_tracer_citation_markers(para, self.citation_regex)
+        if not markers:
             return para, processing_data_index, []
 
         # 处理引用
@@ -403,19 +465,19 @@ class CitationCheckerResearch:
         cur_para_data_index = processing_data_index  # 记录当前段落开始时的data_index
 
         del_indices = []
-        for match in matches:
+        for marker in markers:
             # 处理单个引用
             single_match_del_indices = self.validate_and_process_single_citation(
-                match, datas, processed_citation_urls, processing_data_index)
+                marker, datas, processed_citation_urls, processing_data_index)
             del_indices.extend(single_match_del_indices)
             processing_data_index += 1
 
         # 验证引用数量匹配
-        if len(matches) != processing_data_index - cur_para_data_index:
+        if len(markers) != processing_data_index - cur_para_data_index:
             error_msg = "[CITATION CHECKER]: the length of matches is error."
             error_msg += "Not equal to count of citation in the para: \n"
             if not LogManager.is_sensitive():
-                error_msg += f"matches: {matches} \n para: {para}"
+                error_msg += f"markers: {markers} \n para: {para}"
             raise CustomValueException(StatusCode.CITATION_CHECKER_DATA_LEN_ERROR.code,
                                        StatusCode.CITATION_CHECKER_DATA_LEN_ERROR.errmsg.
                                        format(e=error_msg))
@@ -506,14 +568,19 @@ class CitationCheckerResearch:
     def normalize_source_tracer_titles(self, markdown_text):
         """Normalize titles in existing source tracer placeholders before paragraph splitting."""
 
-        def replace_title(match):
-            image_marker = "!" if match.group(1) else ""
-            title = _normalize_citation_title(match.group(2))
-            if match.group(3) is not None:
-                return f"[source_tracer_result]{image_marker}[{title}]<{match.group(3)}>"
-            return f"[source_tracer_result]{image_marker}[{title}]({match.group(4)})"
+        def replace_title(marker):
+            image_marker = "!" if marker.image_marker else ""
+            title = _normalize_citation_title(marker.title)
+            return f"[source_tracer_result]{image_marker}[{title}]({marker.paren_url})"
 
-        return self.citation_regex.sub(replace_title, markdown_text)
+        parts = []
+        cursor = 0
+        for marker in self._iter_source_tracer_citation_markers(markdown_text, self.citation_regex):
+            parts.append(markdown_text[cursor:marker.raw_start])
+            parts.append(replace_title(marker))
+            cursor = marker.raw_end
+        parts.append(markdown_text[cursor:])
+        return "".join(parts)
 
     @staticmethod
     def normalize_datas_titles(datas):
@@ -522,7 +589,7 @@ class CitationCheckerResearch:
             if isinstance(data, dict) and "title" in data:
                 data["title"] = _normalize_citation_title(data.get("title", ""))
 
-    def replace_inline_citations(self, markdown_text, datas, inline_ref_pattern):
+    def replace_inline_citations(self, markdown_text, datas):
         """将行内溯源标记替换为带稳定 id 的 checked citation。
 
         该步骤会把 ``[source_tracer_result]`` 形式的内联引用转换为前端可识别的
@@ -533,7 +600,6 @@ class CitationCheckerResearch:
         Args:
             markdown_text: 包含行内引用的 Markdown 文本。
             datas: 引用数据列表，每项都是引用信息字典。
-            inline_ref_pattern: 用于匹配行内引用的正则对象。
 
         Returns:
             tuple[str, OrderedDict, list]: 转换后的正文、参考文献映射和更新后的引用数据。
@@ -546,29 +612,22 @@ class CitationCheckerResearch:
         new_parts = []
         last_pos = 0
 
-        for match in inline_ref_pattern.finditer(markdown_text):
-            is_image = match.group(1) is not None
-            title = match.group(2)
-            url = match.group(3) or match.group(4)
-
-            if url is None:
-                # 无法识别 URL，原样保留该匹配段
-                before_text = markdown_text[last_pos:match.end()]
-                new_parts.append(before_text)
-                last_pos = match.end()
-                continue
+        for marker in self._iter_source_tracer_citation_markers(markdown_text, self.citation_regex):
+            is_image = marker.image_marker is not None
+            title = marker.title
+            url = marker.paren_url
 
             url = url.strip()
             cur_citation_index += 1
 
             # 追加匹配之前的非引用文本
-            before_text = markdown_text[last_pos:match.start()]
+            before_text = markdown_text[last_pos:marker.raw_start]
             new_parts.append(before_text)
 
             url, is_valid = self.validate_url_match(url, datas, cur_citation_index)
             if not is_valid:
                 # 无效引用，替换为空字符串
-                last_pos = match.end()
+                last_pos = marker.raw_end
                 continue
 
             if is_image:
@@ -584,7 +643,7 @@ class CitationCheckerResearch:
                 datas[cur_citation_index]["id"] = next_citation_id
                 next_citation_id += 1
 
-            last_pos = match.end()
+            last_pos = marker.raw_end
 
         # 追加剩余文本
         new_parts.append(markdown_text[last_pos:])
@@ -616,12 +675,8 @@ class CitationCheckerResearch:
         # 预处理文本和引用数据
         markdown_text, datas = self.preprocess_text_and_citations(text, datas)
 
-        # 匹配行内引用 [title]<url> 的正则表达式, 两种匹配模式防遗漏：[source_tracer_result][title]<url>, [source_tracer_result][title](url)
-        inline_ref_pattern = self.citation_regex
-
         # 执行引用替换
-        transformed_text, references, datas = self.replace_inline_citations(
-            markdown_text, datas, inline_ref_pattern)
+        transformed_text, references, datas = self.replace_inline_citations(markdown_text, datas)
         logger.info('[CITATION CHECKER]: replace inline citations success.')
 
         # 构建参考文献章节

@@ -64,6 +64,13 @@ class SynonymRewriter:
         start_offset = feedback["start_offset"]
         end_offset = feedback["end_offset"]
         user_instruction = feedback.get("user_instruction", "")
+        logger.info(
+            "[SynonymRewriter] synonym_rewrite started. action=%s start_offset=%s end_offset=%s report_len=%s",
+            action,
+            start_offset,
+            end_offset,
+            len(report_content),
+        )
 
         stripped_text, _, _ = strip_markup_in_range(report_content, start_offset, end_offset)
 

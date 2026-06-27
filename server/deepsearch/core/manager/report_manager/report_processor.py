@@ -2,7 +2,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 import base64
 import logging
-import re
 import time
 from abc import ABC, abstractmethod
 from tempfile import TemporaryDirectory
@@ -13,9 +12,14 @@ import docx
 import markdown2
 from docx.document import Document
 
-from server.deepsearch.core.manager.report_manager.docx_offline import convert_md_to_docx
-from server.deepsearch.core.manager.report_manager.html_offline import convert_md_to_html
-from server.deepsearch.core.manager.report_manager.conversion_utils import postprocess_html
+from server.deepsearch.core.manager.report_manager.docx_export import convert_md_to_docx
+from server.deepsearch.core.manager.report_manager.html_export import convert_md_to_html
+from server.deepsearch.core.manager.report_manager.conversion_utils import (
+    postprocess_html,
+    preprocess_markdown_text,
+    protect_math_spans,
+    restore_math_spans,
+)
 from server.deepsearch.core.manager.report_manager.report_bundle import build_report_bundle, pack_bundle_to_base64
 from server.deepsearch.core.manager.report_manager.word_utils import set_global_styles, html_to_doc
 
@@ -145,7 +149,11 @@ class ReportHtml(DefaultReportFormatProcessor):
         <script>
         window.MathJax = {
             tex: {
-                inlineMath: [['$', '$'], ['\\\\(', '\\\\)']]
+                inlineMath: [['\\\\(', '\\\\)']],
+                displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+                macros: {
+                    bm: ['{\\\\boldsymbol{#1}}', 1]
+                }
             }
         };
         </script>
@@ -160,31 +168,15 @@ class ReportHtml(DefaultReportFormatProcessor):
 
         return html_body
 
-    @staticmethod
-    def _fix_markdown_latex(md_content):
-        # 匹配行内公式 $...$ 和块级公式 $$...$$
-        pattern = re.compile(r'(\${1,2})(.+?)\1', re.DOTALL)
-
-        def fix_formula(match):
-            delimiter = match.group(1)
-            content = match.group(2)
-
-            # 修复 ^x → ^{x}，但跳过 ^{x}
-            content = re.sub(r'\^([A-Za-z0-9*])', r'^{\1}', content)
-
-            # 转义*，但跳过已经转义的 \*
-            content = re.sub(r'(?<!\\)\*', r'\\*', content)
-            return f"{delimiter}{content}{delimiter}"
-
-        return pattern.sub(fix_formula, md_content)
-
     @classmethod
     def convert_from_markdown(cls, md_report_content: str) -> str:
-        md_report_content = cls._fix_markdown_latex(md_report_content)
+        md_report_content = preprocess_markdown_text(md_report_content)
+        md_report_content, math_spans = protect_math_spans(md_report_content)
         html_body = markdown2.markdown(
             md_report_content,
             extras=["tables", "fenced-code-blocks", "code-friendly"]
         )
+        html_body = restore_math_spans(html_body, math_spans)
         html_body = cls._enable_html_latex(html_body)
         html_body = postprocess_html(html_body)
 

@@ -4,7 +4,7 @@
 import logging
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
@@ -35,8 +35,7 @@ async def query_interpreter(current_inputs: dict) -> dict:
             logger.debug("[query_interpreter] get algorithm output.")
         return dict(result=response.get("content"))
     except Exception as e:
-        err_msg = (f"[{StatusCode.INTERPRETATION_GENERATE_ERROR.code}]"
-                   f"{StatusCode.INTERPRETATION_GENERATE_ERROR.errmsg}: {e}")
+        err_msg = format_exception_info(StatusCode.INTERPRETATION_GENERATE_ERROR, e)
         if LogManager.is_sensitive():
             logger.error(f"[{StatusCode.INTERPRETATION_GENERATE_ERROR.code}]"
                          f"{StatusCode.INTERPRETATION_GENERATE_ERROR.errmsg}")

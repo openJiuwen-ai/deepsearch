@@ -28,6 +28,7 @@ async def test_supplementary_search_selected_only_replaces_only_span_and_preserv
         ]
     }
     original_infer_messages = [{"id": 3, "content": "保留推理"}]
+    collection_doc_infos = [{"title": "补搜来源", "url": "https://new.com", "original_content": "补搜正文"}]
 
     searcher = SupplementarySearcher(llm_model_name="mock")
     with patch.object(
@@ -39,7 +40,7 @@ async def test_supplementary_search_selected_only_replaces_only_span_and_preserv
         searcher,
         "_run_collection",
         new_callable=AsyncMock,
-        return_value={"info_summary": "补充摘要"},
+        return_value={"info_summary": "补充摘要", "doc_infos": collection_doc_infos},
     ), patch.object(
         searcher,
         "_rewrite_selected_only",
@@ -65,6 +66,7 @@ async def test_supplementary_search_selected_only_replaces_only_span_and_preserv
     mock_rewrite_only.assert_awaited_once()
     assert result["new_report"] == "# 标题\n\n## 第二章\n前缀选中内容已补充后缀\n"
     assert result["rewritten_text"] == "选中内容已补充"
+    assert result["source_trace_doc_infos"] == collection_doc_infos
 
 
 @pytest.mark.asyncio
@@ -87,6 +89,7 @@ async def test_supplementary_search_selected_and_related_preserves_metadata():
         ]
     }
     original_infer_messages = []
+    collection_doc_infos = [{"title": "补搜来源", "url": "https://new.com", "original_content": "补搜正文"}]
 
     searcher = SupplementarySearcher(llm_model_name="mock")
     with patch.object(
@@ -98,7 +101,7 @@ async def test_supplementary_search_selected_and_related_preserves_metadata():
         searcher,
         "_run_collection",
         new_callable=AsyncMock,
-        return_value={"info_summary": "补充摘要"},
+        return_value={"info_summary": "补充摘要", "doc_infos": collection_doc_infos},
     ), patch.object(
         searcher,
         "_rewrite_selected_and_related",
@@ -125,6 +128,7 @@ async def test_supplementary_search_selected_and_related_preserves_metadata():
     mock_rewrite_related.assert_awaited_once()
     assert result["new_report"] == "# 标题\n\n## 第二章\n新章节内容"
     assert result["rewritten_text"] == "## 第二章\n新章节内容"
+    assert result["source_trace_doc_infos"] == collection_doc_infos
 
 
 @pytest.mark.asyncio
@@ -277,27 +281,19 @@ async def test_rewrite_methods_accept_named_context_and_forward_prompt_vars(meth
         result = await getattr(searcher, method_name)(rewrite_context)
 
     assert result == "改写结果"
-    mock_invoke_prompt.assert_awaited_once_with(
-        prompt_name,
-        {
-            "language": "zh-CN",
-            "user_instruction": "补充数据",
-            "selected_text_clean": "选中文本",
-            "section_text_clean": "章节文本",
-            "collector_summary": "摘要",
-            "doc_infos": [
-                {
-                    "doc_time": "2025-05",
-                    "source_authority": "",
-                    "task_relevance": "",
-                    "original_content": "原文",
-                    "url": "https://example.com",
-                    "information_richness": "",
-                    "data_density": "",
-                    "title": "doc",
-                    "query": "",
-                }
-            ],
-        },
-        agent_name,
-    )
+    mock_invoke_prompt.assert_awaited_once()
+    prompt_args = mock_invoke_prompt.await_args.args
+    assert prompt_args[0] == prompt_name
+    assert prompt_args[2] == agent_name
+    prompt_vars = prompt_args[1]
+    assert prompt_vars["language"] == "zh-CN"
+    assert prompt_vars["doc_infos"][0]["publish_time"] == "2025-05"
+    assert prompt_vars["doc_infos"][0]["url"] == "https://example.com"
+    assert prompt_vars["doc_infos"][0]["query"] == ""
+    assert prompt_vars["doc_infos"][0]["scores"] == {"authority": 8}
+    assert prompt_vars["doc_infos"][0]["key_passages"] == ["关键段落"]
+    assert "original_content" not in prompt_vars["doc_infos"][0]
+    assert "source_authority" not in prompt_vars["doc_infos"][0]
+    assert "task_relevance" not in prompt_vars["doc_infos"][0]
+    assert "information_richness" not in prompt_vars["doc_infos"][0]
+    assert "data_density" not in prompt_vars["doc_infos"][0]

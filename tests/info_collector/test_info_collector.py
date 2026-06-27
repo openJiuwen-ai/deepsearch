@@ -634,16 +634,14 @@ class TestInfoCollectorNode:
         assert result[0]["scores"]["authority"] == 0.8
         assert result[0]["scores"]["relevance"] == 0.9
         assert result[0]["scores"]["answerability"] == 0.7
-        assert "source_authority" in result[0]
+        assert "source_authority" not in result[0]
         assert "_legacy_compatibility_fields" not in result[0]
-        assert "task_relevance" in result[0]
-        assert "information_richness" in result[0]
+        assert "task_relevance" not in result[0]
+        assert "information_richness" not in result[0]
+        assert "data_density" not in result[0]
         assert "doc_time" in result[0]
 
         # 验证分数被正确格式化
-        assert "0.8" in result[0]["source_authority"]
-        assert "0.9" in result[0]["task_relevance"]
-        assert "0.7" in result[0]["information_richness"]
 
     def test_process_post_process_result_prefers_publish_time(self, info_collector_node):
         """evaluator 同时返回 publish_time 和 doc_time 时应优先使用规范字段。"""

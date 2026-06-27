@@ -4,12 +4,15 @@
 import asyncio
 import json
 import logging
-from typing import Callable, Optional, Any
+from typing import Callable, Optional
 from dataclasses import dataclass
 
 import re
 import difflib
-from urllib.parse import urlparse
+from openjiuwen_deepsearch.algorithm.source_trace.domain_source_mapping import lookup_source, save_mapping
+from openjiuwen_deepsearch.algorithm.source_trace.source_match_algo import classify_and_match
+from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
+from openjiuwen_deepsearch.algorithm.source_trace.domain_source_mapping import _extract_registered_domain
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.exception import CustomValueException
@@ -315,13 +318,13 @@ class CitationVerifyResearch:
         chart_title_pattern = r'<div\s+style="text-align:\s*center;">'
         return bool(re.search(chart_title_pattern, chunk))
 
-    def prepare_handle_data(self) -> tuple:
+    async def prepare_handle_data(self) -> tuple:
         """预处理引用数据
-        过滤有效引用，提取域名信息，构建适合后续处理的数据结构
+        过滤有效引用，提取域名信息，查询映射表，进行匹配分类标记，构建适合后续处理的数据结构
 
         Returns:
             tuple: (handle_datas, handle_index)
-                - handle_datas: 预处理后的数据列表，每个元素包含domain、citation_content、fact、is_chart字段
+                - handle_datas: 预处理后的数据列表，每个元素包含domain、citation_content、fact、is_chart及内部标记字段
                 - handle_index: 原始数据索引列表，用于后续结果映射
         """
         handle_datas = []
@@ -343,17 +346,45 @@ class CitationVerifyResearch:
                         f"chunk: {chunk}"
                     )
             
+            # 检查vlm图表标记
+            is_vlm_chart = data.get("is_vlm_chart", False)
+            
             handle_index.append(index)
             url = data.get("url", "")
             if url.startswith("http"):  # 仅处理网页引用
-                domain = urlparse(url).netloc
+                domain = extract_domain_from_url(url)
             else:
                 domain = ""
+            
+            # 查询域名→来源映射表
+            source_name, was_cached = await lookup_source(domain)
+            
+            citation_content = data.get("content", "")
+            
+            # 确保 registered_domain 使用提取后的注册域名，而非原始域名
+            # 原始 domain 可能是 news.example.co.uk，但映射表的 key 是 example.co.uk
+            registered_domain = _extract_registered_domain(domain) or domain
+            
+            # 匹配分类标记：图表引用走独立路径，跳过算法匹配
+            if is_chart or is_vlm_chart:
+                match_type = "chart"
+                algo_marked_citation_content = []
+                algo_score = 0.0
+            else:
+                match_type, algo_marked_citation_content, algo_score = (
+                    classify_and_match(citation_content, chunk)
+                )
+            
             handle_datas.append(
                 {"domain": domain,
-                 "citation_content": data.get("content", ""),
+                 "citation_content": citation_content,
                  "fact": chunk,
-                 "is_chart": is_chart}
+                 "domain_resolved": was_cached,
+                 "resolved_source": source_name,
+                 "registered_domain": registered_domain,
+                 "match_type": match_type,
+                 "algo_marked_citation_content": algo_marked_citation_content,
+                 "algo_score": algo_score}
             )
         
         return handle_datas, handle_index
@@ -539,7 +570,7 @@ class CitationVerifyResearch:
                                        format(e=error_msg))
 
         for idx, ordered_result in zip(handle_index, ordered_results):
-            is_chart = handle_datas[idx].get("is_chart", False)
+            is_chart = handle_datas[idx].get("is_chart", False) or self.datas[idx].get("is_chart", False)
             
             # 图表数据处理
             if is_chart:
@@ -595,30 +626,142 @@ class CitationVerifyResearch:
     async def get_source_date_mark_score(self) -> None:
         """获取引用数据的详细信息
 
-        批量获取引用数据的来源、日期、标记的引用内容和置信度分数
+        批量获取引用数据的来源、日期、标记的引用内容和置信度分数。
+        实现前置分流逻辑：exact match + domain resolved → 算法快速路径；
+        其他 → LLM 路径。
 
         Returns:
             None
         """
         logger.info("[CITATION VERIFY]: get source, date, mark citation content and score of url.")
 
-        handle_datas, handle_index = self.prepare_handle_data()
+        handle_datas, handle_index = await self.prepare_handle_data()
         if not handle_datas:
             return
         logger.info("[CITATION VERIFY]: prepare handle data success.")
 
-        ordered_results = await self.process_batches_with_concurrency(
-            data=handle_datas,
-            batch_size=self.verify_batch_size,
-            process_func=self.extract_messages_batch,
-            error_func=lambda b: [{} for _ in b],
-            log_prefix="get_source_date_mark_score"
+        # 前置分流：快速路径 vs LLM 路径
+        fast_path_indices = []   # handle_datas 中的索引，走算法快速路径
+        llm_path_indices = []    # handle_datas 中的索引，走 LLM 路径
+
+        # 分流统计计数器
+        match_type_counts = {"exact": 0, "fuzzy": 0, "no_match": 0, "chart": 0}
+        domain_resolved_true = 0
+        domain_resolved_false = 0
+
+        for i, hd in enumerate(handle_datas):
+            mt = hd.get("match_type", "no_match")
+            match_type_counts[mt] = match_type_counts.get(mt, 0) + 1
+            if hd.get("domain_resolved", False):
+                domain_resolved_true += 1
+            else:
+                domain_resolved_false += 1
+
+            if hd.get("domain_resolved", False) and mt == "exact":
+                fast_path_indices.append(i)
+            else:
+                llm_path_indices.append(i)
+
+        logger.info(
+            f"[CITATION VERIFY]: routing stats - total={len(handle_datas)}, "
+            f"match_types={match_type_counts}, "
+            f"domain_resolved={domain_resolved_true}, domain_unresolved={domain_resolved_false}, "
+            f"fast_path={len(fast_path_indices)}, llm_path={len(llm_path_indices)}"
         )
-        logger.info("[CITATION VERIFY]: process batches success.")
+
+        # 快速路径：算法直接输出结果
+        fast_path_results = []
+        for i in fast_path_indices:
+            hd = handle_datas[i]
+            fast_path_results.append({
+                "source": hd["resolved_source"],
+                "marked_citation_content": hd["algo_marked_citation_content"],
+                "score": hd["algo_score"],
+            })
+
+        # LLM 路径：批次处理（剥离内部标记字段，避免泄漏到LLM prompt）
+        _internal_keys_for_llm_strip = {"domain_resolved", "resolved_source", "registered_domain",
+                                        "match_type", "algo_marked_citation_content", "algo_score"}
+        llm_path_datas = [
+            {k: v for k, v in handle_datas[i].items() if k not in _internal_keys_for_llm_strip}
+            for i in llm_path_indices
+        ]
+        llm_ordered_results = []
+        if llm_path_datas:
+            llm_ordered_results = await self.process_batches_with_concurrency(
+                data=llm_path_datas,
+                batch_size=self.verify_batch_size,
+                process_func=self.extract_messages_batch,
+                error_func=lambda b: [{} for _ in b],
+                log_prefix="get_source_date_mark_score_llm_path"
+            )
+            logger.info("[CITATION VERIFY]: LLM path process batches success.")
+
+        # 合并结果：按原始 handle_datas 顺序对齐
+        merged_results = [None] * len(handle_datas)
+        for idx_in_fast, original_idx in enumerate(fast_path_indices):
+            merged_results[original_idx] = fast_path_results[idx_in_fast]
+        for idx_in_llm, original_idx in enumerate(llm_path_indices):
+            merged_results[original_idx] = llm_ordered_results[idx_in_llm]
+
+        # 回写映射表：domain_resolved=False 且 source 有效
+        await self._save_new_mappings(handle_datas, merged_results)
+
+        # 清除内部标记字段，防止泄漏到最终datas
+        _internal_keys = {"domain_resolved", "resolved_source", "registered_domain",
+                         "match_type", "algo_marked_citation_content", "algo_score"}
+        for hd in handle_datas:
+            for key in _internal_keys:
+                hd.pop(key, None)
 
         # 更新引用数据
-        self.update_citation_data(handle_index, ordered_results, handle_datas)
+        self.update_citation_data(handle_index, merged_results, handle_datas)
         logger.info("[CITATION VERIFY]: update citation data success.")
+
+    async def _save_new_mappings(self, handle_datas: list, results: list) -> None:
+        """回写映射表：将LLM推断出的 domain→source 映射保存
+
+        仅对 domain_resolved=False 且 source 有效的条目执行 save_mapping。
+        同一 registered_domain 只执行一次 save_mapping（去重）。
+        "unknown source" 不保存映射。
+
+        Args:
+            handle_datas: 预处理后的数据列表（含内部标记字段）
+            results: 合并后的结果列表（含 source 字段）
+        """
+        saved_domains = set()
+        skipped_unknown = 0
+        skipped_dedup = 0
+        skipped_empty_domain = 0
+        for i, hd in enumerate(handle_datas):
+            if not hd.get("domain_resolved", False):
+                registered_domain = hd.get("registered_domain", "")
+                result = results[i] if i < len(results) else {}
+                source = result.get("source", "") if result else ""
+
+                # "unknown source" 不保存映射（含 "unknown" 关键词均不保存）
+                if not source or "unknown" in source.lower():
+                    skipped_unknown += 1
+                    continue
+
+                # 去重：同一 registered_domain 只执行一次
+                if registered_domain in saved_domains:
+                    skipped_dedup += 1
+                    continue
+
+                # 空 domain 不保存
+                if not registered_domain:
+                    skipped_empty_domain += 1
+                    continue
+
+                saved_domains.add(registered_domain)
+                await save_mapping(registered_domain, source)
+
+        logger.info(
+            f"[CITATION VERIFY]: mapping save stats - saved={len(saved_domains)}, "
+            f"skipped_unknown={skipped_unknown}, skipped_dedup={skipped_dedup}, "
+            f"skipped_empty_domain={skipped_empty_domain}"
+        )
 
     def fuzzy_find_and_tag(
         self,

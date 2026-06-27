@@ -69,8 +69,109 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 - 项目运行日志：**common.log**
 
 补充说明：
-- `common.log` 主要记录DeepSearch项目自身日志；第三方组件日志默认仅保留 `warning/error` 级别，`debug/info` 不会写入。
+- `common.log` 主要记录 DeepSearch 项目自身日志；第三方组件日志默认仅保留 `warning/error` 级别，`debug/info` 不会写入。
 - 超长日志会自动截断，仅保留头尾关键片段；少数关键结果日志会显式跳过截断，便于排查引用、报告等完整输出。
+
+### 2. 如何判断报告是否成功生成并定位异常
+
+工作流结束时，最终结果统一写入 `final_result`（见 [search_context 文档](../4.开发指南/API文档/search_context.md)）。排查时优先看 **`exception_info`** 与 **`warning_info`**，再结合日志中的 **`conversation_id` / `thread_id`** 串联全链路。
+
+| 字段 | 含义 |
+|------|------|
+| `exception_info` | 导致流程异常退出或结果不可用的错误信息；非空通常表示失败 |
+| `warning_info` | 非致命告警（如某章节信息收集为空、图表生成失败等）；可能仍有报告输出 |
+| `response_content` | 报告正文；成功时不应为空（局部改写场景除外） |
+
+成败判定优先级：`exception_info` 非空时优先视为失败；`warning_info` 只影响完整性评估，不改变成功状态。
+
+错误信息统一格式为：`[错误码]错误描述: 具体原因`，其中「具体原因」通常为原始异常 `e` 或业务 detail。错误码对照见本文 [第七节附录](#七附录)。
+
+---
+
+#### （1）报告生成成功时，如何查找报告
+
+**① 看接口 / SDK 流式返回**
+
+- 结束阶段 `EndNode` 推送的 `final_result` 中，`exception_info` 为空字符串 `""`。
+- 对应流式事件为 **`SUMMARY_RESPONSE`**（若 `exception_info` 非空则为 **`ERROR`**）。
+- 随后通常还有框架层的 **`ALL END`** 结束标记。
+- `response_content` 有实质内容（Markdown 报告正文）。
+
+**② 看日志（先查 `common_warning.log`）**
+
+1. 用当次任务的 **`conversation_id`**（即配置中的 `thread_id`）检索日志，缩小范围。
+2. `common_warning.log` 中**没有**阻断主流程的 `ERROR`（少量 `WARN` 如模型重试、单条搜索无结果，通常不影响最终成稿）。若日志中出现 `ERROR`，最终仍以 `final_result.exception_info` 判定是否失败，再用日志辅助定位原因。
+3. `common.log` 中出现 **`[EndNode] Start EndNode`** 且 **`Get final result`** 中 `exception_info` 为空。
+![img.png](../images/FAQ/日志最终报告.png)
+4. 主路径关键节点按顺序应有完成类日志，例如：`EntryNode` → `OutlineNode` / `OutlineInteractionNode` → `EditorTeamNode` → `ReporterNode` → `SourceTracerNode` → `EndNode`（若开启溯源推理 / 用户反馈，中间还会经过对应节点）。
+
+**③ 如何理解「有告警但仍算成功」**
+
+- `warning_info` 非空、`exception_info` 为空：报告可能已生成，但部分章节/图表/收集环节存在问题，需结合告警内容评估完整性。
+- 若业务要求「零告警」，除检查 `exception_info` 外还应确认 `warning_info` 为空。
+
+**④ 可选：节点调试日志**
+
+- 配置开启 `node_debug_enable` 后，可在 **`output/logs/common/node_debug_log/`** 下查看各节点输入输出快照，用于核对大纲、章节规划、子报告等中间结果。
+
+**⑤ 快速查找报告**
+
+- 直接在 **`common.log`** 中按 `conversation_id` / `thread_id` 过滤后搜索 **`Get final result`**。
+- 找到对应日志后，查看其中的 `final_result.response_content` 即为最终报告正文；同时确认 `exception_info` 为空，避免误把失败结果中的部分内容当作完整报告。
+
+---
+
+#### （2）失败时，如何定位问题
+
+**① 确认失败信号**
+
+**日志侧：看最终结果**
+
+- 在 **`common.log`** 中搜索 **`Get final result`**，查看其中的 `final_result.exception_info`。
+- `exception_info` 非空即表示工作流以异常结束；即使 `response_content` 有内容，也不应视为完整成功。
+- 仅 `warning_info` 非空时，多为降级完成，需人工评估报告是否可用。
+
+**接口侧：看返回事件 / HTTP 响应**
+
+- `EndNode` 或框架层推送 **`event: ERROR`**，`content` 中通常含 `exception_info`。
+- 若在 `run` 调用外层即崩溃，HTTP 响应中也可能直接带 `{"exception_info": "..."}`。
+
+**② 根据错误码定位模块 / 节点**
+
+- `exception_info` 字符串开头的 **`[211800]`** 等为错误码，可对照 [status_code.py](https://gitcode.com/openJiuwen/deepsearch/blob/dev/openjiuwen_deepsearch/common/status_code.py) 定位模块与节点。
+- 冒号后的内容为具体原因（异常信息或业务 detail），应作为进一步查日志的关键词。
+
+常见错误码与节点对应关系：
+
+| 错误码段 | 典型节点 / 环节 |
+|----------|-----------------|
+| 211600 | `EntryNode` 语言路由 / 意图识别 |
+| 211700–211702 | `GenerateQuestionsNode` / `FeedbackHandlerNode` 人机交互 |
+| 211800 | `OutlineNode` 大纲生成 |
+| 211801 | 子图 `PlanReasoningNode` 任务规划 |
+| 211901 | 章节信息收集为空 |
+| 212000 | 子报告生成 |
+| 212001 | 总报告 `ReporterNode` |
+| 212106 / 212300 | 溯源 / 溯源推理 |
+
+**③ 按 `conversation_id` / `thread_id` 查日志**
+
+1. 打开 **`common_warning.log`**，用 `conversation_id` / `thread_id` 过滤。
+2. 搜索 **`ERROR`**，并关注报错行附近的 **节点名**（如 `[OutlineNode]`、`[ReporterNode]`、`[EditorTeamNode]`、`plan_reasoning`、`sub_reporter`）。
+3. 若 `exception_info` 中有具体异常文本，在 **`common.log`** 中继续搜索同一关键词，查看完整堆栈与上下文。
+4. 结合本文 **三、模型相关错误 / 3. 节点异常影响范围** 判断是局部章节问题还是整报告失败。
+
+**④ 沿子图 / 主图继续下钻**
+
+- 子图（单章节）异常先写入 `section_context.exception_infos`，由 `EditorTeamNode` 汇总到主图 `final_result.exception_info`。
+- 日志中若看到章节级 `section_idx` / `plan_idx`，应在对应章节的 Planner、InfoCollector、SubReporter 日志中继续向下追。
+
+**⑤ 推荐排查顺序**
+
+```
+final_result.exception_info  →  错误码查表  →  common_warning.log 按 thread_id 过滤
+→  定位节点名  →  common.log 查异常详情  →  （可选）node_debug_log 看中间结果
+```
 
 ## 三、模型相关错误
 ### 1. 模型服务调用失败或超时

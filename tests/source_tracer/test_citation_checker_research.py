@@ -1,28 +1,36 @@
 import json
-import re
 from collections import OrderedDict
 from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research import CitationCheckerResearch
+from openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research import (
+    CitationCheckerResearch,
+    SourceTracerCitationMarker,
+)
 from openjiuwen_deepsearch.common.exception import CustomIndexException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 
 
-class MockMatch:
-    """模拟 re.Match 对象，用于测试"""
+def make_source_tracer_marker(start, end, string="mocked string"):
+    """构造 source tracer 引用标记测试对象。
 
-    def __init__(self, start, end, string="mocked string"):
-        self._start = start
-        self._end = end
-        self.string = string
+    Args:
+        start: 标记起始偏移。
+        end: 标记结束偏移。
+        string: 标记所属原始文本。
 
-    def start(self):
-        return self._start
-
-    def end(self):
-        return self._end
+    Returns:
+        SourceTracerCitationMarker 测试对象。
+    """
+    return SourceTracerCitationMarker(
+        raw_start=start,
+        raw_end=end,
+        image_marker=None,
+        title="示例",
+        paren_url="https://example.com",
+        string=string,
+    )
 
 
 class TestResearchCitationChecker:
@@ -33,6 +41,32 @@ class TestResearchCitationChecker:
         checker = CitationCheckerResearch("mock_model")
         assert hasattr(checker, 'citation_verifier')
         assert checker.citation_verifier is not None
+
+    def test_source_tracer_citation_marker_uses_fields_not_match_methods(self):
+        """source tracer 引用标记应使用字段表达位置和内容。"""
+        marker = SourceTracerCitationMarker(
+            raw_start=3,
+            raw_end=42,
+            image_marker=None,
+            title="标题",
+            paren_url="https://example.com/a_(b)",
+            string="正文[source_tracer_result][标题](https://example.com/a_(b))",
+        )
+
+        assert marker.raw_start == 3
+        assert marker.raw_end == 42
+        assert marker.paren_url == "https://example.com/a_(b)"
+        assert not hasattr(marker, "start")
+        assert not hasattr(marker, "end")
+        assert not hasattr(marker, "group")
+
+    def test_source_tracer_citation_marker_ignores_angle_link_destination(self):
+        """source_tracer_result 只支持括号形式 URL，不再解析尖括号形式。"""
+        text = "[source_tracer_result][标题]<https://example.com>"
+
+        markers = self.checker._iter_source_tracer_citation_markers(text, self.checker.citation_regex)
+
+        assert markers == []
 
     # Test core static methods that contain important business logic
     def test_validate_url_match_exact_match(self):
@@ -66,12 +100,12 @@ class TestResearchCitationChecker:
     def test_handle_duplicate_citations_keep_higher_score(self):
         """Test handling duplicate URLs with higher score."""
         url = "https://example.com"
-        # 创建模拟的match对象，使它们相邻
-        old_match = MockMatch(10, 50)
-        new_match = MockMatch(52, 92)  # 与旧引用相邻（相差2个字符以内）
+        # 创建引用标记，使它们相邻
+        old_marker = make_source_tracer_marker(10, 50)
+        new_marker = make_source_tracer_marker(52, 92)  # 与旧引用相邻（相差2个字符以内）
 
-        current_data = {'score': 0.9, 'match': new_match}
-        existing_data = {'score': 0.8, 'match': old_match}
+        current_data = {'score': 0.9, 'citation_marker': new_marker}
+        existing_data = {'score': 0.8, 'citation_marker': old_marker}
         datas = [existing_data, current_data]
         processed_citation_urls = {url: {'score': 0.8, 'data_index': 0}}
         citation_index = 1
@@ -89,12 +123,12 @@ class TestResearchCitationChecker:
     def test_handle_duplicate_citations_keep_existing_score(self):
         """Test handling duplicate URLs with lower score."""
         url = "https://example.com"
-        # 创建模拟的match对象，使它们相邻
-        old_match = MockMatch(10, 50)
-        new_match = MockMatch(52, 92)  # 与旧引用相邻（相差2个字符以内）
+        # 创建引用标记，使它们相邻
+        old_marker = make_source_tracer_marker(10, 50)
+        new_marker = make_source_tracer_marker(52, 92)  # 与旧引用相邻（相差2个字符以内）
 
-        current_data = {'score': 0.6, 'match': new_match}
-        existing_data = {'score': 0.8, 'match': old_match}
+        current_data = {'score': 0.6, 'citation_marker': new_marker}
+        existing_data = {'score': 0.8, 'citation_marker': old_marker}
         datas = [existing_data, current_data]
         processed_citation_urls = {url: {'score': 0.8, 'data_index': 0}}
         citation_index = 1
@@ -112,12 +146,12 @@ class TestResearchCitationChecker:
     def test_handle_duplicate_citations_non_adjacent(self):
         """Test handling non-adjacent duplicate URLs."""
         url = "https://example.com"
-        # 创建模拟的match对象，使它们不相邻
-        old_match = MockMatch(10, 50)
-        new_match = MockMatch(100, 140)  # 与旧引用不相邻（相差超过2个字符）
+        # 创建引用标记，使它们不相邻
+        old_marker = make_source_tracer_marker(10, 50)
+        new_marker = make_source_tracer_marker(100, 140)  # 与旧引用不相邻（相差超过2个字符）
 
-        current_data = {'score': 0.9, 'match': new_match}
-        existing_data = {'score': 0.8, 'match': old_match}
+        current_data = {'score': 0.9, 'citation_marker': new_marker}
+        existing_data = {'score': 0.8, 'citation_marker': old_marker}
         datas = [existing_data, current_data]
         processed_citation_urls = {url: {'score': 0.8, 'data_index': 0}}
         citation_index = 1
@@ -207,30 +241,28 @@ class TestResearchCitationChecker:
         """Test processing a single citation with logging enabled."""
         mock_log_manager.is_sensitive.return_value = False
         para = "这是一个测试[source_tracer_result][示例](https://example.com)引用。"
-        pattern = r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))'
-        match = re.search(pattern, para)
+        marker = self.checker._iter_source_tracer_citation_markers(para, self.checker.citation_regex)[0]
         datas = [{'url': 'https://example.com', 'valid': True, 'score': 0.8}]
         processed_citation_urls = {}
         data_index = 0
 
         result_del_indices = self.checker.validate_and_process_single_citation(
-            match, datas, processed_citation_urls, data_index)
+            marker, datas, processed_citation_urls, data_index)
 
         assert result_del_indices == []
         assert datas[0]['is_image'] is False
-        assert 'match' in datas[0]
+        assert 'citation_marker' in datas[0]
 
     def test_process_single_citation_invalid_data(self):
         """Test processing a citation with invalid data."""
         para = "这是一个测试[source_tracer_result][示例](https://example.com)引用。"
-        pattern = r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))'
-        match = re.search(pattern, para)
+        marker = self.checker._iter_source_tracer_citation_markers(para, self.checker.citation_regex)[0]
         datas = [{'url': 'https://example.com', 'valid': False}]
         processed_citation_urls = {}
         data_index = 0
 
         result_del_indices = self.checker.validate_and_process_single_citation(
-            match, datas, processed_citation_urls, data_index)
+            marker, datas, processed_citation_urls, data_index)
 
         assert 0 in result_del_indices
         assert datas[0]['is_image'] is False
@@ -238,14 +270,13 @@ class TestResearchCitationChecker:
     def test_process_single_citation_invalid_url(self):
         """Test processing a citation with invalid URL."""
         para = "这是一个测试[source_tracer_result][示例](https://example.com)引用。"
-        pattern = r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))'
-        match = re.search(pattern, para)
+        marker = self.checker._iter_source_tracer_citation_markers(para, self.checker.citation_regex)[0]
         datas = [{'url': 'https://different.com', 'valid': True}]
         processed_citation_urls = {}
         data_index = 0
 
         result_del_indices = self.checker.validate_and_process_single_citation(
-            match, datas, processed_citation_urls, data_index)
+            marker, datas, processed_citation_urls, data_index)
 
         assert 0 in result_del_indices
         assert datas[0]['valid'] is False
@@ -253,15 +284,14 @@ class TestResearchCitationChecker:
     def test_process_single_citation_index_out_of_range(self):
         """Test processing a citation with index out of range."""
         para = "这是一个测试[source_tracer_result][示例](https://example.com)引用。"
-        pattern = r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))'
-        match = re.search(pattern, para)
+        marker = self.checker._iter_source_tracer_citation_markers(para, self.checker.citation_regex)[0]
         datas = []  # Empty datas
         processed_citation_urls = {}
         data_index = 0
 
         with pytest.raises(CustomIndexException):
             self.checker.validate_and_process_single_citation(
-                match, datas, processed_citation_urls, data_index)
+                marker, datas, processed_citation_urls, data_index)
 
     def test_process_single_paragraph_length_mismatch(self):
         """Test processing a paragraph with citation length mismatch."""
@@ -297,27 +327,20 @@ class TestResearchCitationChecker:
         """Test replacement with image citation."""
         markdown_text = "这是一个测试![source_tracer_result][图片](https://image.com)引用。"
         datas = [{'url': 'https://image.com', 'valid': True}]
-        inline_ref_pattern = re.compile(
-            r'\[source_tracer_result\](?:!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))')
 
-        result_text, references, result_datas = self.checker.replace_inline_citations(
-            markdown_text, datas, inline_ref_pattern)
+        result_text, references, result_datas = self.checker.replace_inline_citations(markdown_text, datas)
 
         # Should contain image citation format (title might be None if not in datas)
         assert '![[' in result_text and 'https://image.com' in result_text
         assert references == OrderedDict()  # No references for images
 
-    def test_replace_inline_citations_assigns_checked_citation_tokens(self):
+    def test_replace_inline_citations_assigns_checked_citation_markers(self):
         markdown_text = "前缀[source_tracer_result][测试标题](https://test.com)后缀"
         datas = [
             {"url": "https://test.com", "title": "测试标题", "valid": True, "score": 0.9},
         ]
-        inline_ref_pattern = re.compile(
-            r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))'
-        )
 
-        transformed_text, references, datas = self.checker.replace_inline_citations(
-            markdown_text, datas, inline_ref_pattern)
+        transformed_text, references, datas = self.checker.replace_inline_citations(markdown_text, datas)
 
         assert transformed_text == "前缀[checked_citation:0][[1]](https://test.com)后缀"
         assert list(references.items()) == [("https://test.com", ("测试标题", 1))]
@@ -367,6 +390,55 @@ class TestResearchCitationChecker:
         assert "[1]. [Build Smarter RAG with Routing and Hybrid Retrieval - Milvus Blog]" in result_text
         assert result_datas[0]["id"] == 0
         assert result_datas[0]["reference_index"] == 1
+
+    def test_transform_references_handles_nested_parentheses_in_source_urls(self):
+        """source_tracer_result URL 中的嵌套括号应完整参与转换和去重。"""
+        url = "https://example.com/a_(b_(c))"
+        text = {
+            "article": (
+                f"第一处[source_tracer_result][标题A]({url})，"
+                f"第二处[source_tracer_result][标题A]({url})。"
+            )
+        }
+        datas = [
+            {"url": url, "title": "标题A", "content": "Content 1", "valid": True, "score": 0.9},
+            {"url": url, "title": "标题A", "content": "Content 2", "valid": True, "score": 0.8},
+        ]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        expected_text = (
+            f"第一处[checked_citation:0][[1]]({url})，"
+            f"第二处[checked_citation:1][[1]]({url})。\n\n"
+            f"[1]. [标题A]({url})\n\n"
+        )
+        assert "[source_tracer_result]" not in result_text
+        assert result_text == expected_text
+        assert [item["reference_index"] for item in result_datas] == [1, 1]
+
+    def test_transform_references_deduplicates_same_url_separated_only_by_other_citation(self):
+        """相同 URL 中间只隔其他引用时仍按相邻重复引用去重。"""
+        url_a = "https://example.com/a_(b_(c))"
+        url_b = "https://example.com/b"
+        text = {
+            "article": (
+                f"正文[source_tracer_result][标题A]({url_a})"
+                f"[source_tracer_result][标题B]({url_b})"
+                f"[source_tracer_result][标题A]({url_a})结束。"
+            )
+        }
+        datas = [
+            {"url": url_a, "title": "标题A", "content": "A1", "valid": True, "score": 0.9},
+            {"url": url_b, "title": "标题B", "content": "B", "valid": True, "score": 0.8},
+            {"url": url_a, "title": "标题A", "content": "A2", "valid": True, "score": 0.7},
+        ]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert f"[checked_citation:0][[1]]({url_a})" in result_text
+        assert f"[checked_citation:1][[2]]({url_b})" in result_text
+        assert "[checked_citation:2]" not in result_text
+        assert [item["url"] for item in result_datas] == [url_a, url_b]
 
     # Test main workflow
     @pytest.mark.asyncio
@@ -450,7 +522,7 @@ class TestResearchCitationChecker:
 
 
 class TestCitationOffsetTracking:
-    """测试稳定 citation token 替换后的数据映射"""
+    """测试稳定 citation marker 替换后的数据映射"""
 
     @pytest.fixture
     def checker(self):
@@ -463,11 +535,8 @@ class TestCitationOffsetTracking:
             {"url": "https://a.com", "title": "标题A", "valid": True, "score": 0.9},
             {"url": "https://b.com", "title": "标题B", "valid": True, "score": 0.8},
         ]
-        inline_ref_pattern = re.compile(
-            r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))')
 
-        transformed_text, references, datas = checker.replace_inline_citations(
-            markdown_text, datas, inline_ref_pattern)
+        transformed_text, references, datas = checker.replace_inline_citations(markdown_text, datas)
 
         for data in datas:
             if data.get("valid", False):
@@ -486,11 +555,8 @@ class TestCitationOffsetTracking:
         datas = [
             {"url": "https://test.com", "title": "测试标题", "valid": True, "score": 0.9},
         ]
-        inline_ref_pattern = re.compile(
-            r'\[source_tracer_result\](!)?\[(.*?)\](?:<(.*?)>|\((.*?)\))')
 
-        transformed_text, references, datas = checker.replace_inline_citations(
-            markdown_text, datas, inline_ref_pattern)
+        transformed_text, references, datas = checker.replace_inline_citations(markdown_text, datas)
 
         assert len(datas) == 1
         assert transformed_text == "前缀文本[checked_citation:0][[1]](https://test.com)后缀文本"

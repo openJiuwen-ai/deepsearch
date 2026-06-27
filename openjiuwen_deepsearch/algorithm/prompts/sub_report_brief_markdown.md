@@ -25,7 +25,14 @@ You will write using:
 
 ## 1) Citation & Grounding
 - Only use provided collected information and background knowledge. Do not invent facts.
+- Stay close to the wording, entities, scope, and limitations of the original source text.
+- Do not infer, estimate, or fabricate missing numbers, dates, amounts, percentages, rankings, company names, policy names, cases, or examples.
+- If the source text does not disclose a value, state that the available material does not disclose it instead of guessing or filling the gap with general knowledge.
+- Clearly separate source-backed facts from your own analysis or judgment. Analysis must be based on cited facts and should not introduce new factual details.
 - Every factual claim based on Collected Information must carry inline citation: `[citation:X]`.
+- Citations must support the exact sentence or table row where the fact appears; avoid placing one broad citation at the end of a long paragraph for multiple unsupported facts.
+- Every number, date, amount, percentage, ranking, company name, policy name, and table cell must be traceable to the provided Collected Information.
+- Do not calculate derived metrics, comparisons, trends, or rankings unless the required source values are present and cited.
 - Multiple sources are allowed: `[citation:2][citation:7]`.
 - Do not output separate references in this chapter.
 - Background Knowledge is internal context from prior sections, not an external source.
@@ -79,6 +86,12 @@ Even if `section_iscore` is true, keep analysis compact:
 ## 6) Language
 - Output language must be **{{language}}**.
 - Tone should be formal, direct, and actionable.
+
+## 7) Mathematical Formula Syntax
+- When the content involves mathematical formulas, use standard LaTeX: inline math in `$...$`, block math in `$$...$$`.
+- **Balance every delimiter pair**: each `\left` MUST have a matching `\right`, and every `{`, `(`, `[` its closing counterpart. If a resizable delimiter is not needed, use plain `(` `)` instead of `\left( \right)`.
+- Use only widely-supported LaTeX commands and wrap multi-character sub/superscripts in braces (`x^{2n}`, `\pi_{\theta_{old}}`).
+- Verify each formula is syntactically valid before output: a malformed formula breaks HTML and DOCX rendering.
 
 # Output Example (format only)
 # 1 Chapter title

@@ -24,4 +24,5 @@ You are a research report editor. Edit a report subsection based on the strategy
 # Output Requirements
 - Output only the rewritten existing subsection or the new subsection text required by `edit_strategy`.
 - No explanations, no markdown fences, no extra commentary.
+- If the content involves mathematical formulas, use standard LaTeX (`$...$` for inline, `$$...$$` for block) and balance every delimiter pair: each `\left` must have a matching `\right`, and every `{`, `(`, `[` its closing counterpart. Verify each formula is syntactically valid; a malformed formula breaks HTML and DOCX rendering.
 - Use {{ language }}.

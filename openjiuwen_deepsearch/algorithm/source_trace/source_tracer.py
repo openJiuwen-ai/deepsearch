@@ -3,7 +3,8 @@
 
 import json
 import logging
-from typing import Any, Dict
+import re
+from typing import Any, Dict, Tuple
 
 from openjiuwen_deepsearch.algorithm.source_trace.add_source import (add_source_references,
                                                                      generate_source_datas,
@@ -15,6 +16,7 @@ from openjiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors im
                                                                                       preprocess_search_record)
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.utils.common_utils.text_utils import split_into_sentences
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,8 @@ class SourceTracer:
         self._similarity_threshold = 0.9
         self._search_record_max_content_len = 3000
         self._chunk_size = 40
+        self._min_origin_coverage_count: int = 10
+        self._min_origin_coverage_ratio: float = 0.3
         self._report = algorithm_inputs.get("report", "")
         self._classified_content = algorithm_inputs.get("classified_content", [])
         self._search_record = self.transform_search_record(self._classified_content)
@@ -68,6 +72,130 @@ class SourceTracer:
 
         search_record = dict(search_record=filtered_content)
         return search_record
+
+    @staticmethod
+    def _filter_meaningful_sentences(sentences: list) -> list:
+        """过滤无意义的句子，保留实际内容用于覆盖率计算。
+
+        过滤规则：
+        - 空字符串或仅含空白字符的行
+        - Markdown标题行（以#开头）
+        - Markdown表格分隔行（仅含|、-、:、空格）
+        - Markdown表格数据行（以|开头）
+        - 代码块标记行（以```开头）
+
+        Args:
+            sentences (list): split_into_sentences 返回的原始句子列表
+
+        Returns:
+            list: 仅包含有意义内容句子的列表
+        """
+        meaningful = []
+        for s in sentences:
+            stripped = s.strip()
+            if not stripped:
+                continue
+            # Markdown标题行
+            if stripped.startswith('#'):
+                continue
+            # 代码块标记行
+            if stripped.startswith('```'):
+                continue
+            # Markdown表格分隔行（仅含 |、-、:、空格）
+            if re.match(r'^[\s|:-]+$', stripped):
+                continue
+            meaningful.append(s)
+        return meaningful
+
+    @staticmethod
+    def _calculate_coverage(report: str) -> Tuple[float, int]:
+        """通过检测引用标记计算报告文本的覆盖率及被覆盖句子数。
+
+        使用 [citation:X] 标记检测代替文本子串匹配，避免误报和漏报：
+        - 零误报：只有真正带引用标记的句子才算覆盖
+        - 零漏报：每个带引用标记的句子都会被检测到
+
+        Args:
+            report (str): 预处理后的报告文本（含 [citation:X] 标记）
+
+        Returns:
+            Tuple[float, int]: (覆盖率, 被覆盖句子数)，total_sentences为0时返回(0.0, 0)
+        """
+        sentences = split_into_sentences(report)
+        meaningful_sentences = SourceTracer._filter_meaningful_sentences(sentences)
+        total_sentences = len(meaningful_sentences)
+        if total_sentences == 0:
+            return 0.0, 0
+
+        # 检测句子中的引用标记 [citation:X]，精确判断覆盖
+        citation_pattern = re.compile(r'\[\s*citation:\s*\d+\s*\]')
+        covered_count = sum(
+            1 for sentence in meaningful_sentences
+            if citation_pattern.search(sentence)
+        )
+
+        return covered_count / total_sentences, covered_count
+
+    def pre_check_origin_coverage(self) -> dict:
+        """前置检查报告被原始引用的覆盖情况，判断是否需要执行溯源。
+
+        Returns:
+            dict: 包含5个字段的检查结果：
+                - need_generate (bool): True=需要执行research_trace_source, False=可跳过
+                - origin_count (int): 被引用覆盖的唯一句子数
+                - total_sentences (int): 报告中有意义的句子总数
+                - coverage (float): 覆盖率
+                - reason (str): 跳过或执行的原因说明
+        """
+        # 前置判断：空报告 → 不需要生成
+        if not self._report:
+            return {
+                "need_generate": False,
+                "origin_count": 0,
+                "total_sentences": 0,
+                "coverage": 0.0,
+                "reason": "empty report"
+            }
+
+        # 前置判断：无 classified_content → 无法生成新引用，跳过溯源
+        if not self._classified_content:
+            return {
+                "need_generate": False,
+                "origin_count": 0,
+                "total_sentences": 0,
+                "coverage": 0.0,
+                "reason": "no classified content"
+            }
+
+        # 预处理报告
+        _, preprocessed_report = preprocess_report(self._report)
+
+        # 通过引用标记检测计算覆盖率（无需 generate_origin_report_data）
+        coverage, covered_count = self._calculate_coverage(preprocessed_report)
+
+        # 被覆盖的唯一句子数
+        origin_count = covered_count
+
+        # 计算有意义句子总数
+        sentences = split_into_sentences(preprocessed_report)
+        meaningful_sentences = self._filter_meaningful_sentences(sentences)
+        total_sentences = len(meaningful_sentences)
+
+        # 判断逻辑
+        if origin_count >= self._min_origin_coverage_count and coverage >= self._min_origin_coverage_ratio:
+            reason = "coverage sufficient"
+            need_generate = False
+        else:
+            reason = "coverage insufficient"
+            need_generate = True
+
+        return {
+            "need_generate": need_generate,
+            "origin_count": origin_count,
+            "total_sentences": total_sentences,
+            "coverage": coverage,
+            "reason": reason
+        }
 
     async def research_trace_source(self) -> None:
         """在research模式下对报告进行溯源，生成引用信息data列表。

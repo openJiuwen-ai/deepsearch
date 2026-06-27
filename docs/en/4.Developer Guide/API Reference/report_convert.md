@@ -2,7 +2,7 @@
 
 ## Overview
 
-`/reports/convert` converts a DeepSearch workflow `final_result` payload into an offline export bundle.
+`/reports/convert` converts a DeepSearch workflow `final_result` payload into a report export bundle.
 
 Under the default backend router registration, the full endpoint path is `/api/v1/agent/deepsearch/reports/convert`.
 
@@ -95,6 +95,12 @@ Notes:
 - For HTML export, Mermaid is rendered offline to SVG through `mmdc` and embedded into the HTML output.
 - For DOCX export, Mermaid is rendered offline to PNG through `mmdc` and then converted through pandoc.
 - If `mmdc` is unavailable, the export does not fail. The Mermaid source block is preserved in the output instead.
+
+### Math Formulas
+
+- HTML export includes MathJax configuration for LaTeX formulas, but the MathJax runtime is loaded from jsDelivr CDN.
+- In offline or intranet-only deployments, HTML formulas may not render unless that CDN URL is reachable or the runtime is provided by a deployment-specific replacement.
+- DOCX export converts normalized formulas into Word OMML during export and does not depend on MathJax at viewing time.
 
 ### Source-Tracing Graphs
 

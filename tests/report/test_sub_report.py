@@ -5,6 +5,12 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import pytest
 
 from openjiuwen_deepsearch.algorithm.report import table_caption_utils
+from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
+    build_classify_scores,
+    build_compact_classify_doc_infos_text,
+    format_key_passage_block,
+    normalize_key_passages,
+)
 from openjiuwen_deepsearch.algorithm.report.report import Reporter, _get_classified_infos
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
@@ -17,6 +23,7 @@ def _classified_doc(title: str, url: str, source_id: str, relevance: float) -> d
         "url": url,
         "source_id": source_id,
         "original_content": f"{title} content",
+        "key_passages": [f"{title} passage"],
         "scores": {"relevance": relevance, "answerability": 0, "authority": 0, "data_density": 0},
     }
 
@@ -26,8 +33,135 @@ def _report_doc(idx: int, *, url: str | None = None, content: str | None = None)
         "title": f"doc-{idx}",
         "url": url or f"https://example.com/{idx}",
         "original_content": content or f"content-{idx}",
+        "key_passages": [f"passage-{idx}"],
         "scores": {"relevance": 9, "answerability": 9, "authority": 9, "data_density": 9},
     }
+
+
+def test_normalize_key_passages_cleans_non_standard_values():
+    assert normalize_key_passages(["alpha", "", None, " beta "]) == ["alpha", "beta"]
+    assert normalize_key_passages("single passage") == ["single passage"]
+    assert normalize_key_passages(None) == []
+
+
+def test_build_classify_scores_prefers_scores_over_legacy_fields():
+    doc_info = {
+        "scores": {"relevance": 0.9, "authority": 0.8},
+        "source_authority": "legacy authority",
+        "task_relevance": "legacy relevance",
+        "information_richness": "legacy richness",
+        "data_density": "legacy density",
+    }
+
+    assert build_classify_scores(doc_info) == {"relevance": 0.9, "authority": 0.8}
+
+
+def test_build_classify_scores_ignores_legacy_score_fields():
+    doc_info = {
+        "source_authority": "high",
+        "task_relevance": "medium",
+        "information_richness": "rich",
+        "data_density": "dense",
+    }
+
+    assert build_classify_scores(doc_info) == {}
+
+
+def test_build_compact_classify_doc_infos_text_excludes_full_content_and_internal_fields():
+    output = build_compact_classify_doc_infos_text([
+        {
+            "doc_id": "web_1",
+            "source_id": "web_1_p1",
+            "url": "https://example.com/a",
+            "title": "Example title",
+            "doc_time": "2026-05",
+            "publish_time": "2026-05-10",
+            "original_content": "SECRET FULL CONTENT",
+            "query": "hidden query",
+            "content_ref": {"type": "source_store", "source_id": "web_1_p1"},
+            "scores": {"relevance": 0.9, "authority": 0.8},
+            "source_authority": "legacy authority",
+            "key_passages": ["passage 1", "passage 2"],
+        },
+        {
+            "url": "https://example.com/b",
+            "title": "Empty evidence",
+            "key_passages": [],
+        },
+    ])
+
+    assert "Document 1:" in output
+    assert "url: https://example.com/a" in output
+    assert "title: Example title" in output
+    assert "doc_time: 2026-05" in output
+    assert "publish_time: 2026-05-10" in output
+    assert "scores:" in output
+    assert "relevance: 0.9" in output
+    assert "authority: 0.8" in output
+    assert "key passages:" in output
+    assert "- passage 1" in output
+    assert "Document 2:" in output
+    assert "[]" in output
+    assert "original_content" not in output
+    assert "SECRET FULL CONTENT" not in output
+    assert "doc_id" not in output
+    assert "source_id" not in output
+    assert "content_ref" not in output
+    assert "hidden query" not in output
+    assert "legacy authority" not in output
+
+
+def test_report_package_exports_compact_doc_info_helpers():
+    from openjiuwen_deepsearch.algorithm.report import (
+        build_compact_classify_doc_infos_text as package_build_compact,
+        compact_doc_info,
+    )
+
+    assert package_build_compact is build_compact_classify_doc_infos_text
+    assert compact_doc_info.build_compact_classify_doc_infos_text is build_compact_classify_doc_infos_text
+
+
+def test_format_key_passage_block_only_outputs_passages():
+    output = format_key_passage_block(
+        {
+            "url": "https://example.com/a",
+            "title": "Example title",
+            "scores": {"relevance": 0.9},
+            "source_id": "source-1",
+            "doc_id": "doc-1",
+            "content_ref": {"type": "source_store"},
+            "original_content": "SECRET FULL CONTENT",
+            "key_passages": ["passage 1", "passage 2"],
+        },
+        3,
+    )
+
+    assert output == "Document 3 key passages:\n- passage 1\n- passage 2"
+    assert "https://example.com/a" not in output
+    assert "Example title" not in output
+    assert "relevance" not in output
+    assert "source-1" not in output
+    assert "doc-1" not in output
+    assert "content_ref" not in output
+    assert "SECRET FULL CONTENT" not in output
+
+
+def test_select_visualization_uses_structured_scores_data_density():
+    selected = Reporter._select_visualization_from_classified_content([
+        {
+            "title": "high density",
+            "scores": {"data_density": 9},
+            "data_density": "legacy low score: 1",
+        },
+        {
+            "title": "low density",
+            "scores": {"data_density": 8.9},
+            "data_density": "legacy high score: 10",
+        },
+    ])
+
+    assert [item["title"] for item in selected] == ["high density"]
+
 
 def _centered_caption(caption_text: str) -> str:
     return f'<div style="text-align: center;">\n\n**{caption_text}**\n\n</div>'
@@ -580,18 +714,48 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
         # 遍历 messages 里的 dict，检查 content 字段
         if any("classification" in msg.get("content", "") for msg in messages):
             user_content = next(msg.get("content", "") for msg in messages if msg.get("role") == "user")
-            assert "'original_content': 'fake original_content'" in user_content
-            assert "'doc_time': '2024 8月'" in user_content
+            assert "url: fake_url" in user_content
+            assert "title: XX有限公司 - 企业详情" in user_content
+            assert "doc_time: 2024 8月" in user_content
+            assert "publish_time: 2024 8月" in user_content
+            assert "scores:" in user_content
+            assert "authority: 8" in user_content
+            assert "relevance: 9" in user_content
+            assert "answerability: 7" in user_content
+            assert "data_density: 6" in user_content
+            assert "key passages:" in user_content
+            assert "- fake passage" in user_content
+            assert "fake original_content" not in user_content
+            assert "original_content" not in user_content
             assert "doc_id" not in user_content
             assert "source_id" not in user_content
             assert "content_ref" not in user_content
-            assert "scores" not in user_content
+            assert "query:" not in user_content
             assert "key_passages" not in user_content
             return {"content": '{\"chapter\": \"企业经营与行业分析\", \"selected_url_list\": [\"fake_url\"]}'}
         elif any("subsection outline" in msg.get("content", "") for msg in messages):
-            return {"content": "3 企业经营与行业分析\n3.1 经营风险评价\3.2 杠杆风险评估"}
-        elif any("write the chapter" in msg.get("content", "") for msg in messages):
-            return {"content": "fake subsection report content"}
+            return {"content": "3 企业经营与行业分析\n3.1 经营风险评价\n3.2 杠杆风险评估"}
+        elif any("professional sub report writer" in msg.get("content", "") for msg in messages):
+            user_content = next(msg.get("content", "") for msg in messages if msg.get("role") == "user")
+            assert "scores:" in user_content
+            assert "authority: 8" in user_content
+            assert "relevance: 9" in user_content
+            assert "answerability: 7" in user_content
+            assert "data_density: 6" in user_content
+            assert "source_authority" not in user_content
+            assert "task_relevance" not in user_content
+            assert "information_richness" not in user_content
+            assert "fake original_content" in user_content
+            return {"content": "# 3 企业经营与行业分析\n\n## 3.1 经营风险评价\nfake content 1\n\n## 3.2 杠杆风险评估\nfake content 2"}
+        elif any("structured sidecar" in msg.get("content", "") for msg in messages):
+            return {
+                "content": (
+                    '{"chapter_summary":"经营与行业摘要",'
+                    '"key_findings":["经营风险可控"],"risk_points":[]}'
+                )
+            }
+        elif any("draft a specific chapter" in msg.get("content", "") for msg in messages):
+            return {"content": "# 3 企业经营与行业分析\n\n## 3.1 经营风险评价\nfake content 1\n\n## 3.2 杠杆风险评估\nfake content 2"}
         else:
             return {"content": "default response"}
 
@@ -629,7 +793,9 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     success, report, sub_report_content, classified_content = await reporter.generate_sub_report(current_inputs)
 
     assert success is True
-    assert current_inputs["sub_section_core_content"] == ["fake original_content"]
+    assert current_inputs["sub_section_core_content"] == ["Document 1 key passages:\n- fake passage"]
+    assert current_inputs["sub_report_summary"] == "经营与行业摘要"
+    assert current_inputs["sub_report_chapter_sidecar"].chapter_summary == "经营与行业摘要"
 
 
 @pytest.mark.asyncio
@@ -732,8 +898,18 @@ async def test_classify_doc_infos_prefilters_and_keeps_same_url_different_conten
 
 def test_get_classified_infos_returns_all_distinct_content_variants_for_selected_url():
     doc_infos = [
-        {"title": "A", "url": "https://example.com/same", "original_content": "variant A"},
-        {"title": "A", "url": "https://example.com/same", "original_content": "variant B"},
+        {
+            "title": "A",
+            "url": "https://example.com/same",
+            "original_content": "variant A",
+            "key_passages": ["passage A"],
+        },
+        {
+            "title": "A",
+            "url": "https://example.com/same",
+            "original_content": "variant B",
+            "key_passages": ["passage B"],
+        },
         {"title": "B", "url": "https://example.com/other", "original_content": "other"},
     ]
 
@@ -743,14 +919,29 @@ def test_get_classified_infos_returns_all_distinct_content_variants_for_selected
     )
 
     assert classified_infos["references"] == ["[A](https://example.com/same)"]
-    assert classified_infos["core_content_list"] == ["variant A", "variant B"]
+    assert classified_infos["core_content_list"] == [
+        "Document 1 key passages:\n- passage A",
+        "Document 2 key passages:\n- passage B",
+    ]
     assert classified_doc_infos == doc_infos[:2]
 
 
 def test_get_classified_infos_deduplicates_same_content_without_source_id():
     doc_infos = [
-        {"title": "A low", "url": "https://example.com/same", "original_content": "same content", "scores": {"relevance": 1}},
-        {"title": "A high", "url": "https://example.com/same", "original_content": "same content", "scores": {"relevance": 9}},
+        {
+            "title": "A low",
+            "url": "https://example.com/same",
+            "original_content": "same content",
+            "key_passages": ["low passage"],
+            "scores": {"relevance": 1},
+        },
+        {
+            "title": "A high",
+            "url": "https://example.com/same",
+            "original_content": "same content",
+            "key_passages": ["high passage"],
+            "scores": {"relevance": 9},
+        },
     ]
 
     classified_infos, classified_doc_infos = _get_classified_infos(
@@ -758,7 +949,7 @@ def test_get_classified_infos_deduplicates_same_content_without_source_id():
         ["https://example.com/same"],
     )
 
-    assert classified_infos["core_content_list"] == ["same content"]
+    assert classified_infos["core_content_list"] == ["Document 1 key passages:\n- high passage"]
     assert classified_doc_infos == [doc_infos[1]]
 
 
@@ -859,9 +1050,11 @@ async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, 
             )
             return {
                 "content": (
-                    "[Parent Section 1] 如第1章所述，公司主营业务稳定。"
-                    "[Background Knowledge from Parent Section 1] 结合第1章分析，收入结构清晰。"
-                    "[Background Knowledge from Section 2] 延续第2章判断，风险仍需关注。"
+                    "# 2 企业经营分析\n\n"
+                    "## 2.1 上游章节要点承接\n\n"
+                    "如第1章所述，公司主营业务稳定。结合第1章分析，收入结构清晰。\n\n"
+                    "## 2.2 当前章节判断\n\n"
+                    "延续第2章判断，风险仍需关注。"
                 )
             }
         return {"content": "background summary"}

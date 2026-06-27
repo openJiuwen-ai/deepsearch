@@ -1,8 +1,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+import asyncio
 import json
 import logging
 import os
 import random
+import tempfile
 from collections import deque
 from typing import Deque, List, Optional
 
@@ -41,6 +43,8 @@ class ActionPool:
         self.config: ActionSamplingConfig = ActionSamplingConfig()
         self.log_dir: str = ""
         self._score_cache: dict[str, float] = {}
+        self._snapshot_dirty: bool = False
+        self._snapshot_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------
     # Scoring
@@ -86,35 +90,96 @@ class ActionPool:
             "depth": action.state.depth,
         }
 
+    def _build_pool_snapshot(self) -> dict:
+        return {
+            "pending": [self._action_snapshot(a) for a in self._pool],
+            "running": [self._action_snapshot(a) for a in self.running_actions],
+            "completed": [
+                {**self._action_snapshot(a), "has_result": r is not None}
+                for a, r in self.completed_actions
+            ],
+        }
+
+    @staticmethod
+    def _emit_pool_snapshot(snapshot: dict) -> None:
+        emit(
+            "action_pool_snapshot",
+            {
+                "pending_count": len(snapshot["pending"]),
+                "running_count": len(snapshot["running"]),
+                "completed_count": len(snapshot["completed"]),
+                "snapshot": snapshot,
+            },
+            source="action_pool._save_pool_json",
+            action_id=None,
+        )
+
+    def _write_pool_json_sync(self, snapshot: dict) -> None:
+        path = os.path.join(self.log_dir, "action_pool.json")
+        fd, tmp_path = tempfile.mkstemp(
+            prefix="action_pool.",
+            suffix=".tmp",
+            dir=self.log_dir,
+            text=True,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    logger.debug("[ActionPool] failed to remove temp snapshot file: %s", tmp_path)
+
+    async def _flush_pool_json_task(self) -> None:
+        try:
+            while self._snapshot_dirty and self.log_dir:
+                self._snapshot_dirty = False
+                snapshot = self._build_pool_snapshot()
+                try:
+                    await asyncio.to_thread(self._write_pool_json_sync, snapshot)
+                    self._emit_pool_snapshot(snapshot)
+                except Exception as e:
+                    logger.exception("[ActionPool] _save_pool_json failed: %s", e, exc_info=True)
+        finally:
+            self._snapshot_task = None
+
     def _save_pool_json(self) -> None:
-        """Write a live snapshot of the pool state to action_pool.json in log_dir."""
+        """Persist a live snapshot without blocking the active event loop."""
         if not self.log_dir:
             return
+
+        self._snapshot_dirty = True
         try:
-            snapshot = {
-                "pending": [self._action_snapshot(a) for a in self._pool],
-                "running": [self._action_snapshot(a) for a in self.running_actions],
-                "completed": [
-                    {**self._action_snapshot(a), "has_result": r is not None}
-                    for a, r in self.completed_actions
-                ],
-            }
-            path = os.path.join(self.log_dir, "action_pool.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(snapshot, f, indent=2, ensure_ascii=False)
-            emit(
-                "action_pool_snapshot",
-                {
-                    "pending_count": len(snapshot["pending"]),
-                    "running_count": len(snapshot["running"]),
-                    "completed_count": len(snapshot["completed"]),
-                    "snapshot": snapshot,
-                },
-                source="action_pool._save_pool_json",
-                action_id=None,
-            )
-        except Exception as e:
-            logger.exception("[ActionPool] _save_pool_json failed: %s", e, exc_info=True)
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                snapshot = self._build_pool_snapshot()
+                self._write_pool_json_sync(snapshot)
+                self._emit_pool_snapshot(snapshot)
+            except Exception as e:
+                logger.exception("[ActionPool] _save_pool_json failed: %s", e, exc_info=True)
+            finally:
+                self._snapshot_dirty = False
+            return
+
+        if self._snapshot_task is None or self._snapshot_task.done():
+            self._snapshot_task = loop.create_task(self._flush_pool_json_task())
+
+    async def flush_snapshot(self) -> None:
+        """Await persistence of the latest pool snapshot if logging is enabled."""
+        if not self.log_dir:
+            return
+
+        self._snapshot_dirty = True
+        loop = asyncio.get_running_loop()
+
+        while self._snapshot_dirty or self._snapshot_task is not None:
+            if self._snapshot_task is None or self._snapshot_task.done():
+                self._snapshot_task = loop.create_task(self._flush_pool_json_task())
+            await self._snapshot_task
 
     # ------------------------------------------------------------------
     # Mutations

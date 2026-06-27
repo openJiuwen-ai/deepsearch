@@ -46,6 +46,8 @@ openjiuwen_deepsearch/
   - `supplementary_search_rewrite_selected_and_related.md` - Prompt for supplementary search that rewrites the entire related section
   - `new_task_assessment.md` - Prompt for assessing sufficiency of historical evidence for new-task requests
   - `new_task_rewrite_section.md` - Prompt for rewriting sections based on new-task edit strategy
+  - `truth_verification_assessment.md` - Prompt for content truth verification assessment
+  - `truth_verification_search_task.md` - Prompt for truth-verification supplementary search task generation
 - **query_understanding/** - Query understanding
   - `interpreter.py` - Generate clarification questions
   - `outliner.py` - Generate outlines
@@ -88,6 +90,7 @@ openjiuwen_deepsearch/
   - `section_locator.py` - Locate the smallest Markdown heading block for a selection
   - `supplementary_search.py` - Execution logic for supplementary search and local / whole-section rewriting
   - `synonym_rewrite.py` - Execution logic for expansion, polishing, and shortening
+  - `truth_verification.py` - Content truth verification
   - `user_feedback_processor.py` - Parse feedback, validate, execute, and send results
 
 ---

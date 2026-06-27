@@ -11,6 +11,7 @@ class UserFeedbackActionCategory(str, Enum):
     SYNONYM_REWRITE = "synonym_rewrite"
     SUPPLEMENTARY_SEARCH = "supplementary_search"
     NEW_TASK = "new_task"
+    TRUTH_VERIFICATION = "truth_verification"
     SECTION_CHANGE = "section_change"
     SYNC = "sync"
     FINISH = "finish"
@@ -36,6 +37,12 @@ class NewTaskActionSubcategory(str, Enum):
     NEW_TASK = "new_task"
 
 
+class TruthVerificationActionSubcategory(str, Enum):
+    """内容真实性核验小类动作。"""
+
+    TRUTH_VERIFICATION = "truth_verification"
+
+
 class FinishActionSubcategory(str, Enum):
     """完成任务小类动作。"""
 
@@ -52,6 +59,7 @@ ResolvedActionSubcategory = (
     SynonymRewriteActionSubcategory
     | SupplementarySearchActionSubcategory
     | NewTaskActionSubcategory
+    | TruthVerificationActionSubcategory
     | SyncActionSubcategory
     | FinishActionSubcategory
 )
@@ -114,6 +122,12 @@ USER_INPUT_ACTION_MAP: dict[str, UserInputActionMapping] = {
     "new_task": UserInputActionMapping(
         action_category=UserFeedbackActionCategory.NEW_TASK,
         action_subcategory=NewTaskActionSubcategory.NEW_TASK,
+    ),
+
+    # 内容真实性核验
+    "truth_verification": UserInputActionMapping(
+        action_category=UserFeedbackActionCategory.TRUTH_VERIFICATION,
+        action_subcategory=TruthVerificationActionSubcategory.TRUTH_VERIFICATION,
     ),
 
     # 整篇同步

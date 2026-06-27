@@ -13,7 +13,12 @@ From the user's **original_query** (below), extract:
    - Do not translate the query, do not rewrite it into English keywords, and do not "internationalize" wording.
    - Mixed-language entities (e.g., names like Jensen Huang, product names like Blackwell/Rubin) can be kept as-is.
 
-2. **research_intent** (structured constraints):
+2. **language**: Detect the user's language and emit a locale code (e.g., `zh-CN`, `en-US`, `ja-JP`, `ko-KR`). You MUST always provide this field — never omit it.
+
+3. **research_intent** (structured constraints):
+   - **task_type**: classify the user's primary delivery pattern using a short English label such as `comparison`, `classification`, `trend_judgement`, `recommendation`, `evaluation`. Prefer `comparison` for prompts that ask to compare named targets or rank winners; prefer `classification` for prompts that ask to split by categories/types; prefer `trend_judgement` for prompts that ask how far a field is from industrialization, what the timeline is, or whether something is feasible; prefer `recommendation` for prompts that ask to suggest the best option, priority investment, or action plan; prefer `evaluation` for prompts that ask to assess quality, risk, feasibility, or effectiveness of a specific subject.
+   - **required_dimensions**: explicit comparison or analysis dimensions that the answer must cover.
+   - **comparison_targets**: explicit entities / options / categories that must be compared side by side.
    - **section_count**: positive integer if the user asks for a maximum or fixed number of chapters/sections; otherwise omit.
    - **audience_role**: who the report is for (e.g. CTO, investor), short phrase; omit if not stated.
    - **tone**: map the user's style request to ONE English enum value when possible, e.g. `objective`, `formal`, `analytical`, `informative`, `explanatory`, `persuasive`, `descriptive`, `critical`, `comparative`, `simple`, `casual`. Omit if unclear.
@@ -22,6 +27,7 @@ From the user's **original_query** (below), extract:
    - **include_domains** / **exclude_domains**: domain names only (no `http://`), lowercase hostnames; add domains implied by natural language (e.g. "只用维基百科" → `wikipedia.org`) when confident.
 
 Do **not** invent URLs. Extract URLs exactly as in the text when present.
+Do **not** leave task contract fields empty when the user explicitly asks for comparisons, categories, rankings, recommendations, timelines, or final judgments.
 
 ## Additional Context
 

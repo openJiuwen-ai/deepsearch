@@ -18,7 +18,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     CollectorSourceStore,
     build_evaluation_documents,
     build_evidence_atom,
-    hydrate_legacy_doc_info_fields,
+    normalize_doc_info_scores_and_time,
     normalize_scores,
 )
 from openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
@@ -470,7 +470,7 @@ class InfoRetrievalNode(BaseNode):
             publish_time = scored.get("publish_time") or scored.get("doc_time") or "未提供时间信息"
             doc_infos[index]["scores"] = scores
             doc_infos[index]["publish_time"] = publish_time
-            hydrate_legacy_doc_info_fields(doc_infos[index])
+            normalize_doc_info_scores_and_time(doc_infos[index])
             seen_indexes.add(index)
 
         return doc_infos

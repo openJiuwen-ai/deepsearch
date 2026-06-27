@@ -20,17 +20,6 @@ TRACKING_QUERY_KEYS = {"spm", "from", "source", "ref", "fbclid", "gclid"}
 MAX_PASSAGE_LENGTH = 500
 DEFAULT_KEY_PASSAGE_COUNT = 5
 SCORE_KEYS = ("authority", "relevance", "answerability", "data_density")
-LEGACY_DOC_INFO_FIELDS = (
-    "doc_time",
-    "source_authority",
-    "task_relevance",
-    "original_content",
-    "url",
-    "information_richness",
-    "data_density",
-    "title",
-    "query",
-)
 
 
 @dataclass
@@ -466,7 +455,7 @@ def build_evidence_atom(
         "content_ref": content_ref,
     }
     doc_info = {**base, "original_content": content}
-    hydrate_legacy_doc_info_fields(doc_info)
+    normalize_doc_info_scores_and_time(doc_info)
     return base, doc_info
 
 
@@ -625,70 +614,11 @@ def normalize_scores(scores: dict[str, Any] | None) -> dict[str, float | None]:
     return {key: _to_float_or_none(scores.get(key)) for key in SCORE_KEYS}
 
 
-def _score_text(value: float | None, fallback: str) -> str:
-    """格式化兼容期评分文本。
-
-    Args:
-        value: 结构化分数。
-        fallback: 缺失时使用的中文说明。
-
-    Returns:
-        用于旧字段的短文本。
-    """
-    return str(value) if value is not None else fallback
-
-
-def hydrate_legacy_doc_info_fields(doc_info: dict[str, Any]) -> dict[str, Any]:
-    """从新评分结构派生兼容期旧字段。
-
-    Args:
-        doc_info: 待补齐的文档信息。
-
-    Returns:
-        原字典本身，已写入兼容字段。
-    """
+def normalize_doc_info_scores_and_time(doc_info: dict[str, Any]) -> dict[str, Any]:
+    """Normalize structured scores and canonical time fields on doc_info."""
     scores = normalize_scores(doc_info.get("scores"))
     doc_info["scores"] = scores
     publish_time = doc_info.get("publish_time") or doc_info.get("doc_time") or "未提供时间信息"
     doc_info["publish_time"] = publish_time
     doc_info["doc_time"] = publish_time
-    authority = _score_text(scores["authority"], "未提供权威性得分")
-    relevance = _score_text(scores["relevance"], "未提供相关性得分")
-    answerability = _score_text(scores["answerability"], "未提供可答性得分")
-    data_density = _score_text(scores["data_density"], "未提供数据密度得分")
-    # Transitional compatibility: downstream report/classify/chart/debug code still reads these fields.
-    doc_info["source_authority"] = f"该篇文章的信息来源权威性和可信度得分：{authority}"
-    doc_info["task_relevance"] = f"该篇文章的内容与当前任务的相关性得分：{relevance}"
-    doc_info["information_richness"] = f"该篇文章的信息丰富程度与可答性得分：{answerability}"
-    doc_info["data_density"] = f"该篇文章的数据丰富和密集程度得分：{data_density}"
     return doc_info
-
-
-def build_legacy_doc_info_view(doc_info: dict[str, Any]) -> dict[str, Any]:
-    """构建旧报告链路使用的 doc_info 视图。
-
-    Args:
-        doc_info: 新 evidence 结构中的文档信息。
-
-    Returns:
-        仅包含旧报告链路字段的 doc_info 副本。
-    """
-    # 中间过渡态：部分下游报告节点仍依赖旧 doc_infos schema。
-    # 后续这些节点迁移到 evidence schema 后，需要删除该视图。
-    legacy_view = {field: doc_info.get(field, "") for field in LEGACY_DOC_INFO_FIELDS}
-    legacy_view["doc_time"] = doc_info.get("doc_time") or doc_info.get("publish_time", "")
-    return legacy_view
-
-
-def build_legacy_doc_infos_view(doc_infos: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """批量构建旧报告链路使用的 doc_infos 视图。
-
-    Args:
-        doc_infos: 新 evidence 结构中的文档信息列表。
-
-    Returns:
-        仅包含旧报告链路字段的 doc_infos 副本列表。
-    """
-    # 中间过渡态：渐进迁移期间用于稳定旧 prompt 输入。
-    # 后续下游 prompt 直接消费 compact evidence view 后，需要删除该 helper。
-    return [build_legacy_doc_info_view(doc_info) for doc_info in doc_infos]

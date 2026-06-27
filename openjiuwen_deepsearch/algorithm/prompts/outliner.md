@@ -31,15 +31,44 @@ understand the context and generate a more accurate outline:
 - Writing tone intent: {{ tone }}. Section naming and sequencing should align with this tone.
 {% endif %}
 
-## Analysis Framework (8 Dimensions)
-1. **Historical Context**: Evolution timeline  
-2. **Current Status**: Data points + recent developments  
-3. **Future Indicators**: Predictive models + scenario planning  
-4. **Stakeholder Data**: Group impact + perspective mapping  
-5. **Quantitative Data**: Multi-source statistics  
-6. **Qualitative Data**: Case studies + testimonies  
-7. **Comparative Analysis**: Cross-case benchmarking  
-8. **Risk Assessment**: Challenges + contingency plans  
+{% if task_type or has_required_dimensions or has_comparison_targets %}
+## Task Contract — Structure Guide
+- Primary task type: {{ task_type or "general_research" }}
+{% if has_required_dimensions %}- Required dimensions: {{ required_dimensions_text }}{% endif %}
+{% if has_comparison_targets %}- Explicit comparison targets: {{ comparison_targets_text }}{% endif %}
+
+The task contract guides **how to organize** the relevant dimensions from the thinking checklist below into sections, not which dimensions to consider.
+{% if task_type == "comparison" %}
+- For `comparison` tasks: organize relevant dimensions as comparison axes. Each comparison dimension should be a subsection or section. Ensure the compared objects and dimensions are easy to identify.
+{% elif task_type == "classification" %}
+- For `classification` tasks: organize sections by category/type first, then apply relevant dimensions within each category.
+{% elif task_type == "trend_judgement" %}
+- For `trend_judgement` tasks: ensure the outline explicitly covers current status, bottlenecks, timeline or distance-to-go, and feasibility path as distinct sections.
+{% endif %}
+{% endif %}
+
+## Analysis Framework — Thinking Checklist
+Use these 8 dimensions as a **thinking checklist** to ensure comprehensive coverage. For each dimension, ask: "Is this relevant to the current topic?" Include relevant dimensions as sections; skip genuinely irrelevant ones.
+
+1. **Historical Context**: Evolution timeline
+2. **Current Status**: Data points + recent developments
+3. **Future Indicators**: Predictive models + scenario planning
+4. **Stakeholder Data**: Group impact + perspective mapping
+5. **Quantitative Data**: Multi-source statistics
+6. **Qualitative Data**: Case studies + testimonies
+7. **Comparative Analysis**: Cross-case benchmarking
+8. **Risk Assessment**: Challenges + contingency plans
+
+⚠️ Dimensions such as **Risk Assessment**, **Stakeholder Data**, and **Qualitative Data** are commonly overlooked. Before skipping a dimension, briefly consider whether it is genuinely irrelevant or just less obvious.
+
+## Dimensional Coverage
+- For broad research queries (not a focused comparison, classification, or simple factual question), ensure at least **4 relevant dimensions** from the thinking checklist become separate sections.
+- If fewer than 4 dimensions are genuinely relevant to the topic, do not fabricate irrelevant sections. Brief reports are exempt.
+
+## Section Focus Assignment
+For each section in the outline, you MUST assign:
+- `section_focus`: a short label describing the section's analytical role within the report. Examples for business reports: `market_size_and_growth`, `vendors_and_supply`, `technology_drivers`, `risks_and_barriers`, `use_cases_and_commercialization`, `recommendation_and_ranking`. For non-business domains (scientific, legal, medical, educational), create appropriate labels that reflect the section's analytical purpose. Use `section_specific_analysis` as a fallback. Use `recommendation_and_ranking` ONLY for the section that carries the final judgment/recommendation.
+- `focus_dimensions`: 2-4 specific analytical dimensions this section primarily owns. Each dimension should have a primary owner section, but may be referenced as supporting context in other sections. Avoid making the same dimension the primary focus of multiple sections.
 
 ## Execution Constraints
 - **Target Number of Sections:** {{ section_num }} (require high focus, do not exceed this quantity)

@@ -18,15 +18,16 @@ class StartNode(Start)
 
 ---
 
-### class EntryNode
+### class IntentRecognitionNode
 ```python
-class EntryNode(BaseNode)
+class IntentRecognitionNode(BaseNode)
 ```
-**EntryNode** 负责语言识别与路由。
+**IntentRecognitionNode** 负责报告意图识别与语言检测。
 
 **功能**：
-- 调用 `classify_query` 判断用户需求语言类型。
-- 统一语言标识（`zh-CN` / `en-US`）。
+- 调用 `classify_and_recognize_intent` 解析用户查询意图。
+- 检测用户语言并统一语言标识（`zh-CN` / `en-US`）。
+- 执行网络搜索获取初始结果。
 - 失败或异常写入 `final_result.exception_info` 并结束。
 
 ---
@@ -193,18 +194,20 @@ class SourceTracerNode(BaseNode)
 ```python
 class UserFeedbackProcessorNode(BaseNode)
 ```
-**UserFeedbackProcessorNode** 在报告生成完成后，处理用户对局部文本的迭代改写请求。
+**UserFeedbackProcessorNode** 在报告生成完成后，处理用户对局部文本的迭代改写请求，以及选中内容的真实性核验。
 
 **功能**：
 - 根据 `user_feedback_processor_enable` 决定是否启用报告后局部优化。
 - 首次进入时先向前端发送完整的 `final_result` 快照，并通过 `search_context.feedback_snapshot_sent` 保证只发送一次。
-- 读取用户 JSON 反馈，支持 `expand`、`shorten`、`polish`、`supplementary_search`、`new_task`、`sync`、`finish`。
+- 读取用户 JSON 反馈，支持 `expand`、`shorten`、`polish`、`supplementary_search`、`new_task`、`truth_verification`、`sync`、`finish`。
 - 对改写类动作解析并校验 `action`、`rewrite_scope`、`selected_text`、偏移量等字段。
 - `supplementary_search` 支持 `selected_only` 与 `selected_and_related` 两种改写范围。
+- `truth_verification` 为只读动作：校验选区后返回 Markdown 核验结果，不更新 `final_result.response_content`，不写入 `search_context.rewrite_history`。
 - `sync` 会以轻量 ack 回传整篇报告更新结果，不消耗 `feedback_interaction_count`；只有整篇报告内容实际变化时才会追加一条 `rewrite_history` 记录。
-- 调用 `UserFeedbackProcessor` 完成局部改写，仅更新 `final_result.response_content`。
-- 普通 rewrite / supplementary_search 会维护 `search_context.feedback_interaction_count` 与 `search_context.rewrite_history`，记录动作类型、改写范围和实际替换区间。
-- 改写链路保留原有 citation / infer metadata，不再额外维护前端偏移映射。
+- 调用 `UserFeedbackProcessor` 完成局部改写并更新 `final_result.response_content`。
+- 当 `source_tracer_research_trace_source_switch` 开启时，普通 rewrite、`supplementary_search` 和 `new_task` 会对变化片段执行差异感知局部溯源；未变化片段保留原引用，新增引用会同步更新 `citation_messages` 并在文末追加参考文献。
+- 普通 rewrite / supplementary_search / new_task 会维护 `search_context.feedback_interaction_count` 与 `search_context.rewrite_history`，记录动作类型、改写范围和实际替换区间。
+- 改写链路不再额外维护前端偏移映射；`sync` 仅同步正文，不触发局部溯源。
 - `sync` 历史仅保留最近 10 条；内容未变化的 `sync` 不会新增历史记录。
 - 只有非 `sync` 动作会受 `user_feedback_processor_max_interactions` 约束；收到 `finish` 后结束流程。
 
@@ -288,14 +291,14 @@ class EndNode(End)
 
 ### 主工作流（并行）
 ```
-StartNode -> EntryNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
+StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
 -> [OutlineInteractionNode -> OutlineNode]* -> EditorTeamNode -> ReporterNode -> SourceTracerNode -> EndNode
 -> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
 ```
 
 ### 主工作流（依赖驱动）
 ```text
-StartNode -> EntryNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> DependencyOutlineNode
+StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> DependencyOutlineNode
 -> [DependencyOutlineInteractionNode -> DependencyOutlineNode]*
 -> DependencyEditorTeamNode -> ReporterNode -> SourceTracerNode
 -> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode

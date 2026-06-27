@@ -225,10 +225,14 @@ class OutlineToExcelExporter:
 
                         # 为每个doc_info创建单独的记录
                         for doc_info in query.get('doc_infos', []):
+                            scores = doc_info.get('scores', {})
+                            if not isinstance(scores, dict):
+                                scores = {}
                             doc_scores = (f"doc_time: {doc_info.get('doc_time', '')}\n\n"
-                                          f"source_authority: {doc_info.get('source_authority', '')}\n\n"
-                                          f"task_relevance: {doc_info.get('task_relevance', '')}\n\n"
-                                          f"information_richness: {doc_info.get('information_richness', '')}")
+                                          f"authority: {scores.get('authority', '')}\n\n"
+                                          f"relevance: {scores.get('relevance', '')}\n\n"
+                                          f"answerability: {scores.get('answerability', '')}\n\n"
+                                          f"data_density: {scores.get('data_density', '')}")
                             query_row_copy = copy.deepcopy(query_row)
                             query_row_copy['doc_title'] = doc_info.get('title', '')
                             query_row_copy['doc_url'] = doc_info.get('url', '')

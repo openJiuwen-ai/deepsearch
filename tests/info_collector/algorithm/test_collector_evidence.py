@@ -4,16 +4,14 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     build_content_ref,
     build_evaluation_documents,
     build_evidence_atom,
-    build_legacy_doc_info_view,
-    build_legacy_doc_infos_view,
     build_summary_evidence_pack,
     build_supervisor_evidence_table,
     extract_key_passages,
     generate_doc_id,
     generate_source_id,
-    hydrate_legacy_doc_info_fields,
     MAX_PASSAGE_LENGTH,
     normalize_content_for_dedup,
+    normalize_doc_info_scores_and_time,
     normalize_scores,
     read_content_by_ref,
     split_passages,
@@ -130,64 +128,6 @@ def test_content_ref_legacy_doc_infos_returns_legacy_content_directly(caplog):
 
     assert read_content_by_ref(content_ref, store, legacy_content="兼容正文") == "兼容正文"
     assert "content_ref missing in source_store" not in caplog.text
-
-
-def test_build_legacy_doc_info_view_returns_old_doc_info_shape():
-    """旧报告链路视图只应包含未适配节点需要的 legacy 字段。"""
-    doc_info = {
-        "doc_id": "web_1",
-        "source_id": "web_1_p123",
-        "title": "标题",
-        "url": "https://example.com",
-        "source": "example.com",
-        "publish_time": "2025-05",
-        "doc_time": "",
-        "query": "查询",
-        "key_passages": ["关键段落"],
-        "scores": {"authority": 8, "relevance": 9, "answerability": 7, "data_density": 6},
-        "content_ref": {"type": "source_store", "source_id": "web_1_p123"},
-        "original_content": "原文",
-        "source_authority": "权威性说明",
-        "task_relevance": "相关性说明",
-        "information_richness": "丰富度说明",
-        "data_density": "数据密度说明",
-    }
-
-    legacy_view = build_legacy_doc_info_view(doc_info)
-
-    assert legacy_view == {
-        "doc_time": "2025-05",
-        "source_authority": "权威性说明",
-        "task_relevance": "相关性说明",
-        "original_content": "原文",
-        "url": "https://example.com",
-        "information_richness": "丰富度说明",
-        "data_density": "数据密度说明",
-        "title": "标题",
-        "query": "查询",
-    }
-
-
-def test_build_legacy_doc_infos_view_does_not_mutate_source_doc_infos():
-    """批量转换旧报告链路视图时不应修改原始 doc_infos。"""
-    doc_infos = [{"title": "标题", "url": "https://example.com", "doc_id": "web_1"}]
-
-    legacy_view = build_legacy_doc_infos_view(doc_infos)
-
-    assert legacy_view == [
-        {
-            "doc_time": "",
-            "source_authority": "",
-            "task_relevance": "",
-            "original_content": "",
-            "url": "https://example.com",
-            "information_richness": "",
-            "data_density": "",
-            "title": "标题",
-            "query": "",
-        }
-    ]
-    assert doc_infos == [{"title": "标题", "url": "https://example.com", "doc_id": "web_1"}]
 
 
 def test_extract_key_passages_prefers_query_matches_and_data_dense_text():
@@ -428,17 +368,23 @@ def test_normalize_scores_accepts_missing_and_numeric_values():
     }
 
 
-def test_hydrate_legacy_doc_info_fields_keeps_only_downstream_fields():
+def test_normalize_doc_info_scores_and_time_keeps_only_downstream_fields():
     doc_info = {
         "scores": {"authority": 8.0, "relevance": 9.0, "answerability": 7.5, "data_density": 6.0},
         "publish_time": "2025 5月",
     }
 
-    hydrated = hydrate_legacy_doc_info_fields(doc_info)
+    hydrated = normalize_doc_info_scores_and_time(doc_info)
 
-    assert hydrated["source_authority"] == "该篇文章的信息来源权威性和可信度得分：8.0"
-    assert hydrated["task_relevance"] == "该篇文章的内容与当前任务的相关性得分：9.0"
-    assert hydrated["information_richness"] == "该篇文章的信息丰富程度与可答性得分：7.5"
-    assert hydrated["data_density"] == "该篇文章的数据丰富和密集程度得分：6.0"
+    assert "source_authority" not in hydrated
+    assert "task_relevance" not in hydrated
+    assert "information_richness" not in hydrated
+    assert "data_density" not in hydrated
+    assert hydrated["scores"] == {
+        "authority": 8.0,
+        "relevance": 9.0,
+        "answerability": 7.5,
+        "data_density": 6.0,
+    }
     assert hydrated["doc_time"] == "2025 5月"
     assert "_legacy_compatibility_fields" not in hydrated

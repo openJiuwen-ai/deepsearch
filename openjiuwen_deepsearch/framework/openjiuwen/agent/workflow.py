@@ -56,7 +56,7 @@ from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions 
     _is_report_feedback_payload,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.config.config import (
     AgentConfig,
     Config,
@@ -78,7 +78,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     DependencyOutlineNode,
     EndNode,
     IntentRecognitionNode,
-    EntryNode,
     FeedbackHandlerNode,
     FindActionSpaceNode,
     GenerateQuestionsNode,
@@ -226,7 +225,15 @@ class BaseAgent:
                 file_name=file_name, file_stream=file_stream, is_template=is_template, agent_config=agent_config
             )
             success = result.get("status", "").lower() == "success"
-            response_info = {} if success else {"exception_info": result.get("error_message", "")}
+            response_info = (
+                {}
+                if success
+                else {
+                    "exception_info": format_exception_info(
+                        StatusCode.TEMPLATE_GENERATE_ERROR, result.get("error_message", "")
+                    )
+                }
+            )
             return result
         except Exception as e:
             if LogManager.is_sensitive():
@@ -234,9 +241,11 @@ class BaseAgent:
             else:
                 logger.error(f"[extract_template] {e}")
             if LogManager.is_sensitive():
-                error_msg = "Error when generating template."
+                error_msg = format_exception_info(
+                    StatusCode.TEMPLATE_GENERATE_ERROR, "Error when generating template."
+                )
             else:
-                error_msg = str(e)
+                error_msg = format_exception_info(StatusCode.TEMPLATE_GENERATE_ERROR, e)
             response_info = {"exception_info": error_msg}
             return {"status": "fail", "template_content": "", "error_message": error_msg}
         finally:
@@ -617,10 +626,16 @@ class DeepresearchAgent(BaseAgent):
         except Exception as e:
             if not LogManager.is_sensitive() or isinstance(e, CustomValueException):
                 logger.error(f"[DeepResearchAgent.run] Session closed with error: {e}")
-                final_result_info = {"exception_info": str(e)}
+                final_result_info = {
+                    "exception_info": format_exception_info(StatusCode.WORKFLOW_RUN_ERROR, e)
+                }
             else:
                 logger.error(f"[DeepResearchAgent.run] Session closed with error.")
-                final_result_info = {"exception_info": "Session closed with error."}
+                final_result_info = {
+                    "exception_info": format_exception_info(
+                        StatusCode.WORKFLOW_RUN_ERROR, "Session closed with error."
+                    )
+                }
             if stats_info_llm_enabled:
                 try:
                     current_session = session_context.get()
@@ -699,7 +714,6 @@ class DeepresearchAgent(BaseAgent):
         )
         # 主图节点
         flow.add_workflow_comp(NodeId.INTENT_RECOGNITION.value, IntentRecognitionNode())
-        flow.add_workflow_comp(NodeId.ENTRY.value, EntryNode())
         flow.add_workflow_comp(NodeId.GENERATE_QUESTIONS.value, GenerateQuestionsNode())
         flow.add_workflow_comp(NodeId.FEEDBACK_HANDLER.value, FeedbackHandlerNode())
         flow.add_workflow_comp(NodeId.OUTLINE.value, OutlineNode())
@@ -717,11 +731,9 @@ class DeepresearchAgent(BaseAgent):
         flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
 
         # 添加条件边
-        entry_router = init_router(
-            NodeId.ENTRY.value, [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value]
-        )
         intent_recognition_router = init_router(
-            NodeId.INTENT_RECOGNITION.value, NodeId.ENTRY.value
+            NodeId.INTENT_RECOGNITION.value,
+            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -739,7 +751,6 @@ class DeepresearchAgent(BaseAgent):
             NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
         )
         flow.add_conditional_connection(NodeId.INTENT_RECOGNITION.value, router=intent_recognition_router)
-        flow.add_conditional_connection(NodeId.ENTRY.value, router=entry_router)
         flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
         flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
         flow.add_conditional_connection(NodeId.FEEDBACK_HANDLER.value, router=feedback_handler_router)
@@ -864,7 +875,6 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         )
         # 添加node
         flow.add_workflow_comp(NodeId.INTENT_RECOGNITION.value, IntentRecognitionNode())
-        flow.add_workflow_comp(NodeId.ENTRY.value, EntryNode())
         flow.add_workflow_comp(NodeId.GENERATE_QUESTIONS.value, GenerateQuestionsNode())
         flow.add_workflow_comp(NodeId.FEEDBACK_HANDLER.value, FeedbackHandlerNode())
         flow.add_workflow_comp(NodeId.OUTLINE.value, DependencyOutlineNode())
@@ -882,11 +892,9 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
 
         # 添加条件边
-        entry_router = init_router(
-            NodeId.ENTRY.value, [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value]
-        )
         intent_recognition_router = init_router(
-            NodeId.INTENT_RECOGNITION.value, NodeId.ENTRY.value
+            NodeId.INTENT_RECOGNITION.value,
+            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -908,7 +916,6 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
             NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
         )
         flow.add_conditional_connection(NodeId.INTENT_RECOGNITION.value, router=intent_recognition_router)
-        flow.add_conditional_connection(NodeId.ENTRY.value, router=entry_router)
         flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
         flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
         flow.add_conditional_connection(NodeId.FEEDBACK_HANDLER.value, router=feedback_handler_router)
@@ -1627,6 +1634,14 @@ class DeepSearchAgent(BaseAgent):
             self._build_agent()
 
             result: SearchFinalResult = await self._run_internal()
+            try:
+                await self.action_pool.flush_snapshot()
+            except Exception as e:
+                logger.warning(
+                    "[DeepSearchAgent] Failed to flush action pool snapshot before final result: %s",
+                    e,
+                    exc_info=not LogManager.is_sensitive(),
+                )
             if hasattr(result, "model_dump"):
                 yield json.dumps(to_json_safe(result.model_dump()), ensure_ascii=False)
             elif isinstance(result, dict):
@@ -1634,6 +1649,14 @@ class DeepSearchAgent(BaseAgent):
             else:
                 yield json.dumps({"result": str(result)}, ensure_ascii=False)
         finally:
+            try:
+                await self.action_pool.flush_snapshot()
+            except Exception as e:
+                logger.warning(
+                    "[DeepSearchAgent] Failed to flush action pool snapshot during cleanup: %s",
+                    e,
+                    exc_info=not LogManager.is_sensitive(),
+                )
             if llm_token is not None:
                 llm_context.reset(llm_token)
             if tool_token is not None:

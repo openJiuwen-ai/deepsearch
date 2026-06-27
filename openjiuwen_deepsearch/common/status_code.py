@@ -89,6 +89,17 @@ class StatusCode(Enum):
     # 业务类型相关错误（21开头，子类型编码范围 10-99）
     AGENT_RETRY_FAILED_ALL_ATTEMPTS = (211000, "Failed to get response after all retries")
     AGENT_RUN_NOT_SUPPORT = (211001, "Agent run is not supported")
+    AGENT_INIT_STATE_ERROR = (211002, "Agent init state failed or invalid result")
+    AGENT_FIND_ACTION_RESULT_ERROR = (211003, "Agent find action result invalid: {e}")
+    FIND_ACTION_PARSE_ERROR = (211004, "Find action: parse or validation failed: {e}")
+    RUN_ACTION_PARSE_ERROR = (211005, "Run action: parse or apply LLM result failed: {e}")
+    INIT_STATE_FAILED = (211006, "Failed to init state: {e}")
+    INIT_STATE_PLACEHOLDER_ERROR = (211007, "Failed to init state [placeholder]")
+    VALIDATE_NEW_STATE_ERROR = (211008, "Validate new state failed: {e}")
+    EMBED_API_CALL_FAILED = (
+        211009,
+        "Embedding API call failed, HTTP status code: {status_code}. {detail}",
+    )
 
     WORKFLOW_ROUTER_INIT_TYPE_ERROR = (211100, "next_nodes must be either str or list[str]")
     WORKFLOW_TYPE_NOT_EXIST_ERROR = (211101, "Workflow doesn't exist, config is {config}")
@@ -102,6 +113,7 @@ class StatusCode(Enum):
     WORKFLOW_CONTROLLER_NO_WORKFLOWS = (211106, "No workflows configured for WorkflowController")
     WORKFLOW_PARAM_INVALID = (211107, "Workflow must have .card or be callable provider with id/version.")
     WORKFLOW_ADD_FAILED = (211108, "Failed to add workflow {workflow_key}: {err}")
+    WORKFLOW_RUN_ERROR = (211109, "Workflow run failed, error: {e}")
 
     LLM_INSTANCE_NONE_ERROR = (211200, "llm instance is None when ainvoke, check if obtain llm first")
     LLM_RESPONSE_ERROR = (211201, "LLM response has something wrong")
@@ -152,22 +164,11 @@ class StatusCode(Enum):
 
     TEMPLATE_NAME_INVALID = (212201, "Invalid template name: {name}. Only Chinese/English letters, numbers,"
                                      "underscores (_), hyphens (-), and dots (.) are allowed.")
+    TEMPLATE_GENERATE_ERROR = (212202, "Template generation failed, error: {e}")
 
     SOURCE_TRACER_INFER_ERROR = (212300, "Source tracer infer error {e}")
     SOURCE_TRACER_INFER_DATA_TYPE_ERROR = (212301, "Source tracer infer data type error {e}")
     SOURCE_TRACER_INFER_DATA_LEN_ERROR = (212302, "Source tracer infer data length error {e}")
-
-    AGENT_INIT_STATE_ERROR = (212400, "Agent init state failed or invalid result")
-    AGENT_FIND_ACTION_RESULT_ERROR = (212401, "Agent find action result invalid: {e}")
-    FIND_ACTION_PARSE_ERROR = (212402, "Find action: parse or validation failed: {e}")
-    RUN_ACTION_PARSE_ERROR = (212403, "Run action: parse or apply LLM result failed: {e}")
-    INIT_STATE_FAILED = (212404, "Failed to init state: {e}")
-    INIT_STATE_PLACEHOLDER_ERROR = (212405, "Failed to init state [placeholder]")
-    VALIDATE_NEW_STATE_ERROR = (212406, "Validate new state failed: {e}")
-    EMBED_API_CALL_FAILED = (
-        212407,
-        "Embedding API call failed, HTTP status code: {status_code}. {detail}",
-    )
 
     USER_FEEDBACK_PROCESSOR_DISABLED = (212400, "User feedback processor is disabled")
     USER_FEEDBACK_PROCESSOR_MAX_INTERACTIONS_REACHED = (212401, "Max interaction limit reached: {max_interactions}")
@@ -203,3 +204,28 @@ class StatusCode(Enum):
     def code(self):
         """Return error code"""
         return self.value[0]
+
+
+def format_exception_info(
+    status_code: StatusCode,
+    error: str | BaseException | None = None,
+    *,
+    prefix: str = "",
+) -> str:
+    """Format exception info."""
+    detail = "" if error is None else str(error).strip()
+    errmsg = status_code.errmsg
+    if detail:
+        if "{e}" in errmsg:
+            message = errmsg.format(e=detail)
+        else:
+            message = f"{errmsg}: {detail}"
+    elif "{e}" in errmsg:
+        message = errmsg.format(e="").rstrip(" :")
+    else:
+        message = errmsg
+    if prefix:
+        if not prefix.endswith(" "):
+            prefix = f"{prefix} "
+        return f"[{status_code.code}]{prefix}{message}"
+    return f"[{status_code.code}]{message}"

@@ -536,6 +536,10 @@ async def test_run_new_task_merges_new_docs_and_rewrites_entire_section(caplog):
     assert result["used_historical_doc_count"] == 1
     assert result["used_new_doc_count"] == 1
     assert result["incremental_doc_infos"] == [{"title": "文档B", "url": "https://b.com"}]
+    assert result["source_trace_doc_infos"] == [
+        {"title": "文档A", "url": "https://a.com"},
+        {"title": "文档B", "url": "https://b.com"},
+    ]
     assert result["assessment_summary"] == "还缺行业背景"
     assert any("incremental collection started" in record.message for record in caplog.records)
     assert any("incremental collection completed" in record.message for record in caplog.records)
@@ -1173,19 +1177,17 @@ async def test_assess_section_assets_parses_structured_llm_response():
     assert result.relevant_doc_infos == [doc_info]
     assert result.reasoning_summary == "历史资料足够支撑补写"
     prompt_vars = mock_invoke.await_args.args[1]
-    assert prompt_vars["historical_doc_infos"] == [
-        {
-            "doc_time": "2025-05",
-            "source_authority": "",
-            "task_relevance": "",
-            "original_content": "原文A",
-            "url": "https://a.com",
-            "information_richness": "",
-            "data_density": "",
-            "title": "文档A",
-            "query": "",
-        }
-    ]
+    historical_doc_info = prompt_vars["historical_doc_infos"][0]
+    assert historical_doc_info["publish_time"] == "2025-05"
+    assert historical_doc_info["url"] == "https://a.com"
+    assert historical_doc_info["query"] == ""
+    assert historical_doc_info["scores"] == {"authority": 8, "relevance": 9, "answerability": 7, "data_density": 6}
+    assert historical_doc_info["key_passages"] == ["关键段落"]
+    assert "original_content" not in historical_doc_info
+    assert "source_authority" not in historical_doc_info
+    assert "task_relevance" not in historical_doc_info
+    assert "information_richness" not in historical_doc_info
+    assert "data_density" not in historical_doc_info
     assert mock_invoke.await_args.args[2] == AgentLlmName.USER_FEEDBACK_PROCESSOR_NEW_TASK_ASSESSMENT.value
 
 
@@ -1587,19 +1589,17 @@ async def test_rewrite_section_with_assets_returns_clean_section_text():
 
     assert result == "## 第一章\n新章节内容"
     prompt_vars = mock_invoke.await_args.args[1]
-    assert prompt_vars["doc_infos"] == [
-        {
-            "doc_time": "2025-05",
-            "source_authority": "",
-            "task_relevance": "",
-            "original_content": "原文A",
-            "url": "https://a.com",
-            "information_richness": "",
-            "data_density": "",
-            "title": "文档A",
-            "query": "",
-        }
-    ]
+    doc_info = prompt_vars["doc_infos"][0]
+    assert doc_info["publish_time"] == "2025-05"
+    assert doc_info["url"] == "https://a.com"
+    assert doc_info["query"] == ""
+    assert doc_info["scores"] == {"authority": 8}
+    assert doc_info["key_passages"] == ["关键段落"]
+    assert "original_content" not in doc_info
+    assert "source_authority" not in doc_info
+    assert "task_relevance" not in doc_info
+    assert "information_richness" not in doc_info
+    assert "data_density" not in doc_info
     assert mock_invoke.await_args.args[2] == AgentLlmName.USER_FEEDBACK_PROCESSOR_NEW_TASK_REWRITE_SECTION.value
 
 

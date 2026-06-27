@@ -11,6 +11,7 @@ from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions 
     SupplementarySearchActionSubcategory,
     SyncActionSubcategory,
     SynonymRewriteActionSubcategory,
+    TruthVerificationActionSubcategory,
     SYNONYM_REWRITE_ACTIONS,
     USER_INPUT_ACTION_MAP,
     UserFeedbackActionCategory,
@@ -20,8 +21,12 @@ from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions 
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.supplementary_search import (
     SupplementarySearcher,
 )
+from openjiuwen_deepsearch.algorithm.user_feedback_processor.local_source_trace import (
+    apply_local_source_trace_to_action_result,
+)
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.synonym_rewrite import SynonymRewriter
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.new_task_processor import NewTaskProcessor
+from openjiuwen_deepsearch.algorithm.user_feedback_processor.truth_verification import TruthVerificationProcessor
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.common.exception import (
     CustomException,
@@ -56,6 +61,8 @@ class UserFeedbackProcessor:
         self._supplementary_searcher = SupplementarySearcher(llm_model_name)
         # 新增任务处理器
         self._new_task_processor = NewTaskProcessor(llm_model_name)
+        # 内容真实性核验处理器
+        self._truth_verifier = TruthVerificationProcessor(llm_model_name)
 
     # ------------------------------------------------------------------
     # 解析 & 校验
@@ -404,6 +411,10 @@ class UserFeedbackProcessor:
                 UserFeedbackProcessor._build_new_task_stream_result,
                 UserFeedbackProcessor._send_new_task_result,
             ),
+            UserFeedbackActionCategory.TRUTH_VERIFICATION: (
+                UserFeedbackProcessor._build_truth_verification_stream_result,
+                UserFeedbackProcessor._send_truth_verification_result,
+            ),
             UserFeedbackActionCategory.SECTION_CHANGE: (
                 UserFeedbackProcessor._build_section_change_stream_result,
                 UserFeedbackProcessor._send_section_change_result,
@@ -509,6 +520,29 @@ class UserFeedbackProcessor:
                 f"Rewrite stream result requires new_task subcategory, got {subcategory.value}"
             )
         return UserFeedbackProcessor._build_rewrite_stream_result(action_result, resolved_action)
+
+    @staticmethod
+    def _build_truth_verification_stream_result(
+        action_result: dict,
+        resolved_action: ResolvedUserAction,
+    ) -> str:
+        """构建内容真实性核验动作的流式结果。"""
+        subcategory = resolved_action.action_subcategory
+        if not isinstance(subcategory, TruthVerificationActionSubcategory):
+            UserFeedbackProcessor._raise_stream_result_error(
+                "Truth verification stream result requires truth_verification subcategory."
+            )
+        verification_result = action_result.get("verification_result")
+        if not isinstance(verification_result, dict):
+            UserFeedbackProcessor._raise_stream_result_error(
+                "Truth verification stream result requires dict verification_result."
+            )
+        display_text = verification_result.get("display_text", "")
+        if not isinstance(display_text, str) or not display_text.strip():
+            UserFeedbackProcessor._raise_stream_result_error(
+                "Truth verification stream result requires non-empty display_text."
+            )
+        return display_text.strip()
 
     @staticmethod
     def _build_sync_stream_result(
@@ -653,6 +687,32 @@ class UserFeedbackProcessor:
         )
 
     @staticmethod
+    async def _send_truth_verification_result(
+        session,
+        result: object | None,
+        final_result: dict | None = None,
+        feedback_interaction_count: int = 0,
+    ):
+        """向前端发送内容真实性核验结果。"""
+        if not isinstance(result, str):
+            UserFeedbackProcessor._raise_stream_result_error(
+                f"Expected truth verification display text, got {type(result).__name__}"
+            )
+        content = result.strip()
+        if not content:
+            UserFeedbackProcessor._raise_stream_result_error(
+                "Truth verification display text cannot be empty."
+            )
+        await session.write_custom_stream({
+            "message_id": str(uuid.uuid4()),
+            "agent": NodeId.USER_FEEDBACK_PROCESSOR.value,
+            "content": content,
+            "message_type": MessageType.MESSAGE_CHUNK.value,
+            "event": StreamEvent.SUMMARY_RESPONSE.value,
+            "created_time": get_current_time(),
+        })
+
+    @staticmethod
     async def _send_sync_result(
         session,
         result: object | None,
@@ -741,6 +801,8 @@ class UserFeedbackProcessor:
         feedback: dict,
         final_result,
         language: str,
+        enable_local_source_trace: bool = True,
+        current_report=None,
     ) -> dict:
         """根据动作类型路由到具体反馈处理逻辑。
 
@@ -752,6 +814,7 @@ class UserFeedbackProcessor:
             feedback: 已通过校验的用户反馈字典。
             final_result: 当前报告完整结果，至少包含正文与 metadata。
             language: 当前报告语言。
+            enable_local_source_trace: 是否在改写后执行差异感知局部溯源。
 
         Returns:
             dict: 改写后的结果快照，包含：
@@ -765,8 +828,63 @@ class UserFeedbackProcessor:
         action = feedback["action"]
 
         report_content = final_result.get("response_content", "") or ""
+        action_mapping = USER_INPUT_ACTION_MAP.get(action)
+        flow_name = action_mapping.action_category.value if action_mapping else "unsupported"
+        logger.info(
+            "[UserFeedbackProcessor] execute started. action=%s flow=%s rewrite_scope=%s "
+            "enable_local_source_trace=%s report_len=%s",
+            action,
+            flow_name,
+            feedback.get("rewrite_scope", ""),
+            enable_local_source_trace,
+            len(report_content),
+        )
+
+        async def apply_trace_if_enabled(action_result: dict) -> dict:
+            """按开关决定是否执行局部溯源。
+
+            Args:
+                action_result: 子处理器返回的改写结果。
+
+            Returns:
+                开关关闭时返回原始 action_result；开启时返回局部溯源增强后的结果。
+            """
+            if not enable_local_source_trace:
+                logger.info(
+                    "[UserFeedbackProcessor] local source trace skipped. action=%s flow=%s reason=disabled",
+                    action,
+                    flow_name,
+                )
+                return action_result
+            logger.info(
+                "[UserFeedbackProcessor] local source trace stage started. action=%s flow=%s",
+                action,
+                flow_name,
+            )
+            traced_result = await apply_local_source_trace_to_action_result(
+                feedback=feedback,
+                action_result=action_result,
+                final_result=final_result,
+                llm_model_name=self.llm_model_name,
+                language=language,
+            )
+            logger.info(
+                "[UserFeedbackProcessor] local source trace stage completed. action=%s flow=%s "
+                "citation_updated=%s warning_present=%s",
+                action,
+                flow_name,
+                "citation_messages" in traced_result,
+                bool(traced_result.get("warning_info")),
+            )
+            return traced_result
+
         if action == "sync":
             synced_report = feedback["selected_text"]
+            logger.info(
+                "[UserFeedbackProcessor] sync flow completed. original_len=%s synced_len=%s",
+                len(report_content),
+                len(synced_report),
+            )
             return {
                 "sync_only": True,
                 "new_report": synced_report,
@@ -779,23 +897,34 @@ class UserFeedbackProcessor:
             }
 
         if action in SYNONYM_REWRITE_ACTIONS:
-            return await self._synonym_rewriter.synonym_rewrite(
+            action_result = await self._synonym_rewriter.synonym_rewrite(
                 feedback=feedback,
                 report_content=report_content,
                 language=language,
             )
+            return await apply_trace_if_enabled(action_result)
 
         if action == "supplementary_search":
-            return await self._supplementary_searcher.supplementary_search(
+            action_result = await self._supplementary_searcher.supplementary_search(
                 feedback=feedback,
                 final_result=final_result,
                 language=language,
             )
+            return await apply_trace_if_enabled(action_result)
 
         if action == "new_task":
-            return await self._new_task_processor.run_new_task(
+            action_result = await self._new_task_processor.run_new_task(
                 feedback=feedback,
                 final_result=final_result,
+                language=language,
+            )
+            return await apply_trace_if_enabled(action_result)
+
+        if action == "truth_verification":
+            return await self._truth_verifier.truth_verification(
+                feedback=feedback,
+                final_result=final_result,
+                current_report=current_report,
                 language=language,
             )
 

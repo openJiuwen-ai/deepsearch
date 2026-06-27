@@ -203,7 +203,7 @@ class TestDependencyInfoCollectorNode:
         assert updated["current_plan_is_completed"] is True
         assert updated["history_plans"] == [current_plan]
         assert updated["warning_infos"]
-        assert "阻塞任务" in updated["warning_infos"][0]
+        assert "blocked tasks with unsatisfied parent steps" in updated["warning_infos"][0]
 
     def test_post_handle_flushes_warning_infos_and_collected_doc_num(self):
         node = DependencyInfoCollectorNode()

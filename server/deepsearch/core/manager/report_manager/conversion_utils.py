@@ -24,7 +24,49 @@ NUMBERED_HEADING_RE = re.compile(
     r"^(?P<indent>\s{0,3})(?P<number>\d+(?:\.\d+)*)(?:\.\s+|\s+)(?P<title>.+?)\s*$"
 )
 LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+\.\s+)")
+# Math formula spans. Block math ($$...$$) is matched first (DOTALL) so inline
+# matching never splits a block delimiter pair.
+BLOCK_MATH_RE = re.compile(r"\$\$.+?\$\$", re.DOTALL)
+SIMPLE_VARIABLE_MATH_RE = re.compile(r"[A-Za-zΑ-Ωα-ω]")
+MATH_FEATURE_RE = re.compile(r"(\\[A-Za-z]+|[_^={}]|[+\-*/×÷∑∫√≈≠≤≥<>])")
+STRONG_NUMERIC_MATH_FEATURE_RE = re.compile(r"(\\[A-Za-z]+|[_^{}]|[+\-−×÷∑∫√=≈≠≤≥<>])")
+MATH_FUNCTION_CALL_RE = re.compile(
+    r"(?:\\?[A-Za-zΑ-Ωα-ω]+|[0-9]+|\\[A-Za-z]+)"
+    r"\s*(?:_\{?[\w\\]+\}?|\\[A-Za-z]+)*"
+    r"\s*[\(\[][^)\]\n]+[\)\]]"
+)
+EQUATION_REFERENCE_RE = re.compile(r"\((?:Eq\.?|Equation)\s*\d+[A-Za-z]?\)", re.IGNORECASE)
+NUMERIC_TUPLE_RE = re.compile(r"\(\s*[+-]?\d+(?:\.\d+)?(?:\s*,\s*[+-]?\d+(?:\.\d+)?)+\s*\)")
+PRIME_VARIABLE_RE = re.compile(
+    r"(?:\\[A-Za-z]+|[A-Za-zΑ-Ωα-ω])(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?)*'+"
+)
+PLAIN_CURRENCY_RE = re.compile(r"\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:\s*(?:[-–—~至到]|to)\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?)?")
+# Sentinel uses NUL control chars so Python-Markdown leaves it untouched (no
+# emphasis, strong, escaping, or link parsing applied to the placeholder).
+MATH_PLACEHOLDER = "\x00MATH{}\x00"
+MATH_PLACEHOLDER_RE = re.compile(r"\x00MATH(\d+)\x00")
+INLINE_MATH_DOLLAR_RE = re.compile(r"^\$(?!\$)(.*?)(?<!\$)\$$", re.DOTALL)
+HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?>")
+MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]\n]+\]\([^)]+\)")
+CODE_PLACEHOLDER = "\x00CODE{}\x00"
+CODE_PLACEHOLDER_RE = re.compile(r"\x00CODE(\d+)\x00")
+FENCED_CODE_RE = re.compile(
+    r"(?ms)^(?P<indent>[ \t]{0,3})(?P<fence>`{3,}|~{3,})[^\n]*\n.*?\n(?P=indent)(?P=fence)[ \t]*$"
+)
+INLINE_CODE_RE = re.compile(r"`+[^`\n]*`+")
+LIST_ITEM_WITH_INDENT_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<marker>(?:[-*+]\s+|\d+\.\s+).*)$"
+)
 INDENTED_LIST_ITEM_RE = re.compile(r"^(?P<indent>[ \t]{4,})(?P<marker>(?:[-*+]\s+|\d+\.\s+).*)$")
+MARKDOWN_IMAGE_LINE_RE = re.compile(r"^[ \t]*!\[[^\]]*\]\([^)]+\)[ \t]*$")
+LEGACY_FONT_CAPTION_PREFIX_RE = re.compile(
+    r'^[ \t]*<font\b[^>]*\bsize\s*=\s*["\']?2["\']?[^>]*>',
+    flags=re.IGNORECASE,
+)
+INDENTED_HTML_BLOCK_END_RE = re.compile(
+    r"^[ \t]+</(?:div|section|article|main)>[ \t]*$",
+    flags=re.IGNORECASE,
+)
 MARKDOWN_TABLE_ROW_RE = re.compile(r"^[ \t]{0,3}\|")
 MARKDOWN_TABLE_DELIMITER_RE = re.compile(r":?-{1,}:?")
 SENTENCE_END_RE = re.compile(r"[。！？?!…]$")
@@ -36,7 +78,7 @@ LEGACY_CITATION_RE = re.compile(r"\[\s*citation:\s*\d+\s*\]")
 REFERENCE_LINE_RE = re.compile(r"^(?P<indent>\s*)\[(\d+)\]\.\s+(.*)$", re.MULTILINE)
 CENTER_CAPTION_RE = re.compile(r'<div\s+style="text-align:\s*center;?">', flags=re.IGNORECASE)
 LEGACY_FONT_CAPTION_LINE_RE = re.compile(
-    r'^[ \t]*<font\b[^>]*\bsize\s*=\s*["\']?2["\']?[^>]*>(?P<body>.*?)</font>'
+    r'^(?P<indent>[ \t]*)<font\b[^>]*\bsize\s*=\s*["\']?2["\']?[^>]*>(?P<body>.*?)</font>'
     r'(?P<citations>(?:<sup class="citation">.*?</sup>)*)[ \t]*$',
     flags=re.IGNORECASE | re.MULTILINE,
 )
@@ -256,12 +298,78 @@ def normalize_legacy_font_caption_blocks(text: str) -> str:
     """
 
     def _replace(match: re.Match[str]) -> str:
+        indent = match.group("indent")
         body = match.group("body").strip()
         citations = match.group("citations").strip()
         caption_content = f"{body}{citations}"
-        return f'\n<div class="figure-caption" markdown="1">\n{caption_content}\n</div>\n'
+        return (
+            f'\n{indent}<div class="figure-caption" markdown="1">\n'
+            f"{indent}{caption_content}\n"
+            f"{indent}</div>\n"
+        )
 
     return LEGACY_FONT_CAPTION_LINE_RE.sub(_replace, text)
+
+
+def normalize_interrupted_nested_list_blocks(text: str) -> str:
+    """Keep image or description blocks inside the list items they interrupt."""
+    lines = text.split("\n")
+
+    def _indent_width(indent: str) -> int:
+        return len(indent.expandtabs(4))
+
+    for index, line in enumerate(lines):
+        current_item = LIST_ITEM_WITH_INDENT_RE.match(line)
+        if current_item is None:
+            continue
+
+        list_indent = _indent_width(current_item.group("indent"))
+        block_indexes: list[int] = []
+        saw_image = False
+        saw_font_description = False
+
+        for cursor in range(index + 1, len(lines)):
+            candidate = lines[cursor]
+            if not candidate.strip():
+                block_indexes.append(cursor)
+                continue
+
+            if MARKDOWN_IMAGE_LINE_RE.match(candidate):
+                saw_image = True
+                block_indexes.append(cursor)
+                continue
+
+            if saw_image and LEGACY_FONT_CAPTION_PREFIX_RE.match(candidate):
+                saw_font_description = True
+                block_indexes.append(cursor)
+                continue
+
+            if not saw_image and LEGACY_FONT_CAPTION_PREFIX_RE.match(candidate):
+                saw_font_description = True
+                block_indexes.append(cursor)
+                continue
+
+            next_item = LIST_ITEM_WITH_INDENT_RE.match(candidate)
+            next_indent = _indent_width(next_item.group("indent")) if next_item else -1
+            is_matching_sibling = (
+                saw_image
+                and next_item is not None
+                and next_indent == list_indent
+            )
+            is_nested_after_description = (
+                saw_font_description
+                and next_item is not None
+                and next_indent > list_indent
+            )
+            if is_matching_sibling or is_nested_after_description:
+                content_indent_width = next_indent if is_nested_after_description else list_indent + 4
+                content_indent = " " * content_indent_width
+                for block_index in block_indexes:
+                    if lines[block_index].strip():
+                        lines[block_index] = content_indent + lines[block_index].lstrip()
+            break
+
+    return "\n".join(lines)
 
 
 def normalize_list_boundaries(text: str) -> str:
@@ -371,6 +479,10 @@ def normalize_orphan_indented_list_items(text: str) -> str:
     def _indent_width(indent: str) -> int:
         return len(indent.expandtabs(4))
 
+    def _line_indent_width(line: str) -> int:
+        indent = re.match(r"^[ \t]*", line).group(0)
+        return _indent_width(indent)
+
     for line in lines:
         if line.lstrip().startswith("```"):
             in_fenced_code = not in_fenced_code
@@ -386,7 +498,19 @@ def normalize_orphan_indented_list_items(text: str) -> str:
                 continue
 
             previous = _previous_nonempty_line()
-            if not LIST_ITEM_RE.match(previous) and not INDENTED_LIST_ITEM_RE.match(previous):
+            previous_indent_width = _line_indent_width(previous)
+            follows_nested_content = (
+                previous_indent_width > indent_width
+                or (
+                    previous_indent_width == indent_width
+                    and INDENTED_HTML_BLOCK_END_RE.match(previous)
+                )
+            )
+            if (
+                not follows_nested_content
+                and not LIST_ITEM_RE.match(previous)
+                and not INDENTED_LIST_ITEM_RE.match(previous)
+            ):
                 orphan_list_indent = indent_width
                 normalized.append(match.group("marker"))
                 continue
@@ -429,6 +553,7 @@ def preprocess_markdown_text(text: str) -> str:
         str: 预处理后的 Markdown 文本。
     """
     text = normalize_whitespace(text)
+    text = normalize_interrupted_nested_list_blocks(text)
     text = strip_internal_citation_markers(text)
     text = replace_citations(text)
     text = normalize_reference_lines(text)
@@ -478,6 +603,210 @@ def postprocess_html(html_text: str) -> str:
     html_text = re.sub(r'[ \t]+(<sup class="citation">)', r"\1", html_text)
     html_text = re.sub(r'(</sup>)[ \t]+(<sup class="citation">)', r"\1\2", html_text)
     return wrap_html_tables(html_text)
+
+
+def protect_math_spans(text: str) -> tuple[str, list[str]]:
+    """Replace LaTeX math spans with placeholders before Markdown conversion.
+
+    Python-Markdown otherwise treats characters inside ``$...$`` / ``$$...$$``
+    (notably ``_`` and ``*``) as emphasis markup and injects ``<em>``/``<strong>``
+    tags into the formula, leaving MathJax with invalid LaTeX. Each span is
+    swapped for a NUL-wrapped sentinel that Markdown leaves untouched, then
+    restored verbatim by :func:`restore_math_spans` after conversion.
+
+    Args:
+        text: 原始 Markdown 文本。
+
+    Returns:
+        tuple[str, list[str]]: (替换占位符后的文本, 按出现顺序保存的公式原文列表)。
+    """
+    formulas: list[str] = []
+    code_spans: list[str] = []
+
+    def _store_code(match: re.Match[str]) -> str:
+        code_spans.append(match.group(0))
+        return CODE_PLACEHOLDER.format(len(code_spans) - 1)
+
+    def _store(match: re.Match[str]) -> str:
+        formulas.append(match.group(0))
+        return MATH_PLACEHOLDER.format(len(formulas) - 1)
+
+    text = FENCED_CODE_RE.sub(_store_code, text)
+    text = INLINE_CODE_RE.sub(_store_code, text)
+    # Block math first (DOTALL) so inline matching never splits a ``$$`` pair.
+    text = BLOCK_MATH_RE.sub(_store, text)
+    text = _protect_inline_math_spans(text, formulas)
+
+    def _restore_code(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 0 <= index < len(code_spans):
+            return code_spans[index]
+        return match.group(0)
+
+    text = CODE_PLACEHOLDER_RE.sub(_restore_code, text)
+    return text, formulas
+
+
+def _protect_inline_math_spans(text: str, formulas: list[str]) -> str:
+    """Protect inline LaTeX spans while leaving currency-like dollars intact."""
+    parts: list[str] = []
+    cursor = 0
+    index = 0
+
+    while index < len(text):
+        start = text.find("$", index)
+        if start == -1:
+            break
+        if _should_skip_inline_math_start(text, start):
+            index = start + 1
+            continue
+
+        end = _find_inline_math_end(text, start + 1)
+        if end is None:
+            index = start + 1
+            continue
+
+        formula = text[start:end + 1]
+        if _is_likely_inline_math(formula[1:-1].strip()):
+            parts.append(text[cursor:start])
+            formulas.append(formula)
+            parts.append(MATH_PLACEHOLDER.format(len(formulas) - 1))
+            cursor = end + 1
+            index = end + 1
+        else:
+            index = end + 1
+
+    if not parts:
+        return text
+
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def _find_inline_math_end(text: str, start_index: int) -> int | None:
+    index = start_index
+    while index < len(text):
+        end = text.find("$", index)
+        if end == -1:
+            return None
+        if "\n" in text[start_index:end]:
+            return None
+        if _is_valid_inline_math_end(text, start_index, end):
+            return end
+        index = end + 1
+    return None
+
+
+def _should_skip_inline_math_start(text: str, index: int) -> bool:
+    """Return whether a dollar sign cannot start an inline math span."""
+    if _is_escaped(text, index):
+        return True
+    if _is_double_dollar(text, index):
+        return True
+    if _is_likely_currency_start(text, index):
+        return True
+    return not _is_valid_inline_math_start(text, index)
+
+
+def _is_valid_inline_math_end(text: str, start_index: int, end_index: int) -> bool:
+    """Return whether a dollar sign can close an inline math span."""
+    if _is_escaped(text, end_index):
+        return False
+    if _is_double_dollar(text, end_index):
+        return False
+    if end_index <= start_index:
+        return False
+    if text[end_index - 1].isspace():
+        return False
+    return not (end_index + 1 < len(text) and text[end_index + 1].isdigit())
+
+
+def _is_likely_inline_math(content: str) -> bool:
+    if not content:
+        return False
+    if HTML_TAG_RE.search(content) or MARKDOWN_LINK_RE.search(content):
+        return False
+    if PLAIN_CURRENCY_RE.fullmatch(content):
+        return False
+    return bool(
+        SIMPLE_VARIABLE_MATH_RE.fullmatch(content)
+        or MATH_FEATURE_RE.search(content)
+        or MATH_FUNCTION_CALL_RE.fullmatch(content)
+        or EQUATION_REFERENCE_RE.fullmatch(content)
+        or NUMERIC_TUPLE_RE.fullmatch(content)
+        or PRIME_VARIABLE_RE.fullmatch(content)
+    )
+
+
+def _is_valid_inline_math_start(text: str, index: int) -> bool:
+    next_index = index + 1
+    if next_index >= len(text):
+        return False
+    next_char = text[next_index]
+    if next_char.isspace() or next_char in "，。；：、,.!?;:)]}）】」』":
+        return False
+    return True
+
+
+def _is_likely_currency_start(text: str, index: int) -> bool:
+    """Return whether a dollar sign begins currency-like text, not math."""
+    match = re.match(r"\$(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?", text[index:])
+    if not match:
+        return False
+    next_index = index + len(match.group(0))
+    if next_index >= len(text):
+        return True
+    end = _find_inline_math_end(text, index + 1)
+    if end is not None and STRONG_NUMERIC_MATH_FEATURE_RE.search(text[next_index:end]):
+        return False
+    return text[next_index] not in "([{_=^\\"
+
+
+def _is_double_dollar(text: str, index: int) -> bool:
+    return (
+        (index > 0 and text[index - 1] == "$")
+        or (index + 1 < len(text) and text[index + 1] == "$")
+    )
+
+
+def _is_escaped(text: str, index: int) -> bool:
+    slash_count = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        slash_count += 1
+        cursor -= 1
+    return slash_count % 2 == 1
+
+
+def restore_math_spans(html_text: str, formulas: list[str]) -> str:
+    """Restore math placeholders produced by :func:`protect_math_spans`.
+
+    Args:
+        html_text: 经 Markdown 转换、仍含公式占位符的 HTML 文本。
+        formulas: :func:`protect_math_spans` 返回的公式原文列表。
+
+    Returns:
+        str: 占位符还原为公式原文后的 HTML 文本。
+    """
+
+    def _restore(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 0 <= index < len(formulas):
+            return normalize_math_span_for_rendering(formulas[index])
+        return match.group(0)
+
+    return MATH_PLACEHOLDER_RE.sub(_restore, html_text)
+
+
+def normalize_math_span_for_rendering(formula: str) -> str:
+    """Normalize protected inline dollar math to explicit LaTeX delimiters."""
+    match = INLINE_MATH_DOLLAR_RE.match(formula)
+    if match:
+        return rf"\({html.escape(match.group(1), quote=False)}\)"
+    block_match = BLOCK_MATH_RE.fullmatch(formula)
+    if block_match:
+        return f"$${html.escape(formula[2:-2], quote=False)}$$"
+    return html.escape(formula, quote=False)
 
 
 def _neighbor_numbered_line(lines: list[str], index: int, *, reverse: bool) -> str | None:

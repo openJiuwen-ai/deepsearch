@@ -24,11 +24,12 @@ from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
 from openjiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TIME_LOGGER_TAG
 from openjiuwen_deepsearch.algorithm.query_understanding.interpreter import query_interpreter
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
+    classify_and_recognize_intent,
     recognize_report_intent,
     resolve_report_type_policy,
+    web_search_for_query,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
-from openjiuwen_deepsearch.algorithm.query_understanding.router import classify_query, web_search_for_query
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.search_nodes.find_action import run_find_action_space
@@ -72,7 +73,7 @@ from openjiuwen_deepsearch.common.exception import (
     CustomJiuWenBaseException,
     CustomValueException,
 )
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.config.config import (
     Config,
     LocalSearchEngineConfig,
@@ -82,6 +83,7 @@ from openjiuwen_deepsearch.config.config import (
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Action,
+    build_research_intent_prompt_context,
     Message,
     Outline,
     OutlineInteraction,
@@ -231,7 +233,8 @@ class StartNode(Start):
 
 class IntentRecognitionNode(BaseNode):
     """
-    报告意图识别节点：从原始 query 中拆分研究主题和报告生成约束。
+    报告意图识别节点：从原始 query 中拆分研究主题和报告生成约束，
+    所有查询均进入研究报告生成流程（OUTLINE / GENERATE_QUESTIONS）。
     """
 
     def __init__(self):
@@ -243,16 +246,70 @@ class IntentRecognitionNode(BaseNode):
             original_query=session.get_global_state("search_context.original_query") or "",
             messages=session.get_global_state("search_context.messages") or [],
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
+            human_in_the_loop=session.get_global_state("config.workflow_human_in_the_loop"),
+            web_search_engine_config=session.get_global_state("config.web_search_engine_config"),
+            info_collector_search_method=session.get_global_state("config.info_collector_search_method") or "web",
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
-        intent_result = await recognize_report_intent(current_inputs)
+
+        # 执行意图识别，获取 research_query 用于网络搜索
+        intent_result = await classify_and_recognize_intent(current_inputs)
+
+        # 检查搜索模式：仅在 web 或 all 模式下执行网络搜索
+        info_collector_search_method = current_inputs.get("info_collector_search_method", "web")
+        if info_collector_search_method in ("web", "all"):
+            # 预搜索前应用域名约束
+            _web_search_engine_config = current_inputs.get("web_search_engine_config")
+            _web_search_engine_name = _web_search_engine_config.search_engine_name if _web_search_engine_config else ""
+            apply_web_search_domain_constraints(
+                search_engine_name=_web_search_engine_name,
+                include_domains=intent_result.research_intent.include_domains,
+                exclude_domains=intent_result.research_intent.exclude_domains,
+            )
+
+            # 使用 research_query 进行网络搜索
+            web_search_engine_name = (
+                current_inputs["web_search_engine_config"].search_engine_name
+                if current_inputs.get("web_search_engine_config") else "petal"
+            )
+            research_query = (intent_result.research_query or "").strip() or current_inputs["original_query"]
+            web_search_input = {
+                "query": research_query,
+                "web_search_engine_name": web_search_engine_name,
+            }
+            web_search_output = await web_search_for_query(web_search_input)
+
+            error_msg = web_search_output.get("error_msg", "")
+            if error_msg:
+                exception_info = f"[{StatusCode.ENTRY_GENERATE_ERROR.code}] {error_msg}"
+                session.update_global_state({
+                    "search_context.final_result.exception_info": exception_info,
+                })
+                add_debug_log_wrapper(session, NodeDebugData(
+                    NodeId.INTENT_RECOGNITION.value, 0, NodeType.MAIN.value,
+                    output_content=exception_info,
+                ))
+                logger.error("[IntentRecognitionNode] Web search failed: %s", error_msg)
+                return dict(next_node=NodeId.END.value)
+            intent_result.entry_search_results = web_search_output.get("search_results", [])
+        else:
+            # 纯本地模式：跳过网络搜索，使用空结果
+            logger.info("[IntentRecognitionNode] Local-only mode, skipping web search.")
+            intent_result.entry_search_results = []
+
         return self._post_handle(inputs, intent_result, session, context)
 
     def _post_handle(self, inputs: Input, algorithm_output: Any, session: Session, context: ModelContext):
         original_q = algorithm_output.original_query
         research_q = (algorithm_output.research_query or "").strip() or original_q
+
+        lang = (algorithm_output.lang or "zh-CN").lower()
+        if "zh" in lang or "chinese" in lang or "中文" in lang:
+            lang = CHINESE
+        if "en" in lang or "english" in lang or "英文" in lang:
+            lang = ENGLISH
 
         report_type = algorithm_output.research_intent.report_type
         report_policy = resolve_report_type_policy(report_type)
@@ -267,14 +324,13 @@ class IntentRecognitionNode(BaseNode):
             "search_context.research_query": research_q,
             "search_context.research_intent": algorithm_output.research_intent.model_dump(),
             "search_context.report_type_policy": report_policy.model_dump(),
+            "search_context.language": lang,
         })
-        web_search_engine_config = session.get_global_state("config.web_search_engine_config")
-        web_search_engine_name = web_search_engine_config.search_engine_name if web_search_engine_config else ""
-        apply_web_search_domain_constraints(
-            search_engine_name=web_search_engine_name,
-            include_domains=algorithm_output.research_intent.include_domains,
-            exclude_domains=algorithm_output.research_intent.exclude_domains,
-        )
+
+        if algorithm_output.entry_search_results:
+            session.update_global_state({
+                "search_context.entry_search_results": algorithm_output.entry_search_results,
+            })
 
         messages = list(session.get_global_state("search_context.messages") or [])
         if messages:
@@ -295,74 +351,11 @@ class IntentRecognitionNode(BaseNode):
             NodeType.MAIN.value,
             output_content=algorithm_output.model_dump_json(),
         ))
-        logger.info("[IntentRecognitionNode] End IntentRecognitionNode.")
-        return dict(next_node=NodeId.ENTRY.value)
 
-
-class EntryNode(BaseNode):
-
-    def __init__(self):
-        super().__init__()
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
-        logger.info(f"[EntryNode] Start EntryNode.")
-
-        messages = session.get_global_state("search_context.messages")
-        llm_model_name = adapt_llm_model_name(session, NodeId.ENTRY.value)
-        query = session.get_global_state("search_context.research_query")
-        web_search_engine_config = session.get_global_state("config.web_search_engine_config")
-        web_search_engine_name = web_search_engine_config.search_engine_name if web_search_engine_config else "petal"
-
-        return dict(messages=messages, llm_model_name=llm_model_name,
-                    query=query, web_search_engine_name=web_search_engine_name)
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        current_inputs = self._pre_handle(inputs, session, context)
-
-        # Parallel execution of classify_query and web_search_for_query
-        web_search_input = {
-            "query": current_inputs.get("query", ""),
-            "web_search_engine_name": current_inputs.get("web_search_engine_name", "petal")
-        }
-        classify_query_output, web_search_output = await asyncio.gather(
-            classify_query(current_inputs),
-            web_search_for_query(web_search_input)
-        )
-        classify_query_output["entry_search_results"] = web_search_output.get("search_results", [])
-
-        result = self._post_handle(inputs, classify_query_output, session, context)
-        return result
-
-    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
-        lang = algorithm_output.get("lang", "zh-CN").lower()
-        llm_result = algorithm_output.get("llm_result", "")
-        error_msg = algorithm_output.get("error_msg", "")
-        entry_search_results = algorithm_output.get("entry_search_results", [])
-
-        if "zh" in lang or "chinese" in lang or "中文" in lang:
-            lang = CHINESE
-        if "en" in lang or "english" in lang or "英文" in lang:
-            lang = ENGLISH
-
-        # 更新session
-        session.update_global_state({"search_context.language": lang})
-        if entry_search_results:
-            session.update_global_state({"search_context.entry_search_results": entry_search_results})
-
-        # 决定下一个节点
         next_node = NodeId.GENERATE_QUESTIONS.value if human_in_the_loop else NodeId.OUTLINE.value
 
-        if error_msg:
-            session.update_global_state({"search_context.final_result.response_content": llm_result})
-            session.update_global_state({"search_context.final_result.exception_info": error_msg})
-            next_node = NodeId.END.value
-
-        # 添加EntryNode debug日志
-        add_debug_log_wrapper(
-            session, NodeDebugData(NodeId.ENTRY.value, 0, NodeType.MAIN.value, output_content=str(algorithm_output))
-        )
-        logger.info(f"[EntryNode] End EntryNode.")
+        logger.info("[IntentRecognitionNode] End IntentRecognitionNode, next_node=%s", next_node)
         return dict(language=lang, human_in_the_loop=human_in_the_loop, next_node=next_node)
 
 
@@ -387,12 +380,20 @@ class FeedbackHandlerNode(BaseNode):
         feedback_mode = current_inputs.get("feedback_mode", "cmd")
 
         user_feedback = await self._get_user_feedback(feedback_mode, session)
-        standardized_feedback = truncate_string(user_feedback, max_length=MAX_QUERY_LENGTH)
-        if not standardized_feedback:
-            logger.error("[FeedbackHandlerNode] Invalid feedback, length or type is invalid")
-            standardized_feedback = "Invalid feedback, length is 0 or type is invalid"
+        error_detail = ""
+        if user_feedback == "Invalid feedback_mode":
+            standardized_feedback = user_feedback
+            error_detail = feedback_mode
+        else:
+            standardized_feedback = truncate_string(user_feedback, max_length=MAX_QUERY_LENGTH)
+            if not standardized_feedback:
+                logger.error("[FeedbackHandlerNode] Invalid feedback, length or type is invalid")
+                error_detail = user_feedback or "empty"
+                standardized_feedback = "Invalid feedback, length is 0 or type is invalid"
 
         algorithm_output = dict(user_feedback=standardized_feedback)
+        if error_detail:
+            algorithm_output["error_detail"] = error_detail
         if standardized_feedback not in {
             "Invalid feedback_mode",
             "Invalid feedback, length is 0 or type is invalid",
@@ -520,9 +521,9 @@ class FeedbackHandlerNode(BaseNode):
         user_feedback = algorithm_output.get("user_feedback", "")
 
         if user_feedback == "Invalid feedback_mode":
-            exception_info = (
-                f"[{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.code}]"
-                f"{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.errmsg}"
+            exception_info = format_exception_info(
+                StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR,
+                algorithm_output.get("error_detail", ""),
             )
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             # 添加FeedbackHandlerNode debug日志
@@ -537,9 +538,9 @@ class FeedbackHandlerNode(BaseNode):
             )
             return dict(next_node=NodeId.END.value)
         if user_feedback == "Invalid feedback, length is 0 or type is invalid":
-            exception_info = (
-                f"[{StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR.code}]"
-                f"{StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR.errmsg}"
+            exception_info = format_exception_info(
+                StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR,
+                algorithm_output.get("error_detail", ""),
             )
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             # 添加FeedbackHandlerNode debug日志
@@ -623,7 +624,7 @@ class ReporterNode(BaseNode):
         research_intent = session.get_global_state("search_context.research_intent") or {}
         audience_role = (research_intent.get("audience_role", "") or "").strip()
         tone = (research_intent.get("tone", "") or "").strip()
-        return dict(
+        result = dict(
             thread_id=session.get_global_state("config.thread_id") or "",
             report_style=session.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
             report_format=session.get_global_state("config.report_format") or ReportFormat.MARKDOWN,
@@ -637,9 +638,13 @@ class ReporterNode(BaseNode):
             visualization_enable=visualization_enable,
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
+            report_type_policy=rtp,
+            research_intent=research_intent,
             audience_role=audience_role,
             tone=tone,
         )
+        result.update(build_research_intent_prompt_context(research_intent))
+        return result
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext):
         current_inputs = self._pre_handle(inputs, session, context)
@@ -662,7 +667,11 @@ class ReporterNode(BaseNode):
                 current_report.report_content = "error: " + algorithm_output.get("report_str")
                 session.update_global_state({"search_context.current_report": current_report})
             logger.error("[ReporterNode] ReporterNode ended with fail.")
-            exception_info = f"[{StatusCode.REPORT_GENERATE_ERROR.code}] {algorithm_output.get('report_str')}"
+            report_str = algorithm_output.get("report_str", "")
+            if report_str.startswith(f"[{StatusCode.REPORT_GENERATE_ERROR.code}]"):
+                exception_info = report_str
+            else:
+                exception_info = format_exception_info(StatusCode.REPORT_GENERATE_ERROR, report_str)
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             add_debug_log_wrapper(
                 session, NodeDebugData(NodeId.REPORTER.value, 0, NodeType.MAIN.value, output_content=exception_info)
@@ -826,7 +835,9 @@ class GenerateQuestionsNode(BaseNode):
             )
             return dict(next_node=NodeId.END.value)
         if not algorithm_output.get("result"):
-            exception_info = "Query Interpreter result is empty."
+            exception_info = format_exception_info(
+                StatusCode.INTERPRETATION_GENERATE_ERROR, "Query Interpreter result is empty."
+            )
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             logger.error(f"[GenerateQuestionsNode] {exception_info}")
             add_debug_log_wrapper(
@@ -910,8 +921,7 @@ class OutlineNode(BaseNode):
             section_num = configured_section_num
         audience_role = research_intent.get("audience_role") or ""
         tone = research_intent.get("tone") or ""
-
-        return dict(
+        result = dict(
             messages=messages,
             user_feedback=user_feedback,
             questions=questions,
@@ -933,6 +943,8 @@ class OutlineNode(BaseNode):
             audience_role=audience_role,
             tone=tone,
         )
+        result.update(build_research_intent_prompt_context(research_intent))
+        return result
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
@@ -948,7 +960,11 @@ class OutlineNode(BaseNode):
         algorithm_output = None
         while not success_flag:
             if outline_executed_num >= max_outline_retry_num:
-                error_msg += f"{self.log_prefix} Reached max outline retry num: {max_outline_retry_num}"
+                last_error = algorithm_output.get("error_msg") if algorithm_output else ""
+                detail = last_error or f"Reached max outline retry num: {max_outline_retry_num}"
+                error_msg = format_exception_info(
+                    StatusCode.OUTLINER_GENERATE_ERROR, detail, prefix=self.log_prefix
+                )
                 logger.error(error_msg)
                 algorithm_output = {
                     "llm_result": "",
@@ -1144,15 +1160,19 @@ class SourceTracerNode(BaseNode):
                 logger.error(f"[SourceTracerNode] trace source failed.")
             else:
                 logger.error(f"[SourceTracerNode] trace source failed. {str(e)}")
-            check_result_dict = {"check_result": False, "citation_checker_result_str": str(e)}
+            check_result_dict = {
+                "check_result": False,
+                "citation_checker_result_str": format_exception_info(StatusCode.SOURCE_TRACER_NODE_ERROR, e),
+            }
         except Exception as e:
             if LogManager.is_sensitive():
                 logger.error(f"[SourceTracerNode] trace source failed.")
             else:
                 logger.error(f"[SourceTracerNode] trace source failed. {str(e)}")
-            errmsg = StatusCode.SOURCE_TRACER_NODE_ERROR.errmsg.format(e=e)
-            errmsg = f"[{StatusCode.SOURCE_TRACER_NODE_ERROR.code}] {errmsg}\t"
-            check_result_dict = {"check_result": False, "citation_checker_result_str": errmsg}
+            check_result_dict = {
+                "check_result": False,
+                "citation_checker_result_str": format_exception_info(StatusCode.SOURCE_TRACER_NODE_ERROR, e),
+            }
 
         algorithm_output = {"check_result_dict": check_result_dict, "origin_report": current_inputs.get("report", "")}
         result = self._post_handle(inputs, algorithm_output, session, context)
@@ -1314,11 +1334,8 @@ class OutlineInteractionNode(BaseNode):
         try:
             logger.info(f"{self.log_prefix} Received user input: {'***' if LogManager.is_sensitive() else user_input}")
             return json.loads(user_input)
-        except json.JSONDecodeError:
-            exception_info = (
-                f"[{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.code}]"
-                f"{StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR.errmsg}"
-            )
+        except json.JSONDecodeError as e:
+            exception_info = format_exception_info(StatusCode.USER_FEEDBACK_PROCESSOR_INVALID_JSON, e)
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
             # 添加FeedbackHandlerNode debug日志
             add_debug_log_wrapper(
@@ -1489,14 +1506,12 @@ class SourceTracerInferNode(BaseNode):
                 logger.error(f"{self.log_prefix} {error_msg}")
             else:
                 logger.error(f"{self.log_prefix} {error_msg} {e}")
-            errcode = StatusCode.SOURCE_TRACER_INFER_ERROR.code
-            errmsg = StatusCode.SOURCE_TRACER_INFER_ERROR.errmsg.format(e=e)
             infer_result_dict = dict(
                 infer_success=False,
                 response=current_inputs.get("source_tracer_response", ""),
                 infer_messages=[],
                 scores=[(0, 0)],
-                error_msg=f"[{errcode}] {errmsg}",
+                error_msg=format_exception_info(StatusCode.SOURCE_TRACER_INFER_ERROR, e, prefix=self.log_prefix),
                 source_tracer_infer_switch=current_inputs.get("source_tracer_infer_switch", False),
             )
         else:
@@ -1540,7 +1555,11 @@ class UserFeedbackProcessorNode(BaseNode):
             feedback_snapshot_sent=session.get_global_state("search_context.feedback_snapshot_sent") or False,
             language=session.get_global_state("search_context.language"),
             final_result=session.get_global_state("search_context.final_result"),
+            current_report=session.get_global_state("search_context.current_report"),
             llm_model_name=adapt_llm_model_name(session, NodeId.USER_FEEDBACK_PROCESSOR.value),
+            enable_local_source_trace=(
+                session.get_global_state("config.source_tracer_research_trace_source_switch") is not False
+            ),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -1633,6 +1652,8 @@ class UserFeedbackProcessorNode(BaseNode):
                 feedback=feedback,
                 final_result=final_result,
                 language=current_inputs["language"],
+                enable_local_source_trace=current_inputs["enable_local_source_trace"],
+                current_report=current_inputs.get("current_report"),
             )
         except CustomException as e:
             if interaction_count >= max_interactions and consume_interaction:
@@ -1649,7 +1670,7 @@ class UserFeedbackProcessorNode(BaseNode):
                 interaction_count=interaction_count,
                 consume_interaction=consume_interaction,
                 mark_feedback_snapshot_sent=mark_feedback_snapshot_sent,
-                exception_info=str(e),
+                exception_info=format_exception_info(StatusCode.USER_FEEDBACK_PROCESSOR_REWRITE_ERROR, e),
             )
         except Exception as e:
             if interaction_count >= max_interactions and consume_interaction:
@@ -1670,16 +1691,23 @@ class UserFeedbackProcessorNode(BaseNode):
                 interaction_count=interaction_count,
                 consume_interaction=consume_interaction,
                 mark_feedback_snapshot_sent=mark_feedback_snapshot_sent,
-                exception_info=str(wrapped_error),
+                exception_info=format_exception_info(StatusCode.USER_FEEDBACK_PROCESSOR_REWRITE_ERROR, e),
             )
 
         stream_result = UserFeedbackProcessor.build_stream_result(feedback, action_result)
-        updated_final_result = dict(final_result or {})
-        updated_final_result.update(
-            {
-                "response_content": action_result["new_report"],
-            }
-        )
+        if action_result.get("read_only_result", False):
+            updated_final_result = final_result
+        else:
+            updated_final_result = dict(final_result or {})
+            updated_final_result.update(
+                {
+                    "response_content": action_result["new_report"],
+                }
+            )
+        if "citation_messages" in action_result:
+            updated_final_result["citation_messages"] = action_result["citation_messages"]
+        if "warning_info" in action_result:
+            updated_final_result["warning_info"] = action_result["warning_info"]
         await UserFeedbackProcessor.send_result(
             session=session,
             feedback=feedback,
@@ -1777,6 +1805,12 @@ class UserFeedbackProcessorNode(BaseNode):
         current_report_content = current_final_result.get("response_content", "") or ""
         new_report = algorithm_output["new_report"]
         session.update_global_state({"search_context.final_result.response_content": new_report})
+        if "citation_messages" in algorithm_output:
+            session.update_global_state(
+                {"search_context.final_result.citation_messages": algorithm_output["citation_messages"]}
+            )
+        if "warning_info" in algorithm_output:
+            session.update_global_state({"search_context.final_result.warning_info": algorithm_output["warning_info"]})
         feedback = algorithm_output["feedback"]
         updated_outline = build_current_outline_update(
             current_outline=session.get_global_state("search_context.current_outline"),
@@ -1909,8 +1943,7 @@ class VLMChartGeneratorNode(BaseNode):
             else:
                 logger.error(f"[VLMChartGeneratorNode] vlm_chart_generator failed: {str(e)}")
             vlm_chart_generator_output = {
-                "error_msg": f"[{StatusCode.CHART_GENERATION_ERROR.code}] \
-                    {StatusCode.CHART_GENERATION_ERROR.errmsg.format(e=e)}",
+                "error_msg": format_exception_info(StatusCode.CHART_GENERATION_ERROR, e),
             }
         except Exception as e:
             if LogManager.is_sensitive():
@@ -1918,8 +1951,7 @@ class VLMChartGeneratorNode(BaseNode):
             else:
                 logger.error(f"[VLMChartGeneratorNode] vlm_chart_generator failed: {str(e)}")
             vlm_chart_generator_output = {
-                "error_msg": f"[{StatusCode.CHART_GENERATION_ERROR.code}] \
-                    {StatusCode.CHART_GENERATION_ERROR.errmsg.format(e=e)}",
+                "error_msg": format_exception_info(StatusCode.CHART_GENERATION_ERROR, e),
             }
 
         algorithm_output = {

@@ -272,7 +272,7 @@ def main(
     """
     with run_telemetry_session(telemetry):
         parser = argparse.ArgumentParser(description="Run deepsearch workflow")
-        parser.add_argument("--query", nargs="*", default="AI手机研究报告", help="The query to process")
+        parser.add_argument("--query", nargs="*", default=["AI手机研究报告"], help="The query to process")
         parser.add_argument(
             "--mode",
             choices=["query", "template", "all"],
@@ -399,7 +399,8 @@ def main(
 
         args = parser.parse_args(argv) if argv is not None else parser.parse_args()
         _validate_args(parser, args)
-        joined_query = " ".join(args.query)
+        query_list = args.query if isinstance(args.query, list) else [args.query]
+        joined_query = " ".join(query_list)
 
         os.environ["LLM_SSL_VERIFY"] = "true" if args.llm_ssl_verify else "false"
         os.environ["LLM_SSL_CERT"] = args.llm_ssl_cert

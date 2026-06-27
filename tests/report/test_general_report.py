@@ -5,13 +5,124 @@ import pytest
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    ChapterSidecar,
     Outline,
+    ResearchIntent,
     Section,
     Report,
     SubReport,
     SubReportContent,
+    build_research_intent_prompt_context,
 )
 from openjiuwen_deepsearch.common.common_constants import CHINESE
+
+
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+def test_build_reporter_compact_context_selects_fields_by_target(mock_llm_cls):
+    reporter = Reporter("basic")
+    reporter.gen_report_context = {
+        "report_task": "总报告任务",
+        "current_report": Report(
+            sub_reports=[
+                SubReport(
+                    section_id="2",
+                    section_task="章节标题",
+                    content=SubReportContent(
+                        sub_report_content_summary="兼容摘要",
+                        sub_report_chapter_sidecar=ChapterSidecar(
+                            chapter_summary="结构化摘要",
+                            key_findings=["发现1", "发现2", "发现3", "发现4"],
+                            risk_points=["风险1"],
+                        ),
+                    ),
+                )
+            ]
+        ),
+    }
+
+    abstract_context = reporter._build_reporter_compact_context("abstract")
+    conclusion_context = reporter._build_reporter_compact_context("conclusion")
+
+    assert "总报告任务" in abstract_context
+    assert "2 章节标题" in abstract_context
+    assert "结构化摘要" in abstract_context
+    assert "发现1" in abstract_context
+    assert "发现3" in abstract_context
+    assert "发现4" not in abstract_context
+    assert "风险1" not in abstract_context
+
+    assert "发现4" in conclusion_context
+    assert "风险1" in conclusion_context
+
+
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+def test_build_reporter_compact_context_uses_summary_fallback_and_skips_empty(mock_llm_cls):
+    reporter = Reporter("basic")
+    reporter.gen_report_context = {
+        "current_report": Report(
+            sub_reports=[
+                SubReport(
+                    section_id=1,
+                    section_task="可用章节",
+                    content=SubReportContent(sub_report_content_summary="全文兜底摘要"),
+                ),
+                SubReport(section_id=2, section_task="空章节"),
+            ]
+        )
+    }
+
+    compact_context = reporter._build_reporter_compact_context("abstract")
+
+    assert "1 可用章节" in compact_context
+    assert "Summary (fallback)" in compact_context
+    assert "全文兜底摘要" in compact_context
+    assert "空章节" not in compact_context
+
+    reporter.gen_report_context = {"current_report": Report(sub_reports=[SubReport()])}
+    assert reporter._build_reporter_compact_context("abstract") == ""
+
+
+@pytest.mark.asyncio
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+async def test_generate_report_falls_back_to_full_content_when_compact_context_is_empty(
+    mock_llm_cls,
+):
+    reporter = Reporter("basic")
+    reporter.gen_report_context = {
+        "current_outline": Outline(thought="", title="报告标题"),
+        "current_report": Report(sub_reports=[SubReport()]),
+        "language": CHINESE,
+    }
+    sub_report_result = {
+        "sub_reports_content": "完整拼接正文",
+        "sub_references": "",
+        "refreshed_all_classified_contents": [],
+    }
+
+    with patch.object(reporter, "_set_context_variables", return_value=True):
+        with patch.object(
+            reporter,
+            "_process_sub_report",
+            new_callable=AsyncMock,
+            return_value=sub_report_result,
+        ):
+            with patch.object(
+                reporter,
+                "generate_abstract",
+                new_callable=AsyncMock,
+                return_value="摘要",
+            ) as mock_generate_abstract:
+                with patch.object(
+                    reporter,
+                    "generate_conclusion",
+                    new_callable=AsyncMock,
+                    return_value="结论",
+                ) as mock_generate_conclusion:
+                    success, _ = await reporter.generate_report({"language": CHINESE})
+
+    assert success is True
+    mock_generate_abstract.assert_awaited_once_with("完整拼接正文")
+    mock_generate_conclusion.assert_awaited_once_with("完整拼接正文")
 
 
 @pytest.mark.asyncio
@@ -54,6 +165,162 @@ async def test_generate_conclusion(mock_generate, mock_llm_cls):
     assert args[0] == "conclusion"
     assert "report_implications_and_recommendations_markdown" in args[1]
     assert args[2] == "test content"
+
+
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+def test_set_context_variables_exposes_research_intent_prompt_context(mock_llm_cls):
+    reporter = Reporter("basic")
+    ok = reporter._set_context_variables(
+        {
+            "language": CHINESE,
+            "report_type_policy": {"report_type": "professional"},
+            "research_intent": ResearchIntent(
+                task_type="comparison",
+                required_dimensions=["growth", "dividend"],
+                comparison_targets=["AIA", "Ping An"],
+            ).model_dump(),
+        }
+    )
+
+    assert ok is True
+    expected = build_research_intent_prompt_context(
+        ResearchIntent(
+            task_type="comparison",
+            required_dimensions=["growth", "dividend"],
+            comparison_targets=["AIA", "Ping An"],
+        )
+    )
+    for key, value in expected.items():
+        assert reporter.gen_report_context[key] == value
+
+
+def test_validate_sub_report_headings_match_outline_accepts_exact_outline():
+    outline = """3 落地场景分化：消费级与企业级应用在中美欧的渗透深度对比
+3.1 消费级场景渗透率量化对比：中美欧内容创作与教育娱乐差异
+3.2 企业级应用成熟度评估：政企集采、混合办公与合规驱动分化
+3.3 垂直行业落地深度分析：教育医疗增量与金融制造定制化路径
+3.4 场景差异化归因分析：用户付费意愿与制度文化根源研判"""
+    content = """# 3 落地场景分化：消费级与企业级应用在中美欧的渗透深度对比
+
+## 3.1 消费级场景渗透率量化对比：中美欧内容创作与教育娱乐差异
+正文一
+
+## 3.2 企业级应用成熟度评估：政企集采、混合办公与合规驱动分化
+正文二
+
+## 3.3 垂直行业落地深度分析：教育医疗增量与金融制造定制化路径
+正文三
+
+## 3.4 场景差异化归因分析：用户付费意愿与制度文化根源研判
+正文四
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is True
+    assert reason == ""
+
+
+def test_validate_sub_report_headings_match_outline_rejects_duplicated_h2_block():
+    outline = """3 落地场景分化：消费级与企业级应用在中美欧的渗透深度对比
+3.1 消费级场景渗透率量化对比：中美欧内容创作与教育娱乐差异
+3.2 企业级应用成熟度评估：政企集采、混合办公与合规驱动分化
+3.3 垂直行业落地深度分析：教育医疗增量与金融制造定制化路径
+3.4 场景差异化归因分析：用户付费意愿与制度文化根源研判"""
+    content = """# 3 落地场景分化：消费级与企业级应用在中美欧的渗透深度对比
+
+## 3.1 消费级场景渗透率量化对比：中美欧内容创作与教育娱乐差异
+正文一
+
+## 3.2 企业级应用成熟度评估：政企集采、混合办公与合规驱动分化
+正文二
+
+## 3.3 垂直行业落地深度分析：教育医疗增量与金融制造定制化路径
+正文三
+
+## 3.4 场景差异化归因分析：用户付费意愿与制度文化根源研判
+正文四
+
+## 3.1 消费级场景渗透率量化对比：中美欧内容创作与教育娱乐差异
+重复正文一
+
+## 3.2 企业级应用成熟度评估：政企集采、混合办公与合规驱动分化
+重复正文二
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is False
+    assert "duplicate" in reason.lower() or "expected" in reason.lower()
+
+
+def test_clean_markdown_headers_preserves_year_prefixed_titles():
+    content = """# 2025年中美欧AI PC市场规模与增长动能对比基准
+
+## 2025年中美欧AI PC出货量与渗透率量化对标
+正文
+"""
+
+    cleaned = Reporter.clean_markdown_headers(content)
+
+    assert "# 2025年中美欧AI PC市场规模与增长动能对比基准" in cleaned
+    assert "## 2025年中美欧AI PC出货量与渗透率量化对标" in cleaned
+
+
+def test_clean_markdown_headers_preserves_space_separated_year_and_age_titles():
+    content = """# 1. 2025 年中美欧AI PC市场规模与增长动能对比基准
+
+## 1.1 53 岁80kg中年人代谢衰退评估与每日热量需求测算
+正文
+"""
+
+    cleaned = Reporter.clean_markdown_headers(content)
+    cleaned_twice = Reporter.clean_markdown_headers(cleaned)
+
+    assert "# 2025 年中美欧AI PC市场规模与增长动能对比基准" in cleaned
+    assert "## 53 岁80kg中年人代谢衰退评估与每日热量需求测算" in cleaned
+    assert cleaned_twice == cleaned
+
+
+def test_clean_markdown_headers_preserves_space_separated_age_titles_for_h4():
+    content = """#### 53 岁80kg中年人控卡原则
+正文
+"""
+
+    cleaned = Reporter.clean_markdown_headers(content)
+
+    assert "- **53 岁80kg中年人控卡原则**" in cleaned
+
+
+def test_strip_leading_number_preserves_year_prefixed_titles():
+    assert (
+        Reporter.strip_leading_number("2025年中美欧AI PC市场规模与增长动能对比基准")
+        == "2025年中美欧AI PC市场规模与增长动能对比基准"
+    )
+
+
+def test_strip_leading_number_preserves_space_separated_year_and_age_titles():
+    assert (
+        Reporter.strip_leading_number("2025 年中美欧AI PC市场规模与增长动能对比基准")
+        == "2025 年中美欧AI PC市场规模与增长动能对比基准"
+    )
+    assert (
+        Reporter.strip_leading_number("53 岁80kg中年人代谢衰退评估与每日热量需求测算")
+        == "53 岁80kg中年人代谢衰退评估与每日热量需求测算"
+    )
+
+
+def test_clean_markdown_headers_still_strips_real_section_numbers():
+    content = """# 1. 中美欧AI PC市场规模与增长动能对比基准
+
+## 1.1 中美欧AI PC出货量与渗透率量化对标
+正文
+"""
+
+    cleaned = Reporter.clean_markdown_headers(content)
+
+    assert "# 中美欧AI PC市场规模与增长动能对比基准" in cleaned
+    assert "## 中美欧AI PC出货量与渗透率量化对标" in cleaned
 
 
 @pytest.mark.asyncio

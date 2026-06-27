@@ -23,12 +23,44 @@ short, focus on writing the current chapter
 {% endif %}
 {% endif %}
 
+{% if section_focus or has_allowed_dimensions or is_final_decision_section or task_type or has_required_dimensions or has_comparison_targets %}
+## Chapter Writing Directive
+
+**Scope**: {{ section_focus or "section_specific_analysis" }}
+{% if has_allowed_dimensions %}- Focus dimensions: {{ allowed_dimensions_text }}{% endif %}
+{% if is_final_decision_section %}
+- **Decision authority**: This chapter carries the final recommendation / ranking / judgment.
+{% else %}
+- **Decision authority**: This chapter must NOT output the final recommendation / ranking / overall judgment as a main deliverable.
+{% endif %}
+
+{% if task_type == "comparison" %}
+**Format**: Comparison matrix — align evidence by target or dimension, prefer Markdown tables for side-by-side contrasts.
+{% if has_comparison_targets %}- Comparison targets: {{ comparison_targets_text }}{% endif %}
+{% elif task_type == "classification" %}
+**Format**: Split by categories/types first, then summarize the cross-category takeaway.
+{% elif task_type == "trend_judgement" %}
+**Format**: Explicitly state current status, bottlenecks, feasibility signals, and time/risk judgments where the outline asks for them.
+{% endif %}
+{% if has_required_dimensions %}- **Required dimensions** to surface clearly: {{ required_dimensions_text }}{% endif %}
+{% if is_final_decision_section %}- **Final decision required**: answer it explicitly in the conclusion instead of only describing background analysis.{% endif %}
+
+- The chapter must not become a duplicate of other top-level chapters.
+- Use the **Current Chapter Outline** as the primary writing boundary. Treat the **Overall outline** as a consistency reference only.
+{% endif %}
+
 # Critical Constraints (NON-NEGOTIABLE)
 
 ## 1. Citation & Grounding
 - **Strict Grounding**: You can ONLY use the provided Collected Information and Background Knowledge. Do NOT invent facts.
+- **Source Faithfulness**:
+    - Stay close to the wording, entities, scope, and limitations of the original source text.
+    - Do not infer, estimate, or fabricate missing numbers, dates, amounts, percentages, rankings, company names, policy names, cases, or examples.
+    - If the source text does not disclose a value, state that the available material does not disclose it instead of guessing or filling the gap with general knowledge.
+    - Clearly separate source-backed facts from your own analysis or judgment. Analysis must be based on cited facts and should not introduce new factual details.
 - **Citation Format**: 
     - Every factual statement based on Collected Information must be supported by a citation at the end of the sentence or clause.
+    - Citations must support the exact sentence or table row where the fact appears; avoid placing one broad citation at the end of a long paragraph for multiple unsupported facts.
     - Format: `[citation:X]` (e.g., "Revenue grew by 20% [citation:3].").
     - Multiple sources: `[citation:3][citation:5]`.
     - **Prohibited**: Do NOT use `[webpage X]`, `(Source X)`, or list references at the end of the 
@@ -69,6 +101,8 @@ short, focus on writing the current chapter
 - **Data Presentation**:
     - Try to present comparative data in the form of **Markdown Tables** as much as possible.
     - **Specifics**: When mentioning data, cite the source authority (e.g., "According to data from China Education Online...").
+    - Every number, date, amount, percentage, ranking, company name, policy name, and table cell must be traceable to the provided Collected Information.
+    - Do not calculate derived metrics, comparisons, trends, or rankings unless the required source values are present and cited.
 - **Language**: The output language must be **{{language}}**.
 
 # Writing Strategy
@@ -78,6 +112,7 @@ short, focus on writing the current chapter
 - Maintain logical coherence within the provided framework.
 - **Avoid Errors**: Check for common sense errors and logical gaps.
 - Based on background knowledge, generate content by combining collected information.
+- Use the **Current Chapter Outline** and the section-local contract as the primary writing boundary. Treat the **Overall outline** as a consistency reference only.
 
 {% if section_iscore %}
 ## Core Section Requirements (High Importance)
@@ -105,6 +140,14 @@ This is a core part of the report. You must:
 |---------|---------|---------|---------|
 | Content 1 | Content 2 | Content 3 | Content 4 |
 | Content 5 | Content 6 | Content 7 | Content 8 |
+
+## Mathematical Formula Syntax
+- When the content involves mathematical formulas, use standard LaTeX syntax: inline math wrapped in single dollars `$...$`, and block (display) math wrapped in double dollars `$$...$$`.
+- **Balance every delimiter pair**: each `\left` MUST have a matching `\right`, each `{` a matching `}`, and each opening bracket `( [ \{` its closing counterpart. Do NOT leave an unmatched `\left` or `\right`. If you do not need a resizable delimiter, use a plain `(` `)` instead of `\left( \right)`.
+- Use only widely-supported LaTeX commands (e.g., `\frac`, `\sum`, `\int`, `\sqrt`, `\mathbb`, `\mathcal`, `\text`, `\alpha`, `\beta`). Avoid package-specific or non-standard macros that a basic LaTeX renderer cannot parse.
+- Wrap multi-character subscripts and superscripts in braces (`x^{2n}`, `\pi_{\theta_{old}}`), not bare (`x^2n`).
+- Keep each formula self-contained and verify it is syntactically valid before output: a malformed formula breaks HTML and DOCX rendering.
+- Do not escape characters inside math (e.g., do not write `\$` or backslash-escape `*`); only use `$`/`$$` as the outer delimiters.
 
 ## Output Structure Example
 
