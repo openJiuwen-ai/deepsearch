@@ -9,6 +9,9 @@ from openjiuwen_deepsearch.algorithm.report.report import (
     _replace_citations_and_classified_index,
     _get_classified_infos,
 )
+from openjiuwen_deepsearch.algorithm.report.report_utils import (
+    MarkdownOutlineRenumber,
+)
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 
 
@@ -19,6 +22,16 @@ from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
     ("3.4 数据结构", "数据结构"),  # 阿拉伯数字+点
     ("第九章", ""),  # 只有章节号，没有正文
     ("Chapter Intro", "Chapter Intro"),  # 无匹配前缀，保持原样
+    # Year-range and digit-prefixed titles: must NOT strip year digits
+    ("1.2025-2026年xxx", "1.2025-2026年xxx"),  # year after dot — not a section number
+    ("1.1.2025-2026年xxx", "1.1.2025-2026年xxx"),  # hierarchical + year
+    ("2025-2026年xxx", "2025-2026年xxx"),  # no section number
+    ("3.14159分析", "3.14159分析"),  # decimal prefix
+    # Standard section numbers with space: strip number, space consumed by \s*
+    ("1. 2025-2026年xxx", " 2025-2026年xxx"),  # flat number + space + year (leading space from \s*)
+    ("1.1 2025-2026年xxx", " 2025-2026年xxx"),  # hierarchical + space + year
+    ("1.2 subsection title", " subsection title"),  # standard hierarchical
+    ("1.1.2 deep subsection", " deep subsection"),  # three-level hierarchical
 ])
 def test_strip_leading_number(input_str, expected):
     assert Reporter.strip_leading_number(input_str) == expected
@@ -435,3 +448,98 @@ def test_get_classified_infos(doc_infos, urls, expected_infos, expected_docs):
 
     assert classified_infos == expected_infos
     assert classified_doc_infos == expected_docs
+
+
+# ---------------------------------------------------------------------------
+# MarkdownOutlineRenumber tests — year-range and digit-prefixed titles
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input_md, expected_title_text",
+    [
+        # Year-range titles without section numbers: year must be preserved
+        ("## 2025-2026年市场规模", "2025-2026年市场规模"),
+        ("# 2025-2026年行业报告", "2025-2026年行业报告"),
+        # Year-range titles with section number merged (no space): year preserved
+        ("## 1.2025-2026年市场规模", "1.2025-2026年市场规模"),
+        ("# 1.2025-2026年行业报告", "1.2025-2026年行业报告"),
+        # Year-range titles with proper section number + space: year preserved
+        ("## 1. 2025-2026年市场规模", "2025-2026年市场规模"),
+        ("## 1.1 2025-2026年市场规模", "2025-2026年市场规模"),
+        # Decimal / version-prefixed titles: digits preserved
+        ("### 3.14159分析", "3.14159分析"),
+        ("## 2.5G网络部署", "2.5G网络部署"),
+        # Standard section numbering: title preserved
+        ("## 1.1 市场规模分析", "市场规模分析"),
+        ("# 1. 行业概览", "行业概览"),
+        # Section number directly followed by title text (no space): number consumed
+        ("## 1.1技术路线", "技术路线"),
+        ("## 1.标题", "标题"),
+        ("## 2.1市场规模分析", "市场规模分析"),
+        ("### 3.1.2核心结论", "核心结论"),
+    ],
+)
+def test_renumber_headers_preserves_title_text(input_md, expected_title_text):
+    """renumber_headers must preserve title text, especially year/version digits."""
+    renumber = MarkdownOutlineRenumber()
+    result = renumber.renumber_headers(input_md)
+    line = result.split("\n")[0]
+    # Extract title text: everything after "# " or "## " or "### "
+    import re as _re
+    title_match = _re.match(r"^#{1,3}\s+(.*)", line)
+    assert title_match is not None, f"Expected heading in result: {result!r}"
+    actual_title = title_match.group(1).strip()
+    assert expected_title_text in actual_title, (
+        f"Expected title {expected_title_text!r} in heading {actual_title!r}"
+    )
+
+
+def test_renumber_headers_preserves_year_in_full_report():
+    """Multi-heading report with year-range titles must not lose year digits."""
+    content = (
+        "# 行业概览\n"
+        "## 2025-2026年市场规模分析\n"
+        "正文\n"
+        "## 1.1 技术成熟度评估\n"
+        "正文\n"
+        "### 3.14159精度对比\n"
+        "正文\n"
+    )
+    renumber = MarkdownOutlineRenumber()
+    result = renumber.renumber_headers(content)
+
+    assert "2025-2026年市场规模分析" in result
+    assert "技术成熟度评估" in result
+    assert "3.14159精度对比" in result
+
+
+def test_renumber_headers_standard_numbering_still_works():
+    """Standard section numbering must be renumbered correctly."""
+    content = (
+        "# 总报告\n"
+        "## 1 第一章\n"
+        "## 1.1 子章节一\n"
+        "## 1.2 子章节二\n"
+        "## 2 第二章\n"
+        "## 2.1 子章节三\n"
+    )
+    renumber = MarkdownOutlineRenumber()
+    result = renumber.renumber_headers(content)
+    lines = result.split("\n")
+
+    # H1 gets "1.", H2 gets "1.1", "1.2", "1.3", "1.4", "1.5"
+    assert lines[0].startswith("# 1.")
+    assert "第一章" in lines[1]
+    assert "子章节一" in lines[2]
+    assert "子章节二" in lines[3]
+    assert "第二章" in lines[4]
+    assert "子章节三" in lines[5]
+
+
+def test_clean_markdown_headers_preserves_year_range_heading():
+    """clean_markdown_headers must not strip year-range digits from headings."""
+    content = "# 2025-2026年市场规模\n\n## 1.1 2025-2026年出货量对比\n正文\n"
+    cleaned = Reporter.clean_markdown_headers(content)
+    assert "2025-2026年市场规模" in cleaned
+    assert "2025-2026年出货量对比" in cleaned
