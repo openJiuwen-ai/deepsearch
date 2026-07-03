@@ -901,7 +901,10 @@ class TestSendResult:
         )
 
         payload = session.write_custom_stream.await_args.args[0]
-        assert payload["content"] == "部分支持"
+        assert json.loads(payload["content"]) == {
+            "display_text": "部分支持",
+            "feedback_interaction_count": 2,
+        }
         assert payload["event"] == StreamEvent.SUMMARY_RESPONSE.value
 
 

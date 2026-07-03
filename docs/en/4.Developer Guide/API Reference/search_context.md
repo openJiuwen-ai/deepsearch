@@ -78,7 +78,6 @@ Structured report-generation constraints parsed from the user query.
 
 - **session_id**: Session ID.
 - **original_query**: Original user query.
-- **research_query**: Research topic after intent recognition, used for retrieval and planning.
 - **research_intent**: Structured report constraints. Default value: empty `ResearchIntent`.
 - **report_type_policy**: Runtime policy derived from `research_intent.report_type`, consumed by outline generation, planning, information collection, sub-report writing, and final report synthesis. Default value: empty `ReportTypePolicy`.
 - **messages**: Conversation messages.

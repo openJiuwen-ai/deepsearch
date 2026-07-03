@@ -267,7 +267,6 @@ class SearchContext(BaseModel):
     # 1、入参或必需字段
     session_id: str = Field(default="", description="会话ID")
     original_query: str = Field(default="", description="用户输入的原始问题")
-    research_query: str = Field(default="", description="意图识别后的研究主题，供检索与规划使用")
     research_intent: ResearchIntent = Field(default_factory=ResearchIntent, description="结构化报告约束")
     report_type_policy: ReportTypePolicy = Field(
         default_factory=ReportTypePolicy,

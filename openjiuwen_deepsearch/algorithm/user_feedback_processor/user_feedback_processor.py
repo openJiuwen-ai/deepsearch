@@ -698,11 +698,18 @@ class UserFeedbackProcessor:
             UserFeedbackProcessor._raise_stream_result_error(
                 f"Expected truth verification display text, got {type(result).__name__}"
             )
-        content = result.strip()
-        if not content:
+        display_text = result.strip()
+        if not display_text:
             UserFeedbackProcessor._raise_stream_result_error(
                 "Truth verification display text cannot be empty."
             )
+        content = json.dumps(
+            {
+                "display_text": display_text,
+                "feedback_interaction_count": feedback_interaction_count,
+            },
+            ensure_ascii=False,
+        )
         await session.write_custom_stream({
             "message_id": str(uuid.uuid4()),
             "agent": NodeId.USER_FEEDBACK_PROCESSOR.value,

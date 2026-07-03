@@ -34,6 +34,7 @@ Feature 文档按主要代码归属组织：
 - `server/`：REST API、后端管理器、报告转换、存储与持久化等。
 - `llm/`：统一 LLM 封装与厂商适配。
 - `config/`：运行时配置和服务配置。
+- `common/`：错误码、异常基类和跨模块公共常量。
 
 跨子系统特性应放在主要 owner 下，并在文档中列出相关模块。不要在多个目录复制
 同一份设计说明。
@@ -68,4 +69,44 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 
 ## 文档入口
 
+- [查询理解](./algorithm/query-understanding.md)
+- [资料采集](./algorithm/research-collector.md)
+- [DeepSearch 搜索智能体](./algorithm/search-agent.md)
+- [报告生成](./algorithm/report-generation.md)
+- [报告模板生成](./algorithm/report-template.md)
+- [全局溯源](./algorithm/source-trace.md)
+- [推理链溯源](./algorithm/source-tracer-infer.md)
+- [图表生成](./algorithm/chart-generation.md)
+- [Prompt 模板系统](./algorithm/prompt-template-system.md)
 - [用户反馈处理](./algorithm/user-feedback-processor.md)
+- [Agent 工厂与运行模式](./framework/agent-factory.md)
+- [报告研究主工作流](./framework/research-workflow.md)
+- [DeepSearch 搜索子工作流](./framework/deepsearch-sub-workflows.md)
+- [章节推理与写作子工作流](./framework/section-reasoning-writing-sub-workflows.md)
+- [信息采集子图](./framework/info-collector-subgraph.md)
+- [节点基类与会话上下文](./framework/base-node-and-session-context.md)
+- [搜索上下文与数据契约](./framework/search-context.md)
+- [WorkflowAgent 封装](./framework/workflow-agent.md)
+- [LLM 模型槽位适配](./framework/llm-model-adaptation.md)
+- [搜索工具注册与运行时 API 工具](./framework/search-tool-registration.md)
+- [LLM 运行时封装](./llm/llm-runtime.md)
+- [LLM 调用辅助](./utils/llm-invocation-utils.md)
+- [日志与接口记录](./utils/logging.md)
+- [参数校验、安全目录与 URL 处理](./utils/validation-security-url.md)
+- [流式输出与运行遥测](./utils/streaming-and-telemetry.md)
+- [调试与中间结果导出](./utils/debug-and-export.md)
+- [QPS 限流](./utils/rate-limiting.md)
+- [上下文变量、常量与问题路由](./utils/context-routing-constants.md)
+- [文本、Markdown 与 Embedding 辅助](./utils/text-markdown-embedding-helpers.md)
+- [Agent 与服务运行配置](./config/agent-and-service-config.md)
+- [DeepSearch 搜索工作流配置](./config/search-workflow-config.md)
+- [Runtime API 工具配置](./config/runtime-api-tool-config.md)
+- [错误码、异常与公共常量](./common/error-and-common-contracts.md)
+- [Server 应用运行时](./server/fastapi-app-runtime.md)
+- [DeepSearch 运行与 SSE 流](./server/deepsearch-run-streaming.md)
+- [DeepSearch Agent 配置组装](./server/deepsearch-agent-config.md)
+- [Server 报告转换](./server/report-conversion.md)
+- [知识库管理](./server/knowledge-base.md)
+- [模板与联网搜索引擎管理](./server/template-and-web-search-engine-management.md)
+- [Server 持久化与存储](./server/persistence-and-storage.md)
+- [遥测事件服务](./server/telemetry-event-server.md)

@@ -125,7 +125,10 @@ def create_outline_tool(section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": f"Section list of the final report. (Target number of sections: {section_num})",
+                    "description": (
+                        f"Section list of the final report. Generate exactly {section_num} section(s); "
+                        f"the sections array length must be exactly {section_num}."
+                    ),
                     "items": {
                         "type": "object",
                         "properties": {
@@ -206,7 +209,10 @@ def creat_dep_driving_outline_tool(section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": f"Section list of the final report. (Target number of sections: {section_num})",
+                    "description": (
+                        f"Section list of the final report. Generate exactly {section_num} section(s); "
+                        f"the sections array length must be exactly {section_num}."
+                    ),
                     "items": {
                         "type": "object",
                         "properties": {

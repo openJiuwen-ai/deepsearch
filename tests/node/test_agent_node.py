@@ -119,7 +119,7 @@ def test_create_section_state():
         id="1", thought="mock though", title="mock title", sections=[outline_section]
     )
     search_context = {'session_id': 'default_session_id', 'original_query': '杭州的天气怎么样',
-                      'research_query': '杭州的天气怎么样', 'messages': [{...}],
+                      'messages': [{...}],
                       'language': 'zh-CN', 'plan_executed_num': 0, 'current_plan': None,
                       'duplicated_search_queries': {}, 'duplicated_search_items': {}, 'final_report_path': '',
                       'final_result': {'response_content': '', 'citation_messages': {}, 'exception_info': ''},
@@ -372,10 +372,10 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
     update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
     intent_update = next(
         payload for payload in update_payloads
-        if "search_context.original_query" in payload and "search_context.research_query" in payload
+        if "search_context.original_query" in payload and "search_context.research_intent" in payload
     )
     assert intent_update["search_context.original_query"] == original_query
-    assert intent_update["search_context.research_query"] == "AI Agent 趋势"
+    assert "search_context.research_query" not in intent_update
     assert intent_update["search_context.research_intent"] == intent_result.research_intent.model_dump()
     assert "search_context.report_type_policy" in intent_update
     mock_apply_domain_constraints.assert_called_once_with(
@@ -510,7 +510,7 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
 
     def _get_global_state(key):
         mapping = {
-            "search_context.research_query": "低空经济发展趋势",
+            "search_context.original_query": "低空经济发展趋势",
             "search_context.research_intent": {
                 "section_count": 5,
                 "audience_role": "投资人",
@@ -530,7 +530,6 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
     node = FeedbackHandlerNode()
     reparsed_intent = {
         "original_query": "请研究低空经济",
-        "research_query": "低空经济发展趋势",
         "research_intent": {
             "section_count": None,
             "audience_role": None,
@@ -604,8 +603,7 @@ async def test_start_node_merges_agent_llm_timeouts_into_session_config():
 
     search_context = session.update_global_state.call_args_list[0][0][0]["search_context"]
     assert search_context["original_query"] == "hello"
-    assert search_context["research_query"] == "hello"
-    assert "query" not in search_context
+    assert "research_query" not in search_context
 
     merged_config = session.update_global_state.call_args_list[-1][0][0]["config"]
     assert merged_config["agent_llm_timeouts"] == {"default": 300, "sub_reporter": 120}

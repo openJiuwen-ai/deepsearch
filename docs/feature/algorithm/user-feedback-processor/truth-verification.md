@@ -14,7 +14,7 @@
 
 前端传入 `truth_verification` 后，后端会清理选区 markup，并取选中文本首个非空段落作为待核验段落。系统会优先使用当前章节已有资料进行评估；证据不足时可生成补充检索任务并采集更多资料，再产出核验结论。
 
-返回给前端的结果是核验展示文本，不是替换报告正文的改写片段。
+a返回给前端的结果是核验展示文本，不是替换报告正文的改写片段。流式 `SUMMARY_RESPONSE` 的 `content` 为 JSON，包含 `display_text` 与 `feedback_interaction_count`。
 
 ## 关键代码路径
 
@@ -67,6 +67,11 @@ Prompt 契约：
 - `truth_verification_assessment` 输出 JSON 语义的数据，包含结论、展示文本、证据和是否需要补充检索。
 - 允许结论集合由代码侧白名单约束；未知结论应回退为证据不足。
 - `truth_verification_search_task` 输出可交给 collector 的检索任务文本。
+
+流式 `SUMMARY_RESPONSE` 的 `content` JSON 字段：
+
+- `display_text`：Markdown 核验展示文本。
+- `feedback_interaction_count`：本次核验完成后的反馈交互计数，与改写类动作语义一致。
 
 外部依赖：
 

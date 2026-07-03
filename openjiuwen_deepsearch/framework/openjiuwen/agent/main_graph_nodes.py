@@ -25,6 +25,7 @@ from openjiuwen_deepsearch.utils.log_utils.log_metrics import metrics_logger, TI
 from openjiuwen_deepsearch.algorithm.query_understanding.interpreter import query_interpreter
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
     classify_and_recognize_intent,
+    normalize_research_query,
     recognize_report_intent,
     resolve_report_type_policy,
     web_search_for_query,
@@ -169,7 +170,6 @@ class StartNode(Start):
         original_query = inputs.get("query", "")
         search_context = SearchContext(
             original_query=original_query,
-            research_query=original_query,
             session_id=inputs.get("thread_id", ""),
             messages=[Message(role="user", content=original_query)],
             search_mode=inputs.get("search_mode", "research"),
@@ -233,7 +233,7 @@ class StartNode(Start):
 
 class IntentRecognitionNode(BaseNode):
     """
-    报告意图识别节点：从原始 query 中拆分研究主题和报告生成约束，
+    报告意图识别节点：从原始 query 中解析报告生成约束，
     所有查询均进入研究报告生成流程（OUTLINE / GENERATE_QUESTIONS）。
     """
 
@@ -254,7 +254,7 @@ class IntentRecognitionNode(BaseNode):
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
-        # 执行意图识别，获取 research_query 用于网络搜索
+        # 执行意图识别
         intent_result = await classify_and_recognize_intent(current_inputs)
 
         # 检查搜索模式：仅在 web 或 all 模式下执行网络搜索
@@ -269,12 +269,14 @@ class IntentRecognitionNode(BaseNode):
                 exclude_domains=intent_result.research_intent.exclude_domains,
             )
 
-            # 使用 research_query 进行网络搜索
+            # 使用 research_query 进行入口预搜索
             web_search_engine_name = (
                 current_inputs["web_search_engine_config"].search_engine_name
                 if current_inputs.get("web_search_engine_config") else "petal"
             )
-            research_query = (intent_result.research_query or "").strip() or current_inputs["original_query"]
+            research_query = normalize_research_query(intent_result.research_query) or normalize_research_query(
+                current_inputs["original_query"]
+            )
             web_search_input = {
                 "query": research_query,
                 "web_search_engine_name": web_search_engine_name,
@@ -303,7 +305,6 @@ class IntentRecognitionNode(BaseNode):
 
     def _post_handle(self, inputs: Input, algorithm_output: Any, session: Session, context: ModelContext):
         original_q = algorithm_output.original_query
-        research_q = (algorithm_output.research_query or "").strip() or original_q
 
         lang = (algorithm_output.lang or "zh-CN").lower()
         if "zh" in lang or "chinese" in lang or "中文" in lang:
@@ -321,7 +322,6 @@ class IntentRecognitionNode(BaseNode):
 
         session.update_global_state({
             "search_context.original_query": original_q,
-            "search_context.research_query": research_q,
             "search_context.research_intent": algorithm_output.research_intent.model_dump(),
             "search_context.report_type_policy": report_policy.model_dump(),
             "search_context.language": lang,
@@ -331,19 +331,6 @@ class IntentRecognitionNode(BaseNode):
             session.update_global_state({
                 "search_context.entry_search_results": algorithm_output.entry_search_results,
             })
-
-        messages = list(session.get_global_state("search_context.messages") or [])
-        if messages:
-            first = messages[0]
-            if isinstance(first, dict):
-                messages[0] = {**first, "content": research_q}
-            else:
-                messages[0] = Message(
-                    role=getattr(first, "role", "user"),
-                    content=research_q,
-                    name=getattr(first, "name", None),
-                )
-            session.update_global_state({"search_context.messages": messages})
 
         add_debug_log_wrapper(session, NodeDebugData(
             NodeId.INTENT_RECOGNITION.value,
@@ -452,11 +439,8 @@ class FeedbackHandlerNode(BaseNode):
             "llm_model_name": current_inputs.get("llm_model_name"),
         }
 
-    def _merge_reparsed_intent(self, session: Session, reparsed_intent: dict) -> tuple[dict, str]:
-        current_research_query = session.get_global_state("search_context.research_query") or ""
+    def _merge_reparsed_intent(self, session: Session, reparsed_intent: dict) -> dict:
         current_intent = ResearchIntent.model_validate(session.get_global_state("search_context.research_intent") or {})
-        incoming_query = (reparsed_intent.get("research_query") or "").strip()
-        original_query = (reparsed_intent.get("original_query") or "").strip()
         incoming_intent = ResearchIntent.model_validate(reparsed_intent.get("research_intent") or {})
 
         merged_intent = current_intent.model_copy(deep=True)
@@ -479,12 +463,7 @@ class FeedbackHandlerNode(BaseNode):
         if incoming_intent.report_type is not None:
             merged_intent.report_type = incoming_intent.report_type
 
-        is_fallback_query = bool(incoming_query and original_query and incoming_query == original_query)
-        if incoming_query and not is_fallback_query:
-            merged_query = incoming_query
-        else:
-            merged_query = current_research_query or incoming_query or original_query
-        return merged_intent.model_dump(), merged_query
+        return merged_intent.model_dump()
 
     async def _get_user_feedback(self, feedback_mode: str, session: Session) -> str:
         """按交互模式获取用户反馈内容。
@@ -562,13 +541,12 @@ class FeedbackHandlerNode(BaseNode):
         session.update_global_state({"search_context.user_feedback": user_feedback})
         reparsed_intent = algorithm_output.get("reparsed_intent")
         if reparsed_intent:
-            merged_intent_dict, merged_query = self._merge_reparsed_intent(session, reparsed_intent)
+            merged_intent_dict = self._merge_reparsed_intent(session, reparsed_intent)
             if not merged_intent_dict.get("report_type"):
                 merged_intent_dict["report_type"] = "professional"
             merged_policy = resolve_report_type_policy(merged_intent_dict.get("report_type"))
             session.update_global_state(
                 {
-                    "search_context.research_query": merged_query,
                     "search_context.research_intent": merged_intent_dict,
                     "search_context.report_type_policy": merged_policy.model_dump(),
                 }
@@ -581,19 +559,6 @@ class FeedbackHandlerNode(BaseNode):
                 include_domains=merged_intent_dict.get("include_domains", []),
                 exclude_domains=merged_intent_dict.get("exclude_domains", []),
             )
-
-            messages = list(session.get_global_state("search_context.messages") or [])
-            if messages:
-                first = messages[0]
-                if isinstance(first, dict):
-                    messages[0] = {**first, "content": merged_query}
-                else:
-                    messages[0] = Message(
-                        role=getattr(first, "role", "user"),
-                        content=merged_query,
-                        name=getattr(first, "name", None),
-                    )
-                session.update_global_state({"search_context.messages": messages})
 
         add_debug_log_wrapper(
             session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0, NodeType.MAIN.value, output_content=user_feedback)
@@ -633,7 +598,7 @@ class ReporterNode(BaseNode):
             current_report=current_report,
             language=session.get_global_state("search_context.language") or CHINESE,
             report_task=report_task,
-            user_query=session.get_global_state("search_context.research_query"),
+            user_query=session.get_global_state("search_context.original_query"),
             llm_model_name=llm_model_name,
             visualization_enable=visualization_enable,
             report_type=rtp.get("report_type", "professional"),
@@ -785,7 +750,7 @@ class GenerateQuestionsNode(BaseNode):
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info(f"[GenerateQuestionsNode] Start GenerateQuestionsNode.")
         language = session.get_global_state("search_context.language")
-        query = session.get_global_state("search_context.research_query")
+        query = session.get_global_state("search_context.original_query")
         entry_search_results = session.get_global_state("search_context.entry_search_results") or []
         research_intent = session.get_global_state("search_context.research_intent") or {}
         report_type = research_intent.get("report_type")

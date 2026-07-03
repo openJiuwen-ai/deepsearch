@@ -71,7 +71,7 @@ For each section in the outline, you MUST assign:
 - `focus_dimensions`: 2-4 specific analytical dimensions this section primarily owns. Each dimension should have a primary owner section, but may be referenced as supporting context in other sections. Avoid making the same dimension the primary focus of multiple sections.
 
 ## Execution Constraints
-- **Target Number of Sections:** {{ section_num }} (require high focus, do not exceed this quantity)
+- **Target Number of Sections:** {{ section_num }}. The number of sections must match this target.
 - Language consistency: **{{ language }}**
 - The `generate_outline()` method must be executed to generate a detailed outline.
 - Regardless of the user's input—even if it's casual conversation—you must always call `generate_outline()` to create a corresponding outline before responding.

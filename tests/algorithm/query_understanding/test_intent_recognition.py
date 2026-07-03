@@ -5,8 +5,10 @@ import pytest
 
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
     IntentRecognitionResult,
+    MAX_RESEARCH_QUERY_LENGTH,
     _to_str_list,
     classify_and_recognize_intent,
+    normalize_research_query,
     recognize_report_intent,
     web_search_for_query,
 )
@@ -59,6 +61,7 @@ async def test_recognize_report_intent_success(sample_tool_response):
         )
 
     assert isinstance(result, IntentRecognitionResult)
+    assert result.original_query == "Write a report: AI Agent\nhttps://example.com/a"
     assert result.research_query == "AI Agent trends"
     assert result.research_intent.section_count == 5
     assert result.research_intent.audience_role == "研发负责人"
@@ -100,6 +103,7 @@ async def test_recognize_report_intent_exception_fallback():
         q = "fallback text"
         result = await recognize_report_intent({"original_query": q, "llm_model_name": "basic"})
 
+    assert result.original_query == q
     assert result.research_query == q
     assert result.research_intent.section_count is None
     assert result.research_intent.report_type is None
@@ -108,6 +112,7 @@ async def test_recognize_report_intent_exception_fallback():
 @pytest.mark.asyncio
 async def test_empty_original_query():
     result = await recognize_report_intent({"original_query": "", "llm_model_name": "basic"})
+    assert result.original_query == ""
     assert result.research_query == ""
     assert result.research_intent == ResearchIntent()
     assert result.research_intent.report_type is None
@@ -266,6 +271,7 @@ async def test_classify_and_recognize_intent_research_request(sample_tool_respon
         )
 
     assert isinstance(result, IntentRecognitionResult)
+    assert result.original_query == "帮我研究一下 AI Agent 趋势"
     assert result.research_query == "AI Agent trends"
     assert result.research_intent.section_count == 5
 
@@ -310,8 +316,8 @@ async def test_classify_and_recognize_intent_exception_fallback():
             {"original_query": q, "llm_model_name": "basic"}
         )
 
-    assert result.research_query == q
     assert result.original_query == q
+    assert result.research_query == q
 
 
 @pytest.mark.asyncio
@@ -319,8 +325,8 @@ async def test_classify_and_recognize_intent_empty_query():
     """空查询：original_query 为空 → 直接返回 _default_fallback。"""
     result = await classify_and_recognize_intent({"original_query": ""})
 
-    assert result.research_query == ""
     assert result.original_query == ""
+    assert result.research_query == ""
 
 
 @pytest.mark.asyncio
@@ -350,7 +356,51 @@ async def test_classify_and_recognize_intent_invalid_tool_args():
             {"original_query": q, "llm_model_name": "basic"}
         )
 
+    assert result.original_query == q
     assert result.research_query == q
+
+
+# ──────────────────────────────────────────────
+# normalize_research_query 测试
+# ──────────────────────────────────────────────
+
+
+def test_normalize_research_query_truncates_to_max_length():
+    long_query = "研" * (MAX_RESEARCH_QUERY_LENGTH + 50)
+    assert len(normalize_research_query(long_query)) == MAX_RESEARCH_QUERY_LENGTH
+
+
+@pytest.mark.asyncio
+async def test_recognize_report_intent_truncates_long_research_query():
+    long_research_query = "x" * (MAX_RESEARCH_QUERY_LENGTH + 100)
+    response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": long_research_query,
+                    "language": "zh-CN",
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await recognize_report_intent(
+            {"original_query": "原始问题", "llm_model_name": "basic"}
+        )
+
+    assert len(result.research_query) == MAX_RESEARCH_QUERY_LENGTH
+    assert result.research_query == long_research_query[:MAX_RESEARCH_QUERY_LENGTH]
 
 
 # ──────────────────────────────────────────────

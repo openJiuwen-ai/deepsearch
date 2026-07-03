@@ -51,7 +51,6 @@ def test_outliner_prompt_renders_task_contract_context():
         "section_num": 5,
         "max_section_num": 5,
         "original_query": "Compare leading insurers across growth and dividends, then recommend the top 2.",
-        "research_query": "Leading insurers comparison and recommendation",
     }
     context.update(
         build_research_intent_prompt_context(

@@ -12,6 +12,7 @@ From the user's **original_query** (below), extract:
    - Keep `research_query` in the same language as `original_query`.
    - Do not translate the query, do not rewrite it into English keywords, and do not "internationalize" wording.
    - Mixed-language entities (e.g., names like Jensen Huang, product names like Blackwell/Rubin) can be kept as-is.
+   - `research_query` is used only for entry web search; Keep it concise; it MUST NOT exceed 400 characters.
 
 2. **language**: Detect the user's language and emit a locale code (e.g., `zh-CN`, `en-US`, `ja-JP`, `ko-KR`). You MUST always provide this field — never omit it.
 

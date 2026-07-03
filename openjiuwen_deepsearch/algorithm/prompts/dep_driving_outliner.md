@@ -110,7 +110,7 @@ should be selected. The structure should reflect **research logic**, not dimensi
 
 ### 1. Section Count Control
 
-- **Target Number of Sections:** {{ section_num }}
+- **Target Number of Sections:** {{ section_num }}. The number of sections must match this target.
 - Section allocation should reflect **problem leverage**, not equal representation.
 
 Sections that perform synthesis, integration, or implication-drawing may justifiably occupy greater structural weight.

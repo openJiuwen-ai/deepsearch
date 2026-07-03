@@ -100,8 +100,8 @@ tavily ["www.sz.gov.cn", "www.pku.edu.cn"]
 **Notes**
 
 - For `tavily`, `extension.include_domains` and `extension.exclude_domains` are forwarded to the Tavily search API to **prefer or exclude** specified sites; this is not a hard allowlist on the framework side. When relevant results are insufficient, Tavily may still return pages whose domains are outside the `include_domains` list.
-- `jina` falls back to `https://s.jina.ai` when `search_url` is empty.
-- `bocha` and `perplexity` honor `search_url` only when the underlying harness provider supports URL override.
+- `jina` falls back to `https://s.jina.ai` when `search_url` is empty. In China network environments where that endpoint is unreachable, set `search_url="https://s.jinaai.cn"`; you can also set `search_url` for privately deployed or proxy-forwarded endpoints.
+- `bocha` and `perplexity` honor `search_url` only when the underlying harness provider supports URL override. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
 - Search results are normalized before collector-side storage so aliases like `link`, `source_url`, `snippet`, `summary`, and `answer` are mapped into the common `title` / `url` / `content` / `type` shape.
 - Prefetched webpage content and the later collector evaluation input are both bounded by `MAX_COLLECTOR_DOC_CONTENT_LENGTH` to prevent oversized search payloads from reaching downstream LLM evaluation unchanged.
 

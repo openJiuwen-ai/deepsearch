@@ -117,7 +117,7 @@ class UserFeedbackProcessorNode(BaseNode)
 - Read JSON user feedback and support `expand`, `shorten`, `polish`, `supplementary_search`, `new_task`, `truth_verification`, `sync`, and `finish`.
 - Parse and validate rewrite payload fields such as `action`, `rewrite_scope`, `selected_text`, and offsets.
 - Support both `selected_only` and `selected_and_related` as rewrite scopes for `supplementary_search`.
-- Treat `truth_verification` as read-only: validate the selection, return a Markdown verification result, and do not update `final_result.response_content` or `search_context.rewrite_history`.
+- Treat `truth_verification` as read-only: validate the selection, return a JSON verification result in `SUMMARY_RESPONSE`, do not update `final_result.response_content` or `search_context.rewrite_history`, but do consume `feedback_interaction_count`.
 - Return a lightweight ack for `sync`, without consuming `feedback_interaction_count`; successful sync appends a rewrite-history record only when the full report content actually changes.
 - Call `UserFeedbackProcessor` to complete the local rewrite and update `final_result.response_content`.
 - When `source_tracer_research_trace_source_switch` is enabled, normal rewrite, `supplementary_search`, and `new_task` actions run diff-aware local source tracing on changed spans; unchanged spans keep their existing citations, and newly traced citations update `citation_messages` and append reference entries at the end of the report.
