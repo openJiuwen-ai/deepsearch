@@ -48,9 +48,18 @@ supported facts, derived judgments, and proposed actions. Do not present assumpt
 details, or proposed outcomes as established facts. Preserve material risks, limitations, evidence
 gaps, and uncertainty.
 
+{% if task_type or has_required_dimensions or has_comparison_targets %}
+Task contract for the final chapter:
+- Primary task type: {{ task_type or "general_research" }}
+{% if has_required_dimensions %}- Required dimensions: {{ required_dimensions_text }}{% endif %}
+{% if has_comparison_targets %}- Comparison targets: {{ comparison_targets_text }}{% endif %}
+{% endif %}
+
 Formatting and content rules
 - Chapter structure: three main sections — "Conclusion", "Implications" and "Recommendations".
 - Conclusion:
+  - Must be **answer-first**. In the opening 1-2 sentences, directly answer the user's final question before expanding.
+  - If the task asks for recommendation / ranking / choice / shortlist / timing judgement, explicitly name the result in the conclusion instead of only summarizing analysis.
   - Summarize the most critical and representative conclusions of all sub_reports in highly condensed language
   - Briefly review the core trends or key data points identified in the report to strengthen the support for the conclusions
   - Summary should have depth, clear viewpoints, and avoid vague expressions

@@ -28,13 +28,39 @@ LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+\.\s+)")
 # matching never splits a block delimiter pair.
 BLOCK_MATH_RE = re.compile(r"\$\$.+?\$\$", re.DOTALL)
 SIMPLE_VARIABLE_MATH_RE = re.compile(r"[A-Za-zΑ-Ωα-ω]")
-MATH_FEATURE_RE = re.compile(r"(\\[A-Za-z]+|[_^={}]|[+\-*/×÷∑∫√≈≠≤≥<>])")
-STRONG_NUMERIC_MATH_FEATURE_RE = re.compile(r"(\\[A-Za-z]+|[_^{}]|[+\-−×÷∑∫√=≈≠≤≥<>])")
-MATH_FUNCTION_CALL_RE = re.compile(
-    r"(?:\\?[A-Za-zΑ-Ωα-ω]+|[0-9]+|\\[A-Za-z]+)"
-    r"\s*(?:_\{?[\w\\]+\}?|\\[A-Za-z]+)*"
-    r"\s*[\(\[][^)\]\n]+[\)\]]"
+VARIABLE_ATOM_PATTERN = r"(?:\\[A-Za-z]+|[A-Za-zΑ-Ωα-ω](?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?)?)"
+COMPACT_VARIABLE_MATH_RE = re.compile(r"[A-Za-zΑ-Ωα-ω]{2,}(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?)*")
+ALNUM_VARIABLE_MATH_RE = re.compile(r"[A-Za-zΑ-Ωα-ω]+\d+(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?)*")
+VARIABLE_LIST_ELLIPSIS_PATTERN = r"(?:\.{3}|…|\\ldots|\\cdots)"
+VARIABLE_LIST_PATTERN = (
+    rf"{VARIABLE_ATOM_PATTERN}(?:\s*,\s*{VARIABLE_ATOM_PATTERN})+"
+    rf"(?:\s*,\s*{VARIABLE_LIST_ELLIPSIS_PATTERN})?"
 )
+VARIABLE_LIST_MATH_RE = re.compile(VARIABLE_LIST_PATTERN)
+PAREN_VARIABLE_LIST_MATH_RE = re.compile(
+    rf"\(\s*{VARIABLE_LIST_PATTERN}\s*\)"
+)
+MATH_NAME_PATTERN = (
+    r"(?:\\?[A-Za-zΑ-Ωα-ω]+|[0-9]+|\\[A-Za-z]+)"
+    r"(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?|\\[A-Za-z]+)*"
+)
+MATH_FUNCTION_CALL_PATTERN = rf"{MATH_NAME_PATTERN}\s*[\(\[][^)\]\n]+[\)\]]"
+MATH_SPACING_PATTERN = r"(?:\s+|\\[,;:! ]|\\quad|\\qquad)"
+MATH_DELIMITED_CONTENT_PATTERN = r"[^|\n]+"
+MATH_FEATURE_RE = re.compile(r"(\\[A-Za-z]+|[_^={}]|[+\-*/!×÷∑∫√≈≠≤≥<>])")
+STRONG_NUMERIC_MATH_FEATURE_RE = re.compile(r"(\\[A-Za-z]+|[_^{}]|[+\-*/!−×÷∑∫√=≈≠≤≥<>])")
+MATH_FUNCTION_CALL_RE = re.compile(MATH_FUNCTION_CALL_PATTERN)
+PRIME_FUNCTION_CALL_RE = re.compile(
+    rf"{MATH_NAME_PATTERN}'{{1,3}}\s*[\(\[][^)\]\n]+[\)\]]"
+)
+FUNCTION_CALL_SEQUENCE_RE = re.compile(
+    rf"{MATH_FUNCTION_CALL_PATTERN}(?:{MATH_SPACING_PATTERN}{MATH_FUNCTION_CALL_PATTERN})+"
+)
+ABSOLUTE_VALUE_MATH_RE = re.compile(rf"\|{MATH_DELIMITED_CONTENT_PATTERN}\|")
+NORM_MATH_RE = re.compile(
+    rf"(?:\|\|{MATH_DELIMITED_CONTENT_PATTERN}\|\||\\\|{MATH_DELIMITED_CONTENT_PATTERN}\\\||\\lVert\s*.+?\s*\\rVert)"
+)
+PERCENT_MATH_RE = re.compile(rf"(?:[+-]?\d+(?:\.\d+)?|{MATH_NAME_PATTERN})\s*\\?%")
 EQUATION_REFERENCE_RE = re.compile(r"\((?:Eq\.?|Equation)\s*\d+[A-Za-z]?\)", re.IGNORECASE)
 NUMERIC_TUPLE_RE = re.compile(r"\(\s*[+-]?\d+(?:\.\d+)?(?:\s*,\s*[+-]?\d+(?:\.\d+)?)+\s*\)")
 PRIME_VARIABLE_RE = re.compile(
@@ -730,12 +756,65 @@ def _is_likely_inline_math(content: str) -> bool:
         return False
     return bool(
         SIMPLE_VARIABLE_MATH_RE.fullmatch(content)
+        or COMPACT_VARIABLE_MATH_RE.fullmatch(content)
+        or ALNUM_VARIABLE_MATH_RE.fullmatch(content)
+        or VARIABLE_LIST_MATH_RE.fullmatch(content)
+        or PAREN_VARIABLE_LIST_MATH_RE.fullmatch(content)
         or MATH_FEATURE_RE.search(content)
         or MATH_FUNCTION_CALL_RE.fullmatch(content)
+        or PRIME_FUNCTION_CALL_RE.fullmatch(content)
+        or FUNCTION_CALL_SEQUENCE_RE.fullmatch(content)
+        or ABSOLUTE_VALUE_MATH_RE.fullmatch(content)
+        or NORM_MATH_RE.fullmatch(content)
+        or PERCENT_MATH_RE.fullmatch(content)
+        or _is_balanced_math_function_call(content)
         or EQUATION_REFERENCE_RE.fullmatch(content)
         or NUMERIC_TUPLE_RE.fullmatch(content)
         or PRIME_VARIABLE_RE.fullmatch(content)
     )
+
+
+def _is_balanced_math_function_call(content: str) -> bool:
+    """Return whether content is a math-like function call with balanced args."""
+    name_match = re.match(
+        r"(?:\\?[A-Za-zΑ-Ωα-ω]+|[0-9]+|\\[A-Za-z]+)"
+        r"\s*(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?|\\[A-Za-z]+)*\s*",
+        content,
+    )
+    if name_match is None:
+        return False
+
+    open_index = name_match.end()
+    if open_index >= len(content) or content[open_index] not in "([":
+        return False
+
+    open_char = content[open_index]
+    close_char = ")" if open_char == "(" else "]"
+    pairs = {"(": ")", "[": "]"}
+    stack = [close_char]
+    index = open_index + 1
+    saw_argument = False
+
+    while index < len(content):
+        char = content[index]
+        if char == "\\":
+            index += 2
+            saw_argument = True
+            continue
+        if char in pairs:
+            stack.append(pairs[char])
+            saw_argument = True
+        elif stack and char == stack[-1]:
+            stack.pop()
+            if not stack:
+                return saw_argument and index == len(content) - 1
+        elif char in ")]":
+            return False
+        elif not char.isspace():
+            saw_argument = True
+        index += 1
+
+    return False
 
 
 def _is_valid_inline_math_start(text: str, index: int) -> bool:
@@ -756,6 +835,8 @@ def _is_likely_currency_start(text: str, index: int) -> bool:
     next_index = index + len(match.group(0))
     if next_index >= len(text):
         return True
+    if text.startswith(r"\%", next_index) or text[next_index] == "%":
+        return False
     end = _find_inline_math_end(text, index + 1)
     if end is not None and STRONG_NUMERIC_MATH_FEATURE_RE.search(text[next_index:end]):
         return False

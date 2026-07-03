@@ -52,9 +52,9 @@ Older Windows may need extra steps; see [Install Linux on Windows with WSL](http
 
 * Download the matching architecture:
 
-  x86_64: [DeepSearch v0.1.7](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.7_amd64.zip)
+  x86_64: [DeepSearch v0.1.8](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.8_amd64.zip)
 
-  ARM64: [DeepSearch v0.1.7](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.7_arm64.zip)
+  ARM64: [DeepSearch v0.1.8](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.8_arm64.zip)
 
 ### 2. Docker Desktop: Virtual file shares
 

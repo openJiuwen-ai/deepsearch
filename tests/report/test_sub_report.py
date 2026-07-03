@@ -734,7 +734,7 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
             assert "key_passages" not in user_content
             return {"content": '{\"chapter\": \"企业经营与行业分析\", \"selected_url_list\": [\"fake_url\"]}'}
         elif any("subsection outline" in msg.get("content", "") for msg in messages):
-            return {"content": "3 企业经营与行业分析\n3.1 经营风险评价\3.2 杠杆风险评估"}
+            return {"content": "3 企业经营与行业分析\n3.1 经营风险评价\n3.2 杠杆风险评估"}
         elif any("professional sub report writer" in msg.get("content", "") for msg in messages):
             user_content = next(msg.get("content", "") for msg in messages if msg.get("role") == "user")
             assert "scores:" in user_content
@@ -746,7 +746,7 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
             assert "task_relevance" not in user_content
             assert "information_richness" not in user_content
             assert "fake original_content" in user_content
-            return {"content": "fake subsection report content"}
+            return {"content": "# 3 企业经营与行业分析\n\n## 3.1 经营风险评价\nfake content 1\n\n## 3.2 杠杆风险评估\nfake content 2"}
         elif any("structured sidecar" in msg.get("content", "") for msg in messages):
             return {
                 "content": (
@@ -754,6 +754,8 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
                     '"key_findings":["经营风险可控"],"risk_points":[]}'
                 )
             }
+        elif any("draft a specific chapter" in msg.get("content", "") for msg in messages):
+            return {"content": "# 3 企业经营与行业分析\n\n## 3.1 经营风险评价\nfake content 1\n\n## 3.2 杠杆风险评估\nfake content 2"}
         else:
             return {"content": "default response"}
 
@@ -1048,9 +1050,11 @@ async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, 
             )
             return {
                 "content": (
-                    "[Parent Section 1] 如第1章所述，公司主营业务稳定。"
-                    "[Background Knowledge from Parent Section 1] 结合第1章分析，收入结构清晰。"
-                    "[Background Knowledge from Section 2] 延续第2章判断，风险仍需关注。"
+                    "# 2 企业经营分析\n\n"
+                    "## 2.1 上游章节要点承接\n\n"
+                    "如第1章所述，公司主营业务稳定。结合第1章分析，收入结构清晰。\n\n"
+                    "## 2.2 当前章节判断\n\n"
+                    "延续第2章判断，风险仍需关注。"
                 )
             }
         return {"content": "background summary"}

@@ -14,6 +14,30 @@ Based on the provided information, generate a high-quality subsection outline.
 - Avoid taxonomy-style decomposition that expands scope without improving judgment value.
 {% endif %}
 
+{% if section_focus or has_allowed_dimensions or is_final_decision_section or task_type or has_required_dimensions or has_comparison_targets %}
+## Chapter Writing Directive
+
+**Scope**: {{ section_focus or "section_specific_analysis" }}
+{% if has_allowed_dimensions %}- Focus dimensions: {{ allowed_dimensions_text }}{% endif %}
+{% if is_final_decision_section %}
+- This chapter is allowed to carry the final recommendation / ranking / judgment.
+{% else %}
+- This chapter is **not** the final decision section. Do not generate final recommendation / ranking / overall judgment subsection titles here.
+{% endif %}
+
+{% if task_type == "comparison" %}
+**Format**: Prefer dimension-led or target-led subsection titles that support a comparison matrix.
+{% if has_comparison_targets %}- Comparison targets: {{ comparison_targets_text }}{% endif %}
+{% elif task_type == "classification" %}
+**Format**: Subsection titles correspond to categories/types instead of generic background splits.
+{% elif task_type == "trend_judgement" %}
+**Format**: Include subsections that make current status, bottlenecks, and timeline/feasibility visible.
+{% endif %}
+{% if has_required_dimensions %}- **Required dimensions** to surface clearly in subsection titles: {{ required_dimensions_text }}{% endif %}
+
+- Expand only the current chapter's responsibility. If another dimension is needed, mention it only as support rather than as a parallel main subsection.
+{% endif %}
+
 {% if has_template %}
 ## Logic & Constraint(Strictly Adhere)
 - Strictly follow the **section_description** as the authoritative guidance for outline generation.
@@ -45,6 +69,7 @@ The section content is mainly made of key passages. Treat them as the evidence b
 - **Flow:** The subsections must flow logically and not be disjointed to ensure readability.
 - **No Redundancy:** Ensure logical clarity with no repetition between chapters.
 - **Evidence Boundary:** Do not generate concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages.
+- **Boundary:** Use the section-local contract as the primary scope boundary. Do not restate another top-level chapter's main job.
 
 ## Formatting Rules
 1.  **Structure:**

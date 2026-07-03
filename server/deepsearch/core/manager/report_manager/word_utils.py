@@ -35,6 +35,14 @@ MAX_HTML_BLOCK_DEPTH = 100
 HEADING_TAGS = frozenset(f"h{i}" for i in range(1, 9))
 REMOTE_IMAGE_SCHEMES = frozenset({"http", "https"})
 LATEX_TOKEN_RE = re.compile(r"(\$\$.*?\$\$|\\\(.*?\\\))", re.DOTALL)
+LATEX_GROUPED_COMMANDS_WITH_POWER = frozenset({"binom", "frac"})
+LATEX_NORMALIZATION_MAX_PASSES = 8
+LATEX_ALIGNMENT_ENV_RE = re.compile(
+    r"\\begin\{(?P<env>align\*?|aligned|split|gathered)\}"
+    r"(?P<body>.*?)"
+    r"\\end\{(?P=env)\}",
+    re.DOTALL,
+)
 HTML_FORMATTING_WHITESPACE_RE = re.compile(r"[ \t]*\n[ \t]*")
 DOCX_LIST_LEVELS = 9
 DOCX_BULLET_SYMBOLS = ("•", "◦", "▪")
@@ -555,6 +563,7 @@ def _latex_to_omml(latex: str) -> str:
     """
 
     try:
+        latex = _normalize_latex_for_omml(latex)
         # 1. LaTeX → MathML
         mathml = latex2mathml_convert(latex)
 
@@ -564,6 +573,125 @@ def _latex_to_omml(latex: str) -> str:
         return omml
     except Exception as e:
         raise ValueError("transfer latex to omml failed") from e
+
+
+def _normalize_latex_for_omml(latex: str) -> str:
+    """Normalize valid LaTeX forms that mathml2omml cannot parse directly."""
+    previous = _strip_latex_alignment_markers(latex)
+    for _ in range(LATEX_NORMALIZATION_MAX_PASSES):
+        current = _wrap_grouped_command_powers(previous)
+        if current == previous:
+            return current
+        previous = current
+    return previous
+
+
+def _strip_latex_alignment_markers(latex: str) -> str:
+    """Remove unescaped alignment markers from LaTeX alignment environments."""
+
+    def _strip_environment(match: re.Match[str]) -> str:
+        env = match.group("env")
+        body = _strip_unescaped_latex_char(match.group("body"), "&")
+        return rf"\begin{{{env}}}{body}\end{{{env}}}"
+
+    return LATEX_ALIGNMENT_ENV_RE.sub(_strip_environment, latex)
+
+
+def _strip_unescaped_latex_char(text: str, target: str) -> str:
+    parts: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            parts.append(text[index:index + 2])
+            index += 2
+            continue
+        if char != target:
+            parts.append(char)
+        index += 1
+    return "".join(parts)
+
+
+def _wrap_grouped_command_powers(latex: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    index = 0
+
+    while index < len(latex):
+        match = re.search(r"\\([A-Za-z]+)", latex[index:])
+        if match is None:
+            break
+
+        command_start = index + match.start()
+        command_end = index + match.end()
+        command_name = match.group(1)
+        if command_name not in LATEX_GROUPED_COMMANDS_WITH_POWER:
+            index = command_end
+            continue
+
+        first_group_end = _find_latex_group_end(latex, command_end)
+        if first_group_end is None:
+            index = command_end
+            continue
+        second_group_end = _find_latex_group_end(latex, first_group_end + 1)
+        if second_group_end is None:
+            index = first_group_end + 1
+            continue
+
+        power_end = _find_latex_power_end(latex, second_group_end + 1)
+        if power_end is None:
+            index = command_end
+            continue
+
+        parts.append(latex[cursor:command_start])
+        parts.append("{")
+        parts.append(latex[command_start:second_group_end + 1])
+        parts.append("}")
+        parts.append(latex[second_group_end + 1:power_end])
+        cursor = power_end
+        index = power_end
+
+    if not parts:
+        return latex
+
+    parts.append(latex[cursor:])
+    return "".join(parts)
+
+
+def _find_latex_group_end(text: str, open_index: int) -> int | None:
+    if open_index >= len(text) or text[open_index] != "{":
+        return None
+
+    depth = 0
+    index = open_index
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _find_latex_power_end(text: str, caret_index: int) -> int | None:
+    if caret_index >= len(text) or text[caret_index] != "^":
+        return None
+
+    value_start = caret_index + 1
+    if value_start >= len(text):
+        return None
+    if text[value_start] == "{":
+        group_end = _find_latex_group_end(text, value_start)
+        return None if group_end is None else group_end + 1
+    if text[value_start].isalnum():
+        return value_start + 1
+    return None
 
 
 def _add_latex_paragraph(doc, text, style=None):

@@ -232,7 +232,6 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 **字段**：
 - **session_id**(str)：会话ID。默认值：`""`。
 - **original_query**(str)：用户输入的原始问题。默认值：`""`。
-- **research_query**(str)：意图识别后的研究主题，供检索与规划使用。默认值：`""`。
 - **research_intent**(ResearchIntent)：结构化报告约束。默认值：空 `ResearchIntent`。
 - **report_type_policy**(ReportTypePolicy)：由 `research_intent.report_type` 解析出的运行期策略，供大纲、规划、信息收集、子报告写作和总报告汇总阶段消费。默认值：空 `ReportTypePolicy`。
 - **messages**(List[Message])：对话消息列表。

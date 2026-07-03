@@ -25,7 +25,11 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_
     CollectorRunPlanConfig,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.section_context import SectionContext
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import SubReportContent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    SubReportContent,
+    build_research_intent_prompt_context,
+    build_section_local_contract_prompt_context,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import custom_stream_output
@@ -96,6 +100,7 @@ class SectionStartNode(Start):
             session_id=inputs.get("session_id", ""),
             report_type_policy=inputs.get("report_type_policy") or {},
             research_intent=inputs.get("research_intent") or {},
+            section_local_contract=inputs.get("section_local_contract") or {},
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(),
@@ -122,7 +127,8 @@ class BasePlanReasoningNode(BaseNode):
         # 封装入参
         rtp = session.get_global_state("section_context.report_type_policy") or {}
         research_intent = session.get_global_state("section_context.research_intent") or {}
-        return {
+        section_local_contract = session.get_global_state("section_context.section_local_contract") or {}
+        current_inputs = {
             "section_idx": section_idx,
             "language": session.get_global_state("section_context.language"),
             "messages": session.get_global_state("section_context.messages"),
@@ -141,7 +147,17 @@ class BasePlanReasoningNode(BaseNode):
             "require_methodology_and_risk": rtp.get("require_methodology_and_risk", False),
             "audience_role": research_intent.get("audience_role", ""),
             "tone": research_intent.get("tone", ""),
+            "section_local_contract": section_local_contract,
         }
+        current_inputs.update(
+            build_section_local_contract_prompt_context(section_local_contract)
+        )
+        # Pass global research intent (task_type, comparison_targets, required_dimensions)
+        # so the planner can generate search steps that contribute evidence toward global objectives.
+        current_inputs.update(
+            build_research_intent_prompt_context(research_intent)
+        )
+        return current_inputs
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
@@ -335,6 +351,7 @@ class SubReporterNode(BaseNode):
 
         rtp = session.get_global_state("section_context.report_type_policy") or {}
         research_intent = session.get_global_state("section_context.research_intent") or {}
+        section_local_contract = session.get_global_state("section_context.section_local_contract") or {}
 
         return dict(
             thread_id=session.get_global_state("section_context.session_id"),
@@ -367,6 +384,8 @@ class SubReporterNode(BaseNode):
             require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
             audience_role=research_intent.get("audience_role", ""),
             tone=research_intent.get("tone", ""),
+            research_intent=research_intent,
+            section_local_contract=section_local_contract,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -706,6 +725,7 @@ def build_editor_team_workflow():
             "config": "${config}",
             "report_type_policy": "${report_type_policy}",
             "research_intent": "${research_intent}",
+            "section_local_contract": "${section_local_contract}",
         }
     )
 

@@ -23,6 +23,32 @@ short, focus on writing the current chapter
 {% endif %}
 {% endif %}
 
+{% if section_focus or has_allowed_dimensions or is_final_decision_section or task_type or has_required_dimensions or has_comparison_targets %}
+## Chapter Writing Directive
+
+**Scope**: {{ section_focus or "section_specific_analysis" }}
+{% if has_allowed_dimensions %}- Focus dimensions: {{ allowed_dimensions_text }}{% endif %}
+{% if is_final_decision_section %}
+- **Decision authority**: This chapter carries the final recommendation / ranking / judgment.
+{% else %}
+- **Decision authority**: This chapter must NOT output the final recommendation / ranking / overall judgment as a main deliverable.
+{% endif %}
+
+{% if task_type == "comparison" %}
+**Format**: Comparison matrix — align evidence by target or dimension, prefer Markdown tables for side-by-side contrasts.
+{% if has_comparison_targets %}- Comparison targets: {{ comparison_targets_text }}{% endif %}
+{% elif task_type == "classification" %}
+**Format**: Split by categories/types first, then summarize the cross-category takeaway.
+{% elif task_type == "trend_judgement" %}
+**Format**: Explicitly state current status, bottlenecks, feasibility signals, and time/risk judgments where the outline asks for them.
+{% endif %}
+{% if has_required_dimensions %}- **Required dimensions** to surface clearly: {{ required_dimensions_text }}{% endif %}
+{% if is_final_decision_section %}- **Final decision required**: answer it explicitly in the conclusion instead of only describing background analysis.{% endif %}
+
+- The chapter must not become a duplicate of other top-level chapters.
+- Use the **Current Chapter Outline** as the primary writing boundary. Treat the **Overall outline** as a consistency reference only.
+{% endif %}
+
 # Critical Constraints (NON-NEGOTIABLE)
 
 ## 1. Citation & Grounding
@@ -86,6 +112,7 @@ short, focus on writing the current chapter
 - Maintain logical coherence within the provided framework.
 - **Avoid Errors**: Check for common sense errors and logical gaps.
 - Based on background knowledge, generate content by combining collected information.
+- Use the **Current Chapter Outline** and the section-local contract as the primary writing boundary. Treat the **Overall outline** as a consistency reference only.
 
 {% if section_iscore %}
 ## Core Section Requirements (High Importance)

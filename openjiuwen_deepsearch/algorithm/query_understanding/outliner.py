@@ -68,6 +68,8 @@ def generate_outline(
             id=section.get("id", ""),
             parent_ids=section.get("parent_ids", []),
             relationships=section.get("relationships", []),
+            section_focus=section.get("section_focus", ""),
+            focus_dimensions=section.get("focus_dimensions", []),
         )
         for section in sections
     ]
@@ -123,7 +125,10 @@ def create_outline_tool(section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": f"Section list of the final report. (Target number of sections: {section_num})",
+                    "description": (
+                        f"Section list of the final report. Generate exactly {section_num} section(s); "
+                        f"the sections array length must be exactly {section_num}."
+                    ),
                     "items": {
                         "type": "object",
                         "properties": {
@@ -143,6 +148,27 @@ def create_outline_tool(section_num: int):
                             "id": {
                                 "type": "string",
                                 "description": "Unique identifier for the section. Following the format '1', '2', etc."
+                            },
+                            "section_focus": {
+                                "type": "string",
+                                "description": (
+                                    "A short label describing this section's analytical role within the report. "
+                                    "Examples: market_size_and_growth, vendors_and_supply, technology_drivers, "
+                                    "risks_and_barriers, use_cases_and_commercialization, "
+                                    "recommendation_and_ranking, section_specific_analysis. "
+                                    "Use recommendation_and_ranking ONLY for the section "
+                                    "that carries the final judgment."
+                                ),
+                            },
+                            "focus_dimensions": {
+                                "type": "array",
+                                "description": (
+                                    "The 2-4 main analytical dimensions this section should cover. "
+                                    "Other sections should NOT deeply expand these dimensions."
+                                ),
+                                "items": {
+                                    "type": "string"
+                                },
                             },
                         },
                         "required": ["title", "description"]
@@ -183,7 +209,10 @@ def creat_dep_driving_outline_tool(section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": f"Section list of the final report. (Target number of sections: {section_num})",
+                    "description": (
+                        f"Section list of the final report. Generate exactly {section_num} section(s); "
+                        f"the sections array length must be exactly {section_num}."
+                    ),
                     "items": {
                         "type": "object",
                         "properties": {
@@ -219,6 +248,27 @@ def creat_dep_driving_outline_tool(section_num: int):
                                 "items": {
                                     "type": "string"
                                 }
+                            },
+                            "section_focus": {
+                                "type": "string",
+                                "description": (
+                                    "A short label describing this section's analytical role within the report. "
+                                    "Examples: market_size_and_growth, vendors_and_supply, technology_drivers, "
+                                    "risks_and_barriers, use_cases_and_commercialization, "
+                                    "recommendation_and_ranking, section_specific_analysis. "
+                                    "Use recommendation_and_ranking ONLY for the section "
+                                    "that carries the final judgment."
+                                ),
+                            },
+                            "focus_dimensions": {
+                                "type": "array",
+                                "description": (
+                                    "The 2-4 main analytical dimensions this section should cover. "
+                                    "Other sections should NOT deeply expand these dimensions."
+                                ),
+                                "items": {
+                                    "type": "string"
+                                },
                             }
                             },
                         "required": ["title", "description", "id", "parent_ids", "relationships"]

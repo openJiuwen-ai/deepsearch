@@ -81,8 +81,8 @@ Supported engines (set `web_search_engine_config.search_engine_name`):
 
 Integration notes:
 
-- `jina` uses the built-in direct HTTP wrapper. When `search_url=""`, the runtime falls back to `https://s.jina.ai`. Provider-specific query options such as `gl`, `hl`, `location`, and `page` are carried through `extension`.
-- `bocha` and `perplexity` use the harness `web_tools` adapter layer. They support `extension.timeout_seconds` and `extension.fetch_webpage`. `search_url` is only honored when the underlying provider supports URL override in `web_tools`.
+- `jina` uses the built-in direct HTTP wrapper. When `search_url=""`, the runtime falls back to `https://s.jina.ai`. In China network environments where the default endpoint is unreachable, explicitly set `search_url` to `https://s.jinaai.cn`. Provider-specific query options such as `gl`, `hl`, `location`, and `page` are carried through `extension`.
+- `bocha` and `perplexity` use the harness `web_tools` adapter layer. They support `extension.timeout_seconds` and `extension.fetch_webpage`. `search_url` is only honored when the underlying provider supports URL override in `web_tools`. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
 - `serper` is exposed as a dedicated engine name so server-side configuration can use `serper`, while research-mode `web_search_tool` still reuses the Google/Serper wrapper internally.
 - Public engines may keep `search_url` empty and rely on built-in defaults or provider defaults.
 
@@ -92,7 +92,7 @@ Search results are also bounded before they reach the collector LLM path:
 - `InfoRetrievalNode._structure_result` applies the same bound again before passing `contents` into `run_doc_evaluation`.
 - Collector-side normalization stores web results in a stable `title` / `url` / `content` / `type` shape and accepts aliases such as `link`, `source_url`, `snippet`, `summary`, and `answer`.
 
-> Register with the vendor for `search_api_key`. For public engines such as Jina, `search_url` can be left empty to use the built-in default endpoint; provide it only when you need a vendor-specific or privately deployed URL.
+> Register with the vendor for `search_api_key`. For public engines such as Jina, `search_url` can be left empty to use the built-in default endpoint. In China network environments, set Jina `search_url` to `https://s.jinaai.cn`; also provide `search_url` when you need a vendor-specific, privately deployed, or proxy-forwarded URL.
 
 ## TLS / SSL
 
@@ -531,7 +531,7 @@ Notes:
 - `sync` only updates `final_result.response_content`, does not consume `feedback_interaction_count`, and appends a `search_context.rewrite_history` record only when the full report content actually changes.
 - The backend keeps only the latest 10 `sync` history records; unchanged `sync` requests do not create history entries.
 - Each successful normal local rewrite appends one record to `search_context.rewrite_history`, including `action`, `rewrite_scope` (when present), offsets, and related information for debugging and auditing.
-- `truth_verification` does not update `final_result.response_content` or write `rewrite_history`.
+- `truth_verification` does not update `final_result.response_content` or write `rewrite_history`. The streaming `SUMMARY_RESPONSE` `content` is JSON with `display_text` and `feedback_interaction_count`, and it consumes one `feedback_interaction_count`.
 - **Compatibility**: omitting `rewrite_scope` is equivalent to explicitly sending `selected_only`; **`action` cannot be omitted or be an empty string**. If an older frontend still relies on backend inference, it must be updated to send a valid explicit `action`.
 
 # Further reading

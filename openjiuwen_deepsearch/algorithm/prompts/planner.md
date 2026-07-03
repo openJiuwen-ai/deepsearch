@@ -26,6 +26,29 @@ As a professional Deep Researcher planner, your task is to assemble a team of sp
 {% endif %}
 {% endif %}
 
+{% if task_type or has_comparison_targets or has_required_dimensions or section_focus or has_allowed_dimensions or is_final_decision_section %}
+## Research Context & Section Scope
+{% if task_type or has_comparison_targets or has_required_dimensions %}
+### Full Report Intent
+{% if task_type %}- Task type: {{ task_type }}{% endif %}
+{% if has_comparison_targets %}- Comparison targets: {{ comparison_targets_text }}{% endif %}
+{% if has_required_dimensions %}- Required dimensions: {{ required_dimensions_text }}{% endif %}
+{% endif %}
+{% if section_focus or has_allowed_dimensions or is_final_decision_section %}
+### Current Section Responsibility
+Within the full report intent above, this section owns a specific scope:
+- Section focus: {{ section_focus or "section_specific_analysis" }}
+{% if has_allowed_dimensions %}- Section dimensions: {{ allowed_dimensions_text }}{% endif %}
+{% if is_final_decision_section %}
+- This section may collect evidence for the final recommendation / ranking / judgment.
+{% else %}
+- This section must NOT spend main collection budget on final recommendation / ranking / overall judgment evidence.
+{% endif %}
+{% endif %}
+- Use the full report intent as context to frame searches precisely: when a comparison target or required dimension is relevant to this section's scope, include it explicitly in queries rather than searching generically.
+- Stay within this section's dimensions — do not expand collection into areas owned by other chapters.
+{% endif %}
+
 ## Scenario Assessment (Strict Criteria)
 ▸ **Terminate Research** (`is_research_completed=true` requires ALL conditions):
   ✅ 100% coverage of all problem dimensions
@@ -46,16 +69,6 @@ As a professional Deep Researcher planner, your task is to assemble a team of sp
 | Type                | Scenarios                                                               | Prohibitions        |
 |---------------------|-------------------------------------------------------------------------|---------------------|
 | **info_collecting** | Market data/Historical records/Competitive analysis/Statistical reports | Any calculations    |
-
-## Analysis Framework (8 Dimensions)
-1. **Historical Context**: Evolution timeline
-2. **Current Status**: Data points + recent developments
-3. **Future Indicators**: Predictive models + scenario planning
-4. **Stakeholder Data**: Group impact + perspective mapping
-5. **Quantitative Data**: Multi-source statistics
-6. **Qualitative Data**: Case studies + testimonies
-7. **Comparative Analysis**: Cross-case benchmarking
-8. **Risk Assessment**: Challenges + contingency plans
 
 ## Execution Constraints
 - Max steps num: {{ max_step_num }} (require high focus, do not exceed this quantity)

@@ -19,6 +19,7 @@ class SectionBaseContext(BaseModel):
     session_id: str = Field(default="", description="会话ID")
     report_type_policy: dict = Field(default_factory=dict, description="报告类型策略")
     research_intent: dict = Field(default_factory=dict, description="结构化报告细节约束")
+    section_local_contract: dict = Field(default_factory=dict, description="章节级局部合同约束")
 
 
 class SectionReasoningContext(SectionBaseContext):

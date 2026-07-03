@@ -161,7 +161,10 @@ class MarkdownOutlineRenumber:
 
     def renumber_headers(self, content: str) -> str:
         """renumber subsection header number in general report"""
-        pattern = r"^ *(#{1,3}(?!\#)) +([0-9.]*) *"
+        # Match only valid section numbers (1–2 digit groups, e.g. "1", "1.", "1.1",
+        # "1.1.2") followed by non-digit or end-of-line.  This prevents the pattern
+        # from greedily consuming year digits (e.g. "2025" in "## 2025-2026年xxx").
+        pattern = r"^ *(#{1,3}(?!\#))(?:\s*(\d{1,2}(?:\.\d{1,2})*\.?)(?=[^\da-zA-Z.]|$))? *"
         lines = content.split("\n")
         output_lines = []
 

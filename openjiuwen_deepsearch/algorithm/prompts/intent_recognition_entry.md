@@ -13,6 +13,7 @@ You MUST call `emit_report_intent` exactly once for every request. Do not reply 
 - Extract **research_query**: the core research topic or question to investigate. Strip instructions about report format, chapter counts, audience, tone, or listed URLs. Keep the substantive subject only.
   - Keep `research_query` in the same language as `original_query`. Do not translate, rewrite into English keywords, or internationalize wording.
   - Mixed-language entities (e.g., names like Jensen Huang, product names like Blackwell/Rubin) stay as-is.
+  - `research_query` is used only for entry web search; Keep it concise; it MUST NOT exceed 400 characters.
 - Extract **language**: Detect the user's language and emit a locale code (e.g., `zh-CN`, `en-US`, `ja-JP`, `ko-KR`). You MUST always provide this field — never omit it.
 - Extract **research_intent** structured constraints (section_count, audience_role, tone, report_type, include/exclude URLs and domains) as described in the tool schema.
 

@@ -20,8 +20,14 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.de
     build_dependency_reasoning_workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.dependency_writing_team_nodes import \
     build_dependency_writing_workflow
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Section, Outline, Report, SubReport, \
-    SubReportContent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    Section,
+    Outline,
+    Report,
+    SectionLocalContract,
+    SubReport,
+    SubReportContent,
+)
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import StreamEvent, MessageType
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.debug_utils.node_debug import NodeType, add_debug_log_wrapper, NodeDebugData
@@ -36,6 +42,37 @@ class EditorTeamNode(BaseNode):
     def __init__(self):
         super().__init__()
         self.log_prefix = ""
+
+    @staticmethod
+    def dedupe_preserve_order(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in items:
+            value = (item or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result
+
+    @staticmethod
+    def _build_section_local_contract(section: Section) -> dict:
+        """基于 Outliner LLM 生成的 section_focus 和 focus_dimensions 构建章节局部合同。
+
+        当 LLM 未输出 section_focus 时，使用空默认值。
+        """
+        dedupe = EditorTeamNode.dedupe_preserve_order
+
+        focus = (section.section_focus or "").strip() or "section_specific_analysis"
+        allowed_dimensions = dedupe([d for d in (section.focus_dimensions or []) if d])
+        is_final_decision_section = (focus == "recommendation_and_ranking")
+
+        contract = SectionLocalContract(
+            section_focus=focus,
+            allowed_dimensions=allowed_dimensions,
+            is_final_decision_section=is_final_decision_section,
+        )
+        return contract.model_dump()
 
     def graph_invoker(self) -> bool:
         """图执行器"""
@@ -195,6 +232,7 @@ class EditorTeamNode(BaseNode):
             "session_id": state.get("session_id", ""),
             "report_type_policy": state.get("report_type_policy") or {},
             "research_intent": state.get("research_intent") or {},
+            "section_local_contract": self._build_section_local_contract(section),
         }
 
         return section_state

@@ -69,6 +69,29 @@ commands directly.
 - Server changes must preserve Pydantic request/response validation, async
   resource cleanup, and report/storage path safety.
 
+## Feature Documentation
+
+- `docs/feature/` is the maintainer-facing source of truth for current feature
+  behavior, design boundaries, and contracts. It complements, but does not
+  replace, user-facing docs under `docs/zh/` and `docs/en/`.
+- For PRs that change feature behavior, workflow orchestration, public SDK/API
+  behavior, runtime configuration, prompt contracts, data contracts,
+  persistence, report generation/conversion, source tracing, or other
+  user-visible behavior, add or update the relevant file under `docs/feature/`
+  in the same PR.
+- Pure tests, formatting, dependency metadata, comments, or refactors with no
+  behavior/API/configuration change may skip `docs/feature/`, but the PR should
+  state why no feature documentation update is needed.
+- When adding a new feature document, start from `docs/feature/_template.md`.
+  Keep entries factual and current: purpose, visible behavior, key code paths,
+  core flow, data contracts, dependencies, boundaries, tests, and related docs.
+- Do not duplicate prompt contents, implementation internals, or change logs in
+  feature documents. Link to the source files and describe only the current
+  contract.
+- If a feature spans multiple subsystems, document it under the primary owner
+  and list related modules explicitly instead of duplicating the same design in
+  multiple files.
+
 ## Commands
 
 - Install SDK/dev dependencies: `uv sync --group dev`

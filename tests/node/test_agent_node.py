@@ -9,7 +9,9 @@ from openjiuwen.core.workflow.base import WorkflowCard
 from openjiuwen.core.workflow.workflow import Workflow
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import EditorTeamNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import (
+    EditorTeamNode,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     EndNode,
     IntentRecognitionNode,
@@ -117,7 +119,7 @@ def test_create_section_state():
         id="1", thought="mock though", title="mock title", sections=[outline_section]
     )
     search_context = {'session_id': 'default_session_id', 'original_query': '杭州的天气怎么样',
-                      'research_query': '杭州的天气怎么样', 'messages': [{...}],
+                      'messages': [{...}],
                       'language': 'zh-CN', 'plan_executed_num': 0, 'current_plan': None,
                       'duplicated_search_queries': {}, 'duplicated_search_items': {}, 'final_report_path': '',
                       'final_result': {'response_content': '', 'citation_messages': {}, 'exception_info': ''},
@@ -160,6 +162,93 @@ def test_create_section_state():
     assert section_state["research_intent"]["section_count"] == 4
     assert section_state["research_intent"]["audience_role"] == "企业CTO"
     assert section_state["research_intent"]["tone"] == "analytical"
+
+
+def test_create_section_state_builds_section_local_contract():
+    editor_team_node = TestEditorTeamNode()
+    outline_section = Section(
+        title="战略行动建议与未来两年优先投入区域研判",
+        description="综合比较结果，给出区域投入排序与行动建议。",
+        is_core_section=True,
+        section_focus="recommendation_and_ranking",
+        focus_dimensions=["recommendation", "ranking"],
+    )
+    outline = Outline(
+        id="1",
+        thought="mock thought",
+        title="AI PC 市场对比报告",
+        sections=[outline_section],
+    )
+    search_context = {
+        "messages": [{"role": "user", "content": "compare"}],
+        "language": "zh-CN",
+        "report_template": "",
+        "config": {},
+        "parent_section_steps": [],
+        "session_id": "default_session_id",
+        "report_type_policy": {},
+        "research_intent": {
+            "task_type": "comparison",
+            "required_dimensions": ["market_size", "vendors", "risks"],
+        },
+    }
+
+    section_state = editor_team_node.create_section_state_from_state(
+        search_context, outline, outline_section
+    )
+
+    contract = section_state["section_local_contract"]
+    assert contract["section_focus"] == "recommendation_and_ranking"
+    assert contract["is_final_decision_section"] is True
+    assert "forbidden_dimensions" not in contract
+
+
+def test_build_section_local_contract_uses_llm_focus_for_use_cases():
+    section = Section(
+        title="落地场景分化：消费级与企业级应用在中美欧的渗透深度对比",
+        description=(
+            "按场景维度拆解三大市场AI PC的实际使用率与商业化成熟度，"
+            "重点分析消费端44%渗透率、企业端采购渗透率与垂直行业落地路径。"
+        ),
+        is_core_section=True,
+        section_focus="use_cases_and_commercialization",
+        focus_dimensions=["use_cases", "commercialization", "adoption"],
+    )
+
+    contract = EditorTeamNode._build_section_local_contract(section)
+
+    assert contract["section_focus"] == "use_cases_and_commercialization"
+    assert contract["allowed_dimensions"] == [
+        "use_cases",
+        "commercialization",
+        "adoption",
+    ]
+    assert contract["is_final_decision_section"] is False
+    assert "forbidden_dimensions" not in contract
+
+
+def test_build_section_local_contract_uses_llm_focus_for_risks():
+    section = Section(
+        title="系统性风险与挑战：政策壁垒、供应链脆弱性与技术代差评估",
+        description=(
+            "识别并量化政策、供应链与技术层面的差异化风险矩阵，"
+            "评估各市场抗风险韧性。"
+        ),
+        is_core_section=True,
+        section_focus="risks_and_barriers",
+        focus_dimensions=["risks", "regulation", "barriers"],
+    )
+
+    contract = EditorTeamNode._build_section_local_contract(section)
+
+    assert contract["section_focus"] == "risks_and_barriers"
+    assert contract["allowed_dimensions"] == [
+        "risks",
+        "regulation",
+        "barriers",
+    ]
+    assert contract["is_final_decision_section"] is False
+    assert "forbidden_dimensions" not in contract
 
 
 class TestEditorTeamNode(EditorTeamNode):
@@ -283,10 +372,10 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
     update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
     intent_update = next(
         payload for payload in update_payloads
-        if "search_context.original_query" in payload and "search_context.research_query" in payload
+        if "search_context.original_query" in payload and "search_context.research_intent" in payload
     )
     assert intent_update["search_context.original_query"] == original_query
-    assert intent_update["search_context.research_query"] == "AI Agent 趋势"
+    assert "search_context.research_query" not in intent_update
     assert intent_update["search_context.research_intent"] == intent_result.research_intent.model_dump()
     assert "search_context.report_type_policy" in intent_update
     mock_apply_domain_constraints.assert_called_once_with(
@@ -330,6 +419,49 @@ def test_outline_pre_handle_resolves_max_section_num_from_section_count():
 
     assert current_inputs["section_num"] == 4
     assert current_inputs["max_section_num"] == OUTLINER_SECTION_NUM_MAX
+
+
+def test_outline_pre_handle_exposes_task_contract_prompt_context():
+    session = Mock(spec=Session)
+    research_intent = {
+        "section_count": 4,
+        "audience_role": "CTO",
+        "tone": "formal",
+        "task_type": "comparison",
+        "required_dimensions": ["growth", "dividend"],
+        "comparison_targets": ["AIA", "Ping An"],
+    }
+
+    def _get_global_state(key):
+        mapping = {
+            "search_context.language": "zh-CN",
+            "search_context.messages": [],
+            "search_context.questions": "",
+            "search_context.user_feedback": "",
+            "config.outliner_max_section_num": 10,
+            "config.outliner_max_generate_outline_retry_num": 1,
+            "search_context.report_template": "",
+            "search_context.outline_interactions": [],
+            "search_context.current_outline": None,
+            "config.outline_interaction_enabled": False,
+            "config.api_tools_config": {},
+            "search_context.entry_search_results": [],
+            "search_context.report_type_policy": {},
+            "search_context.research_intent": research_intent,
+        }
+        return mapping.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    node = OutlineNode()
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="basic",
+    ):
+        current_inputs = node._pre_handle({}, session, Context())
+
+    assert current_inputs["task_type"] == "comparison"
+    assert current_inputs["required_dimensions_text"] == "growth, dividend"
+    assert current_inputs["comparison_targets_text"] == "AIA, Ping An"
 
 
 def test_generate_questions_keeps_prompt_generated_questions_when_report_type_unspecified():
@@ -378,7 +510,7 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
 
     def _get_global_state(key):
         mapping = {
-            "search_context.research_query": "低空经济发展趋势",
+            "search_context.original_query": "低空经济发展趋势",
             "search_context.research_intent": {
                 "section_count": 5,
                 "audience_role": "投资人",
@@ -398,7 +530,6 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
     node = FeedbackHandlerNode()
     reparsed_intent = {
         "original_query": "请研究低空经济",
-        "research_query": "低空经济发展趋势",
         "research_intent": {
             "section_count": None,
             "audience_role": None,
@@ -472,8 +603,7 @@ async def test_start_node_merges_agent_llm_timeouts_into_session_config():
 
     search_context = session.update_global_state.call_args_list[0][0][0]["search_context"]
     assert search_context["original_query"] == "hello"
-    assert search_context["research_query"] == "hello"
-    assert "query" not in search_context
+    assert "research_query" not in search_context
 
     merged_config = session.update_global_state.call_args_list[-1][0][0]["config"]
     assert merged_config["agent_llm_timeouts"] == {"default": 300, "sub_reporter": 120}

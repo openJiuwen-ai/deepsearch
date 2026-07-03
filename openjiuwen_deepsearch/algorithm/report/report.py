@@ -47,7 +47,12 @@ from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_ma
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.config.config import Config
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ChapterSidecar, Outline
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    ChapterSidecar,
+    Outline,
+    build_research_intent_prompt_context,
+    build_section_local_contract_prompt_context,
+)
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
@@ -68,6 +73,17 @@ def _format_sub_report_error(detail: str | BaseException) -> str:
 
 EFFECT_SUB_REPORT_TAG = "### sub_report_tag ###"
 MAX_LOOP_ROUND = 10
+LEADING_TITLE_NUMBER_PATTERN = re.compile(
+    r"^(?:"
+    r"[\（][一二三四五六七八九十\d]{1,2}[\）]\s*|"
+    r"[\(][一二三四五六七八九十\d]{1,2}[\)]\s*|"
+    r"第?[一二三四五六七八九十\d]+章\s*|"
+    r"[一二三四五六七八九十]+、\s*|"
+    r"\d{1,2}(?:\.\d{1,2})+\s*(?![\da-zA-Z.])|"
+    r"\d{1,2}[\.、]\s*(?![\da-zA-Z.])|"
+    r"(?:[1-9]|1\d)\s+|"
+    r")"
+)
 INTERNAL_CALLBACK_LABEL_PATTERN = re.compile(
     r"\s*\["
     r"(?=[^\]]*(?:background|knowledge|parent|section|prior|summary|背景|知识))"
@@ -107,9 +123,7 @@ class Reporter:
     @staticmethod
     def strip_leading_number(s: str) -> str:
         """移除标题前导编号并返回清洗后的文本。"""
-        return re.sub(
-            r"^(?:\d+(?:[.\-\s]\d+)*|第?[一二三四五六七八九十\d]+[、章])\s*", "", s
-        )
+        return LEADING_TITLE_NUMBER_PATTERN.sub("", s)
 
     @staticmethod
     def _section_sort_key(section_id) -> tuple[int, int | str]:
@@ -144,8 +158,9 @@ class Reporter:
             Generic header cleanup helper.
             level is the header level (number of '#').
             """
-            pattern = rf'^\s*{"#" * level}\s*[\(\（]?[一二三四五六七八九十0-9]+[\.、\)\）]?\s*'
-            return re.sub(pattern, f'{"#" * level} ', line)
+            content = re.sub(rf'^\s*{"#" * level}\s*', "", line).strip()
+            content = Reporter.strip_leading_number(content).strip()
+            return f'{"#" * level} {content}'.rstrip()
 
         lines = md_text.splitlines()
         new_lines = []
@@ -164,10 +179,7 @@ class Reporter:
             # H4 and deeper headers
             elif re.match(r"^\s*#{4,}\s+", line):
                 content = re.sub(r"^\s*#{4,}\s+", "", line).strip()
-                # Remove numbering (same rule as H1-H3)
-                content = re.sub(
-                    r"^[\(\（]?[一二三四五六七八九十0-9]+[\.、\)\）]?\s*", "", content
-                )
+                content = Reporter.strip_leading_number(content).strip()
                 transferred_header = f"- **{content}**"
                 new_lines.append(transferred_header)
 
@@ -375,6 +387,74 @@ class Reporter:
             if LogManager.is_sensitive():
                 return False, f"format check exception for section_idx={section_idx}"
             return False, f"format check exception for section_idx={section_idx}: {e}"
+
+    @staticmethod
+    def _normalize_heading_title(title: str) -> str:
+        title = Reporter.strip_leading_number(title or "")
+        title = re.sub(r"\s+", " ", title).strip()
+        return title
+
+    @staticmethod
+    def _extract_outline_heading_pairs(sub_section_outline: str) -> list[tuple[int, str]]:
+        pairs: list[tuple[int, str]] = []
+        for line in sub_section_outline.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            level = 1 if not pairs else 2
+            pairs.append((level, Reporter._normalize_heading_title(stripped)))
+        return pairs
+
+    @staticmethod
+    def _extract_markdown_heading_pairs(content: str) -> list[tuple[int, str]]:
+        pairs: list[tuple[int, str]] = []
+        for line in content.splitlines():
+            match = re.match(r"^\s*(#{1,2})\s+(.+?)\s*$", line)
+            if not match:
+                continue
+            level = len(match.group(1))
+            pairs.append((level, Reporter._normalize_heading_title(match.group(2))))
+        return pairs
+
+    @staticmethod
+    def validate_sub_report_headings_match_outline(
+        content: str,
+        sub_section_outline: str,
+    ) -> tuple[bool, str]:
+        """Ensure generated markdown headings strictly follow the approved subsection outline."""
+        expected_pairs = Reporter._extract_outline_heading_pairs(sub_section_outline)
+        actual_pairs = Reporter._extract_markdown_heading_pairs(content)
+
+        if not expected_pairs:
+            return False, "expected subsection outline headings are empty"
+        if not actual_pairs:
+            return False, "generated report headings are empty"
+
+        if len(actual_pairs) != len(expected_pairs):
+            return (
+                False,
+                f"heading count mismatch: expected {len(expected_pairs)}, got {len(actual_pairs)}",
+            )
+
+        for index, (expected, actual) in enumerate(
+            zip(expected_pairs, actual_pairs),
+            start=1,
+        ):
+            if expected[0] != actual[0]:
+                return (
+                    False,
+                    f"heading level mismatch at position {index}: expected H{expected[0]}, got H{actual[0]}",
+                )
+            if expected[1] != actual[1]:
+                return (
+                    False,
+                    f"heading title mismatch at position {index}: expected '{expected[1]}', got '{actual[1]}'",
+                )
+
+        if len({pair for pair in actual_pairs[1:]}) != len(actual_pairs[1:]):
+            return False, "duplicate subsection headings detected in generated report"
+
+        return True, ""
 
     @staticmethod
     def is_valid_chapter_format(text, section_idx) -> bool:
@@ -1004,6 +1084,11 @@ class Reporter:
             self.gen_report_context.setdefault(
                 "require_methodology_and_risk", rtp.get("require_methodology_and_risk", False)
             )
+        self.gen_report_context.update(
+            build_research_intent_prompt_context(
+                self.gen_report_context.get("research_intent")
+            )
+        )
         return True
 
     async def _add_sub_report_transaction(self, current_inputs: dict):
@@ -1598,6 +1683,16 @@ class Reporter:
             tmp_context["section_description"] = section_description
             tmp_context["report_type"] = current_inputs.get("report_type", "professional")
             tmp_context["paragraph_style"] = current_inputs.get("paragraph_style", "detailed")
+            tmp_context.update(
+                build_section_local_contract_prompt_context(
+                    current_inputs.get("section_local_contract")
+                )
+            )
+            tmp_context.update(
+                build_research_intent_prompt_context(
+                    current_inputs.get("research_intent")
+                )
+            )
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [generate_sub_section_outline] has_template: "
                 f"{tmp_context['has_template']}"
@@ -2518,6 +2613,12 @@ class Reporter:
                     require_methodology_and_risk=current_inputs.get("require_methodology_and_risk", False),
                     audience_role=current_inputs.get("audience_role", ""),
                     tone=current_inputs.get("tone", ""),
+                    **build_section_local_contract_prompt_context(
+                        current_inputs.get("section_local_contract")
+                    ),
+                    **build_research_intent_prompt_context(
+                        current_inputs.get("research_intent")
+                    ),
                 ),
             )
 
@@ -2610,12 +2711,24 @@ class Reporter:
                 current_inputs.get("section_idx", ""),
             )
 
+            current_inputs["sub_report_content"] = self.clean_markdown_headers(
+                current_inputs["sub_report_content"]
+            )
+            ok, reason = self.validate_sub_report_headings_match_outline(
+                current_inputs["sub_report_content"],
+                current_inputs.get("sub_section_outline", ""),
+            )
+            if not ok:
+                return dict(
+                    success=False,
+                    result=f"generated report headings do not match outline: {reason}",
+                )
             sidecar_result = await self._generate_sub_report_sidecar(current_inputs)
             current_inputs["sub_report_chapter_sidecar"] = sidecar_result.get("sidecar")
             current_inputs["sub_report_summary"] = sidecar_result.get("summary", "")
             current_inputs["sub_report_sidecar_warning"] = sidecar_result.get("warning", "")
             current_inputs["sub_report_content"] = self.add_references(
-                self.clean_markdown_headers(current_inputs["sub_report_content"]),
+                current_inputs["sub_report_content"],
                 current_inputs.get("sub_section_references", []),
                 current_inputs.get("language"),
             ).strip()

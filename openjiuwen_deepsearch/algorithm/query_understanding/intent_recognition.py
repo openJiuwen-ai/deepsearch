@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 import logging
+import re
 from typing import Dict, List
 
 from pydantic import BaseModel, Field
@@ -23,6 +24,12 @@ EMIT_INTENT_TOOL = "emit_report_intent"
 
 _DEFAULT_WEB_SEARCH_ENGINE = "petal"
 _VALID_REPORT_TYPES = frozenset({"professional", "brief"})
+MAX_RESEARCH_QUERY_LENGTH = 390
+
+
+def normalize_research_query(raw: str | None) -> str:
+    """归一化 research_query：去首尾空白并限制最大长度。"""
+    return (raw or "").strip()[:MAX_RESEARCH_QUERY_LENGTH]
 
 
 def normalize_report_type(raw: str | None) -> str | None:
@@ -66,10 +73,10 @@ def resolve_report_type_policy(
 
 class IntentRecognitionResult(BaseModel):
     """
-    意图识别完整结果：保留原始输入并拆分研究主题与报告约束。
+    意图识别完整结果：保留原始输入、入口预搜索查询与报告约束。
     """
     original_query: str = Field(default="", description="用户原始输入，完整保留")
-    research_query: str = Field(default="", description="用于检索与规划的研究主题")
+    research_query: str = Field(default="", description="清洗后的研究主题，仅用于入口预搜索，不写入 SearchContext，最长400字符")
     research_intent: ResearchIntent = Field(default_factory=ResearchIntent, description="结构化报告约束")
     lang: str = Field(default="zh-CN", description="检测到的用户语言（归一化前的原始值）")
     entry_search_results: List[Dict] = Field(default_factory=list, description="初始网络搜索结果")
@@ -80,9 +87,27 @@ def _default_fallback(original_query: str | None) -> IntentRecognitionResult:
     stripped = (text or "").strip()
     return IntentRecognitionResult(
         original_query=text,
-        research_query=stripped,
+        research_query=normalize_research_query(stripped),
         research_intent=ResearchIntent(),
     )
+
+
+def _to_str_list(raw) -> list[str]:
+    """Safely convert a value to a list of strings.
+
+    Handles the case where LLM returns a comma-separated string instead of a list.
+    Supports Chinese punctuation: ，、；and English separators: , ; \n
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        return [item.strip() for item in re.split(r'[,，、;；\n]', raw) if item.strip()]
+    return []
 
 
 def _dedupe_preserve_order(items: list[str]) -> list[str]:
@@ -95,6 +120,26 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
         seen.add(s)
         out.append(s)
     return out
+
+
+def _normalize_task_type(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    value = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    if not value:
+        return None
+    aliases = {
+        "compare": "comparison",
+        "comparison_analysis": "comparison",
+        "classify": "classification",
+        "categorization": "classification",
+        "trend_judgment": "trend_judgement",
+        "trend_judgement": "trend_judgement",
+        "trend_judgement_analysis": "trend_judgement",
+        "feasibility_judgement": "trend_judgement",
+        "feasibility_assessment": "trend_judgement",
+    }
+    return aliases.get(value, value)
 
 
 def _normalize_research_intent(data: dict) -> ResearchIntent:
@@ -117,13 +162,13 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
     ar_raw = data.get("audience_role")
     audience_role = str(ar_raw).strip() if ar_raw is not None and str(ar_raw).strip() else None
 
-    include_url = _dedupe_preserve_order(list(data.get("include_url") or []))
-    exclude_url = _dedupe_preserve_order(list(data.get("exclude_url") or []))
+    include_url = _dedupe_preserve_order(_to_str_list(data.get("include_url")))
+    exclude_url = _dedupe_preserve_order(_to_str_list(data.get("exclude_url")))
     include_domains = _dedupe_preserve_order(
-        [str(d).strip() for d in (data.get("include_domains") or []) if str(d).strip()]
+        [str(d).strip() for d in _to_str_list(data.get("include_domains")) if str(d).strip()]
     )
     exclude_domains = _dedupe_preserve_order(
-        [str(d).strip() for d in (data.get("exclude_domains") or []) if str(d).strip()]
+        [str(d).strip() for d in _to_str_list(data.get("exclude_domains")) if str(d).strip()]
     )
 
     for url in include_url:
@@ -133,6 +178,9 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
     include_domains = _dedupe_preserve_order(include_domains)
 
     return ResearchIntent(
+        task_type=_normalize_task_type(data.get("task_type")),
+        required_dimensions=_dedupe_preserve_order(_to_str_list(data.get("required_dimensions"))),
+        comparison_targets=_dedupe_preserve_order(_to_str_list(data.get("comparison_targets"))),
         section_count=section_count,
         audience_role=audience_role,
         tone=tone,
@@ -146,7 +194,7 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
 
 async def _emit_report_intent(**kwargs) -> IntentRecognitionResult:
     """将 LLM tool_call args 转换为意图识别结果。"""
-    research_query = (kwargs.get("research_query") or "").strip()
+    research_query = normalize_research_query(kwargs.get("research_query"))
     language = kwargs.get("language") or "zh-CN"
 
     return IntentRecognitionResult(
@@ -174,12 +222,30 @@ def _create_emit_intent_tool() -> LocalFunction:
                         "Exclude meta instructions about chapters, audience, tone, or URLs. "
                         "Keep the same language as the user's original query — do NOT translate, "
                         "rewrite into English keywords, or internationalize wording. "
-                        "Mixed-language entities (e.g., Jensen Huang, Blackwell/Rubin) stay as-is."
+                        "Mixed-language entities (e.g., Jensen Huang, Blackwell/Rubin) stay as-is. "
+                        "Keep it concise; MUST NOT exceed 400 characters."
                     ),
                 },
                 "language": {
                     "type": "string",
                     "description": "The user's detected language locale (e.g., zh-CN, en-US, ja-JP).",
+                },
+                "task_type": {
+                    "type": "string",
+                    "description": (
+                        "Primary task type as a concise English enum-like label, such as "
+                        "comparison, classification, trend_judgement, recommendation, evaluation."
+                    ),
+                },
+                "required_dimensions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Named comparison or analysis dimensions that must be covered.",
+                },
+                "comparison_targets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Named entities, options, or categories that should be compared explicitly.",
                 },
                 "section_count": {
                     "type": "integer",
@@ -283,10 +349,13 @@ async def _invoke_llm_for_intent(
         return (None, response)
 
     tool_result = await tool.invoke(args)
+    research_query = normalize_research_query(tool_result.research_query) or normalize_research_query(
+        original_query
+    )
     result = tool_result.model_copy(
         update={
             "original_query": original_query,
-            "research_query": tool_result.research_query or original_query,
+            "research_query": research_query,
         }
     )
     return (result, response)
@@ -294,7 +363,7 @@ async def _invoke_llm_for_intent(
 
 async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResult:
     """
-    使用 LLM + 单次 tool call 解析报告意图与研究主题。
+    使用 LLM + 单次 tool call 解析报告意图与入口预搜索查询。
 
     Args:
         current_inputs: 需包含 ``original_query``；可选 ``messages``、``llm_model_name``。
@@ -336,10 +405,9 @@ async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResu
 
 async def classify_and_recognize_intent(current_inputs: dict) -> IntentRecognitionResult:
     """
-    意图识别（入口函数）：使用 intent_recognition_entry 提示词解析报告意图与研究主题。
+    意图识别（入口函数）：解析报告意图与入口预搜索查询；research_query 仅用于入口 run_web_search。
 
-    所有查询均进入研究报告生成流程，LLM 无 tool_calls 时回退为
-    research_query=original_query、空 intent。
+    所有查询均进入研究报告生成流程，LLM 无 tool_calls 时回退为 research_query=original_query、空 intent。
 
     Args:
         current_inputs: 需包含 ``original_query``；可选 ``messages``、``llm_model_name``。

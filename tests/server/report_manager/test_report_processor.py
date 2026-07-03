@@ -30,7 +30,11 @@ from server.deepsearch.core.manager.report_manager.mermaid_preprocess import (
     preprocess_mermaid_code,
 )
 from server.deepsearch.core.manager.report_manager.report_processor import ReportHtml, ReportWord
-from server.deepsearch.core.manager.report_manager.word_utils import html_to_doc, set_global_styles
+from server.deepsearch.core.manager.report_manager.word_utils import (
+    _normalize_latex_for_omml,
+    html_to_doc,
+    set_global_styles,
+)
 
 
 TINY_PNG_BASE64 = (
@@ -938,6 +942,83 @@ def test_convert_md_to_docx_keeps_valid_math_inline_and_block(tmp_path):
     assert "http://schemas.openxmlformats.org/officeDocument/2006/math" in document_xml
 
 
+def test_convert_md_to_docx_renders_binomial_power_display_math(tmp_path):
+    """Validate DOCX export converts binomial expressions with outer powers."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "# Test\n\n"
+        "$$\n"
+        r"\sum_{k=1}^{\infty} \frac{21k-8}{k^3 \binom{2k}{k}^3} = \frac{\pi^2}{6}"
+        "\n$$\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "$$" not in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "<m:oMath" in document_xml
+
+
+def test_convert_md_to_docx_renders_binomial_power_inline_math(tmp_path):
+    """Validate inline DOCX math also normalizes binomial expressions."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "# Test\n\n"
+        r"The inline choice formula is $\binom{n}{r}^2$ in text."
+        "\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert r"$\binom{n}{r}^2$" not in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "<m:oMath" in document_xml
+
+
+def test_convert_md_to_docx_renders_aligned_display_math(tmp_path):
+    """Validate DOCX export converts aligned display formulas."""
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "# Test\n\n"
+        "$$\n"
+        r"\begin{aligned} "
+        r"\frac {\mathrm {d} x}{\mathrm {d} t}&=\sigma y-\sigma x,\\ "
+        r"\frac {\mathrm {d} y}{\mathrm {d} t}&=\rho x-xz-y,\\ "
+        r"\frac {\mathrm {d} z}{\mathrm {d} t}&=xy-\beta z. "
+        r"\end{aligned}"
+        "\n$$\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "$$" not in paragraph_text
+    assert r"\begin{aligned}" not in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "<m:oMath" in document_xml
+
+
+def test_normalize_latex_for_omml_wraps_nested_grouped_command_powers():
+    """Validate normalization reaches grouped powers nested inside grouped commands."""
+    normalized = _normalize_latex_for_omml(r"\binom{\frac{1}{2}^3}{k}^2")
+
+    assert normalized == r"{\binom{{\frac{1}{2}}^3}{k}}^2"
+
+
 def test_html_export_contains_mathjax_script(tmp_path):
     """Validate HTML export includes MathJax script for formula rendering.
 
@@ -1010,16 +1091,46 @@ def test_protect_math_spans_ignores_code_spans_and_fenced_blocks():
 def test_protect_math_spans_skips_currency_but_keeps_simple_variables():
     """Validate inline math protection distinguishes currency from variables."""
     text = (
-        r"成本为 $5 到 $10，收入约 $1,200.50，"
-        r"变量 $G$ 和公式 $G = (V, E)$ 需要保留，"
+        r"成本为 $5 到 $10，收入约 $1,200.50，区间 amount $1,200 to $1,300，"
+        r"变量 $G$、$H0$、$xyz$、$a, b, m$、$a, b, c, ...$、$(x,y,z)$ 和公式 "
+        r"$G = (V, E)$、$P(1, 2, 1, (1, 0))$、$1/2$、$4*3$、$n!$、$5!$、"
+        r"$|z|$、$|x-y|$、$f'(t)$、$f''(t)$、$f_i'(t)$、"
+        r"$F(s) G(s)$、$F_0(s)\,G_1(s)$、$||x||$、$\|x\|$、$\lVert x \rVert$ 需要保留，"
+        r"百分比 $79.29\%$、$79.29%$ 也需要保留，"
         r"转义美元 \$8 不处理。"
     )
 
     protected, formulas = protect_math_spans(text)
 
-    assert formulas == ["$G$", "$G = (V, E)$"]
+    assert formulas == [
+        "$G$",
+        "$H0$",
+        "$xyz$",
+        "$a, b, m$",
+        "$a, b, c, ...$",
+        "$(x,y,z)$",
+        "$G = (V, E)$",
+        "$P(1, 2, 1, (1, 0))$",
+        "$1/2$",
+        "$4*3$",
+        "$n!$",
+        "$5!$",
+        "$|z|$",
+        "$|x-y|$",
+        "$f'(t)$",
+        "$f''(t)$",
+        "$f_i'(t)$",
+        "$F(s) G(s)$",
+        "$F_0(s)\\,G_1(s)$",
+        "$||x||$",
+        "$\\|x\\|$",
+        "$\\lVert x \\rVert$",
+        "$79.29\\%$",
+        "$79.29%$",
+    ]
     assert "$5 到 $10" in protected
     assert "$1,200.50" in protected
+    assert "$1,200 to $1,300" in protected
     assert r"\$8" in protected
 
 
