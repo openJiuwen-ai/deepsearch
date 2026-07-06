@@ -247,16 +247,6 @@ def _create_emit_intent_tool() -> LocalFunction:
                     "items": {"type": "string"},
                     "description": "Named entities, options, or categories that should be compared explicitly.",
                 },
-                "required_dimensions": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Named comparison or analysis dimensions that must be covered.",
-                },
-                "comparison_targets": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Named entities, options, or categories that should be compared explicitly.",
-                },
                 "section_count": {
                     "type": "integer",
                     "description": "Max or desired number of sections/chapters if user specified; else omit.",
