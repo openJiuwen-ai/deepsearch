@@ -314,6 +314,10 @@ class AgentConfig(BaseModel):
                                                                                      "web: 联网搜索"
                                                                                      "local: 本地搜索工具搜索"
                                                                                      "all: 联网+本地融合搜索")
+    info_collector_webpage_enrich_enable: bool = Field(
+        default=False,
+        description="是否启用 DeepResearch 信息收集阶段的网页正文增强节点",
+    )
     web_search_engine_config: WebSearchEngineConfig = Field(default_factory=WebSearchEngineConfig)
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
     custom_web_search_config: CustomWebSearchConfig = Field(default_factory=CustomWebSearchConfig)
@@ -389,6 +393,18 @@ class ServiceConfig(BaseModel):
     info_collector_max_tool_call_turns_per_query: int = Field(default=2, ge=1, description="单个检索 query 最大工具调用轮次")
     info_collector_max_retry_num: int = Field(default=3, description="最大重试次数")
     info_collector_allow_programmer: bool = Field(default=False, description="")
+    info_collector_webpage_enrich_max_urls: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="网页正文增强每轮最多抓取并增强的 URL 数量",
+    )
+    info_collector_webpage_enrich_fetch_timeout_seconds: int = Field(
+        default=45,
+        ge=5,
+        le=120,
+        description="网页正文增强单个 URL 抓取超时时间，单位秒",
+    )
 
     # 报告节点参数
     sub_report_classify_doc_infos_single_time_num: int = Field(default=60,

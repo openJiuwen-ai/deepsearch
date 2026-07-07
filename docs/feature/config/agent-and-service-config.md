@@ -20,6 +20,7 @@
 - `ServiceConfig.info_collector_max_search_query_count` 控制单轮 query 生成硬上限；
   `ServiceConfig.info_collector_max_research_loops` 控制信息采集 research loop 硬上限；
   `ServiceConfig.info_collector_max_tool_call_turns_per_query` 控制单个检索 query 内的工具调用轮次，三者独立生效。
+- `info_collector_webpage_enrich_enable=True` 时，DeepResearch 信息采集子图会启用网页正文增强节点；默认关闭。
 - `vlm_chart_generator_enable=True` 时会关闭 Mermaid 图文并茂插入；如果缺少 VLM 模型配置，入口校验会自动关闭 VLM 迭代图生成。
 - LLM、搜索和 embedding 密钥字段使用 `bytearray`，调用方和消费代码应沿用现有 `zero_secret` 清理策略。
 
@@ -52,12 +53,15 @@
 - `AgentConfig.execute_mode` 取值为 `commercial` 或 `general`。
 - `AgentConfig.execution_method` 取值为 `parallel` 或 `dependency_driving`，只在 `search_mode=research` 时选择研究工作流实现。
 - `AgentConfig.search_mode` 取值为 `research`、`search`、`react`。
+- `AgentConfig.info_collector_webpage_enrich_enable` 控制信息采集阶段是否启用网页正文增强节点，默认 `False`。
 - `WebSearchEngineConfig.search_engine_name` 支持 tavily、google、xunfei、petal、custom、bocha、jina、perplexity、serper。
 - `LocalSearchEngineConfig.search_engine_name` 支持 openapi、custom、native；native 模式依赖 `knowledge_base_configs`。
 - web/local 最大搜索结果数均限制在 1 到 10。
 - `outliner_max_section_num` 范围为 1 到 `OUTLINER_SECTION_NUM_MAX`，当前最大值为 15。
 - `outline_interaction_max_rounds` 和 `user_feedback_processor_max_interactions` 范围为 1 到 100。
 - `vlm_chart_generator_max_iterations` 范围为 1 到 3。
+- `ServiceConfig.info_collector_webpage_enrich_max_urls` 默认 3，限制单轮最多增强的 URL 数量。
+- `ServiceConfig.info_collector_webpage_enrich_fetch_timeout_seconds` 默认 45，限制单个 URL 抓取超时时间。
 
 ## 边界与错误处理
 

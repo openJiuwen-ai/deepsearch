@@ -166,6 +166,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **source_tracer_infer_switch** (bool, optional): Whether to enable provenance reasoning. Default value: `True`.
 - **llm_config** (Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking", "vlm_chart_generating"], LLMConfig], optional): LLM model configuration. Default value: `dict()`.
 - **info_collector_search_method** (Literal["web", "local", "all"], optional): Search method. `web` means web augmentation search, `local` means local search tool, and `all` means hybrid web + local search. Default value: `"web"`.
+- **info_collector_webpage_enrich_enable** (bool, optional): Whether to enable webpage content enrichment during DeepResearch information collection. Default value: `False`.
 - **web_search_engine_config** (WebSearchEngineConfig, optional): Web augmentation engine configuration. Default value: `WebSearchEngineConfig()`.
 - **local_search_engine_config** (LocalSearchEngineConfig, optional): Local search engine configuration. Default value: `LocalSearchEngineConfig()`.
 - **custom_web_search_config** (CustomWebSearchConfig, optional): Custom web augmentation engine configuration. Default value: `CustomWebSearchConfig()`.
@@ -313,6 +314,8 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_max_research_loops** (int, optional): Maximum number of research loops. Default value: `2`.
 - **info_collector_max_tool_call_turns_per_query** (int, optional): Maximum tool-call turns for each collector query. Default value: `2`.
 - **info_collector_max_retry_num** (int, optional): Maximum retry count. Default value: `3`.
+- **info_collector_webpage_enrich_max_urls** (int, optional): Maximum number of URLs to fetch and enrich per collector loop. Default value: `3`.
+- **info_collector_webpage_enrich_fetch_timeout_seconds** (int, optional): Timeout in seconds for fetching one webpage during webpage enrichment. Default value: `45`.
 
 ### Reporting parameters
 - **sub_report_classify_doc_infos_single_time_num** (int, optional): Number of collected documents classified by the LLM in one pass for a sub-report. Default value: `60`.

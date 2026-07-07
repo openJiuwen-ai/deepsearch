@@ -74,6 +74,10 @@ class DeepSearchRequest(BaseModel):
                                                                                      "web: 联网搜索"
                                                                                      "local: 本地搜索工具搜索"
                                                                                      "all : 联网+本地融合搜索")
+    info_collector_webpage_enrich_enable: bool = Field(
+        default=False,
+        description="是否启用信息收集阶段的网页正文增强",
+    )
     llm_config: dict = Field(default_factory=dict, description="LLM配置")
     web_search_config: WebSearchConfig = Field(default=None, description="联网增强引擎配置，和本地知识库配置至少选择一个")
     local_search_config: LocalSearchConfig = Field(default=None,

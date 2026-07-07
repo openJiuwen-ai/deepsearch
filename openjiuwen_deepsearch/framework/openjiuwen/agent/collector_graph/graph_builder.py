@@ -24,6 +24,7 @@ from openjiuwen_deepsearch.config.config import ServiceConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode, init_router
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_context import CollectorContext
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment import WebPageEnrichmentNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
     EvidenceLedger,
     build_ledger_brief,
@@ -757,6 +758,7 @@ def build_info_collector_sub_graph() -> Workflow:
     )
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_QUERY_GEN.value, GenerateQueryNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_INFO.value, InfoRetrievalNode())
+    sub_workflow.add_workflow_comp(NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value, WebPageEnrichmentNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_SUPERVISOR.value, SupervisorNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_SUMMARY.value, SummaryNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_END.value, GraphEndNode())
@@ -765,7 +767,8 @@ def build_info_collector_sub_graph() -> Workflow:
     # 添加边 add_connection
     sub_workflow.add_connection(NodeId.START.value, NodeId.COLLECTOR_QUERY_GEN.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_QUERY_GEN.value, NodeId.COLLECTOR_INFO.value)
-    sub_workflow.add_connection(NodeId.COLLECTOR_INFO.value, NodeId.COLLECTOR_SUPERVISOR.value)
+    sub_workflow.add_connection(NodeId.COLLECTOR_INFO.value, NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value)
+    sub_workflow.add_connection(NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value, NodeId.COLLECTOR_SUPERVISOR.value)
     supervisor_router = init_router(NodeId.COLLECTOR_SUPERVISOR.value,
                                     [NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_INFO.value])
     sub_workflow.add_conditional_connection(NodeId.COLLECTOR_SUPERVISOR.value, router=supervisor_router)
