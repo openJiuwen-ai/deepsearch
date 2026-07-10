@@ -206,8 +206,8 @@ AgentConfig 下与 Search 相关的主要包括：
 - 开放域问答
 
 配置要求：
-- `serper_api_key`: Serper API 密钥（用于 WebSearch）
-- `jina_api_key`: Jina API 密钥（用于 WebFetch）
+- `web_search_engine_config`: 联网搜索配置（provider、密钥、URL、扩展参数）
+- `web_fetch_provider_config`: 网页抓取 provider 配置；当前需显式设置 `provider_name="jina"` 并提供对应密钥
 
 2. retrieve 模式：使用 `Retrieve` 工具进行向量检索。
 
@@ -407,7 +407,7 @@ pytest -q tests/search_agent -m "not llm" \
 # 通用：LLM 端点取决于你的部署（OpenAI 兼容网关等）
 export OPENAI_API_KEY="your_openai_api_key"
 
-# search_fetch：Jina + Serper（与 `main.py` 中 `--jina_api_key` / `--serper_api_key` 对应）
+# search_fetch：显式 fetch provider + 可选 web search provider
 export JINA_API_KEY="your_jina_api_key"
 export SERPER_API_KEY="your_serper_api_key"
 
@@ -461,7 +461,7 @@ asyncio.run(main())
 
 **retrieve 模式**：需先构建知识库索引（见下文），并在 **`AgentConfig.search_workflow_milvus_config`（`MilvusConfig`）** 中填写 Milvus 与 Embedder；**不要**在 `RetrievalSettingsConfig` 中配置 Milvus（该类型仅含 `top_k`、`mode` 等检索行为参数）。
 
-**命令行（search 模式）**：`main.py` 要求提供完整 LLM 参数，且 `search_fetch` 时必须提供 `--jina_api_key` 与 `--serper_api_key`。查询通过 **`--query`** 传入（可多个词，会拼接为空格分隔的一句）。
+**命令行（search 模式）**：`main.py` 要求提供完整 LLM 参数。兼容字段里 `--jina_api_key` 仍可用于 Jina fetch，但运行时推荐显式配置 `web_fetch_provider_config.provider_name="jina"`；`web_search` 则通过 `web_search_engine_config` 选择 provider。查询通过 **`--query`** 传入（可多个词，会拼接为空格分隔的一句）。
 
 ```bash
 python -m main \

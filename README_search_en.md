@@ -196,7 +196,7 @@ Per-question (one search episode) limits.
 
 1. **`search_fetch`** — uses **`WebSearch`** and **`WebFetch`**.  
    - Good for: live web, fresh pages, open-domain QA.  
-   - Requires: **`serper_api_key`**, **`jina_api_key`** (on **`AgentConfig`**) for the bundled integrations.
+   - Requires: **`web_search_engine_config`** for the active search provider and **`web_fetch_provider_config`** for the fetch provider. Fetch selection is explicit; v1 supports **`provider_name="jina"`**.
 
 2. **`retrieve`** — uses **`Retrieve`** (vector store).  
    - Good for: KB QA, closed corpora, precise chunk retrieval.  
@@ -374,7 +374,7 @@ Typical keys (your app usually reads **`AgentConfig`** / CLI; env vars help loca
 # Generic OpenAI-compatible gateway
 export OPENAI_API_KEY="your_openai_api_key"
 
-# search_fetch: Jina + Serper (same as main.py --jina_api_key / --serper_api_key)
+# search_fetch: explicit fetch provider + configurable web search provider
 export JINA_API_KEY="your_jina_api_key"
 export SERPER_API_KEY="your_serper_api_key"
 
@@ -424,7 +424,7 @@ Two ways to tune defaults:
 
 **Retrieve mode:** build an index first (below), then fill **`AgentConfig.search_workflow_milvus_config` (`MilvusConfig`)**. Do **not** put Milvus connection strings in **`RetrievalSettingsConfig`** (that type only holds retrieval behavior like **`top_k`** and **`mode`**).
 
-**Search mode CLI:** **`main.py`** requires full LLM flags. For **`search_fetch`**, **`--jina_api_key`** and **`--serper_api_key`** are mandatory. Pass the question with **`--query`** (multiple tokens are joined with spaces).
+**Search mode CLI:** **`main.py`** requires full LLM flags. For **`search_fetch`**, the recommended path is explicit **`web_fetch_provider_config.provider_name="jina"`** plus **`web_search_engine_config`** for search provider selection; the legacy **`--jina_api_key`** flag remains a compatibility input. Pass the question with **`--query`** (multiple tokens are joined with spaces).
 
 ```bash
 python -m main \

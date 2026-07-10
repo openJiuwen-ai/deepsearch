@@ -188,7 +188,11 @@ def _build_search_fetch_tools(agent_config: AgentConfig):
     """Build DeepSearch search/fetch tools after the active search engine is registered."""
     web_search_token = _initialize_web_search_context_from_agent_config(agent_config)
     tool_class = [
-        WebFetch({"jina_api_key": agent_config.jina_api_key}),
+        WebFetch(
+            {
+                "web_fetch_provider_config": agent_config.web_fetch_provider_config.model_dump(),
+            }
+        ),
         WebSearch({}),
     ]
     return tool_class, web_search_token
@@ -1677,6 +1681,7 @@ class DeepSearchAgent(BaseAgent):
             cleanup_agent_config = getattr(self, "agent_config", None)
             if cleanup_agent_config is not None:
                 zero_secret(cleanup_agent_config.jina_api_key)
+                zero_secret(cleanup_agent_config.web_fetch_provider_config.api_key)
                 zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
 
 
@@ -1946,6 +1951,7 @@ class SimpleReactSearchAgent(BaseAgent):
             if web_search_token is not None:
                 web_search_context.reset(web_search_token)
             zero_secret(session_agent_config.jina_api_key)
+            zero_secret(session_agent_config.web_fetch_provider_config.api_key)
             zero_secret(session_agent_config.web_search_engine_config.search_api_key)
 
 

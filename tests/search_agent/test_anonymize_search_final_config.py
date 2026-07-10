@@ -19,6 +19,7 @@ def test_anonymize_nested_api_keys_and_bytearray():
             }
         },
         "jina_api_key": "plain",
+        "web_fetch_provider_config": {"provider_name": "jina", "api_key": "fetch-plain"},
         "search_workflow_milvus_config": {"embedder_api_key": "emb"},
         "validator_agent": {"llm_config": {"general": {"api_key": "v"}}},
         "headers": [{"name": "Authorization", "value": "Bearer x"}, {"name": "X-Other", "value": "ok"}],
@@ -27,6 +28,7 @@ def test_anonymize_nested_api_keys_and_bytearray():
     assert out["llm_config"]["general"]["api_key"] == "***"
     assert out["llm_config"]["general"]["model_name"] == "x"
     assert out["jina_api_key"] == "***"
+    assert out["web_fetch_provider_config"]["api_key"] == "***"
     assert out["search_workflow_milvus_config"]["embedder_api_key"] == "***"
     assert out["validator_agent"]["llm_config"]["general"]["api_key"] == "***"
     assert out["headers"][0]["value"] == "***"

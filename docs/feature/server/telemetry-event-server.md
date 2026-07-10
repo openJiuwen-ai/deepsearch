@@ -40,7 +40,7 @@
 
 - telemetry envelope 至少需要非空字符串 `event`，`payload` 如果存在必须是对象。
 - `/runs` 只支持 `search_mode=search` 或 `react`，不支持报告研究 `research`。
-- `tool_map=search_fetch` 时必须提供 Jina 和 Serper key。
+- `tool_map=search_fetch` 时推荐显式提供 `web_fetch_provider_config` 和 `web_search_engine_config`；其中 fetch provider 当前仅支持 `jina`。
 - `tool_map=retrieve` 时必须提供 Milvus embedder key 和 base URL。
 - `conversation_id` 是 API 关联 ID；workflow 内部会生成自己的 conversation id。
 - `MAX_RECENT_N` 当前为 10000。

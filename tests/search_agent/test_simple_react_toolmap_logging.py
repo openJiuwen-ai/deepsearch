@@ -59,7 +59,10 @@ async def test_simple_react_telemetry_uses_built_tool_map(monkeypatch) -> None:
             "search_engine_name": "jina",
             "search_api_key": bytearray(b"search-key"),
         },
-        jina_api_key=bytearray(b"j"),
+        web_fetch_provider_config={
+            "provider_name": "jina",
+            "api_key": bytearray(b"fetch-key"),
+        },
     ).model_dump()
 
     agent = SimpleReactSearchAgent()

@@ -147,6 +147,10 @@ def _build_configs(json_name: str, profile: str) -> tuple[dict, dict]:
     sf = raw.get("search_fetch_config", {})
     agent["jina_api_key"] = _to_ba(sf.get("jina_api_key"))
     agent["serper_api_key"] = _to_ba(sf.get("serper_api_key"))
+    agent["web_fetch_provider_config"] = {
+        "provider_name": "jina",
+        "api_key": _to_ba(sf.get("jina_api_key")),
+    }
 
     agent["search_mode"] = "search"
 

@@ -18,11 +18,14 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 - web search 支持多 query，一次调用返回合并结果。
 - search/react 模式的 `web_search` 使用 `web_search_engine_config` 初始化并注册的活动搜索引擎，而不是单独构造 Serper 专用客户端。
 - web fetch 接收 URL 和 goal，返回与目标相关的网页摘要或证据。
+- search/react 模式的 `web_fetch` 通过 `web_fetch_provider_config` 显式选择 fetch provider；当前只支持 `jina`，未配置或配置非法时返回受控工具错误，不会静默回退。
 
 ## 关键代码路径
 
 - web search 工具：`openjiuwen_deepsearch/algorithm/search_tools/web_search_tool.py`
 - web fetch 工具：`openjiuwen_deepsearch/algorithm/search_tools/web_fetch_tool.py`
+- fetch provider 注册：`openjiuwen_deepsearch/framework/openjiuwen/tools/fetch_api/registry.py`
+- Jina fetch provider：`openjiuwen_deepsearch/framework/openjiuwen/tools/fetch_api/jina/api_wrapper.py`
 - retriever 工具：`openjiuwen_deepsearch/algorithm/search_tools/retriever_tool.py`
 - retriever 实现：`openjiuwen_deepsearch/algorithm/search_tools/retrieval/retriever.py`
 - embedder：`openjiuwen_deepsearch/algorithm/search_tools/retrieval/embedder.py`
@@ -59,7 +62,7 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 工具输出：
 
 - web search 返回历史兼容的格式化文本，文本内容来自活动 wrapper 的标准化搜索结果。
-- 网页摘要或证据。
+- web fetch 返回历史兼容的网页摘要或证据；provider 仅负责单页获取/提取，goal 相关 LLM 摘要仍由共享 facade 生成。
 - 检索片段。
 
 ## 边界与错误处理
@@ -68,6 +71,7 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 - retrieve 模式最多接受配置允许数量的 query。
 - 工具返回错误时应作为工具结果处理，不应直接破坏搜索循环。
 - web search 的 provider 选择由 framework 已注册的活动 wrapper 决定；DeepSearch adapter 负责文本格式归一化、缓存和日志。
+- web fetch 的 provider 选择由 `web_fetch_provider_config.provider_name` 显式决定；DeepSearch facade 负责批量 URL 调度、统一 fallback 和日志。
 
 ## 测试与验证
 

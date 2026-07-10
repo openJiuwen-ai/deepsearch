@@ -162,6 +162,10 @@ def ensure_api_keys_bytearray(agent_config: dict) -> dict:
         if search_workflow_milvus_config and search_workflow_milvus_config.get(key) is not None:
             search_workflow_milvus_config[key] = to_ba(search_workflow_milvus_config[key])
 
+    web_fetch_provider_config = agent_config.get("web_fetch_provider_config")
+    if isinstance(web_fetch_provider_config, dict):
+        convert_api_keys_recursive(web_fetch_provider_config)
+
     swc = agent_config.get("search_workflow")
     if isinstance(swc, dict):
         convert_api_keys_recursive(swc)

@@ -48,6 +48,15 @@ class WebSearchEngineConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
+class WebFetchProviderConfig(BaseModel):
+    provider_name: str = Field(default="", description="DeepSearch 网页抓取 provider 名称")
+    api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="网页抓取 provider 调用密钥")
+    base_url: str = Field(default="", description="网页抓取 provider 调用地址")
+    extension: dict = Field(default_factory=dict, description="网页抓取 provider 扩展配置项")
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
 class EmbedModelConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     model_name: str = Field(..., description="Embedding模型名称")
@@ -315,6 +324,7 @@ class AgentConfig(BaseModel):
                                                                                      "local: 本地搜索工具搜索"
                                                                                      "all: 联网+本地融合搜索")
     web_search_engine_config: WebSearchEngineConfig = Field(default_factory=WebSearchEngineConfig)
+    web_fetch_provider_config: WebFetchProviderConfig = Field(default_factory=WebFetchProviderConfig)
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
     custom_web_search_config: CustomWebSearchConfig = Field(default_factory=CustomWebSearchConfig)
     custom_local_search_config: CustomLocalSearchConfig = Field(default_factory=CustomLocalSearchConfig)
