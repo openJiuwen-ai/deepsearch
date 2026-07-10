@@ -39,7 +39,7 @@ async run(
 ```
 与 **`BaseAgent.run`** 签名一致。先经 **`validate_run_agent_params`**、再剥离可选字段后经 **`validate_agent_required_field`** 校验。将 **`agent_config`** 深拷贝为 **`AgentConfig`**，配置日志目录、从 **`agent_config["service_config"]["search_workflow"]`** 解析 **`SearchWorkflowConfig`**（解析失败则使用默认配置）、**`per_question_params`**、环境变量 **`WORKFLOW_EXECUTE_TIMEOUT`**、LLM 上下文（要求 **`llm_config`** 中存在 **`general`**），以及由 **`per_question_params.tool_map`** 决定的工具：
 
-- **`"search_fetch"`**：注册 **`WebFetch`** 与 **`WebSearch`**（使用配置中的 **`jina_api_key`**、**`serper_api_key`**）。
+- **`"search_fetch"`**：注册 **`WebFetch`** 与 **`WebSearch`**。其中 **`WebFetch`** 当前使用 **`jina_api_key`**，**`WebSearch`** 使用 **`web_search_engine_config`** 中配置的活动联网搜索引擎。
 - **`"retrieve"`**：注册 **`RetrieveTool`**（Milvus / 向量化相关字段来自 **`search_workflow_milvus_config`**）。
 
 ### `MilvusConfig`（`search_workflow_milvus_config`）
@@ -234,9 +234,15 @@ async def main():
         "extension": {},
     }
 
-    # search_fetch keys (tool_map defaults to "search_fetch").
+    # search_fetch 配置（tool_map 默认是 "search_fetch"）。
     agent_config["jina_api_key"] = bytearray("<YOUR_JINA_API_KEY>", encoding="utf-8")
-    agent_config["serper_api_key"] = bytearray("<YOUR_SERPER_API_KEY>", encoding="utf-8")
+    agent_config["web_search_engine_config"] = {
+        "search_engine_name": "serper",  # 也可改为 tavily / jina / petal / bocha / perplexity / custom
+        "search_api_key": bytearray("<YOUR_WEB_SEARCH_API_KEY>", encoding="utf-8"),
+        "search_url": "",
+        "max_web_search_results": 5,
+        "extension": {},
+    }
 
     conversation_id = str(uuid.uuid4())
     agent = AgentFactory().create_agent(copy.deepcopy(agent_config))

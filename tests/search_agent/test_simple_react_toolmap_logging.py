@@ -14,11 +14,18 @@ pytestmark = pytest.mark.unit
 @pytest.mark.asyncio
 async def test_simple_react_telemetry_uses_built_tool_map(monkeypatch) -> None:
     captured_events: list[tuple[str, dict]] = []
+    observed_search_context: dict[str, str] = {}
 
     def _fake_emit(event_type: str, payload: dict, **_kwargs) -> None:
         captured_events.append((event_type, payload))
 
     async def _fake_run_llm_via_ainvoke(**_kwargs):
+        observed_search_context.update(
+            {
+                name: wrapper.__class__.__name__
+                for name, wrapper in (workflow_module.web_search_context.get() or {}).items()
+            }
+        )
         raise RuntimeError("stop after startup telemetry")
 
     monkeypatch.setattr(workflow_module, "emit", _fake_emit)
@@ -48,8 +55,11 @@ async def test_simple_react_telemetry_uses_built_tool_map(monkeypatch) -> None:
             }
         },
         search_workflow_per_question_params=PerQuestionParams(tool_map="search_fetch"),
+        web_search_engine_config={
+            "search_engine_name": "jina",
+            "search_api_key": bytearray(b"search-key"),
+        },
         jina_api_key=bytearray(b"j"),
-        serper_api_key=bytearray(b"s"),
     ).model_dump()
 
     agent = SimpleReactSearchAgent()
@@ -70,3 +80,4 @@ async def test_simple_react_telemetry_uses_built_tool_map(monkeypatch) -> None:
         "web_fetch": "WebFetch",
         "web_search": "WebSearch",
     }
+    assert observed_search_context == {"jina": "JinaSearchAPIWrapper"}

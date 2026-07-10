@@ -172,6 +172,28 @@ def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
     return anonymize_config_for_logging(copy.deepcopy(to_dict_safe(agent_config)))
 
 
+def _initialize_web_search_context_from_agent_config(agent_config: AgentConfig):
+    """Instantiate and register the active web search engine for the current run."""
+    custom_web = agent_config.custom_web_search_config
+    web_search_config = agent_config.web_search_engine_config
+    web_engine_name, web_mapping = DeepresearchAgent._register_web_search_tool(custom_web, web_search_config)
+    web_search_token = web_search_context.set(
+        {web_engine_name: web_mapping[web_engine_name](**web_search_config.model_dump())}
+    )
+    qps_rate_limiter.set_max_qps(agent_config.web_search_max_qps)
+    return web_search_token
+
+
+def _build_search_fetch_tools(agent_config: AgentConfig):
+    """Build DeepSearch search/fetch tools after the active search engine is registered."""
+    web_search_token = _initialize_web_search_context_from_agent_config(agent_config)
+    tool_class = [
+        WebFetch({"jina_api_key": agent_config.jina_api_key}),
+        WebSearch({}),
+    ]
+    return tool_class, web_search_token
+
+
 class BaseAgent:
     """
     base agent: agent基类
@@ -803,23 +825,14 @@ class DeepresearchAgent(BaseAgent):
 
     def _initialize_tools(self, agent_config: AgentConfig):
         """初始化搜索工具"""
-        custom_web = agent_config.custom_web_search_config
         custom_local = agent_config.custom_local_search_config
-        web_search_config = agent_config.web_search_engine_config
         local_search_config = agent_config.local_search_engine_config
 
-        web_engine_name, web_mapping = self._register_web_search_tool(custom_web, web_search_config)
         local_engine_name, local_mapping = self._register_local_search_tool(custom_local, local_search_config)
-        web_search_token = web_search_context.set(
-            {web_engine_name: web_mapping[web_engine_name](**web_search_config.model_dump())}
-        )
+        web_search_token = _initialize_web_search_context_from_agent_config(agent_config)
         local_search_token = local_search_context.set(
             {local_engine_name: local_mapping[local_engine_name](**local_search_config.model_dump())}
         )
-
-        # 注册QPS限流器
-        qps_limiter = qps_rate_limiter
-        qps_limiter.set_max_qps(agent_config.web_search_max_qps)
 
         return web_search_token, local_search_token
 
@@ -1557,6 +1570,7 @@ class DeepSearchAgent(BaseAgent):
         validate_agent_required_field(agent_config_for_model)
 
         llm_token = None
+        web_search_token = None
         tool_token = None
         try:
             session_agent_config = AgentConfig.model_validate(agent_config_for_model)
@@ -1611,10 +1625,7 @@ class DeepSearchAgent(BaseAgent):
 
             tool_class: list[Any] = []
             if self.per_question_params.tool_map == "search_fetch":
-                tool_class.append(WebFetch({"jina_api_key": self.agent_config.jina_api_key}))
-                tool_class.append(WebSearch({"serper_api_key": self.agent_config.serper_api_key}))
-                zero_secret(self.agent_config.jina_api_key)
-                zero_secret(self.agent_config.serper_api_key)
+                tool_class, web_search_token = _build_search_fetch_tools(self.agent_config)
             elif self.per_question_params.tool_map == "retrieve":
                 milvus_cfg = self.agent_config.search_workflow_milvus_config
                 tool_class.append(_build_retrieve_tool(milvus_cfg))
@@ -1659,8 +1670,14 @@ class DeepSearchAgent(BaseAgent):
                 )
             if llm_token is not None:
                 llm_context.reset(llm_token)
+            if web_search_token is not None:
+                web_search_context.reset(web_search_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
+            cleanup_agent_config = getattr(self, "agent_config", None)
+            if cleanup_agent_config is not None:
+                zero_secret(cleanup_agent_config.jina_api_key)
+                zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
 
 
 class SimpleReactSearchAgent(BaseAgent):
@@ -1707,18 +1724,14 @@ class SimpleReactSearchAgent(BaseAgent):
             )
         llm_registry = {general.model_name: create_llm_obj(general.model_copy(deep=True))}
 
+        web_search_token = None
         llm_token = llm_context.set(llm_registry)
         try:
             per_question_params: PerQuestionParams = (
                 session_agent_config.search_workflow_per_question_params
             )
             if per_question_params.tool_map == "search_fetch":
-                tool_class = [
-                    WebFetch({"jina_api_key": session_agent_config.jina_api_key}),
-                    WebSearch({"serper_api_key": session_agent_config.serper_api_key}),
-                ]
-                zero_secret(session_agent_config.jina_api_key)
-                zero_secret(session_agent_config.serper_api_key)
+                tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class = [_build_retrieve_tool(milvus_cfg)]
@@ -1926,10 +1939,14 @@ class SimpleReactSearchAgent(BaseAgent):
                     },
                     config={"agent": "simple_react_search"},
                 )
-            )
+                )
             yield json.dumps(to_json_safe(result.model_dump()), ensure_ascii=False)
         finally:
             llm_context.reset(llm_token)
+            if web_search_token is not None:
+                web_search_context.reset(web_search_token)
+            zero_secret(session_agent_config.jina_api_key)
+            zero_secret(session_agent_config.web_search_engine_config.search_api_key)
 
 
 def parse_endnode_content(chunk: CustomSchema) -> dict | None:

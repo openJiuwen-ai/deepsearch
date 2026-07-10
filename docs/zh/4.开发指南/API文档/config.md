@@ -315,8 +315,8 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **enable_question_router**(bool, 可选)：当为 `True` 且 `search_mode="search"` 时，先经 LLM 路由简单问题到 `react`、复杂问题到 DeepSearch。默认值：`False`。
 - **search_workflow_per_question_params**(PerQuestionParams, 可选)：search/react 单问题控制参数（时间、并发、工具映射、上限等）。默认值：`PerQuestionParams()`。
 - **search_workflow_milvus_config**(MilvusConfig, 可选)：`retrieve` 工具路径使用的 Milvus/Embedding 配置。默认值：`MilvusConfig()`。
-- **jina_api_key**(bytearray, 可选)：`search_fetch` 路径使用的 Jina API Key。默认值：`bytearray("", encoding="utf-8")`。
-- **serper_api_key**(bytearray, 可选)：`search_fetch` 路径使用的 Serper API Key。默认值：`bytearray("", encoding="utf-8")`。
+- **jina_api_key**(bytearray, 可选)：当前 `search_fetch` 抓取路径使用的 Jina API Key。默认值：`bytearray("", encoding="utf-8")`。
+- **serper_api_key**(bytearray, 可选)：保留用于兼容的旧 Serper 字段；当前 DeepSearch `web_search` 通过 `web_search_engine_config` 选择联网引擎。默认值：`bytearray("", encoding="utf-8")`。
 - **model_config**(ConfigDict，内部配置)：Pydantic 模型配置；`arbitrary_types_allowed=True`。
 - **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
 - **user_feedback_processor_enable**(bool, 可选)：是否启用报告生成后的局部优化能力。默认值：`False`。

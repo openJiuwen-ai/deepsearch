@@ -44,6 +44,30 @@ SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES = {
 }
 
 
+def get_web_search_api_wrapper(search_engine_name: str | None = None):
+    """Resolve a registered web search wrapper from the current session context."""
+    try:
+        web_search_engines = web_search_context.get() or {}
+    except LookupError:
+        web_search_engines = {}
+
+    if search_engine_name:
+        return search_engine_name, web_search_engines.get(search_engine_name)
+
+    if not web_search_engines:
+        return "", None
+
+    if len(web_search_engines) > 1:
+        engine_names = list(web_search_engines.keys())
+        logger.warning(
+            "Multiple web search engines are registered in context; defaulting to the first entry: %s",
+            engine_names,
+        )
+
+    resolved_name, api_wrapper = next(iter(web_search_engines.items()))
+    return resolved_name, api_wrapper
+
+
 def apply_web_search_domain_constraints(
         search_engine_name: str,
         include_domains: list[str] | None = None,
@@ -100,7 +124,7 @@ def update_web_search_mapping(func_path: str, func_name: str):
 @qps_rate_limit_async
 async def run_web_search(query: str, search_engine_name: str):
     """运行网页搜索"""
-    api_wrapper = web_search_context.get().get(search_engine_name)
+    resolved_name, api_wrapper = get_web_search_api_wrapper(search_engine_name)
     if not api_wrapper:
         raise CustomValueException(
             StatusCode.WEB_SEARCH_INSTANCE_OBTAIN_ERROR.code,
@@ -110,13 +134,13 @@ async def run_web_search(query: str, search_engine_name: str):
         result = await api_wrapper.aresults(query)
     except Exception as e:
         if LogManager.is_sensitive():
-            logger.error(f"Error when run web search {search_engine_name}")
+            logger.error(f"Error when run web search {resolved_name}")
         else:
-            logger.exception(f"Error when run web search {search_engine_name}: {e}")
-        return dict(search_engine=search_engine_name, 
+            logger.exception(f"Error when run web search {resolved_name}: {e}")
+        return dict(search_engine=resolved_name,
                     search_results=[],
-                    error=f"Error when run web search {search_engine_name}: {e}")
-    return dict(search_engine=search_engine_name, search_results=result)
+                    error=f"Error when run web search {resolved_name}: {e}")
+    return dict(search_engine=resolved_name, search_results=result)
 
 
 def create_web_search_tool():

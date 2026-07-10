@@ -19,6 +19,7 @@ contextvar，避免节点直接持有全局工具对象。
 - 支持通过 `custom_*_search_file` 和 `custom_*_search_func` 注册自定义搜索工具。
 - Tavily 支持把意图识别出的 include/exclude domains 追加到已有配置。
 - web 搜索调用受 `web_search_max_qps` 限流。
+- DeepSearch `search` / `react` 模式会先把活动 web search wrapper 注册到同一个 `web_search_context`，再执行 `web_search` adapter。
 - runtime API 配置会动态生成工具 schema，并可把搜索型响应转换为 collector 可消费 payload。
 
 ## 关键代码路径
@@ -36,7 +37,7 @@ contextvar，避免节点直接持有全局工具对象。
 
 ## 核心流程
 
-1. `DeepresearchAgent._initialize_tools` 读取 `custom_web_search_config`、`custom_local_search_config` 和搜索引擎配置。
+1. `DeepresearchAgent._initialize_tools` 与 DeepSearch 搜索模式共享 web search wrapper 初始化逻辑，读取 `custom_web_search_config`、`custom_local_search_config` 和搜索引擎配置。
 2. `_register_web_search_tool` / `_register_local_search_tool` 更新内置 mapping，并检查目标引擎是否存在。
 3. 搜索实例写入 `web_search_context` 和 `local_search_context`。
 4. web 搜索工具通过 `run_web_search` 从 context 取实例并调用 `aresults`。
@@ -48,6 +49,7 @@ contextvar，避免节点直接持有全局工具对象。
 
 - web/local openJiuwen 工具输入均包含 `query` 和 `search_engine_name`。
 - web/local 工具输出包含 `search_engine` 和 `search_results`；异常时还包含 `error`。
+- DeepSearch 的 `algorithm/search_tools/web_search_tool.py` 不再自行选定 provider，而是从 `web_search_context` 解析当前活动实例并复用其 `search_results`。
 - native local search 必须配置 `knowledge_base_configs`。
 - runtime API 参数按 `send_method` 写入 header、query 或 JSON body；`none` 参数进入 body 但不参与 required 发送校验。
 - runtime API 响应默认读取 JSON；`response_wrapper=search_result` 时会归一化为 `search_results`。

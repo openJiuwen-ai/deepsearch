@@ -152,7 +152,7 @@ async run(
 ```
 Same surface as **`BaseAgent.run`**. Validates with `validate_run_agent_params` and `validate_agent_required_field` (after stripping optional keys). Deep-copies **`agent_config`** into **`AgentConfig`**, sets up logging, **`SearchWorkflowConfig`** from `agent_config["service_config"]["search_workflow"]` (defaults on parse failure), **`per_question_params`**, **`WORKFLOW_EXECUTE_TIMEOUT`**, LLM context (requires `llm_config["general"]`), and tools from **`per_question_params.tool_map`**:
 
-- **`"search_fetch"`**: `WebFetch` + `WebSearch` (uses `jina_api_key`, `serper_api_key` on **`agent_config`**).
+- **`"search_fetch"`**: `WebFetch` + `WebSearch`. `WebFetch` currently uses `jina_api_key`; `WebSearch` uses the active engine configured under `web_search_engine_config`.
 - **`"retrieve"`**: `RetrieveTool` (Milvus / embedder fields from **`search_workflow_milvus_config`**).
 
 ### `MilvusConfig` (`search_workflow_milvus_config`)
@@ -345,9 +345,15 @@ async def main():
         "extension": {},
     }
 
-    # search_fetch keys (tool_map defaults to "search_fetch").
+    # search_fetch config (tool_map defaults to "search_fetch").
     agent_config["jina_api_key"] = bytearray("<YOUR_JINA_API_KEY>", encoding="utf-8")
-    agent_config["serper_api_key"] = bytearray("<YOUR_SERPER_API_KEY>", encoding="utf-8")
+    agent_config["web_search_engine_config"] = {
+        "search_engine_name": "serper",  # or tavily / jina / petal / bocha / perplexity / custom
+        "search_api_key": bytearray("<YOUR_WEB_SEARCH_API_KEY>", encoding="utf-8"),
+        "search_url": "",
+        "max_web_search_results": 5,
+        "extension": {},
+    }
 
     conversation_id = str(uuid.uuid4())
     agent = AgentFactory().create_agent(copy.deepcopy(agent_config))

@@ -49,7 +49,7 @@
 ## 数据契约与依赖
 
 - `PerQuestionParams.tool_map` 取值为 `search_fetch` 或 `retrieve`。
-- `search_fetch` 模式依赖 Jina fetch 和 Serper web search 密钥字段；使用后会清零对应 `bytearray`。
+- `search_fetch` 模式当前仍使用 Jina fetch 密钥字段；web search provider 改为从 `web_search_engine_config` 初始化并注册到 context，运行结束后会清零对应密钥 `bytearray`。
 - `retrieve` 模式依赖 `MilvusConfig` 和 embedding 配置；使用后会清零 `embedder_api_key`。
 - `actions_explored_limit=0` 表示不限制；大于 0 时达到该数量后终止，默认值 200 是实际探索上限。
 - `fail_limit=0` 表示不限制连续失败次数。

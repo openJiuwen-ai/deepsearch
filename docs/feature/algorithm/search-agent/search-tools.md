@@ -8,7 +8,7 @@
 
 ## 功能目的
 
-Search tools 为 run action 节点提供可控的信息获取能力。它们把 LLM tool call 转换为实际 web search、网页抓取或本地语料检索，并把结果整理为搜索节点可解析的工具消息。
+Search tools 为 run action 节点提供可控的信息获取能力。它们把 LLM tool call 转换为实际 web search、网页抓取或本地语料检索，并把结果整理为搜索节点可解析的工具消息。DeepSearch 的 `web_search` adapter 复用 framework 层已注册的 web search wrapper，并把 wrapper 返回的标准化搜索结果重新格式化为搜索循环已兼容的文本输出。
 
 ## 可见行为
 
@@ -16,6 +16,7 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 - retrieve-only 模式只暴露 `retrieve`。
 - 工具名会归一化并校验白名单。
 - web search 支持多 query，一次调用返回合并结果。
+- search/react 模式的 `web_search` 使用 `web_search_engine_config` 初始化并注册的活动搜索引擎，而不是单独构造 Serper 专用客户端。
 - web fetch 接收 URL 和 goal，返回与目标相关的网页摘要或证据。
 
 ## 关键代码路径
@@ -26,6 +27,7 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 - retriever 实现：`openjiuwen_deepsearch/algorithm/search_tools/retrieval/retriever.py`
 - embedder：`openjiuwen_deepsearch/algorithm/search_tools/retrieval/embedder.py`
 - run action 工具定义：`openjiuwen_deepsearch/algorithm/search_nodes/run_action.py`
+- 搜索引擎注册与调用：`openjiuwen_deepsearch/framework/openjiuwen/tools/web_search.py`
 
 主要测试：
 
@@ -56,7 +58,7 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 
 工具输出：
 
-- 搜索结果列表。
+- web search 返回历史兼容的格式化文本，文本内容来自活动 wrapper 的标准化搜索结果。
 - 网页摘要或证据。
 - 检索片段。
 
@@ -65,7 +67,7 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 - 非白名单工具名不执行。
 - retrieve 模式最多接受配置允许数量的 query。
 - 工具返回错误时应作为工具结果处理，不应直接破坏搜索循环。
-- web search 速率限制和搜索引擎差异由工具层处理。
+- web search 的 provider 选择由 framework 已注册的活动 wrapper 决定；DeepSearch adapter 负责文本格式归一化、缓存和日志。
 
 ## 测试与验证
 
