@@ -90,7 +90,8 @@ HTTP/1.1 204 No Content
 - `run_id`（`str | null`，可选）：不传则服务端生成 UUID。
 - `conversation_id`（`str | null`，可选）：不传则服务端生成 UUID（用于 API 生命周期关联）。
 - `tool_map`（`"search_fetch" | "retrieve"`，默认取自 `PerQuestionParams`）。
-- `web_fetch_provider_config` / `web_search_engine_config`（`tool_map="search_fetch"` 时推荐显式提供）。其中 `web_fetch_provider_config.provider_name` 必须显式设置，v1 支持 `jina`。
+- `web_fetch_provider_config` / `web_search_engine_config`（`tool_map="search_fetch"` 时优先显式提供）。其中 `web_fetch_provider_config.provider_name` 必须显式设置，v1 支持 `jina`。
+- `jina_api_key` / `serper_api_key`（`search_fetch` 的废弃兼容输入；当新对象未提供时，服务端会分别映射到 `web_fetch_provider_config.provider_name="jina"` 与 `web_search_engine_config.search_engine_name="serper"`）。
 - `milvus`（`object`，可选）：Milvus/Embedding 配置；当 `tool_map="retrieve"` 时要求 embedder key/base URL。
 - `search_workflow_per_question_params`（`object`，可选）：浅覆盖参数，会按 `PerQuestionParams` 校验。
 
@@ -102,7 +103,7 @@ HTTP/1.1 204 No Content
 
 **错误**：
 - `409 Conflict`：`run_id` 已在运行中。
-- `422 Unprocessable Entity`：参数校验失败（如缺少工具所需 key、覆盖字段非法）。
+- `422 Unprocessable Entity`：参数校验失败（如缺少可解析的 search/fetch 配置、fetch provider 不受支持、覆盖字段非法）。
 
 **Telemetry 事件“分块”含义（当前 DeepSearch telemetry JSON 事件类型）**：
 
