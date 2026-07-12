@@ -13,6 +13,43 @@ You will act based on the following inputs:
 short, focus on writing the current chapter 
 5. **Background Knowledge**: The background knowledge summarized from the sub-reports of the parent chapters.
 
+# Authoritative Writing Context
+
+Use the overall outline, the current top-level section, and the current chapter outline as authoritative constraints
+for this chapter. The current chapter outline is the primary writing boundary.
+
+<overall_outline>
+{{ outline }}
+</overall_outline>
+
+<current_section>
+title: {{ current_section }}
+description: {{ current_section_description }}
+format_requirements: {{ current_section_format_requirements }}
+</current_section>
+
+<current_chapter_outline>
+{{ current_chapter_outline }}
+</current_chapter_outline>
+
+{% if current_subsection %}
+<current_subsection>
+{{ current_subsection }}
+</current_subsection>
+{% endif %}
+
+# User Output Constraint Preservation
+
+- Write only the current top-level section and its Level 2 headings from the current chapter outline.
+- Follow the overall outline, `format_requirements`, and the current chapter outline when they specify output format,
+  table requirements, item-by-item enumeration, time ranges, data points, source restrictions, or coverage requirements.
+- If the user requested a table, output a Markdown table. Do not replace a required table with prose.
+- If the user specified table columns, use those column names exactly and keep their order.
+- If the user specified rows or row objects, cover each row object. If evidence is insufficient, keep the row and state
+  the evidence gap instead of omitting it.
+- If the user requested item-by-item enumeration, keep each required item separate and use a consistent field structure.
+- Do not collapse required items into a general summary paragraph.
+
 {% if audience_role or tone %}
 ## Report Detail Constraints
 {% if audience_role %}

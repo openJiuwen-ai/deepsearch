@@ -67,6 +67,7 @@ class Section(BaseModel):
     id: str = Field(default="", description="章节的唯一标识符")
     title: str = Field(..., description="章节标题，概括本章节整体目标")
     description: str = Field(..., description="章节研究步骤详细说明，明确指定需要收集的数据或执行的编程步骤")
+    format_requirements: List[str] = Field(default_factory=list, description="章节级输出格式要求，例如表格、列名、逐项枚举、字数或样式约束")
     is_core_section: bool = Field(default=False, description="是否为重点章节")
     parent_ids: List[str] = Field(default_factory=list, description="章节执行的依赖章节")
     relationships: List[str] = Field(default_factory=list, description="章节和所依赖章节之间的关系")

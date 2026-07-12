@@ -36,12 +36,14 @@ Task description:
 - Query should ensure that the most current information is gathered. The current time is {{ CURRENT_TIME }}.
 - Do not produce more than {{ max_search_query_count }} queries.
 - For retrieval-needed steps, the allowed query count range is 1..{{ max_search_query_count }}.
-- Write your response in {{ language }}.
+- Query language is not restricted by the report language.
+- Write non-query JSON fields, such as "missing_evidence", in {{ language }}.
+- The strings inside "queries" are exempt from this output-language rule. Choose English, Chinese, another local language, or mixed-language wording based on which wording is most likely to retrieve authoritative evidence.
 
 ## Output Format
 - Return a JSON object with exactly these keys:
   - "missing_evidence": A list of verifiable evidence requirements for the current step.
-  - "queries": A list of search queries, each query is less than 5 keywords.
+  - "queries": A list of search queries, each query is less than 5 keywords and may use the strongest source language for the evidence target.
 - Do not output explanations, rationale, markdown fences, or any extra keys.
 
 ## Example

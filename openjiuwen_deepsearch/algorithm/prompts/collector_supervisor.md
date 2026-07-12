@@ -68,7 +68,9 @@ The table intentionally contains key_passages and scores instead of full source 
 - Do not generate next_queries just to fill the limit.
 - Do not produce more than {{ max_search_query_count }} next_queries.
 - The allowed next_queries count range is 0..{{ max_search_query_count }}.
-- Write your response in {{ language }}.
+- Query language is not restricted by the report language.
+- Write non-query JSON fields, such as "knowledge_gap", "known_facts", and "missing_evidence", in {{ language }}.
+- The strings inside "next_queries" are exempt from this output-language rule. Choose English, Chinese, another local language, or mixed-language wording based on which wording is most likely to retrieve authoritative evidence.
 
 ## Evidence Boundary Policy
 - You have autonomy to decide whether more research is useful, but stay within the current step's evidence boundary.
@@ -100,6 +102,7 @@ The table intentionally contains key_passages and scores instead of full source 
 - Each query should focus on one specific aspect of the remaining blocking missing evidence.
 - Do not generate multiple similar queries.
 - Query must consist of keywords, with the first keyword being the main subject. The total number of keywords should be less than 5.
+- Do not force all follow-up queries into `{{ language }}`. Change query language when it is likely to reach better source material, for example English for global academic or institutional sources, Chinese for China-local sources, or another local language for country-specific primary sources.
 
 ## Output Format
 - Return a JSON object with exactly these keys:

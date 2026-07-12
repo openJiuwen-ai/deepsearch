@@ -149,6 +149,39 @@ class TestOutliner:
         with pytest.raises(CustomValueException, match='Sections is not a list'):
             check_tool_call(tool, tool_calls)
 
+    def test_outline_tool_section_count_respects_explicit_user_structure(self):
+        tool = create_outline_tool(5)
+        sections_description = tool.card.input_params["properties"]["sections"]["description"]
+
+        assert "Target count: 5" in sections_description
+        assert "explicitly defines top-level parts" in sections_description
+        assert "lettered parts" in sections_description
+        assert "divided into N major parts" in sections_description
+        assert "titled numbered tasks" in sections_description
+        assert "one sibling object" in sections_description
+        assert "sub-requirements inside the relevant description" in sections_description
+        assert "source-use restrictions inside format_requirements" in sections_description
+        assert "under a named/lettered major part are subordinate" in sections_description
+        assert "Do not add introduction" in sections_description
+        assert "Never serialize section objects" in sections_description
+        assert "Generate exactly 5" not in sections_description
+        assert "must be exactly 5" not in sections_description
+
+        title_description = tool.card.input_params["properties"]["sections"]["items"]["properties"]["title"]["description"]
+        assert "use only that title" in title_description
+        assert "Relationship Analysis" in title_description
+        assert "Do not append" in title_description
+
+        description_description = tool.card.input_params["properties"]["sections"]["items"]["properties"]["description"]["description"]
+        assert "Concise plain-prose research requirements" in description_description
+        assert "format_requirements instead of copying them here" in description_description
+        assert "Do not include serialized section objects" in description_description
+        assert "'\"title\":'" in description_description
+
+        format_requirements = tool.card.input_params["properties"]["sections"]["items"]["properties"]["format_requirements"]
+        assert format_requirements["type"] == "array"
+        assert "Output format requirements" in format_requirements["description"]
+
     @pytest.mark.asyncio
     async def test_generate_outline_failure(self, setup_outliner, mock_llm):
         """测试生成大纲失败"""
