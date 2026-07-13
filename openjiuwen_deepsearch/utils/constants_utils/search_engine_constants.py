@@ -5,6 +5,8 @@ import enum
 
 class SearchEngine(enum.Enum):
     TAVILY = "tavily"
+    PUBMED = "pubmed"
+    ARXIV = "arxiv"
     GOOGLE = "google"
     XUNFEI = "xunfei"
     PETAL = "petal"

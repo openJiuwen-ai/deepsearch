@@ -127,6 +127,7 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
     get_current_time,
 )
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
+from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
@@ -831,8 +832,21 @@ class DeepresearchAgent(BaseAgent):
 
         web_engine_name, web_mapping = self._register_web_search_tool(custom_web, web_search_config)
         local_engine_name, local_mapping = self._register_local_search_tool(custom_local, local_search_config)
+        web_engine_configs = {
+            web_engine_name: web_search_config.model_dump(),
+        }
+        for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
+            if engine_name in web_mapping and engine_name not in web_engine_configs:
+                vertical_config = web_search_config.model_dump()
+                vertical_config["search_engine_name"] = engine_name
+                vertical_config["search_url"] = ""
+                vertical_config["search_api_key"] = bytearray("", encoding="utf-8")
+                web_engine_configs[engine_name] = vertical_config
         web_search_token = web_search_context.set(
-            {web_engine_name: web_mapping[web_engine_name](**web_search_config.model_dump())}
+            {
+                name: web_mapping[name](**engine_config)
+                for name, engine_config in web_engine_configs.items()
+            }
         )
         local_search_token = local_search_context.set(
             {local_engine_name: local_mapping[local_engine_name](**local_search_config.model_dump())}

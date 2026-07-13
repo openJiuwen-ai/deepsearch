@@ -12,6 +12,8 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
     XunfeiSearchAPIWrapper,
     TavilySearchAPIWrapper,
+    PubMedSearchAPIWrapper,
+    ArxivSearchAPIWrapper,
     GoogleSearchAPIWrapper,
     PetalSearchAPIWrapper,
     BochaSearchAPIWrapper,
@@ -29,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 search_engine_mapping = {
     SearchEngine.TAVILY.value: TavilySearchAPIWrapper,
+    SearchEngine.PUBMED.value: PubMedSearchAPIWrapper,
+    SearchEngine.ARXIV.value: ArxivSearchAPIWrapper,
     SearchEngine.GOOGLE.value: GoogleSearchAPIWrapper,
     SearchEngine.XUNFEI.value: XunfeiSearchAPIWrapper,
     SearchEngine.PETAL.value: PetalSearchAPIWrapper,

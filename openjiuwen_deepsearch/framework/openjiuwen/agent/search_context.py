@@ -27,6 +27,7 @@ class RetrievalQuery(BaseModel):
     检索query模型：步骤任务的检索query
     """
     query: str = Field(..., description="直接用于检索的query")
+    search_engine_name: str = Field(default="", description="Secondary web search engine for this query.")
     description: str = Field(default="", description="简要说明query为何与搜索任务相关，为何要生成当前query")
     doc_infos: Optional[List[Dict]] = Field(default_factory=list, description="query检索的文档信息")
 
