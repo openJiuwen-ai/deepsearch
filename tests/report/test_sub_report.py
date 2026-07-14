@@ -178,6 +178,10 @@ async def test_generate_sub_section_outline_calls_llm_with_preservation_context(
         assert "Program Design Flaws" in rendered_prompt
         assert "Elite Capture" in rendered_prompt
         assert "Targeting Errors" in rendered_prompt
+        assert "User-specified subsection titles are authoritative" in rendered_prompt
+        assert "boundary applies only to model-added concrete wording" in rendered_prompt
+        assert "must not override" in rendered_prompt
+        assert "user-specified subsection titles" in rendered_prompt
     finally:
         llm_context.reset(token)
 
@@ -257,6 +261,11 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         assert "# Current Top-Level Section" in rendered_prompt
         assert "# Current Chapter Outline" in rendered_prompt
         assert "# Collected Evidence" in rendered_prompt
+        assert "Authoritative Writing Context" in rendered_prompt
+        assert "format_requirements" in rendered_prompt
+        assert "If the user requested a table, output a Markdown table" in rendered_prompt
+        assert "If the user specified table columns, use those column names exactly" in rendered_prompt
+        assert "Do not collapse required items into a general summary paragraph" in rendered_prompt
     finally:
         llm_context.reset(token)
 

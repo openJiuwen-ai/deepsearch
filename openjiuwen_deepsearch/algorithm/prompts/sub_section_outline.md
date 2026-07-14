@@ -28,6 +28,9 @@ format_requirements: {{ section_format_requirements }}
 # User-Specified Subsection Preservation
 
 - If the user explicitly specified subsection titles for the current section, follow that count, title text, and order.
+- User-specified subsection titles are authoritative. Do not generalize, rename, merge, split, remove, or reorder them
+  merely because the current key passages do not yet support their concrete entities, cases, company names, metrics, or
+  wording.
 - Treat an explicit ordered list under the current top-level section (`1. ...`, `2. ...`, `3. ...`, etc.) as required
   Level 2 headings when the list describes report content to cover, analysis categories, mechanisms, dimensions,
   questions, or steps. Preserve every listed item as one subsection unless it is clearly only a table column/row,
@@ -86,9 +89,12 @@ format_requirements: {{ section_format_requirements }}
 - Only generate **one** Level 1 heading, which must match the section title: {{ section_title }}
 - All subchapter headings must be Level 2 only, numbered as {{section_idx}}.1, {{ section_idx }}.2, etc.
 - Do not generate multiple Level 1 headings. The outline must reflect a single cohesive section structure.
-- Use key passages as the evidence boundary for concrete wording in subsection titles.
-- Do not generate concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages.
-- When section_description suggests a direction that lacks support in key passages, use a more general subsection title instead of forcing an unsupported specific topic.
+- Use key passages as the evidence boundary only for concrete wording introduced by the model in subsection titles.
+- Do not introduce concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages.
+  This restriction does not authorize renaming or generalizing user-specified subsection titles.
+- When section_description suggests a direction that lacks support in key passages, use a more general subsection title only
+  if that concrete direction was inferred or added by the model. If the direction comes from user-specified structure,
+  preserve it exactly.
 
 The following is the section-specific description:
 {{ section_description }}
@@ -110,7 +116,9 @@ The section content is mainly made of key passages. Treat them as the evidence b
 - **Relevance:** Focus ONLY on relevance to the section title. Do not add unrelated sections just for the sake of length.
 - **Flow:** The subsections must flow logically and not be disjointed to ensure readability.
 - **No Redundancy:** Ensure logical clarity with no repetition between chapters.
-- **Evidence Boundary:** Do not generate concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages.
+- **Evidence Boundary:** Do not introduce concrete facts, metrics, cases, company names, or named examples that are not
+  supported by the key passages. This boundary applies only to model-added concrete wording and must not override
+  user-specified subsection titles or concrete directions inherited from user-specified structure.
 - **Boundary:** Use the section-local contract as the primary scope boundary. Do not restate another top-level chapter's main job.
 
 ## Formatting Rules

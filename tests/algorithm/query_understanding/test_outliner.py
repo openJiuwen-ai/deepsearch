@@ -95,10 +95,20 @@ class TestOutliner:
                 'openjiuwen_deepsearch.algorithm.query_understanding.outliner.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 return_value=functioncall_response
-        ):
+        ) as mock_ainvoke:
             result = await setup_outliner.generate_outline(test_data)
 
         assert result == mock_llm_response
+        mock_ainvoke.assert_awaited_once()
+        prompt = mock_ainvoke.await_args.args[1]
+        rendered_prompt = "\n".join(message["content"] for message in prompt)
+        assert "User-Specified Structure Preservation" in rendered_prompt
+        assert "If an explicit structure exists, it is authoritative" in rendered_prompt
+        assert "default planning aids" in rendered_prompt
+        assert "do not create" in rendered_prompt
+        assert "additional top-level sections" in rendered_prompt
+        assert "do not add top-level sections to reach 4 dimensions" in rendered_prompt
+
     def test_normalize_sections_parses_json_string(self):
         args = {
             "language": "zh-CN",

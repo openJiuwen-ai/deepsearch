@@ -66,12 +66,17 @@ If an explicit structure exists, it is authoritative:
   strings like `"title":`, `"description":`, `}, {`, or `\"id\"` inside a `description`.
 - Use the analysis framework below only to enrich missing analytical coverage; never let it override the user's explicit
   structure.
+- Brief-report guidance, task-contract guidance, dimensional coverage rules, `section_num`, and the analysis framework
+  are default planning aids. When an explicit user structure exists, apply these aids only inside the user-specified
+  major sections through `description`, `section_focus`, `focus_dimensions`, or `format_requirements`; do not create
+  additional top-level sections for early conclusions, summaries, risks, methodology limits, or extra analytical
+  dimensions unless the user named them as major sections.
 
 {% if report_type == "brief" %}
 ## Report type: Brief
 - Prefer **fewer, higher-signal sections**; avoid encyclopedic or purely taxonomic structure.
-{% if require_summary_first %}- Place **early section(s)** for: headline conclusions (overview only). {% endif %}
-{% if require_methodology_and_risk %}- Include explicit room for **evidence/method limits** and **material risks or uncertainties**.{% endif %}
+{% if require_summary_first %}- If the user has not specified an explicit top-level structure, place **early section(s)** for: headline conclusions (overview only). If the user has specified an explicit top-level structure, include headline conclusions only within the most appropriate user-specified section; do not add a new top-level section. {% endif %}
+{% if require_methodology_and_risk %}- If the user has not specified an explicit top-level structure, include explicit room for **evidence/method limits** and **material risks or uncertainties**. If the user has specified an explicit top-level structure, keep these concerns inside the relevant user-specified section descriptions or focus dimensions; do not add new top-level sections.{% endif %}
 {% endif %}
 
 {% if audience_role %}
@@ -112,7 +117,10 @@ Use these 8 dimensions as a **thinking checklist** to ensure comprehensive cover
 ⚠️ Dimensions such as **Risk Assessment**, **Stakeholder Data**, and **Qualitative Data** are commonly overlooked. Before skipping a dimension, briefly consider whether it is genuinely irrelevant or just less obvious.
 
 ## Dimensional Coverage
-- For broad research queries (not a focused comparison, classification, or simple factual question), ensure at least **4 relevant dimensions** from the thinking checklist become separate sections.
+- For broad research queries (not a focused comparison, classification, or simple factual question), ensure at least **4 relevant dimensions** from the thinking checklist become separate sections only when the user has not specified an explicit top-level structure.
+- When the user has specified an explicit top-level structure, do not add top-level sections to reach 4 dimensions. Instead,
+  distribute relevant dimensions across the user-specified sections through `description`, `section_focus`, and
+  `focus_dimensions`.
 - If fewer than 4 dimensions are genuinely relevant to the topic, do not fabricate irrelevant sections. Brief reports are exempt.
 
 ## Section Focus Assignment
