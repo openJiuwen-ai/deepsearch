@@ -35,8 +35,14 @@ def test_query_object_and_retrieval_query_carry_secondary_engine():
 
 def test_fallback_secondary_engine_routing():
     assert route_secondary_search_engine_for_query("glioblastoma clinical trial") == "pubmed"
+    assert route_secondary_search_engine_for_query("gene expression analysis") == "pubmed"
+    assert route_secondary_search_engine_for_query("drug discovery pipeline") == "pubmed"
     assert route_secondary_search_engine_for_query("LLM RAG benchmark") == "arxiv"
+    assert route_secondary_search_engine_for_query("generative AI models") == "arxiv"
     assert route_secondary_search_engine_for_query("Apple annual revenue") == ""
+    assert route_secondary_search_engine_for_query("general productivity software") == ""
+    assert route_secondary_search_engine_for_query("generation planning methods") == ""
+    assert route_secondary_search_engine_for_query("generic database indexing") == ""
     assert route_secondary_search_engine_for_query("Japan pension reform social security statistics") == ""
     assert route_secondary_search_engine_for_query("public policy benchmark pension reform") == ""
 

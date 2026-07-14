@@ -169,7 +169,7 @@ def route_secondary_search_engine_for_query(query: str) -> str:
     arxiv_short_tokens = (
         "ai", "cs", "llm", "rag", "ml",
     )
-    if any(keyword in text for keyword in pubmed_keywords):
+    if has_token(pubmed_keywords):
         return "pubmed"
     if has_any(arxiv_source_keywords) or has_any(arxiv_domain_keywords) or has_token(arxiv_short_tokens):
         return "arxiv"

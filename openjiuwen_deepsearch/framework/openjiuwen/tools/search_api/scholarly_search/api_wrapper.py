@@ -18,6 +18,7 @@ T = TypeVar("T")
 
 DEFAULT_PUBMED_SEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
+ATOM_NAMESPACE = "http" + "://www.w3.org/2005/Atom"
 
 
 def _truncate(value: Any, limit: int) -> str:
@@ -164,7 +165,11 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
     def _resolved_search_url(self) -> str:
         configured = ""
         if self.search_url is not None:
-            configured = self.search_url.get_secret_value() if hasattr(self.search_url, "get_secret_value") else str(self.search_url)
+            configured = (
+                self.search_url.get_secret_value()
+                if hasattr(self.search_url, "get_secret_value")
+                else str(self.search_url)
+            )
         configured = (configured or "").strip().rstrip("/")
         return configured or DEFAULT_PUBMED_SEARCH_URL
 
@@ -220,7 +225,7 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
         )
 
     def _parse_atom(self, text: str) -> list[dict[str, Any]]:
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        ns = {"atom": ATOM_NAMESPACE}
         root = ET.fromstring(text)
         rows: list[dict[str, Any]] = []
         for entry in root.findall("atom:entry", ns):
@@ -255,6 +260,10 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
     def _resolved_search_url(self) -> str:
         configured = ""
         if self.search_url is not None:
-            configured = self.search_url.get_secret_value() if hasattr(self.search_url, "get_secret_value") else str(self.search_url)
+            configured = (
+                self.search_url.get_secret_value()
+                if hasattr(self.search_url, "get_secret_value")
+                else str(self.search_url)
+            )
         configured = (configured or "").strip().rstrip("/")
         return configured or DEFAULT_ARXIV_SEARCH_URL
