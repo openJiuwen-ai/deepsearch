@@ -234,7 +234,10 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 
     if args.mode == "query" and args.search_mode in ("search", "react"):
         if args.tool_map == "search_fetch":
-            missing_search_args = _missing_required_args(args, ["jina_api_key", "serper_api_key"])
+            missing_search_args = _missing_required_args(
+                args,
+                ["web_search_engine_name", "fetch_provider_name"],
+            )
             if missing_search_args:
                 parser.error(
                     "search / react 模式 (tool_map=search_fetch) 必须提供以下参数: "
@@ -374,8 +377,14 @@ def main(
             default=False,
             help="With --search_mode search: call LLM router first (0→react, 1→DeepSearch)",
         )
-        search_group.add_argument("--jina_api_key", type=str, default="", help="jina 模型密钥")
-        search_group.add_argument("--serper_api_key", type=str, default="", help="serper 模型密钥")
+        search_group.add_argument(
+            "--fetch_provider_name",
+            type=str,
+            default="",
+            help="网页抓取 provider 名称，例如 jina",
+        )
+        search_group.add_argument("--fetch_api_key", type=str, default="", help="网页抓取 provider 密钥")
+        search_group.add_argument("--fetch_base_url", type=str, default="", help="网页抓取 provider 服务地址")
         search_group.add_argument("--milvus_host", type=str, default="localhost", help="milvus 主机地址")
         search_group.add_argument("--milvus_port", type=int, default=19530, help="milvus 端口")
         search_group.add_argument("--database_name", type=str, default="default", help="数据库名称")
@@ -447,8 +456,12 @@ def main(
                     logger.warning("开启vlm迭代生成图开关且vlm迭代轮次大于0时，\
                                    需提供 vlm_model_name、type、base_url 和 api_key，将尝试用llm进行vlm迭代优化。")
 
-        # 解析联网增强引擎配置
-        if args.search_mode == "research":
+        # 解析联网增强引擎配置。search_fetch 与 research 共用同一搜索引擎配置契约。
+        if args.search_mode == "research" or (
+            args.mode == "query"
+            and args.search_mode in ("search", "react")
+            and args.tool_map == "search_fetch"
+        ):
             current_agent_config["web_search_engine_config"]["search_engine_name"] = args.web_search_engine_name
             current_agent_config["web_search_engine_config"]["search_api_key"] = bytearray(
                 args.web_search_api_key,
@@ -485,8 +498,11 @@ def main(
                 if args.search_mode in ("search", "react"):
                     current_agent_config["search_mode"] = args.search_mode
                     if args.tool_map == "search_fetch":
-                        current_agent_config["jina_api_key"] = args.jina_api_key
-                        current_agent_config["serper_api_key"] = args.serper_api_key
+                        current_agent_config["web_fetch_provider_config"] = {
+                            "provider_name": args.fetch_provider_name,
+                            "api_key": bytearray(args.fetch_api_key, encoding="utf-8"),
+                            "base_url": args.fetch_base_url,
+                        }
                     elif args.tool_map == "retrieve":
                         current_agent_config["search_workflow_milvus_config"]["milvus_host"] = args.milvus_host
                         current_agent_config["search_workflow_milvus_config"]["milvus_port"] = args.milvus_port

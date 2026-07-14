@@ -155,7 +155,7 @@ def ensure_api_keys_bytearray(agent_config: dict) -> dict:
         k = agent_config["llm_config"].get("api_key")
         if k is not None:
             agent_config["llm_config"]["api_key"] = to_ba(k)
-    for key in ("jina_api_key", "serper_api_key", "embedder_api_key"):
+    for key in ("embedder_api_key",):
         if key in agent_config and agent_config.get(key) is not None:
             agent_config[key] = to_ba(agent_config[key])
         search_workflow_milvus_config = agent_config.get("search_workflow_milvus_config", {})

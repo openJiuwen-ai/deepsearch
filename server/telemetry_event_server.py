@@ -55,7 +55,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from openjiuwen_deepsearch.algorithm.search_nodes.utils import ensure_api_keys_bytearray
@@ -201,6 +201,8 @@ class WebFetchProviderFieldsIn(BaseModel):
 class CreateSearchRunRequest(BaseModel):
     """Request body for **`POST /runs`** (DeepSearch graph: `search` or `react` only — not `research`)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     search_mode: Literal["search", "react"] = Field(
         default="search",
         description="search: DeepSearch graph; react: ReAct + same tools as search (see main.py --search_mode).",
@@ -220,17 +222,7 @@ class CreateSearchRunRequest(BaseModel):
     )
     web_fetch_provider_config: WebFetchProviderFieldsIn | None = Field(
         default=None,
-        description="Preferred fetch provider config for search_fetch mode.",
-    )
-    jina_api_key: str = Field(
-        default=_bytearray_to_str(_AC_CONFIG.jina_api_key),
-        description="Deprecated compatibility fallback for Jina fetch.",
-        json_schema_extra={"deprecated": True},
-    )
-    serper_api_key: str = Field(
-        default=_bytearray_to_str(_AC_CONFIG.serper_api_key),
-        description="Deprecated compatibility fallback for Serper web search.",
-        json_schema_extra={"deprecated": True},
+        description="Required fetch provider config for search_fetch mode.",
     )
     milvus: MilvusFieldsIn = Field(default_factory=MilvusFieldsIn)
     search_workflow_per_question_params: dict[str, Any] = Field(default_factory=dict)
@@ -249,26 +241,18 @@ class CreateSearchRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_tool_keys(self) -> CreateSearchRunRequest:
-        """Validate resolved search/fetch config for `search_fetch`; embedder URL/key for `retrieve`.
+        """Validate search/fetch config for `search_fetch`; embedder URL/key for `retrieve`.
 
         If `search_workflow_per_question_params` is set, validate merged shape against
         `PerQuestionParams`.
         """
         if self.tool_map == "search_fetch":
-            resolved_web_search = self.resolved_web_search_engine_config()
-            resolved_web_fetch = self.resolved_web_fetch_provider_config()
-            if resolved_web_search is None:
-                raise ValueError(
-                    "tool_map=search_fetch requires web_search_engine_config "
-                    "or the deprecated legacy serper_api_key fallback"
-                )
-            if resolved_web_fetch is None:
-                raise ValueError(
-                    "tool_map=search_fetch requires web_fetch_provider_config "
-                    "or the deprecated legacy jina_api_key fallback"
-                )
-            _web_search_config_for_agent(resolved_web_search)
-            _web_fetch_provider_config_for_agent(resolved_web_fetch)
+            if self.web_search_engine_config is None:
+                raise ValueError("tool_map=search_fetch requires web_search_engine_config")
+            if self.web_fetch_provider_config is None:
+                raise ValueError("tool_map=search_fetch requires web_fetch_provider_config")
+            _web_search_config_for_agent(self.web_search_engine_config)
+            _web_fetch_provider_config_for_agent(self.web_fetch_provider_config)
         else:
             if not (self.milvus.embedder_api_key and self.milvus.embedder_base_url):
                 raise ValueError("tool_map=retrieve requires milvus.embedder_api_key and milvus.embedder_base_url")
@@ -278,27 +262,6 @@ class CreateSearchRunRequest(BaseModel):
             merged = {**base, **self.search_workflow_per_question_params}
             PerQuestionParams.model_validate(merged)
         return self
-
-    def resolved_web_search_engine_config(self) -> WebSearchEngineFieldsIn | None:
-        if self.web_search_engine_config is not None:
-            return self.web_search_engine_config
-        if self.serper_api_key:
-            return WebSearchEngineFieldsIn(
-                search_engine_name="serper",
-                search_api_key=self.serper_api_key,
-            )
-        return None
-
-    def resolved_web_fetch_provider_config(self) -> WebFetchProviderFieldsIn | None:
-        if self.web_fetch_provider_config is not None:
-            return self.web_fetch_provider_config
-        if self.jina_api_key:
-            return WebFetchProviderFieldsIn(
-                provider_name="jina",
-                api_key=self.jina_api_key,
-            )
-        return None
-
 
 def _merge_per_question(
     current_agent_config: dict[str, Any],
@@ -377,18 +340,14 @@ def build_agent_config_from_request(req: CreateSearchRunRequest) -> dict[str, An
     current_agent_config["enable_question_router"] = req.enable_question_router
 
     if req.tool_map == "search_fetch":
-        resolved_web_search = req.resolved_web_search_engine_config()
-        resolved_web_fetch = req.resolved_web_fetch_provider_config()
-        if resolved_web_search is None or resolved_web_fetch is None:
-            raise ValueError("tool_map=search_fetch requires both resolved web search and fetch config")
-        web_search_config = _web_search_config_for_agent(resolved_web_search)
-        web_fetch_provider_config = _web_fetch_provider_config_for_agent(resolved_web_fetch)
-        current_agent_config["web_search_engine_config"] = web_search_config
-        current_agent_config["web_fetch_provider_config"] = web_fetch_provider_config
-        if web_fetch_provider_config["provider_name"] == "jina":
-            current_agent_config["jina_api_key"] = web_fetch_provider_config["api_key"]
-        if web_search_config["search_engine_name"] == "serper":
-            current_agent_config["serper_api_key"] = web_search_config["search_api_key"]
+        if req.web_search_engine_config is None or req.web_fetch_provider_config is None:
+            raise ValueError("tool_map=search_fetch requires web_search_engine_config and web_fetch_provider_config")
+        current_agent_config["web_search_engine_config"] = _web_search_config_for_agent(
+            req.web_search_engine_config
+        )
+        current_agent_config["web_fetch_provider_config"] = _web_fetch_provider_config_for_agent(
+            req.web_fetch_provider_config
+        )
     else:
         current_agent_config["search_workflow_milvus_config"] = _milvus_config_for_agent(req.milvus)
     return ensure_api_keys_bytearray(current_agent_config)
@@ -671,8 +630,8 @@ def _make_app() -> FastAPI:
             "The handler returns immediately; progress and errors appear via telemetry to the ingest "
             "path and in server lifecycle `emit` events (`run_completed` / `run_failed` / `run_cancelled`).\n\n"
             "**`search_mode` / `enable_question_router`:** same semantics as `main.py` for graph runs.\n\n"
-            "**`tool_map`:** `search_fetch` accepts explicit `web_search_engine_config` + "
-            "`web_fetch_provider_config` (legacy `serper_api_key` / `jina_api_key` are compatibility fallbacks); "
+            "**`tool_map`:** `search_fetch` requires explicit `web_search_engine_config` + "
+            "`web_fetch_provider_config`; "
             "`retrieve` requires Milvus/embedder fields.\n"
             "\n**IDs:** the workflow generates its **own** `conversation_id` for on-disk logs; the `conversation_id` "
             "in the response (and in lifecycle emits) is the **API** id the client may correlate with. "

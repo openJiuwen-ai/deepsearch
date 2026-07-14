@@ -144,23 +144,19 @@ def test_create_search_run_request_accepts_generic_search_fetch_configs() -> Non
         }
     )
 
-    assert req.resolved_web_search_engine_config() is not None
-    assert req.resolved_web_fetch_provider_config() is not None
+    assert req.web_search_engine_config is not None
+    assert req.web_fetch_provider_config is not None
 
 
-def test_create_search_run_request_accepts_legacy_search_fetch_fallbacks() -> None:
-    req = tes.CreateSearchRunRequest(
-        **{
-            **_base_run_request(),
-            "serper_api_key": "serper-key",
-            "jina_api_key": "jina-key",
-        }
-    )
-
-    assert req.resolved_web_search_engine_config() is not None
-    assert req.resolved_web_search_engine_config().search_engine_name == "serper"
-    assert req.resolved_web_fetch_provider_config() is not None
-    assert req.resolved_web_fetch_provider_config().provider_name == "jina"
+def test_create_search_run_request_rejects_legacy_search_fetch_fields() -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        tes.CreateSearchRunRequest(
+            **{
+                **_base_run_request(),
+                "serper_api_key": "serper-key",
+                "jina_api_key": "jina-key",
+            }
+        )
 
 
 def test_create_search_run_request_rejects_missing_fetch_provider() -> None:
@@ -198,7 +194,6 @@ def test_build_agent_config_from_request_uses_generic_search_fetch_configs() -> 
     assert agent_config["web_search_engine_config"]["search_api_key"] == bytearray(b"jina-search-key")
     assert agent_config["web_fetch_provider_config"]["provider_name"] == "jina"
     assert agent_config["web_fetch_provider_config"]["api_key"] == bytearray(b"jina-fetch-key")
-    assert agent_config["jina_api_key"] == bytearray(b"jina-fetch-key")
 
 
 def test_post_runs_accepts_generic_search_fetch_payload(
@@ -231,7 +226,7 @@ def test_post_runs_accepts_generic_search_fetch_payload(
     assert payload["conversation_id"]
 
 
-def test_post_runs_accepts_legacy_search_fetch_payload(
+def test_post_runs_rejects_legacy_search_fetch_payload(
     telemetry_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -248,6 +243,4 @@ def test_post_runs_accepts_legacy_search_fetch_payload(
 
     response = telemetry_client.post("/runs", json=body)
 
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["status"] == "started"
+    assert response.status_code == 422

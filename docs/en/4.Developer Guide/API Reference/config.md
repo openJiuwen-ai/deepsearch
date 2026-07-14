@@ -175,8 +175,6 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **search_workflow_per_question_params** (`PerQuestionParams`, optional): Per-question control knobs for search/react runs (time, workers, tool map, limits, etc.). Default value: `PerQuestionParams()`.
 - **search_workflow_milvus_config** (`MilvusConfig`, optional): Milvus/embedder settings used when retrieval tool path is selected. Default value: `MilvusConfig()`.
 - **web_fetch_provider_config** (`WebFetchProviderConfig`, optional): Explicit DeepSearch fetch-provider config. Current v1 requires `provider_name="jina"` to enable `web_fetch`. Default value: `WebFetchProviderConfig()`.
-- **jina_api_key** (bytearray, optional): Legacy Jina API key kept for compatibility cleanup; current search/react fetch path uses `web_fetch_provider_config`. Default empty `bytearray`.
-- **serper_api_key** (bytearray, optional): Legacy Serper key kept for compatibility; current DeepSearch `web_search` uses `web_search_engine_config`. Default empty `bytearray`.
 - **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
 - **web_search_max_qps** (float, optional): Maximum QPS for the web augmentation engine. `0` means no rate limit. Floating-point values such as `0.5` are supported and mean one request every 2 seconds. Default value: `0`.
 - **user_feedback_processor_enable** (bool, optional): Whether to enable post-report local optimization. Default value: `False`.

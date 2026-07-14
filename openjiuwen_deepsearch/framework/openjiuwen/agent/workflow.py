@@ -1680,7 +1680,6 @@ class DeepSearchAgent(BaseAgent):
                 tool_context.reset(tool_token)
             cleanup_agent_config = getattr(self, "agent_config", None)
             if cleanup_agent_config is not None:
-                zero_secret(cleanup_agent_config.jina_api_key)
                 zero_secret(cleanup_agent_config.web_fetch_provider_config.api_key)
                 zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
 
@@ -1950,7 +1949,6 @@ class SimpleReactSearchAgent(BaseAgent):
             llm_context.reset(llm_token)
             if web_search_token is not None:
                 web_search_context.reset(web_search_token)
-            zero_secret(session_agent_config.jina_api_key)
             zero_secret(session_agent_config.web_fetch_provider_config.api_key)
             zero_secret(session_agent_config.web_search_engine_config.search_api_key)
 

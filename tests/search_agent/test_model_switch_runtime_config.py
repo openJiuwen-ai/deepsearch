@@ -13,6 +13,12 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepSearch
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("field", ["jina_api_key", "serper_api_key"])
+def test_agent_config_rejects_retired_search_fetch_fields(field: str) -> None:
+    with pytest.raises(ValueError, match="Use web_search_engine_config and web_fetch_provider_config"):
+        AgentConfig.model_validate({field: "retired-key"})
+
+
 def _make_agent(tmp_path: Path, model_name: str, query: str) -> DeepSearchAgent:
     agent = DeepSearchAgent()
     cfg = AgentConfig().model_dump()

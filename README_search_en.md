@@ -424,7 +424,7 @@ Two ways to tune defaults:
 
 **Retrieve mode:** build an index first (below), then fill **`AgentConfig.search_workflow_milvus_config` (`MilvusConfig`)**. Do **not** put Milvus connection strings in **`RetrievalSettingsConfig`** (that type only holds retrieval behavior like **`top_k`** and **`mode`**).
 
-**Search mode CLI:** **`main.py`** requires full LLM flags. For **`search_fetch`**, the recommended path is explicit **`web_fetch_provider_config.provider_name="jina"`** plus **`web_search_engine_config`** for search provider selection; the legacy **`--jina_api_key`** flag remains a compatibility input. Pass the question with **`--query`** (multiple tokens are joined with spaces).
+**Search mode CLI:** **`main.py`** requires full LLM flags. For **`search_fetch`**, provide the generic search engine and fetch provider settings. Pass the question with **`--query`** (multiple tokens are joined with spaces).
 
 ```bash
 python -m main \
@@ -436,8 +436,10 @@ python -m main \
   --llm_model_type openai \
   --llm_base_url "https://api.example.com/v1" \
   --llm_api_key "your-llm-key" \
-  --jina_api_key "your-jina-key" \
-  --serper_api_key "your-serper-key"
+  --web_search_engine_name serper \
+  --web_search_api_key "your-serper-key" \
+  --fetch_provider_name jina \
+  --fetch_api_key "your-jina-key"
 ```
 
 This repository **does not** ship **`scripts_will_be_deleted_later.run_8_queries`** or similar batch benchmark drivers by default; add your own if needed.

@@ -91,8 +91,7 @@ Starts a background DeepSearch graph run (`search` or `react`, not `research`) v
 - `run_id` (`str | null`, optional): if omitted, server generates UUID.
 - `conversation_id` (`str | null`, optional): if omitted, server generates UUID (API lifecycle correlation id).
 - `tool_map` (`"search_fetch" | "retrieve"`, default from `PerQuestionParams`).
-- `web_fetch_provider_config` / `web_search_engine_config` (preferred when `tool_map="search_fetch"`). `web_fetch_provider_config.provider_name` must be set explicitly; v1 supports `jina`.
-- `jina_api_key` / `serper_api_key` (deprecated compatibility fallbacks for `search_fetch`; the server maps them to `web_fetch_provider_config.provider_name="jina"` and `web_search_engine_config.search_engine_name="serper"` when the new objects are omitted).
+- `web_fetch_provider_config` and `web_search_engine_config` (both required when `tool_map="search_fetch"`). `web_fetch_provider_config.provider_name` must be set explicitly; v1 supports `jina`.
 - `milvus` (`object`, optional): Milvus/embedder settings; embedder key/base URL required when `tool_map="retrieve"`.
 - `search_workflow_per_question_params` (`object`, optional): shallow overrides validated against `PerQuestionParams`.
 

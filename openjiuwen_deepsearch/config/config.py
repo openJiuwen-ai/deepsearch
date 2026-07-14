@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 from typing import Any, List, Literal, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openjiuwen_deepsearch.config.runtime_api_models import ApiToolsConfig
 
@@ -338,8 +338,6 @@ class AgentConfig(BaseModel):
     )
     search_workflow_per_question_params: PerQuestionParams = Field(default_factory=PerQuestionParams)
     search_workflow_milvus_config: MilvusConfig = Field(default_factory=MilvusConfig)
-    jina_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="Jina API密钥")
-    serper_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="Serper API密钥")
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # 联网增强引擎 QPS 流控配置
@@ -358,6 +356,18 @@ class AgentConfig(BaseModel):
     vlm_chart_generator_max_iterations: int = Field(default=1, ge=1, le=3, description="vlm迭代生成图最大迭代次数")
 
     agent_llm_timeouts: Dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_retired_search_fetch_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            retired = {"jina_api_key", "serper_api_key"}.intersection(data)
+            if retired:
+                raise ValueError(
+                    f"Unsupported search/fetch config field(s): {', '.join(sorted(retired))}. "
+                    "Use web_search_engine_config and web_fetch_provider_config instead."
+                )
+        return data
 
 
 class ServiceConfig(BaseModel):

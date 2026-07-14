@@ -461,7 +461,7 @@ asyncio.run(main())
 
 **retrieve 模式**：需先构建知识库索引（见下文），并在 **`AgentConfig.search_workflow_milvus_config`（`MilvusConfig`）** 中填写 Milvus 与 Embedder；**不要**在 `RetrievalSettingsConfig` 中配置 Milvus（该类型仅含 `top_k`、`mode` 等检索行为参数）。
 
-**命令行（search 模式）**：`main.py` 要求提供完整 LLM 参数。兼容字段里 `--jina_api_key` 仍可用于 Jina fetch，但运行时推荐显式配置 `web_fetch_provider_config.provider_name="jina"`；`web_search` 则通过 `web_search_engine_config` 选择 provider。查询通过 **`--query`** 传入（可多个词，会拼接为空格分隔的一句）。
+**命令行（search 模式）**：`main.py` 要求提供完整 LLM 参数。`search_fetch` 通过通用的搜索引擎和抓取 provider 参数配置；`web_search` 使用 `web_search_engine_config`，`web_fetch` 使用 `web_fetch_provider_config`。查询通过 **`--query`** 传入（可多个词，会拼接为空格分隔的一句）。
 
 ```bash
 python -m main \
@@ -473,8 +473,10 @@ python -m main \
   --llm_model_type openai \
   --llm_base_url "https://api.example.com/v1" \
   --llm_api_key "your-llm-key" \
-  --jina_api_key "your-jina-key" \
-  --serper_api_key "your-serper-key"
+  --web_search_engine_name serper \
+  --web_search_api_key "your-serper-key" \
+  --fetch_provider_name jina \
+  --fetch_api_key "your-jina-key"
 ```
 
 本仓库默认 **不包含** `scripts_will_be_deleted_later.run_8_queries` 等打榜批跑脚本；若你本地另有该模块，可按其 README 自行调用。
