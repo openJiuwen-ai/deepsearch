@@ -340,6 +340,7 @@ class InfoRetrievalNode(BaseNode):
         else:
             # MCP/custom tools 或多工具复杂路由走 LLM tool-calling
             state, agent_input = await self._collector_llm(state, agent_input, tool_list, tool_dict)
+            agent_input = await self._run_secondary_web_search_if_needed(state, agent_input, tool_dict)
 
         web_record, local_record = [], []
         if len(agent_input["web_page_search_record"]) > 0:
@@ -418,6 +419,49 @@ class InfoRetrievalNode(BaseNode):
                 if current_try < max_retries:
                     continue
                 return None
+
+    async def _run_secondary_web_search_if_needed(
+            self,
+            state: dict,
+            agent_input: dict,
+            tool_dict: dict,
+    ) -> dict:
+        secondary_engine = str(state.get("secondary_web_search_engine_name") or "").strip()
+        primary_engine = str(state.get("web_search_engine_name") or SearchEngine.PETAL.value).strip()
+        if not secondary_engine or secondary_engine == primary_engine:
+            return agent_input
+
+        tool_name = "web_search_tool"
+        if tool_name not in tool_dict:
+            return agent_input
+
+        query = state.get("search_query", state.get("step_title", ""))
+        tool_result_raw = await self._direct_search_with_retry(
+            tool_dict[tool_name],
+            tool_name,
+            query,
+            secondary_engine,
+            state,
+        )
+        if not tool_result_raw:
+            return agent_input
+
+        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+        process_tool_result(tool_name, tool_result_json, agent_input)
+        if LogManager.is_sensitive():
+            logger.info(
+                "section_idx: %s | [InfoRetrievalNode] Secondary web search completed.",
+                state.get("section_idx", 0),
+            )
+        else:
+            logger.info(
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] Secondary web search completed. "
+                "engine=%s",
+                state.get("section_idx", 0),
+                state.get("step_title", ""),
+                secondary_engine,
+            )
+        return agent_input
 
     async def _invoke_llm_with_retry(self, tool_prompt: list, tool_list: list, state: dict):
         section_idx = state.get("section_idx", 0)

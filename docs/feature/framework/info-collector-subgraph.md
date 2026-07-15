@@ -124,6 +124,19 @@
 - 搜索工具来源于 `web_search_context`、`local_search_context` 和 runtime API 工具配置。
 - 网页正文增强节点只更新匹配 doc 的正文证据和证据引用，并同步 `history_queries` 供最终报告读取；证据保持来源语言，不承担报告本地化；不修改原始 URL、标题、评分或 evaluator 结果。
 
+### 学术垂直搜索 Query 契约
+
+- 初始 query 生成支持结构化 query item：每个 item 包含 `query` 和 `search_engine_name`。`search_engine_name`
+  是 query 级 secondary vertical web engine，只能为 `pubmed`、`arxiv` 或空字符串，不替代用户配置的 primary
+  web search engine。
+- `search_engine_name=""` 表示明确不使用垂直源；query object 缺少该字段或旧格式字符串 query 时，collector 会按
+  query 关键词启发式选择 `pubmed`、`arxiv` 或空值以保持向后兼容。
+- 对 `pubmed` 和 `arxiv` 的 query，query 生成 Prompt 要求使用英文论文检索词、标准学术术语或 benchmark/算法名称；
+  `missing_evidence` 等面向用户和报告链路的字段仍使用 collector 输入语言。
+- direct web 分支会对每个 query 执行 primary web engine，并在存在 secondary vertical engine 且与 primary 不同时追加执行。
+  当 `info_collector_search_method=all` 或配置了 `api_tools_config.collector_tools` 进入 LLM tool-calling 分支时，
+  LLM 工具调用结束后也会确定性补跑该 query 的 secondary vertical engine。
+
 ## 边界与错误处理
 
 - collector 子图使用独立 workflow session，依赖驱动并发时避免共享子图状态。
@@ -142,6 +155,9 @@
 - `uv run pytest tests/info_collector/test_webpage_enrichment.py`
 - `uv run pytest tests/info_collector/algorithm/test_tool_log.py`
 - 网页增强测试覆盖 canonical URL 去重、Prompt 消息隔离、输出语言、整体 fetch deadline、PDF/Jina fallback、质量门禁、敏感日志脱敏、历史 query/最终报告同步和并发异常隔离。
+- `uv run pytest tests/info_collector/test_academic_search_routing.py`
+- `uv run pytest tests/info_collector/test_graph_builder.py::test_validate_query_count_accepts_structured_query_items`
+- `uv run pytest tests/info_collector/test_graph_builder.py::test_collector_query_prompt_contract_uses_dynamic_max_query_count`
 - 修改 runtime API 工具参与采集时，补充运行 `uv run pytest tests/tools/test_runtime_api.py`。
 - 修改 web/local 工具映射时，补充运行 `uv run pytest tests/tools/test_web_search.py tests/tools/search_api/`。
 

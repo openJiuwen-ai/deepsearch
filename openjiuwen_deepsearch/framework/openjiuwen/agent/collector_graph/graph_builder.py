@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import uuid
-from typing import List, Any, Literal
+from typing import List, Any, Literal, Sequence
 
 from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.foundation.llm.schema.message import AssistantMessage
@@ -122,11 +122,15 @@ def get_research_record(messages: List[dict]) -> str:
     return research_record
 
 
-def _validate_query_count(queries: list[str], max_search_query_count: int, field_name: str) -> None:
+def _validate_query_count(
+        queries: Sequence[str | SearchQueryItem],
+        max_search_query_count: int,
+        field_name: str,
+) -> None:
     """校验 LLM 生成的 query 数量没有超过单轮硬上限。
 
     Args:
-        queries: LLM 生成的 query 字符串列表。
+        queries: LLM 生成的 query 项列表。
         max_search_query_count: 单轮允许的最大 query 数量。
         field_name: 被校验字段名，用于错误日志。
 
@@ -179,7 +183,10 @@ def route_secondary_search_engine_for_query(query: str) -> str:
 def normalize_search_query_item(item: str | SearchQueryItem) -> SearchQueryItem:
     if isinstance(item, SearchQueryItem):
         query = item.query
-        secondary_engine = item.search_engine_name or route_secondary_search_engine_for_query(query)
+        if "search_engine_name" in item.model_fields_set:
+            secondary_engine = item.search_engine_name
+        else:
+            secondary_engine = route_secondary_search_engine_for_query(query)
         return SearchQueryItem(query=query, search_engine_name=secondary_engine)
     query = str(item)
     return SearchQueryItem(

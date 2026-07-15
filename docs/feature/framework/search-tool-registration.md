@@ -52,6 +52,19 @@ contextvar，避免节点直接持有全局工具对象。
 - runtime API 参数按 `send_method` 写入 header、query 或 JSON body；`none` 参数进入 body 但不参与 required 发送校验。
 - runtime API 响应默认读取 JSON；`response_wrapper=search_result` 时会归一化为 `search_results`。
 
+### 学术垂直搜索引擎契约
+
+- 内置 web engine 包含 `pubmed` 和 `arxiv`。它们通过统一 `web_search_tool` 暴露，通常由 collector query item 的
+  `search_engine_name` 作为 secondary vertical engine 触发。
+- PubMed wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/pubmed.py`，
+  arXiv wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/arxiv.py`，
+  共享默认 URL、XML namespace、provider 级限流和退避工具位于 `scholarly_search/common.py`。
+- PubMed wrapper 使用 `ESearch -> EFetch XML`。返回 item 的 `content` 优先使用 abstract 或 structured abstract；
+  无 abstract 时才退回期刊、发布日期和作者等书目信息。
+- arXiv wrapper 使用 Atom API。返回 item 的 `content` 使用论文 summary，`url` 使用 arXiv entry id。
+- PubMed 内部按 E-utilities request 级限流：无 API key 默认 3 req/s，有 API key 默认 10 req/s；遇到 HTTP 429
+  或 PubMed rate-limit payload 时退避重试。arXiv 内部按 3 秒请求间隔限流，并在 HTTP 429 时退避重试。
+
 ## 边界与错误处理
 
 - 找不到 web/local 引擎实例时分别抛出 `WEB_SEARCH_INSTANCE_OBTAIN_ERROR` 或 `LOCAL_SEARCH_INSTANCE_OBTAIN_ERROR`。
@@ -65,6 +78,7 @@ contextvar，避免节点直接持有全局工具对象。
 - `uv run pytest tests/tools/test_web_search.py`
 - `uv run pytest tests/tools/test_web_search_rate_limit.py`
 - `uv run pytest tests/tools/test_runtime_api.py`
+- `uv run pytest tests/tools/search_api/test_scholarly_rate_limit.py`
 - `uv run pytest tests/tools/search_api/test_external_import_tool.py`
 - 修改具体搜索引擎 wrapper 时，运行 `uv run pytest tests/tools/search_api/`。
 
