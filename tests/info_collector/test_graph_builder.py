@@ -10,6 +10,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_buil
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import EvidenceLedger
 from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 
 module_prefix = "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder"
 
@@ -135,7 +136,7 @@ class TestStartNode:
             "section_idx": 0,
             "step_title": "测试步骤",
             "step_description": "步骤描述",
-            "initial_search_query_count": 3,
+            "max_search_query_count": 3,
             "max_research_loops": 2,
             "max_tool_call_turns_per_query": 4,
         }
@@ -154,6 +155,7 @@ class TestStartNode:
         assert collector_context.language == "zh-CN"
         assert collector_context.section_idx == 0
         assert collector_context.research_loop_count == 0
+        assert collector_context.max_search_query_count == 3
         assert collector_context.max_tool_call_turns_per_query == 4
         assert collector_context.evidence_ledger == {}
 
@@ -185,6 +187,14 @@ class TestStartNode:
             )
 
 
+def test_service_config_uses_max_search_query_count_only():
+    """ServiceConfig 应只暴露单轮 query 硬上限配置。"""
+    service_config = Config().service_config
+
+    assert service_config.info_collector_max_search_query_count == 5
+    assert not hasattr(service_config, "info_collector_initial_search_query_count")
+
+
 class TestGenerateQueryNode:
     """测试 GenerateQueryNode"""
 
@@ -205,7 +215,7 @@ class TestGenerateQueryNode:
             "collector_context.section_idx": 0,
             "collector_context.step_title": "测试步骤",
             "collector_context.messages": [{"role": "user", "content": "测试消息"}],
-            "collector_context.initial_search_query_count": 2,
+            "collector_context.max_search_query_count": 5,
             "collector_context.language": "zh-CN",
             "collector_context.max_research_loops": 2,
             "collector_context.step_description": "步骤描述",
@@ -218,8 +228,10 @@ class TestGenerateQueryNode:
         return Mock()
 
     @pytest.mark.asyncio
-    async def test_generate_query_node_success(self, generate_query_node, mock_session, mock_context):
-        """测试 GenerateQueryNode 成功生成查询"""
+    async def test_generate_query_node_keeps_llm_selected_query_count(
+        self, generate_query_node, mock_session, mock_context
+    ):
+        """GenerateQueryNode 应保留上限内由 LLM 自主选择的 query 数量。"""
         inputs = {}
 
         # 创建 mock 的上下文字典，其 get 方法返回任意 mock 对象（实际 LLM 不会被使用）
@@ -230,33 +242,63 @@ class TestGenerateQueryNode:
         token = llm_context.set(mock_llm_dict)
 
         try:
-            # 仅保留对 _invoke_llm_with_retry 的 patch
             with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
-                queries = ["查询1", "查询2", "查询3"]
+                queries = ["查询1", "查询2", "查询3", "查询4"]
                 missing_evidence = ["需要验证的证据"]
+                mock_apply_prompt.return_value = []
                 mock_llm.return_value = SearchQueryList(
-                    queries=queries,  # 故意超过限制数量
+                    queries=queries,
                     missing_evidence=missing_evidence,
                 )
 
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
-                # 验证设置 search_query (查询被正确截断)
-                search_queries = [RetrievalQuery(query=query) for query in queries[:2]]
+                search_queries = [RetrievalQuery(query=query) for query in queries]
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": search_queries  # 从3个截断到2个
+                    "collector_context.search_queries": search_queries
                 })
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.evidence_ledger": EvidenceLedger(
                         missing_evidence=missing_evidence
                     ).model_dump()
                 })
+                agent_input = mock_apply_prompt.call_args.args[1]
+                assert agent_input["max_search_query_count"] == 5
+                assert "number_queries" not in agent_input
 
                 # 验证返回结果
                 assert result == {}
         finally:
             # 清理 contextvar，防止影响其他异步测试
+            llm_context.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_generate_query_node_retries_over_limit_then_falls_back(
+        self, generate_query_node, mock_session, mock_context
+    ):
+        """初始 query 越界输出不应静默截断，应重试后使用 missing evidence fallback。"""
+        inputs = {}
+        mock_llm_dict = MagicMock()
+        mock_llm_dict.get.return_value = MagicMock()
+        token = llm_context.set(mock_llm_dict)
+
+        try:
+            over_limit = SearchQueryList(
+                queries=["q1", "q2", "q3", "q4", "q5", "q6"],
+                missing_evidence=["缺口1", "缺口2", "缺口3", "缺口4", "缺口5", "缺口6"],
+            )
+            with patch(f"{module_prefix}.ainvoke_llm_with_stats", new=AsyncMock(return_value=over_limit)), \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
+                result = await generate_query_node.invoke(inputs, mock_session, mock_context)
+
+                fallback_queries = [RetrievalQuery(query=f"缺口{i}") for i in range(1, 6)]
+                mock_session.update_global_state.assert_any_call({
+                    "collector_context.search_queries": fallback_queries
+                })
+                assert result == {}
+        finally:
             llm_context.reset(token)
 
     @pytest.mark.asyncio
@@ -313,7 +355,7 @@ class TestSupervisorNode:
             "collector_context.section_idx": 0,
             "collector_context.step_title": "测试步骤",
             "collector_context.step_description": "步骤描述",
-            "collector_context.initial_search_query_count": 2,
+            "collector_context.max_search_query_count": 5,
             "collector_context.language": "zh-CN",
             "collector_context.doc_infos": [
                 {
@@ -442,6 +484,76 @@ class TestSupervisorNode:
                 })
         finally:
             # 清理 contextvar
+            llm_context.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_supervisor_node_keeps_follow_up_queries_within_max_count(
+        self, supervisor_node, mock_session, mock_context
+    ):
+        """SupervisorNode 应保留上限内由 LLM 自主选择的 follow-up query 数量。"""
+        inputs = {}
+        mock_llm_dict = MagicMock()
+        mock_llm_dict.get.return_value = MagicMock()
+        token = llm_context.set(mock_llm_dict)
+
+        try:
+            with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
+                next_queries = ["跟进1", "跟进2", "跟进3", "跟进4"]
+                mock_apply_prompt.return_value = []
+                mock_llm.return_value = Reflection(
+                    is_sufficient=False,
+                    should_continue=True,
+                    knowledge_gap="需要更多证据",
+                    next_queries=next_queries,
+                    known_facts=["新增事实"],
+                    missing_evidence=["仍缺证据"],
+                )
+
+                result = await supervisor_node.invoke(inputs, mock_session, mock_context)
+
+                assert result["next_node"] == "collector_info_retrieval"
+                mock_session.update_global_state.assert_any_call({
+                    "collector_context.search_queries": [RetrievalQuery(query=query) for query in next_queries],
+                })
+                agent_input = mock_apply_prompt.call_args.args[1]
+                assert agent_input["max_search_query_count"] == 5
+                assert "number_queries" not in agent_input
+        finally:
+            llm_context.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_supervisor_node_retries_over_limit_then_stops(
+        self, supervisor_node, mock_session, mock_context
+    ):
+        """Supervisor 越界输出应重试，失败后保守停止，避免静默截断。"""
+        inputs = {}
+        mock_llm_dict = MagicMock()
+        mock_llm_dict.get.return_value = MagicMock()
+        token = llm_context.set(mock_llm_dict)
+
+        try:
+            over_limit = Reflection(
+                is_sufficient=False,
+                should_continue=True,
+                knowledge_gap="需要更多证据",
+                next_queries=["q1", "q2", "q3", "q4", "q5", "q6"],
+                known_facts=[],
+                missing_evidence=["仍缺证据"],
+            )
+            with patch(f"{module_prefix}.ainvoke_llm_with_stats", new=AsyncMock(return_value=over_limit)), \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
+                result = await supervisor_node.invoke(inputs, mock_session, mock_context)
+
+                assert result["next_node"] == "collector_summary"
+                mock_session.update_global_state.assert_any_call({
+                    "collector_context.search_queries": [],
+                })
+                mock_session.update_global_state.assert_any_call({
+                    "collector_context.should_continue": False,
+                })
+        finally:
             llm_context.reset(token)
 
     @pytest.mark.asyncio
@@ -578,7 +690,7 @@ class TestSupervisorNode:
             "collector_context.step_idx": 0,
             "collector_context.step_title": "测试步骤",
             "collector_context.step_description": "步骤描述",
-            "collector_context.initial_search_query_count": 2,
+            "collector_context.max_search_query_count": 2,
             "collector_context.language": "zh-CN",
             "collector_context.doc_infos": [{"url": "old", "title": "历史文档"}],
             "collector_context.new_doc_infos_current_loop": current_loop_docs,
@@ -616,12 +728,18 @@ class TestSupervisorNode:
             llm_context.reset(token)
 
 
-def test_collector_query_prompt_contract_removes_description():
-    """collector_gen_query prompt should request missing_evidence and queries only."""
+def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
+    """collector_gen_query prompt should require retrieval steps to use 1..max_search_query_count queries."""
     prompt = open("openjiuwen_deepsearch/algorithm/prompts/collector_gen_query.md", encoding="utf-8").read()
 
     assert '"missing_evidence"' in prompt
     assert '"queries"' in prompt
+    assert "1..{{ max_search_query_count }}" in prompt
+    assert "Return `queries: []` only when the current step explicitly does not require external retrieval." in prompt
+    assert "{{ max_search_query_count }}" in prompt
+    assert "{{ number_queries }}" not in prompt
+    assert "number_queries" not in prompt
+    assert "initial_search_query_count" not in prompt
     assert '"description"' not in prompt
 
 
@@ -654,6 +772,11 @@ def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
     assert "turn that unresolved item into knowledge_gap" in prompt
     assert "final evaluation" in prompt
     assert '"should_continue"' in prompt
+    assert "{{ max_search_query_count }}" in prompt
+    assert "0..{{ max_search_query_count }}" in prompt
+    assert "{{ number_queries }}" not in prompt
+    assert "number_queries" not in prompt
+    assert "initial_search_query_count" not in prompt
     assert "latest gathered information is mostly duplicate" in prompt
     assert "should_continue\" is false, \"next_queries\" must be []" in prompt
     assert "{{ ledger_brief }}" in prompt
@@ -838,6 +961,16 @@ def test_service_config_uses_relaxed_collector_loop_defaults():
     assert service_config.info_collector_max_research_loops == 2
     assert service_config.info_collector_max_tool_call_turns_per_query == 2
     assert not hasattr(service_config, "info_collector_max_react_recursion_limit")
+
+
+def test_info_collector_graph_has_webpage_enrichment_node_id():
+    """Info collector 子图应注册网页正文增强节点并插入正确边。"""
+    collector_graph = build_info_collector_sub_graph()
+    spec = collector_graph._internal._workflow_spec
+
+    assert NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value in spec.comp_configs
+    assert spec.edges[NodeId.COLLECTOR_INFO.value] == [NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value]
+    assert spec.edges[NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value] == [NodeId.COLLECTOR_SUPERVISOR.value]
 
 
 # 测试工具函数

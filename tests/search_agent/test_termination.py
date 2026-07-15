@@ -11,10 +11,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepSearch
 pytestmark = pytest.mark.unit
 
 
-def _make_agent(tmp_log_dir) -> DeepSearchAgent:
+def _make_agent(tmp_log_dir):
     agent = DeepSearchAgent()
-    agent.agent_config = AgentConfig()
-    agent.per_question_params = agent.agent_config.search_workflow_per_question_params.model_copy(
+    agent_config = AgentConfig()
+    per_question_params = agent_config.search_workflow_per_question_params.model_copy(
         update={
             "max_workers": 1,
             "retry_count_on_empty_action_space": 0,
@@ -25,21 +25,24 @@ def _make_agent(tmp_log_dir) -> DeepSearchAgent:
             "provide_best_guess": False,
         }
     )
-    agent.search_config = SearchWorkflowConfig()
-    agent.query = "capital question"
-    agent.log_dir = str(tmp_log_dir)
-    agent.time_limit = 120
-    agent.tool_map = {}
-    agent.action_pool.log_dir = str(tmp_log_dir)
-    return agent
+    run_context = agent._create_run_context(
+        agent_config=agent_config,
+        per_question_params=per_question_params,
+        search_config=SearchWorkflowConfig(),
+        query="capital question",
+        log_dir=str(tmp_log_dir),
+        time_limit=120,
+        tool_map={},
+    )
+    return agent, run_context
 
 
 @pytest.mark.asyncio
 async def test_run_internal_terminates_on_fail_limit(
     monkeypatch, tmp_log_dir, base_action, base_state
 ) -> None:
-    agent = _make_agent(tmp_log_dir)
-    agent.per_question_params.fail_limit = 1
+    agent, run_context = _make_agent(tmp_log_dir)
+    run_context.per_question_params.fail_limit = 1
 
     async def _fake_run_workflow(*, workflow, inputs):
         if workflow == "init_state_1":
@@ -67,7 +70,7 @@ async def test_run_internal_terminates_on_fail_limit(
         _fake_state_creation_workflow,
     )
 
-    final = await agent._run_internal()
+    final = await agent._run_internal(run_context)
 
     assert final.termination == "fail_limit"
 
@@ -76,8 +79,8 @@ async def test_run_internal_terminates_on_fail_limit(
 async def test_run_internal_terminates_when_action_pool_depleted(
     monkeypatch, tmp_log_dir, base_state
 ) -> None:
-    agent = _make_agent(tmp_log_dir)
-    agent.per_question_params.retry_count_on_empty_action_space = 0
+    agent, run_context = _make_agent(tmp_log_dir)
+    run_context.per_question_params.retry_count_on_empty_action_space = 0
 
     async def _fake_run_workflow(*, workflow, inputs):
         if workflow == "init_state_1":
@@ -91,7 +94,7 @@ async def test_run_internal_terminates_when_action_pool_depleted(
         _fake_run_workflow,
     )
 
-    final = await agent._run_internal()
+    final = await agent._run_internal(run_context)
 
     assert final.termination == "action_pool_depleted"
 
@@ -100,7 +103,7 @@ async def test_run_internal_terminates_when_action_pool_depleted(
 async def test_run_internal_returns_answer_termination(
     monkeypatch, tmp_log_dir, base_action, base_state
 ) -> None:
-    agent = _make_agent(tmp_log_dir)
+    agent, run_context = _make_agent(tmp_log_dir)
 
     async def _fake_run_workflow(*, workflow, inputs):
         if workflow == "init_state_1":
@@ -133,7 +136,7 @@ async def test_run_internal_returns_answer_termination(
         _fake_state_creation_workflow,
     )
 
-    final = await agent._run_internal()
+    final = await agent._run_internal(run_context)
 
     assert final.termination == "answer"
     assert final.prediction == "Paris"

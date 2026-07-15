@@ -22,14 +22,20 @@ Task description:
 - If the topic has a clear subject, such as "Apple Inc's new product in 2025", each query must include that subject.
 - Queries should be diverse. Each query should focus on one specific aspect of the missing evidence.
 - Do not generate multiple similar queries.
+- **Query Count**:
+    - For steps that need retrieval, generate 1..{{ max_search_query_count }} queries.
+    - Use fewer queries for simple or low-value gaps; use more only for independent critical evidence gaps.
+    - Return `queries: []` only when the current step explicitly does not require external retrieval.
+    - Do not generate queries just to fill the limit.
 - **Query Coverage**:
-    - Within the `{{ number_queries }}` query limit, prioritize covering the most important `missing_evidence` items. When missing evidence exceeds the query limit, focus on the items most critical to the step's conclusion.
+    - Within the `{{ max_search_query_count }}` query limit, prioritize covering the most important `missing_evidence` items. When missing evidence exceeds the query limit, focus on the items most critical to the step's conclusion.
     - **Adaptive evidence types**: When the step's domain supports both factual/data evidence and analytical/interpretive evidence, generate at least one query targeting each type. For purely qualitative domains (humanities, law, philosophy) or purely practical tasks (design, generation), adapt the evidence-type requirement to what the domain naturally supports.
     - **Opposing/contrasting terms**: Include opposing or contrasting search terms ONLY when the step's topic involves genuine debate, competing approaches, or alternative viewpoints. Do NOT fabricate opposition for factual, technical, or methodological queries where there is no meaningful counter-position.
     - **Anti-repetition**: Each query should target a different information need. If two queries would likely return overlapping results, merge them and add a query for a different missing evidence item.
 - Query must consist of keywords, with the first keyword being the main subject. The total number of keywords should be less than 5.
 - Query should ensure that the most current information is gathered. The current time is {{ CURRENT_TIME }}.
-- Do not produce more than {{ number_queries }} queries.
+- Do not produce more than {{ max_search_query_count }} queries.
+- For retrieval-needed steps, the allowed query count range is 1..{{ max_search_query_count }}.
 - Write your response in {{ language }}.
 
 ## Output Format

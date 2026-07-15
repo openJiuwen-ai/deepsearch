@@ -33,6 +33,19 @@ class WebFetchWebpageAdapter(WebFetchWebpageTool):
         """Fetch webpage content through the inherited web_tools implementation."""
         return dict(cls._fetch_webpage_sync(url, timeout_seconds))
 
+    @classmethod
+    def fetch_via_jina_reader_sync(cls, url: str, timeout_seconds: int) -> dict[str, str | int]:
+        """通过公开 Jina Reader 代理抓取网页正文。
+
+        Args:
+            url: 目标网页 URL。
+            timeout_seconds: 请求超时时间，单位秒。
+
+        Returns:
+            包含 URL、状态码、标题和正文的抓取结果。
+        """
+        return dict(cls._fetch_via_jina_reader_sync(url, timeout_seconds))
+
 
 _PROVIDER_KEY_ENV = {
     "bocha": "BOCHA_API_KEY",

@@ -65,6 +65,33 @@ def test_deep_search_request_accepts_agent_llm_timeouts():
     assert request.agent_llm_timeouts == {"default": 300, "sub_reporter": 120}
 
 
+def test_deep_search_request_accepts_webpage_enrichment_enable():
+    """验证请求模型允许开启信息收集网页正文增强。"""
+    request = DeepSearchRequest(
+        space_id="space-1",
+        conversation_id="conversation-1",
+        message="hello",
+        llm_config={
+            "general": {
+                "model_name": "mock-model",
+                "model_type": "openai",
+                "base_url": "https://example.com/v1",
+                "api_key": "secret",
+            }
+        },
+        web_search_config={
+            "web_search_config_id": 1,
+            "max_web_search_results": 5,
+        },
+        info_collector_search_method="web",
+        search_mode="research",
+        execution_method="parallel",
+        info_collector_webpage_enrich_enable=True,
+    )
+
+    assert request.info_collector_webpage_enrich_enable is True
+
+
 def test_deep_search_request_rejects_invalid_conversation_id():
     with pytest.raises(ValidationError) as exc_info:
         DeepSearchRequest(

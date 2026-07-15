@@ -63,7 +63,11 @@ The table intentionally contains key_passages and scores instead of full source 
 - If the latest gathered information is mostly duplicate, irrelevant, generic background, or does not narrow the blocking gap, set "should_continue" to false and keep "next_queries" empty.
 - If the remaining gap is unlikely to be resolved by another web retrieval loop, set "should_continue" to false and disclose it in "knowledge_gap".
 - If "should_continue" is false, "next_queries" must be [] even when "is_sufficient" is false.
-- Do not produce more than {{ number_queries }} next_queries.
+- You may generate any number of next_queries from 0 to `{{ max_search_query_count }}`.
+- Choose the next query count based on the remaining blocking missing_evidence and whether another loop is likely to add useful evidence.
+- Do not generate next_queries just to fill the limit.
+- Do not produce more than {{ max_search_query_count }} next_queries.
+- The allowed next_queries count range is 0..{{ max_search_query_count }}.
 - Write your response in {{ language }}.
 
 ## Evidence Boundary Policy

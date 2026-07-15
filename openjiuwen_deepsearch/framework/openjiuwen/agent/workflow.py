@@ -3,19 +3,23 @@
 import asyncio
 import base64
 import copy
+from dataclasses import dataclass
 import json
 import logging
 import os
 from pathlib import Path
+import threading
 import time
 import uuid
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, ClassVar, Optional
 
 from openjiuwen.core.application.workflow_agent.workflow_agent import (
     WorkflowAgent as LegacyWorkflowAgent,
 )
 from openjiuwen.core.runner.runner import Runner
+from openjiuwen.core.session import workflow_session_vars
 from openjiuwen.core.session.checkpointer import CheckpointerFactory
+from openjiuwen.core.session.constants import WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY
 from openjiuwen.core.session.stream.base import CustomSchema, OutputSchema
 from openjiuwen.core.single_agent.legacy.agent import WorkflowFactory
 from openjiuwen.core.single_agent.legacy.config import WorkflowAgentConfig
@@ -196,6 +200,23 @@ def _build_search_fetch_tools(agent_config: AgentConfig):
         WebSearch({}),
     ]
     return tool_class, web_search_token
+
+
+@dataclass
+class DeepSearchRunContext:
+    agent_config: AgentConfig
+    search_config: SearchWorkflowConfig
+    per_question_params: PerQuestionParams
+    query: str
+    log_dir: str
+    time_limit: int
+    gold_answer: str | None
+    tool_map: dict[str, Any]
+    action_pool: ActionPool
+    final_answer: str | None = None
+    fail_count: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
 
 
 class BaseAgent:
@@ -948,44 +969,63 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
 
 
 class DeepSearchAgent(BaseAgent):
+    _workflow_agent: ClassVar[LegacyWorkflowAgent | None] = None
+    _workflow_agent_lock: ClassVar[threading.Lock] = threading.Lock()
+
     def __init__(self) -> None:
         self.version: str = "1"
-        self.action_pool: ActionPool = ActionPool()
-        self.completed_actions: list[tuple[Action, Result | None]] = []
-        self.final_answer: str | None = None
+        self.agent: LegacyWorkflowAgent | None = None
 
-        self.fail_count: int = 0
-        self.total_input_tokens: int = 0
-        self.total_output_tokens: int = 0
-
-        self.log_dir: str = ""
-        self.time_limit: int = 0
-        self.query: str = ""
-        self.gold_answer: str | None = None
-        self.tool_map: dict[str, Any] = {}
-        self.agent_config: AgentConfig | None = None
-        self.per_question_params: PerQuestionParams | None = None
-        self.search_config: SearchWorkflowConfig | None = None
-
-    def setup_log_directory(self, save_as: str) -> None:
+    def setup_log_directory(self, save_as: str, action_pool: ActionPool) -> str:
         """Create a timestamp-based log directory with Action and Result subfolders"""
         base_log_dir: str | None = LogManager.get_log_dir()
 
-        self.log_dir = os.path.join(base_log_dir, save_as)
+        log_dir = os.path.join(base_log_dir, save_as)
 
-        os.makedirs(os.path.join(self.log_dir, "Action"), exist_ok=True)
-        os.makedirs(os.path.join(self.log_dir, "Result"), exist_ok=True)
+        os.makedirs(os.path.join(log_dir, "Action"), exist_ok=True)
+        os.makedirs(os.path.join(log_dir, "Result"), exist_ok=True)
 
-        self.action_pool.log_dir = self.log_dir
+        action_pool.log_dir = log_dir
+        return log_dir
 
-    def _subworkflow_context_inputs(self, workflow_name: str) -> dict[str, Any]:
+    def _create_run_context(
+        self,
+        *,
+        agent_config: AgentConfig,
+        search_config: SearchWorkflowConfig,
+        query: str,
+        log_dir: str,
+        tool_map: dict[str, Any],
+        gold_answer: str | None = None,
+        per_question_params: PerQuestionParams | None = None,
+        time_limit: int | None = None,
+        action_pool: ActionPool | None = None,
+    ) -> DeepSearchRunContext:
+        resolved_params = per_question_params or agent_config.search_workflow_per_question_params
+        resolved_action_pool = action_pool or ActionPool()
+        resolved_action_pool.log_dir = log_dir
+        resolved_time_limit = int(time_limit if time_limit is not None else resolved_params.time_limit)
+        return DeepSearchRunContext(
+            agent_config=agent_config,
+            search_config=search_config,
+            per_question_params=resolved_params,
+            query=query,
+            log_dir=log_dir,
+            time_limit=resolved_time_limit,
+            gold_answer=gold_answer,
+            tool_map=tool_map,
+            action_pool=resolved_action_pool,
+        )
+
+    @staticmethod
+    def _subworkflow_context_inputs(run_context: DeepSearchRunContext, workflow_name: str) -> dict[str, Any]:
         """Build per-run config inputs for DeepSearch sub-workflows.
 
         Sub-workflows are globally registered with fixed IDs, so runtime inputs must
         carry the active request config to avoid stale model settings across runs.
         """
-        agent_config = to_dict_safe(self.agent_config)
-        search_config = to_dict_safe(self.search_config)
+        agent_config = to_dict_safe(run_context.agent_config)
+        search_config = to_dict_safe(run_context.search_config)
         if not isinstance(agent_config, dict):
             agent_config = {}
         if not isinstance(search_config, dict):
@@ -996,7 +1036,8 @@ class DeepSearchAgent(BaseAgent):
             "search_config": search_config,
         }
 
-    def _build_init_state_workflow(self) -> Workflow:
+    @staticmethod
+    def _build_init_state_workflow() -> Workflow:
         card = WorkflowCard(id="init_state", version="1", name="init_state")
         wf = Workflow(card=card)
 
@@ -1015,7 +1056,8 @@ class DeepSearchAgent(BaseAgent):
         wf.add_connection(NodeId.INITIAL_STATE.value, NodeId.END_NODE.value)
         return wf
 
-    def _build_find_action_workflow(self) -> Workflow:
+    @staticmethod
+    def _build_find_action_workflow() -> Workflow:
         card = WorkflowCard(id="find_action", version="1", name="find_action")
         wf = Workflow(card=card)
 
@@ -1034,7 +1076,8 @@ class DeepSearchAgent(BaseAgent):
         wf.add_connection(NodeId.FIND_ACTION_SPACE.value, NodeId.END_NODE.value)
         return wf
 
-    def _build_state_creation_workflow(self) -> Workflow:
+    @staticmethod
+    def _build_state_creation_workflow() -> Workflow:
         card = WorkflowCard(id="state_creation", version="1", name="state_creation")
         wf = Workflow(card=card)
 
@@ -1070,18 +1113,19 @@ class DeepSearchAgent(BaseAgent):
 
         return wf
 
-    def _build_agent(self):
-        schemas = [
+    @staticmethod
+    def _build_subworkflow_schemas() -> list[WorkflowCard]:
+        return [
             WorkflowCard(
                 id="init_state",
-                version=self.version,
+                version="1",
                 name="init_state",
                 description="init_state",
                 input_params={"query": str, "total_input_tokens": int, "total_output_tokens": int, "log_dir": str},
             ),
             WorkflowCard(
                 id="find_action",
-                version=self.version,
+                version="1",
                 name="find_action",
                 description="find_action",
                 input_params={
@@ -1095,7 +1139,7 @@ class DeepSearchAgent(BaseAgent):
             ),
             WorkflowCard(
                 id="state_creation",
-                version=self.version,
+                version="1",
                 name="state_creation",
                 description="state_creation",
                 input_params={
@@ -1109,18 +1153,43 @@ class DeepSearchAgent(BaseAgent):
             ),
         ]
 
-        self.agent = LegacyWorkflowAgent(
+    @classmethod
+    def _create_subworkflow_agent(cls) -> LegacyWorkflowAgent:
+        agent = LegacyWorkflowAgent(
             WorkflowAgentConfig(
                 id="deepsearch_sub_workflows",
                 description="DeepSearch init/find/state_creation subgraphs",
-                workflows=schemas,
+                workflows=cls._build_subworkflow_schemas(),
             )
         )
 
+        init_state_factory = WorkflowFactory(
+            workflow_id="init_state",
+            workflow_version="1",
+            factory=cls._build_init_state_workflow,
+            workflow_name="init_state",
+            workflow_description="init_state",
+            input_schema={"query": str, "total_input_tokens": int, "total_output_tokens": int, "log_dir": str},
+        )
+        find_action_factory = WorkflowFactory(
+            workflow_id="find_action",
+            workflow_version="1",
+            factory=cls._build_find_action_workflow,
+            workflow_name="find_action",
+            workflow_description="find_action",
+            input_schema={
+                "state": State,
+                "result": Result,
+                "query": str,
+                "log_dir": str,
+                "total_input_tokens": int,
+                "total_output_tokens": int,
+            },
+        )
         state_creation_factory = WorkflowFactory(
             workflow_id="state_creation",
             workflow_version="1",
-            factory=self._build_state_creation_workflow,
+            factory=cls._build_state_creation_workflow,
             workflow_name="state_creation",
             workflow_description="state_creation",
             input_schema={
@@ -1133,16 +1202,30 @@ class DeepSearchAgent(BaseAgent):
             },
         )
 
-        self.agent.add_workflows(
+        agent.add_workflows(
             [
-                self._build_init_state_workflow(),
-                self._build_find_action_workflow(),
+                init_state_factory,
+                find_action_factory,
                 state_creation_factory,
             ]
         )
+        return agent
+
+    @classmethod
+    def _get_shared_agent(cls):
+        if cls._workflow_agent is None:
+            with cls._workflow_agent_lock:
+                if cls._workflow_agent is None:
+                    cls._workflow_agent = cls._create_subworkflow_agent()
+        return cls._workflow_agent
+
+    def _build_agent(self):
+        self.agent = self._get_shared_agent()
+        return self.agent
 
     async def _cancel_running_tasks(
         self,
+        run_context: DeepSearchRunContext,
         running_tasks: set[asyncio.Task],
         task_to_action: dict[asyncio.Task, Action],
     ) -> None:
@@ -1156,12 +1239,13 @@ class DeepSearchAgent(BaseAgent):
         for task in list(running_tasks):
             action = task_to_action.pop(task, None)
             if action is not None:
-                self.action_pool.record_completed(action, None)
+                run_context.action_pool.record_completed(action, None)
         running_tasks.clear()
         logger.info("[DeepSearchAgent] cancelled %d remaining tasks", count)
 
     async def run_state_creation_workflow(
         self,
+        run_context: DeepSearchRunContext,
         action: Any,
         semaphore: asyncio.Semaphore,
     ) -> Any:
@@ -1169,23 +1253,23 @@ class DeepSearchAgent(BaseAgent):
             return await Runner.run_workflow(
                 workflow="state_creation_1",
                 inputs={
-                    **self._subworkflow_context_inputs("state_creation_workflow"),
+                    **self._subworkflow_context_inputs(run_context, "state_creation_workflow"),
                     "action": to_dict_safe(action),
-                    "retrieval_tool_only": "retrieve" in self.tool_map,
-                    "total_input_tokens": self.total_input_tokens,
-                    "total_output_tokens": self.total_output_tokens,
-                    "log_dir": self.log_dir,
-                    "fail_count": self.fail_count,
+                    "retrieval_tool_only": "retrieve" in run_context.tool_map,
+                    "total_input_tokens": run_context.total_input_tokens,
+                    "total_output_tokens": run_context.total_output_tokens,
+                    "log_dir": run_context.log_dir,
+                    "fail_count": run_context.fail_count,
                 },
             )
 
-    async def _run_internal(self) -> SearchFinalResult:
+    async def _run_internal(self, run_context: DeepSearchRunContext) -> SearchFinalResult:
         start_time: float = time.time()
 
-        max_workers: int = self.per_question_params.max_workers
+        max_workers: int = run_context.per_question_params.max_workers
         sem = asyncio.Semaphore(max_workers)
 
-        max_tries: int = self.search_config.init_state_agent.max_tries
+        max_tries: int = run_context.search_config.init_state_agent.max_tries
         init_state_result: dict[str, Any] | None = None
         last_exception: Exception | None = None
 
@@ -1193,11 +1277,11 @@ class DeepSearchAgent(BaseAgent):
             init_result: WorkflowOutput = await Runner.run_workflow(
                 workflow="init_state_1",
                 inputs={
-                    **self._subworkflow_context_inputs("init_state_workflow"),
-                    "query": self.query,
+                    **self._subworkflow_context_inputs(run_context, "init_state_workflow"),
+                    "query": run_context.query,
                     "total_input_tokens": 0,
                     "total_output_tokens": 0,
-                    "log_dir": self.log_dir,
+                    "log_dir": run_context.log_dir,
                 },
             )
             init_state_result = parse_and_validate_init_state_result(init_result)
@@ -1211,8 +1295,8 @@ class DeepSearchAgent(BaseAgent):
                 StatusCode.AGENT_INIT_STATE_ERROR.errmsg,
             ) from last_exception
 
-        self.total_input_tokens += init_state_result.get("total_input_tokens", 0)
-        self.total_output_tokens += init_state_result.get("total_output_tokens", 0)
+        run_context.total_input_tokens += init_state_result.get("total_input_tokens", 0)
+        run_context.total_output_tokens += init_state_result.get("total_output_tokens", 0)
 
         init_state: State = init_state_result.get("init_state")
         logger.info(f"[DeepSearchAgent] initial state: %s", "***" if LogManager.is_sensitive() else init_state)
@@ -1220,11 +1304,11 @@ class DeepSearchAgent(BaseAgent):
         actions_result: WorkflowOutput = await Runner.run_workflow(
             workflow="find_action_1",
             inputs={
-                **self._subworkflow_context_inputs("find_action_workflow"),
+                **self._subworkflow_context_inputs(run_context, "find_action_workflow"),
                 "state": init_state,
-                "query": self.query,
+                "query": run_context.query,
                 "result": None,
-                "log_dir": self.log_dir,
+                "log_dir": run_context.log_dir,
                 "total_input_tokens": 0,
                 "total_output_tokens": 0,
             },
@@ -1236,16 +1320,16 @@ class DeepSearchAgent(BaseAgent):
             "***" if LogManager.is_sensitive() else [a.proposal.direction for a in actions_dict.get("actions", [])],
         )
 
-        self.total_input_tokens += actions_dict.get("total_input_tokens", 0)
-        self.total_output_tokens += actions_dict.get("total_output_tokens", 0)
+        run_context.total_input_tokens += actions_dict.get("total_input_tokens", 0)
+        run_context.total_output_tokens += actions_dict.get("total_output_tokens", 0)
 
-        self.action_pool.add(actions_dict.get("actions", []))
+        run_context.action_pool.add(actions_dict.get("actions", []))
 
         actions_explored: int = 0
-        actions_explored_limit: int = self.per_question_params.actions_explored_limit
-        fail_limit: int = self.per_question_params.fail_limit
-        answer_mode_top_k: int = self.per_question_params.answer_mode_top_k
-        provide_best_guess: bool = self.per_question_params.provide_best_guess
+        actions_explored_limit: int = run_context.per_question_params.actions_explored_limit
+        fail_limit: int = run_context.per_question_params.fail_limit
+        answer_mode_top_k: int = run_context.per_question_params.answer_mode_top_k
+        provide_best_guess: bool = run_context.per_question_params.provide_best_guess
 
         running_tasks: set[asyncio.Task[WorkflowOutput]] = set()
         task_to_action: dict[asyncio.Task[WorkflowOutput], Action] = {}
@@ -1253,10 +1337,10 @@ class DeepSearchAgent(BaseAgent):
 
         termination_reason: Termination = Termination.ACTION_POOL_DEPLETED
 
-        find_action_pool_depleted_retries_left: int = self.per_question_params.retry_count_on_empty_action_space
+        find_action_pool_depleted_retries_left: int = run_context.per_question_params.retry_count_on_empty_action_space
 
-        while not self.final_answer:
-            if (time.time() - start_time) > self.time_limit:
+        while not run_context.final_answer:
+            if (time.time() - start_time) > run_context.time_limit:
                 termination_reason = Termination.TIME_LIMIT
                 logger.info("[DeepSearchAgent] %s", termination_reason.log_message)
                 break
@@ -1264,15 +1348,15 @@ class DeepSearchAgent(BaseAgent):
                 termination_reason = Termination.ACTIONS_EXPLORED_LIMIT
                 logger.info("[DeepSearchAgent] %s (%d)", termination_reason.log_message, actions_explored_limit)
                 break
-            if fail_limit > 0 and self.fail_count >= fail_limit:
+            if fail_limit > 0 and run_context.fail_count >= fail_limit:
                 termination_reason = Termination.FAIL_LIMIT
                 logger.info("[DeepSearchAgent] %s (%d)", termination_reason.log_message, fail_limit)
                 break
             available_slots: int = max_workers - len(running_tasks)
 
             # If there is idle workers, assign them a task by sampling from the action pool
-            if available_slots > 0 and self.action_pool.size() > 0:
-                sampled: list[Action] = self.action_pool.sample(available_slots)
+            if available_slots > 0 and run_context.action_pool.size() > 0:
+                sampled: list[Action] = run_context.action_pool.sample(available_slots)
                 logger.info(
                     f"[DeepSearchAgent] sampled actions (dynamic): %s",
                     "***" if LogManager.is_sensitive() else [a.proposal.direction for a in sampled],
@@ -1281,6 +1365,7 @@ class DeepSearchAgent(BaseAgent):
                 for action in sampled:
                     task = asyncio.create_task(
                         self.run_state_creation_workflow(
+                            run_context=run_context,
                             action=action,
                             semaphore=sem,
                         )
@@ -1294,7 +1379,7 @@ class DeepSearchAgent(BaseAgent):
                     logger.info(
                         "[DeepSearchAgent] action pool empty and no running tasks; "
                         "find_action retries exhausted (retry_count_on_empty_action_space=%d)",
-                        self.per_question_params.retry_count_on_empty_action_space,
+                        run_context.per_question_params.retry_count_on_empty_action_space,
                     )
                     break
 
@@ -1304,12 +1389,12 @@ class DeepSearchAgent(BaseAgent):
                     "(retries remaining after this call: %d)",
                     find_action_pool_depleted_retries_left,
                 )
-                retry_strategy = self.search_config.find_action_agent.action_pool_depleted_strategy
+                retry_strategy = run_context.search_config.find_action_agent.action_pool_depleted_strategy
 
                 retry_result = None
-                if retry_strategy == "dependent_retry" and self.action_pool.completed_actions:
+                if retry_strategy == "dependent_retry" and run_context.action_pool.completed_actions:
                     failed_summaries: list[str] = []
-                    for i, (action, action_result) in enumerate(self.action_pool.completed_actions, 1):
+                    for i, (action, action_result) in enumerate(run_context.action_pool.completed_actions, 1):
                         entry = f"{i}. Direction: {action.proposal.direction}"
                         if isinstance(action_result, Result) and action_result.messages:
                             entry += action_result.get_summary()
@@ -1326,23 +1411,23 @@ class DeepSearchAgent(BaseAgent):
                         messages=[{"role": "user", "content": prompt_content}],
                         new_states=[],
                         found_answer=None,
-                        previous_action_id=action.id,
+                        previous_action_id=run_context.action_pool.completed_actions[-1][0].id,
                     )
 
                 actions_result = await Runner.run_workflow(
                     workflow="find_action_1",
                     inputs={
-                        **self._subworkflow_context_inputs("find_action_workflow"),
+                        **self._subworkflow_context_inputs(run_context, "find_action_workflow"),
                         "state": init_state,
-                        "query": self.query,
+                        "query": run_context.query,
                         "result": retry_result,
-                        "log_dir": self.log_dir,
+                        "log_dir": run_context.log_dir,
                         "total_input_tokens": 0,
                         "total_output_tokens": 0,
                     },
                 )
                 actions_dict = parse_and_validate_find_action_result(actions_result.result)
-                self.action_pool.add(actions_dict.get("actions", []))
+                run_context.action_pool.add(actions_dict.get("actions", []))
                 continue
 
             done: set[asyncio.Task[WorkflowOutput]]
@@ -1361,46 +1446,46 @@ class DeepSearchAgent(BaseAgent):
                 logger.info(f"[DeepSearchAgent] action result: %s", "***" if LogManager.is_sensitive() else states)
 
                 state_result: dict[str, Any] = parse_and_validate_state_creation_result(states.result)
-                self.total_input_tokens += state_result.get("total_input_tokens", 0)
-                self.total_output_tokens += state_result.get("total_output_tokens", 0)
+                run_context.total_input_tokens += state_result.get("total_input_tokens", 0)
+                run_context.total_output_tokens += state_result.get("total_output_tokens", 0)
 
                 result: Result | None = state_result.get("result")
                 config = anonymize_config_for_logging(state_result.get("config", {}))
-                self.fail_count += config.get("fail_count", self.fail_count)
+                run_context.fail_count += config.get("fail_count", 0)
 
-                self.action_pool.record_completed(completed_action, result)
+                run_context.action_pool.record_completed(completed_action, result)
 
                 if not isinstance(result, Result):
                     continue
 
                 if result.found_answer:
                     if answer_mode_top_k <= 1:
-                        self.final_answer = result.found_answer
+                        run_context.final_answer = result.found_answer
                         logger.info(
                             f"[DeepSearchAgent] found final answer! %s",
-                            "***" if LogManager.is_sensitive() else self.final_answer,
+                            "***" if LogManager.is_sensitive() else run_context.final_answer,
                         )
-                        await self._cancel_running_tasks(running_tasks, task_to_action)
+                        await self._cancel_running_tasks(run_context, running_tasks, task_to_action)
                         return _save_and_return_search_final_result(
                             SaveSearchFinalResultConfig(
-                                question=self.query,
+                                question=run_context.query,
                                 messages=result.messages,
                                 prediction=result.found_answer,
-                                gold_answer=self.gold_answer,
+                                gold_answer=run_context.gold_answer,
                                 termination=Termination.ANSWER,
                                 retrieved_evidence_ids=result.retrieved_evidence_ids,
                                 params={
-                                    "total_input_tokens": self.total_input_tokens,
-                                    "total_output_tokens": self.total_output_tokens,
+                                    "total_input_tokens": run_context.total_input_tokens,
+                                    "total_output_tokens": run_context.total_output_tokens,
                                     "start_time": start_time,
-                                    "log_dir": self.log_dir,
+                                    "log_dir": run_context.log_dir,
                                 },
                                 config=config,
                             )
                         )
                     else:
-                        self.action_pool.record_successful_answer(completed_action, result)
-                        collected = self.action_pool.successful_answer_count()
+                        run_context.action_pool.record_successful_answer(completed_action, result)
+                        collected = run_context.action_pool.successful_answer_count()
                         logger.info(
                             "[DeepSearchAgent] top-k mode: collected %d/%d answers%s",
                             collected,
@@ -1408,26 +1493,26 @@ class DeepSearchAgent(BaseAgent):
                             " ***" if LogManager.is_sensitive() else f" (latest: {result.found_answer})",
                         )
                         if collected >= answer_mode_top_k:
-                            best_action, best_result = self.action_pool.get_best_answer()
-                            self.final_answer = best_result.found_answer
+                            best_action, best_result = run_context.action_pool.get_best_answer()
+                            run_context.final_answer = best_result.found_answer
                             logger.info(
                                 "[DeepSearchAgent] top-k mode: returning best answer%s",
-                                " ***" if LogManager.is_sensitive() else f": {self.final_answer}",
+                                " ***" if LogManager.is_sensitive() else f": {run_context.final_answer}",
                             )
-                            await self._cancel_running_tasks(running_tasks, task_to_action)
+                            await self._cancel_running_tasks(run_context, running_tasks, task_to_action)
                             return _save_and_return_search_final_result(
                                 SaveSearchFinalResultConfig(
-                                    question=self.query,
+                                    question=run_context.query,
                                     messages=best_result.messages,
                                     prediction=best_result.found_answer,
-                                    gold_answer=self.gold_answer,
+                                    gold_answer=run_context.gold_answer,
                                     termination=Termination.ANSWER,
                                     retrieved_evidence_ids=best_result.retrieved_evidence_ids,
                                     params={
-                                        "total_input_tokens": self.total_input_tokens,
-                                        "total_output_tokens": self.total_output_tokens,
+                                        "total_input_tokens": run_context.total_input_tokens,
+                                        "total_output_tokens": run_context.total_output_tokens,
                                         "start_time": start_time,
-                                        "log_dir": self.log_dir,
+                                        "log_dir": run_context.log_dir,
                                     },
                                     config=config,
                                 )
@@ -1440,11 +1525,11 @@ class DeepSearchAgent(BaseAgent):
                         new_actions_result: WorkflowOutput = await Runner.run_workflow(
                             workflow="find_action_1",
                             inputs={
-                                **self._subworkflow_context_inputs("find_action_workflow"),
+                                **self._subworkflow_context_inputs(run_context, "find_action_workflow"),
                                 "state": new_state,
-                                "query": self.query,
+                                "query": run_context.query,
                                 "result": result,
-                                "log_dir": self.log_dir,
+                                "log_dir": run_context.log_dir,
                                 "total_input_tokens": 0,
                                 "total_output_tokens": 0,
                             },
@@ -1455,70 +1540,70 @@ class DeepSearchAgent(BaseAgent):
                         new_actions: list[Action] = new_actions_dict.get("actions", [])
                         all_new_actions.extend(new_actions)
 
-                        self.total_input_tokens += new_actions_dict.get("total_input_tokens", 0)
-                        self.total_output_tokens += new_actions_dict.get("total_output_tokens", 0)
+                        run_context.total_input_tokens += new_actions_dict.get("total_input_tokens", 0)
+                        run_context.total_output_tokens += new_actions_dict.get("total_output_tokens", 0)
 
                         logger.info(
                             f"[DeepSearchAgent] new actions: %s",
                             "***" if LogManager.is_sensitive() else [a.proposal.direction for a in new_actions],
                         )
 
-                    self.action_pool.add(all_new_actions)
+                    run_context.action_pool.add(all_new_actions)
 
-        await self._cancel_running_tasks(running_tasks, task_to_action)
+        await self._cancel_running_tasks(run_context, running_tasks, task_to_action)
 
-        best_pair = self.action_pool.get_best_answer()
+        best_pair = run_context.action_pool.get_best_answer()
         if best_pair is not None:
             best_action, best_result = best_pair
-            self.final_answer = best_result.found_answer
+            run_context.final_answer = best_result.found_answer
             effective_termination = (
                 Termination.TIMEOUT_ANSWER if termination_reason == Termination.TIME_LIMIT else termination_reason
             )
             logger.info(
                 "[DeepSearchAgent] %s: returning best collected answer%s",
                 effective_termination.name,
-                " ***" if LogManager.is_sensitive() else f": {self.final_answer}",
+                " ***" if LogManager.is_sensitive() else f": {run_context.final_answer}",
             )
             return _save_and_return_search_final_result(
                 SaveSearchFinalResultConfig(
-                    question=self.query,
+                    question=run_context.query,
                     messages=best_result.messages,
                     prediction=best_result.found_answer,
-                    gold_answer=self.gold_answer,
+                    gold_answer=run_context.gold_answer,
                     termination=effective_termination,
                     retrieved_evidence_ids=best_result.retrieved_evidence_ids,
                     params={
-                        "total_input_tokens": self.total_input_tokens,
-                        "total_output_tokens": self.total_output_tokens,
+                        "total_input_tokens": run_context.total_input_tokens,
+                        "total_output_tokens": run_context.total_output_tokens,
                         "start_time": start_time,
-                        "log_dir": self.log_dir,
+                        "log_dir": run_context.log_dir,
                     },
                     config=config,
                 )
             )
 
         if termination_reason == Termination.TIME_LIMIT and provide_best_guess:
-            guess_triple = self.action_pool.get_best_guess()
+            guess_triple = run_context.action_pool.get_best_guess()
             if guess_triple is not None:
                 guess_action, guess_result, guess_candidate = guess_triple
-                self.final_answer = guess_candidate
+                run_context.final_answer = guess_candidate
                 logger.info(
                     "[DeepSearchAgent] TIMEOUT_GUESS: returning best-guess candidate%s",
-                    " ***" if LogManager.is_sensitive() else f": {self.final_answer}",
+                    " ***" if LogManager.is_sensitive() else f": {run_context.final_answer}",
                 )
                 return _save_and_return_search_final_result(
                     SaveSearchFinalResultConfig(
-                        question=self.query,
+                        question=run_context.query,
                         messages=guess_result.messages if guess_result else [],
                         prediction=guess_candidate,
-                        gold_answer=self.gold_answer,
+                        gold_answer=run_context.gold_answer,
                         termination=Termination.TIMEOUT_GUESS,
                         retrieved_evidence_ids=(guess_result.retrieved_evidence_ids if guess_result else []),
                         params={
-                            "total_input_tokens": self.total_input_tokens,
-                            "total_output_tokens": self.total_output_tokens,
+                            "total_input_tokens": run_context.total_input_tokens,
+                            "total_output_tokens": run_context.total_output_tokens,
                             "start_time": start_time,
-                            "log_dir": self.log_dir,
+                            "log_dir": run_context.log_dir,
                         },
                         config=config,
                     )
@@ -1526,17 +1611,17 @@ class DeepSearchAgent(BaseAgent):
 
         return _save_and_return_search_final_result(
             SaveSearchFinalResultConfig(
-                question=self.query,
+                question=run_context.query,
                 messages=[],
-                prediction=self.final_answer,
-                gold_answer=self.gold_answer,
+                prediction=run_context.final_answer,
+                gold_answer=run_context.gold_answer,
                 termination=termination_reason,
                 retrieved_evidence_ids=[],
                 params={
-                    "total_input_tokens": self.total_input_tokens,
-                    "total_output_tokens": self.total_output_tokens,
+                    "total_input_tokens": run_context.total_input_tokens,
+                    "total_output_tokens": run_context.total_output_tokens,
                     "start_time": start_time,
-                    "log_dir": self.log_dir,
+                    "log_dir": run_context.log_dir,
                 },
                 config=config,
             )
@@ -1576,14 +1661,14 @@ class DeepSearchAgent(BaseAgent):
         llm_token = None
         web_search_token = None
         tool_token = None
+        workflow_session_token = None
+        run_context: DeepSearchRunContext | None = None
         try:
-            session_agent_config = AgentConfig.model_validate(agent_config_for_model)
-            self.agent_config = session_agent_config.model_copy(deep=True)
-            self.setup_log_directory(f"result_{conversation_id}")
-            logger.info(f"[DeepSearchAgent] agent_config: {self.agent_config}")
+            session_agent_config = AgentConfig.model_validate(agent_config_for_model).model_copy(deep=True)
+            logger.info(f"[DeepSearchAgent] agent_config: {session_agent_config}")
 
             try:
-                self.search_config = SearchWorkflowConfig.model_validate(
+                search_config = SearchWorkflowConfig.model_validate(
                     (service_config or {}).get("search_workflow", {})
                 )
             except Exception as e:
@@ -1593,12 +1678,10 @@ class DeepSearchAgent(BaseAgent):
                     "*" if LogManager.is_sensitive() else e,
                     exc_info=not LogManager.is_sensitive(),
                 )
-                self.search_config = SearchWorkflowConfig()
+                search_config = SearchWorkflowConfig()
 
-            self.per_question_params = self.agent_config.search_workflow_per_question_params
-            self.time_limit = int(self.per_question_params.time_limit)
-            os.environ["WORKFLOW_EXECUTE_TIMEOUT"] = str(self.time_limit)
-            logger.info(f"[DeepSearchAgent] per_question_params: {self.per_question_params}")
+            per_question_params = session_agent_config.search_workflow_per_question_params
+            logger.info(f"[DeepSearchAgent] per_question_params: {per_question_params}")
 
             llm_configs = session_agent_config.llm_config
             if LlmConfigCategory.GENERAL.value not in llm_configs:
@@ -1611,7 +1694,7 @@ class DeepSearchAgent(BaseAgent):
                 llm_obj = create_llm_obj(llm_config)
                 all_llms[llm_config.model_name] = llm_obj
             general_cfg = llm_configs[LlmConfigCategory.GENERAL.value]
-            init_llm_map = self.search_config.init_state_agent.llm_config
+            init_llm_map = search_config.init_state_agent.llm_config
             init_llm = init_llm_map.get("general") if init_llm_map else None
             if init_llm is not None and init_llm.model_name and init_llm.model_name != general_cfg.model_name:
                 base_llm = all_llms.get(general_cfg.model_name)
@@ -1628,29 +1711,45 @@ class DeepSearchAgent(BaseAgent):
             llm_token = llm_context.set(all_llms)
 
             tool_class: list[Any] = []
-            if self.per_question_params.tool_map == "search_fetch":
-                tool_class, web_search_token = _build_search_fetch_tools(self.agent_config)
-            elif self.per_question_params.tool_map == "retrieve":
-                milvus_cfg = self.agent_config.search_workflow_milvus_config
+            if per_question_params.tool_map == "search_fetch":
+                tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
+            elif per_question_params.tool_map == "retrieve":
+                milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class.append(_build_retrieve_tool(milvus_cfg))
                 zero_secret(milvus_cfg.embedder_api_key)
             else:
                 raise CustomValueException(
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
-                        e=f"Invalid tool map: {self.per_question_params.tool_map}"
+                        e=f"Invalid tool map: {per_question_params.tool_map}"
                     ),
                 )
 
-            self.tool_map = {tool.name: tool for tool in tool_class}
-            tool_token = tool_context.set(self.tool_map)
-            self.query = message
-            self.gold_answer = gold_answer
+            tool_map = {tool.name: tool for tool in tool_class}
+            tool_token = tool_context.set(tool_map)
+
+            action_pool = ActionPool()
+            log_dir = self.setup_log_directory(f"result_{conversation_id}", action_pool)
+            run_context = self._create_run_context(
+                agent_config=session_agent_config.model_copy(deep=True),
+                search_config=search_config,
+                per_question_params=per_question_params,
+                query=message,
+                log_dir=log_dir,
+                time_limit=int(per_question_params.time_limit),
+                gold_answer=gold_answer,
+                tool_map=tool_map,
+                action_pool=action_pool,
+            )
+
+            current_workflow_session_vars = dict(workflow_session_vars.get() or {})
+            current_workflow_session_vars[WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY] = str(run_context.time_limit)
+            workflow_session_token = workflow_session_vars.set(current_workflow_session_vars)
             self._build_agent()
 
-            result: SearchFinalResult = await self._run_internal()
+            result: SearchFinalResult = await self._run_internal(run_context)
             try:
-                await self.action_pool.flush_snapshot()
+                await run_context.action_pool.flush_snapshot()
             except Exception as e:
                 logger.warning(
                     "[DeepSearchAgent] Failed to flush action pool snapshot before final result: %s",
@@ -1664,14 +1763,17 @@ class DeepSearchAgent(BaseAgent):
             else:
                 yield json.dumps({"result": str(result)}, ensure_ascii=False)
         finally:
-            try:
-                await self.action_pool.flush_snapshot()
-            except Exception as e:
-                logger.warning(
-                    "[DeepSearchAgent] Failed to flush action pool snapshot during cleanup: %s",
-                    e,
-                    exc_info=not LogManager.is_sensitive(),
-                )
+            if run_context is not None:
+                try:
+                    await run_context.action_pool.flush_snapshot()
+                except Exception as e:
+                    logger.warning(
+                        "[DeepSearchAgent] Failed to flush action pool snapshot during cleanup: %s",
+                        e,
+                        exc_info=not LogManager.is_sensitive(),
+                    )
+            if workflow_session_token is not None:
+                workflow_session_vars.reset(workflow_session_token)
             if llm_token is not None:
                 llm_context.reset(llm_token)
             if web_search_token is not None:

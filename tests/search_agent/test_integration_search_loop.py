@@ -21,10 +21,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepSearch
 pytestmark = pytest.mark.integration
 
 
-def _make_agent(tmp_log_dir: Path, **pqp_updates: Any) -> DeepSearchAgent:
+def _make_agent(tmp_log_dir: Path, **pqp_updates: Any):
     agent = DeepSearchAgent()
-    agent.agent_config = AgentConfig()
-    base_pqp = agent.agent_config.search_workflow_per_question_params.model_copy(
+    agent_config = AgentConfig()
+    base_pqp = agent_config.search_workflow_per_question_params.model_copy(
         update={
             "max_workers": 2,
             "retry_count_on_empty_action_space": 0,
@@ -35,14 +35,17 @@ def _make_agent(tmp_log_dir: Path, **pqp_updates: Any) -> DeepSearchAgent:
             "provide_best_guess": False,
         }
     )
-    agent.per_question_params = base_pqp.model_copy(update=pqp_updates)
-    agent.search_config = SearchWorkflowConfig()
-    agent.query = "integration query"
-    agent.log_dir = str(tmp_log_dir)
-    agent.time_limit = 120
-    agent.tool_map = {}
-    agent.action_pool.log_dir = str(tmp_log_dir)
-    return agent
+    per_question_params = base_pqp.model_copy(update=pqp_updates)
+    run_context = agent._create_run_context(
+        agent_config=agent_config,
+        per_question_params=per_question_params,
+        search_config=SearchWorkflowConfig(),
+        query="integration query",
+        log_dir=str(tmp_log_dir),
+        time_limit=120,
+        tool_map={},
+    )
+    return agent, run_context
 
 
 def _second_action(base_action: Action, *, action_id: str, strength: float, answer: str) -> Action:
@@ -68,7 +71,7 @@ def _second_action(base_action: Action, *, action_id: str, strength: float, answ
 async def test_actions_explored_limit_terminates(
     monkeypatch: pytest.MonkeyPatch, tmp_log_dir: Path, base_action, base_state
 ) -> None:
-    agent = _make_agent(tmp_log_dir, actions_explored_limit=2, max_workers=2)
+    agent, run_context = _make_agent(tmp_log_dir, actions_explored_limit=2, max_workers=2)
     a2 = base_action.model_copy(update={"id": "action-2", "proposal": ActionProposal(direction="b", score=0.5)})
 
     async def _fake_run_workflow(*, workflow: str, inputs: dict) -> SimpleNamespace:
@@ -101,7 +104,7 @@ async def test_actions_explored_limit_terminates(
         _fake_state_creation,
     )
 
-    final = await agent._run_internal()
+    final = await agent._run_internal(run_context)
     assert final.termination == "actions_explored_limit"
 
 
@@ -109,7 +112,7 @@ async def test_actions_explored_limit_terminates(
 async def test_new_states_triggers_second_find_action_then_answer(
     monkeypatch: pytest.MonkeyPatch, tmp_log_dir: Path, base_action, base_state
 ) -> None:
-    agent = _make_agent(tmp_log_dir, max_workers=1)
+    agent, run_context = _make_agent(tmp_log_dir, max_workers=1)
     find_calls: list[Any] = []
 
     branch_state = base_state.model_copy(update={"id": "branch-1", "depth": 1})
@@ -177,7 +180,7 @@ async def test_new_states_triggers_second_find_action_then_answer(
         _fake_state_creation,
     )
 
-    final = await agent._run_internal()
+    final = await agent._run_internal(run_context)
     assert len(find_calls) >= 2
     second_find_state = find_calls[1]
     second_id = (
@@ -194,7 +197,7 @@ async def test_new_states_triggers_second_find_action_then_answer(
 async def test_answer_mode_top_k_returns_best_strength(
     monkeypatch: pytest.MonkeyPatch, tmp_log_dir: Path, base_action, base_state
 ) -> None:
-    agent = _make_agent(tmp_log_dir, answer_mode_top_k=2, max_workers=2)
+    agent, run_context = _make_agent(tmp_log_dir, answer_mode_top_k=2, max_workers=2)
     weak = _second_action(base_action, action_id="weak", strength=0.2, answer="Paris")
     strong = _second_action(base_action, action_id="strong", strength=0.95, answer="Lyon")
 
@@ -236,7 +239,7 @@ async def test_answer_mode_top_k_returns_best_strength(
         _fake_state_creation,
     )
 
-    final = await agent._run_internal()
+    final = await agent._run_internal(run_context)
     assert final.termination == "answer"
     assert final.prediction == "Lyon"
 
@@ -245,7 +248,7 @@ async def test_answer_mode_top_k_returns_best_strength(
 async def test_answer_writes_final_result_json(
     monkeypatch: pytest.MonkeyPatch, tmp_log_dir: Path, base_action, base_state
 ) -> None:
-    agent = _make_agent(tmp_log_dir)
+    agent, run_context = _make_agent(tmp_log_dir)
 
     async def _fake_run_workflow(*, workflow: str, inputs: dict) -> SimpleNamespace:
         if workflow == "init_state_1":
@@ -282,7 +285,7 @@ async def test_answer_writes_final_result_json(
         _fake_state_creation,
     )
 
-    await agent._run_internal()
+    await agent._run_internal(run_context)
     out = tmp_log_dir / "final_result.json"
     assert out.is_file()
     data = json.loads(out.read_text(encoding="utf-8"))

@@ -307,6 +307,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **source_tracer_infer_switch**(bool, 可选)：溯源推理功能开关。默认值：`True`。
 - **llm_config**(Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking", "vlm_chart_generating"], LLMConfig], 可选)：LLM模型配置。默认值：`dict()`。
 - **info_collector_search_method**(Literal["web", "local", "all"], 可选)：搜索方式，`web`：联网增强搜索，`local`：本地搜索工具搜索，`all`：联网增强+本地融合搜索。默认值：`"web"`。
+- **info_collector_webpage_enrich_enable**(bool, 可选)：DeepResearch 信息收集阶段是否启用网页正文增强节点。默认值：`False`。
 - **web_search_engine_config**(WebSearchEngineConfig, 可选)：联网增强引擎配置。默认值：`WebSearchEngineConfig()`。
 - **local_search_engine_config**(LocalSearchEngineConfig, 可选)：本地搜索引擎配置。默认值：`LocalSearchEngineConfig()`。
 - **custom_web_search_config**(CustomWebSearchConfig, 可选)：自定义联网增强引擎配置。默认值：`CustomWebSearchConfig()`。
@@ -420,10 +421,12 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **planner_max_retry_num**(int, 可选)：最大重试次数。默认值：`3`。
 
 ### 信息收集节点参数
-- **info_collector_initial_search_query_count**(int, 可选)：初始搜索查询数量。默认值：`3`。
+- **info_collector_max_search_query_count**(int, 可选)：单轮最大搜索查询数量。默认值：`5`。
 - **info_collector_max_research_loops**(int, 可选)：最大研究循环次数。默认值：`2`。
 - **info_collector_max_tool_call_turns_per_query**(int, 可选)：单个 collector query 最大工具调用轮次。默认值：`2`。
 - **info_collector_max_retry_num**(int, 可选)：最大重试次数。默认值：`3`。
+- **info_collector_webpage_enrich_max_urls**(int, 可选)：网页正文增强每轮最多抓取并增强的 URL 数量。默认值：`3`。
+- **info_collector_webpage_enrich_fetch_timeout_seconds**(int, 可选)：网页正文增强单个 URL 抓取超时时间，单位秒。默认值：`45`。
 
 ### 报告节点参数
 - **sub_report_classify_doc_infos_single_time_num**(int, 可选)：子报告中单次llm处理筛选收集到的数量。默认值：`60`。

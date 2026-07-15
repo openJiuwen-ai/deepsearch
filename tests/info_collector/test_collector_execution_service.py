@@ -53,7 +53,7 @@ async def test_run_plan_updates_collecting_steps_and_returns_aggregate_result():
             run_config=CollectorRunPlanConfig(
                 language="zh-CN",
                 section_idx=1,
-                initial_search_query_count=2,
+                max_search_query_count=2,
                 max_research_loops=2,
                 max_tool_call_turns_per_query=4,
             ),
@@ -88,7 +88,7 @@ def test_input_build_accepts_named_config_object():
             language="zh-CN",
             section_idx=1,
             build_config=CollectorInputBuildConfig(
-                initial_search_query_count=2,
+                max_search_query_count=2,
                 max_research_loops=3,
                 max_tool_call_turns_per_query=4,
             ),
@@ -99,7 +99,8 @@ def test_input_build_accepts_named_config_object():
     assert agent_input["section_idx"] == 1
     assert agent_input["plan_idx"] == "1"
     assert agent_input["step_title"] == "步骤1"
-    assert agent_input["initial_search_query_count"] == 2
+    assert agent_input["max_search_query_count"] == 2
+    assert "initial_search_query_count" not in agent_input
     assert agent_input["max_research_loops"] == 3
     assert agent_input["max_tool_call_turns_per_query"] == 4
     assert "max_react_recursion_limit" not in agent_input
@@ -122,7 +123,7 @@ def test_input_build_includes_research_intent():
             language="zh-CN",
             section_idx=1,
             build_config=CollectorInputBuildConfig(
-                initial_search_query_count=2,
+                max_search_query_count=2,
                 max_research_loops=3,
                 max_tool_call_turns_per_query=4,
             ),
@@ -179,7 +180,7 @@ async def test_run_plan_handles_absent_or_empty_info_summary(
             run_config=CollectorRunPlanConfig(
                 language="zh-CN",
                 section_idx=1,
-                initial_search_query_count=2,
+                max_search_query_count=2,
                 max_research_loops=2,
                 max_tool_call_turns_per_query=4,
             ),

@@ -594,14 +594,14 @@ class InfoCollectorNode(BaseNode):
         collected_doc_num = session.get_global_state("section_context.collected_doc_num")
         warning_infos = session.get_global_state("section_context.warning_infos")
 
-        initial_search_query_count = session.get_global_state("config.info_collector_initial_search_query_count")
+        max_search_query_count = session.get_global_state("config.info_collector_max_search_query_count")
         max_research_loops = session.get_global_state("config.info_collector_max_research_loops")
         max_tool_call_turns_per_query = session.get_global_state(
             "config.info_collector_max_tool_call_turns_per_query"
         )
 
         return dict(messages=messages, current_plan=current_plan, section_idx=section_idx,
-                    language=language, initial_search_query_count=initial_search_query_count,
+                    language=language, max_search_query_count=max_search_query_count,
                     max_research_loops=max_research_loops,
                     max_tool_call_turns_per_query=max_tool_call_turns_per_query,
                     history_plans=history_plans, collected_doc_num=collected_doc_num, warning_infos=warning_infos)
@@ -622,7 +622,7 @@ class InfoCollectorNode(BaseNode):
             run_config=CollectorRunPlanConfig(
                 language=state.get("language", "zh-CN"),
                 section_idx=state.get("section_idx", 0),
-                initial_search_query_count=state.get("initial_search_query_count", 2),
+                max_search_query_count=state.get("max_search_query_count", 5),
                 max_research_loops=state.get("max_research_loops", 2),
                 max_tool_call_turns_per_query=state.get("max_tool_call_turns_per_query", 2),
             ),

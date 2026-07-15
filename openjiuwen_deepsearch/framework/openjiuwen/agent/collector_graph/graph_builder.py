@@ -24,6 +24,7 @@ from openjiuwen_deepsearch.config.config import ServiceConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode, init_router
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_context import CollectorContext
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment import WebPageEnrichmentNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
     EvidenceLedger,
     build_ledger_brief,
@@ -112,6 +113,48 @@ def get_research_record(messages: List[dict]) -> str:
     return research_record
 
 
+def _validate_query_count(queries: list[str], max_search_query_count: int, field_name: str) -> None:
+    """校验 LLM 生成的 query 数量没有超过单轮硬上限。
+
+    Args:
+        queries: LLM 生成的 query 字符串列表。
+        max_search_query_count: 单轮允许的最大 query 数量。
+        field_name: 被校验字段名，用于错误日志。
+
+    Raises:
+        ValueError: query 数量超过硬上限时抛出。
+    """
+    if len(queries) > max_search_query_count:
+        raise ValueError(
+            f"{field_name} count {len(queries)} exceeds max_search_query_count {max_search_query_count}"
+        )
+
+
+def _fallback_search_query_list(
+    result: SearchQueryList | None,
+    step_title: str,
+    max_search_query_count: int,
+) -> SearchQueryList:
+    """构造初始 query 生成失败后的保守 fallback 结果。
+
+    Args:
+        result: 最近一次可用的 LLM 结构化结果。
+        step_title: 当前采集步骤标题。
+        max_search_query_count: 单轮允许的最大 query 数量。
+
+    Returns:
+        SearchQueryList: 使用 missing evidence 或 step title 构造的 fallback query 结果。
+    """
+    if max_search_query_count <= 0:
+        return SearchQueryList(queries=[], missing_evidence=result.missing_evidence if result else [])
+    if result and result.missing_evidence:
+        return SearchQueryList(
+            queries=result.missing_evidence[:max_search_query_count],
+            missing_evidence=result.missing_evidence,
+        )
+    return SearchQueryList(queries=[step_title] if step_title else [], missing_evidence=[])
+
+
 class StartNode(Start):
     """
     起始节点，初始化 Session global_state 中的 collector_context
@@ -131,7 +174,7 @@ class StartNode(Start):
             step_title=inputs.get("step_title", ""),
             step_description=inputs.get("step_description", ""),
             step_background_knowledge=inputs.get("step_background_knowledge") or [],
-            initial_search_query_count=inputs.get("initial_search_query_count", 1),
+            max_search_query_count=inputs.get("max_search_query_count", 5),
             max_research_loops=inputs.get("max_research_loops", 2),
             max_tool_call_turns_per_query=inputs.get("max_tool_call_turns_per_query", 2),
             evidence_ledger={},
@@ -156,7 +199,7 @@ class GenerateQueryNode(BaseNode):
         plan_thought = session.get_global_state("collector_context.plan_thought")
         step_title = session.get_global_state("collector_context.step_title")
         step_description = session.get_global_state("collector_context.step_description")
-        number_queries = session.get_global_state("collector_context.initial_search_query_count")
+        max_search_query_count = session.get_global_state("collector_context.max_search_query_count")
         language = session.get_global_state("collector_context.language")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
@@ -164,7 +207,7 @@ class GenerateQueryNode(BaseNode):
 
         return dict(section_idx=section_idx, plan_title=plan_title, plan_thought=plan_thought, step_title=step_title,
                     step_description=step_description,
-                    number_queries=number_queries,
+                    max_search_query_count=max_search_query_count,
                     language=language, evidence_ledger=evidence_ledger)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -186,7 +229,7 @@ class GenerateQueryNode(BaseNode):
         plan_thought = state.get("plan_thought", "")
         step_title = state.get("step_title", "")
         step_description = state.get("step_description", "")
-        number_queries = state.get("number_queries", 1)
+        max_search_query_count = state.get("max_search_query_count", 5)
         language = state.get("language", "zh-CN")
 
         report_type = session.get_global_state("collector_context.report_type") or "professional"
@@ -196,16 +239,18 @@ class GenerateQueryNode(BaseNode):
             "plan_thought": plan_thought,
             "step_title": step_title,
             "step_description": step_description,
-            "number_queries": number_queries,
+            "max_search_query_count": max_search_query_count,
             "language": language,
             "report_type": report_type,
         }
         formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
 
-        result: SearchQueryList = await self._invoke_llm_with_retry(formatted_prompt, section_idx, step_title)
-
-        if len(result.queries) > number_queries:
-            result.queries = result.queries[:number_queries]
+        result: SearchQueryList = await self._invoke_llm_with_retry(
+            formatted_prompt,
+            section_idx,
+            step_title,
+            max_search_query_count,
+        )
 
         if not LogManager.is_sensitive():
             logger.debug("section_idx: %s | step title %s | [GenerateQueryNode] Generated search queries: %s",
@@ -235,24 +280,28 @@ class GenerateQueryNode(BaseNode):
 
         return dict()
 
-    async def _invoke_llm_with_retry(self, formatted_prompt: list, section_idx: int, step_title: str):
+    async def _invoke_llm_with_retry(
+        self,
+        formatted_prompt: list,
+        section_idx: int,
+        step_title: str,
+        max_search_query_count: int,
+    ):
         result = None
         for retry_idx in range(max_retries):
             try:
                 result = await ainvoke_llm_with_stats(
                     self.llm, formatted_prompt, agent_name=AgentLlmName.COLLECTOR_QUERY_GENERATION.value,
                     schema=SearchQueryList)
+                _validate_query_count(result.queries, max_search_query_count, "queries")
                 break
             except Exception as e:
                 current_try = retry_idx + 1
                 task_description = "generate search query"
                 record_llm_retry_log(current_try, max_retries, section_idx, step_title,
                                      error=e, operation=task_description)
-        if result is None:
-            result = SearchQueryList(
-                queries=[step_title],
-                missing_evidence=[],
-            )
+        if result is None or len(result.queries) > max_search_query_count:
+            result = _fallback_search_query_list(result, step_title, max_search_query_count)
 
         return result
 
@@ -272,7 +321,7 @@ class SupervisorNode(BaseNode):
         plan_thought = session.get_global_state("collector_context.plan_thought")
         step_title = session.get_global_state("collector_context.step_title")
         step_description = session.get_global_state("collector_context.step_description")
-        number_queries = session.get_global_state("collector_context.initial_search_query_count")
+        max_search_query_count = session.get_global_state("collector_context.max_search_query_count")
         language = session.get_global_state("collector_context.language")
         new_doc_infos_current_loop = session.get_global_state("collector_context.new_doc_infos_current_loop")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
@@ -283,7 +332,7 @@ class SupervisorNode(BaseNode):
         return dict(section_idx=section_idx, plan_idx=plan_idx, step_idx=step_idx,
                     plan_title=plan_title, plan_thought=plan_thought,
                     step_title=step_title, step_description=step_description,
-                    number_queries=number_queries, language=language,
+                    max_search_query_count=max_search_query_count, language=language,
                     new_doc_infos_current_loop=new_doc_infos_current_loop,
                     evidence_ledger=evidence_ledger,
                     research_loop_count=research_loop_count)
@@ -310,7 +359,7 @@ class SupervisorNode(BaseNode):
         step_title = state.get("step_title", "")
         step_description = state.get("step_description", "")
         research_loop_count = state.get("research_loop_count", 1)
-        number_queries = state.get("number_queries", 1)
+        max_search_query_count = state.get("max_search_query_count", 5)
         new_doc_infos = state.get("new_doc_infos_current_loop", []) or []
         current_ledger = ensure_ledger(state.get("evidence_ledger"))
         ledger_brief = build_ledger_brief(current_ledger)
@@ -352,16 +401,18 @@ class SupervisorNode(BaseNode):
             "step_description": step_description,
             "ledger_brief": ledger_brief,
             "evidence_table": evidence_table,
-            "number_queries": number_queries,
+            "max_search_query_count": max_search_query_count,
             "language": state.get("language", "zh-CN"),
             "report_type": report_type,
         }
         formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
 
-        result: Reflection = await self._invoke_llm_with_retry(formatted_prompt, section_idx, step_title)
-
-        if len(result.next_queries) > number_queries:
-            result.next_queries = result.next_queries[:number_queries]
+        result: Reflection = await self._invoke_llm_with_retry(
+            formatted_prompt,
+            section_idx,
+            step_title,
+            max_search_query_count,
+        )
 
         if LogManager.is_sensitive():
             logger.info(f"section_idx: {section_idx} | "
@@ -413,10 +464,20 @@ class SupervisorNode(BaseNode):
         )
         session.update_global_state({"collector_context.evidence_ledger": updated_ledger.model_dump()})
 
+        section_idx = session.get_global_state("collector_context.section_idx")
+        plan_idx = algorithm_output.get("plan_idx", "")
+        step_idx = algorithm_output.get("step_idx", "")
+        step_title = algorithm_output.get("step_title", "")
         next_queries = reflection.next_queries
         if reflection.is_sufficient or not reflection.should_continue:
             next_queries = []
         if not reflection.is_sufficient and reflection.should_continue and not next_queries:
+            logger.warning(
+                "section_idx: %s | step_title: %s | [SupervisorNode] should_continue=True but "
+                "next_queries is empty; falling back to one missing evidence query.",
+                section_idx,
+                step_title,
+            )
             if updated_ledger.missing_evidence:
                 next_queries = [updated_ledger.missing_evidence[0]]
             elif reflection.knowledge_gap:
@@ -426,10 +487,6 @@ class SupervisorNode(BaseNode):
         ) for query in next_queries]
         session.update_global_state({"collector_context.search_queries": search_queries})
 
-        section_idx = session.get_global_state("collector_context.section_idx")
-        plan_idx = algorithm_output.get("plan_idx", "")
-        step_idx = algorithm_output.get("step_idx", "")
-        step_title = algorithm_output.get("step_title", "")
         stop_reason = "continue"
         if reflection.is_sufficient:
             stop_reason = "is_sufficient"
@@ -478,12 +535,19 @@ class SupervisorNode(BaseNode):
 
         return dict(next_node=NodeId.COLLECTOR_INFO.value)
 
-    async def _invoke_llm_with_retry(self, formatted_prompt: list, section_idx: int, step_title: str):
+    async def _invoke_llm_with_retry(
+        self,
+        formatted_prompt: list,
+        section_idx: int,
+        step_title: str,
+        max_search_query_count: int,
+    ):
         result = None
         for retry_idx in range(max_retries):
             try:
                 result = await ainvoke_llm_with_stats(
                     self.llm, formatted_prompt, agent_name=AgentLlmName.COLLECTOR_SUPERVISOR.value, schema=Reflection)
+                _validate_query_count(result.next_queries, max_search_query_count, "next_queries")
                 break
             except Exception as e:
                 current_try = retry_idx + 1
@@ -491,7 +555,7 @@ class SupervisorNode(BaseNode):
                 record_llm_retry_log(current_try, max_retries, section_idx, step_title,
                                      error=e, operation=task_description)
 
-        if result is None:
+        if result is None or len(result.next_queries) > max_search_query_count:
             result = Reflection(
                 is_sufficient=True,
                 should_continue=False,
@@ -685,7 +749,7 @@ def build_info_collector_sub_graph() -> Workflow:
             "step_idx": "${step_idx}", "step_title": "${step_title}",
             "step_description": "${step_description}",
             "step_background_knowledge": "${step_background_knowledge}",
-            "initial_search_query_count": "${initial_search_query_count}",
+            "max_search_query_count": "${max_search_query_count}",
             "max_research_loops": "${max_research_loops}",
             "max_tool_call_turns_per_query": "${max_tool_call_turns_per_query}",
             "report_type": "${report_type}",
@@ -694,6 +758,7 @@ def build_info_collector_sub_graph() -> Workflow:
     )
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_QUERY_GEN.value, GenerateQueryNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_INFO.value, InfoRetrievalNode())
+    sub_workflow.add_workflow_comp(NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value, WebPageEnrichmentNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_SUPERVISOR.value, SupervisorNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_SUMMARY.value, SummaryNode())
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_END.value, GraphEndNode())
@@ -702,7 +767,8 @@ def build_info_collector_sub_graph() -> Workflow:
     # 添加边 add_connection
     sub_workflow.add_connection(NodeId.START.value, NodeId.COLLECTOR_QUERY_GEN.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_QUERY_GEN.value, NodeId.COLLECTOR_INFO.value)
-    sub_workflow.add_connection(NodeId.COLLECTOR_INFO.value, NodeId.COLLECTOR_SUPERVISOR.value)
+    sub_workflow.add_connection(NodeId.COLLECTOR_INFO.value, NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value)
+    sub_workflow.add_connection(NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value, NodeId.COLLECTOR_SUPERVISOR.value)
     supervisor_router = init_router(NodeId.COLLECTOR_SUPERVISOR.value,
                                     [NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_INFO.value])
     sub_workflow.add_conditional_connection(NodeId.COLLECTOR_SUPERVISOR.value, router=supervisor_router)

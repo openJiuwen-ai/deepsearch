@@ -270,7 +270,7 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
         return dict(next_node=NodeId.INFO_COLLECTOR.value)
 
     def _build_collector_input(self, plan: Plan, step: Step, state: dict):
-        initial_search_query_count = state.get("initial_search_query_count", 2)
+        max_search_query_count = state.get("max_search_query_count", 5)
         max_research_loops = state.get("max_research_loops", 2)
         max_tool_call_turns_per_query = state.get("max_tool_call_turns_per_query", 2)
         plan_idx = plan.id.split("-")[-1] if plan.id and "-" in plan.id else "1"
@@ -300,7 +300,7 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
             "step_title": step.title,
             "step_description": step.description,
             "step_background_knowledge": step.background_knowledge or [],
-            "initial_search_query_count": initial_search_query_count,
+            "max_search_query_count": max_search_query_count,
             "max_research_loops": max_research_loops,
             "max_tool_call_turns_per_query": max_tool_call_turns_per_query,
             "report_type": state.get("report_type", "professional"),

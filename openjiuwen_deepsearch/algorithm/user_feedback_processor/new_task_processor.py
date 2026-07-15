@@ -1423,8 +1423,8 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
             run_config=CollectorRunPlanConfig(
                 language=language,
                 section_idx="new_task",
-                initial_search_query_count=session.get_global_state(
-                    "config.info_collector_initial_search_query_count"
+                max_search_query_count=session.get_global_state(
+                    "config.info_collector_max_search_query_count"
                 ),
                 max_research_loops=session.get_global_state(
                     "config.info_collector_max_research_loops"

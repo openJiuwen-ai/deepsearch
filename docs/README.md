@@ -4,7 +4,7 @@
 
 This directory holds technical documentation for the openJiuwen-DeepSearch community.
 
-Repository overview: [README.md](../README.md) (简体中文) · [README-en.md](../README-en.md) (English).
+Repository overview: [README.md](../README.md) (English) · [README_zh.md](../README_zh.md) (简体中文).
 
 ## Layout
 

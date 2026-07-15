@@ -156,7 +156,7 @@ class TestDependencyInfoCollectorNode:
             "section_context.warning_infos": [],
             "section_context.plan_background_knowledge": {},
             "section_context.step_background_knowledge": {},
-            "config.info_collector_initial_search_query_count": 2,
+            "config.info_collector_max_search_query_count": 2,
             "config.info_collector_max_research_loops": 2,
             "config.info_collector_max_tool_call_turns_per_query": 3,
         }.get(key)
@@ -337,7 +337,7 @@ async def test_dependency_info_collector_isolates_parallel_step_inputs_and_resul
         "section_context.warning_infos": [],
         "section_context.plan_background_knowledge": {},
         "section_context.step_background_knowledge": {},
-        "config.info_collector_initial_search_query_count": 2,
+        "config.info_collector_max_search_query_count": 2,
         "config.info_collector_max_research_loops": 2,
         "config.info_collector_max_tool_call_turns_per_query": 3,
     }
@@ -404,7 +404,7 @@ async def test_normal_info_collector_stays_sequential():
         "section_context.history_plans": [],
         "section_context.collected_doc_num": 0,
         "section_context.warning_infos": [],
-        "config.info_collector_initial_search_query_count": 2,
+        "config.info_collector_max_search_query_count": 2,
         "config.info_collector_max_research_loops": 2,
         "config.info_collector_max_tool_call_turns_per_query": 3,
     }
@@ -459,7 +459,7 @@ async def test_normal_info_collector_keeps_previous_collected_doc_num_when_curre
         "section_context.history_plans": [],
         "section_context.collected_doc_num": 5,
         "section_context.warning_infos": [],
-        "config.info_collector_initial_search_query_count": 2,
+        "config.info_collector_max_search_query_count": 2,
         "config.info_collector_max_research_loops": 2,
         "config.info_collector_max_tool_call_turns_per_query": 3,
     }

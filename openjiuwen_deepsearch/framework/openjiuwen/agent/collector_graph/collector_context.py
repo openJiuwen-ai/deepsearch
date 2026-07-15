@@ -17,6 +17,7 @@ class CollectorContext(BaseModel):
         section_idx: 当前章节索引。
         plan_idx: 当前计划索引。
         step_idx: 当前步骤索引。
+        max_search_query_count: 单轮最大检索 query 数量。
         max_tool_call_turns_per_query: 单个检索 query 的最大工具调用轮次。
         should_continue: supervisor 判断未充分时是否值得继续检索。
     """
@@ -31,7 +32,7 @@ class CollectorContext(BaseModel):
     step_title: str = Field(default="", description="步骤标题")
     step_description: str = Field(default="", description="步骤描述")
     step_background_knowledge: list[str] = Field(default=[], description="步骤做信息总结时的背景信息")
-    initial_search_query_count: int = Field(default=1, description="初始查询计数")
+    max_search_query_count: int = Field(default=5, description="单轮最大检索 query 数量")
     max_research_loops: int = Field(default=2, description="最大循环限制")
     research_loop_count: int = Field(default=0, description="研究循环计数")
     max_tool_call_turns_per_query: int = Field(default=2, description="单个检索 query 最大工具调用轮次")

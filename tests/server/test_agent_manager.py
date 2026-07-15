@@ -55,6 +55,18 @@ def _build_request(conversation_id: str) -> DeepSearchRequest:
     )
 
 
+def test_get_or_create_agent_reuses_agent_within_same_conversation():
+    factory = _FakeAgentFactory()
+    manager = DeepSearchAgentManager(agent_factory=factory)
+    request = _build_request("conversation-a")
+
+    agent_a = manager.get_or_create_agent(request, object(), agent_config={"a": 1})
+    agent_b = manager.get_or_create_agent(request, object(), agent_config={"a": 1})
+
+    assert agent_a is agent_b
+    assert len(factory.created) == 1
+
+
 @pytest.mark.asyncio
 async def test_cleanup_session_cache_evicts_agent_cache(monkeypatch):
     """清理会话时应删除该会话对应的 agent 缓存。
@@ -121,6 +133,30 @@ def test_build_agent_config_preserves_agent_llm_timeouts(monkeypatch):
     config = manager.build_agent_config(request, object())
 
     assert config["agent_llm_timeouts"] == {"default": 300, "sub_reporter": -120}
+
+
+def test_build_agent_config_passes_webpage_enrichment_enable(monkeypatch):
+    """验证 server 构建 agent_config 时透传网页正文增强开关。"""
+    factory = _FakeAgentFactory()
+    manager = DeepSearchAgentManager(agent_factory=factory)
+    request = _build_request("conversation-a")
+    request.info_collector_webpage_enrich_enable = True
+
+    monkeypatch.setattr(
+        manager,
+        "_load_web_search_config",
+        lambda space_id, web_search_config, db: {
+            "search_engine_name": "mock",
+            "search_api_key": bytearray(b"secret"),
+            "search_url": "https://example.com/search",
+            "max_web_search_results": 5,
+            "extension": {},
+        },
+    )
+
+    config = manager.build_agent_config(request, object())
+
+    assert config["info_collector_webpage_enrich_enable"] is True
 
 
 def test_build_agent_config_disables_agent_llm_timeouts_without_default(monkeypatch):

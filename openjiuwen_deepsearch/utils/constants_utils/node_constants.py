@@ -46,6 +46,7 @@ class NodeId(enum.Enum):
     # info collector 子图相关
     COLLECTOR_QUERY_GEN = "collector_query_generation"
     COLLECTOR_INFO = "collector_info_retrieval"
+    COLLECTOR_WEBPAGE_ENRICHMENT = "collector_webpage_enrichment"
     COLLECTOR_SUPERVISOR = "collector_supervisor"
     COLLECTOR_SUMMARY = "collector_summary"
     COLLECTOR_PROGRAMMER = "collector_programmer"
@@ -70,6 +71,8 @@ class AgentLlmName(enum.Enum):
 
     COLLECTOR_QUERY_GENERATION = NodeId.COLLECTOR_QUERY_GEN.value
     COLLECTOR_INFO_RETRIEVAL = NodeId.COLLECTOR_INFO.value
+    COLLECTOR_WEBPAGE_ENRICHMENT_SELECTION = "collector_webpage_enrichment_selection"
+    COLLECTOR_WEBPAGE_ENRICHMENT_COMPRESSION = "collector_webpage_enrichment_compression"
     COLLECTOR_SUPERVISOR = NodeId.COLLECTOR_SUPERVISOR.value
     COLLECTOR_SUMMARY = NodeId.COLLECTOR_SUMMARY.value
 

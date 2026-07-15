@@ -380,8 +380,8 @@ class TruthVerificationProcessor(UserFeedbackPromptInvoker):
             run_config=CollectorRunPlanConfig(
                 language=language,
                 section_idx="truth_verification",
-                initial_search_query_count=session.get_global_state(
-                    "config.info_collector_initial_search_query_count"
+                max_search_query_count=session.get_global_state(
+                    "config.info_collector_max_search_query_count"
                 ),
                 max_research_loops=session.get_global_state(
                     "config.info_collector_max_research_loops"
