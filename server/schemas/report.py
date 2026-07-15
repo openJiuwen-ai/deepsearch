@@ -1,6 +1,7 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -54,3 +55,33 @@ class ReportConvertRes(BaseModel):
     code: int = Field(..., description='错误码')
     msg: str = Field(..., description='结果信息')
     convert_content: str = Field(..., description='base64编码过的转换格式后的zip压缩包')
+
+
+class ReportStylizeReq(BaseModel):
+    """Describe a report styling request.
+
+    Attributes:
+        final_result: 工作流最终结果快照。
+        llm_config: 报告样式化使用的 LLM 配置。
+    """
+
+    final_result: dict = Field(..., description="DeepSearch final_result对象")
+    llm_config: dict = Field(..., description="报告样式化使用的 LLM 配置")
+
+
+class ReportStylizeRes(BaseModel):
+    """Describe a styled report export response.
+
+    Attributes:
+        code: HTTP 风格的业务状态码。
+        msg: 结果信息。
+        convert_content: base64 编码后的报告 ZIP bundle。
+        style_applied: 是否成功注入 LLM 生成的 CSS。
+        style_status: 样式状态，成功为 applied，回退为 fallback。
+    """
+
+    code: int = Field(..., description="错误码")
+    msg: str = Field(..., description="结果信息")
+    convert_content: str = Field(..., description="base64 编码后的报告 ZIP bundle")
+    style_applied: bool = Field(..., description="是否成功应用报告样式")
+    style_status: Literal["applied", "fallback"] = Field(..., description="报告样式处理状态")

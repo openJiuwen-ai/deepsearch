@@ -394,7 +394,7 @@ class ServiceConfig(BaseModel):
     sub_report_doc_prefilter_multiplier: int = Field(default=5,
                                                      description="子报告文档预筛保留倍数，最大候选数为top_k乘以该值")
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
-    visualization_enable: bool = Field(default=False, description="报告插入图表开关")
+    visualization_enable: bool = Field(default=True, description="报告插入图表开关")
 
     # 溯源节点参数
     source_tracer_citation_verify_max_concurrency_num: int = Field(default=30, description="溯源校验最大并发数量")
