@@ -32,6 +32,8 @@ dependencies = [
     'seaborn',
     'numpy>=2.4.2',
     'tldextract>=5.0.0',
+    'markdown>=3.7',
+    'beautifulsoup4==4.14.3',
 ]
 
 # 1. 告诉 setuptools 把 openjiuwen_deepsearch 当成一个「命名空间包」
@@ -83,8 +85,6 @@ backend = [
     "requests==2.32.3",
     "pycryptodome==3.23.0",
     "markdown2==2.5.4",
-    "markdown>=3.7",
-    "beautifulsoup4==4.14.3",
     "latex2mathml==3.78.1",
     "mathml2omml-as==0.1.0",
     "aiomysql==0.2.0",

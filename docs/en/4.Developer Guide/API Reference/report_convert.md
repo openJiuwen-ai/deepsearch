@@ -59,6 +59,54 @@ Field notes:
 - `convert_content`
   - Base64-encoded ZIP bundle.
 
+## `/reports/stylize`
+
+`/reports/stylize` creates an HTML ZIP bundle with the same resource layout as the HTML export, then asks the configured LLM for CSS based on the report title, outline, and summary. The LLM does not rewrite Markdown content, links, charts, or inference resources. This endpoint converts supported Mermaid chart source into inline SVG without invoking `mmdc` or Mermaid.js.
+
+The full endpoint path is `/api/v1/agent/deepsearch/reports/stylize`.
+
+### Request Body
+
+```json
+{
+  "final_result": {
+    "response_content": "# Report Title\n\n# Abstract\n\nReport summary",
+    "infer_messages": [],
+    "chart_messages": []
+  },
+  "llm_config": {
+    "writing_checking": {
+      "model_name": "configured-model",
+      "model_type": "openai",
+      "base_url": "https://example.invalid/v1",
+      "api_key": "<api-key>"
+    }
+  }
+}
+```
+
+- `final_result`: Uses the same input contract as the HTML `/reports/convert` export.
+- `llm_config`: Accepts either a single model config or category-keyed config; `writing_checking` takes precedence over `general`.
+
+### Response Body
+
+```json
+{
+  "code": 200,
+  "msg": "success",
+  "convert_content": "<base64-zip>",
+  "style_applied": true,
+  "style_status": "applied"
+}
+```
+
+- `style_applied`: Whether generated CSS was injected into `report.html`.
+- `style_status`: `applied` means styling succeeded. `fallback` means the LLM timed out or failed, returned empty or non-string CSS, or CSS export/injection failed; the ZIP still contains readable baseline HTML.
+
+Supported charts (vertical `xychart-beta` bar/line charts, horizontal bar charts marked with `xychart-beta horizontal` or `horizontal: true`, `pie` charts, and `timeline` charts) are written directly into `report.html` as SVG and can be viewed offline. Mixed-sign bar charts use a separately labeled zero baseline so it is not confused with the minimum-value grid line. Other Mermaid types, or charts that cannot be parsed, remain readable source code blocks and do not load Mermaid.js.
+
+The styling prompt asks the LLM to follow CSS-only and fixed-desktop-canvas restrictions, including avoiding external resources, scripts, fabricated text, hidden report content, `@media`, and changes to the `.report-shell` width. These are prompt guidance, not runtime enforcement. After optional CSS fence normalization, the service injects any nonempty CSS string into the baseline HTML without filtering declarations, selectors, at-rules, or width overrides. Arbitrary CSS declarations do not trigger `fallback`. Invalid requests or LLM configuration return HTTP 400, base export failures return HTTP 500, and style-only failures return HTTP 200 with `fallback`.
+
 ## ZIP Layout
 
 The ZIP bundle always contains `report_bundle/report.md` and the main exported artifact for the requested format. Source-tracing assets, chart assets, and Mermaid debug files appear only when relevant.
@@ -92,9 +140,10 @@ Notes:
 
 ### Mermaid
 
-- For HTML export, Mermaid is rendered offline to SVG through `mmdc` and embedded into the HTML output.
-- For DOCX export, Mermaid is rendered offline to PNG through `mmdc` and then converted through pandoc.
-- If `mmdc` is unavailable, the export does not fail. The Mermaid source block is preserved in the output instead.
+- For `/reports/convert` HTML export, Mermaid is rendered offline to SVG through `mmdc` and embedded into the HTML output.
+- For `/reports/convert` DOCX export, Mermaid is rendered offline to PNG through `mmdc` and then converted through pandoc.
+- If `mmdc` is unavailable for `/reports/convert`, the export does not fail. The Mermaid source block is preserved in the output instead.
+- `/reports/stylize` executes neither `mmdc` nor Mermaid.js: it deterministically converts vertical `xychart-beta`, horizontal `xychart-beta horizontal` (also `horizontal: true`), `pie`, and `timeline` charts into inline SVG. Mixed-sign bars include a labeled zero baseline. Unsupported or invalid Mermaid remains a source block. This path does not create Mermaid CLI debug artifacts.
 
 ### Math Formulas
 

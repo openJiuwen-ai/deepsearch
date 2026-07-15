@@ -3,6 +3,8 @@ import binascii
 import io
 import logging
 import zipfile
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -11,8 +13,100 @@ from server.deepsearch.common.exception.exceptions import (
     ReportConvertExecutionException,
     ReportConvertValidationException,
 )
+from openjiuwen_deepsearch.algorithm.report_style.exceptions import (
+    ReportStyleExportError,
+    ReportStyleValidationError,
+)
 from server.schemas.report import ReportConvertReq, ReportFormat
 from server.deepsearch.core.manager.report_manager.report_processor import ReportHtml, ReportWord
+
+
+@pytest.mark.asyncio
+async def test_report_stylize_returns_algorithm_result(monkeypatch):
+    """Validate that the thin stylize route maps the algorithm result unchanged.
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture.
+    """
+    from openjiuwen_deepsearch.algorithm.report_style.service import StyledReportResult
+    from server.routers import report as report_router
+
+    assert hasattr(report_router, "report_stylize")
+
+    @asynccontextmanager
+    async def fake_style_context(_config):
+        """Provide a fake LLM runtime for the route contract test.
+
+        Args:
+            _config: 路由传入的 LLM 配置。
+
+        Yields:
+            dict: 伪造的 LLM 运行时对象。
+        """
+        yield {"model_name": "style-model", "model": object()}
+
+    monkeypatch.setattr(report_router, "report_style_llm_context", fake_style_context)
+    monkeypatch.setattr(
+        report_router,
+        "stylize_report",
+        AsyncMock(return_value=StyledReportResult("UEs=", True, "applied")),
+    )
+
+    response = await report_router.report_stylize(
+        {
+            "final_result": {"response_content": "正文"},
+            "llm_config": {"model_name": "style-model", "api_key": "key"},
+        }
+    )
+
+    assert response.convert_content == "UEs="
+    assert response.style_applied is True
+    assert response.style_status == "applied"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("style_error", "expected_status"),
+    [
+        (ReportStyleValidationError("invalid input"), 400),
+        (ReportStyleExportError("export failed"), 500),
+    ],
+)
+async def test_report_stylize_maps_algorithm_errors(monkeypatch, style_error, expected_status):
+    """Validate that stylize errors retain their API status classification.
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture.
+        style_error: 算法层抛出的样式化异常。
+        expected_status: 期望映射的 HTTP 状态码。
+    """
+    from server.routers import report as report_router
+
+    @asynccontextmanager
+    async def fake_style_context(_config):
+        """Provide a fake LLM runtime for the route error test.
+
+        Args:
+            _config: 路由传入的 LLM 配置。
+
+        Yields:
+            dict: 伪造的 LLM 运行时对象。
+        """
+        yield {"model_name": "style-model", "model": object()}
+
+    monkeypatch.setattr(report_router, "report_style_llm_context", fake_style_context)
+    monkeypatch.setattr(report_router, "stylize_report", AsyncMock(side_effect=style_error))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await report_router.report_stylize(
+            {
+                "final_result": {"response_content": "正文"},
+                "llm_config": {"model_name": "style-model", "api_key": "key"},
+            }
+        )
+
+    assert exc_info.value.status_code == expected_status
+
 
 def test_report_convert_returns_zip_base64(monkeypatch):
     """Validate that report_convert returns a ZIP bundle encoded as base64.
