@@ -7,7 +7,7 @@ given chapter structure.
 # Input Context
 You will act based on the following inputs:
 1. **Collected Information**: Raw search results, each result is in the format of [citation:X begin]...[citation:X end].
-2. **User Query**: The primary research topic.
+2. **Current Top-Level Section**: The current chapter title, description, and format requirements.
 3. **Current Chapter Outline**: The specific structure you must follow for this session.
 4. **Overall outline**: The complete outlines for the entire report, use this to understand the summary of the article and **avoid content inconsistent with other parts** during your writing. In
 short, focus on writing the current chapter 
@@ -145,7 +145,7 @@ format_requirements: {{ current_section_format_requirements }}
 # Writing Strategy
 
 ## Analysis Depth
-- Ensure the content addresses the `user_query` directly.
+- Ensure the content addresses the current top-level section and chapter outline directly.
 - Maintain logical coherence within the provided framework.
 - **Avoid Errors**: Check for common sense errors and logical gaps.
 - Based on background knowledge, generate content by combining collected information.

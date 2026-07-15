@@ -6,7 +6,7 @@ Your task is to produce a short, high-signal chapter section that is directly us
 # Input Context
 You will write using:
 1. **Collected Information**: Search results wrapped by [citation:X begin] ... [citation:X end].
-2. **User Query**: Main research objective.
+2. **Current Top-Level Section**: The current chapter title, description, and format requirements.
 3. **Current Chapter Outline**: The exact chapter/subchapter structure for this section.
 4. **Overall Outline**: Full report outline for context consistency.
 5. **Background Knowledge**: Condensed context from parent sections.

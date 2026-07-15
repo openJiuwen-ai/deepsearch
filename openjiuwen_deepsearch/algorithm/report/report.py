@@ -1689,12 +1689,6 @@ class Reporter:
             tmp_context["section_description"] = section_description
             tmp_context["section_format_requirements"] = section_format_requirements
             tmp_context["current_outline"] = current_inputs.get("current_outline", "")
-            tmp_context["current_section"] = {
-                "title": section_task,
-                "description": section_description,
-                "format_requirements": section_format_requirements,
-                "id": section_idx,
-            }
             tmp_context["report_type"] = current_inputs.get("report_type", "professional")
             tmp_context["paragraph_style"] = current_inputs.get("paragraph_style", "detailed")
             tmp_context.update(
@@ -2647,7 +2641,6 @@ class Reporter:
                     current_section_format_requirements=current_section_format_requirements,
                     current_chapter_outline=current_chapter_outline,
                     current_subsection=current_subsection,
-                    collected_evidence=infos,
                     **build_section_local_contract_prompt_context(
                         current_inputs.get("section_local_contract")
                     ),
