@@ -457,11 +457,7 @@ def main(
                                    需提供 vlm_model_name、type、base_url 和 api_key，将尝试用llm进行vlm迭代优化。")
 
         # 解析联网增强引擎配置。search_fetch 与 research 共用同一搜索引擎配置契约。
-        if args.search_mode == "research" or (
-            args.mode == "query"
-            and args.search_mode in ("search", "react")
-            and args.tool_map == "search_fetch"
-        ):
+        if args.search_mode == "research" or args.tool_map == "search_fetch":
             current_agent_config["web_search_engine_config"]["search_engine_name"] = args.web_search_engine_name
             current_agent_config["web_search_engine_config"]["search_api_key"] = bytearray(
                 args.web_search_api_key,

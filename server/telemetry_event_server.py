@@ -263,6 +263,7 @@ class CreateSearchRunRequest(BaseModel):
             PerQuestionParams.model_validate(merged)
         return self
 
+
 def _merge_per_question(
     current_agent_config: dict[str, Any],
     req: CreateSearchRunRequest,

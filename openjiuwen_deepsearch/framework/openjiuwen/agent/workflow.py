@@ -180,7 +180,7 @@ def _initialize_web_search_context_from_agent_config(agent_config: AgentConfig):
     """Instantiate and register the active web search engine for the current run."""
     custom_web = agent_config.custom_web_search_config
     web_search_config = agent_config.web_search_engine_config
-    web_engine_name, web_mapping = DeepresearchAgent._register_web_search_tool(custom_web, web_search_config)
+    web_engine_name, web_mapping = DeepresearchAgent.register_web_search_tool(custom_web, web_search_config)
     web_search_token = web_search_context.set(
         {web_engine_name: web_mapping[web_engine_name](**web_search_config.model_dump())}
     )
@@ -431,7 +431,7 @@ class DeepresearchAgent(BaseAgent):
                 logger.warning("[DeepResearchAgent.run] Failed to release checkpointer session.")
 
     @staticmethod
-    def _register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig):
+    def register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig):
         """注册网络搜索工具"""
         search_engine_mapping = update_web_search_mapping(
             custom_web.custom_web_search_file, custom_web.custom_web_search_func
