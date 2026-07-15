@@ -103,7 +103,10 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
 
     def _parse_atom(self, text: str) -> list[dict[str, Any]]:
         ns = {"atom": ATOM_NAMESPACE}
-        root = ET.fromstring(text)
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            return []
         rows: list[dict[str, Any]] = []
         for entry in root.findall("atom:entry", ns):
             arxiv_id = truncate(entry.findtext("atom:id", default="", namespaces=ns), MAX_URL_LENGTH)
