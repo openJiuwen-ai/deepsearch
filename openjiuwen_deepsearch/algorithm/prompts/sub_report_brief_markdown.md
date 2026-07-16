@@ -93,7 +93,8 @@ format_requirements: {{ current_section_format_requirements }}
 - Target chapter length: **450-900 Chinese characters** (or **300-550 English words**).
 - Hard ceiling: **1200 Chinese characters** (or **700 English words**).
 - Keep each `##` subsection to at most **1 short paragraph** (2 only when unavoidable).
-- Prefer at most **1 table** for the whole chapter. Skip tables when they do not improve clarity.
+- For optional tables that are not explicitly required by the user, `format_requirements`, or the current chapter outline, prefer at most **1 table** for the whole chapter and skip them when they do not improve clarity.
+- Required tables are exempt from the one-table preference: if the user, `format_requirements`, or the current chapter outline requires multiple tables, exact columns, or specific row objects, preserve those requirements and keep each table concise.
 - If a table is used, write one intro sentence above it and exactly one concise plain-text caption below it; keep the caption to the table's subject/scope only. Do not manually number the table or add extra table notes/blockquotes such as "表格说明", "表说明", "Table note", or "Note".
 - Avoid long historical background, repeated context, and generic transition language.
 
