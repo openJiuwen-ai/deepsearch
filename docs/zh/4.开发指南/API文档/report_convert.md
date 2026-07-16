@@ -59,6 +59,54 @@
 - `convert_content`
   - base64 编码后的 ZIP 压缩包。
 
+## `/reports/stylize`
+
+`/reports/stylize` 会生成与 HTML 导出相同结构的 ZIP bundle，并基于报告标题、章节树与摘要调用 LLM 生成 CSS。LLM 不会改写 Markdown 正文、链接、图表或推理资源。该接口将受支持的 Mermaid 图表源码转换为内嵌 SVG，不调用 `mmdc` 或 Mermaid.js。
+
+完整接口路径为 `/api/v1/agent/deepsearch/reports/stylize`。
+
+### 请求参数
+
+```json
+{
+  "final_result": {
+    "response_content": "# 报告标题\n\n# 摘要\n\n报告摘要",
+    "infer_messages": [],
+    "chart_messages": []
+  },
+  "llm_config": {
+    "writing_checking": {
+      "model_name": "configured-model",
+      "model_type": "openai",
+      "base_url": "https://example.invalid/v1",
+      "api_key": "<api-key>"
+    }
+  }
+}
+```
+
+- `final_result`：与 `/reports/convert` 的 HTML 导出输入契约一致。
+- `llm_config`：可传单模型配置，或包含 `writing_checking`/`general` 的类别配置；类别配置优先使用 `writing_checking`。
+
+### 响应参数
+
+```json
+{
+  "code": 200,
+  "msg": "success",
+  "convert_content": "<base64-zip>",
+  "style_applied": true,
+  "style_status": "applied"
+}
+```
+
+- `style_applied`：CSS 是否成功生成并注入 `report.html`。
+- `style_status`：`applied` 表示已美化；`fallback` 表示 LLM 超时或调用失败、返回空 CSS 或非字符串 CSS，或 CSS 导出/注入失败；ZIP 仍包含可打开的普通 HTML。
+
+受支持的图表（纵向 `xychart-beta` 柱状图/折线图、通过 `xychart-beta horizontal` 或 `horizontal: true` 标记的横向柱状图、`pie` 饼图和 `timeline` 时间轴）会作为 SVG 直接写入 `report.html`，可离线查看。混合正负值柱状图会单独绘制并标注零基线，避免与最小值网格线混淆。其他 Mermaid 类型或无法解析的图表会保留为源码代码块，不会加载 Mermaid.js。
+
+样式提示词会要求 LLM 遵守仅输出 CSS 与固定桌面画布等限制，包括避免加载外部资源、执行脚本、伪造文本、隐藏正文、使用 `@media` 或修改 `.report-shell` 宽度。这些要求仅为提示词指导，并非运行时强制规则。服务会先进行可选 CSS 围栏规整，随后将任意非空 CSS 字符串注入基础 HTML，不会在运行时过滤 CSS 声明、选择器、at-rule 或宽度覆盖；任意 CSS 声明本身不会触发 `fallback`。请求/LLM 配置不合法返回 HTTP 400，基础报告导出失败返回 HTTP 500；仅样式分支失败返回 HTTP 200 与 `fallback`。
+
 ## ZIP 内容结构
 
 ZIP 压缩包始终包含 `report_bundle/report.md` 和当前导出格式的主文件；推理图、图表资源和 Mermaid 调试文件会按需出现。
@@ -92,9 +140,10 @@ report_bundle/
 
 ### Mermaid 图
 
-- HTML 导出时，优先通过 `mmdc` 离线渲染为 SVG 并内嵌到 HTML。
-- DOCX 导出时，优先通过 `mmdc` 离线渲染为 PNG，再通过 pandoc 转入 DOCX。
-- 如果当前环境缺少 `mmdc`，则不会中断整个导出流程，而是保留 Mermaid 源代码块。
+- `/reports/convert` 的 HTML 导出时，优先通过 `mmdc` 离线渲染为 SVG 并内嵌到 HTML。
+- `/reports/convert` 的 DOCX 导出时，优先通过 `mmdc` 离线渲染为 PNG，再通过 pandoc 转入 DOCX。
+- `/reports/convert` 当前环境缺少 `mmdc` 时，不会中断整个导出流程，而是保留 Mermaid 源代码块。
+- `/reports/stylize` 不执行 `mmdc` 或 Mermaid.js：它会将纵向 `xychart-beta`、横向 `xychart-beta horizontal`（也支持 `horizontal: true`）、`pie` 和 `timeline` 确定性转换为内嵌 SVG；混合正负值柱状图会标注零基线。不支持或非法 Mermaid 会保留为源码块。此路径不会生成 Mermaid CLI 调试文件。
 
 ### 数学公式
 
