@@ -33,16 +33,19 @@ async def test_report_stylize_returns_algorithm_result(monkeypatch):
 
     assert hasattr(report_router, "report_stylize")
 
+    received_configs = []
+
     @asynccontextmanager
-    async def fake_style_context(_config):
+    async def fake_style_context(config):
         """Provide a fake LLM runtime for the route contract test.
 
         Args:
-            _config: 路由传入的 LLM 配置。
+            config: 路由传入的 LLM 配置。
 
         Yields:
             dict: 伪造的 LLM 运行时对象。
         """
+        received_configs.append(config)
         yield {"model_name": "style-model", "model": object()}
 
     monkeypatch.setattr(report_router, "report_style_llm_context", fake_style_context)
@@ -62,6 +65,7 @@ async def test_report_stylize_returns_algorithm_result(monkeypatch):
     assert response.convert_content == "UEs="
     assert response.style_applied is True
     assert response.style_status == "applied"
+    assert received_configs == [{"model_name": "style-model", "api_key": bytearray(b"key")}]
 
 
 @pytest.mark.asyncio

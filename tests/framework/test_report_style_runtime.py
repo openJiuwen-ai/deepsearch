@@ -26,8 +26,8 @@ async def test_report_style_runtime_prefers_writing_model_and_restores_context(m
     try:
         async with runtime.report_style_llm_context(
             {
-                "general": {"model_name": "general-model", "api_key": "general-key"},
-                "writing_checking": {"model_name": "styled-model", "api_key": "style-key"},
+                "general": {"model_name": "general-model", "api_key": bytearray(b"general-key")},
+                "writing_checking": {"model_name": "styled-model", "api_key": bytearray(b"style-key")},
             }
         ) as llm:
             assert llm is styled_llm
@@ -49,7 +49,7 @@ async def test_report_style_runtime_accepts_single_model_and_rejects_empty_confi
     monkeypatch.setattr(runtime, "create_llm_obj", lambda config: single_llm)
 
     async with runtime.report_style_llm_context(
-        {"model_name": "single-model", "api_key": "single-key"}
+        {"model_name": "single-model", "api_key": bytearray(b"single-key")}
     ) as llm:
         assert llm is single_llm
 

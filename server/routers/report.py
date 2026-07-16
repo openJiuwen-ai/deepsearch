@@ -67,7 +67,8 @@ async def report_stylize(request: dict) -> ReportStylizeRes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     try:
-        async with report_style_llm_context(req.llm_config) as llm:
+        llm_config = mgr.normalize_report_stylize_llm_config(req.llm_config)
+        async with report_style_llm_context(llm_config) as llm:
             result = await stylize_report(req.final_result, llm)
     except ReportStyleValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
