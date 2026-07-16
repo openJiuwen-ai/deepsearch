@@ -137,6 +137,18 @@
   当 `info_collector_search_method=all` 或配置了 `api_tools_config.collector_tools` 进入 LLM tool-calling 分支时，
   LLM 工具调用结束后也会确定性补跑该 query 的 secondary vertical engine。
 
+### 学术垂直搜索失败降级流程
+
+- direct web 分支中，primary web engine 和 secondary vertical engine 会并行执行。secondary vertical engine 失败时，不会重试
+  secondary，也不会再次 fallback 调用 primary，只记录 fail-fast 事件并保留 primary 结果。
+- LLM tool-calling 分支中，LLM 的 `web_search_tool` 调用始终使用 primary web engine。LLM 工具调用结束后，collector
+  才根据 query item 的 `search_engine_name` 补跑 secondary vertical engine。该 secondary 失败时不 fallback 到 primary，避免对同一
+  query 重复调用 primary。
+- 单独调用 non-default vertical engine 时，如果请求启用可降级策略，则 PubMed/arXiv 返回 error 或抛出异常后，collector 记录
+  vertical fallback 事件，并使用默认 web engine 对同一 query 重新执行一次。
+- PubMed/arXiv 返回非法 XML、错误 XML 或非预期 root 时，wrapper 会抛出搜索响应类异常；`run_web_search` 会将其转换为
+  `error` 结果，collector 再根据上述策略执行 fail-fast 或 primary fallback。
+
 ## 边界与错误处理
 
 - collector 子图使用独立 workflow session，依赖驱动并发时避免共享子图状态。

@@ -4,7 +4,9 @@ import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.arxiv import (
     ArxivSearchAPIWrapper,
-    arxiv_rate_limiter,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common import (
+    ScholarlySearchResponseError,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed import PubMedSearchAPIWrapper
 
@@ -26,7 +28,7 @@ class DummyResponse:
 
 @pytest.mark.asyncio
 async def test_pubmed_aresults_uses_limited_helper_for_esearch_and_esummary():
-    wrapper = PubMedSearchAPIWrapper(rate_limit_backoff_base_seconds=0)
+    wrapper = PubMedSearchAPIWrapper()
     search_raw = {"esearchresult": {"idlist": ["1"]}}
     fetch_text = """
     <PubmedArticleSet>
@@ -122,58 +124,61 @@ def test_pubmed_parse_fetch_xml_falls_back_to_bibliographic_content_without_abst
     assert rows[0]["content"] == "Bibliographic Journal | 2024 | Grace Hopper"
 
 
-@pytest.mark.asyncio
-async def test_pubmed_async_request_retries_429_after_rate_limit_acquire():
-    wrapper = PubMedSearchAPIWrapper(rate_limit_backoff_base_seconds=0)
-    client = Mock()
-    client.get = AsyncMock(side_effect=[
-        DummyResponse(status_code=429, headers={"Retry-After": "0"}),
-        DummyResponse(json_data={"ok": True}),
-    ])
+def test_pubmed_parse_fetch_xml_rejects_invalid_or_error_response():
+    wrapper = PubMedSearchAPIWrapper()
 
-    with patch.object(wrapper, "_aacquire_rate_limit", AsyncMock()) as mock_acquire, \
-            patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed."
-                  "asyncio.sleep", AsyncMock()) as mock_sleep:
-        raw = await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
+    with pytest.raises(ScholarlySearchResponseError, match="invalid XML"):
+        wrapper._parse_fetch_xml("<PubmedArticleSet>", ["1"])
+    with pytest.raises(ScholarlySearchResponseError, match="returned error"):
+        wrapper._parse_fetch_xml("<ERROR>Bad request</ERROR>", ["1"])
+    with pytest.raises(ScholarlySearchResponseError, match="unexpected XML root"):
+        wrapper._parse_fetch_xml("<html><body>Service unavailable</body></html>", ["1"])
 
-    assert raw == {"ok": True}
-    assert mock_acquire.await_count == 2
-    mock_sleep.assert_awaited_once_with(0.0)
+
+def test_pubmed_parse_fetch_xml_allows_valid_empty_article_set():
+    wrapper = PubMedSearchAPIWrapper()
+
+    assert wrapper._parse_fetch_xml("<PubmedArticleSet></PubmedArticleSet>", ["1"]) == []
 
 
 @pytest.mark.asyncio
-async def test_pubmed_async_request_retries_rate_limit_payload():
-    wrapper = PubMedSearchAPIWrapper(rate_limit_backoff_base_seconds=0)
+async def test_pubmed_async_request_fails_fast_on_rate_limit_payload():
+    wrapper = PubMedSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(side_effect=[
-        DummyResponse(json_data={"error": "API rate limit exceeded"}),
-        DummyResponse(json_data={"ok": True}),
-    ])
+    client.get = AsyncMock(return_value=DummyResponse(json_data={"error": "API rate limit exceeded"}))
 
-    with patch.object(wrapper, "_aacquire_rate_limit", AsyncMock()) as mock_acquire, \
-            patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed."
-                  "asyncio.sleep", AsyncMock()) as mock_sleep:
-        raw = await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
+    with patch.object(wrapper, "_aacquire_rate_limit", AsyncMock()) as mock_acquire:
+        with pytest.raises(RuntimeError, match="rate limit exceeded"):
+            await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
 
-    assert raw == {"ok": True}
-    assert mock_acquire.await_count == 2
-    mock_sleep.assert_awaited_once_with(0)
+    assert mock_acquire.await_count == 1
+    assert client.get.await_count == 1
+
+
+def test_arxiv_parse_atom_rejects_invalid_or_non_feed_response():
+    wrapper = ArxivSearchAPIWrapper()
+
+    with pytest.raises(ScholarlySearchResponseError, match="invalid XML"):
+        wrapper._parse_atom("<feed>")
+    with pytest.raises(ScholarlySearchResponseError, match="non-Atom feed"):
+        wrapper._parse_atom("<html><body>Service unavailable</body></html>")
+
+
+def test_arxiv_parse_atom_allows_valid_empty_feed():
+    wrapper = ArxivSearchAPIWrapper()
+
+    assert wrapper._parse_atom('<feed xmlns="http://www.w3.org/2005/Atom"></feed>') == []
 
 
 @pytest.mark.asyncio
-async def test_arxiv_async_request_retries_429_after_three_second_limiter():
-    wrapper = ArxivSearchAPIWrapper(rate_limit_backoff_base_seconds=0)
+async def test_arxiv_async_request_fails_fast_on_429_after_limiter():
+    wrapper = ArxivSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(side_effect=[
-        DummyResponse(status_code=429, headers={"Retry-After": "0"}),
-        DummyResponse(text="<feed xmlns='http://www.w3.org/2005/Atom'></feed>"),
-    ])
+    client.get = AsyncMock(return_value=DummyResponse(status_code=429, headers={"Retry-After": "0"}))
 
-    with patch.object(arxiv_rate_limiter, "aacquire", AsyncMock()) as mock_acquire, \
-            patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.arxiv."
-                  "asyncio.sleep", AsyncMock()) as mock_sleep:
-        text = await wrapper._aget_text(client, "https://example.com/api/query")
+    with patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.arxiv."
+               "arxiv_rate_limiter.aacquire", AsyncMock()):
+        with pytest.raises(RuntimeError, match="status 429"):
+            await wrapper._aget_text(client, "https://example.com/api/query")
 
-    assert text.startswith("<feed")
-    assert mock_acquire.await_count == 2
-    mock_sleep.assert_awaited_once_with(0.0)
+    assert client.get.await_count == 1

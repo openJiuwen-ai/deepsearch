@@ -149,17 +149,24 @@ def route_secondary_search_engine_for_query(query: str) -> str:
     if not text:
         return ""
 
-    def has_any(keywords: tuple[str, ...]) -> bool:
-        return any(keyword in text for keyword in keywords)
-
-    def has_token(tokens: tuple[str, ...]) -> bool:
-        return any(re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", text) for token in tokens)
+    def has_keyword(keywords: tuple[str, ...]) -> bool:
+        for keyword in keywords:
+            if re.search(r"[a-z0-9]", keyword):
+                if re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", text):
+                    return True
+            elif keyword in text:
+                return True
+        return False
 
     pubmed_keywords = (
         "medicine", "medical", "clinical", "clinic", "biomedical", "biology", "biological",
         "drug", "disease", "epidemiology", "gene", "genetic", "protein", "patient",
         "therapy", "treatment", "trial", "pubmed", "cancer", "医学", "临床", "生物",
         "药物", "疾病", "流行病", "基因", "蛋白", "患者", "治疗",
+    )
+    pubmed_keywords += (
+        "drugs", "diseases", "genes", "proteins", "patients",
+        "therapies", "treatments", "trials",
     )
     arxiv_source_keywords = (
         "arxiv", "preprint", "预印本",
@@ -173,9 +180,12 @@ def route_secondary_search_engine_for_query(query: str) -> str:
     arxiv_short_tokens = (
         "ai", "cs", "llm", "rag", "ml",
     )
-    if has_token(pubmed_keywords):
+    arxiv_domain_keywords += (
+        "algorithms", "neural networks", "transformers",
+    )
+    if has_keyword(pubmed_keywords):
         return "pubmed"
-    if has_any(arxiv_source_keywords) or has_any(arxiv_domain_keywords) or has_token(arxiv_short_tokens):
+    if has_keyword(arxiv_source_keywords) or has_keyword(arxiv_domain_keywords) or has_keyword(arxiv_short_tokens):
         return "arxiv"
     return ""
 

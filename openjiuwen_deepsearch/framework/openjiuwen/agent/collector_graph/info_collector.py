@@ -428,7 +428,80 @@ class InfoRetrievalNode(BaseNode):
         default_search_engine_name = str(
             state.get("web_search_engine_name") or SearchEngine.PETAL.value
         ).strip()
+        retry_direct_search = object()
+
+        async def handle_search_failure(error: Any, reason: str, current_try: int):
+            should_fallback_to_default = self._should_fallback_to_default_search(
+                request.search_engine_name,
+                default_search_engine_name,
+            )
+            operation = f"direct call search tool '{request.tool_name}'"
+            if reason == "returned_error":
+                operation = f"{operation} returned error"
+
+            if request.fallback_to_default and should_fallback_to_default:
+                self._log_vertical_search_fallback(
+                    VerticalSearchFallbackLog(
+                        section_idx=section_idx,
+                        step_title=step_title,
+                        search_engine_name=request.search_engine_name,
+                        default_search_engine_name=default_search_engine_name,
+                        query=request.query,
+                        reason=reason,
+                    )
+                )
+                fallback_operation = (
+                    f"{operation}, fallback to default search engine "
+                    f"'{default_search_engine_name}'"
+                )
+                if reason == "exception":
+                    fallback_operation = (
+                        f"{operation} failed, fallback to default search engine "
+                        f"'{default_search_engine_name}'"
+                    )
+                self._log_vertical_search_failure_detail(
+                    section_idx=section_idx,
+                    step_title=step_title,
+                    operation=fallback_operation,
+                    error=error,
+                    extra_info=f"{request.search_engine_name}: {request.query}",
+                    level=logging.WARNING,
+                )
+                return await self._direct_search_with_retry(
+                    DirectSearchRequest(
+                        tool=request.tool,
+                        tool_name=request.tool_name,
+                        query=request.query,
+                        search_engine_name=default_search_engine_name,
+                    ),
+                    state,
+                )
+
+            if not request.retry_on_error and should_fallback_to_default:
+                self._log_vertical_search_failed_fast(
+                    section_idx,
+                    step_title,
+                    request.search_engine_name,
+                    request.query,
+                    reason,
+                )
+                return None
+
+            record_llm_retry_log(
+                current_try=current_try,
+                max_retries=max_retries if request.retry_on_error else current_try,
+                section_idx=section_idx,
+                step_title=step_title,
+                operation=operation,
+                error=error,
+                extra_info=f"{request.search_engine_name}: {request.query}",
+            )
+            if request.retry_on_error and current_try < max_retries:
+                return retry_direct_search
+            return None
+
         for retry_idx in range(max_retries):
+            current_try = retry_idx + 1
             try:
                 tool_result_raw = await request.tool.invoke({
                     "query": request.query,
@@ -436,122 +509,16 @@ class InfoRetrievalNode(BaseNode):
                 })
                 if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
                     error_msg = tool_result_raw.get("error", "")
-                    current_try = retry_idx + 1
-                    if request.fallback_to_default and self._should_fallback_to_default_search(
-                            request.search_engine_name,
-                            default_search_engine_name,
-                    ):
-                        self._log_vertical_search_fallback(
-                            VerticalSearchFallbackLog(
-                                section_idx=section_idx,
-                                step_title=step_title,
-                                search_engine_name=request.search_engine_name,
-                                default_search_engine_name=default_search_engine_name,
-                                query=request.query,
-                                reason="returned_error",
-                            )
-                        )
-                        record_llm_retry_log(
-                            current_try=current_try,
-                            max_retries=current_try,
-                            section_idx=section_idx,
-                            step_title=step_title,
-                            operation=f"direct call search tool '{request.tool_name}' returned error, "
-                                      f"fallback to default search engine '{default_search_engine_name}'",
-                            error=error_msg,
-                            extra_info=f"{request.search_engine_name}: {request.query}",
-                        )
-                        return await self._direct_search_with_retry(
-                            DirectSearchRequest(
-                                tool=request.tool,
-                                tool_name=request.tool_name,
-                                query=request.query,
-                                search_engine_name=default_search_engine_name,
-                            ),
-                            state,
-                        )
-                    record_llm_retry_log(
-                        current_try=current_try,
-                        max_retries=max_retries if request.retry_on_error else current_try,
-                        section_idx=section_idx,
-                        step_title=step_title,
-                        operation=f"direct call search tool '{request.tool_name}' returned error",
-                        error=error_msg,
-                        extra_info=f"{request.search_engine_name}: {request.query}",
-                    )
-                    if not request.retry_on_error and self._should_fallback_to_default_search(
-                            request.search_engine_name,
-                            default_search_engine_name,
-                    ):
-                        self._log_vertical_search_failed_fast(
-                            section_idx,
-                            step_title,
-                            request.search_engine_name,
-                            request.query,
-                            "returned_error",
-                        )
-                    if request.retry_on_error and current_try < max_retries:
+                    failure_result = await handle_search_failure(error_msg, "returned_error", current_try)
+                    if failure_result is retry_direct_search:
                         continue
-                    return None
+                    return failure_result
                 return tool_result_raw
             except Exception as e:
-                current_try = retry_idx + 1
-                if request.fallback_to_default and self._should_fallback_to_default_search(
-                        request.search_engine_name,
-                        default_search_engine_name,
-                ):
-                    self._log_vertical_search_fallback(
-                        VerticalSearchFallbackLog(
-                            section_idx=section_idx,
-                            step_title=step_title,
-                            search_engine_name=request.search_engine_name,
-                            default_search_engine_name=default_search_engine_name,
-                            query=request.query,
-                            reason="exception",
-                        )
-                    )
-                    record_llm_retry_log(
-                        current_try=current_try,
-                        max_retries=current_try,
-                        section_idx=section_idx,
-                        step_title=step_title,
-                        operation=f"direct call search tool '{request.tool_name}' failed, "
-                                  f"fallback to default search engine '{default_search_engine_name}'",
-                        error=e,
-                        extra_info=f"{request.search_engine_name}: {request.query}",
-                    )
-                    return await self._direct_search_with_retry(
-                        DirectSearchRequest(
-                            tool=request.tool,
-                            tool_name=request.tool_name,
-                            query=request.query,
-                            search_engine_name=default_search_engine_name,
-                        ),
-                        state,
-                )
-                record_llm_retry_log(
-                    current_try=current_try,
-                    max_retries=max_retries if request.retry_on_error else current_try,
-                    section_idx=section_idx,
-                    step_title=step_title,
-                    operation=f"direct call search tool '{request.tool_name}'",
-                    error=e,
-                    extra_info=f"{request.search_engine_name}: {request.query}",
-                )
-                if not request.retry_on_error and self._should_fallback_to_default_search(
-                        request.search_engine_name,
-                        default_search_engine_name,
-                ):
-                    self._log_vertical_search_failed_fast(
-                        section_idx,
-                        step_title,
-                        request.search_engine_name,
-                        request.query,
-                        "exception",
-                    )
-                if request.retry_on_error and current_try < max_retries:
+                failure_result = await handle_search_failure(e, "exception", current_try)
+                if failure_result is retry_direct_search:
                     continue
-                return None
+                return failure_result
 
     @staticmethod
     def _should_fallback_to_default_search(search_engine_name: str, default_search_engine_name: str) -> bool:
@@ -588,6 +555,35 @@ class InfoRetrievalNode(BaseNode):
                 search_engine_name,
                 query,
                 reason,
+            )
+
+    @staticmethod
+    def _log_vertical_search_failure_detail(
+            section_idx: int,
+            step_title: str,
+            operation: str,
+            error: Any,
+            extra_info: str,
+            level: int = logging.INFO,
+    ) -> None:
+        log_method = logger.log
+        if LogManager.is_sensitive():
+            log_method(
+                level,
+                "section_idx: %s | [InfoRetrievalNode] %s",
+                section_idx,
+                operation,
+            )
+        else:
+            log_method(
+                level,
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] %s: %s | Extra Info: %s",
+                section_idx,
+                step_title,
+                operation,
+                error,
+                extra_info,
+                exc_info=isinstance(error, BaseException),
             )
 
     @staticmethod
@@ -637,6 +633,8 @@ class InfoRetrievalNode(BaseNode):
                 tool_name=tool_name,
                 query=query,
                 search_engine_name=secondary_engine,
+                fallback_to_default=False,
+                retry_on_error=False,
             ),
             state,
         )

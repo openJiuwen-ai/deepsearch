@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from openjiuwen_deepsearch.config.config import WebSearchEngineConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import (
@@ -31,11 +32,13 @@ def _agent_input() -> dict:
     }
 
 
-def test_vertical_search_engines_are_registered_and_configurable():
+def test_vertical_search_engines_are_registered_but_not_primary_configurable():
     assert search_engine_mapping["pubmed"] is PubMedSearchAPIWrapper
     assert search_engine_mapping["arxiv"] is ArxivSearchAPIWrapper
-    assert WebSearchEngineConfig(search_engine_name="pubmed").search_engine_name == "pubmed"
-    assert WebSearchEngineConfig(search_engine_name="arxiv").search_engine_name == "arxiv"
+    with pytest.raises(ValidationError):
+        WebSearchEngineConfig(search_engine_name="pubmed")
+    with pytest.raises(ValidationError):
+        WebSearchEngineConfig(search_engine_name="arxiv")
 
 
 def test_query_object_and_retrieval_query_carry_secondary_engine():
@@ -73,10 +76,15 @@ def test_legacy_string_query_uses_heuristic_routing():
 def test_fallback_secondary_engine_routing():
     assert route_secondary_search_engine_for_query("glioblastoma clinical trial") == "pubmed"
     assert route_secondary_search_engine_for_query("gene expression analysis") == "pubmed"
+    assert route_secondary_search_engine_for_query("genes associated with cancer") == "pubmed"
+    assert route_secondary_search_engine_for_query("proteins in disease pathways") == "pubmed"
+    assert route_secondary_search_engine_for_query("patients in clinical trials") == "pubmed"
     assert route_secondary_search_engine_for_query("drug discovery pipeline") == "pubmed"
     assert route_secondary_search_engine_for_query("LLM RAG benchmark") == "arxiv"
     assert route_secondary_search_engine_for_query("generative AI models") == "arxiv"
+    assert route_secondary_search_engine_for_query("physics simulation benchmark") == "arxiv"
     assert route_secondary_search_engine_for_query("Apple annual revenue") == ""
+    assert route_secondary_search_engine_for_query("metaphysics philosophy") == ""
     assert route_secondary_search_engine_for_query("general productivity software") == ""
     assert route_secondary_search_engine_for_query("generation planning methods") == ""
     assert route_secondary_search_engine_for_query("generic database indexing") == ""
@@ -202,6 +210,43 @@ async def test_direct_parallel_secondary_error_does_not_retry_or_repeat_primary(
     assert "Vertical search failed fast" in caplog.text
     assert "engine=arxiv" in caplog.text
     assert "query=LLM RAG benchmark" in caplog.text
+    assert not any(record.levelname == "ERROR" for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_direct_parallel_secondary_exception_does_not_retry_or_repeat_primary(caplog):
+    caplog.set_level("INFO")
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "arxiv evidence",
+        "web_search_engine_name": "tavily",
+    }
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(side_effect=RuntimeError("429 Too Many Requests"))
+
+    result = await node._direct_search_with_retry(
+        DirectSearchRequest(
+            tool=web_tool,
+            tool_name="web_search_tool",
+            query="LLM RAG benchmark",
+            search_engine_name="arxiv",
+            fallback_to_default=False,
+            retry_on_error=False,
+        ),
+        state,
+    )
+
+    assert result is None
+    web_tool.invoke.assert_awaited_once_with({
+        "query": "LLM RAG benchmark",
+        "search_engine_name": "arxiv",
+    })
+    assert "Vertical search failed fast" in caplog.text
+    assert "engine=arxiv" in caplog.text
+    assert "reason=exception" in caplog.text
+    assert "query=LLM RAG benchmark" in caplog.text
+    assert not any(record.levelname == "ERROR" for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -288,3 +333,4 @@ async def test_single_secondary_error_falls_back_to_primary_engine(caplog):
     assert "engine=pubmed" in caplog.text
     assert "default_engine=tavily" in caplog.text
     assert "query=glioblastoma clinical trial" in caplog.text
+    assert not any(record.levelname == "ERROR" for record in caplog.records)

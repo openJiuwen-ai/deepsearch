@@ -18,6 +18,10 @@ PUBMED_API_KEY_MIN_INTERVAL_SECONDS = 1.0 / 10.0
 ARXIV_MIN_INTERVAL_SECONDS = 3.0
 
 
+class ScholarlySearchResponseError(RuntimeError):
+    """Raised when a scholarly search API returns a malformed or unexpected response."""
+
+
 class SharedIntervalRateLimiter:
     """Process-local sync/async limiter that spaces requests by a fixed interval."""
 
@@ -61,26 +65,3 @@ def ssl_verify() -> Union[str, bool]:
 
 def pubmed_rate_limiter(has_api_key: bool) -> SharedIntervalRateLimiter:
     return pubmed_api_key_rate_limiter if has_api_key else pubmed_default_rate_limiter
-
-
-def retry_after_seconds(headers: Any) -> float | None:
-    if not headers:
-        return None
-    value = None
-    try:
-        value = headers.get("Retry-After")
-    except AttributeError:
-        return None
-    if value is None:
-        return None
-    try:
-        return max(0.0, float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def retry_delay_seconds(attempt: int, headers: Any = None, base_delay: float = 1.0, max_delay: float = 8.0) -> float:
-    retry_after = retry_after_seconds(headers)
-    if retry_after is not None:
-        return retry_after
-    return min(max_delay, base_delay * (2 ** attempt))

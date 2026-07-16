@@ -30,8 +30,6 @@ class LLMConfig(BaseModel):
 class WebSearchEngineConfig(BaseModel):
     search_engine_name: Literal[
         "tavily",
-        "pubmed",
-        "arxiv",
         "google",
         "xunfei",
         "petal",

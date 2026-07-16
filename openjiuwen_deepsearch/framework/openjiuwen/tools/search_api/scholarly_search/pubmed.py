@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import time
 import xml.etree.ElementTree as ET
 from typing import Any, Generic, Optional, TypeVar, Union
 
@@ -15,8 +13,8 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH, MAX_URL_LENGTH
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common import (
     DEFAULT_PUBMED_SEARCH_URL,
+    ScholarlySearchResponseError,
     pubmed_rate_limiter,
-    retry_delay_seconds,
     ssl_verify,
     truncate,
 )
@@ -34,8 +32,6 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
 
     email: str | None = None
     tool: str = "openjiuwen-deepsearch"
-    rate_limit_max_attempts: int = 3
-    rate_limit_backoff_base_seconds: float = 1.0
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
@@ -89,81 +85,40 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return self._parse_ids(raw)
 
     async def _aget_json(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
-        last_response = None
-        for attempt in range(self.rate_limit_max_attempts):
-            await self._aacquire_rate_limit()
-            response = await client.get(url, params=params)
-            last_response = response
-            if response.status_code == 429:
-                await asyncio.sleep(self._retry_delay(attempt, response.headers))
-                continue
-            response.raise_for_status()
-            raw = response.json()
-            if self._is_rate_limited_payload(raw):
-                await asyncio.sleep(self._retry_delay(attempt, None))
-                continue
-            return raw
-        if last_response is not None:
-            last_response.raise_for_status()
-        raise RuntimeError("PubMed E-utilities rate limit exceeded")
+        await self._aacquire_rate_limit()
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        raw = response.json()
+        if self._is_rate_limited_payload(raw):
+            raise RuntimeError("PubMed E-utilities rate limit exceeded")
+        return raw
 
     async def _aget_text(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> str:
-        last_response = None
-        for attempt in range(self.rate_limit_max_attempts):
-            await self._aacquire_rate_limit()
-            response = await client.get(url, params=params)
-            last_response = response
-            if response.status_code == 429:
-                await asyncio.sleep(self._retry_delay(attempt, response.headers))
-                continue
-            response.raise_for_status()
-            return response.text
-        if last_response is not None:
-            last_response.raise_for_status()
-        raise RuntimeError("PubMed E-utilities rate limit exceeded")
+        await self._aacquire_rate_limit()
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        return response.text
 
     def _get_json(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> Any:
-        last_response = None
-        for attempt in range(self.rate_limit_max_attempts):
-            self._acquire_rate_limit()
-            response = requests.get(url, params=params, verify=verify, timeout=30)
-            last_response = response
-            if response.status_code == 429:
-                time.sleep(self._retry_delay(attempt, response.headers))
-                continue
-            response.raise_for_status()
-            raw = response.json()
-            if self._is_rate_limited_payload(raw):
-                time.sleep(self._retry_delay(attempt, None))
-                continue
-            return raw
-        if last_response is not None:
-            last_response.raise_for_status()
-        raise RuntimeError("PubMed E-utilities rate limit exceeded")
+        self._acquire_rate_limit()
+        response = requests.get(url, params=params, verify=verify, timeout=30)
+        response.raise_for_status()
+        raw = response.json()
+        if self._is_rate_limited_payload(raw):
+            raise RuntimeError("PubMed E-utilities rate limit exceeded")
+        return raw
 
     def _get_text(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> str:
-        last_response = None
-        for attempt in range(self.rate_limit_max_attempts):
-            self._acquire_rate_limit()
-            response = requests.get(url, params=params, verify=verify, timeout=30)
-            last_response = response
-            if response.status_code == 429:
-                time.sleep(self._retry_delay(attempt, response.headers))
-                continue
-            response.raise_for_status()
-            return response.text
-        if last_response is not None:
-            last_response.raise_for_status()
-        raise RuntimeError("PubMed E-utilities rate limit exceeded")
+        self._acquire_rate_limit()
+        response = requests.get(url, params=params, verify=verify, timeout=30)
+        response.raise_for_status()
+        return response.text
 
     def _acquire_rate_limit(self) -> None:
         pubmed_rate_limiter(bool(self._api_key_to_str())).acquire()
 
     async def _aacquire_rate_limit(self) -> None:
         await pubmed_rate_limiter(bool(self._api_key_to_str())).aacquire()
-
-    def _retry_delay(self, attempt: int, headers: Any) -> float:
-        return retry_delay_seconds(attempt, headers, base_delay=self.rate_limit_backoff_base_seconds)
 
     @staticmethod
     def _is_rate_limited_payload(raw: Any) -> bool:
@@ -211,8 +166,15 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
     def _parse_fetch_xml(self, text: str, ids: list[str]) -> list[dict[str, Any]]:
         try:
             root = ET.fromstring(text)
-        except ET.ParseError:
-            return []
+        except ET.ParseError as exc:
+            raise ScholarlySearchResponseError("PubMed EFetch returned invalid XML") from exc
+        if root.tag == "ERROR":
+            raise ScholarlySearchResponseError(f"PubMed EFetch returned error: {self._joined_text(root)}")
+        error = root.find(".//ERROR")
+        if error is not None:
+            raise ScholarlySearchResponseError(f"PubMed EFetch returned error: {self._joined_text(error)}")
+        if root.tag != "PubmedArticleSet":
+            raise ScholarlySearchResponseError("PubMed EFetch returned unexpected XML root")
 
         rows_by_pmid: dict[str, dict[str, Any]] = {}
         for article in root.findall(".//PubmedArticle"):

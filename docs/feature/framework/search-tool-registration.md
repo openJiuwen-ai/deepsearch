@@ -62,8 +62,9 @@ contextvar，避免节点直接持有全局工具对象。
 - PubMed wrapper 使用 `ESearch -> EFetch XML`。返回 item 的 `content` 优先使用 abstract 或 structured abstract；
   无 abstract 时才退回期刊、发布日期和作者等书目信息。
 - arXiv wrapper 使用 Atom API。返回 item 的 `content` 使用论文 summary，`url` 使用 arXiv entry id。
-- PubMed 内部按 E-utilities request 级限流：无 API key 默认 3 req/s，有 API key 默认 10 req/s；遇到 HTTP 429
-  或 PubMed rate-limit payload 时退避重试。arXiv 内部按 3 秒请求间隔限流，并在 HTTP 429 时退避重试。
+- PubMed 内部按 E-utilities request 级限流：无 API key 默认 3 req/s，有 API key 默认 10 req/s。arXiv 内部按 3 秒请求间隔限流。
+  HTTP 429、PubMed rate-limit payload 或异常响应会作为搜索错误返回给上层，由 collector 根据 primary/secondary 策略决定 retry、
+  fail-fast 或 fallback。
 
 ## 边界与错误处理
 
