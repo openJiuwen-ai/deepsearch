@@ -161,3 +161,112 @@ async def test_llm_tool_calling_path_skips_duplicate_secondary_engine():
         await node._collector_main(state)
 
     web_tool.invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_parallel_secondary_error_does_not_retry_or_repeat_primary():
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "arxiv evidence",
+        "web_search_engine_name": "tavily",
+    }
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(return_value={
+        "search_engine": "arxiv",
+        "search_results": [],
+        "error": "429 Too Many Requests",
+    })
+
+    result = await node._direct_search_with_retry(
+        web_tool,
+        "web_search_tool",
+        "LLM RAG benchmark",
+        "arxiv",
+        state,
+        fallback_to_default=False,
+        retry_on_error=False,
+    )
+
+    assert result is None
+    web_tool.invoke.assert_awaited_once_with({
+        "query": "LLM RAG benchmark",
+        "search_engine_name": "arxiv",
+    })
+
+
+@pytest.mark.asyncio
+async def test_direct_primary_error_keeps_retry_behavior():
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "general evidence",
+        "web_search_engine_name": "tavily",
+    }
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(side_effect=[
+        {
+            "search_engine": "tavily",
+            "search_results": [],
+            "error": "temporary failure",
+        },
+        {
+            "search_engine": "tavily",
+            "search_results": [{"title": "Recovered"}],
+        },
+    ])
+
+    result = await node._direct_search_with_retry(
+        web_tool,
+        "web_search_tool",
+        "general query",
+        "tavily",
+        state,
+        fallback_to_default=False,
+        retry_on_error=True,
+    )
+
+    assert result["search_results"] == [{"title": "Recovered"}]
+    assert web_tool.invoke.await_count == 2
+    assert web_tool.invoke.await_args_list[0].kwargs == {}
+    assert web_tool.invoke.await_args_list[0].args[0] == {
+        "query": "general query",
+        "search_engine_name": "tavily",
+    }
+
+
+@pytest.mark.asyncio
+async def test_single_secondary_error_falls_back_to_primary_engine():
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "clinical evidence",
+        "web_search_engine_name": "tavily",
+    }
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(side_effect=[
+        {
+            "search_engine": "pubmed",
+            "search_results": [],
+            "error": "PubMed rate limit exceeded",
+        },
+        {
+            "search_engine": "tavily",
+            "search_results": [{"title": "Fallback result"}],
+        },
+    ])
+
+    result = await node._direct_search_with_retry(
+        web_tool,
+        "web_search_tool",
+        "glioblastoma clinical trial",
+        "pubmed",
+        state,
+    )
+
+    assert result["search_engine"] == "tavily"
+    assert result["search_results"] == [{"title": "Fallback result"}]
+    assert [item.args[0]["search_engine_name"] for item in web_tool.invoke.await_args_list] == [
+        "pubmed",
+        "tavily",
+    ]

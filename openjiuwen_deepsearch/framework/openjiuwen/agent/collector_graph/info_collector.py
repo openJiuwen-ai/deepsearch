@@ -285,8 +285,20 @@ class InfoRetrievalNode(BaseNode):
                 processed_results = []
                 if search_method == "web":
                     engine_names = self._web_search_engines_for_query(state)
+                    default_search_engine_name = str(
+                        state.get("web_search_engine_name") or SearchEngine.PETAL.value
+                    ).strip()
+                    fallback_to_default = default_search_engine_name not in engine_names
                     raw_results = await asyncio.gather(*[
-                        self._direct_search_with_retry(tool_dict[tool_name], tool_name, query, engine_name, state)
+                        self._direct_search_with_retry(
+                            tool_dict[tool_name],
+                            tool_name,
+                            query,
+                            engine_name,
+                            state,
+                            fallback_to_default=fallback_to_default,
+                            retry_on_error=engine_name == default_search_engine_name,
+                        )
                         for engine_name in engine_names
                     ])
                     for tool_result_raw in raw_results:
@@ -383,42 +395,106 @@ class InfoRetrievalNode(BaseNode):
                 result.append(engine)
         return result
 
-    async def _direct_search_with_retry(self, tool, tool_name: str, query: str, search_engine_name: str, state: dict):
+    async def _direct_search_with_retry(
+            self,
+            tool,
+            tool_name: str,
+            query: str,
+            search_engine_name: str,
+            state: dict,
+            fallback_to_default: bool = True,
+            retry_on_error: bool = True,
+    ):
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")
+        default_search_engine_name = str(
+            state.get("web_search_engine_name") or SearchEngine.PETAL.value
+        ).strip()
         for retry_idx in range(max_retries):
             try:
                 tool_result_raw = await tool.invoke({"query": query, "search_engine_name": search_engine_name})
                 if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
                     error_msg = tool_result_raw.get("error", "")
                     current_try = retry_idx + 1
+                    if fallback_to_default and self._should_fallback_to_default_search(
+                            search_engine_name,
+                            default_search_engine_name,
+                    ):
+                        record_llm_retry_log(
+                            current_try=current_try,
+                            max_retries=current_try,
+                            section_idx=section_idx,
+                            step_title=step_title,
+                            operation=f"direct call search tool '{tool_name}' returned error, "
+                                      f"fallback to default search engine '{default_search_engine_name}'",
+                            error=error_msg,
+                            extra_info=f"{search_engine_name}: {query}",
+                        )
+                        return await self._direct_search_with_retry(
+                            tool,
+                            tool_name,
+                            query,
+                            default_search_engine_name,
+                            state,
+                        )
                     record_llm_retry_log(
                         current_try=current_try,
-                        max_retries=max_retries,
+                        max_retries=max_retries if retry_on_error else current_try,
                         section_idx=section_idx,
                         step_title=step_title,
                         operation=f"direct call search tool '{tool_name}' returned error",
                         error=error_msg,
                         extra_info=f"{search_engine_name}: {query}",
                     )
-                    if current_try < max_retries:
+                    if retry_on_error and current_try < max_retries:
                         continue
                     return None
                 return tool_result_raw
             except Exception as e:
                 current_try = retry_idx + 1
+                if fallback_to_default and self._should_fallback_to_default_search(
+                        search_engine_name,
+                        default_search_engine_name,
+                ):
+                    record_llm_retry_log(
+                        current_try=current_try,
+                        max_retries=current_try,
+                        section_idx=section_idx,
+                        step_title=step_title,
+                        operation=f"direct call search tool '{tool_name}' failed, "
+                                  f"fallback to default search engine '{default_search_engine_name}'",
+                        error=e,
+                        extra_info=f"{search_engine_name}: {query}",
+                    )
+                    return await self._direct_search_with_retry(
+                        tool,
+                        tool_name,
+                        query,
+                        default_search_engine_name,
+                        state,
+                    )
                 record_llm_retry_log(
                     current_try=current_try,
-                    max_retries=max_retries,
+                    max_retries=max_retries if retry_on_error else current_try,
                     section_idx=section_idx,
                     step_title=step_title,
                     operation=f"direct call search tool '{tool_name}'",
                     error=e,
                     extra_info=f"{search_engine_name}: {query}",
                 )
-                if current_try < max_retries:
+                if retry_on_error and current_try < max_retries:
                     continue
                 return None
+
+    @staticmethod
+    def _should_fallback_to_default_search(search_engine_name: str, default_search_engine_name: str) -> bool:
+        search_engine_name = str(search_engine_name or "").strip()
+        default_search_engine_name = str(default_search_engine_name or "").strip()
+        return bool(
+            search_engine_name
+            and default_search_engine_name
+            and search_engine_name != default_search_engine_name
+        )
 
     async def _run_secondary_web_search_if_needed(
             self,
