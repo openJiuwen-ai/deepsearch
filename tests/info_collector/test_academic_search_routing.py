@@ -164,7 +164,8 @@ async def test_llm_tool_calling_path_skips_duplicate_secondary_engine():
 
 
 @pytest.mark.asyncio
-async def test_direct_parallel_secondary_error_does_not_retry_or_repeat_primary():
+async def test_direct_parallel_secondary_error_does_not_retry_or_repeat_primary(caplog):
+    caplog.set_level("INFO")
     node = InfoRetrievalNode()
     state = {
         "section_idx": 0,
@@ -193,6 +194,9 @@ async def test_direct_parallel_secondary_error_does_not_retry_or_repeat_primary(
         "query": "LLM RAG benchmark",
         "search_engine_name": "arxiv",
     })
+    assert "Vertical search failed fast" in caplog.text
+    assert "engine=arxiv" in caplog.text
+    assert "query=LLM RAG benchmark" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -236,7 +240,8 @@ async def test_direct_primary_error_keeps_retry_behavior():
 
 
 @pytest.mark.asyncio
-async def test_single_secondary_error_falls_back_to_primary_engine():
+async def test_single_secondary_error_falls_back_to_primary_engine(caplog):
+    caplog.set_level("INFO")
     node = InfoRetrievalNode()
     state = {
         "section_idx": 0,
@@ -270,3 +275,7 @@ async def test_single_secondary_error_falls_back_to_primary_engine():
         "pubmed",
         "tavily",
     ]
+    assert "Vertical search fallback to default" in caplog.text
+    assert "engine=pubmed" in caplog.text
+    assert "default_engine=tavily" in caplog.text
+    assert "query=glioblastoma clinical trial" in caplog.text

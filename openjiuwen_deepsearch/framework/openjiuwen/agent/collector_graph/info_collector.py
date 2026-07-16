@@ -420,6 +420,14 @@ class InfoRetrievalNode(BaseNode):
                             search_engine_name,
                             default_search_engine_name,
                     ):
+                        self._log_vertical_search_fallback(
+                            section_idx,
+                            step_title,
+                            search_engine_name,
+                            default_search_engine_name,
+                            query,
+                            "returned_error",
+                        )
                         record_llm_retry_log(
                             current_try=current_try,
                             max_retries=current_try,
@@ -446,6 +454,17 @@ class InfoRetrievalNode(BaseNode):
                         error=error_msg,
                         extra_info=f"{search_engine_name}: {query}",
                     )
+                    if not retry_on_error and self._should_fallback_to_default_search(
+                            search_engine_name,
+                            default_search_engine_name,
+                    ):
+                        self._log_vertical_search_failed_fast(
+                            section_idx,
+                            step_title,
+                            search_engine_name,
+                            query,
+                            "returned_error",
+                        )
                     if retry_on_error and current_try < max_retries:
                         continue
                     return None
@@ -456,6 +475,14 @@ class InfoRetrievalNode(BaseNode):
                         search_engine_name,
                         default_search_engine_name,
                 ):
+                    self._log_vertical_search_fallback(
+                        section_idx,
+                        step_title,
+                        search_engine_name,
+                        default_search_engine_name,
+                        query,
+                        "exception",
+                    )
                     record_llm_retry_log(
                         current_try=current_try,
                         max_retries=current_try,
@@ -482,6 +509,17 @@ class InfoRetrievalNode(BaseNode):
                     error=e,
                     extra_info=f"{search_engine_name}: {query}",
                 )
+                if not retry_on_error and self._should_fallback_to_default_search(
+                        search_engine_name,
+                        default_search_engine_name,
+                ):
+                    self._log_vertical_search_failed_fast(
+                        section_idx,
+                        step_title,
+                        search_engine_name,
+                        query,
+                        "exception",
+                    )
                 if retry_on_error and current_try < max_retries:
                     continue
                 return None
@@ -495,6 +533,63 @@ class InfoRetrievalNode(BaseNode):
             and default_search_engine_name
             and search_engine_name != default_search_engine_name
         )
+
+    @staticmethod
+    def _log_vertical_search_failed_fast(
+            section_idx: int,
+            step_title: str,
+            search_engine_name: str,
+            query: str,
+            reason: str,
+    ) -> None:
+        if LogManager.is_sensitive():
+            logger.info(
+                "section_idx: %s | [InfoRetrievalNode] Vertical search failed fast. "
+                "engine=%s reason=%s",
+                section_idx,
+                search_engine_name,
+                reason,
+            )
+        else:
+            logger.info(
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] Vertical search failed fast. "
+                "engine=%s query=%s reason=%s",
+                section_idx,
+                step_title,
+                search_engine_name,
+                query,
+                reason,
+            )
+
+    @staticmethod
+    def _log_vertical_search_fallback(
+            section_idx: int,
+            step_title: str,
+            search_engine_name: str,
+            default_search_engine_name: str,
+            query: str,
+            reason: str,
+    ) -> None:
+        if LogManager.is_sensitive():
+            logger.info(
+                "section_idx: %s | [InfoRetrievalNode] Vertical search fallback to default. "
+                "engine=%s default_engine=%s reason=%s",
+                section_idx,
+                search_engine_name,
+                default_search_engine_name,
+                reason,
+            )
+        else:
+            logger.info(
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] Vertical search fallback to default. "
+                "engine=%s default_engine=%s query=%s reason=%s",
+                section_idx,
+                step_title,
+                search_engine_name,
+                default_search_engine_name,
+                query,
+                reason,
+            )
 
     async def _run_secondary_web_search_if_needed(
             self,
