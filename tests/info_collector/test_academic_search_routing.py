@@ -9,7 +9,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_buil
     normalize_search_query_item,
     route_secondary_search_engine_for_query,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
+    DirectSearchRequest,
+    InfoRetrievalNode,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search import (
     ArxivSearchAPIWrapper,
@@ -180,13 +183,15 @@ async def test_direct_parallel_secondary_error_does_not_retry_or_repeat_primary(
     })
 
     result = await node._direct_search_with_retry(
-        web_tool,
-        "web_search_tool",
-        "LLM RAG benchmark",
-        "arxiv",
+        DirectSearchRequest(
+            tool=web_tool,
+            tool_name="web_search_tool",
+            query="LLM RAG benchmark",
+            search_engine_name="arxiv",
+            fallback_to_default=False,
+            retry_on_error=False,
+        ),
         state,
-        fallback_to_default=False,
-        retry_on_error=False,
     )
 
     assert result is None
@@ -221,13 +226,15 @@ async def test_direct_primary_error_keeps_retry_behavior():
     ])
 
     result = await node._direct_search_with_retry(
-        web_tool,
-        "web_search_tool",
-        "general query",
-        "tavily",
+        DirectSearchRequest(
+            tool=web_tool,
+            tool_name="web_search_tool",
+            query="general query",
+            search_engine_name="tavily",
+            fallback_to_default=False,
+            retry_on_error=True,
+        ),
         state,
-        fallback_to_default=False,
-        retry_on_error=True,
     )
 
     assert result["search_results"] == [{"title": "Recovered"}]
@@ -262,10 +269,12 @@ async def test_single_secondary_error_falls_back_to_primary_engine(caplog):
     ])
 
     result = await node._direct_search_with_retry(
-        web_tool,
-        "web_search_tool",
-        "glioblastoma clinical trial",
-        "pubmed",
+        DirectSearchRequest(
+            tool=web_tool,
+            tool_name="web_search_tool",
+            query="glioblastoma clinical trial",
+            search_engine_name="pubmed",
+        ),
         state,
     )
 
