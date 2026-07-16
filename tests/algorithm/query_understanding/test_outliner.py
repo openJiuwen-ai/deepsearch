@@ -33,7 +33,10 @@ outline_response = Outline(
             id="1",
             title="1. 中国汽车产业概述",
             description="中国汽车产业概述",
+            format_requirements=[],
             is_core_section=False,
+            section_focus="market_size_and_growth",
+            focus_dimensions=["industry_structure"],
         )
     ],
 )
@@ -54,7 +57,10 @@ functioncall_response = {
                     {
                         'description': '中国汽车产业概述',
                         'title': '1. 中国汽车产业概述',
-                        'is_core_section': False
+                        'format_requirements': [],
+                        'is_core_section': False,
+                        'section_focus': 'market_size_and_growth',
+                        'focus_dimensions': ['industry_structure'],
                     },
                 ],
                 'thought': '中国汽车产业结构分析',
@@ -159,6 +165,59 @@ class TestOutliner:
         with pytest.raises(CustomValueException, match='Sections is not a list'):
             check_tool_call(tool, tool_calls)
 
+    @pytest.mark.parametrize(
+        "missing_field",
+        ["format_requirements", "section_focus", "focus_dimensions"],
+    )
+    def test_check_tool_call_requires_section_contract_fields(self, missing_field):
+        tool = create_outline_tool(1)
+        section = {
+            "title": "test section",
+            "description": "test description",
+            "format_requirements": [],
+            "section_focus": "section_specific_analysis",
+            "focus_dimensions": ["overview"],
+        }
+        section.pop(missing_field)
+        tool_calls = [
+            {
+                "args": {
+                    "language": "zh-CN",
+                    "sections": [section],
+                    "thought": "test thought",
+                    "title": "test title",
+                },
+                "name": tool.card.name,
+            }
+        ]
+
+        with pytest.raises(CustomValueException, match=missing_field):
+            check_tool_call(tool, tool_calls)
+
+    def test_check_tool_call_allows_empty_format_requirements(self):
+        tool = create_outline_tool(1)
+        tool_calls = [
+            {
+                "args": {
+                    "language": "zh-CN",
+                    "sections": [
+                        {
+                            "title": "test section",
+                            "description": "test description",
+                            "format_requirements": [],
+                            "section_focus": "section_specific_analysis",
+                            "focus_dimensions": ["overview"],
+                        }
+                    ],
+                    "thought": "test thought",
+                    "title": "test title",
+                },
+                "name": tool.card.name,
+            }
+        ]
+
+        check_tool_call(tool, tool_calls)
+
     def test_outline_tool_section_count_respects_explicit_user_structure(self):
         tool = create_outline_tool(5)
         sections_description = tool.card.input_params["properties"]["sections"]["description"]
@@ -191,6 +250,11 @@ class TestOutliner:
         format_requirements = tool.card.input_params["properties"]["sections"]["items"]["properties"]["format_requirements"]
         assert format_requirements["type"] == "array"
         assert "Output format requirements" in format_requirements["description"]
+
+        required_items = tool.card.input_params["properties"]["sections"]["items"]["required"]
+        assert "format_requirements" in required_items
+        assert "section_focus" in required_items
+        assert "focus_dimensions" in required_items
 
     @pytest.mark.asyncio
     async def test_generate_outline_failure(self, setup_outliner, mock_llm):

@@ -225,6 +225,7 @@ def create_outline_tool(section_num: int):
                             },
                             "section_focus": {
                                 "type": "string",
+                                "minLength": 1,
                                 "description": (
                                     "A short label describing this section's analytical role within the report. "
                                     "Examples: market_size_and_growth, vendors_and_supply, technology_drivers, "
@@ -236,6 +237,7 @@ def create_outline_tool(section_num: int):
                             },
                             "focus_dimensions": {
                                 "type": "array",
+                                "minItems": 1,
                                 "description": (
                                     "The 2-4 main analytical dimensions this section should cover. "
                                     "Other sections should NOT deeply expand these dimensions."
@@ -245,7 +247,13 @@ def create_outline_tool(section_num: int):
                                 },
                             },
                         },
-                        "required": ["title", "description"]
+                        "required": [
+                            "title",
+                            "description",
+                            "format_requirements",
+                            "section_focus",
+                            "focus_dimensions",
+                        ]
                     }
                 }
                 },
@@ -383,7 +391,7 @@ def check_tool_call(tool_dict: dict[str, LocalFunction] | LocalFunction, tool_ca
         _check_tool_name(tool, tool_call, is_sensitive)
         arguments = _check_tool_arguments(tool_call, is_sensitive)
         _check_required_params(tool, arguments, tool_call, is_sensitive)
-        _check_sections(arguments, tool_call, is_sensitive)
+        _check_sections(tool, arguments, tool_call, is_sensitive)
 
 
 def _raise_tool_call_error(message: str) -> None:
@@ -433,7 +441,9 @@ def _check_required_params(
         )
 
 
-def _check_sections(arguments: dict, tool_call: dict, is_sensitive: bool) -> None:
+def _check_sections(
+    tool: LocalFunction, arguments: dict, tool_call: dict, is_sensitive: bool
+) -> None:
     sections = arguments.get("sections")
     if sections is None:
         return
@@ -441,24 +451,53 @@ def _check_sections(arguments: dict, tool_call: dict, is_sensitive: bool) -> Non
         _raise_tool_call_error(
             f"Sections is not a list in tool call: {'**' if is_sensitive else tool_call}"
         )
+    section_schema = (
+        tool.card.input_params
+        .get("properties", {})
+        .get("sections", {})
+        .get("items", {})
+    )
     for index, section in enumerate(sections):
-        _check_section(section, index, tool_call, is_sensitive)
+        _check_section(section, index, section_schema, tool_call, is_sensitive)
 
 
 def _check_section(
-    section: dict, index: int, tool_call: dict, is_sensitive: bool
+    section: dict,
+    index: int,
+    section_schema: dict,
+    tool_call: dict,
+    is_sensitive: bool,
 ) -> None:
     if not isinstance(section, dict):
         _raise_tool_call_error(
             f"Section[{index}] is not a dict in tool call: {'**' if is_sensitive else tool_call}"
         )
-    if section.get("title") and section.get("description"):
-        return
 
-    _raise_tool_call_error(
-        "Required section param 'title' or 'description' not found in tool call: "
-        f"{'**' if is_sensitive else tool_call}"
-    )
+    required_params = section_schema.get("required", ["title", "description"])
+    properties = section_schema.get("properties", {})
+    for param_name in required_params:
+        if _has_required_section_value(section, param_name, properties.get(param_name, {})):
+            continue
+        _raise_tool_call_error(
+            f"Required section param '{param_name}' not found in tool call: "
+            f"{'**' if is_sensitive else tool_call}"
+        )
+
+
+def _has_required_section_value(
+    section: dict, param_name: str, param_schema: dict
+) -> bool:
+    if param_name not in section or section.get(param_name) is None:
+        return False
+
+    value = section.get(param_name)
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        min_items = param_schema.get("minItems")
+        return min_items is None or len(value) >= min_items
+
+    return True
 
 
 class Outliner:
