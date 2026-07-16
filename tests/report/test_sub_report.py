@@ -861,7 +861,11 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     async def mock_ainvoke_llm_with_stats(llm, messages, llm_type: str = "basic", agent_name="AI", schema=None,
                                           tools=None, need_stream_out=False):
         # 遍历 messages 里的 dict，检查 content 字段
-        if any("classification" in msg.get("content", "") for msg in messages):
+        if any("content analyst" in msg.get("content", "").lower() for msg in messages):
+            return {"content": '{"coverage_matrix": {"doc_0": {"rationale_1": 0.8, "rationale_2": 0.5}}, "reliability_scores": {"doc_0": 0.75}, "noise_scores": {"doc_0": 0.2}}'}
+        elif any("research analyst" in msg.get("content", "").lower() for msg in messages):
+            return {"content": '{"rationales": [{"id": "rationale_1", "description": "企业经营状况分析"}, {"id": "rationale_2", "description": "行业竞争格局"}]}'}
+        elif any("classification" in msg.get("content", "") for msg in messages):
             user_content = next(msg.get("content", "") for msg in messages if msg.get("role") == "user")
             assert "url: fake_url" in user_content
             assert "title: XX有限公司 - 企业详情" in user_content
@@ -945,104 +949,6 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     assert current_inputs["sub_section_core_content"] == ["Document 1 key passages:\n- fake passage"]
     assert current_inputs["sub_report_summary"] == "经营与行业摘要"
     assert current_inputs["sub_report_chapter_sidecar"].chapter_summary == "经营与行业摘要"
-
-
-@pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_classify_doc_infos_returns_selected_url_list(mock_llm_cls):
-    reporter = Reporter("basic")
-    reporter._classify_with_llm = AsyncMock(
-        return_value=(True, '{"chapter": "企业经营与行业分析", "selected_url_list": ["fake_url"]}')
-    )
-    current_inputs = {
-        "section_idx": 3,
-        "section_task": "企业经营与行业分析",
-        "doc_infos": [
-            {
-                "title": "XX有限公司 - 企业详情",
-                "url": "fake_url",
-                "original_content": "fake original_content",
-            }
-        ],
-        "classify_doc_infos_single_time_num": 60,
-        "classify_doc_infos_res_top_k_num": 10,
-    }
-
-    success, classified_content = await reporter._classify_doc_infos(current_inputs)
-
-    assert success is True
-    assert classified_content == {"selected_url_list": ["fake_url"]}
-
-
-@pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_classify_doc_infos_preserves_llm_url_order(mock_llm_cls):
-    reporter = Reporter("basic")
-    selected_urls = ["https://example.com/order/2", "https://example.com/order/0", "https://example.com/order/1"]
-    reporter._classify_with_llm = AsyncMock(
-        return_value=(
-            True,
-            json.dumps({"chapter": "chapter", "selected_url_list": selected_urls}),
-        )
-    )
-
-    docs = [_report_doc(idx, url=url) for idx, url in enumerate(selected_urls)]
-
-    success, classified_content = await reporter._classify_doc_infos({
-        "section_idx": 3,
-        "section_task": "企业经营与行业分析",
-        "doc_infos": docs,
-        "classify_doc_infos_single_time_num": 60,
-        "classify_doc_infos_res_top_k_num": len(selected_urls),
-        "classify_doc_infos_prefilter_multiplier": 5,
-    })
-
-    assert success is True
-    assert classified_content == {"selected_url_list": selected_urls}
-
-
-@pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_classify_doc_infos_prefilters_and_keeps_same_url_different_content(mock_llm_cls):
-    reporter = Reporter("basic")
-    seen_batch_sizes = []
-
-    async def fake_classify(current_inputs, section_task, batch):
-        seen_batch_sizes.append(len(batch))
-        same_url_docs = [doc for doc in batch if doc["url"] == "https://example.com/same"]
-        assert len(same_url_docs) == 2
-        return True, '{"selected_url_list": ["https://example.com/same"]}'
-
-    reporter._classify_with_llm = AsyncMock(side_effect=fake_classify)
-    docs = []
-    for idx in range(80):
-        docs.append({
-            "title": f"doc-{idx}",
-            "url": f"https://example.com/{idx}",
-            "original_content": f"content-{idx}",
-            "plan_idx": 0,
-            "step_idx": idx % 4,
-            "scores": {"relevance": idx % 10, "answerability": 9, "authority": 8, "data_density": 7},
-        })
-    docs[0]["url"] = "https://example.com/same"
-    docs[0]["original_content"] = "variant A"
-    docs[0]["scores"]["relevance"] = 10
-    docs[1]["url"] = "https://example.com/same"
-    docs[1]["original_content"] = "variant B"
-    docs[1]["scores"]["relevance"] = 10
-
-    success, classified_content = await reporter._classify_doc_infos({
-        "section_idx": 3,
-        "section_task": "企业经营与行业分析",
-        "doc_infos": docs,
-        "classify_doc_infos_single_time_num": 60,
-        "classify_doc_infos_res_top_k_num": 10,
-        "classify_doc_infos_prefilter_multiplier": 5,
-    })
-
-    assert success is True
-    assert classified_content == {"selected_url_list": ["https://example.com/same"]}
-    assert seen_batch_sizes == [50]
 
 
 def test_get_classified_infos_returns_all_distinct_content_variants_for_selected_url():
@@ -1141,41 +1047,6 @@ def test_get_classified_infos_keeps_each_selected_url_before_filling_variants():
         "[A\\-0](https://example.com/a)",
         "[B](https://example.com/b)",
     ]
-
-
-@pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_classify_doc_infos_fallbacks_when_prefilter_result_returns_empty_urls(mock_llm_cls):
-    reporter = Reporter("basic")
-    calls = []
-
-    async def fake_classify(current_inputs, section_task, batch):
-        calls.append(len(batch))
-        if len(calls) == 1:
-            return True, '{"selected_url_list": []}'
-        return True, '{"selected_url_list": ["https://example.com/1"]}'
-
-    reporter._classify_with_llm = AsyncMock(side_effect=fake_classify)
-
-    success, classified_content = await reporter._classify_doc_infos({
-        "section_idx": 3,
-        "section_task": "企业经营与行业分析",
-        "doc_infos": [
-            {
-                "title": "doc",
-                "url": "https://example.com/1",
-                "original_content": "content",
-                "scores": {"relevance": 9, "answerability": 9, "authority": 9, "data_density": 9},
-            }
-        ],
-        "classify_doc_infos_single_time_num": 60,
-        "classify_doc_infos_res_top_k_num": 10,
-        "classify_doc_infos_prefilter_multiplier": 5,
-    })
-
-    assert success is True
-    assert classified_content == {"selected_url_list": ["https://example.com/1"]}
-    assert calls == [1, 1]
 
 
 @pytest.mark.asyncio

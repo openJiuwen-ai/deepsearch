@@ -27,12 +27,17 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     format_key_passage_block,
     get_numeric_score,
 )
+from openjiuwen_deepsearch.algorithm.report.ngram_utils import (
+    extract_doc_ngrams,
+    extract_ngrams,
+    compute_pool_idf,
+    ngram_jaccard_similarity,
+    prefilter_by_ngram_coverage,
+)
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
-    build_balanced_doc_batches,
     build_doc_variant_key,
     extract_doc_score,
-    prefilter_doc_infos_for_classification,
 )
 from openjiuwen_deepsearch.algorithm.report.report_utils import (
     ArticlePart,
@@ -72,7 +77,7 @@ def _format_sub_report_error(detail: str | BaseException) -> str:
 
 
 EFFECT_SUB_REPORT_TAG = "### sub_report_tag ###"
-MAX_LOOP_ROUND = 10
+BATCH_SIZE = 15
 LEADING_TITLE_NUMBER_PATTERN = re.compile(
     r"^(?:"
     r"[\（][一二三四五六七八九十\d]{1,2}[\）]\s*|"
@@ -852,56 +857,84 @@ class Reporter:
             current_inputs["classified_content"] = []
             classified_content = []
         else:
-            classify_success, classified_content = await self._classify_doc_infos(
-                current_inputs
+            # New flow: rationale generation → coverage matrix → greedy optimization → elbow cutoff → verify
+            rationales = await self._generate_section_rationales(current_inputs)
+            if not rationales:
+                logger.error(
+                    f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
+                    f"rationale generation failed"
+                )
+                return False, _format_sub_report_error("rationale generation fail"), "", []
+
+            coverage_result = await self._evaluate_coverage_matrix(
+                current_inputs, doc_infos, rationales
             )
+            if not coverage_result:
+                logger.error(
+                    f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
+                    f"coverage matrix evaluation failed"
+                )
+                return False, _format_sub_report_error("coverage matrix evaluation fail"), "", []
+
+            classify_doc_infos_res_top_k_num = current_inputs.get(
+                "classify_doc_infos_res_top_k_num", 20
+            )
+
+            selected_docs, marginal_values = self._optimize_document_set(
+                doc_infos, rationales, coverage_result,
+                top_k=classify_doc_infos_res_top_k_num
+            )
+
+            selected_docs = self._elbow_cutoff(
+                selected_docs, marginal_values, classify_doc_infos_res_top_k_num,
+                coverage_ctx={"coverage_result": coverage_result, "rationales": rationales},
+                fallback_docs=doc_infos,
+            )
+
+            verify_result = self._verify_coverage(
+                selected_docs, rationales, coverage_result, section_idx,
+                fallback_docs=doc_infos,
+            )
+
+            if not selected_docs:
+                logger.error(
+                    f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
+                    f"no docs selected after optimization"
+                )
+                return False, _format_sub_report_error("no docs selected after optimization"), "", []
+
+            selected_urls = list(dict.fromkeys(
+                doc.get("url", "") for doc in selected_docs if doc.get("url")
+            ))
+            if not selected_urls:
+                logger.error(
+                    f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
+                    f"no valid URLs in selected docs"
+                )
+                return False, _format_sub_report_error("no valid URLs in selected docs"), "", []
+
+            classified_infos, classified_doc_infos = _get_classified_infos(
+                doc_infos,
+                selected_urls,
+                max_source_id_count=classify_doc_infos_res_top_k_num,
+            )
+            current_inputs["sub_section_core_content"] = classified_infos.get(
+                "core_content_list", []
+            )
+            current_inputs["sub_section_core_content_from_background_knowledge"] = False
+            current_inputs["sub_section_references"] = classified_infos.get(
+                "references", []
+            )
+            for idx, doc_info in enumerate(classified_doc_infos):
+                doc_info.pop("query", None)
+                doc_info["index"] = idx + 1
+            current_inputs["classified_content"] = classified_doc_infos
+            classified_content = classified_doc_infos
             if LogManager.is_sensitive():
                 logger.info(
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
-                    f"classified_content len: {len(classified_content)}"
+                    f"selected_content len: {len(classified_content)}"
                 )
-            else:
-                logger.debug(
-                    "%s [generate_sub_report] section_idx: [%s], classified_content is %s",
-                    EFFECT_SUB_REPORT_TAG,
-                    section_idx,
-                    classified_content,
-                )
-
-            if classify_success:
-                selected_urls = classified_content.get("selected_url_list", [])
-                selected_urls = list(dict.fromkeys(selected_urls))
-                if not selected_urls:
-                    logger.error(
-                        f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
-                        "no selected urls returned from classification"
-                    )
-                    return False, _format_sub_report_error("no selected urls from classification"), "", []
-                classify_doc_infos_res_top_k_num = current_inputs.get(
-                    "classify_doc_infos_res_top_k_num", 10
-                )
-                classified_infos, classified_doc_infos = _get_classified_infos(
-                    doc_infos,
-                    selected_urls,
-                    max_source_id_count=classify_doc_infos_res_top_k_num,
-                )
-                current_inputs["sub_section_core_content"] = classified_infos.get(
-                    "core_content_list", []
-                )
-                current_inputs["sub_section_core_content_from_background_knowledge"] = False
-                current_inputs["sub_section_references"] = classified_infos.get(
-                    "references", []
-                )
-                for idx, doc_info in enumerate(classified_doc_infos):
-                    doc_info.pop("query", None)
-                    doc_info["index"] = idx + 1
-                current_inputs["classified_content"] = classified_doc_infos
-            else:
-                logger.error(
-                    f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] Error: Classify doc information failed for "
-                    f"[{classified_content}], section_idx: [{section_idx}]"
-                )
-                return False, _format_sub_report_error("classify_doc_infos fail"), "", []
         classified_content = current_inputs.get("classified_content", [])
         if not LogManager.is_sensitive():
             logger.debug(
@@ -1373,260 +1406,599 @@ class Reporter:
             sub_reports_content, sub_references, all_classified_contents
         )
 
-    async def _classify_with_llm(
-        self, current_inputs: dict, section_task: str, doc_infos: List[Dict]
-    ) -> Tuple[bool, str]:
-        """调用分类 LLM 为当前章节选择相关文档 URL。
+    async def _generate_section_rationales(self, current_inputs: dict) -> list:
+        """Generate section information dimensions (rationales).
+
+        Inspired by METEORA: LLM generates rationales from section context +
+        step_result + evaluation, grounded on actually collected information
+        to ensure the coverage matrix evaluation is meaningful.
 
         Args:
-            current_inputs: 当前子报告生成上下文。
-            section_task: 当前章节标题。
-            doc_infos: 候选文档信息列表。
+            current_inputs: context containing section info and step_summaries.
 
         Returns:
-            元组，包含调用是否成功，以及 LLM 原始输出或失败原因。
+            rationale list, each with id/description/type.
         """
         section_idx = current_inputs.get("section_idx", 1)
-        section_description = current_inputs.get(
-            "section_description", ""
-        )  # Section description
-        subsection_outline = current_inputs.get("sub_section_outline", "")
-        max_attempt_num = current_inputs.get("max_generate_retry_num", 3)
+        section_task = self.strip_leading_number(current_inputs.get("section_task", ""))
+        section_description = current_inputs.get("section_description", "")
+        report_task = current_inputs.get("report_task", "")
+        overall_outline = current_inputs.get("current_outline", "")
+        step_summaries = current_inputs.get("step_summaries", [])
 
-        for attempt in range(1, max_attempt_num + 1):
-            try:
-                compact_doc_infos = build_compact_classify_doc_infos_text(doc_infos)
-                infos_for_llm = (
-                    f"Section title is {section_task},"
-                    f"User query is {current_inputs.get('report_task', '')},"
-                    f"Document infos is {compact_doc_infos},"
-                    f"Section description is {section_description},"
-                    f"Subsection outline is {subsection_outline}"
-                )
-                tmp_context = {
-                    "messages": [dict(role="user", content=infos_for_llm)],
-                    "top_k": current_inputs.get("classify_doc_infos_res_top_k_num", 10),
-                }
-                llm_input = apply_system_prompt("classify_doc_infos", tmp_context)
-                if not LogManager.is_sensitive():
-                    logger.debug(
-                        "%s [classify_with_llm] section_idx: [%s], llm_input is %s",
-                        EFFECT_SUB_REPORT_TAG,
-                        section_idx,
-                        llm_input,
-                    )
-                llm_output = await ainvoke_llm_with_stats(
-                    llm=self._llm,
-                    messages=llm_input,
-                    agent_name=AgentLlmName.SUB_REPORTER_CLASSIFY_DOC_INFOS.value,
-                )
-                if not LogManager.is_sensitive():
-                    logger.debug(
-                        "%s [classify_with_llm] section_idx: [%s], llm_output is %s",
-                        EFFECT_SUB_REPORT_TAG,
-                        section_idx,
-                        llm_output,
-                    )
-                # Validate LLM output
-                if not llm_output or not llm_output.get("content"):
-                    error_msg = "LLM returned empty content for the section"
-                    logger.error(
-                        f"{EFFECT_SUB_REPORT_TAG} [classify_with_llm] section_idx: [{section_idx}] try the {attempt} "
-                        f"times, error: {error_msg}"
-                    )
-                    raise CustomValueException(
-                        error_code=StatusCode.LLM_RESPONSE_ERROR.code, message=error_msg
-                    )
-                return True, llm_output.get("content")
-            except Exception as e:
-                if LogManager.is_sensitive():
-                    error_msg = f"Error classify doc infos"
-                else:
-                    error_msg = f"Error classify doc infos: {str(e)}"
-                logger.warning(
-                    f"{EFFECT_SUB_REPORT_TAG} [classify_with_llm] section_idx: [{section_idx}] "
-                    f"retry the {attempt}/{max_attempt_num} times, {error_msg}",
-                    exc_info=True,
-                )
-                if attempt >= max_attempt_num:
-                    logger.error(
-                        f"{EFFECT_SUB_REPORT_TAG} [classify_with_llm] section_idx: [{section_idx}] "
-                        f"retry reach the max_attempt_num: {max_attempt_num}"
-                    )
-                    return False, error_msg
+        step_summaries_text = "\n".join(
+            f"  - Step {s['plan_idx']}-{s['step_idx']}: {s['title']}\n"
+            f"    Description: {s.get('description', '')}\n"
+            f"    Collected: {s.get('step_result', '')}\n"
+            f"    Evaluation: {s.get('evaluation', '')}"
+            for s in step_summaries
+        ) if step_summaries else "  No step summaries available."
 
-        return (
-            False,
-            f"classify doc_infos failed after retry max_attempt_num: {max_attempt_num}",
+        tmp_context = {
+            "messages": [dict(role="user", content=f"Generate rationales for this chapter.")],
+            "user_query": report_task,
+            "section_task": section_task,
+            "section_description": section_description,
+            "overall_outline": overall_outline,
+            "step_summaries": step_summaries_text,
+        }
+
+        llm_input = apply_system_prompt("rationale_generator", tmp_context)
+        llm_output = await ainvoke_llm_with_stats(
+            llm=self._llm,
+            messages=llm_input,
+            agent_name=AgentLlmName.SUB_REPORTER_RATIONALE_GENERATOR.value,
         )
 
-    async def _classify_doc_infos(self, current_inputs: dict):
-        """根据当前章节从候选文档中选择相关 URL。
-
-        Args:
-            current_inputs: 包含章节信息、候选 doc_infos 和分类配置的上下文。
-
-        Returns:
-            元组，包含分类是否成功，以及分类结果或失败原因。成功时结果使用
-            selected_url_list 表示选中的文档 URL。
-        """
-        section_idx = current_inputs.get("section_idx", 1)
-        logger.info(
-            f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] Starting to classify doc infos, section_idx: "
-            f"[{section_idx}]"
-        )
-        section_task = self.strip_leading_number(
-            current_inputs.get("section_task", "")
-        )  # Current section title
-        raw_doc_infos = current_inputs.get("doc_infos", [])
-        classify_doc_infos_single_time_num = current_inputs.get(
-            "classify_doc_infos_single_time_num", 60
-        )
-        classify_doc_infos_res_top_k_num = current_inputs.get(
-            "classify_doc_infos_res_top_k_num", 10
-        )
-        classify_doc_infos_prefilter_multiplier = current_inputs.get(
-            "classify_doc_infos_prefilter_multiplier", 5
-        )
-        prefilter_result = prefilter_doc_infos_for_classification(
-            raw_doc_infos,
-            result_top_k=classify_doc_infos_res_top_k_num,
-            prefilter_multiplier=classify_doc_infos_prefilter_multiplier,
-        )
-        doc_infos = prefilter_result.doc_infos
-        logger.info(
-            "%s [classify_doc_infos] section_idx: [%s] prefilter stats: "
-            "original_count=%s, deduped_count=%s, filtered_count=%s, candidate_limit=%s, "
-            "url_key_count=%s, content_variant_count=%s, step_bucket_count=%s, score_stats=%s",
-            EFFECT_SUB_REPORT_TAG,
-            section_idx,
-            prefilter_result.original_count,
-            len(prefilter_result.deduped_doc_infos),
-            prefilter_result.filtered_count,
-            prefilter_result.candidate_limit,
-            prefilter_result.url_key_count,
-            prefilter_result.content_variant_count,
-            prefilter_result.step_bucket_count,
-            prefilter_result.score_stats,
-        )
-        if not LogManager.is_sensitive():
-            logger.debug(
-                "%s [classify_doc_infos] section_idx: [%s] prefilter step_bucket_stats=%s",
-                EFFECT_SUB_REPORT_TAG,
-                section_idx,
-                prefilter_result.step_bucket_stats,
+        if not llm_output or not llm_output.get("content"):
+            logger.error(
+                f"{EFFECT_SUB_REPORT_TAG} [generate_rationales] section_idx: [{section_idx}] "
+                f"LLM returned empty content"
             )
+            return []
 
-        # Validate required fields
-        if not section_task or not doc_infos:
-            if section_task and prefilter_result.deduped_doc_infos:
-                doc_infos = prefilter_result.deduped_doc_infos
-            else:
-                error_msg = "Missing 'section_task' or 'doc_infos' in context (section title required)"
-                logger.error(
-                    f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] {error_msg}"
-                )
-                return False, error_msg
+        try:
+            data = json.loads(normalize_json_output(llm_output.get("content", "")))
+            rationales = data.get("rationales", [])
+            logger.info(
+                f"{EFFECT_SUB_REPORT_TAG} [generate_rationales] section_idx: [{section_idx}] "
+                f"generated {len(rationales)} rationales"
+            )
+            return rationales
+        except Exception as e:
+            logger.error(
+                "%s [generate_rationales] section_idx: [%s] failed to parse LLM output: %s",
+                EFFECT_SUB_REPORT_TAG, section_idx, e,
+            )
+            return []
 
-        async def classify_until_converged(candidate_doc_infos: list[dict], *, is_fallback: bool = False):
-            round_count = 0
-            doc_infos_for_round = candidate_doc_infos
-            while round_count < MAX_LOOP_ROUND:
-                round_count += 1
-                logger.info(
-                    "%s [classify_doc_infos] section_idx: [%s] start round NO. [%s]",
-                    EFFECT_SUB_REPORT_TAG,
-                    section_idx,
-                    round_count,
-                )
+    async def _evaluate_coverage_matrix(
+        self, current_inputs: dict, doc_infos: list, rationales: list
+    ) -> dict:
+        """Evaluate coverage matrix: LLM evaluates each document's coverage of each rationale.
 
-                batches = build_balanced_doc_batches(
-                    doc_infos_for_round,
-                    classify_doc_infos_single_time_num,
-                )
+        Flow: n-gram coarse filter → max doc count cutoff → batched parallel LLM evaluation → merge results.
 
-                results = await asyncio.gather(
-                    *[
-                        self._classify_with_llm(current_inputs, section_task, batch)
-                        for batch in batches
-                    ],
-                    return_exceptions=True,
-                )
+        Args:
+            current_inputs: context.
+            doc_infos: deduplicated document list.
+            rationales: rationale list.
 
-                merged_urls = []
-                merged_url_set = set()
-                for res in results:
-                    if isinstance(res, Exception):
-                        logger.warning(
-                            f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                            f"round:[{round_count}], classify task raised exception: {str(res)}",
-                            exc_info=True,
-                        )
-                        continue
-                    res_flag, json_str = res
-                    if not res_flag:
-                        logger.warning(
-                            f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                            f"round:[{round_count}], partly classify doc_infos with llm failed, failed reason: "
-                            f"{json_str}"
-                        )
-                        continue
-                    try:
-                        data = json.loads(json_str)
-                    except json.JSONDecodeError as e:
-                        if LogManager.is_sensitive():
-                            logger.warning(
-                                f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                                f"round:[{round_count}], partly classify doc_infos with llm failed, "
-                                f"failed reason: parse classified doc information failed"
-                            )
-                        else:
-                            logger.warning(
-                                f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                                f"round:[{round_count}], partly classify doc_infos with llm failed, "
-                                f"failed reason: parse classified doc information failed: {e}"
-                            )
-                        continue
-                    for url in data.get("selected_url_list", []):
-                        if url in merged_url_set:
-                            continue
-                        merged_urls.append(url)
-                        merged_url_set.add(url)
+        Returns:
+            Coverage matrix evaluation result dict, containing coverage_matrix/reliability_scores/noise_scores.
+            Returns empty dict on failure.
+        """
+        section_idx = current_inputs.get("section_idx", 1)
+        section_task = self.strip_leading_number(current_inputs.get("section_task", ""))
+        section_description = current_inputs.get("section_description", "")
 
-                if not merged_urls:
-                    logger.error(
-                        f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] "
-                        f"round:[{round_count}], no selected urls returned."
-                    )
-                    return False, "no selected urls from classification"
-
-                if len(merged_urls) <= classify_doc_infos_res_top_k_num:
-                    logger.info(
-                        f"{EFFECT_SUB_REPORT_TAG} [classify_doc_infos] section_idx: [{section_idx}] successfully "
-                        f"ended on the NO.[{round_count}] round"
-                    )
-                    return True, {"selected_url_list": merged_urls}
-
-                doc_infos_for_round = [
-                    doc for doc in doc_infos_for_round if doc.get("url") in merged_url_set
-                ]
-            suffix = " during fallback" if is_fallback else ""
-            return False, f"Exceeded max loop round{suffix}: {MAX_LOOP_ROUND}"
-
-        success, result = await classify_until_converged(doc_infos)
-        if success:
-            return success, result
-
-        fallback_doc_infos = prefilter_result.deduped_doc_infos
-        if result == "no selected urls from classification" and fallback_doc_infos:
+        if not doc_infos or not rationales:
             logger.warning(
-                "%s [classify_doc_infos] section_idx: [%s] prefiltered classification returned no URLs, "
-                "retry with deduped full candidates.",
-                EFFECT_SUB_REPORT_TAG,
-                section_idx,
+                f"{EFFECT_SUB_REPORT_TAG} [coverage_matrix] section_idx: [{section_idx}] "
+                f"empty doc_infos ({len(doc_infos)}) or rationales ({len(rationales)})"
             )
-            return await classify_until_converged(fallback_doc_infos, is_fallback=True)
-        return success, result
+            return {}
+
+        # n-gram coarse filter (0 LLM calls)
+        filtered_docs = prefilter_by_ngram_coverage(doc_infos, rationales)
+        if not filtered_docs:
+            logger.warning(
+                f"{EFFECT_SUB_REPORT_TAG} [coverage_matrix] section_idx: [{section_idx}] "
+                f"n-gram coarse filter removed all docs, using original list"
+            )
+            filtered_docs = doc_infos
+
+        logger.info(
+            f"{EFFECT_SUB_REPORT_TAG} [coverage_matrix] section_idx: [{section_idx}] "
+            f"n-gram filter: {len(doc_infos)} → {len(filtered_docs)} docs"
+        )
+
+        # Build rationale text
+        rationales_text = "\n".join(
+            f"  {r['id']}: {r['description']} (type: {r.get('type', 'unknown')})"
+            for r in rationales
+        )
+
+        # Batched parallel LLM evaluation
+        batches = [
+            filtered_docs[i:i + BATCH_SIZE]
+            for i in range(0, len(filtered_docs), BATCH_SIZE)
+        ]
+
+        logger.info(
+            "%s [coverage_matrix] section_idx: [%s] split into %s batch(es), "
+            "batch_size=%s, sending %s docs × %s rationales to LLM",
+            EFFECT_SUB_REPORT_TAG, section_idx, len(batches),
+            BATCH_SIZE, len(filtered_docs), len(rationales),
+        )
+
+        section_ctx = {
+            "section_task": section_task,
+            "section_description": section_description,
+            "section_idx": section_idx,
+        }
+
+        tasks = [
+            self._eval_coverage_batch(
+                batch, batch_idx, rationales_text, section_ctx,
+            )
+            for batch_idx, batch in enumerate(batches)
+        ]
+        batch_results = await asyncio.gather(*tasks)
+
+        # Merge batch results, map in-batch doc_X to global doc_{offset + X}
+        merged_coverage: dict = {}
+        merged_reliability: dict = {}
+        merged_noise: dict = {}
+
+        for batch_idx, (batch_result, _batch_docs) in enumerate(batch_results):
+            if not batch_result:
+                continue
+            offset = batch_idx * BATCH_SIZE
+            for doc_key, scores in batch_result.get("coverage_matrix", {}).items():
+                try:
+                    local_idx = int(doc_key.split("_")[1])
+                    merged_coverage[f"doc_{offset + local_idx}"] = scores
+                except (ValueError, IndexError):
+                    merged_coverage[doc_key] = scores
+            for doc_key, score in batch_result.get("reliability_scores", {}).items():
+                try:
+                    local_idx = int(doc_key.split("_")[1])
+                    merged_reliability[f"doc_{offset + local_idx}"] = score
+                except (ValueError, IndexError):
+                    merged_reliability[doc_key] = score
+            for doc_key, score in batch_result.get("noise_scores", {}).items():
+                try:
+                    local_idx = int(doc_key.split("_")[1])
+                    merged_noise[f"doc_{offset + local_idx}"] = score
+                except (ValueError, IndexError):
+                    merged_noise[doc_key] = score
+
+        logger.info(
+            f"{EFFECT_SUB_REPORT_TAG} [coverage_matrix] section_idx: [{section_idx}] "
+            f"merged {len(merged_coverage)} docs × {len(rationales)} rationales "
+            f"from {len(batches)} batch(es)"
+        )
+
+        return {
+            "coverage_matrix": merged_coverage,
+            "reliability_scores": merged_reliability,
+            "noise_scores": merged_noise,
+            "filtered_docs": filtered_docs,
+        }
+
+    async def _eval_coverage_batch(
+        self, batch_docs: list, batch_idx: int,
+        rationales_text: str, section_ctx: dict,
+    ) -> tuple:
+        """Evaluate coverage matrix for a single batch of documents (1 LLM call).
+
+        Args:
+            batch_docs: list of documents in this batch.
+            batch_idx: batch index (for logging).
+            rationales_text: rationale text.
+            section_ctx: dict with section_task, section_description, section_idx.
+
+        Returns:
+            (parsed_result_dict, batch_docs) tuple. parsed_result is empty dict on failure.
+        """
+        section_task = section_ctx.get("section_task", "")
+        section_description = section_ctx.get("section_description", "")
+        section_idx = section_ctx.get("section_idx", -1)
+        compact_text = build_compact_classify_doc_infos_text(batch_docs)
+
+        tmp_context = {
+            "messages": [dict(role="user", content="Please evaluate the coverage matrix for the documents above.")],
+            "section_task": section_task,
+            "section_description": section_description,
+            "rationales": rationales_text,
+            "doc_infos": compact_text,
+        }
+
+        llm_input = apply_system_prompt("coverage_matrix_evaluator", tmp_context)
+        llm_output = await ainvoke_llm_with_stats(
+            llm=self._llm,
+            messages=llm_input,
+            agent_name=AgentLlmName.SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR.value,
+        )
+
+        if not llm_output or not llm_output.get("content"):
+            logger.error(
+                "%s [coverage_matrix] section_idx: [%s] batch %s: LLM returned empty content",
+                EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+            )
+            return {}, batch_docs
+
+        try:
+            data = json.loads(normalize_json_output(llm_output.get("content", "")))
+            logger.info(
+                "%s [coverage_matrix] section_idx: [%s] batch %s: parsed %s docs",
+                EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+                len(data.get("coverage_matrix", {})),
+            )
+            return data, batch_docs
+        except Exception as e:
+            logger.error(
+                "%s [coverage_matrix] section_idx: [%s] batch %s: failed to parse LLM output: %s",
+                EFFECT_SUB_REPORT_TAG, section_idx, batch_idx, e,
+            )
+            return {}, batch_docs
+
+    @staticmethod
+    def _optimize_document_set(
+        doc_infos: list, rationales: list, coverage_result: dict, top_k: int = 20
+    ) -> tuple:
+        """Greedy submodular document selection (0 LLM calls).
+
+        Inspired by TREC submodular selection + PureCover noise penalty.
+        Each round selects the document with the highest marginal value:
+            marginal_value = coverage_gain - β×redundancy - γ×noise - δ×untrustworthy
+
+        Args:
+            doc_infos: candidate document list (already n-gram filtered).
+            rationales: rationale list.
+            coverage_result: coverage matrix evaluation result.
+            top_k: maximum number of documents to select.
+
+        Returns:
+            (selected_docs, marginal_values) tuple.
+        """
+        section_idx = -1  # printed by caller
+        filtered_docs = coverage_result.get("filtered_docs", doc_infos)
+        coverage_matrix = coverage_result.get("coverage_matrix", {})
+        reliability_scores = coverage_result.get("reliability_scores", {})
+        noise_scores = coverage_result.get("noise_scores", {})
+
+        beta = 0.3   # redundancy penalty weight
+        gamma = 0.3   # noise penalty weight
+        delta = 0.2   # untrustworthy penalty weight
+
+        # Precompute n-grams for redundancy detection
+        doc_ngrams = [extract_doc_ngrams(d) for d in filtered_docs]
+        pool_idf = compute_pool_idf(doc_ngrams)
+
+        rationale_ids = [r.get("id", "") for r in rationales]
+        rationale_ngram_sets = {
+            r.get("id", ""): extract_ngrams(str(r.get("description", "")))
+            for r in rationales
+        }
+
+        covered = {rid: 0.0 for rid in rationale_ids}
+        covered_ngrams: set = set()
+        selected_indices: list = []
+        selected_ngrams: list = []
+        marginal_values: list = []
+
+        for _ in range(min(top_k, len(filtered_docs))):
+            best_idx = -1
+            best_value = 0.0
+
+            for idx in range(len(filtered_docs)):
+                if idx in selected_indices:
+                    continue
+
+                doc_key = f"doc_{idx}"
+                doc_cov = coverage_matrix.get(doc_key, {})
+
+                # Coverage gain
+                gain = sum(
+                    max(0.0, doc_cov.get(rid, 0.0) - covered.get(rid, 0.0))
+                    for rid in rationale_ids
+                )
+
+                # Redundancy penalty (weighted n-gram Jaccard)
+                redundancy = 0.0
+                if selected_ngrams:
+                    redundancy = max(
+                        ngram_jaccard_similarity(doc_ngrams[idx], sn)
+                        for sn in selected_ngrams
+                    )
+
+                # Noise penalty
+                noise = noise_scores.get(doc_key, 0.0)
+
+                # Untrustworthy penalty
+                reliability = reliability_scores.get(doc_key, 0.5)
+                untrustworthy = 1.0 - reliability
+
+                marginal_value = gain - beta * redundancy - gamma * noise - delta * untrustworthy
+
+                if marginal_value > best_value:
+                    best_value = marginal_value
+                    best_idx = idx
+
+            if best_idx < 0 or best_value <= 0:
+                break
+
+            selected_indices.append(best_idx)
+            marginal_values.append(best_value)
+            selected_ngrams.append(doc_ngrams[best_idx])
+
+            doc_key = f"doc_{best_idx}"
+            doc_cov = coverage_matrix.get(doc_key, {})
+            for rid in rationale_ids:
+                covered[rid] = max(covered.get(rid, 0.0), doc_cov.get(rid, 0.0))
+
+        selected_docs = [filtered_docs[i] for i in selected_indices]
+        logger.info(
+            "%s [optimize_docs] selected %s docs from %s candidates, covered %s/%s rationales",
+            EFFECT_SUB_REPORT_TAG, len(selected_docs), len(filtered_docs),
+            sum(1 for v in covered.values() if v >= 0.3), len(rationale_ids),
+        )
+
+        return selected_docs, marginal_values
+
+    @staticmethod
+    def _elbow_cutoff(
+        selected_docs: list,
+        marginal_values: list,
+        top_k: int = 20,
+        coverage_ctx: dict | None = None,
+        fallback_docs: list | None = None,
+    ) -> list:
+        """Elbow detection + rationale-coverage-aware adaptive cutoff (0 LLM calls).
+
+        First detects the marginal value drop (elbow). After the elbow, instead
+        of cutting immediately, checks each subsequent document: if it covers
+        any rationale better than the current max coverage from kept docs,
+        keep it and continue; otherwise stop.
+
+        Args:
+            selected_docs: greedily selected document list.
+            marginal_values: marginal value of each document.
+            top_k: maximum count upper limit.
+            coverage_ctx: dict with 'coverage_result' and 'rationales' for rationale check.
+            fallback_docs: fallback doc list when coverage_result lacks filtered_docs.
+
+        Returns:
+            Cutoff document list.
+        """
+        if len(selected_docs) <= 3:
+            return selected_docs
+
+        # Compute adjacent marginal value differences
+        diffs = [
+            marginal_values[i] - marginal_values[i + 1]
+            for i in range(len(marginal_values) - 1)
+        ]
+
+        if not diffs:
+            return selected_docs[:top_k]
+
+        # Find max difference point (elbow)
+        max_diff = max(diffs)
+        mean_diff = sum(diffs) / len(diffs)
+
+        # Only cut off when max diff is significantly larger than mean diff
+        if not (max_diff > mean_diff * 2 and max_diff > 0.05):
+            return selected_docs[:top_k]
+
+        elbow_idx = diffs.index(max_diff)
+        # Start from the first doc after elbow (the first dropped doc)
+        cutoff = elbow_idx + 1
+
+        # --- Rationale-coverage-aware extension ---
+        # All pre-elbow docs are kept. Then iterate through ALL post-elbow docs:
+        # keep any doc that is the best for at least one rationale (higher than
+        # current max across all kept docs so far).
+        if coverage_ctx is None:
+            coverage_result = None
+            rationales = None
+        else:
+            coverage_result = coverage_ctx.get("coverage_result")
+            rationales = coverage_ctx.get("rationales")
+
+        if coverage_result is None or rationales is None:
+            if cutoff < len(selected_docs):
+                logger.info(
+                    "%s [elbow_cutoff] elbow at index %s, cutting from %s to %s docs (no coverage check)",
+                    EFFECT_SUB_REPORT_TAG, elbow_idx, len(selected_docs), cutoff,
+                )
+                return selected_docs[:cutoff]
+            return selected_docs[:top_k]
+
+        coverage_matrix = coverage_result.get("coverage_matrix", {})
+        filtered_docs = coverage_result.get("filtered_docs", fallback_docs or selected_docs)
+        rationale_ids = [r.get("id", "") for r in rationales]
+
+        # Build URL→index map to look up coverage_matrix keys
+        url_to_idx = {}
+        for idx, doc in enumerate(filtered_docs):
+            url = doc.get("url", "")
+            if url:
+                url_to_idx[url] = idx
+
+        def _get_doc_cov(doc: dict) -> dict:
+            """Get coverage scores for a doc from the coverage matrix."""
+            url = doc.get("url", "")
+            idx = url_to_idx.get(url)
+            if idx is None:
+                return {}
+            return coverage_matrix.get(f"doc_{idx}", {})
+
+        # Start with all pre-elbow docs
+        kept_docs = list(selected_docs[:cutoff])
+
+        # Compute max coverage per rationale from pre-elbow docs
+        max_covered = {rid: 0.0 for rid in rationale_ids}
+        for doc in kept_docs:
+            doc_cov = _get_doc_cov(doc)
+            for rid in rationale_ids:
+                cov = doc_cov.get(rid, 0.0)
+                if cov > max_covered[rid]:
+                    max_covered[rid] = cov
+
+        # Iterate through ALL post-elbow docs, keep any that improves a rationale
+        extra_kept = 0
+        for i in range(cutoff, len(selected_docs)):
+            doc_cov = _get_doc_cov(selected_docs[i])
+            improves = False
+            for rid in rationale_ids:
+                cov = doc_cov.get(rid, 0.0)
+                if cov > max_covered[rid]:
+                    improves = True
+                    break
+            if improves:
+                kept_docs.append(selected_docs[i])
+                extra_kept += 1
+                for rid in rationale_ids:
+                    cov = doc_cov.get(rid, 0.0)
+                    if cov > max_covered[rid]:
+                        max_covered[rid] = cov
+                logger.debug(
+                    "%s [elbow_cutoff] keeping doc at index %s (improves rationale coverage)",
+                    EFFECT_SUB_REPORT_TAG, i,
+                )
+
+        logger.info(
+            "%s [elbow_cutoff] elbow at index %s, pre-elbow=%s docs, coverage-aware kept %s extra, total=%s docs",
+            EFFECT_SUB_REPORT_TAG, elbow_idx, cutoff, extra_kept, len(kept_docs),
+        )
+
+        # Enforce top_k upper limit
+        if len(kept_docs) > top_k:
+            kept_docs = kept_docs[:top_k]
+            logger.info(
+                f"{EFFECT_SUB_REPORT_TAG} [elbow_cutoff] capped to top_k={top_k}, "
+                f"dropped {len(kept_docs) - top_k} docs"
+            )
+
+        return kept_docs
+
+    @staticmethod
+    def _verify_coverage(
+        selected_docs: list, rationales: list, coverage_result: dict, section_idx,
+        fallback_docs: list | None = None,
+    ) -> dict:
+        """Coverage verification + debug output (0 LLM calls).
+
+        Check whether all rationales are covered, print dimension-document matching relationships.
+
+        Args:
+            selected_docs: selected document list.
+            rationales: rationale list.
+            coverage_result: coverage matrix evaluation result.
+            section_idx: section index (for logging).
+
+        Returns:
+            Verification result dict, containing uncovered/weak/coverage_rate/limitations.
+        """
+        coverage_matrix = coverage_result.get("coverage_matrix", {})
+        filtered_docs = coverage_result.get("filtered_docs", fallback_docs or selected_docs)
+        reliability_scores = coverage_result.get("reliability_scores", {})
+
+        # Build URL→index map to look up coverage_matrix keys for selected docs only
+        url_to_idx = {}
+        for idx, doc in enumerate(filtered_docs):
+            url = doc.get("url", "")
+            if url:
+                url_to_idx[url] = idx
+
+        # Compute coverage for each rationale using ONLY selected docs
+        covered = {}
+        for r in rationales:
+            rid = r.get("id", "")
+            max_cov = 0.0
+            for doc in selected_docs:
+                idx = url_to_idx.get(doc.get("url", ""))
+                if idx is None:
+                    continue
+                doc_key = f"doc_{idx}"
+                doc_cov = coverage_matrix.get(doc_key, {})
+                cov = doc_cov.get(rid, 0.0)
+                if cov > max_cov:
+                    max_cov = cov
+            covered[rid] = max_cov
+
+        uncovered = [r for r in rationales if covered.get(r.get("id", ""), 0.0) < 0.3]
+        weak = [r for r in rationales if 0.3 <= covered.get(r.get("id", ""), 0.0) < 0.6]
+
+        # ===== Debug output: dimension-document matching (DEBUG level) =====
+        logger.debug(
+            "%s ===== dimension-document coverage (section_idx=%s) =====",
+            EFFECT_SUB_REPORT_TAG, section_idx,
+        )
+        for r in rationales:
+            rid = r.get("id", "")
+            cov_score = covered.get(rid, 0.0)
+            status = "✓covered" if cov_score >= 0.6 else ("△weak" if cov_score >= 0.3 else "✗uncovered")
+
+            # Find top-3 selected documents covering this dimension
+            doc_scores = []
+            for doc in selected_docs:
+                idx = url_to_idx.get(doc.get("url", ""))
+                if idx is None:
+                    continue
+                doc_key = f"doc_{idx}"
+                doc_cov = coverage_matrix.get(doc_key, {})
+                score = doc_cov.get(rid, 0.0)
+                if score > 0:
+                    rel = reliability_scores.get(doc_key, 0.0)
+                    doc_scores.append((doc, score, rel))
+            doc_scores.sort(key=lambda x: x[1], reverse=True)
+
+            logger.debug(
+                "%s   %s [%s] coverage=%.2f",
+                EFFECT_SUB_REPORT_TAG, r.get("description", ""), status, cov_score,
+            )
+            for doc, score, rel in doc_scores[:3]:
+                title = str(doc.get("title", ""))[:40]
+                url = str(doc.get("url", ""))[:60]
+                logger.debug(
+                    "%s     ← %s (url=%s, coverage=%.2f, reliability=%.2f)",
+                    EFFECT_SUB_REPORT_TAG, title, url, score, rel,
+                )
+
+        # Summary log (INFO level, single line)
+        covered_count = sum(1 for v in covered.values() if v >= 0.6)
+        weak_count = sum(1 for v in covered.values() if 0.3 <= v < 0.6)
+        uncovered_count = len(uncovered)
+        logger.info(
+            "%s [verify_coverage] section_idx: [%s] candidates: %s → selected: %s | "
+            "total_rationales: %s → covered: %s weak: %s uncovered: %s",
+            EFFECT_SUB_REPORT_TAG, section_idx, len(filtered_docs),
+            len(selected_docs), len(rationales),
+            covered_count, weak_count, uncovered_count,
+        )
+        if uncovered:
+            logger.warning(
+                "%s [verify_coverage] section_idx: [%s] ⚠ uncovered dimensions: %s",
+                EFFECT_SUB_REPORT_TAG, section_idx,
+                [r.get("description", "") for r in uncovered],
+            )
+        # ======================================
+
+        limitations = [
+            f"This section does not sufficiently cover the following key information: {r.get('description', '')}"
+            for r in uncovered
+        ]
+
+        return {
+            "uncovered_rationales": uncovered,
+            "weak_rationales": weak,
+            "coverage_rate": 1 - len(uncovered) / max(len(rationales), 1),
+            "limitations": limitations,
+        }
 
     async def _generate_sub_section_outline(self, current_inputs: dict) -> dict:
         """Generate subsection outline"""

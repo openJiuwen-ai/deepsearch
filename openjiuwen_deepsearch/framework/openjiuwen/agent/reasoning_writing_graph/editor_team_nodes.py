@@ -68,6 +68,34 @@ def _collect_doc_infos(history_plans) -> list:
     return deduplicate_doc_infos(doc_infos)
 
 
+def _collect_step_summaries(history_plans) -> list:
+    """Collect step-level summaries (description, step_result, evaluation) from history_plans.
+
+    Used by rationale generation to ground rationales in actual collected information.
+    Filters out steps with no step_result or evaluation to avoid injecting empty noise.
+    """
+    summaries: list = []
+    for plan_idx, plan in enumerate(history_plans or []):
+        steps = plan.steps if hasattr(plan, "steps") else plan.get("steps", [])
+        for step_idx, step in enumerate(steps):
+            description = step.description if hasattr(step, "description") else step.get("description", "")
+            step_result = step.step_result if hasattr(step, "step_result") else step.get("step_result", "")
+            evaluation = step.evaluation if hasattr(step, "evaluation") else step.get("evaluation", "")
+            title = step.title if hasattr(step, "title") else step.get("title", "")
+            # Skip steps with no collected information (non-INFO_COLLECTING or unexecuted steps)
+            if not step_result and not evaluation:
+                continue
+            summaries.append({
+                "plan_idx": plan_idx,
+                "step_idx": step_idx,
+                "title": title or "",
+                "description": description or "",
+                "step_result": step_result or "",
+                "evaluation": evaluation or "",
+            })
+    return summaries
+
+
 def _get_classify_doc_infos_single_time_num(session: Session) -> int:
     value = session.get_global_state("config.sub_report_classify_doc_infos_single_time_num")
     if not value or value <= 60:
@@ -370,6 +398,7 @@ class SubReporterNode(BaseNode):
                 "section_context.section_format_requirements"
             ) or [],
             doc_infos=_collect_doc_infos(session.get_global_state("section_context.history_plans")),
+            step_summaries=_collect_step_summaries(session.get_global_state("section_context.history_plans")),
             current_outline=session.get_global_state("section_context.current_outline")
             if session.get_global_state("section_context.current_outline") else "",
             max_generate_retry_num=session.get_global_state("config.report_max_generate_retry_num") or 3,
