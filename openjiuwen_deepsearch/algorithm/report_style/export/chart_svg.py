@@ -462,7 +462,9 @@ def _render_pie_svg(body: str) -> str | None:
 
     width = 760
     height = max(360, 72 + len(items) * 34)
-    center_x, center_y, radius = 175.0, height / 2, 120.0
+    # 饼图与右侧图例作为一个整体居中，保留两者原有的 55px 间距。
+    center_x, center_y, radius = 300.0, height / 2, 120.0
+    legend_x = 475.0
     parts = [
         f'<svg class="chart-svg" viewBox="0 0 {width} {height}" role="img" '
         'xmlns="http://www.w3.org/2000/svg">',
@@ -489,8 +491,10 @@ def _render_pie_svg(body: str) -> str | None:
         )
         legend_y = 42 + index * 34
         parts.append(
-            f'<rect x="350" y="{legend_y - 11}" width="14" height="14" fill="{color}" rx="2"/>'
-            f'<text x="374" y="{legend_y}" font-size="13" fill="#334155">{_escape_text(label)}</text>'
+            f'<rect x="{_svg_number(legend_x)}" y="{legend_y - 11}" width="14" height="14" '
+            f'fill="{color}" rx="2"/>'
+            f'<text x="{_svg_number(legend_x + 24)}" y="{legend_y}" font-size="13" fill="#334155">'
+            f"{_escape_text(label)}</text>"
         )
         start_angle = end_angle
     parts.append("</svg>")

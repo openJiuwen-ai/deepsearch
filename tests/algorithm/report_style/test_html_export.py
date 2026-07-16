@@ -267,6 +267,9 @@ def test_convert_md_to_html_renders_pie_mermaid_as_inline_svg(tmp_path):
     assert chart is not None
     assert len(chart.select("path.chart-pie-slice")) == 3
     assert "商汤 (42.9%)" in chart.get_text()
+    assert 'M 300 180' in chart.select_one("path.chart-pie-slice")["d"]
+    assert chart.select_one('rect[x="475"]') is not None
+    assert chart.select_one('text[x="499"]') is not None
 
 
 def test_convert_md_to_html_renders_timeline_mermaid_as_inline_svg(tmp_path):
