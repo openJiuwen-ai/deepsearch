@@ -16,6 +16,33 @@ from server.schemas.report import ReportConvertReq, ReportConvertRes
 logger = logging.getLogger(__name__)
 
 
+def normalize_report_stylize_llm_config(llm_config: dict) -> dict:
+    """将报告美化请求中的 LLM 密钥转换为可清零的字节数组。
+
+    Args:
+        llm_config: 直接模型配置，或以模型类别为键的 LLM 配置。
+
+    Returns:
+        dict: 保持原有配置结构、且字符串 API 密钥已转换的配置副本。
+    """
+    normalized_config = llm_config.copy()
+    if "model_name" in normalized_config:
+        api_key = normalized_config.get("api_key")
+        if isinstance(api_key, str):
+            normalized_config["api_key"] = bytearray(api_key, encoding="utf-8")
+        return normalized_config
+
+    for config_name, config in normalized_config.items():
+        if not isinstance(config, dict):
+            continue
+        normalized_model_config = config.copy()
+        api_key = normalized_model_config.get("api_key")
+        if isinstance(api_key, str):
+            normalized_model_config["api_key"] = bytearray(api_key, encoding="utf-8")
+        normalized_config[config_name] = normalized_model_config
+    return normalized_config
+
+
 def _raise_report_convert_error(
         exc_cls: type[ReportConvertBasicException],
         detail: str,

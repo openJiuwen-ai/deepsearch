@@ -36,12 +36,6 @@ def _select_report_style_config(raw_config: dict) -> LLMConfig:
     if not isinstance(candidate, dict):
         raise ReportStyleValidationError("llm_config requires writing_checking or general")
 
-    # API 请求中的密钥是 JSON 字符串；LLMConfig 则要求可在创建模型后清零的 bytearray。
-    candidate = candidate.copy()
-    api_key = candidate.get("api_key")
-    if isinstance(api_key, str):
-        candidate["api_key"] = bytearray(api_key, encoding="utf-8")
-
     try:
         return LLMConfig.model_validate(candidate)
     except ValidationError as exc:
