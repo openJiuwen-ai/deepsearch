@@ -63,6 +63,16 @@ class VerticalSearchFallbackLog:
     reason: str
 
 
+@dataclass(frozen=True)
+class VerticalSearchFailureDetailLog:
+    section_idx: int
+    step_title: str
+    operation: str
+    error: Any
+    extra_info: str
+    level: int = logging.INFO
+
+
 def _merge_source_store(
     source_store: dict,
     task_source_store: dict,
@@ -460,12 +470,14 @@ class InfoRetrievalNode(BaseNode):
                         f"'{default_search_engine_name}'"
                     )
                 self._log_vertical_search_failure_detail(
-                    section_idx=section_idx,
-                    step_title=step_title,
-                    operation=fallback_operation,
-                    error=error,
-                    extra_info=f"{request.search_engine_name}: {request.query}",
-                    level=logging.WARNING,
+                    VerticalSearchFailureDetailLog(
+                        section_idx=section_idx,
+                        step_title=step_title,
+                        operation=fallback_operation,
+                        error=error,
+                        extra_info=f"{request.search_engine_name}: {request.query}",
+                        level=logging.WARNING,
+                    )
                 )
                 return await self._direct_search_with_retry(
                     DirectSearchRequest(
@@ -559,31 +571,26 @@ class InfoRetrievalNode(BaseNode):
 
     @staticmethod
     def _log_vertical_search_failure_detail(
-            section_idx: int,
-            step_title: str,
-            operation: str,
-            error: Any,
-            extra_info: str,
-            level: int = logging.INFO,
+            failure_log: VerticalSearchFailureDetailLog,
     ) -> None:
         log_method = logger.log
         if LogManager.is_sensitive():
             log_method(
-                level,
+                failure_log.level,
                 "section_idx: %s | [InfoRetrievalNode] %s",
-                section_idx,
-                operation,
+                failure_log.section_idx,
+                failure_log.operation,
             )
         else:
             log_method(
-                level,
+                failure_log.level,
                 "section_idx: %s | step title: %s | [InfoRetrievalNode] %s: %s | Extra Info: %s",
-                section_idx,
-                step_title,
-                operation,
-                error,
-                extra_info,
-                exc_info=isinstance(error, BaseException),
+                failure_log.section_idx,
+                failure_log.step_title,
+                failure_log.operation,
+                failure_log.error,
+                failure_log.extra_info,
+                exc_info=isinstance(failure_log.error, BaseException),
             )
 
     @staticmethod
