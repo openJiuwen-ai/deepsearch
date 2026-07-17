@@ -21,9 +21,10 @@ Bundle 组装把工作流最终结果整理成稳定的磁盘目录结构，使�
 
 ## 关键代码路径
 
-- `server/deepsearch/core/manager/report_manager/report_bundle.py`
-- `server/deepsearch/core/manager/report_manager/conversion_utils.py`
-- `server/deepsearch/core/manager/report_manager/report_processor.py`
+- `openjiuwen_deepsearch/algorithm/report_export/report_bundle.py`
+- `openjiuwen_deepsearch/algorithm/report_export/conversion_utils.py`
+- `openjiuwen_deepsearch/algorithm/report_export/service.py`
+- `tests/algorithm/report_export/test_report_export_service.py`
 - `tests/server/report_manager/test_report_bundle.py`
 
 ## 核心流程

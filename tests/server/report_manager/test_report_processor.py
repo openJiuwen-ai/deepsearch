@@ -10,7 +10,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 import markdown
 import pytest
 
-from server.deepsearch.core.manager.report_manager.conversion_utils import (
+from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
     normalize_docx_tables,
     postprocess_html,
     preprocess_markdown_text,
@@ -18,19 +18,15 @@ from server.deepsearch.core.manager.report_manager.conversion_utils import (
     restore_math_spans,
     wrap_html_tables,
 )
-from server.deepsearch.core.manager.report_manager.docx_export import convert_md_to_docx
-from server.deepsearch.core.manager.report_manager.html_export import convert_md_to_html
-from server.deepsearch.core.manager.report_manager.mermaid_offline import (
-    ensure_mermaid_cli,
-    render_mermaid_offline,
-)
-from server.deepsearch.core.manager.report_manager.mermaid_preprocess import (
+from openjiuwen_deepsearch.algorithm.report_export.docx_export import convert_md_to_docx
+from openjiuwen_deepsearch.algorithm.report_export.html_export import convert_md_to_html
+from openjiuwen_deepsearch.algorithm.report_export.mermaid_preprocess import (
     MermaidRenderOptions,
     extract_xychart_metadata,
     preprocess_mermaid_code,
 )
-from server.deepsearch.core.manager.report_manager.report_processor import ReportHtml, ReportWord
-from server.deepsearch.core.manager.report_manager.word_utils import (
+from openjiuwen_deepsearch.algorithm.report_export.report_bundle import build_report_bundle
+from openjiuwen_deepsearch.algorithm.report_export.word_utils import (
     _normalize_latex_for_omml,
     html_to_doc,
     set_global_styles,
@@ -42,6 +38,70 @@ TINY_PNG_BASE64 = (
     "+/p9sAAAAASUVORK5CYII="
 )
 
+STYLE_MAP = {
+    "heading1": "heading 1",
+    "heading2": "heading 2",
+    "heading3": "heading 3",
+    "heading4": "heading 4",
+    "heading5": "heading 5",
+    "heading6": "heading 6",
+    "heading7": "heading 7",
+    "heading8": "heading 8",
+    "heading9": "heading 9",
+    "paragraph": "Normal",
+    "table": "Table Grid",
+    "default": "Normal",
+}
+
+
+def _convert_html_text(markdown_text: str, tmp_path: Path) -> str:
+    """将 Markdown 转换为公共 legacy HTML 并返回文本。
+
+    Args:
+        markdown_text: 待转换 Markdown。
+        tmp_path: pytest 临时工作目录。
+
+    Returns:
+        生成的 HTML 文本。
+    """
+    markdown_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    markdown_path.write_text(markdown_text, encoding="utf-8")
+    convert_md_to_html(markdown_path, html_path)
+    return html_path.read_text(encoding="utf-8")
+
+
+def _convert_docx_document(markdown_text: str, tmp_path: Path) -> Document:
+    """将 Markdown 转换为公共 DOCX 并返回文档对象。
+
+    Args:
+        markdown_text: 待转换 Markdown。
+        tmp_path: pytest 临时工作目录。
+
+    Returns:
+        已生成的 Word 文档。
+    """
+    markdown_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    markdown_path.write_text(markdown_text, encoding="utf-8")
+    convert_md_to_docx(markdown_path, docx_path)
+    return Document(docx_path)
+
+
+def _html_to_word(html_text: str) -> Document:
+    """使用公共 HTML-to-DOCX 工具转换 HTML 文本。
+
+    Args:
+        html_text: 待转换 HTML。
+
+    Returns:
+        生成的 Word 文档。
+    """
+    document = Document()
+    set_global_styles(document)
+    html_to_doc(document, html_text, STYLE_MAP)
+    return document
+
 
 def test_set_global_styles_uses_compact_line_spacing():
     """Validate generated DOCX paragraphs use compact line spacing."""
@@ -52,53 +112,6 @@ def test_set_global_styles_uses_compact_line_spacing():
     paragraph_format = document.styles["Normal"].paragraph_format
     assert paragraph_format.line_spacing_rule == WD_LINE_SPACING.MULTIPLE
     assert paragraph_format.line_spacing == 1.15
-
-
-def test_ensure_mermaid_cli_returns_unavailable_when_missing(monkeypatch):
-    """Validate Mermaid CLI detection when the executable is unavailable.
-
-    Args:
-        monkeypatch: pytest monkeypatch fixture.
-
-    Returns:
-        None.
-    """
-    monkeypatch.delenv("MERMAID_MMDC_PATH", raising=False)
-    monkeypatch.setattr("shutil.which", lambda name: None)
-    monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.mermaid_offline.resolve_mmdc_path",
-        lambda: None,
-    )
-
-    status = ensure_mermaid_cli()
-
-    assert status.available is False
-
-
-def test_render_mermaid_offline_returns_false_when_cli_missing(tmp_path, monkeypatch):
-    """Validate Mermaid rendering fallback when Mermaid CLI is missing.
-
-    Args:
-        tmp_path: pytest 提供的临时目录。
-        monkeypatch: pytest monkeypatch fixture。
-
-    Returns:
-        None.
-    """
-    monkeypatch.delenv("MERMAID_MMDC_PATH", raising=False)
-    monkeypatch.setattr("shutil.which", lambda name: None)
-    monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.mermaid_offline.resolve_mmdc_path",
-        lambda: None,
-    )
-
-    ok = render_mermaid_offline(
-        "graph TD\nA-->B",
-        tmp_path / "diagram.svg",
-        output_format="svg",
-    )
-
-    assert ok is False
 
 
 def test_preprocess_mermaid_code_scales_xychart_and_extracts_metadata():
@@ -171,43 +184,43 @@ def test_postprocess_html_wraps_tables_without_rewriting_svg():
     assert '<div class="table-wrap"><table>' in processed
 
 
-def test_report_html_convert_from_markdown_wraps_tables():
+def test_report_html_convert_from_markdown_wraps_tables(tmp_path):
     """Validate direct HTML conversion wraps Markdown tables.
 
     Returns:
         None.
     """
-    html_text = ReportHtml.convert_from_markdown("| A | B |\n|---|---|\n| 1 | 2 |")
+    html_text = _convert_html_text("| A | B |\n|---|---|\n| 1 | 2 |", tmp_path)
 
     assert 'class="table-wrap"' in html_text
     assert "<table>" in html_text
 
 
-def test_report_html_convert_from_markdown_uses_shared_safe_math_handling():
+def test_report_html_convert_from_markdown_uses_shared_safe_math_handling(tmp_path):
     """Validate direct HTML conversion shares offline math/currency behavior."""
-    html_text = ReportHtml.convert_from_markdown("变量 $G$ 保留为公式，价格 $4 和 $5 保持文本。")
+    html_text = _convert_html_text("变量 $G$ 保留为公式，价格 $4 和 $5 保持文本。", tmp_path)
 
     assert r"\(G\)" in html_text
     assert "$4 和 $5" in html_text
     assert "inlineMath: [['$', '$']" not in html_text
 
 
-def test_report_word_convert_from_markdown_keeps_wrapped_tables():
+def test_report_word_convert_from_markdown_keeps_wrapped_tables(tmp_path):
     """Validate online DOCX conversion keeps tables wrapped for HTML centering.
 
     Returns:
         None.
     """
-    doc = ReportWord.convert_from_markdown("| A | B |\n|---|---|\n| 1 | 2 |")
+    doc = _convert_docx_document("| A | B |\n|---|---|\n| 1 | 2 |", tmp_path)
 
     assert len(doc.tables) == 1
     assert doc.tables[0].cell(0, 0).text == "A"
     assert doc.tables[0].cell(1, 1).text == "2"
 
 
-def test_report_word_convert_from_markdown_uses_shared_safe_math_handling():
+def test_report_word_convert_from_markdown_uses_shared_safe_math_handling(tmp_path):
     """Validate direct DOCX conversion renders math without converting currency."""
-    doc = ReportWord.convert_from_markdown("变量 $G$ 保留为公式，价格 $4 和 $5 保持文本。")
+    doc = _convert_docx_document("变量 $G$ 保留为公式，价格 $4 和 $5 保持文本。", tmp_path)
     paragraph_text = "\n".join(paragraph.text for paragraph in doc.paragraphs)
 
     assert r"\(G\)" not in paragraph_text
@@ -225,7 +238,7 @@ def test_report_word_convert_from_html_handles_irregular_table_rows():
         "</div>"
     )
 
-    doc = ReportWord._html_to_word(html_text)
+    doc = _html_to_word(html_text)
 
     assert len(doc.tables) == 1
     assert len(doc.tables[0].columns) == 3
@@ -243,7 +256,7 @@ def test_report_word_convert_from_html_limits_nested_block_depth():
         + "</div>"
     )
 
-    doc = ReportWord._html_to_word(html_text)
+    doc = _html_to_word(html_text)
 
     assert any("深层内容" in paragraph.text for paragraph in doc.paragraphs)
 
@@ -466,7 +479,7 @@ def test_convert_md_to_html_keeps_nested_list_level_across_chart_block(tmp_path)
     assert nested_items[0].find("img", alt="日本Top10") is not None
 
 
-def test_report_converters_keep_nested_list_level_across_font_description():
+def test_report_converters_keep_nested_list_level_across_font_description(tmp_path):
     """Validate a font description does not promote following nested items."""
     markdown = (
         "- **多维度协同分析**：\n"
@@ -476,7 +489,7 @@ def test_report_converters_keep_nested_list_level_across_font_description():
         "    - **经济维度**：内容。\n"
     )
 
-    html = ReportHtml.convert_from_markdown(markdown)
+    html = _convert_html_text(markdown, tmp_path)
     soup = BeautifulSoup(html, "html.parser")
     parent_item = next(item for item in soup.find_all("li") if "多维度协同分析" in item.get_text())
     nested_items = parent_item.find("ul", recursive=False).find_all("li", recursive=False)
@@ -485,7 +498,7 @@ def test_report_converters_keep_nested_list_level_across_font_description():
         "经济维度：内容。",
     ]
 
-    document = ReportWord.convert_from_markdown(markdown)
+    document = _convert_docx_document(markdown, tmp_path)
     paragraphs = {paragraph.text: paragraph for paragraph in document.paragraphs}
     parent = next(paragraph for paragraph in document.paragraphs if paragraph.text.startswith("多维度协同分析："))
     parent_num_pr = parent._p.pPr.numPr
@@ -591,10 +604,11 @@ def test_report_table_css_preserves_global_width_and_centers_wrapped_tables():
     Returns:
         None.
     """
-    css_path = Path("server/deepsearch/core/manager/report_manager/css/style.css")
-    css_text = css_path.read_text(encoding="utf-8")
+    from openjiuwen_deepsearch.algorithm.report_export.html_export import HTML_TEMPLATE
 
-    assert re.search(r"table\s*\{[^}]*width:\s*100%;", css_text, flags=re.DOTALL)
+    css_text = HTML_TEMPLATE
+
+    assert re.search(r"table\s*\{[^}]*width:\s*fit-content;", css_text, flags=re.DOTALL)
     assert re.search(
         r"\.table-wrap\s+table\s*\{[^}]*width:\s*auto;[^}]*max-width:\s*100%;[^}]*margin:\s*0\s+auto;",
         css_text,
@@ -619,7 +633,10 @@ def test_report_html_export_renders_mermaid_or_falls_back(tmp_path):
         "exception_info": "",
     }
 
-    html_text = ReportHtml.convert_from_final_result(final_result, tmp_path)
+    bundle = build_report_bundle(final_result, tmp_path)
+    html_path = bundle.root_dir / "report.html"
+    convert_md_to_html(bundle.markdown_path, html_path)
+    html_text = html_path.read_text(encoding="utf-8")
 
     assert "<html" in html_text.lower()
     assert "标题" in html_text
@@ -652,7 +669,7 @@ def test_normalize_docx_tables_centers_tables_and_captions(tmp_path):
     assert normalized.paragraphs[-1].alignment == WD_ALIGN_PARAGRAPH.CENTER
 
 
-def test_convert_md_to_html_annotates_xychart_value_labels(tmp_path, monkeypatch):
+def test_convert_md_to_html_annotates_xychart_value_labels(tmp_path):
     """Validate HTML export annotates xychart SVG output with value labels.
 
     Args:
@@ -665,31 +682,18 @@ def test_convert_md_to_html_annotates_xychart_value_labels(tmp_path, monkeypatch
     md_path = tmp_path / "report.md"
     html_path = tmp_path / "report.html"
     md_path.write_text(
-        "```mermaid\nxychart-beta\n  bar [1200]\n```",
+        "```mermaid\n---\nconfig:\n    showDataLabel: true\n---\n"
+        "xychart-beta\n"
+        '  x-axis ["收入"]\n'
+        '  y-axis "亿元" 0 --> 2\n'
+        "  bar [1.2]\n```",
         encoding="utf-8",
-    )
-
-    def _fake_render_mermaid_offline(code, output_path, **kwargs):
-        del code, kwargs
-        output_file = tmp_path / output_path.name
-        output_file.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
-            '<g class="plot"><g class="bar-plot-0" fill="#374151">'
-            '<rect x="10" y="10" width="20" height="30" />'
-            "</g></g></svg>",
-            encoding="utf-8",
-        )
-        return True
-
-    monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.html_export.render_mermaid_offline",
-        _fake_render_mermaid_offline,
     )
 
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert "xychart-value-label" in html_text
+    assert "chart-value-label" in html_text
 
 
 def test_convert_md_to_html_keeps_legacy_font_caption_separate_from_following_list(tmp_path):
@@ -794,7 +798,9 @@ def test_report_docx_export_creates_docx_file(tmp_path):
         "exception_info": "",
     }
 
-    docx_path = ReportWord.convert_from_final_result(final_result, tmp_path)
+    bundle = build_report_bundle(final_result, tmp_path)
+    docx_path = bundle.root_dir / "report.docx"
+    convert_md_to_docx(bundle.markdown_path, docx_path)
 
     assert docx_path.exists()
     document = Document(docx_path)
@@ -820,12 +826,12 @@ def test_convert_md_to_docx_normalizes_headings_fonts_and_tables(tmp_path, monke
     table_calls = {"count": 0}
 
     monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_export.normalize_docx_fonts",
+        "openjiuwen_deepsearch.algorithm.report_export.docx_export.normalize_docx_fonts",
         lambda *_args, **_kwargs: font_calls.__setitem__("count", font_calls["count"] + 1),
         raising=False,
     )
     monkeypatch.setattr(
-        "server.deepsearch.core.manager.report_manager.docx_export.normalize_docx_tables",
+        "openjiuwen_deepsearch.algorithm.report_export.docx_export.normalize_docx_tables",
         lambda *_args, **_kwargs: table_calls.__setitem__("count", table_calls["count"] + 1),
         raising=False,
     )

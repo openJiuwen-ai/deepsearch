@@ -1,15 +1,18 @@
 # -*- coding: UTF-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 """Shared helpers for report export conversions."""
 
 from __future__ import annotations
 
+import base64
 import html
 import logging
 import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+
+import markdown
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,10 @@ HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?>")
 MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]\n]+\]\([^)]+\)")
 CODE_PLACEHOLDER = "\x00CODE{}\x00"
 CODE_PLACEHOLDER_RE = re.compile(r"\x00CODE(\d+)\x00")
+MERMAID_BLOCK_RE = re.compile(r"(?ms)^```[ \t]*mermaid[ \t]*\r?\n(.*?)\r?\n```[ \t]*$")
+CHART_IMAGE_SRC_RE = re.compile(
+    r"src=(?P<quote>[\"'])charts/(?P<chart_id>[A-Za-z0-9_-]+)\.png(?P=quote)"
+)
 FENCED_CODE_RE = re.compile(
     r"(?ms)^(?P<indent>[ \t]{0,3})(?P<fence>`{3,}|~{3,})[^\n]*\n.*?\n(?P=indent)(?P=fence)[ \t]*$"
 )
@@ -631,6 +638,24 @@ def postprocess_html(html_text: str) -> str:
     return wrap_html_tables(html_text)
 
 
+def render_markdown_html_fragment(markdown_text: str) -> str:
+    """将预处理完成的 Markdown 转换为公共 HTML fragment。
+
+    Args:
+        markdown_text: 已完成格式专属 Mermaid 替换等预处理的 Markdown。
+
+    Returns:
+        包含公式、引用和表格后处理结果的 HTML fragment。
+    """
+    markdown_text, math_spans = protect_math_spans(markdown_text)
+    html_body = markdown.markdown(
+        markdown_text,
+        extensions=["extra", "toc", "md_in_html"],
+        output_format="html5",
+    )
+    return postprocess_html(restore_math_spans(html_body, math_spans))
+
+
 def protect_math_spans(text: str) -> tuple[str, list[str]]:
     """Replace LaTeX math spans with placeholders before Markdown conversion.
 
@@ -1178,6 +1203,31 @@ def normalize_docx_fonts(docx_path: Path, *, font_name: str = DEFAULT_DOCX_FONT)
             _apply_font_to_table(table, font_name)
 
     document.save(docx_path)
+
+
+def inline_chart_images(html_text: str, base_path: Path) -> str:
+    """将 bundle 内的 VLM PNG 引用替换为 Data URI。
+
+    仅处理 bundle 生成的安全 `charts/<id>.png` 路径，其他本地或远程
+    图片引用保持原样。
+
+    Args:
+        html_text: 已生成的 HTML 文本。
+        base_path: `report.md` 所在的 bundle 根目录。
+
+    Returns:
+        VLM PNG 已内嵌的 HTML 文本；资源不存在时保留原引用。
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        chart_path = base_path / "charts" / f"{match.group('chart_id')}.png"
+        if not chart_path.is_file():
+            return match.group(0)
+        encoded = base64.b64encode(chart_path.read_bytes()).decode("ascii")
+        quote = match.group("quote")
+        return f"src={quote}data:image/png;base64,{encoded}{quote}"
+
+    return CHART_IMAGE_SRC_RE.sub(_replace, html_text)
 
 
 def enhance_image(image_path: str) -> None:
