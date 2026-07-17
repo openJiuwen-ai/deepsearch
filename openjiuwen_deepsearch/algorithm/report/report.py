@@ -1448,11 +1448,18 @@ class Reporter:
         }
 
         llm_input = apply_system_prompt("rationale_generator", tmp_context)
-        llm_output = await ainvoke_llm_with_stats(
-            llm=self._llm,
-            messages=llm_input,
-            agent_name=AgentLlmName.SUB_REPORTER_RATIONALE_GENERATOR.value,
-        )
+        try:
+            llm_output = await ainvoke_llm_with_stats(
+                llm=self._llm,
+                messages=llm_input,
+                agent_name=AgentLlmName.SUB_REPORTER_RATIONALE_GENERATOR.value,
+            )
+        except Exception as e:
+            logger.error(
+                "%s [generate_rationales] section_idx: [%s] LLM call failed, info: %s",
+                EFFECT_SUB_REPORT_TAG, section_idx, e,
+            )
+            return []
 
         if not llm_output or not llm_output.get("content"):
             logger.error(
@@ -1519,7 +1526,7 @@ class Reporter:
 
         # Build rationale text
         rationales_text = "\n".join(
-            f"  {r['id']}: {r['description']} (type: {r.get('type', 'unknown')})"
+            f"  {r.get('id', '')}: {r.get('description', '')} (type: {r.get('type', 'unknown')})"
             for r in rationales
         )
 
@@ -1631,7 +1638,7 @@ class Reporter:
         section_task = section_ctx.get("section_task", "")
         section_description = section_ctx.get("section_description", "")
         section_idx = section_ctx.get("section_idx", -1)
-        compact_text = build_compact_classify_doc_infos_text(batch_docs)
+        compact_text = build_compact_classify_doc_infos_text(batch_docs, start=0)
 
         # Build user message with untrusted data (doc content, rationales)
         # separated from system prompt to prevent prompt injection.
@@ -1713,7 +1720,7 @@ class Reporter:
         # Precompute n-grams for redundancy detection
         doc_ngrams = [extract_doc_ngrams(d) for d in filtered_docs]
 
-        rationale_ids = [r.get("id", "") for r in rationales]
+        rationale_ids = list(dict.fromkeys(r.get("id", "") for r in rationales))
 
         covered = {rid: 0.0 for rid in rationale_ids}
         selected_indices: list = []
@@ -1850,7 +1857,7 @@ class Reporter:
 
         coverage_matrix = coverage_result.get("coverage_matrix", {})
         filtered_docs = coverage_result.get("filtered_docs", fallback_docs or selected_docs)
-        rationale_ids = [r.get("id", "") for r in rationales]
+        rationale_ids = list(dict.fromkeys(r.get("id", "") for r in rationales))
 
         # Build doc→index map using object identity (not URL) to correctly
         # handle same-URL different-content doc variants in filtered_docs.

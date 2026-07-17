@@ -430,7 +430,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_webpage_enrich_fetch_timeout_seconds**(int, 可选)：网页正文增强单个 URL 抓取超时时间，单位秒。默认值：`45`。
 
 ### 报告节点参数
-- **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中单次llm处理返回的top_k数量。默认值：`10`。
+- **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中单次llm处理返回的top_k数量。默认值：`20`。
 - **report_max_generate_retry_num**(int, 可选)：生成内容最大重试次数。默认值：`3`。
 - **visualization_enable**(bool, 可选)：报告插图可视化开关。默认值：`False`。
 

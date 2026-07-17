@@ -122,6 +122,7 @@ def test_report_package_exports_compact_doc_info_helpers():
     assert compact_doc_info.build_compact_classify_doc_infos_text is build_compact_classify_doc_infos_text
 
 
+<<<<<<< HEAD
 @pytest.mark.asyncio
 async def test_generate_sub_section_outline_calls_llm_with_preservation_context():
     token = llm_context.set({"mock_model": object()})
@@ -268,6 +269,30 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         assert "Do not collapse required items into a general summary paragraph" in rendered_prompt
     finally:
         llm_context.reset(token)
+=======
+def test_build_compact_classify_doc_infos_text_zero_based():
+    """Coverage-matrix flow uses start=0 so 'Document 0' maps to 'doc_0'."""
+    output = build_compact_classify_doc_infos_text(
+        [{"url": "https://example.com/a", "title": "Doc A", "key_passages": []}],
+        start=0,
+    )
+    assert "Document 0:" in output
+    assert "Document 1:" not in output
+
+
+def test_coverage_matrix_formatter_output_matches_prompt_keys():
+    """Round-trip: formatter start=0 output must align with prompt's doc_0-based keys."""
+    docs = [
+        {"url": "https://example.com/a", "title": "Doc A", "key_passages": ["p1"]},
+        {"url": "https://example.com/b", "title": "Doc B", "key_passages": ["p2"]},
+    ]
+    text = build_compact_classify_doc_infos_text(docs, start=0)
+    # Prompt expects doc_0, doc_1 ... so input must number from 0
+    for i in range(len(docs)):
+        assert f"Document {i}:" in text
+    # Must NOT contain 1-based numbering when start=0
+    assert f"Document {len(docs)}:" not in text
+>>>>>>> 85d2c73 (检视意见修改2)
 
 
 def test_format_key_passage_block_only_outputs_passages():

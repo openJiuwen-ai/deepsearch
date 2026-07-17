@@ -396,7 +396,7 @@ class SubReporterNode(BaseNode):
             if session.get_global_state("section_context.current_outline") else "",
             max_generate_retry_num=session.get_global_state("config.report_max_generate_retry_num") or 3,
             classify_doc_infos_res_top_k_num=session.get_global_state(
-                "config.sub_report_classify_doc_infos_res_top_k_num") or 10,
+                "config.sub_report_classify_doc_infos_res_top_k_num") or 20,
             llm_model_name=adapt_llm_model_name(session, NodeId.SUB_REPORTER.value),
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],
