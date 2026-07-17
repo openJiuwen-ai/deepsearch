@@ -1662,6 +1662,7 @@ class DeepSearchAgent(BaseAgent):
         web_search_token = None
         tool_token = None
         workflow_session_token = None
+        session_agent_config: AgentConfig | None = None
         run_context: DeepSearchRunContext | None = None
         try:
             session_agent_config = AgentConfig.model_validate(agent_config_for_model).model_copy(deep=True)
@@ -1780,10 +1781,14 @@ class DeepSearchAgent(BaseAgent):
                 web_search_context.reset(web_search_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
-            cleanup_agent_config = getattr(self, "agent_config", None)
-            if cleanup_agent_config is not None:
-                zero_secret(cleanup_agent_config.web_fetch_provider_config.api_key)
-                zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
+            # The run context owns a deep copy, so clear both per-run configurations.
+            for cleanup_agent_config in (
+                session_agent_config,
+                run_context.agent_config if run_context is not None else None,
+            ):
+                if cleanup_agent_config is not None:
+                    zero_secret(cleanup_agent_config.web_fetch_provider_config.api_key)
+                    zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
 
 
 class SimpleReactSearchAgent(BaseAgent):

@@ -236,7 +236,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         if args.tool_map == "search_fetch":
             missing_search_args = _missing_required_args(
                 args,
-                ["web_search_engine_name", "fetch_provider_name"],
+                [
+                    "web_search_engine_name",
+                    "web_search_api_key",
+                    "fetch_provider_name",
+                    "fetch_api_key",
+                ],
             )
             if missing_search_args:
                 parser.error(
