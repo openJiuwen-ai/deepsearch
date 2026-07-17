@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.algorithm.query_understanding.outliner import (
     create_outline_tool,
     normalize_sections,
 )
+from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
 
@@ -33,7 +34,10 @@ outline_response = Outline(
             id="1",
             title="1. 中国汽车产业概述",
             description="中国汽车产业概述",
+            format_requirements=[],
             is_core_section=False,
+            section_focus="market_size_and_growth",
+            focus_dimensions=["industry_structure"],
         )
     ],
 )
@@ -54,7 +58,10 @@ functioncall_response = {
                     {
                         'description': '中国汽车产业概述',
                         'title': '1. 中国汽车产业概述',
-                        'is_core_section': False
+                        'format_requirements': [],
+                        'is_core_section': False,
+                        'section_focus': 'market_size_and_growth',
+                        'focus_dimensions': ['industry_structure'],
                     },
                 ],
                 'thought': '中国汽车产业结构分析',
@@ -95,10 +102,20 @@ class TestOutliner:
                 'openjiuwen_deepsearch.algorithm.query_understanding.outliner.ainvoke_llm_with_stats',
                 new_callable=AsyncMock,
                 return_value=functioncall_response
-        ):
+        ) as mock_ainvoke:
             result = await setup_outliner.generate_outline(test_data)
 
         assert result == mock_llm_response
+        mock_ainvoke.assert_awaited_once()
+        prompt = mock_ainvoke.await_args.args[1]
+        rendered_prompt = "\n".join(message["content"] for message in prompt)
+        assert "User-Specified Structure Preservation" in rendered_prompt
+        assert "If an explicit structure exists, it is authoritative" in rendered_prompt
+        assert "default planning aids" in rendered_prompt
+        assert "do not create" in rendered_prompt
+        assert "additional top-level sections" in rendered_prompt
+        assert "do not add top-level sections to reach 4 dimensions" in rendered_prompt
+
     def test_normalize_sections_parses_json_string(self):
         args = {
             "language": "zh-CN",
@@ -148,6 +165,118 @@ class TestOutliner:
 
         with pytest.raises(CustomValueException, match='Sections is not a list'):
             check_tool_call(tool, tool_calls)
+
+    @pytest.mark.parametrize(
+        "missing_field",
+        ["format_requirements", "section_focus", "focus_dimensions"],
+    )
+    def test_check_tool_call_requires_section_contract_fields(self, missing_field):
+        tool = create_outline_tool(1)
+        section = {
+            "title": "test section",
+            "description": "test description",
+            "format_requirements": [],
+            "section_focus": "section_specific_analysis",
+            "focus_dimensions": ["overview"],
+        }
+        section.pop(missing_field)
+        tool_calls = [
+            {
+                "args": {
+                    "language": "zh-CN",
+                    "sections": [section],
+                    "thought": "test thought",
+                    "title": "test title",
+                },
+                "name": tool.card.name,
+            }
+        ]
+
+        with pytest.raises(CustomValueException, match=missing_field):
+            check_tool_call(tool, tool_calls)
+
+    def test_check_tool_call_allows_empty_format_requirements(self):
+        tool = create_outline_tool(1)
+        tool_calls = [
+            {
+                "args": {
+                    "language": "zh-CN",
+                    "sections": [
+                        {
+                            "title": "test section",
+                            "description": "test description",
+                            "format_requirements": [],
+                            "section_focus": "section_specific_analysis",
+                            "focus_dimensions": ["overview"],
+                        }
+                    ],
+                    "thought": "test thought",
+                    "title": "test title",
+                },
+                "name": tool.card.name,
+            }
+        ]
+
+        check_tool_call(tool, tool_calls)
+
+    def test_outline_tool_section_count_respects_explicit_user_structure(self):
+        tool = create_outline_tool(5)
+        sections_description = tool.card.input_params["properties"]["sections"]["description"]
+
+        assert "Target count: 5" in sections_description
+        assert "explicitly defines top-level parts" in sections_description
+        assert "lettered parts" in sections_description
+        assert "divided into N major parts" in sections_description
+        assert "titled numbered tasks" in sections_description
+        assert "one sibling object" in sections_description
+        assert "sub-requirements inside the relevant description" in sections_description
+        assert "source-use restrictions inside format_requirements" in sections_description
+        assert "under a named/lettered major part are subordinate" in sections_description
+        assert "Do not add introduction" in sections_description
+        assert "Never serialize section objects" in sections_description
+        assert "Generate exactly 5" not in sections_description
+        assert "must be exactly 5" not in sections_description
+
+        title_description = tool.card.input_params["properties"]["sections"]["items"]["properties"]["title"]["description"]
+        assert "use only that title" in title_description
+        assert "Relationship Analysis" in title_description
+        assert "Do not append" in title_description
+
+        description_description = tool.card.input_params["properties"]["sections"]["items"]["properties"]["description"]["description"]
+        assert "Concise plain-prose research requirements" in description_description
+        assert "format_requirements instead of copying them here" in description_description
+        assert "Do not include serialized section objects" in description_description
+        assert "'\"title\":'" in description_description
+
+        format_requirements = tool.card.input_params["properties"]["sections"]["items"]["properties"]["format_requirements"]
+        assert format_requirements["type"] == "array"
+        assert "Output format requirements" in format_requirements["description"]
+
+        required_items = tool.card.input_params["properties"]["sections"]["items"]["required"]
+        assert "format_requirements" in required_items
+        assert "section_focus" in required_items
+        assert "focus_dimensions" in required_items
+
+    def test_outliner_template_prompt_requires_section_contract_fields(self):
+        prompts = apply_system_prompt(
+            "outliner_template",
+            {
+                "entry_search_results": [],
+                "report_template": "# Market Overview\n> Function: explain the market\n> is_core_section: false",
+                "questions": "Analyze AI infrastructure vendors",
+                "user_feedback": "",
+                "language": "en-US",
+            },
+        )
+        rendered_prompt = "\n".join(message["content"] for message in prompts)
+
+        assert "Required Section Contract Fields" in rendered_prompt
+        assert "`format_requirements`" in rendered_prompt
+        assert "`section_focus`" in rendered_prompt
+        assert "`focus_dimensions`" in rendered_prompt
+        assert '"format_requirements": []' in rendered_prompt
+        assert '"section_focus": "section_specific_analysis"' in rendered_prompt
+        assert '"focus_dimensions":' in rendered_prompt
 
     @pytest.mark.asyncio
     async def test_generate_outline_failure(self, setup_outliner, mock_llm):

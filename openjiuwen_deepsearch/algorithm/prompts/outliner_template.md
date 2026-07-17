@@ -24,6 +24,15 @@ understand the context and generate a more accurate outline:
 - **`sections` MUST be a JSON array of objects, NOT a string.**
 - Do NOT quote or stringify `sections`.
 
+## Required Section Contract Fields
+Each section object MUST include these contract fields:
+- `format_requirements`: section-specific output constraints from the template or user request, such as required tables,
+  exact columns, row objects, item-by-item enumeration, length/style rules, and source-use restrictions. Use `[]` when
+  there are no section-specific format requirements.
+- `section_focus`: a non-empty string describing this section's analytical role. Use `section_specific_analysis` when
+  no more specific role applies.
+- `focus_dimensions`: a non-empty array of the 1-4 main analytical dimensions this section should primarily cover.
+
 ## Execution Constraints
 - Template structure takes precedence over all other considerations
 - **No Generic Terms in Output**: Ensure NO generic descriptive terms (e.g., 某城市, 某公司, 该方法) remain in the final title or description. They must be fully instantiated with the specific context from the user's query: {{ questions }} .
@@ -33,6 +42,8 @@ understand the context and generate a more accurate outline:
   - Only two heading levels are allowed in the final template: Level 1 and Level 2.
   - The description for each Level 1 section must be formatted according to the "Description Formatting" rules below.
   - **Do NOT generate separate level 3 section titles for Level 2 subtitles. They must be merged into the description of their parent Level 1 section.**  
+  - Keep substantive Level 2 scope and functions in `description`; put table, exact-column, enumeration, length/style,
+    and source-use constraints in `format_requirements`.
   - Ignore Level 3 and deeper levels.  
   - Always preserve all Level 1 sections from the template, **except those that are summarizing in nature (e.g., "摘要","简介"，"总结", "结论", "Summary", "Conclusion", "Final Remarks")**.  
   - **Explicitly drop any summarizing sections**, even if they exist in the template.
@@ -97,12 +108,18 @@ Based on the rules, you must call the outline generation function tool with the 
     {
       "title": "发展概况",
       "description": "- 历史演进与产业基础: 详细介绍研究对象的历史发展历程，按照时间维度列举发展历程中的重要事件，并分析重要事件的标志性影响\n- 产业结构: 详细分析研究对象的核心结构（例如有哪些环节，每个环节的具体概念）\n- 产业核心环节: 详细介绍产业的核心环节有哪些，并分析研究对象在这些核心环节的发展情况",
-      "is_core_section": false
+      "format_requirements": [],
+      "is_core_section": false,
+      "section_focus": "section_specific_analysis",
+      "focus_dimensions": ["development_history", "industry_structure", "core_segments"]
     },
     {
       "title": "核心环节竞争力分析",
       "description": "- 整车制造环节竞争力: 详细分析研究对象在整车制造环节的竞争力，例如有哪些车企，这些车企各自的详细信息，在整车制造环节的优劣\n- 关键零部件环节竞争力: 详细分析研究对象在零部件环节的竞争力，例如有哪些零部件，每种零部件的详细信息与重要性，以及当前研究对象有哪些优劣\n- 新能源技术环节竞争力: 详细分析研究对象在新能源技术环节的竞争力",
-      "is_core_section": true
+      "format_requirements": [],
+      "is_core_section": true,
+      "section_focus": "section_specific_analysis",
+      "focus_dimensions": ["vehicle_manufacturing", "key_components", "new_energy_technology"]
     }
   ]
 }

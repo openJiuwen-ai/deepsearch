@@ -224,6 +224,7 @@ class EditorTeamNode(BaseNode):
             "section_idx": section.id,
             "section_task": section.title,
             "section_description": section.description,
+            "section_format_requirements": section.format_requirements,
             "section_iscore": section.is_core_section,
             "parent_section_steps": state.get("parent_section_steps", []),
             "config": state.get("config", {}),

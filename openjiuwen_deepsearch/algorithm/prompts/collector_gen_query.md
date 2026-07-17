@@ -36,7 +36,9 @@ Task description:
 - Query should ensure that the most current information is gathered. The current time is {{ CURRENT_TIME }}.
 - Do not produce more than {{ max_search_query_count }} queries.
 - For retrieval-needed steps, the allowed query count range is 1..{{ max_search_query_count }}.
-- Use `{{ language }}` for user-facing fields such as `missing_evidence`.
+- Query language is not restricted by the report language.
+- Write non-query JSON fields, such as "missing_evidence", in {{ language }}.
+- The strings inside "queries" are exempt from this output-language rule. Choose English, Chinese, another local language, or mixed-language wording based on which wording is most likely to retrieve authoritative evidence.
 - Separate display language from retrieval language:
   - Keep `missing_evidence` in `{{ language }}`.
   - For query objects with `search_engine_name` set to `"pubmed"` or `"arxiv"`, write `query` in English using academic terms, canonical paper-title keywords, biomedical terminology, algorithm names, benchmark names, or standard English abbreviations.

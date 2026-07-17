@@ -7,6 +7,47 @@ section id is {{section_idx}}
 Based on the provided information, generate a high-quality subsection outline.
 **Crucial:** The output must start with the section title (Level 1), followed by the subsection titles (Level 2).
 
+# Authoritative Context
+
+You are generating the sub-outline for **one top-level section only**.
+
+Use the current outline and the current top-level section as authoritative context.
+If subsection titles are specified in the outline, section title, or section description, preserve those subsection
+titles exactly.
+
+<current_outline>
+{{ current_outline }}
+</current_outline>
+
+<current_section>
+title: {{ section_title }}
+description: {{ section_description }}
+format_requirements: {{ section_format_requirements }}
+</current_section>
+
+# User-Specified Subsection Preservation
+
+- If the user explicitly specified subsection titles for the current section, follow that count, title text, and order.
+- User-specified subsection titles are authoritative. Do not generalize, rename, merge, split, remove, or reorder them
+  merely because the current key passages do not yet support their concrete entities, cases, company names, metrics, or
+  wording.
+- Treat an explicit ordered list under the current top-level section (`1. ...`, `2. ...`, `3. ...`, etc.) as required
+  Level 2 headings when the list describes report content to cover, analysis categories, mechanisms, dimensions,
+  questions, or steps. Preserve every listed item as one subsection unless it is clearly only a table column/row,
+  citation/source rule, length/style rule, or other output-format constraint.
+- If the current section description says to use exact categories, mechanisms, dimensions, or questions, use those labels
+  verbatim as Level 2 headings. Do not replace them with broader summaries.
+- Do not rename, merge, split, remove, or reorder user-specified subsection titles.
+- Do not combine multiple user-listed items into a single subsection, even when they appear thematically close.
+- Do not add generic subsections such as background, summary, risks, recommendations, or outlook unless the user
+  explicitly requested them under the current section.
+- Bullets, tables, paragraph style, coverage requirements, data points, time ranges, format requirements, and source
+  restrictions in `format_requirements` or under a subsection are subordinate requirements. Keep them within that
+  subsection's scope; do not promote them into extra Level 2 headings.
+- Do not create extra subsection titles just to satisfy the default maximum subsection count.
+- Output only one Level 1 heading for the current top-level section and Level 2 subsection headings. Do not output JSON,
+  serialized subsection objects, or strings such as `"title":`, `"description":`, or `}, {`.
+
 {% if report_type == "brief" %}
 ## Brief Mode (Strict)
 - This is a brief report. Keep subsection design compact and decision-oriented.
@@ -41,18 +82,25 @@ Based on the provided information, generate a high-quality subsection outline.
 {% if has_template %}
 ## Logic & Constraint(Strictly Adhere)
 - Strictly follow the **section_description** as the authoritative guidance for outline generation.
+- Strictly preserve **section_format_requirements** as output constraints for the current section.
 - Ensure the outline reflects the logical structure implied by section_description, with **only two levels of headings (Level 1 and Level 2).**
 - Do **NOT** invent subsections or expand into Level 3 (or deeper) headings beyond what is suggested in section_description.
 - Ignore or override outline information from the global report_template if it conflicts with section_description.
 - Only generate **one** Level 1 heading, which must match the section title: {{ section_title }}
 - All subchapter headings must be Level 2 only, numbered as {{section_idx}}.1, {{ section_idx }}.2, etc.
 - Do not generate multiple Level 1 headings. The outline must reflect a single cohesive section structure.
-- Use key passages as the evidence boundary for concrete wording in subsection titles.
-- Do not generate concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages.
-- When section_description suggests a direction that lacks support in key passages, use a more general subsection title instead of forcing an unsupported specific topic.
+- Use key passages as the evidence boundary only for concrete wording introduced by the model in subsection titles.
+- Do not introduce concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages.
+  This restriction does not authorize renaming or generalizing user-specified subsection titles.
+- When section_description suggests a direction that lacks support in key passages, use a more general subsection title only
+  if that concrete direction was inferred or added by the model. If the direction comes from user-specified structure,
+  preserve it exactly.
 
 The following is the section-specific description:
 {{ section_description }}
+
+The following are section-specific format requirements:
+{{ section_format_requirements }}
 
 {% else %}
 
@@ -68,14 +116,18 @@ The section content is mainly made of key passages. Treat them as the evidence b
 - **Relevance:** Focus ONLY on relevance to the section title. Do not add unrelated sections just for the sake of length.
 - **Flow:** The subsections must flow logically and not be disjointed to ensure readability.
 - **No Redundancy:** Ensure logical clarity with no repetition between chapters.
-- **Evidence Boundary:** Do not generate concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages.
+- **Evidence Boundary:** Do not introduce concrete facts, metrics, cases, company names, or named examples that are not
+  supported by the key passages. This boundary applies only to model-added concrete wording and must not override
+  user-specified subsection titles or concrete directions inherited from user-specified structure.
 - **Boundary:** Use the section-local contract as the primary scope boundary. Do not restate another top-level chapter's main job.
 
 ## Formatting Rules
 1.  **Structure:**
     - **Line 1:** Must be the **Level 1 Heading** (The provided section title).
     - **Line 2+:** Must be **Level 2 Headings** (Subsections).
-    - **Limit:** Maximum 4 subsections. No Level 3 subtitles.
+    - **Limit:** Maximum 4 subsections by default. If the user explicitly specifies or implies more subsection titles
+      for this section through an ordered list, exact categories, mechanisms, dimensions, questions, or steps, preserve
+      the user-specified count and titles. No Level 3 subtitles.
 2.  **Numbering:**
     - Level 1: [section id] [Title]
     - Level 2: [section id].[subsection_sequence]

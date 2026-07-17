@@ -1643,12 +1643,17 @@ class Reporter:
         section_description = current_inputs.get(
             "section_description", ""
         )  # Section description
+        section_format_requirements = current_inputs.get(
+            "section_format_requirements", []
+        )
         if not LogManager.is_sensitive():
             logger.debug(
-                "%s [generate_sub_section_outline] section_idx: [%s], section description: [%s]",
+                "%s [generate_sub_section_outline] section_idx: [%s], section description: [%s], "
+                "format requirements: [%s]",
                 EFFECT_SUB_REPORT_TAG,
                 section_idx,
                 section_description,
+                section_format_requirements,
             )
         collected_infos = current_inputs.get(
             "sub_section_core_content", []
@@ -1670,9 +1675,10 @@ class Reporter:
             sub_content_message = (
                 f"Section id is {section_idx},"
                 f"Section title is {section_task},"
-                f"User query is {report_task},"
+                f"Report task is {report_task},"
                 f"{core_context},"
                 f"Section description is {section_description},"
+                f"Section format requirements are {section_format_requirements},"
             )
             tmp_context = {}
             tmp_context["messages"] = [dict(role="user", content=sub_content_message)]
@@ -1681,6 +1687,8 @@ class Reporter:
             tmp_context["has_template"] = current_inputs.get("has_template")
             tmp_context["section_title"] = section_task
             tmp_context["section_description"] = section_description
+            tmp_context["section_format_requirements"] = section_format_requirements
+            tmp_context["current_outline"] = current_inputs.get("current_outline", "")
             tmp_context["report_type"] = current_inputs.get("report_type", "professional")
             tmp_context["paragraph_style"] = current_inputs.get("paragraph_style", "detailed")
             tmp_context.update(
@@ -2583,15 +2591,29 @@ class Reporter:
         background_knowledge_prompt = self._format_background_knowledge_for_prompt(
             background_knowledge_contents
         )
+        current_section_description = current_inputs.get("section_description", "")
+        current_section_format_requirements = current_inputs.get("section_format_requirements", [])
+        current_chapter_outline = current_inputs.get("sub_section_outline", "")
+        current_subsection = current_inputs.get(
+            "current_subsection",
+            "Full current chapter; follow each Level 2 heading in the current chapter outline.",
+        )
         sub_content_message = (
-            f"Section id is {current_inputs.get('section_idx', 1)},"
-            f"Section title is {section_task},"
-            f"User query is {current_inputs.get('report_task', '')},"
-            f"Collected information is {infos},"
-            f"Overall outline is {current_outline_without_plans},"
-            f"References is {current_inputs.get('sub_section_references', '')},"
-            f"Current Chapter Outline is "
-            f"{current_inputs.get('sub_section_outline', '')},"
+            "# Current Top-Level Section\n"
+            f"section_id: {current_inputs.get('section_idx', 1)}\n"
+            f"title: {section_task}\n"
+            f"description: {current_section_description}\n\n"
+            f"format_requirements: {current_section_format_requirements}\n\n"
+            "# Overall Outline\n"
+            f"{current_outline_without_plans}\n\n"
+            "# Current Chapter Outline\n"
+            f"{current_chapter_outline}\n\n"
+            "# Current Subsection\n"
+            f"{current_subsection}\n\n"
+            "# Collected Evidence\n"
+            f"{infos}\n\n"
+            "# References\n"
+            f"{current_inputs.get('sub_section_references', '')}\n\n"
             f"{background_knowledge_prompt}"
         )
         try:
@@ -2613,6 +2635,12 @@ class Reporter:
                     require_methodology_and_risk=current_inputs.get("require_methodology_and_risk", False),
                     audience_role=current_inputs.get("audience_role", ""),
                     tone=current_inputs.get("tone", ""),
+                    outline=current_outline_without_plans,
+                    current_section=section_task,
+                    current_section_description=current_section_description,
+                    current_section_format_requirements=current_section_format_requirements,
+                    current_chapter_outline=current_chapter_outline,
+                    current_subsection=current_subsection,
                     **build_section_local_contract_prompt_context(
                         current_inputs.get("section_local_contract")
                     ),

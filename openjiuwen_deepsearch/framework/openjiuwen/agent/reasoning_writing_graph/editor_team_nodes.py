@@ -95,6 +95,7 @@ class SectionStartNode(Start):
             report_task=inputs.get("report_task"),
             section_task=inputs.get("section_task", ""),
             section_description=inputs.get("section_description", ""),
+            section_format_requirements=inputs.get("section_format_requirements", []),
             section_iscore=inputs.get("section_iscore", False),
             report_template=inputs.get("report_template", ""),
             session_id=inputs.get("session_id", ""),
@@ -365,6 +366,9 @@ class SubReporterNode(BaseNode):
             section_task=session.get_global_state("section_context.section_task"),  # 当前章节标题
             section_iscore=session.get_global_state("section_context.section_iscore") or False,  # 是否核心章节
             section_description=session.get_global_state("section_context.section_description"),  # 章节描述
+            section_format_requirements=session.get_global_state(
+                "section_context.section_format_requirements"
+            ) or [],
             doc_infos=_collect_doc_infos(session.get_global_state("section_context.history_plans")),
             current_outline=session.get_global_state("section_context.current_outline")
             if session.get_global_state("section_context.current_outline") else "",
@@ -723,6 +727,7 @@ def build_editor_team_workflow():
             "report_task": "${report_task}",
             "section_task": "${section_task}",
             "section_description": "${section_description}",
+            "section_format_requirements": "${section_format_requirements}",
             "section_iscore": "${section_iscore}",
             "report_template": "${report_template}",
             "config": "${config}",

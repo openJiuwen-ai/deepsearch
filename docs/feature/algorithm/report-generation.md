@@ -36,6 +36,7 @@
 
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_brief_markdown.md`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar.md`
 - `openjiuwen_deepsearch/algorithm/prompts/report_abstract_markdown.md`
 - `openjiuwen_deepsearch/algorithm/prompts/report_conclusion_markdown.md`

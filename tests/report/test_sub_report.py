@@ -14,7 +14,8 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
 from openjiuwen_deepsearch.algorithm.report.report import Reporter, _get_classified_infos
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
 
 
 def _classified_doc(title: str, url: str, source_id: str, relevance: float) -> dict:
@@ -119,6 +120,154 @@ def test_report_package_exports_compact_doc_info_helpers():
 
     assert package_build_compact is build_compact_classify_doc_infos_text
     assert compact_doc_info.build_compact_classify_doc_infos_text is build_compact_classify_doc_infos_text
+
+
+@pytest.mark.asyncio
+async def test_generate_sub_section_outline_calls_llm_with_preservation_context():
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "language": ENGLISH,
+            "section_idx": "2",
+            "has_template": False,
+            "report_task": (
+                "Part Two should be organized by five categories: "
+                "1. Program Design Flaws 2. Elite Capture 3. Targeting Errors"
+            ),
+            "origin_query": (
+                "Part Two should be organized by five categories: "
+                "1. Program Design Flaws 2. Elite Capture 3. Targeting Errors"
+            ),
+            "current_outline": "1. Context\n2. Part Two",
+            "section_task": "2 Part Two",
+            "section_description": (
+                "Use Program Design Flaws, Elite Capture, and Targeting Errors as exact subsection titles."
+            ),
+            "sub_section_core_content": [
+                {"title": "evidence", "key_passages": ["Program design evidence."]}
+            ],
+        }
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+        ) as mock_ainvoke, patch.object(
+            reporter,
+            "_generate_sub_report_sidecar",
+            new_callable=AsyncMock,
+            return_value={"sidecar": None, "summary": "summary", "warning": ""},
+        ):
+            mock_ainvoke.return_value = {
+                "content": (
+                    "2 Part Two\n"
+                    "2.1 Program Design Flaws\n"
+                    "2.2 Elite Capture\n"
+                    "2.3 Targeting Errors"
+                )
+            }
+
+            result = await reporter._generate_sub_section_outline(current_inputs)
+
+        assert result["rs_success"] is True
+        mock_ainvoke.assert_awaited_once()
+        _, kwargs = mock_ainvoke.call_args
+        assert kwargs["agent_name"] == AgentLlmName.SUB_REPORTER_OUTLINE.value
+        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
+        assert "User-Specified Subsection Preservation" in rendered_prompt
+        assert "Program Design Flaws" in rendered_prompt
+        assert "Elite Capture" in rendered_prompt
+        assert "Targeting Errors" in rendered_prompt
+        assert "User-specified subsection titles are authoritative" in rendered_prompt
+        assert "boundary applies only to model-added concrete wording" in rendered_prompt
+        assert "must not override" in rendered_prompt
+        assert "user-specified subsection titles" in rendered_prompt
+    finally:
+        llm_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_write_subsection_reports_calls_llm_with_output_constraint_context():
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "language": ENGLISH,
+            "section_idx": "3",
+            "section_task": "3 Program Review",
+            "section_description": "Create a table and enumerate each program separately.",
+            "section_format_requirements": [
+                "Create a summary table with columns: Country, Program Name, Program Type, Program Description.",
+                "For each program, specify who was excluded and why.",
+            ],
+            "origin_query": (
+                "Create a summary table with columns: Country, Program Name, Program Type, "
+                "Program Description. For each program, specify who was excluded and why. "
+                "Do not use https://blocked.example/article."
+            ),
+            "report_task": "Evaluate social protection programs.",
+            "current_outline": "1 Context\n2 Failure Categories\n3 Program Review",
+            "sub_section_outline": "3 Program Review\n3.1 Project Summary",
+            "current_subsection": "3.1 Project Summary",
+            "classified_content": [
+                {
+                    "index": 1,
+                    "doc_time": "2023",
+                    "original_content": (
+                        "India runs Program A as a cash transfer program. Some migrant workers were excluded "
+                        "because registration required local documents."
+                    ),
+                    "scores": {"authority": 8, "relevance": 9, "answerability": 8, "data_density": 7},
+                }
+            ],
+            "sub_section_references": [],
+            "sub_report_background_knowledge": [],
+            "report_type": "professional",
+            "paragraph_style": "detailed",
+            "visualization_enable": False,
+        }
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+        ) as mock_ainvoke, patch.object(
+            reporter,
+            "_generate_sub_report_sidecar",
+            new_callable=AsyncMock,
+            return_value={"sidecar": None, "summary": "summary", "warning": ""},
+        ):
+            mock_ainvoke.return_value = {
+                "content": (
+                    "# 3 Program Review\n"
+                    "## 3.1 Project Summary\n"
+                    "| Country | Program Name | Program Type | Program Description |\n"
+                    "|---|---|---|---|\n"
+                    "| India | Program A | Cash transfer | Registration required local documents [citation:1]. |"
+                )
+            }
+
+            result = await reporter._write_subsection_reports(current_inputs)
+
+        assert result["success"] is True
+        mock_ainvoke.assert_awaited_once()
+        _, kwargs = mock_ainvoke.call_args
+        assert kwargs["agent_name"] == AgentLlmName.SUB_REPORTER.value
+        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
+        assert "Authoritative Writing Context" in rendered_prompt
+        assert "User Output Constraint Preservation" in rendered_prompt
+        assert "Create a summary table with columns" in rendered_prompt
+        assert "Country, Program Name, Program Type, Program Description" in rendered_prompt
+        assert "# Original User Query" not in rendered_prompt
+        assert "# Current Top-Level Section" in rendered_prompt
+        assert "# Current Chapter Outline" in rendered_prompt
+        assert "# Collected Evidence" in rendered_prompt
+        assert "Authoritative Writing Context" in rendered_prompt
+        assert "format_requirements" in rendered_prompt
+        assert "If the user requested a table, output a Markdown table" in rendered_prompt
+        assert "If the user specified table columns, use those column names exactly" in rendered_prompt
+        assert "Do not collapse required items into a general summary paragraph" in rendered_prompt
+    finally:
+        llm_context.reset(token)
 
 
 def test_format_key_passage_block_only_outputs_passages():

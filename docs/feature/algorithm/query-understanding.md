@@ -15,6 +15,7 @@
 - 意图识别会输出 `IntentRecognitionResult`，其中包含 `original_query`、`research_query`、`research_intent`、`lang` 和可选入口搜索结果。
 - 报告类型只接受明确的 `professional` 或 `brief`；未知值保持为空，由下游澄清或默认策略处理。
 - 大纲生成要求章节标题不带编号，并在代码侧修复章节 ID、依赖关系和 parent/relationship 一致性。
+- 用户显式指定顶层结构时，大纲生成按用户给出的主要章节数量、标题和顺序组织，不为了默认章节数、brief 摘要或维度覆盖规则额外新增顶层章节。
 - 计划生成按章节生成信息采集步骤，依赖驱动模式会保留 step id、parent ids 和关系描述。
 
 ## 关键代码路径
