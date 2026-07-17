@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.algorithm.query_understanding.outliner import (
     create_outline_tool,
     normalize_sections,
 )
+from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
 
@@ -255,6 +256,27 @@ class TestOutliner:
         assert "format_requirements" in required_items
         assert "section_focus" in required_items
         assert "focus_dimensions" in required_items
+
+    def test_outliner_template_prompt_requires_section_contract_fields(self):
+        prompts = apply_system_prompt(
+            "outliner_template",
+            {
+                "entry_search_results": [],
+                "report_template": "# Market Overview\n> Function: explain the market\n> is_core_section: false",
+                "questions": "Analyze AI infrastructure vendors",
+                "user_feedback": "",
+                "language": "en-US",
+            },
+        )
+        rendered_prompt = "\n".join(message["content"] for message in prompts)
+
+        assert "Required Section Contract Fields" in rendered_prompt
+        assert "`format_requirements`" in rendered_prompt
+        assert "`section_focus`" in rendered_prompt
+        assert "`focus_dimensions`" in rendered_prompt
+        assert '"format_requirements": []' in rendered_prompt
+        assert '"section_focus": "section_specific_analysis"' in rendered_prompt
+        assert '"focus_dimensions":' in rendered_prompt
 
     @pytest.mark.asyncio
     async def test_generate_outline_failure(self, setup_outliner, mock_llm):
