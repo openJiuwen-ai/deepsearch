@@ -370,7 +370,7 @@ def test_verify_coverage_only_checks_selected_docs():
     """A rationale covered only by a non-selected doc should be 'uncovered'."""
     reporter = _make_reporter()
     all_docs = [_doc(0, "出口"), _doc(1, "目的国")]
-    selected = [_doc(0, "出口")]  # only doc 0 selected, doc 1 not in report
+    selected = [all_docs[0]]  # only doc 0 selected, doc 1 not in report
     rationales = [_rationale("r1", "出口数据"), _rationale("r2", "目的国")]
     matrix = {
         "doc_0": {"r1": 0.9, "r2": 0.1},

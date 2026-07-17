@@ -29,8 +29,6 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
 )
 from openjiuwen_deepsearch.algorithm.report.ngram_utils import (
     extract_doc_ngrams,
-    extract_ngrams,
-    compute_pool_idf,
     ngram_jaccard_similarity,
     prefilter_by_ngram_coverage,
 )
@@ -78,6 +76,7 @@ def _format_sub_report_error(detail: str | BaseException) -> str:
 
 EFFECT_SUB_REPORT_TAG = "### sub_report_tag ###"
 BATCH_SIZE = 15
+MAX_CONCURRENT_BATCHES = 5
 LEADING_TITLE_NUMBER_PATTERN = re.compile(
     r"^(?:"
     r"[\（][一二三四五六七八九十\d]{1,2}[\）]\s*|"
@@ -891,7 +890,7 @@ class Reporter:
                 fallback_docs=doc_infos,
             )
 
-            verify_result = self._verify_coverage(
+            self._verify_coverage(
                 selected_docs, rationales, coverage_result, section_idx,
                 fallback_docs=doc_infos,
             )
@@ -1427,20 +1426,25 @@ class Reporter:
         step_summaries = current_inputs.get("step_summaries", [])
 
         step_summaries_text = "\n".join(
-            f"  - Step {s['plan_idx']}-{s['step_idx']}: {s['title']}\n"
+            f"  - Step {s.get('plan_idx', '')}-{s.get('step_idx', '')}: {s.get('title', '')}\n"
             f"    Description: {s.get('description', '')}\n"
             f"    Collected: {s.get('step_result', '')}\n"
             f"    Evaluation: {s.get('evaluation', '')}"
             for s in step_summaries
         ) if step_summaries else "  No step summaries available."
 
+        # Build user message with data (including untrusted step summaries)
+        # separated from system prompt to prevent prompt injection.
+        user_content = (
+            f"User query: {report_task}\n"
+            f"Chapter title: {section_task}\n"
+            f"Chapter description: {section_description}\n"
+            f"Overall outline: {overall_outline}\n\n"
+            f"Research step summaries:\n{step_summaries_text}\n\n"
+            "Generate rationales for this chapter."
+        )
         tmp_context = {
-            "messages": [dict(role="user", content=f"Generate rationales for this chapter.")],
-            "user_query": report_task,
-            "section_task": section_task,
-            "section_description": section_description,
-            "overall_outline": overall_outline,
-            "step_summaries": step_summaries_text,
+            "messages": [dict(role="user", content=user_content)],
         }
 
         llm_input = apply_system_prompt("rationale_generator", tmp_context)
@@ -1544,7 +1548,8 @@ class Reporter:
             )
             for batch_idx, batch in enumerate(batches)
         ]
-        batch_results = await asyncio.gather(*tasks)
+        # Limit concurrent LLM calls to avoid overwhelming the provider
+        batch_results = await self._gather_with_limit(tasks, MAX_CONCURRENT_BATCHES)
 
         # Merge batch results, map in-batch doc_X to global doc_{offset + X}
         merged_coverage: dict = {}
@@ -1587,6 +1592,27 @@ class Reporter:
             "filtered_docs": filtered_docs,
         }
 
+    @staticmethod
+    async def _gather_with_limit(tasks: list, limit: int) -> list:
+        """Run async tasks with a concurrency limit.
+
+        Args:
+            tasks: list of coroutines.
+            limit: maximum number of concurrent tasks.
+
+        Returns:
+            List of results in the same order as tasks.
+        """
+        if not tasks:
+            return []
+        semaphore = asyncio.Semaphore(limit)
+
+        async def _run_with_sem(task):
+            async with semaphore:
+                return await task
+
+        return await asyncio.gather(*[_run_with_sem(t) for t in tasks])
+
     async def _eval_coverage_batch(
         self, batch_docs: list, batch_idx: int,
         rationales_text: str, section_ctx: dict,
@@ -1607,20 +1633,32 @@ class Reporter:
         section_idx = section_ctx.get("section_idx", -1)
         compact_text = build_compact_classify_doc_infos_text(batch_docs)
 
+        # Build user message with untrusted data (doc content, rationales)
+        # separated from system prompt to prevent prompt injection.
+        user_content = (
+            f"Chapter title: {section_task}\n"
+            f"Chapter description: {section_description}\n\n"
+            f"Information dimensions (rationales):\n{rationales_text}\n\n"
+            f"Documents:\n{compact_text}\n\n"
+            "Please evaluate the coverage matrix for the documents above."
+        )
         tmp_context = {
-            "messages": [dict(role="user", content="Please evaluate the coverage matrix for the documents above.")],
-            "section_task": section_task,
-            "section_description": section_description,
-            "rationales": rationales_text,
-            "doc_infos": compact_text,
+            "messages": [dict(role="user", content=user_content)],
         }
 
         llm_input = apply_system_prompt("coverage_matrix_evaluator", tmp_context)
-        llm_output = await ainvoke_llm_with_stats(
-            llm=self._llm,
-            messages=llm_input,
-            agent_name=AgentLlmName.SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR.value,
-        )
+        try:
+            llm_output = await ainvoke_llm_with_stats(
+                llm=self._llm,
+                messages=llm_input,
+                agent_name=AgentLlmName.SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR.value,
+            )
+        except Exception as e:
+            logger.error(
+                "%s [coverage_matrix] section_idx: [%s] batch %s: LLM call failed: %s",
+                EFFECT_SUB_REPORT_TAG, section_idx, batch_idx, e,
+            )
+            return {}, batch_docs
 
         if not llm_output or not llm_output.get("content"):
             logger.error(
@@ -1663,7 +1701,6 @@ class Reporter:
         Returns:
             (selected_docs, marginal_values) tuple.
         """
-        section_idx = -1  # printed by caller
         filtered_docs = coverage_result.get("filtered_docs", doc_infos)
         coverage_matrix = coverage_result.get("coverage_matrix", {})
         reliability_scores = coverage_result.get("reliability_scores", {})
@@ -1675,16 +1712,10 @@ class Reporter:
 
         # Precompute n-grams for redundancy detection
         doc_ngrams = [extract_doc_ngrams(d) for d in filtered_docs]
-        pool_idf = compute_pool_idf(doc_ngrams)
 
         rationale_ids = [r.get("id", "") for r in rationales]
-        rationale_ngram_sets = {
-            r.get("id", ""): extract_ngrams(str(r.get("description", "")))
-            for r in rationales
-        }
 
         covered = {rid: 0.0 for rid in rationale_ids}
-        covered_ngrams: set = set()
         selected_indices: list = []
         selected_ngrams: list = []
         marginal_values: list = []
@@ -1821,17 +1852,13 @@ class Reporter:
         filtered_docs = coverage_result.get("filtered_docs", fallback_docs or selected_docs)
         rationale_ids = [r.get("id", "") for r in rationales]
 
-        # Build URL→index map to look up coverage_matrix keys
-        url_to_idx = {}
-        for idx, doc in enumerate(filtered_docs):
-            url = doc.get("url", "")
-            if url:
-                url_to_idx[url] = idx
+        # Build doc→index map using object identity (not URL) to correctly
+        # handle same-URL different-content doc variants in filtered_docs.
+        doc_to_idx = {id(doc): idx for idx, doc in enumerate(filtered_docs)}
 
         def _get_doc_cov(doc: dict) -> dict:
             """Get coverage scores for a doc from the coverage matrix."""
-            url = doc.get("url", "")
-            idx = url_to_idx.get(url)
+            idx = doc_to_idx.get(id(doc))
             if idx is None:
                 return {}
             return coverage_matrix.get(f"doc_{idx}", {})
@@ -1877,10 +1904,11 @@ class Reporter:
 
         # Enforce top_k upper limit
         if len(kept_docs) > top_k:
+            dropped = len(kept_docs) - top_k
             kept_docs = kept_docs[:top_k]
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [elbow_cutoff] capped to top_k={top_k}, "
-                f"dropped {len(kept_docs) - top_k} docs"
+                f"dropped {dropped} docs"
             )
 
         return kept_docs
@@ -1907,12 +1935,9 @@ class Reporter:
         filtered_docs = coverage_result.get("filtered_docs", fallback_docs or selected_docs)
         reliability_scores = coverage_result.get("reliability_scores", {})
 
-        # Build URL→index map to look up coverage_matrix keys for selected docs only
-        url_to_idx = {}
-        for idx, doc in enumerate(filtered_docs):
-            url = doc.get("url", "")
-            if url:
-                url_to_idx[url] = idx
+        # Build doc→index map using object identity (not URL) to correctly
+        # handle same-URL different-content doc variants in filtered_docs.
+        doc_to_idx = {id(doc): idx for idx, doc in enumerate(filtered_docs)}
 
         # Compute coverage for each rationale using ONLY selected docs
         covered = {}
@@ -1920,7 +1945,7 @@ class Reporter:
             rid = r.get("id", "")
             max_cov = 0.0
             for doc in selected_docs:
-                idx = url_to_idx.get(doc.get("url", ""))
+                idx = doc_to_idx.get(id(doc))
                 if idx is None:
                     continue
                 doc_key = f"doc_{idx}"
@@ -1946,7 +1971,7 @@ class Reporter:
             # Find top-3 selected documents covering this dimension
             doc_scores = []
             for doc in selected_docs:
-                idx = url_to_idx.get(doc.get("url", ""))
+                idx = doc_to_idx.get(id(doc))
                 if idx is None:
                     continue
                 doc_key = f"doc_{idx}"

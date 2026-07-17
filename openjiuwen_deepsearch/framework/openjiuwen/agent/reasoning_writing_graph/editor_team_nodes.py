@@ -96,13 +96,6 @@ def _collect_step_summaries(history_plans) -> list:
     return summaries
 
 
-def _get_classify_doc_infos_single_time_num(session: Session) -> int:
-    value = session.get_global_state("config.sub_report_classify_doc_infos_single_time_num")
-    if not value or value <= 60:
-        return 60
-    return value
-
-
 class SectionStartNode(Start):
     """
     起始节点，初始化inputs到子图session的section_state中
@@ -404,9 +397,6 @@ class SubReporterNode(BaseNode):
             max_generate_retry_num=session.get_global_state("config.report_max_generate_retry_num") or 3,
             classify_doc_infos_res_top_k_num=session.get_global_state(
                 "config.sub_report_classify_doc_infos_res_top_k_num") or 10,
-            classify_doc_infos_single_time_num=_get_classify_doc_infos_single_time_num(session),
-            classify_doc_infos_prefilter_multiplier=session.get_global_state(
-                "config.sub_report_doc_prefilter_multiplier") or 5,
             llm_model_name=adapt_llm_model_name(session, NodeId.SUB_REPORTER.value),
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],

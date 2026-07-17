@@ -1,24 +1,32 @@
 # -*- coding: UTF-8 -*-
-"""N-gram Pool-IDF utilities for document coverage and redundancy computation.
+# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
-Borrowed from TREC RAG 2025 submodular evidence selection:
-- Use unigram + bigram + trigram n-gram sets
-- Pool-IDF: log((|P|+1) / (df+1)) where |P| = total documents, df = documents containing the n-gram
-- Rare n-grams (low df) get higher weights, encouraging diversity
-"""
+"""N-gram utilities for document pre-filtering and coverage analysis."""
 
 import math
 import re
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set
 
 
 def _tokenize(text: str) -> List[str]:
-    """Simple tokenization for Chinese + English mixed text."""
+    """Tokenize for Chinese + English mixed text.
+
+    CJK characters are split into individual characters because Chinese
+    has no word boundaries.  English/numeric tokens are kept as whole
+    words.  This ensures that semantically related Chinese text with
+    different wording still produces overlapping character n-grams.
+    """
     if not text:
         return []
-    # Split on non-alphanumeric (works for both Chinese and English)
-    tokens = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
-    return [t for t in tokens if len(t) > 0]
+    text = text.lower()
+    tokens: List[str] = []
+    for chunk in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9]+", text):
+        if "\u4e00" <= chunk[0] <= "\u9fff":
+            # CJK: split into individual characters
+            tokens.extend(list(chunk))
+        else:
+            tokens.append(chunk)
+    return tokens
 
 
 def extract_ngrams(text: str, max_n: int = 3) -> Set[str]:
@@ -81,24 +89,25 @@ def compute_pool_idf(doc_ngrams_list: List[Set[str]]) -> Dict[str, float]:
         for ng in ngrams:
             df[ng] = df.get(ng, 0) + 1
 
-    # Pool-IDF: rare n-grams get higher weights
+    # Pool-IDF = log((|P| + 1) / (df + 1))
     pool_idf: Dict[str, float] = {}
     for ng, freq in df.items():
-        pool_idf[ng] = math.log((pool_size + 1.0) / (freq + 1.0))
+        pool_idf[ng] = math.log((pool_size + 1) / (freq + 1))
 
     return pool_idf
 
 
-def ngram_jaccard_similarity(ngrams_a: Set[str], ngrams_b: Set[str]) -> float:
+def ngram_jaccard_similarity(set_a: Set[str], set_b: Set[str]) -> float:
     """Compute Jaccard similarity between two n-gram sets.
 
-    Used for redundancy penalty in greedy selection.
+    Jaccard = |A ∩ B| / |A ∪ B|
+    Returns 0.0 if both sets are empty.
     """
-    if not ngrams_a or not ngrams_b:
+    union = set_a | set_b
+    if not union:
         return 0.0
-    intersection = ngrams_a & ngrams_b
-    union = ngrams_a | ngrams_b
-    return len(intersection) / len(union) if union else 0.0
+    intersection = set_a & set_b
+    return len(intersection) / len(union)
 
 
 def prefilter_by_ngram_coverage(
@@ -123,22 +132,27 @@ def prefilter_by_ngram_coverage(
     if not doc_infos or not rationales:
         return doc_infos
 
+    # Guard: Pool-IDF degenerates to all-zeros when pool_size <= 1,
+    # which would filter out all documents.
+    if len(doc_infos) <= 1:
+        return doc_infos
+
     # Pre-compute n-grams for all documents
     doc_ngrams_list = [extract_doc_ngrams(d) for d in doc_infos]
     pool_idf = compute_pool_idf(doc_ngrams_list)
 
-    # Pre-compute n-grams for all rationales
-    rationale_ngrams = {
-        r.get("id", ""): extract_ngrams(str(r.get("description", "")))
+    # Pre-compute n-grams for all rationales (list of tuples to avoid ID collision)
+    rationale_ngrams = [
+        (r.get("id", ""), extract_ngrams(str(r.get("description", ""))))
         for r in rationales
-    }
+    ]
 
     # Filter: keep documents with non-zero coverage for at least one rationale
     filtered = []
     for idx, doc in enumerate(doc_infos):
         doc_ng = doc_ngrams_list[idx]
         has_coverage = False
-        for r_id, r_ng in rationale_ngrams.items():
+        for _r_id, r_ng in rationale_ngrams:
             overlap = doc_ng & r_ng
             if overlap:
                 gain = sum(pool_idf.get(ng, 0.0) for ng in overlap)

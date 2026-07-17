@@ -16,11 +16,21 @@ from openjiuwen_deepsearch.algorithm.report.ngram_utils import (
 
 # ---------- _tokenize ----------
 
-def test_tokenize_handles_chinese_text():
-    # Chinese text without separators is treated as one token by \w+
+def test_tokenize_splits_chinese_into_characters():
+    """Chinese text is split into individual characters, not whole phrases."""
     tokens = _tokenize("中国 新能源汽车 出口")
-    assert "中国" in tokens
-    assert "新能源" not in tokens  # not split mid-word
+    # CJK chars are individual tokens
+    assert "中" in tokens
+    assert "国" in tokens
+    assert "新" in tokens
+    assert "能" in tokens
+    assert "源" in tokens
+    assert "汽" in tokens
+    assert "车" in tokens
+    assert "出" in tokens
+    assert "口" in tokens
+    # "新能源" is NOT a single token (split into chars)
+    assert "新能源" not in tokens
     assert len(tokens) > 0
 
 
@@ -35,7 +45,10 @@ def test_tokenize_handles_mixed_text():
     tokens = _tokenize("2024年 中国 EV export data")
     assert "export" in tokens
     assert "data" in tokens
-    assert len(tokens) >= 3
+    # CJK chars split individually
+    assert "中" in tokens
+    assert "国" in tokens
+    assert len(tokens) >= 5
 
 
 def test_tokenize_empty_string():
@@ -76,6 +89,20 @@ def test_extract_ngrams_max_n_1():
     assert "a b" not in ngrams
 
 
+def test_extract_ngrams_chinese_character_bigrams():
+    """Chinese text produces character bigrams that enable cross-document matching."""
+    ngrams = extract_ngrams("电动汽车出口")
+    # unigrams (individual chars)
+    assert "电" in ngrams
+    assert "出" in ngrams
+    # bigrams (char pairs joined by space)
+    assert "电 动" in ngrams
+    assert "动 汽" in ngrams
+    assert "汽 车" in ngrams
+    assert "车 出" in ngrams
+    assert "出 口" in ngrams
+
+
 # ---------- extract_doc_ngrams ----------
 
 def test_extract_doc_ngrams_from_title_and_passages():
@@ -85,7 +112,9 @@ def test_extract_doc_ngrams_from_title_and_passages():
     }
     ngrams = extract_doc_ngrams(doc)
     assert len(ngrams) > 0
-    assert any("出口" in ng for ng in ngrams)
+    # Chinese chars produce overlapping bigrams like "出 口"
+    assert "出 口" in ngrams
+    assert "数 据" in ngrams
 
 
 def test_extract_doc_ngrams_passages_as_dicts():
@@ -224,3 +253,23 @@ def test_prefilter_multiple_rationales():
     titles = [d["title"] for d in filtered]
     assert "export data" in titles
     assert "destination country analysis" in titles
+
+
+def test_prefilter_chinese_related_wording():
+    """Documents with different but related Chinese wording should pass prefilter
+    when character n-grams produce overlap."""
+    docs = [
+        # Doc uses "电动汽车出口" (EV export)
+        {"title": "中国电动汽车出口分析", "key_passages": ["2024年数据"]},
+        # Unrelated doc
+        {"title": "天气预报", "key_passages": ["晴天"]},
+        # Another unrelated doc
+        {"title": "足球比赛", "key_passages": ["进球"]},
+    ]
+    # Rationale uses "电动汽车出口" — should match doc 0 via character bigrams
+    rationales = [
+        {"id": "r1", "description": "电动汽车出口数据"},
+    ]
+    filtered = prefilter_by_ngram_coverage(docs, rationales)
+    assert len(filtered) == 1
+    assert "电动汽车出口" in filtered[0]["title"]
