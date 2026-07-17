@@ -144,29 +144,41 @@ class ReportHtml(DefaultReportFormatProcessor):
             return f"<style>{f.read()}</style>"
 
     @staticmethod
-    def _enable_html_latex(html_body: str) -> str:
-        mathjax_scripts = """
-        <script>
-        window.MathJax = {
-            tex: {
-                inlineMath: [['\\\\(', '\\\\)']],
-                displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
-                macros: {
-                    bm: ['{\\\\boldsymbol{#1}}', 1]
-                }
-            }
-        };
-        </script>
-        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-        """
-        if "</body>" in html_body:
-            # 如果你的 HTML 有 </body>，插入在它前面
-            html_body = html_body.replace("</body>", mathjax_scripts + "</body>")
-        else:
-            # 如果没有 body 标签，就直接追加
-            html_body += mathjax_scripts
+    def _katex_resources() -> tuple[str, str]:
+        """Return (css_link_tag, js_script_tag) for KaTeX rendering.
 
-        return html_body
+        KaTeX 是一种快速、轻量的 LaTeX 公式渲染库，相比 MathJax 渲染速度更快、
+        体积更小。使用 auto-render 扩展自动扫描页面中的 ``$...$`` 和 ``$$...$$``
+        并渲染。
+
+        Returns:
+            tuple[str, str]: (CSS 链接标签, JS 脚本标签)。
+        """
+        katex_version = "0.16.11"
+        css_link = (
+            f'<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@{katex_version}/dist/katex.min.css" />'
+        )
+        js_script = (
+            f'<script src="https://cdn.jsdelivr.net/npm/katex@{katex_version}/dist/katex.min.js">'
+            f'</script>\n'
+            f'<script src="https://cdn.jsdelivr.net/npm/katex@{katex_version}/dist/contrib/auto-render.min.js">'
+            f'</script>\n'
+            f"<script>\n"
+            f"document.addEventListener('DOMContentLoaded', function() {{\n"
+            f"    renderMathInElement(document.body, {{\n"
+            f"        delimiters: [\n"
+            f"            {{left: '$$', right: '$$', display: true}},\n"
+            f"            {{left: '$', right: '$', display: false}},\n"
+            f"        ],\n"
+            f"        macros: {{\n"
+            f"            '\\\\bm': '\\\\boldsymbol{{#1}}'\n"
+            f"        }},\n"
+            f"        throwOnError: false\n"
+            f"    }});\n"
+            f"}});\n"
+            f"</script>"
+        )
+        return css_link, js_script
 
     @classmethod
     def convert_from_markdown(cls, md_report_content: str) -> str:
@@ -177,20 +189,22 @@ class ReportHtml(DefaultReportFormatProcessor):
             extras=["tables", "fenced-code-blocks", "code-friendly"]
         )
         html_body = restore_math_spans(html_body, math_spans)
-        html_body = cls._enable_html_latex(html_body)
         html_body = postprocess_html(html_body)
 
         default_style_block_n = cls._load_css()
+        katex_css, katex_js = cls._katex_resources()
         # 包裹完整 HTML
         html_report_content = f"""
                     <html>
                         <head>
                             {default_style_block_n}
+                            {katex_css}
                         </head>
                         <body>
                           <div class="report-container">
                             {html_body}
                           </div>
+                          {katex_js}
                         </body>
                     </html>
                     """

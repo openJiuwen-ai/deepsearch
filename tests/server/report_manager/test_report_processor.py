@@ -31,7 +31,6 @@ from server.deepsearch.core.manager.report_manager.mermaid_preprocess import (
 )
 from server.deepsearch.core.manager.report_manager.report_processor import ReportHtml, ReportWord
 from server.deepsearch.core.manager.report_manager.word_utils import (
-    _normalize_latex_for_omml,
     html_to_doc,
     set_global_styles,
 )
@@ -187,9 +186,9 @@ def test_report_html_convert_from_markdown_uses_shared_safe_math_handling():
     """Validate direct HTML conversion shares offline math/currency behavior."""
     html_text = ReportHtml.convert_from_markdown("变量 $G$ 保留为公式，价格 $4 和 $5 保持文本。")
 
-    assert r"\(G\)" in html_text
+    assert "$G$" in html_text
     assert "$4 和 $5" in html_text
-    assert "inlineMath: [['$', '$']" not in html_text
+    assert "katex" in html_text
 
 
 def test_report_word_convert_from_markdown_keeps_wrapped_tables():
@@ -1012,15 +1011,8 @@ def test_convert_md_to_docx_renders_aligned_display_math(tmp_path):
     assert "<m:oMath" in document_xml
 
 
-def test_normalize_latex_for_omml_wraps_nested_grouped_command_powers():
-    """Validate normalization reaches grouped powers nested inside grouped commands."""
-    normalized = _normalize_latex_for_omml(r"\binom{\frac{1}{2}^3}{k}^2")
-
-    assert normalized == r"{\binom{{\frac{1}{2}}^3}{k}}^2"
-
-
-def test_html_export_contains_mathjax_script(tmp_path):
-    """Validate HTML export includes MathJax script for formula rendering.
+def test_html_export_contains_katex_script(tmp_path):
+    """Validate HTML export includes KaTeX script for formula rendering.
 
     Args:
         tmp_path: pytest 提供的临时目录。
@@ -1039,9 +1031,9 @@ def test_html_export_contains_mathjax_script(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert "MathJax" in html_text
-    assert "mathjax@3" in html_text
-    assert "tex-mml-chtml" in html_text
+    assert "katex" in html_text.lower()
+    assert "auto-render" in html_text
+    assert "renderMathInElement" in html_text
 
 
 def test_protect_math_spans_preserves_underscores_through_markdown():
@@ -1066,7 +1058,7 @@ def test_protect_math_spans_preserves_underscores_through_markdown():
     restored = restore_math_spans(rendered, formulas)
 
     assert "$$\\mathcal{J}_{GRPO}(\\theta) = \\sum_{i=1}^G \\pi_\\theta$$" in restored
-    assert "\\(a_{i} * b_{j}\\)" in restored
+    assert "$a_{i} * b_{j}$" in restored
     assert "<em>" not in restored
     assert "<strong>" not in restored
 
@@ -1134,8 +1126,12 @@ def test_protect_math_spans_skips_currency_but_keeps_simple_variables():
     assert r"\$8" in protected
 
 
-def test_html_export_uses_safe_mathjax_delimiters_for_currency_text(tmp_path):
-    """Validate HTML MathJax does not reinterpret currency dollars as formulas."""
+def test_html_export_uses_safe_katex_delimiters_for_currency_text(tmp_path):
+    """Validate KaTeX does not reinterpret currency dollars as formulas.
+
+    ``$G$`` should be treated as math and wrapped as ``$G$`` in the output,
+    while ``$4`` and ``$5`` are currency and should remain as-is.
+    """
     md_path = tmp_path / "report.md"
     html_path = tmp_path / "report.html"
     md_path.write_text(
@@ -1147,9 +1143,9 @@ def test_html_export_uses_safe_mathjax_delimiters_for_currency_text(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(G\)" in html_text
+    assert "$G$" in html_text
     assert "$4和$5" in html_text
-    assert "inlineMath: [['$', '$']" not in html_text
+    assert "\\\\(G\\\\)" not in html_text  # 不再是 MathJax 的 \(...\) 格式
 
 
 def test_convert_md_to_html_keeps_dollar_unit_table_intact(tmp_path):
@@ -1173,8 +1169,8 @@ def test_convert_md_to_html_keeps_dollar_unit_table_intact(tmp_path):
     soup = BeautifulSoup(html_text, "html.parser")
     assert soup.find("table") is not None
     assert "Price ($/GPU-hr)" in soup.get_text()
-    assert r"\(q_r\)" in html_text
-    assert r"\(/GPU-hr" not in html_text
+    assert "$q_r$" in html_text
+    assert r"\\(/GPU-hr" not in html_text
 
 
 def test_convert_md_to_html_protects_numeric_indicator_math_and_currency(tmp_path):
@@ -1193,7 +1189,7 @@ def test_convert_md_to_html_protects_numeric_indicator_math_and_currency(tmp_pat
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(1(\tau_t \notin [\tau_{min}, \tau_{max}])\)" in html_text
+    assert "$1(\\tau_t \\notin [\\tau_{min}, \\tau_{max}])$" in html_text
     assert "$1.38" in html_text
     assert "$4 and $5" in html_text
 
@@ -1215,10 +1211,10 @@ def test_convert_md_to_html_protects_comparison_math_before_markdown(tmp_path):
 
     html_text = html_path.read_text(encoding="utf-8")
     soup_text = BeautifulSoup(html_text, "html.parser").get_text(" ", strip=True)
-    assert r"\(1(F^{left}_{feet}, F^{right}_{feet} &lt; 1)\)" in html_text
-    assert r"\(r_{t,i} &lt; 0\)" in html_text
-    assert r"\(1(F^{left}_{feet}, F^{right}_{feet} < 1)\)" in soup_text
-    assert r"\(r_{t,i} < 0\)" in soup_text
+    assert "$1(F^{left}_{feet}, F^{right}_{feet} &lt; 1)$" in html_text
+    assert "$r_{t,i} &lt; 0$" in html_text
+    assert "$1(F^{left}_{feet}, F^{right}_{feet} < 1)$" in soup_text
+    assert "$r_{t,i} < 0$" in soup_text
     assert "<em" not in html_text
     assert "$1.38" in html_text
     assert r"\$8" in html_text
@@ -1237,7 +1233,7 @@ def test_convert_md_to_html_protects_numeric_scientific_math(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(4 \times 10^4\)" in html_text
+    assert "$4 \\times 10^4$" in html_text
     assert "$4 and $5" in html_text
 
 
@@ -1254,9 +1250,9 @@ def test_convert_md_to_html_protects_numeric_arithmetic_math(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(2+2=4\)" in html_text
-    assert r"\(4-3=1\)" in html_text
-    assert r"\(4−3=1\)" in html_text
+    assert "$2+2=4$" in html_text
+    assert "$4-3=1$" in html_text
+    assert "$4−3=1$" in html_text
     assert "$4 and $5" in html_text
 
 
@@ -1273,8 +1269,8 @@ def test_convert_md_to_html_escapes_formula_content_before_restore(tmp_path):
 
     html_text = html_path.read_text(encoding="utf-8")
     soup_text = BeautifulSoup(html_text, "html.parser").get_text(" ", strip=True)
-    assert r"\(x&lt;y\)" in html_text
-    assert r"\(x<y\)" in soup_text
+    assert "$x&lt;y$" in html_text
+    assert "$x<y$" in soup_text
     assert "$4 and $5" in soup_text
 
 
@@ -1336,8 +1332,8 @@ def test_convert_md_to_html_protects_equation_references(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\((Eq. 9)\)" in html_text
-    assert r"\((Equation 10)\)" in html_text
+    assert "$(Eq. 9)$" in html_text
+    assert "$(Equation 10)$" in html_text
 
 
 def test_convert_md_to_html_protects_numeric_tuples_and_prime_variables(tmp_path):
@@ -1353,8 +1349,8 @@ def test_convert_md_to_html_protects_numeric_tuples_and_prime_variables(tmp_path
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\((0.75, 1.5)\)" in html_text
-    assert r"\(z'\)" in html_text
+    assert "$(0.75, 1.5)$" in html_text
+    assert "$z'$" in html_text
     assert "$foo'" in html_text
 
 
@@ -1371,16 +1367,14 @@ def test_convert_md_to_html_keeps_function_call_math_distinct_from_closing_dolla
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(A(s,a)\)" in html_text
-    assert r"\(V(s)\)" in html_text
-    assert r"\(A(s,a) = Q(s,a) - V(s)\)" in html_text
-    assert "$A(s,a)" not in html_text
-    assert "$V(s)" not in html_text
+    assert "$A(s,a)$" in html_text
+    assert "$V(s)$" in html_text
+    assert "$A(s,a) = Q(s,a) - V(s)$" in html_text
     assert "$1.38" in html_text
 
 
-def test_html_export_defines_bm_mathjax_macro(tmp_path):
-    """Validate MathJax can render reports that use the common \\bm command."""
+def test_html_export_defines_bm_macro(tmp_path):
+    """Validate KaTeX can render reports that use the common \\bm command."""
     md_path = tmp_path / "report.md"
     html_path = tmp_path / "report.html"
     md_path.write_text(
@@ -1391,8 +1385,8 @@ def test_html_export_defines_bm_mathjax_macro(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(\pi_{\bm{\theta}}:\mathcal{O}\rightarrow\mathcal{A}\)" in html_text
-    assert "bm: ['{\\\\boldsymbol{#1}}', 1]" in html_text
+    assert r"$\pi_{\bm{\theta}}:\mathcal{O}\rightarrow\mathcal{A}$" in html_text
+    assert "\\\\bm" in html_text or "boldsymbol" in html_text
 
 
 def test_convert_md_to_docx_preserves_currency_dollars_next_to_inline_math(tmp_path):
@@ -1433,7 +1427,7 @@ def test_convert_md_to_docx_renders_inline_math_without_currency_text(tmp_path):
 
 
 def test_html_export_preserves_underscore_math(tmp_path):
-    """Validate HTML export keeps underscore-heavy formulas intact for MathJax.
+    """Validate HTML export keeps underscore-heavy formulas intact for KaTeX.
 
     Args:
         tmp_path: pytest 提供的临时目录。

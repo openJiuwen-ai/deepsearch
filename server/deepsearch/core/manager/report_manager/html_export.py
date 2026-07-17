@@ -256,27 +256,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin: 0.45em 0;
         }}
 
-        /* Math formula rendering */
-        mjx-container[jax="CHTML"][display="true"] {{
+        /* Math formula rendering with KaTeX */
+        .katex-display {{
             margin: 1em 0;
+            overflow-x: auto;
+            overflow-y: hidden;
         }}
     </style>
+    <!-- KaTeX CSS for LaTeX math formula rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
 </head>
 <body>
 {content}
-<!-- MathJax for rendering LaTeX math formulas -->
+<!-- KaTeX for rendering LaTeX math formulas ($...$ / $$...$$) -->
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script>
-window.MathJax = {{
-    tex: {{
-        inlineMath: [['\\\\(', '\\\\)']],
-        displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+document.addEventListener('DOMContentLoaded', function() {{
+    renderMathInElement(document.body, {{
+        delimiters: [
+            {{left: '$$', right: '$$', display: true}},
+            {{left: '$', right: '$', display: false}},
+        ],
         macros: {{
-            bm: ['{{\\\\boldsymbol{{#1}}}}', 1]
-        }}
-    }}
-}};
+            '\\bm': '\\boldsymbol{{#1}}'
+        }},
+        throwOnError: false
+    }});
+}});
 </script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
 </body>
 </html>
 """
