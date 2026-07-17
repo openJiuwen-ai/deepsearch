@@ -16,7 +16,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     ATOM_NAMESPACE,
     DEFAULT_ARXIV_SEARCH_URL,
     ScholarlySearchResponseError,
-    arxiv_rate_limiter,
     ssl_verify,
     truncate,
 )
@@ -58,13 +57,11 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
             return self._parse_atom(text)
 
     async def _aget_text(self, client: httpx.AsyncClient, url: str) -> str:
-        await arxiv_rate_limiter.aacquire()
         response = await client.get(url)
         response.raise_for_status()
         return response.text
 
     def _get_text(self, url: str) -> str:
-        arxiv_rate_limiter.acquire()
         response = requests.get(url, verify=ssl_verify(), timeout=30)
         response.raise_for_status()
         return response.text

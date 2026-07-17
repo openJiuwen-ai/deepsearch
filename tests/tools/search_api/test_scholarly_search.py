@@ -27,7 +27,7 @@ class DummyResponse:
 
 
 @pytest.mark.asyncio
-async def test_pubmed_aresults_uses_limited_helper_for_esearch_and_esummary():
+async def test_pubmed_aresults_uses_request_helpers_for_esearch_and_efetch():
     wrapper = PubMedSearchAPIWrapper()
     search_raw = {"esearchresult": {"idlist": ["1"]}}
     fetch_text = """
@@ -142,16 +142,14 @@ def test_pubmed_parse_fetch_xml_allows_valid_empty_article_set():
 
 
 @pytest.mark.asyncio
-async def test_pubmed_async_request_fails_fast_on_rate_limit_payload():
+async def test_pubmed_async_request_fails_fast_on_rate_limit_payload_without_pre_request_limit():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
     client.get = AsyncMock(return_value=DummyResponse(json_data={"error": "API rate limit exceeded"}))
 
-    with patch.object(wrapper, "_aacquire_rate_limit", AsyncMock()) as mock_acquire:
-        with pytest.raises(RuntimeError, match="rate limit exceeded"):
-            await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
+    with pytest.raises(RuntimeError, match="rate limit exceeded"):
+        await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
 
-    assert mock_acquire.await_count == 1
     assert client.get.await_count == 1
 
 
@@ -171,14 +169,12 @@ def test_arxiv_parse_atom_allows_valid_empty_feed():
 
 
 @pytest.mark.asyncio
-async def test_arxiv_async_request_fails_fast_on_429_after_limiter():
+async def test_arxiv_async_request_fails_fast_on_429_without_pre_request_limit():
     wrapper = ArxivSearchAPIWrapper()
     client = Mock()
     client.get = AsyncMock(return_value=DummyResponse(status_code=429, headers={"Retry-After": "0"}))
 
-    with patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.arxiv."
-               "arxiv_rate_limiter.aacquire", AsyncMock()):
-        with pytest.raises(RuntimeError, match="status 429"):
-            await wrapper._aget_text(client, "https://example.com/api/query")
+    with pytest.raises(RuntimeError, match="status 429"):
+        await wrapper._aget_text(client, "https://example.com/api/query")
 
     assert client.get.await_count == 1

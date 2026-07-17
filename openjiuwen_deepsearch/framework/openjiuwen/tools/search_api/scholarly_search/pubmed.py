@@ -14,7 +14,6 @@ from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LEN
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common import (
     DEFAULT_PUBMED_SEARCH_URL,
     ScholarlySearchResponseError,
-    pubmed_rate_limiter,
     ssl_verify,
     truncate,
 )
@@ -85,7 +84,6 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return self._parse_ids(raw)
 
     async def _aget_json(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
-        await self._aacquire_rate_limit()
         response = await client.get(url, params=params)
         response.raise_for_status()
         raw = response.json()
@@ -94,13 +92,11 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return raw
 
     async def _aget_text(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> str:
-        await self._aacquire_rate_limit()
         response = await client.get(url, params=params)
         response.raise_for_status()
         return response.text
 
     def _get_json(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> Any:
-        self._acquire_rate_limit()
         response = requests.get(url, params=params, verify=verify, timeout=30)
         response.raise_for_status()
         raw = response.json()
@@ -109,16 +105,9 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return raw
 
     def _get_text(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> str:
-        self._acquire_rate_limit()
         response = requests.get(url, params=params, verify=verify, timeout=30)
         response.raise_for_status()
         return response.text
-
-    def _acquire_rate_limit(self) -> None:
-        pubmed_rate_limiter(bool(self._api_key_to_str())).acquire()
-
-    async def _aacquire_rate_limit(self) -> None:
-        await pubmed_rate_limiter(bool(self._api_key_to_str())).aacquire()
 
     @staticmethod
     def _is_rate_limited_payload(raw: Any) -> bool:

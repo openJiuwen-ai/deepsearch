@@ -79,7 +79,7 @@ contextvar，避免节点直接持有全局工具对象。
 - `uv run pytest tests/tools/test_web_search.py`
 - `uv run pytest tests/tools/test_web_search_rate_limit.py`
 - `uv run pytest tests/tools/test_runtime_api.py`
-- `uv run pytest tests/tools/search_api/test_scholarly_rate_limit.py`
+- `uv run pytest tests/tools/search_api/test_scholarly_search.py`
 - `uv run pytest tests/tools/search_api/test_external_import_tool.py`
 - 修改具体搜索引擎 wrapper 时，运行 `uv run pytest tests/tools/search_api/`。
 
