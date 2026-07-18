@@ -428,6 +428,24 @@ class InfoRetrievalNode(BaseNode):
                 result.append(engine)
         return result
 
+    @staticmethod
+    def _agent_called_tool(agent_input: dict, tool_name: str) -> bool:
+        for message in agent_input.get("messages", []):
+            if isinstance(message, dict):
+                message_name = message.get("name")
+                tool_calls = message.get("tool_calls", [])
+            else:
+                message_name = getattr(message, "name", None)
+                tool_calls = getattr(message, "tool_calls", [])
+            if message_name == tool_name:
+                return True
+            if not isinstance(tool_calls, list):
+                continue
+            for tool_call in tool_calls:
+                if isinstance(tool_call, dict) and tool_call.get("name") == tool_name:
+                    return True
+        return False
+
     async def _direct_search_with_retry(
             self,
             request: DirectSearchRequest,
@@ -634,13 +652,14 @@ class InfoRetrievalNode(BaseNode):
             return agent_input
 
         query = state.get("search_query", state.get("step_title", ""))
+        fallback_to_default = not self._agent_called_tool(agent_input, tool_name)
         tool_result_raw = await self._direct_search_with_retry(
             DirectSearchRequest(
                 tool=tool_dict[tool_name],
                 tool_name=tool_name,
                 query=query,
                 search_engine_name=secondary_engine,
-                fallback_to_default=False,
+                fallback_to_default=fallback_to_default,
                 retry_on_error=False,
             ),
             state,

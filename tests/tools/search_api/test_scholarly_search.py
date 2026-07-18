@@ -142,15 +142,38 @@ def test_pubmed_parse_fetch_xml_allows_valid_empty_article_set():
 
 
 @pytest.mark.asyncio
-async def test_pubmed_async_request_fails_fast_on_rate_limit_payload_without_pre_request_limit():
+async def test_pubmed_async_request_rejects_esearch_error_payload():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(return_value=DummyResponse(json_data={"error": "API rate limit exceeded"}))
+    client.get = AsyncMock(return_value=DummyResponse(json_data={"error": "Invalid term"}))
 
-    with pytest.raises(RuntimeError, match="rate limit exceeded"):
+    with pytest.raises(ScholarlySearchResponseError, match="ESearch returned error"):
         await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
 
     assert client.get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pubmed_async_request_rejects_esearch_errorlist_payload():
+    wrapper = PubMedSearchAPIWrapper()
+    client = Mock()
+    client.get = AsyncMock(return_value=DummyResponse(json_data={
+        "esearchresult": {
+            "idlist": [],
+            "errorlist": {"phrasesnotfound": ["bad syntax"]},
+        }
+    }))
+
+    with pytest.raises(ScholarlySearchResponseError, match="ESearch returned error"):
+        await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
+
+    assert client.get.await_count == 1
+
+
+def test_pubmed_parse_ids_allows_valid_empty_result_without_error_payload():
+    wrapper = PubMedSearchAPIWrapper()
+
+    assert wrapper._parse_ids({"esearchresult": {"idlist": [], "count": "0"}}) == []
 
 
 def test_arxiv_parse_atom_rejects_invalid_or_non_feed_response():
@@ -168,8 +191,24 @@ def test_arxiv_parse_atom_allows_valid_empty_feed():
     assert wrapper._parse_atom('<feed xmlns="http://www.w3.org/2005/Atom"></feed>') == []
 
 
+def test_arxiv_parse_atom_rejects_official_error_feed_entry():
+    wrapper = ArxivSearchAPIWrapper()
+    xml = """
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <id>http://arxiv.org/api/errors#bad_query</id>
+        <title>Error</title>
+        <summary>Invalid query syntax.</summary>
+      </entry>
+    </feed>
+    """
+
+    with pytest.raises(ScholarlySearchResponseError, match="returned error"):
+        wrapper._parse_atom(xml)
+
+
 @pytest.mark.asyncio
-async def test_arxiv_async_request_fails_fast_on_429_without_pre_request_limit():
+async def test_arxiv_async_request_propagates_http_429_error():
     wrapper = ArxivSearchAPIWrapper()
     client = Mock()
     client.get = AsyncMock(return_value=DummyResponse(status_code=429, headers={"Retry-After": "0"}))

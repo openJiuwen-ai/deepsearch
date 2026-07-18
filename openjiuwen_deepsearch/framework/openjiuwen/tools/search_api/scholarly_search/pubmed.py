@@ -87,8 +87,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         response = await client.get(url, params=params)
         response.raise_for_status()
         raw = response.json()
-        if self._is_rate_limited_payload(raw):
-            raise RuntimeError("PubMed E-utilities rate limit exceeded")
+        self._raise_for_search_error_payload(raw)
         return raw
 
     async def _aget_text(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> str:
@@ -100,8 +99,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         response = requests.get(url, params=params, verify=verify, timeout=30)
         response.raise_for_status()
         raw = response.json()
-        if self._is_rate_limited_payload(raw):
-            raise RuntimeError("PubMed E-utilities rate limit exceeded")
+        self._raise_for_search_error_payload(raw)
         return raw
 
     def _get_text(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> str:
@@ -109,12 +107,36 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         response.raise_for_status()
         return response.text
 
-    @staticmethod
-    def _is_rate_limited_payload(raw: Any) -> bool:
+    def _raise_for_search_error_payload(self, raw: Any) -> None:
+        message = self._search_error_message(raw)
+        if message:
+            raise ScholarlySearchResponseError(f"PubMed ESearch returned error: {message}")
+
+    @classmethod
+    def _search_error_message(cls, raw: Any) -> str:
         if not isinstance(raw, dict):
-            return False
-        message = " ".join(str(raw.get(key) or "") for key in ("error", "message")).lower()
-        return "rate limit" in message or "too many requests" in message
+            return ""
+
+        message = cls._joined_payload_text(raw.get("error")) or cls._joined_payload_text(raw.get("message"))
+        if message:
+            return message
+
+        esearch = raw.get("esearchresult")
+        if not isinstance(esearch, dict):
+            return ""
+        return cls._joined_payload_text(esearch.get("errorlist"))
+
+    @classmethod
+    def _joined_payload_text(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, dict):
+            parts = [cls._joined_payload_text(item) for item in value.values()]
+            return "; ".join(part for part in parts if part)
+        if isinstance(value, (list, tuple, set)):
+            parts = [cls._joined_payload_text(item) for item in value]
+            return "; ".join(part for part in parts if part)
+        return str(value).strip()
 
     def _search_params(self, query: str) -> dict[str, Any]:
         params: dict[str, Any] = {

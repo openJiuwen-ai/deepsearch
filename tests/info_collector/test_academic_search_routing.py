@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from openjiuwen.core.foundation.llm.schema.message import UserMessage
 from pydantic import ValidationError
 
 from openjiuwen_deepsearch.config.config import WebSearchEngineConfig
@@ -109,6 +110,14 @@ def test_web_search_engine_list_keeps_primary_and_adds_one_secondary():
     }) == ["tavily"]
 
 
+def test_agent_called_tool_ignores_message_objects_without_tool_calls():
+    agent_input = {
+        "messages": [UserMessage(content="Now deal with the Query:\n[Query]: test")],
+    }
+
+    assert InfoRetrievalNode._agent_called_tool(agent_input, "web_search_tool") is False
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("search_method", ["all", "web"])
 async def test_llm_tool_calling_path_runs_query_secondary_engine(search_method):
@@ -172,6 +181,95 @@ async def test_llm_tool_calling_path_skips_duplicate_secondary_engine():
         await node._collector_main(state)
 
     web_tool.invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_llm_local_path_secondary_error_falls_back_to_primary_web():
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "clinical evidence",
+        "search_query": "glioblastoma clinical trial",
+        "web_search_engine_name": "tavily",
+        "secondary_web_search_engine_name": "pubmed",
+    }
+    agent_input = _agent_input()
+    agent_input["messages"].append({
+        "role": "assistant",
+        "tool_calls": [{"name": "local_search_tool"}],
+    })
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(side_effect=[
+        {
+            "search_engine": "pubmed",
+            "search_results": [],
+            "error": "PubMed ESearch returned error: Invalid term",
+        },
+        {
+            "search_engine": "tavily",
+            "search_results": [
+                {
+                    "title": "Fallback result",
+                    "url": "https://example.com/fallback",
+                    "content": "Fallback summary",
+                }
+            ],
+        },
+    ])
+
+    await node._run_secondary_web_search_if_needed(
+        state,
+        agent_input,
+        {"web_search_tool": web_tool},
+    )
+
+    assert [item.args[0]["search_engine_name"] for item in web_tool.invoke.await_args_list] == [
+        "pubmed",
+        "tavily",
+    ]
+    assert agent_input["web_page_search_record"] == [
+        {
+            "type": "page",
+            "title": "Fallback result",
+            "url": "https://example.com/fallback",
+            "content": "Fallback summary",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_llm_web_path_secondary_error_does_not_repeat_primary_web():
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "clinical evidence",
+        "search_query": "glioblastoma clinical trial",
+        "web_search_engine_name": "tavily",
+        "secondary_web_search_engine_name": "pubmed",
+    }
+    agent_input = _agent_input()
+    agent_input["messages"].append({
+        "role": "assistant",
+        "tool_calls": [{"name": "web_search_tool"}],
+    })
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(return_value={
+        "search_engine": "pubmed",
+        "search_results": [],
+        "error": "PubMed ESearch returned error: Invalid term",
+    })
+
+    await node._run_secondary_web_search_if_needed(
+        state,
+        agent_input,
+        {"web_search_tool": web_tool},
+    )
+
+    web_tool.invoke.assert_awaited_once_with({
+        "query": "glioblastoma clinical trial",
+        "search_engine_name": "pubmed",
+    })
+    assert agent_input["web_page_search_record"] == []
 
 
 @pytest.mark.asyncio
@@ -305,7 +403,7 @@ async def test_single_secondary_error_falls_back_to_primary_engine(caplog):
         {
             "search_engine": "pubmed",
             "search_results": [],
-            "error": "PubMed rate limit exceeded",
+            "error": "PubMed ESearch returned error: Invalid term",
         },
         {
             "search_engine": "tavily",

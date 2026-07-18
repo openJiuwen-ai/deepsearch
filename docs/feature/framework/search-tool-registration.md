@@ -63,8 +63,8 @@ contextvar，避免节点直接持有全局工具对象。
   无 abstract 时才退回期刊、发布日期和作者等书目信息。
 - arXiv wrapper 使用 Atom API。返回 item 的 `content` 使用论文 summary，`url` 使用 arXiv entry id。
 - PubMed 和 arXiv wrapper 不做 provider 级预请求限流；请求节流仅依赖统一 web 搜索工具上的全局
-  `web_search_max_qps` 配置。HTTP 429、PubMed rate-limit payload 或异常响应会作为搜索错误返回给上层，由 collector
-  根据 primary/secondary 策略决定 retry、fail-fast 或 fallback。
+  `web_search_max_qps` 配置。HTTP 429、PubMed ESearch/EFetch 错误 payload 或异常响应会作为搜索错误返回给上层，
+  由 collector 根据 primary/secondary 策略决定 retry、fail-fast 或 fallback。
 
 ## 边界与错误处理
 

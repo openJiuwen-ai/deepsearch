@@ -86,6 +86,10 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
             arxiv_id = truncate(entry.findtext("atom:id", default="", namespaces=ns), MAX_URL_LENGTH)
             title = " ".join((entry.findtext("atom:title", default="", namespaces=ns) or "").split())
             summary = " ".join((entry.findtext("atom:summary", default="", namespaces=ns) or "").split())
+            if self._is_error_entry(arxiv_id, title):
+                raise ScholarlySearchResponseError(
+                    f"arXiv API returned error: {summary or arxiv_id}"
+                )
             published = truncate(entry.findtext("atom:published", default="", namespaces=ns), 64)
             authors = [
                 name.text.strip()
@@ -110,6 +114,10 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
                 }
             )
         return rows
+
+    @staticmethod
+    def _is_error_entry(arxiv_id: str, title: str) -> bool:
+        return title.strip().casefold() == "error" and "/api/errors#" in arxiv_id
 
     def _resolved_search_url(self) -> str:
         configured = ""
