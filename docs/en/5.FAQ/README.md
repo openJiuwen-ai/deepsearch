@@ -111,7 +111,7 @@ Errors use this format: `[error_code]error description: detail`, where `detail` 
 2. `common_warning.log` should not contain an `ERROR` that blocks the main workflow. A few `WARN` entries, such as model retries or a single empty search result, usually do not prevent the final report. If an `ERROR` appears in logs, still use `final_result.exception_info` as the final failure signal, and use the log to locate the cause.
 3. In `common.log`, look for **`[EndNode] Start EndNode`** and **`Get final result`** with an empty `exception_info`.
 ![Get final result](../../zh/images/FAQ/日志最终报告.png)
-4. Main-path nodes should have completion logs in order, for example: `EntryNode` -> `OutlineNode` / `OutlineInteractionNode` -> `EditorTeamNode` -> `ReporterNode` -> `SourceTracerNode` -> `EndNode`. If provenance reasoning or user feedback is enabled, extra nodes may appear in between.
+4. Main-path nodes should have completion logs in order, for example: `EntryNode` -> `OutlineNode` / `OutlineInteractionNode` -> `EditorTeamNode` or `DependencyEditorTeamNode` -> `ReporterNode` -> `SourceTracerNode` -> `EndNode`. If provenance reasoning or user feedback is enabled, extra nodes may appear in between.
 
 **③ Warnings can still mean success**
 

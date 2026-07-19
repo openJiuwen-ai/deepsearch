@@ -15,6 +15,7 @@
 - 主图从 `SearchContext` 初始化用户 query、语言、消息、模板、搜索模式和最终结果。
 - 研究报告流程会逐步填充 `research_intent`、`report_type_policy`、`current_outline`、`current_report` 和 `final_result`。
 - 大纲交互会追加 `outline_interactions`。
+- hybrid 大纲路由会写入 `outline_execution_method`，用于固定本次大纲生成、交互接受和写作团队选择。
 - 用户反馈处理会更新 `feedback_interaction_count`、`feedback_snapshot_sent` 和 `rewrite_history`。
 - DeepSearch 搜索流程使用 `State`、`Action`、`Result` 和 `SearchFinalResult` 表达搜索状态与结果。
 
@@ -46,6 +47,7 @@
 - `Report` 保存总报告文本、子报告、分类内容和溯源校验后的内容。
 - `Outline.sections[*].section_focus` 和 `focus_dimensions` 会生成章节局部合同。
 - `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL 和域名约束。
+- `outline_execution_method` 保存本次大纲实际执行方式，当前有效值为 `parallel` 或 `dependency_driving`；缺失或非法时按普通并行大纲处理。
 
 ## 边界与错误处理
 

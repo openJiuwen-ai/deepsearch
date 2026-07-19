@@ -13,6 +13,7 @@ from openjiuwen_deepsearch.config.search_mode import SearchMode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import (
     DeepresearchAgent,
     DeepresearchDependencyAgent,
+    DeepresearchIntentHybridAgent,
     DeepSearchAgent,
     SimpleReactSearchAgent,
 )
@@ -33,13 +34,20 @@ class AgentFactory:
         self.agent_map = {
             ExecutionMethod.PARALLEL.value: DeepresearchAgent,
             ExecutionMethod.DEPENDENCY_DRIVING.value: DeepresearchDependencyAgent,
+            ExecutionMethod.HYBRID.value: DeepresearchIntentHybridAgent,
             SearchMode.SEARCH.value: DeepSearchAgent,
             SearchMode.REACT.value: SimpleReactSearchAgent,
         }
 
     def create_agent(
         self, agent_config: dict
-    ) -> DeepresearchAgent | DeepresearchDependencyAgent | DeepSearchAgent | SimpleReactSearchAgent:
+    ) -> (
+        DeepresearchAgent
+        | DeepresearchDependencyAgent
+        | DeepresearchIntentHybridAgent
+        | DeepSearchAgent
+        | SimpleReactSearchAgent
+    ):
         """
         Create an agent based on the provided configuration.
 

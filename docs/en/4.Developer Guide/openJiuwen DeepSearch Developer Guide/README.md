@@ -24,7 +24,7 @@ agent_config["web_search_engine_config"]["search_api_key"] = ""
 agent_config["workflow_human_in_the_loop"] = False
 agent_config["outline_interaction_enabled"] = False
 agent_config["search_mode"] = "research"
-agent_config["execution_method"] = "parallel"
+agent_config["execution_method"] = "parallel"  # Options: "parallel", "dependency_driving", "hybrid"
 ```
 
 ## LLM configuration
@@ -126,7 +126,9 @@ The stack ships a deep-research agent that plans, gathers evidence, and writes r
 
 ---
 
-`AgentFactory` picks `DeepresearchAgent` vs `DeepresearchDependencyAgent` from `execution_method` (and related flags).
+`AgentFactory` picks the research Agent from `execution_method`: `parallel` returns `DeepresearchAgent`, `dependency_driving` returns `DeepresearchDependencyAgent`, and `hybrid` returns `DeepresearchIntentHybridAgent`.
+
+When `execution_method="hybrid"`, `IntentRecognitionNode` calls the outline-mode router LLM, selects either the normal outline branch or the dependency-driven outline branch for the current query, and stores the actual result in `search_context.outline_execution_method`.
 
 ```python
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory

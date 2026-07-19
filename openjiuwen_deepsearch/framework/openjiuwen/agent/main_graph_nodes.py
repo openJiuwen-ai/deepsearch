@@ -81,6 +81,7 @@ from openjiuwen_deepsearch.config.config import (
     OUTLINER_SECTION_NUM_MAX,
     WebSearchEngineConfig,
 )
+from openjiuwen_deepsearch.config.method import ExecutionMethod
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Action,
@@ -110,6 +111,7 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
 from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    llm_context,
     model_context,
     session_context,
     tool_context,
@@ -119,6 +121,7 @@ from openjiuwen_deepsearch.utils.debug_utils.node_debug import (
     NodeType,
     add_debug_log_wrapper,
 )
+from openjiuwen_deepsearch.utils.outline_mode_router import route_outline_execution_method
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.run_telemetry import (
     emit,
@@ -182,6 +185,9 @@ class StartNode(Start):
         agent_config = dict()
         if origin_agent_config:
             agent_config["execute_mode"] = origin_agent_config.get("execute_mode", "commercial")
+            agent_config["execution_method"] = origin_agent_config.get(
+                "execution_method", ExecutionMethod.PARALLEL.value
+            )
             agent_config["workflow_human_in_the_loop"] = origin_agent_config.get("workflow_human_in_the_loop", True)
             agent_config["outline_interaction_enabled"] = origin_agent_config.get("outline_interaction_enabled", True)
             agent_config["outline_interaction_max_rounds"] = origin_agent_config.get(
@@ -243,12 +249,53 @@ class IntentRecognitionNode(BaseNode):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def _get_outline_router_question(current_inputs: dict) -> str:
+        original_query = current_inputs.get("original_query") or ""
+        if original_query:
+            return original_query
+        messages = current_inputs.get("messages") or []
+        for message in reversed(messages):
+            content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+            if content:
+                return content
+        return ""
+
+    async def _resolve_outline_execution_method(self, current_inputs: dict, session: Session) -> str:
+        execution_method = current_inputs.get("execution_method") or ExecutionMethod.PARALLEL.value
+        if execution_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
+            selected_method = ExecutionMethod.DEPENDENCY_DRIVING.value
+        elif execution_method == ExecutionMethod.HYBRID.value:
+            try:
+                llm_entry = llm_context.get().get(current_inputs.get("llm_model_name"))
+            except LookupError:
+                llm_entry = None
+            try:
+                selected_method = await route_outline_execution_method(
+                    self._get_outline_router_question(current_inputs),
+                    llm_entry,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[IntentRecognitionNode] outline mode router failed, defaulting to parallel: %s",
+                    exc,
+                    exc_info=True,
+                )
+                selected_method = ExecutionMethod.PARALLEL.value
+        else:
+            selected_method = ExecutionMethod.PARALLEL.value
+
+        session.update_global_state({"search_context.outline_execution_method": selected_method})
+        logger.info("[IntentRecognitionNode] outline_execution_method=%s", selected_method)
+        return selected_method
+
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info("[IntentRecognitionNode] Start IntentRecognitionNode.")
         return dict(
             original_query=session.get_global_state("search_context.original_query") or "",
             messages=session.get_global_state("search_context.messages") or [],
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
+            execution_method=session.get_global_state("config.execution_method") or ExecutionMethod.PARALLEL.value,
             human_in_the_loop=session.get_global_state("config.workflow_human_in_the_loop"),
             web_search_engine_config=session.get_global_state("config.web_search_engine_config"),
             info_collector_search_method=session.get_global_state("config.info_collector_search_method") or "web",
@@ -259,6 +306,7 @@ class IntentRecognitionNode(BaseNode):
 
         # 执行意图识别
         intent_result = await classify_and_recognize_intent(current_inputs)
+        await self._resolve_outline_execution_method(current_inputs, session)
 
         # 检查搜索模式：仅在 web 或 all 模式下执行网络搜索
         info_collector_search_method = current_inputs.get("info_collector_search_method", "web")
@@ -894,6 +942,7 @@ class OutlineNode(BaseNode):
             user_feedback=user_feedback,
             questions=questions,
             language=language,
+            outline_execution_method=session.get_global_state("search_context.outline_execution_method") or "",
             entry_search_results=entry_search_results,
             section_num=section_num,
             max_section_num=OUTLINER_SECTION_NUM_MAX,
@@ -914,12 +963,18 @@ class OutlineNode(BaseNode):
         result.update(build_research_intent_prompt_context(research_intent))
         return result
 
+    def _get_with_dep_driving(self, current_inputs: dict) -> bool:
+        selected_method = current_inputs.get("outline_execution_method")
+        if selected_method in {ExecutionMethod.PARALLEL.value, ExecutionMethod.DEPENDENCY_DRIVING.value}:
+            return selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value
+        return self.with_dep_driving
+
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
         prompt_name = self._select_prompt_name(current_inputs)
         outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=prompt_name)
-        outliner.with_dep_driving = self.with_dep_driving
+        outliner.with_dep_driving = self._get_with_dep_driving(current_inputs)
         max_outline_retry_num = current_inputs.get("max_outline_retry_num", 1)
 
         success_flag = False
@@ -968,7 +1023,7 @@ class OutlineNode(BaseNode):
         if report_template and not outline_interaction_mode:
             return "outliner_template"
         if outline_interaction_mode == "revise_comment":
-            if self.with_dep_driving:
+            if self._get_with_dep_driving(current_inputs):
                 return "dep_driving_outliner_interaction"
             return "outliner_interaction"
         if outline_interaction_mode == "revise_outline":
@@ -977,10 +1032,19 @@ class OutlineNode(BaseNode):
             except Exception as e:
                 logger.error(f"{self.log_prefix} Failed to parse user outline JSON: {e}")
             return "outliner_user_revised"
+        if self._get_with_dep_driving(current_inputs):
+            return "dep_driving_outliner"
         return self.outline_prompt
 
     def _get_next_node_after_outline(self) -> str:
         """获取大纲生成成功后的下一个节点"""
+        try:
+            session = session_context.get()
+        except LookupError:
+            session = None
+        selected_method = session.get_global_state("search_context.outline_execution_method") if session else None
+        if selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
+            return NodeId.DEPENDENCY_EDITOR_TEAM.value
         return NodeId.EDITOR_TEAM.value
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
@@ -1222,12 +1286,18 @@ class OutlineInteractionNode(BaseNode):
             current_round=current_round,
         )
 
+    def _get_next_node_after_accept(self, session: Session) -> str:
+        selected_method = session.get_global_state("search_context.outline_execution_method")
+        if selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
+            return NodeId.DEPENDENCY_EDITOR_TEAM.value
+        return NodeId.EDITOR_TEAM.value
+
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
         if not current_inputs.get("outline_interaction_enabled"):
             logger.info(f"{self.log_prefix} Outline interaction is disabled, skip to editor team.")
-            return dict(next_node=NodeId.EDITOR_TEAM.value)
+            return dict(next_node=self._get_next_node_after_accept(session))
 
         max_rounds = current_inputs.get("max_rounds", 5)
         current_round = current_inputs.get("current_round", 0)
@@ -1235,7 +1305,7 @@ class OutlineInteractionNode(BaseNode):
         if current_round >= max_rounds:
             logger.info(f"{self.log_prefix} Reached max rounds: {max_rounds}")
             await self._notify_user(session, "Maximum interaction rounds reached.", StreamEvent.USER_INPUT_ENDED)
-            return dict(next_node=NodeId.EDITOR_TEAM.value)
+            return dict(next_node=self._get_next_node_after_accept(session))
 
         feedback_mode = current_inputs.get("feedback_mode", "cmd")
         user_input = await self._get_user_input(feedback_mode, f"{current_round+1}", session)
@@ -1323,7 +1393,7 @@ class OutlineInteractionNode(BaseNode):
 
         if action == "accepted":
             logger.info(f"{self.log_prefix} User accepted the outline")
-            next_node = NodeId.EDITOR_TEAM.value
+            next_node = self._get_next_node_after_accept(session)
         elif action == "revise_comment":
             logger.info(f"{self.log_prefix} User wants to revise with comments")
             self._save_history(session, feedback, "revise_comment")

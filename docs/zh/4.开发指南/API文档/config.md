@@ -297,7 +297,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 **字段**：
 
 - **execute_mode**(Literal["commercial", "general"], 可选)：执行模式，可选值：`["commercial", "general"]`。默认值：`"commercial"`。
-- **execution_method**(Literal["dependency_driving", "parallel"], 可选)：执行方法，`dependency_driving`：依赖驱动工作流执行，`parallel`：并行工作流执行。默认值：`"parallel"`。
+- **execution_method**(Literal["dependency_driving", "parallel", "hybrid"], 可选)：执行方法，`parallel`：并行工作流执行，`dependency_driving`：依赖驱动工作流执行，`hybrid`：混合大纲路由模式，由意图识别节点调用 LLM 选择普通大纲或依赖驱动大纲。默认值：`"parallel"`。
 - **workflow_human_in_the_loop**(bool, 可选)：工作流是否启用人机交互。默认值：`True`。
 - **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 15]。默认值：`10`。
 - **outline_interaction_enabled**(bool, 可选)：大纲交互功能开关，开启后用户可对生成的大纲进行多轮修改。默认值：`True`。

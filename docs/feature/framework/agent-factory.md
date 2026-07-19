@@ -10,7 +10,7 @@
 
 ## 功能目的
 
-Agent 工厂给 SDK 和服务端提供统一构造入口，使调用方只需要传入配置，就能得到研究报告、依赖驱动研究、DeepSearch 搜索或
+Agent 工厂给 SDK 和服务端提供统一构造入口，使调用方只需要传入配置，就能得到研究报告、依赖驱动研究、混合大纲路由研究、DeepSearch 搜索或
 ReAct 搜索对应的运行对象。
 
 ## 可见行为
@@ -18,6 +18,7 @@ ReAct 搜索对应的运行对象。
 - `search_mode=research` 时，根据 `execution_method` 创建报告研究 Agent。
 - `execution_method=parallel` 创建并行章节研究流程。
 - `execution_method=dependency_driving` 创建依赖驱动章节研究流程。
+- `execution_method=hybrid` 创建混合大纲路由研究流程，由意图识别节点调用 LLM 选择普通大纲或依赖驱动大纲。
 - `search_mode=search` 创建 DeepSearch 搜索 Agent。
 - `search_mode=react` 创建简单 ReAct 搜索 Agent。
 - 缺失必填配置、Pydantic 校验失败或未知模式会抛出 `CustomValueException`。
@@ -38,8 +39,8 @@ ReAct 搜索对应的运行对象。
 1. `AgentFactory.create_agent` 先调用 `validate_agent_required_field` 校验必填配置。
 2. 使用 `AgentConfig.model_validate` 归一化输入，并在校验失败时按敏感日志开关决定异常详情。
 3. 校验 `search_mode` 是否属于 `SearchMode`。
-4. `research` 模式继续校验 `execution_method`，并从 `agent_map` 选择 `DeepresearchAgent` 或
-   `DeepresearchDependencyAgent`。
+4. `research` 模式继续校验 `execution_method`，并从 `agent_map` 选择 `DeepresearchAgent`、`DeepresearchDependencyAgent` 或
+   `DeepresearchIntentHybridAgent`。
 5. `search` 和 `react` 模式直接由 `search_mode` 映射到对应 Agent。
 6. 实例化 Agent 并记录创建日志。
 
@@ -48,6 +49,7 @@ ReAct 搜索对应的运行对象。
 - 输入是可被 `AgentConfig` 校验的 dict。
 - `AgentConfig.llm_config.general` 是实际运行时的必需 LLM 槽位，工厂阶段只负责结构校验。
 - `search_mode` 的有效值来自 `SearchMode`。
+- `execution_method=hybrid` 仍只影响 `research` 模式；实际大纲分支选择结果由 `IntentRecognitionNode` 写入 `search_context.outline_execution_method`。
 - `execution_method` 的有效值来自 `ExecutionMethod`，只在 `research` 模式下生效。
 - `WORKFLOW_EXECUTE_TIMEOUT` 在模块加载时同步为 `Config().service_config.workflow_execution_timeout`。
 

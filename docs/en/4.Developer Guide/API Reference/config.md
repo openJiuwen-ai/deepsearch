@@ -156,7 +156,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 **Fields**:
 
 - **execute_mode** (Literal["commercial", "general"], optional): Execution mode. Default value: `"commercial"`.
-- **execution_method** (Literal["dependency_driving", "parallel"], optional): Execution method. Default value: `"parallel"`.
+- **execution_method** (Literal["dependency_driving", "parallel", "hybrid"], optional): Execution method. `parallel` runs the parallel research workflow, `dependency_driving` runs the dependency-driven workflow, and `hybrid` lets `IntentRecognitionNode` call an LLM router to choose the outline branch for the current query. Default value: `"parallel"`.
 - **workflow_human_in_the_loop** (bool, optional): Whether to enable HITL before planning. Default value: `True`.
 - **outliner_max_section_num** (int, optional): Maximum number of outline sections. Range: `[1, 15]`. Default value: `10`.
 - **outline_interaction_enabled** (bool, optional): Whether to enable outline interaction. Default value: `True`.

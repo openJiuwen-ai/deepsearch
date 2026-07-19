@@ -44,7 +44,7 @@ Dependency-aware outline via `dep_driving_outliner`; same retry/stream behavior 
 ```python
 class OutlineInteractionNode(BaseNode)
 ```
-Outline HITL: if `outline_interaction_enabled` is off → `EditorTeamNode`; if rounds ≥ `outline_interaction_max_rounds` → notify and continue; reads feedback (`cmd`/`web`) as JSON:
+Outline HITL: if `outline_interaction_enabled` is off, or if rounds are greater than or equal to `outline_interaction_max_rounds`, the node routes to `EditorTeamNode` or `DependencyEditorTeamNode` according to `search_context.outline_execution_method`. It reads feedback (`cmd`/`web`) as JSON:
 
 ```json
 {
@@ -53,7 +53,7 @@ Outline HITL: if `outline_interaction_enabled` is off → `EditorTeamNode`; if r
 }
 ```
 
-Actions: `accepted` → `EditorTeamNode`; `revise_comment` / `revise_outline` → `OutlineNode`; history in `search_context.outline_interactions`.
+Actions: `accepted` → `EditorTeamNode` or `DependencyEditorTeamNode` according to `search_context.outline_execution_method`; `revise_comment` / `revise_outline` → `OutlineNode`; history in `search_context.outline_interactions`.
 
 ### `DependencyOutlineInteractionNode`
 ```python
@@ -182,6 +182,16 @@ StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerN
 ```
 
 `DependencyEditorTeamNode` pipelines dependency layers (“previous writing + current reasoning” in parallel per layer).
+
+### Hybrid outline-routing main graph
+```text
+StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
+-> [OutlineInteractionNode -> OutlineNode]*
+-> EditorTeamNode / DependencyEditorTeamNode -> ReporterNode -> SourceTracerNode
+-> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
+```
+
+When `execution_method="hybrid"`, `IntentRecognitionNode` calls the outline-mode router LLM and stores the selected branch in `search_context.outline_execution_method`. `OutlineNode` and `OutlineInteractionNode` reuse the normal node classes, then select the normal or dependency-driven outline path and writing team from that session field.
 
 ### Editor-team subgraph
 ```

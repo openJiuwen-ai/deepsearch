@@ -56,6 +56,14 @@ Dependency-driven variant when `execution_method="dependency_driving"`. Same `ru
 
 ---
 
+## `DeepresearchIntentHybridAgent`
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchIntentHybridAgent(DeepresearchAgent)
+```
+Hybrid outline-routing research workflow used when `execution_method="hybrid"`. It reuses the normal `OutlineNode` and `OutlineInteractionNode`; `IntentRecognitionNode` calls the outline-mode router LLM and writes `search_context.outline_execution_method`. A `parallel` result continues to `EditorTeamNode`, while a `dependency_driving` result continues to `DependencyEditorTeamNode`.
+
+---
+
 ## `DeepSearchAgent`
 ```python
 class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent()

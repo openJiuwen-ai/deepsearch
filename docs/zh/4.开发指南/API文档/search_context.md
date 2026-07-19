@@ -242,6 +242,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 - **questions**(str)：系统提问。默认值：`""`。
 - **user_feedback**(str)：用户反馈。默认值：`""`。
 - **outline_interactions**(List[OutlineInteraction])：大纲多轮交互历史记录。默认值：`[]`。
+- **outline_execution_method**(str)：hybrid 模式下本次大纲实际执行方式，当前有效值为 `"parallel"` 或 `"dependency_driving"`。默认值：`""`。
 - **outline_executed_num**(int)：默认值：`0`。
 - **current_outline**(Union[Outline, Dict, str, None])：当前大纲。
 - **history_outlines**(List[Outline])：历史大纲。

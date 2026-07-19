@@ -965,6 +965,117 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         return flow
 
 
+class DeepresearchIntentHybridAgent(DeepresearchAgent):
+    """
+    Deepresearch hybrid agent: 由意图识别节点选择普通大纲或依赖驱动大纲。
+    """
+
+    def _get_default_research_name(self) -> str:
+        return "research_workflow_hybrid"
+
+    def _create_research_workflow_agent(self):
+        workflow_card = WorkflowCard(
+            id=self.research_name,
+            version=self.version,
+            name=self.research_name,
+            description=self.research_name,
+            input_params=self.workflow_input_schema,
+        )
+
+        card = AgentCard(
+            id=self.research_name,
+            name=self.research_name,
+            description=self.research_name,
+        )
+        config = WorkflowControllerConfig(
+            id=self.research_name,
+            version=self.version,
+            description=self.research_name,
+            workflows=[workflow_card],
+        )
+        self.agent = WorkflowAgent(card=card, config=config)
+        self.agent.add_workflows([self._build_workflow_provider(self._build_research_hybrid_workflow, workflow_card)])
+
+    def _build_research_hybrid_workflow(self):
+        _id = self.research_name
+        name = self.research_name
+        version = self.version
+        card = WorkflowCard(
+            id=_id,
+            version=version,
+            name=name,
+        )
+
+        flow = Workflow(card=card)
+        flow.set_start_comp(
+            start_comp_id=NodeId.START.value, component=StartNode(), inputs_schema=self.startnode_input_schema
+        )
+        flow.add_workflow_comp(NodeId.INTENT_RECOGNITION.value, IntentRecognitionNode())
+        flow.add_workflow_comp(NodeId.GENERATE_QUESTIONS.value, GenerateQuestionsNode())
+        flow.add_workflow_comp(NodeId.FEEDBACK_HANDLER.value, FeedbackHandlerNode())
+        flow.add_workflow_comp(NodeId.OUTLINE.value, OutlineNode())
+        flow.add_workflow_comp(NodeId.OUTLINE_INTERACTION.value, OutlineInteractionNode())
+        flow.add_workflow_comp(NodeId.EDITOR_TEAM.value, EditorTeamNode())
+        flow.add_workflow_comp(NodeId.DEPENDENCY_EDITOR_TEAM.value, DependencyEditorTeamNode())
+        flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
+        flow.add_workflow_comp(NodeId.VLM_CHART_GENERATOR.value, VLMChartGeneratorNode())
+        flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
+        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
+        flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        flow.set_end_comp(NodeId.END.value, EndNode())
+
+        flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
+
+        intent_recognition_router = init_router(
+            NodeId.INTENT_RECOGNITION.value,
+            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+        )
+        generate_questions_router = init_router(
+            NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
+        )
+        outline_router = init_router(
+            NodeId.OUTLINE.value,
+            [
+                NodeId.OUTLINE_INTERACTION.value,
+                NodeId.EDITOR_TEAM.value,
+                NodeId.DEPENDENCY_EDITOR_TEAM.value,
+                NodeId.END.value,
+            ],
+        )
+        outline_interaction_router = init_router(
+            NodeId.OUTLINE_INTERACTION.value,
+            [
+                NodeId.OUTLINE.value,
+                NodeId.EDITOR_TEAM.value,
+                NodeId.DEPENDENCY_EDITOR_TEAM.value,
+                NodeId.END.value,
+            ],
+        )
+        reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
+        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
+        dependency_editor_router = init_router(
+            NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]
+        )
+        user_feedback_processor_router = init_router(
+            NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
+        )
+        flow.add_conditional_connection(NodeId.INTENT_RECOGNITION.value, router=intent_recognition_router)
+        flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
+        flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
+        flow.add_conditional_connection(NodeId.FEEDBACK_HANDLER.value, router=feedback_handler_router)
+        flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
+        flow.add_conditional_connection(NodeId.EDITOR_TEAM.value, router=editor_team_router)
+        flow.add_conditional_connection(NodeId.DEPENDENCY_EDITOR_TEAM.value, router=dependency_editor_router)
+        flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
+        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
+        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
+        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
+
+        return flow
+
+
 class DeepSearchAgent(BaseAgent):
     _workflow_agent: ClassVar[LegacyWorkflowAgent | None] = None
     _workflow_agent_lock: ClassVar[threading.Lock] = threading.Lock()

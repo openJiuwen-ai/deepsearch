@@ -25,7 +25,7 @@ agent_config["web_search_engine_config"]["search_api_key"] = ""
 agent_config["workflow_human_in_the_loop"] = False
 agent_config["outline_interaction_enabled"] = False
 agent_config["search_mode"] = "research"
-agent_config["execution_method"] = "parallel"
+agent_config["execution_method"] = "parallel"  # 可选："parallel"、"dependency_driving"、"hybrid"
 ```
 
 ## 大模型配置说明
@@ -123,7 +123,9 @@ os.environ["EMBEDDING_SSL_CERT"] = ""
 
 ---
 
-`AgentFactory` 会根据 `agent_config` 中的 `execution_method` 等配置，返回当前应使用的 Agent 实例。研究模式下，通常返回 `DeepresearchAgent` 或 `DeepresearchDependencyAgent`。
+`AgentFactory` 会根据 `agent_config` 中的 `execution_method` 等配置，返回当前应使用的 Agent 实例。研究模式下，`parallel` 返回 `DeepresearchAgent`，`dependency_driving` 返回 `DeepresearchDependencyAgent`，`hybrid` 返回 `DeepresearchIntentHybridAgent`。
+
+当 `execution_method="hybrid"` 时，系统会在 `IntentRecognitionNode` 中调用大纲模式 router LLM，根据用户 query 自动选择普通大纲或依赖驱动大纲，并将实际选择结果写入 `search_context.outline_execution_method`。
 
 ```python
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
