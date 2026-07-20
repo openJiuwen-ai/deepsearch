@@ -122,7 +122,6 @@ def test_report_package_exports_compact_doc_info_helpers():
     assert compact_doc_info.build_compact_classify_doc_infos_text is build_compact_classify_doc_infos_text
 
 
-<<<<<<< HEAD
 @pytest.mark.asyncio
 async def test_generate_sub_section_outline_calls_llm_with_preservation_context():
     token = llm_context.set({"mock_model": object()})
@@ -269,7 +268,8 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         assert "Do not collapse required items into a general summary paragraph" in rendered_prompt
     finally:
         llm_context.reset(token)
-=======
+
+
 def test_build_compact_classify_doc_infos_text_zero_based():
     """Coverage-matrix flow uses start=0 so 'Document 0' maps to 'doc_0'."""
     output = build_compact_classify_doc_infos_text(
@@ -292,7 +292,6 @@ def test_coverage_matrix_formatter_output_matches_prompt_keys():
         assert f"Document {i}:" in text
     # Must NOT contain 1-based numbering when start=0
     assert f"Document {len(docs)}:" not in text
->>>>>>> 85d2c73 (检视意见修改2)
 
 
 def test_format_key_passage_block_only_outputs_passages():
@@ -976,7 +975,8 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     assert current_inputs["sub_report_chapter_sidecar"].chapter_summary == "经营与行业摘要"
 
 
-def test_get_classified_infos_returns_all_distinct_content_variants_for_selected_url():
+def test_get_classified_infos_returns_all_selected_distinct_variants():
+    """selected_docs with two different source_id variants under same URL: both kept."""
     doc_infos = [
         {
             "title": "A",
@@ -992,11 +992,11 @@ def test_get_classified_infos_returns_all_distinct_content_variants_for_selected
         },
         {"title": "B", "url": "https://example.com/other", "original_content": "other"},
     ]
+    # Matrix selected first two variants (different content -> different source_key, both kept)
+    selected_docs = [doc_infos[0], doc_infos[1]]
+    marginal_values = [0.6, 0.5]
 
-    classified_infos, classified_doc_infos = _get_classified_infos(
-        doc_infos,
-        ["https://example.com/same"],
-    )
+    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
 
     assert classified_infos["references"] == ["[A](https://example.com/same)"]
     assert classified_infos["core_content_list"] == [
@@ -1007,6 +1007,7 @@ def test_get_classified_infos_returns_all_distinct_content_variants_for_selected
 
 
 def test_get_classified_infos_deduplicates_same_content_without_source_id():
+    """selected_docs with two same-content variants (no source_id): keep only high-marginal-value one."""
     doc_infos = [
         {
             "title": "A low",
@@ -1023,26 +1024,28 @@ def test_get_classified_infos_deduplicates_same_content_without_source_id():
             "scores": {"relevance": 9},
         },
     ]
+    # Matrix selected two variants (same content, no source_id -> same source_key, dedup keeps high mv)
+    selected_docs = [doc_infos[0], doc_infos[1]]
+    marginal_values = [0.1, 0.9]
 
-    classified_infos, classified_doc_infos = _get_classified_infos(
-        doc_infos,
-        ["https://example.com/same"],
-    )
+    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
 
     assert classified_infos["core_content_list"] == ["Document 1 key passages:\n- high passage"]
     assert classified_doc_infos == [doc_infos[1]]
 
 
 def test_get_classified_infos_keeps_top10_source_ids_by_score():
+    """selected_docs with 12 variants, max_count=10: keep top 10 by marginal_value."""
     doc_infos = [
         _classified_doc(f"doc-{idx}", "https://example.com/same", f"source-{idx}", idx * 0.8)
         for idx in range(12)
     ]
+    selected_docs = list(doc_infos)  # matrix selected all 12
+    # marginal_value positively correlated with idx, ensuring top10 is source-2..source-11
+    marginal_values = [idx * 0.1 for idx in range(12)]
 
     classified_infos, classified_doc_infos = _get_classified_infos(
-        doc_infos,
-        ["https://example.com/same"],
-        max_source_id_count=10,
+        selected_docs, marginal_values, max_source_id_count=10
     )
 
     assert len(classified_doc_infos) == 10
@@ -1055,16 +1058,17 @@ def test_get_classified_infos_keeps_top10_source_ids_by_score():
 
 
 def test_get_classified_infos_keeps_each_selected_url_before_filling_variants():
+    """selected_docs with a-0, a-1, b, max_count=2: pick one representative per URL first."""
     doc_infos = [
         _classified_doc("A-0", "https://example.com/a", "a-0", 10),
         _classified_doc("A-1", "https://example.com/a", "a-1", 9),
         _classified_doc("B", "https://example.com/b", "b-0", 1),
     ]
+    selected_docs = [doc_infos[0], doc_infos[1], doc_infos[2]]
+    marginal_values = [0.9, 0.8, 0.1]
 
     classified_infos, classified_doc_infos = _get_classified_infos(
-        doc_infos,
-        ["https://example.com/a", "https://example.com/b"],
-        max_source_id_count=2,
+        selected_docs, marginal_values, max_source_id_count=2
     )
 
     assert [doc["url"] for doc in classified_doc_infos] == ["https://example.com/a", "https://example.com/b"]
@@ -1072,6 +1076,14 @@ def test_get_classified_infos_keeps_each_selected_url_before_filling_variants():
         "[A\\-0](https://example.com/a)",
         "[B](https://example.com/b)",
     ]
+
+
+def test_get_classified_infos_with_empty_selected_docs_returns_empty():
+    """Empty selected_docs returns empty."""
+    classified_infos, classified_doc_infos = _get_classified_infos([], [])
+
+    assert classified_infos == {}
+    assert classified_doc_infos == []
 
 
 @pytest.mark.asyncio

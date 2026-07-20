@@ -35,7 +35,6 @@ from openjiuwen_deepsearch.algorithm.report.ngram_utils import (
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
     build_doc_variant_key,
-    extract_doc_score,
 )
 from openjiuwen_deepsearch.algorithm.report.report_utils import (
     ArticlePart,
@@ -884,11 +883,16 @@ class Reporter:
                 top_k=classify_doc_infos_res_top_k_num
             )
 
+            # Build marginal_value map by object identity so _elbow_cutoff's subset can be aligned back
+            mv_by_id = {id(doc): mv for doc, mv in zip(selected_docs, marginal_values)}
+
             selected_docs = self._elbow_cutoff(
                 selected_docs, marginal_values, classify_doc_infos_res_top_k_num,
                 coverage_ctx={"coverage_result": coverage_result, "rationales": rationales},
                 fallback_docs=doc_infos,
             )
+
+            selected_marginal_values = [mv_by_id.get(id(doc), 0.0) for doc in selected_docs]
 
             self._verify_coverage(
                 selected_docs, rationales, coverage_result, section_idx,
@@ -913,8 +917,8 @@ class Reporter:
                 return False, _format_sub_report_error("no valid URLs in selected docs"), "", []
 
             classified_infos, classified_doc_infos = _get_classified_infos(
-                doc_infos,
-                selected_urls,
+                selected_docs,
+                selected_marginal_values,
                 max_source_id_count=classify_doc_infos_res_top_k_num,
             )
             current_inputs["sub_section_core_content"] = classified_infos.get(
@@ -1421,6 +1425,8 @@ class Reporter:
         section_idx = current_inputs.get("section_idx", 1)
         section_task = self.strip_leading_number(current_inputs.get("section_task", ""))
         section_description = current_inputs.get("section_description", "")
+        section_focus = current_inputs.get("section_focus", "")
+        focus_dimensions = current_inputs.get("focus_dimensions", [])
         report_task = current_inputs.get("report_task", "")
         overall_outline = current_inputs.get("current_outline", "")
         step_summaries = current_inputs.get("step_summaries", [])
@@ -1433,12 +1439,16 @@ class Reporter:
             for s in step_summaries
         ) if step_summaries else "  No step summaries available."
 
+        focus_dimensions_text = ", ".join(focus_dimensions) if focus_dimensions else "None specified"
+
         # Build user message with data (including untrusted step summaries)
         # separated from system prompt to prevent prompt injection.
         user_content = (
             f"User query: {report_task}\n"
             f"Chapter title: {section_task}\n"
             f"Chapter description: {section_description}\n"
+            f"Chapter focus: {section_focus}\n"
+            f"Focus dimensions: {focus_dimensions_text}\n"
             f"Overall outline: {overall_outline}\n\n"
             f"Research step summaries:\n{step_summaries_text}\n\n"
             "Generate rationales for this chapter."
@@ -1448,40 +1458,61 @@ class Reporter:
         }
 
         llm_input = apply_system_prompt("rationale_generator", tmp_context)
-        try:
-            llm_output = await ainvoke_llm_with_stats(
-                llm=self._llm,
-                messages=llm_input,
-                agent_name=AgentLlmName.SUB_REPORTER_RATIONALE_GENERATOR.value,
-            )
-        except Exception as e:
-            logger.error(
-                "%s [generate_rationales] section_idx: [%s] LLM call failed, info: %s",
-                EFFECT_SUB_REPORT_TAG, section_idx, e,
-            )
-            return []
+        max_retries = current_inputs.get("max_generate_retry_num", 3)
+        last_error = None
+        for attempt_num in range(max_retries):
+            try:
+                llm_output = await ainvoke_llm_with_stats(
+                    llm=self._llm,
+                    messages=llm_input,
+                    agent_name=AgentLlmName.SUB_REPORTER_RATIONALE_GENERATOR.value,
+                )
+            except Exception as e:
+                last_error = f"LLM call failed: {e}"
+                logger.warning(
+                    "%s [generate_rationales] section_idx: [%s] attempt %s/%s %s",
+                    EFFECT_SUB_REPORT_TAG, section_idx,
+                    attempt_num + 1, max_retries, last_error,
+                )
+                continue
 
-        if not llm_output or not llm_output.get("content"):
-            logger.error(
-                f"{EFFECT_SUB_REPORT_TAG} [generate_rationales] section_idx: [{section_idx}] "
-                f"LLM returned empty content"
-            )
-            return []
+            if not llm_output or not llm_output.get("content"):
+                last_error = "LLM returned empty content"
+                logger.warning(
+                    "%s [generate_rationales] section_idx: [%s] attempt %s/%s %s",
+                    EFFECT_SUB_REPORT_TAG, section_idx,
+                    attempt_num + 1, max_retries, last_error,
+                )
+                continue
 
-        try:
-            data = json.loads(normalize_json_output(llm_output.get("content", "")))
-            rationales = data.get("rationales", [])
-            logger.info(
-                f"{EFFECT_SUB_REPORT_TAG} [generate_rationales] section_idx: [{section_idx}] "
-                f"generated {len(rationales)} rationales"
-            )
-            return rationales
-        except Exception as e:
-            logger.error(
-                "%s [generate_rationales] section_idx: [%s] failed to parse LLM output: %s",
-                EFFECT_SUB_REPORT_TAG, section_idx, e,
-            )
-            return []
+            try:
+                data = json.loads(normalize_json_output(llm_output.get("content", "")))
+                rationales = data.get("rationales", [])
+                primary_count = sum(1 for r in rationales if r.get("priority") == "primary")
+                supplementary_count = len(rationales) - primary_count
+                logger.info(
+                    "%s [generate_rationales] section_idx: [%s] generated %s rationales "
+                    "(primary: %s, supplementary: %s) (attempt %s/%s)",
+                    EFFECT_SUB_REPORT_TAG, section_idx,
+                    len(rationales), primary_count, supplementary_count,
+                    attempt_num + 1, max_retries,
+                )
+                return rationales
+            except Exception as e:
+                last_error = f"failed to parse LLM output: {e}"
+                logger.warning(
+                    "%s [generate_rationales] section_idx: [%s] attempt %s/%s %s",
+                    EFFECT_SUB_REPORT_TAG, section_idx,
+                    attempt_num + 1, max_retries, last_error,
+                )
+                continue
+
+        logger.error(
+            "%s [generate_rationales] section_idx: [%s] failed after %s attempts: %s",
+            EFFECT_SUB_REPORT_TAG, section_idx,
+            max_retries, last_error,
+        )
+        return []
 
     async def _evaluate_coverage_matrix(
         self, current_inputs: dict, doc_infos: list, rationales: list
@@ -1547,6 +1578,7 @@ class Reporter:
             "section_task": section_task,
             "section_description": section_description,
             "section_idx": section_idx,
+            "max_retries": current_inputs.get("max_generate_retry_num", 3),
         }
 
         tasks = [
@@ -1654,40 +1686,57 @@ class Reporter:
         }
 
         llm_input = apply_system_prompt("coverage_matrix_evaluator", tmp_context)
-        try:
-            llm_output = await ainvoke_llm_with_stats(
-                llm=self._llm,
-                messages=llm_input,
-                agent_name=AgentLlmName.SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR.value,
-            )
-        except Exception as e:
-            logger.error(
-                "%s [coverage_matrix] section_idx: [%s] batch %s: LLM call failed: %s",
-                EFFECT_SUB_REPORT_TAG, section_idx, batch_idx, e,
-            )
-            return {}, batch_docs
+        max_retries = section_ctx.get("max_retries", 3)
+        last_error = None
+        for attempt_num in range(max_retries):
+            try:
+                llm_output = await ainvoke_llm_with_stats(
+                    llm=self._llm,
+                    messages=llm_input,
+                    agent_name=AgentLlmName.SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR.value,
+                )
+            except Exception as e:
+                last_error = f"LLM call failed: {e}"
+                logger.warning(
+                    "%s [coverage_matrix] section_idx: [%s] batch %s: attempt %s/%s %s",
+                    EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+                    attempt_num + 1, max_retries, last_error,
+                )
+                continue
 
-        if not llm_output or not llm_output.get("content"):
-            logger.error(
-                "%s [coverage_matrix] section_idx: [%s] batch %s: LLM returned empty content",
-                EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
-            )
-            return {}, batch_docs
+            if not llm_output or not llm_output.get("content"):
+                last_error = "LLM returned empty content"
+                logger.warning(
+                    "%s [coverage_matrix] section_idx: [%s] batch %s: attempt %s/%s %s",
+                    EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+                    attempt_num + 1, max_retries, last_error,
+                )
+                continue
 
-        try:
-            data = json.loads(normalize_json_output(llm_output.get("content", "")))
-            logger.info(
-                "%s [coverage_matrix] section_idx: [%s] batch %s: parsed %s docs",
-                EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
-                len(data.get("coverage_matrix", {})),
-            )
-            return data, batch_docs
-        except Exception as e:
-            logger.error(
-                "%s [coverage_matrix] section_idx: [%s] batch %s: failed to parse LLM output: %s",
-                EFFECT_SUB_REPORT_TAG, section_idx, batch_idx, e,
-            )
-            return {}, batch_docs
+            try:
+                data = json.loads(normalize_json_output(llm_output.get("content", "")))
+                logger.info(
+                    "%s [coverage_matrix] section_idx: [%s] batch %s: parsed %s docs (attempt %s/%s)",
+                    EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+                    len(data.get("coverage_matrix", {})),
+                    attempt_num + 1, max_retries,
+                )
+                return data, batch_docs
+            except Exception as e:
+                last_error = f"failed to parse LLM output: {e}"
+                logger.warning(
+                    "%s [coverage_matrix] section_idx: [%s] batch %s: attempt %s/%s %s",
+                    EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+                    attempt_num + 1, max_retries, last_error,
+                )
+                continue
+
+        logger.error(
+            "%s [coverage_matrix] section_idx: [%s] batch %s: failed after %s attempts: %s",
+            EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+            max_retries, last_error,
+        )
+        return {}, batch_docs
 
     @staticmethod
     def _optimize_document_set(
@@ -2018,7 +2067,6 @@ class Reporter:
                 EFFECT_SUB_REPORT_TAG, section_idx,
                 [r.get("description", "") for r in uncovered],
             )
-        # ======================================
 
         limitations = [
             f"This section does not sufficiently cover the following key information: {r.get('description', '')}"
@@ -3549,15 +3597,27 @@ def _replace_citations_and_classified_index(
     return updated_paragraphs, updated_classified_contents
 
 
-def _get_classified_infos(doc_infos: list, urls: list, max_source_id_count: int | None = 10):
-    """根据分类结果 URL 提取下游写作所需的信息。
+def _get_classified_infos(
+    selected_docs: list[dict],
+    marginal_values: list[float],
+    max_source_id_count: int | None = 10,
+):
+    """Extract downstream writing inputs from matrix-selected doc variants.
 
     Args:
-        doc_infos: 信息收集节点输出的文档信息列表。
-        urls: 分类模型选中的文档 URL 列表。
+        selected_docs: concrete doc variants selected by the matrix pipeline.
+            Reverse-looked-up by object identity without expanding to other
+            variants under the same URL, so matrix-rejected variants cannot
+            re-enter writing and citation.
+        marginal_values: marginal value list from greedy matrix selection,
+            index-aligned with selected_docs. Replaces the original doc composite
+            score when picking representatives within the same source_key group,
+            better matching the coverage semantics of the matrix.
+        max_source_id_count: max number of content variants to keep.
 
     Returns:
-        元组，包含分类后的引用与原文内容，以及匹配到的文档信息列表。
+        Tuple of (classified_infos with references and core_content_list,
+        classified_doc_infos list).
     """
     def escape_markdown_text(value: object) -> str:
         text = str(value or "")
@@ -3583,12 +3643,17 @@ def _get_classified_infos(doc_infos: list, urls: list, max_source_id_count: int 
         escaped_url = url.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
         return f"[{title}]({escaped_url})"
 
-    if not doc_infos:
+    if not selected_docs:
         logger.error(
-            f"{EFFECT_SUB_REPORT_TAG} No classified infos found. can not get classified infos."
+            f"{EFFECT_SUB_REPORT_TAG} No selected docs found. can not get classified infos."
         )
         return {}, []
-    if not urls:
+
+    # Use only matrix-selected concrete variants; do not expand to other
+    # variants under the same URL, otherwise matrix-rejected low-coverage /
+    # high-noise variants may re-enter writing and citation.
+    effective_urls = [str(d.get("url") or "") for d in selected_docs if d.get("url")]
+    if not effective_urls:
         logger.error(
             f"{EFFECT_SUB_REPORT_TAG} No urls found. can not get classified infos."
         )
@@ -3596,31 +3661,31 @@ def _get_classified_infos(doc_infos: list, urls: list, max_source_id_count: int 
     classified_infos = {"references": [], "core_content_list": []}
     classified_doc_infos = []
 
-    doc_dict: dict[str, list[dict]] = {}
-    doc_order: dict[int, int] = {}
-    for index, item in enumerate(doc_infos):
-        doc_dict.setdefault(item["url"], []).append(item)
-        doc_order[id(item)] = index
-
-    matched_items = []
+    matched_items: list[dict] = []
     matched_order: dict[int, int] = {}
     matched_by_url: dict[str, list[dict]] = {}
-    for url in urls:
-        for item in doc_dict.get(url, []):
-            matched_order[id(item)] = len(matched_items)
-            matched_items.append(item)
-            matched_by_url.setdefault(url, []).append(item)
+    for item in selected_docs:
+        url = str(item.get("url") or "")
+        if not url:
+            continue
+        matched_order[id(item)] = len(matched_items)
+        matched_items.append(item)
+        matched_by_url.setdefault(url, []).append(item)
+
+    # marginal_value map: id(doc) -> greedy selection marginal value, index-aligned with selected_docs
+    mv_map = {id(doc): mv for doc, mv in zip(selected_docs, marginal_values)}
 
     def source_key_for(item: dict) -> str:
-        # 写作阶段会回查原始 doc_infos，因此这里也复用预筛的内容变体 key；
-        # 否则无 source_id 的同正文重复项可能绕过预筛去重，重新进入写作输入。
+        # Writing stage looks up original doc_infos, so reuse the pre-filter
+        # content variant key here; otherwise same-content duplicates without
+        # source_id may bypass pre-filter dedup and re-enter writing inputs.
         return build_doc_variant_key(item)
 
     def item_rank_key(item: dict) -> tuple[float, int, int]:
         return (
-            extract_doc_score(item).composite,
+            mv_map.get(id(item), 0.0),
             len(str(item.get("original_content") or "")),
-            -matched_order.get(id(item), doc_order.get(id(item), 0)),
+            -matched_order.get(id(item), 0),
         )
 
     def best_representatives(items: list[dict]) -> list[dict]:
@@ -3637,7 +3702,7 @@ def _get_classified_infos(doc_infos: list, urls: list, max_source_id_count: int 
     max_count = None if max_source_id_count is None else max(0, int(max_source_id_count))
 
     if max_count is not None:
-        for url in urls:
+        for url in effective_urls:
             if len(selected_items) >= max_count:
                 break
             representatives = best_representatives(matched_by_url.get(url, []))

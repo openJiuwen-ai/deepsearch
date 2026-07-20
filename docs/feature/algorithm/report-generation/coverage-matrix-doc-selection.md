@@ -17,6 +17,7 @@
 - 候选文档先经 n-gram Pool-IDF 粗筛（0 LLM 调用），删除与所有 rationale 零重叠的文档。
 - n-gram 分词对中文按单字拆分（CJK 无词边界），英文按整词保留，确保不同措辞的中文文档也能产生字符 bigram 重叠。
 - 覆盖矩阵评估使用分批并行（BATCH_SIZE=15），并发上限 5 批，每批独立 LLM 调用。
+- rationale 生成和覆盖矩阵评估的 LLM 调用均按 `max_generate_retry_num`（默认 3）重试，覆盖 LLM 异常、空内容、JSON 解析失败三类瞬时失败，全部失败才降级。
 - Prompt 安全：rationale 生成和覆盖矩阵评估的 system prompt 只含指令和抗注入约束，不可信数据（文档内容、step summaries）通过 user message 传入，防止恶意网页注入指令操纵评分。
 - 贪心子模选择按边际价值排序，含冗余惩罚和噪声惩罚。
 - elbow 截断后做覆盖感知扩展：跳变后只要某文档在某个 rationale 维度是最高覆盖分就保留。
@@ -45,9 +46,9 @@
 
 ## 核心流程
 
-1. **rationale 生成**：LLM 根据用户 query、章节任务、大纲和 step summaries 生成 3-8 个信息维度。
+1. **rationale 生成**：LLM 根据用户 query、章节任务、大纲和 step summaries 生成 3-8 个信息维度。LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败。
 2. **n-gram 粗筛**：用 unigram+bigram+trigram 的 Pool-IDF 加权交集，删除与所有 rationale 零重叠的文档（0 LLM 调用）。中文按单字拆分，英文按整词保留。
-3. **覆盖矩阵评估**：将候选文档分批（BATCH_SIZE=15），并发上限 5 批，每批并行送 LLM 评估对每个 rationale 的覆盖分、可信度和噪声分。LLM 调用异常（限流、超时等）降级为空响应，不影响其他批次。
+3. **覆盖矩阵评估**：将候选文档分批（BATCH_SIZE=15），并发上限 5 批，每批并行送 LLM 评估对每个 rationale 的覆盖分、可信度和噪声分。每批 LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败，全部失败才降级为空响应，不影响其他批次。
 4. **贪心子模选择**：每轮选边际价值最大的文档，边际价值 = 覆盖增益 - β×冗余惩罚 - γ×噪声惩罚 - δ×不可信惩罚。
 5. **elbow 截断**：检测边际值跳变点，跳变前全部保留；跳变后遍历所有文档，只要某文档在某个 rationale 维度是最高覆盖分就保留，最终截断到 top_k。
 6. **覆盖校验**：只检查选入报告的文档，按 0.6/0.3 阈值分类 covered/weak/uncovered，未覆盖维度写入局限性说明。
@@ -75,18 +76,20 @@ Prompt 输入变量：
 关键配置：
 
 - `classify_doc_infos_res_top_k_num`：最大选择文档数（默认 20）。
+- `max_generate_retry_num`：rationale 生成和覆盖矩阵评估的 LLM 调用重试次数（默认 3）。
 - `BATCH_SIZE`：覆盖矩阵分批大小（默认 15）。
 - `MAX_CONCURRENT_BATCHES`：覆盖矩阵 LLM 并发上限（默认 5）。
 - `β=0.3`（冗余）、`γ=0.3`（噪声）、`δ=0.2`（不可信）。
 
 ## 边界与错误处理
 
-- rationale 生成失败返回空列表，章节走错误路径。
-- 覆盖矩阵评估 LLM 返回空内容、JSON 解析失败或调用异常（限流、超时等）时，该批返回空 dict，不影响其他批次。
+- rationale 生成重试 `max_generate_retry_num` 次后仍失败才返回空列表，章节走错误路径。
+- 覆盖矩阵评估 LLM 返回空内容、JSON 解析失败或调用异常（限流、超时等）时，每批重试 `max_generate_retry_num` 次后仍失败才返回空 dict，不影响其他批次。
 - n-gram 粗筛删除全部文档时回退到原始 doc_infos。
 - elbow 截断最终受 top_k 上限约束。
 - 覆盖校验和 elbow 截断使用 `id(doc)` 对象身份做 doc→index 映射，正确处理同 URL 不同内容变体。
 - 覆盖校验的 `filtered_docs` fallback 使用原始 `doc_infos`，确保映射正确。
+- 最终回查 `_get_classified_infos` 直接接受矩阵选中的 `selected_docs`（位置参数，对象身份精确反查）和对应的 `marginal_values`（贪心选择的边际价值，index-aligned），不再传入 `doc_infos` 全集或 URL 列表，从签名上保证矩阵淘汰的低覆盖/高噪声变体不会重新进入写作和引用。同 source_key 组内挑代表时用 `marginal_values` 替代原始文档综合评分，更贴合矩阵覆盖语义。
 
 ## 测试与验证
 
