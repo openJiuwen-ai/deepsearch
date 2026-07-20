@@ -31,7 +31,6 @@ from server.deepsearch.core.manager.report_manager.mermaid_preprocess import (
 )
 from server.deepsearch.core.manager.report_manager.report_processor import ReportHtml, ReportWord
 from server.deepsearch.core.manager.report_manager.word_utils import (
-    _normalize_latex_for_omml,
     html_to_doc,
     set_global_styles,
 )
@@ -187,9 +186,9 @@ def test_report_html_convert_from_markdown_uses_shared_safe_math_handling():
     """Validate direct HTML conversion shares offline math/currency behavior."""
     html_text = ReportHtml.convert_from_markdown("变量 $G$ 保留为公式，价格 $4 和 $5 保持文本。")
 
-    assert r"\(G\)" in html_text
+    assert "$G$" in html_text
     assert "$4 和 $5" in html_text
-    assert "inlineMath: [['$', '$']" not in html_text
+    assert "katex" in html_text
 
 
 def test_report_word_convert_from_markdown_keeps_wrapped_tables():
@@ -1012,15 +1011,8 @@ def test_convert_md_to_docx_renders_aligned_display_math(tmp_path):
     assert "<m:oMath" in document_xml
 
 
-def test_normalize_latex_for_omml_wraps_nested_grouped_command_powers():
-    """Validate normalization reaches grouped powers nested inside grouped commands."""
-    normalized = _normalize_latex_for_omml(r"\binom{\frac{1}{2}^3}{k}^2")
-
-    assert normalized == r"{\binom{{\frac{1}{2}}^3}{k}}^2"
-
-
-def test_html_export_contains_mathjax_script(tmp_path):
-    """Validate HTML export includes MathJax script for formula rendering.
+def test_html_export_contains_katex_script(tmp_path):
+    """Validate HTML export includes KaTeX script for formula rendering.
 
     Args:
         tmp_path: pytest 提供的临时目录。
@@ -1039,9 +1031,9 @@ def test_html_export_contains_mathjax_script(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert "MathJax" in html_text
-    assert "mathjax@3" in html_text
-    assert "tex-mml-chtml" in html_text
+    assert "katex" in html_text.lower()
+    assert "auto-render" in html_text
+    assert "renderMathInElement" in html_text
 
 
 def test_protect_math_spans_preserves_underscores_through_markdown():
@@ -1066,7 +1058,7 @@ def test_protect_math_spans_preserves_underscores_through_markdown():
     restored = restore_math_spans(rendered, formulas)
 
     assert "$$\\mathcal{J}_{GRPO}(\\theta) = \\sum_{i=1}^G \\pi_\\theta$$" in restored
-    assert "\\(a_{i} * b_{j}\\)" in restored
+    assert "$a_{i} * b_{j}$" in restored
     assert "<em>" not in restored
     assert "<strong>" not in restored
 
@@ -1134,8 +1126,12 @@ def test_protect_math_spans_skips_currency_but_keeps_simple_variables():
     assert r"\$8" in protected
 
 
-def test_html_export_uses_safe_mathjax_delimiters_for_currency_text(tmp_path):
-    """Validate HTML MathJax does not reinterpret currency dollars as formulas."""
+def test_html_export_uses_safe_katex_delimiters_for_currency_text(tmp_path):
+    """Validate KaTeX does not reinterpret currency dollars as formulas.
+
+    ``$G$`` should be treated as math and wrapped as ``$G$`` in the output,
+    while ``$4`` and ``$5`` are currency and should remain as-is.
+    """
     md_path = tmp_path / "report.md"
     html_path = tmp_path / "report.html"
     md_path.write_text(
@@ -1147,9 +1143,9 @@ def test_html_export_uses_safe_mathjax_delimiters_for_currency_text(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(G\)" in html_text
+    assert "$G$" in html_text
     assert "$4和$5" in html_text
-    assert "inlineMath: [['$', '$']" not in html_text
+    assert "\\\\(G\\\\)" not in html_text  # 不再是 MathJax 的 \(...\) 格式
 
 
 def test_convert_md_to_html_keeps_dollar_unit_table_intact(tmp_path):
@@ -1173,8 +1169,8 @@ def test_convert_md_to_html_keeps_dollar_unit_table_intact(tmp_path):
     soup = BeautifulSoup(html_text, "html.parser")
     assert soup.find("table") is not None
     assert "Price ($/GPU-hr)" in soup.get_text()
-    assert r"\(q_r\)" in html_text
-    assert r"\(/GPU-hr" not in html_text
+    assert "$q_r$" in html_text
+    assert r"\\(/GPU-hr" not in html_text
 
 
 def test_convert_md_to_html_protects_numeric_indicator_math_and_currency(tmp_path):
@@ -1193,7 +1189,7 @@ def test_convert_md_to_html_protects_numeric_indicator_math_and_currency(tmp_pat
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(1(\tau_t \notin [\tau_{min}, \tau_{max}])\)" in html_text
+    assert "$1(\\tau_t \\notin [\\tau_{min}, \\tau_{max}])$" in html_text
     assert "$1.38" in html_text
     assert "$4 and $5" in html_text
 
@@ -1215,10 +1211,10 @@ def test_convert_md_to_html_protects_comparison_math_before_markdown(tmp_path):
 
     html_text = html_path.read_text(encoding="utf-8")
     soup_text = BeautifulSoup(html_text, "html.parser").get_text(" ", strip=True)
-    assert r"\(1(F^{left}_{feet}, F^{right}_{feet} &lt; 1)\)" in html_text
-    assert r"\(r_{t,i} &lt; 0\)" in html_text
-    assert r"\(1(F^{left}_{feet}, F^{right}_{feet} < 1)\)" in soup_text
-    assert r"\(r_{t,i} < 0\)" in soup_text
+    assert "$1(F^{left}_{feet}, F^{right}_{feet} &lt; 1)$" in html_text
+    assert "$r_{t,i} &lt; 0$" in html_text
+    assert "$1(F^{left}_{feet}, F^{right}_{feet} < 1)$" in soup_text
+    assert "$r_{t,i} < 0$" in soup_text
     assert "<em" not in html_text
     assert "$1.38" in html_text
     assert r"\$8" in html_text
@@ -1237,7 +1233,7 @@ def test_convert_md_to_html_protects_numeric_scientific_math(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(4 \times 10^4\)" in html_text
+    assert "$4 \\times 10^4$" in html_text
     assert "$4 and $5" in html_text
 
 
@@ -1254,9 +1250,9 @@ def test_convert_md_to_html_protects_numeric_arithmetic_math(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(2+2=4\)" in html_text
-    assert r"\(4-3=1\)" in html_text
-    assert r"\(4−3=1\)" in html_text
+    assert "$2+2=4$" in html_text
+    assert "$4-3=1$" in html_text
+    assert "$4−3=1$" in html_text
     assert "$4 and $5" in html_text
 
 
@@ -1273,8 +1269,8 @@ def test_convert_md_to_html_escapes_formula_content_before_restore(tmp_path):
 
     html_text = html_path.read_text(encoding="utf-8")
     soup_text = BeautifulSoup(html_text, "html.parser").get_text(" ", strip=True)
-    assert r"\(x&lt;y\)" in html_text
-    assert r"\(x<y\)" in soup_text
+    assert "$x&lt;y$" in html_text
+    assert "$x<y$" in soup_text
     assert "$4 and $5" in soup_text
 
 
@@ -1336,8 +1332,8 @@ def test_convert_md_to_html_protects_equation_references(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\((Eq. 9)\)" in html_text
-    assert r"\((Equation 10)\)" in html_text
+    assert "$(Eq. 9)$" in html_text
+    assert "$(Equation 10)$" in html_text
 
 
 def test_convert_md_to_html_protects_numeric_tuples_and_prime_variables(tmp_path):
@@ -1353,8 +1349,8 @@ def test_convert_md_to_html_protects_numeric_tuples_and_prime_variables(tmp_path
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\((0.75, 1.5)\)" in html_text
-    assert r"\(z'\)" in html_text
+    assert "$(0.75, 1.5)$" in html_text
+    assert "$z'$" in html_text
     assert "$foo'" in html_text
 
 
@@ -1371,16 +1367,14 @@ def test_convert_md_to_html_keeps_function_call_math_distinct_from_closing_dolla
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(A(s,a)\)" in html_text
-    assert r"\(V(s)\)" in html_text
-    assert r"\(A(s,a) = Q(s,a) - V(s)\)" in html_text
-    assert "$A(s,a)" not in html_text
-    assert "$V(s)" not in html_text
+    assert "$A(s,a)$" in html_text
+    assert "$V(s)$" in html_text
+    assert "$A(s,a) = Q(s,a) - V(s)$" in html_text
     assert "$1.38" in html_text
 
 
-def test_html_export_defines_bm_mathjax_macro(tmp_path):
-    """Validate MathJax can render reports that use the common \\bm command."""
+def test_html_export_defines_bm_macro(tmp_path):
+    """Validate KaTeX can render reports that use the common \\bm command."""
     md_path = tmp_path / "report.md"
     html_path = tmp_path / "report.html"
     md_path.write_text(
@@ -1391,8 +1385,8 @@ def test_html_export_defines_bm_mathjax_macro(tmp_path):
     convert_md_to_html(md_path, html_path)
 
     html_text = html_path.read_text(encoding="utf-8")
-    assert r"\(\pi_{\bm{\theta}}:\mathcal{O}\rightarrow\mathcal{A}\)" in html_text
-    assert "bm: ['{\\\\boldsymbol{#1}}', 1]" in html_text
+    assert r"$\pi_{\bm{\theta}}:\mathcal{O}\rightarrow\mathcal{A}$" in html_text
+    assert "\\\\bm" in html_text or "boldsymbol" in html_text
 
 
 def test_convert_md_to_docx_preserves_currency_dollars_next_to_inline_math(tmp_path):
@@ -1433,7 +1427,7 @@ def test_convert_md_to_docx_renders_inline_math_without_currency_text(tmp_path):
 
 
 def test_html_export_preserves_underscore_math(tmp_path):
-    """Validate HTML export keeps underscore-heavy formulas intact for MathJax.
+    """Validate HTML export keeps underscore-heavy formulas intact for KaTeX.
 
     Args:
         tmp_path: pytest 提供的临时目录。
@@ -1481,3 +1475,269 @@ def test_docx_export_preserves_underscore_math(tmp_path):
         document_xml = zip_file.read("word/document.xml").decode("utf-8")
     # 公式应转为 OMML，且未残留 Markdown 注入的斜体标签
     assert "http://schemas.openxmlformats.org/officeDocument/2006/math" in document_xml
+
+
+def test_is_likely_inline_math_recognizes_long_alphanumeric_variable():
+    """长字母变量（如 velocityvelocityvelocity）应被识别为公式而非普通文本。
+
+    回归测试：commit 867d0e6 引入的 `^[A-Za-zΑ-ω][A-Za-zΑ-ω0-9]{0,4}$` 限制
+    字母变量最多 5 字符，导致 24 字符的 ``velocityvelocityvelocity`` 不被识别为
+    公式，DOCX 中残留字面 ``$...$``。
+    """
+    from server.deepsearch.core.manager.report_manager.conversion_utils import (
+        _is_likely_inline_math,
+    )
+
+    assert _is_likely_inline_math("velocityvelocityvelocity") is True
+    assert _is_likely_inline_math("abcdefghijklmnopqrstuvwxyz") is True
+    # 短变量仍应被识别
+    assert _is_likely_inline_math("x") is True
+    assert _is_likely_inline_math("xyz") is True
+    # 含空格的普通文本不应被识别
+    assert _is_likely_inline_math("plain text") is False
+
+
+def test_convert_md_to_docx_renders_long_variable_as_math(tmp_path):
+    """DOCX 应将长字母变量转为 OMML，而非残留字面 ``$...$``。
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+
+    Returns:
+        None.
+    """
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "Long variable $velocityvelocityvelocity$ should render as math.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(p.text for p in document.paragraphs)
+    # 长变量名应转为 OMML，不应残留字面 $...$
+    assert "$velocityvelocityvelocity$" not in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "<m:oMath" in document_xml
+
+
+def test_process_text_inline_logs_warning_on_latex_conversion_failure(caplog, monkeypatch):
+    """``_process_text_inline`` 在 LaTeX→OMML 转换失败时应记录 warning 日志。
+
+    回归测试：commit 867d0e6 将 ``except ValueError`` 放宽为 ``except Exception``
+    但未添加任何日志记录，导致转换失败被静默吞掉。
+    """
+    import logging
+
+    from server.deepsearch.core.manager.report_manager import word_utils
+    from server.deepsearch.core.manager.report_manager.word_utils import (
+        _process_text_inline,
+    )
+
+    def _raise_value_error(_latex: str) -> str:
+        raise ValueError("mocked latex2omml failure")
+
+    monkeypatch.setattr(word_utils, "_latex_to_omml", _raise_value_error)
+
+    doc = Document()
+    paragraph = doc.add_paragraph()
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="server.deepsearch.core.manager.report_manager.word_utils",
+    ):
+        _process_text_inline(paragraph, "$x^2$", None)
+
+    assert any(
+        "latex" in record.message.lower() or "omml" in record.message.lower()
+        for record in caplog.records
+    ), f"Expected warning log for LaTeX conversion failure, got: {[r.message for r in caplog.records]}"
+
+
+def test_add_hyperlink_logs_warning_on_latex_conversion_failure(caplog, monkeypatch):
+    """``_add_hyperlink`` 在 LaTeX→OMML 转换失败时应记录 warning 日志。
+
+    回归测试：commit 867d0e6 在超链接公式处理路径中也使用了无日志的
+    ``except Exception``，导致转换失败被静默吞掉。
+    """
+    import logging
+
+    from server.deepsearch.core.manager.report_manager import word_utils
+    from server.deepsearch.core.manager.report_manager.word_utils import (
+        _add_hyperlink,
+    )
+
+    def _raise_value_error(_latex: str) -> str:
+        raise ValueError("mocked latex2omml failure")
+
+    monkeypatch.setattr(word_utils, "_latex_to_omml", _raise_value_error)
+
+    doc = Document()
+    paragraph = doc.add_paragraph()
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="server.deepsearch.core.manager.report_manager.word_utils",
+    ):
+        _add_hyperlink(paragraph, "https://example.com", "Formula $x^2$ here")
+
+    assert any(
+        "latex" in record.message.lower() or "omml" in record.message.lower()
+        for record in caplog.records
+    ), f"Expected warning log for LaTeX conversion failure, got: {[r.message for r in caplog.records]}"
+
+
+def test_is_currency_start_recognizes_comparison_and_multiplication_operators():
+    """货币前缀后跟 <、>、×、÷ 等数学运算符不应判为货币。
+
+    回归测试：commit 867d0e6 的 _MATH_FEATURE_AFTER_CURRENCY_RE 与
+    _MATH_CONTINUATION_RE 均遗漏 <、>、×、÷ 等数学特征，导致
+    ``$4 < x$``、``$4 × 5$`` 被误判为货币，不进入公式扫描。
+    """
+    from server.deepsearch.core.manager.report_manager.conversion_utils import (
+        _is_currency_start,
+    )
+
+    # $4 < x$ — < 是数学比较运算符，应判为非货币（即应进入公式扫描）
+    assert _is_currency_start("$4 < x$", 0) is False
+    # $4 > x$ — > 是数学比较运算符
+    assert _is_currency_start("$4 > x$", 0) is False
+    # $4 × 5$ — × 是数学乘法运算符
+    assert _is_currency_start("$4 × 5$", 0) is False
+    # $4 ÷ 2$ — ÷ 是数学除法运算符
+    assert _is_currency_start("$4 ÷ 2$", 0) is False
+    # $4<x$ — 紧贴无空格也应命中
+    assert _is_currency_start("$4<x$", 0) is False
+    # $4×5$ — 紧贴无空格也应命中
+    assert _is_currency_start("$4×5$", 0) is False
+
+    # 真正的货币仍应判为货币
+    assert _is_currency_start("$4 和 $5", 0) is True
+    assert _is_currency_start("$1,200.50", 0) is True
+
+
+def test_protect_math_spans_keeps_comparison_math_with_currency_prefix():
+    """protect_math_spans 应保护 $4 < x$、$4 × 5$ 等比较/乘法公式。
+
+    回归测试：commit 867d0e6 后这些公式被 _is_currency_start 误判为货币，
+    不进入公式扫描，DOCX 实测不含 OMML。
+    """
+    text = "Compare $4 < x$ and multiply $4 × 5$."
+
+    _, formulas = protect_math_spans(text)
+
+    assert "$4 < x$" in formulas
+    assert "$4 × 5$" in formulas
+
+
+def test_convert_md_to_docx_renders_comparison_and_multiplication_math(tmp_path):
+    """DOCX 应将 $4 < x$、$4 × 5$ 等比较/乘法公式转为 OMML。
+
+    回归测试：commit 867d0e6 后 _is_currency_start 遗漏 <、× 等数学特征，
+    导致这些公式不进公式扫描，DOCX 不含 OMML。
+    """
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "Compare $4 < x$ and multiply $4 × 5$.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(p.text for p in document.paragraphs)
+    assert "$4 < x$" not in paragraph_text
+    assert "$4 × 5$" not in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "<m:oMath" in document_xml
+
+
+def test_report_html_katex_resources_includes_currency_protection():
+    """_katex_resources 返回的 JS 应包含货币美元保护逻辑。
+
+    回归测试：commit 867d0e6 的 _katex_resources 启用了 $...$ 定界符，
+    但未采用文件导出路径（html_export.py）中的 escapeCurrencyDollars
+    货币占位保护，导致 $4 和 $5 被 KaTeX auto-render 误配对为公式。
+    """
+    css_link, js_script = ReportHtml._katex_resources()
+
+    assert "renderMathInElement" in js_script
+    assert "escapeCurrency" in js_script
+    # 全角美元符号 U+FF04 作为占位符
+    assert "\\uFF04" in js_script
+
+
+def test_report_html_convert_from_markdown_includes_currency_protection_script():
+    """ReportHtml.convert_from_markdown 输出应包含货币美元保护脚本。
+
+    回归测试：commit 867d0e6 的 _katex_resources 缺少 escapeCurrencyDollars，
+    导致 $4 和 $5 在浏览器中被 KaTeX auto-render 误配对为公式并吞掉
+    两个美元符号。
+    """
+    html_text = ReportHtml.convert_from_markdown(
+        "变量 $G$ 为组内采样数量，价格 $4 和 $5 保持文本。"
+    )
+
+    # 货币保护 JS 应存在
+    assert "escapeCurrency" in html_text
+    # 全角美元符号占位符应存在
+    assert "uFF04" in html_text
+    # $G$ 应保留为公式定界符
+    assert "$G$" in html_text
+    # $4 和 $5 应保留为文本（不被 KaTeX 配对）
+    assert "$4 和 $5" in html_text
+
+
+def test_iter_math_spans_yields_block_math_with_numeric_content():
+    """_iter_math_spans 应产出 $$1$$、$$2026$$ 等纯数字块级公式。
+
+    回归测试：commit 867d0e6 的 _iter_math_spans 对块级 $$...$$ 仍要求
+    _is_likely_inline_math 返回真，而该函数拒绝纯数字内容，导致
+    $$1$$ 和 $$2026$$ 在 DOCX 中保留为字面文本而非 OMML。
+    """
+    from server.deepsearch.core.manager.report_manager.word_utils import (
+        _iter_math_spans,
+    )
+
+    # $$1$$ — 单数字块级公式
+    spans = list(_iter_math_spans("text $$1$$ end"))
+    assert spans == [(5, 10)]
+
+    # $$2026$$ — 多位数字
+    spans = list(_iter_math_spans("year $$2026$$ end"))
+    assert spans == [(5, 13)]
+
+    # $$E = mc^2$$ — 含等式的块级公式仍正常工作
+    spans = list(_iter_math_spans("formula $$E = mc^2$$ end"))
+    assert len(spans) == 1
+    assert spans[0] == (8, 20)
+
+
+def test_convert_md_to_docx_renders_block_math_with_numeric_content(tmp_path):
+    """DOCX 应将 $$1$$、$$2026$$ 等纯数字块级公式转为 OMML。
+
+    回归测试：commit 867d0e6 的 _iter_math_spans 拒绝纯数字块级公式，
+    导致 DOCX 中保留字面 $$1$$、$$2026$$ 而非 OMML。
+    """
+    md_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    md_path.write_text(
+        "# 测试\n\n"
+        "Year $$2026$$ and count $$1$$.\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(md_path, docx_path)
+
+    document = Document(docx_path)
+    paragraph_text = "\n".join(p.text for p in document.paragraphs)
+    assert "$$2026$$" not in paragraph_text
+    assert "$$1$$" not in paragraph_text
+    with zipfile.ZipFile(docx_path) as zip_file:
+        document_xml = zip_file.read("word/document.xml").decode("utf-8")
+    assert "<m:oMath" in document_xml

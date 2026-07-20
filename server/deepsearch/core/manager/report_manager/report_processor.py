@@ -144,29 +144,90 @@ class ReportHtml(DefaultReportFormatProcessor):
             return f"<style>{f.read()}</style>"
 
     @staticmethod
-    def _enable_html_latex(html_body: str) -> str:
-        mathjax_scripts = """
-        <script>
-        window.MathJax = {
-            tex: {
-                inlineMath: [['\\\\(', '\\\\)']],
-                displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
-                macros: {
-                    bm: ['{\\\\boldsymbol{#1}}', 1]
-                }
-            }
-        };
-        </script>
-        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-        """
-        if "</body>" in html_body:
-            # 如果你的 HTML 有 </body>，插入在它前面
-            html_body = html_body.replace("</body>", mathjax_scripts + "</body>")
-        else:
-            # 如果没有 body 标签，就直接追加
-            html_body += mathjax_scripts
+    def _katex_resources() -> tuple[str, str]:
+        """Return (css_link_tag, js_script_tag) for KaTeX rendering.
 
-        return html_body
+        KaTeX 是一种快速、轻量的 LaTeX 公式渲染库，相比 MathJax 渲染速度更快、
+        体积更小。使用 auto-render 扩展自动扫描页面中的 ``$...$`` 和 ``$$...$$``
+        并渲染。
+
+        在调用 ``renderMathInElement`` 之前，先执行 ``escapeCurrencyDollars``
+        对正文文本节点中的货币美元（如 ``$4``、``$5``、``$1,200.50``）做占位
+        保护，避免被 KaTeX auto-render 误配对为公式定界符；渲染完成后再还原
+        占位符。该逻辑与 ``html_export.py`` 文件导出路径保持一致。
+
+        Returns:
+            tuple[str, str]: (CSS 链接标签, JS 脚本标签)。
+        """
+        katex_version = "0.16.11"
+        css_link = (
+            f'<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@{katex_version}/dist/katex.min.css" />'
+        )
+        js_script = (
+            f'<script src="https://cdn.jsdelivr.net/npm/katex@{katex_version}/dist/katex.min.js">'
+            f'</script>\n'
+            f'<script src="https://cdn.jsdelivr.net/npm/katex@{katex_version}/dist/contrib/auto-render.min.js">'
+            f'</script>\n'
+            f"<script>\n"
+            f"document.addEventListener('DOMContentLoaded', function() {{\n"
+            f"    var PH = '\\uFF04';\n"
+            f"    var MATH_OPS = '\\\\+-*/!%^_{{}}=<>×÷';\n"
+            f"    function hasMathOp(s) {{\n"
+            f"        for (var j = 0; j < s.length; j++) {{\n"
+            f"            if (MATH_OPS.indexOf(s[j]) !== -1) return true;\n"
+            f"        }}\n"
+            f"        return false;\n"
+            f"    }}\n"
+            f"    function escapeCurrencyDollars() {{\n"
+            f"        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);\n"
+            f"        var nodes = [];\n"
+            f"        while (walker.nextNode()) nodes.push(walker.currentNode);\n"
+            f"        nodes.forEach(function(node) {{\n"
+            f"            var text = node.nodeValue;\n"
+            f"            if (text.indexOf('$') === -1) return;\n"
+            f"            var out = '';\n"
+            f"            var modified = false;\n"
+            f"            var i = 0;\n"
+            f"            while (i < text.length) {{\n"
+            f"                if (text[i] === '$' && i + 1 < text.length &&\n"
+            f"                        text[i + 1] >= '0' && text[i + 1] <= '9') {{\n"
+            f"                    var next$ = text.indexOf('$', i + 1);\n"
+            f"                    if (next$ === -1 || next$ - i > 50 ||\n"
+            f"                            !hasMathOp(text.substring(i + 1, next$))) {{\n"
+            f"                        out += PH;\n"
+            f"                        modified = true;\n"
+            f"                        i++;\n"
+            f"                        continue;\n"
+            f"                    }}\n"
+            f"                }}\n"
+            f"                out += text[i];\n"
+            f"                i++;\n"
+            f"            }}\n"
+            f"            if (modified) node.nodeValue = out;\n"
+            f"        }});\n"
+            f"    }}\n"
+            f"    escapeCurrencyDollars();\n"
+            f"    renderMathInElement(document.body, {{\n"
+            f"        delimiters: [\n"
+            f"            {{left: '$$', right: '$$', display: true}},\n"
+            f"            {{left: '$', right: '$', display: false}},\n"
+            f"        ],\n"
+            f"        macros: {{\n"
+            f"            '\\\\bm': '\\\\boldsymbol{{#1}}'\n"
+            f"        }},\n"
+            f"        throwOnError: false\n"
+            f"    }});\n"
+            f"    var restoreWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);\n"
+            f"    while (restoreWalker.nextNode()) {{\n"
+            f"        var n = restoreWalker.currentNode;\n"
+            f"        if (n.nodeValue.indexOf(PH) !== -1) {{\n"
+            f"            n.nodeValue = n.nodeValue.split(PH).join('$');\n"
+            f"        }}\n"
+            f"    }}\n"
+            f"}});\n"
+            f"</script>"
+        )
+        return css_link, js_script
 
     @classmethod
     def convert_from_markdown(cls, md_report_content: str) -> str:
@@ -177,20 +238,23 @@ class ReportHtml(DefaultReportFormatProcessor):
             extras=["tables", "fenced-code-blocks", "code-friendly"]
         )
         html_body = restore_math_spans(html_body, math_spans)
-        html_body = cls._enable_html_latex(html_body)
         html_body = postprocess_html(html_body)
 
         default_style_block_n = cls._load_css()
+        katex_css, katex_js = cls._katex_resources()
         # 包裹完整 HTML
-        html_report_content = f"""
-                    <html>
+        html_report_content = f"""<!DOCTYPE html>
+                    <html lang="zh-CN">
                         <head>
+                            <meta charset="UTF-8">
                             {default_style_block_n}
+                            {katex_css}
                         </head>
                         <body>
                           <div class="report-container">
                             {html_body}
                           </div>
+                          {katex_js}
                         </body>
                     </html>
                     """
