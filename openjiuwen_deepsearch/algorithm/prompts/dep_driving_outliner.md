@@ -25,6 +25,17 @@ research process toward meaningful resolution** of {{ questions }}.
 When conflicts arise, problem-resolution value must take precedence over structural symmetry, dimensional exhaustiveness,
 or descriptive elegance. {{ user_feedback }} may refine emphasis or scope, but must not override the core research problem.
 
+## Structured Section Contract
+
+For every section returned through the outline tool:
+- Put substantive research scope, entities, time ranges, questions, analytical dimensions, and dependency relationships
+  in `description`.
+- Put Markdown table requirements, exact column names and order, required row objects, item-by-item enumeration,
+  length or style rules, source restrictions, and deliverable format rules in `format_requirements`.
+- Preserve user-provided labels and ordering exactly. Do not duplicate the same format constraint in `description`.
+- Use an empty array `[]` when no section-specific format requirement exists; never omit `format_requirements`.
+- Provide a non-empty `section_focus` and at least one item in `focus_dimensions` for every section.
+
 {% if report_type == "brief" %}
 ## Report type: Brief
 - Fewer sections; each must earn its place for **decisions, conclusions, or risk framing**—not decorative completeness.
