@@ -1425,8 +1425,13 @@ class Reporter:
         section_idx = current_inputs.get("section_idx", 1)
         section_task = self.strip_leading_number(current_inputs.get("section_task", ""))
         section_description = current_inputs.get("section_description", "")
-        section_focus = current_inputs.get("section_focus", "")
-        focus_dimensions = current_inputs.get("focus_dimensions", [])
+        # Expand section_local_contract (nested dict) into top-level fields via the shared helper,
+        # consistent with other prompt sites (report.py:2148, 3097).
+        contract_ctx = build_section_local_contract_prompt_context(
+            current_inputs.get("section_local_contract")
+        )
+        section_focus = contract_ctx.get("section_focus", "")
+        focus_dimensions = contract_ctx.get("allowed_dimensions", [])
         report_task = current_inputs.get("report_task", "")
         overall_outline = current_inputs.get("current_outline", "")
         step_summaries = current_inputs.get("step_summaries", [])
