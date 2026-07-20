@@ -2,47 +2,32 @@
 
 ## Overview
 
-`/reports/convert` converts a DeepSearch workflow `final_result` payload into a report export bundle.
+`/reports/convert` converts a DeepSearch workflow `final_result` payload into a report export bundle. Under the default router registration the full endpoint is `/api/v1/agent/deepsearch/reports/convert`.
 
-Under the default backend router registration, the full endpoint path is `/api/v1/agent/deepsearch/reports/convert`.
-
-Supported export formats:
-
-- `html`
-- `docx`
-
-The response is a base64-encoded ZIP bundle.
+Supported `convert_type` values are `html` and `docx`. `convert_content` is a base64-encoded ZIP bundle. HTML can optionally request LLM-generated CSS styling.
 
 ## Request Body
 
 ```json
 {
   "final_result": {
-    "response_content": "# Report Title",
+    "response_content": "# Report title",
     "infer_messages": [],
     "chart_messages": [],
     "warning_info": "",
     "exception_info": ""
   },
-  "convert_type": "html"
+  "convert_type": "html",
+  "enable_html_styling": false
 }
 ```
 
-Field notes:
-
-- `final_result.response_content`
-  - Markdown report body.
-- `final_result.infer_messages`
-  - Source-tracing graph resources. To export these resources into the ZIP bundle, each item should include:
-    - `id`: Graph identifier used to rewrite `#inference:<id>` links in the report body.
-    - `html_base64`: Base64-encoded HTML content that is decoded into a standalone HTML file.
-- `final_result.chart_messages`
-  - VLM chart resources. To export these resources into the ZIP bundle, each item should include:
-    - `chart_id`: Chart identifier used to match `(#insertChart:<chart_id>)` placeholders in the report body.
-    - `base64`: Base64-encoded image content that is decoded into an image file.
-    - `chart_title`: Optional. When present, it becomes the alt text of the rewritten Markdown image reference.
-- `convert_type`
-  - Target export format, either `html` or `docx`.
+- `final_result.response_content`: required Markdown report body.
+- `final_result.infer_messages`: optional source-tracing assets with `id` and `html_base64`. Report links using `#inference:<id>` become relative links to standalone HTML files in the bundle.
+- `final_result.chart_messages`: optional VLM PNG assets with `chart_id`, `base64`, and optional `chart_title`. `(#insertChart:<chart_id>)` placeholders become image references.
+- `convert_type`: `html` or `docx`.
+- `enable_html_styling`: optional and defaults to `false`; it applies only to HTML.
+- `llm_config`: required only when HTML styling is enabled; it may be a direct model configuration or a category configuration containing `general`. Category configurations use only `general`.
 
 ## Response Body
 
@@ -50,146 +35,70 @@ Field notes:
 {
   "code": 200,
   "msg": "success",
-  "convert_content": "<base64-zip>"
+  "convert_content": "<base64-zip>",
+  "style_applied": false,
+  "style_status": "not_requested"
 }
 ```
 
-Field notes:
+`style_status` is `not_requested` for ordinary HTML, `not_supported` for DOCX, `applied` after successful styling, or `fallback` when only styling fails.
 
-- `convert_content`
-  - Base64-encoded ZIP bundle.
+## HTML Styling
+
+When `convert_type=html` and `enable_html_styling=true`, `/reports/convert` builds semantic baseline HTML and asks the configured LLM for CSS based on the report title, outline, and summary. `llm_config` may be direct or category based; category configurations use only `general`. The LLM does not rewrite Markdown, links, charts, or inference assets.
+
+```json
+{
+  "convert_type": "html",
+  "enable_html_styling": true,
+  "llm_config": {"general": {"model_name": "your-model", "api_key": "your-key"}}
+}
+```
+
+Successful styling returns `style_applied=true` and `style_status=applied`. If CSS generation or injection fails, the endpoint still returns HTTP 200 with readable semantic baseline HTML, `style_applied=false`, and `style_status=fallback`. Missing or invalid `llm_config` returns HTTP 400; base bundle or export failures return HTTP 500. DOCX never initializes or validates the LLM configuration.
 
 ## ZIP Layout
-
-The ZIP bundle always contains `report_bundle/report.md` and the main exported artifact for the requested format. Source-tracing assets, chart assets, and Mermaid debug files appear only when relevant.
 
 ```text
 report_bundle/
   report.md
   report.html | report.docx
   infer/                       # optional
-    inference_0.html
+    inference_<id>.html
   charts/                      # optional
-    chart_0.png
-  report_mermaid_0.mmd         # optional, only when Mermaid rendering fails
-  report_mermaid_0.error.txt   # optional, only when Mermaid rendering fails with diagnostics
+    <chart_id>.png
 ```
 
-Notes:
+`report.md` is the rewritten intermediate Markdown. Inference HTML remains standalone. VLM PNG files remain in `charts/`; both HTML variants additionally inline their rendered references as Data URIs so `report.html` can be opened after extraction on its own.
 
-- `report.md`
-  - Intermediate Markdown after inference-link and chart-placeholder rewriting.
-- `report.html` or `report.docx`
-  - Main exported artifact.
-- `infer/`
-  - Standalone source-tracing graph HTML resources; present only when exportable `infer_messages` entries exist.
-- `charts/`
-  - VLM chart resources; present only when exportable `chart_messages` entries exist.
-- `report_mermaid_0.mmd` / `report_mermaid_0.error.txt`
-  - Mermaid debug artifacts kept for troubleshooting Mermaid source or runtime issues after render failures.
-
-## Diagram Handling
+## Diagrams, Images, And Formulas
 
 ### Mermaid
 
-- For HTML export, Mermaid is rendered offline to SVG through `mmdc` and embedded into the HTML output.
-- For DOCX export, Mermaid is rendered offline to PNG through `mmdc` and then converted through pandoc.
-- If `mmdc` is unavailable, the export does not fail. The Mermaid source block is preserved in the output instead.
+Mermaid Markdown remains the report contract. Ordinary and styled HTML plus DOCX from `/reports/convert` share deterministic parsing and layout for the chart source produced by this project: vertical `xychart-beta` bar/line charts, horizontal bars marked by `xychart-beta horizontal` or `horizontal: true`, `pie`, and `timeline`.
 
-### Math Formulas
+- HTML emits supported charts as escaped inline SVG.
+- DOCX uses Pillow and the repository-bundled `chart_generation/fonts/kt_font.ttf` to produce in-memory PNG data inserted through `BytesIO`; no Mermaid image files are created.
+- Engineering-scale normalization and `showDataLabel` keep the same data and layout meaning across HTML and DOCX. Pie legends include names and values; timelines retain their existing note semantics.
+- A parse, render, or font-load failure affects only that chart and preserves its original Mermaid source block.
+- Unsupported Mermaid types remain source blocks and Mermaid.js is never loaded.
 
-- HTML export includes MathJax configuration for LaTeX formulas, but the MathJax runtime is loaded from jsDelivr CDN.
-- In offline or intranet-only deployments, HTML formulas may not render unless that CDN URL is reachable or the runtime is provided by a deployment-specific replacement.
-- DOCX export converts normalized formulas into Word OMML during export and does not depend on MathJax at viewing time.
+This feature has no external Mermaid command, Node, Chrome, or vector-rendering runtime dependency and needs no related installation or environment variables.
 
-### Source-Tracing Graphs
+### Math
 
-- `infer_messages[*].html_base64` is decoded into standalone HTML files.
-- `#inference:<id>` links are rewritten to relative bundle-local HTML links.
-- The graphs are preserved as standalone resources rather than inline content in the main document.
+- HTML retains the MathJax configuration and the jsDelivr MathJax runtime.
+- DOCX converts normalized formulas to Word OMML during export.
 
-### VLM Charts
+### VLM Images
 
-- `chart_messages[*].base64` is decoded into image files.
-- `(#insertChart:<chart_id>)` placeholders are rewritten into Markdown image references pointing to `charts/<chart_id>.png`.
+- `chart_messages[*].base64` is decoded under the existing PNG contract and retained in `charts/`.
+- Main HTML reports embed those PNGs as Data URIs; DOCX continues to insert the bundle-local image.
+- No Base64 size, pixel, or image-format limit is added.
 
-## Export Environment Prerequisites
+## Failures And Fallbacks
 
-### Offline Mermaid Rendering
-
-Offline Mermaid rendering depends on `mmdc`, usually installed through npm:
-
-```bash
-npm install -g @mermaid-js/mermaid-cli
-```
-
-Installing the `mmdc` command alone is not enough. At runtime, `mmdc` also needs a Chrome or `chrome-headless-shell` executable that Puppeteer can launch. The recommended follow-up step is:
-
-```bash
-npx puppeteer browsers install chrome-headless-shell
-```
-
-If Chrome is already installed locally, or if `chrome-headless-shell` has already been downloaded by Puppeteer, you can explicitly point to the browser executable through an environment variable. Common examples:
-
-```bash
-# macOS
-export PUPPETEER_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-
-# Linux
-export PUPPETEER_EXECUTABLE_PATH="/usr/bin/google-chrome"
-
-# Windows PowerShell
-$env:PUPPETEER_EXECUTABLE_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-```
-
-You can also point to a custom Mermaid CLI executable with:
-
-```bash
-export MERMAID_MMDC_PATH=/path/to/mmdc
-```
-
-`PUPPETEER_EXECUTABLE_PATH` can also point directly to a Puppeteer-downloaded `chrome-headless-shell` binary. If `mmdc` is installed but still fails with `Could not find Chrome (...)`, check and set this variable first.
-
-If `/reports/convert` is served by a long-running backend process, restart the backend after changing `PUPPETEER_EXECUTABLE_PATH` or `MERMAID_MMDC_PATH`. Existing processes do not pick up updated environment variables automatically.
-
-Do not treat `mmdc --version` as the only success signal. Run a minimal render test as well:
-
-```bash
-tmpdir=$(mktemp -d)
-cat > "$tmpdir/test.mmd" <<'EOF'
-graph TD
-A-->B
-EOF
-mmdc -i "$tmpdir/test.mmd" -o "$tmpdir/test.svg" -b white
-```
-
-If `test.svg` is created successfully, the Mermaid offline rendering prerequisites are ready.
-
-### DOCX Export
-
-DOCX export depends on both `pypandoc` and the `pandoc` binary:
-
-- Recommended: preinstall `pandoc` in the deployment environment
-- Compatible fallback: if `pandoc` is missing, the program can attempt to download it through `pypandoc`
-
-### Minimal Verification
-
-Before calling `/reports/convert`, it is recommended to verify both Mermaid and Pandoc dependencies.
-
-For Mermaid, you can reuse the minimal `mmdc` render test shown above.
-
-Minimal Pandoc verification:
-
-```bash
-pandoc --version
-```
-
-If `pandoc` is not preinstalled, the first DOCX export can also trigger an automatic download attempt through `pypandoc`.
-
-## Failure And Fallback Behavior
-
-- The export fails when `response_content` is empty.
-- The export fails when `infer_messages` or `chart_messages` contain invalid base64 payloads.
-- Mermaid rendering failures do not stop the export. Mermaid falls back to source code blocks in the output.
-- If `mmdc` is installed but Chrome or `chrome-headless-shell` is still missing, a common error is `Could not find Chrome (...)`. This means Mermaid CLI is present, but the browser runtime is not ready yet.
-- When Mermaid rendering fails, the ZIP bundle may include `.error.txt` and `.mmd` debug artifacts. They preserve the failure details and Mermaid source for troubleshooting.
+- Empty `response_content`, a non-dictionary `final_result`, or invalid inference/VLM base64 data produce the existing validation errors.
+- Main-report or ZIP generation failures produce the existing execution errors.
+- Mermaid failures are local fallback only and do not create Mermaid CLI debug artifacts.
+- Existing request fields, format values, and the ZIP top-level layout remain unchanged; the response adds style status fields.

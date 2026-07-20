@@ -56,6 +56,74 @@ def normalize_sections(args: dict) -> dict:
     return args
 
 
+def _section_list_description(section_num: int, include_format_requirements: bool = True) -> str:
+    requirement_location = (
+        "Put substantive research scope, time ranges, dimensions, examples, and other "
+        "sub-requirements inside the relevant description, not as extra top-level sections. "
+        "Put tables, exact columns, rows, enumeration, length/style constraints, and source-use "
+        "restrictions inside format_requirements. "
+        if include_format_requirements
+        else "Put bullets, nested lists, tables, time ranges, dimensions, examples, and other "
+        "sub-requirements inside the relevant description, not as extra top-level sections. "
+    )
+    return (
+        f"Final report sections. Target count: {section_num}. "
+        "If the user explicitly defines top-level parts, chapters, lettered parts, or titled "
+        "numbered tasks, follow that count, title text, and order instead. If the user says "
+        "the report is divided into N major parts/sections, this array must contain exactly "
+        "those N major parts, except for a separately phrased final deliverable outside them. "
+        f"Each explicit top-level item must be one sibling object in this array. {requirement_location}"
+        "Numbered or bold "
+        "items under a named/lettered major part are subordinate requirements of that part. "
+        "Do not add introduction, background, summary, conclusion, appendix, or standalone "
+        "table sections unless explicitly requested as major sections. "
+        "Never serialize section objects or JSON fragments inside a description string."
+    )
+
+
+def _section_title_description() -> str:
+    return (
+        "Pure section title. If the user gives an explicit title, use only that title. "
+        "For Markdown items like '3. **Relationship Analysis**: ...', use exactly "
+        "'Relationship Analysis'; put text after the colon in description. Do not append "
+        "subtitles, covered entities, or rewritten scope."
+    )
+
+
+def _section_description_description(
+    extra_context: str = "", include_format_requirements: bool = True
+) -> str:
+    context = f" {extra_context}" if extra_context else ""
+    format_guidance = (
+        "Keep formatting, table, enumeration, column, row, length, and source-use constraints "
+        "in format_requirements instead of copying them here. "
+        if include_format_requirements
+        else ""
+    )
+    return (
+        f"Concise plain-prose research requirements for this one section{context}. "
+        f"{format_guidance}Do not include serialized section objects, escaped JSON, or "
+        "strings such as '\"title\":', '\"description\":', '}, {', '\\\"title\\\"', or '\\\"id\\\"'."
+    )
+
+
+def _format_requirements_description() -> str:
+    return (
+        "Output format requirements that apply to this section, extracted from the user request. "
+        "Include table requirements, exact column names/order, required row objects, item-by-item "
+        "enumeration, length/style constraints, source restrictions, and deliverable format rules. "
+        "Use an empty array [] when there are no section-specific format requirements."
+    )
+
+
+def _normalize_format_requirements(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
 def generate_outline(
     language: str, title: str, thought: str, sections: list[Section]
 ) -> Outline:
@@ -64,6 +132,9 @@ def generate_outline(
         Section(
             title=section.get("title", ""),
             description=section.get("description", ""),
+            format_requirements=_normalize_format_requirements(
+                section.get("format_requirements", [])
+            ),
             is_core_section=section.get("is_core_section", False),
             id=section.get("id", ""),
             parent_ids=section.get("parent_ids", []),
@@ -125,21 +196,24 @@ def create_outline_tool(section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": (
-                        f"Section list of the final report. Generate exactly {section_num} section(s); "
-                        f"the sections array length must be exactly {section_num}."
-                    ),
+                    "description": _section_list_description(section_num),
                     "items": {
                         "type": "object",
                         "properties": {
                             "title": {
                                 "type": "string",
-                                "description": "Pure section title without numbering. Never include numbers, bullets, "
-                                                "or prefixes like '1.', '2)', 'I.', '第一章'."
+                                "description": _section_title_description()
                             },
                             "description": {
                                 "type": "string",
-                                "description": "Detailed description of each research section."
+                                "description": _section_description_description()
+                            },
+                            "format_requirements": {
+                                "type": "array",
+                                "description": _format_requirements_description(),
+                                "items": {
+                                    "type": "string"
+                                },
                             },
                             "is_core_section": {
                                 "type": "boolean",
@@ -151,6 +225,7 @@ def create_outline_tool(section_num: int):
                             },
                             "section_focus": {
                                 "type": "string",
+                                "minLength": 1,
                                 "description": (
                                     "A short label describing this section's analytical role within the report. "
                                     "Examples: market_size_and_growth, vendors_and_supply, technology_drivers, "
@@ -162,6 +237,7 @@ def create_outline_tool(section_num: int):
                             },
                             "focus_dimensions": {
                                 "type": "array",
+                                "minItems": 1,
                                 "description": (
                                     "The 2-4 main analytical dimensions this section should cover. "
                                     "Other sections should NOT deeply expand these dimensions."
@@ -171,7 +247,13 @@ def create_outline_tool(section_num: int):
                                 },
                             },
                         },
-                        "required": ["title", "description"]
+                        "required": [
+                            "title",
+                            "description",
+                            "format_requirements",
+                            "section_focus",
+                            "focus_dimensions",
+                        ]
                     }
                 }
                 },
@@ -209,22 +291,20 @@ def creat_dep_driving_outline_tool(section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": (
-                        f"Section list of the final report. Generate exactly {section_num} section(s); "
-                        f"the sections array length must be exactly {section_num}."
-                    ),
+                    "description": _section_list_description(section_num, include_format_requirements=False),
                     "items": {
                         "type": "object",
                         "properties": {
                             "title": {
                                 "type": "string",
-                                "description": "Pure section title without numbering. Never include numbers, bullets, "
-                                                "or prefixes like '1.', '2)', 'I.', '第一章'."
+                                "description": _section_title_description()
                             },
                             "description": {
                                 "type": "string",
-                                "description": "Detailed description of each research section and the explanation of "
-                                               "the relationships."
+                                "description": _section_description_description(
+                                    "and its relationships",
+                                    include_format_requirements=False,
+                                )
                             },
                             "is_core_section": {
                                 "type": "boolean",
@@ -311,7 +391,7 @@ def check_tool_call(tool_dict: dict[str, LocalFunction] | LocalFunction, tool_ca
         _check_tool_name(tool, tool_call, is_sensitive)
         arguments = _check_tool_arguments(tool_call, is_sensitive)
         _check_required_params(tool, arguments, tool_call, is_sensitive)
-        _check_sections(arguments, tool_call, is_sensitive)
+        _check_sections(tool, arguments, tool_call, is_sensitive)
 
 
 def _raise_tool_call_error(message: str) -> None:
@@ -361,7 +441,9 @@ def _check_required_params(
         )
 
 
-def _check_sections(arguments: dict, tool_call: dict, is_sensitive: bool) -> None:
+def _check_sections(
+    tool: LocalFunction, arguments: dict, tool_call: dict, is_sensitive: bool
+) -> None:
     sections = arguments.get("sections")
     if sections is None:
         return
@@ -369,24 +451,53 @@ def _check_sections(arguments: dict, tool_call: dict, is_sensitive: bool) -> Non
         _raise_tool_call_error(
             f"Sections is not a list in tool call: {'**' if is_sensitive else tool_call}"
         )
+    section_schema = (
+        tool.card.input_params
+        .get("properties", {})
+        .get("sections", {})
+        .get("items", {})
+    )
     for index, section in enumerate(sections):
-        _check_section(section, index, tool_call, is_sensitive)
+        _check_section(section, index, section_schema, tool_call, is_sensitive)
 
 
 def _check_section(
-    section: dict, index: int, tool_call: dict, is_sensitive: bool
+    section: dict,
+    index: int,
+    section_schema: dict,
+    tool_call: dict,
+    is_sensitive: bool,
 ) -> None:
     if not isinstance(section, dict):
         _raise_tool_call_error(
             f"Section[{index}] is not a dict in tool call: {'**' if is_sensitive else tool_call}"
         )
-    if section.get("title") and section.get("description"):
-        return
 
-    _raise_tool_call_error(
-        "Required section param 'title' or 'description' not found in tool call: "
-        f"{'**' if is_sensitive else tool_call}"
-    )
+    required_params = section_schema.get("required", ["title", "description"])
+    properties = section_schema.get("properties", {})
+    for param_name in required_params:
+        if _has_required_section_value(section, param_name, properties.get(param_name, {})):
+            continue
+        _raise_tool_call_error(
+            f"Required section param '{param_name}' not found in tool call: "
+            f"{'**' if is_sensitive else tool_call}"
+        )
+
+
+def _has_required_section_value(
+    section: dict, param_name: str, param_schema: dict
+) -> bool:
+    if param_name not in section or section.get(param_name) is None:
+        return False
+
+    value = section.get(param_name)
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        min_items = param_schema.get("minItems")
+        return min_items is None or len(value) >= min_items
+
+    return True
 
 
 class Outliner:

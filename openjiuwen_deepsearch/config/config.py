@@ -427,12 +427,8 @@ class ServiceConfig(BaseModel):
     )
 
     # 报告节点参数
-    sub_report_classify_doc_infos_single_time_num: int = Field(default=60,
-                                                               description="子报告中单次llm处理筛选收集到的数量")
-    sub_report_classify_doc_infos_res_top_k_num: int = Field(default=10,
+    sub_report_classify_doc_infos_res_top_k_num: int = Field(default=20,
                                                              description="子报告中单次llm处理返回的top_k数量")
-    sub_report_doc_prefilter_multiplier: int = Field(default=5,
-                                                     description="子报告文档预筛保留倍数，最大候选数为top_k乘以该值")
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=True, description="报告插入图表开关")
 

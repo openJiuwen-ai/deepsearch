@@ -27,6 +27,7 @@ class RetrievalQuery(BaseModel):
     检索query模型：步骤任务的检索query
     """
     query: str = Field(..., description="直接用于检索的query")
+    search_engine_name: str = Field(default="", description="Secondary web search engine for this query.")
     description: str = Field(default="", description="简要说明query为何与搜索任务相关，为何要生成当前query")
     doc_infos: Optional[List[Dict]] = Field(default_factory=list, description="query检索的文档信息")
 
@@ -67,6 +68,7 @@ class Section(BaseModel):
     id: str = Field(default="", description="章节的唯一标识符")
     title: str = Field(..., description="章节标题，概括本章节整体目标")
     description: str = Field(..., description="章节研究步骤详细说明，明确指定需要收集的数据或执行的编程步骤")
+    format_requirements: List[str] = Field(default_factory=list, description="章节级输出格式要求，例如表格、列名、逐项枚举、字数或样式约束")
     is_core_section: bool = Field(default=False, description="是否为重点章节")
     parent_ids: List[str] = Field(default_factory=list, description="章节执行的依赖章节")
     relationships: List[str] = Field(default_factory=list, description="章节和所依赖章节之间的关系")

@@ -6,7 +6,8 @@ from openjiuwen.core.workflow.workflow import Workflow
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import SearchQueryList, \
     Reflection, Summary, CollectorContext, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, \
-    GraphEndNode, build_info_collector_sub_graph, get_research_record, llm_context
+    GraphEndNode, SearchQueryItem, build_info_collector_sub_graph, get_research_record, llm_context, \
+    _validate_query_count
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import EvidenceLedger
 from openjiuwen_deepsearch.config.config import Config
@@ -727,6 +728,15 @@ class TestSupervisorNode:
         finally:
             llm_context.reset(token)
 
+def test_validate_query_count_accepts_structured_query_items():
+    """Query count validation should accept structured query items as well as strings."""
+    queries = [
+        SearchQueryItem(query="glioblastoma clinical trial", search_engine_name="pubmed"),
+        "Apple revenue official",
+    ]
+
+    _validate_query_count(queries, 2, "queries")
+
 
 def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
     """collector_gen_query prompt should require retrieval steps to use 1..max_search_query_count queries."""
@@ -736,6 +746,10 @@ def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
     assert '"queries"' in prompt
     assert "1..{{ max_search_query_count }}" in prompt
     assert "Return `queries: []` only when the current step explicitly does not require external retrieval." in prompt
+    assert "Separate display language from retrieval language" in prompt
+    assert "Keep `missing_evidence` in `{{ language }}`" in prompt
+    assert 'search_engine_name` set to `"pubmed"` or `"arxiv"`' in prompt
+    assert "write `query` in English using academic terms" in prompt
     assert "{{ max_search_query_count }}" in prompt
     assert "{{ number_queries }}" not in prompt
     assert "number_queries" not in prompt

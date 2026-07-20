@@ -3,8 +3,9 @@
 
 import json
 import logging
+import re
 import uuid
-from typing import List, Any
+from typing import List, Any, Literal, Sequence
 
 from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.foundation.llm.schema.message import AssistantMessage
@@ -45,13 +46,21 @@ logger = logging.getLogger(__name__)
 max_retries = ServiceConfig().info_collector_max_retry_num
 
 
+class SearchQueryItem(BaseModel):
+    query: str = Field(description="Search query text.")
+    search_engine_name: Literal["", "pubmed", "arxiv"] = Field(
+        default="",
+        description="Secondary vertical search engine for this query.",
+    )
+
+
 class SearchQueryList(BaseModel):
     missing_evidence: List[str] = Field(
         default_factory=list,
         description="Verifiable evidence requirements for the current collector step."
     )
-    queries: List[str] = Field(
-        description="A list of search queries to be used for web research."
+    queries: List[str | SearchQueryItem] = Field(
+        description="A list of search queries or query objects to be used for web research."
     )
 
 
@@ -113,11 +122,15 @@ def get_research_record(messages: List[dict]) -> str:
     return research_record
 
 
-def _validate_query_count(queries: list[str], max_search_query_count: int, field_name: str) -> None:
+def _validate_query_count(
+        queries: Sequence[str | SearchQueryItem],
+        max_search_query_count: int,
+        field_name: str,
+) -> None:
     """校验 LLM 生成的 query 数量没有超过单轮硬上限。
 
     Args:
-        queries: LLM 生成的 query 字符串列表。
+        queries: LLM 生成的 query 项列表。
         max_search_query_count: 单轮允许的最大 query 数量。
         field_name: 被校验字段名，用于错误日志。
 
@@ -128,6 +141,68 @@ def _validate_query_count(queries: list[str], max_search_query_count: int, field
         raise ValueError(
             f"{field_name} count {len(queries)} exceeds max_search_query_count {max_search_query_count}"
         )
+
+
+def route_secondary_search_engine_for_query(query: str) -> str:
+    """Choose a query-level vertical search engine only for clear academic domains."""
+    text = (query or "").lower()
+    if not text:
+        return ""
+
+    def has_keyword(keywords: tuple[str, ...]) -> bool:
+        for keyword in keywords:
+            if re.search(r"[a-z0-9]", keyword):
+                if re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", text):
+                    return True
+            elif keyword in text:
+                return True
+        return False
+
+    pubmed_keywords = (
+        "medicine", "medical", "clinical", "clinic", "biomedical", "biology", "biological",
+        "drug", "disease", "epidemiology", "gene", "genetic", "protein", "patient",
+        "therapy", "treatment", "trial", "pubmed", "cancer", "医学", "临床", "生物",
+        "药物", "疾病", "流行病", "基因", "蛋白", "患者", "治疗",
+    )
+    pubmed_keywords += (
+        "drugs", "diseases", "genes", "proteins", "patients",
+        "therapies", "treatments", "trials",
+    )
+    arxiv_source_keywords = (
+        "arxiv", "preprint", "预印本",
+    )
+    arxiv_domain_keywords = (
+        "artificial intelligence", "computer science", "algorithm", "machine learning",
+        "deep learning", "large language model", "retrieval augmented", "neural network",
+        "transformer", "mathematics", "physics", "计算机", "算法", "机器学习", "大模型",
+        "数学", "物理",
+    )
+    arxiv_short_tokens = (
+        "ai", "cs", "llm", "rag", "ml",
+    )
+    arxiv_domain_keywords += (
+        "algorithms", "neural networks", "transformers",
+    )
+    if has_keyword(pubmed_keywords):
+        return "pubmed"
+    if has_keyword(arxiv_source_keywords) or has_keyword(arxiv_domain_keywords) or has_keyword(arxiv_short_tokens):
+        return "arxiv"
+    return ""
+
+
+def normalize_search_query_item(item: str | SearchQueryItem) -> SearchQueryItem:
+    if isinstance(item, SearchQueryItem):
+        query = item.query
+        if "search_engine_name" in item.model_fields_set:
+            secondary_engine = item.search_engine_name
+        else:
+            secondary_engine = route_secondary_search_engine_for_query(query)
+        return SearchQueryItem(query=query, search_engine_name=secondary_engine)
+    query = str(item)
+    return SearchQueryItem(
+        query=query,
+        search_engine_name=route_secondary_search_engine_for_query(query),
+    )
 
 
 def _fallback_search_query_list(
@@ -266,9 +341,11 @@ class GenerateQueryNode(BaseNode):
         return node_output
 
     def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, session: Session, context: ModelContext):
+        query_items = [normalize_search_query_item(query) for query in algorithm_output.queries]
         search_queries = [RetrievalQuery(
-            query=query
-        ) for query in algorithm_output.queries]
+            query=item.query,
+            search_engine_name=item.search_engine_name,
+        ) for item in query_items]
         current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
         ledger_update = EvidenceLedger(missing_evidence=algorithm_output.missing_evidence)
         updated_ledger = merge_ledger_update(current_ledger, ledger_update)
@@ -483,7 +560,8 @@ class SupervisorNode(BaseNode):
             elif reflection.knowledge_gap:
                 next_queries = [reflection.knowledge_gap]
         search_queries = [RetrievalQuery(
-            query=query
+            query=query,
+            search_engine_name=route_secondary_search_engine_for_query(query),
         ) for query in next_queries]
         session.update_global_state({"collector_context.search_queries": search_queries})
 

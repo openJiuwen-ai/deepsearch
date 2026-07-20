@@ -44,7 +44,8 @@
 
 - `cancel_context` 默认值为 `None`，用于取消信号传播。
 - `tool_context` 默认值为 `None`，按每次运行设置工具 map。
-- 搜索引擎枚举包含 `tavily`、`google`、`xunfei`、`petal`、`bocha`、`jina`、`perplexity`、`serper`。
+- 搜索引擎枚举包含 `tavily`、`google`、`xunfei`、`petal`、`bocha`、`jina`、`perplexity`、`serper`，
+  以及学术垂直搜索引擎 `pubmed` 和 `arxiv`。
 - 本地搜索枚举包含 `openapi` 和 `native`。
 - 问题路由 Prompt 来自 `openjiuwen_deepsearch/algorithm/prompts/question_model_router.md`。
 

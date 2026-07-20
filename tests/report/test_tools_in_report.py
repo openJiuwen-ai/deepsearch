@@ -368,30 +368,26 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
 
 # 测试 _get_classified_infos 函数
 @pytest.mark.parametrize(
-    "doc_infos, urls, expected_infos, expected_docs",
+    "selected_docs, marginal_values, expected_infos, expected_docs",
     [
-        # doc_infos为空
-        ([], ["http://a.com"], {}, []),
+        # selected_docs is empty
+        ([], [], {}, []),
 
-        # urls为空
-        ([{"url": "http://a.com", "title": "A", "original_content": "contentA"}], [], {}, []),
-
-        # 单个匹配
+        # single match
         (
                 [{"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]}],
-                ["http://a.com"],
+                [0.5],
                 {"references": ["[A](http://a.com)"], "core_content_list": ["Document 1 key passages:\n- passageA"]},
                 [{"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]}],
         ),
 
-        # urls里有两个地址，doc_infos里都有
+        # two selected variants (from different URLs)
         (
                 [
                     {"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]},
                     {"url": "http://b.com", "title": "B", "original_content": "contentB", "key_passages": ["passageB"]},
-                    {"url": "http://c.com", "title": "C", "original_content": "contentC"},
                 ],
-                ["http://a.com", "http://b.com"],
+                [0.5, 0.4],
                 {
                     "references": [
                         "[A](http://a.com)",
@@ -416,7 +412,7 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
                         "key_passages": [],
                     }
                 ],
-                ["https://example.test/"],
+                [0.5],
                 {
                     "references": [
                         "[x\\]\\(javascript:alert\\(1\\)\\) \\[safe](https://example.test/)"
@@ -434,7 +430,7 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
         ),
         (
                 [{"url": "javascript:alert(2)", "title": "benign", "original_content": "contentB", "key_passages": ["passageB"]}],
-                ["javascript:alert(2)"],
+                [0.5],
                 {
                     "references": ["benign (javascript:alert\\(2\\))"],
                     "core_content_list": ["Document 1 key passages:\n- passageB"],
@@ -443,8 +439,8 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
         ),
     ],
 )
-def test_get_classified_infos(doc_infos, urls, expected_infos, expected_docs):
-    classified_infos, classified_doc_infos = _get_classified_infos(doc_infos, urls)
+def test_get_classified_infos(selected_docs, marginal_values, expected_infos, expected_docs):
+    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
 
     assert classified_infos == expected_infos
     assert classified_doc_infos == expected_docs

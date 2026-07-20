@@ -317,9 +317,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_webpage_enrich_fetch_timeout_seconds** (int, optional): Timeout in seconds for fetching one webpage during webpage enrichment. Default value: `45`.
 
 ### Reporting parameters
-- **sub_report_classify_doc_infos_single_time_num** (int, optional): Number of collected documents classified by the LLM in one pass for a sub-report. Default value: `60`.
-- **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k number returned by the LLM classification in one pass for a sub-report. Default value: `10`.
-- **sub_report_doc_prefilter_multiplier** (int, optional): Candidate multiplier for deterministic sub-report document prefiltering. The maximum candidate count is `sub_report_classify_doc_infos_res_top_k_num * sub_report_doc_prefilter_multiplier`. Default value: `5`.
+- **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k number returned by the LLM classification in one pass for a sub-report. Default value: `20`.
 - **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
 - **visualization_enable** (bool, optional): Whether to enable visualization illustrations in reports. Default value: `False`.
 

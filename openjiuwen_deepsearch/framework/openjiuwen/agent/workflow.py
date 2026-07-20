@@ -127,6 +127,7 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
     get_current_time,
 )
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
+from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
@@ -176,13 +177,30 @@ def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
     return anonymize_config_for_logging(copy.deepcopy(to_dict_safe(agent_config)))
 
 
-def _initialize_web_search_context_from_agent_config(agent_config: AgentConfig):
-    """Instantiate and register the active web search engine for the current run."""
+def _initialize_web_search_context_from_agent_config(
+    agent_config: AgentConfig,
+    *,
+    include_academic_engines: bool = False,
+):
+    """Instantiate the active engine and optional research-only academic engines for a run."""
     custom_web = agent_config.custom_web_search_config
     web_search_config = agent_config.web_search_engine_config
     web_engine_name, web_mapping = DeepresearchAgent.register_web_search_tool(custom_web, web_search_config)
+    web_engine_configs = {web_engine_name: web_search_config.model_dump()}
+    if include_academic_engines:
+        for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
+            if engine_name not in web_mapping or engine_name in web_engine_configs:
+                continue
+            academic_config = web_search_config.model_dump()
+            academic_config["search_engine_name"] = engine_name
+            academic_config["search_url"] = ""
+            academic_config["search_api_key"] = bytearray()
+            web_engine_configs[engine_name] = academic_config
     web_search_token = web_search_context.set(
-        {web_engine_name: web_mapping[web_engine_name](**web_search_config.model_dump())}
+        {
+            engine_name: web_mapping[engine_name](**engine_config)
+            for engine_name, engine_config in web_engine_configs.items()
+        }
     )
     qps_rate_limiter.set_max_qps(agent_config.web_search_max_qps)
     return web_search_token
@@ -854,7 +872,10 @@ class DeepresearchAgent(BaseAgent):
         local_search_config = agent_config.local_search_engine_config
 
         local_engine_name, local_mapping = self._register_local_search_tool(custom_local, local_search_config)
-        web_search_token = _initialize_web_search_context_from_agent_config(agent_config)
+        web_search_token = _initialize_web_search_context_from_agent_config(
+            agent_config,
+            include_academic_engines=True,
+        )
         local_search_token = local_search_context.set(
             {local_engine_name: local_mapping[local_engine_name](**local_search_config.model_dump())}
         )

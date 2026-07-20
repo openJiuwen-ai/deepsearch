@@ -1,41 +1,38 @@
 # -*- coding: UTF-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
 """HTML conversion for report export bundles."""
 
 from __future__ import annotations
 
 import html
 import logging
-import re
 import time
-import uuid
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-import markdown
-
-from server.deepsearch.core.manager.report_manager.conversion_utils import (
-    postprocess_html,
+from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
+    MERMAID_BLOCK_RE,
+    inline_chart_images,
     preprocess_markdown_text,
-    protect_math_spans,
     read_text_with_fallback,
+    render_markdown_html_fragment,
     render_mermaid_supplement,
-    restore_math_spans,
 )
-from server.deepsearch.core.manager.report_manager.mermaid_common import load_svg_markup
-from server.deepsearch.core.manager.report_manager.mermaid_offline import render_mermaid_offline
-from server.deepsearch.core.manager.report_manager.mermaid_preprocess import (
+from openjiuwen_deepsearch.algorithm.report_export.mermaid_preprocess import (
     MermaidRenderOptions,
-    extract_xychart_metadata,
-    looks_like_mermaid_xychart,
     normalize_whitespace_and_units,
     preprocess_mermaid_code,
 )
-from server.deepsearch.core.manager.report_manager.xychart_value_labels import annotate_xychart_svg
+from openjiuwen_deepsearch.algorithm.report_export.mermaid_renderer import (
+    render_preprocessed_mermaid_chart_as_svg,
+)
+from openjiuwen_deepsearch.algorithm.report_style.structure import decorate_report_html
 
 
 logger = logging.getLogger(__name__)
+HtmlPageVariant = Literal["standard", "styled"]
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -260,6 +257,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         mjx-container[jax="CHTML"][display="true"] {{
             margin: 1em 0;
         }}
+{variant_css}
     </style>
 </head>
 <body>
@@ -281,7 +279,41 @@ window.MathJax = {{
 </html>
 """
 
-MERMAID_BLOCK_RE = re.compile(r"(?ms)^```[ \t]*mermaid[ \t]*\r?\n(.*?)\r?\n```[ \t]*$")
+STYLED_CSS_OVERLAY = """
+        :root {
+            --report-section-title: #1e3a5f;
+            --report-table-header-background: #1e3a5f;
+            --report-table-header-text: #ffffff;
+        }
+
+        body {
+            max-width: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .report-shell {
+            width: 1280px;
+            margin: 48px auto;
+        }
+
+        .report-abstract > h1 {
+            margin-top: 0;
+        }
+
+        .report-section > h1 {
+            color: var(--report-section-title);
+            border-bottom: 2px solid var(--border);
+            margin-top: 2.2em;
+            padding-bottom: 0.45em;
+        }
+
+        /* 表格单元格自身必须持有前景和背景色，不能只依赖 thead 背景。 */
+        .report-table th {
+            background-color: var(--report-table-header-background);
+            color: var(--report-table-header-text);
+        }
+"""
 
 
 @dataclass(slots=True)
@@ -289,42 +321,29 @@ class ConvertOptions:
     """Control HTML export conversion behavior.
 
     Attributes:
-        mermaid_security_level: Mermaid 安全等级预留参数。
         timeline_max_label_len: 时间轴标签最大显示宽度。
         scale_xychart: 是否启用 xychart 工程量级缩放。
         warn_on_invalid_number: 是否对 xychart 非法数值告警。
-        show_xychart_value_labels: 是否给 xychart SVG 叠加数值标签。
         title: 输出 HTML 标题。
+        page_variant: 页面结构和基础样式变体。
     """
 
-    mermaid_security_level: str = "strict"
     timeline_max_label_len: int = 18
     scale_xychart: bool = True
     warn_on_invalid_number: bool = True
-    show_xychart_value_labels: bool = True
     title: str = "Document"
+    page_variant: HtmlPageVariant = "standard"
 
 
 def replace_mermaid_blocks(
     text: str,
     options: ConvertOptions,
-    *,
-    asset_dir: Path,
-    asset_prefix: str,
-    cleanup_paths: list[Path],
-    debug_dir: Path,
-    debug_stem: str,
 ) -> str:
     """Replace Mermaid code fences with rendered SVG or fallback code blocks.
 
     Args:
         text: 原始 Markdown 文本。
         options: HTML 转换选项。
-        asset_dir: Mermaid 中间产物目录。
-        asset_prefix: 资源名前缀。
-        cleanup_paths: 需要在结束时清理的临时文件列表。
-        debug_dir: Mermaid 调试文件目录。
-        debug_stem: Mermaid 调试文件名前缀。
 
     Returns:
         str: Mermaid 代码块被替换后的 Markdown 文本。
@@ -350,8 +369,6 @@ def replace_mermaid_blocks(
         raw_mermaid_code = match.group(1).strip()
         block_id = block_counter
         block_counter += 1
-        debug_base_path = debug_dir / f"{debug_stem}_mermaid_{block_id}"
-        fallback_code = raw_mermaid_code
         supplement_markdown = ""
 
         try:
@@ -361,33 +378,16 @@ def replace_mermaid_blocks(
                     timeline_max_label_len=options.timeline_max_label_len,
                     scale_xychart=options.scale_xychart,
                     warn_on_invalid_number=options.warn_on_invalid_number,
-                    show_xychart_value_labels=options.show_xychart_value_labels,
                 ),
             )
-            fallback_code = mermaid_code
-
-            xychart_metadata = None
-            if options.show_xychart_value_labels and looks_like_mermaid_xychart(mermaid_code.splitlines()):
-                xychart_metadata = extract_xychart_metadata(mermaid_code, warn_on_invalid=False)
-
-            svg_path = asset_dir / f"{asset_prefix}_mermaid_{block_id}.svg"
-            if render_mermaid_offline(
-                mermaid_code,
-                svg_path,
-                output_format="svg",
-                debug_base_path=debug_base_path,
-            ):
-                cleanup_paths.append(svg_path)
-                svg_markup = load_svg_markup(svg_path)
-                if xychart_metadata and xychart_metadata.series:
-                    svg_markup = annotate_xychart_svg(svg_markup, xychart_metadata)
+            svg_markup = render_preprocessed_mermaid_chart_as_svg(mermaid_code)
+            if svg_markup is not None:
                 supplement_html = render_mermaid_supplement(supplement_markdown)
                 return (
                     '\n<div class="mermaid-wrap"><div class="mermaid-rendered">'
                     f"{svg_markup}</div></div>{supplement_html}\n"
                 )
-
-            logger.warning("Offline Mermaid rendering failed; keeping the source block in HTML output.")
+            logger.warning("Mermaid rendering failed; keeping the source block in HTML output.")
         except Exception as exc:
             logger.warning(
                 "Mermaid block processing failed in HTML export conversion; keeping the source block. "
@@ -396,7 +396,7 @@ def replace_mermaid_blocks(
                 exc,
             )
 
-        return _build_fallback_block(fallback_code, supplement_markdown)
+        return _build_fallback_block(raw_mermaid_code, supplement_markdown)
 
     return MERMAID_BLOCK_RE.sub(_replace, text)
 
@@ -404,38 +404,19 @@ def replace_mermaid_blocks(
 def preprocess_markdown(
     text: str,
     options: ConvertOptions,
-    *,
-    asset_dir: Path,
-    asset_prefix: str,
-    cleanup_paths: list[Path],
-    debug_dir: Path,
-    debug_stem: str,
 ) -> str:
     """Apply Markdown preprocessing before HTML conversion.
 
     Args:
         text: 原始 Markdown 文本。
         options: HTML 转换选项。
-        asset_dir: Mermaid 资源目录。
-        asset_prefix: 资源名前缀。
-        cleanup_paths: 待清理路径列表。
-        debug_dir: Mermaid 调试输出目录。
-        debug_stem: Mermaid 调试前缀。
 
     Returns:
         str: 预处理后的 Markdown 文本。
     """
     text = normalize_whitespace_and_units(text)
     text = preprocess_markdown_text(text)
-    return replace_mermaid_blocks(
-        text,
-        options,
-        asset_dir=asset_dir,
-        asset_prefix=asset_prefix,
-        cleanup_paths=cleanup_paths,
-        debug_dir=debug_dir,
-        debug_stem=debug_stem,
-    )
+    return replace_mermaid_blocks(text, options)
 
 
 def convert_md_to_html(
@@ -444,21 +425,27 @@ def convert_md_to_html(
     *,
     options: ConvertOptions | None = None,
 ) -> None:
-    """Convert Markdown into HTML using local Mermaid rendering when available.
+    """使用内联 SVG 将 Markdown 转换为 HTML。
 
     Args:
         input_md: 输入 Markdown 文件路径。
         output_html: 输出 HTML 文件路径。
-        options: HTML 转换选项。
+        options: HTML 转换选项，包含标准或语义化美化页面变体。
 
     Returns:
         None.
     """
     options = options or ConvertOptions()
+    if options.page_variant not in {"standard", "styled"}:
+        raise ValueError(f"Unsupported HTML page variant: {options.page_variant}")
+
     input_path = Path(input_md)
     output_path = Path(output_html)
     start_time = time.perf_counter()
-    logger.info("Starting Markdown to HTML conversion input=%s output=%s", input_path, output_path)
+    if options.page_variant == "styled":
+        logger.info("Starting Markdown to HTML conversion")
+    else:
+        logger.info("Starting Markdown to HTML conversion input=%s output=%s", input_path, output_path)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Markdown file does not exist: {input_path}")
@@ -466,39 +453,30 @@ def convert_md_to_html(
         warnings.warn(f"Input file does not look like Markdown: {input_path.name}", stacklevel=2)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_prefix = f".tmp_{output_path.stem}_{uuid.uuid4().hex}"
-    cleanup_paths: list[Path] = []
-
-    try:
-        md_content = read_text_with_fallback(input_path)
-        md_content = preprocess_markdown(
-            md_content,
-            options,
-            asset_dir=output_path.parent,
-            asset_prefix=temp_prefix,
-            cleanup_paths=cleanup_paths,
-            debug_dir=output_path.parent,
-            debug_stem=output_path.stem,
+    md_content = read_text_with_fallback(input_path)
+    md_content = preprocess_markdown(md_content, options)
+    full_html = HTML_TEMPLATE.format(
+        title=html.escape(options.title, quote=True),
+        content=render_markdown_html_fragment(md_content),
+        variant_css=STYLED_CSS_OVERLAY if options.page_variant == "styled" else "",
+    )
+    if options.page_variant == "styled":
+        full_html = decorate_report_html(full_html)
+    full_html = inline_chart_images(full_html, input_path.parent)
+    output_path.write_text(full_html, encoding="utf-8", newline="\n")
+    html_bytes = output_path.stat().st_size if output_path.exists() else 0
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    if options.page_variant == "styled":
+        logger.info(
+            "Completed Markdown to HTML conversion html_bytes=%s duration_ms=%.2f",
+            html_bytes,
+            duration_ms,
         )
-        md_content, math_spans = protect_math_spans(md_content)
-        html_body = markdown.markdown(
-            md_content,
-            extensions=["extra", "toc", "md_in_html"],
-            output_format="html5",
-        )
-        html_body = restore_math_spans(html_body, math_spans)
-        full_html = HTML_TEMPLATE.format(
-            title=html.escape(options.title, quote=True),
-            content=postprocess_html(html_body),
-        )
-        output_path.write_text(full_html, encoding="utf-8", newline="\n")
+    else:
         logger.info(
             "Completed Markdown to HTML conversion input=%s output=%s html_bytes=%s duration_ms=%.2f",
             input_path,
             output_path,
-            output_path.stat().st_size if output_path.exists() else 0,
-            (time.perf_counter() - start_time) * 1000,
+            html_bytes,
+            duration_ms,
         )
-    finally:
-        for path in cleanup_paths:
-            path.unlink(missing_ok=True)

@@ -16,6 +16,7 @@
 - `exclude_domains` 会过滤命中的域名及其子域名。
 - 每个文档或证据片段会获得稳定的 `doc_id` / `source_id`，用于后续引用、去重和 source store 回查。
 - 文档评估只接收 compact evidence，不应把完整 `original_content` 直接送入 evaluator Prompt。
+- 采集阶段的说明性结构化字段遵循报告语言；搜索 `queries` 和 `next_queries` 不强制遵循报告语言，可以选择更容易召回权威证据的源语言或混合语言。
 
 ## 关键代码路径
 
@@ -40,6 +41,7 @@
 - `tests/info_collector/algorithm/test_tool_log.py`
 - `tests/info_collector/test_info_collector.py`
 - `tests/info_collector/test_collector_execution_service.py`
+- `tests/info_collector/test_collector_query_prompts.py`
 
 ## 核心流程
 
