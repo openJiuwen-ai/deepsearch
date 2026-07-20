@@ -36,6 +36,15 @@ class TestSectionWritingStartNode:
             "section_task": "Section 1",
             "section_description": "Test section",
             "section_iscore": True,
+            "section_format_requirements": [
+                "Use a Markdown table",
+                "Columns: Product, Price, Risk",
+            ],
+            "section_local_contract": {
+                "section_focus": "product_comparison",
+                "allowed_dimensions": ["price", "risk"],
+                "is_final_decision_section": False,
+            },
             "config": {"test": "config"},
         }
 
@@ -51,6 +60,29 @@ class TestSectionWritingStartNode:
         assert section_context["section_idx"] == "1"
         assert section_context["report_task"] == "Test Report"
         assert section_context["section_task"] == "Section 1"
+        assert section_context["section_format_requirements"] == [
+            "Use a Markdown table",
+            "Columns: Product, Price, Risk",
+        ]
+        assert section_context["section_local_contract"] == {
+            "section_focus": "product_comparison",
+            "allowed_dimensions": ["price", "risk"],
+            "is_final_decision_section": False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_section_writing_contract_defaults(self):
+        node = SectionWritingStartNode()
+        session = Mock(spec=Session)
+        context = Mock(spec=ModelContext)
+
+        await node.invoke({"report_task": "", "config": {}}, session, context)
+
+        section_context = session.update_global_state.call_args[0][0][
+            "section_context"
+        ]
+        assert section_context["section_format_requirements"] == []
+        assert section_context["section_local_contract"] == {}
 
     @pytest.mark.asyncio
     async def test_section_writing_background_knowledge(self):
