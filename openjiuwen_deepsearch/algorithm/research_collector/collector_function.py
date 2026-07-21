@@ -134,6 +134,17 @@ async def execute_tool(tool_call: dict, agent_input: dict, tool_dict: dict, step
                              f"[COLLECTOR FUNCTION] ReAct Tool '{tool_name}' execute error: {e}")
         return processed_results
 
+    if tool_name not in ("web_search_tool", "local_search_tool"):
+        if LogManager.is_sensitive():
+            logger.info(f"section_idx: {section_idx} | "
+                        f"[COLLECTOR FUNCTION] Custom tool '{tool_name}' call finished. "
+                        f"result_count={len(processed_results)}")
+        else:
+            logger.info(f"section_idx: {section_idx} | step title {step_title} | "
+                        f"Collecting info for query: {query} | "
+                        f"[COLLECTOR FUNCTION] Custom tool '{tool_name}' call finished. "
+                        f"result_count={len(processed_results)}")
+
     if LogManager.is_sensitive():
         logger.info(f"section_idx: {section_idx} | "
                     f"[COLLECTOR FUNCTION] Finish ReAct Tool call.")

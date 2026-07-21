@@ -49,6 +49,7 @@ class SectionContext(SectionBaseContext):
     current_outline: Union[Outline, dict, str, None] = Field(default=None, description="当前章节大纲")
     section_task: str = Field(default="", description="章节任务")
     section_description: str = Field(default="", description="章节描述")
+    section_format_requirements: List[str] = Field(default_factory=list, description="章节级输出格式要求")
     section_iscore: bool = Field(default=False, description="是否为核心章节")
     report_task: str = Field(default="", description="报告任务")
     report_template: str = Field(default="", description="子报告模板")

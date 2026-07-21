@@ -36,16 +36,34 @@ Task description:
 - Query should ensure that the most current information is gathered. The current time is {{ CURRENT_TIME }}.
 - Do not produce more than {{ max_search_query_count }} queries.
 - For retrieval-needed steps, the allowed query count range is 1..{{ max_search_query_count }}.
-- Write your response in {{ language }}.
+- Query language is not restricted by the report language.
+- Write non-query JSON fields, such as "missing_evidence", in {{ language }}.
+- The strings inside "queries" are exempt from this output-language rule. Choose English, Chinese, another local language, or mixed-language wording based on which wording is most likely to retrieve authoritative evidence.
+- Separate display language from retrieval language:
+  - Keep `missing_evidence` in `{{ language }}`.
+  - For query objects with `search_engine_name` set to `"pubmed"` or `"arxiv"`, write `query` in English using academic terms, canonical paper-title keywords, biomedical terminology, algorithm names, benchmark names, or standard English abbreviations.
+  - For query objects with `search_engine_name` set to `""`, use the language most likely to retrieve authoritative sources for that evidence need.
+- For each query, also choose a secondary vertical search engine in `search_engine_name`.
+  - Use `"pubmed"` for medicine, clinical evidence, biology, drugs, disease, epidemiology, genes, proteins, or patient-related evidence.
+  - Use `"arxiv"` for AI, computer science, mathematics, statistics, physics, algorithms, machine learning, LLM, RAG, benchmarks, or preprint evidence.
+  - Use `""` for general web evidence such as official websites, news, policy, standards, company information, market data, or when no vertical source is appropriate.
+- `search_engine_name` is an additional vertical search engine. It does not replace the user's configured primary web search engine.
 
 ## Output Format
 - Return a JSON object with exactly these keys:
   - "missing_evidence": A list of verifiable evidence requirements for the current step.
-  - "queries": A list of search queries, each query is less than 5 keywords.
+  - "queries": A list of query objects. Each object contains:
+    - "query": A search query less than 5 keywords.
+    - "search_engine_name": One of "pubmed", "arxiv", or "".
 - Do not output explanations, rationale, markdown fences, or any extra keys.
 
 ## Example
 {
     "missing_evidence": ["specific verifiable evidence requirement for the current step"],
-    "queries": ["Tesla battery lifespan official"]
+    "queries": [
+        {
+            "query": "Tesla battery lifespan official",
+            "search_engine_name": ""
+        }
+    ]
 }

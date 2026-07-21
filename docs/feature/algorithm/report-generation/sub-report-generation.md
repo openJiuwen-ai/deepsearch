@@ -4,7 +4,7 @@
 
 本文档覆盖报告生成中的子报告生成能力，包括章节契约、资料分类输入、子报告 Markdown 生成、brief/professional 差异和 sidecar 生成。
 
-本文档不覆盖候选文档预筛、表格 caption 和最终服务端格式转换。
+本文档不覆盖候选文档预筛、信息维度矩阵文档选择、表格 caption 和最终服务端格式转换。
 
 ## 功能目的
 
@@ -15,6 +15,9 @@
 - 每个章节会生成独立子报告。
 - brief 报告和 professional 报告使用不同 Prompt 或不同段落策略。
 - 子报告标题会被清理编号，过深标题会被降级为列表项。
+- 子大纲生成只面向当前顶层章节；用户在当前 outline、章节标题或章节描述中指定的 subsection titles 会被精确保留。
+- key passages 只约束模型新增的具体事实、指标、案例、公司名和命名示例，不用于重命名或泛化用户指定的 subsection titles。
+- 子报告写作只输出当前顶层章节及其二级标题，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
 - 章节 sidecar 保存摘要、资料映射和局部契约，供后续用户反馈和报告流程复用。
 
 ## 关键代码路径
@@ -27,6 +30,7 @@
 
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_brief_markdown.md`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_summary.md`
 
@@ -40,11 +44,12 @@
 
 1. Reporter 读取 outline section、章节计划和 classified contents。
 2. 构建章节局部契约和资料摘要。
-3. 根据报告类型选择子报告 Prompt。
-4. LLM 生成章节 Markdown。
-5. 标题编号和过深标题被清理。
-6. 生成或更新 chapter sidecar。
-7. 子报告交给最终报告拼接。
+3. 信息维度矩阵文档选择：rationale 生成 → n-gram 粗筛 → 覆盖矩阵评估 → 贪心子模选择 → elbow 截断 → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。
+4. 根据报告类型选择子报告 Prompt。
+5. LLM 生成章节 Markdown。
+6. 标题编号和过深标题被清理。
+7. 生成或更新 chapter sidecar。
+8. 子报告交给最终报告拼接。
 
 ## 数据契约与依赖
 
@@ -81,4 +86,5 @@ uv run pytest tests/report/test_chapter_sidecar.py
 
 - [报告生成总览](../report-generation.md)
 - [候选文档预筛](./doc-prefilter.md)
+- [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)
 - [Prompt 模板系统](../prompt-template-system.md)

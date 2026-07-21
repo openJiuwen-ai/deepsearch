@@ -248,10 +248,14 @@ def tool_invoke_log_async(func):
         duration = time.time() - start_time
         result_str = repr(result)
         log_str = result_str[:100] + "..." if len(result_str) > 100 else result_str
+        try:
+            result_count = len(result)
+        except TypeError:
+            result_count = 1
         if LogManager.is_sensitive():
-            logger.info(f"[TOOL END] {function_name} | Tool result count: {len(result)} | Duration: {duration: .2f}s")
+            logger.info(f"[TOOL END] {function_name} | Tool result count: {result_count} | Duration: {duration: .2f}s")
         else:
-            logger.info(f"[TOOL END] {function_name} | Args: {args_text} | Tool result count: {len(result)} | "
+            logger.info(f"[TOOL END] {function_name} | Args: {args_text} | Tool result count: {result_count} | "
                         f"Result content: {log_str} | Duration: {duration: .2f}s")
 
         if stats_info_search:
@@ -263,7 +267,9 @@ def tool_invoke_log_async(func):
             if kwargs.get("query") and not LogManager.is_sensitive():
                 search_stat["query"] = kwargs.get("query")
 
-            if result and result.get("search_results") and isinstance(result.get("search_results"), list):
+            if (isinstance(result, dict) and 
+                result.get("search_results") and 
+                isinstance(result.get("search_results"), list)):
                 res_len_list = []
                 for search_result in result.get("search_results"):
                     res_len_list.append(len(search_result.get('content', '')))

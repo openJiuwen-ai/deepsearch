@@ -4,6 +4,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from openjiuwen.core.context_engine.base import ModelContext
@@ -40,6 +41,36 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 max_retries = Config().service_config.info_collector_max_retry_num
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DirectSearchRequest:
+    tool: Any
+    tool_name: str
+    query: str
+    search_engine_name: str
+    fallback_to_default: bool = True
+    retry_on_error: bool = True
+
+
+@dataclass(frozen=True)
+class VerticalSearchFallbackLog:
+    section_idx: int
+    step_title: str
+    search_engine_name: str
+    default_search_engine_name: str
+    query: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class VerticalSearchFailureDetailLog:
+    section_idx: int
+    step_title: str
+    operation: str
+    error: Any
+    extra_info: str
+    level: int = logging.INFO
 
 
 def _merge_source_store(
@@ -127,6 +158,7 @@ class InfoRetrievalNode(BaseNode):
                 "max_tool_call_turns_per_query": state.get("max_tool_call_turns_per_query", 2),
                 "search_method": state.get("search_method", "web"),
                 "web_search_engine_name": state.get("web_search_engine_name", None),
+                "secondary_web_search_engine_name": getattr(retrieval_query, "search_engine_name", ""),
                 "local_search_engine_name": state.get("local_search_engine_name", None),
                 "api_tools_config": state.get("api_tools_config", {}),
                 "research_intent": state.get("research_intent", {}),
@@ -282,54 +314,78 @@ class InfoRetrievalNode(BaseNode):
                 processed_results = []
             else:
                 processed_results = []
-                for retry_idx in range(max_retries):
-                    try:
-                        search_engine_name = state.get(f"{search_method}_search_engine_name")
-                        tool_call_args = {"query": query, "search_engine_name": search_engine_name}
-                        tool_result_raw = await tool_dict[tool_name].invoke(tool_call_args)
+                if search_method == "web":
+                    engine_names = self._web_search_engines_for_query(state)
+                    default_search_engine_name = str(
+                        state.get("web_search_engine_name") or SearchEngine.PETAL.value
+                    ).strip()
+                    fallback_to_default = default_search_engine_name not in engine_names
+                    raw_results = await asyncio.gather(*[
+                        self._direct_search_with_retry(
+                            DirectSearchRequest(
+                                tool=tool_dict[tool_name],
+                                tool_name=tool_name,
+                                query=query,
+                                search_engine_name=engine_name,
+                                fallback_to_default=fallback_to_default,
+                                retry_on_error=engine_name == default_search_engine_name,
+                            ),
+                            state,
+                        )
+                        for engine_name in engine_names
+                    ])
+                    for tool_result_raw in raw_results:
+                        if not tool_result_raw:
+                            continue
+                        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+                        processed_results.extend(process_tool_result(tool_name, tool_result_json, agent_input))
+                    if LogManager.is_sensitive():
+                        logger.info(f"section_idx: {section_idx} | "
+                                    f"[InfoRetrievalNode] Direct web calls completed, engines: {len(engine_names)}")
+                    else:
+                        logger.info(f"section_idx: {section_idx} | step title: {step_title} | "
+                                    f"[InfoRetrievalNode] Direct web calls for {engine_names}, results: "
+                                    f"{len(processed_results)}")
+                else:
+                    for retry_idx in range(max_retries):
+                        try:
+                            search_engine_name = state.get(f"{search_method}_search_engine_name")
+                            tool_call_args = {"query": query, "search_engine_name": search_engine_name}
+                            tool_result_raw = await tool_dict[tool_name].invoke(tool_call_args)
 
-                        if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
-                            error_msg = tool_result_raw.get("error", "")
+                            if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
+                                error_msg = tool_result_raw.get("error", "")
+                                current_try = retry_idx + 1
+                                record_llm_retry_log(
+                                    current_try=current_try, max_retries=max_retries,
+                                    section_idx=section_idx, step_title=step_title,
+                                    operation=f"direct call search tool '{tool_name}' returned error",
+                                    error=error_msg, extra_info=query,
+                                )
+                                if current_try < max_retries:
+                                    continue
+                                processed_results = []
+                                break
+
+                            tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+                            processed_results = process_tool_result(tool_name, tool_result_json, agent_input)
+                            break
+
+                        except Exception as e:
                             current_try = retry_idx + 1
                             record_llm_retry_log(
                                 current_try=current_try, max_retries=max_retries,
                                 section_idx=section_idx, step_title=step_title,
-                                operation=f"direct call search tool '{tool_name}' returned error",
-                                error=error_msg, extra_info=query,
+                                operation=f"direct call search tool '{tool_name}'",
+                                error=e, extra_info=query,
                             )
                             if current_try < max_retries:
                                 continue
-                            # 重试耗尽，返回空结果
                             processed_results = []
-                            break
-
-                        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
-                        processed_results = process_tool_result(tool_name, tool_result_json, agent_input)
-                        if LogManager.is_sensitive():
-                            logger.info(f"section_idx: {section_idx} | "
-                                        f"[InfoRetrievalNode] Direct tool call completed, results: "
-                                        f"{len(processed_results)}")
-                        else:
-                            logger.info(f"section_idx: {section_idx} | step title: {step_title} | "
-                                        f"[InfoRetrievalNode] Direct tool call for {tool_name}, results: "
-                                        f"{len(processed_results)}")
-                        break
-
-                    except Exception as e:
-                        current_try = retry_idx + 1
-                        record_llm_retry_log(
-                            current_try=current_try, max_retries=max_retries,
-                            section_idx=section_idx, step_title=step_title,
-                            operation=f"direct call search tool '{tool_name}'",
-                            error=e, extra_info=query,
-                        )
-                        if current_try < max_retries:
-                            continue
-                        # 重试耗尽，返回空结果
-                        processed_results = []
         else:
             # MCP/custom tools 或多工具复杂路由走 LLM tool-calling
             state, agent_input = await self._collector_llm(state, agent_input, tool_list, tool_dict)
+            agent_input = await self._run_secondary_web_search_if_needed(state, agent_input, tool_dict)
 
         web_record, local_record = [], []
         if len(agent_input["web_page_search_record"]) > 0:
@@ -358,6 +414,275 @@ class InfoRetrievalNode(BaseNode):
             "local_record": local_record,
             "search_query": query,
         }
+
+    @staticmethod
+    def _web_search_engines_for_query(state: dict) -> list[str]:
+        engines = [
+            state.get("web_search_engine_name") or SearchEngine.PETAL.value,
+            state.get("secondary_web_search_engine_name") or "",
+        ]
+        result = []
+        for engine in engines:
+            engine = str(engine or "").strip()
+            if engine and engine not in result:
+                result.append(engine)
+        return result
+
+    @staticmethod
+    def _agent_called_tool(agent_input: dict, tool_name: str) -> bool:
+        for message in agent_input.get("messages", []):
+            if isinstance(message, dict):
+                message_name = message.get("name")
+                tool_calls = message.get("tool_calls", [])
+            else:
+                message_name = getattr(message, "name", None)
+                tool_calls = getattr(message, "tool_calls", [])
+            if message_name == tool_name:
+                return True
+            if not isinstance(tool_calls, list):
+                continue
+            for tool_call in tool_calls:
+                if isinstance(tool_call, dict) and tool_call.get("name") == tool_name:
+                    return True
+        return False
+
+    async def _direct_search_with_retry(
+            self,
+            request: DirectSearchRequest,
+            state: dict,
+    ):
+        section_idx = state.get("section_idx", 0)
+        step_title = state.get("step_title", "")
+        default_search_engine_name = str(
+            state.get("web_search_engine_name") or SearchEngine.PETAL.value
+        ).strip()
+        retry_direct_search = object()
+
+        async def handle_search_failure(error: Any, reason: str, current_try: int):
+            should_fallback_to_default = self._should_fallback_to_default_search(
+                request.search_engine_name,
+                default_search_engine_name,
+            )
+            operation = f"direct call search tool '{request.tool_name}'"
+            if reason == "returned_error":
+                operation = f"{operation} returned error"
+
+            if request.fallback_to_default and should_fallback_to_default:
+                self._log_vertical_search_fallback(
+                    VerticalSearchFallbackLog(
+                        section_idx=section_idx,
+                        step_title=step_title,
+                        search_engine_name=request.search_engine_name,
+                        default_search_engine_name=default_search_engine_name,
+                        query=request.query,
+                        reason=reason,
+                    )
+                )
+                fallback_operation = (
+                    f"{operation}, fallback to default search engine "
+                    f"'{default_search_engine_name}'"
+                )
+                if reason == "exception":
+                    fallback_operation = (
+                        f"{operation} failed, fallback to default search engine "
+                        f"'{default_search_engine_name}'"
+                    )
+                self._log_vertical_search_failure_detail(
+                    VerticalSearchFailureDetailLog(
+                        section_idx=section_idx,
+                        step_title=step_title,
+                        operation=fallback_operation,
+                        error=error,
+                        extra_info=f"{request.search_engine_name}: {request.query}",
+                        level=logging.WARNING,
+                    )
+                )
+                return await self._direct_search_with_retry(
+                    DirectSearchRequest(
+                        tool=request.tool,
+                        tool_name=request.tool_name,
+                        query=request.query,
+                        search_engine_name=default_search_engine_name,
+                    ),
+                    state,
+                )
+
+            if not request.retry_on_error and should_fallback_to_default:
+                self._log_vertical_search_failed_fast(
+                    section_idx,
+                    step_title,
+                    request.search_engine_name,
+                    request.query,
+                    reason,
+                )
+                return None
+
+            record_llm_retry_log(
+                current_try=current_try,
+                max_retries=max_retries if request.retry_on_error else current_try,
+                section_idx=section_idx,
+                step_title=step_title,
+                operation=operation,
+                error=error,
+                extra_info=f"{request.search_engine_name}: {request.query}",
+            )
+            if request.retry_on_error and current_try < max_retries:
+                return retry_direct_search
+            return None
+
+        for retry_idx in range(max_retries):
+            current_try = retry_idx + 1
+            try:
+                tool_result_raw = await request.tool.invoke({
+                    "query": request.query,
+                    "search_engine_name": request.search_engine_name,
+                })
+                if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
+                    error_msg = tool_result_raw.get("error", "")
+                    failure_result = await handle_search_failure(error_msg, "returned_error", current_try)
+                    if failure_result is retry_direct_search:
+                        continue
+                    return failure_result
+                return tool_result_raw
+            except Exception as e:
+                failure_result = await handle_search_failure(e, "exception", current_try)
+                if failure_result is retry_direct_search:
+                    continue
+                return failure_result
+
+    @staticmethod
+    def _should_fallback_to_default_search(search_engine_name: str, default_search_engine_name: str) -> bool:
+        search_engine_name = str(search_engine_name or "").strip()
+        default_search_engine_name = str(default_search_engine_name or "").strip()
+        return bool(
+            search_engine_name
+            and default_search_engine_name
+            and search_engine_name != default_search_engine_name
+        )
+
+    @staticmethod
+    def _log_vertical_search_failed_fast(
+            section_idx: int,
+            step_title: str,
+            search_engine_name: str,
+            query: str,
+            reason: str,
+    ) -> None:
+        if LogManager.is_sensitive():
+            logger.info(
+                "section_idx: %s | [InfoRetrievalNode] Vertical search failed fast. "
+                "engine=%s reason=%s",
+                section_idx,
+                search_engine_name,
+                reason,
+            )
+        else:
+            logger.info(
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] Vertical search failed fast. "
+                "engine=%s query=%s reason=%s",
+                section_idx,
+                step_title,
+                search_engine_name,
+                query,
+                reason,
+            )
+
+    @staticmethod
+    def _log_vertical_search_failure_detail(
+            failure_log: VerticalSearchFailureDetailLog,
+    ) -> None:
+        log_method = logger.log
+        if LogManager.is_sensitive():
+            log_method(
+                failure_log.level,
+                "section_idx: %s | [InfoRetrievalNode] %s",
+                failure_log.section_idx,
+                failure_log.operation,
+            )
+        else:
+            log_method(
+                failure_log.level,
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] %s: %s | Extra Info: %s",
+                failure_log.section_idx,
+                failure_log.step_title,
+                failure_log.operation,
+                failure_log.error,
+                failure_log.extra_info,
+                exc_info=isinstance(failure_log.error, BaseException),
+            )
+
+    @staticmethod
+    def _log_vertical_search_fallback(
+            fallback_log: VerticalSearchFallbackLog,
+    ) -> None:
+        if LogManager.is_sensitive():
+            logger.info(
+                "section_idx: %s | [InfoRetrievalNode] Vertical search fallback to default. "
+                "engine=%s default_engine=%s reason=%s",
+                fallback_log.section_idx,
+                fallback_log.search_engine_name,
+                fallback_log.default_search_engine_name,
+                fallback_log.reason,
+            )
+        else:
+            logger.info(
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] Vertical search fallback to default. "
+                "engine=%s default_engine=%s query=%s reason=%s",
+                fallback_log.section_idx,
+                fallback_log.step_title,
+                fallback_log.search_engine_name,
+                fallback_log.default_search_engine_name,
+                fallback_log.query,
+                fallback_log.reason,
+            )
+
+    async def _run_secondary_web_search_if_needed(
+            self,
+            state: dict,
+            agent_input: dict,
+            tool_dict: dict,
+    ) -> dict:
+        secondary_engine = str(state.get("secondary_web_search_engine_name") or "").strip()
+        primary_engine = str(state.get("web_search_engine_name") or SearchEngine.PETAL.value).strip()
+        if not secondary_engine or secondary_engine == primary_engine:
+            return agent_input
+
+        tool_name = "web_search_tool"
+        if tool_name not in tool_dict:
+            return agent_input
+
+        query = state.get("search_query", state.get("step_title", ""))
+        fallback_to_default = not self._agent_called_tool(agent_input, tool_name)
+        tool_result_raw = await self._direct_search_with_retry(
+            DirectSearchRequest(
+                tool=tool_dict[tool_name],
+                tool_name=tool_name,
+                query=query,
+                search_engine_name=secondary_engine,
+                fallback_to_default=fallback_to_default,
+                retry_on_error=False,
+            ),
+            state,
+        )
+        if not tool_result_raw:
+            return agent_input
+
+        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+        process_tool_result(tool_name, tool_result_json, agent_input)
+        if LogManager.is_sensitive():
+            logger.info(
+                "section_idx: %s | [InfoRetrievalNode] Secondary web search completed.",
+                state.get("section_idx", 0),
+            )
+        else:
+            logger.info(
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] Secondary web search completed. "
+                "engine=%s",
+                state.get("section_idx", 0),
+                state.get("step_title", ""),
+                secondary_engine,
+            )
+        return agent_input
 
     async def _invoke_llm_with_retry(self, tool_prompt: list, tool_list: list, state: dict):
         section_idx = state.get("section_idx", 0)

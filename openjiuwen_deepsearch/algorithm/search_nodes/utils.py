@@ -155,12 +155,16 @@ def ensure_api_keys_bytearray(agent_config: dict) -> dict:
         k = agent_config["llm_config"].get("api_key")
         if k is not None:
             agent_config["llm_config"]["api_key"] = to_ba(k)
-    for key in ("jina_api_key", "serper_api_key", "embedder_api_key"):
+    for key in ("embedder_api_key",):
         if key in agent_config and agent_config.get(key) is not None:
             agent_config[key] = to_ba(agent_config[key])
         search_workflow_milvus_config = agent_config.get("search_workflow_milvus_config", {})
         if search_workflow_milvus_config and search_workflow_milvus_config.get(key) is not None:
             search_workflow_milvus_config[key] = to_ba(search_workflow_milvus_config[key])
+
+    web_fetch_provider_config = agent_config.get("web_fetch_provider_config")
+    if isinstance(web_fetch_provider_config, dict):
+        convert_api_keys_recursive(web_fetch_provider_config)
 
     swc = agent_config.get("search_workflow")
     if isinstance(swc, dict):

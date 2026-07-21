@@ -124,6 +124,32 @@
 - 搜索工具来源于 `web_search_context`、`local_search_context` 和 runtime API 工具配置。
 - 网页正文增强节点只更新匹配 doc 的正文证据和证据引用，并同步 `history_queries` 供最终报告读取；证据保持来源语言，不承担报告本地化；不修改原始 URL、标题、评分或 evaluator 结果。
 
+### 学术垂直搜索 Query 契约
+
+- 初始 query 生成支持结构化 query item：每个 item 包含 `query` 和 `search_engine_name`。`search_engine_name`
+  是 query 级 secondary vertical web engine，只能为 `pubmed`、`arxiv` 或空字符串，不替代用户配置的 primary
+  web search engine。
+- `search_engine_name=""` 表示明确不使用垂直源；query object 缺少该字段或旧格式字符串 query 时，collector 会按
+  query 关键词启发式选择 `pubmed`、`arxiv` 或空值以保持向后兼容。
+- 对 `pubmed` 和 `arxiv` 的 query，query 生成 Prompt 要求使用英文论文检索词、标准学术术语或 benchmark/算法名称；
+  `missing_evidence` 等面向用户和报告链路的字段仍使用 collector 输入语言。
+- direct web 分支会对每个 query 执行 primary web engine，并在存在 secondary vertical engine 且与 primary 不同时追加执行。
+  当 `info_collector_search_method=all` 或配置了 `api_tools_config.collector_tools` 进入 LLM tool-calling 分支时，
+  LLM 工具调用结束后也会确定性补跑该 query 的 secondary vertical engine。
+
+### 学术垂直搜索失败降级流程
+
+- direct web 分支中，primary web engine 和 secondary vertical engine 会并行执行。secondary vertical engine 失败时，不会重试
+  secondary，也不会再次 fallback 调用 primary，只记录 fail-fast 事件并保留 primary 结果。
+- LLM tool-calling 分支中，LLM 的 `web_search_tool` 调用始终使用 primary web engine。LLM 工具调用结束后，collector
+  才根据 query item 的 `search_engine_name` 补跑 secondary vertical engine。如果本轮 LLM 已调用过 `web_search_tool`，该 secondary
+  失败时不 fallback 到 primary，避免对同一 query 重复调用 primary；如果本轮 LLM 只调用了 local/custom 工具或未调用
+  `web_search_tool`，该 secondary 失败时会 fallback 到 primary web engine。
+- 单独调用 non-default vertical engine 时，如果请求启用可降级策略，则 PubMed/arXiv 返回 error 或抛出异常后，collector 记录
+  vertical fallback 事件，并使用默认 web engine 对同一 query 重新执行一次。
+- PubMed/arXiv 返回非法 XML、错误 XML 或非预期 root 时，wrapper 会抛出搜索响应类异常；`run_web_search` 会将其转换为
+  `error` 结果，collector 再根据上述策略执行 fail-fast 或 primary fallback。
+
 ## 边界与错误处理
 
 - collector 子图使用独立 workflow session，依赖驱动并发时避免共享子图状态。
@@ -142,6 +168,9 @@
 - `uv run pytest tests/info_collector/test_webpage_enrichment.py`
 - `uv run pytest tests/info_collector/algorithm/test_tool_log.py`
 - 网页增强测试覆盖 canonical URL 去重、Prompt 消息隔离、输出语言、整体 fetch deadline、PDF/Jina fallback、质量门禁、敏感日志脱敏、历史 query/最终报告同步和并发异常隔离。
+- `uv run pytest tests/info_collector/test_academic_search_routing.py`
+- `uv run pytest tests/info_collector/test_graph_builder.py::test_validate_query_count_accepts_structured_query_items`
+- `uv run pytest tests/info_collector/test_graph_builder.py::test_collector_query_prompt_contract_uses_dynamic_max_query_count`
 - 修改 runtime API 工具参与采集时，补充运行 `uv run pytest tests/tools/test_runtime_api.py`。
 - 修改 web/local 工具映射时，补充运行 `uv run pytest tests/tools/test_web_search.py tests/tools/search_api/`。
 

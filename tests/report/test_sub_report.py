@@ -14,7 +14,8 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
 from openjiuwen_deepsearch.algorithm.report.report import Reporter, _get_classified_infos
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
 
 
 def _classified_doc(title: str, url: str, source_id: str, relevance: float) -> dict:
@@ -119,6 +120,178 @@ def test_report_package_exports_compact_doc_info_helpers():
 
     assert package_build_compact is build_compact_classify_doc_infos_text
     assert compact_doc_info.build_compact_classify_doc_infos_text is build_compact_classify_doc_infos_text
+
+
+@pytest.mark.asyncio
+async def test_generate_sub_section_outline_calls_llm_with_preservation_context():
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "language": ENGLISH,
+            "section_idx": "2",
+            "has_template": False,
+            "report_task": (
+                "Part Two should be organized by five categories: "
+                "1. Program Design Flaws 2. Elite Capture 3. Targeting Errors"
+            ),
+            "origin_query": (
+                "Part Two should be organized by five categories: "
+                "1. Program Design Flaws 2. Elite Capture 3. Targeting Errors"
+            ),
+            "current_outline": "1. Context\n2. Part Two",
+            "section_task": "2 Part Two",
+            "section_description": (
+                "Use Program Design Flaws, Elite Capture, and Targeting Errors as exact subsection titles."
+            ),
+            "sub_section_core_content": [
+                {"title": "evidence", "key_passages": ["Program design evidence."]}
+            ],
+        }
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+        ) as mock_ainvoke, patch.object(
+            reporter,
+            "_generate_sub_report_sidecar",
+            new_callable=AsyncMock,
+            return_value={"sidecar": None, "summary": "summary", "warning": ""},
+        ):
+            mock_ainvoke.return_value = {
+                "content": (
+                    "2 Part Two\n"
+                    "2.1 Program Design Flaws\n"
+                    "2.2 Elite Capture\n"
+                    "2.3 Targeting Errors"
+                )
+            }
+
+            result = await reporter._generate_sub_section_outline(current_inputs)
+
+        assert result["rs_success"] is True
+        mock_ainvoke.assert_awaited_once()
+        _, kwargs = mock_ainvoke.call_args
+        assert kwargs["agent_name"] == AgentLlmName.SUB_REPORTER_OUTLINE.value
+        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
+        assert "User-Specified Subsection Preservation" in rendered_prompt
+        assert "Program Design Flaws" in rendered_prompt
+        assert "Elite Capture" in rendered_prompt
+        assert "Targeting Errors" in rendered_prompt
+        assert "User-specified subsection titles are authoritative" in rendered_prompt
+        assert "boundary applies only to model-added concrete wording" in rendered_prompt
+        assert "must not override" in rendered_prompt
+        assert "user-specified subsection titles" in rendered_prompt
+    finally:
+        llm_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_write_subsection_reports_calls_llm_with_output_constraint_context():
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "language": ENGLISH,
+            "section_idx": "3",
+            "section_task": "3 Program Review",
+            "section_description": "Create a table and enumerate each program separately.",
+            "section_format_requirements": [
+                "Create a summary table with columns: Country, Program Name, Program Type, Program Description.",
+                "For each program, specify who was excluded and why.",
+            ],
+            "origin_query": (
+                "Create a summary table with columns: Country, Program Name, Program Type, "
+                "Program Description. For each program, specify who was excluded and why. "
+                "Do not use https://blocked.example/article."
+            ),
+            "report_task": "Evaluate social protection programs.",
+            "current_outline": "1 Context\n2 Failure Categories\n3 Program Review",
+            "sub_section_outline": "3 Program Review\n3.1 Project Summary",
+            "current_subsection": "3.1 Project Summary",
+            "classified_content": [
+                {
+                    "index": 1,
+                    "doc_time": "2023",
+                    "original_content": (
+                        "India runs Program A as a cash transfer program. Some migrant workers were excluded "
+                        "because registration required local documents."
+                    ),
+                    "scores": {"authority": 8, "relevance": 9, "answerability": 8, "data_density": 7},
+                }
+            ],
+            "sub_section_references": [],
+            "sub_report_background_knowledge": [],
+            "report_type": "professional",
+            "paragraph_style": "detailed",
+            "visualization_enable": False,
+        }
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+        ) as mock_ainvoke, patch.object(
+            reporter,
+            "_generate_sub_report_sidecar",
+            new_callable=AsyncMock,
+            return_value={"sidecar": None, "summary": "summary", "warning": ""},
+        ):
+            mock_ainvoke.return_value = {
+                "content": (
+                    "# 3 Program Review\n"
+                    "## 3.1 Project Summary\n"
+                    "| Country | Program Name | Program Type | Program Description |\n"
+                    "|---|---|---|---|\n"
+                    "| India | Program A | Cash transfer | Registration required local documents [citation:1]. |"
+                )
+            }
+
+            result = await reporter._write_subsection_reports(current_inputs)
+
+        assert result["success"] is True
+        mock_ainvoke.assert_awaited_once()
+        _, kwargs = mock_ainvoke.call_args
+        assert kwargs["agent_name"] == AgentLlmName.SUB_REPORTER.value
+        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
+        assert "Authoritative Writing Context" in rendered_prompt
+        assert "User Output Constraint Preservation" in rendered_prompt
+        assert "Create a summary table with columns" in rendered_prompt
+        assert "Country, Program Name, Program Type, Program Description" in rendered_prompt
+        assert "# Original User Query" not in rendered_prompt
+        assert "# Current Top-Level Section" in rendered_prompt
+        assert "# Current Chapter Outline" in rendered_prompt
+        assert "# Collected Evidence" in rendered_prompt
+        assert "Authoritative Writing Context" in rendered_prompt
+        assert "format_requirements" in rendered_prompt
+        assert "If the user requested a table, output a Markdown table" in rendered_prompt
+        assert "If the user specified table columns, use those column names exactly" in rendered_prompt
+        assert "Do not collapse required items into a general summary paragraph" in rendered_prompt
+    finally:
+        llm_context.reset(token)
+
+
+def test_build_compact_classify_doc_infos_text_zero_based():
+    """Coverage-matrix flow uses start=0 so 'Document 0' maps to 'doc_0'."""
+    output = build_compact_classify_doc_infos_text(
+        [{"url": "https://example.com/a", "title": "Doc A", "key_passages": []}],
+        start=0,
+    )
+    assert "Document 0:" in output
+    assert "Document 1:" not in output
+
+
+def test_coverage_matrix_formatter_output_matches_prompt_keys():
+    """Round-trip: formatter start=0 output must align with prompt's doc_0-based keys."""
+    docs = [
+        {"url": "https://example.com/a", "title": "Doc A", "key_passages": ["p1"]},
+        {"url": "https://example.com/b", "title": "Doc B", "key_passages": ["p2"]},
+    ]
+    text = build_compact_classify_doc_infos_text(docs, start=0)
+    # Prompt expects doc_0, doc_1 ... so input must number from 0
+    for i in range(len(docs)):
+        assert f"Document {i}:" in text
+    # Must NOT contain 1-based numbering when start=0
+    assert f"Document {len(docs)}:" not in text
 
 
 def test_format_key_passage_block_only_outputs_passages():
@@ -712,7 +885,11 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     async def mock_ainvoke_llm_with_stats(llm, messages, llm_type: str = "basic", agent_name="AI", schema=None,
                                           tools=None, need_stream_out=False):
         # 遍历 messages 里的 dict，检查 content 字段
-        if any("classification" in msg.get("content", "") for msg in messages):
+        if any("content analyst" in msg.get("content", "").lower() for msg in messages):
+            return {"content": '{"coverage_matrix": {"doc_0": {"rationale_1": 0.8, "rationale_2": 0.5}}, "reliability_scores": {"doc_0": 0.75}, "noise_scores": {"doc_0": 0.2}}'}
+        elif any("research analyst" in msg.get("content", "").lower() for msg in messages):
+            return {"content": '{"rationales": [{"id": "rationale_1", "description": "企业经营状况分析"}, {"id": "rationale_2", "description": "行业竞争格局"}]}'}
+        elif any("classification" in msg.get("content", "") for msg in messages):
             user_content = next(msg.get("content", "") for msg in messages if msg.get("role") == "user")
             assert "url: fake_url" in user_content
             assert "title: XX有限公司 - 企业详情" in user_content
@@ -798,105 +975,8 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     assert current_inputs["sub_report_chapter_sidecar"].chapter_summary == "经营与行业摘要"
 
 
-@pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_classify_doc_infos_returns_selected_url_list(mock_llm_cls):
-    reporter = Reporter("basic")
-    reporter._classify_with_llm = AsyncMock(
-        return_value=(True, '{"chapter": "企业经营与行业分析", "selected_url_list": ["fake_url"]}')
-    )
-    current_inputs = {
-        "section_idx": 3,
-        "section_task": "企业经营与行业分析",
-        "doc_infos": [
-            {
-                "title": "XX有限公司 - 企业详情",
-                "url": "fake_url",
-                "original_content": "fake original_content",
-            }
-        ],
-        "classify_doc_infos_single_time_num": 60,
-        "classify_doc_infos_res_top_k_num": 10,
-    }
-
-    success, classified_content = await reporter._classify_doc_infos(current_inputs)
-
-    assert success is True
-    assert classified_content == {"selected_url_list": ["fake_url"]}
-
-
-@pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_classify_doc_infos_preserves_llm_url_order(mock_llm_cls):
-    reporter = Reporter("basic")
-    selected_urls = ["https://example.com/order/2", "https://example.com/order/0", "https://example.com/order/1"]
-    reporter._classify_with_llm = AsyncMock(
-        return_value=(
-            True,
-            json.dumps({"chapter": "chapter", "selected_url_list": selected_urls}),
-        )
-    )
-
-    docs = [_report_doc(idx, url=url) for idx, url in enumerate(selected_urls)]
-
-    success, classified_content = await reporter._classify_doc_infos({
-        "section_idx": 3,
-        "section_task": "企业经营与行业分析",
-        "doc_infos": docs,
-        "classify_doc_infos_single_time_num": 60,
-        "classify_doc_infos_res_top_k_num": len(selected_urls),
-        "classify_doc_infos_prefilter_multiplier": 5,
-    })
-
-    assert success is True
-    assert classified_content == {"selected_url_list": selected_urls}
-
-
-@pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_classify_doc_infos_prefilters_and_keeps_same_url_different_content(mock_llm_cls):
-    reporter = Reporter("basic")
-    seen_batch_sizes = []
-
-    async def fake_classify(current_inputs, section_task, batch):
-        seen_batch_sizes.append(len(batch))
-        same_url_docs = [doc for doc in batch if doc["url"] == "https://example.com/same"]
-        assert len(same_url_docs) == 2
-        return True, '{"selected_url_list": ["https://example.com/same"]}'
-
-    reporter._classify_with_llm = AsyncMock(side_effect=fake_classify)
-    docs = []
-    for idx in range(80):
-        docs.append({
-            "title": f"doc-{idx}",
-            "url": f"https://example.com/{idx}",
-            "original_content": f"content-{idx}",
-            "plan_idx": 0,
-            "step_idx": idx % 4,
-            "scores": {"relevance": idx % 10, "answerability": 9, "authority": 8, "data_density": 7},
-        })
-    docs[0]["url"] = "https://example.com/same"
-    docs[0]["original_content"] = "variant A"
-    docs[0]["scores"]["relevance"] = 10
-    docs[1]["url"] = "https://example.com/same"
-    docs[1]["original_content"] = "variant B"
-    docs[1]["scores"]["relevance"] = 10
-
-    success, classified_content = await reporter._classify_doc_infos({
-        "section_idx": 3,
-        "section_task": "企业经营与行业分析",
-        "doc_infos": docs,
-        "classify_doc_infos_single_time_num": 60,
-        "classify_doc_infos_res_top_k_num": 10,
-        "classify_doc_infos_prefilter_multiplier": 5,
-    })
-
-    assert success is True
-    assert classified_content == {"selected_url_list": ["https://example.com/same"]}
-    assert seen_batch_sizes == [50]
-
-
-def test_get_classified_infos_returns_all_distinct_content_variants_for_selected_url():
+def test_get_classified_infos_returns_all_selected_distinct_variants():
+    """selected_docs with two different source_id variants under same URL: both kept."""
     doc_infos = [
         {
             "title": "A",
@@ -912,11 +992,11 @@ def test_get_classified_infos_returns_all_distinct_content_variants_for_selected
         },
         {"title": "B", "url": "https://example.com/other", "original_content": "other"},
     ]
+    # Matrix selected first two variants (different content -> different source_key, both kept)
+    selected_docs = [doc_infos[0], doc_infos[1]]
+    marginal_values = [0.6, 0.5]
 
-    classified_infos, classified_doc_infos = _get_classified_infos(
-        doc_infos,
-        ["https://example.com/same"],
-    )
+    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
 
     assert classified_infos["references"] == ["[A](https://example.com/same)"]
     assert classified_infos["core_content_list"] == [
@@ -927,6 +1007,7 @@ def test_get_classified_infos_returns_all_distinct_content_variants_for_selected
 
 
 def test_get_classified_infos_deduplicates_same_content_without_source_id():
+    """selected_docs with two same-content variants (no source_id): keep only high-marginal-value one."""
     doc_infos = [
         {
             "title": "A low",
@@ -943,26 +1024,28 @@ def test_get_classified_infos_deduplicates_same_content_without_source_id():
             "scores": {"relevance": 9},
         },
     ]
+    # Matrix selected two variants (same content, no source_id -> same source_key, dedup keeps high mv)
+    selected_docs = [doc_infos[0], doc_infos[1]]
+    marginal_values = [0.1, 0.9]
 
-    classified_infos, classified_doc_infos = _get_classified_infos(
-        doc_infos,
-        ["https://example.com/same"],
-    )
+    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
 
     assert classified_infos["core_content_list"] == ["Document 1 key passages:\n- high passage"]
     assert classified_doc_infos == [doc_infos[1]]
 
 
 def test_get_classified_infos_keeps_top10_source_ids_by_score():
+    """selected_docs with 12 variants, max_count=10: keep top 10 by marginal_value."""
     doc_infos = [
         _classified_doc(f"doc-{idx}", "https://example.com/same", f"source-{idx}", idx * 0.8)
         for idx in range(12)
     ]
+    selected_docs = list(doc_infos)  # matrix selected all 12
+    # marginal_value positively correlated with idx, ensuring top10 is source-2..source-11
+    marginal_values = [idx * 0.1 for idx in range(12)]
 
     classified_infos, classified_doc_infos = _get_classified_infos(
-        doc_infos,
-        ["https://example.com/same"],
-        max_source_id_count=10,
+        selected_docs, marginal_values, max_source_id_count=10
     )
 
     assert len(classified_doc_infos) == 10
@@ -975,16 +1058,17 @@ def test_get_classified_infos_keeps_top10_source_ids_by_score():
 
 
 def test_get_classified_infos_keeps_each_selected_url_before_filling_variants():
+    """selected_docs with a-0, a-1, b, max_count=2: pick one representative per URL first."""
     doc_infos = [
         _classified_doc("A-0", "https://example.com/a", "a-0", 10),
         _classified_doc("A-1", "https://example.com/a", "a-1", 9),
         _classified_doc("B", "https://example.com/b", "b-0", 1),
     ]
+    selected_docs = [doc_infos[0], doc_infos[1], doc_infos[2]]
+    marginal_values = [0.9, 0.8, 0.1]
 
     classified_infos, classified_doc_infos = _get_classified_infos(
-        doc_infos,
-        ["https://example.com/a", "https://example.com/b"],
-        max_source_id_count=2,
+        selected_docs, marginal_values, max_source_id_count=2
     )
 
     assert [doc["url"] for doc in classified_doc_infos] == ["https://example.com/a", "https://example.com/b"]
@@ -994,39 +1078,12 @@ def test_get_classified_infos_keeps_each_selected_url_before_filling_variants():
     ]
 
 
-@pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_classify_doc_infos_fallbacks_when_prefilter_result_returns_empty_urls(mock_llm_cls):
-    reporter = Reporter("basic")
-    calls = []
+def test_get_classified_infos_with_empty_selected_docs_returns_empty():
+    """Empty selected_docs returns empty."""
+    classified_infos, classified_doc_infos = _get_classified_infos([], [])
 
-    async def fake_classify(current_inputs, section_task, batch):
-        calls.append(len(batch))
-        if len(calls) == 1:
-            return True, '{"selected_url_list": []}'
-        return True, '{"selected_url_list": ["https://example.com/1"]}'
-
-    reporter._classify_with_llm = AsyncMock(side_effect=fake_classify)
-
-    success, classified_content = await reporter._classify_doc_infos({
-        "section_idx": 3,
-        "section_task": "企业经营与行业分析",
-        "doc_infos": [
-            {
-                "title": "doc",
-                "url": "https://example.com/1",
-                "original_content": "content",
-                "scores": {"relevance": 9, "answerability": 9, "authority": 9, "data_density": 9},
-            }
-        ],
-        "classify_doc_infos_single_time_num": 60,
-        "classify_doc_infos_res_top_k_num": 10,
-        "classify_doc_infos_prefilter_multiplier": 5,
-    })
-
-    assert success is True
-    assert classified_content == {"selected_url_list": ["https://example.com/1"]}
-    assert calls == [1, 1]
+    assert classified_infos == {}
+    assert classified_doc_infos == []
 
 
 @pytest.mark.asyncio

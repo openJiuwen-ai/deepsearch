@@ -90,7 +90,7 @@ HTTP/1.1 204 No Content
 - `run_id`（`str | null`，可选）：不传则服务端生成 UUID。
 - `conversation_id`（`str | null`，可选）：不传则服务端生成 UUID（用于 API 生命周期关联）。
 - `tool_map`（`"search_fetch" | "retrieve"`，默认取自 `PerQuestionParams`）。
-- `jina_api_key` / `serper_api_key`（当 `tool_map="search_fetch"` 时必填）。
+- `web_fetch_provider_config` 和 `web_search_engine_config`（`tool_map="search_fetch"` 时必须同时提供）。其中 `web_fetch_provider_config.provider_name` 必须显式设置，v1 支持 `jina`。
 - `milvus`（`object`，可选）：Milvus/Embedding 配置；当 `tool_map="retrieve"` 时要求 embedder key/base URL。
 - `search_workflow_per_question_params`（`object`，可选）：浅覆盖参数，会按 `PerQuestionParams` 校验。
 
@@ -102,7 +102,7 @@ HTTP/1.1 204 No Content
 
 **错误**：
 - `409 Conflict`：`run_id` 已在运行中。
-- `422 Unprocessable Entity`：参数校验失败（如缺少工具所需 key、覆盖字段非法）。
+- `422 Unprocessable Entity`：参数校验失败（如缺少可解析的 search/fetch 配置、fetch provider 不受支持、覆盖字段非法）。
 
 **Telemetry 事件“分块”含义（当前 DeepSearch telemetry JSON 事件类型）**：
 
@@ -136,8 +136,16 @@ HTTP/1.1 204 No Content
     "extension": {}
   },
   "tool_map": "search_fetch",
-  "jina_api_key": "jina_***",
-  "serper_api_key": "serper_***",
+  "web_fetch_provider_config": {
+    "provider_name": "jina",
+    "api_key": "jina_***",
+    "base_url": "",
+    "extension": {}
+  },
+  "web_search_engine_config": {
+    "search_engine_name": "serper",
+    "search_api_key": "serper_***"
+  },
   "search_workflow_per_question_params": {
     "time_limit": 300,
     "max_workers": 2

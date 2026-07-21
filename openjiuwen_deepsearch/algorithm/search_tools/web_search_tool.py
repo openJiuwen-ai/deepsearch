@@ -1,13 +1,17 @@
 import asyncio
+import contextvars
 import json
 import logging
 import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
-import requests
+from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
+    get_web_search_api_wrapper,
+    run_web_search,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +65,7 @@ class WebSearch:
     _file_lock = asyncio.Lock()
 
     def __init__(self, config: Optional[dict]) -> None:
-        if isinstance(config.get("serper_api_key", None), (bytes, bytearray)):
-            try:
-                self.serper_api_key = config.get("serper_api_key", None).decode("utf-8")
-            except Exception:
-                self.serper_api_key = str(config.get("serper_api_key", None))
-        else:
-            self.serper_api_key = config.get("serper_api_key", None)
+        config = config or {}
         self.web_search_log_file = config.get(
             "web_search_log_file", "gnosis/tool_log/web_search_log.jsonl"
         )
@@ -88,8 +86,9 @@ class WebSearch:
             in_loop = False
         if not in_loop:
             return asyncio.run(self._acall_impl(params))
+        context = contextvars.copy_context()
         with ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, self._acall_impl(params)).result()
+            return pool.submit(context.run, asyncio.run, self._acall_impl(params)).result()
 
     async def _acall_impl(self, params: Union[str, dict]) -> str:
         if not isinstance(params, dict) or "query" not in params:
@@ -128,74 +127,91 @@ class WebSearch:
         if cached is not None:
             return cached
 
-        result = await asyncio.to_thread(self._execute_query, query)
+        result = await self._execute_query(query)
 
         if log_enabled:
             await self._write_log(query, result)
 
         return result
 
-    def _execute_query(self, query: str) -> str:
-        endpoint = "https://google.serper.dev/search"
-        headers = {
-            "X-API-KEY": self.serper_api_key,
-            "Content-Type": "application/json",
-        }
+    async def _execute_query(self, query: str) -> str:
+        search_engine_name, api_wrapper = get_web_search_api_wrapper()
+        if not search_engine_name or api_wrapper is None:
+            return (
+                f'No usable results for query "{query}". Error: '
+                "Active web search engine is not initialized."
+            )
 
-        payload = self._build_payload(query)
-        last_error: Optional[str] = None
+        result = await run_web_search(query, search_engine_name)
+        if not isinstance(result, dict):
+            return f'No usable results for query "{query}".'
 
-        for attempt in range(5):
-            try:
-                resp = requests.post(
-                    endpoint,
-                    headers=headers,
-                    json=payload,
-                    timeout=20,
-                )
-                if resp.ok:
-                    return WebSearch._format_output(query, resp.json())
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-            except Exception as exc:
-                last_error = str(exc)
+        error = str(result.get("error") or "").strip()
+        if error:
+            return f'No usable results for query "{query}". Error: {error}'
 
-            time.sleep(0.6 * (attempt + 1))
-
-        return f'No usable results for query "{query}". Error: {last_error}'
+        return WebSearch._format_output(query, result.get("search_results"))
 
     @staticmethod
-    def _contains_cjk(text: str) -> bool:
-        return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+    def _first_non_empty(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+        for key in keys:
+            value = item.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
 
-    def _build_payload(self, query: str) -> dict:
-        if self._contains_cjk(query):
-            return {
-                "q": query,
-                "location": "China",
-                "gl": "cn",
-                "hl": "zh-cn",
-            }
+    @classmethod
+    def _normalize_result_row(cls, item: Any) -> dict[str, str] | None:
+        if not isinstance(item, dict):
+            return None
+
+        title = cls._first_non_empty(item, ("title", "name"))
+        link = cls._first_non_empty(item, ("url", "link", "source_url"))
+        snippet = cls._first_non_empty(
+            item,
+            ("content", "snippet", "summary", "answer", "description", "raw_content"),
+        )
+        source = cls._first_non_empty(
+            item,
+            ("source", "site_name", "displayLink", "origin"),
+        )
+        date = cls._first_non_empty(
+            item,
+            ("date", "published", "published_at", "published_date"),
+        )
+
+        if not link:
+            return None
+
         return {
-            "q": query,
-            "location": "United States",
-            "gl": "us",
-            "hl": "en",
+            "title": title or link,
+            "link": link,
+            "snippet": snippet,
+            "source": source,
+            "date": date,
         }
 
-    @staticmethod
-    def _format_output(query: str, data: dict) -> str:
-        organic = data.get("organic")
-        if not organic:
+    @classmethod
+    def _format_output(cls, query: str, rows: Any) -> str:
+        if not isinstance(rows, list):
             return f'No usable results for query "{query}".'
 
         blocks = []
-        for idx, item in enumerate(organic, start=1):
-            title = item.get("title", "")
-            link = item.get("link", "")
-            snippet = item.get("snippet", "")
-            source = item.get("source", "")
-            date = item.get("date", "")
+        for item in rows:
+            normalized = cls._normalize_result_row(item)
+            if normalized is None:
+                continue
 
+            title = normalized["title"]
+            link = normalized["link"]
+            snippet = normalized["snippet"]
+            source = normalized["source"]
+            date = normalized["date"]
+
+            idx = len(blocks) + 1
             entry = f"{idx}. [{title}]({link})"
             if date:
                 entry += f"\nPublished: {date}"
@@ -205,6 +221,9 @@ class WebSearch:
                 entry += f"\n{snippet}"
 
             blocks.append(entry)
+
+        if not blocks:
+            return f'No usable results for query "{query}".'
 
         header = f'Results for query "{query}" ({len(blocks)} entries):\n\n'
         return header + "\n\n".join(blocks)
