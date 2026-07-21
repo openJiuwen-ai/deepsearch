@@ -111,7 +111,6 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
 from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
-    llm_context,
     model_context,
     session_context,
     tool_context,
@@ -121,7 +120,9 @@ from openjiuwen_deepsearch.utils.debug_utils.node_debug import (
     NodeType,
     add_debug_log_wrapper,
 )
-from openjiuwen_deepsearch.utils.outline_mode_router import route_outline_execution_method
+from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
+    resolve_outline_execution_method,
+)
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.run_telemetry import (
     emit,
@@ -249,42 +250,8 @@ class IntentRecognitionNode(BaseNode):
     def __init__(self):
         super().__init__()
 
-    @staticmethod
-    def _get_outline_router_question(current_inputs: dict) -> str:
-        original_query = current_inputs.get("original_query") or ""
-        if original_query:
-            return original_query
-        messages = current_inputs.get("messages") or []
-        for message in reversed(messages):
-            content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
-            if content:
-                return content
-        return ""
-
     async def _resolve_outline_execution_method(self, current_inputs: dict, session: Session) -> str:
-        execution_method = current_inputs.get("execution_method") or ExecutionMethod.PARALLEL.value
-        if execution_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
-            selected_method = ExecutionMethod.DEPENDENCY_DRIVING.value
-        elif execution_method == ExecutionMethod.HYBRID.value:
-            try:
-                llm_entry = llm_context.get().get(current_inputs.get("llm_model_name"))
-            except LookupError:
-                llm_entry = None
-            try:
-                selected_method = await route_outline_execution_method(
-                    self._get_outline_router_question(current_inputs),
-                    llm_entry,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[IntentRecognitionNode] outline mode router failed, defaulting to parallel: %s",
-                    exc,
-                    exc_info=True,
-                )
-                selected_method = ExecutionMethod.PARALLEL.value
-        else:
-            selected_method = ExecutionMethod.PARALLEL.value
-
+        selected_method = await resolve_outline_execution_method(current_inputs)
         session.update_global_state({"search_context.outline_execution_method": selected_method})
         logger.info("[IntentRecognitionNode] outline_execution_method=%s", selected_method)
         return selected_method
@@ -1036,13 +1003,9 @@ class OutlineNode(BaseNode):
             return "dep_driving_outliner"
         return self.outline_prompt
 
-    def _get_next_node_after_outline(self) -> str:
+    def _get_next_node_after_outline(self, session: Session) -> str:
         """获取大纲生成成功后的下一个节点"""
-        try:
-            session = session_context.get()
-        except LookupError:
-            session = None
-        selected_method = session.get_global_state("search_context.outline_execution_method") if session else None
+        selected_method = session.get_global_state("search_context.outline_execution_method")
         if selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
             return NodeId.DEPENDENCY_EDITOR_TEAM.value
         return NodeId.EDITOR_TEAM.value
@@ -1080,7 +1043,7 @@ class OutlineNode(BaseNode):
                 next_node = NodeId.OUTLINE_INTERACTION.value
                 logger.info(f"{self.log_prefix} Outline generated, go to OutlineInteractionNode.")
             else:
-                next_node = self._get_next_node_after_outline()
+                next_node = self._get_next_node_after_outline(session)
                 logger.info(f"{self.log_prefix} Successfully generate outline, go to {next_node}.")
         else:
             next_node = NodeId.END.value
@@ -1102,7 +1065,7 @@ class DependencyOutlineNode(OutlineNode):
         self.outline_prompt = "dep_driving_outliner"
         self.with_dep_driving = True
 
-    def _get_next_node_after_outline(self) -> str:
+    def _get_next_node_after_outline(self, session: Session) -> str:
         """依赖驱动模式下的下一个节点"""
         return NodeId.DEPENDENCY_EDITOR_TEAM.value
 

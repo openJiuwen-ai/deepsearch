@@ -284,7 +284,10 @@ class SearchContext(BaseModel):
     questions: str = Field(default="", description="系统基于用户问题提出的问题")
     user_feedback: str = Field(default="", description="用户问题的反馈结果")
     outline_interactions: List[OutlineInteraction] = Field(default_factory=list, description="大纲多轮交互历史记录")
-    outline_execution_method: str = Field(default="", description="混合大纲模式下LLM选择的执行方式")
+    outline_execution_method: Literal["", "parallel", "dependency_driving"] = Field(
+        default="",
+        description="大纲生成阶段实际选择的执行方式，空值表示尚未选择，parallel表示普通大纲，dependency_driving表示依赖驱动大纲",
+    )
 
     # 3、运行时上下文状态存储
     outline_executed_num: int = Field(default=0, description="大纲执行次数")

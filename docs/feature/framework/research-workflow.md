@@ -29,7 +29,7 @@
 
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/workflow.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/main_graph_nodes.py`
-- `openjiuwen_deepsearch/utils/outline_mode_router.py`
+- `openjiuwen_deepsearch/algorithm/query_understanding/outline_mode_router.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/editor_team_manager_node.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/core/workflow_agent/workflow_agent.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/core/workflow_agent/workflow_controller.py`
@@ -80,7 +80,7 @@
 - `uv run pytest tests/workflow/test_workflow_llm_usage_lifecycle.py`
 - `uv run pytest tests/user_feedback_processor/test_workflow_integration.py`
 - 修改大纲交互或依赖驱动路由时，补充运行 `uv run pytest tests/workflow/test_dependency_workflow.py`。
-- 修改 hybrid 大纲路由时，补充运行 `uv run pytest tests/utils/test_outline_mode_router.py tests/node/test_agent_node.py tests/node/test_outline_interaction_node.py tests/workflow/test_create_agent.py tests/workflow/test_dependency_workflow.py tests/server/test_deepsearch_run.py`。
+- 修改 hybrid 大纲路由时，补充运行 `uv run pytest tests/algorithm/query_understanding/test_outline_mode_router.py tests/node/test_agent_node.py tests/node/test_outline_interaction_node.py tests/workflow/test_create_agent.py tests/workflow/test_dependency_workflow.py tests/server/test_deepsearch_run.py`。
 
 ## 相关文档
 

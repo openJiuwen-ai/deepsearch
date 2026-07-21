@@ -88,7 +88,7 @@ Structured report-generation constraints parsed from the user query.
 - **questions**: Clarification questions.
 - **user_feedback**: User feedback.
 - **outline_interactions**: Outline interaction history.
-- **outline_execution_method**: Actual outline execution method selected for the current hybrid run. Valid values are `"parallel"` and `"dependency_driving"`. Default value: `""`.
+- **outline_execution_method** (Literal["", "parallel", "dependency_driving"]): Actual outline execution method selected for the current hybrid run. Empty string means no outline branch has been selected yet, `"parallel"` means the normal outline branch, and `"dependency_driving"` means the dependency-driven outline branch. Default value: `""`.
 - **outline_executed_num**: Number of outline executions.
 - **current_outline**: Current outline.
 - **history_outlines**: Historical outlines.

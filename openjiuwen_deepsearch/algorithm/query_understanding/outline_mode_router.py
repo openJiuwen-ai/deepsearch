@@ -6,8 +6,11 @@ import logging
 from pathlib import Path
 
 from openjiuwen_deepsearch.config.method import ExecutionMethod
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 
-_DEFAULT_PROMPTS_DIR = Path(__file__).resolve().parents[1] / "algorithm" / "prompts"
+_DEFAULT_PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
 
 OUTLINE_MODE_ROUTER_SYSTEM_PROMPT = (
     _DEFAULT_PROMPTS_DIR / "outline_mode_router.md"
@@ -24,15 +27,7 @@ def parse_outline_execution_method(text: str) -> str | None:
     return label if label in VALID_OUTLINE_METHODS else None
 
 
-async def route_outline_execution_method(
-    question: str,
-    llm_entry: dict,
-    *,
-    extra_body: dict | None = None,
-) -> str:
-    from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
-    from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
-
+async def route_outline_execution_method(question: str, llm_model_name: str) -> str:
     log = logging.getLogger(__name__)
     q = (question or "").strip()
     if not q:
@@ -43,14 +38,15 @@ async def route_outline_execution_method(
         {"role": "system", "content": OUTLINE_MODE_ROUTER_SYSTEM_PROMPT},
         {"role": "user", "content": q},
     ]
+
     try:
+        llm = llm_context.get().get(llm_model_name)
         resp = await ainvoke_llm_with_stats(
-            llm_entry,
+            llm,
             messages,
             llm_type="basic",
             agent_name=AgentLlmName.OUTLINE_MODE_ROUTER.value,
             tools=None,
-            extra_body=extra_body,
         )
         content = (resp.get("content") or "").strip() if isinstance(resp, dict) else ""
     except Exception as e:
@@ -69,3 +65,16 @@ async def route_outline_execution_method(
         )
         return ExecutionMethod.PARALLEL.value
     return selected_method
+
+
+async def resolve_outline_execution_method(current_inputs: dict) -> str:
+    execution_method = current_inputs.get("execution_method") or ExecutionMethod.PARALLEL.value
+    if execution_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
+        return ExecutionMethod.DEPENDENCY_DRIVING.value
+    if execution_method != ExecutionMethod.HYBRID.value:
+        return ExecutionMethod.PARALLEL.value
+
+    return await route_outline_execution_method(
+        current_inputs.get("original_query") or "",
+        current_inputs.get("llm_model_name") or "",
+    )

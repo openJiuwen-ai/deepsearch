@@ -34,10 +34,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
-    llm_context,
-    session_context,
-)
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
 from tests.utils.mock_config import get_default_agent_config
 
 logger = logging.getLogger(__name__)
@@ -52,19 +49,23 @@ async def _run_agent_with_mocks(pre_handle_return, sub_graph_return):
                 new_callable=AsyncMock,
                 return_value=sub_graph_return
         ):
-            agent = MockAgent()
-            agent_config = get_default_agent_config()
-            chunks = []
-            async for chunk in agent.run(
-                    message='杭州的天气怎么样',
-                    conversation_id="default_session_id",
-                    report_template="",
-                    interrupt_feedback="",
-                    agent_config=agent_config
+            with patch(
+                "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.create_llm_obj",
+                return_value={"model": Mock(), "model_name": "mock_model"},
             ):
-                chunks.append(chunk)
-                # 如果只是触发逻辑，不关心 chunk，可省略收集
-            return chunks
+                agent = MockAgent()
+                agent_config = get_default_agent_config()
+                chunks = []
+                async for chunk in agent.run(
+                        message='杭州的天气怎么样',
+                        conversation_id="default_session_id",
+                        report_template="",
+                        interrupt_feedback="",
+                        agent_config=agent_config
+                ):
+                    chunks.append(chunk)
+                    # 如果只是触发逻辑，不关心 chunk，可省略收集
+                return chunks
 
 
 @pytest.mark.asyncio
@@ -107,10 +108,14 @@ async def test_agent_node_missing_sections(caplog):
 async def test_agent_node_with_interrupt_feedback():
     agent = MockAgent()
     agent_config = get_default_agent_config()
-    async for chunk in agent.run(message='杭州的天气怎么样', conversation_id="default_session_id",
-                                 report_template="", interrupt_feedback="accepted",
-                                 agent_config=agent_config):
-        logger.debug("[Stream message from node: %s]", chunk)
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.create_llm_obj",
+        return_value={"model": Mock(), "model_name": "mock_model"},
+    ):
+        async for chunk in agent.run(message='杭州的天气怎么样', conversation_id="default_session_id",
+                                     report_template="", interrupt_feedback="accepted",
+                                     agent_config=agent_config):
+            logger.debug("[Stream message from node: %s]", chunk)
 
 
 def test_create_section_state():
@@ -390,13 +395,13 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         exclude_domains=["bad.com"],
     )
 
+
 @pytest.mark.asyncio
-async def test_intent_recognition_node_hybrid_calls_outline_router_and_saves_result():
-    """hybrid 模式下，意图识别节点应调用大纲模式 router 并保存 LLM 选择结果。"""
+async def test_intent_recognition_node_calls_outline_method_resolver_and_saves_result():
+    """意图识别节点只编排调用算法层 resolver，并保存大纲实际执行方式。"""
     node = IntentRecognitionNode()
     session = Mock(spec=Session)
     session.update_global_state = Mock()
-    llm_entry = {"model": object(), "model_name": "m"}
     current_inputs = {
         "execution_method": ExecutionMethod.HYBRID.value,
         "original_query": "请先诊断问题，再给出改进方案",
@@ -404,81 +409,44 @@ async def test_intent_recognition_node_hybrid_calls_outline_router_and_saves_res
         "llm_model_name": "basic",
     }
 
-    token = llm_context.set({"basic": llm_entry})
-    try:
-        with patch(
-            "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.route_outline_execution_method",
-            new=AsyncMock(return_value=ExecutionMethod.DEPENDENCY_DRIVING.value),
-        ) as mock_router:
-            selected_method = await node._resolve_outline_execution_method(current_inputs, session)
-    finally:
-        llm_context.reset(token)
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.resolve_outline_execution_method",
+        new=AsyncMock(return_value=ExecutionMethod.DEPENDENCY_DRIVING.value),
+    ) as mock_resolver:
+        selected_method = await node._resolve_outline_execution_method(current_inputs, session)
 
     assert selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value
-    mock_router.assert_awaited_once_with("请先诊断问题，再给出改进方案", llm_entry)
+    mock_resolver.assert_awaited_once_with(current_inputs)
     session.update_global_state.assert_called_once_with({
         "search_context.outline_execution_method": ExecutionMethod.DEPENDENCY_DRIVING.value
     })
 
 
 @pytest.mark.asyncio
-async def test_intent_recognition_node_hybrid_router_uses_last_message_when_original_query_empty():
-    """original_query 为空时，hybrid router 应回退使用 messages 中最后一条内容。"""
-    node = IntentRecognitionNode()
-    session = Mock(spec=Session)
-    session.update_global_state = Mock()
-    llm_entry = {"model": object(), "model_name": "m"}
-    current_inputs = {
-        "execution_method": ExecutionMethod.HYBRID.value,
-        "original_query": "",
-        "messages": [
-            {"role": "user", "content": "旧问题"},
-            {"role": "user", "content": "最后一个问题"},
-        ],
-        "llm_model_name": "basic",
-    }
-
-    token = llm_context.set({"basic": llm_entry})
-    try:
-        with patch(
-            "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.route_outline_execution_method",
-            new=AsyncMock(return_value=ExecutionMethod.PARALLEL.value),
-        ) as mock_router:
-            selected_method = await node._resolve_outline_execution_method(current_inputs, session)
-    finally:
-        llm_context.reset(token)
-
-    assert selected_method == ExecutionMethod.PARALLEL.value
-    mock_router.assert_awaited_once_with("最后一个问题", llm_entry)
-
-
-@pytest.mark.asyncio
-async def test_intent_recognition_node_hybrid_router_exception_defaults_parallel():
-    """hybrid router 异常时，应兜底为普通并行模式。"""
+async def test_intent_recognition_node_saves_parallel_outline_method():
+    """resolver 返回 parallel 时，意图识别节点应保存普通大纲执行方式。"""
     node = IntentRecognitionNode()
     session = Mock(spec=Session)
     session.update_global_state = Mock()
     current_inputs = {
-        "execution_method": ExecutionMethod.HYBRID.value,
-        "original_query": "需要复杂判断的大纲任务",
+        "execution_method": ExecutionMethod.PARALLEL.value,
+        "original_query": "生成市场格局综述",
         "messages": [],
         "llm_model_name": "basic",
     }
 
-    token = llm_context.set({"basic": {"model": object(), "model_name": "m"}})
-    try:
-        with patch(
-            "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.route_outline_execution_method",
-            new=AsyncMock(side_effect=RuntimeError("router failed")),
-        ):
-            selected_method = await node._resolve_outline_execution_method(current_inputs, session)
-    finally:
-        llm_context.reset(token)
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.resolve_outline_execution_method",
+        new=AsyncMock(return_value=ExecutionMethod.PARALLEL.value),
+    ) as mock_resolver:
+        selected_method = await node._resolve_outline_execution_method(current_inputs, session)
 
     assert selected_method == ExecutionMethod.PARALLEL.value
+    mock_resolver.assert_awaited_once_with(current_inputs)
     session.update_global_state.assert_called_once_with({
         "search_context.outline_execution_method": ExecutionMethod.PARALLEL.value
     })
+
 
 def test_outline_pre_handle_resolves_max_section_num_from_section_count():
     """OutlineNode 应从 research_intent.section_count 计算 section_num（目标章节数）。"""
