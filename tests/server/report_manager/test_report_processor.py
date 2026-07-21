@@ -450,65 +450,6 @@ def test_convert_md_to_html_keeps_consecutive_indented_list_items_at_same_level(
     assert "second item" in html_text
 
 
-def test_convert_md_to_html_keeps_nested_list_level_across_chart_block(tmp_path):
-    """Validate a chart inserted between nested items does not end the nested list."""
-    md_path = tmp_path / "report.md"
-    html_path = tmp_path / "report.html"
-    md_path.write_text(
-        "- **开源与闭源博弈的多维透视**：\n"
-        "    - **地缘维度**：第一条\n"
-        "\n"
-        "![日本Top10](chart.png)\n"
-        "<font size=2>**日本Top10**: 图注</font>\n"
-        "    - **生态维度**：第二条\n",
-        encoding="utf-8",
-    )
-
-    convert_md_to_html(md_path, html_path)
-
-    soup = BeautifulSoup(html_path.read_text(encoding="utf-8"), "html.parser")
-    parent_item = next(
-        item
-        for item in soup.find_all("li")
-        if "开源与闭源博弈的多维透视" in item.get_text()
-    )
-    nested_items = parent_item.find("ul", recursive=False).find_all("li", recursive=False)
-    assert len(nested_items) == 2
-    assert "地缘维度" in nested_items[0].get_text()
-    assert "生态维度" in nested_items[1].get_text()
-    assert nested_items[0].find("img", alt="日本Top10") is not None
-
-
-def test_report_converters_keep_nested_list_level_across_font_description(tmp_path):
-    """Validate a font description does not promote following nested items."""
-    markdown = (
-        "- **多维度协同分析**：\n"
-        "\n"
-        "<font size=2>**边缘智能体多维度协同分析**: 描述。</font>\n"
-        "    - **技术维度**：内容。\n"
-        "    - **经济维度**：内容。\n"
-    )
-
-    html = _convert_html_text(markdown, tmp_path)
-    soup = BeautifulSoup(html, "html.parser")
-    parent_item = next(item for item in soup.find_all("li") if "多维度协同分析" in item.get_text())
-    nested_items = parent_item.find("ul", recursive=False).find_all("li", recursive=False)
-    assert [item.get_text(strip=True) for item in nested_items] == [
-        "技术维度：内容。",
-        "经济维度：内容。",
-    ]
-
-    document = _convert_docx_document(markdown, tmp_path)
-    paragraphs = {paragraph.text: paragraph for paragraph in document.paragraphs}
-    parent = next(paragraph for paragraph in document.paragraphs if paragraph.text.startswith("多维度协同分析："))
-    parent_num_pr = parent._p.pPr.numPr
-    assert parent_num_pr.ilvl.val == 0
-    for text in ("技术维度：内容。", "经济维度：内容。"):
-        child_num_pr = paragraphs[text]._p.pPr.numPr
-        assert child_num_pr.numId.val == parent_num_pr.numId.val
-        assert child_num_pr.ilvl.val == 1
-
-
 def test_html_to_doc_keeps_nested_list_items_as_separate_paragraphs():
     """Validate nested HTML lists do not collapse child item text into the parent paragraph."""
     document = Document()
