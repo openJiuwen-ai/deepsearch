@@ -974,6 +974,7 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         return "research_workflow_hybrid"
 
     def _create_research_workflow_agent(self):
+        """创建 hybrid 大纲路由工作流 Agent 实例。"""
         workflow_card = WorkflowCard(
             id=self.research_name,
             version=self.version,
@@ -997,6 +998,12 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         self.agent.add_workflows([self._build_workflow_provider(self._build_research_hybrid_workflow, workflow_card)])
 
     def _build_research_hybrid_workflow(self):
+        """
+        构建 hybrid research workflow。
+
+        该 workflow 复用普通 OutlineNode 和 OutlineInteractionNode，同时注册普通写作团队与依赖驱动写作团队。
+        大纲模式由 IntentRecognitionNode 写入 session，后续节点按该结果选择 prompt、tool schema 和写作分支。
+        """
         _id = self.research_name
         name = self.research_name
         version = self.version

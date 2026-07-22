@@ -251,6 +251,16 @@ class IntentRecognitionNode(BaseNode):
         super().__init__()
 
     async def _resolve_outline_execution_method(self, current_inputs: dict, session: Session) -> str:
+        """
+        解析并保存本轮大纲实际执行方式。
+
+        Args:
+            current_inputs: 意图识别节点预处理后的输入，包含 execution_method、original_query 和 llm_model_name。
+            session: 当前工作流会话，用于写入 search_context.outline_execution_method。
+
+        Returns:
+            parallel 或 dependency_driving。仅 hybrid 入口会调用 LLM router，固定模式直接映射。
+        """
         execution_method = current_inputs.get("execution_method") or ExecutionMethod.PARALLEL.value
         if execution_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
             selected_method = ExecutionMethod.DEPENDENCY_DRIVING.value
@@ -941,13 +951,30 @@ class OutlineNode(BaseNode):
         return result
 
     def _get_with_dep_driving(self, current_inputs: dict) -> bool:
+        """
+        判断当前大纲生成是否使用依赖驱动工具 schema。
+
+        Args:
+            current_inputs: 大纲节点预处理后的输入，优先读取 outline_execution_method。
+
+        Returns:
+            True 表示使用 dependency_driving 工具 schema；False 表示使用普通大纲工具 schema。
+        """
         selected_method = current_inputs.get("outline_execution_method")
         if selected_method in {ExecutionMethod.PARALLEL.value, ExecutionMethod.DEPENDENCY_DRIVING.value}:
             return selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value
         return self.with_dep_driving
 
     def _select_prompt_and_dep_driving(self, current_inputs: dict) -> tuple[str, bool]:
-        """同时选择大纲 prompt 与工具 schema，避免普通 prompt 搭配依赖驱动工具 schema。"""
+        """
+        同时选择大纲 prompt 与工具 schema。
+
+        Args:
+            current_inputs: 大纲节点预处理后的输入，包含交互模式、模板和 outline_execution_method。
+
+        Returns:
+            prompt 名称，以及是否启用 dependency_driving 工具 schema。
+        """
         prompt_name = self._select_prompt_name(current_inputs)
         if prompt_name in {"outliner_template", "outliner_user_revised"}:
             return prompt_name, False
@@ -1271,6 +1298,15 @@ class OutlineInteractionNode(BaseNode):
         )
 
     def _get_next_node_after_accept(self, session: Session) -> str:
+        """
+        根据已选择的大纲执行方式决定用户接受大纲后的写作节点。
+
+        Args:
+            session: 当前工作流会话，用于读取 search_context.outline_execution_method。
+
+        Returns:
+            editor_team 或 dependency_editor_team。
+        """
         selected_method = session.get_global_state("search_context.outline_execution_method")
         if selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
             return NodeId.DEPENDENCY_EDITOR_TEAM.value
