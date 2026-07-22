@@ -152,36 +152,3 @@ async def test_route_messages_and_call_options():
     assert seen["kwargs"]["llm_type"] == "basic"
     assert seen["kwargs"]["agent_name"] == AgentLlmName.OUTLINE_MODE_ROUTER.value
     assert seen["kwargs"]["tools"] is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_outline_execution_method_keeps_fixed_modes():
-    """非 hybrid 模式不调用 LLM router，直接得到固定的大纲执行方式。"""
-    with patch.object(omr, "route_outline_execution_method", new_callable=AsyncMock) as mock_route:
-        assert await omr.resolve_outline_execution_method({}) == ExecutionMethod.PARALLEL.value
-        assert await omr.resolve_outline_execution_method({
-            "execution_method": ExecutionMethod.PARALLEL.value
-        }) == ExecutionMethod.PARALLEL.value
-        assert await omr.resolve_outline_execution_method({
-            "execution_method": ExecutionMethod.DEPENDENCY_DRIVING.value
-        }) == ExecutionMethod.DEPENDENCY_DRIVING.value
-
-    mock_route.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_resolve_outline_execution_method_calls_router_for_hybrid():
-    """hybrid 模式调用 LLM router，并传入原始 query 与 LLM 模型名称。"""
-    with patch.object(
-        omr,
-        "route_outline_execution_method",
-        new=AsyncMock(return_value=ExecutionMethod.DEPENDENCY_DRIVING.value),
-    ) as mock_route:
-        out = await omr.resolve_outline_execution_method({
-            "execution_method": ExecutionMethod.HYBRID.value,
-            "original_query": "用户问题",
-            "llm_model_name": "basic",
-        })
-
-    assert out == ExecutionMethod.DEPENDENCY_DRIVING.value
-    mock_route.assert_awaited_once_with("用户问题", "basic")

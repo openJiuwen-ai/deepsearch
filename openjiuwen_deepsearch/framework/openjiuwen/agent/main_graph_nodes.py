@@ -121,7 +121,7 @@ from openjiuwen_deepsearch.utils.debug_utils.node_debug import (
     add_debug_log_wrapper,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
-    resolve_outline_execution_method,
+    route_outline_execution_method,
 )
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.run_telemetry import (
@@ -251,7 +251,17 @@ class IntentRecognitionNode(BaseNode):
         super().__init__()
 
     async def _resolve_outline_execution_method(self, current_inputs: dict, session: Session) -> str:
-        selected_method = await resolve_outline_execution_method(current_inputs)
+        execution_method = current_inputs.get("execution_method") or ExecutionMethod.PARALLEL.value
+        if execution_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
+            selected_method = ExecutionMethod.DEPENDENCY_DRIVING.value
+        elif execution_method == ExecutionMethod.HYBRID.value:
+            selected_method = await route_outline_execution_method(
+                current_inputs.get("original_query") or "",
+                current_inputs.get("llm_model_name") or "",
+            )
+        else:
+            selected_method = ExecutionMethod.PARALLEL.value
+
         session.update_global_state({"search_context.outline_execution_method": selected_method})
         logger.info("[IntentRecognitionNode] outline_execution_method=%s", selected_method)
         return selected_method
@@ -936,12 +946,19 @@ class OutlineNode(BaseNode):
             return selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value
         return self.with_dep_driving
 
+    def _select_prompt_and_dep_driving(self, current_inputs: dict) -> tuple[str, bool]:
+        """同时选择大纲 prompt 与工具 schema，避免普通 prompt 搭配依赖驱动工具 schema。"""
+        prompt_name = self._select_prompt_name(current_inputs)
+        if prompt_name in {"outliner_template", "outliner_user_revised"}:
+            return prompt_name, False
+        return prompt_name, self._get_with_dep_driving(current_inputs)
+
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
-        prompt_name = self._select_prompt_name(current_inputs)
+        prompt_name, with_dep_driving = self._select_prompt_and_dep_driving(current_inputs)
         outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=prompt_name)
-        outliner.with_dep_driving = self._get_with_dep_driving(current_inputs)
+        outliner.with_dep_driving = with_dep_driving
         max_outline_retry_num = current_inputs.get("max_outline_retry_num", 1)
 
         success_flag = False
@@ -1064,6 +1081,10 @@ class DependencyOutlineNode(OutlineNode):
         super().__init__()
         self.outline_prompt = "dep_driving_outliner"
         self.with_dep_driving = True
+
+    def _get_with_dep_driving(self, current_inputs: dict) -> bool:
+        """依赖驱动大纲节点固定使用依赖驱动工具 schema，不受 session 路由状态覆盖。"""
+        return True
 
     def _get_next_node_after_outline(self, session: Session) -> str:
         """依赖驱动模式下的下一个节点"""

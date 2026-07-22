@@ -23,11 +23,36 @@ VALID_OUTLINE_METHODS = {
 
 
 def parse_outline_execution_method(text: str) -> str | None:
+    """
+    Parse the outline mode router label from LLM output.
+
+    Args:
+        text: Raw LLM output content.
+
+    Returns:
+        ``parallel`` or ``dependency_driving`` when the output exactly matches a
+        supported outline execution method; otherwise ``None``.
+    """
     label = (text or "").strip()
     return label if label in VALID_OUTLINE_METHODS else None
 
 
 async def route_outline_execution_method(question: str, llm_model_name: str) -> str:
+    """
+    Route a research query to the actual outline execution method.
+
+    The framework layer decides when this router should be called. This function
+    only invokes the configured LLM with the original user query and parses the
+    returned mode label.
+
+    Args:
+        question: Original user query used for outline mode selection.
+        llm_model_name: LLM entry name to read from ``llm_context``.
+
+    Returns:
+        ``parallel`` or ``dependency_driving``. Empty queries, LLM call failures,
+        and unparseable model outputs fail open to ``parallel``.
+    """
     log = logging.getLogger(__name__)
     q = (question or "").strip()
     if not q:
@@ -65,16 +90,3 @@ async def route_outline_execution_method(question: str, llm_model_name: str) -> 
         )
         return ExecutionMethod.PARALLEL.value
     return selected_method
-
-
-async def resolve_outline_execution_method(current_inputs: dict) -> str:
-    execution_method = current_inputs.get("execution_method") or ExecutionMethod.PARALLEL.value
-    if execution_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
-        return ExecutionMethod.DEPENDENCY_DRIVING.value
-    if execution_method != ExecutionMethod.HYBRID.value:
-        return ExecutionMethod.PARALLEL.value
-
-    return await route_outline_execution_method(
-        current_inputs.get("original_query") or "",
-        current_inputs.get("llm_model_name") or "",
-    )

@@ -18,6 +18,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     FeedbackHandlerNode,
     GenerateQuestionsNode,
     OutlineInteractionNode,
+    DependencyOutlineNode,
     OutlineNode,
     StartNode,
     UserFeedbackProcessorNode,
@@ -397,8 +398,8 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
 
 
 @pytest.mark.asyncio
-async def test_intent_recognition_node_calls_outline_method_resolver_and_saves_result():
-    """意图识别节点只编排调用算法层 resolver，并保存大纲实际执行方式。"""
+async def test_intent_recognition_node_calls_outline_mode_router_for_hybrid_and_saves_result():
+    """hybrid 模式下，IntentRecognitionNode 调用大纲模式 router 并保存实际大纲执行方式。"""
     node = IntentRecognitionNode()
     session = Mock(spec=Session)
     session.update_global_state = Mock()
@@ -410,41 +411,52 @@ async def test_intent_recognition_node_calls_outline_method_resolver_and_saves_r
     }
 
     with patch(
-        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.resolve_outline_execution_method",
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.route_outline_execution_method",
         new=AsyncMock(return_value=ExecutionMethod.DEPENDENCY_DRIVING.value),
-    ) as mock_resolver:
+    ) as mock_router:
         selected_method = await node._resolve_outline_execution_method(current_inputs, session)
 
     assert selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value
-    mock_resolver.assert_awaited_once_with(current_inputs)
+    mock_router.assert_awaited_once_with("请先诊断问题，再给出改进方案", "basic")
     session.update_global_state.assert_called_once_with({
         "search_context.outline_execution_method": ExecutionMethod.DEPENDENCY_DRIVING.value
     })
 
 
 @pytest.mark.asyncio
-async def test_intent_recognition_node_saves_parallel_outline_method():
-    """resolver 返回 parallel 时，意图识别节点应保存普通大纲执行方式。"""
+@pytest.mark.parametrize(
+    "execution_method, expected_method",
+    [
+        (ExecutionMethod.PARALLEL.value, ExecutionMethod.PARALLEL.value),
+        (ExecutionMethod.DEPENDENCY_DRIVING.value, ExecutionMethod.DEPENDENCY_DRIVING.value),
+        ("", ExecutionMethod.PARALLEL.value),
+    ],
+)
+async def test_intent_recognition_node_resolves_fixed_outline_methods_without_router(
+    execution_method,
+    expected_method,
+):
+    """非 hybrid 模式不调用 LLM router，直接保存固定的大纲执行方式。"""
     node = IntentRecognitionNode()
     session = Mock(spec=Session)
     session.update_global_state = Mock()
     current_inputs = {
-        "execution_method": ExecutionMethod.PARALLEL.value,
+        "execution_method": execution_method,
         "original_query": "生成市场格局综述",
         "messages": [],
         "llm_model_name": "basic",
     }
 
     with patch(
-        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.resolve_outline_execution_method",
-        new=AsyncMock(return_value=ExecutionMethod.PARALLEL.value),
-    ) as mock_resolver:
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.route_outline_execution_method",
+        new_callable=AsyncMock,
+    ) as mock_router:
         selected_method = await node._resolve_outline_execution_method(current_inputs, session)
 
-    assert selected_method == ExecutionMethod.PARALLEL.value
-    mock_resolver.assert_awaited_once_with(current_inputs)
+    assert selected_method == expected_method
+    mock_router.assert_not_called()
     session.update_global_state.assert_called_once_with({
-        "search_context.outline_execution_method": ExecutionMethod.PARALLEL.value
+        "search_context.outline_execution_method": expected_method
     })
 
 
@@ -679,6 +691,51 @@ async def test_outline_node_sets_prompt_and_tool_schema_branch_from_selected_met
     assert created_outliners[0].prompt_name == expected_prompt
     assert created_outliners[0].generated_with_dep_driving is expected_with_dep_driving
     assert result["next_node"] == expected_next_node
+
+
+def test_dependency_outline_node_with_dep_driving_ignores_session_outline_method():
+    """DependencyOutlineNode 固定依赖驱动，不应被 session 中的 outline_execution_method=parallel 覆盖。"""
+    node = DependencyOutlineNode()
+
+    current_inputs = {
+        "outline_execution_method": ExecutionMethod.PARALLEL.value,
+    }
+
+    assert node._get_with_dep_driving(current_inputs) is True
+    assert node._select_prompt_name(current_inputs) == "dep_driving_outliner"
+
+
+@pytest.mark.parametrize(
+    "current_inputs, expected_prompt",
+    [
+        (
+            {
+                "outline_execution_method": ExecutionMethod.DEPENDENCY_DRIVING.value,
+                "report_template": "模板内容",
+                "outline_interaction_mode": "",
+            },
+            "outliner_template",
+        ),
+        (
+            {
+                "outline_execution_method": ExecutionMethod.DEPENDENCY_DRIVING.value,
+                "outline_interaction_mode": "revise_outline",
+                "user_feedback": '{"title": "用户大纲", "thought": "mock", "sections": []}',
+                "report_template": "",
+            },
+            "outliner_user_revised",
+        ),
+    ],
+)
+def test_outline_node_parallel_contract_prompts_use_general_tool_schema(current_inputs, expected_prompt):
+    """普通章节契约 prompt 不应搭配依赖驱动工具 schema。"""
+    node = OutlineNode()
+
+    prompt_name, with_dep_driving = node._select_prompt_and_dep_driving(current_inputs)
+
+    assert prompt_name == expected_prompt
+    assert with_dep_driving is False
+
 
 def test_generate_questions_keeps_prompt_generated_questions_when_report_type_unspecified():
     session = Mock(spec=Session)
