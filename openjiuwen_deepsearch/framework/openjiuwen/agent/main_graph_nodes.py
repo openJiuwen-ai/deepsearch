@@ -965,7 +965,7 @@ class OutlineNode(BaseNode):
             return selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value
         return self.with_dep_driving
 
-    def _select_prompt_and_dep_driving(self, current_inputs: dict) -> tuple[str, bool]:
+    def _select_prompt_and_dep_driving(self, current_inputs: dict) -> tuple[str, bool, str]:
         """
         同时选择大纲 prompt 与工具 schema。
 
@@ -973,17 +973,52 @@ class OutlineNode(BaseNode):
             current_inputs: 大纲节点预处理后的输入，包含交互模式、模板和 outline_execution_method。
 
         Returns:
-            prompt 名称，以及是否启用 dependency_driving 工具 schema。
+            prompt 名称、是否启用 dependency_driving 工具 schema，以及本轮实际执行的大纲模式。
         """
         prompt_name = self._select_prompt_name(current_inputs)
         if prompt_name in {"outliner_template", "outliner_user_revised"}:
-            return prompt_name, False
-        return prompt_name, self._get_with_dep_driving(current_inputs)
+            return prompt_name, False, ExecutionMethod.PARALLEL.value
+        with_dep_driving = self._get_with_dep_driving(current_inputs)
+        selected_method = (
+            ExecutionMethod.DEPENDENCY_DRIVING.value
+            if with_dep_driving
+            else ExecutionMethod.PARALLEL.value
+        )
+        return prompt_name, with_dep_driving, selected_method
+
+    def _sync_outline_execution_method(
+        self,
+        current_inputs: dict,
+        session: Session,
+        selected_method: str,
+    ) -> None:
+        """
+        将本轮实际大纲模式同步回 session，保证 prompt、工具 schema 与后续节点一致。
+
+        Args:
+            current_inputs: 大纲节点预处理后的输入。
+            session: 当前工作流会话。
+            selected_method: 本轮实际执行的大纲模式。
+        """
+        current_method = current_inputs.get("outline_execution_method")
+        if current_method not in {ExecutionMethod.PARALLEL.value, ExecutionMethod.DEPENDENCY_DRIVING.value}:
+            return
+        if current_method == selected_method:
+            return
+        current_inputs["outline_execution_method"] = selected_method
+        session.update_global_state({"search_context.outline_execution_method": selected_method})
+        logger.info(
+            "%s Reset outline_execution_method from %s to %s to keep prompt and tool schema consistent.",
+            self.log_prefix,
+            current_method,
+            selected_method,
+        )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
-        prompt_name, with_dep_driving = self._select_prompt_and_dep_driving(current_inputs)
+        prompt_name, with_dep_driving, selected_method = self._select_prompt_and_dep_driving(current_inputs)
+        self._sync_outline_execution_method(current_inputs, session, selected_method)
         outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=prompt_name)
         outliner.with_dep_driving = with_dep_driving
         max_outline_retry_num = current_inputs.get("max_outline_retry_num", 1)

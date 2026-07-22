@@ -731,10 +731,34 @@ def test_outline_node_parallel_contract_prompts_use_general_tool_schema(current_
     """普通章节契约 prompt 不应搭配依赖驱动工具 schema。"""
     node = OutlineNode()
 
-    prompt_name, with_dep_driving = node._select_prompt_and_dep_driving(current_inputs)
+    prompt_name, with_dep_driving, selected_method = node._select_prompt_and_dep_driving(current_inputs)
 
     assert prompt_name == expected_prompt
     assert with_dep_driving is False
+    assert selected_method == ExecutionMethod.PARALLEL.value
+
+
+def test_outline_node_parallel_contract_prompt_resets_session_outline_method():
+    """特殊 prompt 强制使用普通工具 schema 时，应同步重置 session 中的大纲模式。"""
+    node = OutlineNode()
+    session = Mock(spec=Session)
+    session.update_global_state = Mock()
+    current_inputs = {
+        "outline_execution_method": ExecutionMethod.DEPENDENCY_DRIVING.value,
+        "report_template": "template",
+        "outline_interaction_mode": "",
+    }
+
+    prompt_name, with_dep_driving, selected_method = node._select_prompt_and_dep_driving(current_inputs)
+    node._sync_outline_execution_method(current_inputs, session, selected_method)
+
+    assert prompt_name == "outliner_template"
+    assert with_dep_driving is False
+    assert selected_method == ExecutionMethod.PARALLEL.value
+    assert current_inputs["outline_execution_method"] == ExecutionMethod.PARALLEL.value
+    session.update_global_state.assert_called_once_with(
+        {"search_context.outline_execution_method": ExecutionMethod.PARALLEL.value}
+    )
 
 
 def test_generate_questions_keeps_prompt_generated_questions_when_report_type_unspecified():
