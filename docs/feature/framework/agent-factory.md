@@ -20,6 +20,7 @@ ReAct 搜索对应的运行对象。
 - `execution_method=dependency_driving` 创建依赖驱动章节研究流程。
 - `search_mode=search` 创建 DeepSearch 搜索 Agent。
 - `search_mode=react` 创建简单 ReAct 搜索 Agent。
+- DeepSearch Agent 实例可被服务端缓存复用；并行/重叠运行隔离由 [DeepSearch 搜索子工作流](./deepsearch-sub-workflows.md) 的 per-run context 负责，不由工厂保证。
 - 缺失必填配置、Pydantic 校验失败或未知模式会抛出 `CustomValueException`。
 - 敏感日志模式下，参数校验错误不会把原始校验详情写入异常消息。
 
