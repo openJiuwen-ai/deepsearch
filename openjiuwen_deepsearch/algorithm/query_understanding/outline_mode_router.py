@@ -10,6 +10,8 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
 
 OUTLINE_MODE_ROUTER_SYSTEM_PROMPT = (
@@ -53,10 +55,9 @@ async def route_outline_execution_method(question: str, llm_model_name: str) -> 
         ``parallel`` or ``dependency_driving``. Empty queries, LLM call failures,
         and unparseable model outputs fail open to ``parallel``.
     """
-    log = logging.getLogger(__name__)
     q = (question or "").strip()
     if not q:
-        log.warning("outline mode router: empty question; defaulting to parallel")
+        logger.warning("outline mode router: empty question; defaulting to parallel")
         return ExecutionMethod.PARALLEL.value
 
     messages = [
@@ -75,7 +76,7 @@ async def route_outline_execution_method(question: str, llm_model_name: str) -> 
         )
         content = (resp.get("content") or "").strip() if isinstance(resp, dict) else ""
     except Exception as e:
-        log.warning(
+        logger.warning(
             "outline mode router LLM call failed, defaulting to parallel: %s",
             e,
             exc_info=True,
@@ -84,7 +85,7 @@ async def route_outline_execution_method(question: str, llm_model_name: str) -> 
 
     selected_method = parse_outline_execution_method(content)
     if selected_method is None:
-        log.warning(
+        logger.warning(
             "outline mode router expected parallel or dependency_driving; got %r, defaulting to parallel",
             content,
         )

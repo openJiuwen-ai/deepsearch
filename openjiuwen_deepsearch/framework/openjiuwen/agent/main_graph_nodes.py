@@ -30,6 +30,9 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     resolve_report_type_policy,
     web_search_for_query,
 )
+from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
+    route_outline_execution_method,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
@@ -119,9 +122,6 @@ from openjiuwen_deepsearch.utils.debug_utils.node_debug import (
     NodeDebugData,
     NodeType,
     add_debug_log_wrapper,
-)
-from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
-    route_outline_execution_method,
 )
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.run_telemetry import (
