@@ -91,4 +91,5 @@ uv run pytest tests/search_agent/test_termination.py
 - [Action Pool](../algorithm/search-agent/action-pool.md)
 - [Search Nodes](../algorithm/search-agent/search-nodes.md)
 - [Search Tools](../algorithm/search-agent/search-tools.md)
+- [DeepSearch 网页抓取 Provider 注册](../framework/web-fetch-provider-registry.md)
 - [DeepSearch 搜索子工作流](../framework/deepsearch-sub-workflows.md)
