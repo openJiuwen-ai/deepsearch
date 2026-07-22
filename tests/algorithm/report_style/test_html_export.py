@@ -1,11 +1,28 @@
+# -*- coding: UTF-8 -*-
+# Copyright (c) Huawei Technologies Co., Ltd. 2025-2026. All rights reserved.
 """Test standalone Markdown to HTML export for report styling."""
 
 import math
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 import pytest
 
-from openjiuwen_deepsearch.algorithm.report_style.export import html_export
+from openjiuwen_deepsearch.algorithm.report_export import html_export
+
+
+def convert_styled_md_to_html(input_md: str | Path, output_html: str | Path) -> None:
+    """使用统一导出器生成语义化美化 HTML。
+
+    Args:
+        input_md: 输入 Markdown 文件路径。
+        output_html: 输出 HTML 文件路径。
+    """
+    html_export.convert_md_to_html(
+        input_md,
+        output_html,
+        options=html_export.ConvertOptions(page_variant="styled"),
+    )
 
 
 def test_convert_md_to_html_keeps_report_content_and_local_asset_links(tmp_path, caplog):
@@ -24,7 +41,7 @@ def test_convert_md_to_html_keeps_report_content_and_local_asset_links(tmp_path,
     )
 
     with caplog.at_level("INFO", logger=html_export.__name__):
-        html_export.convert_md_to_html(source, target)
+        convert_styled_md_to_html(source, target)
 
     html = target.read_text(encoding="utf-8")
     soup = BeautifulSoup(html, "html.parser")
@@ -68,7 +85,7 @@ def test_convert_md_to_html_keeps_unsupported_mermaid_as_source_without_runtime(
     target = tmp_path / "report.html"
     source.write_text("```mermaid\ngraph TD\n  A --> B\n```", encoding="utf-8")
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     html = target.read_text(encoding="utf-8")
     soup = BeautifulSoup(html, "html.parser")
@@ -95,7 +112,7 @@ def test_convert_md_to_html_renders_xychart_mermaid_as_inline_svg(tmp_path):
         encoding="utf-8",
     )
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     html = target.read_text(encoding="utf-8")
     soup = BeautifulSoup(html, "html.parser")
@@ -139,7 +156,7 @@ def test_convert_md_to_html_renders_horizontal_xychart_as_horizontal_bars(
         encoding="utf-8",
     )
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     soup = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
     chart = soup.select_one(".mermaid-wrap svg.chart-svg")
@@ -172,7 +189,7 @@ def test_convert_md_to_html_distinguishes_zero_baseline_for_mixed_sign_bars(tmp_
         encoding="utf-8",
     )
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     soup = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
     chart = soup.select_one(".mermaid-wrap svg.chart-svg")
@@ -204,7 +221,7 @@ def test_convert_md_to_html_reserves_viewbox_space_for_long_x_axis_labels(tmp_pa
         encoding="utf-8",
     )
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     soup = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
     chart = soup.select_one(".mermaid-wrap svg.chart-svg")
@@ -233,7 +250,7 @@ def test_convert_md_to_html_renders_line_mermaid_as_inline_svg(tmp_path):
         encoding="utf-8",
     )
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     soup = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
     chart = soup.select_one(".mermaid-wrap svg.chart-svg")
@@ -259,7 +276,7 @@ def test_convert_md_to_html_renders_pie_mermaid_as_inline_svg(tmp_path):
         encoding="utf-8",
     )
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     soup = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
     chart = soup.select_one(".mermaid-wrap svg.chart-svg")
@@ -287,7 +304,7 @@ def test_convert_md_to_html_renders_timeline_mermaid_as_inline_svg(tmp_path):
         encoding="utf-8",
     )
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     soup = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
     chart = soup.select_one(".mermaid-wrap svg.chart-svg")
@@ -312,7 +329,7 @@ def test_convert_md_to_html_structures_h2_led_report_without_changing_links(tmp_
         encoding="utf-8",
     )
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     html = target.read_text(encoding="utf-8")
     soup = BeautifulSoup(html, "html.parser")
@@ -351,7 +368,7 @@ def test_convert_md_to_html_keeps_stable_section_when_cover_consumes_all_content
     target = tmp_path / "minimal-report.html"
     source.write_text(markdown, encoding="utf-8")
 
-    html_export.convert_md_to_html(source, target)
+    convert_styled_md_to_html(source, target)
 
     soup = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
 

@@ -4,7 +4,8 @@ import base64
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.report_style.export import report_bundle
+from openjiuwen_deepsearch.algorithm.report_export import report_bundle
+from openjiuwen_deepsearch.common.exception import CustomValueException
 
 
 PNG_B64 = (
@@ -68,5 +69,5 @@ def test_build_report_bundle_rejects_invalid_input(tmp_path, final_result):
         tmp_path: pytest 提供的临时目录。
         final_result: 需要验证的报告最终结果。
     """
-    with pytest.raises(report_bundle.ReportStyleValidationError):
+    with pytest.raises(CustomValueException):
         report_bundle.build_report_bundle(final_result, tmp_path)

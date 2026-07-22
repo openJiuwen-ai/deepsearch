@@ -4,7 +4,9 @@
 
 本文档覆盖报告生成中的候选文档预筛能力，包括 URL 规范化、正文变体去重、评分提取、step 分桶、候选数量限制和均衡批处理。
 
-本文档不覆盖 collector 侧证据生成和 LLM 分类 Prompt 本身。
+本文档不覆盖信息维度矩阵文档选择（rationale 生成、覆盖矩阵评估、贪心子模选择）和 collector 侧证据生成。
+
+详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)。
 
 ## 功能目的
 
@@ -69,5 +71,6 @@ uv run pytest tests/report/test_doc_prefilter.py
 ## 相关文档
 
 - [报告生成总览](../report-generation.md)
+- [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)
 - [子报告生成](./sub-report-generation.md)
 - [资料采集](../research-collector.md)

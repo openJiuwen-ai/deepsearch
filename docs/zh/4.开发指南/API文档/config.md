@@ -316,8 +316,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **enable_question_router**(bool, 可选)：当为 `True` 且 `search_mode="search"` 时，先经 LLM 路由简单问题到 `react`、复杂问题到 DeepSearch。默认值：`False`。
 - **search_workflow_per_question_params**(PerQuestionParams, 可选)：search/react 单问题控制参数（时间、并发、工具映射、上限等）。默认值：`PerQuestionParams()`。
 - **search_workflow_milvus_config**(MilvusConfig, 可选)：`retrieve` 工具路径使用的 Milvus/Embedding 配置。默认值：`MilvusConfig()`。
-- **jina_api_key**(bytearray, 可选)：`search_fetch` 路径使用的 Jina API Key。默认值：`bytearray("", encoding="utf-8")`。
-- **serper_api_key**(bytearray, 可选)：`search_fetch` 路径使用的 Serper API Key。默认值：`bytearray("", encoding="utf-8")`。
+- **web_fetch_provider_config**(WebFetchProviderConfig, 可选)：显式 DeepSearch 抓取 provider 配置。当前 v1 需设置 `provider_name="jina"` 才能启用 `web_fetch`。默认值：`WebFetchProviderConfig()`。
 - **model_config**(ConfigDict，内部配置)：Pydantic 模型配置；`arbitrary_types_allowed=True`。
 - **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
 - **user_feedback_processor_enable**(bool, 可选)：是否启用报告生成后的局部优化能力。默认值：`False`。
@@ -430,9 +429,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_webpage_enrich_fetch_timeout_seconds**(int, 可选)：网页正文增强单个 URL 抓取超时时间，单位秒。默认值：`45`。
 
 ### 报告节点参数
-- **sub_report_classify_doc_infos_single_time_num**(int, 可选)：子报告中单次llm处理筛选收集到的数量。默认值：`60`。
-- **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中单次llm处理返回的top_k数量。默认值：`10`。
-- **sub_report_doc_prefilter_multiplier**(int, 可选)：子报告写作前文档预筛保留倍数，最大候选数为 `sub_report_classify_doc_infos_res_top_k_num * sub_report_doc_prefilter_multiplier`。默认值：`5`。
+- **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中单次llm处理返回的top_k数量。默认值：`20`。
 - **report_max_generate_retry_num**(int, 可选)：生成内容最大重试次数。默认值：`3`。
 - **visualization_enable**(bool, 可选)：报告插图可视化开关。默认值：`False`。
 

@@ -65,10 +65,18 @@ def _format_key_passages(passages: list[str]) -> list[str]:
     return [f"- {passage}" for passage in passages]
 
 
-def build_compact_classify_doc_infos_text(doc_infos: list[dict[str, Any]]) -> str:
-    """Build compact document information for classification LLM input."""
+def build_compact_classify_doc_infos_text(
+    doc_infos: list[dict[str, Any]], *, start: int = 1
+) -> str:
+    """Build compact document information for classification LLM input.
+
+    Args:
+        doc_infos: List of doc_info dicts.
+        start: Starting index for document numbering (1-based by default,
+               use 0 for coverage-matrix flow where output keys are doc_0-based).
+    """
     blocks = []
-    for index, doc_info in enumerate(doc_infos, start=1):
+    for index, doc_info in enumerate(doc_infos, start=start):
         scores = build_classify_scores(doc_info)
         passages = normalize_key_passages(doc_info.get("key_passages"))
         block_lines = [

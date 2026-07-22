@@ -208,8 +208,8 @@ AgentConfig 下与 Search 相关的主要包括：
 - 开放域问答
 
 配置要求：
-- `serper_api_key`: Serper API 密钥（用于 WebSearch）
-- `jina_api_key`: Jina API 密钥（用于 WebFetch）
+- `web_search_engine_config`: 配置 `search_engine_name`、`search_api_key`、可选的 `search_url` 和 `max_web_search_results`。
+- `web_fetch_provider_config`: 配置 `provider_name`、`api_key` 和可选的 `base_url`。当前内置网页抓取 provider 为 Jina。
 
 2. retrieve 模式：使用 `Retrieve` 工具进行向量检索。
 
@@ -409,12 +409,9 @@ pytest -q tests/search_agent -m "not llm" \
 # 通用：LLM 端点取决于你的部署（OpenAI 兼容网关等）
 export OPENAI_API_KEY="your_openai_api_key"
 
-# search_fetch：Jina + Serper（与 `main.py` 中 `--jina_api_key` / `--serper_api_key` 对应）
-export JINA_API_KEY="your_jina_api_key"
-export SERPER_API_KEY="your_serper_api_key"
-
-# 运行 tests/search_agent 中带 @pytest.mark.llm 的 e2e（如 test_llm_search_fetch_e2e）时，fixture 期望：
-# RUN_LLM_TESTS=1 且 OPENROUTER_API_KEY、JINA_API_KEY、SERPER_API_KEY
+# search_fetch：通过 AgentConfig 或 CLI 配置任一受支持的 web 搜索引擎及网页抓取 provider。
+# 需要真实联网测试时，提供所选 provider 的密钥；密钥字段分别为
+# web_search_engine_config.search_api_key 和 web_fetch_provider_config.api_key。
 
 # retrieve：Embedding 密钥由 AgentConfig.search_workflow_milvus_config.embedder_api_key 提供；
 # 若你本地脚本使用 EMBEDDER_API_KEY 命名，请在合并进 agent_config 时映射到 embedder_api_key
@@ -463,7 +460,7 @@ asyncio.run(main())
 
 **retrieve 模式**：需先构建知识库索引（见下文），并在 **`AgentConfig.search_workflow_milvus_config`（`MilvusConfig`）** 中填写 Milvus 与 Embedder；**不要**在 `RetrievalSettingsConfig` 中配置 Milvus（该类型仅含 `top_k`、`mode` 等检索行为参数）。
 
-**命令行（search 模式）**：`main.py` 要求提供完整 LLM 参数，且 `search_fetch` 时必须提供 `--jina_api_key` 与 `--serper_api_key`。查询通过 **`--query`** 传入（可多个词，会拼接为空格分隔的一句）。
+**命令行（search 模式）**：`main.py` 要求提供完整 LLM 参数；`search_fetch` 时必须提供搜索引擎和抓取 provider 的名称及密钥。查询通过 **`--query`** 传入（可多个词，会拼接为空格分隔的一句）。
 
 ```bash
 python -m main \
@@ -475,8 +472,10 @@ python -m main \
   --llm_model_type openai \
   --llm_base_url "https://api.example.com/v1" \
   --llm_api_key "your-llm-key" \
-  --jina_api_key "your-jina-key" \
-  --serper_api_key "your-serper-key"
+  --web_search_engine_name "jina" \
+  --web_search_api_key "your-search-key" \
+  --fetch_provider_name "jina" \
+  --fetch_api_key "your-fetch-key"
 ```
 
 本仓库默认 **不包含** `scripts_will_be_deleted_later.run_8_queries` 等打榜批跑脚本；若你本地另有该模块，可按其 README 自行调用。

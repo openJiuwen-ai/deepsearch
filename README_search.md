@@ -198,7 +198,7 @@ Per-question (one search episode) limits.
 
 1. **`search_fetch`** — uses **`WebSearch`** and **`WebFetch`**.  
    - Good for: live web, fresh pages, open-domain QA.  
-   - Requires: **`serper_api_key`**, **`jina_api_key`** (on **`AgentConfig`**) for the bundled integrations.
+   - Requires: **`web_search_engine_config`** for the selected search engine and **`web_fetch_provider_config`** for the selected fetch provider. The current fetch provider is `jina`; supported search engines include Tavily, Google, Jina, Serper, Bocha, Perplexity, Petal, Xunfei, and custom engines.
 
 2. **`retrieve`** — uses **`Retrieve`** (vector store).  
    - Good for: KB QA, closed corpora, precise chunk retrieval.  
@@ -376,7 +376,7 @@ Typical keys (your app usually reads **`AgentConfig`** / CLI; env vars help loca
 # Generic OpenAI-compatible gateway
 export OPENAI_API_KEY="your_openai_api_key"
 
-# search_fetch: Jina + Serper (same as main.py --jina_api_key / --serper_api_key)
+# search_fetch: map the selected generic search and fetch provider credentials into agent_config
 export JINA_API_KEY="your_jina_api_key"
 export SERPER_API_KEY="your_serper_api_key"
 
@@ -426,7 +426,7 @@ Two ways to tune defaults:
 
 **Retrieve mode:** build an index first (below), then fill **`AgentConfig.search_workflow_milvus_config` (`MilvusConfig`)**. Do **not** put Milvus connection strings in **`RetrievalSettingsConfig`** (that type only holds retrieval behavior like **`top_k`** and **`mode`**).
 
-**Search mode CLI:** **`main.py`** requires full LLM flags. For **`search_fetch`**, **`--jina_api_key`** and **`--serper_api_key`** are mandatory. Pass the question with **`--query`** (multiple tokens are joined with spaces).
+**Search mode CLI:** **`main.py`** requires full LLM flags. For **`search_fetch`**, configure the selected search engine with `--web_search_engine_name` and `--web_search_api_key`, and the selected fetch provider with `--fetch_provider_name` and `--fetch_api_key`. Pass the question with **`--query`** (multiple tokens are joined with spaces).
 
 ```bash
 python -m main \
@@ -438,8 +438,10 @@ python -m main \
   --llm_model_type openai \
   --llm_base_url "https://api.example.com/v1" \
   --llm_api_key "your-llm-key" \
-  --jina_api_key "your-jina-key" \
-  --serper_api_key "your-serper-key"
+  --web_search_engine_name serper \
+  --web_search_api_key "your-serper-key" \
+  --fetch_provider_name jina \
+  --fetch_api_key "your-jina-key"
 ```
 
 This repository **does not** ship **`scripts_will_be_deleted_later.run_8_queries`** or similar batch benchmark drivers by default; add your own if needed.

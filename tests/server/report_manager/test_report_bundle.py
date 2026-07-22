@@ -2,8 +2,8 @@ import base64
 
 import pytest
 
-from server.deepsearch.common.exception.exceptions import ReportConvertValidationException
-from server.deepsearch.core.manager.report_manager.report_bundle import build_report_bundle
+from openjiuwen_deepsearch.algorithm.report_export.report_bundle import build_report_bundle
+from openjiuwen_deepsearch.common.exception import CustomValueException
 
 
 def test_build_report_bundle_writes_infer_and_chart_assets(tmp_path):
@@ -116,7 +116,7 @@ def test_build_report_bundle_raises_validation_exception_when_response_content_e
         "exception_info": "",
     }
 
-    with pytest.raises(ReportConvertValidationException):
+    with pytest.raises(CustomValueException):
         build_report_bundle(final_result, tmp_path)
 
 
@@ -143,7 +143,7 @@ def test_build_report_bundle_raises_validation_exception_when_chart_base64_inval
         "exception_info": "",
     }
 
-    with pytest.raises(ReportConvertValidationException):
+    with pytest.raises(CustomValueException):
         build_report_bundle(final_result, tmp_path)
 
 
@@ -170,7 +170,7 @@ def test_build_report_bundle_raises_validation_exception_when_chart_id_is_unsafe
         "exception_info": "",
     }
 
-    with pytest.raises(ReportConvertValidationException):
+    with pytest.raises(CustomValueException):
         build_report_bundle(final_result, tmp_path)
 
 
@@ -191,7 +191,7 @@ def test_build_report_bundle_raises_validation_exception_when_chart_placeholder_
         "exception_info": "",
     }
 
-    with pytest.raises(ReportConvertValidationException):
+    with pytest.raises(CustomValueException):
         build_report_bundle(final_result, tmp_path)
 
 
@@ -212,5 +212,5 @@ def test_build_report_bundle_raises_validation_exception_when_chart_messages_is_
         "exception_info": "",
     }
 
-    with pytest.raises(ReportConvertValidationException):
+    with pytest.raises(CustomValueException):
         build_report_bundle(final_result, tmp_path)

@@ -18,7 +18,7 @@ def test_anonymize_nested_api_keys_and_bytearray():
                 "model_name": "x",
             }
         },
-        "jina_api_key": "plain",
+        "web_fetch_provider_config": {"provider_name": "jina", "api_key": "fetch-plain"},
         "search_workflow_milvus_config": {"embedder_api_key": "emb"},
         "validator_agent": {"llm_config": {"general": {"api_key": "v"}}},
         "headers": [{"name": "Authorization", "value": "Bearer x"}, {"name": "X-Other", "value": "ok"}],
@@ -26,13 +26,13 @@ def test_anonymize_nested_api_keys_and_bytearray():
     out = anonymize_config_for_logging(cfg)
     assert out["llm_config"]["general"]["api_key"] == "***"
     assert out["llm_config"]["general"]["model_name"] == "x"
-    assert out["jina_api_key"] == "***"
+    assert out["web_fetch_provider_config"]["api_key"] == "***"
     assert out["search_workflow_milvus_config"]["embedder_api_key"] == "***"
     assert out["validator_agent"]["llm_config"]["general"]["api_key"] == "***"
     assert out["headers"][0]["value"] == "***"
     assert out["headers"][1]["value"] == "ok"
     # original unchanged
-    assert cfg["jina_api_key"] == "plain"
+    assert cfg["web_fetch_provider_config"]["api_key"] == "fetch-plain"
 
 
 def test_save_search_final_result_uses_redacted_config():
@@ -58,7 +58,7 @@ def test_save_search_final_result_uses_redacted_config():
         "access_token",
         "password",
         "client_secret",
-        "serper_api_key",
+        "search_api_key",
     ],
 )
 def test_anonymize_misc_secret_keys(key):

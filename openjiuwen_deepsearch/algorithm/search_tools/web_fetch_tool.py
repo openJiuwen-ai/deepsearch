@@ -4,11 +4,8 @@ import logging
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterable, List, Optional, Tuple, Union
-
-import requests
-from requests.exceptions import RequestException
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Optional, Tuple, Union
 
 from openjiuwen_deepsearch.algorithm.prompts.template import get_prompt_section
 from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import (
@@ -17,59 +14,15 @@ from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import (
     run_llm,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api import (
+    resolve_web_fetch_provider,
+    supported_fetch_providers,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import format_llm_log_correlation_suffix
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_JINA_READER_BASE_URLS: tuple[str, ...] = (
-    "https://r.jinaai.cn",
-    "https://r.jina.ai",
-)
-
-
-def _parse_jina_reader_base_url_override(raw: str | None) -> list[str]:
-    if not raw or not str(raw).strip():
-        return []
-    return [part.strip().rstrip("/") for part in str(raw).split(",") if part.strip()]
-
-
-def _dedupe_urls_preserve_order(urls: Iterable[str]) -> tuple[str, ...]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for url in urls:
-        if url not in seen:
-            seen.add(url)
-            ordered.append(url)
-    return tuple(ordered)
-
-
-def resolve_jina_reader_base_urls() -> tuple[str, ...]:
-    """Reader bases for WebFetch: env override first, then China mirror, then global."""
-    override = _parse_jina_reader_base_url_override(os.getenv("JINA_READER_BASE_URL"))
-    return _dedupe_urls_preserve_order((*override, *_DEFAULT_JINA_READER_BASE_URLS))
-
-
-def build_jina_reader_url(base_url: str, target_url: str) -> str:
-    """Build Jina Reader GET URL for a target page."""
-    return f"{base_url.rstrip('/')}/{target_url}"
-
-
-def jina_reader_request_timeout() -> tuple[float, float]:
-    """(connect_timeout, read_timeout) per endpoint; endpoints are raced in parallel."""
-    connect = float(os.getenv("JINA_READER_CONNECT_TIMEOUT", "4"))
-    read = float(os.getenv("JINA_READER_READ_TIMEOUT", "8"))
-    return connect, read
-
-
-def _jina_reader_auth_failure(response: requests.Response) -> bool:
-    if response.status_code in (401, 403):
-        return True
-    if response.status_code < 500:
-        return False
-    body = (response.text or "").lower()
-    return "authenticate" in body or "authenticationrequired" in body
 
 if sys.platform == "win32":
     import msvcrt
@@ -111,15 +64,9 @@ class WebFetch:
     _log_lock = asyncio.Lock()
 
     def __init__(self, config: Optional[dict]) -> None:
-        if isinstance(config.get("jina_api_key", None), (bytes, bytearray)):
-            try:
-                self.jina_api_key = config.get("jina_api_key", None).decode("utf-8")
-            except Exception:
-                self.jina_api_key = str(config.get("jina_api_key", None))
-        else:
-            self.jina_api_key = config.get("jina_api_key", None)
-        self._jina_reader_bases = resolve_jina_reader_base_urls()
-        self._jina_reader_timeout = jina_reader_request_timeout()
+        config = config or {}
+        provider_config = config.get("web_fetch_provider_config") or {}
+        self.provider_name, self.provider = resolve_web_fetch_provider(provider_config)
         self.web_fetch_log_file = config.get("web_fetch_log_file", "gnosis/tool_log/web_fetch_log.jsonl")
         log_dir = os.path.dirname(self.web_fetch_log_file)
         if log_dir:
@@ -201,6 +148,18 @@ class WebFetch:
             model_name=model_name,
         )
 
+    def _provider_config_error(self) -> str:
+        providers = ", ".join(supported_fetch_providers())
+        if not self.provider_name:
+            return (
+                "[web_fetch] No fetch provider configured. "
+                "Set agent_config.web_fetch_provider_config.provider_name explicitly."
+            )
+        return (
+            f"[web_fetch] Unsupported fetch provider '{self.provider_name}'. "
+            f"Supported providers: {providers}."
+        )
+
     async def _execute_fetch(
         self,
         url: str,
@@ -208,7 +167,10 @@ class WebFetch:
         log_fetch: bool,
         model_name: Optional[str],
     ) -> str:
-        page_text = await asyncio.to_thread(self._retrieve_page, url)
+        if self.provider is None:
+            return self._provider_config_error()
+
+        page_text = await asyncio.to_thread(self.provider.fetch_page, url)
         raw_page = page_text
 
         if page_text and not page_text.startswith("[web_fetch] Failed"):
@@ -220,7 +182,8 @@ class WebFetch:
 
             if extracted is None:
                 logger.error(
-                    "[WebFetch] extractor returned no structured result; falling back | url=%s goal=%s%s",
+                    "[WebFetch] extractor returned no structured result; falling back | provider=%s url=%s goal=%s%s",
+                    self.provider_name,
                     url,
                     "*" if LogManager.is_sensitive() else goal,
                     format_llm_log_correlation_suffix(),
@@ -244,78 +207,6 @@ class WebFetch:
             return result
 
         return await self._fallback(url, goal, raw_page, log_fetch)
-
-    def _retrieve_page(self, url: str) -> str:
-        for _ in range(2):
-            content = self._read_via_jina(url)
-            # Check if content is valid by splitting conditions
-            has_content = content is not None and content
-            if not has_content:
-                continue
-            is_not_failed = not content.startswith("[web_fetch] Failed")
-            is_not_empty = content != "[web_fetch] Empty content."
-            is_not_parser_error = not content.startswith("[document_parser]")
-
-            if is_not_failed and is_not_empty and is_not_parser_error:
-                return content
-        return "[web_fetch] Failed to read page."
-
-    def _read_via_jina(self, url: str) -> str:
-        headers = {"Authorization": f"Bearer {self.jina_api_key}"}
-        bases = self._jina_reader_bases
-        if not bases:
-            return "[web_fetch] Failed to read page."
-
-        def _fetch_base(base: str) -> tuple[str, requests.Response | None, RequestException | None]:
-            reader_url = build_jina_reader_url(base, url)
-            try:
-                resp = requests.get(
-                    reader_url,
-                    headers=headers,
-                    timeout=self._jina_reader_timeout,
-                )
-                return base, resp, None
-            except RequestException as exc:
-                return base, None, exc
-
-        last_error: RequestException | None = None
-        server_error_response: requests.Response | None = None
-
-        with ThreadPoolExecutor(max_workers=len(bases)) as pool:
-            futures = [pool.submit(_fetch_base, base) for base in bases]
-            for future in as_completed(futures):
-                base, resp, err = future.result()
-                if err is not None:
-                    last_error = err
-                    logger.warning(
-                        "[WebFetch] Jina reader %s unreachable: %s",
-                        base,
-                        err,
-                    )
-                    continue
-                if resp.status_code == 200:
-                    return resp.text
-                if _jina_reader_auth_failure(resp):
-                    logger.warning(
-                        "[WebFetch] Jina reader %s rejected credentials for target url",
-                        base,
-                    )
-                    return "[web_fetch] Failed to read page."
-                logger.warning(
-                    "[WebFetch] Jina reader %s returned HTTP %s for target url",
-                    base,
-                    resp.status_code,
-                )
-                if resp.status_code >= 500 and server_error_response is None:
-                    server_error_response = resp
-
-        if last_error is not None:
-            logger.warning(
-                "[WebFetch] all Jina reader endpoints failed for target url: %s",
-                last_error,
-                exc_info=True,
-            )
-        return "[web_fetch] Failed to read page."
 
     @staticmethod
     def _extractor_raw_preview(raw: str, limit: int = 200) -> str:
@@ -408,7 +299,7 @@ class WebFetch:
                 )
                 working = working[:new_len]
                 logger.warning(
-                    "[WebFetch._analyze_content] context limit; " "truncated body to len=%s (attempt %s/%s)%s",
+                    "[WebFetch._analyze_content] context limit; truncated body to len=%s (attempt %s/%s)%s",
                     len(working),
                     attempt + 1,
                     max_attempts,
@@ -423,7 +314,6 @@ class WebFetch:
         model_name: str,
         max_retries: int = 2,
     ) -> Tuple[str, Optional[BaseException]]:
-
         llm_config = {
             "model_name": model_name,
             "max_tries": max_retries + 1,
@@ -448,11 +338,10 @@ class WebFetch:
                     if left != -1 and right != -1 and left <= right:
                         content = content[left: right + 1]
                 return content, None
-            else:
-                logger.warning(
-                    "[WebFetch._invoke_llm] run_llm returned empty content for model %s",
-                    "*" if LogManager.is_sensitive() else model_name,
-                )
+            logger.warning(
+                "[WebFetch._invoke_llm] run_llm returned empty content for model %s",
+                "*" if LogManager.is_sensitive() else model_name,
+            )
         except Exception as e:
             return "", e
 
@@ -463,12 +352,14 @@ class WebFetch:
             "timestamp": time.time(),
             "url": url,
             "goal": goal,
-            "jina_output": raw,
+            "provider_name": self.provider_name,
+            "provider_output": raw,
             "summary": summary,
         }
+        if self.provider_name == "jina":
+            record["jina_output"] = raw
 
         def _do_write() -> None:
-
             try:
                 with open(self.web_fetch_log_file, "ab") as f:
                     locked = False
@@ -483,9 +374,9 @@ class WebFetch:
                             try:
                                 _unlock_file(f)
                             except Exception as e:
-                                logger.warning(f"Failed to release log file lock: {e}")
+                                logger.warning("Failed to release log file lock: %s", e)
             except Exception as e:
-                logger.warning(f"Failed to write web_fetch log: {e}")
+                logger.warning("Failed to write web_fetch log: %s", e)
 
         async with self._log_lock:
             await asyncio.to_thread(_do_write)

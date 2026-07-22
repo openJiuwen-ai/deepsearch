@@ -4,7 +4,7 @@ import pytest
 from openjiuwen.core.foundation.llm.schema.message import UserMessage
 from pydantic import ValidationError
 
-from openjiuwen_deepsearch.config.config import WebSearchEngineConfig
+from openjiuwen_deepsearch.config.config import AgentConfig, WebSearchEngineConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import (
     SearchQueryItem,
     SearchQueryList,
@@ -16,11 +16,15 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_colle
     InfoRetrievalNode,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import (
+    _initialize_web_search_context_from_agent_config,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search import (
     ArxivSearchAPIWrapper,
     PubMedSearchAPIWrapper,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import search_engine_mapping
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import web_search_context
 
 
 def _agent_input() -> dict:
@@ -40,6 +44,25 @@ def test_vertical_search_engines_are_registered_but_not_primary_configurable():
         WebSearchEngineConfig(search_engine_name="pubmed")
     with pytest.raises(ValidationError):
         WebSearchEngineConfig(search_engine_name="arxiv")
+
+
+def test_web_search_context_registers_academic_engines_for_research_only():
+    config = AgentConfig(web_search_engine_config={"search_engine_name": "jina"})
+
+    research_token = _initialize_web_search_context_from_agent_config(
+        config,
+        include_academic_engines=True,
+    )
+    try:
+        assert set(web_search_context.get()) == {"jina", "pubmed", "arxiv"}
+    finally:
+        web_search_context.reset(research_token)
+
+    deepsearch_token = _initialize_web_search_context_from_agent_config(config)
+    try:
+        assert set(web_search_context.get()) == {"jina"}
+    finally:
+        web_search_context.reset(deepsearch_token)
 
 
 def test_query_object_and_retrieval_query_carry_secondary_engine():
