@@ -1398,7 +1398,12 @@ class DeepSearchAgent(BaseAgent):
                     "total_input_tokens": run_context.total_input_tokens,
                     "total_output_tokens": run_context.total_output_tokens,
                     "log_dir": run_context.log_dir,
-                    "fail_count": run_context.fail_count,
+                    # Pass 0 so the sub-workflow reports a per-action delta (0/1),
+                    # not the running cumulative total. The parent accumulates it
+                    # at the completion site; passing run_context.fail_count here
+                    # caused the total to be double-counted (and inflated under
+                    # parallelism).
+                    "fail_count": 0,
                 },
             )
 
