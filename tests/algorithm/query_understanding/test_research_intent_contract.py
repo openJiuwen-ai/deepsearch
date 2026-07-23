@@ -144,6 +144,59 @@ def test_sub_section_outline_prompt_renders_section_local_contract_context():
     assert "recommendation, ranking" in system_prompt
 
 
+def test_sub_section_outline_prompt_allows_flat_outline_when_section_is_focused():
+    context = {
+        "messages": [],
+        "language": "zh-CN",
+        "section_idx": "1",
+        "has_template": False,
+        "section_title": "市场概览",
+        "section_description": "概述市场当前状态。",
+        "section_format_requirements": "",
+        "current_outline": "1 市场概览",
+        "report_type": "brief",
+        "paragraph_style": "concise",
+    }
+
+    prompts = apply_system_prompt("sub_section_outline", context)
+    system_prompt = prompts[0]["content"]
+
+    assert "Flat outline" in system_prompt
+    assert "only the Level 1 heading" in system_prompt
+    assert "research scope, not a one-to-one mapping to Level 2 headings" in system_prompt
+    assert "Multiple focus dimensions may be covered in one cohesive flat chapter" in system_prompt
+
+
+@pytest.mark.parametrize(
+    "prompt_name",
+    ["sub_report_markdown", "sub_report_brief_markdown"],
+)
+def test_sub_report_prompts_render_flat_outline_writing_rule(prompt_name):
+    context = {
+        "messages": [],
+        "language": "zh-CN",
+        "section_iscore": False,
+        "report_type": "brief",
+        "paragraph_style": "concise",
+        "current_chapter_outline": "1 市场概览",
+    }
+
+    prompts = apply_system_prompt(prompt_name, context)
+    system_prompt = prompts[0]["content"]
+
+    assert "If the outline has only one line" in system_prompt
+    assert "Do not invent" in system_prompt
+    assert "Level 2 headings" in system_prompt
+    assert "exactly one Markdown heading" in system_prompt
+    assert (
+        "Do not add any Markdown heading that is not present in "
+        "`current_chapter_outline`" in system_prompt
+    )
+    assert "must still be included" in system_prompt
+    assert "not as additional Markdown headings" in system_prompt
+    assert "generic headings such as" not in system_prompt
+
+
 def test_sub_report_prompt_renders_section_local_contract_context():
     context = {
         "messages": [],

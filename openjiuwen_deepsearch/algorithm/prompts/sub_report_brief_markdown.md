@@ -85,6 +85,11 @@ format_requirements: {{ current_section_format_requirements }}
 - Convert `current_chapter_outline` plain text into Markdown headings:
   - First line -> `#`
   - Remaining lines -> `##`
+- If the outline has only one line, write exactly one Markdown heading: the Level 1 heading from that line.
+  Do not invent Level 2 headings. Do not add any Markdown heading that is not present in `current_chapter_outline`.
+  Conclusions, implications, recommendations, and other content required by the current section, `format_requirements`,
+  or the Chapter Writing Directive must still be included. In a flat outline, present that content as prose, bold
+  lead-ins, numbered sentences, lists, or tables as appropriate, not as additional Markdown headings.
 - Keep title wording exactly the same as the provided outline.
 - Do not output `###` or deeper headings.
 - If more structure is needed, use bullet points with bold lead-ins.
@@ -92,7 +97,8 @@ format_requirements: {{ current_section_format_requirements }}
 ## 3) Brief-Length Rules (STRICT)
 - Target chapter length: **450-900 Chinese characters** (or **300-550 English words**).
 - Hard ceiling: **1200 Chinese characters** (or **700 English words**).
-- Keep each `##` subsection to at most **1 short paragraph** (2 only when unavoidable).
+- When Level 2 headings are present, keep each `##` subsection to at most **1 short paragraph** (2 only when unavoidable).
+- For a flat outline, apply the same concise length discipline to the whole chapter without adding headings.
 - For optional tables that are not explicitly required by the user, `format_requirements`, or the current chapter outline, prefer at most **1 table** for the whole chapter and skip them when they do not improve clarity.
 - Required tables are exempt from the one-table preference: if the user, `format_requirements`, or the current chapter outline requires multiple tables, exact columns, or specific row objects, preserve those requirements and keep each table concise.
 - If a table is used, write one intro sentence above it and exactly one concise plain-text caption below it; keep the caption to the table's subject/scope only. Do not manually number the table or add extra table notes/blockquotes such as "表格说明", "表说明", "Table note", or "Note".

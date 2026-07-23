@@ -322,9 +322,10 @@ class Reporter:
 
             # Subsection: "1.1 title".
             # Section: "1 title" (title may start with digits, e.g. 2025) or "1. title" but not "1.1".
-            sub_pat = re.compile(rf"^\s*{n}\.(\d+)\s*")
-            main_space_pat = re.compile(rf"^\s*{n}\s+.+")
-            main_dot_pat = re.compile(rf"^\s*{n}\.(?!\d)\s*.+")
+            escaped_n = re.escape(str(n))
+            sub_pat = re.compile(rf"{escaped_n}\.(\d+)\s+.+")
+            main_space_pat = re.compile(rf"{escaped_n}\s+.+")
+            main_dot_pat = re.compile(rf"{escaped_n}\.(?!\d)\s*.+")
             third_pat = re.compile(r"\d+\.\d+\.\d+")
 
             has_main = False
@@ -344,10 +345,22 @@ class Reporter:
                         False,
                         f"line {line_no}: third-level numbering not allowed (e.g. {n}.1.1): {preview!r}",
                     )
-                sub_match = sub_pat.match(ln)
+                sub_match = sub_pat.fullmatch(ln)
                 if sub_match:
+                    if not has_main:
+                        preview = ln[:120] + ("..." if len(ln) > 120 else "")
+                        return (
+                            False,
+                            f"line {line_no}: subsection appears before level-1 title: {preview!r}",
+                        )
                     sub_numbers.append(int(sub_match.group(1)))
-                elif main_space_pat.match(ln) or main_dot_pat.match(ln):
+                elif main_space_pat.fullmatch(ln) or main_dot_pat.fullmatch(ln):
+                    if line_no != 1:
+                        preview = ln[:120] + ("..." if len(ln) > 120 else "")
+                        return (
+                            False,
+                            f"line {line_no}: level-1 title must be the first non-empty line: {preview!r}",
+                        )
                     if has_main:
                         preview = ln[:120] + ("..." if len(ln) > 120 else "")
                         return (
@@ -355,32 +368,47 @@ class Reporter:
                             f"line {line_no}: duplicate level-1 title for section {n}: {preview!r}",
                         )
                     has_main = True
-                elif re.match(r"\d+", ln):
+                else:
                     preview = ln[:120] + ("..." if len(ln) > 120 else "")
+                    if re.match(r"\d+", ln):
+                        return (
+                            False,
+                            f"line {line_no}: line starts with digits but is not a valid "
+                            f"'{n} title' or '{n}.x' subsection title: {preview!r}",
+                        )
                     return (
                         False,
-                        f"line {line_no}: line starts with digits but is not a valid "
-                        f"'{n} title' or '{n}.x' subsection title: {preview!r}",
+                        f"line {line_no}: unexpected content; only "
+                        f"'{n} title' and '{n}.x subsection title' are allowed: {preview!r}",
                     )
 
             sorted_subs = sorted(set(sub_numbers))
             if not sorted_subs:
+                if has_main:
+                    return True, ""
                 return (
                     False,
-                    f"no valid subsection lines like '{n}.1 title' "
-                    f"(found {len(lines)} non-empty line(s); level-1 present={has_main})",
+                    f"missing level-1 title line like '{n} section title' "
+                    f"(found {len(lines)} non-empty line(s))",
                 )
-            if sorted_subs[0] != 1:
+            if sub_numbers[0] != 1:
                 return (
                     False,
-                    f"first subsection must be {n}.1, got {n}.{sorted_subs[0]} "
-                    f"(subsection indices found: {sorted_subs})",
+                    f"first subsection must be {n}.1, got {n}.{sub_numbers[0]} "
+                    f"(subsection indices found: {sub_numbers})",
                 )
             if not has_main:
                 return (
                     False,
                     f"missing level-1 title line like '{n} section title' "
                     f"(subsection indices found: {sorted_subs})",
+                )
+            expected_sub_numbers = list(range(1, len(sub_numbers) + 1))
+            if sub_numbers != expected_sub_numbers:
+                return (
+                    False,
+                    f"subsections must be unique, ordered, and consecutive "
+                    f"(expected {expected_sub_numbers}, got {sub_numbers})",
                 )
             return True, ""
         except Exception as e:

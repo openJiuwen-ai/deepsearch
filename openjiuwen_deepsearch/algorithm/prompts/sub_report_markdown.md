@@ -121,6 +121,11 @@ format_requirements: {{ current_section_format_requirements }}
     - The provided `current_chapter_outline` is **plain text** (no symbols). You must convert them into standard Markdown Headings in your output.
     - **Level 1 Heading**: Apply `#` to the **first line** of the outline (the Main Chapter Title).
     - **Level 2 Heading**: Apply `##` to all **subsequent lines** (the Sub-chapter Titles).
+    - If the outline has only one line, write exactly one Markdown heading: the Level 1 heading from that line.
+      Do not invent Level 2 headings. Do not add any Markdown heading that is not present in `current_chapter_outline`.
+      Conclusions, implications, recommendations, and other content required by the current section, `format_requirements`,
+      or the Chapter Writing Directive must still be included. In a flat outline, present that content as prose, bold
+      lead-ins, numbered sentences, lists, or tables as appropriate, not as additional Markdown headings.
     - **Format Rule**: Output must be standard Markdown headers (e.g., `# 1. Title`), **Not** bold text (e.g., `**1. Title**`) or plain text.
 - **Title Preservation**:
     - You must STRICTLY follow the **text content** of the `current_chapter_outline`.

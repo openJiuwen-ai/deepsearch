@@ -135,6 +135,33 @@ def test_is_valid_chapter_format(text, section_idx, expected):
     assert Reporter.is_valid_chapter_format(text, section_idx) == expected
 
 
+def test_check_chapter_format_accepts_level1_only_outline():
+    ok, reason = Reporter.check_chapter_format("1 市场概览", 1)
+    assert ok is True, reason
+    assert reason == ""
+
+
+@pytest.mark.parametrize(
+    "outline",
+    [
+        "1 市场概览\nHere is the requested outline:",
+        "1 市场概览\n```",
+        "1 市场概览\n正文说明",
+        "说明文字\n1 市场概览",
+        "1 市场概览\n2 错误章节",
+        "1.1 子章节\n1 市场概览",
+        "1 市场概览\n1.1",
+        "1 市场概览\n1.1 现状\n1.3 趋势",
+        "1 市场概览\n1.2 趋势\n1.1 现状",
+        "1 市场概览\n1.1 现状\n1.1 趋势",
+    ],
+)
+def test_check_chapter_format_rejects_extra_or_misordered_lines(outline):
+    ok, reason = Reporter.check_chapter_format(outline, 1)
+    assert ok is False
+    assert reason
+
+
 def test_check_chapter_format_returns_reason_for_markdown_heading():
     ok, reason = Reporter.check_chapter_format("## 1.1 子标题\n1 主标题", 1)
     assert ok is False

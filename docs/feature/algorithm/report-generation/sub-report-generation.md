@@ -16,8 +16,12 @@
 - brief 报告和 professional 报告使用不同 Prompt 或不同段落策略。
 - 子报告标题会被清理编号，过深标题会被降级为列表项。
 - 子大纲生成只面向当前顶层章节；用户在当前 outline、章节标题或章节描述中指定的 subsection titles 会被精确保留。
+- `focus_dimensions` 只定义当前章节的研究范围，子大纲生成器不会机械地为每个维度创建一个 H2；多个维度可以在一个连贯的扁平章节中呈现。
+- 聚焦、简洁且不需要独立比较轴、类别、阶段、机制、对象、问题或步骤的章节，可以生成仅含一级标题的扁平子大纲；需要显式内部结构时仍生成连续编号的二级标题。
+- 子大纲的每个非空行必须是第一行一级标题或后续二级标题。说明文字、代码围栏、正文、空标题、错序标题和其他章节标题均视为非法输出，并触发子大纲重试。
 - key passages 只约束模型新增的具体事实、指标、案例、公司名和命名示例，不用于重命名或泛化用户指定的 subsection titles。
-- 子报告写作只输出当前顶层章节及其二级标题，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
+- 子报告写作严格复用已批准的子大纲标题。单行扁平大纲只允许一个 H1，不得增加子大纲之外的 Markdown 标题；章节要求的结论、建议、启示等内容仍须保留，并使用段落、编号句、列表、表格或加粗引导语表达。
+- professional 和 brief 写作 Prompt 都遵循相同的扁平标题契约，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
 - 章节 sidecar 保存摘要、资料映射和局部契约，供后续用户反馈和报告流程复用。
 
 ## 关键代码路径
@@ -44,11 +48,12 @@
 
 1. Reporter 读取 outline section、章节计划和 classified contents。
 2. 构建章节局部契约和资料摘要。
-3. 根据报告类型选择子报告 Prompt。
-4. LLM 生成章节 Markdown。
-5. 标题编号和过深标题被清理。
-6. 生成或更新 chapter sidecar。
-7. 子报告交给最终报告拼接。
+3. LLM 生成当前章节的子大纲；`Reporter.check_chapter_format()` 逐行验证标题格式和顺序，非法输出进入重试。
+4. 根据报告类型选择 professional 或 brief 子报告 Prompt，两者共享扁平/层级标题契约。
+5. LLM 按已批准的子大纲生成章节 Markdown。
+6. 标题编号和过深标题被清理，并校验 Markdown 标题与子大纲逐项一致。
+7. 生成或更新 chapter sidecar。
+8. 子报告交给最终报告拼接。
 
 ## 数据契约与依赖
 
@@ -69,7 +74,9 @@
 
 - 子报告生成异常使用 `SUB_REPORT_GENERATE_ERROR` 格式化。
 - Prompt 输出空内容时应走错误或 fallback 路径。
-- 标题不能破坏整体报告层级。
+- 扁平子大纲必须恰好包含一个合法一级标题；层级化子大纲必须先出现一级标题，再出现带非空标题文本的 `n.x` 二级标题。
+- 子大纲中的额外说明、Markdown 代码围栏、正文或错序标题不能被静默接受。
+- 正文标题必须与已批准子大纲的数量、层级、顺序和文本一致，不能破坏整体报告层级。
 - 敏感日志模式下不输出完整资料和子报告正文。
 
 ## 测试与验证
@@ -79,6 +86,8 @@
 ```bash
 uv run pytest tests/report/test_sub_report.py
 uv run pytest tests/report/test_chapter_sidecar.py
+uv run pytest tests/report/test_tools_in_report.py
+uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.py
 ```
 
 ## 相关文档

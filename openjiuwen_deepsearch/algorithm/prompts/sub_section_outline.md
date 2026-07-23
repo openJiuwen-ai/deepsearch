@@ -5,7 +5,8 @@ section id is {{section_idx}}
 
 # Your Task
 Based on the provided information, generate a high-quality subsection outline.
-**Crucial:** The output must start with the section title (Level 1), followed by the subsection titles (Level 2).
+**Crucial:** The output must start with the section title (Level 1). Add subsection titles (Level 2) only when the
+current section genuinely needs them.
 
 # Authoritative Context
 
@@ -45,6 +46,13 @@ format_requirements: {{ section_format_requirements }}
   restrictions in `format_requirements` or under a subsection are subordinate requirements. Keep them within that
   subsection's scope; do not promote them into extra Level 2 headings.
 - Do not create extra subsection titles just to satisfy the default maximum subsection count.
+- Flat outline is allowed: when the current section is focused, concise, or already narrow enough to write as one
+  cohesive chapter, output only the Level 1 heading and do not invent Level 2 headings.
+- Treat `focus_dimensions` as research scope, not a one-to-one mapping to Level 2 headings.
+- Multiple focus dimensions may be covered in one cohesive flat chapter; do not create one subsection per dimension
+  mechanically.
+- Use a hierarchical outline only when the user query, current outline, section title, section description, or local
+  contract clearly requires separate comparison axes, categories, stages, mechanisms, objects, questions, or steps.
 - Output only one Level 1 heading for the current top-level section and Level 2 subsection headings. Do not output JSON,
   serialized subsection objects, or strings such as `"title":`, `"description":`, or `}, {`.
 
@@ -83,11 +91,12 @@ format_requirements: {{ section_format_requirements }}
 ## Logic & Constraint(Strictly Adhere)
 - Strictly follow the **section_description** as the authoritative guidance for outline generation.
 - Strictly preserve **section_format_requirements** as output constraints for the current section.
-- Ensure the outline reflects the logical structure implied by section_description, with **only two levels of headings (Level 1 and Level 2).**
+- Ensure the outline reflects the logical structure implied by section_description, with either a flat Level 1-only
+  outline or two levels of headings (Level 1 and Level 2).
 - Do **NOT** invent subsections or expand into Level 3 (or deeper) headings beyond what is suggested in section_description.
 - Ignore or override outline information from the global report_template if it conflicts with section_description.
 - Only generate **one** Level 1 heading, which must match the section title: {{ section_title }}
-- All subchapter headings must be Level 2 only, numbered as {{section_idx}}.1, {{ section_idx }}.2, etc.
+- If subchapter headings are needed, they must be Level 2 only, numbered as {{section_idx}}.1, {{ section_idx }}.2, etc.
 - Do not generate multiple Level 1 headings. The outline must reflect a single cohesive section structure.
 - Use key passages as the evidence boundary only for concrete wording introduced by the model in subsection titles.
 - Do not introduce concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages.
@@ -124,7 +133,8 @@ The section content is mainly made of key passages. Treat them as the evidence b
 ## Formatting Rules
 1.  **Structure:**
     - **Line 1:** Must be the **Level 1 Heading** (The provided section title).
-    - **Line 2+:** Must be **Level 2 Headings** (Subsections).
+    - **Line 2+:** Optional **Level 2 Headings** (Subsections). Omit them for a flat outline when the section is
+      focused enough to write as one cohesive chapter.
     - **Limit:** Maximum 4 subsections by default. If the user explicitly specifies or implies more subsection titles
       for this section through an ordered list, exact categories, mechanisms, dimensions, questions, or steps, preserve
       the user-specified count and titles. No Level 3 subtitles.
@@ -140,6 +150,10 @@ The section content is mainly made of key passages. Treat them as the evidence b
 {% endif %}
 
 ## Output Template (Must Follow):
+Flat outline:
+{{section_idx}} {{section_title}}
+
+Hierarchical outline:
 {{section_idx}} {{section_title}}
 {{section_idx}}.1 [Subsection Title 1]
 {{section_idx}}.2 [Subsection Title 2]
