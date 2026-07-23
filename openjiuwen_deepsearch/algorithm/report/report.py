@@ -2622,9 +2622,22 @@ class Reporter:
         current_section_description = current_inputs.get("section_description", "")
         current_section_format_requirements = current_inputs.get("section_format_requirements", [])
         current_chapter_outline = current_inputs.get("sub_section_outline", "")
+        outline_lines = [
+            line.strip()
+            for line in current_chapter_outline.splitlines()
+            if line.strip()
+        ]
+        default_current_subsection = (
+            "Full current chapter; follow each Level 2 heading in the current chapter outline."
+            if len(outline_lines) > 1
+            else (
+                "Full current chapter; keep the Level 1-only outline. "
+                "Do not add Level 2 or deeper headings."
+            )
+        )
         current_subsection = current_inputs.get(
             "current_subsection",
-            "Full current chapter; follow each Level 2 heading in the current chapter outline.",
+            default_current_subsection,
         )
         sub_content_message = (
             "# Current Top-Level Section\n"
