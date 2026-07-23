@@ -1148,6 +1148,18 @@ class DependencyOutlineNode(OutlineNode):
         """依赖驱动大纲节点固定使用依赖驱动工具 schema，不受 session 路由状态覆盖。"""
         return True
 
+    def _select_prompt_and_dep_driving(self, current_inputs: dict) -> tuple[str, bool, str]:
+        """
+        固定依赖驱动 workflow 始终保持 dependency_driving 执行契约。
+
+        Args:
+            current_inputs: 大纲节点预处理后的输入。
+
+        Returns:
+            prompt 名称、依赖驱动工具 schema 标记，以及 dependency_driving 执行模式。
+        """
+        return self._select_prompt_name(current_inputs), True, ExecutionMethod.DEPENDENCY_DRIVING.value
+
     def _get_next_node_after_outline(self, session: Session) -> str:
         """依赖驱动模式下的下一个节点"""
         return NodeId.DEPENDENCY_EDITOR_TEAM.value

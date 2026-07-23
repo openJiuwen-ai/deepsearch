@@ -703,6 +703,49 @@ def test_dependency_outline_node_with_dep_driving_ignores_session_outline_method
 
     assert node._get_with_dep_driving(current_inputs) is True
     assert node._select_prompt_name(current_inputs) == "dep_driving_outliner"
+    assert node._select_prompt_and_dep_driving(current_inputs) == (
+        "dep_driving_outliner",
+        True,
+        ExecutionMethod.DEPENDENCY_DRIVING.value,
+    )
+
+
+@pytest.mark.parametrize(
+    "current_inputs, expected_prompt",
+    [
+        (
+            {
+                "outline_execution_method": ExecutionMethod.DEPENDENCY_DRIVING.value,
+                "report_template": "模板内容",
+                "outline_interaction_mode": "",
+            },
+            "outliner_template",
+        ),
+        (
+            {
+                "outline_execution_method": ExecutionMethod.DEPENDENCY_DRIVING.value,
+                "outline_interaction_mode": "revise_outline",
+                "user_feedback": '{"title": "用户大纲", "thought": "mock", "sections": []}',
+                "report_template": "",
+            },
+            "outliner_user_revised",
+        ),
+    ],
+)
+def test_dependency_outline_node_special_prompts_keep_dependency_contract(current_inputs, expected_prompt):
+    """DependencyOutlineNode 的特殊 prompt 不应降级为普通 schema 或 parallel session。"""
+    node = DependencyOutlineNode()
+    session = Mock(spec=Session)
+    session.update_global_state = Mock()
+
+    prompt_name, with_dep_driving, selected_method = node._select_prompt_and_dep_driving(current_inputs)
+    node._sync_outline_execution_method(current_inputs, session, selected_method)
+
+    assert prompt_name == expected_prompt
+    assert with_dep_driving is True
+    assert selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value
+    assert current_inputs["outline_execution_method"] == ExecutionMethod.DEPENDENCY_DRIVING.value
+    session.update_global_state.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -739,7 +782,7 @@ def test_outline_node_parallel_contract_prompts_use_general_tool_schema(current_
 
 
 def test_outline_node_parallel_contract_prompt_resets_session_outline_method():
-    """特殊 prompt 强制使用普通工具 schema 时，应同步重置 session 中的大纲模式。"""
+    """普通 OutlineNode 特殊 prompt 使用普通 schema 时，应同步重置 session 中的大纲模式。"""
     node = OutlineNode()
     session = Mock(spec=Session)
     session.update_global_state = Mock()
