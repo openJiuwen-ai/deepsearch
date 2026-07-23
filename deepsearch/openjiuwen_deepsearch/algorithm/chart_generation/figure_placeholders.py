@@ -263,6 +263,11 @@ class FigurePlaceholderGenerator:
             logger.error(f"Error processing sections_h1: {len(results)} != {len(sections)}")
         h1_tasks = []
         for result in results:
+            if not isinstance(result, list):
+                # 单个二级章节处理失败（异常或返回 None）时跳过，避免拖垮整个一级章节
+                if isinstance(result, Exception):
+                    logger.error(f"Error processing section_h2: {result}")
+                continue
             h1_tasks.extend(result)
         # 为每个一级章节下的图表生成唯一的图表id
         chart_id_in_section = 0
@@ -311,6 +316,7 @@ class FigurePlaceholderGenerator:
             logger.error(
                 f"[CHART GENERATION] Error calling LLM for section {section_title}: {e}"
             )
+            return []
 
     @staticmethod
     def _parse_llm_response(
