@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.algorithm.report.report import (
     _replace_citations_and_classified_index,
     _get_classified_infos,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section, Plan, Step, StepType
 from openjiuwen_deepsearch.algorithm.report.report_utils import (
     MarkdownOutlineRenumber,
 )
@@ -539,3 +540,138 @@ def test_clean_markdown_headers_preserves_year_range_heading():
     cleaned = Reporter.clean_markdown_headers(content)
     assert "2025-2026年市场规模" in cleaned
     assert "2025-2026年出货量对比" in cleaned
+
+
+# ---------------------------------------------------------------------------
+# export_outline_without_plans: strip plans from outline for LLM input
+# ---------------------------------------------------------------------------
+
+def _make_outline_dict():
+    """Build a minimal outline dict with thought, plans, and step_result."""
+    return {
+        "id": "test-outline",
+        "language": "zh-CN",
+        "thought": "outline reasoning process",
+        "title": "Test Report",
+        "sections": [
+            {
+                "id": "1",
+                "title": "Chapter One",
+                "description": "desc one",
+                "format_requirements": [],
+                "is_core_section": True,
+                "parent_ids": [],
+                "relationships": [],
+                "plans": [
+                    {
+                        "id": "1-1",
+                        "language": "zh-CN",
+                        "title": "Plan 1",
+                        "thought": "plan thought",
+                        "is_research_completed": True,
+                        "steps": [
+                            {
+                                "id": "1-1-1",
+                                "type": "info_collecting",
+                                "title": "Step 1",
+                                "description": "collect data",
+                                "step_result": "X" * 5_000,
+                                "evaluation": "good",
+                            },
+                        ],
+                    },
+                ],
+                "section_focus": "market_size",
+                "focus_dimensions": ["size", "growth"],
+            },
+            {
+                "id": "2",
+                "title": "Chapter Two",
+                "description": "desc two",
+                "plans": [],
+                "parent_ids": ["1"],
+                "relationships": ["depends on"],
+            },
+        ],
+    }
+
+
+def test_export_outline_without_plans_strips_plans_from_dict():
+    """export_outline_without_plans must remove 'plans' (with step_result) from dict input."""
+    outline = _make_outline_dict()
+    result = Reporter.export_outline_without_plans(outline)
+
+    assert isinstance(result, dict)
+    for sec in result.get("sections", []):
+        assert "plans" not in sec or sec["plans"] == []
+        assert "step_result" not in str(sec)
+
+    # Title and section metadata are preserved
+    assert result["title"] == "Test Report"
+    assert result["sections"][0]["title"] == "Chapter One"
+    assert result["sections"][0]["description"] == "desc one"
+    assert result["sections"][1]["parent_ids"] == ["1"]
+
+
+def test_export_outline_without_plans_with_empty_input():
+    """None / unsupported types should be handled gracefully."""
+    assert Reporter.export_outline_without_plans(None) is None
+    assert Reporter.export_outline_without_plans("str") == "str"
+    assert Reporter.export_outline_without_plans({}) == {}
+
+
+def test_export_outline_without_plans_preserves_section_metadata():
+    """Section metadata (focus, dimensions, parent_ids) must survive stripping."""
+    outline = _make_outline_dict()
+    result = Reporter.export_outline_without_plans(outline)
+    sec0 = result["sections"][0]
+    assert sec0["section_focus"] == "market_size"
+    assert sec0["focus_dimensions"] == ["size", "growth"]
+    assert sec0["is_core_section"] is True
+
+
+def test_export_outline_without_plans_preserves_thought():
+    """thought field should be preserved (not stripped by export_outline_without_plans)."""
+    outline = _make_outline_dict()
+    result = Reporter.export_outline_without_plans(outline)
+    assert result.get("thought") == "outline reasoning process"
+
+
+def test_export_outline_without_plans_with_outline_object():
+    """export_outline_without_plans must handle Outline objects, returning Outline."""
+    step = Step(
+        type=StepType.INFO_COLLECTING,
+        title="Step 1",
+        description="desc",
+        step_result="R" * 5_000,
+        evaluation="eval",
+    )
+    plan = Plan(
+        id="1-1",
+        title="Plan 1",
+        thought="plan thought",
+        is_research_completed=True,
+        steps=[step],
+    )
+    section = Section(
+        id="1",
+        title="Chapter One",
+        description="desc one",
+        plans=[plan],
+        section_focus="market_size",
+        focus_dimensions=["size"],
+    )
+    outline = Outline(
+        thought="T" * 10_000,
+        title="Test Report",
+        sections=[section],
+    )
+
+    result = Reporter.export_outline_without_plans(outline)
+    assert isinstance(result, Outline)
+    assert result.title == "Test Report"
+    # plans must be stripped
+    for sec in result.sections:
+        assert sec.plans == []
+    # step_result must not leak
+    assert "R" * 100 not in str(result)

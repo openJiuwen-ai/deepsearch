@@ -732,8 +732,12 @@ class Reporter:
             logger.error(f"[generate_report] Generate report error: {error_message}")
             return False, _format_report_error(error_message)
 
+        if isinstance(current_outline, dict):
+            _outline_title = current_outline.get("title", "")
+        else:
+            _outline_title = getattr(current_outline, "title", "")
         report_content = (
-            f"{'# ' + current_outline.title}\n\n"  # Use outline title directly for report title
+            f"{'# ' + _outline_title}\n\n"  # Use outline title directly for report title
             f"{self._post_process_abstract(abstract)}\n\n"
             f"{sub_report_res.get('sub_reports_content')}\n\n"
             f"{self._post_process_conclusion(conclusion)}\n\n"
@@ -1433,7 +1437,9 @@ class Reporter:
         section_focus = contract_ctx.get("section_focus", "")
         focus_dimensions = contract_ctx.get("allowed_dimensions", [])
         report_task = current_inputs.get("report_task", "")
-        overall_outline = current_inputs.get("current_outline", "")
+        overall_outline = Reporter.export_outline_without_plans(
+            current_inputs.get("current_outline", {})
+        )
         step_summaries = current_inputs.get("step_summaries", [])
 
         step_summaries_text = "\n".join(
@@ -2145,7 +2151,9 @@ class Reporter:
             tmp_context["section_title"] = section_task
             tmp_context["section_description"] = section_description
             tmp_context["section_format_requirements"] = section_format_requirements
-            tmp_context["current_outline"] = current_inputs.get("current_outline", "")
+            tmp_context["current_outline"] = Reporter.export_outline_without_plans(
+                current_inputs.get("current_outline", {})
+            )
             tmp_context["report_type"] = current_inputs.get("report_type", "professional")
             tmp_context["paragraph_style"] = current_inputs.get("paragraph_style", "detailed")
             tmp_context.update(

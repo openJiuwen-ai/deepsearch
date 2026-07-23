@@ -16,6 +16,7 @@
 - brief 报告和 professional 报告使用不同 Prompt 或不同段落策略。
 - 子报告标题会被清理编号，过深标题会被降级为列表项。
 - 子大纲生成只面向当前顶层章节；用户在当前 outline、章节标题或章节描述中指定的 subsection titles 会被精确保留。
+- 所有传入 LLM prompt 的 outline 均经 `export_outline_without_plans` 处理：剥离 `plans`（含 `step_result`/`evaluation` 等收集结果全文），仅保留章节标题、描述、依赖关系等结构骨架，避免超长输入导致模型 token 超限。
 - key passages 只约束模型新增的具体事实、指标、案例、公司名和命名示例，不用于重命名或泛化用户指定的 subsection titles。
 - 子报告写作只输出当前顶层章节及其二级标题，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
 - 章节 sidecar 保存摘要、资料映射和局部契约，供后续用户反馈和报告流程复用。
