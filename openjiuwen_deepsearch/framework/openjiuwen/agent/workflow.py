@@ -1158,7 +1158,11 @@ class DeepSearchAgent(BaseAgent):
                     "total_input_tokens": self.total_input_tokens,
                     "total_output_tokens": self.total_output_tokens,
                     "log_dir": self.log_dir,
-                    "fail_count": self.fail_count,
+                    # Pass 0 so the sub-workflow reports a per-action delta (0/1),
+                    # not the running cumulative total. The parent accumulates it
+                    # at the completion site; passing self.fail_count here caused
+                    # the total to be double-counted (and inflated under parallelism).
+                    "fail_count": 0,
                 },
             )
 
@@ -1349,7 +1353,7 @@ class DeepSearchAgent(BaseAgent):
 
                 result: Result | None = state_result.get("result")
                 config = anonymize_config_for_logging(state_result.get("config", {}))
-                self.fail_count += config.get("fail_count", self.fail_count)
+                self.fail_count += config.get("fail_count", 0)
 
                 self.action_pool.record_completed(completed_action, result)
 
