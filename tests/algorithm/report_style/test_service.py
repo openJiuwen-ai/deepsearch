@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openjiuwen_deepsearch.algorithm.report_style import service
+from openjiuwen_deepsearch.algorithm.report_export import service as export_service
+from openjiuwen_deepsearch.algorithm.report_export.models import ReportExportResult
 
 
 FINAL_RESULT = {
@@ -18,6 +20,15 @@ FINAL_RESULT = {
     "chart_messages": [],
 }
 LLM = {"model_name": "style-model", "model": object()}
+PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO"
+    "+/p9sAAAAASUVORK5CYII="
+)
+
+
+def test_styled_report_result_remains_the_common_result_type() -> None:
+    """兼容类型别名应保持与统一导出结果的同一类型。"""
+    assert service.StyledReportResult is ReportExportResult
 
 
 def _read_report_html(convert_content: str) -> str:
@@ -46,7 +57,7 @@ async def test_stylize_report_injects_arbitrary_css_without_changing_markdown(mo
         ".report-cover::before { content: 'replacement'; }"
     )
     monkeypatch.setattr(
-        service,
+        export_service,
         "ainvoke_llm_with_stats",
         AsyncMock(return_value={"content": generated_css}),
     )
@@ -63,6 +74,31 @@ async def test_stylize_report_injects_arbitrary_css_without_changing_markdown(mo
 
 
 @pytest.mark.asyncio
+async def test_stylize_report_inlines_vlm_png_and_keeps_bundle_asset(monkeypatch) -> None:
+    """样式化 HTML 内嵌 VLM PNG，同时 bundle 保留原资源。"""
+    final_result = {
+        "response_content": "# 标题\n\n(#insertChart:chart_1)",
+        "infer_messages": [],
+        "chart_messages": [
+            {"chart_id": "chart_1", "chart_title": "销量", "base64": PNG_B64}
+        ],
+    }
+    monkeypatch.setattr(
+        export_service,
+        "ainvoke_llm_with_stats",
+        AsyncMock(return_value={"content": "body { color: #123456; }"}),
+    )
+
+    result = await service.stylize_report(final_result, LLM)
+
+    with zipfile.ZipFile(io.BytesIO(base64.b64decode(result.convert_content))) as archive:
+        html = archive.read("report_bundle/report.html").decode()
+        chart_bytes = archive.read("report_bundle/charts/chart_1.png")
+    assert 'src="data:image/png;base64,' in html
+    assert chart_bytes == base64.b64decode(PNG_B64)
+
+
+@pytest.mark.asyncio
 async def test_stylize_report_logs_css_lengths_without_css_content(monkeypatch, caplog):
     """成功样式化仅记录 CSS 长度，不记录完整模型响应。
 
@@ -73,12 +109,12 @@ async def test_stylize_report_logs_css_lengths_without_css_content(monkeypatch, 
     css_marker = "UNIQUE_CSS_CONTENT_MUST_NOT_BE_LOGGED"
     generated_css = f".report-cover {{ color: #123456; }} /* {css_marker} */"
     monkeypatch.setattr(
-        service,
+        export_service,
         "ainvoke_llm_with_stats",
         AsyncMock(return_value={"content": generated_css}),
     )
 
-    with caplog.at_level(logging.INFO, logger=service.__name__):
+    with caplog.at_level(logging.INFO, logger=export_service.__name__):
         result = await service.stylize_report(FINAL_RESULT, LLM)
 
     assert result.style_status == "applied"
@@ -104,7 +140,7 @@ async def test_stylize_report_falls_back_when_style_generation_is_unusable(monke
         llm_call.side_effect = llm_result
     else:
         llm_call.return_value = llm_result
-    monkeypatch.setattr(service, "ainvoke_llm_with_stats", llm_call)
+    monkeypatch.setattr(export_service, "ainvoke_llm_with_stats", llm_call)
 
     result = await service.stylize_report(FINAL_RESULT, LLM)
 
@@ -123,7 +159,7 @@ async def test_stylize_report_does_not_apply_service_level_timeout(monkeypatch):
         monkeypatch: pytest 的动态替换夹具。
     """
     monkeypatch.setattr(
-        service,
+        export_service,
         "ainvoke_llm_with_stats",
         AsyncMock(return_value={"content": "h1 { color: #123456; }"}),
     )
@@ -157,10 +193,10 @@ async def test_stylize_report_logs_raw_and_normalized_lengths_when_css_injection
     """
     normalized_css = "h1 { color: #123456; }"
     raw_css = f"```css\n{normalized_css}\n```"
-    monkeypatch.setattr(service, "ainvoke_llm_with_stats", AsyncMock(return_value={"content": raw_css}))
-    monkeypatch.setattr(service, "inject_css", lambda _html, _css: (_ for _ in ()).throw(ValueError("invalid HTML")))
+    monkeypatch.setattr(export_service, "ainvoke_llm_with_stats", AsyncMock(return_value={"content": raw_css}))
+    monkeypatch.setattr(export_service, "inject_css", lambda _html, _css: (_ for _ in ()).throw(ValueError("invalid HTML")))
 
-    with caplog.at_level(logging.INFO, logger=service.__name__):
+    with caplog.at_level(logging.INFO, logger=export_service.__name__):
         result = await service.stylize_report(FINAL_RESULT, LLM)
 
     assert 'id="report-style-generated"' not in _read_report_html(result.convert_content)
@@ -182,14 +218,14 @@ async def test_stylize_report_logs_compact_fallback_diagnostics(monkeypatch, cap
     """
     css_marker = "UNIQUE_FALLBACK_CSS_CONTENT_MUST_NOT_BE_LOGGED"
     generated_css = f".report-cover {{ color: #123456; }} /* {css_marker} */"
-    monkeypatch.setattr(service, "ainvoke_llm_with_stats", AsyncMock(return_value={"content": generated_css}))
+    monkeypatch.setattr(export_service, "ainvoke_llm_with_stats", AsyncMock(return_value={"content": generated_css}))
     monkeypatch.setattr(
-        service,
+        export_service,
         "normalize_css_output",
         lambda _css: (_ for _ in ()).throw(ValueError("invalid CSS")),
     )
 
-    with caplog.at_level(logging.INFO, logger=service.__name__):
+    with caplog.at_level(logging.INFO, logger=export_service.__name__):
         result = await service.stylize_report(FINAL_RESULT, LLM)
 
     assert result.style_status == "fallback"

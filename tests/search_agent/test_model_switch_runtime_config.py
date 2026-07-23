@@ -12,8 +12,15 @@ from openjiuwen.core.session.constants import WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY
 from openjiuwen_deepsearch.config.config import AgentConfig, PerQuestionParams, SearchWorkflowConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Result, SearchFinalResult
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepSearchAgent
+from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret as clear_secret
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("field", ["jina_api_key", "serper_api_key"])
+def test_agent_config_rejects_retired_search_fetch_fields(field: str) -> None:
+    with pytest.raises(ValueError, match="Use web_search_engine_config and web_fetch_provider_config"):
+        AgentConfig.model_validate({field: "retired-key"})
 
 
 def _make_agent(tmp_path: Path, model_name: str, query: str, *, time_limit: int = 120):
@@ -296,6 +303,8 @@ async def test_overlapping_runs_keep_workflow_timeout_isolated(
 async def test_run_sets_workflow_timeout_and_preserves_caller_secrets(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    cleared_secret_ids: list[int] = []
+
     class _DummyTool:
         def __init__(self, name: str, config: dict):
             self.name = name
@@ -321,6 +330,10 @@ async def test_run_sets_workflow_timeout_and_preserves_caller_secrets(
             messages=[],
         )
 
+    def _record_and_clear_secret(secret: bytearray) -> None:
+        cleared_secret_ids.append(id(secret))
+        clear_secret(secret)
+
     monkeypatch.setattr(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.LogManager.get_log_dir",
         lambda: str(tmp_path),
@@ -345,6 +358,10 @@ async def test_run_sets_workflow_timeout_and_preserves_caller_secrets(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent._run_internal",
         _fake_run_internal,
     )
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.zero_secret",
+        _record_and_clear_secret,
+    )
 
     agent_config = AgentConfig(
         llm_config={
@@ -356,8 +373,14 @@ async def test_run_sets_workflow_timeout_and_preserves_caller_secrets(
             }
         },
         search_workflow_per_question_params=PerQuestionParams(tool_map="search_fetch", time_limit=45),
-        jina_api_key=bytearray(b"j"),
-        serper_api_key=bytearray(b"s"),
+        web_search_engine_config={
+            "search_engine_name": "jina",
+            "search_api_key": bytearray(b"search"),
+        },
+        web_fetch_provider_config={
+            "provider_name": "jina",
+            "api_key": bytearray(b"fetch"),
+        },
     ).model_dump()
 
     token = workflow_session_vars.set({"existing": "value"})
@@ -376,5 +399,7 @@ async def test_run_sets_workflow_timeout_and_preserves_caller_secrets(
         workflow_session_vars.reset(token)
 
     assert json.loads(chunks[0])["prediction"] == "done"
-    assert agent_config["jina_api_key"] == bytearray(b"j")
-    assert agent_config["serper_api_key"] == bytearray(b"s")
+    assert len(cleared_secret_ids) == 4
+    assert len(set(cleared_secret_ids)) == 4
+    assert agent_config["web_search_engine_config"]["search_api_key"] == bytearray(b"search")
+    assert agent_config["web_fetch_provider_config"]["api_key"] == bytearray(b"fetch")

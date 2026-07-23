@@ -103,7 +103,7 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 2. `common_warning.log` 中**没有**阻断主流程的 `ERROR`（少量 `WARN` 如模型重试、单条搜索无结果，通常不影响最终成稿）。若日志中出现 `ERROR`，最终仍以 `final_result.exception_info` 判定是否失败，再用日志辅助定位原因。
 3. `common.log` 中出现 **`[EndNode] Start EndNode`** 且 **`Get final result`** 中 `exception_info` 为空。
 ![img.png](../images/FAQ/日志最终报告.png)
-4. 主路径关键节点按顺序应有完成类日志，例如：`EntryNode` → `OutlineNode` / `OutlineInteractionNode` → `EditorTeamNode` → `ReporterNode` → `SourceTracerNode` → `EndNode`（若开启溯源推理 / 用户反馈，中间还会经过对应节点）。
+4. 主路径关键节点按顺序应有完成类日志，例如：`EntryNode` → `OutlineNode` / `OutlineInteractionNode` → `EditorTeamNode` 或 `DependencyEditorTeamNode` → `ReporterNode` → `SourceTracerNode` → `EndNode`（若开启溯源推理 / 用户反馈，中间还会经过对应节点）。
 
 **③ 如何理解「有告警但仍算成功」**
 

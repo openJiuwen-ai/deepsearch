@@ -156,7 +156,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 **Fields**:
 
 - **execute_mode** (Literal["commercial", "general"], optional): Execution mode. Default value: `"commercial"`.
-- **execution_method** (Literal["dependency_driving", "parallel"], optional): Execution method. Default value: `"parallel"`.
+- **execution_method** (Literal["dependency_driving", "parallel", "hybrid"], optional): Execution method. `parallel` runs the parallel research workflow, `dependency_driving` runs the dependency-driven workflow, and `hybrid` lets `IntentRecognitionNode` call an LLM router to choose the outline branch for the current query. Default value: `"parallel"`.
 - **workflow_human_in_the_loop** (bool, optional): Whether to enable HITL before planning. Default value: `True`.
 - **outliner_max_section_num** (int, optional): Maximum number of outline sections. Range: `[1, 15]`. Default value: `10`.
 - **outline_interaction_enabled** (bool, optional): Whether to enable outline interaction. Default value: `True`.
@@ -175,8 +175,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **enable_question_router** (bool, optional): When `True` and `search_mode="search"`, route simple questions to `react` and complex ones to DeepSearch. Default value: `False`.
 - **search_workflow_per_question_params** (`PerQuestionParams`, optional): Per-question control knobs for search/react runs (time, workers, tool map, limits, etc.). Default value: `PerQuestionParams()`.
 - **search_workflow_milvus_config** (`MilvusConfig`, optional): Milvus/embedder settings used when retrieval tool path is selected. Default value: `MilvusConfig()`.
-- **jina_api_key** (bytearray, optional): Jina API key for `search_fetch`. Default empty `bytearray`.
-- **serper_api_key** (bytearray, optional): Serper API key for `search_fetch`. Default empty `bytearray`.
+- **web_fetch_provider_config** (`WebFetchProviderConfig`, optional): Explicit DeepSearch fetch-provider config. Current v1 requires `provider_name="jina"` to enable `web_fetch`. Default value: `WebFetchProviderConfig()`.
 - **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
 - **web_search_max_qps** (float, optional): Maximum QPS for the web augmentation engine. `0` means no rate limit. Floating-point values such as `0.5` are supported and mean one request every 2 seconds. Default value: `0`.
 - **user_feedback_processor_enable** (bool, optional): Whether to enable post-report local optimization. Default value: `False`.
@@ -318,9 +317,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_webpage_enrich_fetch_timeout_seconds** (int, optional): Timeout in seconds for fetching one webpage during webpage enrichment. Default value: `45`.
 
 ### Reporting parameters
-- **sub_report_classify_doc_infos_single_time_num** (int, optional): Number of collected documents classified by the LLM in one pass for a sub-report. Default value: `60`.
-- **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k number returned by the LLM classification in one pass for a sub-report. Default value: `10`.
-- **sub_report_doc_prefilter_multiplier** (int, optional): Candidate multiplier for deterministic sub-report document prefiltering. The maximum candidate count is `sub_report_classify_doc_infos_res_top_k_num * sub_report_doc_prefilter_multiplier`. Default value: `5`.
+- **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k number returned by the LLM classification in one pass for a sub-report. Default value: `20`.
 - **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
 - **visualization_enable** (bool, optional): Whether to enable visualization illustrations in reports. Default value: `False`.
 

@@ -89,6 +89,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [WorkflowAgent 封装](./framework/workflow-agent.md)
 - [LLM 模型槽位适配](./framework/llm-model-adaptation.md)
 - [搜索工具注册与运行时 API 工具](./framework/search-tool-registration.md)
+- [DeepSearch 网页抓取 Provider 注册](./framework/web-fetch-provider-registry.md)
 - [LLM 运行时封装](./llm/llm-runtime.md)
 - [LLM 调用辅助](./utils/llm-invocation-utils.md)
 - [日志与接口记录](./utils/logging.md)

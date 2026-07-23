@@ -77,12 +77,12 @@ async run(message: Optional[str] = None, conversation_id: Optional[str] = None, 
 
 ---
 
-### _register_web_search_tool
+### register_web_search_tool
 ```python
 @staticmethod
-_register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig)
+register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig)
 ```
-注册网络搜索工具并返回引擎名称与映射。
+注册网络搜索工具并返回引擎名称与映射。研究工作流还会注册内置 PubMed 和 arXiv 作为 secondary 搜索引擎；DeepSearch 只注册当前配置的活动 web 引擎。
 
 ---
 
@@ -108,6 +108,20 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchDepe
 - `DependencyEditorTeamNode` 内部统一编排依赖驱动的推理子图和写作子图，章节执行遵循依赖层级：上一层章节写作可以与下一层章节推理并行执行。
 
 ---
+
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchIntentHybridAgent
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchIntentHybridAgent(DeepresearchAgent)
+```
+混合大纲路由模式的研究工作流 Agent。
+
+**行为说明**：
+- 与 `DeepresearchAgent` 共用 `run` 接口、参数校验和中断恢复机制。
+- 当 `agent_config.execution_method="hybrid"` 时启用。
+- 主链路复用 `OutlineNode` 和 `OutlineInteractionNode`，不会注册旧方案中的 hybrid 大纲节点。
+- `IntentRecognitionNode` 会调用大纲模式 router LLM，并把结果写入 `search_context.outline_execution_method`。
+- 当路由结果为 `parallel` 时进入 `EditorTeamNode`；当路由结果为 `dependency_driving` 时进入 `DependencyEditorTeamNode`。
+
 
 ## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent
 ```python

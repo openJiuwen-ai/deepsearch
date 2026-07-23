@@ -39,17 +39,19 @@
 ## 核心流程
 
 1. `DeepSearchAgent.run` 从顶层 `agent_config` 中分离可选的 `service_config` 和 `gold_answer`。
-2. 顶层配置经 `AgentConfig` 校验后写入 `self.agent_config`。
-3. `service_config.search_workflow` 经 `SearchWorkflowConfig` 校验后写入 `self.search_config`，失败时使用默认值。
-4. `search_workflow_per_question_params` 设置 action 循环的超时、并发和工具模式。
-5. 子工作流运行前通过 `_subworkflow_context_inputs` 传入当前 `agent_config` 和 `search_config`。
+2. 顶层配置经 `AgentConfig` 校验后深拷贝到本次运行的 `DeepSearchRunContext.agent_config`。
+3. `service_config.search_workflow` 经 `SearchWorkflowConfig` 校验后写入本次 `run_context.search_config`，失败时使用默认值。
+4. `search_workflow_per_question_params` 设置该 run 的超时、并发和工具模式；`time_limit` 通过 `workflow_session_vars` 注入，不改进程级环境变量。
+5. 子工作流运行前通过 `_subworkflow_context_inputs(run_context, ...)` 传入当前 `agent_config` 和 `search_config`。
 6. `SearchStartNode` 按 `workflow_name` 选择 init state、find action 或 state creation 配置，并补齐当前 `general` LLM。
 7. 搜索节点读取合并后的配置执行状态初始化、action 发现、工具执行和状态校验。
 
 ## 数据契约与依赖
 
 - `PerQuestionParams.tool_map` 取值为 `search_fetch` 或 `retrieve`。
-- `search_fetch` 模式依赖 Jina fetch 和 Serper web search 密钥字段；使用后会清零对应 `bytearray`。
+- `PerQuestionParams.max_workers` 控制单个问题内并发执行的 action 数；多问题并行由 framework 的 per-run context 隔离，不依赖该字段。
+- `search_fetch` 模式的 web search provider 从 `web_search_engine_config` 初始化并注册到 context；web fetch provider 从 `web_fetch_provider_config` 显式选择，当前只支持 `provider_name="jina"`。
+- 搜索运行结束后会清零 `web_search_engine_config.search_api_key` 和 `web_fetch_provider_config.api_key`。
 - `retrieve` 模式依赖 `MilvusConfig` 和 embedding 配置；使用后会清零 `embedder_api_key`。
 - `actions_explored_limit=0` 表示不限制；大于 0 时达到该数量后终止，默认值 200 是实际探索上限。
 - `fail_limit=0` 表示不限制连续失败次数。
@@ -64,6 +66,7 @@
 - `service_config.search_workflow` 缺失或解析失败不会中断运行，DeepSearch 使用默认 `SearchWorkflowConfig`。
 - 子工作流名称不属于 init state、find action 或 state creation 时，返回 `WORKFLOW_TYPE_NOT_EXIST_ERROR`。
 - 子工作流必须从当前请求读取模型配置；修改全局 workflow 注册逻辑时要防止模型槽位串用。
+- 重叠 DeepSearch 运行必须保持配置、超时和 action pool 的 per-run 隔离；见 [DeepSearch 搜索子工作流](../framework/deepsearch-sub-workflows.md)。
 - retrieve 模式新增配置字段时，需要同步匿名化和 secret 清零逻辑。
 
 ## 测试与验证
@@ -90,4 +93,5 @@ uv run pytest tests/search_agent/test_termination.py
 - [Action Pool](../algorithm/search-agent/action-pool.md)
 - [Search Nodes](../algorithm/search-agent/search-nodes.md)
 - [Search Tools](../algorithm/search-agent/search-tools.md)
+- [DeepSearch 网页抓取 Provider 注册](../framework/web-fetch-provider-registry.md)
 - [DeepSearch 搜索子工作流](../framework/deepsearch-sub-workflows.md)

@@ -16,6 +16,7 @@ Builds the execution-method → Agent class map:
 
 - `"parallel"` → `DeepresearchAgent`
 - `dependency_driving` → `DeepresearchDependencyAgent`
+- `"hybrid"` → `DeepresearchIntentHybridAgent`
 - `search` → `DeepSearchAgent` (see [`deepsearch_agent`](./deepsearch_agent.md))
 
 **Example**:
@@ -39,6 +40,7 @@ Validates config and returns the matching Agent instance.
 **Returns**:
 - `DeepresearchAgent` when `search_mode` is `"research"` and `execution_method` is `"parallel"` (default).
 - `DeepresearchDependencyAgent` when `search_mode` is `"research"` and `execution_method` is `dependency_driving`.
+- `DeepresearchIntentHybridAgent` when `search_mode` is `"research"` and `execution_method` is `"hybrid"`.
 - `DeepSearchAgent` when `search_mode` is `"search"`.
 - `SimpleReactSearchAgent` when `search_mode` is `"react"`.
 
@@ -70,7 +72,17 @@ DeepresearchAgent
 >>> print(type(agent).__name__)
 DeepresearchDependencyAgent
 
->>> # Example 3: search (DeepSearchAgent)
+>>> # Example 3: hybrid outline routing
+>>> agent_config = {
+...     "llm_config": {"model_name": "gpt-4", "model_type": "openai"},
+...     "search_mode": "research",
+...     "execution_method": "hybrid",
+... }
+>>> agent = factory.create_agent(agent_config)
+>>> print(type(agent).__name__)
+DeepresearchIntentHybridAgent
+
+>>> # Example 4: search (DeepSearchAgent)
 >>> agent_config = {
 ...     "llm_config": {"model_name": "gpt-4", "model_type": "openai"},
 ...     "search_mode": "search",

@@ -7,3 +7,4 @@ import enum
 class ExecutionMethod(enum.Enum):
     DEPENDENCY_DRIVING = "dependency_driving"
     PARALLEL = "parallel"
+    HYBRID = "hybrid"

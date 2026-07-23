@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 """Build export workspaces and ZIP bundles for report conversion."""
 
 from __future__ import annotations
@@ -12,10 +12,11 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from server.deepsearch.common.exception.exceptions import ReportConvertValidationException
-from server.deepsearch.core.manager.report_manager.conversion_utils import (
+from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
     strip_internal_citation_markers,
 )
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.status_code import StatusCode
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,15 @@ def _decode_base64_payload(payload: str, field_name: str) -> bytes:
         bytes: 解码后的二进制内容。
 
     Raises:
-        ReportConvertValidationException: base64 内容非法时抛出。
+        CustomValueException: base64 内容非法时抛出。
     """
     try:
         return base64.b64decode(payload, validate=True)
     except ValueError as exc:
-        raise ReportConvertValidationException(f"invalid base64 payload for {field_name}") from exc
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            f"invalid base64 payload for {field_name}",
+        ) from exc
 
 
 def _validate_bundle_id(raw_value: object, field_name: str) -> str:
@@ -68,14 +72,15 @@ def _validate_bundle_id(raw_value: object, field_name: str) -> str:
         str: 清理后的安全 ID。
 
     Raises:
-        ReportConvertValidationException: ID 包含路径分隔符或其他不安全字符时抛出。
+        CustomValueException: ID 包含路径分隔符或其他不安全字符时抛出。
     """
     value = "" if raw_value is None else str(raw_value).strip()
     if not value:
         return ""
     if not SAFE_BUNDLE_ID_RE.fullmatch(value):
-        raise ReportConvertValidationException(
-            f"invalid {field_name}: only letters, numbers, underscores, and hyphens are allowed"
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            f"invalid {field_name}: only letters, numbers, underscores, and hyphens are allowed",
         )
     return value
 
@@ -91,16 +96,22 @@ def _validate_message_list(final_result: dict, field_name: str) -> list[dict]:
         list[dict]: 校验通过后的消息列表。
 
     Raises:
-        ReportConvertValidationException: 字段不是列表或列表成员不是字典时抛出。
+        CustomValueException: 字段不是列表或列表成员不是字典时抛出。
     """
     messages = final_result.get(field_name, [])
     if messages is None:
         return []
     if not isinstance(messages, list):
-        raise ReportConvertValidationException(f"{field_name} must be a list")
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            f"{field_name} must be a list",
+        )
     for index, item in enumerate(messages):
         if not isinstance(item, dict):
-            raise ReportConvertValidationException(f"{field_name}[{index}] must be a dictionary")
+            raise CustomValueException(
+                StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+                f"{field_name}[{index}] must be a dictionary",
+            )
     return messages
 
 
@@ -114,16 +125,25 @@ def _validate_final_result(final_result: dict) -> tuple[str, list[dict], list[di
         tuple[str, list[dict], list[dict]]: 报告正文、推理资源列表和图表资源列表。
 
     Raises:
-        ReportConvertValidationException: final_result 结构不合法时抛出。
+        CustomValueException: final_result 结构不合法时抛出。
     """
     if not isinstance(final_result, dict):
-        raise ReportConvertValidationException("final_result must be a dictionary")
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            "final_result must be a dictionary",
+        )
 
     response_content = final_result.get("response_content", "") or ""
     if not isinstance(response_content, str):
-        raise ReportConvertValidationException("response_content must be a string")
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            "response_content must be a string",
+        )
     if not response_content:
-        raise ReportConvertValidationException("response_content is empty")
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            "response_content is empty",
+        )
 
     infer_messages = _validate_message_list(final_result, "infer_messages")
     chart_messages = _validate_message_list(final_result, "chart_messages")
@@ -184,11 +204,11 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
         ReportBundle: 已组装完成的导出工作目录信息。
 
     Raises:
-        ReportConvertValidationException: `response_content` 为空或资源内容非法时抛出。
+        CustomValueException: `response_content` 为空或资源内容非法时抛出。
     """
     start_time = time.perf_counter()
     response_content, infer_messages, chart_messages = _validate_final_result(final_result)
-    logger.info(
+    logger.debug(
         "Building report bundle workspace=%s infer_messages=%s chart_messages=%s response_length=%s",
         workspace,
         len(infer_messages),
@@ -199,8 +219,7 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
     root_dir = workspace / "report_bundle"
     infer_dir = root_dir / "infer"
     charts_dir = root_dir / "charts"
-    assets_dir = root_dir / "assets"
-    for path in (root_dir, infer_dir, charts_dir, assets_dir):
+    for path in (root_dir, infer_dir, charts_dir):
         path.mkdir(parents=True, exist_ok=True)
 
     for item in infer_messages:
@@ -223,10 +242,9 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
     markdown_text = _rewrite_inference_links(markdown_text)
     markdown_text = _rewrite_chart_placeholders(markdown_text, chart_messages)
     markdown_path = root_dir / "report.md"
-    markdown_path.write_text(markdown_text, encoding="utf-8")
+    markdown_path.write_bytes(markdown_text.encode("utf-8"))
     logger.info(
-        "Built report bundle root_dir=%s infer_assets=%s chart_assets=%s duration_ms=%.2f",
-        root_dir,
+        "Built report bundle infer_assets=%s chart_assets=%s duration_ms=%.2f",
         len(list(infer_dir.glob("*.html"))),
         len(list(charts_dir.glob("*.png"))),
         (time.perf_counter() - start_time) * 1000,
@@ -254,8 +272,7 @@ def pack_bundle_to_base64(bundle_root: Path) -> str:
 
     encoded = base64.b64encode(zip_path.read_bytes()).decode("utf-8")
     logger.info(
-        "Packed report bundle bundle_root=%s file_count=%s zip_bytes=%s duration_ms=%.2f",
-        bundle_root,
+        "Packed report bundle file_count=%s zip_bytes=%s duration_ms=%.2f",
         file_count,
         zip_path.stat().st_size,
         (time.perf_counter() - start_time) * 1000,

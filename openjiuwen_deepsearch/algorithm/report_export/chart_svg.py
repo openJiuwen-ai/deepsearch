@@ -75,6 +75,23 @@ def _escape_text(value: object) -> str:
     return html.escape(str(value), quote=True)
 
 
+def _truncate_vertical_axis_label(label: str, max_characters: int) -> str:
+    """截断纵向图旋转标签以避免超出 SVG 左侧边界。
+
+    Args:
+        label: 原始类别标签。
+        max_characters: 允许显示的最大字符数。
+
+    Returns:
+        未超限时返回原标签；超限时返回带 ASCII 省略号的显示文本。
+    """
+    if len(label) <= max_characters:
+        return label
+    if max_characters <= 3:
+        return label[:max_characters]
+    return f"{label[:max_characters - 3]}..."
+
+
 def _load_json_array(raw_value: str) -> list[object]:
     """Load a non-empty JSON array from Mermaid chart source.
 
@@ -174,6 +191,18 @@ def _is_horizontal_xychart(code: str, body: str) -> bool:
     )
 
 
+def is_horizontal_xychart(code: str) -> bool:
+    """判断 Mermaid xychart 源码是否声明为横向柱状图。
+
+    Args:
+        code: 含可选 frontmatter 的完整 Mermaid 源码。
+
+    Returns:
+        源码声明横向图时返回 True。
+    """
+    return _is_horizontal_xychart(code, _strip_frontmatter(code))
+
+
 def _render_horizontal_xychart_svg(
     *,
     code: str,
@@ -200,8 +229,17 @@ def _render_horizontal_xychart_svg(
     requested_height = _read_svg_size(code, "height", 360, 280, 640)
     height = max(requested_height, min(640, 120 + len(labels) * 30))
     max_label_width = max(len(label) * 11 for label in labels)
-    left = min(max(110, max_label_width + 28), width * 0.45)
+    baseline_value = 0.0 if y_min <= 0 <= y_max else (y_min if y_min > 0 else y_max)
+    category_label_x = max_label_width + 16
+    negative_value_label_width = max(
+        (len(_format_number(value)) * 8 for value in values if value < baseline_value),
+        default=0,
+    )
+    # 负值标签位于柱体左侧，需在类别标签区与绘图区间预留独立 gutter。
+    left = max(110, category_label_x + negative_value_label_width + 14)
     right, top, bottom = 30, 34, 54
+    # 横向类目文本不旋转，保留完整标签空间并扩展画布，避免被 viewBox 裁切。
+    width = max(width, int(left + right + 260))
     plot_width = width - left - right
     plot_height = height - top - bottom
 
@@ -216,7 +254,6 @@ def _render_horizontal_xychart_svg(
         """
         return left + (value - y_min) * plot_width / (y_max - y_min)
 
-    baseline_value = 0.0 if y_min <= 0 <= y_max else (y_min if y_min > 0 else y_max)
     baseline_x = value_to_x(baseline_value)
     x_axis_y = top + plot_height
     parts = [
@@ -265,7 +302,7 @@ def _render_horizontal_xychart_svg(
             f"<title>{_escape_text(f'{label}: {_format_number(value)}')}</title></rect>"
         )
         parts.append(
-            f'<text class="chart-category-label" x="{_svg_number(left - 12)}" '
+            f'<text class="chart-category-label" x="{_svg_number(category_label_x)}" '
             f'y="{_svg_number(center_y + 4)}" text-anchor="end" '
             f'font-size="11" fill="#334155">{_escape_text(label)}</text>'
         )
@@ -316,7 +353,7 @@ def _render_xychart_svg(code: str, body: str) -> str | None:
     if len(labels) != len(values) or y_min >= y_max:
         return None
 
-    if _is_horizontal_xychart(code, body) and series_kind == "bar":
+    if is_horizontal_xychart(code) and series_kind == "bar":
         return _render_horizontal_xychart_svg(
             code=code,
             labels=labels,
@@ -329,14 +366,35 @@ def _render_xychart_svg(code: str, body: str) -> str | None:
     width = _read_svg_size(code, "width", max(480, 140 + len(labels) * 95), 420, 1080)
     height = _read_svg_size(code, "height", 360, 280, 640)
     label_rotation_degrees = 32
-    max_label_width = max(len(label) * 11 for label in labels)
-    # 旋转后的中文标签会向下延伸；底部边距必须覆盖投影高度，避免被 viewBox 裁切。
+    left, right, top = 66, 30, 34
+    plot_width = width - left - right
+    # 最左侧标签的锚点决定可用的旋转文本宽度，超长部分以 title 保留原文。
+    first_label_x = left + plot_width / (2 * len(labels))
+    max_display_width = max(
+        44,
+        (first_label_x - 8) / math.cos(math.radians(label_rotation_degrees)),
+    )
+    max_display_characters = max(4, math.floor(max_display_width / 11))
+    display_labels = [
+        _truncate_vertical_axis_label(label, max_display_characters) for label in labels
+    ]
+    display_label_markup = [
+        _escape_text(display_label)
+        + (
+            f"<title>{_escape_text(label)}</title>"
+            if display_label != label
+            else ""
+        )
+        for label, display_label in zip(labels, display_labels, strict=True)
+    ]
+    max_label_width = max(len(label) * 11 for label in display_labels)
+    # 旋转文本会向下延伸；底部边距必须覆盖显示文本的投影高度。
     bottom = max(
         80,
         math.ceil(38 + max_label_width * math.sin(math.radians(label_rotation_degrees))),
     )
-    left, right, top = 66, 30, 34
-    plot_width = width - left - right
+    # 标签投影可超过生成器的固定高度；保留最小绘图区避免坐标反向。
+    height = max(height, top + bottom + 180)
     plot_height = height - top - bottom
 
     def value_to_y(value: float) -> float:
@@ -391,7 +449,9 @@ def _render_xychart_svg(code: str, body: str) -> str | None:
     step = plot_width / len(labels)
     if series_kind == "bar":
         bar_width = max(12, min(42, step * 0.55))
-        for index, (label, value) in enumerate(zip(labels, values, strict=True)):
+        for index, (label, display_markup, value) in enumerate(
+            zip(labels, display_label_markup, values, strict=True)
+        ):
             center_x = left + step * (index + 0.5)
             value_y = value_to_y(value)
             rect_y = min(value_y, baseline_y)
@@ -407,7 +467,7 @@ def _render_xychart_svg(code: str, body: str) -> str | None:
                 f'y="{_svg_number(x_label_y)}" text-anchor="end" '
                 f'font-size="11" fill="#334155" transform="rotate(-{label_rotation_degrees} '
                 f'{_svg_number(center_x)} {_svg_number(x_label_y)})">'
-                f"{_escape_text(label)}</text>"
+                f"{display_markup}</text>"
             )
     else:
         points = []
@@ -418,7 +478,9 @@ def _render_xychart_svg(code: str, body: str) -> str | None:
             f'<polyline class="chart-line" points="{" ".join(points)}" fill="none" '
             'stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>'
         )
-        for index, (label, value) in enumerate(zip(labels, values, strict=True)):
+        for index, (label, display_markup, value) in enumerate(
+            zip(labels, display_label_markup, values, strict=True)
+        ):
             center_x = left + step * (index + 0.5)
             center_y = value_to_y(value)
             parts.append(
@@ -431,7 +493,7 @@ def _render_xychart_svg(code: str, body: str) -> str | None:
                 f'y="{_svg_number(x_label_y)}" text-anchor="end" '
                 f'font-size="11" fill="#334155" transform="rotate(-{label_rotation_degrees} '
                 f'{_svg_number(center_x)} {_svg_number(x_label_y)})">'
-                f"{_escape_text(label)}</text>"
+                f"{display_markup}</text>"
             )
 
     parts.append("</svg>")
@@ -481,14 +543,22 @@ def _render_pie_svg(body: str) -> str | None:
         end_y = center_y + radius * math.sin(end_angle)
         large_arc = 1 if sweep > math.pi else 0
         color = PALETTE[index % len(PALETTE)]
-        path = (
-            f"M {_svg_number(center_x)} {_svg_number(center_y)} L {_svg_number(start_x)} {_svg_number(start_y)} "
-            f"A {radius} {radius} 0 {large_arc} 1 {_svg_number(end_x)} {_svg_number(end_y)} Z"
-        )
-        parts.append(
-            f'<path class="chart-pie-slice" d="{path}" fill="{color}" stroke="#ffffff" stroke-width="2">'
-            f"<title>{_escape_text(f'{label}: {_format_number(value)}')}</title></path>"
-        )
+        title = _escape_text(f"{label}: {_format_number(value)}")
+        if math.isclose(sweep, math.tau, rel_tol=0.0, abs_tol=1e-9):
+            parts.append(
+                f'<circle class="chart-pie-slice" cx="{_svg_number(center_x)}" '
+                f'cy="{_svg_number(center_y)}" r="{radius}" fill="{color}" '
+                f'stroke="#ffffff" stroke-width="2"><title>{title}</title></circle>'
+            )
+        elif sweep > 0:
+            path = (
+                f"M {_svg_number(center_x)} {_svg_number(center_y)} L {_svg_number(start_x)} {_svg_number(start_y)} "
+                f"A {radius} {radius} 0 {large_arc} 1 {_svg_number(end_x)} {_svg_number(end_y)} Z"
+            )
+            parts.append(
+                f'<path class="chart-pie-slice" d="{path}" fill="{color}" stroke="#ffffff" stroke-width="2">'
+                f"<title>{title}</title></path>"
+            )
         legend_y = 42 + index * 34
         parts.append(
             f'<rect x="{_svg_number(legend_x)}" y="{legend_y - 11}" width="14" height="14" '

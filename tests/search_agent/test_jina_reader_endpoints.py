@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool import (
-    WebFetch,
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper import (
+    JinaWebFetchProvider,
     build_jina_reader_url,
     resolve_jina_reader_base_urls,
 )
@@ -33,7 +33,7 @@ def test_build_jina_reader_url():
 
 
 def test_web_fetch_races_reader_endpoints_in_parallel():
-    fetch = WebFetch({"jina_api_key": "test-key"})
+    fetch = JinaWebFetchProvider(api_key="test-key")
     china_resp = Mock(status_code=200, text="from-china")
     called_urls: list[str] = []
 
@@ -44,7 +44,7 @@ def test_web_fetch_races_reader_endpoints_in_parallel():
         raise AssertionError(f"unexpected url: {url}")
 
     with patch(
-        "openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool.requests.get",
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
         side_effect=fake_get,
     ):
         assert fetch._read_via_jina("https://example.com") == "from-china"
@@ -53,19 +53,19 @@ def test_web_fetch_races_reader_endpoints_in_parallel():
 
 
 def test_web_fetch_uses_fastest_successful_reader_endpoint():
-    fetch = WebFetch({"jina_api_key": "test-key"})
+    fetch = JinaWebFetchProvider(api_key="test-key")
     china_resp = Mock(status_code=200, text="from-china")
 
     with patch(
-        "openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool.requests.get",
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
         return_value=china_resp,
     ) as mock_get:
         assert fetch._read_via_jina("https://example.com") == "from-china"
-        assert mock_get.call_count == len(fetch._jina_reader_bases)
+        assert mock_get.call_count == len(fetch._reader_bases)
 
 
 def test_web_fetch_falls_back_to_global_reader_endpoint():
-    fetch = WebFetch({"jina_api_key": "test-key"})
+    fetch = JinaWebFetchProvider(api_key="test-key")
     global_resp = Mock(status_code=200, text="from-global")
 
     def fake_get(url, **kwargs):
@@ -76,7 +76,7 @@ def test_web_fetch_falls_back_to_global_reader_endpoint():
         raise AssertionError(f"unexpected url: {url}")
 
     with patch(
-        "openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool.requests.get",
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
         side_effect=fake_get,
     ):
         assert fetch._read_via_jina("https://example.com") == "from-global"

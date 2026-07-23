@@ -13,7 +13,7 @@
 ## 可见行为
 
 - `AgentFactory.create_agent` 会先校验 `agent_config` 必填字段，再用 `AgentConfig.model_validate` 做类型、枚举和范围校验。
-- `search_mode` 决定运行研究报告、DeepSearch 搜索图或简单 ReAct 搜索；`search_mode=research` 时再由 `execution_method` 决定并行或依赖驱动研究工作流。
+- `search_mode` 决定运行研究报告、DeepSearch 搜索图或简单 ReAct 搜索；`search_mode=research` 时再由 `execution_method` 决定并行、依赖驱动或混合大纲路由研究工作流。
 - `llm_config` 按模型槽位传入，运行时至少需要 `general` 槽位；部分节点可使用 `plan_understanding`、`info_collecting`、`writing_checking` 或 `vlm_chart_generating`。
 - `StartNode` 只把本次运行需要的 `agent_config` 字段合并进 session，再叠加默认 `ServiceConfig`，形成节点读取的 `config` 全局状态。
 - `ServiceConfig` 提供 SDK 内部默认参数，包括 workflow 超时、重试次数、采集循环、报告生成、溯源并发、LLM 默认超时、thinking 模式、节点调试和中间结果导出。
@@ -51,10 +51,12 @@
 
 - `Config` 由 `agent_config` 和 `service_config` 两部分组成。
 - `AgentConfig.execute_mode` 取值为 `commercial` 或 `general`。
-- `AgentConfig.execution_method` 取值为 `parallel` 或 `dependency_driving`，只在 `search_mode=research` 时选择研究工作流实现。
+- `AgentConfig.execution_method` 取值为 `parallel`、`dependency_driving` 或 `hybrid`，只在 `search_mode=research` 时选择研究工作流实现；`hybrid` 会在意图识别阶段调用 LLM 生成 `search_context.outline_execution_method`。
 - `AgentConfig.search_mode` 取值为 `research`、`search`、`react`。
 - `AgentConfig.info_collector_webpage_enrich_enable` 控制信息采集阶段是否启用网页正文增强节点，默认 `False`。
 - `WebSearchEngineConfig.search_engine_name` 支持 tavily、google、xunfei、petal、custom、bocha、jina、perplexity、serper。
+- `WebFetchProviderConfig` 通过 `AgentConfig.web_fetch_provider_config` 显式选择 DeepSearch 网页抓取 provider；当前有效 `provider_name` 为 `jina`。
+- 顶层 `jina_api_key` / `serper_api_key` 已退役；传入时 `AgentConfig` 校验失败，应改用 `web_fetch_provider_config` 与 `web_search_engine_config`。
 - `LocalSearchEngineConfig.search_engine_name` 支持 openapi、custom、native；native 模式依赖 `knowledge_base_configs`。
 - web/local 最大搜索结果数均限制在 1 到 10。
 - `outliner_max_section_num` 范围为 1 到 `OUTLINER_SECTION_NUM_MAX`，当前最大值为 15。
@@ -76,6 +78,7 @@
 - `uv run pytest tests/server/test_deepsearch_run.py`
 - `uv run pytest tests/server/test_agent_manager.py`
 - `uv run pytest tests/node/test_agent_node.py`
+- 修改 `execution_method` 取值或 server 请求 schema 时，补充运行 `uv run pytest tests/workflow/test_create_agent.py tests/server/test_deepsearch_run.py`。
 - 修改用户反馈配置时，补充运行 `uv run pytest tests/user_feedback_processor/test_user_feedback_processor_node.py`。
 - 修改 LLM 超时或模型槽位时，补充运行 `uv run pytest tests/utils/test_llm_utils.py`。
 
@@ -83,6 +86,7 @@
 
 - [DeepSearch 搜索工作流配置](./search-workflow-config.md)
 - [Runtime API 工具配置](./runtime-api-tool-config.md)
+- [DeepSearch 网页抓取 Provider 注册](../framework/web-fetch-provider-registry.md)
 - [Agent 工厂与运行模式](../framework/agent-factory.md)
 - [报告研究主工作流](../framework/research-workflow.md)
 - [LLM 运行时封装](../llm/llm-runtime.md)

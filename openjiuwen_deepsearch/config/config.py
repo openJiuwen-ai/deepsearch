@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 from typing import Any, List, Literal, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openjiuwen_deepsearch.config.runtime_api_models import ApiToolsConfig
 
@@ -44,6 +44,15 @@ class WebSearchEngineConfig(BaseModel):
     search_url: str = Field(default="", description="联网增强引擎调用地址")
     max_web_search_results: int = Field(default=5, ge=1, le=10, description="最大搜索结果数量")
     extension: dict = Field(default_factory=dict, description="联网增强引擎扩展配置项，根据具体联网增强引擎接口设置")
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class WebFetchProviderConfig(BaseModel):
+    provider_name: str = Field(default="", description="DeepSearch 网页抓取 provider 名称")
+    api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="网页抓取 provider 调用密钥")
+    base_url: str = Field(default="", description="网页抓取 provider 调用地址")
+    extension: dict = Field(default_factory=dict, description="网页抓取 provider 扩展配置项")
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -289,10 +298,15 @@ class AgentConfig(BaseModel):
     """
     execute_mode: Literal["commercial", "general"] = Field(default="commercial",
                                                            description='执行模式，可选值: ["commercial", "general"]')
-    execution_method: Literal["dependency_driving", "parallel"] = Field(default="parallel",
-                                                                        description="执行方法: "
-                                                                                    "dependency_driving: 依赖驱动工作流执行"
-                                                                                    "parallel: 并行工作流执行")
+    execution_method: Literal["dependency_driving", "parallel", "hybrid"] = Field(
+        default="parallel",
+        description=(
+            "执行方法："
+            "parallel：并行工作流执行；"
+            "dependency_driving：依赖驱动工作流执行；"
+            "hybrid：混合大纲路由模式，由意图识别节点调用LLM选择普通大纲或依赖驱动大纲。"
+        ),
+    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=5,
@@ -319,6 +333,7 @@ class AgentConfig(BaseModel):
         description="是否启用 DeepResearch 信息收集阶段的网页正文增强节点",
     )
     web_search_engine_config: WebSearchEngineConfig = Field(default_factory=WebSearchEngineConfig)
+    web_fetch_provider_config: WebFetchProviderConfig = Field(default_factory=WebFetchProviderConfig)
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
     custom_web_search_config: CustomWebSearchConfig = Field(default_factory=CustomWebSearchConfig)
     custom_local_search_config: CustomLocalSearchConfig = Field(default_factory=CustomLocalSearchConfig)
@@ -332,8 +347,6 @@ class AgentConfig(BaseModel):
     )
     search_workflow_per_question_params: PerQuestionParams = Field(default_factory=PerQuestionParams)
     search_workflow_milvus_config: MilvusConfig = Field(default_factory=MilvusConfig)
-    jina_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="Jina API密钥")
-    serper_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="Serper API密钥")
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # 联网增强引擎 QPS 流控配置
@@ -352,6 +365,18 @@ class AgentConfig(BaseModel):
     vlm_chart_generator_max_iterations: int = Field(default=1, ge=1, le=3, description="vlm迭代生成图最大迭代次数")
 
     agent_llm_timeouts: Dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_retired_search_fetch_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            retired = {"jina_api_key", "serper_api_key"}.intersection(data)
+            if retired:
+                raise ValueError(
+                    f"Unsupported search/fetch config field(s): {', '.join(sorted(retired))}. "
+                    "Use web_search_engine_config and web_fetch_provider_config instead."
+                )
+        return data
 
 
 class ServiceConfig(BaseModel):
@@ -407,12 +432,8 @@ class ServiceConfig(BaseModel):
     )
 
     # 报告节点参数
-    sub_report_classify_doc_infos_single_time_num: int = Field(default=60,
-                                                               description="子报告中单次llm处理筛选收集到的数量")
-    sub_report_classify_doc_infos_res_top_k_num: int = Field(default=10,
+    sub_report_classify_doc_infos_res_top_k_num: int = Field(default=20,
                                                              description="子报告中单次llm处理返回的top_k数量")
-    sub_report_doc_prefilter_multiplier: int = Field(default=5,
-                                                     description="子报告文档预筛保留倍数，最大候选数为top_k乘以该值")
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=True, description="报告插入图表开关")
 

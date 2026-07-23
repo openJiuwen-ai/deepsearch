@@ -177,6 +177,49 @@ def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
     return anonymize_config_for_logging(copy.deepcopy(to_dict_safe(agent_config)))
 
 
+def _initialize_web_search_context_from_agent_config(
+    agent_config: AgentConfig,
+    *,
+    include_academic_engines: bool = False,
+):
+    """Instantiate the active engine and optional research-only academic engines for a run."""
+    custom_web = agent_config.custom_web_search_config
+    web_search_config = agent_config.web_search_engine_config
+    web_engine_name, web_mapping = DeepresearchAgent.register_web_search_tool(custom_web, web_search_config)
+    web_engine_configs = {web_engine_name: web_search_config.model_dump()}
+    if include_academic_engines:
+        for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
+            if engine_name not in web_mapping or engine_name in web_engine_configs:
+                continue
+            academic_config = web_search_config.model_dump()
+            academic_config["search_engine_name"] = engine_name
+            academic_config["search_url"] = ""
+            academic_config["search_api_key"] = bytearray()
+            web_engine_configs[engine_name] = academic_config
+    web_search_token = web_search_context.set(
+        {
+            engine_name: web_mapping[engine_name](**engine_config)
+            for engine_name, engine_config in web_engine_configs.items()
+        }
+    )
+    qps_rate_limiter.set_max_qps(agent_config.web_search_max_qps)
+    return web_search_token
+
+
+def _build_search_fetch_tools(agent_config: AgentConfig):
+    """Build DeepSearch search/fetch tools after the active search engine is registered."""
+    web_search_token = _initialize_web_search_context_from_agent_config(agent_config)
+    tool_class = [
+        WebFetch(
+            {
+                "web_fetch_provider_config": agent_config.web_fetch_provider_config.model_dump(),
+            }
+        ),
+        WebSearch({}),
+    ]
+    return tool_class, web_search_token
+
+
 @dataclass
 class DeepSearchRunContext:
     agent_config: AgentConfig
@@ -406,7 +449,7 @@ class DeepresearchAgent(BaseAgent):
                 logger.warning("[DeepResearchAgent.run] Failed to release checkpointer session.")
 
     @staticmethod
-    def _register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig):
+    def register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig):
         """注册网络搜索工具"""
         search_engine_mapping = update_web_search_mapping(
             custom_web.custom_web_search_file, custom_web.custom_web_search_func
@@ -825,36 +868,17 @@ class DeepresearchAgent(BaseAgent):
 
     def _initialize_tools(self, agent_config: AgentConfig):
         """初始化搜索工具"""
-        custom_web = agent_config.custom_web_search_config
         custom_local = agent_config.custom_local_search_config
-        web_search_config = agent_config.web_search_engine_config
         local_search_config = agent_config.local_search_engine_config
 
-        web_engine_name, web_mapping = self._register_web_search_tool(custom_web, web_search_config)
         local_engine_name, local_mapping = self._register_local_search_tool(custom_local, local_search_config)
-        web_engine_configs = {
-            web_engine_name: web_search_config.model_dump(),
-        }
-        for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
-            if engine_name in web_mapping and engine_name not in web_engine_configs:
-                vertical_config = web_search_config.model_dump()
-                vertical_config["search_engine_name"] = engine_name
-                vertical_config["search_url"] = ""
-                vertical_config["search_api_key"] = bytearray("", encoding="utf-8")
-                web_engine_configs[engine_name] = vertical_config
-        web_search_token = web_search_context.set(
-            {
-                name: web_mapping[name](**engine_config)
-                for name, engine_config in web_engine_configs.items()
-            }
+        web_search_token = _initialize_web_search_context_from_agent_config(
+            agent_config,
+            include_academic_engines=True,
         )
         local_search_token = local_search_context.set(
             {local_engine_name: local_mapping[local_engine_name](**local_search_config.model_dump())}
         )
-
-        # 注册QPS限流器
-        qps_limiter = qps_rate_limiter
-        qps_limiter.set_max_qps(agent_config.web_search_max_qps)
 
         return web_search_token, local_search_token
 
@@ -957,6 +981,124 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
         flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
         flow.add_conditional_connection(NodeId.DEPENDENCY_EDITOR_TEAM.value, router=dependency_editor_router)
+        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
+        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
+        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
+
+        return flow
+
+
+class DeepresearchIntentHybridAgent(DeepresearchAgent):
+    """
+    Deepresearch hybrid agent: 由意图识别节点选择普通大纲或依赖驱动大纲。
+    """
+
+    def _get_default_research_name(self) -> str:
+        return "research_workflow_hybrid"
+
+    def _create_research_workflow_agent(self):
+        """创建 hybrid 大纲路由工作流 Agent 实例。"""
+        workflow_card = WorkflowCard(
+            id=self.research_name,
+            version=self.version,
+            name=self.research_name,
+            description=self.research_name,
+            input_params=self.workflow_input_schema,
+        )
+
+        card = AgentCard(
+            id=self.research_name,
+            name=self.research_name,
+            description=self.research_name,
+        )
+        config = WorkflowControllerConfig(
+            id=self.research_name,
+            version=self.version,
+            description=self.research_name,
+            workflows=[workflow_card],
+        )
+        self.agent = WorkflowAgent(card=card, config=config)
+        self.agent.add_workflows([self._build_workflow_provider(self._build_research_hybrid_workflow, workflow_card)])
+
+    def _build_research_hybrid_workflow(self):
+        """
+        构建 hybrid research workflow。
+
+        该 workflow 复用普通 OutlineNode 和 OutlineInteractionNode，同时注册普通写作团队与依赖驱动写作团队。
+        大纲模式由 IntentRecognitionNode 写入 session，后续节点按该结果选择 prompt、tool schema 和写作分支。
+        """
+        _id = self.research_name
+        name = self.research_name
+        version = self.version
+        card = WorkflowCard(
+            id=_id,
+            version=version,
+            name=name,
+        )
+
+        flow = Workflow(card=card)
+        flow.set_start_comp(
+            start_comp_id=NodeId.START.value, component=StartNode(), inputs_schema=self.startnode_input_schema
+        )
+        flow.add_workflow_comp(NodeId.INTENT_RECOGNITION.value, IntentRecognitionNode())
+        flow.add_workflow_comp(NodeId.GENERATE_QUESTIONS.value, GenerateQuestionsNode())
+        flow.add_workflow_comp(NodeId.FEEDBACK_HANDLER.value, FeedbackHandlerNode())
+        flow.add_workflow_comp(NodeId.OUTLINE.value, OutlineNode())
+        flow.add_workflow_comp(NodeId.OUTLINE_INTERACTION.value, OutlineInteractionNode())
+        flow.add_workflow_comp(NodeId.EDITOR_TEAM.value, EditorTeamNode())
+        flow.add_workflow_comp(NodeId.DEPENDENCY_EDITOR_TEAM.value, DependencyEditorTeamNode())
+        flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
+        flow.add_workflow_comp(NodeId.VLM_CHART_GENERATOR.value, VLMChartGeneratorNode())
+        flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
+        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
+        flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        flow.set_end_comp(NodeId.END.value, EndNode())
+
+        flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
+
+        intent_recognition_router = init_router(
+            NodeId.INTENT_RECOGNITION.value,
+            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+        )
+        generate_questions_router = init_router(
+            NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
+        )
+        outline_router = init_router(
+            NodeId.OUTLINE.value,
+            [
+                NodeId.OUTLINE_INTERACTION.value,
+                NodeId.EDITOR_TEAM.value,
+                NodeId.DEPENDENCY_EDITOR_TEAM.value,
+                NodeId.END.value,
+            ],
+        )
+        outline_interaction_router = init_router(
+            NodeId.OUTLINE_INTERACTION.value,
+            [
+                NodeId.OUTLINE.value,
+                NodeId.EDITOR_TEAM.value,
+                NodeId.DEPENDENCY_EDITOR_TEAM.value,
+                NodeId.END.value,
+            ],
+        )
+        reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
+        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
+        dependency_editor_router = init_router(
+            NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]
+        )
+        user_feedback_processor_router = init_router(
+            NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
+        )
+        flow.add_conditional_connection(NodeId.INTENT_RECOGNITION.value, router=intent_recognition_router)
+        flow.add_conditional_connection(NodeId.GENERATE_QUESTIONS.value, router=generate_questions_router)
+        flow.add_conditional_connection(NodeId.OUTLINE.value, router=outline_router)
+        flow.add_conditional_connection(NodeId.FEEDBACK_HANDLER.value, router=feedback_handler_router)
+        flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
+        flow.add_conditional_connection(NodeId.EDITOR_TEAM.value, router=editor_team_router)
+        flow.add_conditional_connection(NodeId.DEPENDENCY_EDITOR_TEAM.value, router=dependency_editor_router)
+        flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
         flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
         flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
         flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
@@ -1656,8 +1798,10 @@ class DeepSearchAgent(BaseAgent):
         validate_agent_required_field(agent_config_for_model)
 
         llm_token = None
+        web_search_token = None
         tool_token = None
         workflow_session_token = None
+        session_agent_config: AgentConfig | None = None
         run_context: DeepSearchRunContext | None = None
         try:
             session_agent_config = AgentConfig.model_validate(agent_config_for_model).model_copy(deep=True)
@@ -1708,10 +1852,7 @@ class DeepSearchAgent(BaseAgent):
 
             tool_class: list[Any] = []
             if per_question_params.tool_map == "search_fetch":
-                tool_class.append(WebFetch({"jina_api_key": session_agent_config.jina_api_key}))
-                tool_class.append(WebSearch({"serper_api_key": session_agent_config.serper_api_key}))
-                zero_secret(session_agent_config.jina_api_key)
-                zero_secret(session_agent_config.serper_api_key)
+                tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class.append(_build_retrieve_tool(milvus_cfg))
@@ -1775,8 +1916,18 @@ class DeepSearchAgent(BaseAgent):
                 workflow_session_vars.reset(workflow_session_token)
             if llm_token is not None:
                 llm_context.reset(llm_token)
+            if web_search_token is not None:
+                web_search_context.reset(web_search_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
+            # The run context owns a deep copy, so clear both per-run configurations.
+            for cleanup_agent_config in (
+                session_agent_config,
+                run_context.agent_config if run_context is not None else None,
+            ):
+                if cleanup_agent_config is not None:
+                    zero_secret(cleanup_agent_config.web_fetch_provider_config.api_key)
+                    zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
 
 
 class SimpleReactSearchAgent(BaseAgent):
@@ -1823,18 +1974,14 @@ class SimpleReactSearchAgent(BaseAgent):
             )
         llm_registry = {general.model_name: create_llm_obj(general.model_copy(deep=True))}
 
+        web_search_token = None
         llm_token = llm_context.set(llm_registry)
         try:
             per_question_params: PerQuestionParams = (
                 session_agent_config.search_workflow_per_question_params
             )
             if per_question_params.tool_map == "search_fetch":
-                tool_class = [
-                    WebFetch({"jina_api_key": session_agent_config.jina_api_key}),
-                    WebSearch({"serper_api_key": session_agent_config.serper_api_key}),
-                ]
-                zero_secret(session_agent_config.jina_api_key)
-                zero_secret(session_agent_config.serper_api_key)
+                tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class = [_build_retrieve_tool(milvus_cfg)]
@@ -2042,10 +2189,14 @@ class SimpleReactSearchAgent(BaseAgent):
                     },
                     config={"agent": "simple_react_search"},
                 )
-            )
+                )
             yield json.dumps(to_json_safe(result.model_dump()), ensure_ascii=False)
         finally:
             llm_context.reset(llm_token)
+            if web_search_token is not None:
+                web_search_context.reset(web_search_token)
+            zero_secret(session_agent_config.web_fetch_provider_config.api_key)
+            zero_secret(session_agent_config.web_search_engine_config.search_api_key)
 
 
 def parse_endnode_content(chunk: CustomSchema) -> dict | None:

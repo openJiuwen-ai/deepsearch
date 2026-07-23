@@ -13,6 +13,8 @@ Agent 配置组装把前端/HTTP 请求转换为 `AgentFactory` 可校验的配�
 ## 可见行为
 
 - 同一个配置缓存 key 命中时复用 Agent 实例。
+- 同一 `conversation_id` 且配置缓存 key 相同时，连续 `get_or_create_agent` 返回同一实例。
+- DeepSearch `search` / `react` Agent 复用是安全的：每次 `run` 的可变状态在 `DeepSearchRunContext` 中，不挂在实例字段上。
 - 缓存 key 排除 `message` 和 `interrupt_feedback`，保留影响 Agent 构建的字段。
 - `llm_config` 可以是单模型形态，也可以是按槽位嵌套形态；单模型会包成 `general`。
 - `info_collector_search_method` 不是 `local` 时必须提供 web 搜索配置；不是 `web` 时必须提供 local 搜索配置。
@@ -66,6 +68,7 @@ Agent 配置组装把前端/HTTP 请求转换为 `AgentFactory` 可校验的配�
 ## 相关文档
 
 - [DeepSearch 运行与 SSE 流](./deepsearch-run-streaming.md)
+- [DeepSearch 搜索子工作流](../framework/deepsearch-sub-workflows.md)
 - [Agent 与服务运行配置](../config/agent-and-service-config.md)
 - [Runtime API 工具配置](../config/runtime-api-tool-config.md)
 - [知识库管理](./knowledge-base.md)

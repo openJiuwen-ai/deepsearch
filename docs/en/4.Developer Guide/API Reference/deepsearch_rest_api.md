@@ -91,7 +91,7 @@ Starts a background DeepSearch graph run (`search` or `react`, not `research`) v
 - `run_id` (`str | null`, optional): if omitted, server generates UUID.
 - `conversation_id` (`str | null`, optional): if omitted, server generates UUID (API lifecycle correlation id).
 - `tool_map` (`"search_fetch" | "retrieve"`, default from `PerQuestionParams`).
-- `jina_api_key` / `serper_api_key` (required when `tool_map="search_fetch"`).
+- `web_fetch_provider_config` and `web_search_engine_config` (both required when `tool_map="search_fetch"`). `web_fetch_provider_config.provider_name` must be set explicitly; v1 supports `jina`.
 - `milvus` (`object`, optional): Milvus/embedder settings; embedder key/base URL required when `tool_map="retrieve"`.
 - `search_workflow_per_question_params` (`object`, optional): shallow overrides validated against `PerQuestionParams`.
 
@@ -103,7 +103,7 @@ Starts a background DeepSearch graph run (`search` or `react`, not `research`) v
 
 **Errors**:
 - `409 Conflict`: `run_id` already in progress.
-- `422 Unprocessable Entity`: validation error (e.g., missing required tool keys, invalid per-question overrides).
+- `422 Unprocessable Entity`: validation error (for example missing resolved search/fetch config, unsupported fetch provider, or invalid per-question overrides).
 
 **Telemetry event “chunks” (current DeepSearch telemetry JSON types)**:
 
@@ -137,8 +137,16 @@ Starts a background DeepSearch graph run (`search` or `react`, not `research`) v
     "extension": {}
   },
   "tool_map": "search_fetch",
-  "jina_api_key": "jina_***",
-  "serper_api_key": "serper_***",
+  "web_fetch_provider_config": {
+    "provider_name": "jina",
+    "api_key": "jina_***",
+    "base_url": "",
+    "extension": {}
+  },
+  "web_search_engine_config": {
+    "search_engine_name": "serper",
+    "search_api_key": "serper_***"
+  },
   "search_workflow_per_question_params": {
     "time_limit": 300,
     "max_workers": 2

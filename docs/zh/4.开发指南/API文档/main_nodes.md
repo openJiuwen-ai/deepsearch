@@ -91,8 +91,8 @@ class OutlineInteractionNode(BaseNode)
 **OutlineInteractionNode** 大纲交互节点，接收用户反馈并决定后续流程。
 
 **功能**：
-- 检查 `outline_interaction_enabled` 配置，禁用时直接跳转到 `EditorTeamNode`。
-- 检查当前交互轮次，达到 `outline_interaction_max_rounds` 时通知用户并跳转到 `EditorTeamNode`。
+- 检查 `outline_interaction_enabled` 配置，禁用时根据 `search_context.outline_execution_method` 跳转到 `EditorTeamNode` 或 `DependencyEditorTeamNode`。
+- 检查当前交互轮次，达到 `outline_interaction_max_rounds` 时通知用户，并根据 `search_context.outline_execution_method` 跳转到对应写作团队。
 - 通过 `workflow_feedback_mode`（`cmd`/`web`）获取用户输入, 用户输入需要为如下json格式：
 ```json
 {
@@ -101,7 +101,7 @@ class OutlineInteractionNode(BaseNode)
 }
 ```
 - 支持三种用户反馈动作：
-  - `accepted`：用户接受大纲，跳转到 `EditorTeamNode`
+  - `accepted`：用户接受大纲，根据 `search_context.outline_execution_method` 跳转到 `EditorTeamNode` 或 `DependencyEditorTeamNode`
   - `revise_comment`：用户提供修改意见，跳转到 `OutlineNode` 重新生成大纲
   - `revise_outline`：用户直接修改大纲，跳转到 `OutlineNode` 重新生成大纲
 - 保存交互记录到 `search_context.outline_interactions`。
@@ -116,7 +116,7 @@ class DependencyOutlineInteractionNode(OutlineInteractionNode)
 
 **功能**：
 - 继承自 `OutlineInteractionNode`，交互逻辑与父类相同。
-- 区别在于：用户接受大纲时，跳转到 `DependencyEditorTeamNode`。
+- 区别在于：用户接受大纲时，始终跳转到 `DependencyEditorTeamNode`。
 - 修改评论时，仍然跳转到 `OutlineNode`。
 
 ---
@@ -306,6 +306,16 @@ StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerN
 
 说明：`DependencyEditorTeamNode` 会在内部同时编排依赖驱动的推理子图与写作子图，
 按章节依赖层级执行“上一层写作 + 本层推理”的流水线并行调度。
+
+### 主工作流（混合大纲路由）
+```text
+StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
+-> [OutlineInteractionNode -> OutlineNode]*
+-> EditorTeamNode / DependencyEditorTeamNode -> ReporterNode -> SourceTracerNode
+-> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
+```
+
+说明：当 `execution_method="hybrid"` 时，`IntentRecognitionNode` 调用大纲模式 router LLM，并把结果写入 `search_context.outline_execution_method`。`OutlineNode` 与 `OutlineInteractionNode` 复用普通节点实现，再按该字段选择普通大纲/依赖驱动大纲以及后续写作团队。
 
 ### 编辑团队子图
 ```

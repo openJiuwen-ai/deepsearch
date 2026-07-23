@@ -2,7 +2,13 @@
   "llm_config": {},
   "per_question_params": {},
   "search_fetch_config": {
-    "jina_api_key": "placeholder",
-    "serper_api_key": "placeholder"
+    "web_search_engine_config": {
+      "search_engine_name": "serper",
+      "search_api_key": "placeholder"
+    },
+    "web_fetch_provider_config": {
+      "provider_name": "jina",
+      "api_key": "placeholder"
+    }
   }
 }

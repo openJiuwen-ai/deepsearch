@@ -5,7 +5,11 @@ import pytest
 
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
-from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import (
+    DeepresearchAgent,
+    DeepresearchDependencyAgent,
+    DeepresearchIntentHybridAgent,
+)
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -62,19 +66,35 @@ agent_factory = AgentFactory()
 
 def test_agent_factory_create_different_agent():
     """
-        Feature: Test agent factory creation with different configuration combinations
-        Description:
-            - Base case: Default config creates DeepresearchAgent
-            - llm_config.execution="parallel" creates DeepresearchAgent
-            - llm_config.execution="dependency_driving" creates DeepresearchDependencyAgent
-        Expectation:
-            - Each configuration combination returns the corresponding agent subclass
-            - Type assertions validate correct class instantiation
+    Feature: 测试不同 execution_method 下 AgentFactory 创建的 Agent 类型
+    Description:
+        - 默认配置创建 DeepresearchAgent
+        - execution_method="parallel" 创建 DeepresearchAgent
+        - execution_method="dependency_driving" 创建 DeepresearchDependencyAgent
+        - execution_method="hybrid" 创建 DeepresearchIntentHybridAgent
+    Expectation:
+        - 每种 execution_method 都映射到预期的 Agent class
+        - 默认值仍保持 parallel，不影响旧调用方
     """
     current_config = copy.deepcopy(agent_config)
     agent = agent_factory.create_agent(current_config)
     logger.info(type(agent))
     assert isinstance(agent, DeepresearchAgent)
+
+    current_config = copy.deepcopy(agent_config)
+    current_config["execution_method"] = "parallel"
+    agent = agent_factory.create_agent(current_config)
+    assert isinstance(agent, DeepresearchAgent)
+
+    current_config = copy.deepcopy(agent_config)
+    current_config["execution_method"] = "dependency_driving"
+    agent = agent_factory.create_agent(current_config)
+    assert isinstance(agent, DeepresearchDependencyAgent)
+
+    current_config = copy.deepcopy(agent_config)
+    current_config["execution_method"] = "hybrid"
+    agent = agent_factory.create_agent(current_config)
+    assert isinstance(agent, DeepresearchIntentHybridAgent)
 
 
 @pytest.mark.parametrize("invalid_value, error_code, error_msg_fragment", [
@@ -152,3 +172,12 @@ def test_agent_factory_param_range_check(param_name, invalid_value, error_code, 
         error_msg_fragment,
         agent_config
     )
+
+def test_agent_config_accepts_hybrid_execution_method():
+    """AgentConfig 应接受 hybrid 作为公开执行模式。"""
+    current_config = copy.deepcopy(agent_config)
+    current_config["execution_method"] = "hybrid"
+
+    agent = agent_factory.create_agent(current_config)
+
+    assert isinstance(agent, DeepresearchIntentHybridAgent)
