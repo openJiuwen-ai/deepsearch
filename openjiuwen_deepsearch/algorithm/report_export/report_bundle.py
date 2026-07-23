@@ -242,7 +242,7 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
     markdown_text = _rewrite_inference_links(markdown_text)
     markdown_text = _rewrite_chart_placeholders(markdown_text, chart_messages)
     markdown_path = root_dir / "report.md"
-    markdown_path.write_bytes(markdown_text.encode("utf-8"))
+    markdown_path.write_text(markdown_text, encoding="utf-8")
     logger.info(
         "Built report bundle infer_assets=%s chart_assets=%s duration_ms=%.2f",
         len(list(infer_dir.glob("*.html"))),

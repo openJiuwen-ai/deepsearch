@@ -135,7 +135,7 @@ async def export_report(
                 baseline_html = html_path.read_text(encoding="utf-8")
                 markdown = bundle.markdown_path.read_text(encoding="utf-8")
                 styled_html, style_applied = await _apply_html_style(baseline_html, markdown, llm)
-                html_path.write_bytes(styled_html.encode("utf-8"))
+                html_path.write_text(styled_html, encoding="utf-8")
                 style_status = "applied" if style_applied else "fallback"
             else:
                 convert_md_to_html(bundle.markdown_path, bundle.root_dir / "report.html")
