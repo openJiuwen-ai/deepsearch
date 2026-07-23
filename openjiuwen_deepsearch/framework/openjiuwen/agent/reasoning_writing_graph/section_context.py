@@ -65,3 +65,6 @@ class SectionContext(SectionBaseContext):
     # 章节任务推理、写作过程中的错误和警告
     warning_infos: List[str] = Field(default_factory=list, description="推理写作子图执行过程中的警告信息")
     exception_infos: List[str] = Field(default_factory=list, description="推理写作子图执行过程中的异常信息，导致子图END")
+
+    # 文档选择调试信息（coverage-matrix doc selection）
+    doc_selection_debug: Dict = Field(default_factory=dict, description="文档选择流程的中间调试数据")

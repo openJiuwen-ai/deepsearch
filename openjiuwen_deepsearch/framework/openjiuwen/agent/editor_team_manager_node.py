@@ -298,6 +298,7 @@ class EditorTeamNode(BaseNode):
             classified_content=sub_report_content_obj.classified_content if sub_report_content_obj else [],
             plans=section_state.get("plans", []),
             sub_report_content=sub_report_content_obj,
+            doc_selection_debug=section_state.get("doc_selection_debug"),
             warning_infos=section_state.get("warning_infos", []),
             exception_infos=section_state.get("exception_infos", []),
         )
@@ -314,6 +315,7 @@ class EditorTeamNode(BaseNode):
         all_classified_contents = []
         for section, sub_report, result in zip(sections, sub_reports, task_results):
             section.plans = result.get("plans")
+            section.doc_selection_debug = result.get("doc_selection_debug")
             sub_report.content = result.get("sub_report_content")
             warning_info += '\n'.join(result.get("warning_infos", ""))
             exception_info += '\n'.join(result.get("exception_infos", ""))

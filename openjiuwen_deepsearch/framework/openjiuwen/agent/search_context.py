@@ -81,6 +81,10 @@ class Section(BaseModel):
         ),
     )
     focus_dimensions: List[str] = Field(default_factory=list, description="该章节应主展开的 2-4 个分析维度，其他章节不应深入展开这些维度")
+    doc_selection_debug: Optional[Dict] = Field(
+        default=None,
+        description="文档选择调试信息：rationales/ngram_filter/coverage_matrix/reliability/noise/selected_docs/verify_result",
+    )
 
 
 class Outline(BaseModel):

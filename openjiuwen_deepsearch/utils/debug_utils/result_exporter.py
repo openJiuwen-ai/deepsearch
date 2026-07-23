@@ -124,7 +124,7 @@ class ResultExporter:
             excel_path = cls._safe_output_path(output_dir, f"{base_name}.xlsx")
             exporter = OutlineToExcelExporter(data)
             exporter.export_to_excel(excel_path)
-            logger.info(f"{log_prefix} Exported Outline Excel: {excel_path}")
+            logger.info(f"{log_prefix} Exported Outline Excel: {excel_path}") 
 
         except Exception as e:
             logger.error(f"{log_prefix} Failed to export outline: {e}", exc_info=True)

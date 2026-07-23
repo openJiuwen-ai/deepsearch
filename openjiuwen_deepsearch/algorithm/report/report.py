@@ -116,6 +116,17 @@ class VisualizationInsertRenderContext:
     language: str
 
 
+@dataclass
+class DocSelectionContext:
+    """Encapsulates doc-selection intermediate results for debug export."""
+    rationales: list
+    coverage_result: dict
+    doc_infos: list
+    selected_docs: list
+    selected_marginal_values: list
+    verify_result: dict
+
+
 class Reporter:
     def __init__(self, llm_model_name):
         # Keep consistent with other modules: workflow/template_generator registers
@@ -894,9 +905,23 @@ class Reporter:
 
             selected_marginal_values = [mv_by_id.get(id(doc), 0.0) for doc in selected_docs]
 
-            self._verify_coverage(
+            verify_result = self._verify_coverage(
                 selected_docs, rationales, coverage_result, section_idx,
                 fallback_docs=doc_infos,
+            )
+
+            # Write doc-selection debug info back to Section for ResultExporter
+            # Placed before early returns so debug data is captured on all exit paths
+            self._write_doc_selection_debug(
+                current_inputs,
+                DocSelectionContext(
+                    rationales=rationales,
+                    coverage_result=coverage_result,
+                    doc_infos=doc_infos,
+                    selected_docs=selected_docs,
+                    selected_marginal_values=selected_marginal_values,
+                    verify_result=verify_result,
+                ),
             )
 
             if not selected_docs:
@@ -2083,6 +2108,53 @@ class Reporter:
             "weak_rationales": weak,
             "coverage_rate": 1 - len(uncovered) / max(len(rationales), 1),
             "limitations": limitations,
+        }
+
+    @staticmethod
+    def _write_doc_selection_debug(
+        current_inputs: dict, ctx: DocSelectionContext,
+    ) -> None:
+        """Pack doc-selection intermediate results into current_inputs.
+
+        Stores debug data in current_inputs["doc_selection_debug"] so the caller
+        (SubReporterNode → editor_team_manager_node._update_state) can write it
+        back to Section.doc_selection_debug for ResultExporter to dump to JSON/Excel.
+        """
+        rationales = ctx.rationales
+        coverage_result = ctx.coverage_result
+        doc_infos = ctx.doc_infos
+        selected_docs = ctx.selected_docs
+        selected_marginal_values = ctx.selected_marginal_values
+        verify_result = ctx.verify_result
+
+        filtered_docs = coverage_result.get("filtered_docs", doc_infos)
+        doc_info_map = {
+            f"doc_{i}": {"title": d.get("title", ""), "url": d.get("url", "")}
+            for i, d in enumerate(filtered_docs)
+        }
+        id_to_key = {id(d): f"doc_{i}" for i, d in enumerate(filtered_docs)}
+        selected_summary = [
+            {
+                "doc_key": id_to_key.get(id(doc), ""),
+                "title": doc.get("title", ""),
+                "url": doc.get("url", ""),
+                "marginal_value": mv,
+            }
+            for doc, mv in zip(selected_docs, selected_marginal_values)
+        ]
+
+        current_inputs["doc_selection_debug"] = {
+            "rationales": rationales,
+            "ngram_filter": {
+                "before": len(doc_infos),
+                "after": len(filtered_docs),
+            },
+            "coverage_matrix": coverage_result.get("coverage_matrix", {}),
+            "reliability_scores": coverage_result.get("reliability_scores", {}),
+            "noise_scores": coverage_result.get("noise_scores", {}),
+            "doc_info_map": doc_info_map,
+            "selected_docs": selected_summary,
+            "verify_result": verify_result or {},
         }
 
     async def _generate_sub_section_outline(self, current_inputs: dict) -> dict:

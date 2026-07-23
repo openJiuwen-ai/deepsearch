@@ -422,7 +422,8 @@ class SubReporterNode(BaseNode):
 
         algorithm_output = dict(success=success, msg=msg,
                                 classified_content=classified_content,
-                                sub_report_content=sub_report_content)
+                                sub_report_content=sub_report_content,
+                                doc_selection_debug=updating_state.get("doc_selection_debug"))
         updating_state.update(algorithm_output)
 
         return self._post_handle(inputs, updating_state, session, context)
@@ -470,6 +471,10 @@ class SubReporterNode(BaseNode):
 
         # 更新上下文子报告内容信息
         session.update_global_state({"section_context.sub_report_content": sub_report_content})
+        # 更新上下文文档选择调试信息
+        doc_selection_debug = algorithm_output.get("doc_selection_debug")
+        if doc_selection_debug:
+            session.update_global_state({"section_context.doc_selection_debug": doc_selection_debug})
 
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
         return dict(next_node=next_node)
@@ -712,6 +717,7 @@ class SectionEndNode(End):
                                                                         ".sub_report_background_knowledge") or [],
             "warning_infos": session.get_global_state("section_context.warning_infos") or [],
             "exception_infos": session.get_global_state("section_context.exception_infos") or [],
+            "doc_selection_debug": session.get_global_state("section_context.doc_selection_debug") or {},
         }
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
         return section_state

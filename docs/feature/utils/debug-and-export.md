@@ -45,7 +45,7 @@
 - `LogType` 包含 `input` 和 `output`。
 - `ResultExporter` 默认安全基目录为 `./output/results`。
 - 导出目录必须通过 `ensure_safe_directory` 校验。
-- Excel sheet 覆盖 outline、sections、plans、steps、retrieval query docs、doc infos 和 toc 等结构。
+- Excel sheet 覆盖 outline、sections、plans、steps、retrieval query docs、doc infos、toc 以及文档选择调试（信息维度、覆盖矩阵、文档选择、覆盖校验）等结构。
 
 ## 边界与错误处理
 
@@ -65,3 +65,4 @@
 - [日志与接口记录](./logging.md)
 - [参数校验、安全目录与 URL 处理](./validation-security-url.md)
 - [章节推理与写作子工作流](../framework/section-reasoning-writing-sub-workflows.md)
+- [文档选择调试信息导出](./doc-selection-debug-export.md)
