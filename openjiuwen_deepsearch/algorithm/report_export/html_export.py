@@ -275,7 +275,7 @@ document.addEventListener('DOMContentLoaded', function() {{
        does not pair them as inline-math delimiters. The $ signs are restored
        after rendering, leaving the visible output unchanged. */
     var PH = '\uFF04';
-    var MATH_OPS = '\\+-*/!%^_{{}}=';
+    var MATH_OPS = '\\+-*/!%^_{{}}=<>×÷';
     function hasMathOp(s) {{
         for (var j = 0; j < s.length; j++) {{
             if (MATH_OPS.indexOf(s[j]) !== -1) return true;

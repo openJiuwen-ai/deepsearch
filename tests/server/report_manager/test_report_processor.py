@@ -1683,3 +1683,30 @@ def test_convert_md_to_docx_renders_block_math_with_numeric_content(tmp_path):
     with zipfile.ZipFile(docx_path) as zip_file:
         document_xml = zip_file.read("word/document.xml").decode("utf-8")
     assert "<m:oMath" in document_xml
+
+
+def test_report_html_currency_protection_math_ops_synced_with_backend(tmp_path):
+    """HTML 货币保护脚本的 MATH_OPS 应与后端 _is_currency_start 的数学特征集同步。
+
+    回归测试：commit 688516d 的 _is_currency_start 已将 <、>、×、÷ 当作
+    数学特征（_MATH_CONTINUATION_RE / _MATH_FEATURE_AFTER_CURRENCY_RE），
+    但 HTML 路径的 JS MATH_OPS 缺少这些字符，导致 $4 < x$、$4 × 5$
+    在 HTML 中先被替换为货币占位符，KaTeX 不渲染，最终只显示字面公式，
+    而 DOCX 则会渲染，造成两种导出不一致。
+    """
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text("价格 $4 < x$ 和 $4 × 5$ 保持公式。\n", encoding="utf-8")
+
+    convert_md_to_html(md_path, html_path)
+    html_text = html_path.read_text(encoding="utf-8")
+
+    # MATH_OPS 应包含 <、>、×、÷，与后端 _MATH_FEATURE_AFTER_CURRENCY_RE 一致
+    math_ops_match = re.search(r"var\s+MATH_OPS\s*=\s*'([^']*)'", html_text)
+    assert math_ops_match is not None, "MATH_OPS 变量应存在于 HTML 脚本中"
+    math_ops = math_ops_match.group(1)
+    for operator in ("<", ">", "×", "÷"):
+        assert operator in math_ops, (
+            f"MATH_OPS 应包含 '{operator}' 以与后端 _is_currency_start 同步，"
+            f"实际 MATH_OPS={math_ops!r}"
+        )

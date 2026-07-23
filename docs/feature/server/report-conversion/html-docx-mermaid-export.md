@@ -10,10 +10,10 @@
 - HTML 中数学公式通过 KaTeX 脚本（`katex.min.js` + `auto-render.min.js` + `katex.min.css`，版本固定 0.16.11）渲染，使用 `$...$` / `$$...$$` 作为定界符；`\bm` 宏映射为 `\boldsymbol{#1}`，`throwOnError=false` 保证无法解析的公式不打断页面渲染。
 - HTML 在 KaTeX 渲染前会做"货币美元保护"：遍历正文文本节点，把 `$` + 数字开头且不像公式的片段替换为全角 `＄`（U+FF04）占位符，渲染完成后还原为 `$`，避免 `$4`、`$1,200.50` 等金额被 KaTeX 误配对为公式定界符。
 - DOCX 导出使用纯 Python 流水线从 Markdown 生成 Word 文件。
-- HTML 与 DOCX 共用同一套公式扫描器 `conversion_utils._iter_math_spans` / 公式判别函数 `_is_likely_inline_math` / 货币判别函数 `_is_currency_start`，保证两侧对"哪些 `$...$` 是公式、哪些是货币或纯文本"的判定一致。
+- HTML 路径通过 `conversion_utils.protect_math_spans`、DOCX 路径通过 `word_utils._iter_math_spans` 切分公式段；两者复用 `conversion_utils` 中的公式判别函数 `_is_likely_inline_math` / 货币判别函数 `_is_currency_start` / `_find_inline_math_end` / `_is_escaped` / `_is_double_dollar`，保证两侧对"哪些 `$...$` 是公式、哪些是货币或纯文本"的判定一致。
 - DOCX 超链接文本中若包含 `$...$` 或 `$$...$$`，会把公式段单独切出并转为 OMML 公式 run，其余文本保持为普通文本 run；HTML 实体先经 `html.unescape` 解码再进入公式处理。
 - DOCX 列表嵌套按列表类型显式分支：同类型嵌套（`ul→ul` / `ol→ol`）沿用同一编号并增加缩进层级；异类型嵌套（如 `ul` 内含 `ol`）创建独立编号，避免编号串号。
-- Mermaid 代码块会尝试通过 Mermaid CLI 渲染为图片或 SVG。
+- Mermaid 代码块通过纯 Python SVG 渲染器（`mermaid_renderer` + `chart_svg`）渲染为内联 SVG，不依赖外部命令行工具。
 - xychart 和 timeline Mermaid 会做预处理以提升离线渲染稳定性。
 - DOCX 表格、字体和标题会做后处理规范化。
 - `/reports/convert` 的默认 HTML 使用既有基础页面外壳；开启 HTML 美化时在共享 HTML fragment 上添加语义结构和 LLM CSS。
@@ -38,7 +38,7 @@
 
 1. Markdown 先经过正文预处理，保护数学公式、修正引用、表格、列表和标题边界。
 2. HTML 导出读取 Markdown，替换 Mermaid 代码块，转换为 HTML 并注入样式与 KaTeX 资源（CSS + JS + auto-render 脚本）。
-3. DOCX 导出读取 Markdown，替换 Mermaid 代码块为图片，再把 HTML/Markdown 结构写入 docx；行内文本和超链接文本通过 `_iter_math_spans` 切分公式与非公式段，公式段经 `_latex_to_omml` 转为 OMML 插入段落或超链接 run。
+3. DOCX 导出读取 Markdown，替换 Mermaid 代码块为图片，再把 HTML/Markdown 结构写入 docx；行内文本和超链接文本通过 `word_utils._iter_math_spans` 切分公式与非公式段，公式段经 `_latex_to_omml` 转为 OMML 插入段落或超链接 run。
 4. Mermaid 渲染前会清理代码和解析 frontmatter。
 5. timeline/xychart 会做文本压缩、单位归一化和值标签补强。
 6. DOCX 生成后会规范化字体、表格居中和图片尺寸。
@@ -50,7 +50,7 @@
 
 ## 依赖与边界
 
-- Mermaid 离线渲染依赖本机可用的 `mmdc` 或相关 Mermaid CLI 路径。
+- Mermaid 静态渲染为纯 Python 实现，不依赖 `mmdc`、Node、Chrome 或其他外部命令行工具；仅使用仓库内置的 `chart_generation/fonts/kt_font.ttf`。
 - HTML 和 DOCX 导出都从 bundle 的 `report.md` 读取输入。
 - 本地图片必须解析到 bundle 或允许的工作区路径内。
 - DOCX 默认字体在转换工具中统一设置。
@@ -64,7 +64,7 @@
 - Mermaid 渲染失败时会保存失败源代码到 debug 路径，具体行为由渲染工具控制。
 - 不安全或无法解析的本地图片不会越权读取。
 - 数学公式保护只描述当前启发式行为，新增公式语法时需要覆盖 HTML 和 DOCX 两条路径；二者共享 `conversion_utils` 中的扫描与判别函数，改动任一侧必须同时验证另一侧。
-- `_iter_math_spans` 复用 `_is_currency_start` / `_is_escaped` / `_is_double_dollar` / `_find_inline_math_end` / `_is_likely_inline_math`，HTML 与 DOCX 必须得到一致的公式段切分结果。
+- `word_utils._iter_math_spans`（DOCX）与 `conversion_utils._protect_inline_math_spans`（HTML）均复用 `conversion_utils` 中的 `_is_currency_start` / `_is_escaped` / `_is_double_dollar` / `_find_inline_math_end` / `_is_likely_inline_math`，两侧必须得到一致的公式段切分结果。
 - LaTeX → OMML 转换（`latex2mathml` → `mathml2omml`）失败时，段落内和超链接内均回退为保留原始文本（`$...$`）并发出 `logger.warning` 记录前 200 字符与异常信息，不抛出中断导出。
 - HTML 中双重转义实体（如 `&amp;#92;` → `&#92;`）在 `postprocess_html` 阶段由 `_fix_double_escaped_entities` 还原为单层实体，避免页面显示字面量而非反斜杠等字符。
 - 列表嵌套状态显式分支：`block_state` 为 None 或无 `list_num_id` 时新建编号；同列表类型时沿用编号并提升 `list_depth`；不同列表类型时另起编号，`list_depth` 归零，避免编号错乱。

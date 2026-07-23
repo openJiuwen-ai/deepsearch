@@ -47,6 +47,23 @@ class TestIsSensitiveKey:
         assert is_sensitive_key("database_url_string") == True
         assert is_sensitive_key("some_key_name") == True
 
+    def test_is_sensitive_key_credential_fields(self):
+        """测试凭据相关键名
+
+        回归测试：runtime API 的 header 参数（如 Authorization、Password、
+        Client-Secret）必须被 is_sensitive_key 识别为敏感字段，否则
+        tool_invoke_log_async 装饰器会以 INFO 级别明文记录凭据。
+        """
+        credential_keys = [
+            "authorization", "Authorization", "AUTHORIZATION",
+            "auth", "x-auth-token", "authentication",
+            "password", "user_password", "Password",
+            "secret", "client_secret", "Client-Secret",
+            "credential", "credentials", "api_credential",
+        ]
+        for key in credential_keys:
+            assert is_sensitive_key(key) == True, f"Key '{key}' should be sensitive"
+
 
 class TestGetLoggedTool:
     """测试 get_logged_tool 函数"""
