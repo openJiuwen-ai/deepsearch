@@ -70,7 +70,7 @@
 
 Prompt 输入变量：
 
-- rationale_generator：system prompt 只含指令和抗注入约束；user message 含 `user_query`、`section_task`、`section_description`、`overall_outline`、`step_summaries`（不可信数据在 user prompt 中）
+- rationale_generator：system prompt 只含指令和抗注入约束；user message 含 `user_query`、`section_task`、`section_description`、`overall_outline`（经 `export_outline_without_plans` 剥离 plans）、`step_summaries`（不可信数据在 user prompt 中）
 - coverage_matrix_evaluator：system prompt 只含指令和抗注入约束；user message 含 `section_task`、`section_description`、`rationales`、`doc_infos`（不可信数据在 user prompt 中）
 
 关键配置：

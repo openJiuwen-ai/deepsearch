@@ -18,7 +18,11 @@ from openjiuwen_deepsearch.algorithm.report_export.report_bundle import (
     pack_bundle_to_base64,
 )
 from openjiuwen_deepsearch.algorithm.report_style.context import build_style_context
-from openjiuwen_deepsearch.algorithm.report_style.css import inject_css, normalize_css_output
+from openjiuwen_deepsearch.algorithm.report_style.css import (
+    append_cover_title_contrast_safeguard,
+    inject_css,
+    normalize_css_output,
+)
 from openjiuwen_deepsearch.common.exception import CustomRuntimeException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
@@ -30,7 +34,10 @@ ReportExportFormat = Literal["html", "docx"]
 
 
 async def _apply_html_style(baseline_html: str, markdown: str, llm: dict) -> tuple[str, bool]:
-    """生成并注入报告 CSS，样式阶段失败时保留基础 HTML。
+    """生成、修正并注入报告 CSS，样式阶段失败时保留基础 HTML。
+
+    在写入 HTML 前，会为封面标题追加必要的对比度保护规则；该修正仅影响
+    `.report-cover > h1`，不会改变模型为其余报告区域生成的样式。
 
     Args:
         baseline_html: 已生成的语义化基础 HTML。
@@ -61,6 +68,18 @@ async def _apply_html_style(baseline_html: str, markdown: str, llm: dict) -> tup
             raw_css_length,
             normalized_css_length,
         )
+        style_phase = "append_cover_title_contrast_safeguard"
+        safeguarded_css = append_cover_title_contrast_safeguard(css)
+        if safeguarded_css != css:
+            # 仅根据服务端追加的后缀判断模式，避免将模型生成的 CSS 写入日志。
+            safeguard_suffix = safeguarded_css.removeprefix(css.rstrip())
+            safeguard_mode = (
+                "title_backdrop"
+                if "background-color: #0f172a !important;" in safeguard_suffix
+                else "title_color_override"
+            )
+            logger.info("Report style cover contrast safeguard applied mode=%s", safeguard_mode)
+        css = safeguarded_css
         style_phase = "inject_css"
         return inject_css(baseline_html, css), True
     except Exception as exc:

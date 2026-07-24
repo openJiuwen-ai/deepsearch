@@ -16,6 +16,7 @@ __init__()
 
 - `"parallel"` → `DeepresearchAgent`
 - `dependency_driving` → `DeepresearchDependencyAgent`
+- `"hybrid"` → `DeepresearchIntentHybridAgent`
 - `search` → `DeepSearchAgent`（详见 [`deepsearch_agent`](./deepsearch_agent.md)）
 
 **样例**：
@@ -39,6 +40,7 @@ create_agent(agent_config: dict)
 **返回**：
 - `DeepresearchAgent`：`search_mode` 为 `"research"` 且 `execution_method` 为 `"parallel"`（默认）
 - `DeepresearchDependencyAgent`：`search_mode` 为 `"research"` 且 `execution_method` 为 `dependency_driving`
+- `DeepresearchIntentHybridAgent`：`search_mode` 为 `"research"` 且 `execution_method` 为 `"hybrid"`
 - `DeepSearchAgent`：`search_mode` 为 `"search"`
 - `SimpleReactSearchAgent`：`search_mode` 为 `"react"`
 
@@ -70,7 +72,17 @@ DeepresearchAgent
 >>> print(type(agent).__name__)
 DeepresearchDependencyAgent
 
->>> # 样例3：search（DeepSearchAgent）
+>>> # 样例3：混合大纲路由执行
+>>> agent_config = {
+...     "llm_config": {"model_name": "gpt-4", "model_type": "openai"},
+...     "search_mode": "research",
+...     "execution_method": "hybrid",
+... }
+>>> agent = factory.create_agent(agent_config)
+>>> print(type(agent).__name__)
+DeepresearchIntentHybridAgent
+
+>>> # 样例4：search（DeepSearchAgent）
 >>> agent_config = {
 ...     "llm_config": {"model_name": "gpt-4", "model_type": "openai"},
 ...     "search_mode": "search",

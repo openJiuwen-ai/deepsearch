@@ -9,6 +9,7 @@ import pytest
 from openjiuwen.core.common.constants.constant import INTERACTIVE_INPUT
 from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.session.node import Session
+from openjiuwen_deepsearch.config.method import ExecutionMethod
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     OutlineInteractionNode,
@@ -62,7 +63,12 @@ def default_config():
 
 
 def setup_session_state(
-    session, config=None, history_outlines=None, current_outline=None, outline_interactions=None
+    session,
+    config=None,
+    history_outlines=None,
+    current_outline=None,
+    outline_interactions=None,
+    outline_execution_method=None,
 ):
     """设置 Session 状态"""
 
@@ -79,6 +85,8 @@ def setup_session_state(
             return current_outline
         elif key == "search_context.outline_interactions":
             return outline_interactions if outline_interactions else []
+        elif key == "search_context.outline_execution_method":
+            return outline_execution_method
         return None
 
     session.get_global_state.side_effect = get_state_side_effect
@@ -176,6 +184,109 @@ class TestOutlineInteractionNodeCoreFlow:
             "search_context.outline_interactions" in str(call) for call in calls
         )
         assert not outline_interactions_updated, "接受大纲时不应保存交互记录"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "selected_method, expected_next_node",
+        [
+            (ExecutionMethod.PARALLEL.value, NodeId.EDITOR_TEAM.value),
+            (ExecutionMethod.DEPENDENCY_DRIVING.value, NodeId.DEPENDENCY_EDITOR_TEAM.value),
+        ],
+    )
+    async def test_user_accepts_outline_redirects_by_selected_method(
+        self,
+        outline_interaction_node,
+        mock_session,
+        mock_context,
+        selected_method,
+        expected_next_node,
+    ):
+        """用户接受大纲时，OutlineInteractionNode 应按首次路由结果选择写作团队。"""
+        config = {
+            "feedback_mode": "web",
+            "outline_interaction_enabled": True,
+            "outline_interaction_max_rounds": 5,
+        }
+        setup_session_state(
+            mock_session,
+            config=config,
+            outline_execution_method=selected_method,
+        )
+        mock_session.interact.return_value = json.dumps({"interrupt_feedback": "accepted", "feedback": ""})
+
+        result = await outline_interaction_node._do_invoke({}, mock_session, mock_context)
+
+        assert result["next_node"] == expected_next_node
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "selected_method, expected_next_node",
+        [
+            (ExecutionMethod.PARALLEL.value, NodeId.EDITOR_TEAM.value),
+            (ExecutionMethod.DEPENDENCY_DRIVING.value, NodeId.DEPENDENCY_EDITOR_TEAM.value),
+        ],
+    )
+    async def test_interaction_disabled_redirects_by_selected_method(
+        self,
+        outline_interaction_node,
+        mock_session,
+        mock_context,
+        selected_method,
+        expected_next_node,
+    ):
+        """大纲交互关闭时，应按首次路由结果直接进入对应写作团队。"""
+        config = {
+            "feedback_mode": "cmd",
+            "outline_interaction_enabled": False,
+            "outline_interaction_max_rounds": 5,
+        }
+        setup_session_state(
+            mock_session,
+            config=config,
+            outline_execution_method=selected_method,
+        )
+
+        result = await outline_interaction_node._do_invoke({}, mock_session, mock_context)
+
+        assert result["next_node"] == expected_next_node
+        mock_session.interact.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "selected_method, expected_next_node",
+        [
+            (ExecutionMethod.PARALLEL.value, NodeId.EDITOR_TEAM.value),
+            (ExecutionMethod.DEPENDENCY_DRIVING.value, NodeId.DEPENDENCY_EDITOR_TEAM.value),
+        ],
+    )
+    async def test_max_rounds_reached_redirects_by_selected_method(
+        self,
+        outline_interaction_node,
+        mock_session,
+        mock_context,
+        selected_method,
+        expected_next_node,
+    ):
+        """达到最大交互轮数时，应按首次路由结果进入对应写作团队。"""
+        config = {
+            "feedback_mode": "cmd",
+            "outline_interaction_enabled": True,
+            "outline_interaction_max_rounds": 1,
+        }
+        outline_interactions = [
+            OutlineInteraction(feedback="comment1", interaction_mode="revise_comment"),
+        ]
+        setup_session_state(
+            mock_session,
+            config=config,
+            outline_interactions=outline_interactions,
+            outline_execution_method=selected_method,
+        )
+
+        result = await outline_interaction_node._do_invoke({}, mock_session, mock_context)
+
+        assert result["next_node"] == expected_next_node
+        mock_session.write_custom_stream.assert_called()
 
     @pytest.mark.asyncio
     async def test_user_revise_with_comments(

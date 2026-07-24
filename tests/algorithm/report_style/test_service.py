@@ -74,6 +74,73 @@ async def test_stylize_report_injects_arbitrary_css_without_changing_markdown(mo
 
 
 @pytest.mark.asyncio
+async def test_stylize_report_appends_cover_title_contrast_safeguard(monkeypatch):
+    """样式化导出应修正深色渐变封面上的深色标题。"""
+    generated_css = """
+    :root { --text-primary: #1a202c; }
+    h1 { color: var(--text-primary); }
+    .report-cover { background: linear-gradient(135deg, #0f172a, #1e293b); }
+    """
+    monkeypatch.setattr(
+        export_service,
+        "ainvoke_llm_with_stats",
+        AsyncMock(return_value={"content": generated_css}),
+    )
+
+    result = await service.stylize_report(FINAL_RESULT, LLM)
+
+    html = _read_report_html(result.convert_content)
+    assert ".report-cover > h1 {\n    color: #ffffff !important;\n}" in html
+    assert result.style_applied is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("generated_css", "mode"),
+    [
+        (
+            ".report-cover { background: linear-gradient(135deg, #0f172a, #1e293b); }\n"
+            "h1 { color: #1a202c; }",
+            "title_color_override",
+        ),
+        (
+            ".report-cover { background: url(cover.svg); }\n"
+            "h1 { color: #1a202c; }",
+            "title_backdrop",
+        ),
+    ],
+)
+async def test_stylize_report_logs_cover_contrast_safeguard_mode(
+    monkeypatch,
+    caplog,
+    generated_css,
+    mode,
+):
+    """封面对比度保护触发时应记录模式但不记录模型 CSS。
+
+    Args:
+        monkeypatch: pytest 的动态替换夹具。
+        caplog: pytest 日志捕获夹具。
+        generated_css: 触发保护器的模型 CSS。
+        mode: 预期记录的保护模式。
+    """
+    css_marker = "CSS_CONTENT_MUST_NOT_BE_LOGGED"
+    generated_css = f"{generated_css} /* {css_marker} */"
+    monkeypatch.setattr(
+        export_service,
+        "ainvoke_llm_with_stats",
+        AsyncMock(return_value={"content": generated_css}),
+    )
+
+    with caplog.at_level(logging.INFO, logger=export_service.__name__):
+        result = await service.stylize_report(FINAL_RESULT, LLM)
+
+    assert result.style_applied is True
+    assert f"Report style cover contrast safeguard applied mode={mode}" in caplog.text
+    assert css_marker not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_stylize_report_inlines_vlm_png_and_keeps_bundle_asset(monkeypatch) -> None:
     """样式化 HTML 内嵌 VLM PNG，同时 bundle 保留原资源。"""
     final_result = {

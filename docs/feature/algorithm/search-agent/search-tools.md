@@ -38,6 +38,8 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 - `tests/tools/search_api/test_jina.py`
 - `tests/tools/search_api/test_local_search.py`
 - `tests/tools/search_api/test_native_local_search.py`
+- `tests/search_agent/test_web_fetch_provider_registry.py`
+- `tests/search_agent/test_web_search_tool_adapter.py`
 - `tests/search_agent/test_jina_reader_endpoints.py`
 - `tests/search_agent/test_run_action.py`
 
@@ -79,6 +81,8 @@ Search tools 为 run action 节点提供可控的信息获取能力。它们把 
 
 ```bash
 uv run pytest tests/tools/test_web_search.py
+uv run pytest tests/search_agent/test_web_fetch_provider_registry.py
+uv run pytest tests/search_agent/test_web_search_tool_adapter.py
 uv run pytest tests/search_agent/test_run_action.py
 ```
 
@@ -93,3 +97,4 @@ uv run pytest tests/tools/search_api
 - [DeepSearch 搜索智能体总览](../search-agent.md)
 - [Search Nodes](./search-nodes.md)
 - [Search Index](./search-index.md)
+- [DeepSearch 网页抓取 Provider 注册](../../framework/web-fetch-provider-registry.md)

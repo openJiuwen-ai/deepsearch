@@ -298,10 +298,15 @@ class AgentConfig(BaseModel):
     """
     execute_mode: Literal["commercial", "general"] = Field(default="commercial",
                                                            description='执行模式，可选值: ["commercial", "general"]')
-    execution_method: Literal["dependency_driving", "parallel"] = Field(default="parallel",
-                                                                        description="执行方法: "
-                                                                                    "dependency_driving: 依赖驱动工作流执行"
-                                                                                    "parallel: 并行工作流执行")
+    execution_method: Literal["dependency_driving", "parallel", "hybrid"] = Field(
+        default="parallel",
+        description=(
+            "执行方法："
+            "parallel：并行工作流执行；"
+            "dependency_driving：依赖驱动工作流执行；"
+            "hybrid：混合大纲路由模式，由意图识别节点调用LLM选择普通大纲或依赖驱动大纲。"
+        ),
+    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=5,

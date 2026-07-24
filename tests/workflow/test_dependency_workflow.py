@@ -17,6 +17,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.de
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import (
     DeepresearchAgent,
     DeepresearchDependencyAgent,
+    DeepresearchIntentHybridAgent,
 )
 
 
@@ -94,6 +95,29 @@ class TestDeepresearchDependencyAgent:
         assert "dependency" in dep_agent.research_name.lower()
 
 
+class TestDeepresearchIntentHybridAgent:
+    """测试混合大纲 Agent。"""
+
+    def test_hybrid_agent_workflow_creation(self):
+        """hybrid Agent 应创建独立 workflow，不影响 parallel 和 dependency_driving。"""
+        agent = DeepresearchIntentHybridAgent()
+
+        assert agent is not None
+        assert agent.research_name == "research_workflow_hybrid"
+        assert agent.version == "1"
+        assert agent.agent is not None
+
+    def test_hybrid_agent_name_differs_from_existing_agents(self):
+        """hybrid workflow 名称应与已有两种 workflow 区分开。"""
+        hybrid_agent = DeepresearchIntentHybridAgent()
+        dependency_agent = DeepresearchDependencyAgent()
+        parallel_agent = DeepresearchAgent()
+
+        assert hybrid_agent.research_name != dependency_agent.research_name
+        assert hybrid_agent.research_name != parallel_agent.research_name
+        assert "hybrid" in hybrid_agent.research_name.lower()
+
+
 class TestDependencyReasoningIntegration:
     """测试依赖驱动规划子图集成"""
 
@@ -165,3 +189,33 @@ class TestDependencyWorkflowRegistrationIsolation:
             dependency_key,
             "dependency_editor_team",
         ) == "DependencyEditorTeamNode"
+
+    def test_hybrid_agent_registers_mixed_topology(self, monkeypatch):
+        """hybrid workflow 应复用普通大纲节点，同时注册普通和依赖两套写作团队。"""
+        resource_mgr = ResourceMgr()
+        _patch_runner_resource_mgr(monkeypatch, resource_mgr)
+
+        hybrid_agent = DeepresearchIntentHybridAgent()
+        hybrid_key = generate_workflow_key(hybrid_agent.research_name, hybrid_agent.version)
+
+        assert resource_mgr._resource_registry.workflow()._providers.get(hybrid_key) is not None
+        assert _get_workflow_node_type(resource_mgr, hybrid_key, "intent_recognition") == "IntentRecognitionNode"
+        assert _get_workflow_node_type(resource_mgr, hybrid_key, "outline") == "OutlineNode"
+        assert _get_workflow_node_type(resource_mgr, hybrid_key, "outline_interaction") == "OutlineInteractionNode"
+        assert _get_workflow_node_type(resource_mgr, hybrid_key, "editor_team") == "EditorTeamNode"
+        assert _get_workflow_node_type(
+            resource_mgr,
+            hybrid_key,
+            "dependency_editor_team",
+        ) == "DependencyEditorTeamNode"
+
+    def test_hybrid_agent_does_not_use_old_hybrid_outline_nodes(self, monkeypatch):
+        """hybrid workflow 不应注册旧方案中的 HybridOutlineNode。"""
+        resource_mgr = ResourceMgr()
+        _patch_runner_resource_mgr(monkeypatch, resource_mgr)
+
+        hybrid_agent = DeepresearchIntentHybridAgent()
+        hybrid_key = generate_workflow_key(hybrid_agent.research_name, hybrid_agent.version)
+
+        assert _get_workflow_node_type(resource_mgr, hybrid_key, "outline") != "HybridOutlineNode"
+        assert _get_workflow_node_type(resource_mgr, hybrid_key, "outline_interaction") != "HybridOutlineInteractionNode"

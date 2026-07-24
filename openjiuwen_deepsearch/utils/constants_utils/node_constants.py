@@ -67,6 +67,7 @@ class AgentLlmName(enum.Enum):
     """
 
     QUESTION_MODEL_ROUTER = "question_model_router"
+    OUTLINE_MODE_ROUTER = "outline_mode_router"
     TEMPLATE = NodeId.TEMPLATE.value
 
     COLLECTOR_QUERY_GENERATION = NodeId.COLLECTOR_QUERY_GEN.value

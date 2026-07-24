@@ -64,4 +64,5 @@
 
 - [流式输出与运行遥测](../utils/streaming-and-telemetry.md)
 - [DeepSearch 搜索工作流配置](../config/search-workflow-config.md)
+- [DeepSearch 网页抓取 Provider 注册](../framework/web-fetch-provider-registry.md)
 - [DeepSearch 搜索智能体](../algorithm/search-agent.md)

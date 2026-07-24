@@ -30,6 +30,9 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     resolve_report_type_policy,
     web_search_for_query,
 )
+from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
+    route_outline_execution_method,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
@@ -81,6 +84,7 @@ from openjiuwen_deepsearch.config.config import (
     OUTLINER_SECTION_NUM_MAX,
     WebSearchEngineConfig,
 )
+from openjiuwen_deepsearch.config.method import ExecutionMethod
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Action,
@@ -182,6 +186,9 @@ class StartNode(Start):
         agent_config = dict()
         if origin_agent_config:
             agent_config["execute_mode"] = origin_agent_config.get("execute_mode", "commercial")
+            agent_config["execution_method"] = origin_agent_config.get(
+                "execution_method", ExecutionMethod.PARALLEL.value
+            )
             agent_config["workflow_human_in_the_loop"] = origin_agent_config.get("workflow_human_in_the_loop", True)
             agent_config["outline_interaction_enabled"] = origin_agent_config.get("outline_interaction_enabled", True)
             agent_config["outline_interaction_max_rounds"] = origin_agent_config.get(
@@ -243,12 +250,39 @@ class IntentRecognitionNode(BaseNode):
     def __init__(self):
         super().__init__()
 
+    async def _resolve_outline_execution_method(self, current_inputs: dict, session: Session) -> str:
+        """
+        解析并保存本轮大纲实际执行方式。
+
+        Args:
+            current_inputs: 意图识别节点预处理后的输入，包含 execution_method、original_query 和 llm_model_name。
+            session: 当前工作流会话，用于写入 search_context.outline_execution_method。
+
+        Returns:
+            parallel 或 dependency_driving。仅 hybrid 入口会调用 LLM router，固定模式直接映射。
+        """
+        execution_method = current_inputs.get("execution_method") or ExecutionMethod.PARALLEL.value
+        if execution_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
+            selected_method = ExecutionMethod.DEPENDENCY_DRIVING.value
+        elif execution_method == ExecutionMethod.HYBRID.value:
+            selected_method = await route_outline_execution_method(
+                current_inputs.get("original_query") or "",
+                current_inputs.get("llm_model_name") or "",
+            )
+        else:
+            selected_method = ExecutionMethod.PARALLEL.value
+
+        session.update_global_state({"search_context.outline_execution_method": selected_method})
+        logger.info("[IntentRecognitionNode] outline_execution_method=%s", selected_method)
+        return selected_method
+
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         logger.info("[IntentRecognitionNode] Start IntentRecognitionNode.")
         return dict(
             original_query=session.get_global_state("search_context.original_query") or "",
             messages=session.get_global_state("search_context.messages") or [],
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
+            execution_method=session.get_global_state("config.execution_method") or ExecutionMethod.PARALLEL.value,
             human_in_the_loop=session.get_global_state("config.workflow_human_in_the_loop"),
             web_search_engine_config=session.get_global_state("config.web_search_engine_config"),
             info_collector_search_method=session.get_global_state("config.info_collector_search_method") or "web",
@@ -259,6 +293,7 @@ class IntentRecognitionNode(BaseNode):
 
         # 执行意图识别
         intent_result = await classify_and_recognize_intent(current_inputs)
+        await self._resolve_outline_execution_method(current_inputs, session)
 
         # 检查搜索模式：仅在 web 或 all 模式下执行网络搜索
         info_collector_search_method = current_inputs.get("info_collector_search_method", "web")
@@ -894,6 +929,7 @@ class OutlineNode(BaseNode):
             user_feedback=user_feedback,
             questions=questions,
             language=language,
+            outline_execution_method=session.get_global_state("search_context.outline_execution_method") or "",
             entry_search_results=entry_search_results,
             section_num=section_num,
             max_section_num=OUTLINER_SECTION_NUM_MAX,
@@ -914,12 +950,77 @@ class OutlineNode(BaseNode):
         result.update(build_research_intent_prompt_context(research_intent))
         return result
 
+    def _get_with_dep_driving(self, current_inputs: dict) -> bool:
+        """
+        判断当前大纲生成是否使用依赖驱动工具 schema。
+
+        Args:
+            current_inputs: 大纲节点预处理后的输入，优先读取 outline_execution_method。
+
+        Returns:
+            True 表示使用 dependency_driving 工具 schema；False 表示使用普通大纲工具 schema。
+        """
+        selected_method = current_inputs.get("outline_execution_method")
+        if selected_method in {ExecutionMethod.PARALLEL.value, ExecutionMethod.DEPENDENCY_DRIVING.value}:
+            return selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value
+        return self.with_dep_driving
+
+    def _select_prompt_and_dep_driving(self, current_inputs: dict) -> tuple[str, bool, str]:
+        """
+        同时选择大纲 prompt 与工具 schema。
+
+        Args:
+            current_inputs: 大纲节点预处理后的输入，包含交互模式、模板和 outline_execution_method。
+
+        Returns:
+            prompt 名称、是否启用 dependency_driving 工具 schema，以及本轮实际执行的大纲模式。
+        """
+        prompt_name = self._select_prompt_name(current_inputs)
+        if prompt_name in {"outliner_template", "outliner_user_revised"}:
+            return prompt_name, False, ExecutionMethod.PARALLEL.value
+        with_dep_driving = self._get_with_dep_driving(current_inputs)
+        selected_method = (
+            ExecutionMethod.DEPENDENCY_DRIVING.value
+            if with_dep_driving
+            else ExecutionMethod.PARALLEL.value
+        )
+        return prompt_name, with_dep_driving, selected_method
+
+    def _sync_outline_execution_method(
+        self,
+        current_inputs: dict,
+        session: Session,
+        selected_method: str,
+    ) -> None:
+        """
+        将本轮实际大纲模式同步回 session，保证 prompt、工具 schema 与后续节点一致。
+
+        Args:
+            current_inputs: 大纲节点预处理后的输入。
+            session: 当前工作流会话。
+            selected_method: 本轮实际执行的大纲模式。
+        """
+        current_method = current_inputs.get("outline_execution_method")
+        if current_method not in {ExecutionMethod.PARALLEL.value, ExecutionMethod.DEPENDENCY_DRIVING.value}:
+            return
+        if current_method == selected_method:
+            return
+        current_inputs["outline_execution_method"] = selected_method
+        session.update_global_state({"search_context.outline_execution_method": selected_method})
+        logger.info(
+            "%s Reset outline_execution_method from %s to %s to keep prompt and tool schema consistent.",
+            self.log_prefix,
+            current_method,
+            selected_method,
+        )
+
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
-        prompt_name = self._select_prompt_name(current_inputs)
+        prompt_name, with_dep_driving, selected_method = self._select_prompt_and_dep_driving(current_inputs)
+        self._sync_outline_execution_method(current_inputs, session, selected_method)
         outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=prompt_name)
-        outliner.with_dep_driving = self.with_dep_driving
+        outliner.with_dep_driving = with_dep_driving
         max_outline_retry_num = current_inputs.get("max_outline_retry_num", 1)
 
         success_flag = False
@@ -968,7 +1069,7 @@ class OutlineNode(BaseNode):
         if report_template and not outline_interaction_mode:
             return "outliner_template"
         if outline_interaction_mode == "revise_comment":
-            if self.with_dep_driving:
+            if self._get_with_dep_driving(current_inputs):
                 return "dep_driving_outliner_interaction"
             return "outliner_interaction"
         if outline_interaction_mode == "revise_outline":
@@ -977,10 +1078,15 @@ class OutlineNode(BaseNode):
             except Exception as e:
                 logger.error(f"{self.log_prefix} Failed to parse user outline JSON: {e}")
             return "outliner_user_revised"
+        if self._get_with_dep_driving(current_inputs):
+            return "dep_driving_outliner"
         return self.outline_prompt
 
-    def _get_next_node_after_outline(self) -> str:
+    def _get_next_node_after_outline(self, session: Session) -> str:
         """获取大纲生成成功后的下一个节点"""
+        selected_method = session.get_global_state("search_context.outline_execution_method")
+        if selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
+            return NodeId.DEPENDENCY_EDITOR_TEAM.value
         return NodeId.EDITOR_TEAM.value
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
@@ -1016,7 +1122,7 @@ class OutlineNode(BaseNode):
                 next_node = NodeId.OUTLINE_INTERACTION.value
                 logger.info(f"{self.log_prefix} Outline generated, go to OutlineInteractionNode.")
             else:
-                next_node = self._get_next_node_after_outline()
+                next_node = self._get_next_node_after_outline(session)
                 logger.info(f"{self.log_prefix} Successfully generate outline, go to {next_node}.")
         else:
             next_node = NodeId.END.value
@@ -1038,7 +1144,23 @@ class DependencyOutlineNode(OutlineNode):
         self.outline_prompt = "dep_driving_outliner"
         self.with_dep_driving = True
 
-    def _get_next_node_after_outline(self) -> str:
+    def _get_with_dep_driving(self, current_inputs: dict) -> bool:
+        """依赖驱动大纲节点固定使用依赖驱动工具 schema，不受 session 路由状态覆盖。"""
+        return True
+
+    def _select_prompt_and_dep_driving(self, current_inputs: dict) -> tuple[str, bool, str]:
+        """
+        固定依赖驱动 workflow 始终保持 dependency_driving 执行契约。
+
+        Args:
+            current_inputs: 大纲节点预处理后的输入。
+
+        Returns:
+            prompt 名称、依赖驱动工具 schema 标记，以及 dependency_driving 执行模式。
+        """
+        return self._select_prompt_name(current_inputs), True, ExecutionMethod.DEPENDENCY_DRIVING.value
+
+    def _get_next_node_after_outline(self, session: Session) -> str:
         """依赖驱动模式下的下一个节点"""
         return NodeId.DEPENDENCY_EDITOR_TEAM.value
 
@@ -1222,12 +1344,27 @@ class OutlineInteractionNode(BaseNode):
             current_round=current_round,
         )
 
+    def _get_next_node_after_accept(self, session: Session) -> str:
+        """
+        根据已选择的大纲执行方式决定用户接受大纲后的写作节点。
+
+        Args:
+            session: 当前工作流会话，用于读取 search_context.outline_execution_method。
+
+        Returns:
+            editor_team 或 dependency_editor_team。
+        """
+        selected_method = session.get_global_state("search_context.outline_execution_method")
+        if selected_method == ExecutionMethod.DEPENDENCY_DRIVING.value:
+            return NodeId.DEPENDENCY_EDITOR_TEAM.value
+        return NodeId.EDITOR_TEAM.value
+
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
         if not current_inputs.get("outline_interaction_enabled"):
             logger.info(f"{self.log_prefix} Outline interaction is disabled, skip to editor team.")
-            return dict(next_node=NodeId.EDITOR_TEAM.value)
+            return dict(next_node=self._get_next_node_after_accept(session))
 
         max_rounds = current_inputs.get("max_rounds", 5)
         current_round = current_inputs.get("current_round", 0)
@@ -1235,7 +1372,7 @@ class OutlineInteractionNode(BaseNode):
         if current_round >= max_rounds:
             logger.info(f"{self.log_prefix} Reached max rounds: {max_rounds}")
             await self._notify_user(session, "Maximum interaction rounds reached.", StreamEvent.USER_INPUT_ENDED)
-            return dict(next_node=NodeId.EDITOR_TEAM.value)
+            return dict(next_node=self._get_next_node_after_accept(session))
 
         feedback_mode = current_inputs.get("feedback_mode", "cmd")
         user_input = await self._get_user_input(feedback_mode, f"{current_round+1}", session)
@@ -1323,7 +1460,7 @@ class OutlineInteractionNode(BaseNode):
 
         if action == "accepted":
             logger.info(f"{self.log_prefix} User accepted the outline")
-            next_node = NodeId.EDITOR_TEAM.value
+            next_node = self._get_next_node_after_accept(session)
         elif action == "revise_comment":
             logger.info(f"{self.log_prefix} User wants to revise with comments")
             self._save_history(session, feedback, "revise_comment")

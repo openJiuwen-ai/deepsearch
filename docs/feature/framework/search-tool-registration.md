@@ -4,7 +4,7 @@
 
 本文档覆盖 framework 层 web/local 搜索工具注册、外部自定义工具加载、域名约束合并、QPS 限流和 runtime API 工具生成。
 
-不覆盖具体搜索引擎服务的外部 API 语义；只记录本仓库对这些工具的包装契约。
+不覆盖具体搜索引擎服务的外部 API 语义；只记录本仓库对这些工具的包装契约。DeepSearch 网页抓取 provider 注册见 [网页抓取 Provider 注册](./web-fetch-provider-registry.md)。
 
 ## 功能目的
 
@@ -90,4 +90,5 @@ contextvar，避免节点直接持有全局工具对象。
 - [报告研究主工作流](./research-workflow.md)
 - [信息采集子图](./info-collector-subgraph.md)
 - [DeepSearch 搜索子工作流](./deepsearch-sub-workflows.md)
+- [DeepSearch 网页抓取 Provider 注册](./web-fetch-provider-registry.md)
 - [资料采集](../algorithm/research-collector.md)

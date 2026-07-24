@@ -109,6 +109,20 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchDepe
 
 ---
 
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchIntentHybridAgent
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchIntentHybridAgent(DeepresearchAgent)
+```
+混合大纲路由模式的研究工作流 Agent。
+
+**行为说明**：
+- 与 `DeepresearchAgent` 共用 `run` 接口、参数校验和中断恢复机制。
+- 当 `agent_config.execution_method="hybrid"` 时启用。
+- 主链路复用 `OutlineNode` 和 `OutlineInteractionNode`，不会注册旧方案中的 hybrid 大纲节点。
+- `IntentRecognitionNode` 会调用大纲模式 router LLM，并把结果写入 `search_context.outline_execution_method`。
+- 当路由结果为 `parallel` 时进入 `EditorTeamNode`；当路由结果为 `dependency_driving` 时进入 `DependencyEditorTeamNode`。
+
+
 ## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent
 ```python
 class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent()

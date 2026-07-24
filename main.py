@@ -310,7 +310,7 @@ def main(
         research_group = parser.add_argument_group("Research", "研究 / 报告模板与可选 VLM 图表")
         research_group.add_argument(
             "--execution_method",
-            choices=["parallel", "dependency_driving"],
+            choices=["parallel", "dependency_driving", "hybrid"],
             default="parallel",
             help="execution method of workflow",
         )
@@ -489,6 +489,8 @@ def main(
         current_agent_config["enable_question_router"] = args.enable_question_router
         if args.execution_method.strip() == ExecutionMethod.DEPENDENCY_DRIVING.value:
             current_agent_config["execution_method"] = ExecutionMethod.DEPENDENCY_DRIVING.value
+        elif args.execution_method.strip() == ExecutionMethod.HYBRID.value:
+            current_agent_config["execution_method"] = ExecutionMethod.HYBRID.value
         else:
             current_agent_config["execution_method"] = ExecutionMethod.PARALLEL.value
 
