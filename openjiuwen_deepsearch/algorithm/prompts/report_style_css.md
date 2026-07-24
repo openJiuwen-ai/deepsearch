@@ -14,6 +14,8 @@ Design requirements:
 
 - Choose a distinctive palette, type hierarchy, whitespace, borders, and shadows that suit the report topic and research reading; keep body text comfortable, professional, and easy to read.
 - Design `.report-cover` as the report cover, expressing the topic, title hierarchy, and visual focal point.
+- Cover readability is mandatory: set `color` directly on `.report-cover > h1`; never rely only on inherited `color` from `.report-cover`. Choose an opaque hex title color (`#RRGGBB`) that has at least 4.5:1 contrast against every opaque hex background color or gradient stop used by `.report-cover`. Prefer opaque hex colors for the cover title and background so their contrast can be verified.
+- Do not use `background-image`, transparent cover backgrounds, or a decorative overlay as the sole means of making the cover title readable.
 - Design `.report-abstract` as an abstract card with a clear content hierarchy relative to the body.
 - Design `.report-section` and its headings, paragraphs, lists, and citations so that section organization, reading rhythm, and key information are clear.
 - Design `.report-table`, `table`, `th`, and `td` so data tables have clear headers, separation, and readability.

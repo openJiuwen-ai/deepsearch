@@ -72,6 +72,19 @@ Use it only as **context to understand how the outline evolved**, not as strict 
 
 The **current user feedback always has the highest priority**.
 
+## Structured Section Contract
+
+For every section returned through the updated outline tool:
+- Put substantive research scope, entities, time ranges, questions, analytical dimensions, and dependency relationships
+  in `description`.
+- Put Markdown table requirements, exact column names and order, required row objects, item-by-item enumeration,
+  length or style rules, source restrictions, and deliverable format rules in `format_requirements`.
+- Preserve user-provided labels and ordering exactly. Do not duplicate the same format constraint in `description`.
+- Use an empty array `[]` when no section-specific format requirement exists; never omit `format_requirements`.
+- Provide a non-empty `section_focus` and at least one item in `focus_dimensions` for every section.
+- When current user feedback adds, removes, or changes an output-format constraint, update the corresponding section's
+  `format_requirements`; do not update only `description`.
+
 ---
 
 # Reference Report Template

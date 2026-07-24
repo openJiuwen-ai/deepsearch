@@ -5,9 +5,13 @@
 import pytest
 
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import (
+    check_tool_call,
     creat_dep_driving_outline_tool,
     create_outline_tool,
+    generate_outline,
 )
+from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.common.exception import CustomValueException
 
 
 class TestDepDrivingOutlineTool:
@@ -84,6 +88,146 @@ class TestDepDrivingOutlineTool:
         assert "id" in required_items
         assert "parent_ids" in required_items
         assert "relationships" in required_items
+
+    def test_dependency_tool_requires_structured_section_contract(self):
+        tool = creat_dep_driving_outline_tool(5)
+        items = tool.card.input_params["properties"]["sections"]["items"]
+        properties = items["properties"]
+        required = items["required"]
+
+        assert properties["format_requirements"]["type"] == "array"
+        assert properties["format_requirements"]["items"]["type"] == "string"
+        assert properties["section_focus"]["minLength"] == 1
+        assert properties["focus_dimensions"]["minItems"] == 1
+        assert {
+            "format_requirements",
+            "section_focus",
+            "focus_dimensions",
+            "id",
+            "parent_ids",
+            "relationships",
+        }.issubset(required)
+
+    def test_dependency_contract_schema_matches_general_tool(self):
+        dependency_properties = (
+            creat_dep_driving_outline_tool(5)
+            .card.input_params["properties"]["sections"]["items"]["properties"]
+        )
+        general_properties = (
+            create_outline_tool(5)
+            .card.input_params["properties"]["sections"]["items"]["properties"]
+        )
+
+        for field_name in (
+            "format_requirements",
+            "section_focus",
+            "focus_dimensions",
+        ):
+            assert dependency_properties[field_name] == general_properties[field_name]
+
+    @pytest.mark.parametrize(
+        "missing_field",
+        ["format_requirements", "section_focus", "focus_dimensions"],
+    )
+    def test_dependency_tool_call_requires_section_contract_fields(
+        self, missing_field
+    ):
+        tool = creat_dep_driving_outline_tool(1)
+        section = self._valid_dependency_section()
+        section.pop(missing_field)
+
+        with pytest.raises(CustomValueException, match=missing_field):
+            check_tool_call(tool, [self._tool_call(tool, section)])
+
+    def test_dependency_tool_call_allows_empty_format_requirements(self):
+        tool = creat_dep_driving_outline_tool(1)
+
+        check_tool_call(
+            tool,
+            [self._tool_call(tool, self._valid_dependency_section())],
+        )
+
+    def test_generate_outline_preserves_ordered_format_requirements(self):
+        requirements = [
+            "Use a Markdown table",
+            "Columns: Product, Price, Risk",
+            "Use official sources only",
+        ]
+        section = self._valid_dependency_section()
+        section["format_requirements"] = requirements
+
+        outline = generate_outline("en-US", "Comparison", "Compare", [section])
+
+        assert outline.sections[0].format_requirements == requirements
+
+    @pytest.mark.parametrize(
+        "prompt_name",
+        ["dep_driving_outliner", "dep_driving_outliner_interaction"],
+    )
+    def test_dependency_prompt_requires_structured_format_requirements(
+        self, prompt_name
+    ):
+        rendered = str(
+            apply_system_prompt(
+                prompt_name,
+                {
+                    "questions": "Compare products in a table",
+                    "user_feedback": "Keep the exact columns",
+                    "section_num": 2,
+                    "language": "en-US",
+                },
+            )
+        ).lower()
+
+        assert "format_requirements" in rendered
+        assert "exact column" in rendered
+        assert "required row" in rendered
+        assert "item-by-item" in rendered
+        assert "source restriction" in rendered
+        assert "[]" in rendered
+        assert "description" in rendered
+
+    def test_dependency_interaction_prompt_updates_structured_format_field(self):
+        rendered = str(
+            apply_system_prompt(
+                "dep_driving_outliner_interaction",
+                {
+                    "questions": "Compare products",
+                    "user_feedback": "Add a Risk column",
+                    "section_num": 2,
+                    "language": "en-US",
+                },
+            )
+        ).lower()
+
+        assert "feedback" in rendered
+        assert "update" in rendered
+        assert "format_requirements" in rendered
+
+    @staticmethod
+    def _valid_dependency_section():
+        return {
+            "title": "Product comparison",
+            "description": "Compare product price, advantages, and risks.",
+            "format_requirements": [],
+            "id": "1",
+            "parent_ids": [],
+            "relationships": [],
+            "section_focus": "product_comparison",
+            "focus_dimensions": ["price", "advantages", "risks"],
+        }
+
+    @staticmethod
+    def _tool_call(tool, section):
+        return {
+            "name": tool.card.name,
+            "args": {
+                "language": "en-US",
+                "title": "Comparison",
+                "thought": "Compare products",
+                "sections": [section],
+            },
+        }
 
     def test_comparison_with_general_outline_tool(self):
         """测试与通用大纲工具的区别"""

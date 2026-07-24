@@ -8,6 +8,7 @@
 
 - `/reports/convert` 接收 `final_result`、`convert_type` 和可选 `enable_html_styling`，生成 HTML 或 DOCX 的 Base64 ZIP。
 - HTML 美化只在开关开启时使用 `llm_config` 生成 CSS；可接受顶层直接配置或 `general` 分类配置，后者只使用 `general`。样式分支失败时仍返回 HTTP 200 和 `style_status=fallback`。
+- HTML 美化在注入模型 CSS 前会检查封面背景与标题的可解析色彩对比度。低于 4.5:1 时，导出器仅覆盖 `.report-cover > h1` 为对比度更高的黑色或白色；若封面背景不可解析，则只为该标题追加不透明底板，不回退整份主题 CSS。
 - 响应始终包含 `style_applied` 与 `style_status`：普通 HTML 为 `not_requested`，DOCX 为 `not_supported`。
 - bundle 始终包含 `report.md` 和主导出文件，并按需包含 `infer/` 和 `charts/`。
 - 两种 HTML 将 VLM PNG 引用转为 Data URI，同时 ZIP 继续保留 `charts/*.png`。

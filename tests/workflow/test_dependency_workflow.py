@@ -62,6 +62,18 @@ class TestDependencyWritingWorkflow:
         assert workflow is not None
         assert isinstance(workflow, Workflow)
 
+    def test_dependency_writing_workflow_maps_section_contract_fields(self):
+        workflow = build_dependency_writing_workflow()
+        inputs_schema = (
+            workflow._internal._workflow_spec.comp_configs["start"]
+            .io_configs.inputs_schema
+        )
+
+        assert inputs_schema["section_format_requirements"] == (
+            "${section_format_requirements}"
+        )
+        assert inputs_schema["section_local_contract"] == "${section_local_contract}"
+
 
 class TestDeepresearchDependencyAgent:
     """测试 DeepresearchDependencyAgent"""

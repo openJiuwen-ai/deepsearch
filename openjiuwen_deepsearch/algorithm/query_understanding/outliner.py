@@ -291,7 +291,7 @@ def creat_dep_driving_outline_tool(section_num: int):
                 },
                 "sections": {
                     "type": "array",
-                    "description": _section_list_description(section_num, include_format_requirements=False),
+                    "description": _section_list_description(section_num),
                     "items": {
                         "type": "object",
                         "properties": {
@@ -303,8 +303,14 @@ def creat_dep_driving_outline_tool(section_num: int):
                                 "type": "string",
                                 "description": _section_description_description(
                                     "and its relationships",
-                                    include_format_requirements=False,
                                 )
+                            },
+                            "format_requirements": {
+                                "type": "array",
+                                "description": _format_requirements_description(),
+                                "items": {
+                                    "type": "string"
+                                },
                             },
                             "is_core_section": {
                                 "type": "boolean",
@@ -331,6 +337,7 @@ def creat_dep_driving_outline_tool(section_num: int):
                             },
                             "section_focus": {
                                 "type": "string",
+                                "minLength": 1,
                                 "description": (
                                     "A short label describing this section's analytical role within the report. "
                                     "Examples: market_size_and_growth, vendors_and_supply, technology_drivers, "
@@ -342,6 +349,7 @@ def creat_dep_driving_outline_tool(section_num: int):
                             },
                             "focus_dimensions": {
                                 "type": "array",
+                                "minItems": 1,
                                 "description": (
                                     "The 2-4 main analytical dimensions this section should cover. "
                                     "Other sections should NOT deeply expand these dimensions."
@@ -351,7 +359,16 @@ def creat_dep_driving_outline_tool(section_num: int):
                                 },
                             }
                             },
-                        "required": ["title", "description", "id", "parent_ids", "relationships"]
+                        "required": [
+                            "title",
+                            "description",
+                            "format_requirements",
+                            "id",
+                            "parent_ids",
+                            "relationships",
+                            "section_focus",
+                            "focus_dimensions",
+                        ]
                     }
                 }
             },

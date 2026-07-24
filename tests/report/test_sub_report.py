@@ -200,6 +200,11 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
                 "Create a summary table with columns: Country, Program Name, Program Type, Program Description.",
                 "For each program, specify who was excluded and why.",
             ],
+            "section_local_contract": {
+                "section_focus": "program_comparison",
+                "allowed_dimensions": ["eligibility", "exclusion_risk"],
+                "is_final_decision_section": False,
+            },
             "origin_query": (
                 "Create a summary table with columns: Country, Program Name, Program Type, "
                 "Program Description. For each program, specify who was excluded and why. "
@@ -266,6 +271,9 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         assert "If the user requested a table, output a Markdown table" in rendered_prompt
         assert "If the user specified table columns, use those column names exactly" in rendered_prompt
         assert "Do not collapse required items into a general summary paragraph" in rendered_prompt
+        assert "program_comparison" in rendered_prompt
+        assert "eligibility, exclusion_risk" in rendered_prompt
+        assert "must NOT output the final recommendation" in rendered_prompt
     finally:
         llm_context.reset(token)
 

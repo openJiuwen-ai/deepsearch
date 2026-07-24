@@ -39,6 +39,7 @@ class SectionWritingStartNode(Start):
             report_task=inputs.get("report_task"),
             section_task=inputs.get("section_task", ""),
             section_description=inputs.get("section_description", ""),
+            section_format_requirements=inputs.get("section_format_requirements", []),
             section_iscore=inputs.get("section_iscore", False),
             report_template=inputs.get("report_template", ""),
             sub_report_background_knowledge=inputs.get("sub_report_background_knowledge", []),
@@ -46,6 +47,7 @@ class SectionWritingStartNode(Start):
             history_plans=inputs.get("history_plans", []),
             report_type_policy=inputs.get("report_type_policy") or {},
             research_intent=inputs.get("research_intent") or {},
+            section_local_contract=inputs.get("section_local_contract") or {},
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(), "config": config})
@@ -67,6 +69,7 @@ def build_dependency_writing_workflow():
             "config": "${config}",
             "section_task": "${section_task}",
             "section_description": "${section_description}",
+            "section_format_requirements": "${section_format_requirements}",
             "section_iscore": "${section_iscore}",
             "report_template": "${report_template}",
             "sub_report_background_knowledge": "${sub_report_background_knowledge}",
@@ -74,6 +77,7 @@ def build_dependency_writing_workflow():
             "history_plans": "${history_plans}",
             "report_type_policy": "${report_type_policy}",
             "research_intent": "${research_intent}",
+            "section_local_contract": "${section_local_contract}",
         }
     )
     sub_workflow.add_workflow_comp(NodeId.SUB_REPORTER.value, SubReporterNode())
