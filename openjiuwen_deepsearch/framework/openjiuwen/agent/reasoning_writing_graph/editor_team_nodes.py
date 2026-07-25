@@ -414,7 +414,7 @@ class SubReporterNode(BaseNode):
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         updating_state = self._pre_handle(inputs, session, context)
-        logger.info(f"f{self.log_prefix} current node inputs is "
+        logger.info(f"{self.log_prefix} current node inputs is "
                     f"{'*' if LogManager.is_sensitive() else updating_state.get('current_outline')}")
 
         reporter = Reporter(updating_state.get('llm_model_name'))

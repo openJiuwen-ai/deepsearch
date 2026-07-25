@@ -455,6 +455,52 @@ class TestSectionModelField:
         assert ctx.doc_selection_debug == {}  # default is empty dict
 
 
+# ---------- export_outline_without_plans ----------
+
+class TestExportOutlineWithoutPlans:
+    """Verify export_outline_without_plans excludes doc_selection_debug from LLM inputs."""
+
+    def test_excludes_doc_selection_debug_from_sections(self):
+        """Verify doc_selection_debug is excluded alongside plans."""
+        from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+            Outline, Section, Plan, Step,
+        )
+        step = Step(id="s1", type="info_collecting", title="Step", description="desc")
+        plan = Plan(id="p1", language="zh-CN", title="Plan", thought="t",
+                    steps=[step], is_research_completed=True)
+        section = Section(
+            id="1", title="Test", description="desc",
+            plans=[plan],
+            doc_selection_debug={"rationales": [], "verify_result": {}},
+        )
+        outline = Outline(
+            id="o1", language="zh-CN", thought="t", title="Report",
+            sections=[section],
+        )
+        result = Reporter.export_outline_without_plans(outline)
+        assert isinstance(result, Outline)
+        result_section = result.sections[0]
+        assert result_section.plans == []
+        assert result_section.doc_selection_debug is None
+
+    def test_excludes_doc_selection_debug_from_dict(self):
+        """Verify exclusion works when outline is a dict."""
+        outline_dict = {
+            "id": "o1", "language": "zh-CN", "thought": "t", "title": "Report",
+            "sections": [{
+                "id": "1", "title": "Test", "description": "desc",
+                "plans": [{"id": "p1", "language": "zh-CN", "title": "P",
+                           "thought": "", "steps": [], "is_research_completed": False}],
+                "doc_selection_debug": {"rationales": [{"id": "r1"}]},
+            }],
+        }
+        result = Reporter.export_outline_without_plans(outline_dict)
+        assert isinstance(result, dict)
+        result_section = result["sections"][0]
+        assert "plans" not in result_section or result_section["plans"] == []
+        assert "doc_selection_debug" not in result_section or result_section["doc_selection_debug"] is None
+
+
 # ---------- OutlineToExcelExporter integration ----------
 
 class TestOutlineToExcelExporterIntegration:

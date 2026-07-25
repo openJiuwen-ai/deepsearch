@@ -16,6 +16,7 @@
 
 - `Section` 模型新增可选字段 `doc_selection_debug: Optional[Dict]`，默认 `None`，不影响已有序列化。
 - 仅在走文档选择新流程（`doc_infos` 非空且进入 else 分支）时写入；背景知识回退路径不写入。
+- `export_outline_without_plans` 在排除 `plans` 的同时排除 `doc_selection_debug`，确保调试数据不会泄漏到 LLM 提示词（报告生成、章节摘要、sidecar 等）。
 - `ResultExporter.export_outline` 的 JSON 输出自动包含 `doc_selection_debug`（因为 `model_dump()` 序列化全部字段）。
 - `OutlineToExcelExporter` 的 Excel 输出新增 4 个 sheet：信息维度、覆盖矩阵、文档选择、覆盖校验。
 - 开关仍由 `export_intermediate_results` 控制，与现有大纲导出一致。
@@ -24,6 +25,7 @@
 
 - 数据模型：`openjiuwen_deepsearch/framework/openjiuwen/agent/search_context.py`（`Section.doc_selection_debug`）
 - 采集写入：`openjiuwen_deepsearch/algorithm/report/report.py`（`_write_doc_selection_debug`）
+- LLM 输入排除：`openjiuwen_deepsearch/algorithm/report/report.py`（`export_outline_without_plans`，排除 `plans` + `doc_selection_debug`）
 - Excel 导出：`openjiuwen_deepsearch/utils/debug_utils/outline_visualization.py`（`_extract_doc_selection_debug`、`create_dataframes`、`export_to_excel`）
 - 触发入口：`openjiuwen_deepsearch/framework/openjiuwen/agent/editor_team_manager_node.py`（`ResultExporter.export_outline`）
 
@@ -138,7 +140,7 @@
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/editor_team_nodes.py` | 修改 | `_do_invoke` 将 `doc_selection_debug` 纳入 `algorithm_output`；`_post_handle` 写入 session；`SectionEndNode.invoke` 从 session 读取并纳入 payload |
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/editor_team_manager_node.py` | 修改 | `_parse_section_state` 提取 `doc_selection_debug`；`_update_state` 写入 `section.doc_selection_debug` |
 | `openjiuwen_deepsearch/utils/debug_utils/outline_visualization.py` | 新增方法 + sheet | 新增 `_extract_doc_selection_debug`；`create_dataframes` 新增 4 个 DataFrame；`export_to_excel` 新增 4 个 sheet 写入 |
-| `tests/report/test_doc_selection_debug_export.py` | 新增测试 | 覆盖打包、提取、端到端一致性、模型字段、DataFrame 集成，共 18 个用例 |
+| `tests/report/test_doc_selection_debug_export.py` | 新增测试 | 覆盖打包、提取、端到端一致性、模型字段、LLM 输入排除、DataFrame 集成，共 20 个用例 |
 
 ## 测试与验证
 
