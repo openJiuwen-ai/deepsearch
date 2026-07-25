@@ -28,6 +28,10 @@
   `SectionContext`。依赖写作工作流不得在开始节点边界将这两个字段退化为 `[]` 或 `{}`，下游
   SubReporter 使用它们约束章节格式、允许展开的分析维度和最终判断权限。
 - 章节 sidecar 保存摘要、资料映射和局部契约，供后续用户反馈和报告流程复用。
+- 子大纲与子报告正文生成失败后会按 `max_generate_retry_num` 重试；重试时上一轮校验失败原因会以带数据边界的 `<retry_feedback>` user 消息追加到下一次调用的消息列表末尾（system prompt 不变，首次调用不追加）。
+- rationale（信息维度）生成失败后同样按 `max_generate_retry_num` 重试；重试循环在 `_generate_section_rationales` 内部，上一轮失败原因（LLM 异常 / 空输出 / JSON 解析失败）由内部循环变量维护，同样以 `<retry_feedback>` user 消息注入下一次 LLM 调用。
+- rationale 生成重试耗尽后，最后一次失败原因（`last_error`）随返回值传播到上游 `generate_sub_report` 的错误消息（截断 500 字符，敏感模式下省略明细），不再是泛化的 "rationale generation fail"。
+- 子报告正文重试的 warning 日志在非敏感模式下包含校验失败的具体原因，敏感模式下为泛化文案。
 
 ## 关键代码路径
 
@@ -60,6 +64,8 @@
 7. 标题编号和过深标题被清理，并校验 Markdown 标题与子大纲逐项一致。
 8. 生成或更新 chapter sidecar。
 9. 子报告交给最终报告拼接。
+
+提纲、正文、rationale 生成和覆盖矩阵评估失败重试时，上一轮失败原因会以带数据边界的 `<retry_feedback>` user 消息追加到下一次调用的消息列表末尾（system prompt 不变，首次调用不追加）；rationale/覆盖矩阵重试耗尽后，真实失败原因（截断 500 字符）会传播到上游错误消息；覆盖矩阵全部批次失败时降级为跳过打分选文、直接用候选文档继续写作（不丢章），部分批次失败继续合并并记录 warning 日志；敏感模式下重试日志使用泛化文案，且异常类文本（provider 异常详情）在上游错误消息、返回值与 LLM 反馈中均泛化（校验类结构化原因不受影响）。
 
 ## 数据契约与依赖
 
