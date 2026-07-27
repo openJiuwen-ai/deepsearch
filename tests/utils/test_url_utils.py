@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.utils.common_utils.url_utils import (
     normalize_domain,
     normalize_url,
     are_similar_urls,
+    validate_public_web_url,
     validate_runtime_request_url,
 )
 
@@ -206,4 +207,30 @@ def test_validate_runtime_request_url_blocks_dns_to_non_public_ip(monkeypatch):
 
     with pytest.raises(CustomValueException):
         validate_runtime_request_url("http://metadata.attacker.test/latest/meta-data/")
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost/admin",
+    "http://127.0.0.1/admin",
+    "http://[::1]/admin",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://user:password@example.com/private",
+    "file:///etc/passwd",
+])
+def test_validate_public_web_url_rejects_unsafe_targets(url):
+    with pytest.raises(CustomValueException):
+        validate_public_web_url(url)
+
+
+def test_validate_public_web_url_blocks_dns_to_non_public_ip(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _mock_getaddrinfo("10.0.0.5"))
+
+    with pytest.raises(CustomValueException):
+        validate_public_web_url("https://public-looking.example/report")
+
+
+def test_validate_public_web_url_accepts_public_dns(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _mock_getaddrinfo("93.184.216.34"))
+
+    validate_public_web_url("https://example.com/report")
 

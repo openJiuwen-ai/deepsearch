@@ -159,6 +159,29 @@ def test_build_agent_config_passes_webpage_enrichment_enable(monkeypatch):
     assert config["info_collector_webpage_enrich_enable"] is True
 
 
+def test_build_agent_config_passes_article_link_follow_enable(monkeypatch):
+    factory = _FakeAgentFactory()
+    manager = DeepSearchAgentManager(agent_factory=factory)
+    request = _build_request("conversation-article-link")
+    request.info_collector_article_link_follow_enable = True
+
+    monkeypatch.setattr(
+        manager,
+        "_load_web_search_config",
+        lambda space_id, web_search_config, db: {
+            "search_engine_name": "mock",
+            "search_api_key": bytearray(b"secret"),
+            "search_url": "https://example.com/search",
+            "max_web_search_results": 5,
+            "extension": {},
+        },
+    )
+
+    config = manager.build_agent_config(request, object())
+
+    assert config["info_collector_article_link_follow_enable"] is True
+
+
 def test_build_agent_config_disables_agent_llm_timeouts_without_default(monkeypatch):
     """验证构建配置时不会提前根据 default 缺失禁用 agent LLM timeout。
 

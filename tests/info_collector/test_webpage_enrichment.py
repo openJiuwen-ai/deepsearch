@@ -4,6 +4,9 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph import webpage_enrichment as webpage_enrichment_module
+from openjiuwen_deepsearch.algorithm.research_collector.article_link_follow import (
+    ARTICLE_LINK_SOURCE_FIELD,
+)
 from openjiuwen_deepsearch.algorithm.research_collector import webpage_enrichment as webpage_enrichment_algorithm
 from openjiuwen_deepsearch.config.config import AgentConfig, ServiceConfig
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
@@ -89,6 +92,15 @@ def test_webpage_enrichment_identifiers_are_registered():
     assert (
         AgentLlmName.COLLECTOR_WEBPAGE_ENRICHMENT_COMPRESSION.value
         == "collector_webpage_enrichment_compression"
+    )
+
+
+def test_article_link_follow_uses_webpage_node_and_compression_llm_identifier():
+    """链接跟进不再拥有节点 ID，规则选择不注册 LLM 统计标识。"""
+    assert "COLLECTOR_ARTICLE_LINK_FOLLOW" not in NodeId.__members__
+    assert "COLLECTOR_ARTICLE_LINK_FOLLOW_SELECTION" not in AgentLlmName.__members__
+    assert AgentLlmName.COLLECTOR_ARTICLE_LINK_FOLLOW_COMPRESSION.value == (
+        "collector_article_link_follow_compression"
     )
 
 
@@ -192,6 +204,285 @@ class ExposedWebPageEnrichmentNode(WebPageEnrichmentNode):
     def apply_enrichment(self, doc_info: dict, evidence: WebPageEvidenceContent, fetched: dict) -> dict:
         """调用节点增强写回方法。"""
         return self._apply_enrichment(doc_info, evidence, fetched)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("link_follow_enabled", "expect_sidecar"),
+    [(True, True), (False, False)],
+)
+async def test_enrichment_captures_links_only_when_follow_enabled(
+    link_follow_enabled,
+    expect_sidecar,
+    caplog,
+):
+    caplog.set_level(
+        "INFO",
+        logger=(
+            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph."
+            "webpage_enrichment"
+        ),
+    )
+    node = ExposedWebPageEnrichmentNode()
+    node._fetch_webpage = AsyncMock(return_value={
+        "url": "https://example.com/article",
+        "status_code": 200,
+        "content": "Evidence [official report](/reports/2026) before compression.",
+    })
+    node._compress_content = AsyncMock(return_value=WebPageEvidenceContent(
+        original_content="Compressed evidence without links.",
+        key_passages=["Compressed evidence"],
+    ))
+    parent = {
+        "doc_id": "doc-a",
+        "source_id": "source-a",
+        "url": "https://example.com/article",
+        "query": "official report",
+        "original_content": "",
+    }
+    state = {
+        "fetch_timeout_seconds": 45,
+        "article_link_follow_enabled": link_follow_enabled,
+        "section_idx": 0,
+        "step_title": "Official evidence",
+        "candidates": [{
+            "candidate_index": 0,
+            "doc_index": 0,
+            "url": parent["url"],
+            "scores": {},
+        }],
+        "new_doc_infos_current_loop": [dict(parent)],
+        "doc_infos": [dict(parent)],
+        "history_queries": [],
+        "source_store": {},
+    }
+
+    updates = await node.enrich_selected_candidates(state, [0])
+
+    enriched = updates["new_doc_infos_current_loop"][0]
+    assert enriched["original_content"] == "Compressed evidence without links."
+    assert (ARTICLE_LINK_SOURCE_FIELD in enriched) is expect_sidecar
+    if expect_sidecar:
+        assert "[official report](/reports/2026)" in enriched[
+            ARTICLE_LINK_SOURCE_FIELD
+        ]
+        assert "phase=sidecar_build" in caplog.text
+        assert "fetched_content_link_count=1" in caplog.text
+        assert "sidecar_link_count=1" in caplog.text
+        assert "sidecar_attached=true" in caplog.text
+
+
+def _dual_phase_runtime_state(*, enrichment: bool, link_follow: bool) -> dict:
+    """构造网页增强与链接跟进双阶段运行态。"""
+    parent = {
+        "doc_id": "web_parent",
+        "source_id": "web_parent_source",
+        "title": "Parent",
+        "url": "https://example.com/a",
+        "query": "official evidence",
+        "original_content": "[official report](https://agency.gov/report)",
+    }
+    return {
+        "config.info_collector_webpage_enrich_enable": enrichment,
+        "config.info_collector_article_link_follow_enable": link_follow,
+        "config.info_collector_webpage_enrich_max_urls": 3,
+        "config.info_collector_article_link_follow_max_urls": 3,
+        "config.info_collector_webpage_enrich_fetch_timeout_seconds": 45,
+        "collector_context.section_idx": 0,
+        "collector_context.plan_title": "Plan",
+        "collector_context.plan_thought": "Find primary evidence",
+        "collector_context.step_title": "Official evidence",
+        "collector_context.step_description": "Collect the original report",
+        "collector_context.new_doc_infos_current_loop": [dict(parent)],
+        "collector_context.doc_infos": [dict(parent)],
+        "collector_context.history_queries": [
+            RetrievalQuery(query="official evidence", doc_infos=[dict(parent)])
+        ],
+        "collector_context.source_store": {"web_parent_source": parent["original_content"]},
+        "collector_context.evidence_ledger": {},
+    }
+
+
+def _mutable_session(state: dict) -> Mock:
+    """返回能反映 update_global_state 写入结果的 session mock。"""
+    session = Mock()
+    session.get_global_state = Mock(side_effect=lambda key: state.get(key))
+    session.update_global_state = Mock(side_effect=lambda updates: state.update(updates))
+    return session
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enrichment", "link_follow", "enrich_calls", "follow_calls"),
+    [
+        (False, False, 0, 0),
+        (True, False, 1, 0),
+        (False, True, 0, 1),
+        (True, True, 1, 1),
+    ],
+)
+async def test_webpage_enrichment_node_runs_independently_enabled_phases(
+    enrichment: bool,
+    link_follow: bool,
+    enrich_calls: int,
+    follow_calls: int,
+):
+    """任一阶段关闭都不得阻断另一个阶段。"""
+    runtime_state = _dual_phase_runtime_state(
+        enrichment=enrichment,
+        link_follow=link_follow,
+    )
+    session = _mutable_session(runtime_state)
+    node = WebPageEnrichmentNode()
+
+    with patch.object(
+        node,
+        "_run_webpage_enrichment",
+        new=AsyncMock(return_value=None),
+    ) as enrich, patch.object(
+        node,
+        "_run_article_link_follow",
+        new=AsyncMock(return_value=None),
+    ) as follow, patch.object(
+        webpage_enrichment_module,
+        "adapt_llm_model_name",
+        return_value="model",
+    ):
+        token = llm_context.set({"model": Mock()})
+        try:
+            await node._do_invoke({}, session, Mock())
+        finally:
+            llm_context.reset(token)
+
+    assert enrich.await_count == enrich_calls
+    assert follow.await_count == follow_calls
+
+
+@pytest.mark.asyncio
+async def test_link_follow_reads_enriched_a_when_both_phases_are_enabled():
+    """A 增强开启时，链接阶段必须重新读取增强后的本轮文档。"""
+    runtime_state = _dual_phase_runtime_state(enrichment=True, link_follow=True)
+    session = _mutable_session(runtime_state)
+    node = WebPageEnrichmentNode()
+    calls: list[str] = []
+
+    async def enrich(state: dict, current_session: Mock) -> dict:
+        calls.append("enrich")
+        parent = dict(state["new_doc_infos_current_loop"][0])
+        parent["original_content"] = "enhanced A with https://agency.gov/report"
+        current_session.update_global_state({
+            "collector_context.new_doc_infos_current_loop": [parent]
+        })
+        return {
+            "new_doc_infos_current_loop": [parent],
+            "doc_infos": state["doc_infos"],
+            "history_queries": state["history_queries"],
+            "source_store": state["source_store"],
+        }
+
+    async def follow(state: dict, current_session: Mock) -> None:
+        calls.append("follow")
+        assert current_session is session
+        assert "enhanced A" in state["new_doc_infos_current_loop"][0]["original_content"]
+
+    with patch.object(node, "_run_webpage_enrichment", new=enrich), patch.object(
+        node, "_run_article_link_follow", new=follow
+    ), patch.object(
+        webpage_enrichment_module,
+        "adapt_llm_model_name",
+        return_value="model",
+    ):
+        token = llm_context.set({"model": Mock()})
+        try:
+            await node._do_invoke({}, session, Mock())
+        finally:
+            llm_context.reset(token)
+
+    assert calls == ["enrich", "follow"]
+
+
+@pytest.mark.asyncio
+async def test_link_follow_uses_enrichment_updates_before_session_commit():
+    """The real session stages global updates until the node finishes."""
+    runtime_state = _dual_phase_runtime_state(enrichment=True, link_follow=True)
+    pending_updates: list[dict] = []
+    session = Mock()
+    session.get_global_state = Mock(side_effect=lambda key: runtime_state.get(key))
+    session.update_global_state = Mock(side_effect=pending_updates.append)
+    node = WebPageEnrichmentNode()
+
+    async def enrich(state: dict, current_session: Mock) -> dict:
+        parent = dict(state["new_doc_infos_current_loop"][0])
+        parent["original_content"] = "compressed without links"
+        parent[ARTICLE_LINK_SOURCE_FIELD] = (
+            "[official report](https://agency.gov/report)"
+        )
+        updates = {
+            "new_doc_infos_current_loop": [parent],
+            "doc_infos": [parent],
+            "history_queries": state["history_queries"],
+            "source_store": state["source_store"],
+        }
+        current_session.update_global_state({
+            "collector_context.new_doc_infos_current_loop": [parent]
+        })
+        return updates
+
+    async def follow(state: dict, current_session: Mock) -> None:
+        assert current_session is session
+        assert ARTICLE_LINK_SOURCE_FIELD in state[
+            "new_doc_infos_current_loop"
+        ][0]
+
+    with patch.object(node, "_run_webpage_enrichment", new=enrich), patch.object(
+        node, "_run_article_link_follow", new=follow
+    ), patch.object(
+        webpage_enrichment_module,
+        "adapt_llm_model_name",
+        return_value="model",
+    ):
+        token = llm_context.set({"model": Mock()})
+        try:
+            await node._do_invoke({}, session, Mock())
+        finally:
+            llm_context.reset(token)
+
+    assert pending_updates
+
+
+@pytest.mark.asyncio
+async def test_link_follow_reads_original_a_when_enrichment_is_disabled():
+    """A 增强关闭时，链接阶段仍直接消费检索得到的 A。"""
+    runtime_state = _dual_phase_runtime_state(enrichment=False, link_follow=True)
+    session = _mutable_session(runtime_state)
+    node = WebPageEnrichmentNode()
+
+    async def follow(state: dict, current_session: Mock) -> None:
+        assert current_session is session
+        assert state["new_doc_infos_current_loop"][0]["original_content"].startswith(
+            "[official report]"
+        )
+
+    with patch.object(
+        node,
+        "_run_webpage_enrichment",
+        new=AsyncMock(return_value=None),
+    ) as enrich, patch.object(
+        node,
+        "_run_article_link_follow",
+        new=follow,
+    ), patch.object(
+        webpage_enrichment_module,
+        "adapt_llm_model_name",
+        return_value="model",
+    ):
+        token = llm_context.set({"model": Mock()})
+        try:
+            await node._do_invoke({}, session, Mock())
+        finally:
+            llm_context.reset(token)
+
+    enrich.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -651,6 +942,71 @@ async def test_quality_guard_preserves_original_identity_when_enrichment_degrade
     assert updates["doc_infos"][0] == original_doc
     assert updates["source_store"] == {"source-old": original_doc["original_content"]}
     assert "enrichment skipped by quality guard" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_enrichment_logs_links_lost_during_compression(caplog):
+    node = ExposedWebPageEnrichmentNode()
+    original_doc = {
+        "doc_id": "doc-links",
+        "source_id": "source-links",
+        "url": "https://example.com/index",
+        "query": "official reports",
+        "original_content": "short search evidence",
+    }
+    fetched_content = (
+        "[Annual report](https://example.com/report) "
+        '<a href="https://example.com/regulation">Regulation</a>'
+    )
+
+    async def fake_fetch(url: str, timeout_seconds: int, minimum_content_length: int) -> dict:
+        del url, timeout_seconds, minimum_content_length
+        return {
+            "url": original_doc["url"],
+            "status_code": 200,
+            "content": fetched_content,
+        }
+
+    async def fake_compress(state: dict, doc_info: dict, fetched: dict) -> WebPageEvidenceContent:
+        del state, doc_info, fetched
+        return WebPageEvidenceContent(
+            original_content=(
+                "Useful evidence with "
+                "[Annual report](https://example.com/report)"
+            ),
+            key_passages=["Useful evidence"],
+        )
+
+    node._fetch_webpage = fake_fetch
+    node._compress_content = fake_compress
+    caplog.set_level(
+        "INFO",
+        logger=(
+            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph."
+            "webpage_enrichment"
+        ),
+    )
+    state = {
+        "fetch_timeout_seconds": 45,
+        "section_idx": 0,
+        "step_title": "Official reports",
+        "candidates": [{
+            "candidate_index": 0,
+            "doc_index": 0,
+            "url": original_doc["url"],
+            "scores": {},
+        }],
+        "new_doc_infos_current_loop": [original_doc],
+        "doc_infos": [dict(original_doc)],
+        "source_store": {"source-links": original_doc["original_content"]},
+    }
+
+    await node.enrich_selected_candidates(state, [0])
+
+    assert "phase=link_preservation" in caplog.text
+    assert "fetched_content_link_count=2" in caplog.text
+    assert "compressed_content_link_count=1" in caplog.text
+    assert "lost_link_count=1" in caplog.text
 
 
 @pytest.mark.asyncio

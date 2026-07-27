@@ -27,6 +27,11 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     format_key_passage_block,
     get_numeric_score,
 )
+from openjiuwen_deepsearch.algorithm.report.article_link_follow_diagnostics import (
+    log_report_candidates,
+    log_report_classification,
+    log_report_prefilter,
+)
 from openjiuwen_deepsearch.algorithm.report.ngram_utils import (
     extract_doc_ngrams,
     ngram_jaccard_similarity,
@@ -876,6 +881,7 @@ class Reporter:
                 "require_methodology_and_risk", rtp.get("require_methodology_and_risk", False)
             )
         doc_infos = current_inputs.get("doc_infos", [])
+        log_report_candidates(logger, section_idx, doc_infos)
         background_contents = self._get_background_knowledge_contents(
             current_inputs.get("sub_report_background_knowledge", [])
         )
@@ -905,6 +911,13 @@ class Reporter:
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                     f"rationale generation failed"
                 )
+                log_report_classification(
+                    logger,
+                    section_idx,
+                    doc_infos,
+                    [],
+                    terminal_reason="rationale_generation_failed",
+                )
                 return False, _format_sub_report_error("rationale generation fail"), "", []
 
             coverage_result = await self._evaluate_coverage_matrix(
@@ -915,7 +928,17 @@ class Reporter:
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                     f"coverage matrix evaluation failed"
                 )
+                log_report_classification(
+                    logger,
+                    section_idx,
+                    doc_infos,
+                    [],
+                    terminal_reason="coverage_matrix_failed",
+                )
                 return False, _format_sub_report_error("coverage matrix evaluation fail"), "", []
+
+            filtered_docs = coverage_result.get("filtered_docs", doc_infos)
+            log_report_prefilter(logger, section_idx, doc_infos, filtered_docs)
 
             classify_doc_infos_res_top_k_num = current_inputs.get(
                 "classify_doc_infos_res_top_k_num", 20
@@ -961,6 +984,13 @@ class Reporter:
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                     f"no docs selected after optimization"
                 )
+                log_report_classification(
+                    logger,
+                    section_idx,
+                    filtered_docs,
+                    [],
+                    terminal_reason="no_docs_selected",
+                )
                 return False, _format_sub_report_error("no docs selected after optimization"), "", []
 
             selected_urls = list(dict.fromkeys(
@@ -971,7 +1001,21 @@ class Reporter:
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                     f"no valid URLs in selected docs"
                 )
+                log_report_classification(
+                    logger,
+                    section_idx,
+                    filtered_docs,
+                    [],
+                    terminal_reason="no_valid_urls",
+                )
                 return False, _format_sub_report_error("no valid URLs in selected docs"), "", []
+
+            log_report_classification(
+                logger,
+                section_idx,
+                filtered_docs,
+                selected_urls,
+            )
 
             classified_infos, classified_doc_infos = _get_classified_infos(
                 selected_docs,

@@ -977,12 +977,14 @@ def test_service_config_uses_relaxed_collector_loop_defaults():
     assert not hasattr(service_config, "info_collector_max_react_recursion_limit")
 
 
-def test_info_collector_graph_has_webpage_enrichment_node_id():
-    """Info collector 子图应注册网页正文增强节点并插入正确边。"""
+def test_info_collector_graph_routes_webpage_enrichment_directly_to_supervisor():
+    """链接跟进融合后，网页增强节点应直接连接 Supervisor。"""
     collector_graph = build_info_collector_sub_graph()
     spec = collector_graph._internal._workflow_spec
 
     assert NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value in spec.comp_configs
+    assert "COLLECTOR_ARTICLE_LINK_FOLLOW" not in NodeId.__members__
+    assert "collector_article_link_follow" not in spec.comp_configs
     assert spec.edges[NodeId.COLLECTOR_INFO.value] == [NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value]
     assert spec.edges[NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value] == [NodeId.COLLECTOR_SUPERVISOR.value]
 

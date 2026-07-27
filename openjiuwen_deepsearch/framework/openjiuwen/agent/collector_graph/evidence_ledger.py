@@ -12,6 +12,9 @@ class EvidenceLedger(BaseModel):
     known_facts: list[str] = Field(default_factory=list)
     missing_evidence: list[str] = Field(default_factory=list)
     attempted_queries: list[str] = Field(default_factory=list)
+    attempted_links: list[str] = Field(default_factory=list)
+    successful_links: list[str] = Field(default_factory=list)
+    failed_links: list[str] = Field(default_factory=list)
 
 
 def _clean_items(items: list[str]) -> list[str]:
@@ -48,6 +51,9 @@ def ensure_ledger(value: dict | EvidenceLedger | None) -> EvidenceLedger:
         known_facts=_clean_items(ledger.known_facts),
         missing_evidence=_clean_items(ledger.missing_evidence),
         attempted_queries=_clean_items(ledger.attempted_queries),
+        attempted_links=_clean_items(ledger.attempted_links),
+        successful_links=_clean_items(ledger.successful_links),
+        failed_links=_clean_items(ledger.failed_links),
     )
 
 
@@ -79,6 +85,9 @@ def merge_ledger_update(
         known_facts=_clean_items(current.known_facts + update.known_facts),
         missing_evidence=_clean_items(missing_evidence),
         attempted_queries=_clean_items(current.attempted_queries + update.attempted_queries),
+        attempted_links=_clean_items(current.attempted_links + update.attempted_links),
+        successful_links=_clean_items(current.successful_links + update.successful_links),
+        failed_links=_clean_items(current.failed_links + update.failed_links),
     )
 
 
@@ -89,6 +98,27 @@ def append_attempted_queries(current: EvidenceLedger, queries: list[str]) -> Evi
         known_facts=current.known_facts,
         missing_evidence=current.missing_evidence,
         attempted_queries=_clean_items(current.attempted_queries + queries),
+        attempted_links=current.attempted_links,
+        successful_links=current.successful_links,
+        failed_links=current.failed_links,
+    )
+
+
+def append_link_attempts(
+    current: EvidenceLedger,
+    attempted: list[str],
+    successful: list[str],
+    failed: list[str],
+) -> EvidenceLedger:
+    """Append canonical link outcomes without mutating the input ledger."""
+    current = ensure_ledger(current)
+    return EvidenceLedger(
+        known_facts=current.known_facts,
+        missing_evidence=current.missing_evidence,
+        attempted_queries=current.attempted_queries,
+        attempted_links=_clean_items(current.attempted_links + attempted),
+        successful_links=_clean_items(current.successful_links + successful),
+        failed_links=_clean_items(current.failed_links + failed),
     )
 
 

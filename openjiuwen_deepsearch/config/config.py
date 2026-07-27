@@ -332,6 +332,10 @@ class AgentConfig(BaseModel):
         default=False,
         description="是否启用 DeepResearch 信息收集阶段的网页正文增强节点",
     )
+    info_collector_article_link_follow_enable: bool = Field(
+        default=False,
+        description="是否启用 DeepResearch 信息收集阶段的一跳文章内链接跟进",
+    )
     web_search_engine_config: WebSearchEngineConfig = Field(default_factory=WebSearchEngineConfig)
     web_fetch_provider_config: WebFetchProviderConfig = Field(default_factory=WebFetchProviderConfig)
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
@@ -423,6 +427,12 @@ class ServiceConfig(BaseModel):
         ge=1,
         le=10,
         description="网页正文增强每轮最多抓取并增强的 URL 数量",
+    )
+    info_collector_article_link_follow_max_urls: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="文章内链接跟进每个 step 每轮最多抓取的 URL 数量",
     )
     info_collector_webpage_enrich_fetch_timeout_seconds: int = Field(
         default=45,

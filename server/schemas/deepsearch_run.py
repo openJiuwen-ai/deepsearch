@@ -78,6 +78,10 @@ class DeepSearchRequest(BaseModel):
         default=False,
         description="是否启用信息收集阶段的网页正文增强",
     )
+    info_collector_article_link_follow_enable: bool = Field(
+        default=False,
+        description="是否启用信息收集阶段的一跳文章内链接跟进",
+    )
     llm_config: dict = Field(default_factory=dict, description="LLM配置")
     web_search_config: WebSearchConfig = Field(default=None, description="联网增强引擎配置，和本地知识库配置至少选择一个")
     local_search_config: LocalSearchConfig = Field(default=None,
