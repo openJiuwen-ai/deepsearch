@@ -401,9 +401,10 @@ class XYChartMermaidGenerator:
         use_horizontal = (
             chart_type == "bar" and cls._should_use_horizontal(x_values, count)
         )
-        chart_orientation = (
-            "xychart-beta horizontal" if use_horizontal else "xychart-beta"
-        )
+        # Keep the Mermaid directive itself standard so downstream validators can
+        # infer the chart type from the `bar [...]`/`line [...]` series. The
+        # horizontal rendering hint is preserved in frontmatter for exporters.
+        chart_orientation = "xychart-beta"
 
         lines = [
             "---",

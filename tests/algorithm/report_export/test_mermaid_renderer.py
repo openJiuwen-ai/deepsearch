@@ -126,7 +126,8 @@ def test_horizontal_chart_expands_viewbox_for_long_generated_category_labels() -
         f'["{long_label}",12],["普通项目",8]]}}'
     )
 
-    assert "xychart-beta horizontal" in code
+    assert "horizontal: true" in code
+    assert "xychart-beta horizontal" not in code
     svg = render_mermaid_chart_as_svg(code)
     png = render_mermaid_chart_as_png(code)
 
@@ -166,7 +167,8 @@ def test_all_negative_horizontal_labels_reserve_space_for_value_labels() -> None
         )
     )
 
-    assert "xychart-beta horizontal" in code
+    assert "horizontal: true" in code
+    assert "xychart-beta horizontal" not in code
     svg = render_mermaid_chart_as_svg(code)
     assert svg is not None
     root = ET.fromstring(svg)

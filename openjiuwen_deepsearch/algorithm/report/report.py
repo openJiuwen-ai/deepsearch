@@ -3,6 +3,7 @@
 import asyncio
 import html
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from copy import deepcopy
 import json
 import logging
@@ -76,6 +77,29 @@ def _format_sub_report_error(detail: str | BaseException) -> str:
 EFFECT_SUB_REPORT_TAG = "### sub_report_tag ###"
 BATCH_SIZE = 15
 MAX_CONCURRENT_BATCHES = 5
+REPORT_CONTENT_VISUALIZATION_MAX_CANDIDATES = 6
+REPORT_CONTENT_VISUALIZATION_MAX_CHARTS_PER_CANDIDATE = 3
+REPORT_CONTENT_VISUALIZATION_MAX_TOTAL_CHARTS = 8
+REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS = 12
+REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN = (
+    r"%|百分点|个百分点|"
+    r"(?:百万|千万|十亿|万|千|百|十|亿|兆)?"
+    r"(?:元|美元|人民币|港元|欧元|日元|英镑|人|户|家|个|件|台|辆|吨|千克|公斤|克|"
+    r"平方米|平方公里|公里|米|千瓦时|度|瓦|千瓦|兆瓦|吉瓦|次|页|篇|份)|"
+    r"(?i:(?:million|billion|thousand|mn|bn|k)?\s*"
+    r"(?:users?|people|customers?|visits?|downloads?|orders?|units?|vehicles?|tons?|"
+    r"usd|dollars?|rmb|yuan|eur|euros?|gbp|hours?|minutes?|seconds?|pages?|items?))"
+)
+LOCAL_CHART_LABEL_METRIC_SUFFIX_PATTERN = re.compile(
+    r"(?:销售额|销量|收入|营收|利润|亏损|规模|产量|产能|装机量|出货量|订单量|用户数|客户数|"
+    r"访问量|下载量|价格|成本|费用|支出|投资额|融资额|市值|份额|占比|比重|市占率|"
+    r"增长率|增速|增幅|增长|下降|减少|提升|上升|增加|提高|降低|数量|金额|指数|面积|"
+    r"人口|排放量|能耗|用电量|发电量|客流量|吞吐量|货运量|周转量|里程|时长|"
+    r"revenue|sales|profit|loss|users?|customers?|visits?|downloads?|orders?|volume|"
+    r"output|capacity|price|cost|expenses?|investment|funding|market\s*share|share|"
+    r"ratio|rate|growth|increase|decrease|decline|index|emissions?|energy\s*use|traffic).*$",
+    re.IGNORECASE,
+)
 LEADING_TITLE_NUMBER_PATTERN = re.compile(
     r"^(?:"
     r"[\（][一二三四五六七八九十\d]{1,2}[\）]\s*|"
@@ -94,6 +118,15 @@ INTERNAL_CALLBACK_LABEL_PATTERN = re.compile(
     r"\]\s*",
     re.IGNORECASE,
 )
+
+
+MERMAID_CODE_FENCE_PATTERN = re.compile(
+    r"(?ms)^```mermaid\r?\n(.*?)^```[ \t]*(?:\r?\n|$)"
+)
+MANAGED_MERMAID_CAPTION_PATTERN = re.compile(
+    r'(?s)^\s*<div style="text-align: center;">\s*\*\*.+?\*\*\s*</div>'
+)
+MERMAID_TITLE_PATTERN = re.compile(r'(?m)^\s*title\s+"([^"]+)"\s*$')
 
 
 @dataclass
@@ -259,6 +292,209 @@ class Reporter:
                 str(e),
             )
         return True
+
+    @staticmethod
+    def _infer_desired_chart_type(*texts: str) -> str:
+        """
+        Infer a preferred chart type from section-level instructions.
+
+        The visualization extractor still decides from traceable source data, but
+        explicit report requirements such as "use a line chart" should not be
+        lost between outline generation, data extraction, and Mermaid rendering.
+        """
+        context = " ".join(str(text or "") for text in texts).lower()
+        if not context:
+            return ""
+
+        explicit_patterns = (
+            ("line", (r"折线图", r"折线", r"走势图", r"line\s+chart", r"line\s+graph")),
+            ("bar", (r"柱状图", r"柱形图", r"条形图", r"柱状", r"bar\s+chart")),
+            ("pie", (r"饼图", r"环形图", r"pie\s+chart")),
+            ("timeline", (r"时间线", r"timeline")),
+        )
+        for chart_type, patterns in explicit_patterns:
+            if any(re.search(pattern, context) for pattern in patterns):
+                return chart_type
+
+        # Common implicit section intents. These are intentionally conservative
+        # and describe chartable data shapes rather than a specific domain.
+        trend_keywords = (
+            "趋势",
+            "走势",
+            "逐年",
+            "历年",
+            "年度",
+            "月度",
+            "季度",
+            "时间序列",
+            "同比",
+            "环比",
+            "增速",
+            "增长率",
+            "变化",
+            "演变",
+            "trend",
+            "over time",
+            "time series",
+            "annual",
+            "monthly",
+            "quarterly",
+            "year-over-year",
+            "yoy",
+            "growth",
+        )
+        comparison_keywords = (
+            "对比",
+            "比较",
+            "排名",
+            "排行",
+            "分布",
+            "结构",
+            "占比",
+            "份额",
+            "市占率",
+            "comparison",
+            "ranking",
+            "distribution",
+            "breakdown",
+            "share",
+            "market share",
+        )
+        category_keywords = (
+            "厂商",
+            "品牌",
+            "企业",
+            "公司",
+            "地区",
+            "区域",
+            "城市",
+            "国家",
+            "产品",
+            "车型",
+            "品类",
+            "部门",
+            "行业",
+            "vendor",
+            "manufacturer",
+            "brand",
+            "company",
+            "region",
+            "country",
+            "city",
+            "product",
+            "segment",
+            "category",
+        )
+        has_trend = any(keyword in context for keyword in trend_keywords)
+        has_comparison = any(keyword in context for keyword in comparison_keywords)
+        has_category = any(keyword in context for keyword in category_keywords)
+        has_year_range = bool(
+            re.search(r"(?:19|20)\d{2}\s*(?:至|到|[-—–~～])\s*(?:19|20)\d{2}", context)
+            or re.search(r"(?:19|20)\d{2}\s*[,，、/]\s*(?:19|20)\d{2}", context)
+        )
+
+        # A section may say "compare 2022-2024 trend"; the comparison verb is
+        # about years, not categories. Prefer line charts for temporal records.
+        if has_trend and (
+            has_year_range
+            or not has_comparison
+            or "趋势" in context
+            or "走势" in context
+            or "trend" in context
+            or "time series" in context
+            or ("年度" in context and not has_category)
+            or ("annual" in context and not has_category)
+        ):
+            return "line"
+        if has_comparison:
+            return "bar"
+        if has_trend:
+            return "line"
+        return ""
+
+    @staticmethod
+    def _visualization_label_is_temporal(label: str) -> bool:
+        label = str(label or "").strip()
+        if not label:
+            return False
+        temporal_patterns = (
+            r"^(?:19|20)\d{2}\s*年?$",
+            r"^(?:19|20)\d{2}\s*[-/]\s*\d{1,2}\s*月?$",
+            r"^(?:19|20)\d{2}\s*[Qq][1-4]$",
+            r"^(?:[1-4]|一|二|三|四)\s*季度$",
+            r"^第\s*(?:[1-4]|一|二|三|四)\s*季度$",
+            r"^(?:[1-9]|1[0-2])\s*月$",
+        )
+        return any(re.search(pattern, label) for pattern in temporal_patterns)
+
+    @classmethod
+    def _records_look_like_time_series(cls, records: list) -> bool:
+        if not isinstance(records, list) or len(records) < 3:
+            return False
+        labels = []
+        for row in records:
+            if not isinstance(row, list) or len(row) < 2:
+                return False
+            labels.append(str(row[0] or "").strip())
+        if not labels:
+            return False
+        temporal_count = sum(1 for label in labels if cls._visualization_label_is_temporal(label))
+        return temporal_count >= max(3, int(len(labels) * 0.75))
+
+    @classmethod
+    def _coerce_visualization_chart_type(
+        cls,
+        extracted_obj: dict,
+        visualization_dict: dict,
+    ) -> dict:
+        """
+        Correct obvious chart-type drift while preserving the extracted data.
+
+        GLM can correctly extract yearly records but label them as a bar chart.
+        When the section intent and/or record labels clearly indicate a time
+        series, render it as a line chart. Conversely, explicit comparison
+        sections should remain bar charts when the records are category values.
+        """
+        if not isinstance(extracted_obj, dict):
+            return extracted_obj
+
+        current_type = str(extracted_obj.get("image_type", "") or "").strip()
+        records = extracted_obj.get("records", [])
+        desired_type = str(visualization_dict.get("desired_chart_type", "") or "").strip()
+        if not desired_type:
+            desired_type = cls._infer_desired_chart_type(
+                visualization_dict.get("section_title", ""),
+                visualization_dict.get("section_outline", ""),
+            )
+
+        coerced_type = ""
+        looks_time_series = cls._records_look_like_time_series(records)
+        if looks_time_series and current_type in ("bar", "line"):
+            coerced_type = "line"
+        elif desired_type == "line" and looks_time_series:
+            coerced_type = "line"
+        elif (
+            desired_type == "bar"
+            and not looks_time_series
+            and isinstance(records, list)
+            and len(records) >= 3
+        ):
+            coerced_type = "bar"
+
+        if not coerced_type or coerced_type == current_type:
+            return extracted_obj
+
+        corrected = deepcopy(extracted_obj)
+        corrected["image_type"] = coerced_type
+        logger.info(
+            "%s [process_visualization_task] section_idx: [%s], "
+            "coerce visualization chart type from %s to %s",
+            EFFECT_SUB_REPORT_TAG,
+            visualization_dict.get("section_idx", 1),
+            current_type,
+            coerced_type,
+        )
+        return corrected
 
     @staticmethod
     def _generate_mermaid_code(visualization_content: dict, section_idx: int) -> dict:
@@ -2211,6 +2447,8 @@ class Reporter:
         tmp_context = {
             "language": visualization_dict.get("language", "zh-CN"),
             "section_outline": visualization_dict.get("section_outline", ""),
+            "desired_chart_type": visualization_dict.get("desired_chart_type", ""),
+            "avoid_chart_data": visualization_dict.get("avoid_chart_data", ""),
             "origin_content": visualization_dict.get("origin_content", ""),
         }
         validation_error = (validation_error or "").strip()
@@ -2310,7 +2548,7 @@ class Reporter:
                     )
                     continue
                 raw = (llm_output.get("content") or "").strip()
-                result = json.loads(raw)
+                result = json.loads(normalize_json_output(raw))
                 if not isinstance(result, dict):
                     logger.warning(
                         "%s [validate_chart_compliance] section_idx: [%s] "
@@ -2385,7 +2623,7 @@ class Reporter:
                     )
                     continue
                 raw = (llm_output.get("content") or "").strip()
-                result = json.loads(raw)
+                result = json.loads(normalize_json_output(raw))
                 if not isinstance(result, dict):
                     logger.warning(
                         "%s [validate_chart_traceability] section_idx: [%s] "
@@ -2445,7 +2683,29 @@ class Reporter:
             raw_payload = (
                 visualization_content.get("sub_section_visualization_content") or ""
             ).strip()
+            if raw_payload:
+                raw_payload = normalize_json_output(raw_payload).strip()
+                visualization_content[
+                    "sub_section_visualization_content"
+                ] = raw_payload
             if raw_payload == "{}":
+                validation_error = (
+                    "Previous output was empty JSON. If origin_content contains at "
+                    "least three traceable records for one metric, extract the best "
+                    "valid chart JSON instead of returning {}. Return {} only when "
+                    "no valid chartable dataset exists."
+                )
+                previous_records = raw_payload
+                if i < max_attempt_num - 1:
+                    logger.warning(
+                        "%s [process_visualization_task] section_idx: [%s], "
+                        "empty visualization JSON on attempt %s/%s, retry ...",
+                        EFFECT_SUB_REPORT_TAG,
+                        section_idx,
+                        i + 1,
+                        max_attempt_num,
+                    )
+                    continue
                 visualization_content["rs_success"] = False
                 visualization_content["error_msg"] = "no_chart_data"
                 return False, visualization_content, None
@@ -2453,10 +2713,23 @@ class Reporter:
                 extracted_obj = json.loads(raw_payload)
             except Exception:
                 extracted_obj = None
+                validation_error = (
+                    "Previous output was not valid JSON. Output only one JSON object "
+                    "matching the required visualization schema, with no markdown or "
+                    "extra text."
+                )
             extract_ok = isinstance(
                 extracted_obj, dict
             ) and validate_visualization_extraction_schema(extracted_obj)
             if extract_ok:
+                extracted_obj = self._coerce_visualization_chart_type(
+                    extracted_obj,
+                    visualization_dict,
+                )
+                raw_payload = json.dumps(extracted_obj, ensure_ascii=False)
+                visualization_content[
+                    "sub_section_visualization_content"
+                ] = raw_payload
                 traceability = await self._validate_chart_traceability(
                     raw_payload,
                     visualization_dict.get("origin_content", ""),
@@ -2516,6 +2789,12 @@ class Reporter:
                 )
                 extract_ok = False
                 continue
+            if not extract_ok and not validation_error:
+                validation_error = (
+                    "Previous output did not match the required visualization schema. "
+                    "Keep only traceable records from origin_content and output a "
+                    "single valid chart JSON, or {} if no valid chartable dataset exists."
+                )
             logger.warning(
                 f"{EFFECT_SUB_REPORT_TAG} [process_visualization_task] section_idx: [{section_idx}], "
                 f"Warning: Extract data from text on attempt {i + 1}/{max_attempt_num}. retry ..."
@@ -2552,6 +2831,59 @@ class Reporter:
         if not self._precheck_value_variation(visualization_content, section_idx):
             return visualization_content
         return self._generate_mermaid_code(visualization_content, section_idx)
+
+    @staticmethod
+    def _parse_visualization_number(value: str) -> int | float | None:
+        normalized_value = value.strip().replace(",", "").replace("，", "")
+        try:
+            numeric_value = Decimal(normalized_value)
+        except (InvalidOperation, ValueError):
+            return None
+        if not numeric_value.is_finite():
+            return None
+        if numeric_value == numeric_value.to_integral_value():
+            return int(numeric_value)
+        return float(numeric_value)
+
+    @classmethod
+    def _normalize_same_unit_records_locally(
+        cls,
+        records: list,
+        image_type: str,
+    ) -> dict | None:
+        if image_type not in ("bar", "line", "pie"):
+            return None
+
+        normalized_records = []
+        normalized_unit = None
+        for row in records:
+            if not isinstance(row, list) or len(row) != 3:
+                return None
+            x_value, numeric_text, unit_text = row
+            if not (
+                isinstance(x_value, str)
+                and isinstance(numeric_text, str)
+                and isinstance(unit_text, str)
+            ):
+                return None
+            x_value = x_value.strip()
+            unit_text = unit_text.strip()
+            if not x_value or not unit_text:
+                return None
+            if normalized_unit is None:
+                normalized_unit = unit_text
+            if unit_text != normalized_unit:
+                return None
+
+            parsed_value = cls._parse_visualization_number(numeric_text)
+            if parsed_value is None:
+                return None
+            normalized_records.append([x_value, parsed_value])
+
+        if normalized_unit is None:
+            return None
+
+        return {"unit": normalized_unit, "records": normalized_records}
 
     async def _normalize_visualization_content(
         self,
@@ -2591,6 +2923,26 @@ class Reporter:
             return True
 
         final_obj = None
+        locally_normalized = self._normalize_same_unit_records_locally(
+            extracted_records,
+            image_type,
+        )
+        if locally_normalized and validate_visualization_normalization_schema(
+            locally_normalized, image_type
+        ):
+            final_obj = {
+                "image_title": image_title,
+                "image_type": image_type,
+                "unit": locally_normalized.get("unit", ""),
+                "records": locally_normalized.get("records", []),
+            }
+
+        if final_obj:
+            visualization_content["sub_section_visualization_content"] = json.dumps(
+                final_obj, ensure_ascii=False
+            )
+            return True
+
         records_json = json.dumps({"records": extracted_records}, ensure_ascii=False)
         normalize_context = {
             "language": visualization_dict.get("language", "zh-CN"),
@@ -2607,7 +2959,9 @@ class Reporter:
             )
             if not normalize_output or not normalize_output.get("content"):
                 continue
-            normalized_payload = (normalize_output.get("content") or "").strip()
+            normalized_payload = normalize_json_output(
+                (normalize_output.get("content") or "").strip()
+            ).strip()
             if normalized_payload == "{}":
                 continue
             try:
@@ -2700,6 +3054,7 @@ class Reporter:
             EFFECT_SUB_REPORT_TAG,
             section_idx,
         )
+        desired_chart_type = self._infer_desired_chart_type(section_task, section_outline)
 
         classified_content_for_visualization = deepcopy(
             current_inputs.get("classified_content", [])
@@ -2731,6 +3086,7 @@ class Reporter:
                 "language": current_inputs.get("language", "zh-CN"),
                 "section_title": section_task,
                 "section_outline": section_outline,
+                "desired_chart_type": desired_chart_type,
                 "max_attempt_num": current_inputs.get("max_generate_retry_num", 3),
             }
             task = self._process_visualization_task(visualization_dict)
@@ -2768,6 +3124,1074 @@ class Reporter:
                         res.get("error_msg", "Unknown"),
                     )
         return dict(rs_success=True, visualization_content=visualization_content)
+
+    @staticmethod
+    def _has_visualization_mermaid(visualization_result: object) -> bool:
+        return isinstance(visualization_result, list) and any(
+            isinstance(item, dict) and bool(item.get("mermaid_content"))
+            for item in visualization_result
+        )
+
+    @staticmethod
+    def _visualization_payload_from_item(item: object) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        payload = (item.get("sub_section_visualization_content") or "").strip()
+        if not payload:
+            return None
+        try:
+            parsed = json.loads(payload)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _normalize_visualization_signature_value(value: object) -> str:
+        if isinstance(value, (int, float)):
+            return f"{float(value):.8g}"
+        normalized = str(value or "").strip().lower()
+        normalized = normalized.replace(",", "")
+        normalized = re.sub(r"\s+", "", normalized)
+        return normalized
+
+    @classmethod
+    def _visualization_data_signature(cls, chart_obj: dict | None) -> tuple | None:
+        if not isinstance(chart_obj, dict):
+            return None
+        records = chart_obj.get("records", [])
+        if not isinstance(records, list) or not records:
+            return None
+        normalized_records = []
+        for row in records:
+            if not isinstance(row, list) or len(row) < 2:
+                return None
+            label = str(row[0] or "").strip().lower()
+            label = re.sub(r"\s+", "", label)
+            value = cls._normalize_visualization_signature_value(row[1])
+            normalized_records.append((label, value))
+        unit = str(chart_obj.get("unit", "") or "").strip().lower()
+        unit = re.sub(r"\s+", "", unit)
+        return (unit, tuple(sorted(normalized_records)))
+
+    @classmethod
+    def _visualization_data_is_redundant(
+        cls,
+        chart_obj: dict | None,
+        existing_charts: list[dict],
+    ) -> bool:
+        if not isinstance(chart_obj, dict) or not existing_charts:
+            return False
+        signature = cls._visualization_data_signature(chart_obj)
+        if not signature:
+            return False
+        unit, records = signature
+        record_map = {
+            cls._normalize_visualization_overlap_label(label): value
+            for label, value in records
+        }
+        if len(record_map) < 3:
+            return False
+
+        for existing_chart in existing_charts:
+            existing_signature = cls._visualization_data_signature(existing_chart)
+            if not existing_signature:
+                continue
+            existing_unit, existing_records = existing_signature
+            if existing_unit != unit:
+                continue
+            existing_map = {
+                cls._normalize_visualization_overlap_label(label): value
+                for label, value in existing_records
+            }
+            overlap = [
+                label
+                for label, value in record_map.items()
+                if label in existing_map and existing_map[label] == value
+            ]
+            if len(overlap) >= 3 and len(overlap) >= min(len(record_map), len(existing_map)) * 0.8:
+                return True
+            fuzzy_overlap = 0
+            unmatched_existing_records = list(existing_records)
+            for label, value in records:
+                for idx, (existing_label, existing_value) in enumerate(unmatched_existing_records):
+                    if existing_value == value and cls._visualization_labels_overlap(
+                        label,
+                        existing_label,
+                    ):
+                        fuzzy_overlap += 1
+                        unmatched_existing_records.pop(idx)
+                        break
+            if (
+                fuzzy_overlap >= 3
+                and fuzzy_overlap >= min(len(records), len(existing_records)) * 0.8
+            ):
+                return True
+        return False
+
+    @classmethod
+    def _collect_existing_visualization_data(cls, visualization_result: object) -> tuple[set[tuple], list[dict]]:
+        signatures: set[tuple] = set()
+        avoid_chart_data = []
+        if not isinstance(visualization_result, list):
+            return signatures, avoid_chart_data
+        for item in visualization_result:
+            if not isinstance(item, dict) or not item.get("mermaid_content"):
+                continue
+            chart_obj = cls._visualization_payload_from_item(item)
+            signature = cls._visualization_data_signature(chart_obj)
+            if signature:
+                signatures.add(signature)
+            if chart_obj:
+                avoid_chart_data.append(chart_obj)
+        return signatures, avoid_chart_data
+
+    @staticmethod
+    def _visualization_relevance_terms(text: str) -> set[str]:
+        normalized = str(text or "").lower()
+        terms = set(re.findall(r"[a-z][a-z0-9_-]{2,}", normalized))
+        cjk_chunks = re.findall(r"[\u4e00-\u9fff]{2,}", normalized)
+        for chunk in cjk_chunks:
+            if len(chunk) <= 4:
+                terms.add(chunk)
+                continue
+            for size in (2, 3, 4):
+                terms.update(
+                    chunk[index: index + size]
+                    for index in range(0, len(chunk) - size + 1)
+                )
+        return terms
+
+    @classmethod
+    def _visualization_relevance_overlap(cls, left: str, right: str) -> int:
+        return len(
+            cls._visualization_relevance_terms(left)
+            & cls._visualization_relevance_terms(right)
+        )
+
+    @classmethod
+    def _visualization_item_score(
+        cls,
+        item: dict,
+        chart_obj: dict,
+        current_inputs: dict,
+        order: int,
+    ) -> tuple[int, int]:
+        section_task = cls.strip_leading_number(current_inputs.get("section_task", ""))
+        section_outline = current_inputs.get("sub_section_outline", "") or ""
+        section_context = f"{section_task}\n{section_outline}"
+        chart_text = " ".join(
+            str(value or "")
+            for value in (
+                item.get("title", ""),
+                chart_obj.get("image_title", ""),
+                chart_obj.get("image_type", ""),
+                json.dumps(chart_obj.get("records", []), ensure_ascii=False),
+            )
+        )
+        desired_type = cls._infer_desired_chart_type(section_task, section_outline)
+        chart_type = str(chart_obj.get("image_type", "") or "").strip()
+        records = chart_obj.get("records", [])
+
+        score = min(
+            cls._visualization_relevance_overlap(chart_text, section_context),
+            80,
+        )
+        if desired_type and chart_type == desired_type:
+            score += 25
+        if chart_type == "line" and cls._records_look_like_time_series(records):
+            score += 12
+        if isinstance(records, list):
+            score += min(len(records), 12)
+        if item.get("index"):
+            score += 2
+        if str(item.get("url", "")).startswith("generated://section/"):
+            # Final-section fallback is grounded in the actual written report,
+            # so it is often more section-local than broad pre-write passages.
+            score += 4
+        return score, -order
+
+    @classmethod
+    def _limit_visualization_result_for_section(
+        cls,
+        current_inputs: dict,
+        max_chart_count: int,
+    ) -> list:
+        existing = current_inputs.get("visualization_result", [])
+        if not isinstance(existing, list) or max_chart_count <= 0:
+            return []
+
+        scored_items = []
+        seen_signatures: set[tuple] = set()
+        for order, item in enumerate(existing):
+            if not isinstance(item, dict) or not item.get("mermaid_content"):
+                continue
+            chart_obj = cls._visualization_payload_from_item(item)
+            signature = cls._visualization_data_signature(chart_obj)
+            if not chart_obj or not signature or signature in seen_signatures:
+                continue
+            seen_signatures.add(signature)
+            scored_items.append(
+                {
+                    "item": item,
+                    "chart_obj": chart_obj,
+                    "signature": signature,
+                    "score": cls._visualization_item_score(
+                        item,
+                        chart_obj,
+                        current_inputs,
+                        order,
+                    ),
+                    "order": order,
+                }
+            )
+
+        if len(scored_items) <= max_chart_count:
+            return [entry["item"] for entry in scored_items]
+
+        selected: list[dict] = []
+        selected_signatures: set[tuple] = set()
+        desired_type = cls._infer_desired_chart_type(
+            current_inputs.get("section_task", ""),
+            current_inputs.get("sub_section_outline", ""),
+        )
+
+        def choose_best(predicate) -> None:
+            if len(selected) >= max_chart_count:
+                return
+            candidates = [
+                entry
+                for entry in scored_items
+                if entry["signature"] not in selected_signatures
+                and predicate(entry)
+            ]
+            if not candidates:
+                return
+            best = max(candidates, key=lambda entry: entry["score"])
+            selected.append(best)
+            selected_signatures.add(best["signature"])
+
+        if desired_type:
+            choose_best(
+                lambda entry: entry["chart_obj"].get("image_type") == desired_type
+            )
+        for chart_type in ("line", "bar", "pie", "timeline"):
+            choose_best(lambda entry, chart_type=chart_type: entry["chart_obj"].get("image_type") == chart_type)
+
+        for entry in sorted(scored_items, key=lambda entry: entry["score"], reverse=True):
+            if len(selected) >= max_chart_count:
+                break
+            if entry["signature"] in selected_signatures:
+                continue
+            selected.append(entry)
+            selected_signatures.add(entry["signature"])
+
+        return [
+            entry["item"]
+            for entry in sorted(selected, key=lambda entry: entry["order"])
+        ]
+
+    @staticmethod
+    def _strip_mermaid_blocks(text: str) -> str:
+        return re.sub(
+            r"```mermaid\s*[\s\S]*?```",
+            "",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+
+    @staticmethod
+    def _strip_markdown_noise_for_numeric_density(text: str) -> str:
+        cleaned = "\n".join(
+            line
+            for line in (text or "").splitlines()
+            if not re.match(r"^\s*#+\s+", line)
+        )
+        cleaned = re.sub(r"\[[^\]]+\]\([^)]+\)|\[(?:checked_)?citation:\d+\]|https?://\S+", "", cleaned)
+        return cleaned
+
+    @classmethod
+    def _chartable_numeric_count(cls, text: str) -> int:
+        cleaned = cls._strip_markdown_noise_for_numeric_density(text)
+        return len(re.findall(r"(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?%?", cleaned))
+
+    @classmethod
+    def _report_content_text_units(cls, text: str) -> int:
+        cleaned = cls._strip_markdown_noise_for_numeric_density(
+            cls._strip_mermaid_blocks(text or "")
+        )
+        cleaned = MANAGED_MERMAID_CAPTION_PATTERN.sub("", cleaned)
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", cleaned))
+        latin_word_count = len(re.findall(r"\b[A-Za-z][A-Za-z0-9_-]*\b", cleaned))
+        return cjk_count + latin_word_count
+
+    @staticmethod
+    def _extract_first_citation_index(text: str) -> int:
+        match = re.search(r"\[(?:checked_)?citation:(\d+)\]", text or "")
+        return int(match.group(1)) if match else 0
+
+    @classmethod
+    def _report_content_visualization_candidates(
+        cls,
+        current_inputs: dict,
+    ) -> list[dict]:
+        report_markdown = cls._strip_mermaid_blocks(
+            current_inputs.get("sub_report_content") or ""
+        ).strip()
+        if not report_markdown:
+            return []
+
+        section_outline = (current_inputs.get("sub_section_outline", "") or "").strip()
+        section_task = cls.strip_leading_number(current_inputs.get("section_task", ""))
+        blocks: list[tuple[str, str]] = []
+        current_title = ""
+        current_lines: list[str] = []
+
+        def flush_block() -> None:
+            nonlocal current_title, current_lines
+            block_text = "\n".join(current_lines).strip()
+            if block_text:
+                blocks.append((current_title, block_text))
+            current_title = ""
+            current_lines = []
+
+        for line in report_markdown.splitlines():
+            if re.match(r"^\s*##\s+", line):
+                flush_block()
+                current_title = re.sub(r"^\s*##\s+", "", line).strip()
+                current_lines = [line]
+                continue
+            if re.match(r"^\s*#\s+", line):
+                continue
+            current_lines.append(line)
+        flush_block()
+
+        if not blocks:
+            blocks = [(section_task, report_markdown)]
+
+        candidates = []
+        for idx, (title, block_text) in enumerate(blocks, 1):
+            numeric_count = cls._chartable_numeric_count(block_text)
+            if numeric_count < 3:
+                continue
+            candidates.append(
+                {
+                    "candidate_idx": idx,
+                    "title": title or f"section content {idx}",
+                    "origin_content": block_text,
+                    "numeric_count": numeric_count,
+                    "citation_index": cls._extract_first_citation_index(block_text),
+                    "desired_chart_type": (
+                        cls._infer_desired_chart_type(title, block_text)
+                        or cls._infer_desired_chart_type(
+                            section_outline,
+                            section_task,
+                        )
+                    ),
+                }
+            )
+        if not candidates and cls._chartable_numeric_count(report_markdown) >= 3:
+            candidates.append(
+                {
+                    "candidate_idx": 1,
+                    "title": section_task or "section content",
+                    "origin_content": report_markdown,
+                    "numeric_count": cls._chartable_numeric_count(report_markdown),
+                    "citation_index": cls._extract_first_citation_index(report_markdown),
+                    "desired_chart_type": cls._infer_desired_chart_type(
+                        report_markdown,
+                        section_outline,
+                        section_task,
+                    ),
+                }
+            )
+        return candidates[:REPORT_CONTENT_VISUALIZATION_MAX_CANDIDATES]
+
+    @classmethod
+    def _adaptive_report_content_visualization_limit(
+        cls,
+        current_inputs: dict,
+        candidates: list[dict],
+    ) -> int:
+        report_markdown = current_inputs.get("sub_report_content") or ""
+        numeric_count = cls._chartable_numeric_count(report_markdown)
+        if numeric_count < 3:
+            return 0
+
+        subsection_count = len(
+            re.findall(
+                r"(?m)^\s*##\s+",
+                cls._strip_mermaid_blocks(report_markdown),
+            )
+        )
+        subsection_count = max(1, subsection_count)
+        local_payload_count = sum(
+            min(
+                len(cls._local_report_content_chart_payloads(candidate)),
+                REPORT_CONTENT_VISUALIZATION_MAX_CHARTS_PER_CANDIDATE,
+            )
+            for candidate in candidates
+        )
+        potential_count = max(len(candidates), local_payload_count, 1)
+        cleaned_report = cls._clean_local_visualization_text(report_markdown)
+        has_percent_metric = bool(re.search(r"[-+]?\d[\d,]*(?:\.\d+)?\s*%", cleaned_report))
+        has_non_percent_unit_metric = bool(
+            re.search(
+                rf"[-+]?\d[\d,]*(?:\.\d+)?\s*(?!%)({REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN})",
+                cleaned_report,
+            )
+        )
+        if numeric_count >= 6 and has_percent_metric and has_non_percent_unit_metric:
+            potential_count = max(potential_count, 2)
+
+        # Allow more than one chart where the content actually exposes distinct
+        # dimensions, but keep brief chapters from turning into chart catalogs.
+        limit = min(potential_count, subsection_count + 1)
+        text_units = cls._report_content_text_units(report_markdown)
+        if text_units >= 900 and numeric_count >= 18:
+            limit += 1
+        if text_units >= 1500 and numeric_count >= 30:
+            limit += 1
+        if text_units >= 2500 and numeric_count >= 45:
+            limit += 1
+        return max(1, min(limit, REPORT_CONTENT_VISUALIZATION_MAX_TOTAL_CHARTS))
+
+    @staticmethod
+    def _format_avoid_chart_data(avoid_chart_data: list[dict]) -> str:
+        return json.dumps(avoid_chart_data[-REPORT_CONTENT_VISUALIZATION_MAX_TOTAL_CHARTS:], ensure_ascii=False) if avoid_chart_data else ""
+
+    @classmethod
+    def _clean_local_visualization_text(cls, text: str) -> str:
+        cleaned = cls._strip_mermaid_blocks(text or "")
+        cleaned = re.sub(
+            r'<div style="text-align:\s*center;">[\s\S]*?</div>',
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\[(?:checked_)?citation:\d+\]|\[\[\d+\]\]\([^)]+\)", "", cleaned)
+        cleaned = re.sub(r"\[[^\]]+\]\([^)]+\)|https?://\S+", "", cleaned)
+        cleaned = cleaned.replace("−", "-").replace("–", "-")
+        return cleaned
+
+    @staticmethod
+    def _clean_local_chart_label(label: str) -> str:
+        label = re.sub(r"[*_`#|<>]", "", str(label or "")).strip()
+        label = re.split(r"[\r\n]+", label)[-1].strip()
+        label = re.sub(r"^\s*(?:\d+(?:\.\d+)*\s*)", "", label)
+        label = re.sub(
+            r"^\s*(?:而|但|然而|其中|同时|此外|则|为|是|和|与|and|but|while|whereas|meanwhile|also|with)\s*",
+            "",
+            label,
+            flags=re.IGNORECASE,
+        )
+        label = re.sub(r"(?:的|则|为|是|以|约为|达到|达)$", "", label).strip()
+        label = re.sub(
+            r"(?:19|20)\d{2}年.*$",
+            "",
+            label,
+        ).strip(" ，,、：:；;。（）()")
+        label = LOCAL_CHART_LABEL_METRIC_SUFFIX_PATTERN.sub("", label).strip(" ，,、：:；;。（）()")
+        if len(label) > 24:
+            candidates = [
+                item.strip(" ，,、：:；;。（）()")
+                for item in re.split(r"[\s，,、：:；;|/]+", label)
+                if item.strip(" ，,、：:；;。（）()") and not item.strip().isdigit()
+            ]
+            if candidates:
+                label = candidates[-1]
+        return label.strip(" ，,、：:；;。（）()")[:24]
+
+    @staticmethod
+    def _normalize_visualization_overlap_label(label: str) -> str:
+        normalized = str(label or "").strip().lower()
+        normalized = re.sub(r"\s+", "", normalized)
+        normalized = re.sub(
+            r"(?:集团|股份|有限|公司|co\.?|company|inc\.?|ltd\.?|llc|corp\.?|corporation|group)$",
+            "",
+            normalized,
+        )
+        return normalized
+
+    @classmethod
+    def _visualization_labels_overlap(cls, left: str, right: str) -> bool:
+        left_normalized = cls._normalize_visualization_overlap_label(left)
+        right_normalized = cls._normalize_visualization_overlap_label(right)
+        if not left_normalized or not right_normalized:
+            return False
+        if left_normalized == right_normalized:
+            return True
+        if min(len(left_normalized), len(right_normalized)) < 2:
+            return False
+        return (
+            left_normalized in right_normalized
+            or right_normalized in left_normalized
+        )
+
+    @staticmethod
+    def _local_chart_payload(
+        image_title: str,
+        image_type: str,
+        unit: str,
+        records: list[list],
+    ) -> dict | None:
+        if image_type not in ("bar", "line") or not unit:
+            return None
+        if not (3 <= len(records) <= REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS):
+            return None
+        cleaned_records = []
+        seen_labels = set()
+        for row in records:
+            if not isinstance(row, list) or len(row) != 2:
+                return None
+            label = str(row[0] or "").strip()
+            value = row[1]
+            if not label or label in seen_labels:
+                continue
+            if not isinstance(value, (int, float)):
+                return None
+            cleaned_records.append([label, value])
+            seen_labels.add(label)
+        if len(cleaned_records) < 3:
+            return None
+        return {
+            "image_title": (image_title or "Chart").strip()[:80],
+            "image_type": image_type,
+            "unit": unit.strip(),
+            "records": cleaned_records,
+        }
+
+    @classmethod
+    def _extract_local_year_range_payloads(
+        cls,
+        candidate: dict,
+        text: str,
+    ) -> list[dict]:
+        payloads = []
+        range_pattern = re.compile(
+            r"(?P<start>(?:19|20)\d{2})\s*(?:至|到|[-—–~～])\s*"
+            r"(?P<end>(?:19|20)\d{2})\s*年?"
+            r"(?P<context>[^。；;\n]{0,120}?分别(?:为|是)?[^。；;\n]{0,180})"
+        )
+        value_pattern = re.compile(
+            rf"([-+]?\d[\d,]*(?:\.\d+)?)\s*({REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN})"
+        )
+        for match in range_pattern.finditer(text):
+            start_year = int(match.group("start"))
+            end_year = int(match.group("end"))
+            if end_year < start_year or end_year - start_year + 1 > REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS:
+                continue
+            years = [f"{year}年" for year in range(start_year, end_year + 1)]
+            values = value_pattern.findall(match.group("context"))
+            if len(values) < len(years):
+                continue
+            unit = values[0][1]
+            if any(unit_item != unit for _, unit_item in values[: len(years)]):
+                continue
+            records = []
+            for year_label, (value_text, _) in zip(years, values):
+                parsed = cls._parse_visualization_number(value_text)
+                if parsed is None:
+                    records = []
+                    break
+                records.append([year_label, parsed])
+            payload = cls._local_chart_payload(
+                f"{candidate.get('title', '')}趋势",
+                "line",
+                unit,
+                records,
+            )
+            if payload:
+                payloads.append(payload)
+        return payloads
+
+    @staticmethod
+    def _local_numeric_context_is_approximate(
+        text: str,
+        value_start: int,
+        value_end: int,
+    ) -> bool:
+        before = text[max(0, value_start - 12): value_start]
+        after = text[value_end: min(len(text), value_end + 12)]
+        return bool(
+            re.search(r"(?:约|约为|近|逾|超过|超|突破|不低于|不少于)\s*$", before)
+            or re.search(r"^\s*(?:左右|以上|大关|附近)", after)
+        )
+
+    @classmethod
+    def _local_year_value_score(
+        cls,
+        text: str,
+        value_start: int,
+        value_end: int,
+    ) -> int:
+        return 0 if cls._local_numeric_context_is_approximate(text, value_start, value_end) else 1
+
+    @classmethod
+    def _extract_local_year_value_payloads(
+        cls,
+        candidate: dict,
+        text: str,
+    ) -> list[dict]:
+        payloads = []
+        emitted_signatures: set[tuple] = set()
+        value_pattern = re.compile(
+            r"((?:19|20)\d{2})(?:\s*年)?[^。；;\n.!?]{0,60}?"
+            rf"([-+]?\d[\d,]*(?:\.\d+)?)\s*({REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN})"
+        )
+        def append_payload(unit: str, records: list[list]) -> None:
+            payload = cls._local_chart_payload(
+                f"{candidate.get('title', '')}趋势",
+                "line",
+                unit,
+                records,
+            )
+            signature = cls._visualization_data_signature(payload)
+            if payload and signature and signature not in emitted_signatures:
+                payloads.append(payload)
+                emitted_signatures.add(signature)
+
+        chunks = re.split(r"[。；;\n.!?]+", text)
+        for chunk in chunks:
+            matches = list(value_pattern.finditer(chunk))
+            if len(matches) < 3:
+                continue
+            by_unit: dict[str, dict[str, tuple[int, int | float]]] = {}
+            for match in matches:
+                year, value_text, unit = match.groups()
+                parsed = cls._parse_visualization_number(value_text)
+                if parsed is None:
+                    continue
+                score = cls._local_year_value_score(
+                    chunk,
+                    match.start(2),
+                    match.end(2),
+                )
+                by_unit.setdefault(unit, {})
+                existing = by_unit[unit].get(year)
+                if existing is None or score > existing[0]:
+                    by_unit[unit][year] = (score, parsed)
+            for unit, values_by_year in by_unit.items():
+                records = [
+                    [f"{year}年", values_by_year[year][1]]
+                    for year in sorted(values_by_year)
+                ]
+                append_payload(unit, records)
+        cross_sentence_by_unit: dict[str, dict[str, tuple[int, int | float]]] = {}
+        for match in value_pattern.finditer(text):
+            year, value_text, unit = match.groups()
+            parsed = cls._parse_visualization_number(value_text)
+            if parsed is None:
+                continue
+            cross_sentence_by_unit.setdefault(unit, {})
+            score = cls._local_year_value_score(
+                text,
+                match.start(2),
+                match.end(2),
+            )
+            existing = cross_sentence_by_unit[unit].get(year)
+            if existing is None or score > existing[0]:
+                cross_sentence_by_unit[unit][year] = (score, parsed)
+        for unit, values_by_year in cross_sentence_by_unit.items():
+            records = [
+                [f"{year}年", values_by_year[year][1]]
+                for year in sorted(values_by_year)
+            ]
+            append_payload(unit, records)
+        return payloads
+
+    @classmethod
+    def _extract_local_markdown_table_payloads(
+        cls,
+        candidate: dict,
+        text: str,
+    ) -> list[dict]:
+        payloads = []
+        lines = [line.strip() for line in text.splitlines()]
+        i = 0
+        while i < len(lines) - 2:
+            if not (lines[i].startswith("|") and lines[i + 1].startswith("|")):
+                i += 1
+                continue
+            header = [cell.strip() for cell in lines[i].strip("|").split("|")]
+            separator = [cell.strip() for cell in lines[i + 1].strip("|").split("|")]
+            if not all(re.match(r"^:?-{3,}:?$", cell) for cell in separator):
+                i += 1
+                continue
+            rows = []
+            j = i + 2
+            while j < len(lines) and lines[j].startswith("|"):
+                cells = [cell.strip() for cell in lines[j].strip("|").split("|")]
+                if len(cells) >= len(header):
+                    rows.append(cells)
+                j += 1
+            numeric_columns: list[tuple[int, int]] = []
+            for col_idx in range(1, len(header)):
+                header_text = header[col_idx]
+                if re.search(r"排名|序号|rank", header_text, flags=re.IGNORECASE):
+                    continue
+                numeric_count = sum(
+                    cls._parse_visualization_number(row[col_idx]) is not None
+                    for row in rows
+                )
+                if numeric_count >= 3:
+                    numeric_columns.append((col_idx, numeric_count))
+            if numeric_columns:
+                col_idx = sorted(numeric_columns, key=lambda item: item[1], reverse=True)[0][0]
+                unit_match = re.search(r"[（(]([^）)]+)[）)]", header[col_idx])
+                unit = unit_match.group(1).strip() if unit_match else header[col_idx].strip()
+                records = []
+                for row in rows:
+                    label = cls._clean_local_chart_label(row[0])
+                    parsed = cls._parse_visualization_number(row[col_idx])
+                    if label and parsed is not None:
+                        records.append([label, parsed])
+                payload = cls._local_chart_payload(
+                    f"{candidate.get('title', '')}{header[col_idx]}对比",
+                    "bar",
+                    unit,
+                    records[:REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS],
+                )
+                if payload:
+                    payloads.append(payload)
+            i = max(j, i + 1)
+        return payloads
+
+    @classmethod
+    def _extract_local_percent_comparison_payloads(
+        cls,
+        candidate: dict,
+        text: str,
+    ) -> list[dict]:
+        records = []
+        seen_labels = set()
+        generic_labels = {
+            "总计",
+            "合计",
+            "总体",
+            "整体",
+            "平均",
+            "市场",
+            "行业",
+            "板块",
+            "领域",
+            "类别",
+            "项目",
+            "指标",
+            "样本",
+            "其他",
+            "总",
+            "total",
+            "overall",
+            "average",
+            "market",
+            "industry",
+            "others",
+        }
+        share_or_rate_context = (
+            r"同比|环比|增长率|增幅|增速|增长|下降|下跌|减少|提升|上升|增加|提高|降低|"
+            r"市场份额|市占率|份额|占比|比重|渗透率|转化率|留存率|毛利率|利润率|"
+            r"growth|grew|increase|increased|decrease|decreased|decline|declined|drop|dropped|"
+            r"share|market\s+share|rate|ratio"
+        )
+
+        def add_percent_record(
+            raw_label: str,
+            value_text: str,
+            metric_text: str,
+            context_text: str,
+        ) -> None:
+            label = cls._clean_local_chart_label(
+                re.split(r"[，,、]", raw_label)[-1]
+            )
+            if (
+                not label
+                or label in seen_labels
+                or any(generic in label.lower() for generic in generic_labels)
+            ):
+                return
+            parsed = cls._parse_visualization_number(value_text)
+            if parsed is None:
+                return
+            value_start = context_text.find(value_text)
+            if value_start > 0 and cls._local_numeric_context_is_approximate(
+                context_text,
+                value_start,
+                value_start + len(value_text),
+            ):
+                return
+            if re.search(
+                r"下跌|下降|大跌|负增长|减少|降低|decrease|decline|drop|down|negative|fell|fall",
+                f"{metric_text} {context_text}",
+                flags=re.IGNORECASE,
+            ):
+                parsed = -abs(parsed)
+            records.append([label, parsed])
+            seen_labels.add(label)
+
+        parenthesized_percent_pattern = re.compile(
+            r"(?P<label>[\u4e00-\u9fffA-Za-z0-9·&.\-]{2,32})"
+            r"\s*[（(]\s*(?P<value>[-+]?\d[\d,]*(?:\.\d+)?)\s*%\s*[）)]",
+            flags=re.IGNORECASE,
+        )
+        for match in parenthesized_percent_pattern.finditer(text):
+            nearby_text = text[
+                max(0, match.start() - 80): min(len(text), match.end() + 80)
+            ]
+            if not re.search(share_or_rate_context, nearby_text, flags=re.IGNORECASE):
+                continue
+            add_percent_record(
+                match.group("label"),
+                match.group("value"),
+                nearby_text,
+                nearby_text,
+            )
+            if len(records) >= REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS:
+                break
+
+        metric_before_value_pattern = re.compile(
+            r"(?P<label>[\u4e00-\u9fffA-Za-z0-9·&.\-（）()，,、\s]{2,60}?)"
+            rf"(?P<metric>{share_or_rate_context})"
+            r"[^。；;，,\n]{0,30}?"
+            r"(?P<value>[-+]?\d[\d,]*(?:\.\d+)?)\s*%"
+            ,
+            flags=re.IGNORECASE,
+        )
+        value_before_metric_pattern = re.compile(
+            r"(?P<label>[\u4e00-\u9fffA-Za-z0-9·&.\-（）()，,、\s]{2,60}?)"
+            r"(?P<value>[-+]?\d[\d,]*(?:\.\d+)?)\s*%"
+            r"[^。；;，,\n]{0,12}?"
+            r"(?P<metric>市场份额|市占率|份额|占比|比重|渗透率|转化率|留存率|毛利率|利润率|"
+            r"share|market\s+share|rate|ratio)"
+            ,
+            flags=re.IGNORECASE,
+        )
+        for pattern in (metric_before_value_pattern, value_before_metric_pattern):
+            for match in pattern.finditer(text):
+                add_percent_record(
+                    match.group("label"),
+                    match.group("value"),
+                    match.group("metric"),
+                    match.group(0),
+                )
+                if len(records) >= REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS:
+                    break
+            if len(records) >= REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS:
+                break
+        payload = cls._local_chart_payload(
+            f"{candidate.get('title', '')}百分比对比",
+            "bar",
+            "%",
+            records,
+        )
+        return [payload] if payload else []
+
+    @classmethod
+    def _local_report_content_chart_payloads(cls, candidate: dict) -> list[dict]:
+        text = cls._clean_local_visualization_text(candidate.get("origin_content", ""))
+        desired = candidate.get("desired_chart_type", "")
+        line_payloads = (
+            cls._extract_local_year_range_payloads(candidate, text)
+            + cls._extract_local_year_value_payloads(candidate, text)
+        )
+        bar_payloads = (
+            cls._extract_local_markdown_table_payloads(candidate, text)
+            + cls._extract_local_percent_comparison_payloads(candidate, text)
+        )
+        return bar_payloads + line_payloads if desired == "bar" else line_payloads + bar_payloads
+
+    @classmethod
+    def _local_report_content_visualization_result(
+        cls,
+        candidate: dict,
+        section_idx: int,
+        signatures: set[tuple],
+        avoid_chart_data: list[dict] | None = None,
+    ) -> tuple[dict, dict, tuple] | None:
+        seen_local_signatures: set[tuple] = set()
+        for payload in cls._local_report_content_chart_payloads(candidate):
+            signature = cls._visualization_data_signature(payload)
+            if not signature or signature in signatures or signature in seen_local_signatures:
+                continue
+            if cls._visualization_data_is_redundant(payload, avoid_chart_data or []):
+                continue
+            seen_local_signatures.add(signature)
+            visualization_content = {
+                "rs_success": True,
+                "sub_section_visualization_content": json.dumps(
+                    payload, ensure_ascii=False
+                ),
+            }
+            if not cls._precheck_value_variation(visualization_content, section_idx):
+                continue
+            result = cls._generate_mermaid_code(visualization_content, section_idx)
+            if result.get("rs_success", True) and result.get("mermaid_content"):
+                return result, payload, signature
+        return None
+
+    async def _ensure_report_content_visualization_fallback(
+        self,
+        current_inputs: dict,
+    ) -> None:
+        """
+        Augment visualizations from data-dense drafted sub-report content.
+
+        The primary pipeline extracts chart data from classified source passages
+        before the section is written. In real reports, the final section can
+        contain multiple clean, traceable data dimensions. This fallback keeps
+        the same validation pipeline, asks for data distinct from already
+        generated charts, and stops when no distinct chartable dataset remains.
+        """
+        report_markdown = (current_inputs.get("sub_report_content") or "").strip()
+        section_outline = (current_inputs.get("sub_section_outline") or "").strip()
+        if not report_markdown or not section_outline:
+            return
+
+        section_idx = current_inputs.get("section_idx", 1)
+        section_task = self.strip_leading_number(current_inputs.get("section_task", ""))
+        existing = current_inputs.get("visualization_result", [])
+        if not isinstance(existing, list):
+            existing = []
+
+        candidates = self._report_content_visualization_candidates(current_inputs)
+        max_chart_count = self._adaptive_report_content_visualization_limit(
+            current_inputs,
+            candidates,
+        )
+        current_inputs["visualization_result"] = existing
+        if max_chart_count <= 0:
+            current_inputs["visualization_result"] = []
+            return
+
+        existing = self._limit_visualization_result_for_section(
+            current_inputs,
+            max_chart_count,
+        )
+        current_inputs["visualization_result"] = existing
+        signatures, avoid_chart_data = self._collect_existing_visualization_data(existing)
+        valid_chart_count = len(avoid_chart_data)
+        if valid_chart_count >= max_chart_count:
+            return
+
+        if not candidates:
+            return
+
+        def append_fallback_result(
+            candidate: dict,
+            result: dict,
+            chart_obj: dict,
+            signature: tuple,
+            chart_attempt_index: int,
+        ) -> None:
+            signatures.add(signature)
+            avoid_chart_data.append(chart_obj)
+            fallback_item = {
+                "title": candidate["title"],
+                "url": (
+                    f"generated://section/{section_idx}/report-content/"
+                    f"{candidate['candidate_idx']}/{chart_attempt_index}"
+                ),
+                "original_content": candidate["origin_content"],
+                "scores": {"data_density": float(candidate["numeric_count"])},
+                "index": candidate.get("citation_index", 0),
+                "sub_section_visualization_content": result.get(
+                    "sub_section_visualization_content", ""
+                ),
+                "mermaid_content": result.get("mermaid_content", ""),
+            }
+            existing.append(fallback_item)
+
+        def append_local_fallback(candidate: dict, chart_attempt_index: int) -> bool:
+            local_result = self._local_report_content_visualization_result(
+                candidate,
+                section_idx,
+                signatures,
+                avoid_chart_data,
+            )
+            if not local_result:
+                return False
+            result, chart_obj, signature = local_result
+            append_fallback_result(
+                candidate,
+                result,
+                chart_obj,
+                signature,
+                chart_attempt_index,
+            )
+            return True
+
+        for candidate in candidates:
+            chart_attempts = 0
+            while (
+                chart_attempts < REPORT_CONTENT_VISUALIZATION_MAX_CHARTS_PER_CANDIDATE
+                and valid_chart_count < max_chart_count
+            ):
+                visualization_dict = {
+                    "section_idx": section_idx,
+                    "title": candidate["title"],
+                    "origin_content": candidate["origin_content"],
+                    "data_density": float(candidate["numeric_count"]),
+                    "language": current_inputs.get("language", "zh-CN"),
+                    "section_title": section_task,
+                    "section_outline": section_outline,
+                    "desired_chart_type": candidate.get("desired_chart_type", ""),
+                    "avoid_chart_data": self._format_avoid_chart_data(avoid_chart_data),
+                    "max_attempt_num": current_inputs.get("max_generate_retry_num", 3),
+                }
+                result = await self._process_visualization_task(visualization_dict)
+                if not result.get("rs_success") or not result.get("mermaid_content"):
+                    if append_local_fallback(candidate, chart_attempts + 1):
+                        valid_chart_count += 1
+                        chart_attempts += 1
+                        continue
+                    if not LogManager.is_sensitive():
+                        logger.info(
+                            "%s [generate_sub_section_visualization_content] section_idx: [%s], "
+                            "stop report-content visualization candidate [%s]: %s",
+                            EFFECT_SUB_REPORT_TAG,
+                            section_idx,
+                            candidate["candidate_idx"],
+                            result.get("error_msg", "Unknown"),
+                        )
+                    break
+
+                chart_obj = self._visualization_payload_from_item(result)
+                signature = self._visualization_data_signature(chart_obj)
+                if (
+                    not signature
+                    or signature in signatures
+                    or self._visualization_data_is_redundant(
+                        chart_obj,
+                        avoid_chart_data,
+                    )
+                ):
+                    if append_local_fallback(candidate, chart_attempts + 1):
+                        valid_chart_count += 1
+                        chart_attempts += 1
+                        continue
+                    logger.info(
+                        "%s [generate_sub_section_visualization_content] section_idx: [%s], "
+                        "skip duplicate report-content visualization candidate [%s]",
+                        EFFECT_SUB_REPORT_TAG,
+                        section_idx,
+                        candidate["candidate_idx"],
+                    )
+                    break
+
+                append_fallback_result(
+                    candidate,
+                    result,
+                    chart_obj,
+                    signature,
+                    chart_attempts + 1,
+                )
+                valid_chart_count += 1
+                chart_attempts += 1
+                if candidate["numeric_count"] < 6:
+                    break
+        current_inputs["visualization_result"] = self._limit_visualization_result_for_section(
+            current_inputs,
+            max_chart_count,
+        )
 
     async def _generate_sub_report_summary(self, current_inputs: dict):
         """generate sub report summary"""
@@ -3085,6 +4509,9 @@ class Reporter:
                 dict(
                     messages=[dict(role="user", content=sub_content_message)],
                     language=current_inputs.get("language"),
+                    visualization_enable=current_inputs.get(
+                        "visualization_enable", True
+                    ),
                     section_iscore=current_inputs.get("section_iscore", False),
                     report_type=report_type,
                     paragraph_style=current_inputs.get("paragraph_style", "detailed"),
@@ -3140,6 +4567,9 @@ class Reporter:
 
             # Insert visualization content
             if current_inputs.get("visualization_enable", True):
+                await self._ensure_report_content_visualization_fallback(
+                    current_inputs
+                )
                 if not LogManager.is_sensitive():
                     logger.debug(
                         "%s [write_subsection_reports] section_idx: [%s] "
@@ -3181,6 +4611,12 @@ class Reporter:
                         current_inputs.get("section_idx", 1),
                         str(e),
                     )
+                current_inputs["sub_report_content"] = (
+                    self._ensure_mermaid_pipeline_captions(
+                        current_inputs.get("sub_report_content", ""),
+                        current_inputs.get("language"),
+                    )
+                )
                 if not LogManager.is_sensitive():
                     logger.debug(
                         "%s [write_subsection_reports] section_idx: [%s] "
@@ -3252,13 +4688,18 @@ class Reporter:
         classified_content_for_visualization,
     ):
         selected_visualizations = []
+        fallback_visualizations = []
         for item in classified_content_for_visualization:
             if not isinstance(item, dict):
                 continue
             point = get_numeric_score(item, "data_density")
-            if point is not None and point >= 9.0:
+            if point is None:
+                continue
+            if point >= 9.0:
                 selected_visualizations.append(item)
-        return selected_visualizations
+            elif point >= 8.0:
+                fallback_visualizations.append(item)
+        return selected_visualizations or fallback_visualizations
 
     async def _request_visualization_insert_plan(
         self, context: VisualizationInsertPlanContext
@@ -3312,7 +4753,7 @@ class Reporter:
 
             raw = (llm_output.get("content") or "").strip()
             try:
-                plan = json.loads(raw)
+                plan = json.loads(normalize_json_output(raw))
             except Exception:
                 plan = None
 
@@ -3390,6 +4831,147 @@ class Reporter:
 
         return "".join(out_lines)
 
+    @staticmethod
+    def _complete_visualization_insertions(
+        insertions: list[dict],
+        mermaid_map: dict[int, str],
+        report_lines: list[str],
+        invalid_rows: set[int],
+    ) -> list[dict]:
+        """Ensure every generated visualization has an insertion anchor."""
+        if not mermaid_map:
+            return insertions
+
+        valid_insertions = [
+            item
+            for item in insertions
+            if isinstance(item, dict)
+            and isinstance(item.get("after_row"), int)
+            and isinstance(item.get("index"), int)
+            and item.get("index") in mermaid_map
+        ]
+        used_indices = {item["index"] for item in valid_insertions}
+        missing_indices = [
+            index for index in sorted(mermaid_map) if index not in used_indices
+        ]
+        if not missing_indices:
+            return valid_insertions
+
+        if valid_insertions:
+            fallback_row = valid_insertions[-1]["after_row"]
+        else:
+            fallback_row = next(
+                (
+                    row_idx
+                    for row_idx in range(len(report_lines), 0, -1)
+                    if row_idx not in invalid_rows and report_lines[row_idx - 1].strip()
+                ),
+                None,
+            )
+            if fallback_row is None:
+                fallback_row = next(
+                    (
+                        row_idx
+                        for row_idx in range(len(report_lines), 0, -1)
+                        if row_idx not in invalid_rows
+                    ),
+                    None,
+                )
+
+        if fallback_row is None:
+            return valid_insertions
+
+        completed = list(valid_insertions)
+        completed.extend(
+            {"after_row": fallback_row, "index": index}
+            for index in missing_indices
+        )
+        return completed
+
+    @staticmethod
+    def _is_plain_mermaid_caption_candidate(line: str) -> bool:
+        caption = line.strip()
+        return not (
+            not caption
+            or len(caption) > 120
+            or caption.startswith(("#", "```", "<", "|", ">", "-", "*"))
+            or re.match(r"^\d+[.)]\s+", caption)
+            or caption.endswith((".", "。", "!", "！", "?", "？", ";", "；"))
+            or "[citation:" in caption
+            or "[checked_citation:" in caption
+        )
+
+    @staticmethod
+    def _extract_mermaid_title(mermaid_code: str) -> str:
+        match = MERMAID_TITLE_PATTERN.search(mermaid_code or "")
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+        for line in (mermaid_code or "").splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("title "):
+                return stripped[6:].strip().strip("\"'")
+        return ""
+
+    @staticmethod
+    def _render_managed_mermaid_caption(caption: str, newline: str) -> str:
+        safe_caption = html.escape(caption.strip(), quote=True)
+        return (
+            f'<div style="text-align: center;">{newline}{newline}'
+            f"**{safe_caption}**{newline}{newline}</div>{newline}{newline}"
+        )
+
+    @classmethod
+    def _caption_for_unmanaged_mermaid(
+        cls,
+        following_text: str,
+        mermaid_code: str,
+        language: str,
+    ) -> tuple[str, int]:
+        plain_caption_match = re.match(
+            r"\A(?P<leading>(?:[ \t]*(?:\r?\n))+)"
+            r"(?P<line>[^\r\n]+)"
+            r"(?P<line_end>\r?\n?)"
+            r"(?P<trailing>(?:[ \t]*(?:\r?\n))*)",
+            following_text,
+        )
+        if plain_caption_match:
+            candidate = plain_caption_match.group("line").strip()
+            if cls._is_plain_mermaid_caption_candidate(candidate):
+                return candidate, plain_caption_match.end()
+
+        mermaid_title = cls._extract_mermaid_title(mermaid_code)
+        return (mermaid_title, 0) if mermaid_title else ("图表标题" if language == CHINESE else "Image Title", 0)
+
+    @classmethod
+    def _ensure_mermaid_pipeline_captions(
+        cls,
+        report_markdown: str,
+        language: str,
+    ) -> str:
+        if not isinstance(report_markdown, str) or "```mermaid" not in report_markdown:
+            return report_markdown
+
+        newline = "\r\n" if "\r\n" in report_markdown else "\n"
+        rendered_parts = []
+        cursor = 0
+        for match in MERMAID_CODE_FENCE_PATTERN.finditer(report_markdown):
+            rendered_parts.append(report_markdown[cursor:match.end()])
+            following_text = report_markdown[match.end():]
+            if MANAGED_MERMAID_CAPTION_PATTERN.match(following_text):
+                cursor = match.end()
+                continue
+
+            caption, consumed_chars = cls._caption_for_unmanaged_mermaid(
+                following_text,
+                match.group(1),
+                language,
+            )
+            rendered_parts.append(cls._render_managed_mermaid_caption(caption, newline))
+            cursor = match.end() + consumed_chars
+
+        rendered_parts.append(report_markdown[cursor:])
+        return "".join(rendered_parts)
+
     async def _insert_visualization(self, current_inputs: Dict) -> dict:
         """
         Insert placeholders for visualization content in the markdown report.
@@ -3413,7 +4995,7 @@ class Reporter:
                 numbered_lines.append(f"[ROW:{i}] {line_clean}{newline}")
             numbered_report = "".join(numbered_lines)
 
-            visualization_dict = {}
+            visualization_items = []
             mermaid_map: dict[int, str] = {}
             title_meta_map: dict[int, dict] = {}
             url_to_citation_index = {}
@@ -3440,12 +5022,14 @@ class Reporter:
                     if not isinstance(viz_obj, dict):
                         continue
 
+                    citation_index = url_to_citation_index.get(
+                        item.get("url", ""),
+                        item.get("index", 0),
+                    )
                     mermaid_map[placeholder_index] = item.get("mermaid_content", "")
                     title_meta_map[placeholder_index] = {
                         "image_title": viz_obj.get("image_title", ""),
-                        "citation_index": url_to_citation_index.get(
-                            item.get("url", ""), 0
-                        ),
+                        "citation_index": citation_index,
                     }
                     placement_item = {
                         "index": placeholder_index,
@@ -3454,7 +5038,7 @@ class Reporter:
                         "unit": viz_obj.get("unit", ""),
                         "records": viz_obj.get("records", []),
                     }
-                    visualization_dict[item["url"]] = placement_item
+                    visualization_items.append(placement_item)
                     placeholder_index += 1
 
             if not mermaid_map:
@@ -3463,16 +5047,11 @@ class Reporter:
 
             llm_input_message = numbered_report.rstrip("\r\n") + "\n\n"
             llm_input_message += "=== VISUALIZATION DATA ===\n"
-            for item in current_inputs.get("classified_content", []):
-                if (
-                    isinstance(item, dict)
-                    and "url" in item
-                    and item["url"] in visualization_dict
-                ):
-                    llm_input_message += (
-                        json.dumps(visualization_dict[item["url"]], ensure_ascii=False)
-                        + "\n"
-                    )
+            for visualization_item in visualization_items:
+                llm_input_message += (
+                    json.dumps(visualization_item, ensure_ascii=False)
+                    + "\n"
+                )
             llm_input_message += "=== END VISUALIZATION DATA ===\n"
             messages = [dict(role="user", content=llm_input_message)]
             plan_result = await self._request_visualization_insert_plan(
@@ -3491,6 +5070,12 @@ class Reporter:
 
             insertions = sorted(
                 plan.get("insertions", []), key=lambda x: x["after_row"]
+            )
+            insertions = self._complete_visualization_insertions(
+                insertions,
+                mermaid_map,
+                report_lines,
+                invalid_rows,
             )
             rendered = self._apply_visualization_insertions(
                 VisualizationInsertRenderContext(

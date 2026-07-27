@@ -11,7 +11,11 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     format_key_passage_block,
     normalize_key_passages,
 )
-from openjiuwen_deepsearch.algorithm.report.report import Reporter, _get_classified_infos
+from openjiuwen_deepsearch.algorithm.report.report import (
+    Reporter,
+    VisualizationInsertPlanContext,
+    _get_classified_infos,
+)
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -334,6 +338,1072 @@ def test_select_visualization_uses_structured_scores_data_density():
     ])
 
     assert [item["title"] for item in selected] == ["high density"]
+
+
+def test_select_visualization_uses_eight_point_fallback_when_no_high_density_docs():
+    selected = Reporter._select_visualization_from_classified_content([
+        {
+            "title": "fallback density",
+            "scores": {"data_density": 8.2},
+        },
+        {
+            "title": "too sparse",
+            "scores": {"data_density": 7.9},
+        },
+    ])
+
+    assert [item["title"] for item in selected] == ["fallback density"]
+
+
+def _visualization_reporter() -> Reporter:
+    reporter = Reporter.__new__(Reporter)
+    reporter._llm = object()
+    return reporter
+
+
+def test_infer_desired_chart_type_prefers_category_comparison_over_growth_terms():
+    assert Reporter._infer_desired_chart_type(
+        "\u5934\u90e8\u5382\u5546\u9500\u91cf\u5bf9\u6bd4",
+        "\u540c\u6bd4\u589e\u901f\u4e0e\u89c4\u6a21\u5dee\u5f02",
+    ) == "bar"
+    assert Reporter._infer_desired_chart_type(
+        "\u5e74\u5ea6\u9500\u91cf\u89c4\u6a21\u4e0e\u589e\u901f"
+    ) == "line"
+    assert Reporter._infer_desired_chart_type(
+        "比较 2022—2024 年同一口径年度销量趋势"
+    ) == "line"
+
+
+def test_report_content_visualization_candidates_use_subsection_intent_first():
+    current_inputs = {
+        "section_task": "中国新能源汽车年度销量趋势",
+        "sub_section_outline": "1 中国新能源汽车年度销量趋势\n1.1 年度销量\n1.2 结构演变",
+        "sub_report_content": (
+            "# 1. 中国新能源汽车年度销量趋势\n"
+            "## 1.1 年度总销量与增速趋势\n"
+            "2022年销量688.7万辆，2023年销量949.5万辆，2024年销量1286.6万辆。\n"
+            "## 1.2 纯电与插混结构演变\n"
+            "2023年纯电占比70.4%，2024年纯电占比60.0%，"
+            "2023年插混占比29.6%，2024年插混占比40.0%。\n"
+        ),
+    }
+
+    candidates = Reporter._report_content_visualization_candidates(current_inputs)
+
+    assert [
+        (candidate["title"], candidate["desired_chart_type"])
+        for candidate in candidates
+    ] == [
+        ("1.1 年度总销量与增速趋势", "line"),
+        ("1.2 纯电与插混结构演变", "bar"),
+    ]
+
+
+def test_visualization_redundancy_requires_label_overlap_not_only_same_values():
+    existing_chart = {
+        "image_title": "Region A score",
+        "image_type": "bar",
+        "unit": "%",
+        "records": [["North", 10], ["South", 20], ["West", 30]],
+    }
+    different_dimension_same_values = {
+        "image_title": "Product conversion",
+        "image_type": "bar",
+        "unit": "%",
+        "records": [["Alpha", 10], ["Beta", 20], ["Gamma", 30]],
+    }
+    subset_with_expanded_labels = {
+        "image_title": "Expanded region labels",
+        "image_type": "bar",
+        "unit": "%",
+        "records": [["North Region", 10], ["South Region", 20], ["West Region", 30]],
+    }
+
+    assert not Reporter._visualization_data_is_redundant(
+        different_dimension_same_values,
+        [existing_chart],
+    )
+    assert Reporter._visualization_data_is_redundant(
+        subset_with_expanded_labels,
+        [existing_chart],
+    )
+
+
+def _visualization_item(
+    image_title: str,
+    image_type: str,
+    records: list[list],
+    index: int = 1,
+) -> dict:
+    payload = {
+        "image_title": image_title,
+        "image_type": image_type,
+        "unit": "%",
+        "records": records,
+    }
+    series_values = ", ".join(str(row[1]) for row in records)
+    return {
+        "title": image_title,
+        "index": index,
+        "sub_section_visualization_content": json.dumps(
+            payload,
+            ensure_ascii=False,
+        ),
+        "mermaid_content": (
+            "xychart-beta\n"
+            f"    x-axis {[row[0] for row in records]}\n"
+            f"    {image_type} [{series_values}]"
+        ),
+    }
+
+
+def test_adaptive_visualization_limit_keeps_brief_sections_compact():
+    current_inputs = {
+        "section_task": "中国新能源汽车年度销量趋势",
+        "sub_section_outline": "1 中国新能源汽车年度销量趋势\n1.1 年度销量\n1.2 增速演进",
+        "sub_report_content": (
+            "# 1. 中国新能源汽车年度销量趋势\n"
+            "## 1.1 年度销量\n"
+            "2022年销量688.7万辆，2023年销量949.5万辆，2024年销量1286.6万辆。\n"
+            "国内销量分别为536.5万辆、829.2万辆、1158.2万辆。\n"
+            "## 1.2 增速演进\n"
+            "同比增速分别为93.4%、37.9%、35.5%，渗透率为26.1%、32.9%、45.3%。\n"
+        ),
+    }
+    candidates = Reporter._report_content_visualization_candidates(current_inputs)
+
+    assert Reporter._adaptive_report_content_visualization_limit(
+        current_inputs,
+        candidates,
+    ) == 2
+
+
+def test_visualization_trimming_prefers_section_relevant_core_charts():
+    current_inputs = {
+        "section_task": "2024年主要厂商新能源汽车销量对比",
+        "sub_section_outline": (
+            "2 2024年主要厂商新能源汽车销量对比\n"
+            "2.1 头部厂商销量排名\n"
+            "2.2 市场份额与增长特征"
+        ),
+        "visualization_result": [
+            _visualization_item(
+                "2.2 市场份额与增长特征百分比对比",
+                "bar",
+                [["赛力斯", 269.8], ["吉利", 94], ["广汽埃安", -24.1], ["比亚迪独占", 34.1]],
+                21,
+            ),
+            _visualization_item(
+                "2024年1-12月重点企业(集团)市场份额",
+                "bar",
+                [["前三家", 36.2], ["前五家", 53.1], ["前十家", 84.9]],
+                22,
+            ),
+            _visualization_item(
+                "2024年主要厂商新能源汽车销量对比",
+                "bar",
+                [["比亚迪", 371.83], ["吉利汽车", 86.29], ["特斯拉中国", 65.71]],
+                23,
+            ),
+            _visualization_item(
+                "2024年主要厂商新能源汽车销量同比增速",
+                "bar",
+                [["赛力斯", 269.8], ["奇瑞", 258.9], ["吉利", 94], ["广汽埃安", -24.1]],
+                24,
+            ),
+            _visualization_item(
+                "2024年主要厂商新能源汽车市场份额",
+                "bar",
+                [["比亚迪", 34.1], ["吉利", 7.9], ["特斯拉中国", 6]],
+                25,
+            ),
+        ],
+    }
+
+    selected = Reporter._limit_visualization_result_for_section(current_inputs, 2)
+    selected_titles = [
+        json.loads(item["sub_section_visualization_content"])["image_title"]
+        for item in selected
+    ]
+
+    assert selected_titles == [
+        "2024年主要厂商新能源汽车销量对比",
+        "2024年主要厂商新能源汽车销量同比增速",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_visualization_extraction_retries_empty_json_and_accepts_fenced_json():
+    chart_payload = {
+        "image_title": "2024 Vehicle Sales Comparison",
+        "image_type": "bar",
+        "records": [
+            ["A", "120", "vehicles"],
+            ["B", "95", "vehicles"],
+            ["C", "80", "vehicles"],
+        ],
+    }
+    llm_responses = [
+        {"content": "{}"},
+        {"content": f"```json\n{json.dumps(chart_payload)}\n```"},
+        {"content": '```json\n{"valid":true,"error_msg":""}\n```'},
+        {"content": '```json\n{"valid":true,"error_msg":""}\n```'},
+    ]
+
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new=AsyncMock(side_effect=llm_responses),
+    ) as mocked_llm:
+        ok, result, extracted = (
+            await _visualization_reporter()._extract_visualization_data(
+                visualization_dict={
+                    "section_idx": 1,
+                    "language": "en",
+                    "section_outline": "Vehicle market sales comparison",
+                    "origin_content": (
+                        "A sold 120 vehicles, B sold 95 vehicles, "
+                        "C sold 80 vehicles."
+                    ),
+                },
+                visualization_content={"rs_success": True},
+                max_attempt_num=3,
+                section_idx=1,
+            )
+        )
+
+    assert ok is True
+    assert extracted == chart_payload
+    assert result["sub_section_visualization_content"] == json.dumps(
+        chart_payload, ensure_ascii=False
+    )
+    assert mocked_llm.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_visualization_extraction_coerces_temporal_bar_to_line():
+    chart_payload = {
+        "image_title": "2022-2024 NEV sales trend",
+        "image_type": "bar",
+        "records": [
+            ["2022年", "688.7", "万辆"],
+            ["2023年", "949.5", "万辆"],
+            ["2024年", "1286.6", "万辆"],
+        ],
+    }
+    llm_responses = [
+        {"content": json.dumps(chart_payload, ensure_ascii=False)},
+        {"content": '{"valid":true,"error_msg":""}'},
+        {"content": '{"valid":true,"error_msg":""}'},
+    ]
+
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new=AsyncMock(side_effect=llm_responses),
+    ):
+        ok, result, extracted = (
+            await _visualization_reporter()._extract_visualization_data(
+                visualization_dict={
+                    "section_idx": 1,
+                    "language": "zh-CN",
+                    "section_title": "中国新能源汽车年度销量趋势",
+                    "section_outline": "1 中国新能源汽车年度销量趋势\n1.1 年度销量与增速",
+                    "origin_content": (
+                        "2022年销量688.7万辆，2023年销量949.5万辆，"
+                        "2024年销量1286.6万辆。"
+                    ),
+                    "desired_chart_type": "line",
+                },
+                visualization_content={"rs_success": True},
+                max_attempt_num=3,
+                section_idx=1,
+            )
+        )
+
+    assert ok is True
+    assert extracted["image_type"] == "line"
+    assert json.loads(result["sub_section_visualization_content"])["image_type"] == "line"
+
+
+@pytest.mark.asyncio
+async def test_visualization_normalization_uses_local_same_unit_fast_path():
+    reporter = _visualization_reporter()
+    visualization_content = {"rs_success": True}
+    extracted_obj = {
+        "image_title": "New energy vehicle sales trend",
+        "image_type": "line",
+        "records": [
+            ["2021", "352.1", "万辆"],
+            ["2022", "688.7", "万辆"],
+            ["2023", "949.5", "万辆"],
+            ["2024", "1,286.6", "万辆"],
+        ],
+    }
+
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+    ) as mocked_llm:
+        normalized = await reporter._normalize_visualization_content(
+            visualization_content=visualization_content,
+            extracted_obj=extracted_obj,
+            visualization_dict={"language": "zh-CN"},
+            max_attempt_num=3,
+            section_idx=1,
+        )
+
+    assert normalized is True
+    mocked_llm.assert_not_awaited()
+    assert json.loads(visualization_content["sub_section_visualization_content"]) == {
+        "image_title": "New energy vehicle sales trend",
+        "image_type": "line",
+        "unit": "万辆",
+        "records": [
+            ["2021", 352.1],
+            ["2022", 688.7],
+            ["2023", 949.5],
+            ["2024", 1286.6],
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_generates_missing_chart():
+    chart_payload = {
+        "image_title": "2024年主要厂商新能源汽车销量对比",
+        "image_type": "bar",
+        "records": [
+            ["比亚迪", "3,718,281", "辆"],
+            ["特斯拉中国", "657,102", "辆"],
+            ["广汽埃安", "366,901", "辆"],
+        ],
+    }
+    llm_responses = [
+        {"content": json.dumps(chart_payload, ensure_ascii=False)},
+        {"content": '{"valid":true,"error_msg":""}'},
+        {"content": '{"valid":true,"error_msg":""}'},
+    ]
+    current_inputs = {
+        "section_idx": 2,
+        "language": "zh-CN",
+        "section_task": "2024年主要厂商新能源汽车销量对比",
+        "sub_section_outline": "2 2024年主要厂商新能源汽车销量对比\n2.1 头部厂商销量排名",
+        "sub_report_content": (
+            "2024年新能源厂商零售销量呈现梯队分化。\n"
+            "- **比亚迪**：3,718,281辆[citation:1]\n"
+            "- **特斯拉中国**：657,102辆[citation:1]\n"
+            "- **广汽埃安**：366,901辆[citation:1]\n"
+        ),
+        "visualization_result": [],
+        "max_generate_retry_num": 1,
+    }
+
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new=AsyncMock(side_effect=llm_responses),
+    ):
+        await _visualization_reporter()._ensure_report_content_visualization_fallback(
+            current_inputs
+        )
+
+    assert len(current_inputs["visualization_result"]) == 1
+    fallback = current_inputs["visualization_result"][0]
+    assert "xychart-beta" in fallback["mermaid_content"]
+    assert "bar [3718281, 657102, 366901]" in fallback["mermaid_content"]
+    assert json.loads(fallback["sub_section_visualization_content"])["image_type"] == "bar"
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_adds_distinct_chart_when_existing_chart_present():
+    reporter = _visualization_reporter()
+    existing_chart = {
+        "image_title": "Annual sales trend",
+        "image_type": "line",
+        "unit": "vehicles",
+        "records": [["2022", 100], ["2023", 150], ["2024", 210]],
+    }
+    growth_chart = {
+        "image_title": "Annual growth rate trend",
+        "image_type": "line",
+        "unit": "%",
+        "records": [["2022", 10], ["2023", 50], ["2024", 40]],
+    }
+    reporter._process_visualization_task = AsyncMock(
+        side_effect=[
+            {
+                "rs_success": True,
+                "sub_section_visualization_content": json.dumps(growth_chart),
+                "mermaid_content": 'xychart-beta\n    x-axis ["2022", "2023", "2024"]\n    line [10, 50, 40]',
+            },
+            {"rs_success": False, "error_msg": "no_chart_data"},
+        ]
+    )
+    current_inputs = {
+        "section_idx": 1,
+        "language": "en",
+        "section_task": "Annual vehicle sales trend",
+        "sub_section_outline": "1 Annual vehicle sales trend\n1.1 Sales and growth",
+        "sub_report_content": (
+            "# 1. Annual vehicle sales trend\n"
+            "## 1.1 Sales and growth\n"
+            "2022 sales were 100 vehicles and growth was 10% [citation:1].\n"
+            "2023 sales were 150 vehicles and growth was 50% [citation:1].\n"
+            "2024 sales were 210 vehicles and growth was 40% [citation:1].\n"
+        ),
+        "visualization_result": [
+            {
+                "sub_section_visualization_content": json.dumps(existing_chart),
+                "mermaid_content": 'xychart-beta\n    x-axis ["2022", "2023", "2024"]\n    line [100, 150, 210]',
+            }
+        ],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 2
+    added = current_inputs["visualization_result"][1]
+    assert json.loads(added["sub_section_visualization_content"]) == growth_chart
+    first_call_payload = reporter._process_visualization_task.await_args_list[0].args[0]
+    assert "avoid_chart_data" in first_call_payload
+    assert "Annual sales trend" in first_call_payload["avoid_chart_data"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_skips_duplicate_chart_data():
+    reporter = _visualization_reporter()
+    existing_chart = {
+        "image_title": "Annual sales trend",
+        "image_type": "line",
+        "unit": "vehicles",
+        "records": [["2022", 100], ["2023", 150], ["2024", 210]],
+    }
+    reporter._process_visualization_task = AsyncMock(
+        return_value={
+            "rs_success": True,
+            "sub_section_visualization_content": json.dumps(existing_chart),
+            "mermaid_content": 'xychart-beta\n    x-axis ["2022", "2023", "2024"]\n    line [100, 150, 210]',
+        }
+    )
+    current_inputs = {
+        "section_idx": 1,
+        "language": "en",
+        "section_task": "Annual vehicle sales trend",
+        "sub_section_outline": "1 Annual vehicle sales trend\n1.1 Sales and growth",
+        "sub_report_content": (
+            "# 1. Annual vehicle sales trend\n"
+            "## 1.1 Sales and growth\n"
+            "2022 sales were 100 vehicles [citation:1].\n"
+            "2023 sales were 150 vehicles [citation:1].\n"
+            "2024 sales were 210 vehicles [citation:1].\n"
+        ),
+        "visualization_result": [
+            {
+                "sub_section_visualization_content": json.dumps(existing_chart),
+                "mermaid_content": 'xychart-beta\n    x-axis ["2022", "2023", "2024"]\n    line [100, 150, 210]',
+            }
+        ],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_uses_local_chart_when_llm_has_no_distinct_data():
+    reporter = _visualization_reporter()
+    existing_chart = {
+        "image_title": "Export growth trend",
+        "image_type": "line",
+        "unit": "%",
+        "records": [["2022年", 120.2], ["2023年", 77.6], ["2024年", 6.7]],
+    }
+    reporter._process_visualization_task = AsyncMock(
+        return_value={"rs_success": False, "error_msg": "no_chart_data"}
+    )
+    current_inputs = {
+        "section_idx": 1,
+        "language": "zh-CN",
+        "section_task": "中国新能源汽车年度销量趋势",
+        "sub_section_outline": "1 中国新能源汽车年度销量趋势\n1.1 年度总销量与增速趋势",
+        "sub_report_content": (
+            "# 1. 中国新能源汽车年度销量趋势\n"
+            "## 1.1 年度总销量与增速趋势\n"
+            "2022至2024年，总销量分别为688.7万辆、949.5万辆和1286.6万辆[citation:1]。\n"
+            "## 1.2 出口增长变化\n"
+            "出口同比增速分别为120.2%、77.6%和6.7%[citation:2]。\n"
+        ),
+        "visualization_result": [
+            {
+                "sub_section_visualization_content": json.dumps(existing_chart),
+                "mermaid_content": (
+                    'xychart-beta\n    x-axis ["2022年", "2023年", "2024年"]\n'
+                    "    line [120.2, 77.6, 6.7]"
+                ),
+            }
+        ],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 2
+    added_payload = json.loads(
+        current_inputs["visualization_result"][1]["sub_section_visualization_content"]
+    )
+    assert added_payload["image_type"] == "line"
+    assert added_payload["unit"] == "万辆"
+    assert added_payload["records"] == [
+        ["2022年", 688.7],
+        ["2023年", 949.5],
+        ["2024年", 1286.6],
+    ]
+    assert "line [688.7, 949.5, 1286.6]" in current_inputs["visualization_result"][1]["mermaid_content"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_prefers_exact_annual_total_over_approximate_context():
+    reporter = _visualization_reporter()
+    reporter._process_visualization_task = AsyncMock(
+        return_value={"rs_success": False, "error_msg": "no_chart_data"}
+    )
+    current_inputs = {
+        "section_idx": 1,
+        "language": "zh-CN",
+        "section_task": "中国新能源汽车年度销量趋势",
+        "sub_section_outline": "1 中国新能源汽车年度销量趋势\n1.1 年度总销量与增速趋势",
+        "sub_report_content": (
+            "# 1. 中国新能源汽车年度销量趋势\n"
+            "## 1.1 年度总销量与增速趋势\n"
+            "中国新能源汽车总销量连续三年保持高速增长，"
+            "2024年总销量突破1200万辆大关，同比增速达35.5%[citation:1]。\n"
+            "- 2022年：总销量688.7万辆，同比增速93.4%[citation:1]\n"
+            "- 2023年：总销量949.5万辆，同比增速37.9%[citation:1]\n"
+            "- 2024年：总销量1286.6万辆，同比增速35.5%[citation:1]\n"
+            "2024年国内销量1158.2万辆，出口128.4万辆[citation:1]。\n"
+        ),
+        "visualization_result": [],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 1
+    added_payload = json.loads(
+        current_inputs["visualization_result"][0]["sub_section_visualization_content"]
+    )
+    assert added_payload["image_type"] == "line"
+    assert added_payload["records"] == [
+        ["2022年", 688.7],
+        ["2023年", 949.5],
+        ["2024年", 1286.6],
+    ]
+    assert "line [688.7, 949.5, 1286.6]" in current_inputs["visualization_result"][0]["mermaid_content"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_adds_sales_and_share_charts_from_final_section():
+    reporter = _visualization_reporter()
+    reporter._process_visualization_task = AsyncMock(
+        return_value={"rs_success": False, "error_msg": "normalize_failed"}
+    )
+    current_inputs = {
+        "section_idx": 2,
+        "language": "zh-CN",
+        "section_task": "2024年主要厂商新能源汽车销量对比",
+        "sub_section_outline": (
+            "2 2024年主要厂商新能源汽车销量对比\n"
+            "2.1 主要厂商销量规模对比\n"
+            "2.2 厂商市场份额与竞争格局"
+        ),
+        "sub_report_content": (
+            "# 2. 2024年主要厂商新能源汽车销量对比\n"
+            "## 2.1 主要厂商销量规模对比\n"
+            "| 厂商 | 2024年零售销量（万辆） |\n"
+            "| :--- | :--- |\n"
+            "| 比亚迪 | 371.83 [citation:1] |\n"
+            "| 吉利汽车 | 86.29 [citation:1] |\n"
+            "| 特斯拉中国 | 65.71 [citation:1] |\n"
+            "| 上汽通用五菱 | 64.70 [citation:1] |\n"
+            "| 长安汽车 | 62.23 [citation:2] |\n"
+            "| 广汽埃安 | 36.69 [citation:2] |\n"
+            "## 2.2 厂商市场份额与竞争格局\n"
+            "比亚迪以34.1%的市占率占据绝对主导地位[citation:1]。"
+            "第二梯队竞争激烈，吉利（7.9%）、特斯拉（6.0%）、"
+            "上汽通用五菱（5.9%）与理想（4.6%）份额差距较小[citation:1]。"
+            "广汽埃安份额为3.4%。\n"
+        ),
+        "visualization_result": [],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 2
+    sales_payload = json.loads(
+        current_inputs["visualization_result"][0]["sub_section_visualization_content"]
+    )
+    share_payload = json.loads(
+        current_inputs["visualization_result"][1]["sub_section_visualization_content"]
+    )
+    assert sales_payload["image_type"] == "bar"
+    assert sales_payload["unit"] == "万辆"
+    assert sales_payload["records"] == [
+        ["比亚迪", 371.83],
+        ["吉利汽车", 86.29],
+        ["特斯拉中国", 65.71],
+        ["上汽通用五菱", 64.7],
+        ["长安汽车", 62.23],
+        ["广汽埃安", 36.69],
+    ]
+    assert share_payload["image_type"] == "bar"
+    assert share_payload["unit"] == "%"
+    assert share_payload["records"] == [
+        ["吉利", 7.9],
+        ["特斯拉", 6],
+        ["上汽通用五菱", 5.9],
+        ["理想", 4.6],
+        ["广汽埃安", 3.4],
+        ["比亚迪", 34.1],
+    ]
+    assert "bar [371.83, 86.29, 65.71, 64.7, 62.23, 36.69]" in current_inputs["visualization_result"][0]["mermaid_content"]
+    assert "bar [7.9, 6, 5.9, 4.6, 3.4, 34.1]" in current_inputs["visualization_result"][1]["mermaid_content"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_skips_sales_subset_and_adds_growth_chart():
+    reporter = _visualization_reporter()
+    existing_chart = {
+        "image_title": "Top vendor sales",
+        "image_type": "bar",
+        "unit": "辆",
+        "records": [
+            ["比亚迪汽车", 3718281],
+            ["吉利汽车", 862933],
+            ["特斯拉中国", 657102],
+            ["上汽通用五菱", 647047],
+            ["长安汽车", 622313],
+            ["理想汽车", 500508],
+            ["奇瑞汽车", 432556],
+            ["赛力斯汽车", 385906],
+            ["广汽埃安", 366901],
+            ["长城汽车", 291859],
+        ],
+    }
+    reporter._process_visualization_task = AsyncMock(
+        return_value={"rs_success": False, "error_msg": "no_chart_data"}
+    )
+    current_inputs = {
+        "section_idx": 2,
+        "language": "zh-CN",
+        "section_task": "2024年主要厂商新能源汽车销量对比",
+        "sub_section_outline": "2 2024年主要厂商新能源汽车销量对比\n2.1 头部厂商销量排名",
+        "sub_report_content": (
+            "# 2. 2024年主要厂商新能源汽车销量对比\n"
+            "## 2.1 头部厂商销量排名与对比\n"
+            "| 厂商 | 2024年零售销量（辆） | 排名 |\n"
+            "| :--- | :--- | :--- |\n"
+            "| 比亚迪 | 3,718,281 | 1 |\n"
+            "| 特斯拉中国 | 657,102 | 3 |\n"
+            "| 广汽埃安 | 366,901 | 9 |\n"
+            "## 2.2 增长差异与竞争格局\n"
+            "比亚迪同比增长37.4%[citation:1]，广汽埃安同比大跌24.1%[citation:2]，"
+            "吉利汽车新能源销量同比激增94.0%[citation:3]。\n"
+        ),
+        "visualization_result": [
+            {
+                "sub_section_visualization_content": json.dumps(existing_chart),
+                "mermaid_content": (
+                    'xychart-beta\n    x-axis ["比亚迪汽车", "吉利汽车", "特斯拉中国", '
+                    '"上汽通用五菱", "长安汽车", "理想汽车", "奇瑞汽车", "赛力斯汽车", '
+                    '"广汽埃安", "长城汽车"]\n'
+                    "    bar [3718281, 862933, 657102, 647047, 622313, 500508, "
+                    "432556, 385906, 366901, 291859]"
+                ),
+            }
+        ],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 2
+    added_payload = json.loads(
+        current_inputs["visualization_result"][1]["sub_section_visualization_content"]
+    )
+    assert added_payload["image_type"] == "bar"
+    assert added_payload["unit"] == "%"
+    assert added_payload["records"] == [
+        ["比亚迪", 37.4],
+        ["广汽埃安", -24.1],
+        ["吉利汽车新能源", 94],
+    ]
+    assert "bar [37.4, -24.1, 94]" in current_inputs["visualization_result"][1]["mermaid_content"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_replaces_successful_redundant_llm_subset():
+    reporter = _visualization_reporter()
+    existing_chart = {
+        "image_title": "Existing segment user comparison",
+        "image_type": "bar",
+        "unit": "million users",
+        "records": [
+            ["Enterprise", 4.2],
+            ["SMB", 7.5],
+            ["Individual", 11.3],
+            ["Education", 2.1],
+        ],
+    }
+    redundant_subset = {
+        "image_title": "Subset segment user comparison",
+        "image_type": "bar",
+        "unit": "million users",
+        "records": [
+            ["Enterprise", 4.2],
+            ["SMB", 7.5],
+            ["Individual", 11.3],
+        ],
+    }
+    reporter._process_visualization_task = AsyncMock(
+        return_value={
+            "rs_success": True,
+            "sub_section_visualization_content": json.dumps(redundant_subset),
+            "mermaid_content": (
+                'xychart-beta\n    x-axis ["Enterprise", "SMB", "Individual"]\n'
+                "    bar [4.2, 7.5, 11.3]"
+            ),
+        }
+    )
+    current_inputs = {
+        "section_idx": 4,
+        "language": "en",
+        "section_task": "SaaS product revenue comparison",
+        "sub_section_outline": "4 SaaS product revenue comparison\n4.1 Growth by product",
+        "sub_report_content": (
+            "# 4. SaaS product revenue comparison\n"
+            "## 4.1 Growth by product\n"
+            "| Segment | Active users (million users) | Support tickets |\n"
+            "| :--- | :--- | :--- |\n"
+            "| Enterprise | 4.2 | 180 |\n"
+            "| SMB | 7.5 | 260 |\n"
+            "| Individual | 11.3 | 310 |\n"
+            "Product Alpha revenue growth 18.5% [citation:1], "
+            "Product Beta revenue declined 4.2% [citation:2], and "
+            "Product Gamma revenue growth 31.0% [citation:3].\n"
+        ),
+        "visualization_result": [
+            {
+                "sub_section_visualization_content": json.dumps(existing_chart),
+                "mermaid_content": (
+                    'xychart-beta\n    x-axis ["Enterprise", "SMB", "Individual", "Education"]\n'
+                    "    bar [4.2, 7.5, 11.3, 2.1]"
+                ),
+            }
+        ],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 2
+    added_payload = json.loads(
+        current_inputs["visualization_result"][1]["sub_section_visualization_content"]
+    )
+    assert added_payload["image_type"] == "bar"
+    assert added_payload["unit"] == "%"
+    assert added_payload["records"] == [
+        ["Product Alpha", 18.5],
+        ["Product Beta", -4.2],
+        ["Product Gamma", 31],
+    ]
+    assert "million users" not in current_inputs["visualization_result"][1]["mermaid_content"]
+    assert "bar [18.5, -4.2, 31]" in current_inputs["visualization_result"][1]["mermaid_content"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_extracts_generic_english_growth_rates():
+    reporter = _visualization_reporter()
+    reporter._process_visualization_task = AsyncMock(
+        return_value={"rs_success": False, "error_msg": "no_chart_data"}
+    )
+    current_inputs = {
+        "section_idx": 4,
+        "language": "en",
+        "section_task": "SaaS product revenue comparison",
+        "sub_section_outline": "4 SaaS product revenue comparison\n4.1 Growth by product",
+        "sub_report_content": (
+            "# 4. SaaS product revenue comparison\n"
+            "## 4.1 Growth by product\n"
+            "Product Alpha revenue growth 18.5% [citation:1], "
+            "Product Beta revenue declined 4.2% [citation:2], and "
+            "Product Gamma revenue growth 31.0% [citation:3].\n"
+        ),
+        "visualization_result": [],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 1
+    added_payload = json.loads(
+        current_inputs["visualization_result"][0]["sub_section_visualization_content"]
+    )
+    assert added_payload["image_type"] == "bar"
+    assert added_payload["unit"] == "%"
+    assert added_payload["records"] == [
+        ["Product Alpha", 18.5],
+        ["Product Beta", -4.2],
+        ["Product Gamma", 31],
+    ]
+    assert "bar [18.5, -4.2, 31]" in current_inputs["visualization_result"][0]["mermaid_content"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_extracts_generic_user_time_series():
+    reporter = _visualization_reporter()
+    reporter._process_visualization_task = AsyncMock(
+        return_value={"rs_success": False, "error_msg": "no_chart_data"}
+    )
+    current_inputs = {
+        "section_idx": 5,
+        "language": "zh-CN",
+        "section_task": "平台用户规模趋势",
+        "sub_section_outline": "5 平台用户规模趋势\n5.1 年度活跃用户变化",
+        "sub_report_content": (
+            "# 5. 平台用户规模趋势\n"
+            "## 5.1 年度活跃用户变化\n"
+            "2021年活跃用户为1,200万人[citation:1]，"
+            "2022年活跃用户为1,650万人[citation:1]，"
+            "2023年活跃用户为2,100万人[citation:1]。\n"
+        ),
+        "visualization_result": [],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 1
+    added_payload = json.loads(
+        current_inputs["visualization_result"][0]["sub_section_visualization_content"]
+    )
+    assert added_payload["image_type"] == "line"
+    assert added_payload["unit"] == "万人"
+    assert added_payload["records"] == [
+        ["2021年", 1200],
+        ["2022年", 1650],
+        ["2023年", 2100],
+    ]
+    assert "line [1200, 1650, 2100]" in current_inputs["visualization_result"][0]["mermaid_content"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_adds_multiple_generic_charts_from_one_subsection():
+    reporter = _visualization_reporter()
+    reporter._process_visualization_task = AsyncMock(
+        return_value={"rs_success": False, "error_msg": "no_chart_data"}
+    )
+    current_inputs = {
+        "section_idx": 6,
+        "language": "en",
+        "section_task": "Product operating metrics",
+        "sub_section_outline": "6 Product operating metrics\n6.1 Revenue and user mix",
+        "sub_report_content": (
+            "# 6. Product operating metrics\n"
+            "## 6.1 Revenue and user mix\n"
+            "2021 revenue was 12 million USD [citation:1]. "
+            "2022 revenue was 18 million USD [citation:1]. "
+            "2023 revenue was 27 million USD [citation:1].\n"
+            "| Segment | Active users (million users) | Support tickets |\n"
+            "| :--- | :--- | :--- |\n"
+            "| Enterprise | 4.2 | 180 |\n"
+            "| SMB | 7.5 | 260 |\n"
+            "| Individual | 11.3 | 310 |\n"
+        ),
+        "visualization_result": [],
+        "max_generate_retry_num": 1,
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    assert len(current_inputs["visualization_result"]) == 2
+    payloads = [
+        json.loads(item["sub_section_visualization_content"])
+        for item in current_inputs["visualization_result"]
+    ]
+    assert [payload["image_type"] for payload in payloads] == ["line", "bar"]
+    assert payloads[0]["unit"].lower() == "million usd"
+    assert payloads[0]["records"] == [
+        ["2021年", 12],
+        ["2022年", 18],
+        ["2023年", 27],
+    ]
+    assert payloads[1]["unit"] == "million users"
+    assert payloads[1]["records"] == [
+        ["Enterprise", 4.2],
+        ["SMB", 7.5],
+        ["Individual", 11.3],
+    ]
+    assert "line [12, 18, 27]" in current_inputs["visualization_result"][0]["mermaid_content"]
+    assert "bar [4.2, 7.5, 11.3]" in current_inputs["visualization_result"][1]["mermaid_content"]
+
+
+@pytest.mark.asyncio
+async def test_report_content_visualization_fallback_does_not_force_sparse_content():
+    reporter = _visualization_reporter()
+    reporter._process_visualization_task = AsyncMock()
+    current_inputs = {
+        "section_idx": 3,
+        "language": "en",
+        "section_task": "Qualitative risks",
+        "sub_section_outline": "3 Qualitative risks\n3.1 Narrative",
+        "sub_report_content": (
+            "# 3. Qualitative risks\n"
+            "## 3.1 Narrative\n"
+            "This section describes market uncertainty with only one figure: 2024 [citation:1].\n"
+        ),
+        "visualization_result": [],
+    }
+
+    await reporter._ensure_report_content_visualization_fallback(current_inputs)
+
+    reporter._process_visualization_task.assert_not_awaited()
+    assert current_inputs["visualization_result"] == []
+
+
+@pytest.mark.asyncio
+async def test_insert_visualization_plan_accepts_fenced_json():
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new=AsyncMock(
+            return_value={
+                "content": '```json\n{"insertions":[{"after_row":2,"index":1}]}\n```'
+            }
+        ),
+    ):
+        result = await _visualization_reporter()._request_visualization_insert_plan(
+            VisualizationInsertPlanContext(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "report\n=== VISUALIZATION DATA ===",
+                    }
+                ],
+                current_inputs={
+                    "language": "en",
+                    "section_idx": 1,
+                    "max_generate_retry_num": 1,
+                },
+                report_lines=["# Title\n", "Body paragraph.\n"],
+                invalid_rows={1},
+                mermaid_map={1: 'xychart-beta\n    x-axis ["A"]\n    bar [1]'},
+                original_report="# Title\nBody paragraph.\n",
+            )
+        )
+
+    assert result["rs_success"] is True
+    assert result["plan"] == {"insertions": [{"after_row": 2, "index": 1}]}
+
+
+@pytest.mark.asyncio
+async def test_insert_visualization_keeps_multiple_charts_from_same_source_url():
+    chart_one = {
+        "image_title": "Sales trend",
+        "image_type": "line",
+        "unit": "vehicles",
+        "records": [["2022", 1], ["2023", 2], ["2024", 3]],
+    }
+    chart_two = {
+        "image_title": "Brand comparison",
+        "image_type": "bar",
+        "unit": "vehicles",
+        "records": [["A", 3], ["B", 2], ["C", 1]],
+    }
+    current_inputs = {
+        "language": "en",
+        "section_idx": 1,
+        "max_generate_retry_num": 1,
+        "sub_report_content": "# Section\n\nParagraph one.\n\nParagraph two.\n",
+        "classified_content": [{"url": "https://example.com/source", "index": 7}],
+        "visualization_result": [
+            {
+                "url": "https://example.com/source",
+                "sub_section_visualization_content": json.dumps(chart_one),
+                "mermaid_content": 'xychart-beta\n    x-axis ["2022", "2023", "2024"]\n    line [1, 2, 3]',
+            },
+            {
+                "url": "https://example.com/source",
+                "sub_section_visualization_content": json.dumps(chart_two),
+                "mermaid_content": 'xychart-beta\n    x-axis ["A", "B", "C"]\n    bar [3, 2, 1]',
+            },
+        ],
+    }
+
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new=AsyncMock(
+            return_value={
+                "content": '{"insertions":[{"after_row":3,"index":1},{"after_row":5,"index":2}]}'
+            }
+        ),
+    ):
+        result = await _visualization_reporter()._insert_visualization(current_inputs)
+
+    assert result["rs_success"] is True
+    assert result["result"].count("```mermaid") == 2
+    assert "**Sales trend[citation:7]**" in result["result"]
+    assert "**Brand comparison[citation:7]**" in result["result"]
+
+
+@pytest.mark.asyncio
+async def test_insert_visualization_completes_missing_chart_indices_from_llm_plan():
+    chart_one = {
+        "image_title": "Revenue trend",
+        "image_type": "line",
+        "unit": "million USD",
+        "records": [["2021", 12], ["2022", 18], ["2023", 27]],
+    }
+    chart_two = {
+        "image_title": "User segment mix",
+        "image_type": "bar",
+        "unit": "million users",
+        "records": [["Enterprise", 4.2], ["SMB", 7.5], ["Individual", 11.3]],
+    }
+    current_inputs = {
+        "language": "en",
+        "section_idx": 1,
+        "max_generate_retry_num": 1,
+        "sub_report_content": "# Section\n\nParagraph one.\n\nParagraph two.\n",
+        "classified_content": [{"url": "https://example.com/source", "index": 3}],
+        "visualization_result": [
+            {
+                "url": "https://example.com/source",
+                "sub_section_visualization_content": json.dumps(chart_one),
+                "mermaid_content": 'xychart-beta\n    x-axis ["2021", "2022", "2023"]\n    line [12, 18, 27]',
+            },
+            {
+                "url": "https://example.com/source",
+                "sub_section_visualization_content": json.dumps(chart_two),
+                "mermaid_content": 'xychart-beta\n    x-axis ["Enterprise", "SMB", "Individual"]\n    bar [4.2, 7.5, 11.3]',
+            },
+        ],
+    }
+
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new=AsyncMock(
+            return_value={"content": '{"insertions":[{"after_row":3,"index":1}]}'}
+        ),
+    ):
+        result = await _visualization_reporter()._insert_visualization(current_inputs)
+
+    assert result["rs_success"] is True
+    assert result["result"].count("```mermaid") == 2
+    assert "line [12, 18, 27]" in result["result"]
+    assert "bar [4.2, 7.5, 11.3]" in result["result"]
+    assert "**Revenue trend[citation:3]**" in result["result"]
+    assert "**User segment mix[citation:3]**" in result["result"]
 
 
 def _centered_caption(caption_text: str) -> str:
