@@ -390,6 +390,65 @@ async def test_write_subsection_reports_keeps_hierarchical_outline_instruction()
         llm_context.reset(token)
 
 
+@pytest.mark.asyncio
+async def test_write_subsection_reports_prompt_enforces_heading_contract():
+    """The writer prompt must state the same heading rules the validator enforces."""
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "language": CHINESE,
+            "section_idx": "2",
+            "section_task": "2 模型介绍",
+            "section_description": "分别介绍不同模型。",
+            "section_format_requirements": [],
+            "report_task": "模型研究",
+            "current_outline": "1 市场概览\n2 模型介绍",
+            "sub_section_outline": "2 模型介绍\n2.1 CMSY\n2.2 BSM",
+            "classified_content": [
+                {
+                    "index": 1,
+                    "doc_time": "2026",
+                    "original_content": "CMSY 和 BSM 是资源评估模型。",
+                    "scores": {},
+                }
+            ],
+            "sub_section_references": [],
+            "sub_report_background_knowledge": [],
+            "report_type": "professional",
+            "paragraph_style": "detailed",
+            "visualization_enable": False,
+        }
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+        ) as mock_ainvoke, patch.object(
+            reporter,
+            "_generate_sub_report_sidecar",
+            new_callable=AsyncMock,
+            return_value={"sidecar": None, "summary": "summary", "warning": ""},
+        ):
+            mock_ainvoke.return_value = {
+                "content": "# 2 模型介绍\n\n## 2.1 CMSY\n\n内容。\n\n## 2.2 BSM\n\n内容。"
+            }
+
+            result = await reporter._write_subsection_reports(current_inputs)
+
+        assert result["success"] is True
+        _, kwargs = mock_ainvoke.call_args
+        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
+        # H3 must be a hard ban, matching the validator which silently ignores H3
+        assert "Do NOT generate H3" in rendered_prompt
+        assert "Avoid generate H3" not in rendered_prompt
+        # One outline line -> exactly one heading, and no extra headings
+        assert "exactly one" in rendered_prompt
+        # The cost of a heading mismatch must be explicit
+        assert "discarded" in rendered_prompt
+    finally:
+        llm_context.reset(token)
+
+
 def test_build_compact_classify_doc_infos_text_zero_based():
     """Coverage-matrix flow uses start=0 so 'Document 0' maps to 'doc_0'."""
     output = build_compact_classify_doc_infos_text(

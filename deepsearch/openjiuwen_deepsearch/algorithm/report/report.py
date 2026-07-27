@@ -361,7 +361,7 @@ class Reporter:
             sub_pat = re.compile(rf"{escaped_n}\.(\d+)\s+.+")
             main_space_pat = re.compile(rf"{escaped_n}\s+.+")
             main_dot_pat = re.compile(rf"{escaped_n}\.(?!\d)\s*.+")
-            third_pat = re.compile(r"\d+\.\d+\.\d+")
+            third_pat = re.compile(r"^\d+\.\d+\.\d+")
 
             has_main = False
             sub_numbers = []
