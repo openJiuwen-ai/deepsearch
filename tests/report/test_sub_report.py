@@ -361,30 +361,31 @@ def _visualization_reporter() -> Reporter:
     return reporter
 
 
-def test_infer_desired_chart_type_prefers_category_comparison_over_growth_terms():
+def test_infer_desired_chart_type_uses_explicit_and_temporal_hints_only():
     assert Reporter._infer_desired_chart_type(
-        "\u5934\u90e8\u5382\u5546\u9500\u91cf\u5bf9\u6bd4",
-        "\u540c\u6bd4\u589e\u901f\u4e0e\u89c4\u6a21\u5dee\u5f02",
+        "请使用柱状图展示不同模型的性能指标",
     ) == "bar"
     assert Reporter._infer_desired_chart_type(
-        "\u5e74\u5ea6\u9500\u91cf\u89c4\u6a21\u4e0e\u589e\u901f"
+        "年度吞吐量规模与延迟变化"
     ) == "line"
     assert Reporter._infer_desired_chart_type(
-        "比较 2022—2024 年同一口径年度销量趋势"
+        "比较 2022—2024 年同一口径指标"
     ) == "line"
+    assert Reporter._infer_desired_chart_type(
+        "不同模型、区域或策略的结果对比"
+    ) == ""
 
 
 def test_report_content_visualization_candidates_use_subsection_intent_first():
     current_inputs = {
-        "section_task": "中国新能源汽车年度销量趋势",
-        "sub_section_outline": "1 中国新能源汽车年度销量趋势\n1.1 年度销量\n1.2 结构演变",
+        "section_task": "系统运行指标年度变化",
+        "sub_section_outline": "1 系统运行指标年度变化\n1.1 年度吞吐量\n1.2 错误类型分布",
         "sub_report_content": (
-            "# 1. 中国新能源汽车年度销量趋势\n"
-            "## 1.1 年度总销量与增速趋势\n"
-            "2022年销量688.7万辆，2023年销量949.5万辆，2024年销量1286.6万辆。\n"
-            "## 1.2 纯电与插混结构演变\n"
-            "2023年纯电占比70.4%，2024年纯电占比60.0%，"
-            "2023年插混占比29.6%，2024年插混占比40.0%。\n"
+            "# 1. 系统运行指标年度变化\n"
+            "## 1.1 年度吞吐量趋势\n"
+            "2022年吞吐量688.7万次，2023年吞吐量949.5万次，2024年吞吐量1286.6万次。\n"
+            "## 1.2 错误类型分布\n"
+            "2024年认证错误占比40.0%，超时错误占比35.0%，配额错误占比25.0%。\n"
         ),
     }
 
@@ -394,8 +395,8 @@ def test_report_content_visualization_candidates_use_subsection_intent_first():
         (candidate["title"], candidate["desired_chart_type"])
         for candidate in candidates
     ] == [
-        ("1.1 年度总销量与增速趋势", "line"),
-        ("1.2 纯电与插混结构演变", "bar"),
+        ("1.1 年度吞吐量趋势", "line"),
+        ("1.2 错误类型分布", ""),
     ]
 
 

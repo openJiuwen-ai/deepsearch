@@ -294,13 +294,16 @@ class Reporter:
         return True
 
     @staticmethod
-    def _infer_desired_chart_type(*texts: str) -> str:
+    def _infer_desired_chart_type(*texts: str, explicit_only: bool = False) -> str:
         """
-        Infer a preferred chart type from section-level instructions.
+        Extract a lightweight chart-type hint from explicit or structural cues.
 
-        The visualization extractor still decides from traceable source data, but
-        explicit report requirements such as "use a line chart" should not be
-        lost between outline generation, data extraction, and Mermaid rendering.
+        The baseline visualization prompt remains responsible for selecting the
+        best chart type from traceable source records. This helper deliberately
+        avoids domain keywords (company, market, sales, finance, etc.) because
+        report topics are open-ended. It only preserves explicit chart requests
+        and obvious time-series structure so later pipeline stages can correct
+        GLM chart-type drift without becoming a topic classifier.
         """
         context = " ".join(str(text or "") for text in texts).lower()
         if not context:
@@ -316,99 +319,38 @@ class Reporter:
             if any(re.search(pattern, context) for pattern in patterns):
                 return chart_type
 
-        # Common implicit section intents. These are intentionally conservative
-        # and describe chartable data shapes rather than a specific domain.
-        trend_keywords = (
-            "趋势",
-            "走势",
-            "逐年",
-            "历年",
-            "年度",
-            "月度",
-            "季度",
-            "时间序列",
-            "同比",
-            "环比",
-            "增速",
-            "增长率",
-            "变化",
-            "演变",
-            "trend",
-            "over time",
-            "time series",
-            "annual",
-            "monthly",
-            "quarterly",
-            "year-over-year",
-            "yoy",
-            "growth",
+        if explicit_only:
+            return ""
+
+        temporal_cues = (
+            r"时间序列",
+            r"趋势",
+            r"走势",
+            r"逐年",
+            r"历年",
+            r"年度",
+            r"月度",
+            r"季度",
+            r"同比",
+            r"环比",
+            r"time\s+series",
+            r"over\s+time",
+            r"trend",
+            r"annual",
+            r"monthly",
+            r"quarterly",
+            r"year-over-year",
+            r"\byoy\b",
         )
-        comparison_keywords = (
-            "对比",
-            "比较",
-            "排名",
-            "排行",
-            "分布",
-            "结构",
-            "占比",
-            "份额",
-            "市占率",
-            "comparison",
-            "ranking",
-            "distribution",
-            "breakdown",
-            "share",
-            "market share",
-        )
-        category_keywords = (
-            "厂商",
-            "品牌",
-            "企业",
-            "公司",
-            "地区",
-            "区域",
-            "城市",
-            "国家",
-            "产品",
-            "车型",
-            "品类",
-            "部门",
-            "行业",
-            "vendor",
-            "manufacturer",
-            "brand",
-            "company",
-            "region",
-            "country",
-            "city",
-            "product",
-            "segment",
-            "category",
-        )
-        has_trend = any(keyword in context for keyword in trend_keywords)
-        has_comparison = any(keyword in context for keyword in comparison_keywords)
-        has_category = any(keyword in context for keyword in category_keywords)
-        has_year_range = bool(
+        if any(re.search(pattern, context) for pattern in temporal_cues):
+            return "line"
+
+        year_mentions = set(re.findall(r"(?:19|20)\d{2}", context))
+        has_year_range = (
             re.search(r"(?:19|20)\d{2}\s*(?:至|到|[-—–~～])\s*(?:19|20)\d{2}", context)
             or re.search(r"(?:19|20)\d{2}\s*[,，、/]\s*(?:19|20)\d{2}", context)
         )
-
-        # A section may say "compare 2022-2024 trend"; the comparison verb is
-        # about years, not categories. Prefer line charts for temporal records.
-        if has_trend and (
-            has_year_range
-            or not has_comparison
-            or "趋势" in context
-            or "走势" in context
-            or "trend" in context
-            or "time series" in context
-            or ("年度" in context and not has_category)
-            or ("annual" in context and not has_category)
-        ):
-            return "line"
-        if has_comparison:
-            return "bar"
-        if has_trend:
+        if len(year_mentions) >= 3 or has_year_range:
             return "line"
         return ""
 
@@ -3288,7 +3230,11 @@ class Reporter:
                 json.dumps(chart_obj.get("records", []), ensure_ascii=False),
             )
         )
-        desired_type = cls._infer_desired_chart_type(section_task, section_outline)
+        desired_type = cls._infer_desired_chart_type(
+            section_task,
+            section_outline,
+            explicit_only=True,
+        )
         chart_type = str(chart_obj.get("image_type", "") or "").strip()
         records = chart_obj.get("records", [])
 
@@ -3353,6 +3299,7 @@ class Reporter:
         desired_type = cls._infer_desired_chart_type(
             current_inputs.get("section_task", ""),
             current_inputs.get("sub_section_outline", ""),
+            explicit_only=True,
         )
 
         def choose_best(predicate) -> None:
@@ -3473,6 +3420,14 @@ class Reporter:
             numeric_count = cls._chartable_numeric_count(block_text)
             if numeric_count < 3:
                 continue
+            desired_chart_type = (
+                cls._infer_desired_chart_type(title, block_text)
+                or cls._infer_desired_chart_type(
+                    section_outline,
+                    section_task,
+                    explicit_only=True,
+                )
+            )
             candidates.append(
                 {
                     "candidate_idx": idx,
@@ -3480,13 +3435,7 @@ class Reporter:
                     "origin_content": block_text,
                     "numeric_count": numeric_count,
                     "citation_index": cls._extract_first_citation_index(block_text),
-                    "desired_chart_type": (
-                        cls._infer_desired_chart_type(title, block_text)
-                        or cls._infer_desired_chart_type(
-                            section_outline,
-                            section_task,
-                        )
-                    ),
+                    "desired_chart_type": desired_chart_type,
                 }
             )
         if not candidates and cls._chartable_numeric_count(report_markdown) >= 3:
