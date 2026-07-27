@@ -34,6 +34,9 @@ from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router imp
     route_outline_execution_method,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
+from openjiuwen_deepsearch.algorithm.research_collector.collector_function import (
+    filter_search_results_by_exclude_urls,
+)
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.search_nodes.find_action import run_find_action_space
@@ -366,8 +369,13 @@ class IntentRecognitionNode(BaseNode):
         })
 
         if algorithm_output.entry_search_results:
+            entry_search_results = filter_search_results_by_exclude_urls(
+                algorithm_output.entry_search_results,
+                algorithm_output.research_intent.exclude_url,
+                algorithm_output.research_intent.exclude_titles,
+            )
             session.update_global_state({
-                "search_context.entry_search_results": algorithm_output.entry_search_results,
+                "search_context.entry_search_results": entry_search_results,
             })
 
         add_debug_log_wrapper(session, NodeDebugData(
@@ -491,6 +499,9 @@ class FeedbackHandlerNode(BaseNode):
 
         merged_intent.include_url = self._merge_unique_items(current_intent.include_url, incoming_intent.include_url)
         merged_intent.exclude_url = self._merge_unique_items(current_intent.exclude_url, incoming_intent.exclude_url)
+        merged_intent.exclude_titles = self._merge_unique_items(
+            current_intent.exclude_titles, incoming_intent.exclude_titles
+        )
         merged_intent.include_domains = self._merge_unique_items(
             current_intent.include_domains, incoming_intent.include_domains
         )

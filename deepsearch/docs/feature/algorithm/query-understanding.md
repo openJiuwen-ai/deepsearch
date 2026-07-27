@@ -13,6 +13,8 @@
 ## 可见行为
 
 - 意图识别会输出 `IntentRecognitionResult`，其中包含 `original_query`、`research_query`、`research_intent`、`lang` 和可选入口搜索结果。
+- 意图识别会提取用户指定的来源排除约束：文章级排除进入 `exclude_url`（链接）与 `exclude_titles`（标题，逐字提取，用于识别同文献镜像变体），站点级排除才进入 `exclude_domains`；禁引的 URL 即使同属一个域名也不得归纳为整域排除。提取结果非空时输出 `[EXCLUDE_INTENT]` 观测日志（敏感模式下只记字段计数）。
+- 入口预搜索（web 模式）结果在写入 `search_context.entry_search_results` 前会按 `exclude_url`/`exclude_titles` 过滤（与本地知识库检索无关），过滤后的结果供大纲与问题生成消费；纯本地模式无入口预搜索，不受影响。
 - 报告类型只接受明确的 `professional` 或 `brief`；未知值保持为空，由下游澄清或默认策略处理。
 - 大纲生成要求章节标题不带编号，并在代码侧修复章节 ID、依赖关系和 parent/relationship 一致性。
 - 用户显式指定顶层结构时，大纲生成按用户给出的主要章节数量、标题和顺序组织，不为了默认章节数、brief 摘要或维度覆盖规则额外新增顶层章节。
@@ -63,7 +65,7 @@
 
 关键输出契约：
 
-- `ResearchIntent`：承载任务类型、分析维度、对比对象、章节数、受众、语气、报告类型和域名过滤规则。
+- `ResearchIntent`：承载任务类型、分析维度、对比对象、章节数、受众、语气、报告类型和来源排除规则（`include_url`/`exclude_url` 链接级、`exclude_titles` 文章标题级、`include_domains`/`exclude_domains` 站点级；文章级排除只走链接与标题字段，不得派生为整域排除）。
 - `Outline` / `Section`：章节标题、描述、核心章节标记、section id、依赖关系和分析 focus。
 - 历史 `Outline` / `Section` 缺少新章节契约字段时仍按模型默认值加载；必填约束仅作用于新生成的
   普通或依赖驱动 tool call。

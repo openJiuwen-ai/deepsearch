@@ -160,6 +160,41 @@ def extract_domain_from_url(url: Any) -> str:
     return domain
 
 
+def normalize_url_for_match(url: Any) -> str:
+    """归一化 URL 用于等价匹配.
+
+    返回 ``host + path``（小写、去 ``www.``、路径合并重复斜杠并去末尾斜杠），
+    忽略 scheme、query 和 fragment，使同一页面的 http/https、带参链接等变体能匹配上。
+    """
+    url_str = str(url or "").strip()
+    if not url_str:
+        return ""
+    parsed = urlparse(url_str if "://" in url_str else f"//{url_str}")
+    host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower().strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    if not host or any(c.isspace() for c in host):
+        return ""
+    path = re.sub(r"/+", "/", parsed.path or "").rstrip("/").lower()
+    return f"{host}{path}"
+
+
+def is_url_blocked(url: Any, blocked_urls: Any) -> bool:
+    """判断 URL 是否命中用户要求排除的链接列表.
+
+    归一化（见 ``normalize_url_for_match``）后与禁引列表中任一 URL 完全相同即命中；
+    只做 host+path 精确匹配，同域名下路径不同的其他文章不受影响。
+    """
+    if not blocked_urls:
+        return False
+    if isinstance(blocked_urls, str):
+        blocked_urls = [blocked_urls]
+    target = normalize_url_for_match(url)
+    if not target:
+        return False
+    return any(target == normalize_url_for_match(blocked) for blocked in blocked_urls)
+
+
 def normalize_path(path: str) -> str:
     """
     规范化路径，处理路径中的错误

@@ -3,11 +3,14 @@
 
 import json
 import logging
+import re
+from html import unescape
 from typing import Any
 
 from openjiuwen_deepsearch.common.common_constants import MAX_URL_LENGTH, MAX_SEARCH_CONTENT_LENGTH
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload
-from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, normalize_domains
+from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, is_url_blocked, \
+    normalize_domains
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -19,6 +22,85 @@ def _get_exclude_domains(agent_input: dict) -> list[str]:
     if isinstance(research_intent, dict):
         return normalize_domains(research_intent.get("exclude_domains"))
     return normalize_domains(getattr(research_intent, "exclude_domains", []))
+
+
+def _get_exclude_urls(agent_input: dict) -> list[str]:
+    """从 agent_input 的 research_intent 中获取需要排除的链接."""
+    research_intent = agent_input.get("research_intent") or {}
+    if isinstance(research_intent, dict):
+        value = research_intent.get("exclude_url")
+    else:
+        value = getattr(research_intent, "exclude_url", [])
+    if not value:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _get_exclude_titles(agent_input: dict) -> list[str]:
+    """从 agent_input 的 research_intent 中获取需要排除的文章标题."""
+    research_intent = agent_input.get("research_intent") or {}
+    if isinstance(research_intent, dict):
+        value = research_intent.get("exclude_titles")
+    else:
+        value = getattr(research_intent, "exclude_titles", [])
+    if not value:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _normalize_title_for_match(title: Any) -> str:
+    """归一化标题用于等价匹配：反转义 HTML 实体、小写、去标点、合并空白（保留 CJK 字符）."""
+    text = unescape(str(title or "")).strip().lower()
+    text = re.sub(r"[^\w一-鿿]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# 镜像/聚合站点为页面标题追加的站点标记词（如 "原标题 | MDPI"、"原标题 - ProQuest"），
+# 归一化后位于标题尾部时允许剥离后再做精确匹配。只收明确的站点名，避免误剥正文词汇。
+_AGGREGATOR_SUFFIX_TOKENS = {
+    "proquest", "mdpi", "researchgate", "sciencedirect", "springer", "springerlink",
+    "ieee", "xplore", "nature", "wiley", "semanticscholar", "jstor",
+    "acm", "oup", "sage", "tandfonline", "ebsco", "scopus", "bohrium", "aminer", "dblp",
+}
+
+
+def _strip_aggregator_suffix(normalized_title: str) -> str:
+    """去掉归一化标题尾部的聚合/出版站点标记词，返回剩余部分（无标记时原样返回）."""
+    words = normalized_title.split()
+    while words and words[-1] in _AGGREGATOR_SUFFIX_TOKENS:
+        words.pop()
+    return " ".join(words)
+
+
+def is_title_blocked(title: Any, blocked_titles: list[str]) -> bool:
+    """判断标题是否命中用户要求排除的文章标题.
+
+    匹配规则（任一命中即视为 blocked）：归一化后完全相同；或剥离明确的聚合站后缀
+    （``_AGGREGATOR_SUFFIX_TOKENS``，如 ``| MDPI``、`` - ProQuest``）后完全相同。
+    不做子串/包含匹配——被禁标题可能只是另一篇论文标题的前缀，子串规则会误伤不同文献。
+    """
+    if not blocked_titles:
+        return False
+
+    target = _normalize_title_for_match(title)
+    if not target:
+        return False
+    target_stripped = _strip_aggregator_suffix(target)
+    for blocked_title in blocked_titles:
+        blocked = _normalize_title_for_match(blocked_title)
+        if not blocked:
+            continue
+        if target == blocked or target_stripped == _strip_aggregator_suffix(blocked):
+            return True
+    return False
 
 
 def _is_domain_match(domain: str, target_domain: str) -> bool:
@@ -48,6 +130,52 @@ def filter_search_results_by_exclude_domains(items: list, exclude_domains: list[
         filtered_items.append(item)
     logger.info(
         "[COLLECTOR FUNCTION] exclude_domains filter applied. before=%s after=%s removed=%s",
+        len(items),
+        len(filtered_items),
+        removed_count,
+    )
+    return filtered_items
+
+
+def filter_search_results_by_exclude_urls(
+        items: list,
+        exclude_urls: list[str],
+        exclude_titles: list[str] | None = None,
+) -> list:
+    """按 exclude_url / exclude_titles 过滤搜索结果.
+
+    URL 命中禁引列表（归一化 host+path 精确匹配）或标题命中禁引文章标题的条目会被剔除，
+    防止用户明确要求避开的页面/文献（含同文献的镜像变体）进入收集、抓取与引用环节。
+    """
+    if not exclude_urls and not exclude_titles:
+        return items
+
+    filtered_items = []
+    removed_count = 0
+    for item in items:
+        if not isinstance(item, dict):
+            filtered_items.append(item)
+            continue
+        item_url = item.get("url") or item.get("link") or item.get("source_url") or ""
+        item_title = item.get("title") or item.get("name") or ""
+        url_hit = item_url and is_url_blocked(item_url, exclude_urls)
+        title_hit = item_title and is_title_blocked(item_title, exclude_titles)
+        if url_hit or title_hit:
+            removed_count += 1
+            if LogManager.is_sensitive():
+                logger.info(
+                    "[COLLECTOR FUNCTION] blocked item excluded (redacted, url_hit=%s, title_hit=%s)",
+                    bool(url_hit), bool(title_hit),
+                )
+            else:
+                logger.info(
+                    "[COLLECTOR FUNCTION] blocked item excluded (url_hit=%s, title_hit=%s). url=%s title=%s",
+                    bool(url_hit), bool(title_hit), str(item_url)[:120], str(item_title)[:100],
+                )
+            continue
+        filtered_items.append(item)
+    logger.info(
+        "[COLLECTOR FUNCTION] exclude_url/title filter applied. before=%s after=%s removed=%s",
         len(items),
         len(filtered_items),
         removed_count,
@@ -237,6 +365,8 @@ def process_tavily_search_result(agent_input: dict, tool_content: Any) -> (list,
     try:
         tool_result = tool_content if isinstance(tool_content, list) else []
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
+        tool_result = filter_search_results_by_exclude_urls(
+            tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
         added_records = []
         for item in tool_result:
             new_item = _normalize_web_search_item(item)
@@ -263,6 +393,8 @@ def process_google_search_result(agent_input: dict, tool_content: Any) -> (list,
     try:
         tool_result = tool_content if isinstance(tool_content, list) else []
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
+        tool_result = filter_search_results_by_exclude_urls(
+            tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
         added_records = []
         for item in tool_result:
             new_item = _normalize_web_search_item(item)
@@ -290,6 +422,8 @@ def process_common_search_result(agent_input: dict, tool_content: Any) -> (list,
     try:
         tool_result = tool_content if isinstance(tool_content, list) else []
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
+        tool_result = filter_search_results_by_exclude_urls(
+            tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
         added_records = []
         for item in tool_result:
             new_item = _normalize_web_search_item(item)

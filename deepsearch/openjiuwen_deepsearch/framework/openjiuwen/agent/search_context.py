@@ -211,6 +211,7 @@ class ResearchIntent(BaseModel):
     report_type: Optional[Literal["professional", "brief"]] = Field(default=None, description="报告类型")
     include_url: List[str] = Field(default_factory=list, description="用户指定包含的链接")
     exclude_url: List[str] = Field(default_factory=list, description="用户指定排除的链接")
+    exclude_titles: List[str] = Field(default_factory=list, description="用户指定排除的文章标题")
     include_domains: List[str] = Field(default_factory=list, description="用户指定的站点域名")
     exclude_domains: List[str] = Field(default_factory=list, description="用户排除的站点域名")
 
