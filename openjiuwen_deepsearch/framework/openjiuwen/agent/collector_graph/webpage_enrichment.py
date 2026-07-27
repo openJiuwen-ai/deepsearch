@@ -887,12 +887,13 @@ class WebPageEnrichmentNode(BaseNode):
             if isinstance(doc, dict) and doc.get("url")
         }
         build_stats = ArticleLinkCandidateBuildStats()
-        sidecar_sources = [
-            str(doc.get(ARTICLE_LINK_SOURCE_FIELD) or "")
-            for doc in state["new_doc_infos_current_loop"]
-            if isinstance(doc, dict)
-            and str(doc.get(ARTICLE_LINK_SOURCE_FIELD) or "").strip()
-        ]
+        sidecar_sources: list[str] = []
+        for doc in state["new_doc_infos_current_loop"]:
+            if not isinstance(doc, dict):
+                continue
+            sidecar_source = str(doc.get(ARTICLE_LINK_SOURCE_FIELD) or "")
+            if sidecar_source.strip():
+                sidecar_sources.append(sidecar_source)
         sidecar_link_count = sum(
             int(doc.get(ARTICLE_LINK_SOURCE_COUNT_FIELD) or 0)
             for doc in state["new_doc_infos_current_loop"]

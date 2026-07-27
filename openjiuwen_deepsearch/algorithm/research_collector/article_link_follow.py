@@ -115,6 +115,14 @@ class ArticleLinkCandidateBuildStats:
     final_candidate_count: int = 0
 
 
+@dataclass(frozen=True)
+class ArticleLinkCandidateLimits:
+    """Bounds applied while building article-link candidates."""
+
+    per_parent: int = 20
+    total: int = 50
+
+
 class ArticleLinkEvidence(BaseModel):
     """Bounded evidence extracted from a followed webpage."""
 
@@ -337,25 +345,26 @@ def _is_depth_one(doc: dict) -> bool:
         return False
 
 
+def _canonicalize_urls(urls: set[str]) -> set[str]:
+    canonical_urls: set[str] = set()
+    for url in urls:
+        canonical = canonicalize_url(str(url))
+        if canonical:
+            canonical_urls.add(canonical)
+    return canonical_urls
+
+
 def build_article_link_candidates(
     docs: list[dict],
     existing_urls: set[str],
     attempted_urls: set[str] | None = None,
-    per_parent_limit: int = 20,
-    total_limit: int = 50,
+    limits: ArticleLinkCandidateLimits | None = None,
     stats: ArticleLinkCandidateBuildStats | None = None,
 ) -> list[ArticleLinkCandidate]:
     """Build canonical, one-hop candidates from parent document content."""
-    existing_canonical = {
-        canonical
-        for url in existing_urls
-        if (canonical := canonicalize_url(str(url)))
-    }
-    attempted_canonical = {
-        canonical
-        for url in attempted_urls or set()
-        if (canonical := canonicalize_url(str(url)))
-    }
+    candidate_limits = limits or ArticleLinkCandidateLimits()
+    existing_canonical = _canonicalize_urls(existing_urls)
+    attempted_canonical = _canonicalize_urls(attempted_urls or set())
     candidates_by_url: dict[str, ArticleLinkCandidate] = {}
     ordered_urls: list[str] = []
 
@@ -439,7 +448,7 @@ def build_article_link_candidates(
                 if origin not in existing.origins:
                     existing.origins.append(origin)
                 continue
-            if accepted_for_parent >= per_parent_limit:
+            if accepted_for_parent >= candidate_limits.per_parent:
                 if stats is not None:
                     stats.parent_limit_filtered_count += 1
                 continue
@@ -461,7 +470,7 @@ def build_article_link_candidates(
             ordered_urls.append(canonical)
             accepted_for_parent += 1
 
-    bounded_limit = max(0, total_limit)
+    bounded_limit = max(0, candidate_limits.total)
     if stats is not None:
         stats.total_limit_filtered_count = max(0, len(ordered_urls) - bounded_limit)
     result = [candidates_by_url[url] for url in ordered_urls[:bounded_limit]]
@@ -537,15 +546,14 @@ def select_article_link_candidates(
         )
         if not (anchor_match or context_match or evidence_keyword):
             continue
-        reasons = tuple(
-            reason
-            for matched, reason in (
-                (anchor_match, "anchor_match"),
-                (context_match, "context_match"),
-                (evidence_keyword, "evidence_keyword"),
-            )
-            if matched
-        )
+        reasons_list: list[str] = []
+        if anchor_match:
+            reasons_list.append("anchor_match")
+        if context_match:
+            reasons_list.append("context_match")
+        if evidence_keyword:
+            reasons_list.append("evidence_keyword")
+        reasons = tuple(reasons_list)
         selected = RankedArticleLink(candidate.candidate_index, reasons)
         priority = (
             not anchor_match,
