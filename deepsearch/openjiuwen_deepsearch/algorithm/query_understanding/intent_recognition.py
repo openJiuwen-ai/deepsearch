@@ -5,12 +5,16 @@ import logging
 import re
 from typing import Dict, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ReportTypePolicy, ResearchIntent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    ReportTypePolicy,
+    ResearchIntent,
+    TemporalScope,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_search
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
@@ -142,7 +146,32 @@ def _normalize_task_type(raw: str | None) -> str | None:
     return aliases.get(value, value)
 
 
+def _normalize_temporal_scope(raw: object) -> TemporalScope | None:
+    """校验 LLM 输出的时间范围，非法时仅关闭时间约束。
+
+    Args:
+        raw: 意图识别工具返回的 temporal_scope 原始值。
+
+    Returns:
+        合法的时间范围；缺失或非法时返回 None。
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return TemporalScope.model_validate(raw)
+    except (ValidationError, TypeError, ValueError):
+        return None
+
+
 def _normalize_research_intent(data: dict) -> ResearchIntent:
+    """归一化意图识别工具参数。
+
+    Args:
+        data: LLM tool call 返回的原始字段。
+
+    Returns:
+        可供工作流消费的结构化研究意图。
+    """
     raw_section = data.get("section_count")
     section_count = None
     if raw_section is not None:
@@ -191,6 +220,7 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         exclude_titles=exclude_titles,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
+        temporal_scope=_normalize_temporal_scope(data.get("temporal_scope")),
     )
 
 
@@ -345,6 +375,33 @@ def _create_emit_intent_tool() -> LocalFunction:
                         "NEVER derive domains from exclude_url; banning N articles on the same domain "
                         "is NOT site-level exclusion."
                     ),
+                },
+                "temporal_scope": {
+                    "type": "object",
+                    "description": (
+                        "Explicit research time constraint. Omit when the user does not specify a time boundary."
+                    ),
+                    "properties": {
+                        "constraint_type": {
+                            "type": "string",
+                            "enum": ["source_date", "content_date"],
+                            "description": (
+                                "Use source_date when source publication/availability is bounded; "
+                                "use content_date when only facts or data are bounded."
+                            ),
+                        },
+                        "start_date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "Inclusive lower boundary in YYYY-MM-DD format; omit when absent.",
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "Inclusive upper boundary in YYYY-MM-DD format; omit when absent.",
+                        },
+                    },
+                    "required": ["constraint_type"],
                 },
             },
             "required": ["research_query", "language"],

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
@@ -6,8 +8,10 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ResearchIntent,
+    TemporalScope,
     build_research_intent_prompt_context,
     build_section_local_contract_prompt_context,
+    build_temporal_scope_prompt_context,
 )
 
 
@@ -23,6 +27,97 @@ def test_normalize_research_intent_preserves_task_contract_fields():
     assert intent.task_type == "comparison"
     assert intent.required_dimensions == ["growth", "dividend"]
     assert intent.comparison_targets == ["AIA", "Ping An"]
+
+
+def test_normalize_research_intent_preserves_valid_temporal_scope():
+    """合法时间约束应被归一化为可序列化的结构化意图。"""
+    intent = _normalize_research_intent(
+        {
+            "temporal_scope": {
+                "constraint_type": "source_date",
+                "start_date": "2018-01-01",
+                "end_date": "2023-12-31",
+            }
+        }
+    )
+
+    assert intent.temporal_scope == TemporalScope(
+        constraint_type="source_date",
+        start_date="2018-01-01",
+        end_date="2023-12-31",
+    )
+    assert intent.model_dump(mode="json")["temporal_scope"] == {
+        "constraint_type": "source_date",
+        "start_date": "2018-01-01",
+        "end_date": "2023-12-31",
+    }
+
+
+def test_normalize_research_intent_drops_only_invalid_temporal_scope():
+    """非法时间字段只应关闭时间约束，不能丢失其他研究意图。"""
+    intent = _normalize_research_intent(
+        {
+            "task_type": "comparison",
+            "temporal_scope": {
+                "constraint_type": "source_date",
+                "start_date": "2024-01-01",
+                "end_date": "2023-12-31",
+            },
+        }
+    )
+
+    assert intent.task_type == "comparison"
+    assert intent.temporal_scope is None
+
+
+def test_legacy_research_intent_deserializes_without_temporal_scope():
+    """旧版本序列化数据缺少 temporal_scope 时仍应兼容加载。"""
+    intent = ResearchIntent.model_validate({
+        "task_type": "comparison",
+        "required_dimensions": ["cost"],
+    })
+
+    assert intent.task_type == "comparison"
+    assert intent.required_dimensions == ["cost"]
+    assert intent.temporal_scope is None
+
+
+def test_build_temporal_scope_prompt_context_distinguishes_source_and_content_dates():
+    """Prompt 上下文应区分资料发表时间与事实发生时间。"""
+    source_context = build_temporal_scope_prompt_context(
+        ResearchIntent(
+            temporal_scope=TemporalScope(
+                constraint_type="source_date",
+                start_date="2020-01-01",
+                end_date="2023-12-31",
+            )
+        )
+    )
+    content_context = build_temporal_scope_prompt_context(
+        {
+            "temporal_scope": {
+                "constraint_type": "content_date",
+                "end_date": "2019-06-30",
+            }
+        }
+    )
+
+    assert source_context["has_temporal_scope"] is True
+    assert "published" in source_context["temporal_scope_instruction"]
+    assert "2020-01-01 through 2023-12-31" in source_context["temporal_scope_instruction"]
+    assert content_context["has_temporal_scope"] is True
+    assert "facts and data" in content_context["temporal_scope_instruction"]
+    assert "on or before 2019-06-30" in content_context["temporal_scope_instruction"]
+
+
+def test_build_temporal_scope_prompt_context_handles_missing_scope():
+    """没有时间意图时不应生成隐式时间限制。"""
+    context = build_temporal_scope_prompt_context(ResearchIntent())
+
+    assert context == {
+        "has_temporal_scope": False,
+        "temporal_scope_instruction": "",
+    }
 
 
 def test_build_research_intent_prompt_context_exposes_flags():
@@ -275,3 +370,31 @@ def test_planner_prompt_renders_section_local_contract_context():
     assert "Current Section Responsibility" in system_prompt
     assert "vendors_and_supply" in system_prompt
     assert "vendors, supply_chain, ecosystem" in system_prompt
+
+
+@pytest.mark.parametrize(
+    "prompt_name",
+    [
+        "outliner",
+        "dep_driving_outliner",
+        "outliner_template",
+        "outliner_user_revised",
+        "planner",
+        "dep_driving_planner",
+        "sub_report_markdown",
+        "sub_report_brief_markdown",
+        "report_abstract_markdown",
+        "report_conclusion_markdown",
+        "report_implications_and_recommendations_markdown",
+    ],
+)
+def test_non_collector_prompts_do_not_consume_temporal_scope(prompt_name):
+    """时间约束只能进入 collector query 与补搜 Prompt。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / f"{prompt_name}.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "temporal_scope" not in prompt
+    assert "has_temporal_scope" not in prompt
+    assert "temporal_scope_instruction" not in prompt
+    assert "Research Time Boundary" not in prompt

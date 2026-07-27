@@ -20,6 +20,14 @@ Task title:
 Task description:
 {{ step_description }}
 
+{% if has_temporal_scope %}
+## Research Time Boundary
+{{ temporal_scope_instruction }}
+- Interpret "latest" as the latest information available within this boundary.
+- Naturally express this boundary in every generated next query; do not use provider-specific filter syntax.
+- A next query may contain at most five topical keywords; the time phrase does not count toward the five topical keywords.
+{% endif %}
+
 # Collector Ledger
 
 Ledger brief:
@@ -101,7 +109,7 @@ The table intentionally contains key_passages and scores instead of full source 
 - If the topic has a clear subject, such as "Apple Inc's new product in 2025", the query must include that subject.
 - Each query should focus on one specific aspect of the remaining blocking missing evidence.
 - Do not generate multiple similar queries.
-- Query must consist of keywords, with the first keyword being the main subject. The total number of keywords should be less than 5.
+- Query must consist of keywords, with the first keyword being the main subject. The total number of topical keywords should not exceed 5.
 - Do not force all follow-up queries into `{{ language }}`. Change query language when it is likely to reach better source material, for example English for global academic or institutional sources, Chinese for China-local sources, or another local language for country-specific primary sources.
 
 ## Output Format

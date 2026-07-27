@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 import logging
+from datetime import date, timedelta
 
 from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
@@ -9,6 +10,7 @@ from openjiuwen.core.foundation.tool.function.function import LocalFunction
 from openjiuwen_deepsearch.algorithm.research_collector.tool_log import tool_invoke_log_async
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
     XunfeiSearchAPIWrapper,
     TavilySearchAPIWrapper,
@@ -44,6 +46,10 @@ search_engine_mapping = {
 
 
 SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES = {
+    SearchEngine.TAVILY.value,
+}
+
+TEMPORAL_SCOPE_SEARCH_ENGINES = {
     SearchEngine.TAVILY.value,
 }
 
@@ -113,6 +119,61 @@ def apply_web_search_domain_constraints(
             api_wrapper.exclude_domains,
         )
 
+    return True
+
+
+def apply_web_search_temporal_scope(
+        search_engine_name: str,
+        temporal_scope: TemporalScope | dict | None,
+) -> bool:
+    """为当前会话的 Tavily 实例设置来源发表时间检索边界。
+
+    Tavily 的日期过滤混合使用发表时间与最后更新时间，结果仍由 collector 按统一发表日期
+    后置过滤。内部边界为包含关系，而 Tavily 使用严格 ``after``/``before``，所以开始边界
+    向前、结束边界向后各移动一天。内容时间不会发送原生日期参数。
+
+    Args:
+        search_engine_name: 当前配置的 web 搜索引擎名称。
+        temporal_scope: 结构化时间范围；可传模型、兼容字典或空值。
+
+    Returns:
+        True 表示找到了支持该能力的当前会话 wrapper 并完成设置，否则返回 False。
+    """
+    if search_engine_name not in TEMPORAL_SCOPE_SEARCH_ENGINES:
+        return False
+
+    try:
+        web_search_engines = web_search_context.get() or {}
+    except LookupError:
+        web_search_engines = {}
+    api_wrapper = web_search_engines.get(search_engine_name)
+    if not api_wrapper:
+        return False
+
+    scope = None
+    if temporal_scope is not None:
+        try:
+            scope = temporal_scope if isinstance(temporal_scope, TemporalScope) else TemporalScope.model_validate(
+                temporal_scope
+            )
+        except (TypeError, ValueError):
+            scope = None
+
+    api_wrapper.start_date = None
+    api_wrapper.end_date = None
+    if scope and scope.constraint_type == "source_date":
+        if scope.start_date and scope.start_date > date.min:
+            api_wrapper.start_date = (scope.start_date - timedelta(days=1)).isoformat()
+        if scope.end_date and scope.end_date < date.max:
+            api_wrapper.end_date = (scope.end_date + timedelta(days=1)).isoformat()
+
+    logger.info(
+        "apply_web_search_temporal_scope [%s]: constraint_type=%s, native start_date=%s, end_date=%s",
+        search_engine_name,
+        scope.constraint_type if scope else "",
+        api_wrapper.start_date,
+        api_wrapper.end_date,
+    )
     return True
 
 
