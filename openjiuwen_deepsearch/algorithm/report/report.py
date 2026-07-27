@@ -80,16 +80,6 @@ MAX_CONCURRENT_BATCHES = 5
 REPORT_CONTENT_VISUALIZATION_MAX_CANDIDATES = 6
 REPORT_CONTENT_VISUALIZATION_MAX_CHARTS_PER_CANDIDATE = 3
 REPORT_CONTENT_VISUALIZATION_MAX_TOTAL_CHARTS = 8
-REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS = 12
-REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN = (
-    r"%|百分点|个百分点|"
-    r"(?:百万|千万|十亿|万|千|百|十|亿|兆)?"
-    r"(?:元|美元|人民币|港元|欧元|日元|英镑|人|户|家|个|件|台|辆|吨|千克|公斤|克|"
-    r"平方米|平方公里|公里|米|千瓦时|度|瓦|千瓦|兆瓦|吉瓦|次|页|篇|份)|"
-    r"(?i:(?:million|billion|thousand|mn|bn|k)?\s*"
-    r"(?:users?|people|customers?|visits?|downloads?|orders?|units?|vehicles?|tons?|"
-    r"usd|dollars?|rmb|yuan|eur|euros?|gbp|hours?|minutes?|seconds?|pages?|items?))"
-)
 LEADING_TITLE_NUMBER_PATTERN = re.compile(
     r"^(?:"
     r"[\（][一二三四五六七八九十\d]{1,2}[\）]\s*|"
@@ -3355,23 +3345,8 @@ class Reporter:
             )
         )
         subsection_count = max(1, subsection_count)
-        local_payload_count = sum(
-            min(
-                len(cls._local_report_content_chart_payloads(candidate)),
-                REPORT_CONTENT_VISUALIZATION_MAX_CHARTS_PER_CANDIDATE,
-            )
-            for candidate in candidates
-        )
-        potential_count = max(len(candidates), local_payload_count, 1)
-        cleaned_report = cls._clean_local_visualization_text(report_markdown)
-        has_percent_metric = bool(re.search(r"[-+]?\d[\d,]*(?:\.\d+)?\s*%", cleaned_report))
-        has_non_percent_unit_metric = bool(
-            re.search(
-                rf"[-+]?\d[\d,]*(?:\.\d+)?\s*(?!%)({REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN})",
-                cleaned_report,
-            )
-        )
-        if numeric_count >= 6 and has_percent_metric and has_non_percent_unit_metric:
+        potential_count = max(len(candidates), 1)
+        if numeric_count >= 6:
             potential_count = max(potential_count, 2)
 
         # Allow more than one chart where the content actually exposes distinct
@@ -3389,47 +3364,6 @@ class Reporter:
     @staticmethod
     def _format_avoid_chart_data(avoid_chart_data: list[dict]) -> str:
         return json.dumps(avoid_chart_data[-REPORT_CONTENT_VISUALIZATION_MAX_TOTAL_CHARTS:], ensure_ascii=False) if avoid_chart_data else ""
-
-    @classmethod
-    def _clean_local_visualization_text(cls, text: str) -> str:
-        cleaned = cls._strip_mermaid_blocks(text or "")
-        cleaned = re.sub(
-            r'<div style="text-align:\s*center;">[\s\S]*?</div>',
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-        cleaned = re.sub(r"\[(?:checked_)?citation:\d+\]|\[\[\d+\]\]\([^)]+\)", "", cleaned)
-        cleaned = re.sub(r"\[[^\]]+\]\([^)]+\)|https?://\S+", "", cleaned)
-        cleaned = cleaned.replace("−", "-").replace("–", "-")
-        return cleaned
-
-    @staticmethod
-    def _clean_local_chart_label(label: str) -> str:
-        label = re.sub(r"[*_`#|<>]", "", str(label or "")).strip()
-        label = re.split(r"[\r\n]+", label)[-1].strip()
-        label = re.sub(r"^\s*(?:\d+(?:\.\d+)*\s*)", "", label)
-        label = re.sub(
-            r"^\s*(?:而|但|然而|其中|同时|此外|则|为|是|和|与|and|but|while|whereas|meanwhile|also|with)\s*",
-            "",
-            label,
-            flags=re.IGNORECASE,
-        )
-        label = re.sub(r"(?:的|则|为|是|以|约为|达到|达)$", "", label).strip()
-        label = re.sub(
-            r"(?:19|20)\d{2}年.*$",
-            "",
-            label,
-        ).strip(" ，,、：:；;。（）()")
-        if len(label) > 24:
-            candidates = [
-                item.strip(" ，,、：:；;。（）()")
-                for item in re.split(r"[\s，,、：:；;|/]+", label)
-                if item.strip(" ，,、：:；;。（）()") and not item.strip().isdigit()
-            ]
-            if candidates:
-                label = candidates[-1]
-        return label.strip(" ，,、：:；;。（）()")[:24]
 
     @staticmethod
     def _normalize_visualization_overlap_label(label: str) -> str:
@@ -3457,404 +3391,6 @@ class Reporter:
             or right_normalized in left_normalized
         )
 
-    @staticmethod
-    def _local_chart_payload(
-        image_title: str,
-        image_type: str,
-        unit: str,
-        records: list[list],
-    ) -> dict | None:
-        if image_type not in ("bar", "line") or not unit:
-            return None
-        if not (3 <= len(records) <= REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS):
-            return None
-        cleaned_records = []
-        seen_labels = set()
-        for row in records:
-            if not isinstance(row, list) or len(row) != 2:
-                return None
-            label = str(row[0] or "").strip()
-            value = row[1]
-            if not label or label in seen_labels:
-                continue
-            if not isinstance(value, (int, float)):
-                return None
-            cleaned_records.append([label, value])
-            seen_labels.add(label)
-        if len(cleaned_records) < 3:
-            return None
-        return {
-            "image_title": (image_title or "Chart").strip()[:80],
-            "image_type": image_type,
-            "unit": unit.strip(),
-            "records": cleaned_records,
-        }
-
-    @classmethod
-    def _extract_local_year_range_payloads(
-        cls,
-        candidate: dict,
-        text: str,
-    ) -> list[dict]:
-        payloads = []
-        range_pattern = re.compile(
-            r"(?P<start>(?:19|20)\d{2})\s*(?:至|到|[-—–~～])\s*"
-            r"(?P<end>(?:19|20)\d{2})\s*年?"
-            r"(?P<context>[^。；;\n]{0,120}?分别(?:为|是)?[^。；;\n]{0,180})"
-        )
-        value_pattern = re.compile(
-            rf"([-+]?\d[\d,]*(?:\.\d+)?)\s*({REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN})"
-        )
-        for match in range_pattern.finditer(text):
-            start_year = int(match.group("start"))
-            end_year = int(match.group("end"))
-            if end_year < start_year or end_year - start_year + 1 > REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS:
-                continue
-            years = [f"{year}年" for year in range(start_year, end_year + 1)]
-            values = value_pattern.findall(match.group("context"))
-            if len(values) < len(years):
-                continue
-            unit = values[0][1]
-            if any(unit_item != unit for _, unit_item in values[: len(years)]):
-                continue
-            records = []
-            for year_label, (value_text, _) in zip(years, values):
-                parsed = cls._parse_visualization_number(value_text)
-                if parsed is None:
-                    records = []
-                    break
-                records.append([year_label, parsed])
-            payload = cls._local_chart_payload(
-                f"{candidate.get('title', '')}趋势",
-                "line",
-                unit,
-                records,
-            )
-            if payload:
-                payloads.append(payload)
-        return payloads
-
-    @staticmethod
-    def _local_numeric_context_is_approximate(
-        text: str,
-        value_start: int,
-        value_end: int,
-    ) -> bool:
-        before = text[max(0, value_start - 12): value_start]
-        after = text[value_end: min(len(text), value_end + 12)]
-        return bool(
-            re.search(r"(?:约|约为|近|逾|超过|超|突破|不低于|不少于)\s*$", before)
-            or re.search(r"^\s*(?:左右|以上|大关|附近)", after)
-        )
-
-    @classmethod
-    def _local_year_value_score(
-        cls,
-        text: str,
-        value_start: int,
-        value_end: int,
-    ) -> int:
-        return 0 if cls._local_numeric_context_is_approximate(text, value_start, value_end) else 1
-
-    @classmethod
-    def _extract_local_year_value_payloads(
-        cls,
-        candidate: dict,
-        text: str,
-    ) -> list[dict]:
-        payloads = []
-        emitted_signatures: set[tuple] = set()
-        value_pattern = re.compile(
-            r"((?:19|20)\d{2})(?:\s*年)?[^。；;\n.!?]{0,60}?"
-            rf"([-+]?\d[\d,]*(?:\.\d+)?)\s*({REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN})"
-        )
-        def append_payload(unit: str, records: list[list]) -> None:
-            payload = cls._local_chart_payload(
-                f"{candidate.get('title', '')}趋势",
-                "line",
-                unit,
-                records,
-            )
-            signature = cls._visualization_data_signature(payload)
-            if payload and signature and signature not in emitted_signatures:
-                payloads.append(payload)
-                emitted_signatures.add(signature)
-
-        chunks = re.split(r"[。；;\n.!?]+", text)
-        for chunk in chunks:
-            matches = list(value_pattern.finditer(chunk))
-            if len(matches) < 3:
-                continue
-            by_unit: dict[str, dict[str, tuple[int, int | float]]] = {}
-            for match in matches:
-                year, value_text, unit = match.groups()
-                parsed = cls._parse_visualization_number(value_text)
-                if parsed is None:
-                    continue
-                score = cls._local_year_value_score(
-                    chunk,
-                    match.start(2),
-                    match.end(2),
-                )
-                by_unit.setdefault(unit, {})
-                existing = by_unit[unit].get(year)
-                if existing is None or score > existing[0]:
-                    by_unit[unit][year] = (score, parsed)
-            for unit, values_by_year in by_unit.items():
-                records = [
-                    [f"{year}年", values_by_year[year][1]]
-                    for year in sorted(values_by_year)
-                ]
-                append_payload(unit, records)
-        cross_sentence_by_unit: dict[str, dict[str, tuple[int, int | float]]] = {}
-        for match in value_pattern.finditer(text):
-            year, value_text, unit = match.groups()
-            parsed = cls._parse_visualization_number(value_text)
-            if parsed is None:
-                continue
-            cross_sentence_by_unit.setdefault(unit, {})
-            score = cls._local_year_value_score(
-                text,
-                match.start(2),
-                match.end(2),
-            )
-            existing = cross_sentence_by_unit[unit].get(year)
-            if existing is None or score > existing[0]:
-                cross_sentence_by_unit[unit][year] = (score, parsed)
-        for unit, values_by_year in cross_sentence_by_unit.items():
-            records = [
-                [f"{year}年", values_by_year[year][1]]
-                for year in sorted(values_by_year)
-            ]
-            append_payload(unit, records)
-        return payloads
-
-    @classmethod
-    def _extract_local_markdown_table_payloads(
-        cls,
-        candidate: dict,
-        text: str,
-    ) -> list[dict]:
-        payloads = []
-        lines = [line.strip() for line in text.splitlines()]
-        i = 0
-        while i < len(lines) - 2:
-            if not (lines[i].startswith("|") and lines[i + 1].startswith("|")):
-                i += 1
-                continue
-            header = [cell.strip() for cell in lines[i].strip("|").split("|")]
-            separator = [cell.strip() for cell in lines[i + 1].strip("|").split("|")]
-            if not all(re.match(r"^:?-{3,}:?$", cell) for cell in separator):
-                i += 1
-                continue
-            rows = []
-            j = i + 2
-            while j < len(lines) and lines[j].startswith("|"):
-                cells = [cell.strip() for cell in lines[j].strip("|").split("|")]
-                if len(cells) >= len(header):
-                    rows.append(cells)
-                j += 1
-            numeric_columns: list[tuple[int, int]] = []
-            for col_idx in range(1, len(header)):
-                header_text = header[col_idx]
-                if re.search(r"排名|序号|rank", header_text, flags=re.IGNORECASE):
-                    continue
-                numeric_count = sum(
-                    cls._parse_visualization_number(row[col_idx]) is not None
-                    for row in rows
-                )
-                if numeric_count >= 3:
-                    numeric_columns.append((col_idx, numeric_count))
-            if numeric_columns:
-                col_idx = sorted(numeric_columns, key=lambda item: item[1], reverse=True)[0][0]
-                unit_match = re.search(r"[（(]([^）)]+)[）)]", header[col_idx])
-                unit = unit_match.group(1).strip() if unit_match else header[col_idx].strip()
-                records = []
-                for row in rows:
-                    label = cls._clean_local_chart_label(row[0])
-                    parsed = cls._parse_visualization_number(row[col_idx])
-                    if label and parsed is not None:
-                        records.append([label, parsed])
-                payload = cls._local_chart_payload(
-                    f"{candidate.get('title', '')}{header[col_idx]}对比",
-                    "bar",
-                    unit,
-                    records[:REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS],
-                )
-                if payload:
-                    payloads.append(payload)
-            i = max(j, i + 1)
-        return payloads
-
-    @classmethod
-    def _extract_local_percent_comparison_payloads(
-        cls,
-        candidate: dict,
-        text: str,
-    ) -> list[dict]:
-        records = []
-        seen_labels = set()
-        generic_labels = {
-            "总计",
-            "合计",
-            "总体",
-            "整体",
-            "平均",
-            "行业",
-            "板块",
-            "领域",
-            "类别",
-            "项目",
-            "指标",
-            "样本",
-            "其他",
-            "总",
-            "total",
-            "overall",
-            "average",
-            "industry",
-            "others",
-        }
-        percent_metric_context = (
-            r"(?:同比|环比|增长|下降|下跌|减少|提升|上升|增加|提高|降低|"
-            r"占比|比重|比例|率|"
-            r"growth|grew|increase|increased|decrease|decreased|decline|declined|"
-            r"drop|dropped|share|rate|ratio|percent|percentage)"
-        )
-
-        def add_percent_record(
-            raw_label: str,
-            value_text: str,
-            metric_text: str,
-            context_text: str,
-        ) -> None:
-            label = cls._clean_local_chart_label(
-                re.split(r"[，,、]", raw_label)[-1]
-            )
-            if (
-                not label
-                or label in seen_labels
-                or any(generic in label.lower() for generic in generic_labels)
-            ):
-                return
-            parsed = cls._parse_visualization_number(value_text)
-            if parsed is None:
-                return
-            value_start = context_text.find(value_text)
-            if value_start > 0 and cls._local_numeric_context_is_approximate(
-                context_text,
-                value_start,
-                value_start + len(value_text),
-            ):
-                return
-            if re.search(
-                r"下跌|下降|大跌|负增长|减少|降低|decrease|decline|drop|down|negative|fell|fall",
-                f"{metric_text} {context_text}",
-                flags=re.IGNORECASE,
-            ):
-                parsed = -abs(parsed)
-            records.append([label, parsed])
-            seen_labels.add(label)
-
-        parenthesized_percent_pattern = re.compile(
-            r"(?P<label>[\u4e00-\u9fffA-Za-z0-9·&.\-]{2,32})"
-            r"\s*[（(]\s*(?P<value>[-+]?\d[\d,]*(?:\.\d+)?)\s*%\s*[）)]",
-            flags=re.IGNORECASE,
-        )
-        for match in parenthesized_percent_pattern.finditer(text):
-            nearby_text = text[
-                max(0, match.start() - 80): min(len(text), match.end() + 80)
-            ]
-            if not re.search(percent_metric_context, nearby_text, flags=re.IGNORECASE):
-                continue
-            add_percent_record(
-                match.group("label"),
-                match.group("value"),
-                nearby_text,
-                nearby_text,
-            )
-            if len(records) >= REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS:
-                break
-
-        metric_before_value_pattern = re.compile(
-            r"(?P<label>[\u4e00-\u9fffA-Za-z0-9·&.\-（）()，,、\s]{2,60}?)"
-            rf"(?P<metric>{percent_metric_context})"
-            r"[^。；;，,\n]{0,30}?"
-            r"(?P<value>[-+]?\d[\d,]*(?:\.\d+)?)\s*%"
-            ,
-            flags=re.IGNORECASE,
-        )
-        value_before_metric_pattern = re.compile(
-            r"(?P<label>[\u4e00-\u9fffA-Za-z0-9·&.\-（）()，,、\s]{2,60}?)"
-            r"(?P<value>[-+]?\d[\d,]*(?:\.\d+)?)\s*%"
-            r"[^。；;，,\n]{0,12}?"
-            rf"(?P<metric>{percent_metric_context})"
-            ,
-            flags=re.IGNORECASE,
-        )
-        for pattern in (metric_before_value_pattern, value_before_metric_pattern):
-            for match in pattern.finditer(text):
-                add_percent_record(
-                    match.group("label"),
-                    match.group("value"),
-                    match.group("metric"),
-                    match.group(0),
-                )
-                if len(records) >= REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS:
-                    break
-            if len(records) >= REPORT_CONTENT_LOCAL_VISUALIZATION_MAX_RECORDS:
-                break
-        payload = cls._local_chart_payload(
-            f"{candidate.get('title', '')}百分比对比",
-            "bar",
-            "%",
-            records,
-        )
-        return [payload] if payload else []
-
-    @classmethod
-    def _local_report_content_chart_payloads(cls, candidate: dict) -> list[dict]:
-        text = cls._clean_local_visualization_text(candidate.get("origin_content", ""))
-        desired = candidate.get("desired_chart_type", "")
-        line_payloads = (
-            cls._extract_local_year_range_payloads(candidate, text)
-            + cls._extract_local_year_value_payloads(candidate, text)
-        )
-        bar_payloads = (
-            cls._extract_local_markdown_table_payloads(candidate, text)
-            + cls._extract_local_percent_comparison_payloads(candidate, text)
-        )
-        return bar_payloads + line_payloads if desired == "bar" else line_payloads + bar_payloads
-
-    @classmethod
-    def _local_report_content_visualization_result(
-        cls,
-        candidate: dict,
-        section_idx: int,
-        signatures: set[tuple],
-        avoid_chart_data: list[dict] | None = None,
-    ) -> tuple[dict, dict, tuple] | None:
-        seen_local_signatures: set[tuple] = set()
-        for payload in cls._local_report_content_chart_payloads(candidate):
-            signature = cls._visualization_data_signature(payload)
-            if not signature or signature in signatures or signature in seen_local_signatures:
-                continue
-            if cls._visualization_data_is_redundant(payload, avoid_chart_data or []):
-                continue
-            seen_local_signatures.add(signature)
-            visualization_content = {
-                "rs_success": True,
-                "sub_section_visualization_content": json.dumps(
-                    payload, ensure_ascii=False
-                ),
-            }
-            if not cls._precheck_value_variation(visualization_content, section_idx):
-                continue
-            result = cls._generate_mermaid_code(visualization_content, section_idx)
-            if result.get("rs_success", True) and result.get("mermaid_content"):
-                return result, payload, signature
-        return None
-
     async def _ensure_report_content_visualization_fallback(
         self,
         current_inputs: dict,
@@ -3864,9 +3400,10 @@ class Reporter:
 
         The primary pipeline extracts chart data from classified source passages
         before the section is written. In real reports, the final section can
-        contain multiple clean, traceable data dimensions. This fallback keeps
-        the same validation pipeline, asks for data distinct from already
-        generated charts, and stops when no distinct chartable dataset remains.
+        contain multiple clean, traceable data dimensions. This late
+        report-content pass keeps the same validation pipeline, asks for data
+        distinct from already generated charts, and stops when no distinct
+        chartable dataset remains.
         """
         report_markdown = (current_inputs.get("sub_report_content") or "").strip()
         section_outline = (current_inputs.get("sub_section_outline") or "").strip()
@@ -3902,7 +3439,7 @@ class Reporter:
         if not candidates:
             return
 
-        def append_fallback_result(
+        def append_generated_result(
             candidate: dict,
             result: dict,
             chart_obj: dict,
@@ -3911,7 +3448,7 @@ class Reporter:
         ) -> None:
             signatures.add(signature)
             avoid_chart_data.append(chart_obj)
-            fallback_item = {
+            generated_item = {
                 "title": candidate["title"],
                 "url": (
                     f"generated://section/{section_idx}/report-content/"
@@ -3925,26 +3462,7 @@ class Reporter:
                 ),
                 "mermaid_content": result.get("mermaid_content", ""),
             }
-            existing.append(fallback_item)
-
-        def append_local_fallback(candidate: dict, chart_attempt_index: int) -> bool:
-            local_result = self._local_report_content_visualization_result(
-                candidate,
-                section_idx,
-                signatures,
-                avoid_chart_data,
-            )
-            if not local_result:
-                return False
-            result, chart_obj, signature = local_result
-            append_fallback_result(
-                candidate,
-                result,
-                chart_obj,
-                signature,
-                chart_attempt_index,
-            )
-            return True
+            existing.append(generated_item)
 
         for candidate in candidates:
             chart_attempts = 0
@@ -3966,10 +3484,6 @@ class Reporter:
                 }
                 result = await self._process_visualization_task(visualization_dict)
                 if not result.get("rs_success") or not result.get("mermaid_content"):
-                    if append_local_fallback(candidate, chart_attempts + 1):
-                        valid_chart_count += 1
-                        chart_attempts += 1
-                        continue
                     if not LogManager.is_sensitive():
                         logger.info(
                             "%s [generate_sub_section_visualization_content] section_idx: [%s], "
@@ -3991,10 +3505,6 @@ class Reporter:
                         avoid_chart_data,
                     )
                 ):
-                    if append_local_fallback(candidate, chart_attempts + 1):
-                        valid_chart_count += 1
-                        chart_attempts += 1
-                        continue
                     logger.info(
                         "%s [generate_sub_section_visualization_content] section_idx: [%s], "
                         "skip duplicate report-content visualization candidate [%s]",
@@ -4004,7 +3514,7 @@ class Reporter:
                     )
                     break
 
-                append_fallback_result(
+                append_generated_result(
                     candidate,
                     result,
                     chart_obj,

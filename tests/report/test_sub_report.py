@@ -826,7 +826,7 @@ async def test_report_content_visualization_fallback_skips_duplicate_chart_data(
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_uses_local_chart_when_llm_has_no_distinct_data():
+async def test_report_content_visualization_fallback_does_not_use_local_regex_when_llm_fails():
     reporter = _visualization_reporter()
     existing_chart = {
         "image_title": "Export growth trend",
@@ -863,22 +863,12 @@ async def test_report_content_visualization_fallback_uses_local_chart_when_llm_h
 
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
-    assert len(current_inputs["visualization_result"]) == 2
-    added_payload = json.loads(
-        current_inputs["visualization_result"][1]["sub_section_visualization_content"]
-    )
-    assert added_payload["image_type"] == "line"
-    assert added_payload["unit"] == "万辆"
-    assert added_payload["records"] == [
-        ["2022年", 688.7],
-        ["2023年", 949.5],
-        ["2024年", 1286.6],
-    ]
-    assert "line [688.7, 949.5, 1286.6]" in current_inputs["visualization_result"][1]["mermaid_content"]
+    assert len(current_inputs["visualization_result"]) == 1
+    reporter._process_visualization_task.assert_awaited()
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_prefers_exact_annual_total_over_approximate_context():
+async def test_report_content_visualization_fallback_does_not_extract_year_series_locally():
     reporter = _visualization_reporter()
     reporter._process_visualization_task = AsyncMock(
         return_value={"rs_success": False, "error_msg": "no_chart_data"}
@@ -904,21 +894,12 @@ async def test_report_content_visualization_fallback_prefers_exact_annual_total_
 
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
-    assert len(current_inputs["visualization_result"]) == 1
-    added_payload = json.loads(
-        current_inputs["visualization_result"][0]["sub_section_visualization_content"]
-    )
-    assert added_payload["image_type"] == "line"
-    assert added_payload["records"] == [
-        ["2022年", 688.7],
-        ["2023年", 949.5],
-        ["2024年", 1286.6],
-    ]
-    assert "line [688.7, 949.5, 1286.6]" in current_inputs["visualization_result"][0]["mermaid_content"]
+    assert current_inputs["visualization_result"] == []
+    reporter._process_visualization_task.assert_awaited()
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_adds_table_and_percent_charts_from_final_section():
+async def test_report_content_visualization_fallback_does_not_extract_table_or_percent_locally():
     reporter = _visualization_reporter()
     reporter._process_visualization_task = AsyncMock(
         return_value={"rs_success": False, "error_msg": "normalize_failed"}
@@ -954,39 +935,12 @@ async def test_report_content_visualization_fallback_adds_table_and_percent_char
 
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
-    assert len(current_inputs["visualization_result"]) == 2
-    usage_payload = json.loads(
-        current_inputs["visualization_result"][0]["sub_section_visualization_content"]
-    )
-    utilization_payload = json.loads(
-        current_inputs["visualization_result"][1]["sub_section_visualization_content"]
-    )
-    assert usage_payload["image_type"] == "bar"
-    assert usage_payload["unit"] == "万千瓦时"
-    assert usage_payload["records"] == [
-        ["华北A区", 371.83],
-        ["华东B区", 86.29],
-        ["华南C区", 65.71],
-        ["西南D区", 64.7],
-        ["西北E区", 62.23],
-        ["中部F区", 36.69],
-    ]
-    assert utilization_payload["image_type"] == "bar"
-    assert utilization_payload["unit"] == "%"
-    assert utilization_payload["records"] == [
-        ["华北A区", 74.1],
-        ["华东B区", 68.3],
-        ["华南C区", 63],
-        ["西南D区", 55.9],
-        ["西北E区", 44.6],
-        ["中部F区", 39.4],
-    ]
-    assert "bar [371.83, 86.29, 65.71, 64.7, 62.23, 36.69]" in current_inputs["visualization_result"][0]["mermaid_content"]
-    assert "bar [74.1, 68.3, 63, 55.9, 44.6, 39.4]" in current_inputs["visualization_result"][1]["mermaid_content"]
+    assert current_inputs["visualization_result"] == []
+    reporter._process_visualization_task.assert_awaited()
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_skips_existing_subset_and_adds_change_chart():
+async def test_report_content_visualization_fallback_keeps_existing_when_llm_fails():
     reporter = _visualization_reporter()
     existing_chart = {
         "image_title": "Regional processing volume",
@@ -1042,22 +996,12 @@ async def test_report_content_visualization_fallback_skips_existing_subset_and_a
 
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
-    assert len(current_inputs["visualization_result"]) == 2
-    added_payload = json.loads(
-        current_inputs["visualization_result"][1]["sub_section_visualization_content"]
-    )
-    assert added_payload["image_type"] == "bar"
-    assert added_payload["unit"] == "%"
-    assert added_payload["records"] == [
-        ["华北A区", 37.4],
-        ["东南I区", -24.1],
-        ["华东B区", 94],
-    ]
-    assert "bar [37.4, -24.1, 94]" in current_inputs["visualization_result"][1]["mermaid_content"]
+    assert len(current_inputs["visualization_result"]) == 1
+    reporter._process_visualization_task.assert_awaited()
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_replaces_successful_redundant_llm_subset():
+async def test_report_content_visualization_fallback_does_not_replace_duplicate_with_local_regex():
     reporter = _visualization_reporter()
     existing_chart = {
         "image_title": "Existing segment user comparison",
@@ -1121,23 +1065,12 @@ async def test_report_content_visualization_fallback_replaces_successful_redunda
 
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
-    assert len(current_inputs["visualization_result"]) == 2
-    added_payload = json.loads(
-        current_inputs["visualization_result"][1]["sub_section_visualization_content"]
-    )
-    assert added_payload["image_type"] == "bar"
-    assert added_payload["unit"] == "%"
-    assert added_payload["records"] == [
-        ["Product Alpha", 18.5],
-        ["Product Beta", -4.2],
-        ["Product Gamma", 31],
-    ]
-    assert "million users" not in current_inputs["visualization_result"][1]["mermaid_content"]
-    assert "bar [18.5, -4.2, 31]" in current_inputs["visualization_result"][1]["mermaid_content"]
+    assert len(current_inputs["visualization_result"]) == 1
+    reporter._process_visualization_task.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_extracts_generic_english_growth_rates():
+async def test_report_content_visualization_fallback_does_not_extract_english_growth_rates_locally():
     reporter = _visualization_reporter()
     reporter._process_visualization_task = AsyncMock(
         return_value={"rs_success": False, "error_msg": "no_chart_data"}
@@ -1160,22 +1093,12 @@ async def test_report_content_visualization_fallback_extracts_generic_english_gr
 
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
-    assert len(current_inputs["visualization_result"]) == 1
-    added_payload = json.loads(
-        current_inputs["visualization_result"][0]["sub_section_visualization_content"]
-    )
-    assert added_payload["image_type"] == "bar"
-    assert added_payload["unit"] == "%"
-    assert added_payload["records"] == [
-        ["Product Alpha", 18.5],
-        ["Product Beta", -4.2],
-        ["Product Gamma", 31],
-    ]
-    assert "bar [18.5, -4.2, 31]" in current_inputs["visualization_result"][0]["mermaid_content"]
+    assert current_inputs["visualization_result"] == []
+    reporter._process_visualization_task.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_extracts_generic_user_time_series():
+async def test_report_content_visualization_fallback_does_not_extract_time_series_locally():
     reporter = _visualization_reporter()
     reporter._process_visualization_task = AsyncMock(
         return_value={"rs_success": False, "error_msg": "no_chart_data"}
@@ -1198,22 +1121,12 @@ async def test_report_content_visualization_fallback_extracts_generic_user_time_
 
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
-    assert len(current_inputs["visualization_result"]) == 1
-    added_payload = json.loads(
-        current_inputs["visualization_result"][0]["sub_section_visualization_content"]
-    )
-    assert added_payload["image_type"] == "line"
-    assert added_payload["unit"] == "万人"
-    assert added_payload["records"] == [
-        ["2021年", 1200],
-        ["2022年", 1650],
-        ["2023年", 2100],
-    ]
-    assert "line [1200, 1650, 2100]" in current_inputs["visualization_result"][0]["mermaid_content"]
+    assert current_inputs["visualization_result"] == []
+    reporter._process_visualization_task.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_adds_multiple_generic_charts_from_one_subsection():
+async def test_report_content_visualization_fallback_does_not_extract_multiple_charts_locally():
     reporter = _visualization_reporter()
     reporter._process_visualization_task = AsyncMock(
         return_value={"rs_success": False, "error_msg": "no_chart_data"}
@@ -1241,26 +1154,8 @@ async def test_report_content_visualization_fallback_adds_multiple_generic_chart
 
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
-    assert len(current_inputs["visualization_result"]) == 2
-    payloads = [
-        json.loads(item["sub_section_visualization_content"])
-        for item in current_inputs["visualization_result"]
-    ]
-    assert [payload["image_type"] for payload in payloads] == ["line", "bar"]
-    assert payloads[0]["unit"].lower() == "million usd"
-    assert payloads[0]["records"] == [
-        ["2021年", 12],
-        ["2022年", 18],
-        ["2023年", 27],
-    ]
-    assert payloads[1]["unit"] == "million users"
-    assert payloads[1]["records"] == [
-        ["Enterprise", 4.2],
-        ["SMB", 7.5],
-        ["Individual", 11.3],
-    ]
-    assert "line [12, 18, 27]" in current_inputs["visualization_result"][0]["mermaid_content"]
-    assert "bar [4.2, 7.5, 11.3]" in current_inputs["visualization_result"][1]["mermaid_content"]
+    assert current_inputs["visualization_result"] == []
+    reporter._process_visualization_task.assert_awaited_once()
 
 
 @pytest.mark.asyncio
