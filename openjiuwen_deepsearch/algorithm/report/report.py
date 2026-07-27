@@ -90,16 +90,6 @@ REPORT_CONTENT_LOCAL_VISUALIZATION_UNIT_PATTERN = (
     r"(?:users?|people|customers?|visits?|downloads?|orders?|units?|vehicles?|tons?|"
     r"usd|dollars?|rmb|yuan|eur|euros?|gbp|hours?|minutes?|seconds?|pages?|items?))"
 )
-LOCAL_CHART_LABEL_METRIC_SUFFIX_PATTERN = re.compile(
-    r"(?:销售额|销量|收入|营收|利润|亏损|规模|产量|产能|装机量|出货量|订单量|用户数|客户数|"
-    r"访问量|下载量|价格|成本|费用|支出|投资额|融资额|市值|份额|占比|比重|市占率|"
-    r"增长率|增速|增幅|增长|下降|减少|提升|上升|增加|提高|降低|数量|金额|指数|面积|"
-    r"人口|排放量|能耗|用电量|发电量|客流量|吞吐量|货运量|周转量|里程|时长|"
-    r"revenue|sales|profit|loss|users?|customers?|visits?|downloads?|orders?|volume|"
-    r"output|capacity|price|cost|expenses?|investment|funding|market\s*share|share|"
-    r"ratio|rate|growth|increase|decrease|decline|index|emissions?|energy\s*use|traffic).*$",
-    re.IGNORECASE,
-)
 LEADING_TITLE_NUMBER_PATTERN = re.compile(
     r"^(?:"
     r"[\（][一二三四五六七八九十\d]{1,2}[\）]\s*|"
@@ -300,10 +290,10 @@ class Reporter:
 
         The baseline visualization prompt remains responsible for selecting the
         best chart type from traceable source records. This helper deliberately
-        avoids domain keywords (company, market, sales, finance, etc.) because
+        avoids domain-specific keyword lists because
         report topics are open-ended. It only preserves explicit chart requests
-        and obvious time-series structure so later pipeline stages can correct
-        GLM chart-type drift without becoming a topic classifier.
+        and obvious year-sequence structure as lightweight input for the
+        extraction prompt, without becoming a topic classifier.
         """
         context = " ".join(str(text or "") for text in texts).lower()
         if not context:
@@ -322,29 +312,6 @@ class Reporter:
         if explicit_only:
             return ""
 
-        temporal_cues = (
-            r"时间序列",
-            r"趋势",
-            r"走势",
-            r"逐年",
-            r"历年",
-            r"年度",
-            r"月度",
-            r"季度",
-            r"同比",
-            r"环比",
-            r"time\s+series",
-            r"over\s+time",
-            r"trend",
-            r"annual",
-            r"monthly",
-            r"quarterly",
-            r"year-over-year",
-            r"\byoy\b",
-        )
-        if any(re.search(pattern, context) for pattern in temporal_cues):
-            return "line"
-
         year_mentions = set(re.findall(r"(?:19|20)\d{2}", context))
         has_year_range = (
             re.search(r"(?:19|20)\d{2}\s*(?:至|到|[-—–~～])\s*(?:19|20)\d{2}", context)
@@ -353,90 +320,6 @@ class Reporter:
         if len(year_mentions) >= 3 or has_year_range:
             return "line"
         return ""
-
-    @staticmethod
-    def _visualization_label_is_temporal(label: str) -> bool:
-        label = str(label or "").strip()
-        if not label:
-            return False
-        temporal_patterns = (
-            r"^(?:19|20)\d{2}\s*年?$",
-            r"^(?:19|20)\d{2}\s*[-/]\s*\d{1,2}\s*月?$",
-            r"^(?:19|20)\d{2}\s*[Qq][1-4]$",
-            r"^(?:[1-4]|一|二|三|四)\s*季度$",
-            r"^第\s*(?:[1-4]|一|二|三|四)\s*季度$",
-            r"^(?:[1-9]|1[0-2])\s*月$",
-        )
-        return any(re.search(pattern, label) for pattern in temporal_patterns)
-
-    @classmethod
-    def _records_look_like_time_series(cls, records: list) -> bool:
-        if not isinstance(records, list) or len(records) < 3:
-            return False
-        labels = []
-        for row in records:
-            if not isinstance(row, list) or len(row) < 2:
-                return False
-            labels.append(str(row[0] or "").strip())
-        if not labels:
-            return False
-        temporal_count = sum(1 for label in labels if cls._visualization_label_is_temporal(label))
-        return temporal_count >= max(3, int(len(labels) * 0.75))
-
-    @classmethod
-    def _coerce_visualization_chart_type(
-        cls,
-        extracted_obj: dict,
-        visualization_dict: dict,
-    ) -> dict:
-        """
-        Correct obvious chart-type drift while preserving the extracted data.
-
-        GLM can correctly extract yearly records but label them as a bar chart.
-        When the section intent and/or record labels clearly indicate a time
-        series, render it as a line chart. Conversely, explicit comparison
-        sections should remain bar charts when the records are category values.
-        """
-        if not isinstance(extracted_obj, dict):
-            return extracted_obj
-
-        current_type = str(extracted_obj.get("image_type", "") or "").strip()
-        records = extracted_obj.get("records", [])
-        desired_type = str(visualization_dict.get("desired_chart_type", "") or "").strip()
-        if not desired_type:
-            desired_type = cls._infer_desired_chart_type(
-                visualization_dict.get("section_title", ""),
-                visualization_dict.get("section_outline", ""),
-            )
-
-        coerced_type = ""
-        looks_time_series = cls._records_look_like_time_series(records)
-        if looks_time_series and current_type in ("bar", "line"):
-            coerced_type = "line"
-        elif desired_type == "line" and looks_time_series:
-            coerced_type = "line"
-        elif (
-            desired_type == "bar"
-            and not looks_time_series
-            and isinstance(records, list)
-            and len(records) >= 3
-        ):
-            coerced_type = "bar"
-
-        if not coerced_type or coerced_type == current_type:
-            return extracted_obj
-
-        corrected = deepcopy(extracted_obj)
-        corrected["image_type"] = coerced_type
-        logger.info(
-            "%s [process_visualization_task] section_idx: [%s], "
-            "coerce visualization chart type from %s to %s",
-            EFFECT_SUB_REPORT_TAG,
-            visualization_dict.get("section_idx", 1),
-            current_type,
-            coerced_type,
-        )
-        return corrected
 
     @staticmethod
     def _generate_mermaid_code(visualization_content: dict, section_idx: int) -> dict:
@@ -2664,10 +2547,6 @@ class Reporter:
                 extracted_obj, dict
             ) and validate_visualization_extraction_schema(extracted_obj)
             if extract_ok:
-                extracted_obj = self._coerce_visualization_chart_type(
-                    extracted_obj,
-                    visualization_dict,
-                )
                 raw_payload = json.dumps(extracted_obj, ensure_ascii=False)
                 visualization_content[
                     "sub_section_visualization_content"
@@ -2718,6 +2597,11 @@ class Reporter:
                     f"Compliance/Relevance validation failed: {compliance_error}"
                     if compliance_error
                     else ""
+                )
+                validation_error += (
+                    "\nIf the issue is chart type mismatch, reselect image_type "
+                    "from the chart type rules based on the extracted records; "
+                    "do not rely on downstream code to rewrite image_type."
                 )
                 # Provide previous extracted JSON to help the next extraction fix issues,
                 # but explicitly forbid reuse/copying in the prompt message.
@@ -3244,8 +3128,6 @@ class Reporter:
         )
         if desired_type and chart_type == desired_type:
             score += 25
-        if chart_type == "line" and cls._records_look_like_time_series(records):
-            score += 12
         if isinstance(records, list):
             score += min(len(records), 12)
         if item.get("index"):
@@ -3539,7 +3421,6 @@ class Reporter:
             "",
             label,
         ).strip(" ，,、：:；;。（）()")
-        label = LOCAL_CHART_LABEL_METRIC_SUFFIX_PATTERN.sub("", label).strip(" ，,、：:；;。（）()")
         if len(label) > 24:
             candidates = [
                 item.strip(" ，,、：:；;。（）()")
@@ -3819,7 +3700,6 @@ class Reporter:
             "总体",
             "整体",
             "平均",
-            "市场",
             "行业",
             "板块",
             "领域",
@@ -3832,15 +3712,14 @@ class Reporter:
             "total",
             "overall",
             "average",
-            "market",
             "industry",
             "others",
         }
-        share_or_rate_context = (
-            r"同比|环比|增长率|增幅|增速|增长|下降|下跌|减少|提升|上升|增加|提高|降低|"
-            r"市场份额|市占率|份额|占比|比重|渗透率|转化率|留存率|毛利率|利润率|"
-            r"growth|grew|increase|increased|decrease|decreased|decline|declined|drop|dropped|"
-            r"share|market\s+share|rate|ratio"
+        percent_metric_context = (
+            r"(?:同比|环比|增长|下降|下跌|减少|提升|上升|增加|提高|降低|"
+            r"占比|比重|比例|率|"
+            r"growth|grew|increase|increased|decrease|decreased|decline|declined|"
+            r"drop|dropped|share|rate|ratio|percent|percentage)"
         )
 
         def add_percent_record(
@@ -3886,7 +3765,7 @@ class Reporter:
             nearby_text = text[
                 max(0, match.start() - 80): min(len(text), match.end() + 80)
             ]
-            if not re.search(share_or_rate_context, nearby_text, flags=re.IGNORECASE):
+            if not re.search(percent_metric_context, nearby_text, flags=re.IGNORECASE):
                 continue
             add_percent_record(
                 match.group("label"),
@@ -3899,7 +3778,7 @@ class Reporter:
 
         metric_before_value_pattern = re.compile(
             r"(?P<label>[\u4e00-\u9fffA-Za-z0-9·&.\-（）()，,、\s]{2,60}?)"
-            rf"(?P<metric>{share_or_rate_context})"
+            rf"(?P<metric>{percent_metric_context})"
             r"[^。；;，,\n]{0,30}?"
             r"(?P<value>[-+]?\d[\d,]*(?:\.\d+)?)\s*%"
             ,
@@ -3909,8 +3788,7 @@ class Reporter:
             r"(?P<label>[\u4e00-\u9fffA-Za-z0-9·&.\-（）()，,、\s]{2,60}?)"
             r"(?P<value>[-+]?\d[\d,]*(?:\.\d+)?)\s*%"
             r"[^。；;，,\n]{0,12}?"
-            r"(?P<metric>市场份额|市占率|份额|占比|比重|渗透率|转化率|留存率|毛利率|利润率|"
-            r"share|market\s+share|rate|ratio)"
+            rf"(?P<metric>{percent_metric_context})"
             ,
             flags=re.IGNORECASE,
         )

@@ -50,13 +50,17 @@ If the source text contains multiple metrics, choose the most prominent metric b
 ## 3. Field Constraints
 - `image_title`: non-empty, concise, and consistent with the metric, dimension/scope, time/object, and `section_outline`.
 - `image_type`: exactly one of `pie`, `line`, `timeline`, `bar`.
+- Choose `image_type` correctly here. Downstream code will validate and render the selected type, but it will not rewrite an incorrect `image_type`.
 - `records`: preserve original extraction order. Non-timeline charts require at least 3 records.
 
 # Chart Type Selection
+Before output, compare `records` against all chart type rules and pick the one whose data shape is valid. If the chosen `image_type` conflicts with the extracted records, the output is invalid.
+
 1. Line Chart
    - Use for continuous, equal-granularity quantitative sequences with the same metric across at least 3 points.
    - Examples: yearly trend, monthly trend, price series, temperature sequence.
    - Do not use for non-continuous categories or mixed metrics.
+   - Do not output `bar` for equal-granularity time or ordered numeric sequences.
 
 2. Pie Chart
    - Use only for explicit whole-part/proportion data.
@@ -66,6 +70,7 @@ If the source text contains multiple metrics, choose the most prominent metric b
 3. Bar Chart
    - Use for categorical comparison/ranking of the same metric across discrete categories at the same time point.
    - This is the default for valid numeric comparison data that is not a trend or whole-part proportion.
+   - Do not output `bar` when the X values are a continuous/equal-granularity sequence; use `line` instead.
 
 4. Timeline
    - Use for milestones, events, or policies with explicit dates/years when there is no valid numeric comparison/composition data.

@@ -34,9 +34,11 @@ Output exactly:
 - Mark units invalid only when the base unit/dimension is incompatible, or when records mix different metrics/statistical calibers.
 
 ## 3. Chart Type Rules
+Validate the declared `image_type` against the actual `records` shape. Do not silently accept a chart just because another chart type could represent the records. If the declared type conflicts with the records, return `valid:false` and explain the mismatch so extraction can retry with the correct `image_type`.
+
 ### 3.1 Bar Chart
 - Core rule: one metric, discrete categories, compatible base units, at least 3 comparable records.
-- Invalid if records mix dimensions/metrics, incompatible base units, continuous X-axis values, or fewer than 3 comparable records.
+- Invalid if records mix dimensions/metrics, incompatible base units, continuous/equal-granularity X-axis values, time-series X-axis values, or fewer than 3 comparable records.
 
 ### 3.2 Line Chart
 - Core rule: one metric, continuous/equal-granularity X-axis, compatible base units, at least 3 comparable records.
@@ -57,7 +59,7 @@ Output exactly:
 - No markdown, comments, code fences, extra characters, or line breaks.
 
 # Output Examples
-{"valid":false,"error_msg":"1. Chart data has no relevance to chapter outline (chart focuses on 2023 employee training while outline covers 2024 sales performance); 2. Bar chart mixes incompatible base units/metrics: million yuan and employees."}
-{"valid":false,"error_msg":"Chart data has no relevance to chapter outline (chart is about international market expansion while the outline covers domestic market operations)."}
-{"valid":false,"error_msg":"Line chart mixes dimensions/metrics: revenue and user count are included with incompatible base units million yuan and persons."}
+{"valid":false,"error_msg":"1. Chart data has no relevance to chapter outline (chart focuses on 2023 employee training while outline covers 2024 service uptime); 2. Bar chart mixes incompatible base units/metrics: kWh and employees."}
+{"valid":false,"error_msg":"Chart data has no relevance to chapter outline (chart is about overseas office expansion while the outline covers domestic facility operations)."}
+{"valid":false,"error_msg":"Line chart mixes dimensions/metrics: power usage and device count are included with incompatible base units kWh and devices."}
 {"valid":true,"error_msg":""}

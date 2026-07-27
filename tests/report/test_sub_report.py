@@ -361,13 +361,13 @@ def _visualization_reporter() -> Reporter:
     return reporter
 
 
-def test_infer_desired_chart_type_uses_explicit_and_temporal_hints_only():
+def test_infer_desired_chart_type_uses_explicit_and_year_sequence_hints_only():
     assert Reporter._infer_desired_chart_type(
         "请使用柱状图展示不同模型的性能指标",
     ) == "bar"
     assert Reporter._infer_desired_chart_type(
         "年度吞吐量规模与延迟变化"
-    ) == "line"
+    ) == ""
     assert Reporter._infer_desired_chart_type(
         "比较 2022—2024 年同一口径指标"
     ) == "line"
@@ -581,8 +581,8 @@ async def test_visualization_extraction_retries_empty_json_and_accepts_fenced_js
 
 
 @pytest.mark.asyncio
-async def test_visualization_extraction_coerces_temporal_bar_to_line():
-    chart_payload = {
+async def test_visualization_extraction_retries_chart_type_mismatch():
+    wrong_chart_payload = {
         "image_title": "2022-2024 NEV sales trend",
         "image_type": "bar",
         "records": [
@@ -591,8 +591,20 @@ async def test_visualization_extraction_coerces_temporal_bar_to_line():
             ["2024年", "1286.6", "万辆"],
         ],
     }
+    corrected_chart_payload = {
+        **wrong_chart_payload,
+        "image_type": "line",
+    }
     llm_responses = [
-        {"content": json.dumps(chart_payload, ensure_ascii=False)},
+        {"content": json.dumps(wrong_chart_payload, ensure_ascii=False)},
+        {"content": '{"valid":true,"error_msg":""}'},
+        {
+            "content": (
+                '{"valid":false,"error_msg":"Bar chart uses time-series '
+                'X-axis values; use line instead."}'
+            )
+        },
+        {"content": json.dumps(corrected_chart_payload, ensure_ascii=False)},
         {"content": '{"valid":true,"error_msg":""}'},
         {"content": '{"valid":true,"error_msg":""}'},
     ]
@@ -600,7 +612,7 @@ async def test_visualization_extraction_coerces_temporal_bar_to_line():
     with patch(
         "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
         new=AsyncMock(side_effect=llm_responses),
-    ):
+    ) as mocked_llm:
         ok, result, extracted = (
             await _visualization_reporter()._extract_visualization_data(
                 visualization_dict={
@@ -621,8 +633,10 @@ async def test_visualization_extraction_coerces_temporal_bar_to_line():
         )
 
     assert ok is True
+    assert extracted == corrected_chart_payload
     assert extracted["image_type"] == "line"
     assert json.loads(result["sub_section_visualization_content"])["image_type"] == "line"
+    assert mocked_llm.await_count == 6
 
 
 @pytest.mark.asyncio
@@ -904,7 +918,7 @@ async def test_report_content_visualization_fallback_prefers_exact_annual_total_
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_adds_sales_and_share_charts_from_final_section():
+async def test_report_content_visualization_fallback_adds_table_and_percent_charts_from_final_section():
     reporter = _visualization_reporter()
     reporter._process_visualization_task = AsyncMock(
         return_value={"rs_success": False, "error_msg": "normalize_failed"}
@@ -912,28 +926,27 @@ async def test_report_content_visualization_fallback_adds_sales_and_share_charts
     current_inputs = {
         "section_idx": 2,
         "language": "zh-CN",
-        "section_task": "2024年主要厂商新能源汽车销量对比",
+        "section_task": "2024年数据中心运营指标对比",
         "sub_section_outline": (
-            "2 2024年主要厂商新能源汽车销量对比\n"
-            "2.1 主要厂商销量规模对比\n"
-            "2.2 厂商市场份额与竞争格局"
+            "2 2024年数据中心运营指标对比\n"
+            "2.1 不同机房年度用电量对比\n"
+            "2.2 不同机房资源利用率差异"
         ),
         "sub_report_content": (
-            "# 2. 2024年主要厂商新能源汽车销量对比\n"
-            "## 2.1 主要厂商销量规模对比\n"
-            "| 厂商 | 2024年零售销量（万辆） |\n"
+            "# 2. 2024年数据中心运营指标对比\n"
+            "## 2.1 不同机房年度用电量对比\n"
+            "| 机房 | 年度用电量（万千瓦时） |\n"
             "| :--- | :--- |\n"
-            "| 比亚迪 | 371.83 [citation:1] |\n"
-            "| 吉利汽车 | 86.29 [citation:1] |\n"
-            "| 特斯拉中国 | 65.71 [citation:1] |\n"
-            "| 上汽通用五菱 | 64.70 [citation:1] |\n"
-            "| 长安汽车 | 62.23 [citation:2] |\n"
-            "| 广汽埃安 | 36.69 [citation:2] |\n"
-            "## 2.2 厂商市场份额与竞争格局\n"
-            "比亚迪以34.1%的市占率占据绝对主导地位[citation:1]。"
-            "第二梯队竞争激烈，吉利（7.9%）、特斯拉（6.0%）、"
-            "上汽通用五菱（5.9%）与理想（4.6%）份额差距较小[citation:1]。"
-            "广汽埃安份额为3.4%。\n"
+            "| 华北A区 | 371.83 [citation:1] |\n"
+            "| 华东B区 | 86.29 [citation:1] |\n"
+            "| 华南C区 | 65.71 [citation:1] |\n"
+            "| 西南D区 | 64.70 [citation:1] |\n"
+            "| 西北E区 | 62.23 [citation:2] |\n"
+            "| 中部F区 | 36.69 [citation:2] |\n"
+            "## 2.2 不同机房资源利用率差异\n"
+            "资源利用率差异明显，华北A区（74.1%）、华东B区（68.3%）、华南C区（63.0%）、"
+            "西南D区（55.9%）与西北E区（44.6%）需要持续观察[citation:1]。"
+            "中部F区（39.4%）仍有优化空间。\n"
         ),
         "visualization_result": [],
         "max_generate_retry_num": 1,
@@ -942,54 +955,54 @@ async def test_report_content_visualization_fallback_adds_sales_and_share_charts
     await reporter._ensure_report_content_visualization_fallback(current_inputs)
 
     assert len(current_inputs["visualization_result"]) == 2
-    sales_payload = json.loads(
+    usage_payload = json.loads(
         current_inputs["visualization_result"][0]["sub_section_visualization_content"]
     )
-    share_payload = json.loads(
+    utilization_payload = json.loads(
         current_inputs["visualization_result"][1]["sub_section_visualization_content"]
     )
-    assert sales_payload["image_type"] == "bar"
-    assert sales_payload["unit"] == "万辆"
-    assert sales_payload["records"] == [
-        ["比亚迪", 371.83],
-        ["吉利汽车", 86.29],
-        ["特斯拉中国", 65.71],
-        ["上汽通用五菱", 64.7],
-        ["长安汽车", 62.23],
-        ["广汽埃安", 36.69],
+    assert usage_payload["image_type"] == "bar"
+    assert usage_payload["unit"] == "万千瓦时"
+    assert usage_payload["records"] == [
+        ["华北A区", 371.83],
+        ["华东B区", 86.29],
+        ["华南C区", 65.71],
+        ["西南D区", 64.7],
+        ["西北E区", 62.23],
+        ["中部F区", 36.69],
     ]
-    assert share_payload["image_type"] == "bar"
-    assert share_payload["unit"] == "%"
-    assert share_payload["records"] == [
-        ["吉利", 7.9],
-        ["特斯拉", 6],
-        ["上汽通用五菱", 5.9],
-        ["理想", 4.6],
-        ["广汽埃安", 3.4],
-        ["比亚迪", 34.1],
+    assert utilization_payload["image_type"] == "bar"
+    assert utilization_payload["unit"] == "%"
+    assert utilization_payload["records"] == [
+        ["华北A区", 74.1],
+        ["华东B区", 68.3],
+        ["华南C区", 63],
+        ["西南D区", 55.9],
+        ["西北E区", 44.6],
+        ["中部F区", 39.4],
     ]
     assert "bar [371.83, 86.29, 65.71, 64.7, 62.23, 36.69]" in current_inputs["visualization_result"][0]["mermaid_content"]
-    assert "bar [7.9, 6, 5.9, 4.6, 3.4, 34.1]" in current_inputs["visualization_result"][1]["mermaid_content"]
+    assert "bar [74.1, 68.3, 63, 55.9, 44.6, 39.4]" in current_inputs["visualization_result"][1]["mermaid_content"]
 
 
 @pytest.mark.asyncio
-async def test_report_content_visualization_fallback_skips_sales_subset_and_adds_growth_chart():
+async def test_report_content_visualization_fallback_skips_existing_subset_and_adds_change_chart():
     reporter = _visualization_reporter()
     existing_chart = {
-        "image_title": "Top vendor sales",
+        "image_title": "Regional processing volume",
         "image_type": "bar",
-        "unit": "辆",
+        "unit": "次",
         "records": [
-            ["比亚迪汽车", 3718281],
-            ["吉利汽车", 862933],
-            ["特斯拉中国", 657102],
-            ["上汽通用五菱", 647047],
-            ["长安汽车", 622313],
-            ["理想汽车", 500508],
-            ["奇瑞汽车", 432556],
-            ["赛力斯汽车", 385906],
-            ["广汽埃安", 366901],
-            ["长城汽车", 291859],
+            ["华北A区", 3718281],
+            ["华东B区", 862933],
+            ["华南C区", 657102],
+            ["西南D区", 647047],
+            ["西北E区", 622313],
+            ["中部F区", 500508],
+            ["东北G区", 432556],
+            ["华中H区", 385906],
+            ["东南I区", 366901],
+            ["西部J区", 291859],
         ],
     }
     reporter._process_visualization_task = AsyncMock(
@@ -998,27 +1011,27 @@ async def test_report_content_visualization_fallback_skips_sales_subset_and_adds
     current_inputs = {
         "section_idx": 2,
         "language": "zh-CN",
-        "section_task": "2024年主要厂商新能源汽车销量对比",
-        "sub_section_outline": "2 2024年主要厂商新能源汽车销量对比\n2.1 头部厂商销量排名",
+        "section_task": "2024年数据中心处理量对比",
+        "sub_section_outline": "2 2024年数据中心处理量对比\n2.1 重点区域处理量排名",
         "sub_report_content": (
-            "# 2. 2024年主要厂商新能源汽车销量对比\n"
-            "## 2.1 头部厂商销量排名与对比\n"
-            "| 厂商 | 2024年零售销量（辆） | 排名 |\n"
+            "# 2. 2024年数据中心处理量对比\n"
+            "## 2.1 重点区域处理量排名与对比\n"
+            "| 区域 | 2024年处理量（次） | 排名 |\n"
             "| :--- | :--- | :--- |\n"
-            "| 比亚迪 | 3,718,281 | 1 |\n"
-            "| 特斯拉中国 | 657,102 | 3 |\n"
-            "| 广汽埃安 | 366,901 | 9 |\n"
-            "## 2.2 增长差异与竞争格局\n"
-            "比亚迪同比增长37.4%[citation:1]，广汽埃安同比大跌24.1%[citation:2]，"
-            "吉利汽车新能源销量同比激增94.0%[citation:3]。\n"
+            "| 华北A区 | 3,718,281 | 1 |\n"
+            "| 华南C区 | 657,102 | 3 |\n"
+            "| 东南I区 | 366,901 | 9 |\n"
+            "## 2.2 处理量变化差异\n"
+            "华北A区同比增长37.4%[citation:1]，东南I区同比下降24.1%[citation:2]，"
+            "华东B区同比增长94.0%[citation:3]。\n"
         ),
         "visualization_result": [
             {
                 "sub_section_visualization_content": json.dumps(existing_chart),
                 "mermaid_content": (
-                    'xychart-beta\n    x-axis ["比亚迪汽车", "吉利汽车", "特斯拉中国", '
-                    '"上汽通用五菱", "长安汽车", "理想汽车", "奇瑞汽车", "赛力斯汽车", '
-                    '"广汽埃安", "长城汽车"]\n'
+                    'xychart-beta\n    x-axis ["华北A区", "华东B区", "华南C区", '
+                    '"西南D区", "西北E区", "中部F区", "东北G区", "华中H区", '
+                    '"东南I区", "西部J区"]\n'
                     "    bar [3718281, 862933, 657102, 647047, 622313, 500508, "
                     "432556, 385906, 366901, 291859]"
                 ),
@@ -1036,9 +1049,9 @@ async def test_report_content_visualization_fallback_skips_sales_subset_and_adds
     assert added_payload["image_type"] == "bar"
     assert added_payload["unit"] == "%"
     assert added_payload["records"] == [
-        ["比亚迪", 37.4],
-        ["广汽埃安", -24.1],
-        ["吉利汽车新能源", 94],
+        ["华北A区", 37.4],
+        ["东南I区", -24.1],
+        ["华东B区", 94],
     ]
     assert "bar [37.4, -24.1, 94]" in current_inputs["visualization_result"][1]["mermaid_content"]
 
@@ -1080,19 +1093,19 @@ async def test_report_content_visualization_fallback_replaces_successful_redunda
     current_inputs = {
         "section_idx": 4,
         "language": "en",
-        "section_task": "SaaS product revenue comparison",
-        "sub_section_outline": "4 SaaS product revenue comparison\n4.1 Growth by product",
+        "section_task": "SaaS product performance comparison",
+        "sub_section_outline": "4 SaaS product performance comparison\n4.1 Growth by product",
         "sub_report_content": (
-            "# 4. SaaS product revenue comparison\n"
+            "# 4. SaaS product performance comparison\n"
             "## 4.1 Growth by product\n"
             "| Segment | Active users (million users) | Support tickets |\n"
             "| :--- | :--- | :--- |\n"
             "| Enterprise | 4.2 | 180 |\n"
             "| SMB | 7.5 | 260 |\n"
             "| Individual | 11.3 | 310 |\n"
-            "Product Alpha revenue growth 18.5% [citation:1], "
-            "Product Beta revenue declined 4.2% [citation:2], and "
-            "Product Gamma revenue growth 31.0% [citation:3].\n"
+            "Product Alpha growth 18.5% [citation:1], "
+            "Product Beta declined 4.2% [citation:2], and "
+            "Product Gamma growth 31.0% [citation:3].\n"
         ),
         "visualization_result": [
             {
@@ -1132,14 +1145,14 @@ async def test_report_content_visualization_fallback_extracts_generic_english_gr
     current_inputs = {
         "section_idx": 4,
         "language": "en",
-        "section_task": "SaaS product revenue comparison",
-        "sub_section_outline": "4 SaaS product revenue comparison\n4.1 Growth by product",
+        "section_task": "SaaS product performance comparison",
+        "sub_section_outline": "4 SaaS product performance comparison\n4.1 Growth by product",
         "sub_report_content": (
-            "# 4. SaaS product revenue comparison\n"
+            "# 4. SaaS product performance comparison\n"
             "## 4.1 Growth by product\n"
-            "Product Alpha revenue growth 18.5% [citation:1], "
-            "Product Beta revenue declined 4.2% [citation:2], and "
-            "Product Gamma revenue growth 31.0% [citation:3].\n"
+            "Product Alpha growth 18.5% [citation:1], "
+            "Product Beta declined 4.2% [citation:2], and "
+            "Product Gamma growth 31.0% [citation:3].\n"
         ),
         "visualization_result": [],
         "max_generate_retry_num": 1,
