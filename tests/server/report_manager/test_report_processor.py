@@ -1710,3 +1710,68 @@ def test_report_html_currency_protection_math_ops_synced_with_backend(tmp_path):
             f"MATH_OPS 应包含 '{operator}' 以与后端 _is_currency_start 同步，"
             f"实际 MATH_OPS={math_ops!r}"
         )
+
+
+def test_convert_md_to_html_keeps_nested_list_level_across_chart_block(tmp_path):
+    """图片插入嵌套列表项之间时，不应打断嵌套列表层级。
+
+    回归测试：normalize_interrupted_nested_list_blocks 应将图片和图注
+    重新缩进到父列表项内部，保证后续同级列表项不被提升为顶级列表。
+    原 UT 在 commit 9d72e46 删除函数时一并删除，此处恢复。
+    """
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "- **开源与闭源博弈的多维透视**：\n"
+        "    - **地缘维度**：第一条\n"
+        "\n"
+        "![日本Top10](chart.png)\n"
+        "<font size=2>**日本Top10**: 图注</font>\n"
+        "    - **生态维度**：第二条\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    soup = BeautifulSoup(html_path.read_text(encoding="utf-8"), "html.parser")
+    parent_item = next(
+        item
+        for item in soup.find_all("li")
+        if "开源与闭源博弈的多维透视" in item.get_text()
+    )
+    nested_items = parent_item.find("ul", recursive=False).find_all("li", recursive=False)
+    assert len(nested_items) == 2
+    assert "地缘维度" in nested_items[0].get_text()
+    assert "生态维度" in nested_items[1].get_text()
+    assert nested_items[0].find("img", alt="日本Top10") is not None
+
+
+def test_convert_md_to_html_keeps_nested_list_level_across_font_description(tmp_path):
+    """font 描述块出现在列表项之间时，不应将后续嵌套列表项提升层级。
+
+    回归测试：normalize_interrupted_nested_list_blocks 应将 font 描述块
+    重新缩进到父列表项内部，保证后续嵌套列表项层级不丢失。
+    原 UT 在 commit 9d72e46 删除函数时一并删除，此处恢复。
+    """
+    md_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    md_path.write_text(
+        "- **多维度协同分析**：\n"
+        "\n"
+        "<font size=2>**边缘智能体多维度协同分析**: 描述</font>\n"
+        "    - **技术维度**：内容。\n"
+        "    - **经济维度**：内容。\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(md_path, html_path)
+
+    soup = BeautifulSoup(html_path.read_text(encoding="utf-8"), "html.parser")
+    parent_item = next(
+        item for item in soup.find_all("li") if "多维度协同分析" in item.get_text()
+    )
+    nested_items = parent_item.find("ul", recursive=False).find_all("li", recursive=False)
+    assert [item.get_text(strip=True) for item in nested_items] == [
+        "技术维度：内容。",
+        "经济维度：内容。",
+    ]

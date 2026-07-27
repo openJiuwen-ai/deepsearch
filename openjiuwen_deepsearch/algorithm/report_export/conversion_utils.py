@@ -28,6 +28,18 @@ NUMBERED_HEADING_RE = re.compile(
 )
 LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+\.\s+)")
 INDENTED_LIST_ITEM_RE = re.compile(r"^(?P<indent>[ \t]{4,})(?P<marker>(?:[-*+]\s+|\d+\.\s+).*)$")
+LIST_ITEM_WITH_INDENT_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<marker>(?:[-*+]\s+|\d+\.\s+).*)$"
+)
+MARKDOWN_IMAGE_LINE_RE = re.compile(r"^[ \t]*!\[[^\]]*\]\([^)]+\)[ \t]*$")
+LEGACY_FONT_CAPTION_PREFIX_RE = re.compile(
+    r"^[ \t]*<font\b[^>]*\bsize\s*=\s*[\"']?2[\"']?[^>]*>",
+    flags=re.IGNORECASE,
+)
+INDENTED_HTML_BLOCK_END_RE = re.compile(
+    r"^[ \t]+</(?:div|section|article|main)>[ \t]*$",
+    flags=re.IGNORECASE,
+)
 MARKDOWN_TABLE_ROW_RE = re.compile(r"^[ \t]{0,3}\|")
 MARKDOWN_TABLE_DELIMITER_RE = re.compile(r":?-{1,}:?")
 SENTENCE_END_RE = re.compile(r"[。！？?!…]$")
@@ -39,7 +51,7 @@ LEGACY_CITATION_RE = re.compile(r"\[\s*citation:\s*\d+\s*\]")
 REFERENCE_LINE_RE = re.compile(r"^(?P<indent>\s*)\[(\d+)\]\.\s+(.*)$", re.MULTILINE)
 CENTER_CAPTION_RE = re.compile(r'<div\s+style="text-align:\s*center;?">', flags=re.IGNORECASE)
 LEGACY_FONT_CAPTION_LINE_RE = re.compile(
-    r'^[ \t]*<font\b[^>]*\bsize\s*=\s*["\']?2["\']?[^>]*>(?P<body>.*?)</font>'
+    r'^(?P<indent>[ \t]*)<font\b[^>]*\bsize\s*=\s*["\']?2["\']?[^>]*>(?P<body>.*?)</font>'
     r'(?P<citations>(?:<sup class="citation">.*?</sup>)*)[ \t]*$',
     flags=re.IGNORECASE | re.MULTILINE,
 )
@@ -276,10 +288,15 @@ def normalize_legacy_font_caption_blocks(text: str) -> str:
     """
 
     def _replace(match: re.Match[str]) -> str:
+        indent = match.group("indent")
         body = match.group("body").strip()
         citations = match.group("citations").strip()
         caption_content = f"{body}{citations}"
-        return f'\n<div class="figure-caption" markdown="1">\n{caption_content}\n</div>\n'
+        return (
+            f'\n{indent}<div class="figure-caption" markdown="1">\n'
+            f"{indent}{caption_content}\n"
+            f"{indent}</div>\n"
+        )
 
     return LEGACY_FONT_CAPTION_LINE_RE.sub(_replace, text)
 
@@ -391,6 +408,10 @@ def normalize_orphan_indented_list_items(text: str) -> str:
     def _indent_width(indent: str) -> int:
         return len(indent.expandtabs(4))
 
+    def _line_indent_width(line: str) -> int:
+        indent = re.match(r"^[ \t]*", line).group(0)
+        return _indent_width(indent)
+
     for line in lines:
         if line.lstrip().startswith("```"):
             in_fenced_code = not in_fenced_code
@@ -406,7 +427,19 @@ def normalize_orphan_indented_list_items(text: str) -> str:
                 continue
 
             previous = _previous_nonempty_line()
-            if not LIST_ITEM_RE.match(previous) and not INDENTED_LIST_ITEM_RE.match(previous):
+            previous_indent_width = _line_indent_width(previous)
+            follows_nested_content = (
+                previous_indent_width > indent_width
+                or (
+                    previous_indent_width == indent_width
+                    and INDENTED_HTML_BLOCK_END_RE.match(previous)
+                )
+            )
+            if (
+                not follows_nested_content
+                and not LIST_ITEM_RE.match(previous)
+                and not INDENTED_LIST_ITEM_RE.match(previous)
+            ):
                 orphan_list_indent = indent_width
                 normalized.append(match.group("marker"))
                 continue
@@ -418,6 +451,78 @@ def normalize_orphan_indented_list_items(text: str) -> str:
         normalized.append(line)
 
     return "\n".join(normalized)
+
+
+def normalize_interrupted_nested_list_blocks(text: str) -> str:
+    """Keep image or description blocks inside the list items they interrupt.
+
+    当图片或 ``<font size=2>`` 描述块出现在嵌套列表项之间时，Markdown 会
+    将其视为打断列表的独立段落，导致后续同级列表项被提升为顶级列表。
+    本函数将这些打断块重新缩进到其所属父列表项内部，保证列表层级不丢失。
+
+    Args:
+        text: 原始 Markdown 文本。
+
+    Returns:
+        str: 打断块已归位到父列表项内部的 Markdown 文本。
+    """
+    lines = text.split("\n")
+
+    def _indent_width(indent: str) -> int:
+        return len(indent.expandtabs(4))
+
+    for index, line in enumerate(lines):
+        current_item = LIST_ITEM_WITH_INDENT_RE.match(line)
+        if current_item is None:
+            continue
+
+        list_indent = _indent_width(current_item.group("indent"))
+        block_indexes: list[int] = []
+        saw_image = False
+        saw_font_description = False
+
+        for cursor in range(index + 1, len(lines)):
+            candidate = lines[cursor]
+            if not candidate.strip():
+                block_indexes.append(cursor)
+                continue
+
+            if MARKDOWN_IMAGE_LINE_RE.match(candidate):
+                saw_image = True
+                block_indexes.append(cursor)
+                continue
+
+            if saw_image and LEGACY_FONT_CAPTION_PREFIX_RE.match(candidate):
+                saw_font_description = True
+                block_indexes.append(cursor)
+                continue
+
+            if not saw_image and LEGACY_FONT_CAPTION_PREFIX_RE.match(candidate):
+                saw_font_description = True
+                block_indexes.append(cursor)
+                continue
+
+            next_item = LIST_ITEM_WITH_INDENT_RE.match(candidate)
+            next_indent = _indent_width(next_item.group("indent")) if next_item else -1
+            is_matching_sibling = (
+                saw_image
+                and next_item is not None
+                and next_indent == list_indent
+            )
+            is_nested_after_description = (
+                saw_font_description
+                and next_item is not None
+                and next_indent > list_indent
+            )
+            if is_matching_sibling or is_nested_after_description:
+                content_indent_width = next_indent if is_nested_after_description else list_indent + 4
+                content_indent = " " * content_indent_width
+                for block_index in block_indexes:
+                    if lines[block_index].strip():
+                        lines[block_index] = content_indent + lines[block_index].lstrip()
+            break
+
+    return "\n".join(lines)
 
 
 def render_mermaid_supplement(supplement_markdown: str) -> str:
@@ -449,6 +554,7 @@ def preprocess_markdown_text(text: str) -> str:
         str: 预处理后的 Markdown 文本。
     """
     text = normalize_whitespace(text)
+    text = normalize_interrupted_nested_list_blocks(text)
     text = strip_internal_citation_markers(text)
     text = replace_citations(text)
     text = normalize_reference_lines(text)
