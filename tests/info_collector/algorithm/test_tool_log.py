@@ -1,8 +1,12 @@
 import pytest
 from unittest.mock import patch
+
+import httpx
+
 from openjiuwen_deepsearch.algorithm.research_collector.tool_log import \
     is_sensitive_key, get_logged_tool, tool_invoke_log, tool_invoke_log_async
 from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.status_code import StatusCode
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.tool_log"
 
@@ -496,3 +500,216 @@ class TestToolInvokeLogAsync:
 
             result = await sync_outer()
             assert result == {"search_results": [{"content": "ok"}]}
+
+
+class TestPreserveCustomException:
+    """回归测试：装饰器不应吞并已有 CustomException 的 error_code。
+
+    背景：runtime_api 工具内部对 SSRF 校验、响应大小限制、JSON 深度限制
+    等场景显式抛出 ``CustomValueException(PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR
+    = 200009)``，调用方依赖该错误码区分安全校验失败与普通执行错误。
+    若日志装饰器无差别 ``except Exception`` 后统一包装为
+    ``TOOL_EXEC_ERROR (211304)`` 或 ``TOOL_LOG_ERROR (211303)``，
+    原始错误码丢失，调用方无法区分。
+    """
+
+    # ---- tool_invoke_log_async ----
+
+    @pytest.mark.asyncio
+    async def test_async_preserves_custom_value_exception_code(self):
+        """被装饰函数抛出 CustomValueException(200009) 时，原样上抛。"""
+
+        expected_code = StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code
+
+        @tool_invoke_log_async
+        async def failing_runtime_call():
+            raise CustomValueException(
+                error_code=expected_code,
+                message="runtime api url is not allowed (private ip): '127.0.0.1'",
+            )
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=False), \
+                patch(f"{MODULE_PATH}.logger"), \
+                patch(f"{MODULE_PATH}.Config"):
+            with pytest.raises(CustomValueException) as exc_info:
+                await failing_runtime_call()
+
+        assert exc_info.value.error_code == expected_code
+        assert "private ip" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_async_preserves_custom_value_exception_sensitive_mode(self):
+        """敏感模式下也应原样上抛 CustomValueException，且 message 不能是方法对象。"""
+
+        expected_code = StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code
+
+        @tool_invoke_log_async
+        async def failing_runtime_call():
+            raise CustomValueException(
+                error_code=expected_code,
+                message="runtime api response exceeds max size 2097152 bytes",
+            )
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=True), \
+                patch(f"{MODULE_PATH}.logger"), \
+                patch(f"{MODULE_PATH}.Config"):
+            with pytest.raises(CustomValueException) as exc_info:
+                await failing_runtime_call()
+
+        assert exc_info.value.error_code == expected_code
+        assert "exceeds max size" in exc_info.value.message
+        assert "format" not in exc_info.value.message  # 防止 errmsg.format 漏括号
+
+    @pytest.mark.asyncio
+    async def test_async_wraps_unknown_exception_as_tool_exec_error(self):
+        """被装饰函数抛出未知异常（非 CustomException）时仍包装为 TOOL_EXEC_ERROR。"""
+
+        @tool_invoke_log_async
+        async def failing_runtime_call():
+            raise httpx.ConnectError("connection refused")
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=False), \
+                patch(f"{MODULE_PATH}.logger"), \
+                patch(f"{MODULE_PATH}.Config"):
+            with pytest.raises(CustomValueException) as exc_info:
+                await failing_runtime_call()
+
+        assert exc_info.value.error_code == StatusCode.TOOL_EXEC_ERROR.code
+        assert "connection refused" in exc_info.value.message
+        assert exc_info.value.__cause__ is not None
+
+    @pytest.mark.asyncio
+    async def test_async_wraps_unknown_exception_sensitive_mode_message_is_string(self):
+        """回归：敏感模式下包装未知异常时，message 必须是字符串。
+
+        防止 ``StatusCode.TOOL_EXEC_ERROR.errmsg.format`` 漏括号导致 method
+        对象被当作 message 传入，使 ``exc.message`` 变成
+        ``<built-in method format of str object at 0x...>``。
+        """
+
+        @tool_invoke_log_async
+        async def failing_runtime_call():
+            raise ValueError("boom")
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=True), \
+                patch(f"{MODULE_PATH}.logger"), \
+                patch(f"{MODULE_PATH}.Config"):
+            with pytest.raises(CustomValueException) as exc_info:
+                await failing_runtime_call()
+
+        assert exc_info.value.error_code == StatusCode.TOOL_EXEC_ERROR.code
+        assert isinstance(exc_info.value.message, str)
+        assert "built-in" not in exc_info.value.message
+        assert "format of str" not in exc_info.value.message
+
+    # ---- tool_invoke_log (同步版) ----
+
+    def test_sync_preserves_custom_value_exception_code(self):
+
+        expected_code = StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code
+
+        @tool_invoke_log
+        def failing_runtime_call():
+            raise CustomValueException(
+                error_code=expected_code,
+                message="runtime api url is not allowed (private ip): '10.0.0.1'",
+            )
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=False), \
+                patch(f"{MODULE_PATH}.logger"):
+            with pytest.raises(CustomValueException) as exc_info:
+                failing_runtime_call()
+
+        assert exc_info.value.error_code == expected_code
+        assert "private ip" in exc_info.value.message
+
+    def test_sync_wraps_unknown_exception_as_tool_exec_error(self):
+
+        @tool_invoke_log
+        def failing_runtime_call():
+            raise ValueError("boom")
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=False), \
+                patch(f"{MODULE_PATH}.logger"):
+            with pytest.raises(CustomValueException) as exc_info:
+                failing_runtime_call()
+
+        assert exc_info.value.error_code == StatusCode.TOOL_EXEC_ERROR.code
+        assert "boom" in exc_info.value.message
+
+    # ---- get_logged_tool ----
+
+    def test_get_logged_tool_run_preserves_custom_value_exception(self):
+        """_run 应原样上抛 CustomValueException，不覆盖为 TOOL_LOG_ERROR (211303)。"""
+
+        expected_code = StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code
+
+        class FailingTool:
+            def _run(self, *args, **kwargs):
+                raise CustomValueException(
+                    error_code=expected_code,
+                    message="runtime api response JSON exceeds max depth 20",
+                )
+
+        LoggedTool = get_logged_tool(FailingTool)
+        tool = LoggedTool()
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=False), \
+                patch(f"{MODULE_PATH}.logger"):
+            with pytest.raises(CustomValueException) as exc_info:
+                tool._run("arg1")
+
+        assert exc_info.value.error_code == expected_code
+        assert "max depth" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_get_logged_tool_arun_preserves_custom_value_exception(self):
+        """_arun 应原样上抛 CustomValueException，不覆盖为 TOOL_LOG_ERROR (211303)。"""
+
+        expected_code = StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code
+
+        class AsyncFailingTool:
+            async def _arun(self, *args, **kwargs):
+                raise CustomValueException(
+                    error_code=expected_code,
+                    message="runtime api response JSON object exceeds max item count 1000",
+                )
+
+        LoggedTool = get_logged_tool(AsyncFailingTool)
+        tool = LoggedTool()
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=False), \
+                patch(f"{MODULE_PATH}.logger"):
+            with pytest.raises(CustomValueException) as exc_info:
+                await tool._arun("arg1")
+
+        assert exc_info.value.error_code == expected_code
+        assert "max item count" in exc_info.value.message
+
+    def test_get_logged_tool_run_wraps_unknown_exception_as_tool_log_error(self):
+        """_run 对未知异常仍包装为 TOOL_LOG_ERROR (211303)，保留旧契约。"""
+
+        class FailingTool:
+            def _run(self, *args, **kwargs):
+                raise RuntimeError("unexpected")
+
+        LoggedTool = get_logged_tool(FailingTool)
+        tool = LoggedTool()
+
+        with patch(f"{MODULE_PATH}.time.time"), \
+                patch(f"{MODULE_PATH}.LogManager.is_sensitive", return_value=False), \
+                patch(f"{MODULE_PATH}.logger"):
+            with pytest.raises(CustomValueException) as exc_info:
+                tool._run("arg1")
+
+        assert exc_info.value.error_code == StatusCode.TOOL_LOG_ERROR.code
+        assert "unexpected" in exc_info.value.message
+        assert exc_info.value.__cause__ is not None
