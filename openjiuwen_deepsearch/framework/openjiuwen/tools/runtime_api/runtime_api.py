@@ -12,7 +12,6 @@ from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 from pydantic import BaseModel
 
-from openjiuwen_deepsearch.algorithm.research_collector.tool_log import tool_invoke_log_async
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.api_wrapper import (
@@ -223,12 +222,7 @@ def create_runtime_api_tool(
             return response_model.model_validate(_extract_response_data(payload))
         return payload
 
-    # Set the name on the ORIGINAL function BEFORE decoration so the decorator's
-    # closure captures the correct __name__ for log output.
-    _invoke.__name__ = tool_config.name or "runtime_api_tool"
-    _decorated_invoke = tool_invoke_log_async(_invoke)
-
-    return LocalFunction(card=card, func=_decorated_invoke)
+    return LocalFunction(card=card, func=_invoke)
 
 
 def build_runtime_api_tools(

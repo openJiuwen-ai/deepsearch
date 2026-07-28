@@ -20,14 +20,9 @@ T = TypeVar("T")
 
 
 def is_sensitive_key(key):
-    """判断键名是否包含敏感子字符串
-
-    覆盖通用凭据字段：api_key / access_token / authorization / password /
-    secret / credential 等，避免 runtime API 的 header 参数（如 Authorization）
-    被 tool_invoke_log 装饰器以 INFO 级别明文记录。
-    """
+    """判断键名是否包含敏感子字符串"""
     key_lower = key.lower()
-    sensitive_keys = {"key", "url", "token", "auth", "password", "secret", "credential"}
+    sensitive_keys = {"key", "url", "token"}
     return any(sub in key_lower for sub in sensitive_keys)
 
 
