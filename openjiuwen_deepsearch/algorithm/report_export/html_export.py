@@ -317,7 +317,7 @@ document.addEventListener('DOMContentLoaded', function() {{
             {{left: '$', right: '$', display: false}},
         ],
         macros: {{
-            '\\bm': '\\boldsymbol{{#1}}'
+            '\\\\bm': '\\\\boldsymbol{{#1}}'
         }},
         throwOnError: false
     }});

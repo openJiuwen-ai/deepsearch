@@ -185,7 +185,7 @@ def tool_invoke_log(func):
         try:
             # execute the original function
             result = func(*args, **kwargs)
-        except CustomException:务
+        except CustomException:
             # error_code 与 message，原样上抛，避免被覆盖为 TOOL_EXEC_ERROR。
             error_msg = f"[TOOL ERROR] {function_name} | Args: {args_text} | Exception: {repr(sys.exc_info()[1])}"
             if LogManager.is_sensitive():

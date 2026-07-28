@@ -1334,7 +1334,10 @@ def test_html_export_defines_bm_macro(tmp_path):
 
     html_text = html_path.read_text(encoding="utf-8")
     assert r"$\pi_{\bm{\theta}}:\mathcal{O}\rightarrow\mathcal{A}$" in html_text
-    assert "\\\\bm" in html_text or "boldsymbol" in html_text
+    # 宏键和宏值在最终 HTML/JS 源码中必须各含两个反斜杠，
+    # 使 JavaScript 解析后为单反斜杠 \bm / \boldsymbol{#1}（KaTeX 宏键需带前导反斜杠）。
+    assert r"'\\bm'" in html_text
+    assert r"'\\boldsymbol{#1}'" in html_text
 
 
 def test_convert_md_to_docx_preserves_currency_dollars_next_to_inline_math(tmp_path):
