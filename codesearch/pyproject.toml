@@ -1,0 +1,40 @@
+[project]
+name = "openjiuwen-codesearch"
+version = "0.1.0"
+description = "Agentic code retrieval built on the openJiuwen agent-core framework."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+# Heavy integrations are opt-in so the core SDK stays installable and unit-testable anywhere.
+milvus = ["pymilvus>=2.4"]
+embed = ["aiohttp>=3.9"]
+# spike 已验证该版本两个 API 面（foundation.llm 与 workflow/Runner）齐备，
+# 图化引擎全量测试通过；PyPI openjiuwen==0.1.10.post3 亦兼容，可随时切换。
+llm = ["openjiuwen @ git+https://gitcode.com/openJiuwen/agent-core.git@v0.1.13"]
+bench = ["pandas>=2.0", "pyarrow>=14"]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openjiuwen_codesearch*"]
+
+[tool.setuptools.package-data]
+openjiuwen_codesearch = ["algorithm/prompts/*.md"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = ["-ra", "-q"]
+markers = [
+    "e2e: requires a running Milvus instance / external services",
+    "integration: requires optional heavy dependencies (openjiuwen, pymilvus)",
+]
