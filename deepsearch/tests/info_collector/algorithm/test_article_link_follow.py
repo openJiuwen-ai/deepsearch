@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from openjiuwen_deepsearch.algorithm.research_collector import article_link_follow
 from openjiuwen_deepsearch.algorithm.research_collector.article_link_follow import (
     ARTICLE_LINK_SOURCE_FIELD,
@@ -6,6 +8,17 @@ from openjiuwen_deepsearch.algorithm.research_collector.article_link_follow impo
     build_article_link_candidates,
     select_article_link_candidates,
 )
+
+
+def candidates_from_content(
+    content: str,
+    parent_url: str = "https://example.com/base/article",
+) -> list[ArticleLinkCandidate]:
+    """Build candidates through the public article-link API for parser assertions."""
+    return build_article_link_candidates(
+        [{"doc_id": "parent", "url": parent_url, "original_content": content}],
+        existing_urls=set(),
+    )
 
 
 def test_build_candidates_extracts_supported_link_forms_and_skips_depth_one_docs():
@@ -65,9 +78,9 @@ def test_markdown_link_parser_preserves_balanced_parentheses_in_url():
         "[GIC](https://en.wikipedia.org/wiki/GIC_(sovereign_wealth_fund))"
     )
 
-    extracted = article_link_follow._extract_links(content)
+    candidates = candidates_from_content(content)
 
-    assert extracted[0].href == (
+    assert candidates[0].url == (
         "https://en.wikipedia.org/wiki/GIC_(sovereign_wealth_fund)"
     )
 
@@ -171,10 +184,10 @@ def test_build_article_link_source_preserves_bounded_links_and_context():
     )
 
     source = build_article_link_source(content, max_links=2)
-    extracted = article_link_follow._extract_links(source)
+    candidates = candidates_from_content(source)
 
-    assert list(dict.fromkeys(item.href for item in extracted)) == [
-        "/reports/2026",
+    assert [item.url for item in candidates] == [
+        "https://example.com/reports/2026",
         "https://agency.gov/data",
     ]
     assert "Policy evidence before" in source
@@ -206,9 +219,9 @@ def test_html_link_parser_does_not_cross_unclosed_anchor_tags():
         '<a href="https://example.com/report">Report</a>'
     )
 
-    extracted = article_link_follow._extract_links(content)
+    candidates = candidates_from_content(content)
 
-    assert [(item.href, item.anchor_text) for item in extracted] == [
+    assert [(item.url, item.anchor_text) for item in candidates] == [
         ("https://example.com/report", "Report"),
     ]
 
@@ -241,11 +254,10 @@ def test_build_article_link_source_sanitizes_ambiguous_and_oversized_fields():
     )
 
     source = build_article_link_source(content, max_links=20)
-    unique_hrefs = list(dict.fromkeys(
-        item.href for item in article_link_follow._extract_links(source)
-    ))
+    candidates = candidates_from_content(source)
+    unique_urls = [item.url for item in candidates]
 
-    assert unique_hrefs == ["https://example.com/report_(final%29"]
+    assert unique_urls == ["https://example.com/report_(final%29"]
     assert "labels.example.com" not in source
     assert len(source) < 3000
 
@@ -256,40 +268,48 @@ def test_build_article_link_source_uses_url_slug_for_missing_anchor():
         "sovereign-wealth-funds-in-motion for details."
     )
 
-    extracted = article_link_follow._extract_links(source)
+    candidates = candidates_from_content(source)
 
-    assert extracted[0].anchor_text == "sovereign wealth funds in motion"
+    assert candidates[0].anchor_text == "sovereign wealth funds in motion"
     assert "source link" not in source
+
+
+@dataclass(frozen=True)
+class CandidateOptions:
+    """Optional fields for selection-test candidates."""
+
+    anchor: str = ""
+    before: str = ""
+    after: str = ""
+    position: int = 0
 
 
 def _candidate(
     index: int,
     url: str,
-    anchor: str = "",
-    before: str = "",
-    after: str = "",
-    position: int = 0,
+    options: CandidateOptions | None = None,
 ) -> ArticleLinkCandidate:
+    candidate_options = options or CandidateOptions()
     return ArticleLinkCandidate(
         candidate_index=index,
         url=url,
         canonical_url=url,
-        anchor_text=anchor,
-        context_before=before,
-        context_after=after,
+        anchor_text=candidate_options.anchor,
+        context_before=candidate_options.before,
+        context_after=candidate_options.after,
         parent_doc_id="a",
         parent_title="Parent",
         parent_url="https://example.com/a",
         query="official evidence",
-        source_position=position,
+        source_position=candidate_options.position,
     )
 
 
 def test_rule_selection_hard_filters_homepage_and_action_links():
     candidates = [
-        _candidate(0, "https://example.com/", anchor="Official report"),
-        _candidate(1, "https://example.com/login", anchor="Login"),
-        _candidate(2, "https://example.com/report", anchor="Official report"),
+        _candidate(0, "https://example.com/", CandidateOptions(anchor="Official report")),
+        _candidate(1, "https://example.com/login", CandidateOptions(anchor="Login")),
+        _candidate(2, "https://example.com/report", CandidateOptions(anchor="Official report")),
     ]
 
     selected = select_article_link_candidates(
@@ -303,10 +323,10 @@ def test_rule_selection_hard_filters_homepage_and_action_links():
 
 def test_rule_selection_accepts_three_simple_match_reasons():
     candidates = [
-        _candidate(0, "https://example.com/a", anchor="subsidy policy"),
-        _candidate(1, "https://example.com/b", after="subsidy policy details"),
-        _candidate(2, "https://example.com/dataset/2026", anchor="download"),
-        _candidate(3, "https://example.com/about", anchor="About us"),
+        _candidate(0, "https://example.com/a", CandidateOptions(anchor="subsidy policy")),
+        _candidate(1, "https://example.com/b", CandidateOptions(after="subsidy policy details")),
+        _candidate(2, "https://example.com/dataset/2026", CandidateOptions(anchor="download")),
+        _candidate(3, "https://example.com/about", CandidateOptions(anchor="About us")),
     ]
 
     selected = select_article_link_candidates(
@@ -324,9 +344,21 @@ def test_rule_selection_accepts_three_simple_match_reasons():
 
 def test_rule_selection_is_stable_and_does_not_fill_with_unmatched_links():
     candidates = [
-        _candidate(0, "https://example.com/z-report", anchor="report", position=20),
-        _candidate(1, "https://example.com/a-report", anchor="report", position=10),
-        _candidate(2, "https://example.com/unrelated", anchor="About", position=0),
+        _candidate(
+            0,
+            "https://example.com/z-report",
+            CandidateOptions(anchor="report", position=20),
+        ),
+        _candidate(
+            1,
+            "https://example.com/a-report",
+            CandidateOptions(anchor="report", position=10),
+        ),
+        _candidate(
+            2,
+            "https://example.com/unrelated",
+            CandidateOptions(anchor="About", position=0),
+        ),
     ]
 
     selected = select_article_link_candidates(

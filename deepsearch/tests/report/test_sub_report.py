@@ -1099,7 +1099,11 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm, caplog):
 
     assert any("phase=report_candidate" in message and "urls=fake_url" in message for message in caplog.messages)
     assert any("phase=report_prefilter" in message and "outcome=included" in message for message in caplog.messages)
-    assert any("phase=report_classification" in message and "outcome=selected" in message for message in caplog.messages)
+    assert any(
+        "phase=report_classification" in message
+        and "outcome=selected" in message
+        for message in caplog.messages
+    )
 
 
 @pytest.mark.asyncio
@@ -1108,8 +1112,11 @@ async def test_generate_sub_report_logs_followed_rationale_failure_terminal_outc
     mock_llm_cls,
     caplog,
 ):
-    reporter = Reporter("basic")
-    reporter._generate_section_rationales = AsyncMock(return_value=[])
+    class ReporterWithEmptyRationales(Reporter):
+        async def _generate_section_rationales(self, *args, **kwargs):
+            return []
+
+    reporter = ReporterWithEmptyRationales("basic")
     followed_url = "https://example.com/followed-rationale-failure"
 
     with caplog.at_level(logging.INFO):

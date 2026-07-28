@@ -209,7 +209,7 @@ def test_validate_runtime_request_url_blocks_dns_to_non_public_ip(monkeypatch):
         validate_runtime_request_url("http://metadata.attacker.test/latest/meta-data/")
 
 
-@pytest.mark.parametrize("url", [
+@pytest.mark.parametrize("target_url", [
     "http://localhost/admin",
     "http://127.0.0.1/admin",
     "http://[::1]/admin",
@@ -217,9 +217,9 @@ def test_validate_runtime_request_url_blocks_dns_to_non_public_ip(monkeypatch):
     "http://user:password@example.com/private",
     "file:///etc/passwd",
 ])
-def test_validate_public_web_url_rejects_unsafe_targets(url):
+def test_validate_public_web_url_rejects_unsafe_targets(target_url):
     with pytest.raises(CustomValueException):
-        validate_public_web_url(url)
+        validate_public_web_url(target_url)
 
 
 def test_validate_public_web_url_blocks_dns_to_non_public_ip(monkeypatch):

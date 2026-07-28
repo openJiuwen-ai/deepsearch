@@ -977,10 +977,16 @@ def test_service_config_uses_relaxed_collector_loop_defaults():
     assert not hasattr(service_config, "info_collector_max_react_recursion_limit")
 
 
+def workflow_spec_for_test(graph):
+    """Read framework graph metadata through one explicit test boundary."""
+    internal_graph = getattr(graph, "_internal")
+    return getattr(internal_graph, "_workflow_spec")
+
+
 def test_info_collector_graph_routes_webpage_enrichment_directly_to_supervisor():
     """链接跟进融合后，网页增强节点应直接连接 Supervisor。"""
     collector_graph = build_info_collector_sub_graph()
-    spec = collector_graph._internal._workflow_spec
+    spec = workflow_spec_for_test(collector_graph)
 
     assert NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value in spec.comp_configs
     assert "COLLECTOR_ARTICLE_LINK_FOLLOW" not in NodeId.__members__

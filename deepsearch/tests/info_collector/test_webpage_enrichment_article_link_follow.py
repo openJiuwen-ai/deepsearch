@@ -1,4 +1,5 @@
 import threading
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -20,6 +21,58 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Retr
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+
+
+class ExposedWebPageEnrichmentNode(WebPageEnrichmentNode):
+    """Expose protected orchestration hooks through a test-only public API."""
+
+    def prepare(self, inputs: dict, session: Mock, context: Mock) -> dict:
+        return self._pre_handle(inputs, session, context)
+
+    def set_safe_candidate_builder(self, implementation: Any) -> None:
+        self._safe_article_link_candidates = implementation
+
+    def set_structured_llm_invoker(self, implementation: Any) -> None:
+        self._invoke_structured_llm = implementation
+
+    def set_article_candidate_follower(self, implementation: Any) -> None:
+        self._follow_article_candidate = implementation
+
+    async def run_article_link_follow(self, state: dict, session: Mock) -> None:
+        await self._run_article_link_follow(state, session)
+
+    async def safe_article_link_candidates(
+        self,
+        state: dict,
+    ) -> list[ArticleLinkCandidate]:
+        return await self._safe_article_link_candidates(state)
+
+    async def follow_article_candidate(
+        self,
+        state: dict,
+        candidate: ArticleLinkCandidate,
+        reason: str,
+    ) -> FollowedArticle | None:
+        return await self._follow_article_candidate(state, candidate, reason)
+
+    async def compress_article_link_content(
+        self,
+        state: dict,
+        candidate: ArticleLinkCandidate,
+        reason: str,
+        fetched: dict,
+    ) -> ArticleLinkEvidence | None:
+        return await self._compress_article_link_content(
+            state, candidate, reason, fetched
+        )
+
+    @classmethod
+    def cleanup_article_link_sources(cls, state: dict, session: Mock) -> None:
+        cls._cleanup_article_link_sources(state, session)
+
+    @classmethod
+    def write_article_link_results(cls, *args: Any) -> None:
+        cls._write_article_link_results(*args)
 
 
 @pytest.fixture(autouse=True)
@@ -95,8 +148,8 @@ def _enabled_state(parent_content: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_rule_selection_does_not_invoke_structured_llm():
-    node = WebPageEnrichmentNode()
-    state = node._pre_handle({}, Mock(
+    node = ExposedWebPageEnrichmentNode()
+    state = node.prepare({}, Mock(
         get_global_state=Mock(side_effect=lambda key: _enabled_state(
             "See [official report](https://agency.gov/report)"
         ).get(key))
@@ -113,25 +166,26 @@ async def test_rule_selection_does_not_invoke_structured_llm():
         parent_url="https://example.com/a",
         query="official evidence",
     )
-    node._safe_article_link_candidates = AsyncMock(return_value=[candidate])
-    node._invoke_structured_llm = AsyncMock(return_value=None)
-    node._follow_article_candidate = AsyncMock(return_value=None)
+    node.set_safe_candidate_builder(AsyncMock(return_value=[candidate]))
+    structured_llm = AsyncMock(return_value=None)
+    node.set_structured_llm_invoker(structured_llm)
+    node.set_article_candidate_follower(AsyncMock(return_value=None))
 
-    await node._run_article_link_follow(state, Mock())
+    await node.run_article_link_follow(state, Mock())
 
-    node._invoke_structured_llm.assert_not_awaited()
+    structured_llm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_no_candidates_emit_article_link_follow_summary(caplog):
     state_values = _enabled_state("Parent content without links")
-    node = WebPageEnrichmentNode()
-    state = node._pre_handle(
+    node = ExposedWebPageEnrichmentNode()
+    state = node.prepare(
         {},
         Mock(get_global_state=Mock(side_effect=lambda key: state_values.get(key))),
         Mock(),
     )
-    node._safe_article_link_candidates = AsyncMock(return_value=[])
+    node.set_safe_candidate_builder(AsyncMock(return_value=[]))
     caplog.set_level(
         "INFO",
         logger=(
@@ -140,7 +194,7 @@ async def test_no_candidates_emit_article_link_follow_summary(caplog):
         ),
     )
 
-    await node._run_article_link_follow(state, Mock())
+    await node.run_article_link_follow(state, Mock())
 
     assert "[ArticleLinkFollow] phase=start" in caplog.text
     assert "[ArticleLinkFollow] phase=summary" in caplog.text
@@ -166,11 +220,11 @@ async def test_article_link_follow_cleans_temporary_source_on_early_return():
     session.update_global_state = Mock(
         side_effect=lambda payload: state_values.update(payload)
     )
-    node = WebPageEnrichmentNode()
-    state = node._pre_handle({}, session, Mock())
-    node._safe_article_link_candidates = AsyncMock(return_value=[])
+    node = ExposedWebPageEnrichmentNode()
+    state = node.prepare({}, session, Mock())
+    node.set_safe_candidate_builder(AsyncMock(return_value=[]))
 
-    await node._run_article_link_follow(state, session)
+    await node.run_article_link_follow(state, session)
 
     assert ARTICLE_LINK_SOURCE_FIELD not in state_values[
         "collector_context.new_doc_infos_current_loop"
@@ -186,7 +240,7 @@ async def test_article_link_follow_cleans_temporary_source_on_early_return():
 @pytest.mark.asyncio
 async def test_cleanup_queues_clean_state_before_delayed_session_commit():
     committed = _enabled_state("Committed content without sidecar")
-    state = WebPageEnrichmentNode()._pre_handle(
+    state = ExposedWebPageEnrichmentNode().prepare(
         {},
         Mock(get_global_state=Mock(side_effect=lambda key: committed.get(key))),
         Mock(),
@@ -202,7 +256,7 @@ async def test_cleanup_queues_clean_state_before_delayed_session_commit():
     session.get_global_state = Mock(side_effect=lambda key: committed.get(key))
     session.update_global_state = Mock(side_effect=pending_updates.append)
 
-    WebPageEnrichmentNode._cleanup_article_link_sources(state, session)
+    ExposedWebPageEnrichmentNode.cleanup_article_link_sources(state, session)
 
     queued_docs = pending_updates[-1][
         "collector_context.new_doc_infos_current_loop"
@@ -228,8 +282,8 @@ async def test_article_link_cleanup_preserves_successfully_written_child():
     session.update_global_state = Mock(
         side_effect=lambda payload: state_values.update(payload)
     )
-    node = WebPageEnrichmentNode()
-    state = node._pre_handle({}, session, Mock())
+    node = ExposedWebPageEnrichmentNode()
+    state = node.prepare({}, session, Mock())
     candidate = ArticleLinkCandidate(
         candidate_index=0,
         url="https://agency.gov/report",
@@ -249,19 +303,19 @@ async def test_article_link_cleanup_preserves_successfully_written_child():
         "query": candidate.query,
         "original_content": "Followed evidence",
     }
-    node._safe_article_link_candidates = AsyncMock(return_value=[candidate])
-    node._follow_article_candidate = AsyncMock(return_value=FollowedArticle(
+    node.set_safe_candidate_builder(AsyncMock(return_value=[candidate]))
+    node.set_article_candidate_follower(AsyncMock(return_value=FollowedArticle(
         candidate_index=0,
         canonical_url=candidate.canonical_url,
         doc_info=child,
         source_content=child["original_content"],
-    ))
+    )))
 
-    await node._run_article_link_follow(state, session)
+    await node.run_article_link_follow(state, session)
 
-    assert [doc["doc_id"] for doc in state_values[
-        "collector_context.new_doc_infos_current_loop"
-    ]] == ["web_parent", "web-child"]
+    current_docs = state_values["collector_context.new_doc_infos_current_loop"]
+    current_doc_ids = [doc["doc_id"] for doc in current_docs]
+    assert current_doc_ids == ["web_parent", "web-child"]
     assert all(
         ARTICLE_LINK_SOURCE_FIELD not in doc
         for doc in state_values["collector_context.doc_infos"]
@@ -279,8 +333,8 @@ async def test_candidate_funnel_log_explains_existing_and_self_links(caplog):
         "url": "https://example.com/existing",
         "original_content": "existing",
     })
-    node = WebPageEnrichmentNode()
-    state = node._pre_handle(
+    node = ExposedWebPageEnrichmentNode()
+    state = node.prepare(
         {},
         Mock(get_global_state=Mock(side_effect=lambda key: state_values.get(key))),
         Mock(),
@@ -293,7 +347,7 @@ async def test_candidate_funnel_log_explains_existing_and_self_links(caplog):
         ),
     )
 
-    await node._run_article_link_follow(state, Mock())
+    await node.run_article_link_follow(state, Mock())
 
     assert "phase=candidate_funnel" in caplog.text
     assert "sidecar_doc_count=0" in caplog.text
@@ -493,8 +547,8 @@ async def test_enabled_node_caps_fetches_at_three_per_loop():
 
 @pytest.mark.asyncio
 async def test_candidate_dns_validation_runs_outside_event_loop_thread():
-    node = WebPageEnrichmentNode()
-    state = node._pre_handle({}, Mock(
+    node = ExposedWebPageEnrichmentNode()
+    state = node.prepare({}, Mock(
         get_global_state=Mock(side_effect=lambda key: _enabled_state(
             "[report](https://agency.gov/report)"
         ).get(key))
@@ -509,7 +563,7 @@ async def test_candidate_dns_validation_runs_outside_event_loop_thread():
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment.validate_public_web_url",
         side_effect=record_validation,
     ):
-        candidates = await node._safe_article_link_candidates(state)
+        candidates = await node.safe_article_link_candidates(state)
 
     assert len(candidates) == 1
     assert validation_threads
@@ -518,9 +572,9 @@ async def test_candidate_dns_validation_runs_outside_event_loop_thread():
 
 @pytest.mark.asyncio
 async def test_sensitive_safety_filter_log_redacts_rejected_url(caplog):
-    node = WebPageEnrichmentNode()
+    node = ExposedWebPageEnrichmentNode()
     secret_url = "https://secret.example/private-report"
-    state = node._pre_handle({}, Mock(
+    state = node.prepare({}, Mock(
         get_global_state=Mock(side_effect=lambda key: _enabled_state(
             f"[private report]({secret_url})"
         ).get(key))
@@ -538,7 +592,7 @@ async def test_sensitive_safety_filter_log_redacts_rejected_url(caplog):
         "webpage_enrichment.validate_public_web_url",
         side_effect=ValueError("private diagnostic detail"),
     ):
-        candidates = await node._safe_article_link_candidates(state)
+        candidates = await node.safe_article_link_candidates(state)
 
     assert candidates == []
     assert "phase=safety_filter" in caplog.text
@@ -549,7 +603,7 @@ async def test_sensitive_safety_filter_log_redacts_rejected_url(caplog):
 
 @pytest.mark.asyncio
 async def test_follow_candidate_reuses_webpage_fetch_pipeline():
-    node = WebPageEnrichmentNode()
+    node = ExposedWebPageEnrichmentNode()
     node.llm = Mock()
     state = {
         "fetch_timeout_seconds": 45,
@@ -601,7 +655,9 @@ async def test_follow_candidate_reuses_webpage_fetch_pipeline():
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment.validate_public_web_url",
         side_effect=record_final_url_validation,
     ):
-        followed = await node._follow_article_candidate(state, candidate, "primary source")
+        followed = await node.follow_article_candidate(
+            state, candidate, "primary source"
+        )
 
     shared_fetch.assert_awaited_once_with("https://agency.gov/report", 45)
     assert final_url_validation_threads
@@ -636,7 +692,7 @@ async def test_article_link_compression_logs_bounded_result_diagnostics(
     expected_outcome,
     expected_reason,
 ):
-    node = WebPageEnrichmentNode()
+    node = ExposedWebPageEnrichmentNode()
     state = {
         "step_title": "Official evidence",
         "step_description": "Collect primary data",
@@ -661,7 +717,7 @@ async def test_article_link_compression_logs_bounded_result_diagnostics(
         "fetch_method": "jina_reader",
         "content": "Fetched body",
     }
-    node._invoke_structured_llm = AsyncMock(return_value=structured_result)
+    node.set_structured_llm_invoker(AsyncMock(return_value=structured_result))
     caplog.set_level(
         "INFO",
         logger=(
@@ -670,7 +726,7 @@ async def test_article_link_compression_logs_bounded_result_diagnostics(
         ),
     )
 
-    await node._compress_article_link_content(
+    await node.compress_article_link_content(
         state, candidate, "primary source", fetched
     )
 
@@ -688,7 +744,7 @@ async def test_article_link_compression_logs_bounded_result_diagnostics(
 @pytest.mark.asyncio
 async def test_follow_candidate_rejects_empty_evaluation_result():
     """文档评价失败或无有效输出时不得接纳 B。"""
-    node = WebPageEnrichmentNode()
+    node = ExposedWebPageEnrichmentNode()
     node.llm = Mock()
     state = {
         "fetch_timeout_seconds": 45,
@@ -732,7 +788,9 @@ async def test_follow_candidate_rejects_empty_evaluation_result():
     ), patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment.validate_public_web_url"
     ):
-        followed = await node._follow_article_candidate(state, candidate, "primary source")
+        followed = await node.follow_article_candidate(
+            state, candidate, "primary source"
+        )
 
     assert followed is None
 
@@ -772,7 +830,7 @@ def test_redirect_to_existing_document_is_recorded_as_failed_not_successful():
     )
     session = Mock()
 
-    WebPageEnrichmentNode._write_article_link_results(
+    ExposedWebPageEnrichmentNode.write_article_link_results(
         session,
         state,
         [(0, "primary")],
@@ -824,7 +882,7 @@ def test_article_link_writeback_does_not_mutate_input_history_objects():
     )
     session = Mock()
 
-    WebPageEnrichmentNode._write_article_link_results(
+    ExposedWebPageEnrichmentNode.write_article_link_results(
         session,
         state,
         [(0, "primary")],

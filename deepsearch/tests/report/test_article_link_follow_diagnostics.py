@@ -86,8 +86,16 @@ def test_report_classification_logs_selected_and_rejected_outcomes(caplog):
             ["https://example.com/Selected?a=1"],
         )
 
-    assert any("url=https://example.com/Selected?a=1&utm_source=test" in message and "outcome=selected" in message for message in caplog.messages)
-    assert any("url=https://example.com/rejected" in message and "outcome=rejected" in message for message in caplog.messages)
+    assert any(
+        "url=https://example.com/Selected?a=1&utm_source=test" in message
+        and "outcome=selected" in message
+        for message in caplog.messages
+    )
+    assert any(
+        "url=https://example.com/rejected" in message
+        and "outcome=rejected" in message
+        for message in caplog.messages
+    )
 
 
 def test_report_final_reference_uses_trace_data_or_final_text(caplog):
@@ -104,9 +112,23 @@ def test_report_final_reference_uses_trace_data_or_final_text(caplog):
             [{"source_id": "trace-source", "url": "https://unrelated.example"}],
         )
 
-    assert any("url=https://example.com/traced" in message and "outcome=cited" in message and "trace_source_match=true" in message for message in caplog.messages)
-    assert any("url=https://example.com/text" in message and "outcome=cited" in message and "report_text_match=true" in message for message in caplog.messages)
-    assert any("url=https://example.com/missing" in message and "outcome=not_cited" in message for message in caplog.messages)
+    assert any(
+        "url=https://example.com/traced" in message
+        and "outcome=cited" in message
+        and "trace_source_match=true" in message
+        for message in caplog.messages
+    )
+    assert any(
+        "url=https://example.com/text" in message
+        and "outcome=cited" in message
+        and "report_text_match=true" in message
+        for message in caplog.messages
+    )
+    assert any(
+        "url=https://example.com/missing" in message
+        and "outcome=not_cited" in message
+        for message in caplog.messages
+    )
 
 
 def test_report_diagnostics_hide_document_identifiers_in_sensitive_mode(

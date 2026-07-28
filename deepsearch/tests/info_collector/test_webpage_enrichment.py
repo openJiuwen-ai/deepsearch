@@ -179,6 +179,18 @@ class ExposedWebPageEnrichmentNode(WebPageEnrichmentNode):
         """调用节点候选选择方法。"""
         return await self._select_candidate_indexes(state)
 
+    def set_fetch_implementation(self, implementation) -> None:
+        """Inject the fetch implementation through the test-only public API."""
+        self._fetch_webpage = implementation
+
+    def set_compression_implementation(self, implementation) -> None:
+        """Inject the compression implementation through the test-only public API."""
+        self._compress_content = implementation
+
+    async def invoke_node(self, inputs: dict, session: Mock, context: Mock):
+        """Invoke the protected node implementation through a public test hook."""
+        return await self._do_invoke(inputs, session, context)
+
     async def enrich_selected_candidates(self, state: dict, selected_indexes: list[int]) -> dict:
         """调用节点网页增强方法。"""
         return await self._enrich_selected_candidates(state, selected_indexes)
@@ -224,15 +236,15 @@ async def test_enrichment_captures_links_only_when_follow_enabled(
         ),
     )
     node = ExposedWebPageEnrichmentNode()
-    node._fetch_webpage = AsyncMock(return_value={
+    node.set_fetch_implementation(AsyncMock(return_value={
         "url": "https://example.com/article",
         "status_code": 200,
         "content": "Evidence [official report](/reports/2026) before compression.",
-    })
-    node._compress_content = AsyncMock(return_value=WebPageEvidenceContent(
+    }))
+    node.set_compression_implementation(AsyncMock(return_value=WebPageEvidenceContent(
         original_content="Compressed evidence without links.",
         key_passages=["Compressed evidence"],
-    ))
+    )))
     parent = {
         "doc_id": "doc-a",
         "source_id": "source-a",
@@ -333,7 +345,7 @@ async def test_webpage_enrichment_node_runs_independently_enabled_phases(
         link_follow=link_follow,
     )
     session = _mutable_session(runtime_state)
-    node = WebPageEnrichmentNode()
+    node = ExposedWebPageEnrichmentNode()
 
     with patch.object(
         node,
@@ -350,7 +362,7 @@ async def test_webpage_enrichment_node_runs_independently_enabled_phases(
     ):
         token = llm_context.set({"model": Mock()})
         try:
-            await node._do_invoke({}, session, Mock())
+            await node.invoke_node({}, session, Mock())
         finally:
             llm_context.reset(token)
 
@@ -363,7 +375,7 @@ async def test_link_follow_reads_enriched_a_when_both_phases_are_enabled():
     """A 增强开启时，链接阶段必须重新读取增强后的本轮文档。"""
     runtime_state = _dual_phase_runtime_state(enrichment=True, link_follow=True)
     session = _mutable_session(runtime_state)
-    node = WebPageEnrichmentNode()
+    node = ExposedWebPageEnrichmentNode()
     calls: list[str] = []
 
     async def enrich(state: dict, current_session: Mock) -> dict:
@@ -394,7 +406,7 @@ async def test_link_follow_reads_enriched_a_when_both_phases_are_enabled():
     ):
         token = llm_context.set({"model": Mock()})
         try:
-            await node._do_invoke({}, session, Mock())
+            await node.invoke_node({}, session, Mock())
         finally:
             llm_context.reset(token)
 
@@ -409,7 +421,7 @@ async def test_link_follow_uses_enrichment_updates_before_session_commit():
     session = Mock()
     session.get_global_state = Mock(side_effect=lambda key: runtime_state.get(key))
     session.update_global_state = Mock(side_effect=pending_updates.append)
-    node = WebPageEnrichmentNode()
+    node = ExposedWebPageEnrichmentNode()
 
     async def enrich(state: dict, current_session: Mock) -> dict:
         parent = dict(state["new_doc_infos_current_loop"][0])
@@ -443,7 +455,7 @@ async def test_link_follow_uses_enrichment_updates_before_session_commit():
     ):
         token = llm_context.set({"model": Mock()})
         try:
-            await node._do_invoke({}, session, Mock())
+            await node.invoke_node({}, session, Mock())
         finally:
             llm_context.reset(token)
 
@@ -455,7 +467,7 @@ async def test_link_follow_reads_original_a_when_enrichment_is_disabled():
     """A 增强关闭时，链接阶段仍直接消费检索得到的 A。"""
     runtime_state = _dual_phase_runtime_state(enrichment=False, link_follow=True)
     session = _mutable_session(runtime_state)
-    node = WebPageEnrichmentNode()
+    node = ExposedWebPageEnrichmentNode()
 
     async def follow(state: dict, current_session: Mock) -> None:
         assert current_session is session
@@ -478,7 +490,7 @@ async def test_link_follow_reads_original_a_when_enrichment_is_disabled():
     ):
         token = llm_context.set({"model": Mock()})
         try:
-            await node._do_invoke({}, session, Mock())
+            await node.invoke_node({}, session, Mock())
         finally:
             llm_context.reset(token)
 
@@ -977,8 +989,8 @@ async def test_enrichment_logs_links_lost_during_compression(caplog):
             key_passages=["Useful evidence"],
         )
 
-    node._fetch_webpage = fake_fetch
-    node._compress_content = fake_compress
+    node.set_fetch_implementation(fake_fetch)
+    node.set_compression_implementation(fake_compress)
     caplog.set_level(
         "INFO",
         logger=(
