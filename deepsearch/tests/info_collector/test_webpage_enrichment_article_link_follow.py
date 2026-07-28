@@ -795,6 +795,70 @@ async def test_follow_candidate_rejects_empty_evaluation_result():
     assert followed is None
 
 
+@pytest.mark.asyncio
+async def test_follow_candidate_logs_evaluation_exception(caplog):
+    node = ExposedWebPageEnrichmentNode()
+    node.llm = Mock()
+    state = {
+        "fetch_timeout_seconds": 45,
+        "step_title": "Official evidence",
+        "step_description": "Collect primary data",
+        "section_idx": 7,
+    }
+    candidate = ArticleLinkCandidate(
+        candidate_index=0,
+        url="https://agency.gov/report",
+        canonical_url="https://agency.gov/report",
+        anchor_text="official report",
+        context_before="",
+        context_after="",
+        parent_doc_id="web_parent",
+        parent_title="Parent",
+        parent_url="https://example.com/a",
+        query="official evidence",
+    )
+    evidence = ArticleLinkEvidence(
+        title="Official report",
+        original_content="Primary evidence",
+        key_passages=["Primary evidence"],
+    )
+    caplog.set_level(
+        "INFO",
+        logger=(
+            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph."
+            "webpage_enrichment"
+        ),
+    )
+
+    with patch.object(
+        node,
+        "_fetch_webpage",
+        new=AsyncMock(return_value={
+            "url": candidate.url,
+            "title": "Official report",
+            "content": "Fetched body",
+        }),
+    ), patch.object(
+        node,
+        "_compress_article_link_content",
+        new=AsyncMock(return_value=evidence),
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
+        "run_doc_evaluation",
+        new=AsyncMock(side_effect=RuntimeError("provider secret detail")),
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
+        "validate_public_web_url"
+    ):
+        with pytest.raises(RuntimeError, match="provider secret detail"):
+            await node.follow_article_candidate(state, candidate, "primary source")
+
+    assert "stage=evaluation" in caplog.text
+    assert "outcome=failed" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "provider secret detail" not in caplog.text
+
+
 def test_redirect_to_existing_document_is_recorded_as_failed_not_successful():
     """最终 URL 已存在时不得写入 B 或把候选 URL 记为成功。"""
     state = {

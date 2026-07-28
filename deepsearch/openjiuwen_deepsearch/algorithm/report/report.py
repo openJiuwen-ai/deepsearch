@@ -1014,7 +1014,7 @@ class Reporter:
                 logger,
                 section_idx,
                 filtered_docs,
-                selected_urls,
+                selected_docs,
             )
 
             classified_infos, classified_doc_infos = _get_classified_infos(

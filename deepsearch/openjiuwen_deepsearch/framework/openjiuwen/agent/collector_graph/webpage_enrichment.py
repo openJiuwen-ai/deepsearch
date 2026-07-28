@@ -542,9 +542,10 @@ class WebPageEnrichmentNode(BaseNode):
         else:
             try:
                 direct_result = await asyncio.to_thread(
-                    WebFetchWebpageAdapter.fetch_webpage_sync,
+                    WebFetchWebpageAdapter.fetch_webpage_direct_sync,
                     url,
                     _remaining_timeout_seconds(deadline),
+                    validate_public_web_url,
                 )
             except Exception as exc:
                 self._log_fetch_event(
@@ -557,7 +558,7 @@ class WebPageEnrichmentNode(BaseNode):
 
         direct_pdf_payload = has_pdf_magic(direct_result)
         if not direct_pdf_payload and has_sufficient_fetched_content(direct_result, required_length):
-            direct_result["fetch_method"] = "harness_webpage_fetch"
+            direct_result["fetch_method"] = "direct"
             return direct_result
 
         if direct_pdf_payload:
@@ -1147,11 +1148,18 @@ class WebPageEnrichmentNode(BaseNode):
         )
         if evidence.key_passages:
             doc_info["key_passages"] = evidence.key_passages
-        scored = await run_doc_evaluation(
-            query=doc_info["query"],
-            documents=build_evaluation_documents([doc_info]),
-            llm=self.llm,
-        )
+        try:
+            scored = await run_doc_evaluation(
+                query=doc_info["query"],
+                documents=build_evaluation_documents([doc_info]),
+                llm=self.llm,
+            )
+        except Exception as exc:
+            self._log_article_link_item(
+                section_idx=state["section_idx"], stage="evaluation",
+                outcome="failed", candidate=candidate, reason=reason, error=exc,
+            )
+            raise
         if not scored:
             self._log_article_link_item(
                 section_idx=state["section_idx"], stage="evaluation", outcome="empty",

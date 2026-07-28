@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -13,6 +14,9 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 _METHOD = "article_link_follow"
 _SUMMARY_URL_LIMIT = 10
+_MARKDOWN_LINK_RE = re.compile(
+    r"\[[^\]]*\]\(((?:[^()\s]+|\([^()\s]*\))+?)\)"
+)
 
 
 def _is_followed_document(value: Any) -> bool:
@@ -113,12 +117,11 @@ def log_report_classification(
     logger,
     section_idx: Any,
     candidate_doc_infos: Any,
-    selected_urls: Iterable[Any] | None,
+    selected_doc_infos: Iterable[Any] | None,
     *,
     terminal_reason: str | None = None,
 ) -> None:
-    selected = {_canonical_url(url) for url in (selected_urls or [])}
-    selected.discard("")
+    selected = list(selected_doc_infos or [])
     for doc in followed_documents(candidate_doc_infos):
         if terminal_reason:
             if LogManager.is_sensitive():
@@ -137,7 +140,13 @@ def log_report_classification(
                     terminal_reason,
                 )
             continue
-        outcome = "selected" if _canonical_url(doc) in selected else "rejected"
+        is_selected = any(
+            _same_document(doc, candidate)
+            if isinstance(candidate, dict)
+            else bool(_canonical_url(doc) == _canonical_url(candidate))
+            for candidate in selected
+        )
+        outcome = "selected" if is_selected else "rejected"
         if LogManager.is_sensitive():
             logger.info(
                 "[ArticleLinkFollow] phase=report_classification section_idx=%s outcome=%s",
@@ -146,22 +155,34 @@ def log_report_classification(
             )
         else:
             logger.info(
-                "[ArticleLinkFollow] phase=report_classification section_idx=%s url=%s outcome=%s",
+                "[ArticleLinkFollow] phase=report_classification section_idx=%s "
+                "url=%s source_id=%s outcome=%s",
                 section_idx,
                 _display_url(doc),
+                str(doc.get("source_id") or "<missing>"),
                 outcome,
             )
 
 
-def _nested_matches(value: Any, source_id: str, canonical_url: str) -> bool:
-    if isinstance(value, dict):
-        return any(_nested_matches(item, source_id, canonical_url) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(_nested_matches(item, source_id, canonical_url) for item in value)
-    text = str(value or "")
-    if source_id and text == source_id:
-        return True
-    return bool(canonical_url and _canonical_url(text) == canonical_url)
+def _trace_reference_matches(value: Any, source_id: str, canonical_url: str) -> bool:
+    if not isinstance(value, (list, tuple)):
+        return False
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        item_source_id = str(item.get("source_id") or "")
+        if source_id and item_source_id == source_id:
+            return True
+        item_url = _canonical_url(item.get("url"))
+        if canonical_url and item_url == canonical_url:
+            return True
+    return False
+
+
+def _markdown_reference_urls(report_text: str) -> set[str]:
+    urls = {_canonical_url(match.group(1)) for match in _MARKDOWN_LINK_RE.finditer(report_text)}
+    urls.discard("")
+    return urls
 
 
 def log_report_final_references(
@@ -172,15 +193,14 @@ def log_report_final_references(
     trace_source_datas: Any,
 ) -> None:
     report_text = str(modified_report or "")
+    report_reference_urls = _markdown_reference_urls(report_text)
     for doc in followed_documents(classified_doc_infos):
         source_id = str(doc.get("source_id") or "")
         canonical_url = _canonical_url(doc)
-        trace_match = _nested_matches(trace_source_datas, source_id, canonical_url)
-        raw_url = str(doc.get("url") or "")
-        text_match = bool(
-            (raw_url and raw_url in report_text)
-            or (canonical_url and canonical_url in report_text)
+        trace_match = _trace_reference_matches(
+            trace_source_datas, source_id, canonical_url
         )
+        text_match = bool(canonical_url and canonical_url in report_reference_urls)
         outcome = "cited" if trace_match or text_match else "not_cited"
         if LogManager.is_sensitive():
             logger.info(

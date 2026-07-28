@@ -22,6 +22,12 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_en
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import StartNode as MainStartNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import _collect_doc_infos
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, RetrievalQuery, Step, StepType
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search import (
+    api_wrapper as harness_api_wrapper,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
+    WebFetchWebpageAdapter,
+)
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -40,6 +46,41 @@ def test_webpage_enrichment_service_config_defaults():
 
     assert config.info_collector_webpage_enrich_max_urls == 3
     assert config.info_collector_webpage_enrich_fetch_timeout_seconds == 45
+
+
+def test_direct_adapter_validates_redirect_before_following():
+    response = Mock(
+        status_code=302,
+        headers={"Location": "http://127.0.0.1/admin"},
+        url="https://public.example/start",
+    )
+    validated: list[str] = []
+
+    def validate(url: str) -> None:
+        validated.append(url)
+        if url.startswith("http://127.0.0.1"):
+            raise ValueError("unsafe redirect")
+
+    mocked_requests = Mock()
+    mocked_requests.get.return_value = response
+    with patch.object(
+        harness_api_wrapper,
+        "requests",
+        mocked_requests,
+        create=True,
+    ):
+        with pytest.raises(ValueError, match="unsafe redirect"):
+            WebFetchWebpageAdapter.fetch_webpage_direct_sync(
+                "https://public.example/start",
+                10,
+                validate,
+            )
+
+    assert validated == [
+        "https://public.example/start",
+        "http://127.0.0.1/admin",
+    ]
+    mocked_requests.get.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -590,7 +631,7 @@ async def test_fetch_webpage_retries_insufficient_content_with_jina_reader(
 
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
-        "WebFetchWebpageAdapter.fetch_webpage_sync",
+        "WebFetchWebpageAdapter.fetch_webpage_direct_sync",
         return_value=direct_result,
     ) as mock_direct, patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
@@ -601,7 +642,9 @@ async def test_fetch_webpage_retries_insufficient_content_with_jina_reader(
 
     assert result["content"] == jina_result["content"]
     assert result["fetch_method"] == "jina_reader"
-    mock_direct.assert_called_once_with(url, 45)
+    mock_direct.assert_called_once_with(
+        url, 45, webpage_enrichment_module.validate_public_web_url
+    )
     mock_jina.assert_called_once_with(url, 45)
 
 
@@ -624,7 +667,7 @@ async def test_fetch_webpage_rejects_jina_content_below_dynamic_threshold(
 
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
-        "WebFetchWebpageAdapter.fetch_webpage_sync",
+        "WebFetchWebpageAdapter.fetch_webpage_direct_sync",
         return_value={"url": url, "status_code": 200, "content": "x" * direct_length},
     ), patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
@@ -648,7 +691,7 @@ async def test_fetch_webpage_routes_explicit_pdf_url_directly_to_jina_reader():
 
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
-        "WebFetchWebpageAdapter.fetch_webpage_sync",
+        "WebFetchWebpageAdapter.fetch_webpage_direct_sync",
     ) as mock_direct, patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
         "WebFetchWebpageAdapter.fetch_via_jina_reader_sync",
@@ -671,7 +714,7 @@ async def test_fetch_webpage_retries_pdf_payload_with_jina_reader():
 
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
-        "WebFetchWebpageAdapter.fetch_webpage_sync",
+        "WebFetchWebpageAdapter.fetch_webpage_direct_sync",
         return_value={"url": url, "status_code": 200, "content": "%PDF-1.5 " + ("binary " * 1000)},
     ), patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
@@ -727,17 +770,27 @@ async def test_fetch_fallback_uses_one_total_deadline():
 
 
 @pytest.mark.asyncio
-async def test_direct_adapter_records_harness_source():
+async def test_direct_adapter_records_direct_source_without_implicit_jina_fallback():
     """harness 入口可能内部 fallback，来源字段不应宣称是纯 direct。"""
     node = ExposedWebPageEnrichmentNode()
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
         "WebFetchWebpageAdapter.fetch_webpage_sync",
         return_value={"url": "https://a.com", "status_code": 200, "content": "x" * 300},
-    ):
+    ) as legacy_fetch, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
+        "WebFetchWebpageAdapter.fetch_webpage_direct_sync",
+        return_value={"url": "https://a.com", "status_code": 200, "content": "x" * 300},
+    ) as direct_fetch:
         result = await node.fetch_webpage("https://a.com", 45)
 
-    assert result["fetch_method"] == "harness_webpage_fetch"
+    assert result["fetch_method"] == "direct"
+    legacy_fetch.assert_not_called()
+    direct_fetch.assert_called_once_with(
+        "https://a.com",
+        45,
+        webpage_enrichment_module.validate_public_web_url,
+    )
 
 
 @pytest.mark.asyncio
@@ -754,7 +807,7 @@ async def test_sensitive_fetch_logs_redact_url_and_exception(caplog):
 
     with patch.object(LogManager, "is_sensitive", return_value=True), patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
-        "WebFetchWebpageAdapter.fetch_webpage_sync",
+        "WebFetchWebpageAdapter.fetch_webpage_direct_sync",
         side_effect=RuntimeError(direct_secret),
     ), patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
@@ -1499,7 +1552,7 @@ async def test_node_updates_state_and_redacts_sensitive_success_logs(caplog):
             "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment.ainvoke_llm_with_stats",
             new=AsyncMock(side_effect=fake_llm),
         ), patch(
-            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment.WebFetchWebpageAdapter.fetch_webpage_sync",
+            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment.WebFetchWebpageAdapter.fetch_webpage_direct_sync",
             return_value={
                 "url": "https://example.com/final",
                 "status_code": 200,

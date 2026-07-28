@@ -98,6 +98,30 @@ def test_report_classification_logs_selected_and_rejected_outcomes(caplog):
     )
 
 
+def test_report_classification_distinguishes_same_url_source_variants(caplog):
+    selected = _followed("https://example.com/shared", "selected-source")
+    rejected = _followed("https://example.com/shared", "rejected-source")
+
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        log_report_classification(
+            LOGGER,
+            1,
+            [selected, rejected],
+            [selected],
+        )
+
+    assert any(
+        "source_id=selected-source" in message
+        and "outcome=selected" in message
+        for message in caplog.messages
+    )
+    assert any(
+        "source_id=rejected-source" in message
+        and "outcome=rejected" in message
+        for message in caplog.messages
+    )
+
+
 def test_report_final_reference_uses_trace_data_or_final_text(caplog):
     traced = _followed("https://example.com/traced", "trace-source")
     text_matched = _followed("https://example.com/text", "text-source")
@@ -127,6 +151,27 @@ def test_report_final_reference_uses_trace_data_or_final_text(caplog):
     assert any(
         "url=https://example.com/missing" in message
         and "outcome=not_cited" in message
+        for message in caplog.messages
+    )
+
+
+def test_report_final_reference_ignores_unrelated_nested_values_and_plain_text(caplog):
+    followed = _followed("https://example.com/not-a-citation", "followed-source")
+
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        log_report_final_references(
+            LOGGER,
+            2,
+            [followed],
+            "The URL https://example.com/not-a-citation is discussed as plain prose.",
+            [{"metadata": {"error_detail": "followed-source"}, "content": followed["url"]}],
+        )
+
+    assert any(
+        "url=https://example.com/not-a-citation" in message
+        and "outcome=not_cited" in message
+        and "trace_source_match=false" in message
+        and "report_text_match=false" in message
         for message in caplog.messages
     )
 
