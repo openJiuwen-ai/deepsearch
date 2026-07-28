@@ -100,13 +100,9 @@ INTERNAL_CALLBACK_LABEL_PATTERN = re.compile(
 )
 
 
-MERMAID_CODE_FENCE_PATTERN = re.compile(
-    r"(?ms)^```mermaid\r?\n(.*?)^```[ \t]*(?:\r?\n|$)"
-)
 MANAGED_MERMAID_CAPTION_PATTERN = re.compile(
     r'(?s)^\s*<div style="text-align: center;">\s*\*\*.+?\*\*\s*</div>'
 )
-MERMAID_TITLE_PATTERN = re.compile(r'(?m)^\s*title\s+"([^"]+)"\s*$')
 
 
 @dataclass
@@ -3948,12 +3944,6 @@ class Reporter:
                         current_inputs.get("section_idx", 1),
                         str(e),
                     )
-                current_inputs["sub_report_content"] = (
-                    self._ensure_mermaid_pipeline_captions(
-                        current_inputs.get("sub_report_content", ""),
-                        current_inputs.get("language"),
-                    )
-                )
                 if not LogManager.is_sensitive():
                     logger.debug(
                         "%s [write_subsection_reports] section_idx: [%s] "
@@ -4077,7 +4067,7 @@ class Reporter:
                     attempt + 1,
                     max_attempt_num,
                 )
-                active_messages = base_messages[:1] + [
+                active_messages = base_messages + [
                     dict(
                         role="user",
                         content=(
@@ -4106,7 +4096,7 @@ class Reporter:
                     attempt + 1,
                     max_attempt_num,
                 )
-                active_messages = base_messages[:1] + [
+                active_messages = base_messages + [
                     dict(
                         role="user",
                         content=(
@@ -4224,90 +4214,6 @@ class Reporter:
             for index in missing_indices
         )
         return completed
-
-    @staticmethod
-    def _is_plain_mermaid_caption_candidate(line: str) -> bool:
-        caption = line.strip()
-        return not (
-            not caption
-            or len(caption) > 120
-            or caption.startswith(("#", "```", "<", "|", ">", "-", "*"))
-            or re.match(r"^\d+[.)]\s+", caption)
-            or caption.endswith((".", "。", "!", "！", "?", "？", ";", "；"))
-            or "[citation:" in caption
-            or "[checked_citation:" in caption
-        )
-
-    @staticmethod
-    def _extract_mermaid_title(mermaid_code: str) -> str:
-        match = MERMAID_TITLE_PATTERN.search(mermaid_code or "")
-        if match and match.group(1).strip():
-            return match.group(1).strip()
-        for line in (mermaid_code or "").splitlines():
-            stripped = line.strip()
-            if stripped.lower().startswith("title "):
-                return stripped[6:].strip().strip("\"'")
-        return ""
-
-    @staticmethod
-    def _render_managed_mermaid_caption(caption: str, newline: str) -> str:
-        safe_caption = html.escape(caption.strip(), quote=True)
-        return (
-            f'<div style="text-align: center;">{newline}{newline}'
-            f"**{safe_caption}**{newline}{newline}</div>{newline}{newline}"
-        )
-
-    @classmethod
-    def _caption_for_unmanaged_mermaid(
-        cls,
-        following_text: str,
-        mermaid_code: str,
-        language: str,
-    ) -> tuple[str, int]:
-        plain_caption_match = re.match(
-            r"\A(?P<leading>(?:[ \t]*(?:\r?\n))+)"
-            r"(?P<line>[^\r\n]+)"
-            r"(?P<line_end>\r?\n?)"
-            r"(?P<trailing>(?:[ \t]*(?:\r?\n))*)",
-            following_text,
-        )
-        if plain_caption_match:
-            candidate = plain_caption_match.group("line").strip()
-            if cls._is_plain_mermaid_caption_candidate(candidate):
-                return candidate, plain_caption_match.end()
-
-        mermaid_title = cls._extract_mermaid_title(mermaid_code)
-        return (mermaid_title, 0) if mermaid_title else ("图表标题" if language == CHINESE else "Image Title", 0)
-
-    @classmethod
-    def _ensure_mermaid_pipeline_captions(
-        cls,
-        report_markdown: str,
-        language: str,
-    ) -> str:
-        if not isinstance(report_markdown, str) or "```mermaid" not in report_markdown:
-            return report_markdown
-
-        newline = "\r\n" if "\r\n" in report_markdown else "\n"
-        rendered_parts = []
-        cursor = 0
-        for match in MERMAID_CODE_FENCE_PATTERN.finditer(report_markdown):
-            rendered_parts.append(report_markdown[cursor:match.end()])
-            following_text = report_markdown[match.end():]
-            if MANAGED_MERMAID_CAPTION_PATTERN.match(following_text):
-                cursor = match.end()
-                continue
-
-            caption, consumed_chars = cls._caption_for_unmanaged_mermaid(
-                following_text,
-                match.group(1),
-                language,
-            )
-            rendered_parts.append(cls._render_managed_mermaid_caption(caption, newline))
-            cursor = match.end() + consumed_chars
-
-        rendered_parts.append(report_markdown[cursor:])
-        return "".join(rendered_parts)
 
     async def _insert_visualization(self, current_inputs: Dict) -> dict:
         """

@@ -1216,6 +1216,58 @@ async def test_insert_visualization_plan_accepts_fenced_json():
 
 
 @pytest.mark.asyncio
+async def test_insert_visualization_plan_retry_preserves_report_and_visualization_data():
+    mock_ainvoke = AsyncMock(
+        side_effect=[
+            {"content": "{}"},
+            {"content": '{"insertions":[{"after_row":2,"index":1}]}'},
+        ]
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "[ROW:1] # Title\n"
+                "[ROW:2] Body paragraph.\n\n"
+                "=== VISUALIZATION DATA ===\n"
+                '{"index":1,"image_title":"Chart"}\n'
+                "=== END VISUALIZATION DATA ===\n"
+            ),
+        }
+    ]
+
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new=mock_ainvoke,
+    ):
+        result = await _visualization_reporter()._request_visualization_insert_plan(
+            VisualizationInsertPlanContext(
+                messages=messages,
+                current_inputs={
+                    "language": "en",
+                    "section_idx": 1,
+                    "max_generate_retry_num": 2,
+                },
+                report_lines=["# Title\n", "Body paragraph.\n"],
+                invalid_rows={1},
+                mermaid_map={1: 'xychart-beta\n    x-axis ["A"]\n    bar [1]'},
+                original_report="# Title\nBody paragraph.\n",
+            )
+        )
+
+    assert result["rs_success"] is True
+    second_messages = mock_ainvoke.await_args_list[1].kwargs["messages"]
+    second_prompt = "\n".join(
+        str(message.get("content", ""))
+        for message in second_messages
+        if isinstance(message, dict)
+    )
+    assert "[ROW:2] Body paragraph." in second_prompt
+    assert "=== VISUALIZATION DATA ===" in second_prompt
+    assert "Your previous output is invalid" in second_prompt
+
+
+@pytest.mark.asyncio
 async def test_insert_visualization_keeps_multiple_charts_from_same_source_url():
     chart_one = {
         "image_title": "Sales trend",

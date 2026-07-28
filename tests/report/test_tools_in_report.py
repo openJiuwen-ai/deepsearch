@@ -205,65 +205,6 @@ def test_apply_visualization_insertions_escapes_image_title_html():
     assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;[citation:7]" in result
 
 
-def test_ensure_mermaid_pipeline_captions_adds_missing_caption_from_mermaid_title():
-    content = (
-        "# 1 Sales trend\n\n"
-        "The chart is supported by nearby data [citation:1].\n\n"
-        "```mermaid\n"
-        "xychart-beta\n"
-        "    title \"2022-2024 Sales Trend\"\n"
-        "    x-axis [\"2022\", \"2023\", \"2024\"]\n"
-        "    line [1, 2, 3]\n"
-        "```\n\n"
-        "## 1.2 Next subsection\n"
-    )
-
-    result = Reporter._ensure_mermaid_pipeline_captions(content, ENGLISH)
-
-    assert "```mermaid\nxychart-beta" in result
-    assert '<div style="text-align: center;">\n\n**2022-2024 Sales Trend**\n\n</div>' in result
-    assert result.index("```mermaid") < result.index("**2022-2024 Sales Trend**")
-
-
-def test_ensure_mermaid_pipeline_captions_converts_plain_caption_without_duplication():
-    content = (
-        "# 2 Sales comparison\n\n"
-        "The chart is supported by nearby data [citation:2].\n\n"
-        "```mermaid\n"
-        "xychart-beta\n"
-        "    x-axis [\"A\", \"B\", \"C\"]\n"
-        "    bar [3, 2, 1]\n"
-        "```\n\n"
-        "2024 Sales Comparison\n\n"
-        "## 2.2 Next subsection\n"
-    )
-
-    result = Reporter._ensure_mermaid_pipeline_captions(content, ENGLISH)
-
-    assert result.count("2024 Sales Comparison") == 1
-    assert '<div style="text-align: center;">\n\n**2024 Sales Comparison**\n\n</div>' in result
-    assert "\n\n2024 Sales Comparison\n\n##" not in result
-
-
-def test_ensure_mermaid_pipeline_captions_does_not_consume_following_sentence():
-    content = (
-        "# 3 Sales analysis\n\n"
-        "The chart is supported by nearby data [citation:3].\n\n"
-        "```mermaid\n"
-        "xychart-beta\n"
-        "    title \"Sales Analysis\"\n"
-        "    x-axis [\"A\", \"B\", \"C\"]\n"
-        "    bar [3, 2, 1]\n"
-        "```\n\n"
-        "This short sentence should remain.\n"
-    )
-
-    result = Reporter._ensure_mermaid_pipeline_captions(content, ENGLISH)
-
-    assert "**Sales Analysis**" in result
-    assert "This short sentence should remain." in result
-
-
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
