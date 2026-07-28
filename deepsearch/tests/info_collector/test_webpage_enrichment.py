@@ -1552,7 +1552,8 @@ async def test_node_updates_state_and_redacts_sensitive_success_logs(caplog):
             "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment.ainvoke_llm_with_stats",
             new=AsyncMock(side_effect=fake_llm),
         ), patch(
-            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment.WebFetchWebpageAdapter.fetch_webpage_direct_sync",
+            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
+            "WebFetchWebpageAdapter.fetch_webpage_direct_sync",
             return_value={
                 "url": "https://example.com/final",
                 "status_code": 200,
