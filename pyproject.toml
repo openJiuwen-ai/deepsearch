@@ -1,0 +1,4 @@
+# Virtual uv workspace root for the two products in this repo.
+# Each member keeps its own dependencies; nothing is shared at root level.
+[tool.uv.workspace]
+members = ["deepsearch", "codesearch"]
