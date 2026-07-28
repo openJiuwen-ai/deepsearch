@@ -274,6 +274,71 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         llm_context.reset(token)
 
 
+@pytest.mark.asyncio
+async def test_write_subsection_reports_includes_previous_attempt_feedback():
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "language": ENGLISH,
+            "section_idx": "3",
+            "section_task": "3 Program Review",
+            "section_description": "Regenerate with the approved headings.",
+            "section_format_requirements": [],
+            "origin_query": "Evaluate social protection programs.",
+            "report_task": "Evaluate social protection programs.",
+            "current_outline": "1 Context\n2 Failure Categories\n3 Program Review",
+            "sub_section_outline": "3 Program Review\n3.1 Project Summary",
+            "current_subsection": "3.1 Project Summary",
+            "classified_content": [
+                {
+                    "index": 1,
+                    "doc_time": "2023",
+                    "original_content": "India runs Program A as a cash transfer program.",
+                    "scores": {"authority": 8, "relevance": 9, "answerability": 8, "data_density": 7},
+                }
+            ],
+            "sub_section_references": [],
+            "sub_report_background_knowledge": [],
+            "sub_report_retry_feedback": (
+                "generated report headings do not match outline: "
+                "heading count mismatch: expected 2, got 1"
+            ),
+            "report_type": "professional",
+            "paragraph_style": "detailed",
+            "visualization_enable": False,
+        }
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+        ) as mock_ainvoke, patch.object(
+            reporter,
+            "_generate_sub_report_sidecar",
+            new_callable=AsyncMock,
+            return_value={"sidecar": None, "summary": "summary", "warning": ""},
+        ):
+            mock_ainvoke.return_value = {
+                "content": (
+                    "# 3 Program Review\n"
+                    "## 3.1 Project Summary\n"
+                    "Program A is a cash transfer program [citation:1]."
+                )
+            }
+
+            result = await reporter._write_subsection_reports(current_inputs)
+
+        assert result["success"] is True
+        mock_ainvoke.assert_awaited_once()
+        _, kwargs = mock_ainvoke.call_args
+        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
+        assert "Previous Attempt Feedback" in rendered_prompt
+        assert "Regenerate the chapter from scratch" in rendered_prompt
+        assert "heading count mismatch: expected 2, got 1" in rendered_prompt
+    finally:
+        llm_context.reset(token)
+
+
 def test_build_compact_classify_doc_infos_text_zero_based():
     """Coverage-matrix flow uses start=0 so 'Document 0' maps to 'doc_0'."""
     output = build_compact_classify_doc_infos_text(
@@ -2004,6 +2069,77 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     assert current_inputs["sub_section_core_content"] == ["Document 1 key passages:\n- fake passage"]
     assert current_inputs["sub_report_summary"] == "经营与行业摘要"
     assert current_inputs["sub_report_chapter_sidecar"].chapter_summary == "经营与行业摘要"
+
+
+@pytest.mark.asyncio
+async def test_generate_sub_report_retries_writer_with_failure_feedback():
+    mock_session = MagicMock()
+    mock_session.write_custom_stream = AsyncMock()
+    session_token = session_context.set(mock_session)
+    llm_token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        observed_feedback = []
+        validation_reason = (
+            "generated report headings do not match outline: "
+            "heading count mismatch: expected 2, got 1"
+        )
+
+        async def mock_write_subsection_reports(inputs):
+            observed_feedback.append(inputs.get("sub_report_retry_feedback", ""))
+            if len(observed_feedback) == 1:
+                return {"success": False, "result": validation_reason}
+            return {
+                "success": True,
+                "result": "# 4 Film Market\n\n## 4.1 Top Films\nCorrected chapter.",
+            }
+
+        current_inputs = dict(
+            has_template=False,
+            language=ENGLISH,
+            report_template="",
+            section_idx=4,
+            report_task="Analyze the film market.",
+            section_task="Film Market",
+            section_iscore=False,
+            section_description="Write the final chapter.",
+            doc_infos=[],
+            gathered_info=[],
+            sub_report_background_knowledge=[
+                {"section_id": "3", "content_summary": "Earlier chapters covered box-office recovery."}
+            ],
+            sub_evaluation_details="",
+            max_generate_retry_num=2,
+            max_sub_report_evaluate_num=0,
+            visualization_enable=False,
+        )
+
+        with patch.object(
+            reporter,
+            "_generate_sub_section_outline",
+            new_callable=AsyncMock,
+            return_value={"rs_success": True, "sub_section_outline": "4 Film Market\n4.1 Top Films"},
+        ) as mock_outline, patch.object(
+            reporter,
+            "_write_subsection_reports",
+            new_callable=AsyncMock,
+            side_effect=mock_write_subsection_reports,
+        ) as mock_write:
+            success, report, sub_report_content, classified_content = await reporter.generate_sub_report(
+                current_inputs
+            )
+
+        assert success is True
+        assert report == "# 4 Film Market\n\n## 4.1 Top Films\nCorrected chapter."
+        assert sub_report_content == ""
+        assert classified_content == []
+        assert observed_feedback == ["", validation_reason]
+        assert current_inputs["sub_report_retry_feedback"] == validation_reason
+        mock_outline.assert_awaited_once()
+        assert mock_write.await_count == 2
+    finally:
+        session_context.reset(session_token)
+        llm_context.reset(llm_token)
 
 
 def test_get_classified_infos_returns_all_selected_distinct_variants():

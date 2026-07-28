@@ -1072,8 +1072,10 @@ class Reporter:
                 )
             logger.warning(
                 f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
-                f"Warning: Generate section report failed on attempt {attempt_num + 1}/{max_attempt_num}. retry ..."
+                f"Warning: Generate section report failed on attempt {attempt_num + 1}/{max_attempt_num}: "
+                f"{write_res.get('result', '')}. retry ..."
             )
+            current_inputs["sub_report_retry_feedback"] = write_res.get("result", "")
             await session.write_custom_stream(
                 self._make_payload(
                     stream_id,
@@ -3812,6 +3814,15 @@ class Reporter:
             "current_subsection",
             "Full current chapter; follow each Level 2 heading in the current chapter outline.",
         )
+        retry_feedback = str(current_inputs.get("sub_report_retry_feedback", "") or "").strip()
+        retry_feedback_prompt = ""
+        if retry_feedback:
+            retry_feedback_prompt = (
+                "\n\n# Previous Attempt Feedback\n"
+                "The previous chapter draft was rejected by local validation. "
+                "Regenerate the chapter from scratch and fix this issue exactly:\n"
+                f"{retry_feedback}\n\n"
+            )
         sub_content_message = (
             "# Current Top-Level Section\n"
             f"section_id: {current_inputs.get('section_idx', 1)}\n"
@@ -3829,6 +3840,7 @@ class Reporter:
             "# References\n"
             f"{current_inputs.get('sub_section_references', '')}\n\n"
             f"{background_knowledge_prompt}"
+            f"{retry_feedback_prompt}"
         )
         try:
             report_type = current_inputs.get("report_type", "professional")
