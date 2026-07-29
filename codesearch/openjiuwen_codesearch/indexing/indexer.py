@@ -5,7 +5,6 @@
 存储以 `ChunkStore` 协议注入，单测用 fake，生产用 MilvusStore。
 """
 
-import glob
 import logging
 import os
 from typing import Any, Optional, Protocol
@@ -35,8 +34,35 @@ class ChunkStore(Protocol):
     async def flush(self) -> None: ...
 
 
-def discover_python_files(repo_dir: str, max_files: Optional[int] = None) -> list[str]:
-    files = glob.glob(os.path.join(repo_dir, "**/*.py"), recursive=True)
+def discover_python_files(
+    repo_dir: str,
+    max_files: Optional[int] = None,
+    max_file_size_bytes: int = 5 * 1024 * 1024,
+) -> list[str]:
+    """遍历仓库收集 .py 文件。
+
+    安全防护：不跟随目录符号链接（防符号链接环导致无限遍历、防越界索引仓库外
+    内容）；跳过隐藏目录（.venv/.git 等）；超大文件（默认 >5MB，多为生成物）
+    跳过并告警。
+    """
+    files: list[str] = []
+    for root, dirs, names in os.walk(repo_dir, followlinks=False):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for name in sorted(names):
+            if not name.endswith(".py") or name.startswith("."):
+                continue
+            path = os.path.join(root, name)
+            try:
+                if os.path.islink(path):
+                    continue  # 文件级符号链接同样不跟随
+                if os.stat(path).st_size > max_file_size_bytes:
+                    logger.warning("Skipping oversized file (>%dB): %s",
+                                   max_file_size_bytes, path)
+                    continue
+            except OSError:
+                continue
+            files.append(path)
+    files.sort()
     if max_files is not None:
         files = files[:max_files]
     return files
@@ -152,7 +178,11 @@ async def index_repository(
     embed_batch_size: int = 64,
 ) -> IndexReport:
     """索引一个仓库目录。已存在文件 upsert 标记（修复旧 wrapper 丢 upsert 的 bug #13）。"""
-    code_files = discover_python_files(repo_dir, index_cfg.max_num_files_per_repo)
+    code_files = discover_python_files(
+        repo_dir,
+        max_files=index_cfg.max_num_files_per_repo,
+        max_file_size_bytes=index_cfg.max_file_size_bytes,
+    )
     logger.info("Found %d python files to process.", len(code_files))
 
     hash2path = hash_files(code_files, repo_dir)

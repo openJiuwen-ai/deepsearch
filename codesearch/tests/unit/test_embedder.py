@@ -60,6 +60,21 @@ def test_query_prefix_applied(tmp_path):
     assert transport.last_payload["input"][0].startswith("Instruct:")
 
 
+def test_doc_and_query_vectors_cached_separately(tmp_path):
+    """回归（缓存键冲突 bug）：同一文本作为文档与作为查询必须各自请求/缓存，
+    不得让查询命中文档向量（instruct 前缀使两者语义不同）。"""
+    transport = CountingTransport()
+    model = APIEmbedModel(_config(tmp_path), transport=transport)
+    run(model.async_encode(["same text"], is_query=False))
+    assert transport.count == 1
+    run(model.async_encode(["same text"], is_query=True))
+    assert transport.count == 2, "查询不应命中文档向量的缓存"
+    # 各自二次调用均命中各自缓存
+    run(model.async_encode(["same text"], is_query=False))
+    run(model.async_encode(["same text"], is_query=True))
+    assert transport.count == 2
+
+
 def test_retry_exhaustion_raises(tmp_path):
     transport = CountingTransport(status=500)
     model = APIEmbedModel(_config(tmp_path, retries=3), transport=transport)

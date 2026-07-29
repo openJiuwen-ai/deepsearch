@@ -9,10 +9,11 @@
 
 import json
 import os
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
+
+from openjiuwen_search_base.runtime import RunRegistry
 
 from openjiuwen_codesearch.config.config import CodeSearchConfig
 from openjiuwen_codesearch.domain.memory import SnippetMemory
@@ -77,25 +78,26 @@ class CodeSearchRunContext:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
 
-# --- 运行注册表：workflow session 只携带可序列化的 run_id，
-#     含连接/锁的活对象经此注册表在节点内取回（对齐 deepsearch 的注入纪律）。---
-_RUN_REGISTRY: dict[str, CodeSearchRunContext] = {}
+# --- 运行注册表（泛型实现由 base 包提供）：workflow session 只携带可序列化的
+#     run_id，含连接/锁的活对象经此注册表在节点内取回。---
+_RUN_REGISTRY: RunRegistry[CodeSearchRunContext] = RunRegistry()
 
 
 def register_run_context(ctx: CodeSearchRunContext) -> str:
-    run_id = uuid.uuid4().hex
-    _RUN_REGISTRY[run_id] = ctx
-    return run_id
+    return _RUN_REGISTRY.register(ctx)
+
+
+def run_session(ctx: CodeSearchRunContext):
+    """结构化注册（推荐）：`with run_session(ctx) as run_id:`，退出自动注销。"""
+    return _RUN_REGISTRY.session(ctx)
 
 
 def get_run_context(run_id: str) -> CodeSearchRunContext:
-    if run_id not in _RUN_REGISTRY:
-        raise KeyError(f"Unknown or expired run_id: {run_id}")
-    return _RUN_REGISTRY[run_id]
+    return _RUN_REGISTRY.get(run_id)
 
 
 def unregister_run_context(run_id: str) -> None:
-    _RUN_REGISTRY.pop(run_id, None)
+    _RUN_REGISTRY.unregister(run_id)
 
 
 def build_run_context(

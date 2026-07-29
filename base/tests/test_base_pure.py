@@ -1,0 +1,92 @@
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""base 包纯逻辑单测（零外部依赖；embedding/llm 适配等由消费方测试与 e2e 覆盖）。"""
+
+import pytest
+
+from openjiuwen_search_base.llm import normalize_tool_calls
+from openjiuwen_search_base.milvus import (
+    escape_expr_string,
+    hashes_filter,
+    ids_filter,
+    overlap_filter,
+    revision_filter,
+    versioned_collection_name,
+)
+from openjiuwen_search_base.runtime import RunRegistry
+
+
+class TestExpr:
+    def test_escape_quotes_backslash_newline(self):
+        assert escape_expr_string('a"b\\c\nd') == 'a\\"b\\\\c d'
+
+    def test_revision_filter_escaped(self):
+        assert revision_filter('r"1') == 'ARRAY_CONTAINS(commits, "r\\"1")'
+
+    def test_overlap_filter_coerces_ints(self):
+        expr = overlap_filter("rev", "a.py", "3", "7")  # 字符串行号被强转 int
+        assert "start_line <= 7 and end_line >= 3" in expr
+
+    def test_hashes_and_ids_filters(self):
+        assert hashes_filter(["h1", "h2"]) == 'file_hash in ["h1","h2"]'
+        assert ids_filter([1, 2]) == "id in [1,2]"
+
+
+class TestNaming:
+    def test_prefix_and_version(self):
+        assert versioned_collection_name("repo", "v1", "cs_") == "cs_repo__v1"
+
+
+class TestRunRegistry:
+    def test_register_get_unregister(self):
+        reg: RunRegistry[dict] = RunRegistry()
+        ctx = {"x": 1}
+        run_id = reg.register(ctx)
+        assert reg.get(run_id) is ctx
+        reg.unregister(run_id)
+        with pytest.raises(KeyError):
+            reg.get(run_id)
+
+    def test_unregister_idempotent(self):
+        RunRegistry().unregister("nonexistent")  # 不抛异常
+
+    def test_session_auto_unregisters(self):
+        reg: RunRegistry[dict] = RunRegistry()
+        ctx = {"x": 1}
+        with reg.session(ctx) as run_id:
+            assert reg.get(run_id) is ctx
+        with pytest.raises(KeyError):
+            reg.get(run_id)
+
+    def test_session_unregisters_on_exception(self):
+        reg: RunRegistry[dict] = RunRegistry()
+        with pytest.raises(RuntimeError):
+            with reg.session({"x": 1}) as run_id:
+                raise RuntimeError("boom")
+        with pytest.raises(KeyError):
+            reg.get(run_id)
+
+
+class TestNormalizeToolCalls:
+    class _Fn:
+        def __init__(self, name, arguments):
+            self.name, self.arguments = name, arguments
+
+    class _Call:
+        def __init__(self, fn, call_id="c1"):
+            self.function, self.id = fn, call_id
+
+    def test_openai_function_style(self):
+        calls = normalize_tool_calls(
+            [self._Call(self._Fn("search", '{"q": 1}'))]
+        )
+        assert calls[0].name == "search" and calls[0].arguments == {"q": 1}
+
+    def test_bad_json_arguments_become_empty(self):
+        calls = normalize_tool_calls([self._Call(self._Fn("t", "{bad"))])
+        assert calls[0].arguments == {}
+
+    def test_nameless_call_skipped(self):
+        assert normalize_tool_calls([self._Call(self._Fn(None, "{}"))]) == []
+
+    def test_none_input(self):
+        assert normalize_tool_calls(None) == []
