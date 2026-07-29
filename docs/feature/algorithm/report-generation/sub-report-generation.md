@@ -18,6 +18,7 @@
 - 子大纲生成只面向当前顶层章节；用户在当前 outline、章节标题或章节描述中指定的 subsection titles 会被精确保留。
 - key passages 只约束模型新增的具体事实、指标、案例、公司名和命名示例，不用于重命名或泛化用户指定的 subsection titles。
 - 子报告写作只输出当前顶层章节及其二级标题，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
+- 子报告失败重试只向下一轮 Prompt 传递受控错误码、位置和计数字段；不会回放模型生成标题、provider 异常或本地校验原始文本。
 - 章节 sidecar 保存摘要、资料映射和局部契约，供后续用户反馈和报告流程复用。
 
 ## 关键代码路径
@@ -48,8 +49,9 @@
 4. 根据报告类型选择子报告 Prompt。
 5. LLM 生成章节 Markdown。
 6. 标题编号和过深标题被清理。
-7. 生成或更新 chapter sidecar。
-8. 子报告交给最终报告拼接。
+7. 本地校验 Markdown 标题是否严格匹配当前章节大纲；如果失败，生成受控重试反馈并重新生成章节。
+8. 生成或更新 chapter sidecar。
+9. 子报告交给最终报告拼接。
 
 ## 数据契约与依赖
 
@@ -71,6 +73,7 @@
 - 子报告生成异常使用 `SUB_REPORT_GENERATE_ERROR` 格式化。
 - Prompt 输出空内容时应走错误或 fallback 路径。
 - 标题不能破坏整体报告层级。
+- 重试反馈只允许包含白名单化错误码，例如 `HEADING_COUNT_MISMATCH`、`HEADING_LEVEL_MISMATCH`、`HEADING_TITLE_MISMATCH`、`SUB_REPORT_GENERATION_EXCEPTION`，以及安全的数字位置/计数字段；不把原始失败文本作为下一轮 LLM 指令。
 - 敏感日志模式下不输出完整资料和子报告正文。
 
 ## 测试与验证

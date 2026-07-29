@@ -52,6 +52,12 @@ Validate the declared `image_type` against the actual `records` shape. Do not si
 - Core rule: event/milestone text with an empty unit string.
 - Invalid if `value_string` is a pure numeric string, `unit_string` is non-empty, or the records are better represented as numeric comparison/composition data.
 
+## 4. Mermaid Readability Rules
+- Chart labels must be concise enough to render clearly. Mark invalid if category labels or timeline event text are full sentences, raw evidence snippets, or likely to crowd the axis/legend instead of acting as labels.
+- Chart fields must not contain citation markers, markdown links, raw URLs, or source IDs. References belong in surrounding report text or the managed chart caption, not inside Mermaid labels.
+- Common chart words should follow the requested report language implied by `section_outline`; for Chinese outlines, labels like `other` should be localized to `其他` unless it is part of a proper noun.
+- Prefer bar charts over line charts for discrete comparison against separate benchmark years/categories. Use line charts only for continuous/equal-granularity sequences.
+
 # Output Constraints
 - Output only a valid JSON object with exactly two keys: `valid` (boolean), `error_msg` (string).
 - `valid`: true only if relevance and chart type rules are satisfied.

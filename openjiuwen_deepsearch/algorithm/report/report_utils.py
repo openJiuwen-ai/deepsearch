@@ -9,6 +9,19 @@ from typing import Tuple
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 
 
+def _strip_chart_markup(text: str) -> str:
+    """Remove report citation/link markup that is unreadable inside Mermaid labels."""
+    cleaned = re.sub(r"\[checked_citation:\d+\]\[\[\d+\]\]\([^)]+\)", "", str(text))
+    cleaned = re.sub(r"\[citation:\d+\]", "", cleaned)
+    cleaned = re.sub(r"\[\[\d+\]\]\([^)]+\)", "", cleaned)
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text))
+
+
 def _has_mixed_unit_separators(unit: str) -> bool:
     unit_lower = unit.lower()
     return any(sep in unit for sep in ("或", "/", "|", ",", ";")) or " and " in unit_lower
@@ -284,7 +297,7 @@ class XYChartMermaidGenerator:
 
     @classmethod
     def _sanitize_label(cls, label: str | None) -> str:
-        raw = (str(label) if label is not None else "").strip().replace('"', "'")
+        raw = _strip_chart_markup(str(label) if label is not None else "").replace('"', "'")
         if not raw:
             return "Item"
         return raw
@@ -306,6 +319,10 @@ class XYChartMermaidGenerator:
         weights = [cls._label_weight_length(label) for label in labels]
         total_len = sum(weights)
         max_len = max(weights, default=0.0)
+        if count >= 6:
+            return True
+        if count >= 4 and max_len >= 14:
+            return True
         per_label_limit = cls.HORIZONTAL_TOTAL_LABEL_LIMIT / max(count, 1)
         return not (
             total_len <= cls.HORIZONTAL_TOTAL_LABEL_LIMIT
@@ -559,13 +576,14 @@ class XYChartMermaidGenerator:
 
 
 class PieChartMermaidGenerator:
-    OTHER_LABEL = "other"
+    OTHER_LABEL = "Other"
+    OTHER_LABEL_ZH = "其他"
     EPSILON = 1e-6
 
     @classmethod
     def _sanitize_label(cls, label: str) -> str:
         # Keep original characters; only normalize whitespace and protect quotes.
-        label = str(label).strip()
+        label = _strip_chart_markup(str(label))
         if not label:
             return "label"
         label = label.replace('"', "'")
@@ -636,7 +654,11 @@ class PieChartMermaidGenerator:
             if total > 100.0 + cls.EPSILON:
                 raise ValueError("percent values sum exceeds 100")
             if total < 100.0 - cls.EPSILON:
-                labels.append(cls.OTHER_LABEL)
+                labels.append(
+                    cls.OTHER_LABEL_ZH
+                    if any(_has_cjk(label) for label in labels)
+                    else cls.OTHER_LABEL
+                )
                 other_value = 100.0 - total
                 values.append(other_value)
                 raw_values.append(other_value)
@@ -668,17 +690,21 @@ class TimelineChartMermaidGenerator:
         title <title>
             <time> : <event><br>...
     """
+    EVENT_MAX_LEN = 72
 
-    @staticmethod
-    def _format_event_text(text: str) -> str:
+    @classmethod
+    def _format_event_text(cls, text: str) -> str:
         # Allow line breaks via <br>
-        return (
-            str(text)
+        event = (
+            _strip_chart_markup(str(text))
             .strip()
             .replace("\r\n", "\n")
             .replace("\r", "\n")
             .replace("\n", "<br>")
         )
+        if len(event) > cls.EVENT_MAX_LEN:
+            event = event[: cls.EVENT_MAX_LEN].rstrip() + "..."
+        return event
 
     @classmethod
     def generate_from_json(cls, json_string: str) -> str:

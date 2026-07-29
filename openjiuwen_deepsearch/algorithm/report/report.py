@@ -80,6 +80,8 @@ MAX_CONCURRENT_BATCHES = 5
 REPORT_CONTENT_VISUALIZATION_MAX_CANDIDATES = 6
 REPORT_CONTENT_VISUALIZATION_MAX_CHARTS_PER_CANDIDATE = 3
 REPORT_CONTENT_VISUALIZATION_MAX_TOTAL_CHARTS = 8
+# Counts full _process_visualization_task calls in the late report-content fallback.
+REPORT_CONTENT_VISUALIZATION_MAX_TASKS_PER_SECTION = 6
 LEADING_TITLE_NUMBER_PATTERN = re.compile(
     r"^(?:"
     r"[\（][一二三四五六七八九十\d]{1,2}[\）]\s*|"
@@ -505,6 +507,166 @@ class Reporter:
             return False, "duplicate subsection headings detected in generated report"
 
         return True, ""
+
+    @staticmethod
+    def _build_sub_report_retry_feedback(
+        error_code: str,
+        location: str,
+        fields: dict | None = None,
+    ) -> str:
+        """Build controlled retry feedback without echoing model/provider text."""
+        allowed_codes = {
+            "HEADING_COUNT_MISMATCH",
+            "HEADING_LEVEL_MISMATCH",
+            "HEADING_TITLE_MISMATCH",
+            "HEADING_MISSING",
+            "OUTLINE_HEADING_MISSING",
+            "DUPLICATE_SUBSECTION_HEADINGS",
+            "SUB_REPORT_CONTENT_EMPTY",
+            "MISSING_SECTION_CONTEXT",
+            "SUB_REPORT_GENERATION_EXCEPTION",
+            "SUB_REPORT_RETRY_REQUIRED",
+        }
+        error_code = error_code if error_code in allowed_codes else "SUB_REPORT_RETRY_REQUIRED"
+        lines = [f"error_code: {error_code}", f"location: {location}"]
+        for key in (
+            "position",
+            "expected_heading_count",
+            "actual_heading_count",
+            "expected_heading_level",
+            "actual_heading_level",
+        ):
+            value = (fields or {}).get(key)
+            if value is None:
+                continue
+            match = re.match(r"^H?(\d+)$", str(value).strip(), flags=re.IGNORECASE)
+            if not match:
+                continue
+            safe_value = (
+                f"H{int(match.group(1))}"
+                if key.endswith("_level")
+                else str(int(match.group(1)))
+            )
+            lines.append(f"{key}: {safe_value}")
+        if error_code.startswith("HEADING") or error_code in {
+            "OUTLINE_HEADING_MISSING",
+            "DUPLICATE_SUBSECTION_HEADINGS",
+        }:
+            action = (
+                "Regenerate markdown headings from Current Chapter Outline; "
+                "keep H1/H2 count, level, order, and title text exact."
+            )
+        elif error_code == "MISSING_SECTION_CONTEXT":
+            action = "Retry only after required section title, outline, and evidence context are available."
+        elif error_code == "SUB_REPORT_GENERATION_EXCEPTION":
+            action = (
+                "Regenerate from the provided evidence and constraints; "
+                "do not mention prior system or provider errors."
+            )
+        else:
+            action = "Regenerate non-empty chapter content from the provided evidence and constraints."
+        lines.append(f"action: {action}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _sub_report_retry_feedback_from_failure(cls, failure_reason: str) -> str:
+        """Convert raw failure text into a prompt-safe retry hint."""
+        reason = str(failure_reason or "").strip()
+        if not reason:
+            return ""
+
+        code_match = re.search(r"(?m)^\s*error_code:\s*([A-Z0-9_]+)\s*$", reason)
+        if code_match:
+            fields = {}
+            for key in (
+                "position",
+                "expected_heading_count",
+                "actual_heading_count",
+                "expected_heading_level",
+                "actual_heading_level",
+            ):
+                field_match = re.search(rf"(?m)^\s*{key}:\s*(H?\d+)\s*$", reason)
+                if field_match:
+                    fields[key] = field_match.group(1)
+            error_code = code_match.group(1)
+            location = (
+                "markdown_headings"
+                if (
+                    error_code.startswith("HEADING")
+                    or error_code == "DUPLICATE_SUBSECTION_HEADINGS"
+                )
+                else "chapter"
+            )
+            return cls._build_sub_report_retry_feedback(error_code, location, fields)
+
+        heading_patterns = [
+            (
+                r"heading count mismatch:\s*expected\s*(\d+),\s*got\s*(\d+)",
+                "HEADING_COUNT_MISMATCH",
+                ("expected_heading_count", "actual_heading_count"),
+            ),
+            (
+                r"heading level mismatch at position\s*(\d+):\s*expected\s*H?(\d+),\s*got\s*H?(\d+)",
+                "HEADING_LEVEL_MISMATCH",
+                ("position", "expected_heading_level", "actual_heading_level"),
+            ),
+            (
+                r"heading title mismatch at position\s*(\d+)",
+                "HEADING_TITLE_MISMATCH",
+                ("position",),
+            ),
+        ]
+        for pattern, error_code, field_names in heading_patterns:
+            match = re.search(pattern, reason, flags=re.IGNORECASE)
+            if match:
+                return cls._build_sub_report_retry_feedback(
+                    error_code,
+                    "markdown_headings",
+                    dict(zip(field_names, match.groups())),
+                )
+
+        reason_lower = reason.lower()
+        if "generated report headings are empty" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "HEADING_MISSING",
+                "markdown_headings",
+            )
+        if "expected subsection outline headings are empty" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "OUTLINE_HEADING_MISSING",
+                "markdown_headings",
+            )
+        if "duplicate subsection headings" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "DUPLICATE_SUBSECTION_HEADINGS",
+                "markdown_headings",
+            )
+        if (
+            "no sub report content found" in reason_lower
+            or "sub report content is blank" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "SUB_REPORT_CONTENT_EMPTY",
+                "chapter",
+            )
+        if (
+            "missing 'section_task'" in reason_lower
+            or "missing 'section_task' or sub section outline" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "MISSING_SECTION_CONTEXT",
+                "chapter_context",
+            )
+        if (
+            "error generating section" in reason_lower
+            or "llm returned empty content" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "SUB_REPORT_GENERATION_EXCEPTION",
+                "chapter_generation",
+            )
+
+        return cls._build_sub_report_retry_feedback("SUB_REPORT_RETRY_REQUIRED", "chapter")
 
     @staticmethod
     def is_valid_chapter_format(text, section_idx) -> bool:
@@ -1075,7 +1237,9 @@ class Reporter:
                 f"Warning: Generate section report failed on attempt {attempt_num + 1}/{max_attempt_num}: "
                 f"{write_res.get('result', '')}. retry ..."
             )
-            current_inputs["sub_report_retry_feedback"] = write_res.get("result", "")
+            current_inputs["sub_report_retry_feedback"] = (
+                self._sub_report_retry_feedback_from_failure(write_res.get("result", ""))
+            )
             await session.write_custom_stream(
                 self._make_payload(
                     stream_id,
@@ -2659,6 +2823,13 @@ class Reporter:
             return int(numeric_value)
         return float(numeric_value)
 
+    @staticmethod
+    def _scale_visualization_value(value: int | float, divisor: int) -> int | float:
+        scaled = Decimal(str(value)) / Decimal(divisor)
+        if scaled == scaled.to_integral_value():
+            return int(scaled)
+        return float(scaled)
+
     @classmethod
     def _normalize_same_unit_records_locally(
         cls,
@@ -2696,6 +2867,15 @@ class Reporter:
 
         if normalized_unit is None:
             return None
+
+        if normalized_unit.startswith("万"):
+            max_abs_value = max(abs(float(row[1])) for row in normalized_records)
+            if max_abs_value >= 10000:
+                normalized_unit = "亿" + normalized_unit[1:]
+                normalized_records = [
+                    [row[0], cls._scale_visualization_value(row[1], 10000)]
+                    for row in normalized_records
+                ]
 
         return {"unit": normalized_unit, "records": normalized_records}
 
@@ -3242,9 +3422,75 @@ class Reporter:
         return cjk_count + latin_word_count
 
     @staticmethod
-    def _extract_first_citation_index(text: str) -> int:
-        match = re.search(r"\[(?:checked_)?citation:(\d+)\]", text or "")
-        return int(match.group(1)) if match else 0
+    def _extract_citation_indices(text: str) -> list[int]:
+        indices = []
+        seen = set()
+        for match in re.finditer(r"\[(?:checked_)?citation:(\d+)\]", text or ""):
+            index = int(match.group(1))
+            if index > 0 and index not in seen:
+                seen.add(index)
+                indices.append(index)
+        return indices
+
+    @staticmethod
+    def _normalize_citation_indices(citations) -> list[int]:
+        indices = []
+        seen = set()
+        for citation in citations or []:
+            try:
+                index = int(citation)
+            except (TypeError, ValueError):
+                continue
+            if index > 0 and index not in seen:
+                seen.add(index)
+                indices.append(index)
+        return indices
+
+    @classmethod
+    def _extract_first_citation_index(cls, text: str) -> int:
+        indices = cls._extract_citation_indices(text)
+        return indices[0] if indices else 0
+
+    @classmethod
+    def _classified_source_content_for_citations(
+        cls,
+        classified_content: list,
+        citation_indices: list[int],
+    ) -> str:
+        target_indices = cls._normalize_citation_indices(citation_indices)
+        if not target_indices or not isinstance(classified_content, list):
+            return ""
+
+        source_by_index = {}
+        for item in classified_content:
+            if not isinstance(item, dict):
+                continue
+            item_indices = cls._normalize_citation_indices([item.get("index")])
+            if item_indices:
+                source_by_index.setdefault(item_indices[0], item)
+
+        source_chunks = []
+        for index in target_indices:
+            item = source_by_index.get(index)
+            if not item:
+                continue
+            original_content = (item.get("original_content") or "").strip()
+            if not original_content:
+                key_passages = item.get("key_passages")
+                if isinstance(key_passages, list):
+                    original_content = "\n".join(
+                        str(passage).strip()
+                        for passage in key_passages
+                        if passage is not None and str(passage).strip()
+                    )
+            if not original_content:
+                continue
+            source_chunks.append(
+                f"[citation:{index} begin]time: {item.get('doc_time', '')}|||"
+                f"scores: {format_scores_inline(item)}|||"
+                f"content: {original_content}[citation:{index} end]"
+            )
+        return "\n".join(source_chunks)
 
     @classmethod
     def _report_content_visualization_candidates(
@@ -3298,24 +3544,28 @@ class Reporter:
                     explicit_only=True,
                 )
             )
+            citation_indices = cls._extract_citation_indices(block_text)
             candidates.append(
                 {
                     "candidate_idx": idx,
                     "title": title or f"section content {idx}",
                     "origin_content": block_text,
                     "numeric_count": numeric_count,
-                    "citation_index": cls._extract_first_citation_index(block_text),
+                    "citation_indices": citation_indices,
+                    "citation_index": citation_indices[0] if citation_indices else 0,
                     "desired_chart_type": desired_chart_type,
                 }
             )
         if not candidates and cls._chartable_numeric_count(report_markdown) >= 3:
+            citation_indices = cls._extract_citation_indices(report_markdown)
             candidates.append(
                 {
                     "candidate_idx": 1,
                     "title": section_task or "section content",
                     "origin_content": report_markdown,
                     "numeric_count": cls._chartable_numeric_count(report_markdown),
-                    "citation_index": cls._extract_first_citation_index(report_markdown),
+                    "citation_indices": citation_indices,
+                    "citation_index": citation_indices[0] if citation_indices else 0,
                     "desired_chart_type": cls._infer_desired_chart_type(
                         report_markdown,
                         section_outline,
@@ -3399,9 +3649,9 @@ class Reporter:
         The primary pipeline extracts chart data from classified source passages
         before the section is written. In real reports, the final section can
         contain multiple clean, traceable data dimensions. This late
-        report-content pass keeps the same validation pipeline, asks for data
-        distinct from already generated charts, and stops when no distinct
-        chartable dataset remains.
+        report-content pass uses the drafted section only to locate candidate
+        cited blocks, then extracts and validates chart data against the
+        corresponding classified source passages.
         """
         report_markdown = (current_inputs.get("sub_report_content") or "").strip()
         section_outline = (current_inputs.get("sub_section_outline") or "").strip()
@@ -3421,7 +3671,6 @@ class Reporter:
         )
         current_inputs["visualization_result"] = existing
         if max_chart_count <= 0:
-            current_inputs["visualization_result"] = []
             return
 
         existing = self._limit_visualization_result_for_section(
@@ -3436,6 +3685,9 @@ class Reporter:
 
         if not candidates:
             return
+
+        process_task_count = 0
+        task_budget = REPORT_CONTENT_VISUALIZATION_MAX_TASKS_PER_SECTION
 
         def append_generated_result(
             candidate: dict,
@@ -3452,8 +3704,9 @@ class Reporter:
                     f"generated://section/{section_idx}/report-content/"
                     f"{candidate['candidate_idx']}/{chart_attempt_index}"
                 ),
-                "original_content": candidate["origin_content"],
+                "original_content": candidate["source_content"],
                 "scores": {"data_density": float(candidate["numeric_count"])},
+                "citation_indices": candidate.get("citation_indices", []),
                 "index": candidate.get("citation_index", 0),
                 "sub_section_visualization_content": result.get(
                     "sub_section_visualization_content", ""
@@ -3462,16 +3715,42 @@ class Reporter:
             }
             existing.append(generated_item)
 
-        for candidate in candidates:
+        classified_content = current_inputs.get("classified_content", [])
+        for raw_candidate in candidates:
+            if process_task_count >= task_budget:
+                logger.info(
+                    "%s [generate_sub_section_visualization_content] section_idx: [%s], "
+                    "stop report-content visualization fallback: task budget [%s] reached",
+                    EFFECT_SUB_REPORT_TAG,
+                    section_idx,
+                    task_budget,
+                )
+                break
+            source_content = self._classified_source_content_for_citations(
+                classified_content,
+                raw_candidate.get("citation_indices", []),
+            )
+            if not source_content:
+                logger.info(
+                    "%s [generate_sub_section_visualization_content] section_idx: [%s], "
+                    "skip report-content visualization candidate [%s]: no cited classified source content",
+                    EFFECT_SUB_REPORT_TAG,
+                    section_idx,
+                    raw_candidate["candidate_idx"],
+                )
+                continue
+            candidate = dict(raw_candidate)
+            candidate["source_content"] = source_content
             chart_attempts = 0
             while (
                 chart_attempts < REPORT_CONTENT_VISUALIZATION_MAX_CHARTS_PER_CANDIDATE
                 and valid_chart_count < max_chart_count
+                and process_task_count < task_budget
             ):
                 visualization_dict = {
                     "section_idx": section_idx,
                     "title": candidate["title"],
-                    "origin_content": candidate["origin_content"],
+                    "origin_content": candidate["source_content"],
                     "data_density": float(candidate["numeric_count"]),
                     "language": current_inputs.get("language", "zh-CN"),
                     "section_title": section_task,
@@ -3480,6 +3759,7 @@ class Reporter:
                     "avoid_chart_data": self._format_avoid_chart_data(avoid_chart_data),
                     "max_attempt_num": current_inputs.get("max_generate_retry_num", 3),
                 }
+                process_task_count += 1
                 result = await self._process_visualization_task(visualization_dict)
                 if not result.get("rs_success") or not result.get("mermaid_content"):
                     if not LogManager.is_sensitive():
@@ -3814,13 +4094,16 @@ class Reporter:
             "current_subsection",
             "Full current chapter; follow each Level 2 heading in the current chapter outline.",
         )
-        retry_feedback = str(current_inputs.get("sub_report_retry_feedback", "") or "").strip()
+        retry_feedback = self._sub_report_retry_feedback_from_failure(
+            str(current_inputs.get("sub_report_retry_feedback", "") or "")
+        )
         retry_feedback_prompt = ""
         if retry_feedback:
             retry_feedback_prompt = (
                 "\n\n# Previous Attempt Feedback\n"
-                "The previous chapter draft was rejected by local validation. "
-                "Regenerate the chapter from scratch and fix this issue exactly:\n"
+                "The previous chapter attempt failed validation. "
+                "Use only the controlled fields below to correct the next draft; "
+                "do not copy these fields into the report body.\n"
                 f"{retry_feedback}\n\n"
             )
         sub_content_message = (
@@ -4146,12 +4429,23 @@ class Reporter:
             ]
             title_meta = context.title_meta_map.get(index, {})
             image_title = (title_meta.get("image_title") or "").strip()
-            citation_index = int(title_meta.get("citation_index", 0) or 0)
+            citation_indices = Reporter._normalize_citation_indices(
+                title_meta.get("citation_indices")
+            )
+
+            if not citation_indices:
+                citation_indices = Reporter._normalize_citation_indices(
+                    [title_meta.get("citation_index")]
+                )
+
             if not image_title:
                 image_title = (
                     "图表标题" if context.language == CHINESE else "Image Title"
                 )
-            citation_text = f"[citation:{citation_index}]" if citation_index > 0 else ""
+
+            citation_text = "".join(
+                f"[citation:{citation_index}]" for citation_index in citation_indices
+            )
             safe_image_title = html.escape(image_title, quote=True)
             title_with_citation = f"{safe_image_title}{citation_text}".strip()
             if title_with_citation:
@@ -4277,14 +4571,22 @@ class Reporter:
                     if not isinstance(viz_obj, dict):
                         continue
 
-                    citation_index = url_to_citation_index.get(
-                        item.get("url", ""),
-                        item.get("index", 0),
+                    citation_indices = self._normalize_citation_indices(
+                        item.get("citation_indices")
                     )
+                    if not citation_indices:
+                        citation_index = url_to_citation_index.get(
+                            item.get("url", ""),
+                            item.get("index", 0),
+                        )
+                        citation_indices = self._normalize_citation_indices(
+                            [citation_index]
+                        )
                     mermaid_map[placeholder_index] = item.get("mermaid_content", "")
                     title_meta_map[placeholder_index] = {
                         "image_title": viz_obj.get("image_title", ""),
-                        "citation_index": citation_index,
+                        "citation_index": citation_indices[0] if citation_indices else 0,
+                        "citation_indices": citation_indices,
                     }
                     placement_item = {
                         "index": placeholder_index,
