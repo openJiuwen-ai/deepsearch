@@ -35,8 +35,7 @@ from openjiuwen_codesearch.framework.openjiuwen.nodes import (
 )
 from openjiuwen_codesearch.framework.openjiuwen.runtime_context import (
     CodeSearchRunContext,
-    register_run_context,
-    unregister_run_context,
+    run_session,
 )
 from openjiuwen_codesearch.framework.openjiuwen.steps import finalize
 
@@ -115,23 +114,27 @@ class GraphCodeSearchAgent:
 
     async def run(self, ctx: CodeSearchRunContext) -> CodeSearchResult:
         self._get_shared_agent()
-        run_id = register_run_context(ctx)
-        # per-run 放宽 workflow 执行超时（openjiuwen 默认仅 60s）：
-        # 写 workflow_session_vars 而非 os.environ，重叠运行互不影响（deepsearch 模式）
-        session_vars = dict(workflow_session_vars.get() or {})
-        session_vars[WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY] = str(ctx.config.agent.time_limit_seconds)
-        session_token = workflow_session_vars.set(session_vars)
         logger.info("Starting multi-turn agentic retrieval loop (graph engine)...")
-        try:
-            await Runner.run_workflow(
-                workflow=f"{WORKFLOW_ID}_{WORKFLOW_VERSION}",
-                inputs={"run_id": run_id, "workflow_name": WORKFLOW_ID},
+        # 结构化注册：with 退出自动注销（防长驻服务下的注册表泄漏）
+        with run_session(ctx) as run_id:
+            # per-run 放宽 workflow 执行超时（openjiuwen 默认仅 60s）：
+            # 写 workflow_session_vars 而非 os.environ，重叠运行互不影响（deepsearch 模式）
+            session_vars = dict(workflow_session_vars.get() or {})
+            session_vars[WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY] = str(
+                ctx.config.agent.time_limit_seconds
             )
-            if ctx.result is None:
-                # 图异常中断且 End 未执行：按已有 pending 终止原因降级收尾
-                logger.warning("Workflow ended without EndNode result; finalizing from context.")
-                return finalize(ctx, ctx.pending_termination or Termination.LLM_ERROR)
-            return ctx.result
-        finally:
-            workflow_session_vars.reset(session_token)
-            unregister_run_context(run_id)
+            session_token = workflow_session_vars.set(session_vars)
+            try:
+                await Runner.run_workflow(
+                    workflow=f"{WORKFLOW_ID}_{WORKFLOW_VERSION}",
+                    inputs={"run_id": run_id, "workflow_name": WORKFLOW_ID},
+                )
+                if ctx.result is None:
+                    # 图异常中断且 End 未执行：按已有 pending 终止原因降级收尾
+                    logger.warning(
+                        "Workflow ended without EndNode result; finalizing from context."
+                    )
+                    return finalize(ctx, ctx.pending_termination or Termination.LLM_ERROR)
+                return ctx.result
+            finally:
+                workflow_session_vars.reset(session_token)

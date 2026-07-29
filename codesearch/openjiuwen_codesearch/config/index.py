@@ -14,14 +14,21 @@ class EmbedConfig(BaseModel):
     query_prefix: str = (
         "Instruct: Given a code search query, retrieve relevant code snippets\nQuery: "
     )
-    cache_dir: str = "."
+    # 运行产物一律进 ./output/（对齐 deepsearch 惯例）；目录不存在会自动创建
+    cache_dir: str = "./output/cache"
     max_retries: int = 8
     retry_backoff_seconds: float = 2.0
+    timeout_seconds: float = 60.0  # 单次请求总超时
 
 
 class MilvusConfig(BaseModel):
     host: str = "localhost"
     port: str = "19530"
+    # 认证部署（共用实例开启鉴权的场景）；支持 "user:password" 或 API token 形式
+    token: str = ""
+    # Milvus 2.2+ database：比 cs_ 前缀更强一级的硬隔离（与 deepsearch 对齐的
+    # 运维手段）；"default" 表示不切换
+    database_name: str = "default"
     # 与其他产品（deepsearch）共用 Milvus 实例时的命名空间隔离：
     # collection 实名 = f"{collection_prefix}{name}__{schema_version}"
     collection_prefix: str = "cs_"
@@ -38,6 +45,7 @@ class MilvusConfig(BaseModel):
 class IndexConfig(BaseModel):
     use_dense_embeddings: bool = False
     max_num_files_per_repo: Optional[int] = None  # None 表示不限；>=1 生效
+    max_file_size_bytes: int = 5 * 1024 * 1024  # 超大文件（多为生成物）跳过并告警
     max_char_limit: int = 65535   # Milvus VARCHAR 上限，超长 chunk 截断
     max_num_calls: int = 4096     # calls 数组容量上限，单条截 2048 字符
     # trigram 字段是存储大头（hex 编码 ≈ 原文 7 倍体积）。空间敏感场景可关闭，

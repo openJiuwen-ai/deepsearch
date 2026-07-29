@@ -1,17 +1,20 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""MilvusStore：同时实现检索协议（CodeRetriever）与索引写入协议（ChunkStore）。
+"""MilvusStore：代码检索的 Milvus 实现。
 
-对旧 MilvusCollection 的修正：
-- 所有同步 pymilvus 调用经 `asyncio.to_thread` 隔离（不阻塞 event loop，notes #8）；
-- 所有 expr 经 queries.py 构造（转义，notes #20）；
-- collection 实名带 schema_version（notes #23），重建需显式 reset=True。
+通用存取基建（连接/建库/批式读写/两段式查询/检索执行/线程隔离）由
+openjiuwen-search-base 的 `MilvusCollectionClient` 提供（2026-07-29 提取）；
+本类只保留**代码检索特有**的部分：chunk schema、Snippet 映射、trigram 查询
+与严格子串过滤、repo map、行区间重叠查询、revision 语义、文件哈希查重。
 """
 
-import asyncio
 import logging
-from typing import Any, Optional
+import uuid
+from typing import Any
 
-from pymilvus import AnnSearchRequest, Collection, WeightedRanker, connections, utility
+from pymilvus import AnnSearchRequest
+from pymilvus.exceptions import MilvusException
+
+from openjiuwen_search_base.milvus.store import MilvusCollectionClient
 
 from openjiuwen_codesearch.config.index import IndexConfig, MilvusConfig
 from openjiuwen_codesearch.domain.models import Snippet
@@ -27,8 +30,10 @@ from openjiuwen_codesearch.retrieval.tokenizer import generate_char_trigrams
 
 logger = logging.getLogger(__name__)
 
+_SPARSE_GENERATED_FIELDS = ("sparse_vector", "sparse_vector_trigram")
 
-class MilvusStore:
+
+class MilvusStore(MilvusCollectionClient):
     def __init__(
         self,
         milvus_cfg: MilvusConfig,
@@ -41,35 +46,37 @@ class MilvusStore:
         self._milvus_cfg = milvus_cfg
         self._index_cfg = index_cfg
         self._strict_trigram = strict_trigram
-        self._alias = milvus_cfg.connection_alias
-        self._name = versioned_collection_name(
-            collection_name, milvus_cfg.schema_version, milvus_cfg.collection_prefix
-        )
 
-        connections.connect(self._alias, host=milvus_cfg.host, port=milvus_cfg.port)
-        if reset and utility.has_collection(self._name, using=self._alias):
-            logger.info("Dropping existing collection '%s' (explicit reset)...", self._name)
-            utility.drop_collection(self._name, using=self._alias)
+        indexes: list[tuple[str, dict]] = []
+        if index_cfg.use_dense_embeddings:
+            indexes.append(("dense_vector", DENSE_INDEX_PARAMS))
+        indexes.append(("sparse_vector", SPARSE_INDEX_PARAMS))
+        indexes.append(("sparse_vector_trigram", SPARSE_INDEX_PARAMS))
 
-        if utility.has_collection(self._name, using=self._alias):
-            logger.info("Loading existing collection '%s'...", self._name)
-            self.collection = Collection(name=self._name, using=self._alias)
-        else:
-            logger.info("Creating collection '%s'...", self._name)
-            schema = build_schema(
+        # 别名按实例唯一化：pymilvus 连接按 alias 共享，固定别名下任一实例
+        # close() 会断掉同进程所有实例的连接（互杀）。配置值作为前缀保留可辨识性。
+        instance_alias = f"{milvus_cfg.connection_alias}-{uuid.uuid4().hex[:8]}"
+        super().__init__(
+            host=milvus_cfg.host,
+            port=milvus_cfg.port,
+            token=milvus_cfg.token,
+            database_name=milvus_cfg.database_name,
+            collection_name=versioned_collection_name(
+                collection_name, milvus_cfg.schema_version, milvus_cfg.collection_prefix
+            ),
+            schema_factory=lambda: build_schema(
                 use_dense=index_cfg.use_dense_embeddings,
                 embed_dim=embed_dim,
                 max_char_limit=index_cfg.max_char_limit,
                 max_num_calls=index_cfg.max_num_calls,
-            )
-            self.collection = Collection(name=self._name, schema=schema, using=self._alias)
-            if index_cfg.use_dense_embeddings:
-                self.collection.create_index("dense_vector", DENSE_INDEX_PARAMS)
-            self.collection.create_index("sparse_vector", SPARSE_INDEX_PARAMS)
-            self.collection.create_index("sparse_vector_trigram", SPARSE_INDEX_PARAMS)
-        self.collection.load()
+            ),
+            indexes=indexes,
+            connection_alias=instance_alias,
+            reset=reset,
+            sparse_generated_fields=_SPARSE_GENERATED_FIELDS,
+        )
 
-    # ---------- 内部工具 ----------
+    # ---------- 结果映射（代码域） ----------
     @staticmethod
     def _hit_to_snippet(hit: Any) -> Snippet:
         return Snippet(
@@ -82,17 +89,6 @@ class MilvusStore:
             kind=hit.entity.get("kind") or "",
             original_name=hit.entity.get("original_name") or "",
         )
-
-    def _writable_fields(self) -> list[str]:
-        return [
-            f.name
-            for f in self.collection.schema.fields
-            if not f.auto_id and f.name not in ("sparse_vector", "sparse_vector_trigram")
-        ]
-
-    def _records_to_columns(self, records: list[dict]) -> list[list]:
-        fields = self._writable_fields()
-        return [[record.get(name) for record in records] for name in fields]
 
     # ---------- CodeRetriever ----------
     async def search(
@@ -107,17 +103,14 @@ class MilvusStore:
             field = "sparse_vector"
             fetch_limit = topk
 
-        def _search():
-            return self.collection.search(
-                data=[query_data],
-                anns_field=field,
-                param={"metric_type": "BM25"},
-                limit=fetch_limit,
-                expr=queries.revision_filter(revision),
-                output_fields=OUTPUT_FIELDS,
-            )
-
-        results = await asyncio.to_thread(_search)
+        results = await self.ann_search(
+            data=[query_data],
+            anns_field=field,
+            param={"metric_type": "BM25"},
+            limit=fetch_limit,
+            expr=queries.revision_filter(revision),
+            output_fields=OUTPUT_FIELDS,
+        )
         hits = [self._hit_to_snippet(hit) for hit in results[0]]
 
         if use_trigram and self._strict_trigram:
@@ -127,27 +120,17 @@ class MilvusStore:
         return hits[:topk]
 
     async def get_repo_map(self, revision: str) -> str:
-        def _collect() -> list[str]:
-            id_res = self.collection.query(
-                expr=queries.revision_filter(revision), output_fields=["id"]
-            )
-            if not id_res:
-                return []
-            all_ids = [r["id"] for r in id_res]
-            unique_paths: set[str] = set()
-            batch = 5000
-            for j in range(0, len(all_ids), batch):
-                res = self.collection.query(
-                    expr=queries.ids_filter(all_ids[j : j + batch]),
-                    output_fields=["file_path"],
-                )
-                unique_paths.update(r["file_path"] for r in res if r.get("file_path"))
-            return sorted(unique_paths)
-
         try:
-            paths = await asyncio.to_thread(_collect)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to generate repo map: %s", e)
+            records = await self.query_ids_then_fields(
+                expr=queries.revision_filter(revision),
+                output_fields=["file_path"],
+                ids_filter_builder=queries.ids_filter,
+                heavy_batch_size=5000,
+            )
+            paths = sorted({r["file_path"] for r in records if r.get("file_path")})
+        except MilvusException:
+            # 面向 LLM 的工具结果允许优雅降级，但必须留完整现场；编程错误正常抛出
+            logger.exception("Failed to generate repo map")
             return "Repository Map unavailable."
         if not paths:
             return "Repository Map unavailable (no files found)."
@@ -156,13 +139,10 @@ class MilvusStore:
     async def fetch_overlapping(
         self, revision: str, file_path: str, start_line: int, end_line: int
     ) -> list[Snippet]:
-        def _query():
-            return self.collection.query(
-                expr=queries.overlap_filter(revision, file_path, start_line, end_line),
-                output_fields=["id"] + OUTPUT_FIELDS,
-            )
-
-        res = await asyncio.to_thread(_query)
+        res = await self.query(
+            expr=queries.overlap_filter(revision, file_path, start_line, end_line),
+            output_fields=["id"] + OUTPUT_FIELDS,
+        )
         return [
             Snippet(
                 id=r["id"],
@@ -177,75 +157,17 @@ class MilvusStore:
         ]
 
     async def has_revision(self, revision: str) -> bool:
-        def _query():
-            return self.collection.query(
+        try:
+            res = await self.query(
                 expr=queries.revision_filter(revision), output_fields=["id"], limit=1
             )
-
-        try:
-            return bool(await asyncio.to_thread(_query))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("has_revision check failed: %s", e)
+            return bool(res)
+        except MilvusException:
+            # Milvus 侧故障按"未就绪"处理（fail-fast 返回空结果，不进检索循环），
+            # 完整现场入日志；编程错误正常抛出
+            logger.exception("has_revision check failed")
             return False
 
-    # ---------- ChunkStore ----------
-    async def fetch_records_by_hashes(self, file_hashes: list[str]) -> list[dict]:
-        if not file_hashes:
-            return []
-        fields = self._writable_fields()
-        if "id" not in fields:
-            fields.append("id")
-        heavy_batch = self._milvus_cfg.heavy_fetch_batch_size
-
-        def _fetch() -> list[dict]:
-            records: list[dict] = []
-            for i in range(0, len(file_hashes), self._milvus_cfg.query_batch_size):
-                batch_hashes = file_hashes[i : i + self._milvus_cfg.query_batch_size]
-                id_res = self.collection.query(
-                    expr=queries.hashes_filter(batch_hashes),
-                    output_fields=["id"],
-                    consistency_level="Strong",
-                )
-                all_ids = [r["id"] for r in id_res]
-                for j in range(0, len(all_ids), heavy_batch):
-                    records.extend(
-                        self.collection.query(
-                            expr=queries.ids_filter(all_ids[j : j + heavy_batch]),
-                            output_fields=fields,
-                            consistency_level="Strong",
-                        )
-                    )
-            return records
-
-        try:
-            return await asyncio.to_thread(_fetch)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to query existing hashes from Milvus: %s", e)
-            return []
-
-    async def upsert_records(self, records: list[dict]) -> None:
-        await self._write(records, self.collection.upsert)
-
-    async def insert_records(self, records: list[dict]) -> None:
-        await self._write(records, self.collection.insert)
-
-    async def _write(self, records: list[dict], op) -> None:
-        batch_size = self._milvus_cfg.insert_batch_size
-
-        def _run():
-            for i in range(0, len(records), batch_size):
-                op(self._records_to_columns(records[i : i + batch_size]))
-
-        await asyncio.to_thread(_run)
-
-    async def flush(self) -> None:
-        await asyncio.to_thread(self.collection.flush)
-
-    async def release(self) -> None:
-        """卸载 collection 释放查询内存（多仓 benchmark 按仓分批时使用）。"""
-        await asyncio.to_thread(self.collection.release)
-
-    # ---------- 可选：dense / hybrid（use_dense_embeddings=True 时可用） ----------
     async def hybrid_search(
         self,
         query: str,
@@ -254,6 +176,12 @@ class MilvusStore:
         topk: int,
         use_trigram: bool = False,
     ) -> list[Snippet]:
+        """稠密+稀疏混合检索（use_dense_embeddings=True 的配套查询能力）。
+
+        领域级 API：0.3 dense / 0.7 sparse 加权，trigram 模式下超采样后
+        按真实子串包含严格过滤——与迁移前行为一致。
+        通用执行由 base 的 `hybrid_ann_search` 承担。
+        """
         fetch_limit = topk * 10 if use_trigram else topk
         sparse_field = "sparse_vector_trigram" if use_trigram else "sparse_vector"
         sparse_data = (
@@ -278,18 +206,44 @@ class MilvusStore:
                 expr=expr,
             ),
         ]
-
-        def _search():
-            return self.collection.hybrid_search(
-                reqs=reqs,
-                rerank=WeightedRanker(0.3, 0.7),
-                limit=fetch_limit,
-                output_fields=OUTPUT_FIELDS,
-            )
-
-        results = await asyncio.to_thread(_search)
+        results = await self.hybrid_ann_search(
+            reqs=reqs, weights=(0.3, 0.7), limit=fetch_limit, output_fields=OUTPUT_FIELDS
+        )
         hits = [self._hit_to_snippet(hit) for hit in results[0]]
         if use_trigram and self._strict_trigram:
             needle = query.lower()
             hits = [h for h in hits if needle in h.text.lower()]
         return hits[:topk]
+
+    # ---------- ChunkStore（索引写入侧） ----------
+    async def fetch_records_by_hashes(self, file_hashes: list[str]) -> list[dict]:
+        if not file_hashes:
+            return []
+        fields = self.writable_fields()
+        if "id" not in fields:
+            fields.append("id")
+        # 有意不捕获异常：此处失败若静默返回 []，去重会把已有文件当新文件重复
+        # insert（同 PK 重复写入）。索引失败应当喊出来，由上层按实例记失败并继续。
+        records: list[dict] = []
+        for i in range(0, len(file_hashes), self._milvus_cfg.query_batch_size):
+            batch = file_hashes[i : i + self._milvus_cfg.query_batch_size]
+            records.extend(
+                await self.query_ids_then_fields(
+                    expr=queries.hashes_filter(batch),
+                    output_fields=fields,
+                    ids_filter_builder=queries.ids_filter,
+                    heavy_batch_size=self._milvus_cfg.heavy_fetch_batch_size,
+                    consistency_level="Strong",
+                )
+            )
+        return records
+
+    async def insert_records(self, records: list[dict], batch_size: int | None = None) -> None:
+        await super().insert_records(
+            records, batch_size=batch_size or self._milvus_cfg.insert_batch_size
+        )
+
+    async def upsert_records(self, records: list[dict], batch_size: int | None = None) -> None:
+        await super().upsert_records(
+            records, batch_size=batch_size or self._milvus_cfg.insert_batch_size
+        )

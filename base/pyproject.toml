@@ -1,0 +1,31 @@
+[project]
+name = "openjiuwen-search-base"
+version = "0.1.0"
+description = "Shared building blocks for openJiuwen search products (transitional; extracted from codesearch)."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+# 与消费方相同的分组模式：核心零重依赖，按需启用。
+# workflow 所需 API 面已在 PyPI openjiuwen==0.1.10.post3 与
+# gitcode agent-core v0.1.13 双版本验证共存；其他版本未验证。
+workflow = ["openjiuwen>=0.1.10,<0.2", "certifi"]  # 上界收紧：base_node 依赖框架内部路径，升级需显式回归；certifi 为 SSL 默认 CA 包
+milvus = ["pymilvus>=2.4,<3"]  # 已验证组合：客户端 2.6.x + 服务端 v2.6.18；≥2.5 才有 BM25 Function
+embed = ["aiohttp>=3.9"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openjiuwen_search_base*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = ["-ra", "-q"]

@@ -1,7 +1,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-from typing import Any, Optional
+from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+
+# 通用 LLM 类型由 base 包提供（domain 仍不 import 产品包内模块；base 位于依赖图更底层）
+from openjiuwen_search_base.llm import ToolCall  # noqa: F401  re-export
 
 
 class LineRange(BaseModel):
@@ -42,11 +45,3 @@ class Snippet(BaseModel):
     def header_lines(self) -> list[str]:
         lines = self.text.split("\n")
         return lines[:2] if self.has_header else []
-
-
-class ToolCall(BaseModel):
-    """规范化后的 LLM 工具调用。arguments 已解析为 dict。"""
-
-    name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    call_id: str = ""

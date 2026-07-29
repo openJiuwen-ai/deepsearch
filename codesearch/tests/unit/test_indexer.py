@@ -96,6 +96,45 @@ class TestBuildChunkRecords:
         assert record["text_trigram"] == ""
 
 
+class TestDiscoverPythonFiles:
+    def test_symlink_loop_and_outside_link_not_followed(self, tmp_path):
+        from openjiuwen_codesearch.indexing.indexer import discover_python_files
+
+        repo = tmp_path / "repo"
+        (repo / "pkg").mkdir(parents=True)
+        (repo / "pkg" / "a.py").write_text("x = 1\n")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.py").write_text("y = 2\n")
+        # 目录符号链接环 + 指向仓库外的链接：都不得跟随
+        (repo / "loop").symlink_to(repo)
+        (repo / "leak").symlink_to(outside)
+        files = discover_python_files(str(repo))
+        assert [f for f in files if "secret" in f] == []
+        assert len(files) == 1 and files[0].endswith("a.py")
+
+    def test_oversized_file_skipped(self, tmp_path):
+        from openjiuwen_codesearch.indexing.indexer import discover_python_files
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "ok.py").write_text("x = 1\n")
+        (repo / "huge.py").write_text("#" + "x" * 100)
+        files = discover_python_files(str(repo), max_file_size_bytes=50)
+        assert len(files) == 1 and files[0].endswith("ok.py")
+
+    def test_hidden_dirs_skipped(self, tmp_path):
+        from openjiuwen_codesearch.indexing.indexer import discover_python_files
+
+        repo = tmp_path / "repo"
+        (repo / ".venv").mkdir(parents=True)
+        (repo / ".venv" / "lib.py").write_text("x = 1\n")
+        (repo / "src").mkdir()
+        (repo / "src" / "m.py").write_text("y = 2\n")
+        files = discover_python_files(str(repo))
+        assert len(files) == 1 and files[0].endswith("m.py")
+
+
 class TestIndexRepository:
     def _make_repo(self, tmp_path):
         repo = tmp_path / "repo"
