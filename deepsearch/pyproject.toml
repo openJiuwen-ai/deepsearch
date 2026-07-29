@@ -1,0 +1,107 @@
+[project]
+name = "openjiuwen-deepsearch"
+version = "0.2.0"
+description = "Built on the openJiuwen agent-core framework, openJiuwen DeepSearch is a system supporting both deep search and research work."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+# SDK依赖
+dependencies = [
+    'Jinja2==3.1.6',
+    'json-repair==0.58.0',
+    'python-docx==1.2.0',
+    'tenacity==9.1.2',
+    'pypdfium2==4.30.0',
+    'openjiuwen==0.1.10.post3',
+    'pyvis==0.3.2',
+    'networkx==3.4.2',
+    'aiolimiter==1.1.0',
+    'matplotlib',
+    'seaborn',
+    'numpy>=2.4.2',
+    'tldextract>=5.0.0',
+    'markdown>=3.7',
+    'beautifulsoup4==4.14.3',
+    "latex2mathml>=3.78.1",
+    "mathml2omml-as==0.1.0",
+]
+
+# 1. 告诉 setuptools 把 openjiuwen_deepsearch 当成一个「命名空间包」
+#    这样无论子目录有没有 __init__.py 都会被收录
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openjiuwen_deepsearch*"]          # 星号通配子目录
+
+# 2. 如果 openjiuwen_deepsearch 里还有非 .py 文件（yaml、json、模板等），一起打包
+[tool.setuptools.package-data]
+openjiuwen_deepsearch = ["**/*"]  # 递归收录所有文件，包括 .md、.json、.yaml 等
+
+# pytest configuration
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+addopts = ["-ra -q"]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::pytest.PytestDeprecationWarning",
+    "ignore::pydantic.PydanticDeprecatedSince20",
+    "ignore:.*SwigPyPacked.*:DeprecationWarning",
+    "ignore:.*SwigPyObject.*:DeprecationWarning",
+    "ignore:.*swigvarlink.*:DeprecationWarning"
+]
+markers = [
+    "unit: fast tests without external services",
+    "integration: orchestration tests with mocked Runner/workflows",
+    "llm: real LLM and search_fetch tools (requires env and RUN_LLM_TESTS=1)",
+]
+
+# 捕获所有日志级别
+log_cli = true
+log_cli_level = "DEBUG"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
+
+[dependency-groups]
+# 后端依赖，使用uv sync --group backend安装SDK依赖和后端依赖
+backend = [
+    "fastapi==0.115.11",
+    "uvicorn[standard]>=0.35",
+    "pydantic==2.11.7",
+    "python-dotenv>=1.2.1",
+    "sqlalchemy==2.0.41",
+    "pydantic-settings==2.5.2",
+    "requests==2.32.3",
+    "pycryptodome==3.23.0",
+    "markdown2==2.5.4",
+    "aiomysql==0.2.0",
+    "aiosqlite==0.21.0",
+    "redis==7.1.1",
+    "aioboto3>=11.0.0",
+]
+# 开发依赖
+dev = [
+    "pytest==8.3.5",
+    "fastapi",
+    "uvicorn==0.38.0",
+    "pytest-cov==6.0.0",
+    "pytest-env",
+    "pytest_asyncio==1.2.0",
+    "coverage==7.8.0",
+    "pytest-mock==3.15.1",
+    'pandas==2.3.3',
+    'xlsxwriter==3.2.9'
+]
