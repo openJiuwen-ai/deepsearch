@@ -50,6 +50,6 @@ START → REASONING ⇄ TOOL（自环），两者均可路由 END
 | `framework/openjiuwen/steps.py` | 阶段函数（两引擎共享的全部循环逻辑） |
 | `framework/openjiuwen/workflow.py` | 图组装、注册、GraphCodeSearchAgent、超时注入 |
 | `framework/openjiuwen/nodes.py` | 四节点薄包装 |
-| `framework/openjiuwen/base_node.py` | 三段式 BaseNode 模板 + init_router |
-| `framework/openjiuwen/runtime_context.py` | CodeSearchRunContext + 运行注册表 |
+| `framework/openjiuwen/base_node.py` | 薄壳 → **base 包** `openjiuwen_search_base.workflow`（三段式 BaseNode + init_router） |
+| `framework/openjiuwen/runtime_context.py` | CodeSearchRunContext + 运行注册表（注册表实现在 **base 包** `openjiuwen_search_base.runtime`） |
 | `framework/openjiuwen/agent.py` | react 引擎（同一 steps 的 while 循环驱动） |

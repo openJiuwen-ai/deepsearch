@@ -42,16 +42,18 @@
 git clone <本仓库> && cd codesearch/codesearch
 ```
 
-方式一：uv（注意 openjiuwen 依赖含预发布版，需 `--prerelease=allow`）
+依赖同仓 `base/`（openjiuwen-search-base，search 公共能力过渡包）。
+
+方式一：uv（openjiuwen 依赖含预发布版，需 `--prerelease=allow`）
 
 ```sh
-uv venv .venv && uv pip install --prerelease=allow -e '.[dev,milvus,llm]'
+uv venv .venv && uv pip install --prerelease=allow -e ../base -e '.[dev,milvus,llm]'
 ```
 
-方式二：pip
+方式二：pip（先装 base）
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev,milvus,llm]'
+python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
 ```
 
 可选依赖分组：`milvus`（pymilvus）/ `llm`（openjiuwen，graph 引擎与真实 LLM 调用）/
@@ -211,11 +213,21 @@ git submodule update --init --recursive     # 拉取 third_party/contextbench
 ## 项目分层（依赖方向只允许向左）
 
 ```
-domain ← config ← algorithm ← framework/openjiuwen ← api
-   纯模型    pydantic   纯算法+工具    图/编排/隔离      门面
-                          ↑ indexing / retrieval（索引与检索基建）
+[base] ← domain ← config ← algorithm ← framework/openjiuwen ← api
+ 公共能力   纯模型    pydantic   纯算法+工具    图/编排/隔离      门面
+                                  ↑ indexing / retrieval（索引与检索基建）
 benchmarks/ 只依赖公共 API；核心包不得反向 import。
 ```
+
+`base/`（同仓 openjiuwen-search-base 过渡包）承载 search 场景公共能力：
+LLM 适配、embedding 客户端、Milvus expr 安全构造与命名约定、BaseNode 模板、
+日志、运行注册表——位于依赖图最底层，不依赖任何产品包。
+
+## Milvus 共用
+
+默认支持与 deepsearch 等产品共用同一 Milvus 实例：collection 带 `cs_` 前缀 +
+`__{schema_version}` 后缀、独立连接别名，只操作自己命名空间（e2e 用例锁定该行为）。
+详见 [安装指导](docs/zh/2.安装指导/README.md)。
 
 ## 文档
 

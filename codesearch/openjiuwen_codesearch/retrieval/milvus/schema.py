@@ -3,6 +3,8 @@
 
 from pymilvus import CollectionSchema, DataType, FieldSchema, Function, FunctionType
 
+from openjiuwen_search_base.milvus import versioned_collection_name as _base_versioned_name
+
 OUTPUT_FIELDS = ["text", "file_path", "start_line", "end_line", "kind", "original_name"]
 
 SPARSE_INDEX_PARAMS = {
@@ -19,8 +21,8 @@ DENSE_INDEX_PARAMS = {"metric_type": "COSINE", "index_type": "AUTOINDEX", "param
 
 
 def versioned_collection_name(base_name: str, schema_version: str, prefix: str = "cs_") -> str:
-    """产品前缀隔离共用实例的命名空间；版本后缀隔离 schema 演进。"""
-    return f"{prefix}{base_name}__{schema_version}"
+    """产品前缀隔离共用实例的命名空间；版本后缀隔离 schema 演进（约定由 base 包提供）。"""
+    return _base_versioned_name(base_name, schema_version, prefix)
 
 
 def build_schema(

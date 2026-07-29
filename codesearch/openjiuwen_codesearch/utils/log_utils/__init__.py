@@ -1,52 +1,28 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""最小 LogManager：stdlib logging + 敏感脱敏开关。
+"""LogManager —— 由 openjiuwen-search-base 提供（2026-07-29 提取）。
 
-对齐 deepsearch LogManager 的使用面（init / get_logger / is_sensitive），
-实现保持精简；需要文件轮转/指标时再对齐其完整版。
+本壳保留 codesearch 的历史默认日志文件名（codesearch.log），
+避免提取后接线时的静默漂移；直接使用 `init()` 即得产品默认。
 """
 
-import logging
-import os
 from typing import Optional
 
-_DEFAULT_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+from openjiuwen_search_base.logging_utils import (  # noqa: F401  re-export
+    LogManager,
+    get_logger,
+    redact,
+)
+
+DEFAULT_LOG_FILE_NAME = "codesearch.log"
 
 
-class LogManager:
-    _initialized: bool = False
-    _sensitive: bool = False
-    _log_dir: Optional[str] = None
-
-    @classmethod
-    def init(
-        cls,
-        log_dir: Optional[str] = None,
-        level: str = "INFO",
-        is_sensitive: bool = False,
-    ) -> None:
-        cls._sensitive = is_sensitive
-        cls._log_dir = log_dir
-        handlers: list[logging.Handler] = [logging.StreamHandler()]
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-            handlers.append(logging.FileHandler(os.path.join(log_dir, "codesearch.log")))
-        logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO),
-                            format=_DEFAULT_FORMAT, handlers=handlers, force=True)
-        cls._initialized = True
-
-    @classmethod
-    def is_sensitive(cls) -> bool:
-        return cls._sensitive
-
-    @classmethod
-    def get_log_dir(cls) -> Optional[str]:
-        return cls._log_dir
-
-
-def get_logger(name: str) -> logging.Logger:
-    return logging.getLogger(name)
-
-
-def redact(value: object) -> str:
-    """敏感模式下用于日志的脱敏包装。"""
-    return "***" if LogManager.is_sensitive() else str(value)
+def init(
+    log_dir: Optional[str] = None,
+    level: str = "INFO",
+    is_sensitive: bool = False,
+    log_file_name: str = DEFAULT_LOG_FILE_NAME,
+) -> None:
+    """codesearch 默认参数的 LogManager.init 封装。"""
+    LogManager.init(
+        log_dir=log_dir, level=level, is_sensitive=is_sensitive, log_file_name=log_file_name
+    )
