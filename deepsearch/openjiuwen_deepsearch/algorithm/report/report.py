@@ -4036,14 +4036,17 @@ class Reporter:
         if not mermaid_map:
             return insertions
 
-        valid_insertions = [
-            item
-            for item in insertions
-            if isinstance(item, dict)
-            and isinstance(item.get("after_row"), int)
-            and isinstance(item.get("index"), int)
-            and item.get("index") in mermaid_map
-        ]
+        valid_insertions = []
+        for item in insertions:
+            if not isinstance(item, dict):
+                continue
+            if not isinstance(item.get("after_row"), int):
+                continue
+            if not isinstance(item.get("index"), int):
+                continue
+            if item.get("index") not in mermaid_map:
+                continue
+            valid_insertions.append(item)
         used_indices = {item["index"] for item in valid_insertions}
         missing_indices = [
             index for index in sorted(mermaid_map) if index not in used_indices
