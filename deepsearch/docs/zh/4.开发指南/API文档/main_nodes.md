@@ -235,6 +235,7 @@ class EndNode(End)
 
 **功能**：
 - 将 `final_result` 以 JSON 输出。
+- `final_result.response_content` 非空时，根据 `search_context.language` 在报告末尾追加对应语言的 AI 生成标注；错误事件和 `exception_info` 保持不变。
 - 输出 `"ALL END"` 标记。
 
 ---

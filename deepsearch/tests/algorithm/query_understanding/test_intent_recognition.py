@@ -545,3 +545,139 @@ def test_to_str_list_non_list_str_none():
     assert _to_str_list(123) == []
 
 
+
+
+@pytest.mark.asyncio
+async def test_recognize_report_intent_exclude_url_and_domains_kept_separate():
+    """exclude_url 与 exclude_domains 按 LLM 提取结果各自保留，互不派生。"""
+    response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "topic",
+                    "language": "zh-CN",
+                    "exclude_url": [
+                        "https://www.mdpi.com/2073-445X/11/9/1529",
+                        "https://www.mdpi.com/2410-3888/8/2/80",
+                    ],
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await recognize_report_intent(
+            {"original_query": "不要引用这两篇文章", "llm_model_name": "basic"}
+        )
+
+    assert len(result.research_intent.exclude_url) == 2
+    # 关键断言：exclude_url 的域名不得被派生进 exclude_domains
+    assert result.research_intent.exclude_domains == []
+
+
+@pytest.mark.asyncio
+async def test_recognize_report_intent_emits_exclude_intent_log(caplog):
+    """exclude 字段非空时输出 [EXCLUDE_INTENT] 日志；为空时不输出。"""
+    import logging
+
+    response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "topic",
+                    "language": "zh-CN",
+                    "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        with caplog.at_level(logging.INFO):
+            await recognize_report_intent({"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    assert any("[EXCLUDE_INTENT]" in record.getMessage() for record in caplog.records)
+    assert any("mdpi.com/2073-445X/11/9/1529" in record.getMessage() for record in caplog.records)
+
+
+def _exclude_intent_tool_response(**extra_args):
+    args = {
+        "research_query": "topic",
+        "language": "zh-CN",
+        "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
+    }
+    args.update(extra_args)
+    return {
+        "tool_calls": [
+            {"name": "emit_report_intent", "args": args, "id": "tc1", "type": "tool_call"}
+        ],
+        "content": "",
+    }
+
+
+def _patched_llm(response):
+    return patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    )
+
+
+@pytest.mark.asyncio
+async def test_classify_and_recognize_intent_emits_exclude_intent_log(caplog):
+    """主工作流路径 classify_and_recognize_intent 也应输出 [EXCLUDE_INTENT] 日志。"""
+    import logging
+
+    p1, p2 = _patched_llm(_exclude_intent_tool_response())
+    with p1, p2:
+        with caplog.at_level(logging.INFO):
+            await classify_and_recognize_intent(
+                {"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    assert any("[EXCLUDE_INTENT]" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_exclude_intent_log_redacted_in_sensitive_mode(caplog):
+    """敏感模式下 [EXCLUDE_INTENT] 只记录计数，不输出 URL/标题/query。"""
+    import logging
+
+    p1, p2 = _patched_llm(_exclude_intent_tool_response(
+        exclude_titles=["Some Sensitive Paper Title"]))
+    with p1, p2, patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.LogManager.is_sensitive",
+        return_value=True,
+    ):
+        with caplog.at_level(logging.INFO):
+            await recognize_report_intent(
+                {"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    messages = [record.getMessage() for record in caplog.records
+                if "[EXCLUDE_INTENT]" in record.getMessage()]
+    assert messages, "EXCLUDE_INTENT log missing"
+    assert any("redacted" in m for m in messages)
+    assert not any("mdpi.com" in m or "Sensitive Paper" in m or "不要引用某文" in m
+                   for m in messages)

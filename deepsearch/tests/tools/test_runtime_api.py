@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from pydantic import BaseModel
 
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import (
     SearchResultApiWrapper,
     build_runtime_api_search_payload,
@@ -313,3 +315,46 @@ async def test_runtime_api_tool_ignores_wrapper_when_response_model_present():
 
     assert isinstance(result, DemoResponse)
     assert result.result == "done"
+
+
+@pytest.mark.asyncio
+async def test_runtime_api_tool_propagates_ssrf_param_check_error_code():
+    """回归：runtime_api 工具的 SSRF/参数校验错误码 (200009) 必须原样上抛。
+
+    背景：``_invoke`` 被 ``tool_invoke_log_async`` 装饰后，若装饰器无差别
+    ``except Exception`` 重写为 ``TOOL_EXEC_ERROR (211304)``，调用方
+    无法再区分「安全校验失败」与「普通执行错误」。该测试通过 SSRF 校验
+    真实抛出 ``CustomValueException(200009)`` 验证调用方收到的就是 200009。
+    """
+
+    ssrf_error = CustomValueException(
+        error_code=StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+        message="runtime api url is not allowed (private or non-public IP): 'http://127.0.0.1/'",
+    )
+
+    tools = build_runtime_api_tools([
+        {
+            "tool_id": "tool-ssrf",
+            "name": "ssrf_tool",
+            "description": "SSRF regression tool",
+            "path": "http://127.0.0.1/internal",
+            "http_method": "get",
+            "request_params": [],
+        }
+    ])
+    tool = tools[0]
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.runtime_api.validate_runtime_request_url",
+        side_effect=ssrf_error,
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api.runtime_api.httpx.AsyncClient"
+    ) as mock_client_cls:
+        with pytest.raises(CustomValueException) as exc_info:
+            await tool.invoke({})
+
+    # 关键契约：原始 SSRF/参数校验错误码 200009 必须原样传递，未被装饰器覆盖为 211304
+    assert exc_info.value.error_code == StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code
+    assert "private or non-public IP" in exc_info.value.message
+    # httpx.AsyncClient 不应被调用 —— SSRF 校验在请求发出前就拦截
+    mock_client_cls.assert_not_called()

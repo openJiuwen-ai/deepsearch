@@ -8,7 +8,8 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
     process_tavily_search_result, process_google_search_result, \
     process_common_search_result, process_local_search_result, \
     process_local_search_common, remove_duplicate_items, create_tool_message, \
-    filter_search_results_by_exclude_domains
+    filter_search_results_by_exclude_domains, filter_search_results_by_exclude_urls, \
+    is_title_blocked
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.collector_function"
 
@@ -983,3 +984,134 @@ class TestProcessLocalSearchCommon:
         # 原有记录应该保持不变
         assert len(agent_input["local_text_search_record"]) == 1
         assert agent_input["local_text_search_record"][0]["title"] == "Existing"
+
+
+class TestFilterSearchResultsByExcludeUrls:
+    """测试按 exclude_url 过滤搜索结果"""
+
+    def test_filter_search_results_by_exclude_urls(self):
+        """测试按排除链接过滤搜索结果"""
+        items = [
+            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
+            {"title": "Drop", "url": "https://www.mdpi.com/2073-445X/11/9/1529", "content": "drop"},
+            {"title": "DropVariant", "url": "http://mdpi.com/2073-445x/11/9/1529/?utm=x", "content": "drop"},
+            {"title": "No Url", "content": "keep"},
+        ]
+
+        result = filter_search_results_by_exclude_urls(
+            items, ["https://www.mdpi.com/2073-445X/11/9/1529"])
+
+        assert [item.get("title") for item in result] == ["Keep", "No Url"]
+
+    def test_filter_search_results_by_exclude_urls_passthrough(self):
+        """空排除列表时原样返回"""
+        items = [{"title": "Keep", "url": "https://keep.com/a"}]
+        assert filter_search_results_by_exclude_urls(items, []) is items
+
+    def test_filter_search_results_by_exclude_urls_field_alias(self):
+        """URL 字段别名（link/source_url）同样被识别"""
+        items = [
+            {"title": "DropLink", "link": "https://www.mdpi.com/2073-445X/11/9/1529"},
+            {"title": "DropSource", "source_url": "https://www.mdpi.com/2073-445X/11/9/1529"},
+            "not-a-dict",
+        ]
+        result = filter_search_results_by_exclude_urls(
+            items, ["https://www.mdpi.com/2073-445X/11/9/1529"])
+        assert result == ["not-a-dict"]
+
+    def test_process_tavily_search_result_filters_exclude_urls(self):
+        """测试Tavily搜索结果按排除链接过滤，同域其他文章不误伤"""
+        agent_input = {
+            "web_page_search_record": [],
+            "research_intent": {
+                "exclude_url": [
+                    "https://www.mdpi.com/2073-445X/11/9/1529",
+                    "https://www.mdpi.com/2410-3888/8/2/80",
+                ],
+            },
+        }
+        tool_content = [
+            {"title": "Keep", "url": "https://www.mdpi.com/2073-445X/11/9/1530", "content": "Content"},
+            {"title": "Drop1", "url": "https://www.mdpi.com/2073-445X/11/9/1529", "content": "Content"},
+            {"title": "Drop2", "url": "https://www.mdpi.com/2410-3888/8/2/80", "content": "Content"},
+        ]
+
+        result, modified_input = process_tavily_search_result(agent_input, tool_content)
+
+        assert [item.get("title") for item in result] == ["Keep"]
+        assert [item.get("title") for item in modified_input["web_page_search_record"]] == ["Keep"]
+
+    def test_process_common_search_result_filters_exclude_urls(self):
+        """测试通用搜索结果按排除链接过滤"""
+        agent_input = {
+            "web_page_search_record": [],
+            "research_intent": {"exclude_url": ["https://pubmed.ncbi.nlm.nih.gov/38202877/"]},
+        }
+        tool_content = [
+            {"title": "Keep", "url": "https://arxiv.org/abs/1234", "content": "paper"},
+            {"title": "Drop", "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/", "content": "paper"},
+        ]
+
+        result, modified_input = process_common_search_result(agent_input, tool_content)
+
+        assert [item.get("title") for item in result] == ["Keep"]
+
+
+class TestIsTitleBlocked:
+    """测试标题匹配：镜像变体命中，相近主题不误伤"""
+
+    BLOCKED = ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory"]
+
+    def test_exact_title_hit(self):
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory",
+            self.BLOCKED)
+
+    def test_html_entity_hit(self):
+        """标题中间的 HTML 实体差异应命中（反转义后精确相等）"""
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory &#40;Review&#41;",
+            ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory (Review)"])
+
+    def test_suffix_mirror_hit(self):
+        """镜像站后缀（| MDPI / - ProQuest 形态）剥后缀后精确命中"""
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | MDPI",
+            self.BLOCKED)
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory - ProQuest",
+            self.BLOCKED)
+
+    def test_same_prefix_different_paper_no_hit(self):
+        """同前缀但不同论文不误伤（被禁标题是候选标题的前缀）"""
+        assert not is_title_blocked("Deep learning for image recognition", ["Deep learning"])
+        # 被禁标题完整，候选为被禁标题+非站点后缀（不同文献的副标题扩展）不误伤
+        assert not is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory: A Survey",
+            self.BLOCKED)
+
+    def test_different_paper_no_hit(self):
+        """主题相近的不同论文不误伤"""
+        assert not is_title_blocked("A 45nm 0.5V 8T Column-Interleaved SRAM with on-Chip Reference",
+                                    self.BLOCKED)
+        assert not is_title_blocked("", self.BLOCKED)
+        assert not is_title_blocked("Any title", [])
+
+    def test_filter_by_exclude_titles(self):
+        """URL 不命中但标题命中（PMC 变体形态）"""
+        agent_input = {
+            "web_page_search_record": [],
+            "research_intent": {
+                "exclude_url": ["https://pubmed.ncbi.nlm.nih.gov/38202877/"],
+                "exclude_titles": ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory"],
+            },
+        }
+        tool_content = [
+            {"title": "Keep", "url": "https://example.com/other", "content": "Content"},
+            {"title": "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory",
+             "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10780789", "content": "Content"},
+        ]
+
+        result, modified_input = process_common_search_result(agent_input, tool_content)
+
+        assert [item.get("title") for item in result] == ["Keep"]
