@@ -142,6 +142,24 @@ def test_check_chapter_format_accepts_level1_only_outline():
     assert reason == ""
 
 
+def test_check_chapter_format_accepts_date_range_in_title():
+    """Dotted date ranges inside a title (e.g. 2010.3.12–2021.2.26) are not third-level numbering."""
+    outline = (
+        "2 数据汇总：VIX、GVZ、OVX日收盘价描述性统计（2010.3.12–2021.2.26）\n"
+        "2.1 数据来源与样本区间说明（2010.3.12–2021.2.26，约2700个交易日）\n"
+        "2.2 VIX、GVZ、OVX日收盘价描述性统计全样本汇总表"
+    )
+    ok, reason = Reporter.check_chapter_format(outline, 2)
+    assert ok is True, reason
+    assert reason == ""
+
+
+def test_check_chapter_format_rejects_genuine_third_level_numbering():
+    ok, reason = Reporter.check_chapter_format("2 主标题\n2.1.1 三级子节\n2.1 子节", 2)
+    assert ok is False
+    assert "third-level numbering" in reason
+
+
 @pytest.mark.parametrize(
     "outline",
     [

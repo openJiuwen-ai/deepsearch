@@ -3,10 +3,11 @@
 import functools
 import inspect
 import logging
+import sys
 import time
 from typing import TypeVar, Any, Type
 
-from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.exception import CustomException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -101,6 +102,10 @@ def get_logged_tool(base_tool_class: Type[T]) -> Type[T]:
             self._log_start("_run", *args, **kwargs)
             try:
                 result = super()._run(*args, **kwargs)
+            except CustomException:
+                # error_code 与 message，原样上抛，避免被覆盖为 TOOL_LOG_ERROR。
+                self._log_error("_run", sys.exc_info()[1])
+                raise
             except Exception as e:
                 self._log_error("_run", e)
                 if LogManager.is_sensitive():
@@ -119,6 +124,11 @@ def get_logged_tool(base_tool_class: Type[T]) -> Type[T]:
             self._log_start("_arun", *args, **kwargs)
             try:
                 result = await super()._arun(*args, **kwargs)
+            except CustomException:
+                # 已有 CustomException（含 CustomValueException 等）携带业务
+                # error_code 与 message，原样上抛，避免被覆盖为 TOOL_LOG_ERROR。
+                self._log_error("_arun", sys.exc_info()[1])
+                raise
             except Exception as e:
                 self._log_error("_arun", e)
                 if LogManager.is_sensitive():
@@ -170,14 +180,22 @@ def tool_invoke_log(func):
         try:
             # execute the original function
             result = func(*args, **kwargs)
+        except CustomException:
+            # error_code 与 message，原样上抛，避免被覆盖为 TOOL_EXEC_ERROR。
+            error_msg = f"[TOOL ERROR] {function_name} | Args: {args_text} | Exception: {repr(sys.exc_info()[1])}"
+            if LogManager.is_sensitive():
+                logger.error(f"[TOOL ERROR] {function_name} | Raise exception")
+            else:
+                logger.error(error_msg, exc_info=True)
+            raise
         except Exception as e:
             # log exceptions with stack trace
-            error_msg = f"[TOOL ERROR] {function_name} | Exception: {repr(e)}"
+            error_msg = f"[TOOL ERROR] {function_name} | Args: {args_text} | Exception: {repr(e)}"
             if LogManager.is_sensitive():
                 logger.error(f"[TOOL ERROR] {function_name} | Raise exception")
                 raise CustomValueException(
                     error_code=StatusCode.TOOL_EXEC_ERROR.code,
-                    message=StatusCode.TOOL_EXEC_ERROR.errmsg) from e
+                    message=StatusCode.TOOL_EXEC_ERROR.errmsg.format(e="").rstrip(" :")) from e
             logger.error(error_msg, exc_info=True)
             raise CustomValueException(
                     error_code=StatusCode.TOOL_EXEC_ERROR.code,
@@ -231,6 +249,14 @@ def tool_invoke_log_async(func):
             # This makes the decorator robust to mixed sync/async wrappers.
             call_result = func(*args, **kwargs)
             result = await call_result if inspect.isawaitable(call_result) else call_result
+        except CustomException:
+            # error_code 与 message，原样上抛，避免被覆盖为 TOOL_EXEC_ERROR。
+            error_msg = f"[TOOL ERROR] {function_name} | Args: {args_text} | Exception: {repr(sys.exc_info()[1])}"
+            if LogManager.is_sensitive():
+                logger.error(f"[TOOL ERROR] {function_name} | Raise exception")
+            else:
+                logger.error(error_msg, exc_info=True)
+            raise
         except Exception as e:
             # log exceptions with stack trace
             error_msg = f"[TOOL ERROR] {function_name} | Args: {args_text} | Exception: {repr(e)}"
@@ -238,7 +264,7 @@ def tool_invoke_log_async(func):
                 logger.error(f"[TOOL ERROR] {function_name} | Raise exception")
                 raise CustomValueException(
                     error_code=StatusCode.TOOL_EXEC_ERROR.code,
-                    message=StatusCode.TOOL_EXEC_ERROR.errmsg.format) from e
+                    message=StatusCode.TOOL_EXEC_ERROR.errmsg.format(e="").rstrip(" :")) from e
             logger.error(error_msg, exc_info=True)
             raise CustomValueException(
                 error_code=StatusCode.TOOL_EXEC_ERROR.code,
@@ -248,10 +274,14 @@ def tool_invoke_log_async(func):
         duration = time.time() - start_time
         result_str = repr(result)
         log_str = result_str[:100] + "..." if len(result_str) > 100 else result_str
+        try:
+            result_count = len(result)
+        except TypeError:
+            result_count = 1
         if LogManager.is_sensitive():
-            logger.info(f"[TOOL END] {function_name} | Tool result count: {len(result)} | Duration: {duration: .2f}s")
+            logger.info(f"[TOOL END] {function_name} | Tool result count: {result_count} | Duration: {duration: .2f}s")
         else:
-            logger.info(f"[TOOL END] {function_name} | Args: {args_text} | Tool result count: {len(result)} | "
+            logger.info(f"[TOOL END] {function_name} | Args: {args_text} | Tool result count: {result_count} | "
                         f"Result content: {log_str} | Duration: {duration: .2f}s")
 
         if stats_info_search:
@@ -263,7 +293,9 @@ def tool_invoke_log_async(func):
             if kwargs.get("query") and not LogManager.is_sensitive():
                 search_stat["query"] = kwargs.get("query")
 
-            if result and result.get("search_results") and isinstance(result.get("search_results"), list):
+            if (isinstance(result, dict) and
+                result.get("search_results") and
+                isinstance(result.get("search_results"), list)):
                 res_len_list = []
                 for search_result in result.get("search_results"):
                     res_len_list.append(len(search_result.get('content', '')))

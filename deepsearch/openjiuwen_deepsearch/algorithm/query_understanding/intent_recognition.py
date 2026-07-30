@@ -164,6 +164,7 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
 
     include_url = _dedupe_preserve_order(_to_str_list(data.get("include_url")))
     exclude_url = _dedupe_preserve_order(_to_str_list(data.get("exclude_url")))
+    exclude_titles = _dedupe_preserve_order(_to_str_list(data.get("exclude_titles")))
     include_domains = _dedupe_preserve_order(
         [str(d).strip() for d in _to_str_list(data.get("include_domains")) if str(d).strip()]
     )
@@ -187,6 +188,7 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         report_type=report_type,
         include_url=include_url,
         exclude_url=exclude_url,
+        exclude_titles=exclude_titles,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
     )
@@ -201,6 +203,32 @@ async def _emit_report_intent(**kwargs) -> IntentRecognitionResult:
         research_query=research_query,
         research_intent=_normalize_research_intent(kwargs),
         lang=language,
+    )
+
+
+def _log_exclude_intent(result: IntentRecognitionResult, original_query: str) -> None:
+    """exclude 字段非空时输出 [EXCLUDE_INTENT] 观测日志.
+
+    遵循 ``LogManager.is_sensitive()`` 脱敏约定：敏感模式下只记录字段计数，
+    不输出 URL、标题、域名或 query 内容；session_id 由日志上下文自动注入。
+    """
+    intent = result.research_intent
+    if not (intent.exclude_url or intent.exclude_domains or intent.exclude_titles):
+        return
+    if LogManager.is_sensitive():
+        logger.info(
+            "[EXCLUDE_INTENT] (redacted) exclude_url=%d exclude_domains=%d exclude_titles=%d",
+            len(intent.exclude_url),
+            len(intent.exclude_domains),
+            len(intent.exclude_titles),
+        )
+        return
+    logger.info(
+        "[EXCLUDE_INTENT] exclude_url=%s exclude_domains=%s exclude_titles=%s query=%s",
+        intent.exclude_url,
+        intent.exclude_domains,
+        intent.exclude_titles,
+        (original_query or "")[:120],
     )
 
 
@@ -276,27 +304,46 @@ def _create_emit_intent_tool() -> LocalFunction:
                 "include_url": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Full HTTP(S) URLs the user explicitly lists or asks to use. Do NOT invent URLs.",
+                    "description": (
+                        "Full HTTP(S) URLs the user explicitly lists or asks to use / focus on. "
+                        "Do NOT invent URLs; extract exactly as given in the text."
+                    ),
                 },
                 "exclude_url": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Full HTTP(S) URLs the user explicitly asks to avoid. Do NOT invent URLs.",
+                    "description": (
+                        "Full HTTP(S) URLs the user explicitly asks to avoid. Article-level exclusion "
+                        "ALWAYS goes here, even when multiple forbidden URLs share one domain. "
+                        "Do NOT invent URLs."
+                    ),
+                },
+                "exclude_titles": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Verbatim titles of articles/papers the user explicitly asks to avoid, ignore, "
+                        "or not quote. Extract alongside exclude_url whenever the rule names an article; "
+                        "the same article may appear on mirror sites under different URLs."
+                    ),
                 },
                 "include_domains": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "Domains to prefer (hostname only, lowercase, no scheme). "
-                        "Infer from natural-language hints when confident (e.g., 只用维基百科 → wikipedia.org)."
+                        "Domains to prefer or restrict to (hostname only, lowercase, no scheme). "
+                        "ONLY when the user explicitly expresses a site-level preference "
+                        "(e.g. 只用维基百科 → wikipedia.org)."
                     ),
                 },
                 "exclude_domains": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "Domains to exclude (hostname only, lowercase, no scheme). "
-                        "Infer from natural-language hints when confident."
+                        "Domains to exclude (hostname only, lowercase, no scheme). ONLY when the user "
+                        "explicitly expresses site-level exclusion (e.g. 不要用CSDN的文章). "
+                        "NEVER derive domains from exclude_url; banning N articles on the same domain "
+                        "is NOT site-level exclusion."
                     ),
                 },
             },
@@ -385,6 +432,8 @@ async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResu
             logger.warning("[recognize_report_intent] No tool_calls in LLM response, using fallback.")
             return _default_fallback(original_query)
 
+        _log_exclude_intent(result, original_query)
+
         if LogManager.is_sensitive():
             logger.info("[recognize_report_intent] parsed successfully (redacted).")
         else:
@@ -428,6 +477,8 @@ async def classify_and_recognize_intent(current_inputs: dict) -> IntentRecogniti
         if result is None:
             logger.warning("[classify_and_recognize_intent] No tool_calls in LLM response, using fallback.")
             return _default_fallback(original_query)
+
+        _log_exclude_intent(result, original_query)
 
         if LogManager.is_sensitive():
             logger.info("[classify_and_recognize_intent] parsed successfully (redacted).")

@@ -253,28 +253,83 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin: 0.45em 0;
         }}
 
-        /* Math formula rendering */
-        mjx-container[jax="CHTML"][display="true"] {{
+        /* Math formula rendering with KaTeX */
+        .katex-display {{
             margin: 1em 0;
+            overflow-x: auto;
+            overflow-y: hidden;
         }}
 {variant_css}
     </style>
+    <!-- KaTeX CSS for LaTeX math formula rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
 </head>
 <body>
 {content}
-<!-- MathJax for rendering LaTeX math formulas -->
+<!-- KaTeX for rendering LaTeX math formulas ($...$ / $$...$$) -->
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script>
-window.MathJax = {{
-    tex: {{
-        inlineMath: [['\\\\(', '\\\\)']],
-        displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+document.addEventListener('DOMContentLoaded', function() {{
+    /* Escape currency-like $ signs (e.g. $4, $5, $1.38) so KaTeX auto-render
+       does not pair them as inline-math delimiters. The $ signs are restored
+       after rendering, leaving the visible output unchanged. */
+    var PH = '\uFF04';
+    var MATH_OPS = '\\+-*/!%^_{{}}=<>×÷';
+    function hasMathOp(s) {{
+        for (var j = 0; j < s.length; j++) {{
+            if (MATH_OPS.indexOf(s[j]) !== -1) return true;
+        }}
+        return false;
+    }}
+    function escapeCurrencyDollars() {{
+        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        var nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        nodes.forEach(function(node) {{
+            var text = node.nodeValue;
+            if (text.indexOf('$') === -1) return;
+            var out = '';
+            var modified = false;
+            var i = 0;
+            while (i < text.length) {{
+                if (text[i] === '$' && i + 1 < text.length &&
+                        text[i + 1] >= '0' && text[i + 1] <= '9') {{
+                    var next$ = text.indexOf('$', i + 1);
+                    if (next$ === -1 || next$ - i > 50 ||
+                            !hasMathOp(text.substring(i + 1, next$))) {{
+                        out += PH;
+                        modified = true;
+                        i++;
+                        continue;
+                    }}
+                }}
+                out += text[i];
+                i++;
+            }}
+            if (modified) node.nodeValue = out;
+        }});
+    }}
+    escapeCurrencyDollars();
+    renderMathInElement(document.body, {{
+        delimiters: [
+            {{left: '$$', right: '$$', display: true}},
+            {{left: '$', right: '$', display: false}},
+        ],
         macros: {{
-            bm: ['{{\\\\boldsymbol{{#1}}}}', 1]
+            '\\\\bm': '\\\\boldsymbol{{#1}}'
+        }},
+        throwOnError: false
+    }});
+    var restoreWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (restoreWalker.nextNode()) {{
+        var n = restoreWalker.currentNode;
+        if (n.nodeValue.indexOf(PH) !== -1) {{
+            n.nodeValue = n.nodeValue.split(PH).join('$');
         }}
     }}
-}};
+}});
 </script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
 </body>
 </html>
 """

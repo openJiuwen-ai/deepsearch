@@ -1,6 +1,7 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 import base64
+import html
 import io
 import logging
 import re
@@ -21,6 +22,13 @@ from docx.text.paragraph import Paragraph
 from latex2mathml.converter import convert as latex2mathml_convert
 from mathml2omml import convert
 
+from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
+    _find_inline_math_end,
+    _is_currency_start,
+    _is_escaped,
+    _is_likely_inline_math,
+)
+
 logger = logging.getLogger(__name__)
 
 # NOTE:
@@ -34,18 +42,73 @@ OMML_URI = "http://schemas.openxmlformats.org/officeDocument/2006/math"  # URI f
 MAX_HTML_BLOCK_DEPTH = 100
 HEADING_TAGS = frozenset(f"h{i}" for i in range(1, 9))
 REMOTE_IMAGE_SCHEMES = frozenset({"http", "https"})
-LATEX_TOKEN_RE = re.compile(r"(\$\$.*?\$\$|\\\(.*?\\\))", re.DOTALL)
-LATEX_GROUPED_COMMANDS_WITH_POWER = frozenset({"binom", "frac"})
-LATEX_NORMALIZATION_MAX_PASSES = 8
-LATEX_ALIGNMENT_ENV_RE = re.compile(
-    r"\\begin\{(?P<env>align\*?|aligned|split|gathered)\}"
-    r"(?P<body>.*?)"
-    r"\\end\{(?P=env)\}",
-    re.DOTALL,
-)
 HTML_FORMATTING_WHITESPACE_RE = re.compile(r"[ \t]*\n[ \t]*")
 DOCX_LIST_LEVELS = 9
 DOCX_BULLET_SYMBOLS = ("•", "◦", "▪")
+
+# Characters that signal the start of math content after a currency-like prefix
+_MATH_OPENING_PUNCTUATION = "，。、；：,.!?;:)]}）】」』"
+
+
+def _iter_math_spans(text: str):
+    """Yield ``(start, end)`` tuples for each LaTeX math span in *text*.
+
+    Currency-like dollar prefixes (``$5``, ``$10``, ``$1,200.50``) are
+    skipped using the same heuristic as
+    :func:`conversion_utils._is_currency_start`, so ordinary prose containing
+    multiple ``$`` signs (e.g. ``"$5 (promo) to $10"``) is never merged into
+    a single formula candidate.
+    """
+    index = 0
+    while index < len(text):
+        start = text.find("$", index)
+        if start == -1:
+            break
+
+        # Skip escaped \$
+        if _is_escaped(text, start):
+            index = start + 1
+            continue
+
+        # Block math $$...$$
+        if start + 1 < len(text) and text[start + 1] == "$":
+            end = text.find("$$", start + 2)
+            if end != -1:
+                content = text[start + 2:end].strip()
+                # 块级 $$...$$ 是显式公式定界符，无货币歧义，无需过
+                # _is_likely_inline_math 校验；否则会拒绝 $$1$$、$$2026$$
+                # 等纯数字内容，导致 DOCX 残留字面文本而非 OMML。
+                if content:
+                    yield (start, end + 2)
+                    index = end + 2
+                    continue
+            index = start + 2
+            continue
+
+        # Skip currency-like $5, $10, $1,200.50
+        if _is_currency_start(text, start):
+            index = start + 1
+            continue
+
+        # Opening $ must be followed by non-whitespace, non-punctuation
+        if start + 1 >= len(text) or text[start + 1].isspace():
+            index = start + 1
+            continue
+        if text[start + 1] in _MATH_OPENING_PUNCTUATION:
+            index = start + 1
+            continue
+
+        end = _find_inline_math_end(text, start + 1)
+        if end is None or end <= start:
+            index = start + 1
+            continue
+
+        content = text[start + 1:end].strip()
+        if content and _is_likely_inline_math(content):
+            yield (start, end + 1)
+            index = end + 1
+        else:
+            index = end + 1
 
 
 @dataclass(frozen=True)
@@ -308,7 +371,49 @@ def _fit_inline_shape_to_width(inline_shape, max_width) -> None:
     inline_shape.height = int(inline_shape.height * scale)
 
 
+def _make_hyperlink_rpr(style_r_fonts, superscript: bool):
+    """创建超链接样式的 <w:rPr> 元素（蓝色 + 下划线）。"""
+    r_pr = OxmlElement("w:rPr")
+    _apply_r_fonts_to_r_pr(r_pr, style_r_fonts)
+    u = OxmlElement("w:u")
+    u.set(qn("w:val"), "single")
+    r_pr.append(u)
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "0000FF")
+    r_pr.append(color)
+    if superscript:
+        _apply_superscript_to_r_pr(r_pr)
+    return r_pr
+
+
+def _make_hyperlink_text_run(text: str, style_r_fonts, superscript: bool):
+    """创建带超链接样式的文本 <w:r> 元素。"""
+    r = OxmlElement("w:r")
+    r.append(_make_hyperlink_rpr(style_r_fonts, superscript))
+    t = OxmlElement("w:t")
+    t.set(qn("xml:space"), "preserve")
+    t.text = text
+    r.append(t)
+    return r
+
+
+def _make_hyperlink_omml_run(omml_xml: str, style_r_fonts, superscript: bool):
+    """创建带超链接样式的 OMML 公式 <w:r> 元素。"""
+    wrapped_xml = f'<root xmlns:m="{OMML_URI}">{omml_xml}</root>'
+    root = parse_xml(wrapped_xml)
+    omath = root[0]
+    r = OxmlElement("w:r")
+    r.append(_make_hyperlink_rpr(style_r_fonts, superscript))
+    r.append(omath)
+    return r
+
+
 def _add_hyperlink(paragraph, url, text, *, style_r_fonts=None, superscript: bool = False):
+    """创建超链接元素并追加到段落。
+
+    若文本含 LaTeX 定界符（$$...$$ 或 $...$），将其转为 OMML 公式
+    插入超链接内部。HTML 实体会先解码再进行 LaTeX 处理。
+    """
     # 创建关系 id
     part = paragraph.part
     r_id = part.relate_to(
@@ -321,30 +426,44 @@ def _add_hyperlink(paragraph, url, text, *, style_r_fonts=None, superscript: boo
     hyperlink = OxmlElement("w:hyperlink")
     hyperlink.set(qn("r:id"), r_id)
 
-    # 创建 <w:r>
-    r = OxmlElement("w:r")
-    r_pr = OxmlElement("w:rPr")
-    _apply_r_fonts_to_r_pr(r_pr, style_r_fonts)
+    # 解码 HTML 实体（处理 &amp;#92; → &#92; → \ 等双重转义）
+    text = html.unescape(text)
 
-    # 超链接样式（蓝色 + 下划线）
-    u = OxmlElement("w:u")
-    u.set(qn("w:val"), "single")
-    r_pr.append(u)
+    if "$" not in text:
+        hyperlink.append(_make_hyperlink_text_run(text, style_r_fonts, superscript))
+    else:
+        cursor = 0
+        for span_start, span_end in _iter_math_spans(text):
+            if span_start > cursor:
+                hyperlink.append(_make_hyperlink_text_run(
+                    text[cursor:span_start], style_r_fonts, superscript))
+            raw = text[span_start:span_end]
+            latex = raw.strip("$").strip()
+            # 块级 $$...$$ 是显式公式定界符，无货币歧义，应直接转 OMML；
+            # 与 _process_text_inline 保持一致，避免纯数字块级公式残留字面文本。
+            is_block_math = raw.startswith("$$")
+            if latex and (is_block_math or _is_likely_inline_math(latex)):
+                try:
+                    omml = _latex_to_omml(latex)
+                    hyperlink.append(_make_hyperlink_omml_run(
+                        omml, style_r_fonts, superscript))
+                except Exception as exc:
+                    # LaTeX 转换失败，保留原始文本并记录日志
+                    logger.warning(
+                        "LaTeX→OMML 转换失败，超链接内保留原始文本: latex=%r error=%s",
+                        latex[:200], exc,
+                    )
+                    hyperlink.append(_make_hyperlink_text_run(
+                        raw, style_r_fonts, superscript))
+            else:
+                # 非公式内容（如货币 $4），保留原始文本
+                hyperlink.append(_make_hyperlink_text_run(
+                    raw, style_r_fonts, superscript))
+            cursor = span_end
+        if cursor < len(text):
+            hyperlink.append(_make_hyperlink_text_run(
+                text[cursor:], style_r_fonts, superscript))
 
-    color = OxmlElement("w:color")
-    color.set(qn("w:val"), "0000FF")
-    r_pr.append(color)
-    if superscript:
-        _apply_superscript_to_r_pr(r_pr)
-
-    r.append(r_pr)
-
-    # 文本节点
-    t = OxmlElement("w:t")
-    t.text = text
-    r.append(t)
-
-    hyperlink.append(r)
     _docx_paragraph_p(paragraph).append(hyperlink)
 
 
@@ -378,49 +497,58 @@ def _resolve_local_image(src: str, base_path: Path | None) -> Path | None:
 
 
 def _process_text_inline(p, text: str, style_r_fonts, current_run=None, superscript: bool = False) -> None:
-    if "$" not in text and "\\(" not in text:
+    if "$" not in text:
         _add_text_run(p, text, style_r_fonts, current_run=current_run, superscript=superscript)
         return
 
     cursor = 0
     reusable_run = current_run
-    for match in LATEX_TOKEN_RE.finditer(text):
-        if match.start() > cursor:
+    for span_start, span_end in _iter_math_spans(text):
+        if span_start > cursor:
             _add_text_run(
                 p,
-                text[cursor:match.start()],
+                text[cursor:span_start],
                 style_r_fonts,
                 current_run=reusable_run,
                 superscript=superscript,
             )
             reusable_run = None
 
-        token = match.group(0)
-        latex = (
-            token[2:-2].strip()
-            if token.startswith("\\(") and token.endswith("\\)")
-            else token.strip("$").strip()
-        )
-        if latex:
+        raw = text[span_start:span_end]
+        latex = raw.strip("$").strip()
+        # 块级 $$...$$ 是显式公式定界符，无货币歧义，应直接转 OMML；
+        # 否则纯数字内容（如 $$1$$、$$2026$$）会被 _is_likely_inline_math
+        # 拒绝，导致 DOCX 残留字面文本而非 OMML。
+        is_block_math = raw.startswith("$$")
+        if latex and (is_block_math or _is_likely_inline_math(latex)):
             try:
                 omml = _latex_to_omml(latex)
                 _insert_omml(p, omml)
-            except ValueError:
-                # Fallback: render raw LaTeX text when conversion fails
-                # (e.g., unbalanced \left...\right, unsupported commands)
+            except Exception as exc:
+                # LaTeX 转换失败，保留原始文本并记录日志
                 logger.warning(
-                    "LaTeX-to-OMML conversion failed, falling back to raw text. "
-                    "latex=%s",
-                    latex[:200],
+                    "LaTeX→OMML 转换失败，段落内保留原始文本: latex=%r error=%s",
+                    latex[:200], exc,
                 )
                 _add_text_run(
                     p,
-                    match.group(0),
+                    raw,
                     style_r_fonts,
                     current_run=reusable_run,
                     superscript=superscript,
                 )
-        cursor = match.end()
+                reusable_run = None
+        else:
+            # 非公式内容（如货币 $4），保留原始文本
+            _add_text_run(
+                p,
+                raw,
+                style_r_fonts,
+                current_run=reusable_run,
+                superscript=superscript,
+            )
+            reusable_run = None
+        cursor = span_end
 
     if cursor < len(text):
         _add_text_run(
@@ -578,7 +706,7 @@ def _latex_to_omml(latex: str) -> str:
 def _normalize_latex_for_omml(latex: str) -> str:
     """Normalize valid LaTeX forms that mathml2omml cannot parse directly."""
     previous = _strip_latex_alignment_markers(latex)
-    for _ in range(LATEX_NORMALIZATION_MAX_PASSES):
+    for _ in range(8):
         current = _wrap_grouped_command_powers(previous)
         if current == previous:
             return current
@@ -588,13 +716,19 @@ def _normalize_latex_for_omml(latex: str) -> str:
 
 def _strip_latex_alignment_markers(latex: str) -> str:
     """Remove unescaped alignment markers from LaTeX alignment environments."""
+    latex_alignment_env_re = re.compile(
+        r"\\begin\{(?P<env>align\*?|aligned|split|gathered)\}"
+        r"(?P<body>.*?)"
+        r"\\end\{(?P=env)\}",
+        re.DOTALL,
+    )
 
     def _strip_environment(match: re.Match[str]) -> str:
         env = match.group("env")
         body = _strip_unescaped_latex_char(match.group("body"), "&")
         return rf"\begin{{{env}}}{body}\end{{{env}}}"
 
-    return LATEX_ALIGNMENT_ENV_RE.sub(_strip_environment, latex)
+    return latex_alignment_env_re.sub(_strip_environment, latex)
 
 
 def _strip_unescaped_latex_char(text: str, target: str) -> str:
@@ -613,6 +747,12 @@ def _strip_unescaped_latex_char(text: str, target: str) -> str:
 
 
 def _wrap_grouped_command_powers(latex: str) -> str:
+    """Wrap grouped command powers for OMML compatibility.
+
+    Transforms ``\\binom{n}{r}^2`` into ``{\\binom{n}{r}}^2`` so that
+    the power applies to the entire grouped expression.
+    """
+    latex_grouped_commands_with_power = frozenset({"binom", "frac"})
     parts: list[str] = []
     cursor = 0
     index = 0
@@ -625,7 +765,7 @@ def _wrap_grouped_command_powers(latex: str) -> str:
         command_start = index + match.start()
         command_end = index + match.end()
         command_name = match.group(1)
-        if command_name not in LATEX_GROUPED_COMMANDS_WITH_POWER:
+        if command_name not in latex_grouped_commands_with_power:
             index = command_end
             continue
 
@@ -800,12 +940,13 @@ def _process_block_element(
     doc,
     element,
     context: HtmlToDocContext,
-    state: HtmlBlockState = HtmlBlockState(),
+    depth: int = 0,
+    block_state: HtmlBlockState | None = None,
 ):
     """Process one block-level HTML element into a docx document."""
     if element.name is None:
         return
-    if state.depth >= context.max_depth:
+    if depth >= context.max_depth:
         text = element.get_text(strip=True)
         if text:
             paragraph_style = _get_style_by_tag("p", context.style_dict, doc)
@@ -831,17 +972,40 @@ def _process_block_element(
         para.paragraph_format.space_after = Pt(6)
 
     elif element.name in ('ul', 'ol'):
-        current_list_num_id = (
-            state.list_num_id
-            if state.list_num_id is not None and state.list_tag == element.name
-            else _create_word_list_numbering(doc, ordered=element.name == "ol")
-        )
+        is_ordered = element.name == 'ol'
+        # Determine list numbering: new list, same-type nesting, or mixed-type nesting
+        if block_state is None or block_state.list_num_id is None:
+            num_id = _create_word_list_numbering(doc, ordered=is_ordered)
+            new_state = HtmlBlockState(
+                list_depth=0,
+                list_num_id=num_id,
+                list_tag=element.name,
+                depth=block_state.depth if block_state else 0,
+            )
+        elif element.name == block_state.list_tag:
+            # Same list type (ul→ul or ol→ol): increment depth
+            new_state = HtmlBlockState(
+                list_depth=block_state.list_depth + 1,
+                list_num_id=block_state.list_num_id,
+                list_tag=block_state.list_tag,
+                depth=block_state.depth,
+            )
+        else:
+            # Different list type (e.g., ul inside ol): create separate numbering
+            num_id = _create_word_list_numbering(doc, ordered=is_ordered)
+            new_state = HtmlBlockState(
+                list_depth=0,
+                list_num_id=num_id,
+                list_tag=element.name,
+                depth=block_state.depth,
+            )
+
         paragraph_style = _get_style_by_tag("p", context.style_dict, doc)
         for li in element.find_all('li', recursive=False):
             p = doc.add_paragraph(style=paragraph_style)
-            if state.list_depth:
-                p.paragraph_format.left_indent = Pt(18 * state.list_depth)
-            _apply_word_list_numbering(p, current_list_num_id, state.list_depth)
+            _apply_word_list_numbering(p, new_state.list_num_id, new_state.list_depth)
+            if new_state.list_depth > 0:
+                p.paragraph_format.left_indent = Pt(18 * new_state.list_depth)
             style_r_pr = paragraph_style.element.get_or_add_rPr()
             style_r_fonts = style_r_pr.find(qn('w:rFonts'))
             for child in li.contents:
@@ -850,13 +1014,8 @@ def _process_block_element(
                         doc,
                         child,
                         context,
-                        replace(
-                            state,
-                            depth=state.depth + 1,
-                            list_depth=state.list_depth + 1,
-                            list_num_id=current_list_num_id,
-                            list_tag=element.name,
-                        ),
+                        depth + 1,
+                        block_state=new_state,
                     )
                     continue
                 _process_inline(
@@ -874,12 +1033,8 @@ def _process_block_element(
                 doc,
                 child,
                 context,
-                replace(
-                    state,
-                    depth=state.depth + 1,
-                    list_num_id=None,
-                    list_tag=None,
-                ),
+                depth + 1,
+                block_state=block_state,
             )
 
 
@@ -890,9 +1045,9 @@ def _get_available_page_width(doc):
     return section.page_width - section.left_margin - section.right_margin
 
 
-def html_to_doc(doc, html, style_dict, base_path: str | Path | None = None):
+def html_to_doc(doc, html_content, style_dict, base_path: str | Path | None = None):
     """将 HTML 内容转换并写入 docx 文档对象。"""
-    soup = BeautifulSoup(html, 'html.parser')
+    soup = BeautifulSoup(html_content, 'html.parser')
     container = soup.find("div", class_="report-container")
     if container is None:
         container = soup.body or soup

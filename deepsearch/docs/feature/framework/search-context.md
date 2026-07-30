@@ -46,7 +46,7 @@
 - `FinalResult.workflow_llm_token_usage` 保存可选 token 统计。
 - `Report` 保存总报告文本、子报告、分类内容和溯源校验后的内容。
 - `Outline.sections[*].section_focus` 和 `focus_dimensions` 会生成章节局部合同。
-- `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL 和域名约束。
+- `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL、禁引文章标题（`exclude_titles`）和域名约束。
 - `outline_execution_method` 保存本次大纲实际执行方式，当前有效值为 `parallel` 或 `dependency_driving`；缺失或非法时按普通并行大纲处理。
 
 ## 边界与错误处理
