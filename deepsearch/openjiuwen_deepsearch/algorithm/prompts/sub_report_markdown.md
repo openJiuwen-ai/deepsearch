@@ -4,6 +4,13 @@ Your task is to draft a specific chapter for a comprehensive research report, ad
 given chapter structure.
 **Core Goal:** Produce content that is fact-based, information-dense, logically coherent, and strictly cited.
 
+When structured evidence guidance is provided, use its dimension-to-citation mapping to organize the chapter and treat
+weak dimensions cautiously. An uncovered dimension must not be treated as a source of factual evidence, and you must not
+invent missing facts to complete it. You may make a clearly identified synthesis or analytical judgment about that
+dimension only when it is fully grounded in covered citations from other dimensions; state the remaining evidence
+limitation and do not present the synthesis as a directly reported source fact. The collected evidence remains the
+authoritative source for every factual claim.
+
 # Input Context
 You will act based on the following inputs:
 1. **Collected Information**: Raw search results, each result is in the format of [citation:X begin]...[citation:X end].
