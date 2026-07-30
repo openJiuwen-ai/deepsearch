@@ -1173,7 +1173,7 @@ async def test_generate_sub_report_logs_followed_rationale_failure_terminal_outc
 ):
     class ReporterWithEmptyRationales(Reporter):
         async def _generate_section_rationales(self, *args, **kwargs):
-            return []
+            return [], ""
 
     reporter = ReporterWithEmptyRationales("basic")
     followed_url = "https://example.com/followed-rationale-failure"
