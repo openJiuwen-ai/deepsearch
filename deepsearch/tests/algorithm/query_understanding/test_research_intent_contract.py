@@ -197,6 +197,29 @@ def test_sub_report_prompts_render_flat_outline_writing_rule(prompt_name):
     assert "generic headings such as" not in system_prompt
 
 
+@pytest.mark.parametrize(
+    "prompt_name",
+    ["sub_report_markdown", "sub_report_brief_markdown"],
+)
+def test_sub_report_prompts_always_forbid_body_mermaid(prompt_name):
+    context = {
+        "messages": [],
+        "language": "zh-CN",
+        "section_iscore": False,
+        "report_type": "brief",
+        "paragraph_style": "concise",
+        "current_chapter_outline": "1 Market overview",
+        "visualization_enable": False,
+    }
+
+    prompts = apply_system_prompt(prompt_name, context)
+    system_prompt = prompts[0]["content"]
+
+    assert "Do NOT output Mermaid code fences" in system_prompt
+    assert "hand-written chart blocks" in system_prompt
+    assert "report visualization/chart pipeline" in system_prompt
+
+
 def test_sub_report_prompt_renders_section_local_contract_context():
     context = {
         "messages": [],
