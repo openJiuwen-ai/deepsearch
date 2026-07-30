@@ -56,6 +56,12 @@ format_requirements: {{ section_format_requirements }}
 - Output only one Level 1 heading for the current top-level section and Level 2 subsection headings. Do not output JSON,
   serialized subsection objects, or strings such as `"title":`, `"description":`, or `}, {`.
 
+## Structured Evidence Guidance
+
+When structured evidence guidance is provided, use covered primary dimensions first and treat weak dimensions cautiously.
+Do not create a factual subsection solely from an uncovered dimension. Do not mechanically turn every dimension into a
+subsection. User-specified titles and template-required structure remain authoritative.
+
 {% if report_type == "brief" %}
 ## Brief Mode (Strict)
 - This is a brief report. Keep subsection design compact and decision-oriented.

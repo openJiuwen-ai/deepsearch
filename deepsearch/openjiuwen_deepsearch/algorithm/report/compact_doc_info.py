@@ -1,7 +1,11 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+import logging
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_key_passages(value: object) -> list[str]:
@@ -66,11 +70,11 @@ def _format_key_passages(passages: list[str]) -> list[str]:
 
 
 def build_compact_classify_doc_infos_text(
-    doc_infos: list[dict[str, Any]], *, start: int = 1
+    doc_infos: list[dict[str, Any]], *, start: int = 1,
 ) -> str:
     """Build compact document information for classification LLM input.
 
-    Args:
+        Args:
         doc_infos: List of doc_info dicts.
         start: Starting index for document numbering (1-based by default,
                use 0 for coverage-matrix flow where output keys are doc_0-based).
@@ -111,3 +115,55 @@ def build_key_passage_text(doc_infos: list[dict[str, Any]]) -> str:
         format_key_passage_block(doc_info, index)
         for index, doc_info in enumerate(doc_infos, start=1)
     )
+
+
+def build_structured_evidence_guide(
+    selected_docs: list[dict[str, Any]],
+    rationales: list[dict[str, Any]],
+    coverage_result: dict[str, Any],
+    *,
+    selected_doc_keys: list[str],
+) -> str:
+    """Build compact writing guidance from existing document-selection results."""
+    coverage_matrix = coverage_result.get("coverage_matrix", {})
+    if not selected_docs or not rationales or not coverage_matrix:
+        return ""
+    if len(selected_docs) != len(selected_doc_keys):
+        logger.warning(
+            "Cannot build structured evidence guide: selected docs and stable keys are misaligned"
+        )
+        return ""
+    if any(not isinstance(doc_key, str) or doc_key not in coverage_matrix
+           for doc_key in selected_doc_keys):
+        logger.warning(
+            "Cannot build structured evidence guide: selected stable key is missing from coverage matrix"
+        )
+        return ""
+
+    lines = ["Structured evidence guidance:"]
+    for rationale in rationales:
+        rationale_id = str(rationale.get("id", "") or "")
+        if not rationale_id:
+            continue
+        evidence = []
+        max_coverage = 0.0
+        for doc, doc_key in zip(selected_docs, selected_doc_keys, strict=True):
+            score = float(coverage_matrix.get(doc_key, {}).get(rationale_id, 0.0) or 0.0)
+            max_coverage = max(max_coverage, score)
+            if score >= 0.3:
+                evidence.append((score, doc, doc_key))
+
+        status = "covered" if max_coverage >= 0.6 else "weak" if max_coverage >= 0.3 else "uncovered"
+        priority = str(rationale.get("priority", "supplementary") or "supplementary")
+        description = str(rationale.get("description", "") or "")
+        lines.append(f"- {rationale_id} [{priority}, {status}]: {description}")
+        for score, doc, _ in sorted(
+            evidence, key=lambda item: item[0], reverse=True
+        )[:3]:
+            citation_index = doc.get("index", "")
+            title = str(doc.get("title", "") or "")
+            lines.append(
+                f"  - [citation:{citation_index}] {title} (coverage: {score:.2f})"
+            )
+
+    return "\n".join(lines)

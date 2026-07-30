@@ -110,3 +110,13 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 - [候选文档预筛](./doc-prefilter.md)
 - [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)
 - [Prompt 模板系统](../prompt-template-system.md)
+
+## 结构化证据辅助
+
+文档选择完成后，Reporter 使用已有的 rationale 和覆盖矩阵构建精简的结构化证据说明，不增加 LLM 调用。guide 提供维度、优先级、覆盖状态到 citation 的导航，每个维度最多保留三篇覆盖分最高的入选文档；key passages 和完整证据继续由原有的子大纲上下文与 `Collected Evidence` 提供，避免重复内容和额外的模型输出协议。guide builder 接收与最终文档顺序对齐的 `doc_N` 键，用于读取对应的覆盖矩阵行。
+
+该说明同时提供给模板化/非模板化子大纲以及 professional/brief 子报告：证据充分的主要信息维度用于辅助组织内容，弱证据要求谨慎表述，未覆盖维度不得作为新增事实的依据。模型仍可基于其他 covered citations 进行明确标识的综合分析，但必须说明剩余证据限制，不得把综合判断表述为来源直接报告的事实。
+
+结构化证据说明只辅助组织已有材料，不替代 `classified_content`、原文和引用编号。覆盖矩阵缺失、稳定文档键不一致或 background-knowledge-only 路径下，系统使用空 guide 并保持原有生成流程。
+
+端到端排查时可在 INFO 日志中搜索 `[structured_evidence]`。`[build]` 只记录状态计数、文档数、字符数和 guide hash；`[sub_outline]` 与 `[sub_report]` 记录完整 guide 是否实际出现在对应 LLM 输入中，子报告还记录 `Collected Evidence` citation block 的数量和边界是否配对。INFO 不输出 rationale、URL 或完整 guide；`is_sensitive=False` 时只在 build 阶段通过 DEBUG 提供详细诊断。
