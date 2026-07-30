@@ -1301,7 +1301,7 @@ class Reporter:
         stream_id = str(uuid.uuid4())
         write_retry_feedback = ""
         for attempt_num in range(max_attempt_num):
-            write_res = await self._write_subsection_reports(current_inputs, write_retry_feedback)
+            write_res = await self._write_subsection_reports(current_inputs)
             if write_res["success"]:
                 if LogManager.is_sensitive():
                     logger.info(
@@ -3545,7 +3545,7 @@ class Reporter:
         logger.warning("%s [_generate_sub_report_sidecar] %s", EFFECT_SUB_REPORT_TAG, warning)
         return dict(sidecar=None, summary=sub_report_content, warning=warning)
 
-    async def _write_subsection_reports(self, current_inputs: dict, failure_feedback: str = "") -> dict:
+    async def _write_subsection_reports(self, current_inputs: dict) -> dict:
         """Write subsection report to disk"""
         if LogManager.is_sensitive():
             logger.info(
@@ -3718,7 +3718,6 @@ class Reporter:
                     ),
                 ),
             )
-            _append_retry_feedback_message(llm_input, failure_feedback)
 
             if not LogManager.is_sensitive():
                 logger.debug(
