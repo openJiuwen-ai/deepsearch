@@ -23,6 +23,7 @@
 - 报告生成后按配置执行 VLM 图表、全局溯源、推理链溯源和用户反馈处理。
 - `dependency_driving` 模式使用依赖驱动大纲和依赖驱动编辑团队。
 - `hybrid` 模式在意图识别节点中调用 LLM 判断本次 query 应走普通大纲还是依赖驱动大纲，并把结果写入 `search_context.outline_execution_method`。
+- `final_result.response_content` 非空时，`EndNode` 会依据 `search_context.language` 在正文末尾追加中文或英文的 AI 生成标注；部分失败报告仍保留错误事件与 `exception_info`。
 - 错误会以 `StreamEvent.ERROR` 输出，随后输出 `ALL END`。
 
 ## 关键代码路径
@@ -50,7 +51,7 @@
 8. 大纲接受后，`parallel` 进入 `EditorTeamNode`，`dependency_driving` 进入 `DependencyEditorTeamNode`。
 9. `ReporterNode` 生成总报告，随后执行 VLM 图表、全局溯源和推理链溯源。
 10. `UserFeedbackProcessorNode` 根据开关进入报告后局部反馈循环，或直接结束。
-11. `EndNode` 输出 `final_result` 和 `ALL END`。
+11. `EndNode` 为非空报告正文追加 AI 生成标注后，输出 `final_result` 和 `ALL END`。
 
 ## 数据契约与依赖
 
