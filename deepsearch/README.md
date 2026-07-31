@@ -108,3 +108,5 @@ This project is licensed under **Apache 2.0**. See the [LICENSE](LICENSE) file.
 # 🤝 Contributing
 
 Issues and pull requests are welcome. See the [contribution guide](https://www.openjiuwen.com/contribute).
+
+This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance obligations under the EU AI Act and other relevant regulatory frameworks.
