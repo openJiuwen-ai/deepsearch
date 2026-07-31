@@ -1,5 +1,6 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Embedding 客户端 —— 核心实现由 openjiuwen-search-base 提供（2026-07-29 提取）。
+"""Embedding 客户端 —— 核心实现由 openjiuwen-search-base 提供。
 
 本壳负责：EmbedConfig → base EmbedderSettings 的适配，以及把 base 的重试耗尽
 异常包装为 codesearch 错误码体系。原 import 路径与构造签名保持不变。

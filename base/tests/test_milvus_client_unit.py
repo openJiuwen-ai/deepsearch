@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """MilvusCollectionClient 的注入式单测（fake collection，不连真实 Milvus）。"""
 

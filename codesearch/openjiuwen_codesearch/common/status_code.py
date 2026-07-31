@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """错误码表。命名与结构对齐 deepsearch 的 common/status_code.py 惯例。"""
 

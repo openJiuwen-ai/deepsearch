@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 from openjiuwen_codesearch.algorithm.memory_ops import construct_final_hits
 from openjiuwen_codesearch.domain.memory import SnippetMemory

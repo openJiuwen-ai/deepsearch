@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """ContextBench 数据集与 checkout 适配。
 
@@ -33,7 +34,7 @@ def ensure_contextbench_importable(contextbench_dir: str = DEFAULT_CONTEXTBENCH_
 
 
 def load_context_bench_data(path: str = DEFAULT_PARQUET):
-    import pandas as pd  # noqa: PLC0415
+    import pandas as pd
 
     if not os.path.exists(path):
         raise FileNotFoundError(
@@ -56,15 +57,15 @@ def _worktree_root() -> str:
 
 
 def clean_worktrees() -> None:
-    """清理 contextbench 的临时 worktree（旧 jiuwenCoder main() 的开跑前动作；
+    """清理 contextbench 的临时 worktree（长跑前置清理；
     残留的坏 worktree 会让同 commit 的 checkout 永久失败）。"""
     shutil.rmtree(_worktree_root(), ignore_errors=True)
 
 
 def checkout_instance(repo_url: str, commit: str, cache_dir: str = "./repos") -> str:
     ensure_contextbench_importable()
-    from contextbench.core import checkout  # noqa: PLC0415
-    from contextbench.core.repo import _normalize_url  # noqa: PLC0415
+    from contextbench.core import checkout
+    from contextbench.core.repo import _normalize_url
 
     repo_dir = checkout(repo_url, commit, cache_dir=cache_dir, verbose=False)
     if not repo_dir:

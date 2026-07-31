@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """索引构建：文件发现 → 哈希查重 → 切块 → 记录构造 →（可选）嵌入 → 入库。
 
@@ -177,7 +178,7 @@ async def index_repository(
     embedder: Optional[APIEmbedModel] = None,
     embed_batch_size: int = 64,
 ) -> IndexReport:
-    """索引一个仓库目录。已存在文件 upsert 标记（修复旧 wrapper 丢 upsert 的 bug #13）。"""
+    """索引一个仓库目录。已存在文件 upsert 标记。"""
     code_files = discover_python_files(
         repo_dir,
         max_files=index_cfg.max_num_files_per_repo,

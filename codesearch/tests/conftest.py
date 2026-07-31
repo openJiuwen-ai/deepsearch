@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """共享测试设施：fake LLM / snippet 构造 / 事件循环辅助。
 
@@ -43,11 +44,12 @@ def make_snippet(
 
 
 def tool_call_response(
-    calls: list[tuple[str, dict]], content: str = "", cost: float = 0.0
+    calls: list[tuple[str, dict]], content: str = "", tokens: tuple[int, int] = (0, 0)
 ) -> LLMResponse:
     return LLMResponse(
         content=content,
-        cost=cost,
+        input_tokens=tokens[0],
+        output_tokens=tokens[1],
         tool_calls=[
             ToolCall(name=n, arguments=a, call_id=f"call_{i}") for i, (n, a) in enumerate(calls)
         ],
@@ -77,7 +79,9 @@ class FakeLLM:
         return self.responses.pop(0)
 
 
-def make_filter_llm(range_by_file: dict[str, tuple[int, int]], cost: float = 0.0) -> FakeLLM:
+def make_filter_llm(
+    range_by_file: dict[str, tuple[int, int]], tokens: tuple[int, int] = (0, 0)
+) -> FakeLLM:
     """过滤 agent 的 fake：按提示词中出现的文件路径返回预设行区间。"""
 
     def handler(messages, tools):
@@ -89,9 +93,9 @@ def make_filter_llm(range_by_file: dict[str, tuple[int, int]], cost: float = 0.0
                         "save_relevant_lines",
                         {"selections": [{"start_line": st, "end_line": en, "reasoning": "r"}]},
                     )],
-                    cost=cost,
+                    tokens=tokens,
                 )
-        return tool_call_response([("save_relevant_lines", {"selections": []})], cost=cost)
+        return tool_call_response([("save_relevant_lines", {"selections": []})], tokens=tokens)
 
     return FakeLLM(handler=handler)
 

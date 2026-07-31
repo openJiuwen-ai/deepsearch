@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Agent 循环的 fixture 回放测试（Phase 0 基线思想）：
 不连任何外部服务，用脚本化 LLM + 内存检索器驱动完整多轮轨迹，
@@ -50,12 +51,12 @@ def test_happy_path_submit():
                     ("view_repo_map", {}),
                     ("search_codebase", {"search_query": "alpha beta", "use_trigram": False}),
                 ],
-                cost=0.02,
+                tokens=(200, 20),
             ),
-            tool_call_response([("submit_final_snippets", {"snippet_ids": [1]})], cost=0.01),
+            tool_call_response([("submit_final_snippets", {"snippet_ids": [1]})], tokens=(100, 10)),
         ]
     )
-    ctx = _ctx(SNIPPETS, main_llm, make_filter_llm({"a.py": (11, 12)}, cost=0.005))
+    ctx = _ctx(SNIPPETS, main_llm, make_filter_llm({"a.py": (11, 12)}, tokens=(50, 5)))
     result = run(CodeSearchAgent().run(ctx))
 
     assert result.termination == Termination.SUBMITTED
@@ -65,8 +66,9 @@ def test_happy_path_submit():
     assert (hit.file_path, hit.start_line, hit.end_line) == ("a.py", 11, 12)
     assert "second line" in hit.text and "alpha beta gamma" not in hit.text
 
-    # 成本按 stage 归账：主模型 2 次 + 过滤 1 次
-    assert abs(result.total_cost - 0.035) < 1e-9
+    # token 按 stage 归账：主模型 2 次 + 过滤 1 次
+    assert result.total_input_tokens == 350   # 200 + 100 主模型 + 50 过滤
+    assert result.total_output_tokens == 35   # 20 + 10 + 5
 
     # 第二轮的首条消息应重写注入记忆（含已保存行），且包含 repo map 工具结果历史
     second_turn_messages = main_llm.calls[1][0]

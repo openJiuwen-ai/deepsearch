@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """每次运行的可变状态（对齐 deepsearch `DeepSearchRunContext` 模式）。
 
@@ -43,7 +44,7 @@ class CodeSearchRunContext:
     empty_search_rounds: int = 0
     termination: Optional[Termination] = None
     error: str = ""
-    cost_by_stage: dict[str, float] = field(default_factory=dict)
+    tokens_by_stage: dict[str, tuple[int, int]] = field(default_factory=dict)
 
     # 循环中间态（react 与图形态共用；大对象不进 workflow session state）
     base_prompt: str = ""
@@ -63,12 +64,16 @@ class CodeSearchRunContext:
         return self.config.agent.filter_concurrency
 
     @property
-    def total_cost(self) -> float:
-        return sum(self.cost_by_stage.values())
+    def total_input_tokens(self) -> int:
+        return sum(i for i, _ in self.tokens_by_stage.values())
 
-    def add_cost(self, stage: str, amount: float) -> None:
-        if amount:
-            self.cost_by_stage[stage] = self.cost_by_stage.get(stage, 0.0) + amount
+    @property
+    def total_output_tokens(self) -> int:
+        return sum(o for _, o in self.tokens_by_stage.values())
+
+    def add_tokens(self, stage: str, input_tokens: int, output_tokens: int) -> None:
+        prev_in, prev_out = self.tokens_by_stage.get(stage, (0, 0))
+        self.tokens_by_stage[stage] = (prev_in + input_tokens, prev_out + output_tokens)
 
     def write_trace(self, record: dict[str, Any]) -> None:
         if not self.trace_path:

@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """ContextBench 全量评测流程（对应旧 build_index.py 的 benchmark 半部 + run_contextbench.py）。
 
@@ -65,7 +66,7 @@ async def run_benchmark(
                     reset=(reset_indices and row is group_rows[0]),
                 )
                 indexed_rows.append(row)
-            except Exception as e:  # noqa: BLE001  单实例失败不终止长跑
+            except Exception as e:  # 单实例失败不终止长跑
                 logger.error("Index failed for %s: %s", row["instance_id"], e)
                 failures.append((row["instance_id"], f"index: {e}"))
 
@@ -76,7 +77,7 @@ async def run_benchmark(
                     revision=row["base_commit"],
                     top_k=config.agent.retrieve_topk,
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.error("Search failed for %s: %s", row["instance_id"], e)
                 failures.append((row["instance_id"], f"search: {e}"))
                 continue
@@ -95,9 +96,10 @@ async def run_benchmark(
             append_prediction(partial_path, pred)
             done += 1
             logger.info(
-                "[%d/%d] %s: %d hits, termination=%s, cost=$%.4f",
+                "[%d/%d] %s: %d hits, termination=%s, tokens=%din/%dout",
                 done, len(rows), row["instance_id"], len(result.hits),
-                result.termination.value, result.total_cost,
+                result.termination.value,
+                result.total_input_tokens, result.total_output_tokens,
             )
 
     if failures:

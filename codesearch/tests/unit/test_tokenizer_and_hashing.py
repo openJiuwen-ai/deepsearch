@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 from openjiuwen_codesearch.indexing.hashing import deterministic_chunk_id, file_content_hash
 from openjiuwen_codesearch.retrieval.tokenizer import generate_char_trigrams, tokenise_code_string

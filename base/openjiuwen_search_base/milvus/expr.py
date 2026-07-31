@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Milvus 表达式安全构造。所有 expr 必须经本模块——统一转义，杜绝 f-string 直拼注入。"""
 

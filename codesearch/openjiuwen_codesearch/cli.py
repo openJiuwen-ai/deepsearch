@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """CLI 入口：索引 / 检索单个本地仓库。
 
@@ -47,7 +48,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     result = await retriever.search(query, revision=args.revision, top_k=args.top_k)
     print(f"Termination: {result.termination.value} | turns={result.turns} "
-          f"| cost=${result.total_cost:.4f}")
+          f"| tokens={result.total_input_tokens}in/{result.total_output_tokens}out")
     for i, hit in enumerate(result.hits, 1):
         print(f"{i:2d}. {hit.file_path} (L{hit.start_line}-L{hit.end_line})")
     return 0

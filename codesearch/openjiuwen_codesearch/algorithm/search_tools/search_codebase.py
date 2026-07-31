@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """search_codebase 工具：稀疏检索 + 过滤 agent + 记忆写入。
 
@@ -55,16 +56,22 @@ async def execute(env, args: dict) -> ToolOutcome:
         search_query, revision=env.revision, topk=env.search_topk, use_trigram=use_trigram
     )
 
+    # 先登记本次检索的相关性证据（含已处理过的片段——被反复命中是强信号），
+    # 供降级路径按相关性而非写入顺序兜底
+    for rank, hit in enumerate(hits):
+        env.memory.record_hit(hit, rank)
+
     unprocessed = [hit for hit in hits if not env.memory.is_processed(hit.id)]
     results = await filter_snippets(
         env.filter_llm, env.query, unprocessed, env.filter_concurrency
     )
 
     added = 0
-    filter_cost = 0.0
-    for snippet, ranges, cost in results:
+    filter_in = filter_out = 0
+    for snippet, ranges, usage in results:
         env.memory.mark_processed(snippet)
-        filter_cost += cost
+        filter_in += usage[0]
+        filter_out += usage[1]
         if env.memory.add_ranges(snippet, ranges):
             added += 1
 
@@ -86,7 +93,8 @@ async def execute(env, args: dict) -> ToolOutcome:
         )
 
     return ToolOutcome(
-        message=message, added_snippets=added, searched=True, filter_cost=filter_cost
+        message=message, added_snippets=added, searched=True,
+        filter_tokens=(filter_in, filter_out)
     )
 
 

@@ -1,8 +1,9 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 from pydantic import BaseModel, Field
 
 # LLMConfig（通用 OpenAI 兼容客户端配置，含 SSL/证书处理）由 base 包提供
-from openjiuwen_search_base.llm import LLMConfig  # noqa: F401  re-export
+from openjiuwen_search_base.llm import LLMConfig
 
 
 class LLMSuite(BaseModel):

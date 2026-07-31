@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """确定性标识：文件哈希与 chunk ID。公式与旧实现一致（跨运行/跨 commit 去重的根基）。"""
 
