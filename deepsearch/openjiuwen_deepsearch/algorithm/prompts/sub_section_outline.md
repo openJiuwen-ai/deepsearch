@@ -40,7 +40,7 @@ format_requirements: {{ section_format_requirements }}
   than Level 2 headings.
 - A request to include one table does not by itself require a flat outline. Preserve explicitly requested subsections
   when the section also requires separate analysis, categories, objects, questions, or other content blocks.
-- When the user specifies a subsection count, category set, or classification level, preserve that exact granularity.
+- When the user specifies a subsection count, category set, or categorization level, preserve that exact granularity.
 - Do not further subdivide a user-defined category unless the user explicitly requests another heading level.
 
 # User-Specified Subsection Preservation
