@@ -632,6 +632,13 @@ def test_subsection_outline_prompt_explains_structured_evidence_for_all_routes(h
     assert "do not create a factual subsection solely from an uncovered dimension" in normalized_prompt.lower()
     assert "Do not mechanically turn every dimension into a subsection" in normalized_prompt
     assert "User-specified titles and template-required structure remain authoritative" in normalized_prompt
+    assert "Explicit user-specified structure has the highest priority" in normalized_prompt
+    assert "Structured Evidence Guidance controls evidence selection only" in normalized_prompt
+    assert "explicitly requests the current section to contain only one table" in normalized_prompt
+    assert "For such a single-table-only section" in normalized_prompt
+    assert "A request to include one table does not by itself require a flat outline" in normalized_prompt
+    assert "preserve that exact granularity" in normalized_prompt
+    assert "Do not further subdivide a user-defined category" in normalized_prompt
 
 
 @pytest.mark.parametrize("prompt_name", ["sub_report_markdown", "sub_report_brief_markdown"])
