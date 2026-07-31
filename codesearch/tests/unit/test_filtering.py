@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 from openjiuwen_codesearch.algorithm.filtering import (
     filter_snippet,
@@ -20,7 +21,7 @@ def test_numbering_skips_header_and_blank_lines():
     assert lines[4] == "102:     pass"
 
 
-def test_filter_snippet_parses_selections_and_cost():
+def test_filter_snippet_parses_selections_and_usage():
     llm = FakeLLM(
         responses=[
             tool_call_response(
@@ -31,14 +32,14 @@ def test_filter_snippet_parses_selections_and_cost():
                         {"start_line": "bad", "end_line": 9, "reasoning": "r"},  # 非 int 丢弃
                     ]},
                 )],
-                cost=0.01,
+                tokens=(120, 12),
             )
         ]
     )
     s = make_snippet(1, "a.py", 5, ["a", "b", "c"])
-    ranges, cost = run(filter_snippet(llm, "issue", s))
+    ranges, usage = run(filter_snippet(llm, "issue", s))
     assert ranges == [(5, 7)]
-    assert cost == 0.01
+    assert usage == (120, 12)
 
 
 def test_filter_snippet_error_returns_empty():
@@ -47,8 +48,8 @@ def test_filter_snippet_error_returns_empty():
             raise RuntimeError("boom")
 
     s = make_snippet(1, "a.py", 5, ["a"])
-    ranges, cost = run(filter_snippet(BoomLLM(), "issue", s))
-    assert ranges == [] and cost == 0.0
+    ranges, usage = run(filter_snippet(BoomLLM(), "issue", s))
+    assert ranges == [] and usage == (0, 0)
 
 
 def test_filter_snippets_bounded_concurrency_preserves_order():

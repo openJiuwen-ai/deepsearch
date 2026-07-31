@@ -1,14 +1,18 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""发布前校验（base/README "发布前 TODO" 的机器化，供 checklist/CI 调用）：
+"""发布前校验，供发布流程或 CI 调用：
 
-1. codesearch 与 deepsearch 的 version 一致（leader 裁决：版本号同步）；
-2. 发布依赖不得含 git 直引（PyPI 会拒收整包）；
-3. base 版本满足 codesearch 的 pin。
+1. 本包与同系列产品的 version 一致（同步发布要求）；
+2. 发布依赖不得含 git 直引（包索引会拒收整个 distribution）；
+3. base 版本满足本包的版本约束；
+4. 若 CI 会改写版本号，改写后的版本仍须满足 base 约束。
 
-用法：python scripts/release_check.py   （在 codesearch/ 目录下）
-退出码非 0 即不放行。
+用法：
+    python scripts/release_check.py                    # 校验仓库当前状态
+    python scripts/release_check.py --release-version X  # 校验 CI 将要发布的版本
 """
 
+import argparse
 import re
 import sys
 import tomllib
@@ -22,8 +26,28 @@ def load_version(pyproject: Path) -> str:
     return tomllib.loads(pyproject.read_text())["project"]["version"]
 
 
+def pin_accepts(pin: str, version: str) -> bool | None:
+    """pin 是否接受该版本。packaging 不可用时返回 None（跳过该项校验）。"""
+    try:
+        from packaging.requirements import Requirement
+        from packaging.version import Version
+    except ImportError:
+        return None
+    spec = Requirement(pin).specifier
+    # 预发布版需显式放行才可能被接受，这里按“最宽松”判断：宽松都不过就一定不行
+    return spec.contains(Version(version), prereleases=True)
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--release-version",
+        help="CI 将写入 pyproject 的版本号（流水线变量值）；给出后按它复核依赖约束",
+    )
+    args = parser.parse_args()
+
     errors: list[str] = []
+    warnings: list[str] = []
 
     cs = tomllib.loads((HERE / "pyproject.toml").read_text())
     cs_ver = cs["project"]["version"]
@@ -32,7 +56,7 @@ def main() -> int:
 
     # 1) 产品版本同步
     if cs_ver != ds_ver:
-        errors.append(f"版本不同步：codesearch={cs_ver} deepsearch={ds_ver}（裁决要求一致）")
+        errors.append(f"版本不同步：codesearch={cs_ver} deepsearch={ds_ver}（要求一致）")
 
     # 2) 发布依赖禁止 git 直引
     all_deps = list(cs["project"].get("dependencies", []))
@@ -41,8 +65,8 @@ def main() -> int:
     direct = [d for d in all_deps if "@ git+" in d or re.search(r"@\s*https?://", d)]
     if direct:
         errors.append(
-            "发布依赖含 git/URL 直引（PyPI 拒收整包），发布版需切换为索引版本"
-            f"（如 openjiuwen==0.1.10.post3，已验证兼容）：{direct}"
+            "发布依赖含 git/URL 直引（包索引会拒收整个 distribution），"
+            f"发布版本需改用索引中的版本：{direct}"
         )
 
     # 3) base pin 可满足
@@ -51,13 +75,40 @@ def main() -> int:
     if m and not base_ver.startswith(f"{m.group(1)}.{m.group(2)}."):
         errors.append(f"base 版本 {base_ver} 不满足 codesearch 的 pin {pin}")
 
+    # 4) 以 CI 实际发布的版本复核：base 与本包会被改成同一个版本，
+    #    但 pin 不会被改，因此必须验证「pin 是否接受该版本」
+    target = args.release_version
+    if target:
+        accepted = pin_accepts(pin, target)
+        if accepted is False:
+            errors.append(
+                f"发布版本 {target} 不被 base pin 接受：{pin}\n"
+                f"      CI 会把 base 与 codesearch 都发布为 {target}，"
+                f"但本包的 wheel 仍要求 {pin}，安装时无法解析依赖。\n"
+                f"      修法：出包脚本在改写 version 的同时，"
+                f"把该 pin 一并改写为 =={target}"
+            )
+        elif accepted is None:
+            warnings.append("未安装 packaging，跳过发布版本与 pin 的匹配校验")
+        if re.search(r"(a|b|rc|dev)\d*$", target):
+            warnings.append(
+                f"发布版本 {target} 是 PEP 440 预发布版（规范化后带 a/b/rc/dev）。"
+                "默认情况下 `pip install <包名>` **不会**选中预发布版，"
+                "使用者需加 --pre，uv 需加 --prerelease=allow。若这不是本意，"
+                "请改用正式版本号。"
+            )
+
     if errors:
         print("release_check FAILED:")
         for e in errors:
             print(f"  ✗ {e}")
         return 1
     print(f"release_check OK: codesearch={cs_ver} deepsearch={ds_ver} base={base_ver}")
-    print("  提醒（未自动校验）：base 需与 codesearch 共同发布；LICENSE/三方声明齐备。")
+    if target:
+        print(f"  发布版本 {target} 与 base pin {pin} 相容")
+    for w in warnings:
+        print(f"  ⚠ {w}")
+    print("  提醒（未自动校验）：base 需与本包共同发布；LICENSE 与三方声明需齐备。")
     return 0
 
 

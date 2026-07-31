@@ -1,8 +1,9 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""真实 Milvus 的 e2e 检索测试（移植自 jiuwenCoder 的 e2e 用例）。
+"""真实 Milvus 的端到端检索测试。
 
 前置：本地有运行中的 Milvus。连接地址经环境变量覆盖（隔离部署场景）：
-    MILVUS_HOST=localhost MILVUS_PORT=19531 pytest -m e2e -W ignore
+    MILVUS_HOST=localhost MILVUS_PORT=19530 pytest -m e2e -W ignore
 """
 
 import os
@@ -52,7 +53,7 @@ def store():
             reset=True,
             strict_trigram=False,  # 测 raw 排序行为
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         pytest.skip(f"Milvus not reachable at {MILVUS_HOST}:{MILVUS_PORT}: {e}")
 
     data = [

@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 from enum import Enum
 
@@ -31,7 +32,7 @@ class CodeSearchResult(BaseModel):
     hits: list[FinalHit] = Field(default_factory=list)
     termination: Termination
     turns: int = 0
-    total_cost: float = 0.0
+    # 用量以 token 计（不含金额：单价随端点与时间变动，由调用方自行折算）
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     error: str = ""

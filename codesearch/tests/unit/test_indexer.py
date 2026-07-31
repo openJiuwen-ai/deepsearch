@@ -1,5 +1,5 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-import os
 
 from openjiuwen_codesearch.config.index import IndexConfig
 from openjiuwen_codesearch.indexing.chunkers.base import Chunk

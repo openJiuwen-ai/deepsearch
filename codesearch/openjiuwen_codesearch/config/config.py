@@ -1,10 +1,11 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 import os
 
 from pydantic import BaseModel, Field
 
 from openjiuwen_codesearch.config.agent import SearchAgentConfig
-from openjiuwen_codesearch.config.index import (  # noqa: F401
+from openjiuwen_codesearch.config.index import (
     EmbedConfig,
     IndexConfig,
     MilvusConfig,

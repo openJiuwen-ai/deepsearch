@@ -1,8 +1,8 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Snippet 记忆：过滤后区间的存取、合并与提示词渲染。
 
-行为与 jiuwenCoder `agent.py` 的 `merge_intervals` / `_format_memory` 保持一致
-（渲染文本逐字对齐，属 parity 契约，改动需登记行为变更）。
+渲染文本格式属行为契约（由单元测试锁定），修改会影响模型看到的记忆内容。
 """
 
 from pydantic import BaseModel, Field
@@ -28,12 +28,37 @@ def merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
+class SnippetRelevance(BaseModel):
+    """片段的检索相关性证据，用于降级路径的排序。
+
+    智能体主动提交时用它自己挑选的片段；但轮次耗尽/停滞等降级路径没有智能体
+    的判断，此前按"写入顺序"取前 N 个——顺序与相关性无关，导致降级结果多而不准。
+    这里累积客观信号：被多少次检索命中、达到过的最好名次、最高 BM25 分。
+    """
+
+    hit_count: int = 0
+    best_rank: int = 10**6   # 越小越好（0 = 某次检索的首位）
+    best_score: float = 0.0  # BM25 分，越大越好
+
+
 class SnippetMemory(BaseModel):
-    """检索缓存 + 已保存行区间 + 已处理去重集。"""
+    """检索缓存 + 已保存行区间 + 已处理去重集 + 相关性证据。"""
 
     cache: dict[int, Snippet] = Field(default_factory=dict)
     saved: dict[int, list[tuple[int, int]]] = Field(default_factory=dict)
     processed_ids: set[int] = Field(default_factory=set)
+    relevance: dict[int, SnippetRelevance] = Field(default_factory=dict)
+
+    def record_hit(self, snippet: Snippet, rank: int) -> None:
+        """记录一次检索命中（rank 为该次检索结果中的 0-based 名次）。
+
+        对同一片段可多次调用：被不同查询反复命中是较强的相关性信号。
+        """
+        rel = self.relevance.setdefault(snippet.id, SnippetRelevance())
+        rel.hit_count += 1
+        rel.best_rank = min(rel.best_rank, rank)
+        if snippet.score is not None:
+            rel.best_score = max(rel.best_score, float(snippet.score))
 
     def mark_processed(self, snippet: Snippet) -> None:
         self.processed_ids.add(snippet.id)
@@ -56,11 +81,30 @@ class SnippetMemory(BaseModel):
         for sid in snippet_ids:
             if sid in self.saved:
                 del self.saved[sid]
+                self.relevance.pop(sid, None)  # 一并清理，避免长会话残留
                 deleted += 1
         return deleted
 
     def saved_ids(self) -> list[int]:
+        """按写入顺序返回（保留原语义，供需要稳定顺序的场景使用）。"""
         return list(self.saved.keys())
+
+    def ranked_saved_ids(self) -> list[int]:
+        """按检索相关性降序返回已保存片段 ID——降级路径的兜底选择依据。
+
+        排序键（依次）：命中次数多 → 最好名次靠前 → BM25 分高 → 写入顺序。
+        检索命中与 `expand_context`（智能体显式点名，按最优名次计）都会留下
+        相关性记录；无记录的片段排在末尾但不丢弃。
+        """
+        order = {sid: i for i, sid in enumerate(self.saved)}
+
+        def key(sid: int):
+            rel = self.relevance.get(sid)
+            if rel is None:
+                return (0, 10**6, 0.0, order[sid])
+            return (-rel.hit_count, rel.best_rank, -rel.best_score, order[sid])
+
+        return sorted(self.saved.keys(), key=key)
 
     def render(self) -> str:
         """渲染为注入提示词的记忆文本（与旧 `_format_memory` 输出一致）。"""

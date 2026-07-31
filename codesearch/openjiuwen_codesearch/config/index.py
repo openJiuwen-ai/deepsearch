@@ -1,14 +1,19 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from openjiuwen_search_base.security import SecretInput, to_secret
 
 
 class EmbedConfig(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     service: str = "openrouter"  # openrouter | ollama | custom
     url: str = "https://openrouter.ai/api/v1/embeddings"
     model: str = "qwen/qwen3-embedding-8b"
-    api_key: str = ""
+    api_key: bytearray = Field(default_factory=bytearray)
     batch_size: int = 64
     # Qwen3-Embedding 官方建议的查询前缀
     query_prefix: str = (
@@ -20,12 +25,19 @@ class EmbedConfig(BaseModel):
     retry_backoff_seconds: float = 2.0
     timeout_seconds: float = 60.0  # 单次请求总超时
 
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _normalize_api_key(cls, v: SecretInput) -> bytearray:
+        return to_secret(v)
+
 
 class MilvusConfig(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     host: str = "localhost"
     port: str = "19530"
     # 认证部署（共用实例开启鉴权的场景）；支持 "user:password" 或 API token 形式
-    token: str = ""
+    token: bytearray = Field(default_factory=bytearray)
     # Milvus 2.2+ database：比 cs_ 前缀更强一级的硬隔离（与 deepsearch 对齐的
     # 运维手段）；"default" 表示不切换
     database_name: str = "default"
@@ -40,6 +52,11 @@ class MilvusConfig(BaseModel):
     query_batch_size: int = 32
     insert_batch_size: int = 128
     heavy_fetch_batch_size: int = 20  # 大字段按 id 分批取，防 65MB payload 上限
+
+    @field_validator("token", mode="before")
+    @classmethod
+    def _normalize_token(cls, v: SecretInput) -> bytearray:
+        return to_secret(v)
 
 
 class IndexConfig(BaseModel):

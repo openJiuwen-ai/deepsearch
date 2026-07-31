@@ -1,7 +1,8 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Agent 循环的阶段函数：react 编排器与 workflow 图节点共享同一份逻辑。
 
-- `reasoning_step`：一轮 LLM 决策（含 fail-fast、轮次上限、成本/轨迹记账）；
+- `reasoning_step`：一轮 LLM 决策（含 fail-fast、轮次上限、token/轨迹记账）；
 - `tool_step`：执行本轮 pending 工具调用（含提交、停滞、临界警告）；
 - `finalize`：按终止原因构造最终结果。
 
@@ -58,12 +59,12 @@ async def reasoning_step(ctx: CodeSearchRunContext) -> Optional[Termination]:
             ctx.main_llm, ctx.base_prompt, memory_text, ctx.history,
             registry_schemas(get_registry()),
         )
-    except Exception as e:  # noqa: BLE001  LLM 失败走降级出口
+    except Exception as e:  # LLM 失败走降级出口
         logger.error("LLM API call failed: %s. Breaking loop.", e)
         ctx.error = str(e)
         return Termination.LLM_ERROR
 
-    ctx.add_cost("main_llm", response.cost)
+    ctx.add_tokens("main_llm", response.input_tokens, response.output_tokens)
     ctx.write_trace(
         {
             "turn": ctx.turn,
@@ -107,7 +108,7 @@ async def tool_step(ctx: CodeSearchRunContext) -> Optional[Termination]:
             continue
         try:
             outcome = await spec.executor(ctx, call.arguments)
-        except Exception as e:  # noqa: BLE001  单工具失败不终止循环
+        except Exception as e:  # 单工具失败不终止循环
             logger.error("Tool '%s' failed: %s", call.name, e)
             ctx.history.append(
                 ChatMessage(
@@ -118,7 +119,7 @@ async def tool_step(ctx: CodeSearchRunContext) -> Optional[Termination]:
             )
             continue
 
-        ctx.add_cost("filter_llm", outcome.filter_cost)
+        ctx.add_tokens("filter_llm", *outcome.filter_tokens)
 
         if outcome.submitted_ids is not None:
             ctx.submitted_ids = outcome.submitted_ids
@@ -157,13 +158,18 @@ def finalize(ctx: CodeSearchRunContext, termination: Termination) -> CodeSearchR
         hits = []
     else:
         logger.warning("Agentic loop ended (%s). Returning snippets from memory.", termination)
-        hits = construct_final_hits(ctx.memory.saved_ids()[: ctx.top_k], ctx.memory)
-    logger.info("Total cost for this issue: $%.4f", ctx.total_cost)
+        hits = construct_final_hits(ctx.memory.ranked_saved_ids()[: ctx.top_k], ctx.memory)
+    logger.info(
+        "Token usage for this issue: input=%d output=%d",
+        ctx.total_input_tokens,
+        ctx.total_output_tokens,
+    )
     result = CodeSearchResult(
         hits=hits,
         termination=termination,
         turns=ctx.turn,
-        total_cost=ctx.total_cost,
+        total_input_tokens=ctx.total_input_tokens,
+        total_output_tokens=ctx.total_output_tokens,
         error=ctx.error,
     )
     ctx.result = result

@@ -53,3 +53,4 @@ START → REASONING ⇄ TOOL（自环），两者均可路由 END
 | `framework/openjiuwen/base_node.py` | 薄壳 → **base 包** `openjiuwen_search_base.workflow`（三段式 BaseNode + init_router） |
 | `framework/openjiuwen/runtime_context.py` | CodeSearchRunContext + 运行注册表（注册表实现在 **base 包** `openjiuwen_search_base.runtime`） |
 | `framework/openjiuwen/agent.py` | react 引擎（同一 steps 的 while 循环驱动） |
+| `server/routers/api.py` | HTTP 服务出口：检索同步返回、索引转后台作业 |

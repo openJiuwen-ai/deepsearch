@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Prompt 模板加载（.md 文件，类级缓存，对齐 deepsearch SimpleReactSearchAgent 惯例）。"""
 
