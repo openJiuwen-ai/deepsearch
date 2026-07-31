@@ -1,9 +1,9 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """一轮 LLM 决策：构造提示词 → 调主模型 → 返回规范化响应。
 
-旧实现的关键行为（parity 契约）：
-- 记忆每轮**重写进首条消息**（system prompt + issue + memory），不追加；
-- 距轮次上限 warn_before_turns 轮时，向历史追加"必须提交"的系统警告。
+记忆每轮**重写进首条消息**（system prompt + issue + memory），不追加；
+距轮次上限 warn_before_turns 轮时，向历史追加"必须提交"的系统警告。
 """
 
 from openjiuwen_codesearch.algorithm.prompts import load_prompt

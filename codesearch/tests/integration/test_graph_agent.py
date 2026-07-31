@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """图形态（openjiuwen workflow）回放测试：与 react 形态跑同一套场景，
 由真实的 openjiuwen Runner 按路由驱动。需要 openjiuwen（integration marker）。
@@ -54,12 +55,12 @@ def test_graph_happy_path_submit():
                     ("view_repo_map", {}),
                     ("search_codebase", {"search_query": "alpha beta", "use_trigram": False}),
                 ],
-                cost=0.02,
+                tokens=(200, 20),
             ),
-            tool_call_response([("submit_final_snippets", {"snippet_ids": [1]})], cost=0.01),
+            tool_call_response([("submit_final_snippets", {"snippet_ids": [1]})], tokens=(100, 10)),
         ]
     )
-    ctx = _ctx(SNIPPETS, main_llm, make_filter_llm({"a.py": (11, 12)}, cost=0.005))
+    ctx = _ctx(SNIPPETS, main_llm, make_filter_llm({"a.py": (11, 12)}, tokens=(50, 5)))
     result = run(GraphCodeSearchAgent().run(ctx))
 
     assert result.termination == Termination.SUBMITTED
@@ -67,7 +68,8 @@ def test_graph_happy_path_submit():
     assert len(result.hits) == 1
     hit = result.hits[0]
     assert (hit.file_path, hit.start_line, hit.end_line) == ("a.py", 11, 12)
-    assert abs(result.total_cost - 0.035) < 1e-9
+    assert result.total_input_tokens == 350   # 200 + 100 主模型 + 50 过滤
+    assert result.total_output_tokens == 35   # 20 + 10 + 5
     # 第二轮首条消息重写注入记忆（与 react 形态同一行为契约）
     head = main_llm.calls[1][0][0].content
     assert "CURRENT SAVED SNIPPETS" in head and "11: second line" in head

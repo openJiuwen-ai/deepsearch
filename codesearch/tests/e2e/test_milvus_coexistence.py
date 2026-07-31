@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """共用 Milvus 实例的隔离验证（e2e）：
 
@@ -30,7 +31,7 @@ FOREIGN = "coexist_foreign_collection"  # 模拟他产品的无前缀 collection
 def foreign_collection():
     try:
         connections.connect("coexist_check", host=MILVUS_HOST, port=MILVUS_PORT)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         pytest.skip(f"Milvus not reachable at {MILVUS_HOST}:{MILVUS_PORT}: {e}")
     # 预清理：上一轮被强杀的残留（FOREIGN 与 cs_test_coexist*）会导致断言假失败
     for name in utility.list_collections(using="coexist_check"):

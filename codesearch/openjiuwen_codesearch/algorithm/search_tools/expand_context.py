@@ -1,10 +1,9 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """expand_context 工具：按文件+行区间直接取索引内容并写入记忆。
 
-对旧实现的修正（notes 问题 #15）：请求区间按每个命中 chunk 的自身边界**裁剪**后
-再入记忆——不再把完整区间挂给所有重叠 chunk（旧行为会产生跨 chunk 重复行，
-且越界行被静默丢弃）。嵌套定义导致的 chunk 天然重叠仍可能带来少量重复，
-由最终结果的排序与去重语义兜底。
+请求区间按每个命中 chunk 的自身边界**裁剪**后再入记忆——不再把完整区间挂给所有重叠 chunk。
+嵌套定义导致的 chunk 天然重叠仍可能带来少量重复，由最终结果的排序与去重语义兜底。
 """
 
 import logging
@@ -57,6 +56,8 @@ async def execute(env, args: dict) -> ToolOutcome:
         clipped = (max(start_line, chunk.start_line), min(end_line, chunk.end_line))
         if clipped[0] > clipped[1]:
             continue
+        # 智能体显式点名要的上下文：按最高优先级计入相关性证据
+        env.memory.record_hit(chunk, rank=0)
         env.memory.mark_processed(chunk)
         if env.memory.add_ranges(chunk, [clipped]):
             added += 1

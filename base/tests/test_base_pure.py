@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """base 包纯逻辑单测（零外部依赖；embedding/llm 适配等由消费方测试与 e2e 覆盖）。"""
 
@@ -90,3 +91,39 @@ class TestNormalizeToolCalls:
 
     def test_none_input(self):
         assert normalize_tool_calls(None) == []
+
+
+class TestExtractUsage:
+    """用量以 token 上报——token 是 OpenAI 兼容端点的通用字段，金额各家不一。"""
+
+    def test_reads_object_style_usage(self):
+        from openjiuwen_search_base.llm import extract_usage
+
+        class Usage:
+            input_tokens, output_tokens = 13, 64
+
+        class Resp:
+            usage_metadata = Usage()
+
+        assert extract_usage(Resp()) == (13, 64)
+
+    def test_reads_dict_style_usage(self):
+        from openjiuwen_search_base.llm import extract_usage
+
+        class Resp:
+            usage_metadata = {"input_tokens": 7, "output_tokens": 3}
+
+        assert extract_usage(Resp()) == (7, 3)
+
+    def test_missing_usage_is_zero_not_error(self):
+        from openjiuwen_search_base.llm import extract_usage
+
+        assert extract_usage(object()) == (0, 0)
+
+    def test_partial_usage_defaults_to_zero(self):
+        from openjiuwen_search_base.llm import extract_usage
+
+        class Resp:
+            usage_metadata = {"input_tokens": 5}
+
+        assert extract_usage(Resp()) == (5, 0)

@@ -1,7 +1,8 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Python 切块器：stdlib `ast` 实现。
 
-与旧 tree-sitter 版本的行为对齐：按命名定义（函数/类）切块、嵌套定义各自成块
+按命名定义（函数/类）切块、嵌套定义各自成块
 （允许区间重叠）、收集定义体内全部函数调用名、无定义时整文件一块。
 kind 命名沿用 tree-sitter 节点类型（function_definition / class_definition），
 保持索引 schema 兼容。选择 stdlib ast 的原因：零依赖、可测试；
@@ -28,7 +29,7 @@ def _collect_calls(node: ast.AST) -> list[str]:
         if isinstance(sub, ast.Call):
             try:
                 called = ast.unparse(sub.func).strip()
-            except Exception:  # noqa: BLE001  个别奇异节点不阻塞切块
+            except Exception:  # 个别奇异节点不阻塞切块
                 continue
             if called:
                 calls.append(called)

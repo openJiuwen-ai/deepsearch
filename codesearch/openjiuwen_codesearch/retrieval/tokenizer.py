@@ -1,5 +1,6 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""代码文本分词工具（纯函数，无 Milvus 依赖）。与旧 milvus_utils 同名函数行为一致。"""
+"""代码文本分词工具（纯函数，无 Milvus 依赖）。"""
 
 import re
 

@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """公共 API 输入输出模型（re-export 领域模型 + 索引报告）。"""
 
