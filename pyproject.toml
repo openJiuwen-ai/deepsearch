@@ -24,7 +24,7 @@ dependencies = [
     'python-docx==1.2.0',
     'tenacity==9.1.2',
     'pypdfium2==4.30.0',
-    "openjiuwen @ git+https://gitcode.com/openJiuwen/agent-core.git@enterprise-dev",
+    "openjiuwen @ git+https://gitcode.com/openJiuwen/agent-core.git@enterprise-0.1.0.beta05_v2",
     'pyvis==0.3.2',
     'networkx==3.4.2',
     'aiolimiter==1.1.0',
