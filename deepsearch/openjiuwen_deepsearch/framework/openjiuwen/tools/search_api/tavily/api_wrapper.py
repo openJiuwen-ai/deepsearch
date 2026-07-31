@@ -3,6 +3,8 @@
 
 import json
 import os
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Generic, TypeVar, List, Dict, Union, Optional
 import httpx
 import requests
@@ -35,6 +37,8 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
     include_answer: bool = False
     include_raw_content: bool = False
     include_images: bool = False
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
@@ -96,11 +100,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
     def results(self, query: str) -> List[Dict]:
         """Run query through Tavily Search API and return cleaned result"""
 
-        raw_data = self.raw_search_results(query=query)
-
-        # Extract and clean results from response
-        search_results = raw_data.get("results", [])
-        return self.clean_results(search_results)
+        return self.clean_results(self._extract_search_results(self.raw_search_results(query=query)))
 
     async def raw_search_results_async(self, query: str) -> Dict:
         """Run query through Tavily Search API asynchronously."""
@@ -117,12 +117,28 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
 
     async def aresults(self, query: str) -> List[Dict]:
         """Run query through Tavily Search API asynchronously and return cleaned result."""
-
         raw_data = await self.raw_search_results_async(query=query)
+        return self.clean_results(self._extract_search_results(raw_data))
 
-        # Extract and clean results from response
+    @staticmethod
+    def _extract_search_results(raw_data: Any) -> List[Dict]:
+        """校验并提取单路 Tavily 响应中的结果列表。
+
+        Args:
+            raw_data: Tavily 原始响应。
+
+        Returns:
+            结构合法的结果字典列表。
+
+        Raises:
+            ValueError: 响应不是字典、results 不是列表或列表元素不是字典时抛出。
+        """
+        if not isinstance(raw_data, dict):
+            raise ValueError("Tavily response must be a dict")
         search_results = raw_data.get("results", [])
-        return self.clean_results(search_results)
+        if not isinstance(search_results, list) or any(not isinstance(item, dict) for item in search_results):
+            raise ValueError("Tavily response results must be a list of dicts")
+        return search_results
 
     def clean_results(self, results: List[Dict]) -> List[Dict]:
         """Clean results from Tavily Search API with structured json."""
@@ -141,13 +157,46 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
             raw_content = result.get("raw_content")
             if raw_content:
                 cleaned_result["raw_content"] = raw_content[:MAX_SEARCH_CONTENT_LENGTH]
+            # Tavily 官方结果字段 published_date 在 provider 边界归一化为统一来源日期。
+            published_date = result.get("published_date")
+            if published_date is not None and str(published_date).strip():
+                normalized_date = self._normalize_published_date(published_date)
+                if normalized_date:
+                    cleaned_result["source_date"] = normalized_date
+                    cleaned_result["source_date_type"] = "published"
             cleaned_results.append(cleaned_result)
 
         return cleaned_results
 
+    @staticmethod
+    def _normalize_published_date(value: Any) -> str:
+        """将 Tavily 的 RFC 2822 或 ISO 发表时间归一化为 UTC 日期。
+
+        Args:
+            value: Tavily ``published_date`` 字段值。
+
+        Returns:
+            ISO 日期字符串；无法确认时返回空字符串。
+        """
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            parsed = parsedate_to_datetime(text)
+        except (TypeError, ValueError, OverflowError):
+            parsed = None
+        if parsed is None:
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return ""
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.date().isoformat()
+
     def _build_search_params(self, query: str) -> Dict:
         """Build parameters for Tavily API request."""
-        return {
+        params = {
             "api_key": self.search_api_key.decode("utf-8"),
             "query": query,
             "max_results": self.max_web_search_results,
@@ -159,6 +208,11 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
             "include_raw_content": self.include_raw_content,
             "include_images": self.include_images,
         }
+        if self.start_date:
+            params["start_date"] = self.start_date
+        if self.end_date:
+            params["end_date"] = self.end_date
+        return params
 
     def _get_ssl_verify_config(self) -> Union[str, bool]:
         """Get SSL verification configuration."""

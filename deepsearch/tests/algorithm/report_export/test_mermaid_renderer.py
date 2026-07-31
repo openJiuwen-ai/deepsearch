@@ -126,7 +126,8 @@ def test_horizontal_chart_expands_viewbox_for_long_generated_category_labels() -
         f'["{long_label}",12],["普通项目",8]]}}'
     )
 
-    assert "xychart-beta horizontal" in code
+    assert "horizontal: true" in code
+    assert "xychart-beta horizontal" not in code
     svg = render_mermaid_chart_as_svg(code)
     png = render_mermaid_chart_as_png(code)
 
@@ -142,6 +143,82 @@ def test_horizontal_chart_expands_viewbox_for_long_generated_category_labels() -
         assert image.format == "PNG"
         assert image.width == round(viewbox_width * 2)
         assert image.height == round(viewbox_height * 2)
+
+
+def test_generated_xychart_strips_chart_markup_and_prefers_horizontal_for_crowded_bars() -> None:
+    from openjiuwen_deepsearch.algorithm.report.report_utils import XYChartMermaidGenerator
+
+    code = XYChartMermaidGenerator.generate_from_json(
+        json.dumps(
+            {
+                "image_type": "bar",
+                "unit": "亿元",
+                "records": [
+                    ["飞驰人生2[checked_citation:1][[1]](https://example.com)", 33.98],
+                    ["抓娃娃", 33.27],
+                    ["第二十条", 24.54],
+                    ["熊出没·逆转时空", 20.06],
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert "horizontal: true" in code
+    assert "checked_citation" not in code
+    assert "https://example.com" not in code
+    assert "熊出没·逆转时空" in code
+
+
+def test_generated_pie_chart_uses_chinese_other_for_chinese_labels() -> None:
+    from openjiuwen_deepsearch.algorithm.report.report_utils import PieChartMermaidGenerator
+
+    code = PieChartMermaidGenerator.generate_from_json(
+        json.dumps(
+            {
+                "image_type": "pie",
+                "unit": "%",
+                "records": [
+                    ["二线城市", 41],
+                    ["四线城市", 24],
+                    ["三线城市", 20],
+                    ["一线城市", 14],
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert '"其他 (1%)" : 1' in code
+    assert "other" not in code.lower()
+
+
+def test_generated_timeline_strips_citations_urls_and_truncates_long_events() -> None:
+    from openjiuwen_deepsearch.algorithm.report.report_utils import (
+        TimelineChartMermaidGenerator,
+    )
+
+    long_event = (
+        "海外票房（不含中国）预计156亿美元，同比回落7%，较2017-2019年均值低21%，"
+        "同时受到供给断层与档期变化影响，北美、欧洲和亚洲多个市场复苏节奏继续分化"
+        "[checked_citation:8][[2]](https://example.com/report)"
+    )
+    code = TimelineChartMermaidGenerator.generate_from_json(
+        json.dumps(
+            {
+                "image_type": "timeline",
+                "unit": "",
+                "records": [["2024", long_event]],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert "checked_citation" not in code
+    assert "https://example.com" not in code
+    assert "..." in code
+    event_text = code.split(":", 1)[1].strip()
+    assert len(event_text) <= TimelineChartMermaidGenerator.EVENT_MAX_LEN + 3
 
 
 def test_all_negative_horizontal_labels_reserve_space_for_value_labels() -> None:
@@ -166,7 +243,8 @@ def test_all_negative_horizontal_labels_reserve_space_for_value_labels() -> None
         )
     )
 
-    assert "xychart-beta horizontal" in code
+    assert "horizontal: true" in code
+    assert "xychart-beta horizontal" not in code
     svg = render_mermaid_chart_as_svg(code)
     assert svg is not None
     root = ET.fromstring(svg)

@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
     IntentRecognitionResult,
     MAX_RESEARCH_QUERY_LENGTH,
+    _create_emit_intent_tool,
     _to_str_list,
     classify_and_recognize_intent,
     normalize_research_query,
@@ -32,6 +34,10 @@ def sample_tool_response():
                     "exclude_url": [],
                     "include_domains": [],
                     "exclude_domains": [],
+                    "temporal_scope": {
+                        "constraint_type": "source_date",
+                        "end_date": "2024-03-31",
+                    },
                 },
                  "id": "tc1",
                 "type": "tool_call",
@@ -69,6 +75,36 @@ async def test_recognize_report_intent_success(sample_tool_response):
     assert result.research_intent.report_type == "professional"
     assert "https://example.com/a" in result.research_intent.include_url
     assert "example.com" in result.research_intent.include_domains
+    assert result.research_intent.temporal_scope.end_date.isoformat() == "2024-03-31"
+
+
+def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
+    """意图识别工具的时间范围 schema 只使用基础关键字。"""
+    tool = _create_emit_intent_tool()
+    temporal_schema = tool.card.input_params["properties"]["temporal_scope"]
+
+    assert temporal_schema["type"] == "object"
+    assert temporal_schema["properties"]["constraint_type"]["enum"] == [
+        "source_date",
+        "content_date",
+    ]
+    assert temporal_schema["properties"]["start_date"]["format"] == "date"
+    assert temporal_schema["properties"]["end_date"]["format"] == "date"
+    assert "anyOf" not in temporal_schema
+    assert "oneOf" not in temporal_schema
+
+
+@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
+def test_intent_prompt_defines_temporal_normalization_rules(prompt_name):
+    """两个意图 Prompt 必须使用一致的模糊日期与包含边界规则。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+
+    assert "March 31" in prompt
+    assert "June 30" in prompt
+    assert "December 31" in prompt
+    assert "previous year" in prompt
+    assert "previous month" in prompt
+    assert "inclusive" in prompt
 
 
 @pytest.mark.asyncio
@@ -88,6 +124,7 @@ async def test_recognize_report_intent_no_tool_calls_fallback():
     assert result.research_query == q
     assert result.research_intent == ResearchIntent()
     assert result.research_intent.report_type is None
+    assert "is_fallback" not in result.model_dump()
 
 
 @pytest.mark.asyncio
@@ -107,6 +144,7 @@ async def test_recognize_report_intent_exception_fallback():
     assert result.research_query == q
     assert result.research_intent.section_count is None
     assert result.research_intent.report_type is None
+    assert "is_fallback" not in result.model_dump()
 
 
 @pytest.mark.asyncio
@@ -543,9 +581,6 @@ def test_to_str_list_extra_spaces_and_empty_items():
 def test_to_str_list_non_list_str_none():
     """非 list/str/None 类型返回空列表"""
     assert _to_str_list(123) == []
-
-
-
 
 @pytest.mark.asyncio
 async def test_recognize_report_intent_exclude_url_and_domains_kept_separate():

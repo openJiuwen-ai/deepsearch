@@ -103,7 +103,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 )
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name, 
                                                                         adapt_vlm_model_name)
-from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import apply_web_search_domain_constraints
+from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
+    apply_web_search_domain_constraints,
+    apply_web_search_temporal_scope,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     get_effective_workflow_llm_usage,
     save_workflow_llm_usage_to_session,
@@ -340,6 +343,10 @@ class IntentRecognitionNode(BaseNode):
                 logger.error("[IntentRecognitionNode] Web search failed: %s", error_msg)
                 return dict(next_node=NodeId.END.value)
             intent_result.entry_search_results = web_search_output.get("search_results", [])
+            apply_web_search_temporal_scope(
+                search_engine_name=web_search_engine_name,
+                temporal_scope=intent_result.research_intent.temporal_scope,
+            )
         else:
             # 纯本地模式：跳过网络搜索，使用空结果
             logger.info("[IntentRecognitionNode] Local-only mode, skipping web search.")
@@ -514,6 +521,8 @@ class FeedbackHandlerNode(BaseNode):
 
         if incoming_intent.report_type is not None:
             merged_intent.report_type = incoming_intent.report_type
+        if incoming_intent.temporal_scope is not None:
+            merged_intent.temporal_scope = incoming_intent.temporal_scope
 
         return merged_intent.model_dump()
 
@@ -610,6 +619,10 @@ class FeedbackHandlerNode(BaseNode):
                 search_engine_name=web_search_engine_name,
                 include_domains=merged_intent_dict.get("include_domains", []),
                 exclude_domains=merged_intent_dict.get("exclude_domains", []),
+            )
+            apply_web_search_temporal_scope(
+                search_engine_name=web_search_engine_name,
+                temporal_scope=merged_intent_dict.get("temporal_scope"),
             )
 
         add_debug_log_wrapper(
@@ -1386,6 +1399,25 @@ class OutlineInteractionNode(BaseNode):
             return NodeId.DEPENDENCY_EDITOR_TEAM.value
         return NodeId.EDITOR_TEAM.value
 
+    def _reapply_search_constraints(self, session: Session) -> None:
+        """从持久化 session 向当前运行新建的搜索 wrapper 重灌约束。
+
+        Args:
+            session: 当前工作流会话。
+        """
+        web_config = session.get_global_state("config.web_search_engine_config")
+        engine_name = web_config.search_engine_name if web_config else ""
+        research_intent = session.get_global_state("search_context.research_intent") or {}
+        apply_web_search_domain_constraints(
+            search_engine_name=engine_name,
+            include_domains=research_intent.get("include_domains", []),
+            exclude_domains=research_intent.get("exclude_domains", []),
+        )
+        apply_web_search_temporal_scope(
+            search_engine_name=engine_name,
+            temporal_scope=research_intent.get("temporal_scope"),
+        )
+
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
@@ -1399,6 +1431,7 @@ class OutlineInteractionNode(BaseNode):
         if current_round >= max_rounds:
             logger.info(f"{self.log_prefix} Reached max rounds: {max_rounds}")
             await self._notify_user(session, "Maximum interaction rounds reached.", StreamEvent.USER_INPUT_ENDED)
+            self._reapply_search_constraints(session)
             return dict(next_node=self._get_next_node_after_accept(session))
 
         feedback_mode = current_inputs.get("feedback_mode", "cmd")
@@ -1487,6 +1520,7 @@ class OutlineInteractionNode(BaseNode):
 
         if action == "accepted":
             logger.info(f"{self.log_prefix} User accepted the outline")
+            self._reapply_search_constraints(session)
             next_node = self._get_next_node_after_accept(session)
         elif action == "revise_comment":
             logger.info(f"{self.log_prefix} User wants to revise with comments")

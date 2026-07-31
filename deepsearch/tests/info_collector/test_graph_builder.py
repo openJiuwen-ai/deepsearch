@@ -221,6 +221,9 @@ class TestGenerateQueryNode:
             "collector_context.max_research_loops": 2,
             "collector_context.step_description": "步骤描述",
             "collector_context.evidence_ledger": {},
+            "collector_context.research_intent": {
+                "temporal_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"}
+            },
         }
         return state_map.get(key)
 
@@ -319,10 +322,7 @@ class TestGenerateQueryNode:
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 queries = ["测试步骤"]
                 description = "Error when generate search query, use step title as query"
-                mock_llm.return_value = SearchQueryList(
-                    queries=queries,
-                    missing_evidence=[],
-                )
+                mock_llm.return_value = SearchQueryList(queries=queries, missing_evidence=[])
 
                 await generate_query_node.invoke(inputs, mock_session, mock_context)
 
@@ -391,6 +391,9 @@ class TestSupervisorNode:
                 "known_facts": ["已有事实"],
                 "missing_evidence": ["旧缺口"],
                 "attempted_queries": ["已查 query"],
+            },
+            "collector_context.research_intent": {
+                "temporal_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
             },
         }
         return state_map.get(key)
@@ -590,6 +593,26 @@ class TestSupervisorNode:
                 })
         finally:
             llm_context.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_supervisor_llm_failure_stops_follow_up_retrieval(
+        self, supervisor_node
+    ):
+        """Supervisor 全部重试失败后必须直接停止后续检索。"""
+        with patch(
+            f"{module_prefix}.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("provider unavailable"),
+        ):
+            result = await supervisor_node._invoke_llm_with_retry(
+                formatted_prompt=[],
+                section_idx=1,
+                step_title="step",
+                max_search_query_count=5,
+            )
+
+        assert result.should_continue is False
+        assert result.next_queries == []
 
     @pytest.mark.asyncio
     async def test_supervisor_node_uses_missing_evidence_when_next_queries_empty(

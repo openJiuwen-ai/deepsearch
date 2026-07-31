@@ -4,10 +4,12 @@
 import json
 import logging
 import re
+from datetime import date
 from html import unescape
 from typing import Any
 
 from openjiuwen_deepsearch.common.common_constants import MAX_URL_LENGTH, MAX_SEARCH_CONTENT_LENGTH
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, is_url_blocked, \
     normalize_domains
@@ -345,8 +347,34 @@ def _first_non_empty(item: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
-def _normalize_web_search_item(item: Any) -> dict | None:
-    """Normalize common web search result field aliases."""
+def _parse_absolute_date(value: Any) -> date | None:
+    """仅解析 Tavily 已归一化的 ISO 日期。
+
+    Args:
+        value: Tavily 结果中的统一发表日期。
+
+    Returns:
+        可确认的日期；非 ISO 日期返回 None。
+    """
+    text = str(value or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -> dict | None:
+    """归一化 web 结果，并按需附加 Tavily 的发表日期。
+
+    Args:
+        item: 搜索引擎返回的单条结果。
+        include_date_metadata: 是否读取 Tavily 已归一化的发表日期。
+
+    Returns:
+        归一化文档；缺少 URL 或输入非法时返回 None。
+    """
     if not isinstance(item, dict):
         return None
 
@@ -359,30 +387,132 @@ def _normalize_web_search_item(item: Any) -> dict | None:
         item,
         ("content", "raw_content", "snippet", "summary", "answer"),
     )
-    return {
+    normalized = {
         "type": "page",
         "title": title[:MAX_SEARCH_CONTENT_LENGTH],
         "url": url[:MAX_URL_LENGTH],
         "content": content[:MAX_SEARCH_CONTENT_LENGTH],
     }
+    if include_date_metadata:
+        raw_date = item.get("source_date")
+        source_date_type = str(item.get("source_date_type") or "").strip()
+        if raw_date is not None and str(raw_date).strip() and source_date_type == "published":
+            parsed_date = _parse_absolute_date(raw_date)
+            normalized["date_metadata"] = {
+                "field": "source_date",
+                "type": "published",
+                "value": str(raw_date)[:MAX_SEARCH_CONTENT_LENGTH],
+                "parsed_date": parsed_date.isoformat() if parsed_date else "",
+            }
+    return normalized
+
+
+def filter_web_records_by_temporal_scope(
+        records: list[dict],
+        temporal_scope: TemporalScope | dict | None,
+) -> list[dict]:
+    """按来源发表时间过滤归一化 web 文档，日期未知时保留召回。
+
+    Args:
+        records: 已归一化的 web 文档列表。
+        temporal_scope: 结构化时间范围。
+
+    Returns:
+        保留的文档列表。
+    """
+    scope = None
+    if temporal_scope is not None:
+        try:
+            scope = temporal_scope if isinstance(temporal_scope, TemporalScope) else TemporalScope.model_validate(
+                temporal_scope
+            )
+        except (TypeError, ValueError):
+            scope = None
+
+    if scope is None or scope.constraint_type != "source_date":
+        return records
+
+    kept = []
+    date_unknown = 0
+    filtered_out = 0
+    for record in records:
+        metadata = record.get("date_metadata") or {}
+        parsed_text = metadata.get("parsed_date") or ""
+        parsed_date = _parse_absolute_date(parsed_text)
+        if parsed_date is None:
+            date_unknown += 1
+            kept.append(record)
+            continue
+
+        reason = ""
+        if scope.start_date and parsed_date < scope.start_date:
+            reason = "before_start_date"
+        elif scope.end_date and parsed_date > scope.end_date:
+            reason = "after_end_date"
+        if not reason:
+            kept.append(record)
+            continue
+
+        filtered_out += 1
+
+    logger.info(
+        "[COLLECTOR FUNCTION] source_date filter applied. raw=%s kept=%s filtered_out=%s date_unknown=%s",
+        len(records),
+        len(kept),
+        filtered_out,
+        date_unknown,
+    )
+    return kept
+
+
+def _apply_temporal_filter(agent_input: dict, records: list[dict]) -> list[dict]:
+    """按当前研究意图过滤单批 web 记录。
+
+    Args:
+        agent_input: 当前 query 的 collector 内部状态。
+        records: 已归一化的 web 记录。
+
+    Returns:
+        通过时间过滤的正式 web 记录。
+    """
+    research_intent = agent_input.get("research_intent") or {}
+    temporal_scope = (
+        research_intent.get("temporal_scope")
+        if isinstance(research_intent, dict)
+        else getattr(research_intent, "temporal_scope", None)
+    )
+    return filter_web_records_by_temporal_scope(
+        records,
+        temporal_scope,
+    )
 
 
 def process_tavily_search_result(agent_input: dict, tool_content: Any) -> (list, dict):
-    """Tavily搜索工具结果处理方法"""
+    """归一化、过滤并保存 Tavily 搜索结果。
+
+    Args:
+        agent_input: 当前 query 的 collector 内部状态。
+        tool_content: Tavily 搜索结果列表。
+
+    Returns:
+        时间过滤后的紧凑工具视图和更新后的 collector 内部状态。
+    """
     original_records = agent_input.get("web_page_search_record", [])
     if not isinstance(original_records, list):
         original_records = []
     tool_result = []
     try:
-        tool_result = tool_content if isinstance(tool_content, list) else []
-        tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
-        tool_result = filter_search_results_by_exclude_urls(
-            tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
+        raw_results = tool_content if isinstance(tool_content, list) else []
+        raw_results = filter_search_results_by_exclude_domains(raw_results, _get_exclude_domains(agent_input))
+        raw_results = filter_search_results_by_exclude_urls(
+            raw_results, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
         added_records = []
-        for item in tool_result:
-            new_item = _normalize_web_search_item(item)
+        for item in raw_results:
+            new_item = _normalize_web_search_item(item, include_date_metadata=True)
             if new_item is not None:
                 added_records.append(new_item)
+        added_records = _apply_temporal_filter(agent_input, added_records)
+        tool_result = added_records
         combined_records = original_records + added_records
         agent_input["web_page_search_record"] = remove_duplicate_items(combined_records)
     except Exception as e:

@@ -32,7 +32,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_l
     ensure_ledger,
     merge_ledger_update,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    RetrievalQuery,
+    build_temporal_scope_prompt_context,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
@@ -277,13 +280,15 @@ class GenerateQueryNode(BaseNode):
         max_search_query_count = session.get_global_state("collector_context.max_search_query_count")
         language = session.get_global_state("collector_context.language")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
+        research_intent = session.get_global_state("collector_context.research_intent") or {}
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
         return dict(section_idx=section_idx, plan_title=plan_title, plan_thought=plan_thought, step_title=step_title,
                     step_description=step_description,
                     max_search_query_count=max_search_query_count,
-                    language=language, evidence_ledger=evidence_ledger)
+                    language=language, evidence_ledger=evidence_ledger,
+                    research_intent=research_intent)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """根据研究记录生成当前采集轮次的检索 query。
@@ -318,6 +323,7 @@ class GenerateQueryNode(BaseNode):
             "language": language,
             "report_type": report_type,
         }
+        agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
         formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
 
         result: SearchQueryList = await self._invoke_llm_with_retry(
@@ -402,6 +408,7 @@ class SupervisorNode(BaseNode):
         language = session.get_global_state("collector_context.language")
         new_doc_infos_current_loop = session.get_global_state("collector_context.new_doc_infos_current_loop")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
+        research_intent = session.get_global_state("collector_context.research_intent") or {}
         research_loop_count = session.get_global_state("collector_context.research_loop_count")
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
@@ -412,6 +419,7 @@ class SupervisorNode(BaseNode):
                     max_search_query_count=max_search_query_count, language=language,
                     new_doc_infos_current_loop=new_doc_infos_current_loop,
                     evidence_ledger=evidence_ledger,
+                    research_intent=research_intent,
                     research_loop_count=research_loop_count)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -482,6 +490,7 @@ class SupervisorNode(BaseNode):
             "language": state.get("language", "zh-CN"),
             "report_type": report_type,
         }
+        agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
         formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
 
         result: Reflection = await self._invoke_llm_with_retry(
