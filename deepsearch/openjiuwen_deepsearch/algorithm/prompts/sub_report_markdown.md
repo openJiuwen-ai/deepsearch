@@ -154,6 +154,9 @@ format_requirements: {{ current_section_format_requirements }}
     - **Specifics**: When mentioning data, cite the source authority (e.g., "According to data from China Education Online...").
     - Every number, date, amount, percentage, ranking, company name, policy name, and table cell must be traceable to the provided Collected Information.
     - Do not calculate derived metrics, comparisons, trends, or rankings unless the required source values are present and cited.
+- **Visualization Boundary**:
+    - Do NOT output Mermaid code fences, chart code, or hand-written chart blocks in this chapter body.
+    - If the user asks for charts, diagrams, or Mermaid content, satisfy the request with source-backed prose/tables only here; any controlled chart rendering or insertion is handled by the report visualization/chart pipeline after this draft.
 - **Language**: The output language must be **{{language}}**.
 
 # Writing Strategy

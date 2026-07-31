@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import html
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from copy import deepcopy
 import json
 import logging
@@ -117,6 +118,7 @@ INTERNAL_CALLBACK_LABEL_PATTERN = re.compile(
     r"\]\s*",
     re.IGNORECASE,
 )
+
 
 
 @dataclass
@@ -293,6 +295,44 @@ class Reporter:
                 str(e),
             )
         return True
+
+    @staticmethod
+    def _infer_desired_chart_type(*texts: str, explicit_only: bool = False) -> str:
+        """
+        Extract a lightweight chart-type hint from explicit or structural cues.
+
+        The baseline visualization prompt remains responsible for selecting the
+        best chart type from traceable source records. This helper deliberately
+        avoids domain-specific keyword lists because
+        report topics are open-ended. It only preserves explicit chart requests
+        and obvious year-sequence structure as lightweight input for the
+        extraction prompt, without becoming a topic classifier.
+        """
+        context = " ".join(str(text or "") for text in texts).lower()
+        if not context:
+            return ""
+
+        explicit_patterns = (
+            ("line", (r"折线图", r"折线", r"走势图", r"line\s+chart", r"line\s+graph")),
+            ("bar", (r"柱状图", r"柱形图", r"条形图", r"柱状", r"bar\s+chart")),
+            ("pie", (r"饼图", r"环形图", r"pie\s+chart")),
+            ("timeline", (r"时间线", r"timeline")),
+        )
+        for chart_type, patterns in explicit_patterns:
+            if any(re.search(pattern, context) for pattern in patterns):
+                return chart_type
+
+        if explicit_only:
+            return ""
+
+        year_mentions = set(re.findall(r"(?:19|20)\d{2}", context))
+        has_year_range = (
+            re.search(r"(?:19|20)\d{2}\s*(?:至|到|[-—–~～])\s*(?:19|20)\d{2}", context)
+            or re.search(r"(?:19|20)\d{2}\s*[,，、/]\s*(?:19|20)\d{2}", context)
+        )
+        if len(year_mentions) >= 3 or has_year_range:
+            return "line"
+        return ""
 
     @staticmethod
     def _generate_mermaid_code(visualization_content: dict, section_idx: int) -> dict:
@@ -520,6 +560,166 @@ class Reporter:
             return False, "duplicate subsection headings detected in generated report"
 
         return True, ""
+
+    @staticmethod
+    def _build_sub_report_retry_feedback(
+        error_code: str,
+        location: str,
+        fields: dict | None = None,
+    ) -> str:
+        """Build controlled retry feedback without echoing model/provider text."""
+        allowed_codes = {
+            "HEADING_COUNT_MISMATCH",
+            "HEADING_LEVEL_MISMATCH",
+            "HEADING_TITLE_MISMATCH",
+            "HEADING_MISSING",
+            "OUTLINE_HEADING_MISSING",
+            "DUPLICATE_SUBSECTION_HEADINGS",
+            "SUB_REPORT_CONTENT_EMPTY",
+            "MISSING_SECTION_CONTEXT",
+            "SUB_REPORT_GENERATION_EXCEPTION",
+            "SUB_REPORT_RETRY_REQUIRED",
+        }
+        error_code = error_code if error_code in allowed_codes else "SUB_REPORT_RETRY_REQUIRED"
+        lines = [f"error_code: {error_code}", f"location: {location}"]
+        for key in (
+            "position",
+            "expected_heading_count",
+            "actual_heading_count",
+            "expected_heading_level",
+            "actual_heading_level",
+        ):
+            value = (fields or {}).get(key)
+            if value is None:
+                continue
+            match = re.match(r"^H?(\d+)$", str(value).strip(), flags=re.IGNORECASE)
+            if not match:
+                continue
+            safe_value = (
+                f"H{int(match.group(1))}"
+                if key.endswith("_level")
+                else str(int(match.group(1)))
+            )
+            lines.append(f"{key}: {safe_value}")
+        if error_code.startswith("HEADING") or error_code in {
+            "OUTLINE_HEADING_MISSING",
+            "DUPLICATE_SUBSECTION_HEADINGS",
+        }:
+            action = (
+                "Regenerate markdown headings from Current Chapter Outline; "
+                "keep H1/H2 count, level, order, and title text exact."
+            )
+        elif error_code == "MISSING_SECTION_CONTEXT":
+            action = "Retry only after required section title, outline, and evidence context are available."
+        elif error_code == "SUB_REPORT_GENERATION_EXCEPTION":
+            action = (
+                "Regenerate from the provided evidence and constraints; "
+                "do not mention prior system or provider errors."
+            )
+        else:
+            action = "Regenerate non-empty chapter content from the provided evidence and constraints."
+        lines.append(f"action: {action}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _sub_report_retry_feedback_from_failure(cls, failure_reason: str) -> str:
+        """Convert raw failure text into a prompt-safe retry hint."""
+        reason = str(failure_reason or "").strip()
+        if not reason:
+            return ""
+
+        code_match = re.search(r"(?m)^\s*error_code:\s*([A-Z0-9_]+)\s*$", reason)
+        if code_match:
+            fields = {}
+            for key in (
+                "position",
+                "expected_heading_count",
+                "actual_heading_count",
+                "expected_heading_level",
+                "actual_heading_level",
+            ):
+                field_match = re.search(rf"(?m)^\s*{key}:\s*(H?\d+)\s*$", reason)
+                if field_match:
+                    fields[key] = field_match.group(1)
+            error_code = code_match.group(1)
+            location = (
+                "markdown_headings"
+                if (
+                    error_code.startswith("HEADING")
+                    or error_code == "DUPLICATE_SUBSECTION_HEADINGS"
+                )
+                else "chapter"
+            )
+            return cls._build_sub_report_retry_feedback(error_code, location, fields)
+
+        heading_patterns = [
+            (
+                r"heading count mismatch:\s*expected\s*(\d+),\s*got\s*(\d+)",
+                "HEADING_COUNT_MISMATCH",
+                ("expected_heading_count", "actual_heading_count"),
+            ),
+            (
+                r"heading level mismatch at position\s*(\d+):\s*expected\s*H?(\d+),\s*got\s*H?(\d+)",
+                "HEADING_LEVEL_MISMATCH",
+                ("position", "expected_heading_level", "actual_heading_level"),
+            ),
+            (
+                r"heading title mismatch at position\s*(\d+)",
+                "HEADING_TITLE_MISMATCH",
+                ("position",),
+            ),
+        ]
+        for pattern, error_code, field_names in heading_patterns:
+            match = re.search(pattern, reason, flags=re.IGNORECASE)
+            if match:
+                return cls._build_sub_report_retry_feedback(
+                    error_code,
+                    "markdown_headings",
+                    dict(zip(field_names, match.groups())),
+                )
+
+        reason_lower = reason.lower()
+        if "generated report headings are empty" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "HEADING_MISSING",
+                "markdown_headings",
+            )
+        if "expected subsection outline headings are empty" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "OUTLINE_HEADING_MISSING",
+                "markdown_headings",
+            )
+        if "duplicate subsection headings" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "DUPLICATE_SUBSECTION_HEADINGS",
+                "markdown_headings",
+            )
+        if (
+            "no sub report content found" in reason_lower
+            or "sub report content is blank" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "SUB_REPORT_CONTENT_EMPTY",
+                "chapter",
+            )
+        if (
+            "missing 'section_task'" in reason_lower
+            or "missing 'section_task' or sub section outline" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "MISSING_SECTION_CONTEXT",
+                "chapter_context",
+            )
+        if (
+            "error generating section" in reason_lower
+            or "llm returned empty content" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "SUB_REPORT_GENERATION_EXCEPTION",
+                "chapter_generation",
+            )
+
+        return cls._build_sub_report_retry_feedback("SUB_REPORT_RETRY_REQUIRED", "chapter")
 
     @staticmethod
     def is_valid_chapter_format(text, section_idx) -> bool:
@@ -1129,7 +1329,7 @@ class Reporter:
         stream_id = str(uuid.uuid4())
         write_retry_feedback = ""
         for attempt_num in range(max_attempt_num):
-            write_res = await self._write_subsection_reports(current_inputs, write_retry_feedback)
+            write_res = await self._write_subsection_reports(current_inputs)
             if write_res["success"]:
                 if LogManager.is_sensitive():
                     logger.info(
@@ -1155,6 +1355,9 @@ class Reporter:
                 f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                 f"Warning: Generate section report failed on attempt {attempt_num + 1}/{max_attempt_num}"
                 f"{detail}. retry ..."
+            )
+            current_inputs["sub_report_retry_feedback"] = (
+                self._sub_report_retry_feedback_from_failure(write_retry_feedback)
             )
             await session.write_custom_stream(
                 self._make_payload(
@@ -2620,6 +2823,7 @@ class Reporter:
         tmp_context = {
             "language": visualization_dict.get("language", "zh-CN"),
             "section_outline": visualization_dict.get("section_outline", ""),
+            "desired_chart_type": visualization_dict.get("desired_chart_type", ""),
             "origin_content": visualization_dict.get("origin_content", ""),
         }
         validation_error = (validation_error or "").strip()
@@ -2719,7 +2923,7 @@ class Reporter:
                     )
                     continue
                 raw = (llm_output.get("content") or "").strip()
-                result = json.loads(raw)
+                result = json.loads(normalize_json_output(raw))
                 if not isinstance(result, dict):
                     logger.warning(
                         "%s [validate_chart_compliance] section_idx: [%s] "
@@ -2794,7 +2998,7 @@ class Reporter:
                     )
                     continue
                 raw = (llm_output.get("content") or "").strip()
-                result = json.loads(raw)
+                result = json.loads(normalize_json_output(raw))
                 if not isinstance(result, dict):
                     logger.warning(
                         "%s [validate_chart_traceability] section_idx: [%s] "
@@ -2854,7 +3058,29 @@ class Reporter:
             raw_payload = (
                 visualization_content.get("sub_section_visualization_content") or ""
             ).strip()
+            if raw_payload:
+                raw_payload = normalize_json_output(raw_payload).strip()
+                visualization_content[
+                    "sub_section_visualization_content"
+                ] = raw_payload
             if raw_payload == "{}":
+                validation_error = (
+                    "Previous output was empty JSON. If origin_content contains at "
+                    "least three traceable records for one metric, extract the best "
+                    "valid chart JSON instead of returning {}. Return {} only when "
+                    "no valid chartable dataset exists."
+                )
+                previous_records = raw_payload
+                if i < max_attempt_num - 1:
+                    logger.warning(
+                        "%s [process_visualization_task] section_idx: [%s], "
+                        "empty visualization JSON on attempt %s/%s, retry ...",
+                        EFFECT_SUB_REPORT_TAG,
+                        section_idx,
+                        i + 1,
+                        max_attempt_num,
+                    )
+                    continue
                 visualization_content["rs_success"] = False
                 visualization_content["error_msg"] = "no_chart_data"
                 return False, visualization_content, None
@@ -2862,10 +3088,19 @@ class Reporter:
                 extracted_obj = json.loads(raw_payload)
             except Exception:
                 extracted_obj = None
+                validation_error = (
+                    "Previous output was not valid JSON. Output only one JSON object "
+                    "matching the required visualization schema, with no markdown or "
+                    "extra text."
+                )
             extract_ok = isinstance(
                 extracted_obj, dict
             ) and validate_visualization_extraction_schema(extracted_obj)
             if extract_ok:
+                raw_payload = json.dumps(extracted_obj, ensure_ascii=False)
+                visualization_content[
+                    "sub_section_visualization_content"
+                ] = raw_payload
                 traceability = await self._validate_chart_traceability(
                     raw_payload,
                     visualization_dict.get("origin_content", ""),
@@ -2913,6 +3148,11 @@ class Reporter:
                     if compliance_error
                     else ""
                 )
+                validation_error += (
+                    "\nIf the issue is chart type mismatch, reselect image_type "
+                    "from the chart type rules based on the extracted records; "
+                    "do not rely on downstream code to rewrite image_type."
+                )
                 # Provide previous extracted JSON to help the next extraction fix issues,
                 # but explicitly forbid reuse/copying in the prompt message.
                 previous_records = raw_payload or None
@@ -2925,6 +3165,12 @@ class Reporter:
                 )
                 extract_ok = False
                 continue
+            if not extract_ok and not validation_error:
+                validation_error = (
+                    "Previous output did not match the required visualization schema. "
+                    "Keep only traceable records from origin_content and output a "
+                    "single valid chart JSON, or {} if no valid chartable dataset exists."
+                )
             logger.warning(
                 f"{EFFECT_SUB_REPORT_TAG} [process_visualization_task] section_idx: [{section_idx}], "
                 f"Warning: Extract data from text on attempt {i + 1}/{max_attempt_num}. retry ..."
@@ -2961,6 +3207,75 @@ class Reporter:
         if not self._precheck_value_variation(visualization_content, section_idx):
             return visualization_content
         return self._generate_mermaid_code(visualization_content, section_idx)
+
+    @staticmethod
+    def _parse_visualization_number(value: str) -> int | float | None:
+        normalized_value = value.strip().replace(",", "").replace("，", "")
+        try:
+            numeric_value = Decimal(normalized_value)
+        except (InvalidOperation, ValueError):
+            return None
+        if not numeric_value.is_finite():
+            return None
+        if numeric_value == numeric_value.to_integral_value():
+            return int(numeric_value)
+        return float(numeric_value)
+
+    @staticmethod
+    def _scale_visualization_value(value: int | float, divisor: int) -> int | float:
+        scaled = Decimal(str(value)) / Decimal(divisor)
+        if scaled == scaled.to_integral_value():
+            return int(scaled)
+        return float(scaled)
+
+    @classmethod
+    def _normalize_same_unit_records_locally(
+        cls,
+        records: list,
+        image_type: str,
+    ) -> dict | None:
+        if image_type not in ("bar", "line", "pie"):
+            return None
+
+        normalized_records = []
+        normalized_unit = None
+        for row in records:
+            if not isinstance(row, list) or len(row) != 3:
+                return None
+            x_value, numeric_text, unit_text = row
+            if not (
+                isinstance(x_value, str)
+                and isinstance(numeric_text, str)
+                and isinstance(unit_text, str)
+            ):
+                return None
+            x_value = x_value.strip()
+            unit_text = unit_text.strip()
+            if not x_value or not unit_text:
+                return None
+            if normalized_unit is None:
+                normalized_unit = unit_text
+            if unit_text != normalized_unit:
+                return None
+
+            parsed_value = cls._parse_visualization_number(numeric_text)
+            if parsed_value is None:
+                return None
+            normalized_records.append([x_value, parsed_value])
+
+        if normalized_unit is None:
+            return None
+
+        if normalized_unit.startswith("万"):
+            max_abs_value = max(abs(float(row[1])) for row in normalized_records)
+            if max_abs_value >= 10000:
+                normalized_unit = "亿" + normalized_unit[1:]
+                normalized_records = [
+                    [row[0], cls._scale_visualization_value(row[1], 10000)]
+                    for row in normalized_records
+                ]
+
+        return {"unit": normalized_unit, "records": normalized_records}
 
     async def _normalize_visualization_content(
         self,
@@ -3000,6 +3315,26 @@ class Reporter:
             return True
 
         final_obj = None
+        locally_normalized = self._normalize_same_unit_records_locally(
+            extracted_records,
+            image_type,
+        )
+        if locally_normalized and validate_visualization_normalization_schema(
+            locally_normalized, image_type
+        ):
+            final_obj = {
+                "image_title": image_title,
+                "image_type": image_type,
+                "unit": locally_normalized.get("unit", ""),
+                "records": locally_normalized.get("records", []),
+            }
+
+        if final_obj:
+            visualization_content["sub_section_visualization_content"] = json.dumps(
+                final_obj, ensure_ascii=False
+            )
+            return True
+
         records_json = json.dumps({"records": extracted_records}, ensure_ascii=False)
         normalize_context = {
             "language": visualization_dict.get("language", "zh-CN"),
@@ -3016,7 +3351,9 @@ class Reporter:
             )
             if not normalize_output or not normalize_output.get("content"):
                 continue
-            normalized_payload = (normalize_output.get("content") or "").strip()
+            normalized_payload = normalize_json_output(
+                (normalize_output.get("content") or "").strip()
+            ).strip()
             if normalized_payload == "{}":
                 continue
             try:
@@ -3109,6 +3446,7 @@ class Reporter:
             EFFECT_SUB_REPORT_TAG,
             section_idx,
         )
+        desired_chart_type = self._infer_desired_chart_type(section_task, section_outline)
 
         classified_content_for_visualization = deepcopy(
             current_inputs.get("classified_content", [])
@@ -3140,6 +3478,7 @@ class Reporter:
                 "language": current_inputs.get("language", "zh-CN"),
                 "section_title": section_task,
                 "section_outline": section_outline,
+                "desired_chart_type": desired_chart_type,
                 "max_attempt_num": current_inputs.get("max_generate_retry_num", 3),
             }
             task = self._process_visualization_task(visualization_dict)
@@ -3177,6 +3516,20 @@ class Reporter:
                         res.get("error_msg", "Unknown"),
                     )
         return dict(rs_success=True, visualization_content=visualization_content)
+
+    @staticmethod
+    def _normalize_citation_indices(citations) -> list[int]:
+        indices = []
+        seen = set()
+        for citation in citations or []:
+            try:
+                index = int(citation)
+            except (TypeError, ValueError):
+                continue
+            if index > 0 and index not in seen:
+                seen.add(index)
+                indices.append(index)
+        return indices
 
     async def _generate_sub_report_summary(self, current_inputs: dict):
         """generate sub report summary"""
@@ -3379,7 +3732,7 @@ class Reporter:
         logger.warning("%s [_generate_sub_report_sidecar] %s", EFFECT_SUB_REPORT_TAG, warning)
         return dict(sidecar=None, summary=sub_report_content, warning=warning)
 
-    async def _write_subsection_reports(self, current_inputs: dict, failure_feedback: str = "") -> dict:
+    async def _write_subsection_reports(self, current_inputs: dict) -> dict:
         """Write subsection report to disk"""
         if LogManager.is_sensitive():
             logger.info(
@@ -3491,6 +3844,18 @@ class Reporter:
             if structured_evidence_guide
             else ""
         )
+        retry_feedback = self._sub_report_retry_feedback_from_failure(
+            str(current_inputs.get("sub_report_retry_feedback", "") or "")
+        )
+        retry_feedback_prompt = ""
+        if retry_feedback:
+            retry_feedback_prompt = (
+                "\n\n# Previous Attempt Feedback\n"
+                "The previous chapter attempt failed validation. "
+                "Use only the controlled fields below to correct the next draft; "
+                "do not copy these fields into the report body.\n"
+                f"{retry_feedback}\n\n"
+            )
         sub_content_message = (
             "# Current Top-Level Section\n"
             f"section_id: {current_inputs.get('section_idx', 1)}\n"
@@ -3509,6 +3874,7 @@ class Reporter:
             "# References\n"
             f"{current_inputs.get('sub_section_references', '')}\n\n"
             f"{background_knowledge_prompt}"
+            f"{retry_feedback_prompt}"
         )
         try:
             report_type = current_inputs.get("report_type", "professional")
@@ -3522,6 +3888,9 @@ class Reporter:
                 dict(
                     messages=[dict(role="user", content=sub_content_message)],
                     language=current_inputs.get("language"),
+                    visualization_enable=current_inputs.get(
+                        "visualization_enable", True
+                    ),
                     section_iscore=current_inputs.get("section_iscore", False),
                     report_type=report_type,
                     paragraph_style=current_inputs.get("paragraph_style", "detailed"),
@@ -3543,7 +3912,6 @@ class Reporter:
                     ),
                 ),
             )
-            _append_retry_feedback_message(llm_input, failure_feedback)
             self._log_structured_evidence_target(
                 current_inputs.get("section_idx", 1),
                 "sub_report",
@@ -3705,13 +4073,18 @@ class Reporter:
         classified_content_for_visualization,
     ):
         selected_visualizations = []
+        fallback_visualizations = []
         for item in classified_content_for_visualization:
             if not isinstance(item, dict):
                 continue
             point = get_numeric_score(item, "data_density")
-            if point is not None and point >= 9.0:
+            if point is None:
+                continue
+            if point >= 9.0:
                 selected_visualizations.append(item)
-        return selected_visualizations
+            elif point >= 8.0:
+                fallback_visualizations.append(item)
+        return selected_visualizations or fallback_visualizations
 
     async def _request_visualization_insert_plan(
         self, context: VisualizationInsertPlanContext
@@ -3752,7 +4125,7 @@ class Reporter:
                     attempt + 1,
                     max_attempt_num,
                 )
-                active_messages = base_messages[:1] + [
+                active_messages = base_messages + [
                     dict(
                         role="user",
                         content=(
@@ -3765,7 +4138,7 @@ class Reporter:
 
             raw = (llm_output.get("content") or "").strip()
             try:
-                plan = json.loads(raw)
+                plan = json.loads(normalize_json_output(raw))
             except Exception:
                 plan = None
 
@@ -3781,7 +4154,7 @@ class Reporter:
                     attempt + 1,
                     max_attempt_num,
                 )
-                active_messages = base_messages[:1] + [
+                active_messages = base_messages + [
                     dict(
                         role="user",
                         content=(
@@ -3819,12 +4192,23 @@ class Reporter:
             ]
             title_meta = context.title_meta_map.get(index, {})
             image_title = (title_meta.get("image_title") or "").strip()
-            citation_index = int(title_meta.get("citation_index", 0) or 0)
+            citation_indices = Reporter._normalize_citation_indices(
+                title_meta.get("citation_indices")
+            )
+
+            if not citation_indices:
+                citation_indices = Reporter._normalize_citation_indices(
+                    [title_meta.get("citation_index")]
+                )
+
             if not image_title:
                 image_title = (
                     "图表标题" if context.language == CHINESE else "Image Title"
                 )
-            citation_text = f"[citation:{citation_index}]" if citation_index > 0 else ""
+
+            citation_text = "".join(
+                f"[citation:{citation_index}]" for citation_index in citation_indices
+            )
             safe_image_title = html.escape(image_title, quote=True)
             title_with_citation = f"{safe_image_title}{citation_text}".strip()
             if title_with_citation:
@@ -3842,6 +4226,66 @@ class Reporter:
             offset += len(block)
 
         return "".join(out_lines)
+
+    @staticmethod
+    def _complete_visualization_insertions(
+        insertions: list[dict],
+        mermaid_map: dict[int, str],
+        report_lines: list[str],
+        invalid_rows: set[int],
+    ) -> list[dict]:
+        """Ensure every generated visualization has an insertion anchor."""
+        if not mermaid_map:
+            return insertions
+
+        valid_insertions = []
+        for item in insertions:
+            if not isinstance(item, dict):
+                continue
+            if not isinstance(item.get("after_row"), int):
+                continue
+            if not isinstance(item.get("index"), int):
+                continue
+            if item.get("index") not in mermaid_map:
+                continue
+            valid_insertions.append(item)
+        used_indices = {item["index"] for item in valid_insertions}
+        missing_indices = [
+            index for index in sorted(mermaid_map) if index not in used_indices
+        ]
+        if not missing_indices:
+            return valid_insertions
+
+        if valid_insertions:
+            fallback_row = valid_insertions[-1]["after_row"]
+        else:
+            fallback_row = next(
+                (
+                    row_idx
+                    for row_idx in range(len(report_lines), 0, -1)
+                    if row_idx not in invalid_rows and report_lines[row_idx - 1].strip()
+                ),
+                None,
+            )
+            if fallback_row is None:
+                fallback_row = next(
+                    (
+                        row_idx
+                        for row_idx in range(len(report_lines), 0, -1)
+                        if row_idx not in invalid_rows
+                    ),
+                    None,
+                )
+
+        if fallback_row is None:
+            return valid_insertions
+
+        completed = list(valid_insertions)
+        completed.extend(
+            {"after_row": fallback_row, "index": index}
+            for index in missing_indices
+        )
+        return completed
 
     async def _insert_visualization(self, current_inputs: Dict) -> dict:
         """
@@ -3866,7 +4310,7 @@ class Reporter:
                 numbered_lines.append(f"[ROW:{i}] {line_clean}{newline}")
             numbered_report = "".join(numbered_lines)
 
-            visualization_dict = {}
+            visualization_items = []
             mermaid_map: dict[int, str] = {}
             title_meta_map: dict[int, dict] = {}
             url_to_citation_index = {}
@@ -3893,12 +4337,22 @@ class Reporter:
                     if not isinstance(viz_obj, dict):
                         continue
 
+                    citation_indices = self._normalize_citation_indices(
+                        item.get("citation_indices")
+                    )
+                    if not citation_indices:
+                        citation_index = url_to_citation_index.get(
+                            item.get("url", ""),
+                            item.get("index", 0),
+                        )
+                        citation_indices = self._normalize_citation_indices(
+                            [citation_index]
+                        )
                     mermaid_map[placeholder_index] = item.get("mermaid_content", "")
                     title_meta_map[placeholder_index] = {
                         "image_title": viz_obj.get("image_title", ""),
-                        "citation_index": url_to_citation_index.get(
-                            item.get("url", ""), 0
-                        ),
+                        "citation_index": citation_indices[0] if citation_indices else 0,
+                        "citation_indices": citation_indices,
                     }
                     placement_item = {
                         "index": placeholder_index,
@@ -3907,7 +4361,7 @@ class Reporter:
                         "unit": viz_obj.get("unit", ""),
                         "records": viz_obj.get("records", []),
                     }
-                    visualization_dict[item["url"]] = placement_item
+                    visualization_items.append(placement_item)
                     placeholder_index += 1
 
             if not mermaid_map:
@@ -3916,16 +4370,11 @@ class Reporter:
 
             llm_input_message = numbered_report.rstrip("\r\n") + "\n\n"
             llm_input_message += "=== VISUALIZATION DATA ===\n"
-            for item in current_inputs.get("classified_content", []):
-                if (
-                    isinstance(item, dict)
-                    and "url" in item
-                    and item["url"] in visualization_dict
-                ):
-                    llm_input_message += (
-                        json.dumps(visualization_dict[item["url"]], ensure_ascii=False)
-                        + "\n"
-                    )
+            for visualization_item in visualization_items:
+                llm_input_message += (
+                    json.dumps(visualization_item, ensure_ascii=False)
+                    + "\n"
+                )
             llm_input_message += "=== END VISUALIZATION DATA ===\n"
             messages = [dict(role="user", content=llm_input_message)]
             plan_result = await self._request_visualization_insert_plan(
@@ -3944,6 +4393,12 @@ class Reporter:
 
             insertions = sorted(
                 plan.get("insertions", []), key=lambda x: x["after_row"]
+            )
+            insertions = self._complete_visualization_insertions(
+                insertions,
+                mermaid_map,
+                report_lines,
+                invalid_rows,
             )
             rendered = self._apply_visualization_insertions(
                 VisualizationInsertRenderContext(
