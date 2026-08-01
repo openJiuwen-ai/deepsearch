@@ -1,8 +1,8 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """预测文件生成与官方评测调用。
 
-修复旧实现 bug（notes #14）：时间戳与输出文件在**全部实例完成后**生成一次，
-不再每实例写一个累积文件。
+时间戳与输出文件在**全部实例完成后**生成一次，不再每实例写一个累积文件。
 """
 
 import json

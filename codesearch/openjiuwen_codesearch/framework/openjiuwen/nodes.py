@@ -1,5 +1,6 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""workflow 图节点：CodeSearchAgent 阶段方法的薄包装（"机械包装"，plan §4.4）。
+"""workflow 图节点：CodeSearchAgent 阶段方法的薄包装。
 
 会话纪律：workflow session 只携带 `run_id`（可序列化字符串）；
 记忆/检索器/LLM 等活对象全部经 runtime_context 的运行注册表取回，

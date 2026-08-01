@@ -20,9 +20,17 @@ codesearch/
 │   ├── retropus/                    # 厂商化 KG / BM25（engine=retropus；需 [retropus] extra）
 │   ├── indexing/                    # 切块器（ast）/ 嵌入（SQLite 缓存）/ 增量索引编排
 │   ├── retrieval/                   # CodeRetriever 协议 + InMemory fake + milvus/ 实现
-│   └── framework/openjiuwen/        # steps / BaseNode / nodes / workflow /
-│                                    #   CodeSearchRunContext / RetropusRunContext /
-│                                    #   CodeSearchAgent + RetropusCodeSearchAgent
+│   ├── framework/openjiuwen/        # get_registry / BaseNode / nodes / workflow /
+│   │                                #   CodeSearchRunContext / RetropusRunContext /
+│   │                                #   CodeSearchAgent + RetropusCodeSearchAgent
+│   └── server/                      # HTTP 服务层（随包分发，whl 装完即可起服务）
+│       ├── main.py                  # FastAPI 应用与启动（codesearch-server 入口）
+│       ├── core/config.py           # 服务配置（pydantic-settings，CODESEARCH_ 前缀）
+│       ├── routers/api.py           # health / search / index 作业 / job 状态
+│       └── schemas.py               # 请求与响应模型
+├── start_backend.py                 # 源码部署的薄入口（等价于 codesearch-server 命令）
+├── docker/Dockerfile                # 容器镜像（默认服务形态，含 HEALTHCHECK）
+├── scripts/release_check.py         # 发布前校验（版本一致 / 依赖形态 / base pin）
 ├── benchmarks/contextbench/         # 数据集加载 / runner / 预测导出与官方评分
 ├── tests/
 │   ├── unit/                        # 零外部依赖（fixture 回放）

@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """工具注册表：name → (schema, executor)。替代旧实现的 if/elif 大分发。
 
@@ -41,12 +42,13 @@ class RetrieverLike(Protocol):
 
 
 class ToolOutcome(BaseModel):
-    """单次工具执行的结果。orchestrator 依据它更新停滞计数、成本归账与终止判断。"""
+    """单次工具执行的结果。orchestrator 依据它更新停滞计数、token 归账与终止判断。"""
 
     message: str = ""
     added_snippets: int = 0
     searched: bool = False          # 是否属于"检索类"调用（参与停滞计数）
-    filter_cost: float = 0.0        # 本次调用产生的过滤 agent 成本（stage: filter_llm）
+    # 本次调用产生的过滤 agent token 用量（stage: filter_llm）
+    filter_tokens: tuple[int, int] = (0, 0)
     submitted_ids: Optional[list[int]] = None  # 非 None 即为最终提交
 
 
@@ -63,7 +65,7 @@ class ToolSpec(BaseModel):
 
 def build_default_registry() -> dict[str, ToolSpec]:
     """默认 5 工具注册表。import 放在函数内避免循环依赖。"""
-    from openjiuwen_codesearch.algorithm.search_tools import (  # noqa: PLC0415
+    from openjiuwen_codesearch.algorithm.search_tools import (
         expand_context,
         memory_tools,
         repo_map,

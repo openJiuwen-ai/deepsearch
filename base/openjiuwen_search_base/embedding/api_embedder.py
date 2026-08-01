@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """OpenAI 兼容 embedding 客户端：SQLite 缓存 + 有限重试指数退避 + 可注入传输层。"""
 
@@ -9,7 +10,9 @@ import os
 import sqlite3
 from typing import Awaitable, Callable, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from openjiuwen_search_base.security import reveal_secret
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +30,13 @@ class EmbeddingRetryError(Exception):
 
 
 class EmbedderSettings(BaseModel):
+    """密钥以 bytearray 存储，构造时可传字符串（自动规范化）。"""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     url: str = "https://openrouter.ai/api/v1/embeddings"
     model: str = ""
-    api_key: str = ""
+    api_key: bytearray = Field(default_factory=bytearray)
     query_prefix: str = ""
     cache_dir: str = "."
     max_retries: int = 8
@@ -112,21 +119,21 @@ class ApiEmbedder:
         return [c[: self._settings.max_chars] for c in chunks]
 
     async def _aiohttp_transport(self, payload: dict) -> tuple[int, object]:
-        import aiohttp  # noqa: PLC0415  guarded import
+        import aiohttp  # guarded import
 
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self._settings.timeout_seconds)
             )
         headers = {
-            "Authorization": f"Bearer {self._settings.api_key}",
+            "Authorization": f"Bearer {reveal_secret(self._settings.api_key)}",
             "Content-Type": "application/json",
         }
         async with self._session.post(self._settings.url, headers=headers, json=payload) as resp:
             status = resp.status
             try:
                 body = await resp.json()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 body = await resp.text()
             return status, body
 
@@ -150,7 +157,7 @@ class ApiEmbedder:
         for attempt in range(self._settings.max_retries):
             try:
                 status, body = await self._transport(payload)
-            except Exception as e:  # noqa: BLE001  网络异常与非 200 同路径重试
+            except Exception as e:  # 网络异常与非 200 同路径重试
                 status, body = -1, str(e)
             if status == 200 and isinstance(body, dict) and "data" in body:
                 vectors = [item["embedding"] for item in body["data"]]

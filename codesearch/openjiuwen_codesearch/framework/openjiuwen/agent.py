@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """AbstractReactEngine 与 CodeSearch / Retropus 具体引擎。
 
@@ -129,7 +130,7 @@ class CodeSearchAgent(AbstractReactEngine[CodeSearchRunContext]):
             ctx.error = str(e)
             return Termination.LLM_ERROR
 
-        ctx.add_cost("main_llm", response.cost)
+        ctx.add_tokens("main_llm", response.input_tokens, response.output_tokens)
         ctx.write_trace(
             {
                 "turn": ctx.turn,
@@ -183,7 +184,7 @@ class CodeSearchAgent(AbstractReactEngine[CodeSearchRunContext]):
                 )
                 continue
 
-            ctx.add_cost("filter_llm", outcome.filter_cost)
+            ctx.add_tokens("filter_llm", *outcome.filter_tokens)
 
             if outcome.submitted_ids is not None:
                 ctx.submitted_ids = outcome.submitted_ids
@@ -226,12 +227,17 @@ class CodeSearchAgent(AbstractReactEngine[CodeSearchRunContext]):
                 "Agentic loop ended (%s). Returning snippets from memory.", termination
             )
             hits = construct_final_hits(ctx.memory.saved_ids()[: ctx.top_k], ctx.memory)
-        logger.info("Total cost for this issue: $%.4f", ctx.total_cost)
+        logger.info(
+            "Token usage for this issue: input=%d output=%d",
+            ctx.total_input_tokens,
+            ctx.total_output_tokens,
+        )
         result = CodeSearchResult(
             hits=hits,
             termination=termination,
             turns=ctx.turn,
-            total_cost=ctx.total_cost,
+            total_input_tokens=ctx.total_input_tokens,
+            total_output_tokens=ctx.total_output_tokens,
             error=ctx.error,
         )
         ctx.result = result
@@ -296,7 +302,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             ctx.error = str(e)
             return Termination.LLM_ERROR
 
-        ctx.add_cost("main_llm", response.cost)
+        ctx.add_tokens("main_llm", response.input_tokens, response.output_tokens)
         ctx.write_trace(
             {
                 "turn": ctx.turn,
@@ -455,16 +461,18 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             spans = ctx.tools.final_spans()[: ctx.retropus_config.max_final_spans]
             hits = spans_to_hits(spans, ctx.repo_dir, limit)
         logger.info(
-            "Retropus done: termination=%s hits=%d cost=$%.4f",
+            "Retropus done: termination=%s hits=%d tokens=%din/%dout",
             termination,
             len(hits),
-            ctx.total_cost,
+            ctx.total_input_tokens,
+            ctx.total_output_tokens,
         )
         result = CodeSearchResult(
             hits=hits,
             termination=termination,
             turns=ctx.turn,
-            total_cost=ctx.total_cost,
+            total_input_tokens=ctx.total_input_tokens,
+            total_output_tokens=ctx.total_output_tokens,
             error=ctx.error,
         )
         ctx.result = result

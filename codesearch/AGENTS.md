@@ -10,7 +10,7 @@
 ```
 
 - `algorithm/` **禁止** import `framework/`；`domain/` 不 import 产品包内模块；
-- `benchmarks/` 只依赖公共 API（`api/`），核心包不得反向 import；
+- `benchmarks/` 与 `openjiuwen_codesearch/server/` 只依赖公共 API（`api/`），核心包不得反向 import；
 - search 场景公共能力放同仓 `base/`（openjiuwen-search-base）：base 不依赖
   任何产品包，重依赖一律 optional extras + guarded import。
 
@@ -31,7 +31,8 @@
 
 - 禁止 `verify_ssl=False` 默认值；Milvus expr 一律经 base 的安全构造函数
   （禁止 f-string 直拼用户/LLM 输入）；
-- 密钥只经环境变量/配置注入，禁止硬编码、禁止入日志（LogManager 脱敏）；
+- 密钥以 `bytearray` 存储于配置模型，仅在调用外部服务时经
+  `openjiuwen_search_base.security.reveal_secret` 解码；禁止硬编码、禁止入日志；
 - 运行产物（results/agent_logs/repos/tmp/缓存）不入库（见 .gitignore）。
 
 ## 文档义务
@@ -39,6 +40,12 @@
 - 行为可见的变更需同步 `docs/`（中文为准）；特性级设计进 `docs/feature/`
   （按 [_template.md](docs/feature/_template.md)）；
 - README 中的命令必须与真实 CLI 一致（改参数须同步）。
+
+## 交付形态
+
+四种：本地源码、whl 包、Docker 镜像、HTTP 服务。服务层随包分发，whl 装完可用 `codesearch-server` 启动
+（`packages.find` 只收 `openjiuwen_codesearch*`），以源码或镜像部署。
+发布前须通过 `python scripts/release_check.py`（版本一致性、依赖形态、base pin）。
 
 ## 配置纪律
 

@@ -54,3 +54,4 @@ START → REASONING ⇄ TOOL（自环），两者均可路由 END
 | `framework/openjiuwen/nodes.py` | 四节点薄包装（调用共享 `CodeSearchAgent` 实例） |
 | `framework/openjiuwen/base_node.py` | 薄壳 → **base 包** `openjiuwen_search_base.workflow`（三段式 BaseNode + init_router） |
 | `framework/openjiuwen/runtime_context.py` | CodeSearchRunContext + 运行注册表（注册表实现在 **base 包** `openjiuwen_search_base.runtime`） |
+| `server/routers/api.py` | HTTP 服务出口：检索同步返回、索引转后台作业 |

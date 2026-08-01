@@ -1,47 +1,48 @@
-# openjiuwen-search-base（过渡包）
+# openjiuwen-search-base
 
-search 场景的公共能力，自 codesearch 提取（2026-07-29，leader 裁决："后续规划一个
-base 包，把所有 search 场景需要的公共能力都使用 base 包来提供"）。
-**当前唯一消费者为 codesearch**；deepsearch 未迁移（有各自实现），正式 base 包的
-接口与命名待两产品团队对齐后定稿。
+**openjiuwen-search-base** 提供 search 场景产品的公共基础能力，供
+openJiuwen 系列检索产品复用。本包不依赖任何产品包，核心仅依赖 pydantic，
+重量级依赖以可选分组提供并使用受保护导入。
 
 ## 模块
 
-| 模块 | 能力 | 对应 deepsearch 的既有实现（未动） |
+| 模块 | 能力 |
+|---|---|
+| `llm` | LLM 客户端协议、消息与工具调用的规范化模型、openJiuwen 模型适配（含 SSL 证书处理）、`LLMConfig` |
+| `embedding` | OpenAI 兼容的 embedding 客户端：本地 SQLite 缓存、有限重试与指数退避、持久连接复用、可注入传输层 |
+| `milvus` | 查询表达式安全构造（统一转义）、集合命名约定（产品前缀 + 模式版本）、通用存取客户端（连接管理、建库建索引、批量读写、两段式查询、检索执行、同步调用线程隔离） |
+| `workflow` | 工作流节点模板（三段式）与分支路由构造 |
+| `logging_utils` | 日志管理与敏感信息脱敏 |
+| `runtime` | 运行注册表：以 run_id 在工作流中传递，活对象不进入可复制的工作流状态 |
+
+## 安装
+
+```sh
+pip install -e .                       # 核心
+pip install -e '.[workflow,milvus,embed]'   # 按需启用
+```
+
+| 分组 | 依赖 | 何时需要 |
 |---|---|---|
-| `llm` | LLM 客户端协议、消息/响应/工具调用规范化模型、openJiuwen 适配（含 SSL 证书与 SAFE_CERT_DIR 处理）、`LLMConfig` | `llm/llm_wrapper.py`、`framework/openjiuwen/llm/llm_adapter.py` |
-| `embedding` | OpenAI 兼容 embedding 客户端（SQLite 缓存、有限重试指数退避、查询前缀） | `algorithm/search_tools/retrieval/embedder.py` |
-| `milvus` | expr 安全构造（统一转义，防注入）、collection 命名约定（产品前缀 + schema 版本，**共用实例隔离的基础**）、`store.MilvusCollectionClient`——schema 无关的存取基建：连接/建库+索引、批式 insert/upsert、两段式查询（防 payload 上限）、ann/hybrid 检索执行、release、同步调用线程隔离 | `utils` 内散落实现 + 各自 store |
-| `workflow` | BaseNode 三段式模板 + `init_router`（BranchRouter 按 next_node 分支） | `framework/openjiuwen/agent/base_node.py` |
-| `logging_utils` | LogManager（敏感脱敏开关） | `utils/log_utils/` |
-| `runtime` | 泛型运行注册表（per-run 活对象注入，workflow state 不携带大负载/锁对象） | `DeepSearchRunContext` + contextvar 模式 |
+| `workflow` | openjiuwen、certifi | 使用工作流节点模板或 LLM 适配 |
+| `milvus` | pymilvus | 使用 Milvus 存取客户端 |
+| `embed` | aiohttp | 使用 embedding 客户端 |
 
-## 依赖方向
+## 设计约定
 
-`base` 不依赖任何产品包；核心仅 pydantic，重依赖（openjiuwen/pymilvus/aiohttp）
-为可选分组、guarded import。
+- **依赖方向**：base 不依赖任何产品包，产品依赖 base；
+- **可选重依赖**：核心导入路径不触碰 openjiuwen / pymilvus / aiohttp，
+  未安装对应分组时仍可导入并测试纯逻辑部分；
+- **命名空间隔离**：`versioned_collection_name` 生成 `{前缀}{名称}__{模式版本}`
+  形式的集合名，使多个产品可安全共用同一 Milvus 实例；
+- **表达式安全**：所有 Milvus 查询表达式必须经 `milvus.expr` 构造，禁止字符串拼接。
 
-## 发布前 TODO
+## 测试
 
-1. **共同发布**：codesearch 的发布物依赖 `openjiuwen-search-base==0.1.*`；
-   workspace source 只在仓内开发生效，发布时 base 必须一并发布到同一索引源
-   （或改为 vendor 进 codesearch 发布物），否则用户安装即失败。
-2. **版本策略**：产品版本号与 deepsearch 同步（0.2.0），base 当前独立计数
-   （0.1.0）——正式 release notes 中 base 的版本归属需与 leader 确认。
-   同步目前仅是注释约定，**发布 checklist/CI 应校验两产品 pyproject 的
-   version 一致**（人肉维持会漂）。
-3. `workflow` extra 的 openjiuwen 兼容性：两个 API 面
-   （`core.foundation.llm` 与 `core.workflow`）已在 **PyPI
-   openjiuwen==0.1.10.post3 与 gitcode agent-core v0.1.13 双版本上验证共存**
-   （2026-07-28 spike + 全量测试）；其他版本未验证（上界开放，升级需回归）。
-4. **openjiuwen 依赖的发布路径**：codesearch 当前锁
-   `git+https://gitcode.com/...@v0.1.13`——git direct reference **不能进入
-   发布到公共索引的 wheel 元数据**（PyPI 会拒）。发布前需：agent-core v0.1.13
-   发布到 PyPI/内部索引，或改锁 PyPI `openjiuwen==0.1.10.post3`（已验证兼容）。
-5. **密钥处理对齐**：deepsearch 惯例为 `api_key` 用 bytearray + 用后清零
-   （`zero_secret`）；base/codesearch 当前为普通 str。安全审视前对齐
-   （涉及 LLMConfig/EmbedderSettings 类型与 openjiuwen 入参适配，独立任务）。
-6. **semver 纪律**：消费方按 `==0.1.*` pin——因此任何 **breaking change
-   必须升 minor（0.1.x → 0.2.0）**；0.1.x 内只做向后兼容的修复与新增。
-7. **第三方声明**：codesearch/base 引入的 pymilvus/aiohttp/certifi 需补入
-   仓库根 `Open_Source_Software_Notice.txt`（随整体项目 release 的法务清单）。
+```sh
+pytest tests -W ignore
+```
+
+## 许可证
+
+[Apache License 2.0](LICENSE)

@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """LLM 通用数据类型：会话消息、工具调用、规范化响应。"""
 
@@ -30,5 +31,6 @@ class LLMResponse(BaseModel):
 
     content: Optional[str] = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
-    cost: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
     raw: Any = None

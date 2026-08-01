@@ -1,8 +1,9 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """MilvusStore：代码检索的 Milvus 实现。
 
 通用存取基建（连接/建库/批式读写/两段式查询/检索执行/线程隔离）由
-openjiuwen-search-base 的 `MilvusCollectionClient` 提供（2026-07-29 提取）；
+openjiuwen-search-base 的 `MilvusCollectionClient` 提供；
 本类只保留**代码检索特有**的部分：chunk schema、Snippet 映射、trigram 查询
 与严格子串过滤、repo map、行区间重叠查询、revision 语义、文件哈希查重。
 """
@@ -15,6 +16,7 @@ from pymilvus import AnnSearchRequest
 from pymilvus.exceptions import MilvusException
 
 from openjiuwen_search_base.milvus.store import MilvusCollectionClient
+from openjiuwen_search_base.security import reveal_secret
 
 from openjiuwen_codesearch.config.index import IndexConfig, MilvusConfig
 from openjiuwen_codesearch.domain.models import Snippet
@@ -59,7 +61,7 @@ class MilvusStore(MilvusCollectionClient):
         super().__init__(
             host=milvus_cfg.host,
             port=milvus_cfg.port,
-            token=milvus_cfg.token,
+            token=reveal_secret(milvus_cfg.token),
             database_name=milvus_cfg.database_name,
             collection_name=versioned_collection_name(
                 collection_name, milvus_cfg.schema_version, milvus_cfg.collection_prefix

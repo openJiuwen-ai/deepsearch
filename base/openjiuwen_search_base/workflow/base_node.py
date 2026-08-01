@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """BaseNode 三段式模板 + 路由构造（需要 openjiuwen，extras: workflow）。
 

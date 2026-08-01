@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Collection schema 与索引参数。schema 变更必须递增 MilvusConfig.schema_version。"""
 

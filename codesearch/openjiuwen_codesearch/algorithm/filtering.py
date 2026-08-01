@@ -1,8 +1,9 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """过滤 agent：对检索到的 chunk 逐行提取与 issue 相关的行区间。
 
-具名内部阶段（见 plan §4.4）：独立函数、独立计时与成本归因，
-但不是 workflow 节点；并发以 semaphore 封顶（修复旧实现无界 gather）。
+具名内部阶段：独立函数、独立计时与 token 归因，
+但不是 workflow 节点；并发以 semaphore 封顶。
 行号标注逻辑与旧 `filter_chunk` 一致。
 """
 
@@ -14,6 +15,10 @@ from openjiuwen_codesearch.domain.models import Snippet
 from openjiuwen_codesearch.llm.factory import ChatMessage, LLMClient
 
 logger = logging.getLogger(__name__)
+
+# (start_line, end_line) 闭区间；(input_tokens, output_tokens) 用量
+LineRangeTuple = tuple[int, int]
+TokenUsage = tuple[int, int]
 
 FILTER_TOOL_SCHEMA = {
     "type": "function",
@@ -43,7 +48,7 @@ FILTER_TOOL_SCHEMA = {
 
 
 def number_snippet_lines(snippet: Snippet) -> str:
-    """为 chunk 正文标注源文件行号；头两行 `File:` 头与空行不标注（与旧实现一致）。"""
+    """为 chunk 正文标注源文件行号；头两行 `File:` 头与空行不标注。"""
     lines = snippet.text.split("\n")
     numbered = []
     for idx, line in enumerate(lines):
@@ -58,9 +63,9 @@ def number_snippet_lines(snippet: Snippet) -> str:
 
 async def filter_snippet(
     llm: LLMClient, query: str, snippet: Snippet
-) -> tuple[list[tuple[int, int]], float]:
-    """单个 chunk 的相关行提取。返回 (行区间, 本次调用成本)。
-    异常返回空区间（与旧实现一致，失败即放弃该 chunk）。
+) -> tuple[list[LineRangeTuple], TokenUsage]:
+    """单个 chunk 的相关行提取。返回 (行区间, 本次调用的 token 用量)。
+    异常返回空区间与零用量，失败即放弃该 chunk。
     """
     prompt = load_prompt("filter_chunk").format(
         query=query, snippet=number_snippet_lines(snippet)
@@ -77,10 +82,10 @@ async def filter_snippet(
                 st, en = sel.get("start_line"), sel.get("end_line")
                 if isinstance(st, int) and isinstance(en, int):
                     ranges.append((st, en))
-        return ranges, response.cost
-    except Exception as e:  # noqa: BLE001  过滤失败不致命，丢弃该 chunk
+        return ranges, (response.input_tokens, response.output_tokens)
+    except Exception as e:  # 过滤失败不致命，丢弃该 chunk
         logger.error("Filter agent failed: %s", e)
-        return [], 0.0
+        return [], (0, 0)
 
 
 async def filter_snippets(
@@ -88,13 +93,13 @@ async def filter_snippets(
     query: str,
     snippets: list[Snippet],
     concurrency: int,
-) -> list[tuple[Snippet, list[tuple[int, int]], float]]:
-    """有界并发过滤。返回 [(snippet, ranges, cost)]，顺序与输入一致。"""
+) -> list[tuple[Snippet, list[LineRangeTuple], TokenUsage]]:
+    """有界并发过滤。返回 [(snippet, ranges, (in_tokens, out_tokens))]，顺序与输入一致。"""
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
-    async def _one(snippet: Snippet) -> tuple[Snippet, list[tuple[int, int]], float]:
+    async def _one(snippet: Snippet) -> tuple[Snippet, list[LineRangeTuple], TokenUsage]:
         async with semaphore:
-            ranges, cost = await filter_snippet(llm, query, snippet)
-            return snippet, ranges, cost
+            ranges, usage = await filter_snippet(llm, query, snippet)
+            return snippet, ranges, usage
 
     return list(await asyncio.gather(*[_one(s) for s in snippets]))

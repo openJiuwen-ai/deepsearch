@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Milvus 通用存取基建（schema 无关，需要 pymilvus，extras: milvus）。
 
@@ -8,7 +9,7 @@
 
 import asyncio
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from pymilvus import AnnSearchRequest, Collection, WeightedRanker, connections, utility
 
@@ -24,12 +25,12 @@ class MilvusCollectionClient:
         sparse_generated_fields: 由 Milvus Function 生成、写入时必须排除的字段。
         database_name: Milvus 2.2+ 的 database（比 collection 前缀更强一级的
             多产品硬隔离手段）；"default" 表示不切换。
-            ⚠️ `using_database` 是 **per-alias 全局**的：同一 alias 下的所有
+            `using_database` 是 **per-alias 全局**的：同一 alias 下的所有
             客户端共享该切换，勿在同 alias 上混用不同 database。
         collection: 测试/高级注入口——直接提供 collection 对象时跳过
             connect/建库/load（对齐 deepsearch "构造器可注入 client" 的可测性惯例）。
 
-    ⚠️ 构造函数包含**阻塞网络 I/O**（connect/建库/load，大 collection 的 load
+    构造函数包含**阻塞网络 I/O**（connect/建库/load，大 collection 的 load
     可达数秒）：在事件循环上惰性构造时请包 `asyncio.to_thread`。
     """
 
@@ -62,7 +63,7 @@ class MilvusCollectionClient:
             connect_kwargs["token"] = token
         connections.connect(self._alias, **connect_kwargs)
         if database_name and database_name != "default":
-            from pymilvus import db  # noqa: PLC0415  Milvus 2.2+
+            from pymilvus import db  # Milvus 2.2+
 
             db.using_database(database_name, using=self._alias)
         if reset and utility.has_collection(self._name, using=self._alias):
@@ -116,7 +117,7 @@ class MilvusCollectionClient:
     async def close(self) -> None:
         """断开本客户端的连接别名（服务化/热重载的生命周期收口）。
 
-        ⚠️ pymilvus 连接按 **alias 共享**：同进程内多个客户端若使用同一
+        pymilvus 连接按 **alias 共享**：同进程内多个客户端若使用同一
         alias，close 任意一个会断开全部；对同 alias 换 host 重连也会报错。
         多实例长驻场景请为每个实例分配独立 alias（或参照 deepsearch server
         的做法：短命 alias 仅用于健康检查、长连接用独立 MilvusClient）。

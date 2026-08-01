@@ -16,3 +16,10 @@ _emb_*.db
 third_party/
 *.env*
 !.env.example
+
+# 构建与测试产物（本地生成，不入库）
+build/
+dist/
+.coverage
+coverage.xml
+outputs/

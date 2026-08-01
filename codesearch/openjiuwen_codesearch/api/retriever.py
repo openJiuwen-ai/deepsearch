@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """公共 SDK 门面。
 
@@ -36,7 +37,7 @@ class CodeSearchRetriever:
         main_llm: Optional[LLMClient] = None,
         filter_llm: Optional[LLMClient] = None,
     ) -> None:
-        import asyncio  # noqa: PLC0415
+        import asyncio
 
         self.config = config or CodeSearchConfig.from_env()
         self.collection_name = collection_name
@@ -57,7 +58,7 @@ class CodeSearchRetriever:
     # ---------- lazy wiring ----------
     def _ensure_store(self, reset: bool = False):
         if self._store is None:
-            from openjiuwen_codesearch.retrieval.milvus.store import MilvusStore  # noqa: PLC0415
+            from openjiuwen_codesearch.retrieval.milvus.store import MilvusStore
 
             self._store = MilvusStore(
                 milvus_cfg=self.config.milvus,
@@ -70,7 +71,7 @@ class CodeSearchRetriever:
 
     def _ensure_llms(self) -> tuple[LLMClient, LLMClient]:
         if self._main_llm is None or self._filter_llm is None:
-            from openjiuwen_codesearch.llm.factory import create_llm_client  # noqa: PLC0415
+            from openjiuwen_codesearch.llm.factory import create_llm_client
 
             if self._main_llm is None:
                 self._main_llm = create_llm_client(self.config.llm.main, client_id="codesearch_main")
@@ -119,14 +120,15 @@ class CodeSearchRetriever:
         instance_id: Optional[str] = None,
         reset: bool = False,
     ) -> IndexReport:
-        import asyncio  # noqa: PLC0415
+        import asyncio
 
         if self._is_retropus():
             async with self._store_lock:
                 return await asyncio.to_thread(self._build_retropus_index, repo_path, reset)
 
-        from openjiuwen_codesearch.indexing.chunkers.python import PythonAstChunker  # noqa: PLC0415
-        from openjiuwen_codesearch.indexing.indexer import index_repository  # noqa: PLC0415
+        from openjiuwen_codesearch.indexing.chunkers.python import PythonAstChunker
+        from openjiuwen_codesearch.indexing.indexer import index_repository
+
 
         # store 构造含阻塞网络 I/O（connect/load 可达数秒），不占事件循环；
         # 加锁防并发重复构造
@@ -134,7 +136,7 @@ class CodeSearchRetriever:
             store = await asyncio.to_thread(self._ensure_store, reset)
         embedder = None
         if self.config.index.use_dense_embeddings:
-            from openjiuwen_codesearch.indexing.embedder import APIEmbedModel  # noqa: PLC0415
+            from openjiuwen_codesearch.indexing.embedder import APIEmbedModel
 
             embedder = APIEmbedModel(
                 self.config.embed, max_chars=self.config.index.max_char_limit
@@ -162,7 +164,7 @@ class CodeSearchRetriever:
             return RetropusCodeSearchAgent()
         if engine in ("graph", "auto"):
             try:
-                from openjiuwen_codesearch.framework.openjiuwen.workflow import (  # noqa: PLC0415
+                from openjiuwen_codesearch.framework.openjiuwen.workflow import (
                     GraphCodeSearchAgent,
                 )
 
@@ -179,7 +181,7 @@ class CodeSearchRetriever:
     async def search(
         self, query: str, revision: str = "local", top_k: int = 20
     ) -> CodeSearchResult:
-        import asyncio  # noqa: PLC0415
+        import asyncio
 
         if self._is_retropus():
             return await self._search_retropus(query, top_k=top_k)
@@ -209,7 +211,6 @@ class CodeSearchRetriever:
                 hits=[],
                 termination=Termination.INDEX_NOT_READY,
                 turns=0,
-                total_cost=0.0,
                 error="retropus index not ready; call index_repository first",
             )
 
@@ -243,5 +244,5 @@ class CodeSearchRetriever:
         await self.close()
 
 
-# 兼容别名（保留一个版本，见 plan Phase 5/6）
+# 兼容别名
 JiuwenRetriever = CodeSearchRetriever

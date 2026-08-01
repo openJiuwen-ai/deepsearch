@@ -1,3 +1,4 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 from openjiuwen_codesearch.domain.memory import (
     EMPTY_MEMORY_TEXT,
@@ -87,3 +88,55 @@ class TestSnippetMemory:
         memory.add_ranges(early, [(5, 5)])
         rendered = memory.render()
         assert rendered.index("early line") < rendered.index("later line")
+
+
+class TestRelevanceRanking:
+    """降级路径的兜底排序：按检索相关性而非写入顺序。"""
+
+    def _mem_with_hits(self):
+        memory = SnippetMemory()
+        # 写入顺序：a(第1) b(第2) c(第3)；相关性顺序应为 c > b > a
+        a = make_snippet(1, "a.py", 1, ["x"])
+        b = make_snippet(2, "b.py", 1, ["y"])
+        c = make_snippet(3, "c.py", 1, ["z"])
+        a.score, b.score, c.score = 1.0, 5.0, 9.0
+        memory.record_hit(a, rank=9)              # 命中 1 次，名次靠后
+        memory.record_hit(b, rank=3)              # 命中 2 次
+        memory.record_hit(b, rank=5)
+        memory.record_hit(c, rank=0)              # 命中 2 次且拿过第一
+        memory.record_hit(c, rank=1)
+        for s in (a, b, c):
+            memory.add_ranges(s, [(1, 1)])
+        return memory
+
+    def test_ranked_by_hit_count_then_best_rank(self):
+        memory = self._mem_with_hits()
+        assert memory.saved_ids() == [1, 2, 3]           # 写入顺序不变
+        assert memory.ranked_saved_ids() == [3, 2, 1]    # 相关性顺序
+
+    def test_repeated_hits_outrank_single_hit(self):
+        memory = SnippetMemory()
+        once = make_snippet(1, "a.py", 1, ["x"])
+        twice = make_snippet(2, "b.py", 1, ["y"])
+        memory.record_hit(once, rank=0)      # 名次更好但只命中一次
+        memory.record_hit(twice, rank=8)
+        memory.record_hit(twice, rank=8)     # 被两次不同检索命中
+        memory.add_ranges(once, [(1, 1)])
+        memory.add_ranges(twice, [(1, 1)])
+        assert memory.ranked_saved_ids()[0] == 2
+
+    def test_snippets_without_relevance_kept_at_end(self):
+        memory = SnippetMemory()
+        ranked = make_snippet(1, "a.py", 1, ["x"])
+        orphan = make_snippet(2, "b.py", 1, ["y"])   # 无 record_hit
+        memory.record_hit(ranked, rank=0)
+        memory.add_ranges(ranked, [(1, 1)])
+        memory.add_ranges(orphan, [(1, 1)])
+        assert memory.ranked_saved_ids() == [1, 2]   # 不丢弃，排末尾
+
+    def test_ranking_ignores_unsaved_snippets(self):
+        memory = SnippetMemory()
+        s = make_snippet(1, "a.py", 1, ["x"])
+        memory.record_hit(s, rank=0)
+        memory.mark_processed(s)          # 命中但过滤未保留任何行
+        assert memory.ranked_saved_ids() == []

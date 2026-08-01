@@ -1,10 +1,13 @@
+# -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 from typing import Optional
 
 from pydantic import BaseModel
 
 # 通用 LLM 类型由 base 包提供（domain 仍不 import 产品包内模块；base 位于依赖图更底层）
-from openjiuwen_search_base.llm import ToolCall  # noqa: F401  re-export
+from openjiuwen_search_base.llm import ToolCall
+
+__all__ = ["LineRange", "Snippet", "ToolCall"]
 
 
 class LineRange(BaseModel):
