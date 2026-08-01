@@ -33,11 +33,13 @@ from openjiuwen_codesearch.framework.openjiuwen.nodes import (
     ReasoningNode,
     ToolNode,
 )
+from openjiuwen_codesearch.framework.openjiuwen.agent import CodeSearchAgent
 from openjiuwen_codesearch.framework.openjiuwen.runtime_context import (
     CodeSearchRunContext,
     run_session,
 )
-from openjiuwen_codesearch.framework.openjiuwen.steps import finalize
+
+_CS_AGENT = CodeSearchAgent()
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +136,9 @@ class GraphCodeSearchAgent:
                     logger.warning(
                         "Workflow ended without EndNode result; finalizing from context."
                     )
-                    return finalize(ctx, ctx.pending_termination or Termination.LLM_ERROR)
+                    return _CS_AGENT.finalize(
+                        ctx, ctx.pending_termination or Termination.LLM_ERROR
+                    )
                 return ctx.result
             finally:
                 workflow_session_vars.reset(session_token)

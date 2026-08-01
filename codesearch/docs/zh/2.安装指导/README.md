@@ -6,7 +6,7 @@
 |---|---|---|
 | Python | >= 3.11 | |
 | Milvus | >= 2.5（推荐 2.6.x） | BM25 Function 依赖 2.5+；默认 `localhost:19530` |
-| LLM API Key | `OPENROUTER_API_KEY` 环境变量 | 仅检索需要；默认稀疏索引**不需要** |
+| LLM | `OPENAI_API_KEY` + `OPENAI_BASE_URL`（默认 `https://openrouter.ai/api/v1`） | 仅检索需要；默认稀疏索引**不需要** |
 
 ## 安装
 
@@ -30,8 +30,11 @@ python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
 ```
 
 可选依赖分组：`milvus`（pymilvus）/ `llm`（openjiuwen）/ `embed`（aiohttp，稠密向量模式）/
+`retropus`（tree-sitter + bm25s，`engine=retropus` 的 KG/BM25 索引）/
 `bench`（pandas+pyarrow，ContextBench 评测）/ `dev`（pytest）。
 核心包仅依赖 pydantic，不装 extra 也可运行单元测试。
+Retropus 配置见 [`.env.example`](../../../.env.example) 与
+[feature/framework/retropus-agent.md](../../feature/framework/retropus-agent.md)。
 
 > ⚠️ **与 deepsearch 不能共用同一个 venv**：gitcode agent-core 与 PyPI openjiuwen
 > 是同一个发行名 `openjiuwen`，两产品当前锁定版本不同（v0.1.13 vs 0.1.10.post3），

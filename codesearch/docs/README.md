@@ -8,4 +8,5 @@
 | [zh/4.开发指南](zh/4.开发指南/README.md) | 分层架构、扩展点、测试 |
 | [zh/5.FAQ](zh/5.FAQ/README.md) | 常见问题 |
 | [en/](en/) | English documentation |
-| [feature/](feature/) | 特性设计文档（workflow 编排、检索智能体、运维 runbook） |
+| [feature/](feature/) | 特性设计文档（workflow 编排、Retropus 引擎与配置、检索智能体、运维 runbook） |
+| [feature/framework/retropus-agent.md](feature/framework/retropus-agent.md) | Retropus：`retropus.*` / `MAX_*` / `IMP_*` 配置与工具隔离 |

@@ -12,15 +12,17 @@ codesearch/
 │   ├── llm/                         # LLMClient 协议 + openjiuwen 适配（guarded）
 │   ├── utils/log_utils/             # LogManager（含敏感脱敏）
 │   ├── algorithm/                   # 纯算法层（禁止 import framework）
-│   │   ├── prompts/                 # .md 提示词模板（主检索 / 过滤）
+│   │   ├── prompts/                 # .md 提示词（主检索 / 过滤 / retropus_*）
 │   │   ├── reasoning.py             # 一轮 LLM 决策
 │   │   ├── filtering.py             # 过滤智能体（有界并发逐行提取）
 │   │   ├── memory_ops.py            # 最终结果构造
-│   │   └── search_tools/            # 5 工具 registry（repo_map/search/expand/delete/submit）
+│   │   └── search_tools/            # CodeSearch 5 工具 + retropus_registry / graph_tools
+│   ├── retropus/                    # 厂商化 KG / BM25（engine=retropus；需 [retropus] extra）
 │   ├── indexing/                    # 切块器（ast）/ 嵌入（SQLite 缓存）/ 增量索引编排
 │   ├── retrieval/                   # CodeRetriever 协议 + InMemory fake + milvus/ 实现
-│   └── framework/openjiuwen/        # steps 阶段函数 / BaseNode / nodes / workflow 图 /
-│                                    #   CodeSearchRunContext（运行隔离）/ 双引擎编排器
+│   └── framework/openjiuwen/        # steps / BaseNode / nodes / workflow /
+│                                    #   CodeSearchRunContext / RetropusRunContext /
+│                                    #   CodeSearchAgent + RetropusCodeSearchAgent
 ├── benchmarks/contextbench/         # 数据集加载 / runner / 预测导出与官方评分
 ├── tests/
 │   ├── unit/                        # 零外部依赖（fixture 回放）

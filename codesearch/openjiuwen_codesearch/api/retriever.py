@@ -7,12 +7,16 @@
 """
 
 import logging
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 from openjiuwen_codesearch.api.models import IndexReport
 from openjiuwen_codesearch.config.config import CodeSearchConfig
-from openjiuwen_codesearch.domain.result import CodeSearchResult
-from openjiuwen_codesearch.framework.openjiuwen.agent import CodeSearchAgent
+from openjiuwen_codesearch.domain.result import CodeSearchResult, Termination
+from openjiuwen_codesearch.framework.openjiuwen.agent import (
+    CodeSearchAgent,
+    RetropusCodeSearchAgent,
+)
 from openjiuwen_codesearch.framework.openjiuwen.runtime_context import build_run_context
 from openjiuwen_codesearch.llm.factory import LLMClient
 from openjiuwen_codesearch.retrieval.base import CodeRetriever
@@ -42,6 +46,13 @@ class CodeSearchRetriever:
         # 防并发构造竞态：两个并发请求同时看到 _store is None 会重复建连，
         # 且 reset 与并发 search 交错时可能 drop 对方刚 load 的 collection
         self._store_lock = asyncio.Lock()
+        # Retropus-owned index cache (KG + BM25); never shared with Milvus path
+        self._retropus_repo_dir: Optional[Path] = None
+        self._retropus_kg: Any = None
+        self._retropus_retriever: Any = None
+
+    def _is_retropus(self) -> bool:
+        return self.config.agent.engine == "retropus"
 
     # ---------- lazy wiring ----------
     def _ensure_store(self, reset: bool = False):
@@ -69,6 +80,37 @@ class CodeSearchRetriever:
                 )
         return self._main_llm, self._filter_llm
 
+    def _build_retropus_index(self, repo_path: str, reset: bool = False) -> IndexReport:
+        try:
+            from openjiuwen_codesearch.retropus.index import (  # noqa: PLC0415
+                build_index,
+                build_retriever,
+            )
+        except ImportError as e:
+            raise ImportError(
+                "engine='retropus' requires retropus extras "
+                "(pip install 'openjiuwen-codesearch[retropus]')"
+            ) from e
+
+        repo_dir = Path(repo_path).resolve()
+        if reset or self._retropus_repo_dir != repo_dir:
+            self._retropus_kg = None
+            self._retropus_retriever = None
+
+        retropus_cfg = self.config.retropus
+        if self._retropus_kg is None:
+            self._retropus_kg = build_index(repo_dir, retropus_cfg)
+            self._retropus_retriever = build_retriever(self._retropus_kg, retropus_cfg)
+            self._retropus_repo_dir = repo_dir
+
+        kg = self._retropus_kg
+        return IndexReport(
+            files_total=len(kg.get_file_nodes()),
+            files_new=len(kg.get_file_nodes()),
+            files_reused=0,
+            chunks_inserted=len(kg.get_ast_nodes()) + len(kg.get_text_nodes()),
+        )
+
     # ---------- public API ----------
     async def index_repository(
         self,
@@ -78,6 +120,10 @@ class CodeSearchRetriever:
         reset: bool = False,
     ) -> IndexReport:
         import asyncio  # noqa: PLC0415
+
+        if self._is_retropus():
+            async with self._store_lock:
+                return await asyncio.to_thread(self._build_retropus_index, repo_path, reset)
 
         from openjiuwen_codesearch.indexing.chunkers.python import PythonAstChunker  # noqa: PLC0415
         from openjiuwen_codesearch.indexing.indexer import index_repository  # noqa: PLC0415
@@ -110,8 +156,10 @@ class CodeSearchRetriever:
                 await embedder.close()  # 释放持久 HTTP 会话
 
     def _create_agent(self):
-        """按配置选择引擎：graph（openjiuwen workflow 图形态）或 react 兜底。"""
+        """按配置选择引擎：retropus / graph / react。"""
         engine = self.config.agent.engine
+        if engine == "retropus":
+            return RetropusCodeSearchAgent()
         if engine in ("graph", "auto"):
             try:
                 from openjiuwen_codesearch.framework.openjiuwen.workflow import (  # noqa: PLC0415
@@ -133,6 +181,9 @@ class CodeSearchRetriever:
     ) -> CodeSearchResult:
         import asyncio  # noqa: PLC0415
 
+        if self._is_retropus():
+            return await self._search_retropus(query, top_k=top_k)
+
         # store 惰性构造含阻塞网络 I/O，隔离到线程执行；加锁防并发重复构造
         async with self._store_lock:
             store = await asyncio.to_thread(self._ensure_store)
@@ -148,6 +199,32 @@ class CodeSearchRetriever:
         )
         return await self._create_agent().run(ctx)
 
+    async def _search_retropus(self, query: str, top_k: int) -> CodeSearchResult:
+        from openjiuwen_codesearch.framework.openjiuwen.retropus_context import (  # noqa: PLC0415
+            build_retropus_run_context,
+        )
+
+        if self._retropus_kg is None or self._retropus_retriever is None:
+            return CodeSearchResult(
+                hits=[],
+                termination=Termination.INDEX_NOT_READY,
+                turns=0,
+                total_cost=0.0,
+                error="retropus index not ready; call index_repository first",
+            )
+
+        main_llm, _filter_llm = self._ensure_llms()
+        ctx = build_retropus_run_context(
+            config=self.config,
+            query=query,
+            top_k=top_k,
+            repo_dir=self._retropus_repo_dir or Path("."),
+            kg=self._retropus_kg,
+            retriever=self._retropus_retriever,
+            main_llm=main_llm,
+            issue_body=query,
+        )
+        return await RetropusCodeSearchAgent().run(ctx)
 
     # ---------- 生命周期 ----------
     async def close(self) -> None:
@@ -155,6 +232,9 @@ class CodeSearchRetriever:
         if self._store is not None and hasattr(self._store, "close"):
             await self._store.close()
             self._store = None
+        self._retropus_kg = None
+        self._retropus_retriever = None
+        self._retropus_repo_dir = None
 
     async def __aenter__(self) -> "CodeSearchRetriever":
         return self

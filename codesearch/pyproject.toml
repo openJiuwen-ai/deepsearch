@@ -34,6 +34,13 @@ embed = ["aiohttp>=3.9"]
 # 图化引擎全量测试通过；PyPI openjiuwen==0.1.10.post3 亦兼容，可随时切换。
 llm = ["openjiuwen @ git+https://gitcode.com/openJiuwen/agent-core.git@v0.1.13"]
 bench = ["pandas>=2.0", "pyarrow>=14"]
+retropus = [
+    "tree-sitter==0.25.2",
+    "tree-sitter-language-pack==0.10.0",
+    "igittigitt>=2.1.5",
+    "bm25s>=0.2.0",
+    "numpy>=1.24",
+]
 dev = ["pytest>=8"]
 
 [project.scripts]

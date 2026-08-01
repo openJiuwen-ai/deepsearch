@@ -115,7 +115,15 @@ class OpenJiuwenLLMClient:
         )
 
     def _to_provider_messages(self, messages: list[ChatMessage]) -> list[Any]:
-        from openjiuwen.core.foundation.llm import ToolMessage, UserMessage  # noqa: PLC0415
+        from openjiuwen.core.foundation.llm import (  # noqa: PLC0415
+            ToolMessage,
+            UserMessage,
+        )
+
+        try:
+            from openjiuwen.core.foundation.llm import SystemMessage  # noqa: PLC0415
+        except ImportError:  # pragma: no cover - older openjiuwen
+            SystemMessage = None  # type: ignore[misc, assignment]
 
         provider_messages: list[Any] = []
         for msg in messages:
@@ -125,7 +133,11 @@ class OpenJiuwenLLMClient:
                 provider_messages.append(
                     ToolMessage(tool_call_id=msg.tool_call_id, content=msg.content)
                 )
+            elif msg.role == "system" and SystemMessage is not None:
+                provider_messages.append(SystemMessage(content=msg.content))
             else:
+                # CodeSearch folds system into the first user turn; unknown roles
+                # and missing SystemMessage fall back to UserMessage.
                 provider_messages.append(UserMessage(content=msg.content))
         return provider_messages
 

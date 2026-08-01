@@ -30,3 +30,12 @@ collection 命名自带 `cs_` 产品前缀与 `__{schema_version}` 版本后缀�
 
 **`docker ps` 权限不足（Linux）？**
 `sudo usermod -aG docker $USER` 后重新登录。
+
+**如何启用 Retropus？相关环境变量有哪些？**
+安装 `pip install 'openjiuwen-codesearch[retropus]'`，并设置
+`CodeSearchConfig.agent.engine = "retropus"`（或
+`python -m benchmarks.contextbench.runner --engine retropus`）。
+`ENGINE=` 不是环境变量。循环与索引参数见
+`CodeSearchConfig.retropus`（`MAX_ROUNDS` / `MAX_TOOL_CALLS` / `IMP_*` 等），
+完整表：[retropus-agent.md](../../feature/framework/retropus-agent.md)；
+模板：[`.env.example`](../../../.env.example)。Retropus 不使用 Milvus。

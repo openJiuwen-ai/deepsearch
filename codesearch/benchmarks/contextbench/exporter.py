@@ -44,16 +44,19 @@ def run_eval(
     gold_path: str = DEFAULT_PARQUET,
     contextbench_dir: str = DEFAULT_CONTEXTBENCH_DIR,
 ) -> int:
+    metrics_path = f"{pred_file}_metrics.jsonl"
     cmd = [
         sys.executable, "-m", "contextbench.evaluate",
         "--gold", gold_path,
         "--pred", pred_file,
-        "--out", f"{pred_file}_metrics.jsonl",
+        "--out", metrics_path,
     ]
     env = os.environ.copy()
     env["PYTHONPATH"] = contextbench_dir + os.pathsep + env.get("PYTHONPATH", "")
     logger.info("Starting eval for %s", pred_file)
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    logger.info("Return code: %s\nSTDOUT: %s\nSTDERR: %s",
-                result.returncode, result.stdout, result.stderr)
+    # EVALUATION summary is on evaluate's stdout; reprint it last.
+    print(result.stdout or "", flush=True)
+    if result.returncode != 0:
+        logger.error("Eval failed with return code %s", result.returncode)
     return result.returncode

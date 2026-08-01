@@ -1,0 +1,1 @@
+When a selected span is inside a class, use `expand_inheritance` to inspect its superclass and subclasses (INHERITS neighbors) before finishing — related edit sites often live one hop away on the inheritance graph.

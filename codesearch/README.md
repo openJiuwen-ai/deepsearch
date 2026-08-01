@@ -34,7 +34,7 @@
 |---|---|---|
 | Python | >= 3.11 | |
 | Milvus | >= 2.5，默认 `localhost:19530` | 索引与检索都需要；BM25 Function 依赖 2.5+ |
-| LLM API Key | `OPENROUTER_API_KEY` 环境变量 | 仅检索需要；索引默认（纯稀疏）**不需要** |
+| LLM | `OPENAI_API_KEY` + `OPENAI_BASE_URL`（默认 `https://openrouter.ai/api/v1`） | 仅检索需要；索引默认（纯稀疏）**不需要** |
 
 ## 安装
 
@@ -57,8 +57,10 @@ python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
 ```
 
 可选依赖分组：`milvus`（pymilvus）/ `llm`（openjiuwen，graph 引擎与真实 LLM 调用）/
-`embed`（aiohttp，仅稠密向量模式）/ `bench`（pandas+pyarrow，跑 ContextBench）/ `dev`（pytest）。
+`embed`（aiohttp，仅稠密向量模式）/ `retropus`（tree-sitter + bm25s，`engine=retropus` 的 KG 索引）/
+`bench`（pandas+pyarrow，跑 ContextBench）/ `dev`（pytest）。
 核心包只依赖 pydantic，不装任何 extra 也可运行单元测试与 fake 检索器。
+详见 [docs/feature/framework/retropus-agent.md](docs/feature/framework/retropus-agent.md)。
 
 ## 启动 Milvus（本机）
 
@@ -107,7 +109,8 @@ curl -sf http://localhost:9091/healthz && echo " milvus healthy"
 ### 2. 检索
 
 ```sh
-export OPENROUTER_API_KEY="sk-or-v1-..."
+export OPENAI_API_KEY="sk-or-v1-..."
+export OPENAI_BASE_URL="https://openrouter.ai/api/v1"   # 默认即可，可省略
 ```
 
 ```sh
@@ -139,7 +142,7 @@ import asyncio
 from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
 
 async def main():
-    config = CodeSearchConfig.from_env()      # 读取 OPENROUTER_API_KEY，默认 OpenRouter+GPT-5
+    config = CodeSearchConfig.from_env()      # 读取 OPENAI_API_KEY / OPENAI_BASE_URL / MODEL
     retriever = CodeSearchRetriever(config, collection_name="my_repo")
 
     report = await retriever.index_repository("/path/to/repo", revision="abc123")
@@ -169,18 +172,47 @@ config = CodeSearchConfig(
 
 ## 关键配置
 
-全部配置见 `openjiuwen_codesearch/config/`（pydantic，构造传参，无全局可变状态）。常用项：
+全部配置见 `openjiuwen_codesearch/config/`（pydantic，构造传参，无全局可变状态）。
+常用项：
 
 | 配置 | 默认 | 说明 |
 |---|---|---|
-| `agent.engine` | `auto` | `graph`（workflow 图形态）/ `react`（代码循环）/ `auto`（graph 可用则 graph） |
-| `agent.max_turns` | 20 | 检索循环轮次上限 |
-| `agent.stagnation_rounds` | 3 | 连续 N 个零收获检索轮后提前终止 |
+| `agent.engine` | `auto` | `graph`（workflow 图形态）/ `react`（代码循环）/ `auto`（graph 可用则 graph）/ `retropus`（KG+BM25 Retropus 检索，需 `[retropus]` extra；**无** `ENGINE=` 环境变量，需程序赋值或 CLI `--engine`） |
+| `agent.max_turns` | 20 | graph/react 检索循环轮次上限（retropus 用 `retropus.max_rounds`） |
+| `agent.stagnation_rounds` | 3 | 连续 N 个零收获检索轮后提前终止（仅 graph/react） |
 | `agent.filter_concurrency` | 8 | 过滤模型并发上限 |
 | `index.max_num_files_per_repo` | None | 每仓库索引文件数上限（空间控制） |
 | `index.enable_trigram` | True | trigram 字段开关（存储大头，≈原文 7 倍体积） |
 | `milvus.collection_prefix` | `cs_` | 与其他产品共用 Milvus 实例时的命名空间隔离 |
 | `milvus.schema_version` | `v1` | schema 演进版本，变更 schema 必须递增 |
+
+### Retropus（`CodeSearchConfig.retropus`）
+
+`engine=retropus` 时生效；由 `RetropusSearchAgentConfig.from_env()` 读取
+`codesearch/.env` / 进程环境（进程环境优先）。模板见 [`.env.example`](.env.example)；
+完整字段表见 [retropus-agent.md](docs/feature/framework/retropus-agent.md)。
+
+| 配置 / 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `retriever` / `RETRIEVER` | `bm25` | 仅支持 `bm25` |
+| `max_rounds` / `MAX_ROUNDS` | 12 | LLM 决策轮次上限 |
+| `max_tool_calls` / `MAX_TOOL_CALLS` | 24 | 工具调用总次数上限 |
+| `max_final_spans` / `MAX_FINAL_SPANS` | 25 | 最终输出 span 上限 |
+| `max_obs_chars` / `MAX_OBS_CHARS` | 6000 | 工具观察文本截断 |
+| `max_read_lines` / `MAX_READ_LINES` | 400 | `read_file` 行数上限 |
+| `max_ast_depth` / `MAX_AST_DEPTH` | 6 | KG AST 遍历深度 |
+| `chunk_size` / `CHUNK_SIZE` | 1000 | 文本切块大小 |
+| `chunk_overlap` / `CHUNK_OVERLAP` | 200 | 文本切块重叠 |
+| `code_aware_tokenizer` / `CODE_AWARE_TOKENIZER` | false | 代码感知分词 |
+| `tokenize_workers` / `TOKENIZE_WORKERS` | `cpu_count-1` | 分词并行度 |
+| `min_spans_before_finish` / `MIN_SPANS_BEFORE_FINISH` | 3 | 配合 `IMP_ANTI_EARLY_FINISH` |
+| `min_files_before_finish` / `MIN_FILES_BEFORE_FINISH` | 1 | 配合 `IMP_ANTI_EARLY_FINISH` |
+| `min_mandatory_return_spans` / `MIN_MANDATORY_RETURN_SPANS`（或 `RETROPUS_MIN_MANDATORY_RETURN_SPANS`） | 0 | 结束时强制补齐到 N 条（0=关） |
+| `IMP_*` / `IMP_ALL` | 见下 | 改进开关；仅 `IMP_INHERITS_EXPAND` 默认开 |
+
+`IMP_*`：`BAN_TESTS` / `ANTI_EARLY_FINISH` / `SAME_FILE_EXPAND` /
+`SECOND_FILE_PROBE` / `INHERITS_EXPAND`（默认开）。
+`IMP_ALL=0|1` 可先统一关/开，再被单个 `IMP_*` 覆盖。
 
 ## 测试
 
@@ -205,7 +237,14 @@ git submodule update --init --recursive     # 拉取 third_party/contextbench
 将数据集 `contextbench_verified.parquet` 放入 `third_party/contextbench/data/`，然后：
 
 ```sh
-.venv/bin/pip install -e '.[bench]' && OPENROUTER_API_KEY=sk-... .venv/bin/python -m benchmarks.contextbench.runner --num-repos 4
+.venv/bin/pip install -e '.[bench]' && OPENAI_API_KEY=sk-... .venv/bin/python -m benchmarks.contextbench.runner --num-instances 4
+```
+
+Retropus 引擎（需 `[retropus]`，无 Milvus；配置见 `.env` / 上表）：
+
+```sh
+.venv/bin/pip install -e '.[bench,retropus,llm]'
+OPENAI_API_KEY=sk-... .venv/bin/python -m benchmarks.contextbench.runner --engine retropus --num-instances 5
 ```
 
 预测 JSONL 与评分输出在 `./results/`。
@@ -233,6 +272,7 @@ LLM 适配、embedding 客户端、Milvus expr 安全构造与命名约定、Bas
 
 - [docs/README.md](docs/README.md) — 文档地图（产品简介 / 安装 / 快速开始 / 开发指南 / FAQ，中英双语）
 - [docs/feature/framework/codesearch-workflow.md](docs/feature/framework/codesearch-workflow.md) — 检索工作流设计（双引擎 / 图结构 / 运行隔离）
+- [docs/feature/framework/retropus-agent.md](docs/feature/framework/retropus-agent.md) — Retropus 引擎（KG/BM25、工具隔离、全部 `retropus.*` / `IMP_*` 配置）
 - [docs/feature/algorithm/search-agent.md](docs/feature/algorithm/search-agent.md) — 检索智能体设计（工具集 / 过滤 / 记忆）
 - [docs/feature/runbook-server-indexing.md](docs/feature/runbook-server-indexing.md) — 共享服务器部署 runbook
 
