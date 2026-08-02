@@ -39,6 +39,65 @@ def write_predictions(
     return output_path
 
 
+def _load_metrics_rows(metrics_path: str) -> list[dict]:
+    rows: list[dict] = []
+    if not os.path.isfile(metrics_path):
+        return rows
+    with open(metrics_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def write_eval_summary(
+    metrics_path: str,
+    summary_path: str | None = None,
+    contextbench_dir: str = DEFAULT_CONTEXTBENCH_DIR,
+) -> str | None:
+    """Persist the aggregate EVALUATION summary next to the per-instance metrics JSONL."""
+    rows = _load_metrics_rows(metrics_path)
+    if not rows:
+        logger.warning("No metrics rows to summarize at %s", metrics_path)
+        return None
+
+    # Reuse official micro-average aggregation so the JSON matches the printed banner.
+    if contextbench_dir not in sys.path:
+        sys.path.insert(0, contextbench_dir)
+    from contextbench.evaluate import aggregate_results
+
+    summary = aggregate_results(rows)
+    error_counts: dict[str, int] = {}
+    n_empty_scored = 0
+    for row in rows:
+        err = row.get("error")
+        if err:
+            error_counts[err] = error_counts.get(err, 0) + 1
+        if row.get("empty_retrieval"):
+            n_empty_scored += 1
+    if error_counts:
+        summary["errors"] = error_counts
+    if n_empty_scored:
+        summary["empty_retrieval_scored"] = n_empty_scored
+
+    if summary_path is None:
+        if metrics_path.endswith("_metrics.jsonl"):
+            summary_path = metrics_path[: -len("_metrics.jsonl")] + "_summary.json"
+        else:
+            summary_path = f"{metrics_path}_summary.json"
+
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    logger.info("Saved evaluation summary at: %s", summary_path)
+    return summary_path
+
+
 def run_eval(
     pred_file: str,
     gold_path: str = DEFAULT_PARQUET,
@@ -57,6 +116,10 @@ def run_eval(
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     # EVALUATION summary is on evaluate's stdout; reprint it last.
     print(result.stdout or "", flush=True)
+    if os.path.isfile(metrics_path):
+        summary_path = write_eval_summary(metrics_path, contextbench_dir=contextbench_dir)
+        if summary_path:
+            print(f"Summary written to {summary_path}", flush=True)
     if result.returncode != 0:
         logger.error("Eval failed with return code %s", result.returncode)
     return result.returncode

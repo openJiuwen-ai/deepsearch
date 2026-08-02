@@ -11,12 +11,13 @@ from pydantic import BaseModel
 DEFAULT_TOKENIZE_WORKERS = max(1, (os.cpu_count() or 4) - 1)
 
 # Short names for Imp_* fields / IMP_* env vars (defaults live on the model).
-_IMPROVEMENT_FLAGS = (
+IMPROVEMENT_FLAGS = (
     "ban_tests",
     "anti_early_finish",
     "same_file_expand",
     "second_file_probe",
     "inherits_expand",
+    "expand_imports",
 )
 
 
@@ -92,11 +93,15 @@ class RetropusSearchAgentConfig(BaseModel):
     imp_same_file_expand: bool = False
     imp_second_file_probe: bool = False
     imp_inherits_expand: bool = True
+    # Suggest-only IMPORTS expand tool (does not block finish).
+    imp_expand_imports: bool = False
 
     def improvement_flags(self) -> dict[str, bool]:
-        return {name: getattr(self, f"imp_{name}") for name in _IMPROVEMENT_FLAGS}
+        """Map each ``IMPROVEMENT_FLAGS`` name to its current boolean value."""
+        return {name: getattr(self, f"imp_{name}") for name in IMPROVEMENT_FLAGS}
 
     def enabled_improvements(self) -> list[str]:
+        """Names of improvement flags that are currently on."""
         return [name for name, on in self.improvement_flags().items() if on]
 
     @classmethod
@@ -126,7 +131,7 @@ class RetropusSearchAgentConfig(BaseModel):
                     else getattr(defaults, f"imp_{name}")
                 ),
             )
-            for name in _IMPROVEMENT_FLAGS
+            for name in IMPROVEMENT_FLAGS
         }
 
         return cls(
@@ -169,4 +174,5 @@ class RetropusSearchAgentConfig(BaseModel):
             imp_same_file_expand=imp_flags["same_file_expand"],
             imp_second_file_probe=imp_flags["second_file_probe"],
             imp_inherits_expand=imp_flags["inherits_expand"],
+            imp_expand_imports=imp_flags["expand_imports"],
         )

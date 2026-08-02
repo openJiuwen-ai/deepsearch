@@ -1,0 +1,1 @@
+Import neighbors from knowledge-graph IMPORTS edges (in-repo modules across Python/Java/JS/TS/Go/Rust/C/C++). 'imports' = modules this file imports; 'imported_by' = other files that import it. Related edit sites often live one hop away — read_file / add_context on any that are relevant:

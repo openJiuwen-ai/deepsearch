@@ -1,0 +1,1 @@
+After selecting a production file, consider `expand_imports` to follow IMPORTS edges in the knowledge graph: modules it imports and other files that import it — related edit sites often live one import hop away. Prefer production modules over tests. This is recommended, not required; you may still `finish` without it.

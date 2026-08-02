@@ -19,6 +19,7 @@ from openjiuwen_codesearch.algorithm.prompts.retropus import (
 )
 from openjiuwen_codesearch.algorithm.search_tools.graph_tools import (
     EXPAND_FILE_DEFS_SCHEMA,
+    EXPAND_IMPORTS_SCHEMA,
     EXPAND_INHERITANCE_SCHEMA,
     EXPAND_SPECS,
     GraphExpandTools,
@@ -37,10 +38,9 @@ _ISSUE_ABOUT_TESTS_RE = re.compile(
     re.IGNORECASE,
 )
 
-_normalize_rel_path = normalize_rel_path
-
 
 def _truncate(text: str, max_chars: int) -> str:
+    """Trim ``text`` to ``max_chars``, appending a truncation marker when needed."""
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n... [truncated]"
@@ -50,8 +50,9 @@ class RetrievalTools(GraphExpandTools):
     """Stateful tool dispatcher for one Retropus instance run.
 
     Improvement flags (from ``RetropusSearchAgentConfig``) gate precision/recall
-    guards: ban_tests, same_file_expand, second_file_probe, inherits_expand,
-    anti_early_finish.
+    guards: ban_tests, same_file_expand, second_file_probe, anti_early_finish.
+    ``inherits_expand`` / ``expand_imports`` register suggest-only expand tools
+    (they do not block ``finish``).
     """
 
     def __init__(
@@ -62,6 +63,7 @@ class RetrievalTools(GraphExpandTools):
         config: Optional[RetropusSearchAgentConfig] = None,
         issue_text: str = "",
     ):
+        """Wire KG, retriever, and per-run config; initialize span / expand state."""
         from openjiuwen_codesearch.retropus.graph.graph_types import (  # noqa: PLC0415
             FileNode,
         )
@@ -88,6 +90,7 @@ class RetrievalTools(GraphExpandTools):
         self._expanded_files: set[str] = set()
         self._second_file_probed = False
         self._inheritance_expanded = False
+        self._import_index = None
 
     # ------------------------------------------------------------------ #
     #                          Tool schemas                              #
@@ -203,6 +206,8 @@ class RetrievalTools(GraphExpandTools):
             schemas.append(EXPAND_FILE_DEFS_SCHEMA)
         if self.config.imp_inherits_expand:
             schemas.append(EXPAND_INHERITANCE_SCHEMA)
+        if self.config.imp_expand_imports:
+            schemas.append(EXPAND_IMPORTS_SCHEMA)
         schemas.append(
             {
                 "type": "function",
@@ -257,6 +262,20 @@ class RetrievalTools(GraphExpandTools):
                     ),
                     limit,
                 )
+            if name == "expand_imports":
+                depth_raw = args.get("depth", 1)
+                try:
+                    depth = int(depth_raw) if depth_raw is not None else 1
+                except (TypeError, ValueError):
+                    depth = 1
+                return _truncate(
+                    self.expand_imports(
+                        args.get("path"),
+                        direction=str(args.get("direction") or "both"),
+                        depth=depth,
+                    ),
+                    limit,
+                )
             if name == "add_context":
                 return self.add_context(
                     str(args.get("file", "")),
@@ -275,6 +294,7 @@ class RetrievalTools(GraphExpandTools):
     # ------------------------------------------------------------------ #
 
     def search_code(self, query: str, top_files: int = 12, max_defs: int = 20) -> str:
+        """Rank definitions for ``query`` and return a path:span / label listing."""
         from openjiuwen_codesearch.retropus.retrievers.bm25 import (  # noqa: PLC0415
             definition_label,
         )
@@ -318,6 +338,7 @@ class RetrievalTools(GraphExpandTools):
         return SEARCH_CODE_HEADER + "\n".join(lines)
 
     def search_text(self, query: str) -> str:
+        """Search markdown/text chunks for ``query`` and return the formatted hits."""
         query = query.strip()
         if not query:
             return "Empty query."
@@ -325,6 +346,7 @@ class RetrievalTools(GraphExpandTools):
         return formatted
 
     def get_repo_structure(self, query: Optional[str]) -> str:
+        """Return a query-scoped definition tree, or a shallow file tree fallback."""
         from openjiuwen_codesearch.retropus.retrievers.bm25 import (  # noqa: PLC0415
             render_scored_file_tree,
         )
@@ -349,6 +371,7 @@ class RetrievalTools(GraphExpandTools):
         )
 
     def _file_line_count(self, rel: str) -> Optional[int]:
+        """Cached line count for a repo-relative path, or ``None`` if unreadable."""
         if rel in self._line_count_cache:
             return self._line_count_cache[rel]
         abs_path = self.repo_dir / rel
@@ -363,7 +386,8 @@ class RetrievalTools(GraphExpandTools):
         return count
 
     def read_file(self, path: str, start_line: int, end_line: int) -> str:
-        rel = _normalize_rel_path(path)
+        """Return numbered source lines for ``path`` in ``[start_line, end_line]``."""
+        rel = normalize_rel_path(path)
         abs_path = self.repo_dir / rel
         if not abs_path.is_file():
             return f"File not found: {rel}"
@@ -390,12 +414,14 @@ class RetrievalTools(GraphExpandTools):
         return "\n".join(out)
 
     def selected_files(self) -> List[str]:
+        """Sorted unique file paths among recorded ``add_context`` spans."""
         return sorted({s["file"] for s in self._all_spans})
 
     def add_context(
         self, file: str, start_line: int, end_line: int, reason: Optional[str] = None
     ) -> str:
-        rel = _normalize_rel_path(file)
+        """Record a retrieval span after path / test-ban / bounds checks."""
+        rel = normalize_rel_path(file)
         if not rel:
             return "add_context ignored: empty file path."
 
@@ -471,19 +497,24 @@ class RetrievalTools(GraphExpandTools):
                 "second file before finishing."
             )
 
+        # inherits_expand is suggest-only: do not block finish. Surface a soft
+        # reminder when finishing with unprobed INHERITS neighbors.
+        suggestion = ""
         if self.config.imp_inherits_expand and self.selected_files():
             pending = self._pending_inheritance_targets()
             if pending and not self._inheritance_expanded:
                 preview = ", ".join(pending[:5])
                 more = f" (+{len(pending) - 5} more)" if len(pending) > 5 else ""
-                blocks.append(
-                    "Selected class spans have INHERITS neighbors in other files "
-                    f"({preview}{more}). Call expand_inheritance and add any relevant "
-                    "superclass/subclass spans before finishing."
+                suggestion = (
+                    f"Note: selected class spans have INHERITS neighbors in other "
+                    f"files ({preview}{more}). Optional: call expand_inheritance "
+                    "next time if those look relevant."
                 )
 
         if blocks:
             return "finish blocked:\n- " + "\n- ".join(blocks)
+        if suggestion:
+            return f"Finishing retrieval.\n{suggestion}"
         return "Finishing retrieval."
 
     def finish_allowed(self) -> bool:
@@ -495,21 +526,30 @@ class RetrievalTools(GraphExpandTools):
     # ------------------------------------------------------------------ #
 
     def drain_new_spans(self) -> List[Dict[str, Any]]:
+        """Return and clear spans recorded since the previous drain."""
         spans = self._new_since_drain
         self._new_since_drain = []
         return spans
 
     def final_spans(self) -> List[Dict[str, Any]]:
+        """Copy of all spans recorded for this run."""
         return list(self._all_spans)
 
     def has_spans(self) -> bool:
+        """True if at least one ``add_context`` span has been recorded."""
         return bool(self._all_spans)
 
 
 class _RetropusToolsLike(Protocol):
-    def tool_schemas(self) -> list[dict]: ...
+    """Minimal surface required to build a Retropus ``ToolSpec`` registry."""
 
-    def dispatch(self, name: str, args: dict) -> str: ...
+    def tool_schemas(self) -> list[dict]:
+        """OpenAI-style tool schema list for the current flag set."""
+        ...
+
+    def dispatch(self, name: str, args: dict) -> str:
+        """Synchronously run tool ``name`` with ``args``; return observation text."""
+        ...
 
 
 def build_retropus_registry(tools: _RetropusToolsLike) -> dict[str, ToolSpec]:
@@ -535,7 +575,10 @@ def build_retropus_registry(tools: _RetropusToolsLike) -> dict[str, ToolSpec]:
 
 
 def _make_executor(tools: _RetropusToolsLike, name: str):
+    """Build an async ``ToolSpec`` executor that dispatches ``name`` on ``tools``."""
+
     async def execute(env: Any, args: dict) -> ToolOutcome:
+        """Run the tool off-thread and update finish flags when ``name`` is ``finish``."""
         observation = await asyncio.to_thread(tools.dispatch, name, args or {})
         if name == "finish":
             if observation.startswith("finish blocked"):

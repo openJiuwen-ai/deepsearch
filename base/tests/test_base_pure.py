@@ -4,7 +4,10 @@
 
 import pytest
 
-from openjiuwen_search_base.llm import normalize_tool_calls
+from openjiuwen_search_base.llm import (
+    normalize_tool_calls,
+    strip_unsupported_prompt_cache_key,
+)
 from openjiuwen_search_base.milvus import (
     escape_expr_string,
     hashes_filter,
@@ -65,6 +68,27 @@ class TestRunRegistry:
                 raise RuntimeError("boom")
         with pytest.raises(KeyError):
             reg.get(run_id)
+
+
+class TestPromptCacheKeyFallback:
+    def test_type_error_strips_key(self):
+        kwargs = {"prompt_cache_key": "retropus:abc", "temperature": 0.0}
+        out = strip_unsupported_prompt_cache_key(TypeError("unexpected kw"), kwargs)
+        assert out == {"temperature": 0.0}
+
+    def test_provider_message_strips_key(self):
+        kwargs = {"prompt_cache_key": "retropus:abc"}
+        out = strip_unsupported_prompt_cache_key(
+            RuntimeError("Unknown field: prompt_cache_key"), kwargs
+        )
+        assert out == {}
+
+    def test_unrelated_error_returns_none(self):
+        kwargs = {"prompt_cache_key": "retropus:abc"}
+        assert strip_unsupported_prompt_cache_key(RuntimeError("timeout"), kwargs) is None
+
+    def test_missing_key_returns_none(self):
+        assert strip_unsupported_prompt_cache_key(TypeError("x"), {}) is None
 
 
 class TestNormalizeToolCalls:

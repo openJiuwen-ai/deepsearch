@@ -7,6 +7,7 @@ from openjiuwen_search_base.llm.client import (
     create_llm_client,
     extract_usage,
     normalize_tool_calls,
+    strip_unsupported_prompt_cache_key,
 )
 from openjiuwen_search_base.security import reveal_secret, to_secret, zero_secret
 from openjiuwen_search_base.llm.types import ChatMessage, LLMResponse, ToolCall
@@ -21,6 +22,7 @@ __all__ = [
     "create_llm_client",
     "extract_usage",
     "normalize_tool_calls",
+    "strip_unsupported_prompt_cache_key",
     "reveal_secret",
     "to_secret",
     "zero_secret",

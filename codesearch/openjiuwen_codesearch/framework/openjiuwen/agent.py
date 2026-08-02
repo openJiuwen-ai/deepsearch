@@ -248,13 +248,19 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
     """Retropus retrieval agent: KG/BM25 tools + openjiuwen LLM client."""
 
     async def run(self, ctx: "RetropusRunContext") -> CodeSearchResult:
+        """Run the Retropus ReAct loop and return a ``CodeSearchResult``."""
         logger.info("Starting retropus retrieval loop...")
         return await super().run(ctx)
 
     def _ensure_history(self, ctx: "RetropusRunContext") -> None:
+        """Seed system + issue user messages on first turn (idempotent)."""
         from openjiuwen_codesearch.algorithm.prompts.retropus import (  # noqa: PLC0415
             build_issue_user_message,
             build_system_prompt,
+            stable_prompt_cache_key,
+        )
+        from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (  # noqa: PLC0415
+            build_retropus_registry,
         )
 
         if ctx.history:
@@ -262,6 +268,11 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
         cfg = ctx.retropus_config
         ctx.system_prompt = build_system_prompt(
             inherits_expand=cfg.imp_inherits_expand,
+            expand_imports=cfg.imp_expand_imports,
+        )
+        tool_schemas = registry_schemas(build_retropus_registry(ctx.tools))
+        ctx.prompt_cache_key = stable_prompt_cache_key(
+            ctx.system_prompt, tool_schemas
         )
         ctx.history = [
             ChatMessage(role="system", content=ctx.system_prompt),
@@ -270,14 +281,16 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             ),
         ]
         logger.info(
-            "Retropus start: max_rounds=%d max_tool_calls=%d",
+            "Retropus start: max_rounds=%d max_tool_calls=%d prompt_cache_key=%s",
             cfg.max_rounds,
             cfg.max_tool_calls,
+            ctx.prompt_cache_key,
         )
 
     async def reasoning_step(
         self, ctx: "RetropusRunContext"
     ) -> Optional[Termination]:
+        """Invoke the LLM for the next tool calls; nudge once if no spans yet."""
         from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (  # noqa: PLC0415
             build_retropus_registry,
         )
@@ -295,8 +308,13 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
         tool_schemas = registry_schemas(registry)
 
         ctx.turn += 1
+        invoke_kwargs: dict = {}
+        if ctx.prompt_cache_key:
+            invoke_kwargs["prompt_cache_key"] = ctx.prompt_cache_key
         try:
-            response = await ctx.main_llm.invoke(ctx.history, tools=tool_schemas)
+            response = await ctx.main_llm.invoke(
+                ctx.history, tools=tool_schemas, **invoke_kwargs
+            )
         except Exception as e:  # noqa: BLE001
             logger.error("Retropus LLM call failed: %s", e)
             ctx.error = str(e)
@@ -335,6 +353,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
         return None
 
     async def tool_step(self, ctx: "RetropusRunContext") -> Optional[Termination]:
+        """Execute pending tool calls and return ``SUBMITTED`` when finish is accepted."""
         from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (  # noqa: PLC0415
             build_retropus_registry,
         )
@@ -437,6 +456,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
     def finalize(
         self, ctx: "RetropusRunContext", termination: Termination
     ) -> CodeSearchResult:
+        """Pad spans if needed, map them to hits, and build the final result."""
         if termination not in (Termination.LLM_ERROR, Termination.INDEX_NOT_READY):
             cfg = ctx.retropus_config
             mandatory = max(0, int(cfg.min_mandatory_return_spans))

@@ -46,9 +46,11 @@ class FileGraphBuilder:
         self.chunk_overlap = chunk_overlap
 
     def support_code_file(self, file: Path) -> bool:
+        """True if ``file`` can be parsed into an AST with tree-sitter."""
         return tree_sitter_parser.supports_file(file)
 
     def support_text_file(self, file: Path) -> bool:
+        """True if ``file`` is treated as plain text (markdown / rst / txt)."""
         return file.suffix in [".markdown", ".md", ".txt", ".rst"]
 
     def supports_file(self, file: Path) -> bool:
@@ -136,6 +138,7 @@ class FileGraphBuilder:
     def _text_file_graph(
         self, parent_node: KnowledgeGraphNode, file: Path, next_node_id: int
     ) -> Tuple[int, Sequence[KnowledgeGraphNode], Sequence[KnowledgeGraphEdge]]:
+        """Split a text file into chunks and attach them as ``HAS_TEXT`` / ``NEXT_CHUNK``."""
         text = file.open(encoding="utf-8").read()
         chunks = [
             TextChunk(text=chunk)

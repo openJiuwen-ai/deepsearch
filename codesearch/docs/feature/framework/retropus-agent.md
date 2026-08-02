@@ -80,9 +80,13 @@ LLM 凭证仍在 `CodeSearchConfig.llm`（`OPENAI_API_KEY` / `OPENAI_BASE_URL` /
 |---|---|---|---|
 | `imp_ban_tests` | `IMP_BAN_TESTS` | `false` | 检索/选 span 时压制测试路径（issue 本身谈测试时除外） |
 | `imp_anti_early_finish` | `IMP_ANTI_EARLY_FINISH` | `false` | `finish` 前强制 `min_spans` / `min_files` |
-| `imp_same_file_expand` | `IMP_SAME_FILE_EXPAND` | `false` | 注册 `expand_same_file_defs`；finish 前可同文件扩展 |
+| `imp_same_file_expand` | `IMP_SAME_FILE_EXPAND` | `false` | 注册 `expand_file_defs`；finish 前可同文件扩展 |
 | `imp_second_file_probe` | `IMP_SECOND_FILE_PROBE` | `false` | 已选文件时对第二文件做探测；可注册相关 expand |
-| `imp_inherits_expand` | `IMP_INHERITS_EXPAND` | **`true`** | 注册 `expand_inheritance`；finish 前可沿继承边扩展 |
+| `imp_inherits_expand` | `IMP_INHERITS_EXPAND` | **`true`** | 注册 `expand_inheritance`（沿 KG `INHERITS` 边建议邻居；**不**阻挡 `finish`） |
+| `imp_expand_imports` | `IMP_EXPAND_IMPORTS` | `false` | 注册 `expand_imports`（沿 KG `IMPORTS` 边建议邻居；**不**阻挡 `finish`） |
+
+KG 在索引时**始终**构建 `IMPORTS` 边（Python/Java/JS/TS/Go/Rust/C/C++，
+regex 解析、仅 in-repo）；flag 只控制是否暴露工具与系统提示附录。
 
 ### 与 `SearchAgentConfig` 的交叉项
 
@@ -96,9 +100,20 @@ Retropus 循环使用 `config.retropus` 的 `max_rounds` / `max_tool_calls`，
 | `agent.trace_dir` | 非空时写 `retropus_*.jsonl` 轨迹（默认 `agent_logs`；空串关闭） |
 | `agent.retrieve_topk` | ContextBench runner 的 `search(..., top_k=...)`；与 `max_final_spans` 共同限制输出 |
 
+## Prompt caching
+
+Retropus binds a stable OpenAI/OpenRouter `prompt_cache_key` once per run from
+`hash(system_prompt + tool_schemas)` (`retropus:{sha256[:24]}`) and passes it on
+every `main_llm.invoke`. Issue text stays in the user message so the static
+prefix can be reused across rounds and instances that share the same IMP flags.
+This is quality-neutral (cost/latency only). Providers/SDKs that reject the field
+are handled by a transparent retry without the key in
+`openjiuwen_search_base.llm.OpenJiuwenLLMClient`.
+
 ## 数据契约与依赖
 
-- LLM：仅 `LLMClient.invoke`（openjiuwen）；不使用上游 `retropus.llm.LLMClient`。
+- LLM：仅 `LLMClient.invoke`（openjiuwen；可传 `prompt_cache_key=`）；不使用上游
+  `retropus.llm.LLMClient`。
 - 索引：进程内 KG + BM25，缓存于 `CodeSearchRetriever` 实例（按 `repo_dir`；无 Milvus）。
 - 可选依赖：`tree-sitter` / `bm25s` 等，见 `pyproject.toml` 的 `[retropus]` extra。
 
@@ -114,6 +129,9 @@ Retropus 循环使用 `config.retropus` 的 `max_rounds` / `max_tool_calls`，
 - `tests/unit/test_retropus_registry.py`：注册表隔离
 - `tests/unit/test_retropus_agent.py`：假 LLM 回放、hits 映射、INDEX_NOT_READY、跳过 Milvus
 - `tests/unit/test_retropus_agent_config.py`：`from_env` 读取 `MAX_*` / `IMP_*` / 补齐相关变量
+- `tests/unit/test_retropus_expand_imports.py`：`IMPORTS` 边解析、`expand_imports` 工具与 schema 门控
+- `tests/unit/test_retropus_inherits_finish.py`：`inherits_expand` 不阻挡 finish
+- `tests/unit/test_retropus_prompt_cache.py`：`prompt_cache_key` 稳定性与 invoke 透传
 - `tests/unit/test_retropus_mandatory_return_spans.py`：强制补齐与 legacy fallback
 - `tests/unit/test_retropus_text_splitter.py`：文本切块
 
@@ -126,7 +144,8 @@ Retropus 循环使用 `config.retropus` 的 `max_rounds` / `max_tool_calls`，
 | `utils/log_utils` | Retropus 与产品共用 `get_logger`（LogManager） |
 | `algorithm/search_tools/retropus_registry.py` | `RetrievalTools` + 独立 ToolSpec 注册表 |
 | `algorithm/search_tools/graph_tools.py` | Retropus expand_* ToolSpec + `GraphExpandTools` mixin |
-| `algorithm/prompts/{system,inherits,...}.md` + `retropus.py` | Retropus 系统/工具观察提示词 |
+| `algorithm/prompts/{system,inherits,expand_imports,...}.md` + `retropus.py` | Retropus 系统/工具观察提示词 |
+| `retropus/graph/imports.py` | 多语言 `IMPORTS` 边构建与 `ImportIndex` |
 | `retropus/` | 厂商化 KG / BM25 索引运行时 |
 | `config/agent.py` | `RetropusSearchAgentConfig` + `from_env` |
 | `api/retriever.py` | engine 分支与索引缓存 |

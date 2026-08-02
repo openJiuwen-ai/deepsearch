@@ -17,6 +17,7 @@ class AbstractBaseRetriever(ABC):
     """
 
     def __init__(self, kg: KnowledgeGraph):
+        """Bind this retriever to an in-memory ``KnowledgeGraph``."""
         self.kg = kg
 
     def find_file_node_of_a_text_node(self, text_node: KnowledgeGraphNode) -> KnowledgeGraphNode:
@@ -65,6 +66,7 @@ class AbstractBaseRetriever(ABC):
     def _format_ast_result(
         file_node: KnowledgeGraphNode, ast_node: KnowledgeGraphNode
     ) -> Dict[str, Any]:
+        """Serialize a hit as the ``FileNode`` + ``ASTNode`` tool payload dict."""
         return {
             "FileNode": {
                 "node_id": file_node.node_id,
@@ -83,6 +85,7 @@ class AbstractBaseRetriever(ABC):
     def _format_text_result(
         self, text_node: KnowledgeGraphNode, file_node: Optional[KnowledgeGraphNode] = None
     ) -> Dict[str, Any]:
+        """Serialize a hit as the ``FileNode`` + ``TextNode`` tool payload dict."""
         if file_node is None:
             file_node = self.find_file_node_of_a_text_node(text_node)
         return {

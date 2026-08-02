@@ -69,8 +69,9 @@ EXPAND_INHERITANCE_SCHEMA = {
         "description": (
             "List superclass and subclass definitions linked by INHERITS edges "
             "to classes overlapping the currently selected spans (or a given "
-            "file). Use this to find related edit sites in parent/child classes "
-            "before finishing."
+            "file). Recommended when a selected span is inside a class — "
+            "related edit sites often live in parent/child classes — but not "
+            "required before finish."
         ),
         "parameters": {
             "type": "object",
@@ -85,6 +86,47 @@ EXPAND_INHERITANCE_SCHEMA = {
                 "query": {
                     "type": "string",
                     "description": "Optional query to re-rank inheritance neighbors.",
+                },
+            },
+        },
+    },
+}
+
+EXPAND_IMPORTS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "expand_imports",
+        "description": (
+            "List in-repo import neighbors of selected files (or a given "
+            "path) using IMPORTS edges in the knowledge graph (Python, Java, "
+            "JS/TS, Go, Rust, C/C++): modules this file imports, and other repo "
+            "files that import it. Use to find related production modules before "
+            "finish — then read_file / add_context on relevant hits. Suggest-only; "
+            "not required before finish."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Optional repo-relative file to seed from. "
+                        "Defaults to all currently selected files."
+                    ),
+                },
+                "direction": {
+                    "type": "string",
+                    "description": (
+                        "Which edges to follow: 'both' (default), 'out'/'imports' "
+                        "(what this file imports), or 'in'/'importers' "
+                        "(who imports this file)."
+                    ),
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": (
+                        "Hop depth for BFS over the import graph (default 1, max 3)."
+                    ),
                 },
             },
         },
@@ -106,6 +148,13 @@ async def execute_expand_inheritance(env: Any, args: dict) -> ToolOutcome:
     return ToolOutcome(message=observation)
 
 
+async def execute_expand_imports(env: Any, args: dict) -> ToolOutcome:
+    observation = await asyncio.to_thread(
+        env.tools.dispatch, "expand_imports", args or {}
+    )
+    return ToolOutcome(message=observation)
+
+
 EXPAND_FILE_DEFS_SPEC = ToolSpec(
     name="expand_file_defs",
     schema=EXPAND_FILE_DEFS_SCHEMA,
@@ -116,10 +165,16 @@ EXPAND_INHERITANCE_SPEC = ToolSpec(
     schema=EXPAND_INHERITANCE_SCHEMA,
     executor=execute_expand_inheritance,
 )
+EXPAND_IMPORTS_SPEC = ToolSpec(
+    name="expand_imports",
+    schema=EXPAND_IMPORTS_SCHEMA,
+    executor=execute_expand_imports,
+)
 
 EXPAND_SPECS: Dict[str, ToolSpec] = {
     EXPAND_FILE_DEFS_SPEC.name: EXPAND_FILE_DEFS_SPEC,
     EXPAND_INHERITANCE_SPEC.name: EXPAND_INHERITANCE_SPEC,
+    EXPAND_IMPORTS_SPEC.name: EXPAND_IMPORTS_SPEC,
 }
 
 
@@ -129,7 +184,8 @@ class GraphExpandTools:
     Expects the host instance to provide: ``kg``, ``retriever``, ``repo_dir``,
     ``config``, ``issue_text``, ``_issue_about_tests``, ``_file_nodes``,
     ``_all_spans``, ``_defs_by_file``, ``_expanded_files``,
-    ``_second_file_probed``, ``_inheritance_expanded``, and ``selected_files()``.
+    ``_second_file_probed``, ``_inheritance_expanded``, ``_import_index``,
+    ``_rel_to_file_node``, and ``selected_files()``.
     """
 
     def expand_file_defs(self, path: str, query: Optional[str] = None) -> str:
@@ -362,6 +418,105 @@ class GraphExpandTools:
 
         rows.sort(key=lambda t: -t[0])
         lines.extend(row for _, row in rows[:40])
+        return "\n".join(lines)
+
+    def _ensure_import_index(self):
+        from openjiuwen_codesearch.retropus.graph.imports import (  # noqa: PLC0415
+            build_import_index,
+            collect_kg_file_paths,
+            import_index_from_kg,
+        )
+
+        if self._import_index is not None:
+            return self._import_index
+        # Prefer IMPORTS edges already materialised on the knowledge graph.
+        if hasattr(self.kg, "get_imports_edges"):
+            index = import_index_from_kg(self.kg)
+            if index.outgoing or index.incoming or list(self.kg.get_imports_edges()):
+                self._import_index = index
+                return self._import_index
+        # Fallback for lightweight test KGs without IMPORTS edges.
+        paths = collect_kg_file_paths(self._file_nodes)
+        if not paths:
+            paths = sorted(self._rel_to_file_node.keys())
+        self._import_index = build_import_index(self.repo_dir, paths)
+        return self._import_index
+
+    def expand_imports(
+        self,
+        path: Optional[str] = None,
+        direction: str = "both",
+        depth: int = 1,
+    ) -> str:
+        """List in-repo import targets and/or importers for selected files."""
+        from openjiuwen_codesearch.algorithm.prompts.retropus import (  # noqa: PLC0415
+            EXPAND_IMPORTS_HEADER,
+        )
+
+        if self.config.imp_second_file_probe:
+            self._second_file_probed = True
+
+        if path:
+            seed_files = [normalize_rel_path(str(path))]
+        else:
+            seed_files = self.selected_files()
+        seed_files = [f for f in seed_files if f]
+        if not seed_files:
+            return (
+                "expand_imports: no selected spans yet. "
+                "add_context on a file first, then call expand_imports "
+                "(or pass path=)."
+            )
+
+        index = self._ensure_import_index()
+        lines = [EXPAND_IMPORTS_HEADER.rstrip("\n")]
+        lines.append(
+            f"Seeds: {', '.join(seed_files)}  "
+            f"(direction={direction or 'both'}, depth={max(1, min(int(depth or 1), 3))})"
+        )
+
+        seen_rows: set[Tuple[str, str, str, str]] = set()
+        rows: List[str] = []
+        for seed in seed_files:
+            if seed not in index.known_files and not (self.repo_dir / seed).is_file():
+                rows.append(f"  [skip] {seed} — not in knowledge graph / worktree")
+                continue
+            neighbors = index.neighbors(
+                seed,
+                direction=direction or "both",
+                depth=depth,
+                max_nodes=80,
+            )
+            if not neighbors:
+                rows.append(f"  [none] {seed}")
+                continue
+            for other, name, edge_dir in neighbors:
+                if (
+                    self.config.imp_ban_tests
+                    and is_test_path(other)
+                    and not self._issue_about_tests
+                ):
+                    continue
+                key = (seed, other, name, edge_dir)
+                if key in seen_rows:
+                    continue
+                seen_rows.add(key)
+                if edge_dir == "imports":
+                    rows.append(f"  [{seed}] imports {other}  (as {name})")
+                else:
+                    rows.append(f"  [{seed}] imported_by {other}  (as {name})")
+
+        if not any((" imports " in r or " imported_by " in r) for r in rows):
+            return (
+                "\n".join(lines)
+                + "\nNo in-repo import neighbors found for: "
+                + ", ".join(seed_files)
+                + "."
+            )
+
+        lines.extend(rows[:60])
+        if len(rows) > 60:
+            lines.append(f"... [{len(rows) - 60} more omitted]")
         return "\n".join(lines)
 
     def _ensure_defs_index(self) -> Dict[str, List[Tuple[int, int, Any]]]:

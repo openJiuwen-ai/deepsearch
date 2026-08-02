@@ -26,6 +26,9 @@ from openjiuwen_codesearch.retropus.graph.graph_types import (
     KnowledgeGraphEdgeType,
     KnowledgeGraphNode,
 )
+from openjiuwen_codesearch.retropus.graph.imports import (  # noqa: F401
+    parse_python_import_map,
+)
 
 _DEFINITION_KEYWORDS = (
     "function",
@@ -42,6 +45,7 @@ _DEFINITION_SUFFIXES = ("definition", "declaration", "specifier", "item", "spec"
 
 
 def _is_definition_ast_type(ast_type: str) -> bool:
+    """True for tree-sitter types that look like named definitions (fn/class/…)."""
     t = ast_type.lower()
     if not any(keyword in t for keyword in _DEFINITION_KEYWORDS):
         return False
@@ -187,6 +191,7 @@ def is_class_ast_type(ast_type: str) -> bool:
 
 
 def _is_test_path(rel: str) -> bool:
+    """True if a repo-relative path looks like a test file or test directory."""
     return bool(_TEST_PATH_RE.search(rel.replace("\\", "/")))
 
 
@@ -236,6 +241,7 @@ def _matching_brace_body(text: str, open_idx: int) -> Optional[str]:
 
 
 def _simple_name(expr: str) -> str:
+    """Last segment of a dotted or ``::``-qualified type expression."""
     return re.split(r"::|\.", expr)[-1]
 
 
@@ -259,6 +265,7 @@ def extract_class_name_and_bases(text: str) -> Tuple[Optional[str], List[str]]:
 
 
 def _extract_python(text: str) -> Optional[Tuple[str, List[str]]]:
+    """Parse ``class Name(Base, ...):`` → ``(name, bases)``."""
     match = _PY_CLASS_RE.search(text)
     if not match:
         return None
@@ -417,6 +424,7 @@ def _go_interface_embedded_types(body: str) -> List[str]:
 
 
 def _extract_rust_trait(text: str) -> Optional[Tuple[str, List[str]]]:
+    """Parse ``trait Name: Super + Other`` → ``(name, supertraits)``."""
     match = _RUST_TRAIT_RE.search(text)
     if not match:
         return None
@@ -466,6 +474,7 @@ def _split_base_args(raw: str) -> List[str]:
 
 
 def _normalize_base_expr(expr: str) -> Optional[str]:
+    """Clean a base-type expression; return ``None`` for skippable / invalid bases."""
     expr = (expr or "").strip()
     if not expr or expr == "...":
         return None

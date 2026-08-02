@@ -46,6 +46,7 @@ def _split_with_separator(text: str, separator: str) -> List[str]:
 
 
 def _join_docs(docs: List[str], separator: str) -> str | None:
+    """Join split pieces with ``separator``, returning ``None`` for empty/whitespace."""
     text = separator.join(docs).strip()
     return text or None
 
@@ -57,6 +58,7 @@ def _merge_splits(
     chunk_size: int,
     chunk_overlap: int,
 ) -> List[str]:
+    """Greedily merge ``splits`` into chunks of at most ``chunk_size`` with overlap."""
     separator_len = len(separator)
     docs: List[str] = []
     current_doc: List[str] = []
@@ -89,6 +91,7 @@ def _split_text(
     chunk_size: int,
     chunk_overlap: int,
 ) -> List[str]:
+    """Recursively split ``text`` with the coarsest matching separator, then merge."""
     separator = separators[-1]
     new_separators: List[str] = []
     for i, candidate in enumerate(separators):

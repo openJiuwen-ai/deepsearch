@@ -67,11 +67,16 @@ class FakeLLM:
         self.responses = list(responses or [])
         self.handler = handler
         self.calls: list[tuple[list[ChatMessage], Optional[list[dict]]]] = []
+        self.call_kwargs: list[dict] = []
 
     async def invoke(
-        self, messages: list[ChatMessage], tools: Optional[list[dict]] = None
+        self,
+        messages: list[ChatMessage],
+        tools: Optional[list[dict]] = None,
+        **kwargs,
     ) -> LLMResponse:
         self.calls.append((messages, tools))
+        self.call_kwargs.append(dict(kwargs))
         if self.handler is not None:
             return self.handler(messages, tools)
         if not self.responses:

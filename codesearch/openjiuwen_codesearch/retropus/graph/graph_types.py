@@ -91,6 +91,7 @@ class KnowledgeGraphNode:
 
     @classmethod
     def from_neo4j_file_node(cls, node: "Neo4jFileNode") -> "KnowledgeGraphNode":
+        """Rebuild a ``KnowledgeGraphNode`` wrapping a ``FileNode`` from Neo4j dict fields."""
         return cls(
             node_id=node["node_id"],
             node=FileNode(
@@ -101,6 +102,7 @@ class KnowledgeGraphNode:
 
     @classmethod
     def from_neo4j_ast_node(cls, node: "Neo4jASTNode") -> "KnowledgeGraphNode":
+        """Rebuild a ``KnowledgeGraphNode`` wrapping an ``ASTNode`` from Neo4j dict fields."""
         return cls(
             node_id=node["node_id"],
             node=ASTNode(
@@ -113,6 +115,7 @@ class KnowledgeGraphNode:
 
     @classmethod
     def from_neo4j_text_node(cls, node: "Neo4jTextNode") -> "KnowledgeGraphNode":
+        """Rebuild a ``KnowledgeGraphNode`` wrapping a ``TextNode`` from Neo4j dict fields."""
         return cls(
             node_id=node["node_id"],
             node=TextNode(
@@ -132,6 +135,7 @@ class KnowledgeGraphEdgeType(enum.StrEnum):
     has_text = "HAS_TEXT"  # FileNode -> TextNode
     next_chunk = "NEXT_CHUNK"  # TextNode -> TextNode
     inherits = "INHERITS"  # ASTNode (subclass) -> ASTNode (superclass)
+    imports = "IMPORTS"  # FileNode (importer) -> FileNode (imported module)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -157,6 +161,7 @@ class KnowledgeGraphEdge:
         "Neo4jHasTextEdge",
         "Neo4jNextChunkEdge",
         "Neo4jInheritsEdge",
+        "Neo4jImportsEdge",
     ]:
         """Convert the KnowledgeGraphEdge into a Neo4j edge format."""
         match self.type:
@@ -190,6 +195,11 @@ class KnowledgeGraphEdge:
                     source=self.source.to_neo4j_node(),
                     target=self.target.to_neo4j_node(),
                 )
+            case KnowledgeGraphEdgeType.imports:
+                return Neo4jImportsEdge(
+                    source=self.source.to_neo4j_node(),
+                    target=self.target.to_neo4j_node(),
+                )
             case _:
                 raise ValueError(f"Unknown edge type: {self.type}")
 
@@ -200,6 +210,8 @@ class KnowledgeGraphEdge:
 
 
 class Neo4jMetadataNode(TypedDict):
+    """Repo-level metadata attached when exporting a graph to Neo4j."""
+
     codebase_source: str
     local_path: str
     https_url: str
@@ -207,12 +219,16 @@ class Neo4jMetadataNode(TypedDict):
 
 
 class Neo4jFileNode(TypedDict):
+    """Neo4j property dict for a ``FileNode``."""
+
     node_id: int
     basename: str
     relative_path: str
 
 
 class Neo4jASTNode(TypedDict):
+    """Neo4j property dict for an ``ASTNode``."""
+
     node_id: int
     type: str
     start_line: int
@@ -221,6 +237,8 @@ class Neo4jASTNode(TypedDict):
 
 
 class Neo4jTextNode(TypedDict):
+    """Neo4j property dict for a ``TextNode``."""
+
     node_id: int
     text: str
     start_line: int
@@ -228,30 +246,49 @@ class Neo4jTextNode(TypedDict):
 
 
 class Neo4jHasFileEdge(TypedDict):
+    """Neo4j edge dict for ``HAS_FILE`` (directory → child file/dir)."""
+
     source: Neo4jFileNode
     target: Neo4jFileNode
 
 
 class Neo4jHasASTEdge(TypedDict):
+    """Neo4j edge dict for ``HAS_AST`` (file → AST root)."""
+
     source: Neo4jFileNode
     target: Neo4jASTNode
 
 
 class Neo4jParentOfEdge(TypedDict):
+    """Neo4j edge dict for ``PARENT_OF`` (AST parent → AST child)."""
+
     source: Neo4jASTNode
     target: Neo4jASTNode
 
 
 class Neo4jHasTextEdge(TypedDict):
+    """Neo4j edge dict for ``HAS_TEXT`` (file → text chunk)."""
+
     source: Neo4jFileNode
     target: Neo4jTextNode
 
 
 class Neo4jNextChunkEdge(TypedDict):
+    """Neo4j edge dict for ``NEXT_CHUNK`` (text chunk → next chunk)."""
+
     source: Neo4jTextNode
     target: Neo4jTextNode
 
 
 class Neo4jInheritsEdge(TypedDict):
+    """Neo4j edge dict for ``INHERITS`` (subtype AST → supertype AST)."""
+
     source: Neo4jASTNode
     target: Neo4jASTNode
+
+
+class Neo4jImportsEdge(TypedDict):
+    """Neo4j edge dict for ``IMPORTS`` (importer file → imported file)."""
+
+    source: Neo4jFileNode
+    target: Neo4jFileNode

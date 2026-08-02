@@ -104,24 +104,29 @@ def test_retropus_finish_blocked():
 def test_retropus_registry_uses_graph_expand_specs():
     from openjiuwen_codesearch.algorithm.search_tools.graph_tools import (
         EXPAND_FILE_DEFS_SCHEMA,
+        EXPAND_IMPORTS_SCHEMA,
         EXPAND_INHERITANCE_SCHEMA,
         execute_expand_file_defs,
+        execute_expand_imports,
         execute_expand_inheritance,
     )
 
     schemas = list(CORE_SCHEMAS)
     schemas.insert(-1, EXPAND_FILE_DEFS_SCHEMA)
     schemas.insert(-1, EXPAND_INHERITANCE_SCHEMA)
+    schemas.insert(-1, EXPAND_IMPORTS_SCHEMA)
     tools = FakeRetropusTools(schemas=schemas)
     registry = build_retropus_registry(tools)
 
-    assert list(registry)[-3:] == [
+    assert list(registry)[-4:] == [
         "expand_file_defs",
         "expand_inheritance",
+        "expand_imports",
         "finish",
     ]
     assert registry["expand_file_defs"].executor is execute_expand_file_defs
     assert registry["expand_inheritance"].executor is execute_expand_inheritance
+    assert registry["expand_imports"].executor is execute_expand_imports
 
     class Env:
         def __init__(self):

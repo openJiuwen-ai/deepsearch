@@ -32,6 +32,7 @@ class FileType(enum.StrEnum):
 
     @classmethod
     def from_path(cls, path: Path):
+        """Map a filesystem path to a tree-sitter ``FileType`` (or ``UNKNOWN``)."""
         # Determine the file type based on the file extension or name
         if path.name.lower() == "dockerfile":
             return cls.DOCKERFILE

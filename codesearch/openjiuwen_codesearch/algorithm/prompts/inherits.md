@@ -1,1 +1,1 @@
-When a selected span is inside a class, use `expand_inheritance` to inspect its superclass and subclasses (INHERITS neighbors) before finishing — related edit sites often live one hop away on the inheritance graph.
+When a selected span is inside a class, consider `expand_inheritance` to inspect its superclass and subclasses (INHERITS neighbors) — related edit sites often live one hop away on the inheritance graph. This is recommended, not required; you may still `finish` without it.

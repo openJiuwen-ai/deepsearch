@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
 @dataclass
 class RetropusRunContext:
+    """Mutable per-run state for ``RetropusCodeSearchAgent`` (not shared across runs)."""
+
     config: CodeSearchConfig
     retropus_config: "RetropusSearchAgentConfig"
     query: str
@@ -47,6 +49,7 @@ class RetropusRunContext:
     history: list[ChatMessage] = field(default_factory=list)
     pending_calls: list[ToolCall] = field(default_factory=list)
     system_prompt: str = ""
+    prompt_cache_key: Optional[str] = None
     issue_text: str = ""
     termination: Optional[Termination] = None
     error: str = ""
@@ -55,17 +58,21 @@ class RetropusRunContext:
 
     @property
     def total_input_tokens(self) -> int:
+        """Sum of recorded input tokens across all stages."""
         return sum(i for i, _ in self.tokens_by_stage.values())
 
     @property
     def total_output_tokens(self) -> int:
+        """Sum of recorded output tokens across all stages."""
         return sum(o for _, o in self.tokens_by_stage.values())
 
     def add_tokens(self, stage: str, input_tokens: int, output_tokens: int) -> None:
+        """Accumulate token usage for ``stage`` (additive across calls)."""
         prev_in, prev_out = self.tokens_by_stage.get(stage, (0, 0))
         self.tokens_by_stage[stage] = (prev_in + input_tokens, prev_out + output_tokens)
 
     def write_trace(self, record: dict[str, Any]) -> None:
+        """Append one JSONL trace record when ``trace_path`` is configured."""
         if not self.trace_path:
             return
         os.makedirs(os.path.dirname(self.trace_path), exist_ok=True)
@@ -85,6 +92,7 @@ def build_retropus_run_context(
     issue_title: str = "",
     issue_body: str = "",
 ) -> RetropusRunContext:
+    """Construct run context, ``RetrievalTools``, issue text, and optional trace path."""
     from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (  # noqa: PLC0415
         RetrievalTools,
     )

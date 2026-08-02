@@ -226,6 +226,7 @@ def _build_definition_forest(defs: List[Tuple[KnowledgeGraphNode, float]]) -> Li
     entries = [{"node": node, "score": score, "children": []} for node, score in defs]
 
     def parent_index(child_idx: int) -> Optional[int]:
+        """Index of the tightest enclosing definition, or ``None`` for a root."""
         child = entries[child_idx]["node"]
         best_idx: Optional[int] = None
         best_span = None
@@ -250,6 +251,7 @@ def _build_definition_forest(defs: List[Tuple[KnowledgeGraphNode, float]]) -> Li
 
 
 def _render_forest(entries: List[Dict[str, Any]], depth: int, lines: List[str]) -> None:
+    """Append indented definition labels for ``entries`` (and nested children) to ``lines``."""
     seen: set[str] = set()
     for entry in entries:
         name = definition_name(entry["node"])
@@ -300,6 +302,7 @@ class BM25Retriever(AbstractBaseRetriever):
         code_aware_tokenizer: bool = False,
         tokenize_workers: int = DEFAULT_TOKENIZE_WORKERS,
     ):
+        """Configure BM25 hyperparameters and optional code-aware tokenization."""
         super().__init__(kg)
         self.k1 = k1
         self.b = b
@@ -316,6 +319,7 @@ class BM25Retriever(AbstractBaseRetriever):
     # ------------------------------------------------------------------ #
 
     def _tokenize_fn(self) -> Callable[[str], List[str]]:
+        """Return the tokenizer used for both index build and query time."""
         return tokenize_code_text if self.code_aware_tokenizer else tokenize_bm25s_default_text
 
     def _tokenize(
@@ -425,6 +429,7 @@ class BM25Retriever(AbstractBaseRetriever):
     def search_ast_nodes(
         self, query: str, target_file_nodes: List[KnowledgeGraphNode]
     ) -> Tuple[str, List[Dict[str, Any]]]:
+        """BM25-rank AST nodes under ``target_file_nodes``; return formatted text + hits."""
         target_ids = {n.node_id for n in target_file_nodes}
 
         results: List[Dict[str, Any]] = []
@@ -441,6 +446,7 @@ class BM25Retriever(AbstractBaseRetriever):
     def search_text_nodes(
         self, query: str, basename: Optional[str] = None
     ) -> Tuple[str, List[Dict[str, Any]]]:
+        """BM25-rank text chunks, optionally restricted to a file basename."""
         results: List[Dict[str, Any]] = []
         for idx, _score in self._rank_all(query):
             doc = self._documents[idx]
