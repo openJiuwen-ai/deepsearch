@@ -3,16 +3,20 @@
 
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from openjiuwen_codesearch.config.config import CodeSearchConfig
 from openjiuwen_codesearch.domain.models import ToolCall
 from openjiuwen_codesearch.domain.result import Termination
+from openjiuwen_codesearch.framework.openjiuwen.token_trace import (
+    add_tokens as _add_tokens,
+    build_trace_path,
+    total_input_tokens as _total_input_tokens,
+    total_output_tokens as _total_output_tokens,
+    write_trace as _write_trace,
+)
 from openjiuwen_codesearch.llm.factory import ChatMessage, LLMClient
 
 if TYPE_CHECKING:
@@ -64,25 +68,20 @@ class RetropusRunContext:
     @property
     def total_input_tokens(self) -> int:
         """Sum of recorded input tokens across all stages."""
-        return sum(i for i, _ in self.tokens_by_stage.values())
+        return _total_input_tokens(self.tokens_by_stage)
 
     @property
     def total_output_tokens(self) -> int:
         """Sum of recorded output tokens across all stages."""
-        return sum(o for _, o in self.tokens_by_stage.values())
+        return _total_output_tokens(self.tokens_by_stage)
 
     def add_tokens(self, stage: str, input_tokens: int, output_tokens: int) -> None:
         """Accumulate token usage for ``stage`` (additive across calls)."""
-        prev_in, prev_out = self.tokens_by_stage.get(stage, (0, 0))
-        self.tokens_by_stage[stage] = (prev_in + input_tokens, prev_out + output_tokens)
+        _add_tokens(self.tokens_by_stage, stage, input_tokens, output_tokens)
 
     def write_trace(self, record: dict[str, Any]) -> None:
         """Append one JSONL trace record when ``trace_path`` is configured."""
-        if not self.trace_path:
-            return
-        os.makedirs(os.path.dirname(self.trace_path), exist_ok=True)
-        with open(self.trace_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        _write_trace(self.trace_path, record)
 
 
 def build_retropus_run_context(
@@ -114,12 +113,6 @@ def build_retropus_run_context(
         kg, retriever, Path(repo_dir), retropus_config, issue_text=issue_text
     )
 
-    trace_path = None
-    if config.agent.trace_dir:
-        stamp = datetime.now().strftime("%Y%m%d__%H%M%S_%f")
-        safe = str(repo_dir).replace("/", "_")[:64]
-        trace_path = os.path.join(config.agent.trace_dir, stamp, f"retropus_{safe}.jsonl")
-
     return RetropusRunContext(
         config=config.model_copy(deep=True),
         retropus_config=retropus_config,
@@ -131,5 +124,7 @@ def build_retropus_run_context(
         main_llm=main_llm,
         tools=tools,
         issue_text=issue_text,
-        trace_path=trace_path,
+        trace_path=build_trace_path(
+            config.agent.trace_dir, str(repo_dir), stem_prefix="retropus_"
+        ),
     )

@@ -3,49 +3,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from openjiuwen_codesearch.algorithm.search_tools.memory_tools import execute_delete
 from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (
-    RetrievalTools,
     build_retropus_registry,
 )
-from openjiuwen_codesearch.config.agent import RetropusSearchAgentConfig
 from tests.conftest import run
-
-
-class _FakeKG:
-    def get_file_nodes(self):
-        return []
-
-
-class _FakeRetriever:
-    pass
-
-
-def _tools(repo: Path, **cfg) -> RetrievalTools:
-    opts = dict(
-        feat_delete_snippets=True,
-        feat_ban_tests=False,
-        feat_second_file_probe=False,
-        feat_same_file_expand=False,
-        feat_anti_early_finish=False,
-        feat_inherits_expand=False,
-        feat_expand_imports=False,
-    )
-    opts.update(cfg)
-    return RetrievalTools(
-        _FakeKG(),
-        _FakeRetriever(),
-        repo,
-        RetropusSearchAgentConfig(**opts),
-    )
+from tests.unit.retropus_fixtures import make_retropus_tools
 
 
 def test_feat_delete_snippets_registers_tool(tmp_path):
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
-    tools = _tools(tmp_path)
+    tools = make_retropus_tools(tmp_path, feat_delete_snippets=True)
     names = [s["function"]["name"] for s in tools.tool_schemas()]
     assert names[-2:] == ["delete_snippets", "finish"]
 
@@ -54,7 +24,7 @@ def test_feat_delete_snippets_registers_tool(tmp_path):
 
 
 def test_feat_delete_snippets_off_omits_tool(tmp_path):
-    tools = _tools(tmp_path, feat_delete_snippets=False)
+    tools = make_retropus_tools(tmp_path, feat_delete_snippets=False)
     names = [s["function"]["name"] for s in tools.tool_schemas()]
     assert "delete_snippets" not in names
 
@@ -62,7 +32,7 @@ def test_feat_delete_snippets_off_omits_tool(tmp_path):
 def test_delete_snippets_removes_span_by_id(tmp_path):
     (tmp_path / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
     (tmp_path / "b.py").write_text("def g():\n    return 2\n", encoding="utf-8")
-    tools = _tools(tmp_path)
+    tools = make_retropus_tools(tmp_path, feat_delete_snippets=True)
 
     msg1 = tools.add_context("a.py", 1, 2)
     msg2 = tools.add_context("b.py", 1, 2)

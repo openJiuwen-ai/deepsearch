@@ -4,11 +4,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 from openjiuwen_codesearch.algorithm.prompts import load_prompt
 from openjiuwen_codesearch.algorithm.prompts.retropus import build_system_prompt
-from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import RetrievalTools
 from openjiuwen_codesearch.config.agent import RetropusSearchAgentConfig
 from openjiuwen_codesearch.retropus.graph.graph_types import (
     FileNode,
@@ -23,22 +21,7 @@ from openjiuwen_codesearch.retropus.graph.imports import (
     resolve_import_targets,
     resolve_module_to_existing_file,
 )
-
-
-class _FakeKG:
-    def __init__(self, rels: list[str] | None = None):
-        self._rels = rels or []
-
-    def get_file_nodes(self):
-        out = []
-        for rel in self._rels:
-            node = SimpleNamespace(relative_path=rel)
-            out.append(SimpleNamespace(node=node))
-        return out
-
-
-class _FakeRetriever:
-    pass
+from tests.unit.retropus_fixtures import make_retropus_tools
 
 
 class _KgWithImports:
@@ -100,24 +83,6 @@ def _file_nodes(rels: list[str]) -> list[KnowledgeGraphNode]:
             )
         )
     return nodes
-
-
-def _tools(repo: Path, rels: list[str], **cfg) -> RetrievalTools:
-    opts = dict(
-        feat_expand_imports=True,
-        feat_ban_tests=False,
-        feat_second_file_probe=False,
-        feat_same_file_expand=False,
-        feat_anti_early_finish=False,
-        feat_inherits_expand=False,
-    )
-    opts.update(cfg)
-    return RetrievalTools(
-        _FakeKG(rels),
-        _FakeRetriever(),
-        repo,
-        RetropusSearchAgentConfig(**opts),
-    )
 
 
 def test_expand_imports_off_by_default():
@@ -195,11 +160,8 @@ def test_build_imports_edges_and_tool_from_kg(tmp_path: Path):
     assert "pkg/b.py" in {t for t, _ in index.imports_of("pkg/a.py")}
     assert "pkg/d.py" in {s for s, _ in index.importers_of("pkg/a.py")}
 
-    tools = RetrievalTools(
-        kg,
-        _FakeRetriever(),
-        tmp_path,
-        RetropusSearchAgentConfig(feat_expand_imports=True, feat_ban_tests=False),
+    tools = make_retropus_tools(
+        tmp_path, kg=kg, feat_expand_imports=True, feat_ban_tests=False
     )
     tools.add_context("pkg/a.py", 1, 2)
     out = tools.expand_imports(direction="both", depth=1)
@@ -210,7 +172,7 @@ def test_build_imports_edges_and_tool_from_kg(tmp_path: Path):
 
 def test_expand_imports_tool_out_and_in(tmp_path: Path):
     rels = _write_pkg(tmp_path)
-    tools = _tools(tmp_path, rels)
+    tools = make_retropus_tools(tmp_path, rels=rels, feat_expand_imports=True)
     tools.add_context("pkg/a.py", 1, 2)
 
     both = tools.expand_imports(direction="both", depth=1)
@@ -228,7 +190,9 @@ def test_expand_imports_tool_out_and_in(tmp_path: Path):
 
 def test_expand_imports_respects_ban_tests(tmp_path: Path):
     rels = _write_pkg(tmp_path)
-    tools = _tools(tmp_path, rels, feat_ban_tests=True)
+    tools = make_retropus_tools(
+        tmp_path, rels=rels, feat_expand_imports=True, feat_ban_tests=True
+    )
     out = tools.expand_imports(path="pkg/a.py", direction="in", depth=1)
     assert "pkg/d.py" in out
     assert "test_a.py" not in out
@@ -236,7 +200,9 @@ def test_expand_imports_respects_ban_tests(tmp_path: Path):
 
 def test_expand_imports_marks_second_file_probe(tmp_path: Path):
     rels = _write_pkg(tmp_path)
-    tools = _tools(tmp_path, rels, feat_second_file_probe=True)
+    tools = make_retropus_tools(
+        tmp_path, rels=rels, feat_expand_imports=True, feat_second_file_probe=True
+    )
     tools.add_context("pkg/a.py", 1, 2)
     blocked = tools.finish()
     assert blocked.startswith("finish blocked")
@@ -246,11 +212,11 @@ def test_expand_imports_marks_second_file_probe(tmp_path: Path):
 
 def test_expand_imports_not_in_schema_when_off(tmp_path: Path):
     rels = _write_pkg(tmp_path)
-    tools = _tools(tmp_path, rels, feat_expand_imports=False)
+    tools = make_retropus_tools(tmp_path, rels=rels, feat_expand_imports=False)
     names = [s["function"]["name"] for s in tools.tool_schemas()]
     assert "expand_imports" not in names
 
-    tools_on = _tools(tmp_path, rels, feat_expand_imports=True)
+    tools_on = make_retropus_tools(tmp_path, rels=rels, feat_expand_imports=True)
     names_on = [s["function"]["name"] for s in tools_on.tool_schemas()]
     assert "expand_imports" in names_on
 

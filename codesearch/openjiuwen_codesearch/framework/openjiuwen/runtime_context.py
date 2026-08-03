@@ -8,10 +8,7 @@
 - config 为深拷贝副本，运行期只读。
 """
 
-import json
-import os
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 from openjiuwen_search_base.runtime import RunRegistry
@@ -20,6 +17,13 @@ from openjiuwen_codesearch.config.config import CodeSearchConfig
 from openjiuwen_codesearch.domain.memory import SnippetMemory
 from openjiuwen_codesearch.domain.models import ToolCall
 from openjiuwen_codesearch.domain.result import Termination
+from openjiuwen_codesearch.framework.openjiuwen.token_trace import (
+    add_tokens as _add_tokens,
+    build_trace_path,
+    total_input_tokens as _total_input_tokens,
+    total_output_tokens as _total_output_tokens,
+    write_trace as _write_trace,
+)
 from openjiuwen_codesearch.llm.factory import ChatMessage, LLMClient
 from openjiuwen_codesearch.retrieval.base import CodeRetriever
 
@@ -65,22 +69,17 @@ class CodeSearchRunContext:
 
     @property
     def total_input_tokens(self) -> int:
-        return sum(i for i, _ in self.tokens_by_stage.values())
+        return _total_input_tokens(self.tokens_by_stage)
 
     @property
     def total_output_tokens(self) -> int:
-        return sum(o for _, o in self.tokens_by_stage.values())
+        return _total_output_tokens(self.tokens_by_stage)
 
     def add_tokens(self, stage: str, input_tokens: int, output_tokens: int) -> None:
-        prev_in, prev_out = self.tokens_by_stage.get(stage, (0, 0))
-        self.tokens_by_stage[stage] = (prev_in + input_tokens, prev_out + output_tokens)
+        _add_tokens(self.tokens_by_stage, stage, input_tokens, output_tokens)
 
     def write_trace(self, record: dict[str, Any]) -> None:
-        if not self.trace_path:
-            return
-        os.makedirs(os.path.dirname(self.trace_path), exist_ok=True)
-        with open(self.trace_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        _write_trace(self.trace_path, record)
 
 
 # --- 运行注册表（泛型实现由 base 包提供）：workflow session 只携带可序列化的
@@ -114,11 +113,6 @@ def build_run_context(
     main_llm: LLMClient,
     filter_llm: LLMClient,
 ) -> CodeSearchRunContext:
-    trace_path = None
-    if config.agent.trace_dir:
-        stamp = datetime.now().strftime("%Y%m%d__%H%M%S_%f")
-        safe_rev = revision.replace("/", "_")[:64]
-        trace_path = os.path.join(config.agent.trace_dir, stamp, f"{safe_rev}.jsonl")
     return CodeSearchRunContext(
         config=config.model_copy(deep=True),
         query=query,
@@ -127,5 +121,5 @@ def build_run_context(
         retriever=retriever,
         main_llm=main_llm,
         filter_llm=filter_llm,
-        trace_path=trace_path,
+        trace_path=build_trace_path(config.agent.trace_dir, revision),
     )

@@ -12,7 +12,7 @@ from openjiuwen_codesearch.config.llm import LLMConfig, LLMSuite
 from openjiuwen_codesearch.config.agent import RetropusSearchAgentConfig
 from openjiuwen_codesearch.framework.openjiuwen.agent import RetropusCodeSearchAgent
 from openjiuwen_codesearch.framework.openjiuwen.retropus_context import RetropusRunContext
-from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import RetrievalTools
+from tests.unit.retropus_fixtures import FakeRetriever, make_retropus_tools
 
 
 def _ast(rel: str, start: int, end: int, name: str = "foo"):
@@ -24,14 +24,6 @@ def _ast(rel: str, start: int, end: int, name: str = "foo"):
         relative_path=rel,
     )
     return SimpleNamespace(node=node)
-
-
-class _FakeRetriever:
-    def __init__(self, ranked):
-        self._ranked = ranked
-
-    def score_files_and_defs(self, query, top_k=10, max_defs_per_file=20):
-        return self._ranked[:top_k]
 
 
 def _write_repo(tmp_path: Path) -> None:
@@ -68,12 +60,11 @@ def _ctx(tmp_path: Path, ranked, *, min_mandatory: int, tools=None) -> RetropusR
         min_mandatory_return_spans=min_mandatory,
         feat_ban_tests=False,
     )
-    retriever = _FakeRetriever(ranked)
-    tools = tools or RetrievalTools(
-        SimpleNamespace(get_file_nodes=lambda: []),
-        retriever,
+    retriever = FakeRetriever(ranked)
+    tools = tools or make_retropus_tools(
         tmp_path,
-        cfg,
+        retriever=retriever,
+        min_mandatory_return_spans=min_mandatory,
     )
     cs = CodeSearchConfig(llm=LLMSuite(main=LLMConfig(model_name="fake")))
     cs.agent.engine = "retropus"
@@ -106,15 +97,10 @@ def test_pad_spans_reaches_mandatory_target(tmp_path: Path):
 def test_pad_spans_only_fills_deficit(tmp_path: Path):
     _write_repo(tmp_path)
     ranked = _ranked_three_files(tmp_path)
-    cfg = RetropusSearchAgentConfig(
-        min_mandatory_return_spans=3,
-        feat_ban_tests=False,
-    )
-    tools = RetrievalTools(
-        SimpleNamespace(get_file_nodes=lambda: []),
-        _FakeRetriever(ranked),
+    tools = make_retropus_tools(
         tmp_path,
-        cfg,
+        retriever=FakeRetriever(ranked),
+        min_mandatory_return_spans=3,
     )
     tools.add_context("pkg/a.py", 1, 2, reason="agent")
     ctx = _ctx(tmp_path, ranked, min_mandatory=3, tools=tools)

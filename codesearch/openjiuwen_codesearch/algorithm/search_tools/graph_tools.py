@@ -9,16 +9,10 @@ Never register these into CodeSearch ``build_default_registry``.
 from __future__ import annotations
 
 import asyncio
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from openjiuwen_codesearch.algorithm.search_tools.registry import ToolOutcome, ToolSpec
-
-_TEST_PATH_RE = re.compile(
-    r"(^|/)(tests?|testing)(/|$)|(^|/)test_[^/]+\.(py|js|ts|java|go|rb|rs)$|"
-    r"(^|/)[^/]+_test\.(py|js|ts|java|go|rb|rs)$|(^|/)conftest\.py$",
-    re.IGNORECASE,
-)
+from openjiuwen_codesearch.retropus.path_utils import is_test_path  # re-export
 
 
 def normalize_rel_path(path: str) -> str:
@@ -30,10 +24,6 @@ def normalize_rel_path(path: str) -> str:
     while p.startswith("./"):
         p = p[2:]
     return p.lstrip("/")
-
-
-def is_test_path(rel: str) -> bool:
-    return bool(_TEST_PATH_RE.search(rel.replace("\\", "/")))
 
 
 EXPAND_FILE_DEFS_SCHEMA = {

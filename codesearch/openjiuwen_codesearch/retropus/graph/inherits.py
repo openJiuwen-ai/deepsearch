@@ -29,6 +29,7 @@ from openjiuwen_codesearch.retropus.graph.graph_types import (
 from openjiuwen_codesearch.retropus.graph.imports import (  # noqa: F401
     parse_python_import_map,
 )
+from openjiuwen_codesearch.retropus.path_utils import is_test_path
 
 _DEFINITION_KEYWORDS = (
     "function",
@@ -152,12 +153,6 @@ _RUST_STRUCT_RE = re.compile(r"\bstruct\s+([A-Za-z_]\w*)\b", re.M)
 _CPP_BASE_NOISE_RE = re.compile(
     r"\b(?:public|protected|private|virtual)\b"
 )
-_TEST_PATH_RE = re.compile(
-    r"(^|/)(tests?|testing)(/|$)|(^|/)test_[^/]+\.(py|js|ts|tsx|java|go|rs|c|cc|cpp|cxx)$|"
-    r"(^|/)[^/]+_test\.(py|js|ts|tsx|java|go|rs)$|(^|/)conftest\.py$|"
-    r"(^|/)[^/]+_test\.go$",
-    re.IGNORECASE,
-)
 _CODE_EXTS = (
     ".py",
     ".java",
@@ -188,11 +183,6 @@ def is_class_ast_type(ast_type: str) -> bool:
     if t == "type_spec":
         return True
     return any(k in t for k in ("class", "interface", "struct", "trait"))
-
-
-def _is_test_path(rel: str) -> bool:
-    """True if a repo-relative path looks like a test file or test directory."""
-    return bool(_TEST_PATH_RE.search(rel.replace("\\", "/")))
 
 
 def _strip_angle_generics(text: str) -> str:
@@ -565,7 +555,7 @@ def resolve_base_candidate(
         if len(path_hits) == 1:
             return path_hits[0]
 
-    prod = [c for c in cands if not _is_test_path(c[1].node.relative_path)]
+    prod = [c for c in cands if not is_test_path(c[1].node.relative_path)]
     if len(prod) == 1:
         return prod[0]
     return None
