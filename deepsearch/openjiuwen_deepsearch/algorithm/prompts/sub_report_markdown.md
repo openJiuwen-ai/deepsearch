@@ -6,9 +6,12 @@ given chapter structure.
 
 When structured evidence guidance is provided, use its dimension-to-citation mapping to organize the chapter and treat
 weak dimensions cautiously. An uncovered dimension must not be treated as a source of factual evidence, and you must not
-invent missing facts to complete it. You may make a clearly identified synthesis or analytical judgment about that
-dimension only when it is fully grounded in covered citations from other dimensions; state the remaining evidence
-limitation and do not present the synthesis as a directly reported source fact. The collected evidence remains the
+invent missing facts to complete it. Do not expose the guidance's coverage labels or evidence-selection process in the
+report. Silently omit optional content that depends only on an uncovered dimension. If the user, template, or chapter
+outline explicitly requires that content, preserve that required structure and include only facts directly supported by
+covered citations. Do not use an uncovered dimension as permission to add uncited synthesis, examples, or factual detail.
+Do not narrate the internal evidence process with phrases such as "the evidence is uncovered", "the collected evidence
+does not cover", or "the following is based on a comprehensive assessment". The collected evidence remains the
 authoritative source for every factual claim.
 
 # Input Context

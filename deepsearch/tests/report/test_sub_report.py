@@ -652,9 +652,13 @@ def test_subreport_prompts_share_structured_evidence_semantics(prompt_name):
 
     assert "dimension-to-citation mapping" in normalized_prompt
     assert "must not be treated as a source of factual evidence" in normalized_prompt
-    assert "synthesis or analytical judgment" in normalized_prompt
-    assert "fully grounded in covered citations" in normalized_prompt
-    assert "remaining evidence limitation" in normalized_prompt
+    assert "Do not expose the guidance's coverage labels or evidence-selection process" in normalized_prompt
+    assert "Silently omit optional content that depends only on an uncovered dimension" in normalized_prompt
+    assert "preserve that required structure" in normalized_prompt
+    assert "directly supported by covered citations" in normalized_prompt
+    assert "Do not use an uncovered dimension as permission to add uncited synthesis" in normalized_prompt
+    assert "Do not narrate the internal evidence process" in normalized_prompt
+    assert "remaining evidence limitation" not in normalized_prompt
     assert "collected evidence remains the authoritative source" in normalized_prompt.lower()
 
 
