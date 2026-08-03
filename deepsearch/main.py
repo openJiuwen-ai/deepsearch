@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -111,6 +112,7 @@ async def run_jiuwen_workflow(query: str, agent_config: dict, report_template: s
 
     agent_factory = AgentFactory()
     agent = agent_factory.create_agent(agent_config)
+    final_report_content = None
     async for chunk in agent.run(
         message=query,
         conversation_id=conversation_id,
@@ -123,6 +125,29 @@ async def run_jiuwen_workflow(query: str, agent_config: dict, report_template: s
         report_result = parse_endnode_content(chunk_content)
         if report_result:
             logger.debug("[Final Report is: %s]", report_result)
+            final_report_content = report_result
+
+    # Save report as markdown file
+    if final_report_content:
+        try:
+            report_text = (
+                final_report_content.get("response_content", "")
+                if isinstance(final_report_content, dict)
+                else str(final_report_content)
+            )
+            if report_text:
+                output_dir = Path("output") / "results" / "outline"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                safe_query = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", query[:50]).strip()
+                if not safe_query:
+                    safe_query = "report"
+                timestamp = os.environ.get("RUN_TIMESTAMP") or ""
+                file_name = f"{safe_query}_{conversation_id[:8]}{timestamp}.md"
+                report_path = output_dir / file_name
+                report_path.write_text(report_text, encoding="utf-8")
+                logger.info("Report saved to %s", report_path)
+        except Exception as e:
+            logger.warning("Failed to save report: %s", e)
 
 
 def read_file_safely(file_name: str) -> bytes:
@@ -433,6 +458,13 @@ def main(
         current_agent_config["llm_config"]["general"]["hyper_parameters"] = {
             "top_p": 1.0,
             "temperature": 1.0,
+        }
+        # 关闭思考模式，参考 agent-studio 的 build_single_model_config
+        current_agent_config["llm_config"]["general"]["extension"] = {
+            "extra_body": {
+                "enable_thinking": False,
+                "thinking": {"type": "disabled"},
+            }
         }
 
         # 解析多模态llm配置

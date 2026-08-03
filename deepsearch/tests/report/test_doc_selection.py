@@ -1,10 +1,10 @@
-"""Tests for new document selection methods in report.py.
+"""Tests for document selection methods in report.py.
 
-Covers: _optimize_document_set, _elbow_cutoff, _verify_coverage.
-These are pure-algorithm methods (0 LLM calls).
+Covers: _select_by_rationale_coverage, _verify_coverage,
+_extract_and_score_documents. These are pure-algorithm or
+mock-LLM methods.
 """
 
-import asyncio
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -25,10 +25,9 @@ def _make_reporter():
 
 def _doc(idx, title=None, url=None):
     return {
-        "title": title or f"doc-{idx}",
-        "url": url or f"https://example.com/{idx}",
-        "original_content": f"content-{idx}",
-        "key_passages": [f"passage-{idx}"],
+        "doc_title": title or f"doc-{idx}",
+        "doc_url": url or f"https://example.com/{idx}",
+        "passage_text": f"passage-{idx}",
     }
 
 
@@ -45,9 +44,10 @@ def _coverage_result(docs, matrix, reliability=None, noise=None):
     }
 
 
-# ---------- _optimize_document_set ----------
+# ---------- _select_by_rationale_coverage ----------
 
-def test_optimize_selects_high_coverage_docs_first():
+def test_select_by_rationale_selects_high_coverage_docs_first():
+    """每个 rationale 按 coverage 分数降序选择 top_k 个文档。"""
     reporter = _make_reporter()
     docs = [_doc(0, "出口数据"), _doc(1, "目的国分析"), _doc(2, "无关内容")]
     rationales = [_rationale("r1", "出口数据"), _rationale("r2", "目的国")]
@@ -56,245 +56,102 @@ def test_optimize_selects_high_coverage_docs_first():
         "doc_1": {"r1": 0.1, "r2": 0.9},
         "doc_2": {"r1": 0.05, "r2": 0.05},
     }
-    coverage = _coverage_result(docs, matrix, reliability={"doc_0": 0.8, "doc_1": 0.8, "doc_2": 0.5},
-                                noise={"doc_0": 0.0, "doc_1": 0.0, "doc_2": 0.5})
-
-    selected, values = reporter._optimize_document_set(docs, rationales, coverage, top_k=5)
-
-    assert len(selected) >= 2
-    # doc_0 and doc_1 should be selected before doc_2
-    selected_titles = [d["title"] for d in selected]
-    assert "出口数据" in selected_titles
-    assert "目的国分析" in selected_titles
-    # marginal values should be descending
-    assert values == sorted(values, reverse=True)
-
-
-def test_optimize_stops_when_marginal_value_zero():
-    reporter = _make_reporter()
-    docs = [_doc(0), _doc(1)]
-    rationales = [_rationale("r1", "test")]
-    matrix = {"doc_0": {"r1": 0.0}, "doc_1": {"r1": 0.0}}
     coverage = _coverage_result(docs, matrix)
 
-    selected, values = reporter._optimize_document_set(docs, rationales, coverage, top_k=5)
+    selected, values = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=5)
 
-    # With 0 coverage and some noise/untrustworthy penalty, marginal value <= 0
-    assert len(selected) == 0
+    assert len(selected) >= 2
+    # doc_0 and doc_1 should be selected (highest coverage for r1 and r2)
+    selected_titles = [d["doc_title"] for d in selected]
+    assert "出口数据" in selected_titles
+    assert "目的国分析" in selected_titles
 
 
-def test_optimize_respects_top_k_limit():
+def test_select_by_rationale_respects_top_k_limit():
+    """每个 rationale 最多选择 top_k 个文档。"""
     reporter = _make_reporter()
     docs = [_doc(i) for i in range(15)]
     rationales = [_rationale("r1", "common topic")]
     matrix = {f"doc_{i}": {"r1": 0.5} for i in range(15)}
     coverage = _coverage_result(docs, matrix)
 
-    selected, _ = reporter._optimize_document_set(docs, rationales, coverage, top_k=3)
+    selected, _ = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=3)
 
+    # 1 rationale × top_k=3 = at most 3 docs
     assert len(selected) <= 3
 
 
-def test_optimize_penalty_for_noise_reduces_selection():
+def test_select_by_rationale_deduplicates_across_rationales():
+    """同一文档被多个 rationale 选中时只保留一次(按对象身份去重)。"""
     reporter = _make_reporter()
-    docs = [_doc(0, "good"), _doc(1, "noisy")]
-    rationales = [_rationale("r1", "good")]
-    matrix = {"doc_0": {"r1": 0.5}, "doc_1": {"r1": 0.5}}
-    coverage = _coverage_result(
-        docs, matrix,
-        reliability={"doc_0": 0.9, "doc_1": 0.9},
-        noise={"doc_0": 0.0, "doc_1": 0.8},
-    )
+    docs = [_doc(0, "共享文档"), _doc(1, "r1专属"), _doc(2, "r2专属")]
+    rationales = [_rationale("r1", "主题1"), _rationale("r2", "主题2")]
+    # doc_0 对两个 rationale 都有最高分
+    matrix = {
+        "doc_0": {"r1": 0.9, "r2": 0.9},
+        "doc_1": {"r1": 0.5, "r2": 0.1},
+        "doc_2": {"r1": 0.1, "r2": 0.5},
+    }
+    coverage = _coverage_result(docs, matrix)
 
-    selected, values = reporter._optimize_document_set(docs, rationales, coverage, top_k=2)
+    selected, values = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=2)
 
-    # doc_0 should have higher marginal value due to lower noise
-    assert len(selected) >= 1
-    assert selected[0]["title"] == "good"
+    # doc_0 只出现一次(去重), doc_1 和 doc_2 各被一个 rationale 选中
+    selected_ids = [id(d) for d in selected]
+    assert len(selected_ids) == len(set(selected_ids))  # 无重复
+    # doc_0 应在结果中
+    assert any(d["doc_title"] == "共享文档" for d in selected)
 
 
-def test_optimize_penalty_for_low_reliability():
+def test_select_by_rationale_empty_docs():
+    """空文档列表应返回空结果。"""
     reporter = _make_reporter()
-    docs = [_doc(0, "reliable"), _doc(1, "unreliable")]
-    rationales = [_rationale("r1", "test")]
-    matrix = {"doc_0": {"r1": 0.5}, "doc_1": {"r1": 0.5}}
-    coverage = _coverage_result(
-        docs, matrix,
-        reliability={"doc_0": 0.9, "doc_1": 0.1},
-    )
-
-    selected, values = reporter._optimize_document_set(docs, rationales, coverage, top_k=2)
-
-    assert len(selected) >= 1
-    assert selected[0]["title"] == "reliable"
-
-
-def test_optimize_empty_docs():
-    reporter = _make_reporter()
-    selected, values = reporter._optimize_document_set([], [], {}, top_k=5)
+    selected, values = reporter._select_by_rationale_coverage([], [], {}, top_k=5)
     assert selected == []
     assert values == []
 
 
-def test_optimize_redundancy_penalty_prevents_duplicates():
+def test_select_by_rationale_empty_rationales():
+    """空 rationale 列表应返回空结果。"""
     reporter = _make_reporter()
-    # Two docs with identical content (high n-gram overlap)
-    docs = [_doc(0, "出口数据 2024"), _doc(1, "出口数据 2024")]
-    rationales = [_rationale("r1", "出口数据")]
-    matrix = {"doc_0": {"r1": 0.8}, "doc_1": {"r1": 0.8}}
-    coverage = _coverage_result(docs, matrix, reliability={"doc_0": 0.8, "doc_1": 0.8})
+    docs = [_doc(0), _doc(1)]
+    matrix = {"doc_0": {"r1": 0.5}, "doc_1": {"r1": 0.5}}
+    coverage = _coverage_result(docs, matrix)
 
-    selected, values = reporter._optimize_document_set(docs, rationales, coverage, top_k=5)
-
-    # First doc has high marginal value, second has high redundancy penalty
-    assert len(selected) >= 1
-    if len(selected) == 2:
-        # If both selected, second should have lower value
-        assert values[1] < values[0]
+    selected, values = reporter._select_by_rationale_coverage(docs, [], coverage, top_k=5)
+    assert selected == []
+    assert values == []
 
 
-# ---------- _elbow_cutoff ----------
-
-def test_elbow_cutoff_short_list_returns_all():
+def test_select_by_rationale_marginal_values_are_best_scores():
+    """marginal_values 应为每个选中文档的最佳 coverage 分数。"""
     reporter = _make_reporter()
-    docs = [_doc(0), _doc(1), _doc(2)]
-    result = reporter._elbow_cutoff(docs, [0.9, 0.8, 0.7], top_k=10)
-    assert len(result) == 3
+    docs = [_doc(0), _doc(1)]
+    rationales = [_rationale("r1", "test")]
+    matrix = {"doc_0": {"r1": 0.8}, "doc_1": {"r1": 0.6}}
+    coverage = _coverage_result(docs, matrix)
+
+    selected, values = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=5)
+
+    assert len(selected) == 2
+    # doc_0 has higher score, should be selected first with 0.8
+    assert values[0] == 0.8
+    assert values[1] == 0.6
 
 
-def test_elbow_cutoff_detects_elbow():
+def test_select_by_rationale_skips_zero_score_docs():
+    """coverage 分数为 0 的文档仍会被选中(top_k 内), 因为不按分数阈值过滤。"""
     reporter = _make_reporter()
-    docs = [_doc(i) for i in range(10)]
-    # Sharp drop after index 3
-    values = [1.0, 0.9, 0.8, 0.7, 0.05, 0.04, 0.03, 0.02, 0.01, 0.005]
-    result = reporter._elbow_cutoff(docs, values, top_k=10)
-    # Should cut around index 3+2=5
-    assert len(result) <= 6
-    assert len(result) >= 4
+    docs = [_doc(0), _doc(1)]
+    rationales = [_rationale("r1", "test")]
+    matrix = {"doc_0": {"r1": 0.0}, "doc_1": {"r1": 0.0}}
+    coverage = _coverage_result(docs, matrix)
 
+    selected, values = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=5)
 
-def test_elbow_cutoff_no_clear_elbow_returns_top_k():
-    reporter = _make_reporter()
-    docs = [_doc(i) for i in range(8)]
-    # Gradual decline, no sharp drop
-    values = [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
-    result = reporter._elbow_cutoff(docs, values, top_k=5)
-    assert len(result) == 5
-
-
-def test_elbow_cutoff_empty_list():
-    reporter = _make_reporter()
-    assert reporter._elbow_cutoff([], [], top_k=5) == []
-
-
-def test_elbow_cutoff_single_element():
-    reporter = _make_reporter()
-    result = reporter._elbow_cutoff([_doc(0)], [0.9], top_k=5)
-    assert len(result) == 1
-
-
-def test_elbow_cutoff_all_same_values():
-    reporter = _make_reporter()
-    docs = [_doc(i) for i in range(6)]
-    values = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
-    result = reporter._elbow_cutoff(docs, values, top_k=5)
-    # diffs are all 0, max_diff = 0 which is not > 0.05, so no elbow
-    assert len(result) == 5
-
-
-def test_elbow_cutoff_coverage_aware_keeps_improving_doc():
-    """After elbow, keep a doc that improves rationale coverage."""
-    reporter = _make_reporter()
-    docs = [_doc(i) for i in range(8)]
-    # Sharp drop after index 2: elbow_idx=2, baseline cutoff=3
-    values = [1.0, 0.9, 0.8, 0.05, 0.04, 0.03, 0.02, 0.01]
-    rationales = [{"id": "r1", "description": "export data"}, {"id": "r2", "description": "destination"}]
-    # Pre-elbow docs (0,1,2) cover r1 well, but r2 poorly.
-    # Post-elbow doc 3 covers r2 better → should be kept.
-    coverage_result = {
-        "filtered_docs": docs,
-        "coverage_matrix": {
-            "doc_0": {"r1": 0.9, "r2": 0.1},
-            "doc_1": {"r1": 0.8, "r2": 0.2},
-            "doc_2": {"r1": 0.7, "r2": 0.1},
-            "doc_3": {"r1": 0.1, "r2": 0.8},  # improves r2!
-            "doc_4": {"r1": 0.1, "r2": 0.1},  # no improvement
-            "doc_5": {"r1": 0.1, "r2": 0.1},
-            "doc_6": {"r1": 0.1, "r2": 0.1},
-            "doc_7": {"r1": 0.1, "r2": 0.1},
-        },
-        "reliability_scores": {},
-        "noise_scores": {},
-    }
-    result = reporter._elbow_cutoff(
-        docs, values, top_k=10,
-        coverage_ctx={"coverage_result": coverage_result, "rationales": rationales},
-    )
-    # Baseline cutoff=3, doc 3 improves r2 → kept, rest don't improve
-    assert len(result) == 4  # docs 0,1,2,3
-
-
-def test_elbow_cutoff_coverage_aware_no_improvement():
-    """After elbow, if no doc improves coverage, use baseline cutoff."""
-    reporter = _make_reporter()
-    docs = [_doc(i) for i in range(8)]
-    values = [1.0, 0.9, 0.8, 0.05, 0.04, 0.03, 0.02, 0.01]
-    rationales = [{"id": "r1", "description": "export data"}]
-    coverage_result = {
-        "filtered_docs": docs,
-        "coverage_matrix": {
-            "doc_0": {"r1": 0.9},
-            "doc_1": {"r1": 0.8},
-            "doc_2": {"r1": 0.7},
-            "doc_3": {"r1": 0.1},  # no improvement over 0.9
-            "doc_4": {"r1": 0.1},
-            "doc_5": {"r1": 0.1},
-            "doc_6": {"r1": 0.1},
-            "doc_7": {"r1": 0.1},
-        },
-        "reliability_scores": {},
-        "noise_scores": {},
-    }
-    result = reporter._elbow_cutoff(
-        docs, values, top_k=10,
-        coverage_ctx={"coverage_result": coverage_result, "rationales": rationales},
-    )
-    # Baseline cutoff=3, no improvement → stays at 3
-    assert len(result) == 3
-
-
-def test_elbow_cutoff_coverage_aware_non_contiguous_keeps():
-    """Post-elbow docs are kept even if non-contiguous (no early stop)."""
-    reporter = _make_reporter()
-    docs = [_doc(i) for i in range(8)]
-    values = [1.0, 0.9, 0.8, 0.05, 0.04, 0.03, 0.02, 0.01]
-    rationales = [
-        {"id": "r1", "description": "export data"},
-        {"id": "r2", "description": "destination"},
-        {"id": "r3", "description": "tariff"},
-    ]
-    coverage_result = {
-        "filtered_docs": docs,
-        "coverage_matrix": {
-            "doc_0": {"r1": 0.9, "r2": 0.1, "r3": 0.1},
-            "doc_1": {"r1": 0.8, "r2": 0.2, "r3": 0.1},
-            "doc_2": {"r1": 0.7, "r2": 0.1, "r3": 0.1},
-            "doc_3": {"r1": 0.1, "r2": 0.1, "r3": 0.1},  # no improvement
-            "doc_4": {"r1": 0.1, "r2": 0.8, "r3": 0.1},  # improves r2
-            "doc_5": {"r1": 0.1, "r2": 0.1, "r3": 0.1},  # no improvement (gap)
-            "doc_6": {"r1": 0.1, "r2": 0.1, "r3": 0.9},  # improves r3 (non-contiguous!)
-            "doc_7": {"r1": 0.1, "r2": 0.1, "r3": 0.1},
-        },
-        "reliability_scores": {},
-        "noise_scores": {},
-    }
-    result = reporter._elbow_cutoff(
-        docs, values, top_k=10,
-        coverage_ctx={"coverage_result": coverage_result, "rationales": rationales},
-    )
-    # Pre-elbow: 0,1,2. Doc 4 improves r2, doc 6 improves r3 (non-contiguous)
-    # Docs 3,5,7 don't improve anything but we don't stop — we keep iterating
-    assert len(result) == 5  # docs 0,1,2,4,6
+    # 新实现不按分数阈值过滤, 0 分文档也会被选中
+    assert len(selected) == 2
+    assert all(v == 0.0 for v in values)
 
 
 # ---------- _verify_coverage ----------
@@ -386,140 +243,288 @@ def test_verify_coverage_only_checks_selected_docs():
     assert result["coverage_rate"] == 0.5
 
 
-# ---------- _evaluate_coverage_matrix (batch + parallel) ----------
-
-def test_evaluate_coverage_matrix_single_batch():
-    """When docs <= BATCH_SIZE, should use 1 batch."""
+def test_select_by_rationale_tolerates_float_coverage_entries():
+    """_select_by_rationale_coverage must not crash when coverage_matrix contains
+    a float value for some doc_key (defensive guard for malformed LLM output)."""
     reporter = _make_reporter()
-    docs = [_doc(i, f"export data {i}") for i in range(8)]
-    rationales = [_rationale("r1", "export data")]
-    current_inputs = {"section_idx": 1, "section_task": "1 Export", "section_description": "desc"}
+    docs = [_doc(0, "good"), _doc(1, "malformed"), _doc(2, "zero")]
+    rationales = [_rationale("r1", "topic")]
+    # doc_1 maps to a float instead of a dict — must be treated as 0.0 coverage.
+    matrix = {
+        "doc_0": {"r1": 0.9},
+        "doc_1": 0.8,      # malformed float
+        "doc_2": {"r1": 0.0},
+    }
+    coverage = _coverage_result(docs, matrix)
 
-    async def fake_batch(batch_docs, batch_idx, *args):
-        result = {
-            "coverage_matrix": {f"doc_{i}": {"r1": 0.8} for i in range(len(batch_docs))},
-            "reliability_scores": {f"doc_{i}": 0.9 for i in range(len(batch_docs))},
-            "noise_scores": {f"doc_{i}": 0.1 for i in range(len(batch_docs))},
-        }
-        return result, batch_docs, ""
+    selected, values = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=5)
 
-    with patch.object(reporter, "_eval_coverage_batch", side_effect=fake_batch):
-        result, last_error = asyncio.run(
-            reporter._evaluate_coverage_matrix(current_inputs, docs, rationales)
-        )
-
-    assert len(result["coverage_matrix"]) == 8
-    assert result["coverage_matrix"]["doc_0"] == {"r1": 0.8}
-    assert result["coverage_matrix"]["doc_7"] == {"r1": 0.8}
-    assert len(result["filtered_docs"]) <= 8
+    # No crash; doc_1 treated as 0.0 so it sorts last; all 3 still selected (top_k=5).
+    assert len(selected) == 3
+    titles = [d["doc_title"] for d in selected]
+    assert "good" in titles
+    assert "malformed" in titles
 
 
-def test_evaluate_coverage_matrix_multi_batch_merges_keys():
-    """When docs > BATCH_SIZE, should split into batches and merge with offset."""
+def test_verify_coverage_tolerates_float_coverage_entries():
+    """_verify_coverage must not crash when coverage_matrix contains a float value."""
     reporter = _make_reporter()
-    docs = [_doc(i, f"export data {i}") for i in range(25)]
-    rationales = [_rationale("r1", "export data")]
-    current_inputs = {"section_idx": 1, "section_task": "1 Export", "section_description": "desc"}
+    docs = [_doc(0, "good"), _doc(1, "malformed")]
+    rationales = [_rationale("r1", "topic")]
+    matrix = {
+        "doc_0": {"r1": 0.9},
+        "doc_1": 0.8,  # malformed float
+    }
+    coverage = _coverage_result(docs, matrix)
 
-    # Track batch calls
-    batch_calls = []
+    result = reporter._verify_coverage(docs, rationales, coverage, section_idx=1)
 
-    async def fake_batch(batch_docs, batch_idx, *args):
-        batch_calls.append((batch_idx, len(batch_docs)))
-        result = {
-            "coverage_matrix": {f"doc_{i}": {"r1": 0.5} for i in range(len(batch_docs))},
-            "reliability_scores": {f"doc_{i}": 0.7 for i in range(len(batch_docs))},
-            "noise_scores": {f"doc_{i}": 0.2 for i in range(len(batch_docs))},
-        }
-        return result, batch_docs, ""
+    # No crash; r1 covered by doc_0 (0.9 >= 0.6).
+    assert result["coverage_rate"] == 1.0
+    assert len(result["uncovered_rationales"]) == 0
 
-    with patch.object(reporter, "_eval_coverage_batch", side_effect=fake_batch):
-        result, last_error = asyncio.run(
-            reporter._evaluate_coverage_matrix(current_inputs, docs, rationales)
-        )
 
-    # No truncation, all 25 docs kept (after n-gram filter)
-    assert len(result["filtered_docs"]) <= 25
-    # With BATCH_SIZE=15, 25 docs → 2 batches
-    assert len(batch_calls) == 2
-    # Batch 0: 15 docs, Batch 1: 10 docs
-    assert batch_calls[0] == (0, 15)
-    assert batch_calls[1] == (1, 10)
+# ---------- _extract_and_score_documents (extractive summarization) ----------
 
-    # Merged keys should have global indices
+def _raw_doc(idx, title=None, url=None, content=None):
+    """Create a raw doc-level dict (before passage splitting)."""
+    return {
+        "doc_id": f"doc-{idx}",
+        "title": title or f"article-{idx}",
+        "url": url or f"https://example.com/{idx}",
+        "source": "example.com",
+        "publish_time": "2025-01-01",
+        "doc_time": "2025-01-01",
+        "original_content": content or f"This is the full content of article {idx}. " * 20,
+    }
+
+
+def _make_extract_llm_output(passages_by_doc):
+    """Build mock LLM output for extractive summarization.
+
+    Args:
+        passages_by_doc: list of lists, each inner list is
+            [{"text": "...", "rationale_ids": ["r1"], "scores": {"r1": {"coverage": 0.9, "reliability": 0.8, "analysis": 0.7, "presentation": 0.6}}}]
+    """
+    documents = []
+    for doc_idx, passages in enumerate(passages_by_doc):
+        documents.append({"doc_index": doc_idx, "passages": passages})
+    return {"documents": documents}
+
+
+@pytest.mark.asyncio
+async def test_extract_and_score_produces_passages():
+    """_extract_and_score_documents returns passage-level dicts with correct fields and weighted scores."""
+    reporter = _make_reporter()
+    raw_docs = [_raw_doc(0, "风险度量", content="持有56-73只股票的建议来自TWSD模型。")]
+    rationales = [_rationale("r1", "风险度量方法")]
+
+    # New 4-dimension scoring format with total_score
+    mock_llm_result = MagicMock()
+    mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "持有56-73只股票的建议来自TWSD模型。", "rationale_ids": ["r1"], "scores": {"r1": {"coverage": 1.0, "reliability": 0.8, "analysis": 0.5, "presentation": 0.7, "total_score": 0.88}}}]}]}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, rationales,
+            )
+
+    assert error == ""
+    assert "filtered_docs" in result
+    assert "coverage_matrix" in result
+    assert len(result["filtered_docs"]) >= 1
+    # Check passage-level fields
+    passage = result["filtered_docs"][0]
+    assert "doc_url" in passage
+    assert "doc_title" in passage
+    assert "passage_text" in passage
+    assert passage["passage_text"] == "持有56-73只股票的建议来自TWSD模型。"
+    # Check coverage_matrix uses total_score from LLM output
     assert "doc_0" in result["coverage_matrix"]
-    assert "doc_14" in result["coverage_matrix"]
-    # Batch 1 local doc_0 → global doc_15
-    assert "doc_15" in result["coverage_matrix"]
-    assert "doc_24" in result["coverage_matrix"]
+    assert abs(result["coverage_matrix"]["doc_0"].get("r1") - 0.88) < 0.001
 
 
-def test_evaluate_coverage_matrix_empty_docs():
-    """Empty doc_infos should return empty dict."""
+@pytest.mark.asyncio
+async def test_extract_and_score_degrades_on_total_failure():
+    """When all batches fail, degrades to original docs as passages (truncated to 500 chars)."""
     reporter = _make_reporter()
-    current_inputs = {"section_idx": 1, "section_task": "test", "section_description": ""}
-    result, last_error = asyncio.run(
-        reporter._evaluate_coverage_matrix(current_inputs, [], [_rationale("r1", "test")])
-    )
-    assert result == {}
+    raw_docs = [_raw_doc(0, content="A" * 1000)]
+
+    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", side_effect=Exception("LLM down")):
+        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    # Degraded: original docs as passages
+    assert len(result["filtered_docs"]) >= 1
+    assert len(result["filtered_docs"][0]["passage_text"]) <= 500
+    assert result["coverage_matrix"] == {}  # no scores in degraded path
+    assert "LLM" in error
 
 
-def test_evaluate_coverage_matrix_empty_rationales():
-    """Empty rationales should return empty dict."""
+@pytest.mark.asyncio
+async def test_extract_and_score_skips_malformed_scores():
+    """Non-numeric score values are treated as 0.0 (no crash)."""
     reporter = _make_reporter()
-    docs = [_doc(0, "test")]
-    current_inputs = {"section_idx": 1, "section_task": "test", "section_description": ""}
-    result, last_error = asyncio.run(
-        reporter._evaluate_coverage_matrix(current_inputs, docs, [])
-    )
-    assert result == {}
+    raw_docs = [_raw_doc(0, content="test content")]
+
+    # scores with bad values in dimensions
+    mock_llm_result = MagicMock()
+    mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "test", "rationale_ids": ["r1"], "scores": {"r1": {"coverage": "bad", "reliability": null, "analysis": 0.5, "presentation": 0.6}}}]}]}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    assert error == ""
+    assert "doc_0" in result["coverage_matrix"]
+    # coverage=0.0(bad) + reliability=0.0(null) + analysis=0.5 + presentation=0.6
+    # 0.6*0 + 0.2*0 + 0.1*0.5 + 0.1*0.6 = 0.11
+    assert abs(result["coverage_matrix"]["doc_0"]["r1"] - 0.11) < 0.001
 
 
-def test_evaluate_coverage_matrix_batch_failure_continues():
-    """If one batch fails, other batches' results should still be merged."""
+@pytest.mark.asyncio
+async def test_extract_and_score_preserves_parent_doc_metadata():
+    """Each extracted passage inherits doc_url/doc_title/source from its parent document."""
     reporter = _make_reporter()
-    docs = [_doc(i, f"export data {i}") for i in range(25)]
-    rationales = [_rationale("r1", "export data")]
-    current_inputs = {"section_idx": 1, "section_task": "1 Export", "section_description": "desc"}
+    raw_docs = [_raw_doc(0, title="Investment Guide", url="https://finance.example.com/1",
+                          content="Diversification requires 30-50 stocks.")]
 
-    async def fake_batch(batch_docs, batch_idx, *args):
-        if batch_idx == 0:
-            return {}, batch_docs, "batch failed"  # First batch fails
-        result = {
-            "coverage_matrix": {f"doc_{i}": {"r1": 0.9} for i in range(len(batch_docs))},
-            "reliability_scores": {f"doc_{i}": 0.8 for i in range(len(batch_docs))},
-            "noise_scores": {f"doc_{i}": 0.1 for i in range(len(batch_docs))},
-        }
-        return result, batch_docs, ""
+    mock_llm_result = MagicMock()
+    mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "Diversification requires 30-50 stocks.", "rationale_ids": ["r1"], "scores": {"r1": {"coverage": 0.9, "reliability": 0.8, "analysis": 0.6, "presentation": 0.7}}}]}]}'
 
-    with patch.object(reporter, "_eval_coverage_batch", side_effect=fake_batch):
-        result, last_error = asyncio.run(
-            reporter._evaluate_coverage_matrix(current_inputs, docs, rationales)
-        )
+    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "diversification")],
+            )
 
-    # Batch 0 failed → no doc_0..doc_14
-    assert "doc_0" not in result["coverage_matrix"]
-    # Batch 1 succeeded → doc_15..doc_24 present
-    assert "doc_15" in result["coverage_matrix"]
-    assert "doc_24" in result["coverage_matrix"]
+    assert error == ""
+    passage = result["filtered_docs"][0]
+    assert passage["doc_url"] == "https://finance.example.com/1"
+    assert passage["doc_title"] == "Investment Guide"
+    assert passage["source"] == "example.com"
 
 
-def test_evaluate_coverage_matrix_all_batches_fail_degrades_with_error():
-    """When every batch fails, degrade to an old-shape dict (empty matrix) and surface the error."""
+# ---------- _select_by_rationale_coverage: count fix ----------
+
+def test_select_by_rationale_count_per_rationale_not_blocked_by_seen():
+    """每个 rationale 独立获得 top_k 个新文档，已见文档不消耗该 rationale 的配额。
+
+    场景：2 个 rationale，top_k=2。
+    - doc_0 对两个 rationale 都最高分
+    - doc_1 对 r1 次高分
+    - doc_2 对 r2 次高分
+    - doc_3 对 r2 第三高分
+
+    r1 选中 doc_0, doc_1（2 个新文档 = top_k）。
+    r2 跳过已见的 doc_0，仍应选中 doc_2, doc_3（2 个新文档 = top_k），
+    而不是因为 doc_0 已见消耗一次迭代而只选到 doc_2。
+    """
     reporter = _make_reporter()
-    docs = [_doc(i, f"export data {i}") for i in range(25)]
-    rationales = [_rationale("r1", "export data")]
-    current_inputs = {"section_idx": 1, "section_task": "1 Export", "section_description": "desc"}
+    docs = [
+        _doc(0, "共享文档"),
+        _doc(1, "r1专属"),
+        _doc(2, "r2专属"),
+        _doc(3, "r2第三"),
+    ]
+    rationales = [_rationale("r1", "主题1"), _rationale("r2", "主题2")]
+    matrix = {
+        "doc_0": {"r1": 0.9, "r2": 0.9},
+        "doc_1": {"r1": 0.8, "r2": 0.1},
+        "doc_2": {"r1": 0.1, "r2": 0.8},
+        "doc_3": {"r1": 0.05, "r2": 0.7},
+    }
+    coverage = _coverage_result(docs, matrix)
 
-    async def fake_batch(batch_docs, batch_idx, *args):
-        return {}, batch_docs, f"batch {batch_idx} boom"
+    selected, values = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=2)
 
-    with patch.object(reporter, "_eval_coverage_batch", side_effect=fake_batch):
-        result, last_error = asyncio.run(
-            reporter._evaluate_coverage_matrix(current_inputs, docs, rationales)
-        )
+    selected_titles = [d["doc_title"] for d in selected]
+    # r1 选中 doc_0(共享) + doc_1(r1专属)
+    assert "共享文档" in selected_titles
+    assert "r1专属" in selected_titles
+    # r2 跳过已见的 doc_0，仍应选中 doc_2 + doc_3
+    assert "r2专属" in selected_titles
+    assert "r2第三" in selected_titles
+    # 总共 4 个新文档
+    assert len(selected) == 4
 
-    # Degrade path: old-shape truthy dict so the caller continues (chapter not lost)
-    assert result["coverage_matrix"] == {}
-    assert result["filtered_docs"]
-    assert "boom" in last_error
+
+# ---------- _extract_and_score_documents: content truncation ----------
+
+@pytest.mark.asyncio
+async def test_extract_and_score_truncates_long_content():
+    """_extract_batch 和 degraded path 应将超过 15000 字符的内容截断。"""
+    from openjiuwen_deepsearch.algorithm.report.report import MAX_EXTRACT_DOC_CHARS
+
+    reporter = _make_reporter()
+    long_content = "X" * 20000  # > 15000 chars
+    raw_docs = [_raw_doc(0, "长文档", content=long_content)]
+
+    mock_llm_result = MagicMock()
+    mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "truncated content", "rationale_ids": ["r1"], "scores": {"r1": {"coverage": 0.5, "reliability": 0.5, "analysis": 0.5, "presentation": 0.5}}}]}]}'
+
+    captured_content = {}
+
+    def capture_apply_system_prompt(name, ctx):
+        # Capture the user content sent to LLM
+        messages = ctx.get("messages", [])
+        if messages:
+            captured_content["text"] = messages[0].get("content", "")
+        return [{"role": "user", "content": "test"}]
+
+    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=capture_apply_system_prompt):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    assert error == ""
+    # Verify the content sent to LLM was truncated
+    assert "text" in captured_content
+    sent_text = captured_content["text"]
+    # The content portion should not exceed MAX_EXTRACT_DOC_CHARS
+    # Find the content after "Content: " in the document block
+    content_start = sent_text.find("Content: ")
+    assert content_start != -1, "Document content should be present in LLM input"
+    content_part = sent_text[content_start + len("Content: "):]
+    # The content is followed by "\n\n" and trailing instruction text, so split there
+    doc_content = content_part.split("\n\n")[0]
+    # The content should be truncated to exactly MAX_EXTRACT_DOC_CHARS
+    assert len(doc_content) == MAX_EXTRACT_DOC_CHARS
+
+
+@pytest.mark.asyncio
+async def test_extract_and_score_degraded_truncates_long_content():
+    """Degraded path 也应将超过 15000 字符的内容截断到 MAX_EXTRACT_DOC_CHARS。"""
+    from openjiuwen_deepsearch.algorithm.report.report import MAX_EXTRACT_DOC_CHARS
+
+    reporter = _make_reporter()
+    long_content = "Y" * 20000  # > 15000 chars
+    raw_docs = [_raw_doc(0, "降级长文档", content=long_content)]
+
+    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", side_effect=Exception("LLM down")):
+        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    assert len(result["filtered_docs"]) >= 1
+    passage_text = result["filtered_docs"][0]["passage_text"]
+    # Degraded path truncates to MAX_EXTRACT_DOC_CHARS (not 500)
+    assert len(passage_text) <= MAX_EXTRACT_DOC_CHARS

@@ -80,7 +80,7 @@ Formatting and content rules
 Output format (exact)
 - Conclusion content: Begin directly with the summary content with no "Conclusion" or "Conclusion, Implications and Recommendations" such Subheading
 - Subheading: "Implications"(or translate into the corresponding language, e.g., "启示" in Chinese) then bulleted list as specified, use second level headings(e.g., ##)
-- Subheading: "Recommendations"(or translate into the corresponding language, e.g., "建议" in Chinese) then bulleted list as specified, use second level headings(e.g., ##)
+- Subheading: "Recommendations"(or translate into the corresponding language, e.g., "建议" in Chinese) then bulleted lQist as specified, use second level headings(e.g., ##)
 
 General Example
 摩根大通作为全球系统重要性银行中唯一位于第四档的机构，凭借卓越的市值表现、资产回报率（ROA）和股权回报率（ROE）在全球大型银行中占据领先地位。本报告通过历史演进、经营现状、未来趋势、利益相关方治理、量化数据与对标分析等维度，全面剖析其核心竞争力，并为中国商业银行提供可借鉴的发展路径。\n\n**摩根大通的核心优势体现在以下几个方面：一是强大的综合化业务结构**，消费与社区银行、投资银行、资产管理等板块协同效应显著；**二是领先的资本效率与盈利能力**，ROE、ROA等指标持续优于同业；**三是强大的市场影响力**，影响力的根基在于综合竞争实力；**四是前瞻性的科技布局**，人工智能、区块链、数字货币等领域投入巨大且成果转化明显；**五是健全的利益相关方治理体系**，在ESG责任履行、监管合规、员工多样性等方面树立行业标杆。\n\n面对日益复杂的地缘政治环境和宏观经济波动，摩根大通通过多元化资产配置、压力测试机制和全球资源整合能力有效应对不确定性。同时，其绿色金融战略、科技创新驱动以及国际化网络布局，进一步巩固了其在全球金融体系中的领导地位。 \n\n总体来看，摩根大通的成功不仅源于其雄厚的资本实力和稳健的财务表现，更在于其长期坚持以客户为中心、以创新为动力、以风控为底线的战略定力。这些特质使其在全球银行业竞争中始终保持领先。**以下是针对商业银行的经济研究工作的启示和建议：**

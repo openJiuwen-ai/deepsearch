@@ -61,7 +61,7 @@
 1. Reporter 读取 outline section、章节计划和 classified contents。
 2. 构建章节局部契约和资料摘要。
 3. LLM 生成当前章节的子大纲；`Reporter.check_chapter_format()` 逐行验证标题格式和顺序，非法输出进入重试。
-4. 信息维度矩阵文档选择：rationale 生成 → n-gram 粗筛 → 覆盖矩阵评估 → 贪心子模选择 → elbow 截断 → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。
+4. 信息维度矩阵文档选择：rationale 生成 → 抽取式总结+打分 → 按维度 top-k 段落选择 → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。
 5. 根据报告类型选择 professional 或 brief 子报告 Prompt，两者共享扁平/层级标题契约。
 6. LLM 按已批准的子大纲生成章节 Markdown。
 7. 标题编号和过深标题被清理，并校验 Markdown 标题与子大纲逐项一致；如果失败，生成受控重试反馈并重新生成章节。

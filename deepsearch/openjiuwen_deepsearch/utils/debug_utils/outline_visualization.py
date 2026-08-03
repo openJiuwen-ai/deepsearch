@@ -86,9 +86,7 @@ class OutlineToExcelExporter:
             'doc_infos': [],
             'toc': [],  # 新增TOC数据
             'rationales': [],
-            'coverage_matrix': [],
-            'doc_selection': [],
-            'coverage_verify': [],
+            'rationale_top_passages': [],
         }
 
         raw_sections = copy.deepcopy(self.outline).get('sections', [])
@@ -235,19 +233,10 @@ class OutlineToExcelExporter:
 
                         # 为每个doc_info创建单独的记录
                         for doc_info in query.get('doc_infos', []):
-                            scores = doc_info.get('scores', {})
-                            if not isinstance(scores, dict):
-                                scores = {}
-                            doc_scores = (f"doc_time: {doc_info.get('doc_time', '')}\n\n"
-                                          f"authority: {scores.get('authority', '')}\n\n"
-                                          f"relevance: {scores.get('relevance', '')}\n\n"
-                                          f"answerability: {scores.get('answerability', '')}\n\n"
-                                          f"data_density: {scores.get('data_density', '')}")
                             query_row_copy = copy.deepcopy(query_row)
                             query_row_copy['doc_title'] = doc_info.get('title', '')
                             query_row_copy['doc_url'] = doc_info.get('url', '')
                             query_row_copy['doc_core_content'] = doc_info.get('core_content', '')
-                            query_row_copy['doc_scores'] = doc_scores
                             query_row_copy['merge_section'] = f"{section.get('id', '')}"  # 仅用于内部合并，不导出
                             query_row_copy['merge_plan'] = f"{plan.get('id', '')}"  # 仅用于内部合并，不导出
                             query_row_copy['merge_step'] = f"{step.get('id', '')}"  # 仅用于内部合并，不导出
@@ -258,10 +247,8 @@ class OutlineToExcelExporter:
             outline_data['toc'].extend(self._extract_toc_data(section))
 
         logger.debug(
-            "[OutlineToExcelExporter] extract_all_data: rationales=%s, coverage_matrix=%s, "
-            "doc_selection=%s, coverage_verify=%s",
-            len(outline_data['rationales']), len(outline_data['coverage_matrix']),
-            len(outline_data['doc_selection']), len(outline_data['coverage_verify']),
+            "[OutlineToExcelExporter] extract_all_data: rationales=%s, rationale_top_passages=%s",
+            len(outline_data['rationales']), len(outline_data['rationale_top_passages']),
         )
         return outline_data
 
@@ -345,83 +332,46 @@ class OutlineToExcelExporter:
                 'rationale_priority': r.get('priority', ''),
             })
 
-        # 2. coverage_matrix sheet rows (long format: doc × rationale)
+        # 2. rationale_top_passages sheet rows
+        # For each rationale, find docs with the highest total_score and output top passages.
         coverage_matrix = debug.get('coverage_matrix', {})
-        reliability_scores = debug.get('reliability_scores', {})
-        noise_scores = debug.get('noise_scores', {})
-        ngram_filter = debug.get('ngram_filter', {})
+        dimension_scores = debug.get('dimension_scores', {})
         doc_info_map = debug.get('doc_info_map', {})
 
-        # Collect all rationale ids from the matrix
-        rationale_ids = set()
-        for doc_key, cov in coverage_matrix.items():
-            if isinstance(cov, dict):
-                rationale_ids.update(cov.keys())
-        rationale_ids = sorted(rationale_ids)
-
-        for doc_key, cov in coverage_matrix.items():
-            if not isinstance(cov, dict):
-                continue
-            doc_info = doc_info_map.get(doc_key, {})
-            for rid in rationale_ids:
-                outline_data['coverage_matrix'].append({
+        for r in debug.get('rationales', []):
+            rid = r.get('id', '')
+            r_desc = r.get('description', '')
+            # Collect (doc_key, total_score) pairs for this rationale
+            scored_docs = []
+            for doc_key, cov in coverage_matrix.items():
+                if not isinstance(cov, dict):
+                    continue
+                score = cov.get(rid, 0.0)
+                if isinstance(score, (int, float)) and score > 0:
+                    scored_docs.append((doc_key, score))
+            # Sort by total_score descending and keep top 15
+            scored_docs.sort(key=lambda x: x[1], reverse=True)
+            for rank, (doc_key, score) in enumerate(scored_docs[:15], 1):
+                doc_info = doc_info_map.get(doc_key, {})
+                # Get dimension scores for this passage-rationale pair
+                dims = dimension_scores.get(doc_key, {}).get(rid, {})
+                has_dims = bool(dims)
+                outline_data['rationale_top_passages'].append({
                     'section_id': section_id,
                     'section_title': section_title,
-                    'ngram_before': ngram_filter.get('before', 0),
-                    'ngram_after': ngram_filter.get('after', 0),
-                    'doc_key': doc_key,
-                    'doc_title': doc_info.get('title', ''),
-                    'doc_url': doc_info.get('url', ''),
                     'rationale_id': rid,
-                    'coverage': cov.get(rid, 0.0),
-                    'reliability': reliability_scores.get(doc_key, 0.0),
-                    'noise': noise_scores.get(doc_key, 0.0),
+                    'rationale_description': r_desc,
+                    'rank': rank,
+                    'doc_key': doc_key,
+                    'doc_title': doc_info.get('doc_title', ''),
+                    'doc_url': doc_info.get('doc_url', ''),
+                    'passage_text': doc_info.get('passage_text', ''),
+                    'coverage': dims.get('coverage', score if not has_dims else 0.0),
+                    'reliability': dims.get('reliability', 0.0),
+                    'analysis': dims.get('analysis', 0.0),
+                    'presentation': dims.get('presentation', 0.0),
+                    'total_score': score,
                 })
-
-        # 3. doc_selection sheet rows
-        for rank, doc in enumerate(debug.get('selected_docs', []), 1):
-            outline_data['doc_selection'].append({
-                'section_id': section_id,
-                'section_title': section_title,
-                'rank': rank,
-                'doc_key': doc.get('doc_key', ''),
-                'doc_title': doc.get('title', ''),
-                'doc_url': doc.get('url', ''),
-                'marginal_value': doc.get('marginal_value', ''),
-            })
-
-        # 4. coverage_verify sheet rows
-        verify = debug.get('verify_result', {})
-        uncovered = verify.get('uncovered_rationales', [])
-        weak = verify.get('weak_rationales', [])
-        for r in uncovered:
-            outline_data['coverage_verify'].append({
-                'section_id': section_id,
-                'section_title': section_title,
-                'rationale_id': r.get('id', ''),
-                'rationale_description': r.get('description', ''),
-                'status': '✗ uncovered',
-                'coverage_rate': verify.get('coverage_rate', ''),
-            })
-        for r in weak:
-            outline_data['coverage_verify'].append({
-                'section_id': section_id,
-                'section_title': section_title,
-                'rationale_id': r.get('id', ''),
-                'rationale_description': r.get('description', ''),
-                'status': '△ weak',
-                'coverage_rate': verify.get('coverage_rate', ''),
-            })
-        # Add a summary row per section even if all covered
-        if not uncovered and not weak:
-            outline_data['coverage_verify'].append({
-                'section_id': section_id,
-                'section_title': section_title,
-                'rationale_id': '',
-                'rationale_description': 'All rationales covered',
-                'status': '✓ covered',
-                'coverage_rate': verify.get('coverage_rate', ''),
-            })
 
     @staticmethod
     def format_parent_relations(parent_ids, relationships):
@@ -496,12 +446,12 @@ class OutlineToExcelExporter:
                 'section_id', 'section_base_info', 'plan_id', 'plan_base_info',
                 'step_id', 'step_base_info', 'step_result',
                 'query_id', 'query_text', 'query_info_count', 'doc_infos',
-                'doc_title', 'doc_url', 'doc_core_content', 'doc_scores',
+                'doc_title', 'doc_url', 'doc_core_content',
             ]]
             df_queries.columns = ['章节ID', '章节基础信息', '计划ID', '计划基础信息',
                                   '步骤ID', '步骤基础信息', '步骤结果',
                                   '查询ID', '查询文本', '查询结果文档数量', '查询结果',
-                                  '文档标题', '文档URL', '文档内容', '文档评分',
+                                  '文档标题', '文档URL', '文档内容',
                                   ]
             dataframes['retrieval_query_docs'] = df_queries
 
@@ -520,38 +470,18 @@ class OutlineToExcelExporter:
             df_rationales.columns = ['章节ID', '章节标题', '维度ID', '维度描述', '维度类型', '优先级']
             dataframes['rationales'] = df_rationales
 
-        # 覆盖矩阵表
-        if outline_data['coverage_matrix']:
-            df_cov = pd.DataFrame(outline_data['coverage_matrix'])
-            df_cov = df_cov[[
-                'section_id', 'section_title', 'ngram_before', 'ngram_after',
-                'doc_key', 'doc_title', 'doc_url',
-                'rationale_id', 'coverage', 'reliability', 'noise',
+        # 维度Top段落表
+        if outline_data['rationale_top_passages']:
+            df_top = pd.DataFrame(outline_data['rationale_top_passages'])
+            df_top = df_top[[
+                'section_id', 'section_title', 'rationale_id', 'rationale_description',
+                'rank', 'doc_key', 'doc_title', 'doc_url', 'passage_text',
+                'coverage', 'reliability', 'analysis', 'presentation', 'total_score',
             ]]
-            df_cov.columns = ['章节ID', '章节标题', 'ngram筛选前', 'ngram筛选后',
-                              '文档键', '文档标题', '文档URL',
-                              '维度ID', '覆盖分', '可信度', '噪声分']
-            dataframes['coverage_matrix'] = df_cov
-
-        # 文档选择表
-        if outline_data['doc_selection']:
-            df_sel = pd.DataFrame(outline_data['doc_selection'])
-            df_sel = df_sel[[
-                'section_id', 'section_title', 'rank',
-                'doc_key', 'doc_title', 'doc_url', 'marginal_value',
-            ]]
-            df_sel.columns = ['章节ID', '章节标题', '选择序号', '文档键', '文档标题', '文档URL', '边际价值']
-            dataframes['doc_selection'] = df_sel
-
-        # 覆盖校验表
-        if outline_data['coverage_verify']:
-            df_verify = pd.DataFrame(outline_data['coverage_verify'])
-            df_verify = df_verify[[
-                'section_id', 'section_title', 'rationale_id',
-                'rationale_description', 'status', 'coverage_rate',
-            ]]
-            df_verify.columns = ['章节ID', '章节标题', '维度ID', '维度描述', '状态', '覆盖率']
-            dataframes['coverage_verify'] = df_verify
+            df_top.columns = ['章节ID', '章节标题', '维度ID', '维度描述',
+                              '排名', '文档键', '文档标题', '文档URL', '段落内容',
+                              '覆盖分', '可信分', '分析分', '呈现分', '总分']
+            dataframes['rationale_top_passages'] = df_top
 
         return dataframes
 
@@ -818,7 +748,6 @@ class OutlineToExcelExporter:
                 worksheet.set_column('L:L', 40)  # 文档标题
                 worksheet.set_column('M:M', 50)  # 文档URL
                 worksheet.set_column('N:N', 60)  # 文档内容
-                worksheet.set_column('O:O', 40)  # 文档评分
 
                 # 设置标题格式
                 for col_num, value in enumerate(df_queries.columns.values):
@@ -940,82 +869,33 @@ class OutlineToExcelExporter:
                                         df_rationales_sanitized.iloc[row_num, col_num],
                                         normal_format)
 
-            # 8. 写入覆盖矩阵表
-            if 'coverage_matrix' in dataframes:
-                df_cov = dataframes['coverage_matrix']
-                df_cov_sanitized = sanitize_dataframe(df_cov)
-                df_cov_sanitized.to_excel(writer, sheet_name='覆盖矩阵', index=False)
-                worksheet = writer.sheets['覆盖矩阵']
-                worksheet.set_column('A:A', 10)
-                worksheet.set_column('B:B', 30)
-                worksheet.set_column('C:D', 12)
-                worksheet.set_column('E:E', 10)
-                worksheet.set_column('F:F', 40)
-                worksheet.set_column('G:G', 50)
-                worksheet.set_column('H:H', 10)
-                worksheet.set_column('I:K', 12)
-                for col_num, value in enumerate(df_cov.columns.values):
+            # 8. 写入维度Top段落表
+            if 'rationale_top_passages' in dataframes:
+                df_top = dataframes['rationale_top_passages']
+                df_top_sanitized = sanitize_dataframe(df_top)
+                df_top_sanitized.to_excel(writer, sheet_name='维度Top段落', index=False)
+                worksheet = writer.sheets['维度Top段落']
+                worksheet.set_column('A:A', 10)  # 章节ID
+                worksheet.set_column('B:B', 30)  # 章节标题
+                worksheet.set_column('C:C', 10)  # 维度ID
+                worksheet.set_column('D:D', 50)  # 维度描述
+                worksheet.set_column('E:E', 8)   # 排名
+                worksheet.set_column('F:F', 10)  # 文档键
+                worksheet.set_column('G:G', 40)  # 文档标题
+                worksheet.set_column('H:H', 50)  # 文档URL
+                worksheet.set_column('I:I', 60)  # 段落内容
+                worksheet.set_column('J:J', 10)  # 覆盖分
+                worksheet.set_column('K:K', 10)  # 可信分
+                worksheet.set_column('L:L', 10)  # 分析分
+                worksheet.set_column('M:M', 10)  # 呈现分
+                worksheet.set_column('N:N', 10)  # 总分
+                for col_num, value in enumerate(df_top.columns.values):
                     worksheet.write(0, col_num, value, header_format)
-                for row_num in range(len(df_cov_sanitized)):
-                    for col_num in range(len(df_cov_sanitized.columns)):
+                for row_num in range(len(df_top_sanitized)):
+                    for col_num in range(len(df_top_sanitized.columns)):
                         worksheet.write(row_num + 1, col_num,
-                                        df_cov_sanitized.iloc[row_num, col_num],
+                                        df_top_sanitized.iloc[row_num, col_num],
                                         normal_format)
-
-            # 9. 写入文档选择表
-            if 'doc_selection' in dataframes:
-                df_sel = dataframes['doc_selection']
-                df_sel_sanitized = sanitize_dataframe(df_sel)
-                df_sel_sanitized.to_excel(writer, sheet_name='文档选择', index=False)
-                worksheet = writer.sheets['文档选择']
-                worksheet.set_column('A:A', 10)
-                worksheet.set_column('B:B', 30)
-                worksheet.set_column('C:C', 10)
-                worksheet.set_column('D:D', 10)
-                worksheet.set_column('E:E', 40)
-                worksheet.set_column('F:F', 50)
-                worksheet.set_column('G:G', 12)
-                for col_num, value in enumerate(df_sel.columns.values):
-                    worksheet.write(0, col_num, value, header_format)
-                for row_num in range(len(df_sel_sanitized)):
-                    for col_num in range(len(df_sel_sanitized.columns)):
-                        worksheet.write(row_num + 1, col_num,
-                                        df_sel_sanitized.iloc[row_num, col_num],
-                                        normal_format)
-
-            # 10. 写入覆盖校验表
-            if 'coverage_verify' in dataframes:
-                df_verify = dataframes['coverage_verify']
-                df_verify_sanitized = sanitize_dataframe(df_verify)
-                df_verify_sanitized.to_excel(writer, sheet_name='覆盖校验', index=False)
-                worksheet = writer.sheets['覆盖校验']
-                worksheet.set_column('A:A', 10)
-                worksheet.set_column('B:B', 30)
-                worksheet.set_column('C:C', 10)
-                worksheet.set_column('D:D', 50)
-                worksheet.set_column('E:E', 15)
-                worksheet.set_column('F:F', 12)
-                weak_format = workbook.add_format({
-                    'font_color': '#FFC000',
-                    'bold': True,
-                    'border': 1,
-                    'text_wrap': True,
-                    'valign': 'vcenter'
-                })
-                for col_num, value in enumerate(df_verify.columns.values):
-                    worksheet.write(0, col_num, value, header_format)
-                for row_num in range(len(df_verify_sanitized)):
-                    status = str(df_verify_sanitized.iloc[row_num]['状态'])
-                    if 'uncovered' in status:
-                        cell_fmt = core_format
-                    elif 'weak' in status:
-                        cell_fmt = weak_format
-                    else:
-                        cell_fmt = completed_format
-                    for col_num in range(len(df_verify_sanitized.columns)):
-                        worksheet.write(row_num + 1, col_num,
-                                        df_verify_sanitized.iloc[row_num, col_num],
-                                        cell_fmt)
 
             # 6. 创建汇总表
             self._create_summary_sheet(writer, outline_data, workbook)

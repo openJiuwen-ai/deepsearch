@@ -505,6 +505,16 @@ class SubSourceTracerNode(BaseNode):
             report = ""
             classified_content = []
 
+        cc_count = len(classified_content) if isinstance(classified_content, list) else 0
+        cc_sample_keys = (
+            sorted(list(classified_content[0].keys()))
+            if cc_count > 0 and isinstance(classified_content[0], dict) else None
+        )
+        logger.info(
+            "[TRACE_DIAG] SubSourceTracer _pre_handle: classified_content count=%d, sample_keys=%s",
+            cc_count, cc_sample_keys,
+        )
+
         return dict(
             report=report,
             classified_content=classified_content,

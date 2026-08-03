@@ -47,9 +47,6 @@ class ExposedInfoRetrievalNode(InfoRetrievalNode):
     async def structure_result(self, *args, **kwargs):
         return await self._structure_result(*args, **kwargs)
 
-    def process_post_process_result(self, *args, **kwargs):
-        return self._process_post_process_result(*args, **kwargs)
-
     def prepare_collector_tool(self, *args, **kwargs):
         return self._prepare_collector_tool(*args, **kwargs)
 
@@ -417,8 +414,7 @@ class TestInfoCollectorNode:
         }
 
         with patch.object(info_collector_node, '_collector_llm') as mock_collector_llm, \
-                patch.object(info_collector_node, '_structure_result') as mock_structure, \
-                patch.object(info_collector_node, '_process_post_process_result') as mock_process:
+                patch.object(info_collector_node, '_structure_result') as mock_structure:
             # Mock LLM 收集过程
             mock_collector_llm.return_value = (
                 state,
@@ -432,12 +428,8 @@ class TestInfoCollectorNode:
             # Mock 结构化结果
             mock_structure.return_value = (
                 [{"url": "http://example.com/1", "title": "标题1"}],  # doc_infos
-                [{"document_index": "0", "scores": {"relevance": 0.9}}],
                 {"web_1": "正文"},
             )
-
-            # Mock 后处理
-            mock_process.return_value = [{"url": "http://example.com/1", "title": "标题1", "source_authority": "0.8"}]
 
             result = await info_collector_node.collector_main(state)
 
@@ -452,7 +444,6 @@ class TestInfoCollectorNode:
             # 验证调用了相关方法
             mock_collector_llm.assert_called_once()
             mock_structure.assert_called_once()
-            mock_process.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_collector_main_filters_source_dates_before_document_evaluator(self, info_collector_node):
@@ -502,12 +493,8 @@ class TestInfoCollectorNode:
         ), patch.object(
             info_collector_node,
             '_structure_result',
-            new=AsyncMock(return_value=([], [], {})),
-        ) as mock_structure, patch.object(
-            info_collector_node,
-            '_process_post_process_result',
-            return_value=[],
-        ):
+            new=AsyncMock(return_value=([], {})),
+        ) as mock_structure:
             result = await info_collector_node.collector_main(state)
 
         web_records = mock_structure.call_args.args[0]
@@ -590,54 +577,55 @@ class TestInfoCollectorNode:
         with pytest.raises(TypeError):
             await info_collector_node.collector_llm(state, agent_input, [], {})
 
-    @pytest.mark.asyncio
-    async def test_structure_result_with_records(self, info_collector_node, sample_web_record):
-        """测试 _structure_result 方法有记录的情况"""
-        web_record = sample_web_record
-        local_record = []
-        query = "测试查询"
-
-        with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
-            # Mock 文档评估结果
-            mock_eval.return_value = [
-                {
-                    "document_index": "0",
-                    "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
-                    "doc_time": "2024-01-01"
-                },
-                {
-                    "document_index": "1",
-                    "scores": {"authority": 0.7, "relevance": 0.8, "answerability": 0.6},
-                    "doc_time": "2024-01-02"
-                }
-            ]
-
-            doc_infos, scored_result, source_store = await info_collector_node.structure_result(
-                web_record, local_record, query
-            )
-
-            # 验证返回结果
-            assert len(doc_infos) == 2
-            assert len(scored_result) == 2
-            assert "doc_id" in doc_infos[0]
-            assert "source_id" in doc_infos[0]
-            assert "content_ref" in doc_infos[0]
-            assert "snippet" not in doc_infos[0]
-            assert "summary" not in doc_infos[0]
-            assert "key_passages" in doc_infos[0]
-            assert "original_content" in doc_infos[0]
-            assert doc_infos[0]["source_id"] in source_store
-            assert "original_content" not in str(mock_eval.call_args.kwargs["documents"])
-
-            # 验证文档信息结构
-            for doc_info in doc_infos:
-                assert "url" in doc_info
-                assert "title" in doc_info
-                assert "query" in doc_info
-                assert doc_info["query"] == query
-
-            # 验证调用了文档评估
-            mock_eval.assert_called_once()
+    # TODO: deleted doc_evaluation module
+    # @pytest.mark.asyncio
+    # async def test_structure_result_with_records(self, info_collector_node, sample_web_record):
+    #     """测试 _structure_result 方法有记录的情况"""
+    #     web_record = sample_web_record
+    #     local_record = []
+    #     query = "测试查询"
+    #
+    #     with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
+    #         # Mock 文档评估结果
+    #         mock_eval.return_value = [
+    #             {
+    #                 "document_index": "0",
+    #                 "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
+    #                 "doc_time": "2024-01-01"
+    #             },
+    #             {
+    #                 "document_index": "1",
+    #                 "scores": {"authority": 0.7, "relevance": 0.8, "answerability": 0.6},
+    #                 "doc_time": "2024-01-02"
+    #             }
+    #         ]
+    #
+    #         doc_infos, scored_result, source_store = await info_collector_node.structure_result(
+    #             web_record, local_record, query
+    #         )
+    #
+    #         # 验证返回结果
+    #         assert len(doc_infos) == 2
+    #         assert len(scored_result) == 2
+    #         assert "doc_id" in doc_infos[0]
+    #         assert "source_id" in doc_infos[0]
+    #         assert "content_ref" in doc_infos[0]
+    #         assert "snippet" not in doc_infos[0]
+    #         assert "summary" not in doc_infos[0]
+    #         assert "key_passages" in doc_infos[0]
+    #         assert "original_content" in doc_infos[0]
+    #         assert doc_infos[0]["source_id"] in source_store
+    #         assert "original_content" not in str(mock_eval.call_args.kwargs["documents"])
+    #
+    #         # 验证文档信息结构
+    #         for doc_info in doc_infos:
+    #             assert "url" in doc_info
+    #             assert "title" in doc_info
+    #             assert "query" in doc_info
+    #             assert doc_info["query"] == query
+    #
+    #         # 验证调用了文档评估
+    #         mock_eval.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_structure_result_empty_records(self, info_collector_node):
@@ -646,150 +634,40 @@ class TestInfoCollectorNode:
         local_record = []
         query = "测试查询"
 
-        doc_infos, scored_result, source_store = await info_collector_node.structure_result(
+        doc_infos, source_store = await info_collector_node.structure_result(
             web_record, local_record, query
         )
 
         # 验证返回空结果
         assert doc_infos == []
-        assert scored_result == []
         assert source_store == {}
 
-    @pytest.mark.asyncio
-    async def test_structure_result_truncates_original_content(self, info_collector_node):
-        """_structure_result should keep collector LLM input under the shared content limit."""
-        web_record = [
-            {
-                "url": "http://example.com/large",
-                "title": "Large page",
-                "content": "A" * (MAX_COLLECTOR_DOC_CONTENT_LENGTH + 1),
-            }
-        ]
-
-        with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
-            mock_eval.return_value = []
-
-            doc_infos, _, source_store = await info_collector_node.structure_result(
-                web_record, [], "large query"
-            )
-
-        assert len(doc_infos) == 1
-        assert len(doc_infos[0]["original_content"]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
-        assert len(source_store[doc_infos[0]["source_id"]]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
-        mock_eval.assert_called_once()
-        assert "documents" in mock_eval.call_args.kwargs
-        assert "contents" not in mock_eval.call_args.kwargs
-        assert len(str(mock_eval.call_args.kwargs["documents"])) < MAX_COLLECTOR_DOC_CONTENT_LENGTH
-
-    def test_process_post_process_result_success(self, info_collector_node):
-        """测试 _process_post_process_result 方法成功执行"""
-        scored_result = [
-            {
-                "document_index": "0",
-                "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
-                "doc_time": "2024-01-01",
-            },
-            {
-                "document_index": "1",
-                "scores": {"authority": 0.7, "relevance": 0.8, "answerability": 0.6},
-                "doc_time": "2024-01-02"
-            }
-        ]
-
-        doc_infos = [
-            {"url": "http://example.com/1", "title": "标题1"},
-            {"url": "http://example.com/2", "title": "标题2"}
-        ]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        # 验证文档信息被正确更新
-        assert len(result) == 2
-        assert result[0]["scores"]["authority"] == 0.8
-        assert result[0]["scores"]["relevance"] == 0.9
-        assert result[0]["scores"]["answerability"] == 0.7
-        assert "source_authority" not in result[0]
-        assert "_legacy_compatibility_fields" not in result[0]
-        assert "task_relevance" not in result[0]
-        assert "information_richness" not in result[0]
-        assert "data_density" not in result[0]
-        assert "doc_time" in result[0]
-
-        # 验证分数被正确格式化
-
-    def test_process_post_process_result_prefers_publish_time(self, info_collector_node):
-        """evaluator 同时返回 publish_time 和 doc_time 时应优先使用规范字段。"""
-        scored_result = [{
-            "document_index": "0",
-            "scores": {"relevance": 0.9},
-            "publish_time": "2024-02",
-            "doc_time": "2024-01",
-        }]
-        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        assert result[0]["publish_time"] == "2024-02"
-        assert result[0]["doc_time"] == "2024-02"
-
-    def test_process_post_process_result_invalid_index(self, info_collector_node):
-        """测试 _process_post_process_result 方法索引无效的情况"""
-        scored_result = [
-            {
-                "document_index": "invalid",  # 无效的索引
-                "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7}
-            }
-        ]
-
-        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        # 验证即使索引无效也不会崩溃
-        assert len(result) == 1
-        assert "scores" not in result[0]
-
-    def test_process_post_process_result_logs_non_dict_item_type(self, info_collector_node, caplog):
-        """非 dict 评分项日志应准确指出类型问题。"""
-        result = info_collector_node.process_post_process_result(
-            ["invalid"],
-            [{"url": "http://example.com/1", "title": "标题1"}],
-            section_idx=0,
-        )
-
-        assert "scores" not in result[0]
-        assert "Score result is not a dict (type=str)" in caplog.text
-
-    def test_process_post_process_result_continues_after_invalid_items(self, info_collector_node):
-        """无效评分项不应导致后续有效 document_index 被截断丢弃。"""
-        scored_result = [
-            {"document_index": "invalid", "scores": {"relevance": 1}},
-            {"document_index": "0", "scores": {"relevance": 8}},
-            {"document_index": "1", "scores": {"relevance": 9}},
-        ]
-        doc_infos = [
-            {"url": "http://example.com/1", "title": "标题1"},
-            {"url": "http://example.com/2", "title": "标题2"},
-        ]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        assert result[0]["scores"]["relevance"] == 8.0
-        assert result[1]["scores"]["relevance"] == 9.0
-
-    def test_process_post_process_result_rejects_legacy_content_index(self, info_collector_node):
-        """拒绝 evaluator 返回旧 content 索引字段。"""
-        scored_result = [{
-            "content": "0",
-            "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
-            "doc_time": "2024-01-01",
-        }]
-        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        assert "scores" not in result[0]
-        assert "doc_time" not in result[0]
+    # TODO: deleted doc_evaluation module
+    # @pytest.mark.asyncio
+    # async def test_structure_result_truncates_original_content(self, info_collector_node):
+    #     """_structure_result should keep collector LLM input under the shared content limit."""
+    #     web_record = [
+    #         {
+    #             "url": "http://example.com/large",
+    #             "title": "Large page",
+    #             "content": "A" * (MAX_COLLECTOR_DOC_CONTENT_LENGTH + 1),
+    #         }
+    #     ]
+    #
+    #     with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
+    #         mock_eval.return_value = []
+    #
+    #         doc_infos, _, source_store = await info_collector_node.structure_result(
+    #             web_record, [], "large query"
+    #         )
+    #
+    #     assert len(doc_infos) == 1
+    #     assert len(doc_infos[0]["original_content"]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
+    #     assert len(source_store[doc_infos[0]["source_id"]]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
+    #     mock_eval.assert_called_once()
+    #     assert "documents" in mock_eval.call_args.kwargs
+    #     assert "contents" not in mock_eval.call_args.kwargs
+    #     assert len(str(mock_eval.call_args.kwargs["documents"])) < MAX_COLLECTOR_DOC_CONTENT_LENGTH
 
     def test_prepare_collector_tool_web(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - 联网增强 搜索"""

@@ -31,7 +31,7 @@
 
 ## 核心流程
 
-1. `generate_sub_report` 执行文档选择流程（rationale 生成 → n-gram 粗筛 → 覆盖矩阵评估 → 贪心选择 → elbow 截断 → 覆盖校验），中间结果为局部变量。
+1. `generate_sub_report` 执行文档选择流程（rationale 生成 → 抽取式总结+4 维度评分 → 按 rationale top-k 选择 → 覆盖校验），中间结果为局部变量。
 2. `_verify_coverage` 的返回值从丢弃改为捕获（`verify_result = self._verify_coverage(...)`）。
 3. `_write_doc_selection_debug` 将 7 类中间结果打包为 dict 并写入 `current_inputs["doc_selection_debug"]`。打包时通过 `DocSelectionContext` dataclass 封装 6 个相关参数，函数签名从 7 参数简化为 2 参数。同时构建 `doc_info_map`（doc_key → {title, url}）供 Excel 覆盖矩阵表展示文档标题和 URL。
 4. `SubReporterNode._do_invoke` 将 `doc_selection_debug` 纳入 `algorithm_output`；`_post_handle` 将其写入 `session.update_global_state({"section_context.doc_selection_debug": ...})`。
@@ -55,6 +55,10 @@
     "coverage_matrix": {
         "doc_0": {"r1": 0.8, "r2": 0.3},
         "doc_1": {"r1": 0.1, "r2": 0.7}
+    },
+    "dimension_scores": {
+        "doc_0": {"r1": {"coverage": 0.9, "reliability": 0.8, "analysis": 0.7, "presentation": 0.6, "total_score": 0.8}, "r2": {"coverage": 0.3, "reliability": 0.5, "analysis": 0.4, "presentation": 0.3, "total_score": 0.3}},
+        "doc_1": {"r1": {"coverage": 0.1, "reliability": 0.2, "analysis": 0.1, "presentation": 0.2, "total_score": 0.1}, "r2": {"coverage": 0.7, "reliability": 0.8, "analysis": 0.6, "presentation": 0.7, "total_score": 0.7}}
     },
     "reliability_scores": {"doc_0": 0.75, "doc_1": 0.85},
     "noise_scores": {"doc_0": 0.2, "doc_1": 0.1},
@@ -87,7 +91,7 @@
 
 长表格式，一行 = 一个 doc × rationale 组合，便于透视分析。
 
-| 章节ID | 章节标题 | ngram筛选前 | ngram筛选后 | 文档键 | 文档标题 | 文档URL | 维度ID | 覆盖分 | 可信度 | 噪声分 |
+| 章节ID | 章节标题 | 文档键 | 文档标题 | 文档URL | 维度ID | 覆盖分 | 可信度 | 分析 | 呈现 | total_score |
 |--------|----------|------------|------------|--------|----------|---------|--------|--------|--------|--------|
 
 ### 文档选择（doc_selection）
@@ -107,8 +111,8 @@
 输入依赖（来自文档选择流程）：
 
 - `rationales`：`_generate_section_rationales` 返回的 list[dict]
-- `coverage_result`：`_evaluate_coverage_matrix` 返回的 dict，含 `coverage_matrix` / `reliability_scores` / `noise_scores` / `filtered_docs`
-- `selected_docs` + `selected_marginal_values`：`_optimize_document_set` + `_elbow_cutoff` 后的最终选择
+- `coverage_result`：`_extract_and_score_documents` 返回的 dict，含 `coverage_matrix` / `dimension_scores` / `reliability_scores` / `noise_scores` / `filtered_docs`
+- `selected_docs` + `selected_marginal_values`：`_select_by_rationale_coverage` 后的最终选择
 - `verify_result`：`_verify_coverage` 返回的 dict，含 `uncovered_rationales` / `weak_rationales` / `coverage_rate` / `limitations`
 
 输出挂载点：
@@ -152,7 +156,7 @@ PYTHONDONTWRITEBYTECODE=1 uv run python -m compileall -q openjiuwen_deepsearch s
 uv run pytest tests/report/test_doc_selection.py tests/report/test_sub_report.py tests/report/test_tools_in_report.py
 
 # ngram + step summaries
-uv run pytest tests/report/test_ngram_utils.py tests/report/test_step_summaries.py
+uv run pytest tests/report/test_step_summaries.py
 
 # 文档选择调试导出测试
 uv run pytest tests/report/test_doc_selection_debug_export.py

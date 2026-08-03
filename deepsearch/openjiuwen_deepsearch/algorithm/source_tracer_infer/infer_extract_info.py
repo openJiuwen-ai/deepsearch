@@ -46,10 +46,12 @@ class ResearchInferPreprocess():
         for i, section_search_record in enumerate(self.search_records):
             search_record_with_index[i] = []
             for record in section_search_record:
-                search_record_with_index[i].append({"title": record.get("title", ""),
-                                                    "url": record.get("url", ""),
-                                                    "content": record.get("original_content", "")
-                                                    })
+                search_record_with_index[i].append({
+                    "title": record.get("title", "") or record.get("doc_title", ""),
+                    "url": record.get("url", "") or record.get("doc_url", ""),
+                    "content": (record.get("original_content", "")
+                                or record.get("passage_text", ""))
+                })
         self.search_record_with_index = search_record_with_index
 
     async def _extract_conclusion(self):

@@ -94,6 +94,12 @@ class SourceTracerInfer:
         try:
             # search_records中筛选与结论有关的引用
             conclusion_and_evidences = await self.extract_reference(datas)
+            # 空结论或空证据时跳过推理，避免无效 LLM 调用
+            if (not conclusion_and_evidences
+                    or not conclusion_and_evidences.get("conclusion")
+                    or not conclusion_and_evidences.get("reference")):
+                logger.warning("[SOURCE TRACER INFER] empty conclusion or evidences, skip infer")
+                return {}, None
             # 对conclusion进行推理
             inferences = await self.infer(conclusion_and_evidences)
             # 过滤无效、低质量推理
