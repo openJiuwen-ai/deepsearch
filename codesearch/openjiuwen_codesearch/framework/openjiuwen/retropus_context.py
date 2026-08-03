@@ -57,6 +57,11 @@ class RetropusRunContext:
     result: Optional["CodeSearchResult"] = None
 
     @property
+    def memory(self) -> Any:
+        """Span-memory adapter for ``delete_snippets`` (``memory_tools.execute_delete``)."""
+        return self.tools.memory
+
+    @property
     def total_input_tokens(self) -> int:
         """Sum of recorded input tokens across all stages."""
         return sum(i for i, _ in self.tokens_by_stage.values())

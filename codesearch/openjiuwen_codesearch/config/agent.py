@@ -18,6 +18,7 @@ IMPROVEMENT_FLAGS = (
     "second_file_probe",
     "inherits_expand",
     "expand_imports",
+    "delete_snippets",
 )
 
 
@@ -95,6 +96,8 @@ class RetropusSearchAgentConfig(BaseModel):
     imp_inherits_expand: bool = True
     # Suggest-only IMPORTS expand tool (does not block finish).
     imp_expand_imports: bool = False
+    # Register CodeSearch ``delete_snippets`` to drop bad ``add_context`` spans by id.
+    imp_delete_snippets: bool = False
 
     def improvement_flags(self) -> dict[str, bool]:
         """Map each ``IMPROVEMENT_FLAGS`` name to its current boolean value."""
@@ -175,4 +178,5 @@ class RetropusSearchAgentConfig(BaseModel):
             imp_second_file_probe=imp_flags["second_file_probe"],
             imp_inherits_expand=imp_flags["inherits_expand"],
             imp_expand_imports=imp_flags["expand_imports"],
+            imp_delete_snippets=imp_flags["delete_snippets"],
         )

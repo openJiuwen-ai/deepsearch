@@ -2,7 +2,8 @@
 """Retropus tool runtime + registry — isolated from CodeSearch ``build_default_registry``.
 
 Owns ``RetrievalTools`` (core search/read/span/finish tools) and builds per-run
-``ToolSpec`` registries. Graph expand tools reuse executors from ``graph_tools``.
+``ToolSpec`` registries. Graph expand tools reuse executors from ``graph_tools``;
+optional ``delete_snippets`` reuses ``memory_tools.execute_delete``.
 Never merge into the default CodeSearch registry.
 """
 
@@ -26,6 +27,10 @@ from openjiuwen_codesearch.algorithm.search_tools.graph_tools import (
     is_test_path,
     normalize_rel_path,
 )
+from openjiuwen_codesearch.algorithm.search_tools.memory_tools import (
+    DELETE_SCHEMA,
+    execute_delete,
+)
 from openjiuwen_codesearch.algorithm.search_tools.registry import ToolOutcome, ToolSpec
 from openjiuwen_codesearch.config.agent import RetropusSearchAgentConfig
 
@@ -46,13 +51,25 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + "\n... [truncated]"
 
 
+class _RetropusSpanMemory:
+    """Adapter so ``memory_tools.execute_delete`` can drop Retropus ``add_context`` spans."""
+
+    def __init__(self, tools: "RetrievalTools"):
+        self._tools = tools
+
+    def delete(self, snippet_ids: list[int]) -> int:
+        """Remove recorded spans whose ids appear in ``snippet_ids``; return count deleted."""
+        return self._tools.delete_spans_by_id(snippet_ids)
+
+
 class RetrievalTools(GraphExpandTools):
     """Stateful tool dispatcher for one Retropus instance run.
 
     Improvement flags (from ``RetropusSearchAgentConfig``) gate precision/recall
     guards: ban_tests, same_file_expand, second_file_probe, anti_early_finish.
     ``inherits_expand`` / ``expand_imports`` register suggest-only expand tools
-    (they do not block ``finish``).
+    (they do not block ``finish``). ``delete_snippets`` reuses CodeSearch's
+    ``memory_tools.execute_delete`` against span ids recorded by ``add_context``.
     """
 
     def __init__(
@@ -79,6 +96,7 @@ class RetrievalTools(GraphExpandTools):
         self._all_spans: List[Dict[str, Any]] = []
         self._seen_spans: set[Tuple[str, int, int]] = set()
         self._new_since_drain: List[Dict[str, Any]] = []
+        self._next_span_id = 1
         self._line_count_cache: Dict[str, int] = {}
         self._rel_to_file_node: Dict[str, Any] = {
             n.node.relative_path: n
@@ -91,6 +109,8 @@ class RetrievalTools(GraphExpandTools):
         self._second_file_probed = False
         self._inheritance_expanded = False
         self._import_index = None
+        # Minimal surface for ``memory_tools.execute_delete`` (env.memory.delete).
+        self.memory = _RetropusSpanMemory(self)
 
     # ------------------------------------------------------------------ #
     #                          Tool schemas                              #
@@ -108,14 +128,27 @@ class RetrievalTools(GraphExpandTools):
                 "function": {
                     "name": "search_code",
                     "description": (
-                        "Search the repository for class/function definitions relevant to a "
-                        "query. Returns ranked definitions with their file path and exact "
-                        "start/end line numbers. Use natural-language or identifier queries."
+                        "Search for class/function definitions via BM25. Returns ranked defs "
+                        "with file:start-end. Prefer 2–6 short tokens: identifiers, "
+                        "class/method names, exception types, or stack-frame symbols from the "
+                        "issue. Do NOT pass regex, site: filters, multi-line code, or "
+                        "near-duplicate reformulations of a failed query. Prefer production "
+                        "modules over examples/, galleries/, docs/. After a useful hit, "
+                        "read_file then add_context — do not keep searching the same symbols."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string", "description": "What to look for."}
+                            "query": {
+                                "type": "string",
+                                "description": (
+                                    "Short 2–6 token query: class/function/method name, "
+                                    "stack-frame symbol, exception type, or distinctive error "
+                                    "token from the issue. Prefer exact identifiers over long "
+                                    "natural-language paraphrases. Do not paste the full issue, "
+                                    "regex, site: filters, or multi-line code."
+                                ),
+                            }
                         },
                         "required": ["query"],
                     },
@@ -126,12 +159,21 @@ class RetrievalTools(GraphExpandTools):
                 "function": {
                     "name": "search_text",
                     "description": (
-                        "Search documentation / markdown / text chunks (non-code files) for a "
-                        "query. Returns matching text with file path and line range."
+                        "Search documentation / markdown / config text chunks (non-code index) "
+                        "for short literal phrases. Use for docs/config issues or unique "
+                        "strings that are not code definitions. For code identifiers and "
+                        "definitions, prefer search_code. Do not pass regex."
                     ),
                     "parameters": {
                         "type": "object",
-                        "properties": {"query": {"type": "string"}},
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": (
+                                    "Short literal phrase from the issue (not regex)."
+                                ),
+                            }
+                        },
                         "required": ["query"],
                     },
                 },
@@ -142,15 +184,19 @@ class RetrievalTools(GraphExpandTools):
                     "name": "get_repo_structure",
                     "description": (
                         "Show the repository structure. With a query, returns a compact tree of "
-                        "the most relevant files and their classes/functions; without a query, "
-                        "returns the top-level file tree."
+                        "the most relevant production files and their classes/functions; "
+                        "without a query, returns the top-level file tree. Prefer production "
+                        "modules over examples/, galleries/, docs/."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "Optional query to scope the tree.",
+                                "description": (
+                                    "Query with identifiers/keywords from the issue to rank the "
+                                    "tree (class/function names, error tokens, file basenames)."
+                                ),
                             }
                         },
                     },
@@ -161,15 +207,28 @@ class RetrievalTools(GraphExpandTools):
                 "function": {
                     "name": "read_file",
                     "description": (
-                        "Read exact numbered lines from a repo-relative file to verify or "
-                        "narrow a span before adding it as context."
+                        "Inspect numbered lines to confirm an edit site. Require "
+                        "start_line <= end_line and keep windows ≤ ~80 lines when possible. "
+                        "If the window contains code that must be changed/read for the fix, "
+                        "you MUST call add_context on the tightest enclosing function/method "
+                        "next — reading alone does not count as retrieved context. Do not "
+                        "re-read the same region repeatedly; commit or move on."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "path": {"type": "string"},
-                            "start_line": {"type": "integer"},
-                            "end_line": {"type": "integer"},
+                            "path": {
+                                "type": "string",
+                                "description": "Repo-relative file path.",
+                            },
+                            "start_line": {
+                                "type": "integer",
+                                "description": "First line to read (1-based, <= end_line).",
+                            },
+                            "end_line": {
+                                "type": "integer",
+                                "description": "Last line to read (inclusive, >= start_line).",
+                            },
                         },
                         "required": ["path", "start_line", "end_line"],
                     },
@@ -180,10 +239,13 @@ class RetrievalTools(GraphExpandTools):
                 "function": {
                     "name": "add_context",
                     "description": (
-                        "Record a final line span that must be read/edited to resolve the "
-                        "issue. Prefer the smallest enclosing function/method that contains the "
-                        "relevant code; avoid adding whole files or test files. Call once per "
-                        "distinct span."
+                        "Record a span that must be read/edited. Prefer the smallest enclosing "
+                        "function/method (typically <100 lines); avoid whole files, large "
+                        "classes, and examples/galleries/docs. Call once per distinct edit "
+                        "site. If several methods in the same file must change, add each — do "
+                        "not stop after the first hit. Do not add a span solely to satisfy a "
+                        "minimum count; only real edit sites. Avoid test files unless the "
+                        "issue is specifically about tests."
                     ),
                     "parameters": {
                         "type": "object",
@@ -193,7 +255,9 @@ class RetrievalTools(GraphExpandTools):
                             "end_line": {"type": "integer"},
                             "reason": {
                                 "type": "string",
-                                "description": "Brief why-relevant note (optional).",
+                                "description": (
+                                    "Brief why this span is required for the fix (optional)."
+                                ),
                             },
                         },
                         "required": ["file", "start_line", "end_line"],
@@ -208,14 +272,20 @@ class RetrievalTools(GraphExpandTools):
             schemas.append(EXPAND_INHERITANCE_SCHEMA)
         if self.config.imp_expand_imports:
             schemas.append(EXPAND_IMPORTS_SCHEMA)
+        if self.config.imp_delete_snippets:
+            schemas.append(DELETE_SCHEMA)
         schemas.append(
             {
                 "type": "function",
                 "function": {
                     "name": "finish",
                     "description": (
-                        "Stop once the added context fully covers the code needed to resolve "
-                        "the issue with high precision."
+                        "End the run only after add_context spans cover the production edit "
+                        "sites with high precision. Do not finish with zero spans. Prefer "
+                        "finishing with a few tight spans over exhausting the turn budget on "
+                        "more search_code calls. If only one file is selected, consider "
+                        "whether a sibling module (imports / callers / related API) still "
+                        "needs a span."
                     ),
                     "parameters": {"type": "object", "properties": {}},
                 },
@@ -282,6 +352,11 @@ class RetrievalTools(GraphExpandTools):
                     int(args.get("start_line", 0)),
                     int(args.get("end_line", 0)),
                     args.get("reason"),
+                )
+            if name == "delete_snippets":
+                return self.delete_snippets(
+                    args.get("snippet_ids") or [],
+                    str(args.get("reasoning", "")),
                 )
             if name == "finish":
                 return self.finish()
@@ -451,12 +526,48 @@ class RetrievalTools(GraphExpandTools):
             return f"Span already recorded: {rel}:{start}-{end}."
         self._seen_spans.add(key)
 
-        span = {"file": rel, "start": start, "end": end}
+        span_id = self._next_span_id
+        self._next_span_id += 1
+        span = {"id": span_id, "file": rel, "start": start, "end": end}
         if reason:
             span["reason"] = reason
         self._all_spans.append(span)
         self._new_since_drain.append(span)
+        if self.config.imp_delete_snippets:
+            return (
+                f"Recorded context {rel}:{start}-{end} "
+                f"(id={span_id}, {len(self._all_spans)} total)."
+            )
         return f"Recorded context {rel}:{start}-{end} ({len(self._all_spans)} total)."
+
+    def delete_spans_by_id(self, snippet_ids: list[int]) -> int:
+        """Drop recorded spans whose ``id`` is in ``snippet_ids``; return how many removed."""
+        wanted = {int(sid) for sid in snippet_ids if isinstance(sid, int) or str(sid).isdigit()}
+        if not wanted:
+            return 0
+        kept: List[Dict[str, Any]] = []
+        deleted = 0
+        for span in self._all_spans:
+            sid = span.get("id")
+            if sid in wanted:
+                deleted += 1
+                self._seen_spans.discard((span["file"], span["start"], span["end"]))
+            else:
+                kept.append(span)
+        self._all_spans = kept
+        self._new_since_drain = [
+            s for s in self._new_since_drain if s.get("id") not in wanted
+        ]
+        return deleted
+
+    def delete_snippets(self, snippet_ids: list, reasoning: str = "") -> str:
+        """Synchronous delete path (dispatch); mirrors ``memory_tools.execute_delete`` text."""
+        ids = [int(sid) for sid in snippet_ids if isinstance(sid, int) or str(sid).isdigit()]
+        deleted = self.delete_spans_by_id(ids)
+        return (
+            f"Successfully deleted {deleted} snippets from your CURRENT SAVED SNIPPETS memory."
+            f"\nYour Reasoning: {reasoning}"
+        )
 
     def finish(self) -> str:
         """Validate finish against recall/precision guards; return observation."""
@@ -564,6 +675,13 @@ def build_retropus_registry(tools: _RetropusToolsLike) -> dict[str, ToolSpec]:
                 name=name,
                 schema=schema,
                 executor=expand_spec.executor,
+            )
+        elif name == "delete_snippets":
+            # Reuse CodeSearch memory_tools executor (needs env.memory.delete).
+            registry[name] = ToolSpec(
+                name=name,
+                schema=schema,
+                executor=execute_delete,
             )
         else:
             registry[name] = ToolSpec(

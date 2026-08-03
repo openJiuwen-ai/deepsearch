@@ -467,10 +467,16 @@ class BM25Retriever(AbstractBaseRetriever):
     def score_files_and_defs(
         self,
         query: str,
-        top_k: int = 10,
+        top_k: int = 32,
         max_defs_per_file: Optional[int] = 20,
+        min_score_ratio: float = 0.1,
     ) -> List[Dict[str, Any]]:
-        """Rank files by their best-scoring class/function AST node for ``query``."""
+        """Rank files by their best-scoring class/function AST node for ``query``.
+
+        Files whose score is below ``min_score_ratio * best_score`` are dropped
+        before the inherits boost / top-k cut. ``min_score_ratio <= 0`` disables
+        the relative filter.
+        """
         per_file: "OrderedDict[int, Dict[str, Any]]" = OrderedDict()
         for idx, score in self._rank_all(query):
             doc = self._documents[idx]
@@ -486,6 +492,11 @@ class BM25Retriever(AbstractBaseRetriever):
                 entry["defs"].append((doc.node, score))
 
         ranked_files = sorted(per_file.values(), key=lambda e: e["score"], reverse=True)
+        if ranked_files and min_score_ratio > 0:
+            best = float(ranked_files[0]["score"])
+            if best > 0:
+                floor = best * min_score_ratio
+                ranked_files = [e for e in ranked_files if float(e["score"]) >= floor]
         from openjiuwen_codesearch.retropus.graph.inherits import boost_ranked_files_with_inherits
 
         # Pass the full scored pool so a high-scoring subclass can surface its

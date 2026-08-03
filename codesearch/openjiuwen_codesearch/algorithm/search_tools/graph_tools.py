@@ -41,9 +41,11 @@ EXPAND_FILE_DEFS_SCHEMA = {
     "function": {
         "name": "expand_file_defs",
         "description": (
-            "List ranked class/function definitions inside one already-selected "
-            "file (or a candidate file). Use this to find additional edit sites "
-            "in the same file before finishing."
+            "List defs in a file you already care about. Use to discover OTHER "
+            "methods/helpers in that file that also need editing (same-file "
+            "recall). Then add_context only on defs that are truly required — do "
+            "not add every listed def. Prefer multiple tight methods over one "
+            "large class body."
         ),
         "parameters": {
             "type": "object",
@@ -54,7 +56,9 @@ EXPAND_FILE_DEFS_SCHEMA = {
                 },
                 "query": {
                     "type": "string",
-                    "description": "Optional query to re-rank defs in the file.",
+                    "description": (
+                        "Optional short identifier query to re-rank defs in the file."
+                    ),
                 },
             },
             "required": ["path"],
@@ -67,11 +71,11 @@ EXPAND_INHERITANCE_SCHEMA = {
     "function": {
         "name": "expand_inheritance",
         "description": (
-            "List superclass and subclass definitions linked by INHERITS edges "
-            "to classes overlapping the currently selected spans (or a given "
-            "file). Recommended when a selected span is inside a class — "
-            "related edit sites often live in parent/child classes — but not "
-            "required before finish."
+            "After the first production add_context inside a class, call once to "
+            "list superclass/subclass defs (INHERITS neighbors). Related edit "
+            "sites often live one hop away. add_context only on neighbors that "
+            "are part of the fix; skip the rest. Especially useful for split "
+            "API/implementation or transform/frame hierarchies."
         ),
         "parameters": {
             "type": "object",
@@ -97,12 +101,11 @@ EXPAND_IMPORTS_SCHEMA = {
     "function": {
         "name": "expand_imports",
         "description": (
-            "List in-repo import neighbors of selected files (or a given "
-            "path) using IMPORTS edges in the knowledge graph (Python, Java, "
-            "JS/TS, Go, Rust, C/C++): modules this file imports, and other repo "
-            "files that import it. Use to find related production modules before "
-            "finish — then read_file / add_context on relevant hits. Suggest-only; "
-            "not required before finish."
+            "After the first production add_context, call once to list in-repo "
+            "import neighbors (IMPORTS edges: modules this file imports, and "
+            "files that import it). Use to find a related second production file "
+            "before finish — then read_file / add_context on relevant hits only. "
+            "Prefer production modules over tests/examples/galleries."
         ),
         "parameters": {
             "type": "object",

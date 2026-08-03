@@ -136,3 +136,34 @@ def test_retropus_registry_uses_graph_expand_specs():
     outcome = run(registry["expand_file_defs"].executor(env, {"path": "a.py"}))
     assert outcome.message == "ok:expand_file_defs"
     assert ("expand_file_defs", {"path": "a.py"}) in tools.calls
+
+
+def test_retropus_registry_reuses_delete_snippets_executor():
+    from openjiuwen_codesearch.algorithm.search_tools.memory_tools import (
+        DELETE_SCHEMA,
+        execute_delete,
+    )
+
+    schemas = list(CORE_SCHEMAS)
+    schemas.insert(-1, DELETE_SCHEMA)
+    tools = FakeRetropusTools(schemas=schemas)
+    registry = build_retropus_registry(tools)
+
+    assert list(registry)[-2:] == ["delete_snippets", "finish"]
+    assert registry["delete_snippets"].executor is execute_delete
+
+    class Memory:
+        def delete(self, snippet_ids):
+            assert snippet_ids == [1, 3]
+            return 2
+
+    class Env:
+        memory = Memory()
+
+    outcome = run(
+        registry["delete_snippets"].executor(
+            Env(), {"snippet_ids": [1, 3], "reasoning": "noise"}
+        )
+    )
+    assert "Successfully deleted 2 snippets" in outcome.message
+    assert "noise" in outcome.message

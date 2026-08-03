@@ -26,6 +26,7 @@ _RETROPUS_ENV_KEYS = (
     "IMP_SECOND_FILE_PROBE",
     "IMP_INHERITS_EXPAND",
     "IMP_EXPAND_IMPORTS",
+    "IMP_DELETE_SNIPPETS",
 )
 
 
@@ -60,6 +61,7 @@ def test_retropus_agent_config_from_env_reads_loop_and_imp_flags(monkeypatch, tm
     assert cfg.imp_same_file_expand is True
     assert cfg.imp_inherits_expand is False
     assert cfg.imp_expand_imports is False
+    assert cfg.imp_delete_snippets is False
 
 
 def test_retropus_agent_config_reads_imp_expand_imports(monkeypatch, tmp_path):
@@ -68,6 +70,14 @@ def test_retropus_agent_config_reads_imp_expand_imports(monkeypatch, tmp_path):
 
     cfg = RetropusSearchAgentConfig.from_env()
     assert cfg.imp_expand_imports is True
+
+
+def test_retropus_agent_config_reads_imp_delete_snippets(monkeypatch, tmp_path):
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("IMP_DELETE_SNIPPETS", "1")
+
+    cfg = RetropusSearchAgentConfig.from_env()
+    assert cfg.imp_delete_snippets is True
 
 
 def test_codesearch_config_from_env_populates_retropus(monkeypatch, tmp_path):
