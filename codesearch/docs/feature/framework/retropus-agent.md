@@ -27,7 +27,7 @@ CodeSearch 默认五工具注册表严格隔离。
 - 公共 API 仍返回 `CodeSearchResult`（hits 来自 pred_spans / final_spans）。
 - CodeSearchAgent 的 `get_registry()` / `build_default_registry()` 不变，不含 retropus 工具。
 - Retropus 默认工具：`search_code`、`search_text`、`get_repo_structure`、`read_file`、
-  `add_context`、`finish`（及 flag 门控的 expand_*）；不含
+  `add_context`、`finish`（及 flag 门控的 expand_* / `delete_snippets`）；不含
   CodeSearch 的 `search_codebase` 等。
 - 未索引时 `search` 返回 `Termination.INDEX_NOT_READY`。
 - 需安装可选依赖：`pip install 'openjiuwen-codesearch[retropus]'`。
@@ -84,6 +84,7 @@ LLM 凭证仍在 `CodeSearchConfig.llm`（`OPENAI_API_KEY` / `OPENAI_BASE_URL` /
 | `imp_second_file_probe` | `IMP_SECOND_FILE_PROBE` | `false` | 已选文件时对第二文件做探测；可注册相关 expand |
 | `imp_inherits_expand` | `IMP_INHERITS_EXPAND` | **`true`** | 注册 `expand_inheritance`（沿 KG `INHERITS` 边建议邻居；**不**阻挡 `finish`） |
 | `imp_expand_imports` | `IMP_EXPAND_IMPORTS` | `false` | 注册 `expand_imports`（沿 KG `IMPORTS` 边建议邻居；**不**阻挡 `finish`） |
+| `imp_delete_snippets` | `IMP_DELETE_SNIPPETS` | `false` | 注册 CodeSearch 的 `delete_snippets`（按 `add_context` 返回的 span id 删除误录 span；复用 `memory_tools.execute_delete`） |
 
 KG 在索引时**始终**构建 `IMPORTS` 边（Python/Java/JS/TS/Go/Rust/C/C++，
 regex 解析、仅 in-repo）；flag 只控制是否暴露工具与系统提示附录。
