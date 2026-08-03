@@ -267,8 +267,8 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             return
         cfg = ctx.retropus_config
         ctx.system_prompt = build_system_prompt(
-            inherits_expand=cfg.imp_inherits_expand,
-            expand_imports=cfg.imp_expand_imports,
+            inherits_expand=cfg.feat_inherits_expand,
+            expand_imports=cfg.feat_expand_imports,
         )
         tool_schemas = registry_schemas(build_retropus_registry(ctx.tools))
         ctx.prompt_cache_key = stable_prompt_cache_key(

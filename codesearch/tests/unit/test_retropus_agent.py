@@ -47,8 +47,8 @@ class FakeRetropusTools:
         self._new_since_drain: list = []
         self._dispatched: list = []
         self.config = SimpleNamespace(
-            imp_same_file_expand=False,
-            imp_inherits_expand=False,
+            feat_same_file_expand=False,
+            feat_inherits_expand=False,
         )
 
     def tool_schemas(self):

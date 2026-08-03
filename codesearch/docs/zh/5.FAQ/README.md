@@ -60,7 +60,7 @@ openJiuwen 的传递依赖包含预发布版本，使用 uv 时加 `--prerelease
 `CodeSearchConfig.agent.engine = "retropus"`（或
 `python -m benchmarks.contextbench.runner --engine retropus`）。
 `ENGINE=` 不是环境变量。循环与索引参数见
-`CodeSearchConfig.retropus`（`MAX_ROUNDS` / `MAX_TOOL_CALLS` / `IMP_*` 等），
+`CodeSearchConfig.retropus`（`MAX_ROUNDS` / `MAX_TOOL_CALLS` / `FEAT_*` 等），
 完整表：[retropus-agent.md](../../feature/framework/retropus-agent.md)；
 模板：[`.env.example`](../../../.env.example)。Retropus 不使用 Milvus。
 

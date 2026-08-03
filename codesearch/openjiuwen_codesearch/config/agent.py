@@ -10,8 +10,8 @@ from pydantic import BaseModel
 # Local default so importing this module does not pull bm25s/numpy.
 DEFAULT_TOKENIZE_WORKERS = max(1, (os.cpu_count() or 4) - 1)
 
-# Short names for Imp_* fields / IMP_* env vars (defaults live on the model).
-IMPROVEMENT_FLAGS = (
+# Short names for Feat_* fields / FEAT_* env vars (defaults live on the model).
+FEATURE_FLAGS = (
     "ban_tests",
     "anti_early_finish",
     "same_file_expand",
@@ -67,7 +67,7 @@ class RetropusSearchAgentConfig(BaseModel):
     """Retropus runtime settings on ``CodeSearchConfig.retropus``.
 
     Loaded from ``codesearch/.env`` / process env via ``from_env()``
-    (``MAX_*``, ``IMP_*``, ``RETRIEVER``, …). LLM credentials live on
+    (``MAX_*``, ``FEAT_*``, ``RETRIEVER``, …). LLM credentials live on
     ``CodeSearchConfig.llm``, not here.
     """
 
@@ -88,24 +88,24 @@ class RetropusSearchAgentConfig(BaseModel):
     # were recorded (0 = disabled; empty-only legacy fallback of 5 still runs).
     min_mandatory_return_spans: int = 0
 
-    # Improvement flags (post-ablation defaults; IMP_ALL / IMP_* override via from_env)
-    imp_ban_tests: bool = False
-    imp_anti_early_finish: bool = False
-    imp_same_file_expand: bool = False
-    imp_second_file_probe: bool = False
-    imp_inherits_expand: bool = True
+    # Feature flags (post-ablation defaults; FEAT_ALL / FEAT_* override via from_env)
+    feat_ban_tests: bool = False
+    feat_anti_early_finish: bool = False
+    feat_same_file_expand: bool = False
+    feat_second_file_probe: bool = False
+    feat_inherits_expand: bool = True
     # Suggest-only IMPORTS expand tool (does not block finish).
-    imp_expand_imports: bool = False
+    feat_expand_imports: bool = False
     # Register CodeSearch ``delete_snippets`` to drop bad ``add_context`` spans by id.
-    imp_delete_snippets: bool = False
+    feat_delete_snippets: bool = False
 
-    def improvement_flags(self) -> dict[str, bool]:
-        """Map each ``IMPROVEMENT_FLAGS`` name to its current boolean value."""
-        return {name: getattr(self, f"imp_{name}") for name in IMPROVEMENT_FLAGS}
+    def feature_flags(self) -> dict[str, bool]:
+        """Map each ``FEATURE_FLAGS`` name to its current boolean value."""
+        return {name: getattr(self, f"feat_{name}") for name in FEATURE_FLAGS}
 
-    def enabled_improvements(self) -> list[str]:
-        """Names of improvement flags that are currently on."""
-        return [name for name, on in self.improvement_flags().items() if on]
+    def enabled_features(self) -> list[str]:
+        """Names of feature flags that are currently on."""
+        return [name for name, on in self.feature_flags().items() if on]
 
     @classmethod
     def from_env(cls) -> RetropusSearchAgentConfig:
@@ -118,23 +118,23 @@ class RetropusSearchAgentConfig(BaseModel):
         defaults = cls()
         retriever = (_first_env("RETRIEVER", default=defaults.retriever) or "bm25").lower()
 
-        # Allow IMP_ALL=0|1 to force every improvement off/on, then
-        # individual IMP_<NAME> overrides. Per-flag defaults come from the model.
-        all_override = _first_env("IMP_ALL")
+        # Allow FEAT_ALL=0|1 to force every feature off/on, then
+        # individual FEAT_<NAME> overrides. Per-flag defaults come from the model.
+        all_override = _first_env("FEAT_ALL")
         all_default: Optional[bool] = None
         if all_override is not None:
             all_default = all_override.strip().lower() in ("1", "true", "yes", "on")
 
-        imp_flags = {
+        feat_flags = {
             name: _bool_env(
-                f"IMP_{name.upper()}",
+                f"FEAT_{name.upper()}",
                 default=(
                     all_default
                     if all_default is not None
-                    else getattr(defaults, f"imp_{name}")
+                    else getattr(defaults, f"feat_{name}")
                 ),
             )
-            for name in IMPROVEMENT_FLAGS
+            for name in FEATURE_FLAGS
         }
 
         return cls(
@@ -172,11 +172,11 @@ class RetropusSearchAgentConfig(BaseModel):
                 "RETROPUS_MIN_MANDATORY_RETURN_SPANS",
                 default=defaults.min_mandatory_return_spans,
             ),
-            imp_ban_tests=imp_flags["ban_tests"],
-            imp_anti_early_finish=imp_flags["anti_early_finish"],
-            imp_same_file_expand=imp_flags["same_file_expand"],
-            imp_second_file_probe=imp_flags["second_file_probe"],
-            imp_inherits_expand=imp_flags["inherits_expand"],
-            imp_expand_imports=imp_flags["expand_imports"],
-            imp_delete_snippets=imp_flags["delete_snippets"],
+            feat_ban_tests=feat_flags["ban_tests"],
+            feat_anti_early_finish=feat_flags["anti_early_finish"],
+            feat_same_file_expand=feat_flags["same_file_expand"],
+            feat_second_file_probe=feat_flags["second_file_probe"],
+            feat_inherits_expand=feat_flags["inherits_expand"],
+            feat_expand_imports=feat_flags["expand_imports"],
+            feat_delete_snippets=feat_flags["delete_snippets"],
         )

@@ -75,12 +75,12 @@ def test_finish_suggests_but_does_not_block_inheritance(tmp_path: Path):
         file_by_ast={base_ast.node_id: file_base, sub_ast.node_id: file_sub},
     )
     cfg = RetropusSearchAgentConfig(
-        imp_inherits_expand=True,
-        imp_anti_early_finish=False,
-        imp_same_file_expand=False,
-        imp_second_file_probe=False,
-        imp_ban_tests=False,
-        imp_expand_imports=False,
+        feat_inherits_expand=True,
+        feat_anti_early_finish=False,
+        feat_same_file_expand=False,
+        feat_second_file_probe=False,
+        feat_ban_tests=False,
+        feat_expand_imports=False,
     )
     tools = RetrievalTools(kg, _FakeRetriever(), tmp_path, cfg)
     tools._definitions_in_file = lambda rel: [  # type: ignore[method-assign]

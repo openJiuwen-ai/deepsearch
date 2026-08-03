@@ -104,12 +104,12 @@ def _file_nodes(rels: list[str]) -> list[KnowledgeGraphNode]:
 
 def _tools(repo: Path, rels: list[str], **cfg) -> RetrievalTools:
     opts = dict(
-        imp_expand_imports=True,
-        imp_ban_tests=False,
-        imp_second_file_probe=False,
-        imp_same_file_expand=False,
-        imp_anti_early_finish=False,
-        imp_inherits_expand=False,
+        feat_expand_imports=True,
+        feat_ban_tests=False,
+        feat_second_file_probe=False,
+        feat_same_file_expand=False,
+        feat_anti_early_finish=False,
+        feat_inherits_expand=False,
     )
     opts.update(cfg)
     return RetrievalTools(
@@ -121,7 +121,7 @@ def _tools(repo: Path, rels: list[str], **cfg) -> RetrievalTools:
 
 
 def test_expand_imports_off_by_default():
-    assert RetropusSearchAgentConfig().imp_expand_imports is False
+    assert RetropusSearchAgentConfig().feat_expand_imports is False
     appendix = load_prompt("expand_imports")
     assert appendix not in build_system_prompt()
     assert appendix in build_system_prompt(expand_imports=True)
@@ -199,7 +199,7 @@ def test_build_imports_edges_and_tool_from_kg(tmp_path: Path):
         kg,
         _FakeRetriever(),
         tmp_path,
-        RetropusSearchAgentConfig(imp_expand_imports=True, imp_ban_tests=False),
+        RetropusSearchAgentConfig(feat_expand_imports=True, feat_ban_tests=False),
     )
     tools.add_context("pkg/a.py", 1, 2)
     out = tools.expand_imports(direction="both", depth=1)
@@ -228,7 +228,7 @@ def test_expand_imports_tool_out_and_in(tmp_path: Path):
 
 def test_expand_imports_respects_ban_tests(tmp_path: Path):
     rels = _write_pkg(tmp_path)
-    tools = _tools(tmp_path, rels, imp_ban_tests=True)
+    tools = _tools(tmp_path, rels, feat_ban_tests=True)
     out = tools.expand_imports(path="pkg/a.py", direction="in", depth=1)
     assert "pkg/d.py" in out
     assert "test_a.py" not in out
@@ -236,7 +236,7 @@ def test_expand_imports_respects_ban_tests(tmp_path: Path):
 
 def test_expand_imports_marks_second_file_probe(tmp_path: Path):
     rels = _write_pkg(tmp_path)
-    tools = _tools(tmp_path, rels, imp_second_file_probe=True)
+    tools = _tools(tmp_path, rels, feat_second_file_probe=True)
     tools.add_context("pkg/a.py", 1, 2)
     blocked = tools.finish()
     assert blocked.startswith("finish blocked")
@@ -246,11 +246,11 @@ def test_expand_imports_marks_second_file_probe(tmp_path: Path):
 
 def test_expand_imports_not_in_schema_when_off(tmp_path: Path):
     rels = _write_pkg(tmp_path)
-    tools = _tools(tmp_path, rels, imp_expand_imports=False)
+    tools = _tools(tmp_path, rels, feat_expand_imports=False)
     names = [s["function"]["name"] for s in tools.tool_schemas()]
     assert "expand_imports" not in names
 
-    tools_on = _tools(tmp_path, rels, imp_expand_imports=True)
+    tools_on = _tools(tmp_path, rels, feat_expand_imports=True)
     names_on = [s["function"]["name"] for s in tools_on.tool_schemas()]
     assert "expand_imports" in names_on
 

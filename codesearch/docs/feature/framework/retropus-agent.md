@@ -65,26 +65,26 @@ LLM 凭证仍在 `CodeSearchConfig.llm`（`OPENAI_API_KEY` / `OPENAI_BASE_URL` /
 
 | 字段 | 环境变量 | 默认 | 说明 |
 |---|---|---|---|
-| `min_spans_before_finish` | `MIN_SPANS_BEFORE_FINISH` | `3` | 仅当 `imp_anti_early_finish` 开启时：`finish` 前最少 span 数 |
-| `min_files_before_finish` | `MIN_FILES_BEFORE_FINISH` | `1` | 仅当 `imp_anti_early_finish` 开启时：`finish` 前最少文件数 |
+| `min_spans_before_finish` | `MIN_SPANS_BEFORE_FINISH` | `3` | 仅当 `feat_anti_early_finish` 开启时：`finish` 前最少 span 数 |
+| `min_files_before_finish` | `MIN_FILES_BEFORE_FINISH` | `1` | 仅当 `feat_anti_early_finish` 开启时：`finish` 前最少文件数 |
 | `min_mandatory_return_spans` | `MIN_MANDATORY_RETURN_SPANS` 或 `RETROPUS_MIN_MANDATORY_RETURN_SPANS` | `0` | 结束时若 spans 少于 N，用 top retriever defs 补齐；`0` = 关闭强制补齐（仅在完全空结果时走 legacy top-5 fallback） |
 
-### Improvement flags（`IMP_*`）
+### Feature flags（`FEAT_*`）
 
 布尔环境变量接受 `1` / `true` / `yes` / `on`（大小写不敏感）。
 
-`IMP_ALL=0|1` 可先强制全部关闭/开启，再被单个 `IMP_<NAME>` 覆盖。
+`FEAT_ALL=0|1` 可先强制全部关闭/开启，再被单个 `FEAT_<NAME>` 覆盖。
 模型字段默认如下（**仅 `inherits_expand` 默认为开**）：
 
 | 字段 | 环境变量 | 默认 | 效果（开启时） |
 |---|---|---|---|
-| `imp_ban_tests` | `IMP_BAN_TESTS` | `false` | 检索/选 span 时压制测试路径（issue 本身谈测试时除外） |
-| `imp_anti_early_finish` | `IMP_ANTI_EARLY_FINISH` | `false` | `finish` 前强制 `min_spans` / `min_files` |
-| `imp_same_file_expand` | `IMP_SAME_FILE_EXPAND` | `false` | 注册 `expand_file_defs`；finish 前可同文件扩展 |
-| `imp_second_file_probe` | `IMP_SECOND_FILE_PROBE` | `false` | 已选文件时对第二文件做探测；可注册相关 expand |
-| `imp_inherits_expand` | `IMP_INHERITS_EXPAND` | **`true`** | 注册 `expand_inheritance`（沿 KG `INHERITS` 边建议邻居；**不**阻挡 `finish`） |
-| `imp_expand_imports` | `IMP_EXPAND_IMPORTS` | `false` | 注册 `expand_imports`（沿 KG `IMPORTS` 边建议邻居；**不**阻挡 `finish`） |
-| `imp_delete_snippets` | `IMP_DELETE_SNIPPETS` | `false` | 注册 CodeSearch 的 `delete_snippets`（按 `add_context` 返回的 span id 删除误录 span；复用 `memory_tools.execute_delete`） |
+| `feat_ban_tests` | `FEAT_BAN_TESTS` | `false` | 检索/选 span 时压制测试路径（issue 本身谈测试时除外） |
+| `feat_anti_early_finish` | `FEAT_ANTI_EARLY_FINISH` | `false` | `finish` 前强制 `min_spans` / `min_files` |
+| `feat_same_file_expand` | `FEAT_SAME_FILE_EXPAND` | `false` | 注册 `expand_file_defs`；finish 前可同文件扩展 |
+| `feat_second_file_probe` | `FEAT_SECOND_FILE_PROBE` | `false` | 已选文件时对第二文件做探测；可注册相关 expand |
+| `feat_inherits_expand` | `FEAT_INHERITS_EXPAND` | **`true`** | 注册 `expand_inheritance`（沿 KG `INHERITS` 边建议邻居；**不**阻挡 `finish`） |
+| `feat_expand_imports` | `FEAT_EXPAND_IMPORTS` | `false` | 注册 `expand_imports`（沿 KG `IMPORTS` 边建议邻居；**不**阻挡 `finish`） |
+| `feat_delete_snippets` | `FEAT_DELETE_SNIPPETS` | `false` | 注册 CodeSearch 的 `delete_snippets`（按 `add_context` 返回的 span id 删除误录 span；复用 `memory_tools.execute_delete`） |
 
 KG 在索引时**始终**构建 `IMPORTS` 边（Python/Java/JS/TS/Go/Rust/C/C++，
 regex 解析、仅 in-repo）；flag 只控制是否暴露工具与系统提示附录。
@@ -129,7 +129,7 @@ are handled by a transparent retry without the key in
 
 - `tests/unit/test_retropus_registry.py`：注册表隔离
 - `tests/unit/test_retropus_agent.py`：假 LLM 回放、hits 映射、INDEX_NOT_READY、跳过 Milvus
-- `tests/unit/test_retropus_agent_config.py`：`from_env` 读取 `MAX_*` / `IMP_*` / 补齐相关变量
+- `tests/unit/test_retropus_agent_config.py`：`from_env` 读取 `MAX_*` / `FEAT_*` / 补齐相关变量
 - `tests/unit/test_retropus_expand_imports.py`：`IMPORTS` 边解析、`expand_imports` 工具与 schema 门控
 - `tests/unit/test_retropus_inherits_finish.py`：`inherits_expand` 不阻挡 finish
 - `tests/unit/test_retropus_prompt_cache.py`：`prompt_cache_key` 稳定性与 invoke 透传

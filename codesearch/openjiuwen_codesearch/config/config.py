@@ -72,7 +72,7 @@ class CodeSearchConfig(BaseModel):
 
         LLM：``OPENAI_API_KEY`` / ``OPENAI_BASE_URL``（默认 OpenRouter）/ ``MODEL``。
         Milvus：``MILVUS_HOST`` / ``MILVUS_PORT`` / ``MILVUS_TOKEN``。
-        Retropus：``MAX_*`` / ``IMP_*`` / ``RETRIEVER`` 等 → ``retropus``
+        Retropus：``MAX_*`` / ``FEAT_*`` / ``RETRIEVER`` 等 → ``retropus``
         （供 ``RetropusCodeSearchAgent`` 与 contextbench runner 使用）。
         """
         _load_dotenv()

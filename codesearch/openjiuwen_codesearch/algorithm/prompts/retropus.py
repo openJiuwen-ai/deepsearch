@@ -8,7 +8,7 @@ after it. Therefore every template below follows:
     [static instructions / labels]  →  [semi-stable metadata]  →  [variable payload]
 
 Cross-instance reuse: keep the system prompt byte-identical across runs that
-share the same improvement flags, and put the issue text only at the end of
+share the same feature flags, and put the issue text only at the end of
 the first user message.
 
 Templates live as ``algorithm/prompts/*.md`` and are loaded via ``load_prompt``.

@@ -205,7 +205,7 @@ class GraphExpandTools:
         if (self.repo_dir / rel).is_file() is False:
             return f"expand_file_defs: file not found: {rel}"
         self._expanded_files.add(rel)
-        if self.config.imp_second_file_probe:
+        if self.config.feat_second_file_probe:
             self._second_file_probed = True
 
         q = (query or "").strip() or self.issue_text[:500]
@@ -288,7 +288,7 @@ class GraphExpandTools:
                     continue
                 nrel = file_node.node.relative_path
                 if (
-                    self.config.imp_ban_tests
+                    self.config.feat_ban_tests
                     and is_test_path(nrel)
                     and not self._issue_about_tests
                 ):
@@ -312,7 +312,7 @@ class GraphExpandTools:
         )
 
         self._inheritance_expanded = True
-        if self.config.imp_second_file_probe:
+        if self.config.feat_second_file_probe:
             self._second_file_probed = True
 
         if path:
@@ -391,7 +391,7 @@ class GraphExpandTools:
                         continue
                     nrel = file_node.node.relative_path
                     if (
-                        self.config.imp_ban_tests
+                        self.config.feat_ban_tests
                         and is_test_path(nrel)
                         and not self._issue_about_tests
                     ):
@@ -456,7 +456,7 @@ class GraphExpandTools:
             EXPAND_IMPORTS_HEADER,
         )
 
-        if self.config.imp_second_file_probe:
+        if self.config.feat_second_file_probe:
             self._second_file_probed = True
 
         if path:
@@ -495,7 +495,7 @@ class GraphExpandTools:
                 continue
             for other, name, edge_dir in neighbors:
                 if (
-                    self.config.imp_ban_tests
+                    self.config.feat_ban_tests
                     and is_test_path(other)
                     and not self._issue_about_tests
                 ):

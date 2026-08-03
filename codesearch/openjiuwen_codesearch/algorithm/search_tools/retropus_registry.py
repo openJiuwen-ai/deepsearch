@@ -65,7 +65,7 @@ class _RetropusSpanMemory:
 class RetrievalTools(GraphExpandTools):
     """Stateful tool dispatcher for one Retropus instance run.
 
-    Improvement flags (from ``RetropusSearchAgentConfig``) gate precision/recall
+    Feature flags (from ``RetropusSearchAgentConfig``) gate precision/recall
     guards: ban_tests, same_file_expand, second_file_probe, anti_early_finish.
     ``inherits_expand`` / ``expand_imports`` register suggest-only expand tools
     (they do not block ``finish``). ``delete_snippets`` reuses CodeSearch's
@@ -120,7 +120,7 @@ class RetrievalTools(GraphExpandTools):
         """Return tool schemas in a fixed order (stable prompt-cache prefix).
 
         Core tools first, optional tools next, ``finish`` always last. Order must
-        not depend on runtime state — only on improvement flags for the run.
+        not depend on runtime state — only on feature flags for the run.
         """
         schemas: List[Dict[str, Any]] = [
             {
@@ -266,13 +266,13 @@ class RetrievalTools(GraphExpandTools):
             },
         ]
         # Optional tools keep a fixed slot before finish so schema order is stable.
-        if self.config.imp_same_file_expand:
+        if self.config.feat_same_file_expand:
             schemas.append(EXPAND_FILE_DEFS_SCHEMA)
-        if self.config.imp_inherits_expand:
+        if self.config.feat_inherits_expand:
             schemas.append(EXPAND_INHERITANCE_SCHEMA)
-        if self.config.imp_expand_imports:
+        if self.config.feat_expand_imports:
             schemas.append(EXPAND_IMPORTS_SCHEMA)
-        if self.config.imp_delete_snippets:
+        if self.config.feat_delete_snippets:
             schemas.append(DELETE_SCHEMA)
         schemas.append(
             {
@@ -379,14 +379,14 @@ class RetrievalTools(GraphExpandTools):
             return "Empty query."
 
         # Mark second-file probe progress when agent searches after having one file.
-        if self.config.imp_second_file_probe and self.selected_files():
+        if self.config.feat_second_file_probe and self.selected_files():
             self._second_file_probed = True
 
         ranked_files = self.retriever.score_files_and_defs(query, top_k=top_files)
         rows: List[Tuple[str, str, int, int, float]] = []
         for entry in ranked_files:
             rel = entry["file_node"].node.relative_path
-            if self.config.imp_ban_tests and is_test_path(rel) and not self._issue_about_tests:
+            if self.config.feat_ban_tests and is_test_path(rel) and not self._issue_about_tests:
                 continue
             for def_node, score in entry["defs"]:
                 label = definition_label(def_node) if definition_label else def_node.node.type
@@ -429,7 +429,7 @@ class RetrievalTools(GraphExpandTools):
         query = (query or "").strip()
         if query and render_scored_file_tree is not None:
             ranked_files = self.retriever.score_files_and_defs(query, top_k=15)
-            if self.config.imp_ban_tests and not self._issue_about_tests:
+            if self.config.feat_ban_tests and not self._issue_about_tests:
                 ranked_files = [
                     e
                     for e in ranked_files
@@ -505,7 +505,7 @@ class RetrievalTools(GraphExpandTools):
             return f"add_context ignored: '{rel}' does not exist at this commit."
 
         if (
-            self.config.imp_ban_tests
+            self.config.feat_ban_tests
             and is_test_path(rel)
             and not self._issue_about_tests
         ):
@@ -533,7 +533,7 @@ class RetrievalTools(GraphExpandTools):
             span["reason"] = reason
         self._all_spans.append(span)
         self._new_since_drain.append(span)
-        if self.config.imp_delete_snippets:
+        if self.config.feat_delete_snippets:
             return (
                 f"Recorded context {rel}:{start}-{end} "
                 f"(id={span_id}, {len(self._all_spans)} total)."
@@ -575,7 +575,7 @@ class RetrievalTools(GraphExpandTools):
         n_files = len(self.selected_files())
         blocks: List[str] = []
 
-        if self.config.imp_anti_early_finish:
+        if self.config.feat_anti_early_finish:
             if n_spans < self.config.min_spans_before_finish:
                 blocks.append(
                     f"Need at least {self.config.min_spans_before_finish} spans "
@@ -588,7 +588,7 @@ class RetrievalTools(GraphExpandTools):
                     f"(have {n_files})."
                 )
 
-        if self.config.imp_same_file_expand and self.selected_files():
+        if self.config.feat_same_file_expand and self.selected_files():
             missing = [f for f in self.selected_files() if f not in self._expanded_files]
             if missing:
                 blocks.append(
@@ -598,7 +598,7 @@ class RetrievalTools(GraphExpandTools):
                 )
 
         if (
-            self.config.imp_second_file_probe
+            self.config.feat_second_file_probe
             and n_files == 1
             and not self._second_file_probed
         ):
@@ -611,7 +611,7 @@ class RetrievalTools(GraphExpandTools):
         # inherits_expand is suggest-only: do not block finish. Surface a soft
         # reminder when finishing with unprobed INHERITS neighbors.
         suggestion = ""
-        if self.config.imp_inherits_expand and self.selected_files():
+        if self.config.feat_inherits_expand and self.selected_files():
             pending = self._pending_inheritance_targets()
             if pending and not self._inheritance_expanded:
                 preview = ", ".join(pending[:5])

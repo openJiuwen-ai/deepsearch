@@ -66,7 +66,7 @@ def _ranked_three_files(tmp_path: Path):
 def _ctx(tmp_path: Path, ranked, *, min_mandatory: int, tools=None) -> RetropusRunContext:
     cfg = RetropusSearchAgentConfig(
         min_mandatory_return_spans=min_mandatory,
-        imp_ban_tests=False,
+        feat_ban_tests=False,
     )
     retriever = _FakeRetriever(ranked)
     tools = tools or RetrievalTools(
@@ -108,7 +108,7 @@ def test_pad_spans_only_fills_deficit(tmp_path: Path):
     ranked = _ranked_three_files(tmp_path)
     cfg = RetropusSearchAgentConfig(
         min_mandatory_return_spans=3,
-        imp_ban_tests=False,
+        feat_ban_tests=False,
     )
     tools = RetrievalTools(
         SimpleNamespace(get_file_nodes=lambda: []),
