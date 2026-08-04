@@ -13,7 +13,8 @@
 ## 可见行为
 
 - web search、local search 和运行时 API 工具结果会被归一化为记录列表。
-- `exclude_domains` 会过滤命中的域名及其子域名。
+- `exclude_domains`、`exclude_url`、`exclude_titles` 三类排除约束仅作用于 Web 搜索结果（tavily/google/common 三条路径的统一入口），本地知识库检索（local search）结果不在其过滤范围内，行为不变。
+- `exclude_domains` 按命中域名及其子域名过滤；`exclude_url` 按命中禁引链接过滤（归一化 host+path 精确匹配）；`exclude_titles` 按命中禁引标题的来源过滤（归一化精确匹配，或剥离枚举聚合站后缀后精确匹配），用于拦截同一文献在 Web 上的镜像变体。
 - 每个文档或证据片段会获得稳定的 `doc_id` / `source_id`，用于后续引用、去重和 source store 回查。
 - 文档评估只接收 compact evidence，不应把完整 `original_content` 直接送入 evaluator Prompt。
 - 采集阶段的说明性结构化字段遵循报告语言；搜索 `queries` 和 `next_queries` 不强制遵循报告语言，可以选择更容易召回权威证据的源语言或混合语言。
@@ -62,6 +63,8 @@
 - `agent_input.local_text_search_record`
 - `agent_input.other_tool_record`
 - `research_intent.exclude_domains`
+- `research_intent.exclude_url`
+- `research_intent.exclude_titles`
 
 关键输出：
 

@@ -17,7 +17,7 @@
 - 候选文档先经 n-gram Pool-IDF 粗筛（0 LLM 调用），删除与所有 rationale 零重叠的文档。
 - n-gram 分词对中文按单字拆分（CJK 无词边界），英文按整词保留，确保不同措辞的中文文档也能产生字符 bigram 重叠。
 - 覆盖矩阵评估使用分批并行（BATCH_SIZE=15），并发上限 5 批，每批独立 LLM 调用。
-- rationale 生成和覆盖矩阵评估的 LLM 调用均按 `max_generate_retry_num`（默认 3）重试，覆盖 LLM 异常、空内容、JSON 解析失败三类瞬时失败，全部失败才降级。
+- rationale 生成和覆盖矩阵评估的 LLM 调用均按 `max_generate_retry_num`（默认 3）重试，覆盖 LLM 异常、空输出、JSON 解析失败三类瞬时失败；重试时上一轮失败原因以带数据边界的 `<retry_feedback>` user 消息追加到下一次调用的消息列表末尾（由函数内部重试循环维护，system prompt 不变，首次调用不追加）。
 - Prompt 安全：rationale 生成和覆盖矩阵评估的 system prompt 只含指令和抗注入约束，不可信数据（文档内容、step summaries）通过 user message 传入，防止恶意网页注入指令操纵评分。
 - 贪心子模选择按边际价值排序，含冗余惩罚和噪声惩罚。
 - elbow 截断后做覆盖感知扩展：跳变后只要某文档在某个 rationale 维度是最高覆盖分就保留。
@@ -46,9 +46,9 @@
 
 ## 核心流程
 
-1. **rationale 生成**：LLM 根据用户 query、章节任务、大纲和 step summaries 生成 3-8 个信息维度。LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败。
+1. **rationale 生成**：LLM 根据用户 query、章节任务、大纲和 step summaries 生成 3-8 个信息维度。LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败；重试时上一轮失败原因以 `<retry_feedback>` user 消息注入下一次调用，重试耗尽后 `last_error` 随返回值传播到上游错误消息。
 2. **n-gram 粗筛**：用 unigram+bigram+trigram 的 Pool-IDF 加权交集，删除与所有 rationale 零重叠的文档（0 LLM 调用）。中文按单字拆分，英文按整词保留。
-3. **覆盖矩阵评估**：将候选文档分批（BATCH_SIZE=15），并发上限 5 批，每批并行送 LLM 评估对每个 rationale 的覆盖分、可信度和噪声分。每批 LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败，全部失败才降级为空响应，不影响其他批次。
+3. **覆盖矩阵评估**：将候选文档分批（BATCH_SIZE=15），并发上限 5 批，每批并行送 LLM 评估对每个 rationale 的覆盖分、可信度和噪声分。每批 LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败，重试时上一轮失败原因以 `<retry_feedback>` user 消息注入下一次调用；批次耗尽后失败原因随返回值带出，部分批次失败不影响其他批次。
 4. **贪心子模选择**：每轮选边际价值最大的文档，边际价值 = 覆盖增益 - β×冗余惩罚 - γ×噪声惩罚 - δ×不可信惩罚。
 5. **elbow 截断**：检测边际值跳变点，跳变前全部保留；跳变后遍历所有文档，只要某文档在某个 rationale 维度是最高覆盖分就保留，最终截断到 top_k。
 6. **覆盖校验**：只检查选入报告的文档，按 0.6/0.3 阈值分类 covered/weak/uncovered，未覆盖维度写入局限性说明。
@@ -83,8 +83,9 @@ Prompt 输入变量：
 
 ## 边界与错误处理
 
-- rationale 生成重试 `max_generate_retry_num` 次后仍失败才返回空列表，章节走错误路径。
-- 覆盖矩阵评估 LLM 返回空内容、JSON 解析失败或调用异常（限流、超时等）时，每批重试 `max_generate_retry_num` 次后仍失败才返回空 dict，不影响其他批次。
+- rationale 生成重试 `max_generate_retry_num` 次后仍失败才返回空列表，并携带最后一次失败原因（`last_error`）传播到上游错误消息（截断 500 字符，敏感模式下省略明细），章节走错误路径。
+- 覆盖矩阵评估 LLM 返回空内容、JSON 解析失败或调用异常（限流、超时等）时，每批重试 `max_generate_retry_num` 次后仍失败才返回空 dict，并携带该批次失败原因；部分批次失败时跳过失败批次继续合并，失败批次及原因记入 warning 日志，不影响其他批次。
+- **全部批次失败时降级（不丢章）**：`_evaluate_coverage_matrix` 返回旧形态 dict（空覆盖矩阵、保留 `filtered_docs`）和合并后的批次错误原因，并记录 warning；`generate_sub_report` 检测到该降级结果后跳过打分选文，直接用筛选后的候选文档（受 top_k 上限）继续写作。仅当结果因其他原因为空（如空 docs/空 rationales）时才走错误路径，并把真实原因写入错误消息（截断 500 字符）。
 - n-gram 粗筛删除全部文档时回退到原始 doc_infos。
 - elbow 截断最终受 top_k 上限约束。
 - 覆盖校验和 elbow 截断使用 `id(doc)` 对象身份做 doc→index 映射，正确处理同 URL 不同内容变体。

@@ -40,8 +40,8 @@ logger = logging.getLogger(__name__)
 api_router = APIRouter()
 
 # 进程内作业表，有界：超出后淘汰最早写入的记录
-_MAX_JOBS = 512
-_jobs: "OrderedDict[str, JobResponse]" = OrderedDict()
+MAX_JOBS = 512
+jobs: "OrderedDict[str, JobResponse]" = OrderedDict()
 
 # 后台任务的强引用：事件循环只持弱引用，不留强引用则任务可能被 GC
 # 回收而中途消失，作业状态将永远停在 running
@@ -52,11 +52,11 @@ _retrievers: dict[str, CodeSearchRetriever] = {}
 _retriever_lock = asyncio.Lock()
 
 
-def _remember_job(job: JobResponse) -> None:
-    _jobs[job.job_id] = job
-    _jobs.move_to_end(job.job_id)
-    while len(_jobs) > _MAX_JOBS:
-        oldest, _ = _jobs.popitem(last=False)
+def remember_job(job: JobResponse) -> None:
+    jobs[job.job_id] = job
+    jobs.move_to_end(job.job_id)
+    while len(jobs) > MAX_JOBS:
+        oldest, _ = jobs.popitem(last=False)
         logger.debug("job table full; evicted %s", oldest)
 
 
@@ -156,7 +156,7 @@ async def _run_index_job(job_id: str, req: IndexRequest, repo_path: str) -> None
         report = await retriever.index_repository(
             repo_path, revision=req.revision, reset=req.reset
         )
-        _remember_job(
+        remember_job(
             JobResponse(
                 job_id=job_id,
                 status="succeeded",
@@ -169,7 +169,7 @@ async def _run_index_job(job_id: str, req: IndexRequest, repo_path: str) -> None
         )
     except Exception as e:  # 作业失败需记录状态而非拖垮服务
         logger.exception("index job %s failed", job_id)
-        _remember_job(JobResponse(job_id=job_id, status="failed", detail=str(e)))
+        remember_job(JobResponse(job_id=job_id, status="failed", detail=str(e)))
     finally:
         await retriever.close()
 
@@ -178,16 +178,16 @@ async def _run_index_job(job_id: str, req: IndexRequest, repo_path: str) -> None
 async def index(req: IndexRequest) -> JobResponse:
     repo_path = _resolve_repo_path(req.repo_path)
     job_id = uuid.uuid4().hex
-    _remember_job(JobResponse(job_id=job_id, status="running"))
+    remember_job(JobResponse(job_id=job_id, status="running"))
     task = asyncio.create_task(_run_index_job(job_id, req, repo_path))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-    return _jobs[job_id]
+    return jobs[job_id]
 
 
 @api_router.get("/v1/jobs/{job_id}", response_model=JobResponse)
 async def job_status(job_id: str) -> JobResponse:
-    job = _jobs.get(job_id)
+    job = jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job

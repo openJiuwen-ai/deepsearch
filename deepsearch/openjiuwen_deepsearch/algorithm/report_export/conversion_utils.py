@@ -27,73 +27,13 @@ NUMBERED_HEADING_RE = re.compile(
     r"^(?P<indent>\s{0,3})(?P<number>\d+(?:\.\d+)*)(?:\.\s+|\s+)(?P<title>.+?)\s*$"
 )
 LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+\.\s+)")
-# Math formula spans. Block math ($$...$$) is matched first (DOTALL) so inline
-# matching never splits a block delimiter pair.
-BLOCK_MATH_RE = re.compile(r"\$\$.+?\$\$", re.DOTALL)
-SIMPLE_VARIABLE_MATH_RE = re.compile(r"[A-Za-zΑ-Ωα-ω]")
-VARIABLE_ATOM_PATTERN = r"(?:\\[A-Za-z]+|[A-Za-zΑ-Ωα-ω](?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?)?)"
-COMPACT_VARIABLE_MATH_RE = re.compile(r"[A-Za-zΑ-Ωα-ω]{2,}(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?)*")
-ALNUM_VARIABLE_MATH_RE = re.compile(r"[A-Za-zΑ-Ωα-ω]+\d+(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?)*")
-VARIABLE_LIST_ELLIPSIS_PATTERN = r"(?:\.{3}|…|\\ldots|\\cdots)"
-VARIABLE_LIST_PATTERN = (
-    rf"{VARIABLE_ATOM_PATTERN}(?:\s*,\s*{VARIABLE_ATOM_PATTERN})+"
-    rf"(?:\s*,\s*{VARIABLE_LIST_ELLIPSIS_PATTERN})?"
-)
-VARIABLE_LIST_MATH_RE = re.compile(VARIABLE_LIST_PATTERN)
-PAREN_VARIABLE_LIST_MATH_RE = re.compile(
-    rf"\(\s*{VARIABLE_LIST_PATTERN}\s*\)"
-)
-MATH_NAME_PATTERN = (
-    r"(?:\\?[A-Za-zΑ-Ωα-ω]+|[0-9]+|\\[A-Za-z]+)"
-    r"(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?|\\[A-Za-z]+)*"
-)
-MATH_FUNCTION_CALL_PATTERN = rf"{MATH_NAME_PATTERN}\s*[\(\[][^)\]\n]+[\)\]]"
-MATH_SPACING_PATTERN = r"(?:\s+|\\[,;:! ]|\\quad|\\qquad)"
-MATH_DELIMITED_CONTENT_PATTERN = r"[^|\n]+"
-MATH_FEATURE_RE = re.compile(r"(\\[A-Za-z]+|[_^={}]|[+\-*/!×÷∑∫√≈≠≤≥<>])")
-STRONG_NUMERIC_MATH_FEATURE_RE = re.compile(r"(\\[A-Za-z]+|[_^{}]|[+\-*/!−×÷∑∫√=≈≠≤≥<>])")
-MATH_FUNCTION_CALL_RE = re.compile(MATH_FUNCTION_CALL_PATTERN)
-PRIME_FUNCTION_CALL_RE = re.compile(
-    rf"{MATH_NAME_PATTERN}'{{1,3}}\s*[\(\[][^)\]\n]+[\)\]]"
-)
-FUNCTION_CALL_SEQUENCE_RE = re.compile(
-    rf"{MATH_FUNCTION_CALL_PATTERN}(?:{MATH_SPACING_PATTERN}{MATH_FUNCTION_CALL_PATTERN})+"
-)
-ABSOLUTE_VALUE_MATH_RE = re.compile(rf"\|{MATH_DELIMITED_CONTENT_PATTERN}\|")
-NORM_MATH_RE = re.compile(
-    rf"(?:\|\|{MATH_DELIMITED_CONTENT_PATTERN}\|\||\\\|{MATH_DELIMITED_CONTENT_PATTERN}\\\||\\lVert\s*.+?\s*\\rVert)"
-)
-PERCENT_MATH_RE = re.compile(rf"(?:[+-]?\d+(?:\.\d+)?|{MATH_NAME_PATTERN})\s*\\?%")
-EQUATION_REFERENCE_RE = re.compile(r"\((?:Eq\.?|Equation)\s*\d+[A-Za-z]?\)", re.IGNORECASE)
-NUMERIC_TUPLE_RE = re.compile(r"\(\s*[+-]?\d+(?:\.\d+)?(?:\s*,\s*[+-]?\d+(?:\.\d+)?)+\s*\)")
-PRIME_VARIABLE_RE = re.compile(
-    r"(?:\\[A-Za-z]+|[A-Za-zΑ-Ωα-ω])(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?)*'+"
-)
-PLAIN_CURRENCY_RE = re.compile(r"\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:\s*(?:[-–—~至到]|to)\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?)?")
-# Sentinel uses NUL control chars so Python-Markdown leaves it untouched (no
-# emphasis, strong, escaping, or link parsing applied to the placeholder).
-MATH_PLACEHOLDER = "\x00MATH{}\x00"
-MATH_PLACEHOLDER_RE = re.compile(r"\x00MATH(\d+)\x00")
-INLINE_MATH_DOLLAR_RE = re.compile(r"^\$(?!\$)(.*?)(?<!\$)\$$", re.DOTALL)
-HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*)?>")
-MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]\n]+\]\([^)]+\)")
-CODE_PLACEHOLDER = "\x00CODE{}\x00"
-CODE_PLACEHOLDER_RE = re.compile(r"\x00CODE(\d+)\x00")
-MERMAID_BLOCK_RE = re.compile(r"(?ms)^```[ \t]*mermaid[ \t]*\r?\n(.*?)\r?\n```[ \t]*$")
-CHART_IMAGE_SRC_RE = re.compile(
-    r"src=(?P<quote>[\"'])charts/(?P<chart_id>[A-Za-z0-9_-]+)\.png(?P=quote)"
-)
-FENCED_CODE_RE = re.compile(
-    r"(?ms)^(?P<indent>[ \t]{0,3})(?P<fence>`{3,}|~{3,})[^\n]*\n.*?\n(?P=indent)(?P=fence)[ \t]*$"
-)
-INLINE_CODE_RE = re.compile(r"`+[^`\n]*`+")
+INDENTED_LIST_ITEM_RE = re.compile(r"^(?P<indent>[ \t]{4,})(?P<marker>(?:[-*+]\s+|\d+\.\s+).*)$")
 LIST_ITEM_WITH_INDENT_RE = re.compile(
     r"^(?P<indent>[ \t]*)(?P<marker>(?:[-*+]\s+|\d+\.\s+).*)$"
 )
-INDENTED_LIST_ITEM_RE = re.compile(r"^(?P<indent>[ \t]{4,})(?P<marker>(?:[-*+]\s+|\d+\.\s+).*)$")
 MARKDOWN_IMAGE_LINE_RE = re.compile(r"^[ \t]*!\[[^\]]*\]\([^)]+\)[ \t]*$")
 LEGACY_FONT_CAPTION_PREFIX_RE = re.compile(
-    r'^[ \t]*<font\b[^>]*\bsize\s*=\s*["\']?2["\']?[^>]*>',
+    r"^[ \t]*<font\b[^>]*\bsize\s*=\s*[\"']?2[\"']?[^>]*>",
     flags=re.IGNORECASE,
 )
 INDENTED_HTML_BLOCK_END_RE = re.compile(
@@ -132,6 +72,23 @@ DOCX_TABLE_CAPTION_RE = re.compile(
     r"^(?:表\s*[\d一二三四五六七八九十]+(?:[-－—.][\d一二三四五六七八九十]+)*|"
     r"Table\s+[\w]+(?:[-－—.][\w]+)*)\s*[:：]",
     flags=re.IGNORECASE,
+)
+DOUBLE_ESCAPED_ENTITY_RE = re.compile(r"&amp;(#\d+;|#x[0-9a-fA-F]+;)")
+# Math formula protection — NUL-based sentinels that Python-Markdown leaves untouched.
+# Fenced / inline code blocks use CODE_PLACEHOLDER so they are excluded from formula matching.
+MATH_PLACEHOLDER = "\x00MATH{}\x00"
+MATH_PLACEHOLDER_RE = re.compile(r"\x00MATH(\d+)\x00")
+CODE_PLACEHOLDER = "\x00CODE{}\x00"
+CODE_PLACEHOLDER_RE = re.compile(r"\x00CODE(\d+)\x00")
+FENCED_CODE_RE = re.compile(
+    r"(?ms)^(?P<indent>[ \t]{0,3})(?P<fence>`{3,}|~{3,})[^\n]*\n.*?\n(?P=indent)(?P=fence)[ \t]*$"
+)
+INLINE_CODE_RE = re.compile(r"`+[^`\n]*`+")
+BLOCK_MATH_RE = re.compile(r"\$\$.+?\$\$", re.DOTALL)
+INLINE_MATH_DOLLAR_RE = re.compile(r"^\$(?!\$)(.*?)(?<!\$)\$$", re.DOTALL)
+MERMAID_BLOCK_RE = re.compile(r"(?ms)^```[ \t]*mermaid[ \t]*\r?\n(.*?)\r?\n```[ \t]*$")
+CHART_IMAGE_SRC_RE = re.compile(
+    r"src=(?P<quote>[\"'])charts/(?P<chart_id>[A-Za-z0-9_-]+)\.png(?P=quote)"
 )
 
 try:
@@ -344,67 +301,6 @@ def normalize_legacy_font_caption_blocks(text: str) -> str:
     return LEGACY_FONT_CAPTION_LINE_RE.sub(_replace, text)
 
 
-def normalize_interrupted_nested_list_blocks(text: str) -> str:
-    """Keep image or description blocks inside the list items they interrupt."""
-    lines = text.split("\n")
-
-    def _indent_width(indent: str) -> int:
-        return len(indent.expandtabs(4))
-
-    for index, line in enumerate(lines):
-        current_item = LIST_ITEM_WITH_INDENT_RE.match(line)
-        if current_item is None:
-            continue
-
-        list_indent = _indent_width(current_item.group("indent"))
-        block_indexes: list[int] = []
-        saw_image = False
-        saw_font_description = False
-
-        for cursor in range(index + 1, len(lines)):
-            candidate = lines[cursor]
-            if not candidate.strip():
-                block_indexes.append(cursor)
-                continue
-
-            if MARKDOWN_IMAGE_LINE_RE.match(candidate):
-                saw_image = True
-                block_indexes.append(cursor)
-                continue
-
-            if saw_image and LEGACY_FONT_CAPTION_PREFIX_RE.match(candidate):
-                saw_font_description = True
-                block_indexes.append(cursor)
-                continue
-
-            if not saw_image and LEGACY_FONT_CAPTION_PREFIX_RE.match(candidate):
-                saw_font_description = True
-                block_indexes.append(cursor)
-                continue
-
-            next_item = LIST_ITEM_WITH_INDENT_RE.match(candidate)
-            next_indent = _indent_width(next_item.group("indent")) if next_item else -1
-            is_matching_sibling = (
-                saw_image
-                and next_item is not None
-                and next_indent == list_indent
-            )
-            is_nested_after_description = (
-                saw_font_description
-                and next_item is not None
-                and next_indent > list_indent
-            )
-            if is_matching_sibling or is_nested_after_description:
-                content_indent_width = next_indent if is_nested_after_description else list_indent + 4
-                content_indent = " " * content_indent_width
-                for block_index in block_indexes:
-                    if lines[block_index].strip():
-                        lines[block_index] = content_indent + lines[block_index].lstrip()
-            break
-
-    return "\n".join(lines)
-
-
 def normalize_list_boundaries(text: str) -> str:
     """Insert a blank line before list items when the source omits one.
 
@@ -557,6 +453,78 @@ def normalize_orphan_indented_list_items(text: str) -> str:
     return "\n".join(normalized)
 
 
+def normalize_interrupted_nested_list_blocks(text: str) -> str:
+    """Keep image or description blocks inside the list items they interrupt.
+
+    当图片或 ``<font size=2>`` 描述块出现在嵌套列表项之间时，Markdown 会
+    将其视为打断列表的独立段落，导致后续同级列表项被提升为顶级列表。
+    本函数将这些打断块重新缩进到其所属父列表项内部，保证列表层级不丢失。
+
+    Args:
+        text: 原始 Markdown 文本。
+
+    Returns:
+        str: 打断块已归位到父列表项内部的 Markdown 文本。
+    """
+    lines = text.split("\n")
+
+    def _indent_width(indent: str) -> int:
+        return len(indent.expandtabs(4))
+
+    for index, line in enumerate(lines):
+        current_item = LIST_ITEM_WITH_INDENT_RE.match(line)
+        if current_item is None:
+            continue
+
+        list_indent = _indent_width(current_item.group("indent"))
+        block_indexes: list[int] = []
+        saw_image = False
+        saw_font_description = False
+
+        for cursor in range(index + 1, len(lines)):
+            candidate = lines[cursor]
+            if not candidate.strip():
+                block_indexes.append(cursor)
+                continue
+
+            if MARKDOWN_IMAGE_LINE_RE.match(candidate):
+                saw_image = True
+                block_indexes.append(cursor)
+                continue
+
+            if saw_image and LEGACY_FONT_CAPTION_PREFIX_RE.match(candidate):
+                saw_font_description = True
+                block_indexes.append(cursor)
+                continue
+
+            if not saw_image and LEGACY_FONT_CAPTION_PREFIX_RE.match(candidate):
+                saw_font_description = True
+                block_indexes.append(cursor)
+                continue
+
+            next_item = LIST_ITEM_WITH_INDENT_RE.match(candidate)
+            next_indent = _indent_width(next_item.group("indent")) if next_item else -1
+            is_matching_sibling = (
+                saw_image
+                and next_item is not None
+                and next_indent == list_indent
+            )
+            is_nested_after_description = (
+                saw_font_description
+                and next_item is not None
+                and next_indent > list_indent
+            )
+            if is_matching_sibling or is_nested_after_description:
+                content_indent_width = next_indent if is_nested_after_description else list_indent + 4
+                content_indent = " " * content_indent_width
+                for block_index in block_indexes:
+                    if lines[block_index].strip():
+                        lines[block_index] = content_indent + lines[block_index].lstrip()
+            break
+
+    return "\n".join(lines)
+
+
 def render_mermaid_supplement(supplement_markdown: str) -> str:
     """Render timeline supplement markdown into an HTML helper block.
 
@@ -611,6 +579,23 @@ def wrap_html_tables(html_text: str) -> str:
     return HTML_TABLE_RE.sub(_replace, html_text)
 
 
+def _fix_double_escaped_entities(html_text: str) -> str:
+    """还原被双重转义的数字 HTML 实体。
+
+    当 Markdown 库的 md_in_html 扩展或其他处理步骤将 HTML 实体中的
+    ``&`` 转义为 ``&amp;`` 时，``&#92;`` 会变成 ``&amp;#92;``，浏览器
+    会将其渲染为字面文本 ``&#92;`` 而非反斜杠 ``\\``。本函数将此类
+    双重转义的数字实体还原回正常形式。
+
+    Args:
+        html_text: 可能包含双重转义实体的 HTML 文本。
+
+    Returns:
+        str: 双重转义实体已还原的 HTML 文本。
+    """
+    return DOUBLE_ESCAPED_ENTITY_RE.sub(r"&\1", html_text)
+
+
 def postprocess_html(html_text: str) -> str:
     """Postprocess generated HTML for external links, citations and table wrappers.
 
@@ -631,11 +616,17 @@ def postprocess_html(html_text: str) -> str:
     def _wrap_citation(match: re.Match[str]) -> str:
         return f'<sup class="citation">{match.group(1)}</sup>'
 
+    html_text = _fix_double_escaped_entities(html_text)
     html_text = EXTERNAL_LINK_RE.sub(_replace, html_text)
     html_text = CITATION_ANCHOR_RE.sub(_wrap_citation, html_text)
     html_text = re.sub(r'[ \t]+(<sup class="citation">)', r"\1", html_text)
     html_text = re.sub(r'(</sup>)[ \t]+(<sup class="citation">)', r"\1\2", html_text)
     return wrap_html_tables(html_text)
+
+
+# Simple regex to detect currency-like dollar prefixes:
+# $ followed by digits (optionally comma-separated) and optional decimal.
+_CURRENCY_START_RE = re.compile(r"\$(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?")
 
 
 def render_markdown_html_fragment(markdown_text: str) -> str:
@@ -661,9 +652,11 @@ def protect_math_spans(text: str) -> tuple[str, list[str]]:
 
     Python-Markdown otherwise treats characters inside ``$...$`` / ``$$...$$``
     (notably ``_`` and ``*``) as emphasis markup and injects ``<em>``/``<strong>``
-    tags into the formula, leaving MathJax with invalid LaTeX. Each span is
-    swapped for a NUL-wrapped sentinel that Markdown leaves untouched, then
-    restored verbatim by :func:`restore_math_spans` after conversion.
+    tags into the formula. Each span is swapped for a NUL-wrapped sentinel that
+    Markdown leaves untouched, then restored verbatim by :func:`restore_math_spans`
+    after conversion.
+
+    Code blocks (fenced and inline) are excluded from formula matching.
 
     Args:
         text: 原始 Markdown 文本。
@@ -678,16 +671,21 @@ def protect_math_spans(text: str) -> tuple[str, list[str]]:
         code_spans.append(match.group(0))
         return CODE_PLACEHOLDER.format(len(code_spans) - 1)
 
-    def _store(match: re.Match[str]) -> str:
+    def _store_formula(match: re.Match[str]) -> str:
         formulas.append(match.group(0))
         return MATH_PLACEHOLDER.format(len(formulas) - 1)
 
+    # 1. Protect code blocks first (so $ inside code is never mistaken for math)
     text = FENCED_CODE_RE.sub(_store_code, text)
     text = INLINE_CODE_RE.sub(_store_code, text)
-    # Block math first (DOTALL) so inline matching never splits a ``$$`` pair.
-    text = BLOCK_MATH_RE.sub(_store, text)
+
+    # 2. Protect block math $$...$$ (DOTALL so multi-line blocks match)
+    text = BLOCK_MATH_RE.sub(_store_formula, text)
+
+    # 3. Protect inline math $...$
     text = _protect_inline_math_spans(text, formulas)
 
+    # 4. Restore code blocks (their $ signs go back as-is)
     def _restore_code(match: re.Match[str]) -> str:
         index = int(match.group(1))
         if 0 <= index < len(code_spans):
@@ -698,8 +696,48 @@ def protect_math_spans(text: str) -> tuple[str, list[str]]:
     return text, formulas
 
 
+# Characters that signal the start of math content after a currency-like prefix.
+# 包含 < > × ÷ 等比较与乘除运算符，确保 $4 < x$、$4 × 5$ 不被误判为货币。
+_MATH_CONTINUATION_RE = re.compile(r"[\\_^([{=%<>×÷]")
+# Math operators / commands that distinguish a formula from plain currency.
+# 与 _MATH_CONTINUATION_RE 保持同步，覆盖空格后的数学特征（如 $4 < x$）。
+_MATH_FEATURE_AFTER_CURRENCY_RE = re.compile(r"[+\-*/!%%^_{}=\\<>×÷]")
+
+
+def _is_currency_start(text: str, start: int) -> bool:
+    """Check if a ``$`` at ``start`` is a currency amount rather than inline math.
+
+    Returns True when the ``$`` is followed by a digits-only amount with no
+    closing ``$``, or when the characters after the amount don't look like
+    math operators / commands.
+    """
+    match = re.match(r"\$(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?", text[start:])
+    if not match:
+        return False
+    after = start + len(match.group(0))
+
+    # Percentage → math (e.g. $79.29%, $79.29\%)
+    if after < len(text) and text[after] == "%":
+        return False
+    if after + 1 < len(text) and text[after] == "\\" and text[after + 1] == "%":
+        return False
+
+    # Followed by math continuation → math (e.g. $1/2$, $4*3$, $5!)
+    if after < len(text) and _MATH_CONTINUATION_RE.match(text[after:]):
+        return False
+
+    # If there's a nearby closing $, check if the content between has math ops
+    next_dollar = text.find("$", after)
+    if next_dollar != -1 and next_dollar - start <= 50:
+        between = text[after:next_dollar]
+        if _MATH_FEATURE_AFTER_CURRENCY_RE.search(between):
+            return False
+
+    return True
+
+
 def _protect_inline_math_spans(text: str, formulas: list[str]) -> str:
-    """Protect inline LaTeX spans while leaving currency-like dollars intact."""
+    """Find and protect inline $...$ spans, skipping currency-like patterns."""
     parts: list[str] = []
     cursor = 0
     index = 0
@@ -708,17 +746,36 @@ def _protect_inline_math_spans(text: str, formulas: list[str]) -> str:
         start = text.find("$", index)
         if start == -1:
             break
-        if _should_skip_inline_math_start(text, start):
+
+        # Skip escaped \$ and double $$
+        if _is_escaped(text, start) or _is_double_dollar(text, start):
             index = start + 1
             continue
 
+        # Skip currency-like dollar prefixes: $5, $10, $1,200.50, etc.
+        # (but keep when followed by math operators: $1/2$, $5!, $79.29%, etc.)
+        if _is_currency_start(text, start):
+            index = start + 1
+            continue
+
+        # Opening $ must be followed by non-whitespace, non-punctuation
+        if start + 1 >= len(text) or text[start + 1].isspace():
+            index = start + 1
+            continue
+        if text[start + 1] in "，。、；：,.!?;:)]}）】」』":
+            index = start + 1
+            continue
+
+        # Find the very next unescaped, non-double $ as the closing delimiter
         end = _find_inline_math_end(text, start + 1)
-        if end is None:
+        if end is None or end <= start:
             index = start + 1
             continue
 
         formula = text[start:end + 1]
-        if _is_likely_inline_math(formula[1:-1].strip()):
+        content = formula[1:-1].strip()
+
+        if content and _is_likely_inline_math(content):
             parts.append(text[cursor:start])
             formulas.append(formula)
             parts.append(MATH_PLACEHOLDER.format(len(formulas) - 1))
@@ -735,140 +792,96 @@ def _protect_inline_math_spans(text: str, formulas: list[str]) -> str:
 
 
 def _find_inline_math_end(text: str, start_index: int) -> int | None:
+    """Find the closing $ for an inline math span.
+
+    Returns the position of the very next unescaped, non-double $ that is
+    preceded by non-space content (i.e., the formula content is non-empty).
+    """
     index = start_index
     while index < len(text):
         end = text.find("$", index)
         if end == -1:
             return None
+        # Inline math cannot span multiple lines
         if "\n" in text[start_index:end]:
             return None
-        if _is_valid_inline_math_end(text, start_index, end):
-            return end
-        index = end + 1
+        if _is_escaped(text, end) or _is_double_dollar(text, end):
+            index = end + 1
+            continue
+        # Closing $ must be preceded by content (not whitespace)
+        if end <= start_index:
+            return None
+        if text[end - 1].isspace():
+            index = end + 1
+            continue
+        return end
     return None
 
 
-def _should_skip_inline_math_start(text: str, index: int) -> bool:
-    """Return whether a dollar sign cannot start an inline math span."""
-    if _is_escaped(text, index):
-        return True
-    if _is_double_dollar(text, index):
-        return True
-    if _is_likely_currency_start(text, index):
-        return True
-    return not _is_valid_inline_math_start(text, index)
-
-
-def _is_valid_inline_math_end(text: str, start_index: int, end_index: int) -> bool:
-    """Return whether a dollar sign can close an inline math span."""
-    if _is_escaped(text, end_index):
-        return False
-    if _is_double_dollar(text, end_index):
-        return False
-    if end_index <= start_index:
-        return False
-    if text[end_index - 1].isspace():
-        return False
-    return not (end_index + 1 < len(text) and text[end_index + 1].isdigit())
-
-
 def _is_likely_inline_math(content: str) -> bool:
+    """Return whether content looks like LaTeX math rather than plain text/currency."""
     if not content:
         return False
-    if HTML_TAG_RE.search(content) or MARKDOWN_LINK_RE.search(content):
+    if len(content) > 250:
         return False
-    if PLAIN_CURRENCY_RE.fullmatch(content):
-        return False
-    return bool(
-        SIMPLE_VARIABLE_MATH_RE.fullmatch(content)
-        or COMPACT_VARIABLE_MATH_RE.fullmatch(content)
-        or ALNUM_VARIABLE_MATH_RE.fullmatch(content)
-        or VARIABLE_LIST_MATH_RE.fullmatch(content)
-        or PAREN_VARIABLE_LIST_MATH_RE.fullmatch(content)
-        or MATH_FEATURE_RE.search(content)
-        or MATH_FUNCTION_CALL_RE.fullmatch(content)
-        or PRIME_FUNCTION_CALL_RE.fullmatch(content)
-        or FUNCTION_CALL_SEQUENCE_RE.fullmatch(content)
-        or ABSOLUTE_VALUE_MATH_RE.fullmatch(content)
-        or NORM_MATH_RE.fullmatch(content)
-        or PERCENT_MATH_RE.fullmatch(content)
-        or _is_balanced_math_function_call(content)
-        or EQUATION_REFERENCE_RE.fullmatch(content)
-        or NUMERIC_TUPLE_RE.fullmatch(content)
-        or PRIME_VARIABLE_RE.fullmatch(content)
+
+    # ---------- fast path: contains unambiguous math characters ----------
+    # These characters almost never appear in plain text / currency contexts.
+    math_char_re = re.compile(
+        r"[\\_^{}*!×÷∑∫√≈≠≤≥<>±'|%=()\[\]]"
     )
+    if math_char_re.search(content):
+        return True
 
+    # Greek letter
+    if re.search(r"[Α-ω]", content):
+        return True
 
-def _is_balanced_math_function_call(content: str) -> bool:
-    """Return whether content is a math-like function call with balanced args."""
-    name_match = re.match(
-        r"(?:\\?[A-Za-zΑ-Ωα-ω]+|[0-9]+|\\[A-Za-z]+)"
-        r"\s*(?:_\{?[\w\\]+\}?|\^\{?[\w\\]+\}?|\\[A-Za-z]+)*\s*",
+    # ---------- alphanumeric tokens (letter + optional digits) ----------
+    # Handles: G, H0, xyz, n, f, velocityvelocityvelocity, etc.
+    # 上方 len(content) > 250 已做总体长度限制，此处不再对单 token 施加额外上限，
+    # 否则会将 velocityvelocityvelocity 等长变量名误判为非公式（commit 867d0e6 回归）。
+    if re.match(r"^[A-Za-zΑ-ω][A-Za-zΑ-ω0-9]*$", content):
+        return True
+
+    # ---------- numeric expressions ----------
+    # Must contain an operator character (not just plain digits/commas).
+    # Avoids matching currency values like "1,200" or "1,200.50".
+    if re.match(r"^[\d+\-*/!.,\s]+$", content) and re.search(r"[-+*/!]", content):
+        return True
+
+    # Plain formatted number WITH a percentage sign
+    if re.match(r"^\d+(?:[.,]\d+)?%$", content):
+        return True
+
+    # ---------- function-like: name followed by ( or [ ----------
+    # Handles: f(t), P(1,2,3), \sin(x), etc.
+    # Allow primes between name and parens: f'(t), f''(x)
+    if re.search(
+        r"^[A-Za-z\\]+(?:'++)?(?:_\{?\w+\}?|\^\{?\w+\}?)*(?:\s*,\s*[A-Za-z\\]+)*"
+        r"\s*[(\[]",
         content,
-    )
-    if name_match is None:
-        return False
+    ):
+        return True
 
-    open_index = name_match.end()
-    if open_index >= len(content) or content[open_index] not in "([":
-        return False
+    # ---------- variable list: a, b, c, ... ----------
+    if re.match(r"^[A-Za-z](?:\s*,\s*[A-Za-z])+(?:\s*,\s*\.{3})?$", content):
+        return True
 
-    open_char = content[open_index]
-    close_char = ")" if open_char == "(" else "]"
-    pairs = {"(": ")", "[": "]"}
-    stack = [close_char]
-    index = open_index + 1
-    saw_argument = False
+    # ---------- parenthesized tuple: (x, y, z) ----------
+    if re.match(r"^\(\s*[A-Za-z](?:\s*,\s*[A-Za-z])+\s*\)$", content):
+        return True
 
-    while index < len(content):
-        char = content[index]
-        if char == "\\":
-            index += 2
-            saw_argument = True
-            continue
-        if char in pairs:
-            stack.append(pairs[char])
-            saw_argument = True
-        elif stack and char == stack[-1]:
-            stack.pop()
-            if not stack:
-                return saw_argument and index == len(content) - 1
-        elif char in ")]":
-            return False
-        elif not char.isspace():
-            saw_argument = True
-        index += 1
+    # ---------- equation-like: contains = with variables ----------
+    # e.g. G = (V, E), A = B + C
+    if re.search(r"[A-Za-zΑ-ω]\s*=", content) and re.search(r"=\s*[A-Za-zΑ-ω(\\]", content):
+        return True
 
     return False
 
 
-def _is_valid_inline_math_start(text: str, index: int) -> bool:
-    next_index = index + 1
-    if next_index >= len(text):
-        return False
-    next_char = text[next_index]
-    if next_char.isspace() or next_char in "，。；：、,.!?;:)]}）】」』":
-        return False
-    return True
-
-
-def _is_likely_currency_start(text: str, index: int) -> bool:
-    """Return whether a dollar sign begins currency-like text, not math."""
-    match = re.match(r"\$(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?", text[index:])
-    if not match:
-        return False
-    next_index = index + len(match.group(0))
-    if next_index >= len(text):
-        return True
-    if text.startswith(r"\%", next_index) or text[next_index] == "%":
-        return False
-    end = _find_inline_math_end(text, index + 1)
-    if end is not None and STRONG_NUMERIC_MATH_FEATURE_RE.search(text[next_index:end]):
-        return False
-    return text[next_index] not in "([{_=^\\"
-
-
 def _is_double_dollar(text: str, index: int) -> bool:
+    """Check if $ at index is part of a $$ pair."""
     return (
         (index > 0 and text[index - 1] == "$")
         or (index + 1 < len(text) and text[index + 1] == "$")
@@ -876,6 +889,7 @@ def _is_double_dollar(text: str, index: int) -> bool:
 
 
 def _is_escaped(text: str, index: int) -> bool:
+    """Check if character at index is preceded by an odd number of backslashes."""
     slash_count = 0
     cursor = index - 1
     while cursor >= 0 and text[cursor] == "\\":
@@ -887,6 +901,11 @@ def _is_escaped(text: str, index: int) -> bool:
 def restore_math_spans(html_text: str, formulas: list[str]) -> str:
     """Restore math placeholders produced by :func:`protect_math_spans`.
 
+    The formula content is HTML-escaped so that characters like ``<`` and ``>``
+    inside LaTeX (e.g. ``< 1``) do not break HTML parsing. KaTeX auto-render
+    reads the decoded DOM text nodes, so ``&lt;``/``&gt;`` entities are correctly
+    interpreted.
+
     Args:
         html_text: 经 Markdown 转换、仍含公式占位符的 HTML 文本。
         formulas: :func:`protect_math_spans` 返回的公式原文列表。
@@ -894,25 +913,13 @@ def restore_math_spans(html_text: str, formulas: list[str]) -> str:
     Returns:
         str: 占位符还原为公式原文后的 HTML 文本。
     """
-
     def _restore(match: re.Match[str]) -> str:
         index = int(match.group(1))
         if 0 <= index < len(formulas):
-            return normalize_math_span_for_rendering(formulas[index])
+            return html.escape(formulas[index], quote=False)
         return match.group(0)
 
     return MATH_PLACEHOLDER_RE.sub(_restore, html_text)
-
-
-def normalize_math_span_for_rendering(formula: str) -> str:
-    """Normalize protected inline dollar math to explicit LaTeX delimiters."""
-    match = INLINE_MATH_DOLLAR_RE.match(formula)
-    if match:
-        return rf"\({html.escape(match.group(1), quote=False)}\)"
-    block_match = BLOCK_MATH_RE.fullmatch(formula)
-    if block_match:
-        return f"$${html.escape(formula[2:-2], quote=False)}$$"
-    return html.escape(formula, quote=False)
 
 
 def _neighbor_numbered_line(lines: list[str], index: int, *, reverse: bool) -> str | None:
@@ -1051,6 +1058,14 @@ def _set_run_font(run, font_name: str) -> None:
     Returns:
         None.
     """
+    # ponytail: 跳过含 OMML 公式的 run。``_insert_omml`` 把 ``<m:oMath>``
+    # 嵌入 ``<w:r>`` 内，``<m:r>`` 会继承父 ``<w:r>`` 的 ``w:rFonts``。
+    # 段落字体（Microsoft YaHei）在 nary operator 的 sub/sup 上下文缺
+    # 数学 italic 字形，会让 ``i``、``a``、``C`` 等字符在 Word 中渲染
+    # 为 .notdef 平行四边形或错位 glyph。OMML 应使用 ``<m:mathPr>`` 默认
+    # Cambria Math，故此处直接跳过。
+    if run._r.find(qn("m:oMath")) is not None:  # pylint: disable=protected-access
+        return
     run.font.name = font_name
     _set_rfonts(run.element.get_or_add_rPr(), font_name)
 

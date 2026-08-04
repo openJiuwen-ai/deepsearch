@@ -10,6 +10,8 @@ from openjiuwen_deepsearch.utils.common_utils.url_utils import (
     normalize_url,
     are_similar_urls,
     validate_runtime_request_url,
+    is_url_blocked,
+    normalize_url_for_match,
 )
 
 # 构造一个长度超过 8192 的合法 URL
@@ -207,3 +209,51 @@ def test_validate_runtime_request_url_blocks_dns_to_non_public_ip(monkeypatch):
     with pytest.raises(CustomValueException):
         validate_runtime_request_url("http://metadata.attacker.test/latest/meta-data/")
 
+
+
+# ──────────────────────────────────────────────
+# is_url_blocked 相关测试
+# ──────────────────────────────────────────────
+@pytest.mark.parametrize("url, expected", [
+    ("https://www.mdpi.com/2073-445X/11/9/1529", "mdpi.com/2073-445x/11/9/1529"),
+    ("http://MDPI.COM/2073-445X/11/9/1529/", "mdpi.com/2073-445x/11/9/1529"),
+    ("https://www.mdpi.com/2073-445X/11/9/1529?utm_source=x#abs", "mdpi.com/2073-445x/11/9/1529"),
+    ("", ""),
+    ("not a url", ""),
+])
+def test_normalize_url_for_match(url, expected):
+    assert normalize_url_for_match(url) == expected
+
+
+_BLOCKED = ["https://www.mdpi.com/2073-445X/11/9/1529"]
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.mdpi.com/2073-445X/11/9/1529",
+    "http://mdpi.com/2073-445x/11/9/1529/",
+    "https://www.mdpi.com/2073-445X/11/9/1529?utm_source=x",
+])
+def test_is_url_blocked_hits(url):
+    assert is_url_blocked(url, _BLOCKED) is True
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.mdpi.com/2073-445X/11/9/1530",   # 同域名不同文章
+    "https://www.mdpi.com/2073-445X/11/9/152",    # 相近路径（少一位）
+    "https://example.com/other",
+    "",
+])
+def test_is_url_blocked_misses(url):
+    assert is_url_blocked(url, _BLOCKED) is False
+
+
+def test_is_url_blocked_empty_blocked_list():
+    assert is_url_blocked("https://www.mdpi.com/2073-445X/11/9/1529", []) is False
+    assert is_url_blocked("https://www.mdpi.com/2073-445X/11/9/1529", None) is False
+
+
+def test_is_url_blocked_accepts_single_string():
+    assert is_url_blocked(
+        "https://www.mdpi.com/2073-445X/11/9/1529",
+        "https://www.mdpi.com/2073-445X/11/9/1529",
+    ) is True

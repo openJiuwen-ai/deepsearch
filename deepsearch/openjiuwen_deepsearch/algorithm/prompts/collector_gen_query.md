@@ -14,6 +14,14 @@ Task title:
 Task description:
 {{ step_description }}
 
+{% if has_temporal_scope %}
+## Research Time Boundary
+{{ temporal_scope_instruction }}
+- Interpret "latest" as the latest information available within this boundary.
+- You must express this boundary naturally in every generated query; do not use provider-specific filter syntax.
+- A query may contain at most five topical keywords; the time phrase does not count toward the five topical keywords.
+{% endif %}
+
 ## Instructions
 - First identify the current step's missing evidence as concrete, verifiable evidence requirements.
 - Each missing evidence item should name the object, scope, acceptance standard, and intended report use when possible.
@@ -32,8 +40,12 @@ Task description:
     - **Adaptive evidence types**: When the step's domain supports both factual/data evidence and analytical/interpretive evidence, generate at least one query targeting each type. For purely qualitative domains (humanities, law, philosophy) or purely practical tasks (design, generation), adapt the evidence-type requirement to what the domain naturally supports.
     - **Opposing/contrasting terms**: Include opposing or contrasting search terms ONLY when the step's topic involves genuine debate, competing approaches, or alternative viewpoints. Do NOT fabricate opposition for factual, technical, or methodological queries where there is no meaningful counter-position.
     - **Anti-repetition**: Each query should target a different information need. If two queries would likely return overlapping results, merge them and add a query for a different missing evidence item.
-- Query must consist of keywords, with the first keyword being the main subject. The total number of keywords should be less than 5.
+- Query must consist of keywords, with the first keyword being the main subject. The total number of topical keywords should not exceed 5.
+{% if has_temporal_scope %}
+- Query should ensure that the latest information within the Research Time Boundary is gathered.
+{% else %}
 - Query should ensure that the most current information is gathered. The current time is {{ CURRENT_TIME }}.
+{% endif %}
 - Do not produce more than {{ max_search_query_count }} queries.
 - For retrieval-needed steps, the allowed query count range is 1..{{ max_search_query_count }}.
 - Query language is not restricted by the report language.
@@ -53,7 +65,7 @@ Task description:
 - Return a JSON object with exactly these keys:
   - "missing_evidence": A list of verifiable evidence requirements for the current step.
   - "queries": A list of query objects. Each object contains:
-    - "query": A search query less than 5 keywords.
+    - "query": A search query with at most 5 topical keywords; an applicable time phrase is excluded from this limit.
     - "search_engine_name": One of "pubmed", "arxiv", or "".
 - Do not output explanations, rationale, markdown fences, or any extra keys.
 

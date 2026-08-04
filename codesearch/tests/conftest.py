@@ -23,10 +23,11 @@ def make_snippet(
     file_path: str,
     start_line: int,
     body_lines: list[str],
-    with_header: bool = True,
-    kind: str = "function_definition",
-    name: str = "",
+    **opts,
 ) -> Snippet:
+    with_header = opts.get("with_header", True)
+    kind = opts.get("kind", "function_definition")
+    name = opts.get("name", "")
     end_line = start_line + len(body_lines) - 1
     if with_header:
         text = f"File: {file_path} (L{start_line}-L{end_line})\n\n" + "\n".join(body_lines)

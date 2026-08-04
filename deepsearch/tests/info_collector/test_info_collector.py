@@ -177,14 +177,14 @@ class TestInfoCollectorNode:
                 "gathered_info": [{"url": "http://example.com/1", "title": "标题1"}],
                 "web_record": [{"url": "http://example.com/1", "title": "标题1"}],
                 "local_record": [],
-                "search_query": "查询1"
+                "search_query": "查询1",
             },
             {
                 "doc_infos": [{"url": "http://example.com/2", "title": "标题2"}],
                 "gathered_info": [{"url": "http://example.com/2", "title": "标题2"}],
                 "web_record": [{"url": "http://example.com/2", "title": "标题2"}],
                 "local_record": [],
-                "search_query": "查询2"
+                "search_query": "查询2",
             }
         ]
 
@@ -453,6 +453,65 @@ class TestInfoCollectorNode:
             mock_collector_llm.assert_called_once()
             mock_structure.assert_called_once()
             mock_process.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_collector_main_filters_source_dates_before_document_evaluator(self, info_collector_node):
+        """来源时间过滤必须发生在 _structure_result 调用 evaluator 之前。"""
+        state = {
+            "section_idx": 0,
+            "step_title": "历史政策",
+            "search_query": "policy before 2020",
+            "max_tool_call_turns_per_query": 2,
+            "search_method": "web",
+            "web_search_engine_name": "tavily",
+            "api_tools_config": {},
+            "research_intent": {
+                "temporal_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
+            },
+        }
+        tool = AsyncMock()
+        tool.invoke.return_value = {
+            "search_engine": "tavily",
+            "search_results": [
+                {
+                    "title": "In range",
+                    "link": "https://example.com/in",
+                    "snippet": "kept body",
+                    "source_date": "2020-12-31",
+                    "source_date_type": "published",
+                },
+                {
+                    "title": "Out of range",
+                    "link": "https://example.com/out",
+                    "snippet": "removed body",
+                    "source_date": "2021-01-01",
+                    "source_date_type": "published",
+                },
+                {
+                    "title": "Unknown",
+                    "link": "https://example.com/unknown",
+                    "snippet": "unknown body",
+                },
+            ],
+        }
+
+        with patch.object(
+            info_collector_node,
+            '_prepare_collector_tool',
+            return_value=([], {"web_search_tool": tool}),
+        ), patch.object(
+            info_collector_node,
+            '_structure_result',
+            new=AsyncMock(return_value=([], [], {})),
+        ) as mock_structure, patch.object(
+            info_collector_node,
+            '_process_post_process_result',
+            return_value=[],
+        ):
+            result = await info_collector_node.collector_main(state)
+
+        web_records = mock_structure.call_args.args[0]
+        assert [record["title"] for record in web_records] == ["In range", "Unknown"]
 
     @pytest.mark.asyncio
     async def test_collector_llm_success(self, info_collector_node):

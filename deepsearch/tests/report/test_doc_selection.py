@@ -401,10 +401,10 @@ def test_evaluate_coverage_matrix_single_batch():
             "reliability_scores": {f"doc_{i}": 0.9 for i in range(len(batch_docs))},
             "noise_scores": {f"doc_{i}": 0.1 for i in range(len(batch_docs))},
         }
-        return result, batch_docs
+        return result, batch_docs, ""
 
     with patch.object(reporter, "_eval_coverage_batch", side_effect=fake_batch):
-        result = asyncio.run(
+        result, last_error = asyncio.run(
             reporter._evaluate_coverage_matrix(current_inputs, docs, rationales)
         )
 
@@ -431,10 +431,10 @@ def test_evaluate_coverage_matrix_multi_batch_merges_keys():
             "reliability_scores": {f"doc_{i}": 0.7 for i in range(len(batch_docs))},
             "noise_scores": {f"doc_{i}": 0.2 for i in range(len(batch_docs))},
         }
-        return result, batch_docs
+        return result, batch_docs, ""
 
     with patch.object(reporter, "_eval_coverage_batch", side_effect=fake_batch):
-        result = asyncio.run(
+        result, last_error = asyncio.run(
             reporter._evaluate_coverage_matrix(current_inputs, docs, rationales)
         )
 
@@ -458,7 +458,7 @@ def test_evaluate_coverage_matrix_empty_docs():
     """Empty doc_infos should return empty dict."""
     reporter = _make_reporter()
     current_inputs = {"section_idx": 1, "section_task": "test", "section_description": ""}
-    result = asyncio.run(
+    result, last_error = asyncio.run(
         reporter._evaluate_coverage_matrix(current_inputs, [], [_rationale("r1", "test")])
     )
     assert result == {}
@@ -469,7 +469,7 @@ def test_evaluate_coverage_matrix_empty_rationales():
     reporter = _make_reporter()
     docs = [_doc(0, "test")]
     current_inputs = {"section_idx": 1, "section_task": "test", "section_description": ""}
-    result = asyncio.run(
+    result, last_error = asyncio.run(
         reporter._evaluate_coverage_matrix(current_inputs, docs, [])
     )
     assert result == {}
@@ -484,16 +484,16 @@ def test_evaluate_coverage_matrix_batch_failure_continues():
 
     async def fake_batch(batch_docs, batch_idx, *args):
         if batch_idx == 0:
-            return {}, batch_docs  # First batch fails
+            return {}, batch_docs, "batch failed"  # First batch fails
         result = {
             "coverage_matrix": {f"doc_{i}": {"r1": 0.9} for i in range(len(batch_docs))},
             "reliability_scores": {f"doc_{i}": 0.8 for i in range(len(batch_docs))},
             "noise_scores": {f"doc_{i}": 0.1 for i in range(len(batch_docs))},
         }
-        return result, batch_docs
+        return result, batch_docs, ""
 
     with patch.object(reporter, "_eval_coverage_batch", side_effect=fake_batch):
-        result = asyncio.run(
+        result, last_error = asyncio.run(
             reporter._evaluate_coverage_matrix(current_inputs, docs, rationales)
         )
 
@@ -502,3 +502,24 @@ def test_evaluate_coverage_matrix_batch_failure_continues():
     # Batch 1 succeeded → doc_15..doc_24 present
     assert "doc_15" in result["coverage_matrix"]
     assert "doc_24" in result["coverage_matrix"]
+
+
+def test_evaluate_coverage_matrix_all_batches_fail_degrades_with_error():
+    """When every batch fails, degrade to an old-shape dict (empty matrix) and surface the error."""
+    reporter = _make_reporter()
+    docs = [_doc(i, f"export data {i}") for i in range(25)]
+    rationales = [_rationale("r1", "export data")]
+    current_inputs = {"section_idx": 1, "section_task": "1 Export", "section_description": "desc"}
+
+    async def fake_batch(batch_docs, batch_idx, *args):
+        return {}, batch_docs, f"batch {batch_idx} boom"
+
+    with patch.object(reporter, "_eval_coverage_batch", side_effect=fake_batch):
+        result, last_error = asyncio.run(
+            reporter._evaluate_coverage_matrix(current_inputs, docs, rationales)
+        )
+
+    # Degrade path: old-shape truthy dict so the caller continues (chapter not lost)
+    assert result["coverage_matrix"] == {}
+    assert result["filtered_docs"]
+    assert "boom" in last_error

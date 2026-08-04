@@ -22,27 +22,40 @@ logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    application = FastAPI(
         title="openJiuwen-CodeSearch",
         description="Agentic code retrieval service",
         docs_url="/docs",
     )
-    app.include_router(api_router, prefix="/api")
+    application.include_router(api_router, prefix="/api")
 
-    @app.on_event("shutdown")
+    @application.on_event("shutdown")
     async def _close_retrievers() -> None:  # 释放跨请求复用的 Milvus 连接别名
         await shutdown_retrievers()
 
-    return app
+    return application
 
 
 app = create_app()
+
+
+def _warn_if_index_roots_unset() -> None:
+    """未配置白名单时索引接口会 403：启动期明确打出，避免被当成服务故障。"""
+    if settings.allowed_index_roots():
+        return
+    logger.warning(
+        "CODESEARCH_INDEX_ROOTS is empty: POST /api/v1/index is disabled "
+        "(returns 403). Set it to a path whitelist to enable indexing. "
+        "This service has no authentication — deploy on a trusted network "
+        "or behind an access-controlled gateway."
+    )
 
 
 def main() -> None:
     import uvicorn
 
     logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
+    _warn_if_index_roots_unset()
     logger.info("Health check: http://%s:%d/api/health", settings.host, settings.port)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level=settings.log_level.lower())
 

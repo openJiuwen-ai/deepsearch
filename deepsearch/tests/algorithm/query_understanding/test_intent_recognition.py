@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
     IntentRecognitionResult,
     MAX_RESEARCH_QUERY_LENGTH,
+    _create_emit_intent_tool,
     _to_str_list,
     classify_and_recognize_intent,
     normalize_research_query,
@@ -32,6 +34,10 @@ def sample_tool_response():
                     "exclude_url": [],
                     "include_domains": [],
                     "exclude_domains": [],
+                    "temporal_scope": {
+                        "constraint_type": "source_date",
+                        "end_date": "2024-03-31",
+                    },
                 },
                  "id": "tc1",
                 "type": "tool_call",
@@ -69,6 +75,36 @@ async def test_recognize_report_intent_success(sample_tool_response):
     assert result.research_intent.report_type == "professional"
     assert "https://example.com/a" in result.research_intent.include_url
     assert "example.com" in result.research_intent.include_domains
+    assert result.research_intent.temporal_scope.end_date.isoformat() == "2024-03-31"
+
+
+def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
+    """意图识别工具的时间范围 schema 只使用基础关键字。"""
+    tool = _create_emit_intent_tool()
+    temporal_schema = tool.card.input_params["properties"]["temporal_scope"]
+
+    assert temporal_schema["type"] == "object"
+    assert temporal_schema["properties"]["constraint_type"]["enum"] == [
+        "source_date",
+        "content_date",
+    ]
+    assert temporal_schema["properties"]["start_date"]["format"] == "date"
+    assert temporal_schema["properties"]["end_date"]["format"] == "date"
+    assert "anyOf" not in temporal_schema
+    assert "oneOf" not in temporal_schema
+
+
+@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
+def test_intent_prompt_defines_temporal_normalization_rules(prompt_name):
+    """两个意图 Prompt 必须使用一致的模糊日期与包含边界规则。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+
+    assert "March 31" in prompt
+    assert "June 30" in prompt
+    assert "December 31" in prompt
+    assert "previous year" in prompt
+    assert "previous month" in prompt
+    assert "inclusive" in prompt
 
 
 @pytest.mark.asyncio
@@ -88,6 +124,7 @@ async def test_recognize_report_intent_no_tool_calls_fallback():
     assert result.research_query == q
     assert result.research_intent == ResearchIntent()
     assert result.research_intent.report_type is None
+    assert "is_fallback" not in result.model_dump()
 
 
 @pytest.mark.asyncio
@@ -107,6 +144,7 @@ async def test_recognize_report_intent_exception_fallback():
     assert result.research_query == q
     assert result.research_intent.section_count is None
     assert result.research_intent.report_type is None
+    assert "is_fallback" not in result.model_dump()
 
 
 @pytest.mark.asyncio
@@ -544,4 +582,137 @@ def test_to_str_list_non_list_str_none():
     """非 list/str/None 类型返回空列表"""
     assert _to_str_list(123) == []
 
+@pytest.mark.asyncio
+async def test_recognize_report_intent_exclude_url_and_domains_kept_separate():
+    """exclude_url 与 exclude_domains 按 LLM 提取结果各自保留，互不派生。"""
+    response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "topic",
+                    "language": "zh-CN",
+                    "exclude_url": [
+                        "https://www.mdpi.com/2073-445X/11/9/1529",
+                        "https://www.mdpi.com/2410-3888/8/2/80",
+                    ],
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await recognize_report_intent(
+            {"original_query": "不要引用这两篇文章", "llm_model_name": "basic"}
+        )
 
+    assert len(result.research_intent.exclude_url) == 2
+    # 关键断言：exclude_url 的域名不得被派生进 exclude_domains
+    assert result.research_intent.exclude_domains == []
+
+
+@pytest.mark.asyncio
+async def test_recognize_report_intent_emits_exclude_intent_log(caplog):
+    """exclude 字段非空时输出 [EXCLUDE_INTENT] 日志；为空时不输出。"""
+    import logging
+
+    response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "topic",
+                    "language": "zh-CN",
+                    "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        with caplog.at_level(logging.INFO):
+            await recognize_report_intent({"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    assert any("[EXCLUDE_INTENT]" in record.getMessage() for record in caplog.records)
+    assert any("mdpi.com/2073-445X/11/9/1529" in record.getMessage() for record in caplog.records)
+
+
+def _exclude_intent_tool_response(**extra_args):
+    args = {
+        "research_query": "topic",
+        "language": "zh-CN",
+        "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
+    }
+    args.update(extra_args)
+    return {
+        "tool_calls": [
+            {"name": "emit_report_intent", "args": args, "id": "tc1", "type": "tool_call"}
+        ],
+        "content": "",
+    }
+
+
+def _patched_llm(response):
+    return patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    )
+
+
+@pytest.mark.asyncio
+async def test_classify_and_recognize_intent_emits_exclude_intent_log(caplog):
+    """主工作流路径 classify_and_recognize_intent 也应输出 [EXCLUDE_INTENT] 日志。"""
+    import logging
+
+    p1, p2 = _patched_llm(_exclude_intent_tool_response())
+    with p1, p2:
+        with caplog.at_level(logging.INFO):
+            await classify_and_recognize_intent(
+                {"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    assert any("[EXCLUDE_INTENT]" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_exclude_intent_log_redacted_in_sensitive_mode(caplog):
+    """敏感模式下 [EXCLUDE_INTENT] 只记录计数，不输出 URL/标题/query。"""
+    import logging
+
+    p1, p2 = _patched_llm(_exclude_intent_tool_response(
+        exclude_titles=["Some Sensitive Paper Title"]))
+    with p1, p2, patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.LogManager.is_sensitive",
+        return_value=True,
+    ):
+        with caplog.at_level(logging.INFO):
+            await recognize_report_intent(
+                {"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    messages = [record.getMessage() for record in caplog.records
+                if "[EXCLUDE_INTENT]" in record.getMessage()]
+    assert messages, "EXCLUDE_INTENT log missing"
+    assert any("redacted" in m for m in messages)
+    assert not any("mdpi.com" in m or "Sensitive Paper" in m or "不要引用某文" in m
+                   for m in messages)

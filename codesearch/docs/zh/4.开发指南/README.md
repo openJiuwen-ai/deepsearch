@@ -22,7 +22,7 @@
 | `benchmarks/` | 评测适配 | 只依赖公开 API，核心包不得反向依赖 |
 | `openjiuwen_codesearch/server/` | HTTP 服务层（FastAPI）：健康检查、检索接口、索引作业 | 只依赖公开 API；随包分发，故 whl 安装后亦可起服务 |
 
-## 引擎
+## 双引擎
 
 `SearchAgentConfig.engine` 取值：
 
@@ -31,12 +31,10 @@
 | `graph` | openJiuwen 工作流图形态，节点级可观测 |
 | `react` | 纯代码循环，无框架依赖的兜底形态 |
 | `auto`（默认） | 框架可用则用 `graph`，否则回退 `react` |
-| `retropus` | KG+BM25 Retropus 引擎（独立工具注册表与 `CodeSearchConfig.retropus`） |
 
-`graph`/`react` 共享 `CodeSearchAgent` 阶段方法，集成测试锁定输出逐字节一致。
-图结构见 [codesearch-workflow.md](../../feature/framework/codesearch-workflow.md)；
-Retropus 配置与行为见
-[retropus-agent.md](../../feature/framework/retropus-agent.md)。
+两个引擎共享 `framework/openjiuwen/steps.py` 中的同一份阶段逻辑，集成测试
+锁定二者输出逐字节一致。图结构与运行隔离设计见
+[特性文档](../../feature/framework/codesearch-workflow.md)。
 
 ## 扩展点
 

@@ -21,6 +21,9 @@
 - `info_collector_webpage_enrich_enable=True` 时，`InfoRetrievalNode` 和 `SupervisorNode` 之间会启用网页正文增强节点。
 - 没有采集到文档时，调用方会记录 `INFO_COLLECTING_EMPTY` warning。
 - 依赖驱动模式可为满足依赖的多个 step 并行启动独立 collector workflow session。
+- 存在时间范围时，初始 query 与 supervisor 补搜 query 由 LLM 自然表达该范围；每条 query 最多 5 个主题关键词，
+  时间短语不计入该限制。`source_date` 表示资料发表时间，`content_date` 表示事实或数据时间。
+- 时间约束采用召回优先的 best-effort：只删除 Tavily 返回的可确认发表日期且明确越界的文档，日期未知、其他 web 引擎和 local 文档继续进入证据。
 
 ## 关键代码路径
 
@@ -42,7 +45,8 @@
 1. 上游章节节点把当前 plan、step、语言、章节索引和采集上限封装为 collector 输入。
 2. collector 子图初始化 `CollectorContext` 和证据账本。
 3. 采集节点准备可用工具，执行 LLM 决策和工具调用循环。
-4. 工具返回的搜索结果合并进 source store，并更新 `retrieval_queries.doc_infos`。
+4. Tavily 返回的 web 结果先归一化日期元数据；`source_date` 明确越界的文档在 evaluator 和 evidence 构建前整篇删除，
+   范围内或日期未知的文档保留。`content_date` 和 local 结果不执行来源日期过滤。
 5. 如果启用网页正文增强，节点从本轮新增 `doc_infos` 中选择少量高价值 HTTP/HTTPS URL，并行抓取单页正文。
 6. 网页正文增强节点把旧证据和抓取正文交给 LLM 合并为 bounded evidence；仅在质量门禁通过后刷新当前文档、累计文档和历史 query 中的同一证据。
 7. supervisor 根据 evidence ledger、当前资料和缺口决定是否继续；`is_sufficient=true`、达到循环上限、
@@ -116,12 +120,16 @@
 - `EvidenceLedger` 记录 accepted/rejected/pending 证据、尝试过的 query 和缺口，供后续采集轮次判断。
 - `CollectorContext.should_continue` 保存 supervisor 对下一轮检索价值的判断；为 `false` 时，collector 清空后续 query
   并进入 summary。
+- 对有来源日期约束的 Tavily 结果，collector 记录 `raw`、`kept`、`filtered_out` 和 `date_unknown` 计数日志。日志不包含 query、URL、标题或正文。
+- Tavily 工具的 ReAct tool message 使用域名与时间过滤后的规范化结果，避免模型根据已从正式证据删除的越界来源决定停止检索。
 - `max_search_query_count` 来自 `config.info_collector_max_search_query_count`，表示单轮 query 硬上限；初始 query
   生成在需要外部检索时使用 `1..max_search_query_count`，明确不需要外部检索时可返回空列表；supervisor 后续
   query 在 `0..max_search_query_count` 范围内自主决定数量。
 - `max_tool_call_turns_per_query` 来自 `config.info_collector_max_tool_call_turns_per_query`，独立于
   `max_research_loops` 生效。
 - 搜索工具来源于 `web_search_context`、`local_search_context` 和 runtime API 工具配置。
+- 只有 Tavily wrapper 将官方 `published_date` 归一化为 `source_date` 和 `source_date_type=published`；collector 只消费
+  该 ISO 日期，不扫描 `date`、更新时间或其他 provider 字段。
 - 网页正文增强节点只更新匹配 doc 的正文证据和证据引用，并同步 `history_queries` 供最终报告读取；证据保持来源语言，不承担报告本地化；不修改原始 URL、标题、评分或 evaluator 结果。
 
 ### 学术垂直搜索 Query 契约
@@ -161,6 +169,7 @@
 - 空结果不会直接中断主图，但会通过 warning 进入章节和最终报告状态。
 - 候选和网页内容不会插入 system prompt；其中的指令样文本只能作为不可信数据处理。
 - 敏感日志模式下，采集输入、工具结果、中间消息、URL、异常正文和事实锚点不打印明文。
+- query 生成 LLM 降级时沿用既有 fallback，不在代码侧检查或补写时间短语。
 
 ## 测试与验证
 

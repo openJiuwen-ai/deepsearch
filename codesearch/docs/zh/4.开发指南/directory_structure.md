@@ -12,17 +12,15 @@ codesearch/
 │   ├── llm/                         # LLMClient 协议 + openjiuwen 适配（guarded）
 │   ├── utils/log_utils/             # LogManager（含敏感脱敏）
 │   ├── algorithm/                   # 纯算法层（禁止 import framework）
-│   │   ├── prompts/                 # .md 提示词（主检索 / 过滤 / retropus_*）
+│   │   ├── prompts/                 # .md 提示词模板（主检索 / 过滤）
 │   │   ├── reasoning.py             # 一轮 LLM 决策
 │   │   ├── filtering.py             # 过滤智能体（有界并发逐行提取）
 │   │   ├── memory_ops.py            # 最终结果构造
-│   │   └── search_tools/            # CodeSearch 5 工具 + retropus_registry / graph_tools
-│   ├── retropus/                    # 厂商化 KG / BM25（engine=retropus；需 [retropus] extra）
+│   │   └── search_tools/            # 5 工具 registry（repo_map/search/expand/delete/submit）
 │   ├── indexing/                    # 切块器（ast）/ 嵌入（SQLite 缓存）/ 增量索引编排
 │   ├── retrieval/                   # CodeRetriever 协议 + InMemory fake + milvus/ 实现
-│   ├── framework/openjiuwen/        # get_registry / BaseNode / nodes / workflow /
-│   │                                #   CodeSearchRunContext / RetropusRunContext /
-│   │                                #   CodeSearchAgent + RetropusCodeSearchAgent
+│   ├── framework/openjiuwen/        # steps 阶段函数 / BaseNode / nodes / workflow 图 /
+│   │                                #   CodeSearchRunContext（运行隔离）/ 双引擎编排器
 │   └── server/                      # HTTP 服务层（随包分发，whl 装完即可起服务）
 │       ├── main.py                  # FastAPI 应用与启动（codesearch-server 入口）
 │       ├── core/config.py           # 服务配置（pydantic-settings，CODESEARCH_ 前缀）

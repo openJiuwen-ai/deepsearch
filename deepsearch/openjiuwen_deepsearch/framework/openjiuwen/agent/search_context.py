@@ -1,9 +1,10 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 from enum import Enum
+from datetime import date
 from typing import List, Optional, Dict, Union, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Message(BaseModel):
@@ -198,10 +199,38 @@ class ReportTypePolicy(BaseModel):
     )
 
 
+class TemporalScope(BaseModel):
+    """用户明确指定的研究时间范围。
+
+    Attributes:
+        constraint_type: 时间约束对象；source_date 限制来源发布日期，content_date 限制事实或数据时间。
+        start_date: 包含边界的开始日期。
+        end_date: 包含边界的结束日期。
+    """
+
+    constraint_type: Literal["source_date", "content_date"] = Field(description="时间约束对象")
+    start_date: Optional[date] = Field(default=None, description="包含边界的开始日期")
+    end_date: Optional[date] = Field(default=None, description="包含边界的结束日期")
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "TemporalScope":
+        """校验时间范围至少包含一个边界且顺序有效。
+
+        Returns:
+            校验通过的时间范围。
+
+        Raises:
+            ValueError: 未提供任何边界，或开始日期晚于结束日期时抛出。
+        """
+        if self.start_date is None and self.end_date is None:
+            raise ValueError("temporal scope requires at least one date boundary")
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValueError("temporal scope start_date must not be after end_date")
+        return self
+
+
 class ResearchIntent(BaseModel):
-    """
-    报告生成意图：从用户 query 中解析出的结构化约束。
-    """
+    """报告生成意图：从用户 query 中解析出的结构化约束。"""
     task_type: Optional[str] = Field(default=None, description="任务类型，如 comparison/classification/trend_judgement")
     required_dimensions: List[str] = Field(default_factory=list, description="必须覆盖的比较或分析维度")
     comparison_targets: List[str] = Field(default_factory=list, description="需要显式比较的对象")
@@ -211,8 +240,10 @@ class ResearchIntent(BaseModel):
     report_type: Optional[Literal["professional", "brief"]] = Field(default=None, description="报告类型")
     include_url: List[str] = Field(default_factory=list, description="用户指定包含的链接")
     exclude_url: List[str] = Field(default_factory=list, description="用户指定排除的链接")
+    exclude_titles: List[str] = Field(default_factory=list, description="用户指定排除的文章标题")
     include_domains: List[str] = Field(default_factory=list, description="用户指定的站点域名")
     exclude_domains: List[str] = Field(default_factory=list, description="用户排除的站点域名")
+    temporal_scope: Optional[TemporalScope] = Field(default=None, description="用户明确指定的研究时间范围")
 
 
 class SectionLocalContract(BaseModel):
@@ -243,6 +274,48 @@ def build_research_intent_prompt_context(intent: ResearchIntent | dict | None) -
         "comparison_targets_text": ", ".join(comparison_targets),
         "has_required_dimensions": bool(required_dimensions),
         "has_comparison_targets": bool(comparison_targets),
+    }
+
+
+def build_temporal_scope_prompt_context(intent: ResearchIntent | dict | None) -> dict:
+    """将时间约束转换为研究阶段 prompt 可直接消费的上下文。
+
+    Args:
+        intent: 结构化研究意图或兼容字典。
+
+    Returns:
+        包含时间约束类型、边界和自然语言指令的 prompt 上下文；无约束时返回空字段。
+    """
+    if intent is None:
+        scope = None
+    elif isinstance(intent, ResearchIntent):
+        scope = intent.temporal_scope
+    else:
+        scope = ResearchIntent.model_validate(intent).temporal_scope
+
+    if scope is None:
+        return {
+            "has_temporal_scope": False,
+            "temporal_scope_instruction": "",
+        }
+
+    start_date = scope.start_date.isoformat() if scope.start_date else ""
+    end_date = scope.end_date.isoformat() if scope.end_date else ""
+    if start_date and end_date:
+        boundary = f"from {start_date} through {end_date}"
+    elif start_date:
+        boundary = f"on or after {start_date}"
+    else:
+        boundary = f"on or before {end_date}"
+
+    if scope.constraint_type == "source_date":
+        instruction = f"Use sources published {boundary}, using inclusive boundary dates."
+    else:
+        instruction = f"Keep the facts and data {boundary}, using inclusive boundary dates."
+
+    return {
+        "has_temporal_scope": True,
+        "temporal_scope_instruction": instruction,
     }
 
 

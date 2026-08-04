@@ -34,7 +34,8 @@ def test_search_requires_fields(client):
 class TestIndexPathWhitelist:
     """`/v1/index` 读的是服务端本地目录，必须限制在白名单内。"""
 
-    def _client(self, monkeypatch, roots: str):
+    @staticmethod
+    def _client(monkeypatch, roots: str):
         from openjiuwen_codesearch.server.core.config import settings
 
         monkeypatch.setattr(settings, "index_roots", roots)
@@ -90,13 +91,14 @@ class TestIndexPathWhitelist:
 
 
 class TestJobTable:
-    def test_job_table_is_bounded(self):
+    @staticmethod
+    def test_job_table_is_bounded():
         from openjiuwen_codesearch.server.routers import api
 
-        api._jobs.clear()
-        for i in range(api._MAX_JOBS + 20):
-            api._remember_job(api.JobResponse(job_id=f"j{i}", status="running"))
-        assert len(api._jobs) == api._MAX_JOBS
-        assert "j0" not in api._jobs          # 最早的被淘汰
-        assert f"j{api._MAX_JOBS + 19}" in api._jobs
-        api._jobs.clear()
+        api.jobs.clear()
+        for i in range(api.MAX_JOBS + 20):
+            api.remember_job(api.JobResponse(job_id=f"j{i}", status="running"))
+        assert len(api.jobs) == api.MAX_JOBS
+        assert "j0" not in api.jobs          # 最早的被淘汰
+        assert f"j{api.MAX_JOBS + 19}" in api.jobs
+        api.jobs.clear()

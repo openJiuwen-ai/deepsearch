@@ -10,7 +10,10 @@ DELETE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "delete_snippets",
-        "description": "Delete irrelevant snippet IDs from your memory. Provide a reasoning for why they are irrelevant to guide your future searches.",
+        "description": (
+            "Delete irrelevant snippet IDs from your memory. Provide a reasoning for "
+            "why they are irrelevant to guide your future searches."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -21,7 +24,10 @@ DELETE_SCHEMA = {
                 },
                 "reasoning": {
                     "type": "string",
-                    "description": "Explanation of why these snippets are not useful, which will help you plan your next move.",
+                    "description": (
+                        "Explanation of why these snippets are not useful, which will "
+                        "help you plan your next move."
+                    ),
                 },
             },
             "required": ["snippet_ids", "reasoning"],
@@ -33,7 +39,10 @@ SUBMIT_SCHEMA = {
     "type": "function",
     "function": {
         "name": "submit_final_snippets",
-        "description": "Submit the final list of snippet IDs that are most relevant to solving the issue. This concludes the search.",
+        "description": (
+            "Submit the final list of snippet IDs that are most relevant to solving "
+            "the issue. This concludes the search."
+        ),
         "parameters": {
             "type": "object",
             "properties": {

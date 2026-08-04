@@ -10,7 +10,11 @@ SCHEMA = {
     "type": "function",
     "function": {
         "name": "view_repo_map",
-        "description": "Returns a map of all files in the repository. Use this to discover file paths that you can then pass to the `target_file` argument in `search_codebase`.",
+        "description": (
+            "Returns a map of all files in the repository. Use this to discover file "
+            "paths that you can then pass to the `target_file` argument in "
+            "`search_codebase`."
+        ),
         "parameters": {"type": "object", "properties": {}},
     },
 }

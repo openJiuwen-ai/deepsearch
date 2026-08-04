@@ -136,7 +136,7 @@ Skips if `source_tracer_infer_switch` is off; builds provenance reasoning artifa
 ```python
 class EndNode(End)
 ```
-Emits `final_result` JSON and `"ALL END"`.
+When `final_result.response_content` is non-empty, appends an AI-generation notice in the language selected by `search_context.language`, then emits `final_result` JSON and `"ALL END"`; error events and `exception_info` remain unchanged.
 
 ---
 

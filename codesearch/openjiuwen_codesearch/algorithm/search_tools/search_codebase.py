@@ -18,17 +18,27 @@ SCHEMA = {
     "type": "function",
     "function": {
         "name": "search_codebase",
-        "description": "Searches the codebase for relevant code snippets. You can call this multiple times to try different keywords.",
+        "description": (
+            "Searches the codebase for relevant code snippets. You can call this "
+            "multiple times to try different keywords."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "search_query": {
                     "type": "string",
-                    "description": "The optimized search keywords extracted from the problem statement. DO NOT use regex.",
+                    "description": (
+                        "The optimized search keywords extracted from the problem "
+                        "statement. DO NOT use regex."
+                    ),
                 },
                 "use_trigram": {
                     "type": "boolean",
-                    "description": "Set to True for Trigram BM25 (best for stack traces, partial matches, or obfuscated names). Set to False for standard Token BM25.",
+                    "description": (
+                        "Set to True for Trigram BM25 (best for stack traces, partial "
+                        "matches, or obfuscated names). Set to False for standard Token "
+                        "BM25."
+                    ),
                 },
                 "target_file": {
                     "type": "string",

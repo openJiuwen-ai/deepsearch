@@ -24,7 +24,9 @@ MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 
 
-def _record(rid, path, start, end, name, text):
+def _record(rid, path, start, end, **fields):
+    name = fields["name"]
+    text = fields["text"]
     return {
         "id": rid,
         "file_hash": f"hash{rid}",
@@ -57,16 +59,16 @@ def store():
         pytest.skip(f"Milvus not reachable at {MILVUS_HOST}:{MILVUS_PORT}: {e}")
 
     data = [
-        _record(1, "app.py", 1, 5, "setup_app",
-                "def setup_app():\n    print('Initializing application')\n    return True"),
-        _record(2, "utils.py", 10, 15, "calculate_metrics",
-                "def calculate_metrics(data):\n    # some complex logic here\n    return data.sum()"),
+        _record(1, "app.py", 1, 5, name="setup_app",
+                text="def setup_app():\n    print('Initializing application')\n    return True"),
+        _record(2, "utils.py", 10, 15, name="calculate_metrics",
+                text="def calculate_metrics(data):\n    # some complex logic here\n    return data.sum()"),
         # 干扰项 1：词都在但分散，无 data.sum()
-        _record(3, "eval.py", 20, 25, "evaluate_logic",
-                "def evaluate_logic(metrics):\n    # calculate the final score\n    return sum(metrics)"),
+        _record(3, "eval.py", 20, 25, name="evaluate_logic",
+                text="def evaluate_logic(metrics):\n    # calculate the final score\n    return sum(metrics)"),
         # 干扰项 2：trigram 目标词但空格打散
-        _record(4, "spaced.py", 30, 35, "spaced_sum",
-                "def spaced_sum(data):\n    return data . sum ()"),
+        _record(4, "spaced.py", 30, 35, name="spaced_sum",
+                text="def spaced_sum(data):\n    return data . sum ()"),
     ]
     run(store.insert_records(data))
     run(store.flush())

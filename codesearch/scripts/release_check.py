@@ -13,10 +13,13 @@
 """
 
 import argparse
+import logging
 import re
 import sys
-import tomllib
 from pathlib import Path
+import tomllib
+
+logger = logging.getLogger(__name__)
 
 HERE = Path(__file__).resolve().parent.parent  # codesearch/
 REPO = HERE.parent
@@ -53,9 +56,26 @@ def main() -> int:
     cs_ver = cs["project"]["version"]
     ds_ver = load_version(REPO / "deepsearch" / "pyproject.toml")
     base_ver = load_version(REPO / "base" / "pyproject.toml")
+    target = args.release_version
 
     # 1) 产品版本同步
-    if cs_ver != ds_ver:
+    if target:
+        if cs_ver != target:
+            errors.append(
+                f"codesearch version={cs_ver} 与 --release-version={target} 不一致"
+                "（请确认出包脚本已 sed version）"
+            )
+        if ds_ver != target:
+            warnings.append(
+                f"仓内 deepsearch={ds_ver} ≠ 发布号 {target}；"
+                "由 deepsearch 出包任务单独改写，不阻断本任务"
+            )
+        if base_ver != target:
+            warnings.append(
+                f"仓内 base={base_ver} ≠ 发布号 {target}；"
+                "由 build_search_base 单独改写，不阻断本任务"
+            )
+    elif cs_ver != ds_ver:
         errors.append(f"版本不同步：codesearch={cs_ver} deepsearch={ds_ver}（要求一致）")
 
     # 2) 发布依赖禁止 git 直引
@@ -69,15 +89,13 @@ def main() -> int:
             f"发布版本需改用索引中的版本：{direct}"
         )
 
-    # 3) base pin 可满足
+    # 3) base pin 可满足（仅通配 pin；CI 精确 pin 交给第 4 步）
     pin = next((d for d in cs["project"]["dependencies"] if "openjiuwen-search-base" in d), "")
     m = re.search(r"==(\d+)\.(\d+)\.\*", pin)
     if m and not base_ver.startswith(f"{m.group(1)}.{m.group(2)}."):
         errors.append(f"base 版本 {base_ver} 不满足 codesearch 的 pin {pin}")
 
     # 4) 以 CI 实际发布的版本复核：base 与本包会被改成同一个版本，
-    #    但 pin 不会被改，因此必须验证「pin 是否接受该版本」
-    target = args.release_version
     if target:
         accepted = pin_accepts(pin, target)
         if accepted is False:
@@ -99,18 +117,24 @@ def main() -> int:
             )
 
     if errors:
-        print("release_check FAILED:")
+        logger.error("release_check FAILED:")
         for e in errors:
-            print(f"  ✗ {e}")
+            logger.error("  ✗ %s", e)
         return 1
-    print(f"release_check OK: codesearch={cs_ver} deepsearch={ds_ver} base={base_ver}")
+    logger.info(
+        "release_check OK: codesearch=%s deepsearch=%s base=%s",
+        cs_ver,
+        ds_ver,
+        base_ver,
+    )
     if target:
-        print(f"  发布版本 {target} 与 base pin {pin} 相容")
+        logger.info("  发布版本 %s 与 base pin %s 相容", target, pin)
     for w in warnings:
-        print(f"  ⚠ {w}")
-    print("  提醒（未自动校验）：base 需与本包共同发布；LICENSE 与三方声明需齐备。")
+        logger.info("  ⚠ %s", w)
+    logger.info("  提醒（未自动校验）：base 需与本包共同发布；LICENSE 与三方声明需齐备。")
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     sys.exit(main())

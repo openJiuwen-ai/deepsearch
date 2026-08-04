@@ -43,8 +43,9 @@
 
 ## 交付形态
 
-四种：本地源码、whl 包、Docker 镜像、HTTP 服务。服务层随包分发，whl 装完可用 `codesearch-server` 启动
-（`packages.find` 只收 `openjiuwen_codesearch*`），以源码或镜像部署。
+三种：本地源码、正式 whl（含 `openjiuwen-search-base` + 本包）、Docker 镜像。
+服务层随包分发，装完 `[server]` 后可用 `codesearch-server` 启动
+（`packages.find` 收 `openjiuwen_codesearch*`，含 `server/`）。
 发布前须通过 `python scripts/release_check.py`（版本一致性、依赖形态、base pin）。
 
 ## 配置纪律

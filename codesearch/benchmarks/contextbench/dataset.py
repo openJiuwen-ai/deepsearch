@@ -30,7 +30,7 @@ def ensure_contextbench_importable(contextbench_dir: str = DEFAULT_CONTEXTBENCH_
             "Run `git submodule update --init --recursive` first."
         )
     if contextbench_dir not in sys.path:
-        sys.path.insert(0, contextbench_dir)
+        sys.path.append(contextbench_dir)
 
 
 def load_context_bench_data(path: str = DEFAULT_PARQUET):
@@ -57,8 +57,7 @@ def _worktree_root() -> str:
 
 
 def clean_worktrees() -> None:
-    """清理 contextbench 的临时 worktree（长跑前置清理；
-    残留的坏 worktree 会让同 commit 的 checkout 永久失败）。"""
+    """清理 contextbench 临时 worktree（残留坏 worktree 会使同 commit checkout 失败）。"""
     shutil.rmtree(_worktree_root(), ignore_errors=True)
 
 

@@ -26,13 +26,17 @@ MAX_CALL_LENGTH = 2048  # calls 数组单条上限（schema max_length 对齐）
 class ChunkStore(Protocol):
     """索引写入侧的最小存储协议。"""
 
-    async def fetch_records_by_hashes(self, file_hashes: list[str]) -> list[dict]: ...
+    async def fetch_records_by_hashes(self, file_hashes: list[str]) -> list[dict]:
+        ...
 
-    async def upsert_records(self, records: list[dict]) -> None: ...
+    async def upsert_records(self, records: list[dict]) -> None:
+        ...
 
-    async def insert_records(self, records: list[dict]) -> None: ...
+    async def insert_records(self, records: list[dict]) -> None:
+        ...
 
-    async def flush(self) -> None: ...
+    async def flush(self) -> None:
+        ...
 
 
 def discover_python_files(
@@ -124,12 +128,13 @@ def build_chunk_records(
     chunks: list[Chunk],
     rel_path: str,
     file_hash: str,
-    instance_id: str,
-    repo_name: str,
-    revision: str,
     index_cfg: IndexConfig,
+    **meta,
 ) -> list[dict[str, Any]]:
     """chunk → Milvus 插入记录。含路径头注入、字节级截断、确定性 ID。纯函数。"""
+    instance_id = meta["instance_id"]
+    repo_name = meta["repo_name"]
+    revision = meta["revision"]
     records = []
     for chunk in chunks:
         text = f"File: {rel_path} (L{chunk.start_line}-L{chunk.end_line})\n\n" + chunk.text
@@ -171,14 +176,15 @@ async def index_repository(
     store: ChunkStore,
     chunker: Chunker,
     repo_dir: str,
-    instance_id: str,
-    repo_name: str,
-    revision: str,
     index_cfg: IndexConfig,
-    embedder: Optional[APIEmbedModel] = None,
-    embed_batch_size: int = 64,
+    **ctx,
 ) -> IndexReport:
     """索引一个仓库目录。已存在文件 upsert 标记。"""
+    instance_id = ctx["instance_id"]
+    repo_name = ctx["repo_name"]
+    revision = ctx["revision"]
+    embedder = ctx.get("embedder")
+    embed_batch_size = ctx.get("embed_batch_size", 64)
     code_files = discover_python_files(
         repo_dir,
         max_files=index_cfg.max_num_files_per_repo,
@@ -202,7 +208,13 @@ async def index_repository(
         chunks = chunker.chunk_file(file_path)
         new_records.extend(
             build_chunk_records(
-                chunks, rel_path, file_hash, instance_id, repo_name, revision, index_cfg
+                chunks,
+                rel_path,
+                file_hash,
+                index_cfg,
+                instance_id=instance_id,
+                repo_name=repo_name,
+                revision=revision,
             )
         )
 
@@ -210,7 +222,7 @@ async def index_repository(
         if embedder is None:
             raise ValueError("use_dense_embeddings=True but no embedder provided")
         for start in range(0, len(new_records), embed_batch_size):
-            batch = new_records[start : start + embed_batch_size]
+            batch = new_records[start:start + embed_batch_size]
             vectors = await embedder.async_encode([r["text"].strip() for r in batch])
             for record, vec in zip(batch, vectors):
                 record["dense_vector"] = vec

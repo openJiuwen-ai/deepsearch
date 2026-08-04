@@ -14,8 +14,6 @@ _emb_*.db
 
 # ContextBench 以 git submodule 引入（见 README），本地拷贝不入库
 third_party/
-*.env*
-!.env.example
 
 # 构建与测试产物（本地生成，不入库）
 build/

@@ -130,8 +130,10 @@ format_requirements: {{ current_section_format_requirements }}
 - **Title Preservation**:
     - You must STRICTLY follow the **text content** of the `current_chapter_outline`.
     - Copy the Title **words** EXACTLY. Do Not add/remove titles or change the wording.
+    - If any heading's count, level, or wording does not exactly match the outline, the entire chapter will fail validation and be discarded.
 - **Heading Levels**:
-    - Avoid generate H3 (`###`) or lower levels. If the content logically requires a sub-section (e.g., you want to write about "Advantages" under a "## Technology" section), you MUST use **unordered list with Bold font(e.g., - **header**)** instead of a header
+    - Do NOT generate H3 (`###`) or deeper headings. If the content logically requires a sub-section (e.g., you want to write about "Advantages" under a "## Technology" section), you MUST use **unordered list with Bold font(e.g., - **header**)** instead of a header
+    - Each line of `current_chapter_outline` must appear in your output as **exactly one** Markdown heading — no more, no fewer. Do NOT output any `#`/`##` heading that is not in the outline (e.g., no self-invented "Summary", "Conclusion", or "Data Sources" headings).
     - Avoid Chinese numbering like "（一）" or "一、" in headings. 
 
 ## 3. Content Standards
@@ -145,6 +147,9 @@ format_requirements: {{ current_section_format_requirements }}
     - **Specifics**: When mentioning data, cite the source authority (e.g., "According to data from China Education Online...").
     - Every number, date, amount, percentage, ranking, company name, policy name, and table cell must be traceable to the provided Collected Information.
     - Do not calculate derived metrics, comparisons, trends, or rankings unless the required source values are present and cited.
+- **Visualization Boundary**:
+    - Do NOT output Mermaid code fences, chart code, or hand-written chart blocks in this chapter body.
+    - If the user asks for charts, diagrams, or Mermaid content, satisfy the request with source-backed prose/tables only here; any controlled chart rendering or insertion is handled by the report visualization/chart pipeline after this draft.
 - **Language**: The output language must be **{{language}}**.
 
 # Writing Strategy

@@ -40,10 +40,11 @@ def test_encode_and_sqlite_cache_hit(tmp_path):
     assert transport.count == 1
 
     # 新实例（同缓存目录）：全部命中缓存，不再发请求
-    model2 = APIEmbedModel(_config(tmp_path), transport=CountingTransport())
+    transport2 = CountingTransport()
+    model2 = APIEmbedModel(_config(tmp_path), transport=transport2)
     second = run(model2.async_encode(["hello", "world"]))
     assert second == first
-    assert model2._transport.count == 0  # type: ignore[attr-defined]
+    assert transport2.count == 0
 
 
 def test_partial_cache_only_fetches_missing(tmp_path):
@@ -62,8 +63,7 @@ def test_query_prefix_applied(tmp_path):
 
 
 def test_doc_and_query_vectors_cached_separately(tmp_path):
-    """回归（缓存键冲突 bug）：同一文本作为文档与作为查询必须各自请求/缓存，
-    不得让查询命中文档向量（instruct 前缀使两者语义不同）。"""
+    """回归：同文本作为文档与查询须分别请求/缓存，查询不得命中文档向量。"""
     transport = CountingTransport()
     model = APIEmbedModel(_config(tmp_path), transport=transport)
     run(model.async_encode(["same text"], is_query=False))

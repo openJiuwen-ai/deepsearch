@@ -2,75 +2,97 @@
 
 ## Installation
 
-**Pre-release dependency error during installation?**
+**Pre-release dependency error during installation?**  
 openJiuwen pulls in a pre-release transitive dependency; pass
-`--prerelease=allow` when using uv (already enabled in this package's
-`[tool.uv]` section).
+`--prerelease=allow` when using uv (already enabled under the source tree's
+`[tool.uv]`). For wheels see [Wheel Install](../2.Installation%20Guide/Wheel%20Install.md).
 
-**Can it share a virtual environment with another openJiuwen-based product?**
-Not when the two pin different framework versions — a Python environment can
-hold only one version of a distribution. Use separate environments or
+**Source vs Docker vs wheel?**  
+See the [Quick Guide](../2.Installation%20Guide/Quick%20Guide.md). Source for
+editing code; Docker to `docker build` yourself; wheels download **base +
+codesearch** from the official URL (no source tree).
+
+**Installed codesearch without base?**  
+`openjiuwen-codesearch` depends on `openjiuwen-search-base`. Source needs
+`pip install -e ../base`; wheels need both files; Docker images already include
+base.
+
+**Can it share a virtual environment with another openJiuwen-based product?**  
+Not when the two pin different framework versions. Use separate environments or
 containers. Vector-store coexistence is unaffected.
 
 ## Indexing
 
-**Indexing a non-Python repository yields 0 files.**
-The current chunker supports Python only. Other languages can be added by
-implementing the `Chunker` protocol — see the
+**Can I pass a GitHub / gitcode URL directly?**  
+No. Only a **local directory** (`--repo` / `repo_path`) is accepted. Clone
+first, then index that path. Search uses the `--collection` name chosen at
+index time (e.g. `agent_core`), not the git URL.
+
+**Indexing a non-Python repository yields 0 files.**  
+The chunker supports **Python (`.py`) only** — product scope, not a failure.
+Other languages: implement `Chunker` — see the
 [Developer Guide](../4.Developer%20Guide/README.md).
 
-**How do I control disk usage on a large repository?**
-Run a pilot with `--max-files 200`, measure actual usage, then extrapolate.
-For storage-sensitive environments add `--no-trigram` (the trigram field is
-roughly seven times the source size and dominates storage), at the cost of
-exact-substring search.
+**`POST /api/v1/index` returns 403?**  
+`CODESEARCH_INDEX_ROOTS` is unset or `repo_path` is outside the whitelist.
+Refusing indexing when unset is the **safety default** (no auth; index reads
+local disk). Startup logs a WARNING. Example:
 
-**Does re-indexing the same repository duplicate storage?**
-No. Files are deduplicated by content hash; unchanged files only get an extra
-revision label. The `reused` counter in the output shows how many were reused.
+```sh
+export CODESEARCH_INDEX_ROOTS="/data/repos"
+```
 
-**Does indexing need an LLM API key?**
-Not in the default sparse mode — sparse vectors are produced by Milvus's own
-BM25 Function. A key is only needed when dense-vector mode is enabled.
+**How do I control disk usage on a large repository?**  
+Pilot with `--max-files 200`, then extrapolate. Add `--no-trigram` to skip the
+trigram field (~7× source size) at the cost of exact-substring search.
+
+**Does re-indexing the same repository duplicate storage?**  
+No. Content-hash dedup; `reused` in the output counts reused files.
+
+**Does indexing need an LLM API key?**  
+Not in default sparse mode. Needed only for dense-vector mode.
 
 ## Retrieval
 
-**Search returns `index_not_ready`.**
-That collection or revision has no indexed data yet. Run `index` first and make
-sure `--revision` matches the value used at index time (both default to `local`).
+**Search returns `index_not_ready`.**  
+No data for that collection/revision. Run `index` first; keep `--revision`
+consistent (default `local`).
 
 **What do the termination values mean?**
 
 | Value | Meaning |
 |---|---|
-| `submitted` | The agent submitted its conclusion (normal path) |
-| `stagnated` | No new findings for several consecutive search turns; stopped early |
-| `max_turns` | Turn limit reached; collected results are returned |
-| `no_tool_call` / `llm_error` | The model stopped calling tools or the call failed; collected results are returned |
-| `index_not_ready` | Index unavailable; the retrieval loop never started |
+| `submitted` | Agent submitted its conclusion |
+| `stagnated` | No new findings for several turns; stopped early |
+| `max_turns` | Turn limit reached |
+| `no_tool_call` / `llm_error` | Model stopped or call failed |
+| `index_not_ready` | Index unavailable |
 
-**How do I trade off depth against token usage?**
-`max_turns`, `stagnation_rounds`, `search_topk` and `retrieve_topk` in
-`SearchAgentConfig` together determine search depth and token consumption.
-Every result carries `total_input_tokens` and `total_output_tokens`; convert
-them to money using the pricing of whichever endpoint you configured — the
-result itself reports no monetary amount.
+**How do I trade off depth against token usage?**  
+`max_turns`, `stagnation_rounds`, `search_topk`, `retrieve_topk` in
+`SearchAgentConfig`. Results include `total_input_tokens` /
+`total_output_tokens`.
 
-**Can I use local or third-party models?**
-Yes. `LLMConfig` accepts any OpenAI-compatible endpoint, and the decision and
-filter models are configured independently.
+**Can I use local or third-party models?**  
+Yes — any OpenAI-compatible endpoint; decision and filter models are independent.
 
 ## Runtime
 
-**Errors about SSL certificates or related configuration?**
-The SDK uses the certifi CA bundle by default and configures the framework
-accordingly. For self-signed certificates, set `LLMConfig.ssl_cert`.
+**Does the service authenticate? How to deploy in production?**  
+**No built-in auth.** `/api/v1/index` reads local dirs; `/api/v1/search` returns
+file contents. Set `CODESEARCH_INDEX_ROOTS` and place the service on a trusted
+network or behind a gateway. See
+[Installation · Security](../2.Installation%20Guide/README.md#security-boundary).
 
-**Workflow execution timeout?**
-The framework's default workflow timeout is short; the SDK injects
-`SearchAgentConfig.time_limit_seconds` (default 900s) per run. Increase it for
-unusually deep searches.
+**SSL / certificate errors?**  
+certifi is used by default; set `LLMConfig.ssl_cert` for self-signed CAs.
 
-**`docker ps` permission denied on Linux?**
-Add your user to the docker group and log in again:
-`sudo usermod -aG docker $USER`.
+**Workflow execution timeout?**  
+SDK injects `SearchAgentConfig.time_limit_seconds` (default 900s).
+
+**`docker ps` permission denied on Linux?**  
+`sudo usermod -aG docker $USER` then re-login.
+
+**Docker ignores `index` arguments?**  
+Default entrypoint is `codesearch-server`. Use `--entrypoint codesearch` —
+see [Docker Install](../2.Installation%20Guide/Docker%20Install.md).

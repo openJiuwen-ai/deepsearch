@@ -17,6 +17,8 @@
 - 大纲交互会追加 `outline_interactions`。
 - hybrid 大纲路由会写入 `outline_execution_method`，用于固定本次大纲生成、交互接受和写作团队选择。
 - 用户反馈处理会更新 `feedback_interaction_count`、`feedback_snapshot_sent` 和 `rewrite_history`。
+- `ResearchIntent.temporal_scope` 保存用户明确的时间范围；collector 仅使用它生成时间化 query 和执行 Tavily
+  `source_date` 的来源日期筛选，不把该字段传入大纲、规划或报告 Prompt。
 - DeepSearch 搜索流程使用 `State`、`Action`、`Result` 和 `SearchFinalResult` 表达搜索状态与结果。
 
 ## 关键代码路径
@@ -46,7 +48,12 @@
 - `FinalResult.workflow_llm_token_usage` 保存可选 token 统计。
 - `Report` 保存总报告文本、子报告、分类内容和溯源校验后的内容。
 - `Outline.sections[*].section_focus` 和 `focus_dimensions` 会生成章节局部合同。
-- `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL 和域名约束。
+- `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL、禁引文章标题（`exclude_titles`）、域名约束和可空 `temporal_scope`。
+- `TemporalScope` 的 `constraint_type` 为 `source_date` 或 `content_date`，并要求 `start_date` /
+  `end_date` 至少存在一个包含边界。`source_date` 可由 Tavily 原生日期参数和 Tavily 发表日期后置过滤共同执行；
+  `content_date` 只通过 collector query 表达事实或数据的时间范围，不按来源发布日期过滤。
+- `build_temporal_scope_prompt_context()` 只为 collector query 与补搜 Prompt 生成
+  `has_temporal_scope` 和 `temporal_scope_instruction`，不改变其他研究阶段的 Prompt 契约。
 - `outline_execution_method` 保存本次大纲实际执行方式，当前有效值为 `parallel` 或 `dependency_driving`；缺失或非法时按普通并行大纲处理。
 
 ## 边界与错误处理
