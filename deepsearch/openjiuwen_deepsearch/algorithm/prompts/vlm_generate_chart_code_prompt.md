@@ -104,7 +104,7 @@ Simply complete your plotting code. The execution environment will handle figure
     - Use `plt.subplots_adjust(top=0.95, bottom=0.1)` or `constrained_layout=True` to minimize margins
     - Set `ax.set_ylim()` to fit the data range tightly, avoid leaving large empty space above/below data marks
     - For bar/line charts with sparse data, consider reducing figure height (e.g., `figsize=(5, 2.5)` instead of `(5, 3.5)`)
-13. **Legend requirements**: Legend is NOT mandatory. Only add legend when necessary. If you decide to add a legend, you MUST ensure:
+13. **Legend requirements**: Legend is mandatory for multi-category charts. Only single-category or single-color charts may omit legend. If you decide to add a legend, you MUST ensure:
     - **Correctness**: Legend entries MUST match exactly what is plotted (colors, labels, categories)
     - **Necessity**: Legend is MANDATORY whenever the chart has ≥2 distinguishable categories/datasets that need identification (even if same metric). Only single-category or truly single-color charts may skip legend.
     - **Completeness**: All plotted data categories MUST appear in the legend. Build legend explicitly: set `label=` on every distinct-color series BEFORE calling legend, then `handles, labels = ax.get_legend_handles_labels(); ax.legend(handles=handles, labels=labels)`. No missing or extra entries.
@@ -119,7 +119,7 @@ Simply complete your plotting code. The execution environment will handle figure
 | Libraries | matplotlib + seaborn |
 | Title | **NO title displayed** — Do NOT call `ax.set_title()` or `fig.suptitle()` |
 | Axis labels | x/y-axis labels: minimum 10pt, recommended 10-12pt |
-| Legend | **Optional** — Only when necessary. Minimum 9pt fontsize, placed at top of chart (using `bbox_to_anchor=(0.5, 0.98)`). Must NOT overlap other elements. Must be correct, necessary, and complete. |
+| Legend | **Mandatory for multi-category charts; optional only for single-category/single-color charts**. Minimum 9pt fontsize, placed at top of chart (using `bbox_to_anchor=(0.5, 0.98)`). Must NOT overlap other elements. Must be correct, necessary, and complete. |
 | Ticks / annotations | minimum 9pt |
 | Layout | **ONLY use `constrained_layout=True`** — NEVER use `tight_layout()` simultaneously|
 | X-axis tick labels | ALWAYS use `ha='center'` for center alignment |
