@@ -150,6 +150,39 @@ class DocSelectionContext:
     verify_result: dict
 
 
+def _convert_bold_formula_to_inline_math(content: str) -> str:
+    """把 LLM 误用加粗(**..**)包裹的数学公式转为内联 ``$..$`` 格式。
+
+    根因：摘要/结论提示词只要求"关键信息加粗"，缺公式格式指导，导致 LLM 把
+    公式当作关键信息用 ``**..**`` 包裹。本函数作为后处理兜底，仅处理高置信度
+    公式特征(等式+数学符号、指数、LaTeX 命令、数学函数、根号)，避免误伤普通
+    加粗文本(百分比、关键词、数据对比)。
+    """
+    def _is_formula(text: str) -> bool:
+        if "=" in text:
+            # 等式需额外含数学符号，避免误判含 = 的普通加粗
+            return bool(re.search(
+                r"[_^\\\u00b7\u00d7\u221a]|[\u03b1-\u03c9\u0391-\u03a9]"
+                r"|\b(?:ln|log|sqrt|sin|cos|tan|exp)\b",
+                text,
+            ))
+        if "^" in text:
+            return True
+        if re.search(r"\\(?:frac|sum|int|sqrt)\b", text):
+            return True
+        if re.search(r"\b(?:ln|log|sqrt|sin|cos|tan|exp)\s*\(", text):
+            return True
+        if "\u221a" in text and re.search(r"[A-Za-z0-9]", text):
+            return True
+        return False
+
+    def _convert(match: re.Match) -> str:
+        inner = match.group(1)
+        return f"${inner}$" if _is_formula(inner) else match.group(0)
+
+    return re.sub(r"\*\*([^*]+)\*\*", _convert, content)
+
+
 class Reporter:
     def __init__(self, llm_model_name):
         # Keep consistent with other modules: workflow/template_generator registers
@@ -1381,6 +1414,7 @@ class Reporter:
 
         header = ArticlePart.get_title("abstract", language)
         content = re.sub(r"\[?citation:\d+\]?", "", content)
+        content = _convert_bold_formula_to_inline_math(content)
 
         if language == CHINESE:
             if content.startswith("摘要") and len(content) >= 2:
