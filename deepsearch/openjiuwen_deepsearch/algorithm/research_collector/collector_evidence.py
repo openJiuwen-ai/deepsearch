@@ -437,13 +437,17 @@ def build_evidence_atom(
         )
     content_ref = build_content_ref(doc_id=doc_id, source_id=source_id, stored=stored)
     key_passages = extract_key_passages(content=content, query=query, title=title)
+    date_metadata = record.get("date_metadata") or {}
+    canonical_publish_time = ""
+    if date_metadata.get("type") == "published":
+        canonical_publish_time = str(date_metadata.get("parsed_date") or "")
     base = {
         "doc_id": doc_id,
         "source_id": source_id,
         "title": title,
         "url": url,
         "source": extract_source(url),
-        "publish_time": "未提供时间信息",
+        "publish_time": canonical_publish_time or "未提供时间信息",
         "query": query,
         "key_passages": key_passages,
         "scores": {

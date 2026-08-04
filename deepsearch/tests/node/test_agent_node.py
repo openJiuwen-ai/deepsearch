@@ -1,6 +1,7 @@
 import logging
 import json
 from contextvars import Context
+from datetime import date
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -33,6 +34,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Outline,
     ResearchIntent,
     Section,
+    TemporalScope,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
@@ -332,6 +334,10 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
             tone="formal",
             include_domains=["example.com"],
             exclude_domains=["bad.com"],
+            temporal_scope=TemporalScope(
+                constraint_type="source_date",
+                end_date="2023-12-31",
+            ),
         ),
         lang="zh-CN",
     )
@@ -364,7 +370,15 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         return_value={"search_results": [{"title": "test"}], "error_msg": ""},
     ) as mock_web_search, patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints",
-    ) as mock_apply_domain_constraints:
+    ) as mock_apply_domain_constraints, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope",
+    ) as mock_apply_temporal_scope:
+        call_order = []
+        mock_web_search.side_effect = lambda payload: call_order.append("entry_search") or {
+            "search_results": [{"title": "test"}],
+            "error_msg": "",
+        }
+        mock_apply_temporal_scope.side_effect = lambda *args, **kwargs: call_order.append("temporal_scope") or True
         output = await node.invoke({}, session, Context())
 
     assert output["next_node"] == NodeId.OUTLINE.value
@@ -396,6 +410,11 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         include_domains=["example.com"],
         exclude_domains=["bad.com"],
     )
+    mock_apply_temporal_scope.assert_called_once_with(
+        search_engine_name="tavily",
+        temporal_scope=intent_result.research_intent.temporal_scope,
+    )
+    assert call_order == ["entry_search", "temporal_scope"]
 
 
 @pytest.mark.asyncio
@@ -497,7 +516,7 @@ def test_outline_pre_handle_resolves_max_section_num_from_section_count():
     assert current_inputs["max_section_num"] == OUTLINER_SECTION_NUM_MAX
 
 
-def test_outline_pre_handle_exposes_task_contract_prompt_context():
+def test_outline_pre_handle_exposes_task_contract_without_temporal_context():
     session = Mock(spec=Session)
     research_intent = {
         "section_count": 4,
@@ -506,6 +525,11 @@ def test_outline_pre_handle_exposes_task_contract_prompt_context():
         "task_type": "comparison",
         "required_dimensions": ["growth", "dividend"],
         "comparison_targets": ["AIA", "Ping An"],
+        "temporal_scope": {
+            "constraint_type": "source_date",
+            "start_date": "2018-01-01",
+            "end_date": "2020-12-31",
+        },
     }
 
     def _get_global_state(key):
@@ -538,6 +562,8 @@ def test_outline_pre_handle_exposes_task_contract_prompt_context():
     assert current_inputs["task_type"] == "comparison"
     assert current_inputs["required_dimensions_text"] == "growth, dividend"
     assert current_inputs["comparison_targets_text"] == "AIA, Ping An"
+    assert "has_temporal_scope" not in current_inputs
+    assert "temporal_scope_instruction" not in current_inputs
 
 def test_outline_pre_handle_reads_outline_execution_method_from_session():
     """OutlineNode 应从 session 读取意图识别节点写入的大纲执行模式。"""
@@ -880,6 +906,10 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
             "exclude_url": [],
             "include_domains": ["gov.cn"],
             "exclude_domains": [],
+            "temporal_scope": {
+                "constraint_type": "source_date",
+                "end_date": "2020-12-31",
+            },
         },
     }
 
@@ -887,7 +917,9 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
         "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.add_debug_log_wrapper"
     ), patch(
         "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints"
-    ) as mock_apply_domains:
+    ) as mock_apply_domains, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope"
+    ) as mock_apply_temporal:
         output = node._post_handle(
             {},
             {"user_feedback": "我要精简版", "reparsed_intent": reparsed_intent},
@@ -903,7 +935,82 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
     assert merged_payload["search_context.research_intent"]["report_type"] == "brief"
     assert "gov.cn" in merged_payload["search_context.research_intent"]["include_domains"]
     assert merged_payload["search_context.report_type_policy"]["report_type"] == "brief"
+    assert merged_payload["search_context.research_intent"]["temporal_scope"] == {
+        "constraint_type": "source_date",
+        "start_date": None,
+        "end_date": date(2020, 12, 31),
+    }
+    mock_apply_temporal.assert_called_once()
     mock_apply_domains.assert_called_once()
+
+
+def test_feedback_handler_keeps_existing_temporal_scope_when_reparse_has_no_scope():
+    """反馈重解析未得到时间范围时，应保留已有时间约束。"""
+    session = Mock()
+    session.get_global_state.return_value = {
+        "temporal_scope": {
+            "constraint_type": "source_date",
+            "end_date": "2020-12-31",
+        }
+    }
+    node = FeedbackHandlerNode()
+
+    merged = node._merge_reparsed_intent(
+        session,
+        {"research_intent": {"temporal_scope": None}},
+    )
+
+    assert merged["temporal_scope"] == {
+        "constraint_type": "source_date",
+        "start_date": None,
+        "end_date": date(2020, 12, 31),
+    }
+
+
+def test_outline_accept_reapplies_search_constraints_after_hitl_resume():
+    """大纲恢复轮次创建新 wrapper 后，接受大纲必须从 session 重灌搜索约束。"""
+    session = Mock(spec=Session)
+    session.get_global_state.side_effect = lambda key: {
+        "search_context.outline_execution_method": ExecutionMethod.PARALLEL.value,
+        "config.web_search_engine_config": Mock(search_engine_name="tavily"),
+        "search_context.research_intent": {
+            "include_domains": ["example.com"],
+            "exclude_domains": ["bad.example"],
+            "temporal_scope": {
+                "constraint_type": "source_date",
+                "start_date": "2020-01-01",
+            },
+        },
+    }.get(key)
+    node = OutlineInteractionNode()
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.add_debug_log_wrapper"
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints"
+    ) as apply_domains, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope"
+    ) as apply_temporal:
+        next_node = node._post_handle(
+            {},
+            {"interrupt_feedback": "accepted", "feedback": ""},
+            session,
+            Context(),
+        )
+
+    assert next_node == NodeId.EDITOR_TEAM.value
+    apply_domains.assert_called_once_with(
+        search_engine_name="tavily",
+        include_domains=["example.com"],
+        exclude_domains=["bad.example"],
+    )
+    apply_temporal.assert_called_once_with(
+        search_engine_name="tavily",
+        temporal_scope={
+            "constraint_type": "source_date",
+            "start_date": "2020-01-01",
+        },
+    )
 
 
 @pytest.mark.asyncio

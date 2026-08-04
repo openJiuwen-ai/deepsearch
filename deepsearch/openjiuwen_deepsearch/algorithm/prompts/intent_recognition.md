@@ -36,6 +36,14 @@ From the user's **original_query** (below), extract:
      - "不要引用 mdpi.com 上的内容" → `exclude_url=[]`, `exclude_domains=["mdpi.com"]`
      - "以下三篇不要引用: https://www.mdpi.com/a/1, https://www.mdpi.com/a/2, https://www.mdpi.com/a/3" → `exclude_url=["https://www.mdpi.com/a/1", "https://www.mdpi.com/a/2", "https://www.mdpi.com/a/3"]`, `exclude_domains=[]`
      - "不允许查看文章 'Stock Assessment of Chub Mackerel in the Northwest Pacific' 及其 urls: ['https://www.mdpi.com/2410-3888/8/2/80', 'https://www.researchgate.net/publication/367552057']" → `exclude_url=["https://www.mdpi.com/2410-3888/8/2/80", "https://www.researchgate.net/publication/367552057"]`, `exclude_titles=["Stock Assessment of Chub Mackerel in the Northwest Pacific"]`, `exclude_domains=[]`
+   - **temporal_scope**: emit only when the user explicitly limits source availability/publication time or the facts/data period.
+     - Use `source_date` when the user limits when sources were published or available, including historical "information available as of" snapshots.
+     - Use `content_date` when later retrospective sources remain acceptable but the facts, events, studies summarized, or data period are bounded.
+     - `start_date` and `end_date` are inclusive ISO dates (`YYYY-MM-DD`); omit a boundary the user did not provide.
+     - Normalize `early YEAR` / `YEAR年初` to March 31, `mid-YEAR` / `YEAR年中` to June 30, and `end of YEAR` / `YEAR年底` to December 31.
+     - Normalize `before YEAR` / `YEAR年之前` to December 31 of the previous year; normalize `through YEAR` / `截至YEAR年` to December 31 of that year.
+     - Normalize `before MONTH YEAR` / `YEAR年MONTH月之前` to the final day of the previous month. For an inclusive year range, use January 1 and December 31.
+     - Do not infer a temporal scope from incidental dates that do not constrain the requested research.
 
 Do **not** invent URLs. Extract URLs exactly as in the text when present.
 Do **not** leave task contract fields empty when the user explicitly asks for comparisons, categories, rankings, recommendations, timelines, or final judgments.

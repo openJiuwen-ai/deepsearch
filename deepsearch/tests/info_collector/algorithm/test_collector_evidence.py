@@ -262,6 +262,30 @@ def test_build_evidence_atom_logs_when_source_store_write_fails(monkeypatch, cap
     assert "failed to write source_store" in caplog.text
 
 
+def test_build_evidence_atom_preserves_canonical_publication_date():
+    """provider 已确认的 canonical 发表日期必须进入 evidence 和 evaluator 输入。"""
+    store = CollectorSourceStore()
+    record = {
+        "url": "https://example.com/a",
+        "title": "Alpha",
+        "content": "正文",
+        "type": "page",
+        "date_metadata": {
+            "field": "source_date",
+            "type": "published",
+            "value": "Sat, 01 Jun 2024 12:00:00 GMT",
+            "parsed_date": "2024-06-01",
+        },
+    }
+
+    atom, doc_info = build_evidence_atom(record=record, query="Alpha", source_store=store)
+    evaluation_docs = build_evaluation_documents([doc_info])
+
+    assert atom["publish_time"] == "2024-06-01"
+    assert doc_info["publish_time"] == "2024-06-01"
+    assert evaluation_docs[0]["publish_time"] == "2024-06-01"
+
+
 def test_build_prompt_views_never_include_original_content():
     doc_infos = [
         {

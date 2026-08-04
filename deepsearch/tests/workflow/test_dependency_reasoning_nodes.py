@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 """测试依赖驱动规划子图节点。"""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from openjiuwen.core.context_engine.base import ModelContext
@@ -170,6 +170,43 @@ class TestDependencyPlanReasoningNode:
         result = node._post_handle({}, algorithm_output, mock_session, mock_context)
 
         assert result["next_node"] == NodeId.INFO_COLLECTOR.value
+
+    def test_dependency_planner_pre_handle_omits_temporal_scope(self, mock_context):
+        """依赖驱动 planner 不消费结构化时间范围。"""
+        session = Mock(spec=Session)
+        session.get_global_state.side_effect = lambda key: {
+            "section_context.section_idx": "1",
+            "section_context.language": "zh-CN",
+            "section_context.messages": [],
+            "section_context.plan_executed_num": 0,
+            "config.planner_max_step_num": 5,
+            "config.planner_max_retry_num": 2,
+            "config.workflow_max_plan_executed_num": 3,
+            "section_context.collected_doc_num": 0,
+            "section_context.warning_infos": [],
+            "section_context.exception_infos": [],
+            "config.api_tools_config": {},
+            "section_context.report_type_policy": {},
+            "section_context.research_intent": {
+                "temporal_scope": {
+                    "constraint_type": "content_date",
+                    "end_date": "2019-06-30",
+                }
+            },
+            "section_context.section_local_contract": {},
+            "section_context.plan_background_knowledge": {},
+        }.get(key)
+        node = DependencyPlanReasoningNode()
+
+        with patch(
+            "openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph."
+            "editor_team_nodes.adapt_llm_model_name",
+            return_value="basic",
+        ):
+            current_inputs = node._pre_handle({}, session, mock_context)
+
+        assert "has_temporal_scope" not in current_inputs
+        assert "temporal_scope_instruction" not in current_inputs
 
     def test_dependency_plan_reasoning_success_completed(self, mock_session, mock_context):
         """测试规划成功且信息充足时路由到 END。"""

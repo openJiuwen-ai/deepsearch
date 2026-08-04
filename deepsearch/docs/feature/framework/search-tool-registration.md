@@ -18,9 +18,10 @@ contextvar，避免节点直接持有全局工具对象。
 - 支持内置 local 引擎：openapi、native。
 - 支持通过 `custom_*_search_file` 和 `custom_*_search_func` 注册自定义搜索工具。
 - Tavily 支持把意图识别出的 include/exclude domains 追加到已有配置。
-- web 搜索调用受 `web_search_max_qps` 限流。
+- DeepResearch 的入口预搜索完成后，Tavily 可按 `source_date` 接收绝对起止日期；`content_date` 不发送原生日期参数。
+- web 搜索的每个 provider HTTP 请求受 `web_search_max_qps` 限流。
 - DeepSearch `search` / `react` 模式会先把活动 web search wrapper 注册到同一个 `web_search_context`，再执行 `web_search` adapter。
-- runtime API 配置会动态生成工具 schema，并可把搜索型响应转换为 collector 可消费 payload。
+- runtime API 配置会动态生成工具 schema，并可把搜索型响应转换为 collector 可消费 payload；其结果不参与来源日期过滤。
 
 ## 关键代码路径
 
@@ -48,7 +49,16 @@ contextvar，避免节点直接持有全局工具对象。
 ## 数据契约与依赖
 
 - web/local openJiuwen 工具输入均包含 `query` 和 `search_engine_name`。
+- 统一 web ToolCard 和调用签名不增加时间字段。时间范围写入当前会话的 Tavily wrapper，不使用相对当前时间的
+  `time_range`。
+- Tavily 的绝对日期参数按发表日期或最后更新时间过滤；结果随后仍由 collector 按统一发表日期过滤。
+- 开始和结束日期分别向前、向后移动一天，以适配 Tavily 严格 `after`/`before` 与内部包含边界；`date.min`、`date.max`
+  等无实际收窄作用的极值不下推。
+- 不同 workflow 运行使用独立 `web_search_context` 实例，时间状态不跨会话共享。HITL 恢复会创建新 wrapper，
+  因此接受大纲或达到交互轮次上限后会从 session 重新应用域名和时间约束。
 - web/local 工具输出包含 `search_engine` 和 `search_results`；异常时还包含 `error`。
+- Tavily `news` 结果中的 RFC 2822 或 ISO `published_date` 在 wrapper 边界归一化为 UTC ISO 日期；官方并不保证
+  `general` 主题返回该字段，缺失日期仍按未知来源处理。
 - DeepSearch 的 `algorithm/search_tools/web_search_tool.py` 不再自行选定 provider，而是从 `web_search_context` 解析当前活动实例并复用其 `search_results`。
 - native local search 必须配置 `knowledge_base_configs`。
 - runtime API 参数按 `send_method` 写入 header、query 或 JSON body；`none` 参数进入 body 但不参与 required 发送校验。
@@ -75,6 +85,7 @@ contextvar，避免节点直接持有全局工具对象。
 - runtime API URL 会经过 `validate_runtime_request_url`，避免不安全请求目标。
 - runtime API 响应大小限制为 2 MiB，JSON 深度限制为 20，单个对象或数组最多 1000 项。
 - 重名 runtime API 工具合并时保留已有工具并记录 warning。
+- 非 Tavily web 引擎不接收原生绝对日期参数，也不参与来源日期过滤。
 
 ## 测试与验证
 

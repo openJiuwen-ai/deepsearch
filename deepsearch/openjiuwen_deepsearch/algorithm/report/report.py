@@ -3136,6 +3136,75 @@ class Reporter:
 
         return {"unit": normalized_unit, "records": normalized_records}
 
+    @staticmethod
+    def _parse_visualization_number(value: str) -> int | float | None:
+        normalized_value = value.strip().replace(",", "").replace("，", "")
+        try:
+            numeric_value = Decimal(normalized_value)
+        except (InvalidOperation, ValueError):
+            return None
+        if not numeric_value.is_finite():
+            return None
+        if numeric_value == numeric_value.to_integral_value():
+            return int(numeric_value)
+        return float(numeric_value)
+
+    @staticmethod
+    def _scale_visualization_value(value: int | float, divisor: int) -> int | float:
+        scaled = Decimal(str(value)) / Decimal(divisor)
+        if scaled == scaled.to_integral_value():
+            return int(scaled)
+        return float(scaled)
+
+    @classmethod
+    def _normalize_same_unit_records_locally(
+        cls,
+        records: list,
+        image_type: str,
+    ) -> dict | None:
+        if image_type not in ("bar", "line", "pie"):
+            return None
+
+        normalized_records = []
+        normalized_unit = None
+        for row in records:
+            if not isinstance(row, list) or len(row) != 3:
+                return None
+            x_value, numeric_text, unit_text = row
+            if not (
+                isinstance(x_value, str)
+                and isinstance(numeric_text, str)
+                and isinstance(unit_text, str)
+            ):
+                return None
+            x_value = x_value.strip()
+            unit_text = unit_text.strip()
+            if not x_value or not unit_text:
+                return None
+            if normalized_unit is None:
+                normalized_unit = unit_text
+            if unit_text != normalized_unit:
+                return None
+
+            parsed_value = cls._parse_visualization_number(numeric_text)
+            if parsed_value is None:
+                return None
+            normalized_records.append([x_value, parsed_value])
+
+        if normalized_unit is None:
+            return None
+
+        if normalized_unit.startswith("万"):
+            max_abs_value = max(abs(float(row[1])) for row in normalized_records)
+            if max_abs_value >= 10000:
+                normalized_unit = "亿" + normalized_unit[1:]
+                normalized_records = [
+                    [row[0], cls._scale_visualization_value(row[1], 10000)]
+                    for row in normalized_records
+                ]
+
+        return {"unit": normalized_unit, "records": normalized_records}
+
     async def _normalize_visualization_content(
         self,
         visualization_content: dict,
