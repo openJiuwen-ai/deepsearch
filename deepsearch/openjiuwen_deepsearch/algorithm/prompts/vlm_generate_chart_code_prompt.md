@@ -94,7 +94,7 @@ Simply complete your plotting code. The execution environment will handle figure
 4. **NO title displayed**: Do NOT call `ax.set_title()` or `fig.suptitle()`. The chart must have no visible title.
 5. **Hide top spine**: Remove the top border/spine of the chart: `ax.spines['top'].set_visible(False)`
 6. **Horizontal grid lines**: Add dashed horizontal reference lines: `ax.grid(axis='y', linestyle='--', alpha=0.3)` or `ax.yaxis.grid(True, linestyle=':')`
-7. **Color = semantic category**: Color encodes metric type, NOT individual data points. Same metric = same color. Use multiple colors ONLY for genuinely different categories or when chart type requires it (pie, grouped bar, multi-line).
+7. **Color = semantic category**: Color encodes metric type, NOT individual data points. Same metric = same color. BUT when a bar chart compares DIFFERENT categories/groups (different datasets, entities, scenarios), each bar MUST get a distinct color via `color=[c1, c2, ...]`. CRITICAL: `ax.bar(x, y)` uses ONE color for ALL bars by default (the palette's first color); `sns.set_palette` does NOT auto-cycle colors across bars in a single `ax.bar()` call. To assign per-bar colors, pass `color=[c1, c2, ...]` explicitly, and add `label=` to each bar so the legend captures them.
 8. **All text black** (`#000000`): labels, ticks, legend, annotations.
 9. **Alpha 0.8**: ALL filled elements MUST use `alpha=0.8`.
 10. **No fabricated data**: Use ONLY data from `chart_data`.
@@ -106,9 +106,10 @@ Simply complete your plotting code. The execution environment will handle figure
     - For bar/line charts with sparse data, consider reducing figure height (e.g., `figsize=(5, 2.5)` instead of `(5, 3.5)`)
 13. **Legend requirements**: Legend is NOT mandatory. Only add legend when necessary. If you decide to add a legend, you MUST ensure:
     - **Correctness**: Legend entries MUST match exactly what is plotted (colors, labels, categories)
-    - **Necessity**: Only add legend when the chart has multiple distinguishable categories that need identification. Single-color or single-category charts do NOT need legend.
-    - **Completeness**: All plotted data categories MUST appear in the legend. No missing or extra entries.
-    - **Placement**: Place legend at the TOP of the chart using `ax.legend(loc='upper center', ncol=..., bbox_to_anchor=(0.5, 0.98), framealpha=0.8, fontsize=6)`. Legend must NOT overlap or obscure any chart content (data marks, axis labels, or other text). Legend is 80% semi-transparent (`framealpha=0.8`).
+    - **Necessity**: Legend is MANDATORY whenever the chart has ≥2 distinguishable categories/datasets that need identification (even if same metric). Only single-category or truly single-color charts may skip legend.
+    - **Completeness**: All plotted data categories MUST appear in the legend. Build legend explicitly: set `label=` on every distinct-color series BEFORE calling legend, then `handles, labels = ax.get_legend_handles_labels(); ax.legend(handles=handles, labels=labels)`. No missing or extra entries.
+    - **Placement**: Place legend at the TOP of the chart using `ax.legend(loc='upper center', ncol=..., bbox_to_anchor=(0.5, 0.98), framealpha=0.8, fontsize=9)`. Legend must NOT overlap or obscure any chart content (data marks, axis labels, or other text). Legend is 80% semi-transparent (`framealpha=0.8`).
+14. **Categorical x-axis for discrete comparisons**: When a bar chart compares discrete points (years, entities, scenarios), the x-axis MUST be categorical — use string labels `ax.bar(['2018','2025'], [v1,v2])` or positional index `ax.bar(range(n), vals); ax.set_xticks(range(n)); ax.set_xticklabels(labels)`. NEVER pass raw numeric values (e.g. years) as x — matplotlib treats them as a continuous scale and fills non-existent intermediate ticks (2019-2024), creating huge blank gaps between bars.
 
 ## Charting Standards (Mode B Only)
 
@@ -117,9 +118,9 @@ Simply complete your plotting code. The execution environment will handle figure
 | Canvas | 5×3.5 in, DPI 200. Increase size for dense content |
 | Libraries | matplotlib + seaborn |
 | Title | **NO title displayed** — Do NOT call `ax.set_title()` or `fig.suptitle()` |
-| Axis labels | Maximum 8pt for x-axis and y-axis labels |
-| Legend | **Optional** — Only when necessary. Fixed 6pt fontsize, placed at top of chart (using `bbox_to_anchor=(0.5, 0.98)`). Must NOT overlap other elements. Must be correct, necessary, and complete. |
-| Ticks / annotations | Maximum 8pt |
+| Axis labels | x/y-axis labels: minimum 10pt, recommended 10-12pt |
+| Legend | **Optional** — Only when necessary. Minimum 9pt fontsize, placed at top of chart (using `bbox_to_anchor=(0.5, 0.98)`). Must NOT overlap other elements. Must be correct, necessary, and complete. |
+| Ticks / annotations | minimum 9pt |
 | Layout | **ONLY use `constrained_layout=True`** — NEVER use `tight_layout()` simultaneously|
 | X-axis tick labels | ALWAYS use `ha='center'` for center alignment |
 | Save | `bbox_inches='tight'` |
@@ -135,11 +136,11 @@ Execute in order after plotting, before saving:
    - Multiple categories/colors that need identification → Legend is necessary, continue to next steps
 4. **Legend correctness check**: If legend exists, verify legend entries exactly match plotted elements (same colors, same labels, no fabrication).
 5. **Legend completeness check**: If legend exists, verify all plotted data categories appear in legend. No missing categories, no extra entries.
-6. **Place legend at top**: If legend is needed, place it at the TOP of the chart: `ax.legend(loc='upper center', ncol=..., bbox_to_anchor=(0.5, 0.98), framealpha=0.8, fontsize=6)`. Ensure legend does NOT overlap any chart content.
+6. **Place legend at top**: If legend is needed, place it at the TOP of the chart: `ax.legend(loc='upper center', ncol=..., bbox_to_anchor=(0.5, 0.98), framealpha=0.8, fontsize=9)`. Ensure legend does NOT overlap any chart content.
 7. **Expand space**: Increase figure size and margins if content is dense.
 8. **Simplify labels**: Wrap or shorten long labels. Keep primary identifiers on axes; move secondary metadata to on-mark annotations.
 9. **Rotate ticks if needed**: 30-45° with `ha='center'`.
-10. **Reduce font as last resort**: At most 1-2pt reduction, NEVER below 10pt.
+10. **Reduce font as last resort**: At most 1-2pt reduction, NEVER below the minimums (axis labels ≥10pt, legend ≥9pt, ticks ≥9pt).
 11. **Text collision check (MANDATORY)**: Call `fig.canvas.draw()` → collect ALL text bounding boxes via `t.get_window_extent(renderer=fig.canvas.get_renderer())` → pairwise check overlaps using `bbox1.overlaps(bbox2)` (NOT `intersects` — that method does not exist) → if ANY overlap exists, fix and re-check.
 
 ---
