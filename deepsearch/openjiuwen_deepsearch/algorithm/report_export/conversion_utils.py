@@ -1058,6 +1058,14 @@ def _set_run_font(run, font_name: str) -> None:
     Returns:
         None.
     """
+    # ponytail: 跳过含 OMML 公式的 run。``_insert_omml`` 把 ``<m:oMath>``
+    # 嵌入 ``<w:r>`` 内，``<m:r>`` 会继承父 ``<w:r>`` 的 ``w:rFonts``。
+    # 段落字体（Microsoft YaHei）在 nary operator 的 sub/sup 上下文缺
+    # 数学 italic 字形，会让 ``i``、``a``、``C`` 等字符在 Word 中渲染
+    # 为 .notdef 平行四边形或错位 glyph。OMML 应使用 ``<m:mathPr>`` 默认
+    # Cambria Math，故此处直接跳过。
+    if run._r.find(qn("m:oMath")) is not None:  # pylint: disable=protected-access
+        return
     run.font.name = font_name
     _set_rfonts(run.element.get_or_add_rPr(), font_name)
 
