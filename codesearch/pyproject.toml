@@ -28,7 +28,7 @@ embed = ["aiohttp>=3.9"]
 llm = ["openjiuwen==0.1.10.post3"]
 bench = ["pandas>=2.0", "pyarrow>=14"]
 dev = ["pytest>=8"]
-# 服务形态（源码/镜像部署，不进 wheel：packages.find 只收 openjiuwen_codesearch*）
+# 服务形态依赖（随包分发 openjiuwen_codesearch/server/；装 [server] 后可用 codesearch-server）
 server = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic-settings>=2.5"]
 
 [project.scripts]
