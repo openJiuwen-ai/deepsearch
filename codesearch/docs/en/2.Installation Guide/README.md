@@ -1,163 +1,128 @@
 # Installation Guide
 
+> Choose a method in the [Quick Guide](./Quick%20Guide.md) first.
+
 ## Deployment options
 
-| Option | Use case |
-|---|---|
-| Local source | Development and debugging |
-| Wheel package | Production installation |
-| Docker image | Containerized delivery (starts in service mode by default) |
-| HTTP service | Expose retrieval over HTTP |
+| Option | Use case | Doc |
+|---|---|---|
+| [Source](./Source%20Install.md) | Development | Editable `base` + `codesearch` |
+| [Docker](./Docker%20Install.md) | Isolated delivery | Build from Dockerfile (includes base) |
+| [Wheel](./Wheel%20Install.md) | Production | Download **both** official wheels |
+| HTTP service | All of the above | `codesearch-server` — see below |
+
+## Repository layout
+
+```text
+<repo_root>/
+├── base/           # openjiuwen-search-base
+└── codesearch/     # openjiuwen-codesearch
+```
+
+- **Source**: `pip/uv install -e ../base -e '.[...]'` from `codesearch/`.
+- **Docker**: build context is `<repo_root>`; Dockerfile installs both packages.
+- **Wheel**: release ships `openjiuwen_search_base-*.whl` and
+  `openjiuwen_codesearch-*.whl`.
+
+## Target repository (local path)
+
+Indexing reads a **local directory** visible to the process — not a git URL.
+
+| Step | Parameter | Meaning |
+|---|---|---|
+| Prepare | (`git clone`) | Clone remotes onto the host (or mount into the container) |
+| Index | `--repo` / `repo_path` | Local path to the repository root |
+| Index | `--collection` / `collection` | Milvus collection **name you choose** (e.g. `agent_core`) |
+| Search | `--collection` / `collection` | Collection name only — **no repo path** |
+
+```sh
+git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
+codesearch index --repo /data/repos/agent-core --collection agent_core
+codesearch search --collection agent_core --query "..."
+```
+
+The product does **not** fetch remote repositories for you. Names like
+`agent_core` in examples are **collection labels**, not repository URLs.
 
 ## Requirements
 
 | Item | Requirement | Notes |
 |---|---|---|
 | Python | >= 3.11 | |
-| Milvus | >= 2.5 (2.6.x recommended) | Required for both indexing and retrieval; full-text search needs the BM25 Function introduced in 2.5 |
-| LLM API key | `OPENROUTER_API_KEY`, or any OpenAI-compatible endpoint | Retrieval only; the default sparse indexing mode needs **no** key |
+| Milvus | >= 2.5 (2.6.x recommended) | Indexing and retrieval; BM25 Function needs 2.5+ |
+| LLM API key | `OPENROUTER_API_KEY` or OpenAI-compatible | Retrieval only; sparse indexing needs **no** key |
 
-## Option 1: local source
+> **Language scope**: the syntax chunker supports **Python (`.py`) only**.
+> Indexing other languages yields 0 files — expected.
 
-This package depends on `openjiuwen-search-base` from the same repository.
-
-```sh
-uv venv .venv && uv pip install -e ../base -e '.[dev,milvus,llm]'
-```
-
-```sh
-python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
-```
-
-Optional dependency groups:
+## Optional dependency groups
 
 | Group | Contents | When needed |
 |---|---|---|
-| `milvus` | pymilvus | Indexing and retrieving real repositories |
-| `server` | fastapi, uvicorn, pydantic-settings | Running as an HTTP service |
-| `llm` | openjiuwen | Workflow-graph engine and real model calls |
+| `milvus` | pymilvus | Real repositories |
+| `server` | fastapi, uvicorn, pydantic-settings | HTTP service |
+| `llm` | openjiuwen | Workflow engine and model calls |
 | `embed` | aiohttp | Dense-vector mode |
-| `bench` | pandas, pyarrow | Running benchmarks |
-| `dev` | pytest | Development and testing |
+| `bench` | pandas, pyarrow | Benchmarks |
+| `dev` | pytest | Development |
 
-The core package only requires pydantic; unit tests and the in-memory retriever
-run without any group installed.
+The server ships inside the package (`openjiuwen_codesearch/server/`); after
+installing `[server]`, start with `codesearch-server`.
 
-> If another openJiuwen-based product on the same machine pins a different
-> framework version, install them into separate virtual environments or
-> containers — a Python environment can hold only one version of a distribution.
-> Vector-store coexistence is unaffected (see below).
-
-## Option 2: wheel
+## HTTP service
 
 ```sh
-python -m build && pip install dist/openjiuwen_codesearch-*.whl
+codesearch-server
 ```
 
-The wheel ships the library, the `codesearch` CLI and the HTTP service. After
-installing it, start the service with `codesearch-server` — no source tree
-required.
-
-> Installing the `llm` extra with `uv pip install` outside the source tree fails
-> with a pre-release error, because openJiuwen pins `a2a-sdk==1.0.0a0`. Add
-> `--prerelease=allow`, or use `pip`, which accepts pre-releases that a
-> specifier pins exactly. Installing from source is unaffected: `[tool.uv]` in
-> `pyproject.toml` already allows it.
-
-## Option 3: Docker
-
-The build context must be the repository root so that the base package is
-included:
-
-```sh
-docker build -f codesearch/docker/Dockerfile -t openjiuwen-codesearch:0.2.0 .
-```
-
-```sh
-docker run --rm -e OPENROUTER_API_KEY -e MILVUS_HOST=host.docker.internal \
-  -v /path/to/repo:/repo -v $(pwd)/output:/app/output \
-  openjiuwen-codesearch:0.2.0 index --repo /repo --collection demo
-```
-
-## Option 4: HTTP service
-
-```sh
-pip install -e '.[milvus,llm,server]'
-codesearch-server          # or: python start_backend.py, from a source checkout
-```
-
-Listens on `0.0.0.0:8100` by default; API docs at `/docs`, health at `/api/health`.
+Default `0.0.0.0:8100`; docs at `/docs`, health at `/api/health`.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/health` | GET | Health check |
-| `/api/v1/search` | POST | Synchronous search returning files and line ranges |
-| `/api/v1/index` | POST | Submit an indexing job (long running), returns `job_id`. **Requires `CODESEARCH_INDEX_ROOTS`; returns 403 otherwise** |
-| `/api/v1/jobs/{job_id}` | GET | Query indexing job status |
+| `/api/health` | GET | Health |
+| `/api/v1/search` | POST | Synchronous search |
+| `/api/v1/index` | POST | Indexing job; **403 if `CODESEARCH_INDEX_ROOTS` unset** |
+| `/api/v1/jobs/{job_id}` | GET | Job status |
 
-Server settings come from `CODESEARCH_`-prefixed environment variables. The
-server ships inside the package (`openjiuwen_codesearch/server/`), so source,
-wheel and image deployments can all run it.
+### Security boundary
+
+> The service has **no authentication**. `/api/v1/index` reads local directories
+> and `/api/v1/search` returns file contents. Therefore:
+>
+> 1. Set `CODESEARCH_INDEX_ROOTS` (path whitelist, `:`-separated);
+> 2. **Unset → indexing returns 403** — a safety default, not a broken install;
+> 3. Startup logs a **WARNING** when the whitelist is empty;
+> 4. Deploy on a trusted network or behind an access-controlled gateway.
 
 ## Environment variables
 
-All variables are read when `CodeSearchConfig.from_env()` is called. A template
-is provided in `.env.example`.
+See `.env.example`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENROUTER_API_KEY` | empty | LLM API key (required for retrieval) |
+| `OPENROUTER_API_KEY` | empty | LLM key (retrieval) |
 | `MILVUS_HOST` | `localhost` | Vector store host |
 | `MILVUS_PORT` | `19530` | Vector store port |
-| `MILVUS_TOKEN` | empty | Vector store credentials (`user:password` or API token) |
-| `CODESEARCH_HOST` | `0.0.0.0` | Service bind address (service mode only) |
-| `CODESEARCH_PORT` | `8100` | Service port (service mode only) |
-| `CODESEARCH_LOG_LEVEL` | `INFO` | Service log level (service mode only) |
-| `CODESEARCH_INDEX_ROOTS` | empty | **Whitelist of directories that may be indexed** (`:`-separated). Empty means `/api/v1/index` returns 403 |
+| `MILVUS_TOKEN` | empty | Credentials |
+| `CODESEARCH_HOST` | `0.0.0.0` | Bind address |
+| `CODESEARCH_PORT` | `8100` | Port |
+| `CODESEARCH_LOG_LEVEL` | `INFO` | Log level |
+| `CODESEARCH_INDEX_ROOTS` | empty | Index whitelist; empty → index API 403 |
 
-> **Security boundary of the service**: the service ships without
-> authentication, `/api/v1/index` reads directories on the server host and
-> `/api/v1/search` returns file contents. Always restrict the indexable scope
-> with `CODESEARCH_INDEX_ROOTS` (indexing is refused when it is unset), and run
-> the service on a trusted network or behind an access-controlled gateway.
+## Milvus
 
-Alternatively, construct `CodeSearchConfig` directly and skip environment
-variables entirely.
-
-## Milvus deployment
-
-### Sharing one instance with other products (default)
-
-CodeSearch names its collections `cs_{name}__{schema_version}` and uses a
-dedicated connection alias, touching only its own namespace. An existing Milvus
-instance can therefore be reused as is:
+Collections are named `cs_{name}__{schema_version}`:
 
 ```sh
-curl -sf http://localhost:9091/healthz && echo " instance is reusable"
+curl -sf http://localhost:9091/healthz && echo " reusable"
 ```
 
-> The `cs_` prefix is reserved for CodeSearch — do not name other collections
-> `cs_*__v*`. For stronger isolation, use `MilvusConfig.database_name`
-> (Milvus 2.2+ databases).
+Dedicated instance: use the upstream `standalone_embed.sh` script; pin the
+image tag (e.g. `milvusdb/milvus:v2.6.18`).
 
-### Running a dedicated instance
-
-```sh
-curl -sfL https://raw.githubusercontent.com/milvus-io/milvus/master/scripts/standalone_embed.sh -o standalone_embed.sh
-bash standalone_embed.sh start
-```
-
-> Pin the image tag in the script to a stable release (for example
-> `milvusdb/milvus:v2.6.18`). Use `--milvus-port` or `MILVUS_PORT` for
-> non-default ports.
-
-Operational note: Milvus community edition has no per-collection resource quota,
-so bulk re-indexing affects query latency of other collections on the same
-instance. Schedule bulk jobs off-peak or use a dedicated instance for them.
-
-## Verifying the installation
+## Verify
 
 ```sh
-pytest tests/unit -W ignore      # no external services required
-pytest -m e2e -W ignore          # requires a reachable Milvus instance
+pytest tests/unit -W ignore
+pytest -m e2e -W ignore
 ```

@@ -30,7 +30,7 @@ and automated repair pipelines.
 
 - **Code-aware hybrid indexing**
     + Syntax-aware chunking along function and class boundaries, so every
-      chunk is a complete semantic unit.
+      chunk is a complete semantic unit (**Python only for now**).
     + Dual sparse retrieval: token BM25 for semantic keywords, character
       trigram BM25 for exact substrings such as `data.sum()` or stack traces;
       optional dense-vector hybrid search.
@@ -72,24 +72,39 @@ See the [developer guide](docs/en/4.Developer%20Guide/README.md).
 
 # 📦 Installation
 
-Four deployment options are supported: local source, wheel package, Docker image, and HTTP service.
+Three deployment options: **local source**, **Docker image** (build yourself),
+and **official wheels** (download `openjiuwen-search-base` +
+`openjiuwen-codesearch` from the release URL).
 
-```sh
-python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
-```
-
-Run it as an HTTP service:
-
-```sh
-pip install -e '.[milvus,llm,server]' && codesearch-server
-```
-
-Listens on `0.0.0.0:8100` and exposes health, search and indexing-job endpoints.
-The service has no built-in authentication and the indexing endpoint reads
-directories on the server host, so it only accepts paths under
-`CODESEARCH_INDEX_ROOTS` (indexing is refused until that is set).
-Full steps, dependency groups, Milvus deployment and environment variables:
+Start with the [Quick Guide](docs/en/2.Installation%20Guide/Quick%20Guide.md);
+shared env / Milvus / **local repo path** / security notes:
 [Installation Guide](docs/en/2.Installation%20Guide/README.md).
+
+Source install example (install sibling `base` together):
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm,server]'
+```
+
+Indexing needs a **local directory** (clone remotes first); search uses the
+collection name you chose at index time:
+
+```sh
+git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
+codesearch index --repo /data/repos/agent-core --collection agent_core
+codesearch search --collection agent_core --query "..."
+```
+
+Run as an HTTP service:
+
+```sh
+codesearch-server
+```
+
+Listens on `0.0.0.0:8100`. The service has **no built-in authentication**;
+`/api/v1/index` only accepts paths under `CODESEARCH_INDEX_ROOTS` (returns 403
+when unset — expected). Indexing currently supports **Python (`.py`) only**.
+Full steps: [Installation Guide](docs/en/2.Installation%20Guide/README.md).
 
 # 🚀 Quick start
 

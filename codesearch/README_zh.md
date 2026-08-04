@@ -26,7 +26,8 @@
       在保证质量的同时控制成本。
 
 - **面向代码的混合索引**
-    + 语法感知切块：按函数与类边界切分，每个片段都是完整语义单元。
+    + 语法感知切块：按函数与类边界切分，每个片段都是完整语义单元
+      （**当前仅支持 Python**）。
     + 双路稀疏检索：标准词元检索用于语义关键词，字符三元组检索用于
       `data.sum()`、堆栈跟踪等含符号的精确子串；可选稠密向量混合检索。
     + 增量索引：按文件内容哈希去重，同一仓库的多个版本共享未变更文件的索引。
@@ -62,23 +63,36 @@ search 场景公共能力沉淀于 `openjiuwen-search-base`。详见
 
 # 📦 安装指导
 
-支持四种部署方式：本地源码、whl 包、Docker 镜像、HTTP 服务。
+支持三种部署方式：**源码**、**Docker 镜像**（自行构建）、**正式 whl**
+（发布地址下载 `openjiuwen-search-base` + `openjiuwen-codesearch`）。
+
+请先阅读 [快速指引](docs/zh/2.安装指导/快速指引.md) 选择方式；公共环境变量、
+Milvus、待索引仓库说明与安全边界见
+[安装指导总览](docs/zh/2.安装指导/README.md)。
+
+源码快速安装示例（须同时安装同仓 `base`）：
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
+python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm,server]'
+```
+
+索引需要**本地仓库目录**（远程仓请先 clone）；检索使用索引时起的集合名：
+
+```sh
+git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
+codesearch index --repo /data/repos/agent-core --collection agent_core
+codesearch search --collection agent_core --query "..."
 ```
 
 以 HTTP 服务方式运行：
 
 ```sh
-pip install -e '.[milvus,llm,server]' && codesearch-server
+codesearch-server
 ```
 
-默认监听 `0.0.0.0:8100`，提供健康检查、检索与索引作业接口。
-服务不含鉴权，且索引接口读取的是服务端本地目录，因此只接受
-`CODESEARCH_INDEX_ROOTS` 白名单内的路径（未配置时索引接口直接拒绝）。完整步骤、
-依赖分组、Milvus 部署与环境变量说明见
-[安装指导](docs/zh/2.安装指导/README.md)。
+默认监听 `0.0.0.0:8100`。服务**不含鉴权**，索引接口只接受
+`CODESEARCH_INDEX_ROOTS` 白名单内的路径（未配置时返回 403，属预期行为）。
+当前索引**仅支持 Python（`.py`）**。
 
 # 🚀 快速上手
 

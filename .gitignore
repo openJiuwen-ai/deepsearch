@@ -4,3 +4,6 @@ __pycache__/
 *.egg-info/
 uv.lock
 logs/
+
+# 本地联调产物（Milvus 数据卷、克隆的目标仓、检索日志等），勿入库
+testdata/
