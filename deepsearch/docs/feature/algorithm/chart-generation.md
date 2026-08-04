@@ -18,6 +18,7 @@
 - 如果配置了 VLM 迭代，图表会经过多模态反馈优化；没有可用 VLM 时可降级跳过迭代。
 - 报告中插入 `(#insertChart:<chart_id>)` 占位符和图表说明。
 - 图表相关来源会插入 source trace data，并追加到图表说明后。
+- VLM 节点后处理会清理报告正文中残留的 Mermaid 源码块，避免未受控代码块进入后续溯源和导出流程。
 
 ## 关键代码路径
 
@@ -41,6 +42,8 @@
 主要测试：
 
 - `tests/algorithm/chart_generation/test_chart_generator_semaphore.py`
+- `tests/algorithm/chart_generation/test_utils.py`
+- `tests/node/test_agent_node.py`
 - `tests/source_tracer/test_chart_citation.py`
 
 ## 核心流程
@@ -53,6 +56,7 @@
 6. 图表生成使用全局和单章节双层并发限制，避免任务扇出耗尽资源。
 7. `InsertChartNode` 把占位符、图表说明和来源引用插入报告。
 8. 输出 `chart_messages`、修改后的报告和新的 source trace data。
+9. `VLMChartGeneratorNode` 后处理会在进入 source trace 前移除正文中残留的 Mermaid 源码块；若 VLM 生成失败，也会清理原报告中已有的 Mermaid 源码块。
 
 ## 数据契约与依赖
 
@@ -81,6 +85,7 @@
 - 沙箱限制内置函数、导入模块、文件访问和执行超时。
 - 插入引用前会转义 HTML 文本、Markdown 链接文本，并校验 URL scheme。
 - 锚点找不到时保留原报告并记录 warning。
+- Mermaid 源码块不是 VLM 图表输出契约；VLM 输出应通过 `#insertChart` 占位符和 `chart_messages` 传递真实图片。
 
 ## 测试与验证
 
