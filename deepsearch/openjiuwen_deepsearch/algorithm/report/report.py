@@ -849,7 +849,13 @@ class Reporter:
         is_dict = isinstance(outline, dict)
         obj = Outline.model_validate(outline) if is_dict else outline
 
-        data = obj.model_dump(exclude={"sections": {"__all__": {"plans", "doc_selection_debug"}}})
+        data = obj.model_dump(
+            exclude={
+                "sections": {
+                    "__all__": {"plans", "doc_selection_debug", "visualization_requirements"}
+                }
+            }
+        )
 
         return data if is_dict else Outline.model_validate(data)
 
@@ -3696,6 +3702,9 @@ class Reporter:
                     language=current_inputs.get("language"),
                     visualization_enable=current_inputs.get(
                         "visualization_enable", True
+                    ),
+                    vlm_chart_generator_enable=bool(
+                        current_inputs.get("vlm_chart_generator_enable", False)
                     ),
                     section_iscore=current_inputs.get("section_iscore", False),
                     report_type=report_type,

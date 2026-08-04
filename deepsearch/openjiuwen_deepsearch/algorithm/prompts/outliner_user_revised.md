@@ -54,6 +54,17 @@ Users may modify the outline by:
 
 The **user-edited outline represents the intended structure** and should be treated as the primary reference.
 
+## Visualization Contract
+Keep research scope in `description` and non-visual output constraints in `format_requirements`. Preserve any
+user-requested chart, diagram, process, or relationship view in `visualization_requirements`, including its subject,
+stages, entities, and relationships; use `[]` when none is requested. This field is planning metadata and must not be
+converted into Mermaid code, chart captions, or chart-dependent prose.
+
+{% if vlm_chart_generator_enable %}
+In VLM mode, the chart pipeline owns chart selection, image generation, captions, and insertion. Keep the chapter
+self-contained and do not add Mermaid/chart code or forward references such as “下图”“见图”“如下图”.
+{% endif %}
+
 ---
 
 # Core Editing Principles

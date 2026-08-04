@@ -104,6 +104,9 @@ format_requirements: {{ current_section_format_requirements }}
 - If a table is used, write one intro sentence above it and exactly one concise plain-text caption below it; keep the caption to the table's subject/scope only. Do not manually number the table or add extra table notes/blockquotes such as "表格说明", "表说明", "Table note", or "Note".
 - Do NOT output Mermaid code fences, chart code, or hand-written chart blocks in this brief chapter body.
 - If the user asks for charts, diagrams, or Mermaid content, satisfy the request with source-backed prose/tables only here; any controlled chart rendering or insertion is handled by the report visualization/chart pipeline after this draft.
+{% if vlm_chart_generator_enable %}
+- In VLM chart mode, keep the brief chapter self-contained without a chart. Do not add chart captions or forward references such as “下图”“见图”“如下图” (or their equivalents in the output language); the VLM pipeline owns image selection, captions, and insertion after this draft.
+{% endif %}
 - Avoid long historical background, repeated context, and generic transition language.
 
 ## 4) Content Prioritization

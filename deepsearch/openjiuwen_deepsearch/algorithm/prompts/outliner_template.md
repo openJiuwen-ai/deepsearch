@@ -28,7 +28,9 @@ understand the context and generate a more accurate outline:
 Each section object MUST include these contract fields:
 - `format_requirements`: section-specific output constraints from the template or user request, such as required tables,
   exact columns, row objects, item-by-item enumeration, length/style rules, and source-use restrictions. Use `[]` when
-  there are no section-specific format requirements.
+  there are no section-specific format requirements. Do not use this field for chart or diagram requests.
+- `visualization_requirements`: optional chart, diagram, process, or relationship intent for this section. Preserve
+  the requested subject and relationships here; use `[]` when none is requested.
 - `section_focus`: a non-empty string describing this section's analytical role. Use `section_specific_analysis` when
   no more specific role applies.
 - `focus_dimensions`: a non-empty array of the 1-4 main analytical dimensions this section should primarily cover.
@@ -43,7 +45,7 @@ Each section object MUST include these contract fields:
   - The description for each Level 1 section must be formatted according to the "Description Formatting" rules below.
   - **Do NOT generate separate level 3 section titles for Level 2 subtitles. They must be merged into the description of their parent Level 1 section.**  
   - Keep substantive Level 2 scope and functions in `description`; put table, exact-column, enumeration, length/style,
-    and source-use constraints in `format_requirements`.
+    and source-use constraints in `format_requirements`; put visualization intent in `visualization_requirements`.
   - Ignore Level 3 and deeper levels.  
   - Always preserve all Level 1 sections from the template, **except those that are summarizing in nature (e.g., "摘要","简介"，"总结", "结论", "Summary", "Conclusion", "Final Remarks")**.  
   - **Explicitly drop any summarizing sections**, even if they exist in the template.
