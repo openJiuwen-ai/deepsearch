@@ -99,10 +99,10 @@ class CodeSearchRetriever:
                 store=store,
                 chunker=PythonAstChunker(),
                 repo_dir=repo_path,
+                index_cfg=self.config.index,
                 instance_id=instance_id or self.collection_name,
                 repo_name=self.collection_name,
                 revision=revision,
-                index_cfg=self.config.index,
                 embedder=embedder,
                 embed_batch_size=self.config.embed.batch_size,
             )
@@ -149,13 +149,17 @@ class CodeSearchRetriever:
         )
         return await self._create_agent().run(ctx)
 
-
     # ---------- 生命周期 ----------
+
     async def close(self) -> None:
         """释放持有的连接资源（Milvus 连接别名等）。支持 async with 用法。"""
         if self._store is not None and hasattr(self._store, "close"):
             await self._store.close()
             self._store = None
+
+    def get_store(self):
+        """返回当前底层 store（可能尚未惰性创建）。"""
+        return self._store
 
     async def __aenter__(self) -> "CodeSearchRetriever":
         return self

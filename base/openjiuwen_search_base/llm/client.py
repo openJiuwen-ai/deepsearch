@@ -48,7 +48,8 @@ class LLMConfig(BaseModel):
 class LLMClient(Protocol):
     async def invoke(
         self, messages: list[ChatMessage], tools: Optional[list[dict]] = None
-    ) -> LLMResponse: ...
+    ) -> LLMResponse:
+        ...
 
 
 def normalize_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:
@@ -132,7 +133,8 @@ class OpenJiuwenLLMClient:
             ),
         )
 
-    def _to_provider_messages(self, messages: list[ChatMessage]) -> list[Any]:
+    @staticmethod
+    def _to_provider_messages(messages: list[ChatMessage]) -> list[Any]:
         from openjiuwen.core.foundation.llm import ToolMessage, UserMessage
 
         provider_messages: list[Any] = []

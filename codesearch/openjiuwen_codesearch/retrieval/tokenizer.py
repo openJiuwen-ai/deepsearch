@@ -20,7 +20,7 @@ def generate_char_trigrams(text: str, max_chars: int = 65535) -> str:
     if len(text) < 3:
         return text.encode("utf-8").hex()[:max_chars]
 
-    trigrams = [text[i : i + 3].encode("utf-8").hex() for i in range(len(text) - 2)]
+    trigrams = [text[i:i + 3].encode("utf-8").hex() for i in range(len(text) - 2)]
     res_list: list[str] = []
     current_len = 0
     for t in trigrams:

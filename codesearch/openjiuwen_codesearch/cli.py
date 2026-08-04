@@ -13,6 +13,8 @@ import sys
 
 from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
 
+logger = logging.getLogger(__name__)
+
 
 async def _run(args: argparse.Namespace) -> int:
     config = CodeSearchConfig.from_env()
@@ -31,10 +33,12 @@ async def _run(args: argparse.Namespace) -> int:
         report = await retriever.index_repository(
             args.repo, revision=args.revision, reset=args.reset
         )
-        print(
-            f"Indexed {report.files_total} files "
-            f"({report.files_new} new, {report.files_reused} reused), "
-            f"{report.chunks_inserted} chunks inserted."
+        logger.info(
+            "Indexed %d files (%d new, %d reused), %d chunks inserted.",
+            report.files_total,
+            report.files_new,
+            report.files_reused,
+            report.chunks_inserted,
         )
         return 0
 
@@ -43,14 +47,19 @@ async def _run(args: argparse.Namespace) -> int:
         with open(args.query_file, "r", encoding="utf-8") as f:
             query = f.read()
     if not query:
-        print("Provide --query or --query-file", file=sys.stderr)
+        logger.error("Provide --query or --query-file")
         return 2
 
     result = await retriever.search(query, revision=args.revision, top_k=args.top_k)
-    print(f"Termination: {result.termination.value} | turns={result.turns} "
-          f"| tokens={result.total_input_tokens}in/{result.total_output_tokens}out")
+    logger.info(
+        "Termination: %s | turns=%d | tokens=%din/%dout",
+        result.termination.value,
+        result.turns,
+        result.total_input_tokens,
+        result.total_output_tokens,
+    )
     for i, hit in enumerate(result.hits, 1):
-        print(f"{i:2d}. {hit.file_path} (L{hit.start_line}-L{hit.end_line})")
+        logger.info("%2d. %s (L%d-L%d)", i, hit.file_path, hit.start_line, hit.end_line)
     return 0
 
 
@@ -78,7 +87,7 @@ def main() -> None:
     p_search.add_argument("--top-k", type=int, default=20)
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     sys.exit(asyncio.run(_run(args)))
 
 

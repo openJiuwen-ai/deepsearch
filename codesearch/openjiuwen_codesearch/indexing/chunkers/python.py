@@ -55,7 +55,7 @@ class PythonAstChunker:
                 continue
             start_line = node.lineno
             end_line = node.end_lineno or node.lineno
-            chunk_text = "\n".join(lines[start_line - 1 : end_line])
+            chunk_text = "\n".join(lines[start_line - 1:end_line])
             if not chunk_text.strip():
                 continue
             chunks.append(

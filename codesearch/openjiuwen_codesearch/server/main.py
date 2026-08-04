@@ -22,18 +22,18 @@ logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(
+    application = FastAPI(
         title="openJiuwen-CodeSearch",
         description="Agentic code retrieval service",
         docs_url="/docs",
     )
-    app.include_router(api_router, prefix="/api")
+    application.include_router(api_router, prefix="/api")
 
-    @app.on_event("shutdown")
+    @application.on_event("shutdown")
     async def _close_retrievers() -> None:  # 释放跨请求复用的 Milvus 连接别名
         await shutdown_retrievers()
 
-    return app
+    return application
 
 
 app = create_app()

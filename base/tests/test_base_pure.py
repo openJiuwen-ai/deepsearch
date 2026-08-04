@@ -17,28 +17,34 @@ from openjiuwen_search_base.runtime import RunRegistry
 
 
 class TestExpr:
-    def test_escape_quotes_backslash_newline(self):
+    @staticmethod
+    def test_escape_quotes_backslash_newline():
         assert escape_expr_string('a"b\\c\nd') == 'a\\"b\\\\c d'
 
-    def test_revision_filter_escaped(self):
+    @staticmethod
+    def test_revision_filter_escaped():
         assert revision_filter('r"1') == 'ARRAY_CONTAINS(commits, "r\\"1")'
 
-    def test_overlap_filter_coerces_ints(self):
+    @staticmethod
+    def test_overlap_filter_coerces_ints():
         expr = overlap_filter("rev", "a.py", "3", "7")  # 字符串行号被强转 int
         assert "start_line <= 7 and end_line >= 3" in expr
 
-    def test_hashes_and_ids_filters(self):
+    @staticmethod
+    def test_hashes_and_ids_filters():
         assert hashes_filter(["h1", "h2"]) == 'file_hash in ["h1","h2"]'
         assert ids_filter([1, 2]) == "id in [1,2]"
 
 
 class TestNaming:
-    def test_prefix_and_version(self):
+    @staticmethod
+    def test_prefix_and_version():
         assert versioned_collection_name("repo", "v1", "cs_") == "cs_repo__v1"
 
 
 class TestRunRegistry:
-    def test_register_get_unregister(self):
+    @staticmethod
+    def test_register_get_unregister():
         reg: RunRegistry[dict] = RunRegistry()
         ctx = {"x": 1}
         run_id = reg.register(ctx)
@@ -47,10 +53,12 @@ class TestRunRegistry:
         with pytest.raises(KeyError):
             reg.get(run_id)
 
-    def test_unregister_idempotent(self):
+    @staticmethod
+    def test_unregister_idempotent():
         RunRegistry().unregister("nonexistent")  # 不抛异常
 
-    def test_session_auto_unregisters(self):
+    @staticmethod
+    def test_session_auto_unregisters():
         reg: RunRegistry[dict] = RunRegistry()
         ctx = {"x": 1}
         with reg.session(ctx) as run_id:
@@ -58,7 +66,8 @@ class TestRunRegistry:
         with pytest.raises(KeyError):
             reg.get(run_id)
 
-    def test_session_unregisters_on_exception(self):
+    @staticmethod
+    def test_session_unregisters_on_exception():
         reg: RunRegistry[dict] = RunRegistry()
         with pytest.raises(RuntimeError):
             with reg.session({"x": 1}) as run_id:
@@ -89,14 +98,16 @@ class TestNormalizeToolCalls:
     def test_nameless_call_skipped(self):
         assert normalize_tool_calls([self._Call(self._Fn(None, "{}"))]) == []
 
-    def test_none_input(self):
+    @staticmethod
+    def test_none_input():
         assert normalize_tool_calls(None) == []
 
 
 class TestExtractUsage:
     """用量以 token 上报——token 是 OpenAI 兼容端点的通用字段，金额各家不一。"""
 
-    def test_reads_object_style_usage(self):
+    @staticmethod
+    def test_reads_object_style_usage():
         from openjiuwen_search_base.llm import extract_usage
 
         class Usage:
@@ -107,7 +118,8 @@ class TestExtractUsage:
 
         assert extract_usage(Resp()) == (13, 64)
 
-    def test_reads_dict_style_usage(self):
+    @staticmethod
+    def test_reads_dict_style_usage():
         from openjiuwen_search_base.llm import extract_usage
 
         class Resp:
@@ -115,12 +127,14 @@ class TestExtractUsage:
 
         assert extract_usage(Resp()) == (7, 3)
 
-    def test_missing_usage_is_zero_not_error(self):
+    @staticmethod
+    def test_missing_usage_is_zero_not_error():
         from openjiuwen_search_base.llm import extract_usage
 
         assert extract_usage(object()) == (0, 0)
 
-    def test_partial_usage_defaults_to_zero(self):
+    @staticmethod
+    def test_partial_usage_defaults_to_zero():
         from openjiuwen_search_base.llm import extract_usage
 
         class Resp:

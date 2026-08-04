@@ -11,7 +11,7 @@
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 from openjiuwen_search_base.runtime import RunRegistry
@@ -69,7 +69,7 @@ class CodeSearchRunContext:
 
     @property
     def total_output_tokens(self) -> int:
-        return sum(o for _, o in self.tokens_by_stage.values())
+        return sum(output for _, output in self.tokens_by_stage.values())
 
     def add_tokens(self, stage: str, input_tokens: int, output_tokens: int) -> None:
         prev_in, prev_out = self.tokens_by_stage.get(stage, (0, 0))
@@ -110,13 +110,14 @@ def build_run_context(
     query: str,
     revision: str,
     top_k: int,
-    retriever: CodeRetriever,
-    main_llm: LLMClient,
-    filter_llm: LLMClient,
+    **clients,
 ) -> CodeSearchRunContext:
+    retriever = clients["retriever"]
+    main_llm = clients["main_llm"]
+    filter_llm = clients["filter_llm"]
     trace_path = None
     if config.agent.trace_dir:
-        stamp = datetime.now().strftime("%Y%m%d__%H%M%S_%f")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d__%H%M%S_%f")
         safe_rev = revision.replace("/", "_")[:64]
         trace_path = os.path.join(config.agent.trace_dir, stamp, f"{safe_rev}.jsonl")
     return CodeSearchRunContext(
