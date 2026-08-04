@@ -52,6 +52,18 @@ understand the context and refine the outline more accurately:
 
 {{ user_feedback }}
 
+## Structured Visualization Contract
+- Keep substantive research scope in `description` and non-visual output constraints in `format_requirements`.
+- Keep requested charts, diagrams, processes, or relationship views in `visualization_requirements`; use `[]` when
+  the user did not request a visualization.
+- When updating a visualization request, preserve its subject, stages, entities, and relationships without turning
+  it into Mermaid code or a chapter-writing instruction.
+
+{% if vlm_chart_generator_enable %}
+- In VLM mode, the chart pipeline owns chart selection, images, captions, and insertion. The chapter must remain
+  self-contained and must not contain Mermaid/chart code or forward references such as “下图”“见图”“如下图”.
+{% endif %}
+
 ---
 
 # Previous User Feedback (Interaction History)

@@ -160,6 +160,9 @@ format_requirements: {{ current_section_format_requirements }}
 - **Visualization Boundary**:
     - Do NOT output Mermaid code fences, chart code, or hand-written chart blocks in this chapter body.
     - If the user asks for charts, diagrams, or Mermaid content, satisfy the request with source-backed prose/tables only here; any controlled chart rendering or insertion is handled by the report visualization/chart pipeline after this draft.
+{% if vlm_chart_generator_enable %}
+    - In VLM chart mode, the chapter must be self-contained without a chart. Do not add chart captions or forward references such as “下图”“见图”“如下图” (or their equivalents in the output language); the VLM pipeline owns image selection, captions, and insertion after this draft.
+{% endif %}
 - **Language**: The output language must be **{{language}}**.
 
 # Writing Strategy

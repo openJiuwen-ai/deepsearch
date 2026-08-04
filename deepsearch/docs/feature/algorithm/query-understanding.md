@@ -27,7 +27,8 @@
 - 新生成的依赖驱动大纲与普通大纲采用相同的章节输出契约：每个章节都必须提供
   `format_requirements`、非空 `section_focus` 和非空 `focus_dimensions`。表格、精确列名及顺序、
   指定行、逐项枚举、篇幅/样式和来源限制写入 `format_requirements`，研究范围与依赖关系保留在
-  `description`。没有章节级格式要求时显式使用空数组 `[]`。
+  `description`。图表、流程或关系视图意图单独写入可选的 `visualization_requirements`，不混入
+  `format_requirements`；没有章节级格式要求或可视化要求时分别使用空数组 `[]`。
 
 ## 关键代码路径
 
@@ -75,7 +76,8 @@
 - `TemporalScope`：`constraint_type` 为 `source_date` 或 `content_date`；`start_date` / `end_date` 为可空 ISO 日期，
   但至少存在一个边界，且开始日期不得晚于结束日期。
 - 意图 tool schema 仅使用基础字段约束；模型输出会经过 `TemporalScope` 二次校验，非法或缺少日期边界的对象按既定兼容策略降级为空约束。
-- `Outline` / `Section`：章节标题、描述、核心章节标记、section id、依赖关系和分析 focus。
+- `Outline` / `Section`：章节标题、描述、核心章节标记、section id、依赖关系、分析 focus，以及可选的
+  `visualization_requirements` 规划元数据。
 - 历史 `Outline` / `Section` 缺少新章节契约字段时仍按模型默认值加载；必填约束仅作用于新生成的
   普通或依赖驱动 tool call。
 - `Plan` / `Step`：章节研究步骤，依赖驱动模式下包含 step id 与依赖关系。
