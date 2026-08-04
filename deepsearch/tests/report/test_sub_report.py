@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import pytest
 
 from openjiuwen_deepsearch.algorithm.report import table_caption_utils
+from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_classify_scores,
     build_compact_classify_doc_infos_text,
@@ -127,7 +128,8 @@ def test_report_package_exports_compact_doc_info_helpers():
 
 
 @pytest.mark.asyncio
-async def test_generate_sub_section_outline_calls_llm_with_preservation_context():
+async def test_generate_sub_section_outline_calls_llm_with_preservation_context(caplog):
+    caplog.set_level(logging.INFO)
     token = llm_context.set({"mock_model": object()})
     try:
         reporter = Reporter("mock_model")
@@ -151,6 +153,11 @@ async def test_generate_sub_section_outline_calls_llm_with_preservation_context(
             "sub_section_core_content": [
                 {"title": "evidence", "key_passages": ["Program design evidence."]}
             ],
+            "structured_evidence_guide": (
+                "Structured evidence guidance:\n"
+                "- R1 [primary, covered]: Program design flaws\n"
+                "  - [citation:1] evidence"
+            ),
         }
 
         with patch(
@@ -182,16 +189,25 @@ async def test_generate_sub_section_outline_calls_llm_with_preservation_context(
         assert "Program Design Flaws" in rendered_prompt
         assert "Elite Capture" in rendered_prompt
         assert "Targeting Errors" in rendered_prompt
+        assert "Structured evidence guidance" in rendered_prompt
+        assert "R1 [primary, covered]: Program design flaws" in rendered_prompt
+        assert "[citation:1] evidence" in rendered_prompt
         assert "User-specified subsection titles are authoritative" in rendered_prompt
         assert "boundary applies only to model-added concrete wording" in rendered_prompt
         assert "must not override" in rendered_prompt
         assert "user-specified subsection titles" in rendered_prompt
+        assert "[structured_evidence][sub_outline]" in caplog.text
+        assert "contains_structured_evidence_guidance=true" in caplog.text
+        assert "exact_guide_in_input=true" in caplog.text
+        assert "guide_hash=" in caplog.text
+        assert "Structured evidence guidance:" not in caplog.text
     finally:
         llm_context.reset(token)
 
 
 @pytest.mark.asyncio
-async def test_write_subsection_reports_calls_llm_with_output_constraint_context():
+async def test_write_subsection_reports_calls_llm_with_output_constraint_context(caplog):
+    caplog.set_level(logging.INFO)
     token = llm_context.set({"mock_model": object()})
     try:
         reporter = Reporter("mock_model")
@@ -230,6 +246,11 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
                 }
             ],
             "sub_section_references": [],
+            "structured_evidence_guide": (
+                "Structured evidence guidance:\n"
+                "- R1 [primary, covered]: Program eligibility\n"
+                "  - [citation:1] Program A"
+            ),
             "sub_report_background_knowledge": [],
             "report_type": "professional",
             "paragraph_style": "detailed",
@@ -270,10 +291,19 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         assert "# Current Top-Level Section" in rendered_prompt
         assert "# Current Chapter Outline" in rendered_prompt
         assert "# Collected Evidence" in rendered_prompt
+        assert "# Structured Evidence Guidance" in rendered_prompt
+        assert "R1 [primary, covered]: Program eligibility" in rendered_prompt
         assert "Authoritative Writing Context" in rendered_prompt
         assert "format_requirements" in rendered_prompt
         assert "If the user requested a table, output a Markdown table" in rendered_prompt
         assert "If the user specified table columns, use those column names exactly" in rendered_prompt
+        assert "[structured_evidence][sub_report]" in caplog.text
+        assert "contains_structured_evidence_heading=true" in caplog.text
+        assert "contains_collected_evidence_heading=true" in caplog.text
+        assert "exact_guide_in_input=true" in caplog.text
+        assert "citation_blocks=1" in caplog.text
+        assert "balanced_citation_blocks=true" in caplog.text
+        assert "Structured evidence guidance:" not in caplog.text
         assert "Do not collapse required items into a general summary paragraph" in rendered_prompt
         assert "program_comparison" in rendered_prompt
         assert "eligibility, exclusion_risk" in rendered_prompt
@@ -570,6 +600,66 @@ def test_coverage_matrix_formatter_output_matches_prompt_keys():
         assert f"Document {i}:" in text
     # Must NOT contain 1-based numbering when start=0
     assert f"Document {len(docs)}:" not in text
+
+
+def test_coverage_matrix_prompt_does_not_request_rationale_passage_indices():
+    rendered = apply_system_prompt(
+        "coverage_matrix_evaluator",
+        {"messages": [{"role": "user", "content": "documents"}]},
+    )
+    prompt_text = "\n".join(message["content"] for message in rendered)
+
+    assert "evidence_passage_indices" not in prompt_text
+    assert "0-based key passage indices" not in prompt_text
+
+
+@pytest.mark.parametrize("has_template", [False, True])
+def test_subsection_outline_prompt_explains_structured_evidence_for_all_routes(has_template):
+    rendered = apply_system_prompt(
+        "sub_section_outline",
+        {
+            "messages": [{"role": "user", "content": "Structured evidence guidance"}],
+            "has_template": has_template,
+            "section_idx": 1,
+            "section_title": "Section",
+            "language": ENGLISH,
+        },
+    )
+    prompt_text = "\n".join(message["content"] for message in rendered)
+    normalized_prompt = " ".join(prompt_text.split())
+
+    assert "use covered primary dimensions first" in normalized_prompt
+    assert "do not create a factual subsection solely from an uncovered dimension" in normalized_prompt.lower()
+    assert "Do not mechanically turn every dimension into a subsection" in normalized_prompt
+    assert "User-specified titles and template-required structure remain authoritative" in normalized_prompt
+    assert "Explicit user-specified structure has the highest priority" in normalized_prompt
+    assert "Structured Evidence Guidance controls evidence selection only" in normalized_prompt
+    assert "explicitly requests the current section to contain only one table" in normalized_prompt
+    assert "For such a single-table-only section" in normalized_prompt
+    assert "A request to include one table does not by itself require a flat outline" in normalized_prompt
+    assert "preserve that exact granularity" in normalized_prompt
+    assert "Do not further subdivide a user-defined category" in normalized_prompt
+
+
+@pytest.mark.parametrize("prompt_name", ["sub_report_markdown", "sub_report_brief_markdown"])
+def test_subreport_prompts_share_structured_evidence_semantics(prompt_name):
+    rendered = apply_system_prompt(
+        prompt_name,
+        {"messages": [{"role": "user", "content": "Structured evidence guidance"}]},
+    )
+    prompt_text = "\n".join(message["content"] for message in rendered)
+    normalized_prompt = " ".join(prompt_text.split())
+
+    assert "dimension-to-citation mapping" in normalized_prompt
+    assert "must not be treated as a source of factual evidence" in normalized_prompt
+    assert "Do not expose the guidance's coverage labels or evidence-selection process" in normalized_prompt
+    assert "Silently omit optional content that depends only on an uncovered dimension" in normalized_prompt
+    assert "preserve that required structure" in normalized_prompt
+    assert "directly supported by covered citations" in normalized_prompt
+    assert "Do not use an uncovered dimension as permission to add uncited synthesis" in normalized_prompt
+    assert "Do not narrate the internal evidence process" in normalized_prompt
+    assert "remaining evidence limitation" not in normalized_prompt
+    assert "collected evidence remains the authoritative source" in normalized_prompt.lower()
 
 
 def test_format_key_passage_block_only_outputs_passages():
@@ -1873,6 +1963,22 @@ def test_get_classified_infos_with_empty_selected_docs_returns_empty():
     assert classified_doc_infos == []
 
 
+def test_get_classified_infos_returns_keys_aligned_after_deduplication():
+    first = _classified_doc("Lower", "https://example.com/a", "same-source", 0.8)
+    second = _classified_doc("Higher", "https://example.com/a", "same-source", 0.9)
+
+    classified_infos, classified_doc_infos, classified_doc_keys = _get_classified_infos(
+        [first, second],
+        [0.2, 0.8],
+        selected_doc_keys=["doc_3", "doc_7"],
+        return_doc_keys=True,
+    )
+
+    assert classified_infos["core_content_list"]
+    assert classified_doc_infos == [second]
+    assert classified_doc_keys == ["doc_7"]
+
+
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
@@ -1922,6 +2028,7 @@ async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, 
             {"section_id": "1", "content_summary": "父章节总结：公司主营业务稳定，收入结构清晰。"}
         ],
         sub_evaluation_details='',
+        structured_evidence_guide="Structured evidence guidance:\n- stale",
         max_generate_retry_num=3,
         max_sub_report_evaluate_num=0
     )
@@ -1946,6 +2053,9 @@ async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, 
     assert "Section 1" in background_content["allowed_callback"]
     assert len(writer_user_messages) == 1
     writer_user_message = writer_user_messages[0]
+    assert current_inputs["structured_evidence_guide"] == ""
+    assert "Structured Evidence Guidance" not in writer_user_message
+    assert "- stale" not in writer_user_message
     assert "Background Knowledge is" not in writer_user_message
     assert "Background Knowledge / prior-section continuity context (not citation sources)" in writer_user_message
     assert '"section_id": "1"' in writer_user_message
