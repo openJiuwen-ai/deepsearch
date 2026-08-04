@@ -147,6 +147,16 @@ class VisualizationInsertRenderContext:
 
 
 @dataclass
+class VisualizationMermaidContext:
+    visualization_content: dict
+    extracted_obj: dict
+    visualization_dict: dict
+    max_attempt_num: int
+    section_idx: int
+    metrics: VisualizationTaskMetrics | None = None
+
+
+@dataclass
 class DocSelectionContext:
     """Encapsulates doc-selection intermediate results for debug export."""
     rationales: list
@@ -3031,22 +3041,13 @@ class Reporter:
 
     async def _build_visualization_mermaid(
         self,
-        visualization_content: dict,
-        extracted_obj: dict,
-        visualization_dict: dict,
-        max_attempt_num: int,
-        section_idx: int,
-        metrics: VisualizationTaskMetrics | None = None,
+        context: VisualizationMermaidContext,
     ) -> dict:
+        visualization_content = context.visualization_content
+        section_idx = context.section_idx
+        metrics = context.metrics
         normalize_started_at = perf_counter()
-        normalized = await self._normalize_visualization_content(
-            visualization_content,
-            extracted_obj,
-            visualization_dict,
-            max_attempt_num,
-            section_idx,
-            metrics,
-        )
+        normalized = await self._normalize_visualization_content(context)
         if metrics is not None:
             metrics.record_stage("normalize_units", normalize_started_at)
         if not normalized:
@@ -3207,13 +3208,14 @@ class Reporter:
 
     async def _normalize_visualization_content(
         self,
-        visualization_content: dict,
-        extracted_obj: dict,
-        visualization_dict: dict,
-        max_attempt_num: int,
-        section_idx: int,
-        metrics: VisualizationTaskMetrics | None = None,
+        context: VisualizationMermaidContext,
     ) -> bool:
+        visualization_content = context.visualization_content
+        extracted_obj = context.extracted_obj
+        visualization_dict = context.visualization_dict
+        max_attempt_num = context.max_attempt_num
+        section_idx = context.section_idx
+        metrics = context.metrics
         # Extracted schema is valid here.
         image_title = extracted_obj.get("image_title", "")
         image_type = extracted_obj.get("image_type", "")
@@ -3356,14 +3358,15 @@ class Reporter:
             )
             return visualization_content
 
-        visualization_content = await self._build_visualization_mermaid(
-            visualization_content,
-            extracted_obj,
-            visualization_dict,
-            max_attempt_num,
-            section_idx,
-            metrics,
+        mermaid_context = VisualizationMermaidContext(
+            visualization_content=visualization_content,
+            extracted_obj=extracted_obj,
+            visualization_dict=visualization_dict,
+            max_attempt_num=max_attempt_num,
+            section_idx=section_idx,
+            metrics=metrics,
         )
+        visualization_content = await self._build_visualization_mermaid(mermaid_context)
         visualization_content["_visualization_metrics"] = metrics.finish(
             bool(visualization_content.get("rs_success")),
             visualization_content.get("error_msg", ""),

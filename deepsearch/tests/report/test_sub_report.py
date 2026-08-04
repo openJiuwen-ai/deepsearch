@@ -14,6 +14,7 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
 from openjiuwen_deepsearch.algorithm.report.report import (
     Reporter,
     VisualizationInsertPlanContext,
+    VisualizationMermaidContext,
     _get_classified_infos,
 )
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
@@ -864,11 +865,13 @@ async def test_visualization_normalization_uses_local_same_unit_fast_path():
         new_callable=AsyncMock,
     ) as mocked_llm:
         normalized = await reporter._normalize_visualization_content(
-            visualization_content=visualization_content,
-            extracted_obj=extracted_obj,
-            visualization_dict={"language": "zh-CN"},
-            max_attempt_num=3,
-            section_idx=1,
+            VisualizationMermaidContext(
+                visualization_content=visualization_content,
+                extracted_obj=extracted_obj,
+                visualization_dict={"language": "zh-CN"},
+                max_attempt_num=3,
+                section_idx=1,
+            )
         )
 
     assert normalized is True
