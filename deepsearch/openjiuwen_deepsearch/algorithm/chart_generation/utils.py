@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import logging
 import json
+import re
 from typing import List, Dict, NamedTuple, Optional
 import base64
 
@@ -17,6 +18,106 @@ from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmN
 
 logger = logging.getLogger(__name__)
 MAX_LLM_RETRY_TIMES = 3
+MERMAID_START_PATTERNS = (
+    re.compile(r"^graph\s+(td|tb|bt|rl|lr)\b"),
+    re.compile(r"^flowchart\s+(td|tb|bt|rl|lr)\b"),
+    re.compile(r"^sequencediagram\b"),
+    re.compile(r"^classdiagram(?:-v2)?\b"),
+    re.compile(r"^statediagram(?:-v2)?\b"),
+    re.compile(r"^erdiagram\b"),
+    re.compile(r"^journey\b"),
+    re.compile(r"^gantt\b"),
+    re.compile(r"^pie\b"),
+    re.compile(r"^timeline\b"),
+    re.compile(r"^mindmap\b"),
+    re.compile(r"^quadrantchart\b"),
+    re.compile(r"^xychart-beta\b"),
+    re.compile(r"^sankey-beta\b"),
+)
+
+
+def _looks_like_mermaid_body(body_lines: List[str]) -> bool:
+    content_lines = [line.strip().lower() for line in body_lines if line.strip()]
+    if content_lines and content_lines[0] == "---":
+        try:
+            end_index = content_lines[1:].index("---") + 1
+            content_lines = content_lines[end_index + 1:]
+        except ValueError:
+            return False
+    if not content_lines:
+        return False
+    first_line = content_lines[0]
+    return any(pattern.match(first_line) for pattern in MERMAID_START_PATTERNS)
+
+
+def remove_mermaid_code_blocks(markdown_text: str) -> str:
+    """Remove fenced Mermaid source blocks that should not appear as report body text."""
+    if not markdown_text:
+        return markdown_text
+
+    lines = markdown_text.splitlines(keepends=True)
+    output_lines = []
+    index = 0
+    removed_block = False
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        if lines[index].startswith(("    ", "\t")):
+            body_start = index
+            body_end = body_start
+            body_lines = []
+            while body_end < len(lines):
+                current_line = lines[body_end]
+                if not current_line.strip():
+                    body_lines.append("")
+                    body_end += 1
+                elif current_line.startswith("    "):
+                    body_lines.append(current_line[4:])
+                    body_end += 1
+                elif current_line.startswith("\t"):
+                    body_lines.append(current_line[1:])
+                    body_end += 1
+                else:
+                    break
+
+            if _looks_like_mermaid_body(body_lines):
+                removed_block = True
+                index = body_end
+                continue
+
+            output_lines.extend(lines[body_start:body_end])
+            index = body_end
+            continue
+
+        fence_match = re.match(r"^(```+|~~~+)\s*([^`]*)$", stripped)
+        if not fence_match:
+            output_lines.append(lines[index])
+            index += 1
+            continue
+
+        fence = fence_match.group(1)
+        language = fence_match.group(2).strip().lower()
+        body_start = index + 1
+        body_end = body_start
+        while body_end < len(lines) and not lines[body_end].strip().startswith(fence):
+            body_end += 1
+
+        body_lines = lines[body_start:body_end]
+        is_mermaid = "mermaid" in language or _looks_like_mermaid_body(body_lines)
+        if is_mermaid:
+            removed_block = True
+            index = body_end + 1 if body_end < len(lines) else body_end
+            continue
+
+        output_lines.extend(lines[index:body_end + 1])
+        index = body_end + 1
+
+    if not removed_block:
+        return markdown_text
+
+    cleaned_text = "".join(output_lines)
+    return re.sub(r"\n{3,}", "\n\n", cleaned_text).strip()
 
 
 def type_check(result, expected_type):

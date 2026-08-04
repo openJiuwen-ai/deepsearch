@@ -17,6 +17,7 @@ from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
 
+from openjiuwen_deepsearch.algorithm.chart_generation.utils import remove_mermaid_code_blocks
 from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
 from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     anonymize_config_for_logging,
@@ -2094,10 +2095,12 @@ class VLMChartGeneratorNode(BaseNode):
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> dict:
 
+        current_inputs = algorithm_output.get("current_inputs", {})
         vlm_chart_generator_output = algorithm_output.get("vlm_chart_generator_output", {})
         chart_messages = []
-        modified_report = algorithm_output.get("current_inputs", {}).get("report_content", "")
-        new_source_trace_datas = algorithm_output.get("current_inputs", {}).get("trace_source_datas", [])
+        modified_report = current_inputs.get("report_content", "")
+        new_source_trace_datas = current_inputs.get("trace_source_datas", [])
+        should_update_report = False
 
         if vlm_chart_generator_output.get("skip_node", False):
             logger.info("[VLMChartGeneratorNode] vlm_chart_generator_enable is False, skip VLMChartGeneratorNode.")
@@ -2114,12 +2117,23 @@ class VLMChartGeneratorNode(BaseNode):
             chart_messages = vlm_chart_generator_output.get("chart_messages", [])
             modified_report = vlm_chart_generator_output.get("modified_report", "")
             new_source_trace_datas = vlm_chart_generator_output.get("new_source_trace_datas", [])
+            should_update_report = True
 
-            current_report = session.get_global_state("search_context.current_report")
-            current_report.report_content = modified_report
-            current_report.merged_trace_source_datas = new_source_trace_datas
-            session.update_global_state({"search_context.current_report": current_report})
             session.update_global_state({"search_context.final_result.chart_messages": chart_messages})
+
+        if current_inputs.get("vlm_chart_generator_enable", False):
+            cleaned_report = remove_mermaid_code_blocks(modified_report)
+            if cleaned_report != modified_report:
+                logger.warning("[VLMChartGeneratorNode] Removed Mermaid code block(s) from report content.")
+                modified_report = cleaned_report
+                should_update_report = True
+
+        if should_update_report:
+            current_report = session.get_global_state("search_context.current_report")
+            if current_report:
+                current_report.report_content = modified_report
+                current_report.merged_trace_source_datas = new_source_trace_datas
+                session.update_global_state({"search_context.current_report": current_report})
 
         add_debug_log_wrapper(
             session,
