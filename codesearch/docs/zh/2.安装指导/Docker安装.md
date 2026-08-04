@@ -9,7 +9,7 @@
 |---|---|
 | Docker | 可用的 Docker Engine / Desktop |
 | Milvus | 宿主机或可达网络上的 Milvus ≥ 2.5 |
-| LLM API Key | `OPENROUTER_API_KEY`（检索需要） |
+| LLM API Key | `OPENAI_API_KEY`（检索需要；`OPENAI_BASE_URL` 默认 OpenRouter） |
 
 > **待索引的代码仓**：须是容器内可见的**本地目录**（通常用 `-v` 挂载宿主机上
 > 已 clone 的仓库）。不支持把 git URL 直接传给索引接口；请先在宿主机
@@ -39,7 +39,8 @@ git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
 ```sh
 docker run --rm --name codesearch-server \
   -p 8100:8100 \
-  -e OPENROUTER_API_KEY \
+  -e OPENAI_API_KEY \
+  -e OPENAI_BASE_URL \
   -e MILVUS_HOST=host.docker.internal \
   -e MILVUS_PORT=19530 \
   -e CODESEARCH_INDEX_ROOTS=/repo \
@@ -70,7 +71,8 @@ curl -sS -X POST http://127.0.0.1:8100/api/v1/search \
 
 ```sh
 docker run --rm \
-  -e OPENROUTER_API_KEY \
+  -e OPENAI_API_KEY \
+  -e OPENAI_BASE_URL \
   -e MILVUS_HOST=host.docker.internal \
   -e MILVUS_PORT=19530 \
   -v /data/repos/agent-core:/repo \
@@ -81,7 +83,8 @@ docker run --rm \
 
 ```sh
 docker run --rm \
-  -e OPENROUTER_API_KEY \
+  -e OPENAI_API_KEY \
+  -e OPENAI_BASE_URL \
   -e MILVUS_HOST=host.docker.internal \
   -e MILVUS_PORT=19530 \
   --entrypoint codesearch \

@@ -50,7 +50,7 @@ The product does **not** fetch remote repositories for you. Names like
 |---|---|---|
 | Python | >= 3.11 | |
 | Milvus | >= 2.5 (2.6.x recommended) | Indexing and retrieval; BM25 Function needs 2.5+ |
-| LLM API key | `OPENROUTER_API_KEY` or OpenAI-compatible | Retrieval only; sparse indexing needs **no** key |
+| LLM API key | `OPENAI_API_KEY` / `OPENAI_BASE_URL` (OpenRouter by default) or any OpenAI-compatible endpoint | Retrieval only; sparse indexing needs **no** key |
 
 > **Language scope**: the syntax chunker supports **Python (`.py`) only**.
 > Indexing other languages yields 0 files — expected.
@@ -100,7 +100,8 @@ See `.env.example`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENROUTER_API_KEY` | empty | LLM key (retrieval) |
+| `OPENAI_API_KEY` | empty | LLM key (retrieval) |
+| `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-compatible API base |
 | `MILVUS_HOST` | `localhost` | Vector store host |
 | `MILVUS_PORT` | `19530` | Vector store port |
 | `MILVUS_TOKEN` | empty | Credentials |

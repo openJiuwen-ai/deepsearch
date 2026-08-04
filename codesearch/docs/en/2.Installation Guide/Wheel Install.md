@@ -27,7 +27,8 @@ With uv, add `--prerelease=allow` (openJiuwen pins `a2a-sdk==1.0.0a0`).
 ```sh
 git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
 
-export OPENROUTER_API_KEY="your-key"
+export OPENAI_API_KEY="your-key"
+export OPENAI_BASE_URL="https://openrouter.ai/api/v1"   # default; can omit
 export MILVUS_HOST=localhost MILVUS_PORT=19530
 export CODESEARCH_INDEX_ROOTS="/data/repos"
 codesearch index --repo /data/repos/agent-core --collection agent_core

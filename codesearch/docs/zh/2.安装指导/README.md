@@ -61,7 +61,7 @@ HTTP 形态同样：`POST /api/v1/index` 的 `repo_path` 必须是服务进程�
 |---|---|---|
 | Python | >= 3.11 | |
 | Milvus | >= 2.5（推荐 2.6.x） | 索引与检索均需要；全文检索依赖 2.5+ 的 BM25 Function |
-| LLM API Key | `OPENROUTER_API_KEY` 或任意 OpenAI 兼容端点 | 仅检索需要；默认稀疏索引模式**不需要** |
+| LLM API Key | `OPENAI_API_KEY` / `OPENAI_BASE_URL`（默认 OpenRouter）或任意 OpenAI 兼容端点 | 仅检索需要；默认稀疏索引模式**不需要** |
 
 > **语言范围**：当前语法切块器 **仅支持 Python（`.py`）**。对其它语言仓库执行
 > 索引会得到 0 个文件，属预期行为，不是安装失败。
@@ -118,7 +118,8 @@ codesearch-server          # 源码部署亦可用 python start_backend.py
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `OPENROUTER_API_KEY` | 空 | LLM API 密钥（检索必需） |
+| `OPENAI_API_KEY` | 空 | LLM API 密钥（检索必需） |
+| `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI 兼容 API 基址 |
 | `MILVUS_HOST` | `localhost` | 向量库地址 |
 | `MILVUS_PORT` | `19530` | 向量库端口 |
 | `MILVUS_TOKEN` | 空 | 向量库鉴权（`user:password` 或 API token） |
