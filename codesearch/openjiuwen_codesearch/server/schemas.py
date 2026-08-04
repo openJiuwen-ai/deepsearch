@@ -6,12 +6,19 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+# 与 SearchAgentConfig.engine 对齐；默认 auto，不把 retropus 设为默认
+EngineName = Literal["auto", "react", "graph", "retropus"]
+
 
 class SearchRequest(BaseModel):
     query: str = Field(..., description="问题描述（Issue、缺陷报告等）")
     collection: str = Field(..., description="已索引的集合名称")
     revision: str = Field(default="local", description="版本标签，需与索引时一致")
     top_k: int = Field(default=20, ge=1, le=100)
+    engine: EngineName = Field(
+        default="auto",
+        description="检索引擎；retropus 需显式指定，且须与索引时一致",
+    )
 
 
 class HitModel(BaseModel):
@@ -34,6 +41,10 @@ class IndexRequest(BaseModel):
     collection: str
     revision: str = "local"
     reset: bool = False
+    engine: EngineName = Field(
+        default="auto",
+        description="索引引擎；retropus 需显式指定（进程内 KG/BM25，无 Milvus）",
+    )
 
 
 class JobResponse(BaseModel):

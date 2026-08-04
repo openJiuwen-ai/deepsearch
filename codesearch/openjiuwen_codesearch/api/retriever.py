@@ -55,6 +55,20 @@ class CodeSearchRetriever:
     def _is_retropus(self) -> bool:
         return self.config.agent.engine == "retropus"
 
+    @staticmethod
+    def engine_keeps_index_in_process(engine: str) -> bool:
+        """True when that engine's index lives on the retriever instance.
+
+        Retropus KG/BM25 is in-memory; Milvus is durable and can reconnect
+        after ``close()``. Used by the HTTP server to decide whether to keep
+        the cached retriever after ``/v1/index``.
+        """
+        return engine == "retropus"
+
+    def keeps_index_in_process(self) -> bool:
+        """See :meth:`engine_keeps_index_in_process`."""
+        return self.engine_keeps_index_in_process(self.config.agent.engine)
+
     # ---------- lazy wiring ----------
     def _ensure_store(self, reset: bool = False):
         if self._store is None:

@@ -14,13 +14,22 @@ CodeSearch 默认五工具注册表严格隔离。
 
 ## 核心流程
 
-1. `CodeSearchConfig.agent.engine = "retropus"`（程序赋值或 CLI `--engine retropus`；
-   **无** `ENGINE=` 环境变量）
+1. `CodeSearchConfig.agent.engine = "retropus"`（程序赋值、CLI / ContextBench
+   `--engine retropus`，或 HTTP 请求体 `"engine": "retropus"`；**无** `ENGINE=`
+   环境变量；默认仍为 `auto`，不会自动走 Retropus）
 2. `index_repository(repo_path)` → vendored `build_index` + `build_retriever`（无 Milvus）
 3. `search(query)` → `RetropusRunContext` + `RetropusCodeSearchAgent`
 4. `AbstractReactEngine.run`：`reasoning_step` → `tool_step` →（终止时）`finalize`
 5. `finalize`：`tools.final_spans()`（必要时 retriever pad）→ `spans_to_hits` →
    `CodeSearchResult.hits`
+
+## HTTP 服务
+
+`POST /api/v1/index` 与 `POST /api/v1/search` 接受可选字段 `engine`
+（`auto` | `react` | `graph` | `retropus`，**默认 `auto`**）。Retropus 必须显式传
+`"engine": "retropus"`；索引与检索须使用同一后端（retropus ↔ milvus 混用返回
+**409**）。服务按 `(collection, engine)` 缓存检索器；Retropus 的 KG/BM25 驻留
+进程内存，索引作业成功后不会 `close()` 该实例（与 Milvus 路径不同）。
 
 ## 可见行为
 
@@ -149,7 +158,8 @@ are handled by a transparent retry without the key in
 | `retropus/graph/imports.py` | 多语言 `IMPORTS` 边构建与 `ImportIndex` |
 | `retropus/` | 厂商化 KG / BM25 索引运行时 |
 | `config/agent.py` | `RetropusSearchAgentConfig` + `from_env` |
-| `api/retriever.py` | engine 分支与索引缓存 |
+| `api/retriever.py` | engine 分支与索引缓存；`engine_keeps_index_in_process` |
+| `server/schemas.py` / `server/routers/api.py` | HTTP `engine` 字段、进程内缓存与跨后端 409 |
 
 ## 已知限制与待办 / 相关文档
 

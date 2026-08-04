@@ -56,7 +56,16 @@ Not in default sparse mode. Needed only for dense-vector mode.
 
 **Search returns `index_not_ready`.**  
 No data for that collection/revision. Run `index` first; keep `--revision`
-consistent (default `local`).
+consistent (default `local`). For Retropus over HTTP, pass
+`"engine": "retropus"` on both `/api/v1/index` and `/api/v1/search` (default
+remains `auto`).
+
+**How do I enable Retropus on the HTTP API?**  
+Install `pip install 'openjiuwen-codesearch[retropus]'` and pass
+`"engine": "retropus"` on `POST /api/v1/index` and `POST /api/v1/search`.
+Retropus is never the default. Mixing retropus with a Milvus-backed index on
+the same `collection` returns **409**. Config knobs:
+`CodeSearchConfig.retropus` / [retropus-agent.md](../../feature/framework/retropus-agent.md).
 
 **What do the termination values mean?**
 

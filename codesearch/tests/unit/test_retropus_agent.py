@@ -244,3 +244,11 @@ def test_retriever_retropus_index_skips_milvus(monkeypatch):
     report = run(r.index_repository("/tmp/fake_repo"))
     assert report.files_total == 2
     assert r._store is None
+
+
+def test_engine_keeps_index_in_process_only_retropus():
+    assert CodeSearchRetriever.engine_keeps_index_in_process("retropus") is True
+    assert CodeSearchRetriever.engine_keeps_index_in_process("auto") is False
+    assert CodeSearchRetriever.engine_keeps_index_in_process("graph") is False
+    cfg = _config()
+    assert CodeSearchRetriever(config=cfg).keeps_index_in_process() is True

@@ -97,8 +97,8 @@ codesearch-server          # 源码部署亦可用 python start_backend.py
 | 接口 | 方法 | 说明 |
 |---|---|---|
 | `/api/health` | GET | 健康检查 |
-| `/api/v1/search` | POST | 同步检索，返回文件与行区间 |
-| `/api/v1/index` | POST | 提交索引作业（长任务），返回 `job_id`；**未配置 `CODESEARCH_INDEX_ROOTS` 时返回 403** |
+| `/api/v1/search` | POST | 同步检索，返回文件与行区间；可选 `engine`（默认 `auto`；Retropus 须显式 `"retropus"`） |
+| `/api/v1/index` | POST | 提交索引作业（长任务），返回 `job_id`；可选 `engine`（同上）；**未配置 `CODESEARCH_INDEX_ROOTS` 时返回 403** |
 | `/api/v1/jobs/{job_id}` | GET | 查询索引作业状态 |
 
 ### 安全边界（必读）
