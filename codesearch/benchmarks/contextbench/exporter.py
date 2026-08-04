@@ -10,7 +10,7 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from benchmarks.contextbench.dataset import DEFAULT_CONTEXTBENCH_DIR, DEFAULT_PARQUET
 
@@ -28,7 +28,7 @@ def write_predictions(
     preds: list[dict], results_dir: str, mode: str, topk: int, num_instances: int
 ) -> str:
     os.makedirs(results_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d__%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d__%H%M%S")
     output_path = os.path.join(
         results_dir, f"[{num_instances}]{timestamp}__{mode}_topk={topk}.jsonl"
     )

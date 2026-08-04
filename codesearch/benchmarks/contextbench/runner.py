@@ -106,7 +106,7 @@ async def run_benchmark(
         logger.warning("%d instances failed: %s", len(failures), failures)
 
         # 本仓全部实例完成，卸载 collection 释放查询内存
-        store = retriever._store
+        store = retriever.get_store()
         if store is not None and hasattr(store, "release"):
             await store.release()
             logger.info("Released collection '%s' from memory.", collection)

@@ -11,15 +11,19 @@ from openjiuwen_codesearch.domain.models import Snippet
 class CodeRetriever(Protocol):
     async def search(
         self, query: str, revision: str, topk: int, use_trigram: bool
-    ) -> list[Snippet]: ...
+    ) -> list[Snippet]:
+        ...
 
-    async def get_repo_map(self, revision: str) -> str: ...
+    async def get_repo_map(self, revision: str) -> str:
+        ...
 
     async def fetch_overlapping(
         self, revision: str, file_path: str, start_line: int, end_line: int
-    ) -> list[Snippet]: ...
+    ) -> list[Snippet]:
+        ...
 
-    async def has_revision(self, revision: str) -> bool: ...
+    async def has_revision(self, revision: str) -> bool:
+        ...
 
 
 class InMemoryRetriever:
@@ -59,13 +63,13 @@ class InMemoryRetriever:
     async def fetch_overlapping(
         self, revision: str, file_path: str, start_line: int, end_line: int
     ) -> list[Snippet]:
-        return [
-            s
-            for s in self._snippets
-            if s.file_path == file_path
-            and s.start_line <= end_line
-            and s.end_line >= start_line
-        ]
+        overlapping: list[Snippet] = []
+        for snippet in self._snippets:
+            if snippet.file_path != file_path:
+                continue
+            if snippet.start_line <= end_line and snippet.end_line >= start_line:
+                overlapping.append(snippet)
+        return overlapping
 
     async def has_revision(self, revision: str) -> bool:
         return revision == self._revision and bool(self._snippets)

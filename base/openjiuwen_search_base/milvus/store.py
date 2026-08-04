@@ -90,7 +90,7 @@ class MilvusCollectionClient:
             if not f.auto_id and f.name not in self._sparse_generated
         ]
 
-    def _records_to_columns(self, records: list[dict]) -> list[list]:
+    def records_to_columns(self, records: list[dict]) -> list[list]:
         fields = self.writable_fields()
         return [[record.get(name) for record in records] for name in fields]
 
@@ -103,7 +103,7 @@ class MilvusCollectionClient:
     async def _write(self, records: list[dict], op, batch_size: int) -> None:
         def _run():
             for i in range(0, len(records), batch_size):
-                op(self._records_to_columns(records[i : i + batch_size]))
+                op(self.records_to_columns(records[i:i + batch_size]))
 
         await asyncio.to_thread(_run)
 
@@ -148,7 +148,7 @@ class MilvusCollectionClient:
             for j in range(0, len(all_ids), heavy_batch_size):
                 records.extend(
                     self.collection.query(
-                        expr=ids_filter_builder(all_ids[j : j + heavy_batch_size]),
+                        expr=ids_filter_builder(all_ids[j:j + heavy_batch_size]),
                         output_fields=output_fields,
                         **kwargs,
                     )
@@ -163,9 +163,12 @@ class MilvusCollectionClient:
         anns_field: str,
         param: dict,
         limit: int,
-        expr: str,
-        output_fields: list[str],
+        **query,
     ):
+        """query 需含 expr / output_fields（具名封装，满足参数个数规范）。"""
+        expr = query["expr"]
+        output_fields = query["output_fields"]
+
         def _search():
             return self.collection.search(
                 data=data, anns_field=anns_field, param=param,

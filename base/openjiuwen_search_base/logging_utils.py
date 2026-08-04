@@ -3,9 +3,10 @@
 """最小 LogManager：stdlib logging + 敏感脱敏开关。
 
 `init()` 供应用入口调用一次；库代码只用 `get_logger()`，不配置日志。
-默认不会改动宿主应用已有的 root handler：若 root 上已有 handler，
-`init()` 只记录脱敏开关与日志目录而不重配（需要接管时显式传 `force=True`）。
-当前版本不含日志轮转与路径安全校验，长驻服务建议自行配置 handler。"""
+默认不会改动宿主应用已有的 root handler：若 root 上已有 handler，`init()`
+只记录脱敏开关与日志目录而不重配（需要接管时显式传 `force=True`）。
+当前版本不含日志轮转与路径安全校验，长驻服务建议自行配置 handler。
+"""
 
 import logging
 import os

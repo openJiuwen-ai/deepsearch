@@ -16,7 +16,12 @@ SCHEMA = {
     "type": "function",
     "function": {
         "name": "expand_context",
-        "description": "Fetch a specific line range from a specific file. Use this if a retrieved chunk is cut off. The fetched lines will be injected into memory as a new snippet that you can later save. Keep requests to ~50-200 lines to avoid context explosion.",
+        "description": (
+            "Fetch a specific line range from a specific file. Use this if a retrieved "
+            "chunk is cut off. The fetched lines will be injected into memory as a new "
+            "snippet that you can later save. Keep requests to ~50-200 lines to avoid "
+            "context explosion."
+        ),
         "parameters": {
             "type": "object",
             "properties": {

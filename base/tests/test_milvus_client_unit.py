@@ -53,7 +53,7 @@ def test_writable_fields_excludes_auto_and_generated():
 
 def test_records_to_columns_orders_by_schema():
     client = _client(FakeCollection())
-    cols = client._records_to_columns([{"text": "a", "id": 1}, {"id": 2}])
+    cols = client.records_to_columns([{"text": "a", "id": 1}, {"id": 2}])
     assert cols == [[1, 2], ["a", None]]  # 按 schema 字段序构列，缺失补 None
 
 

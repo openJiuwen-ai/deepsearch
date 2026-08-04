@@ -228,7 +228,7 @@ class MilvusStore(MilvusCollectionClient):
         # insert（同 PK 重复写入）。索引失败应当喊出来，由上层按实例记失败并继续。
         records: list[dict] = []
         for i in range(0, len(file_hashes), self._milvus_cfg.query_batch_size):
-            batch = file_hashes[i : i + self._milvus_cfg.query_batch_size]
+            batch = file_hashes[i:i + self._milvus_cfg.query_batch_size]
             records.extend(
                 await self.query_ids_then_fields(
                     expr=queries.hashes_filter(batch),

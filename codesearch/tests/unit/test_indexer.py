@@ -34,18 +34,21 @@ class FakeStore:
 
 
 class TestReconcileExisting:
-    def test_new_hash_goes_to_embed_list(self):
+    @staticmethod
+    def test_new_hash_goes_to_embed_list():
         upserts, to_embed = reconcile_existing([], ["h1"], "rev1", "inst1")
         assert upserts == [] and to_embed == ["h1"]
 
-    def test_existing_gets_revision_and_instance_appended(self):
+    @staticmethod
+    def test_existing_gets_revision_and_instance_appended():
         record = {"file_hash": "h1", "commits": ["old"], "instance_ids": ["i0"]}
         upserts, to_embed = reconcile_existing([record], ["h1"], "rev1", "inst1")
         assert to_embed == []
         assert upserts[0]["commits"] == ["old", "rev1"]
         assert upserts[0]["instance_ids"] == ["i0", "inst1"]
 
-    def test_already_tagged_record_not_upserted(self):
+    @staticmethod
+    def test_already_tagged_record_not_upserted():
         record = {"file_hash": "h1", "commits": ["rev1"], "instance_ids": ["inst1"]}
         upserts, to_embed = reconcile_existing([record], ["h1"], "rev1", "inst1")
         assert upserts == [] and to_embed == []
@@ -64,7 +67,8 @@ class TestBuildChunkRecords:
             calls=overrides.pop("calls", ["helperCall"]),
         )
         return build_chunk_records(
-            [chunk], "pkg/a.py", "hash1", "inst", "repo", "rev", self.CFG
+            [chunk], "pkg/a.py", "hash1", self.CFG,
+            instance_id="inst", repo_name="repo", revision="rev",
         )[0]
 
     def test_header_injected_with_line_span(self):
@@ -79,25 +83,34 @@ class TestBuildChunkRecords:
     def test_deterministic_id(self):
         assert self._one()["id"] == self._one()["id"]
 
-    def test_oversized_text_truncated_with_mark(self):
+    @staticmethod
+    def test_oversized_text_truncated_with_mark():
         cfg = IndexConfig(max_char_limit=200)
         chunk = Chunk(text="x" * 1000, start_line=1, end_line=1)
-        record = build_chunk_records([chunk], "a.py", "h", "i", "r", "v", cfg)[0]
+        record = build_chunk_records(
+            [chunk], "a.py", "h", cfg,
+            instance_id="i", repo_name="r", revision="v",
+        )[0]
         assert record["text"].endswith(TRUNCATION_MARK)
         assert len(record["text"].encode()) <= 200 + len(TRUNCATION_MARK)
 
     def test_trigram_field_populated(self):
         assert self._one()["text_trigram"]
 
-    def test_trigram_disabled_writes_empty_field(self):
+    @staticmethod
+    def test_trigram_disabled_writes_empty_field():
         cfg = IndexConfig(enable_trigram=False)
         chunk = Chunk(text="def f():\n    pass", start_line=1, end_line=2)
-        record = build_chunk_records([chunk], "a.py", "h", "i", "r", "v", cfg)[0]
+        record = build_chunk_records(
+            [chunk], "a.py", "h", cfg,
+            instance_id="i", repo_name="r", revision="v",
+        )[0]
         assert record["text_trigram"] == ""
 
 
 class TestDiscoverPythonFiles:
-    def test_symlink_loop_and_outside_link_not_followed(self, tmp_path):
+    @staticmethod
+    def test_symlink_loop_and_outside_link_not_followed(tmp_path):
         from openjiuwen_codesearch.indexing.indexer import discover_python_files
 
         repo = tmp_path / "repo"
@@ -113,7 +126,8 @@ class TestDiscoverPythonFiles:
         assert [f for f in files if "secret" in f] == []
         assert len(files) == 1 and files[0].endswith("a.py")
 
-    def test_oversized_file_skipped(self, tmp_path):
+    @staticmethod
+    def test_oversized_file_skipped(tmp_path):
         from openjiuwen_codesearch.indexing.indexer import discover_python_files
 
         repo = tmp_path / "repo"
@@ -123,7 +137,8 @@ class TestDiscoverPythonFiles:
         files = discover_python_files(str(repo), max_file_size_bytes=50)
         assert len(files) == 1 and files[0].endswith("ok.py")
 
-    def test_hidden_dirs_skipped(self, tmp_path):
+    @staticmethod
+    def test_hidden_dirs_skipped(tmp_path):
         from openjiuwen_codesearch.indexing.indexer import discover_python_files
 
         repo = tmp_path / "repo"
@@ -136,7 +151,8 @@ class TestDiscoverPythonFiles:
 
 
 class TestIndexRepository:
-    def _make_repo(self, tmp_path):
+    @staticmethod
+    def _make_repo(tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / "mod.py").write_text("def f():\n    return 1\n")
@@ -147,7 +163,8 @@ class TestIndexRepository:
         report = run(
             index_repository(
                 store, PythonAstChunker(), self._make_repo(tmp_path),
-                "inst", "repo", "rev1", IndexConfig(),
+                IndexConfig(),
+                instance_id="inst", repo_name="repo", revision="rev1",
             )
         )
         assert report.files_new == 1 and report.chunks_inserted >= 1
@@ -157,12 +174,16 @@ class TestIndexRepository:
     def test_reindex_same_content_new_revision_upserts(self, tmp_path):
         repo_dir = self._make_repo(tmp_path)
         store = FakeStore()
-        run(index_repository(store, PythonAstChunker(), repo_dir,
-                             "inst", "repo", "rev1", IndexConfig()))
+        run(index_repository(
+            store, PythonAstChunker(), repo_dir, IndexConfig(),
+            instance_id="inst", repo_name="repo", revision="rev1",
+        ))
         # 模拟已入库：把插入的记录作为存量，换 revision 重建
         store2 = FakeStore(existing=store.inserted)
-        report = run(index_repository(store2, PythonAstChunker(), repo_dir,
-                                      "inst2", "repo", "rev2", IndexConfig()))
+        report = run(index_repository(
+            store2, PythonAstChunker(), repo_dir, IndexConfig(),
+            instance_id="inst2", repo_name="repo", revision="rev2",
+        ))
         # 旧 wrapper 丢 upsert 的 bug（notes #13）的回归测试：必须发生 upsert
         assert report.files_new == 0 and report.files_reused == 1
         assert store2.upserted, "existing files must be re-tagged via upsert"

@@ -40,8 +40,7 @@ class RunRegistry(Generic[T]):
 
     @contextmanager
     def session(self, ctx: T) -> Iterator[str]:
-        """结构化注册：`with registry.session(ctx) as run_id:`——
-        把"必须 finally 注销"的调用方纪律变成结构，长驻服务防泄漏。"""
+        """结构化注册：`with registry.session(ctx) as run_id:`——把注销纪律结构化。"""
         run_id = self.register(ctx)
         try:
             yield run_id
