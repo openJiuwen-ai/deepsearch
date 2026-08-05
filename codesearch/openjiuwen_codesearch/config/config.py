@@ -26,15 +26,31 @@ class CodeSearchConfig(BaseModel):
 
     @classmethod
     def from_env(cls) -> "CodeSearchConfig":
-        """环境变量：OPENROUTER_API_KEY（LLM/embedding）、
-        MILVUS_HOST / MILVUS_PORT / MILVUS_TOKEN（与 e2e 测试及 deepsearch 惯例一致）。
+        """从环境变量组装配置（OpenAI 兼容端点）。
+
+        与 deepsearch ``LLMConfig`` 一致，检索侧只认两组字段：
+          ``api_key`` ← ``CODESEARCH_LLM_API_KEY``
+          ``base_url`` ← ``CODESEARCH_LLM_BASE_URL``（默认空，须显式配置）
+
+        模型名（可选）：
+          ``CODESEARCH_LLM_MODEL``（主）、``CODESEARCH_FILTER_LLM_MODEL``（过滤）
+
+        Milvus：``MILVUS_HOST`` / ``MILVUS_PORT`` / ``MILVUS_TOKEN``。
         """
-        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        api_key = os.getenv("CODESEARCH_LLM_API_KEY", "")
+        base_url = os.getenv("CODESEARCH_LLM_BASE_URL", "")
+        main_model = os.getenv("CODESEARCH_LLM_MODEL", "openai/gpt-5")
+        filter_model = os.getenv("CODESEARCH_FILTER_LLM_MODEL", "openai/gpt-5-mini")
         return cls(
             llm=LLMSuite(
-                main=LLMConfig(model_name="openai/gpt-5", api_key=api_key),
+                main=LLMConfig(
+                    model_name=main_model, api_key=api_key, base_url=base_url
+                ),
                 filter=LLMConfig(
-                    model_name="openai/gpt-5-mini", api_key=api_key, max_tokens=2048
+                    model_name=filter_model,
+                    api_key=api_key,
+                    base_url=base_url,
+                    max_tokens=2048,
                 ),
             ),
             embed=EmbedConfig(api_key=api_key),

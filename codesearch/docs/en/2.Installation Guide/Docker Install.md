@@ -18,7 +18,8 @@ git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
 
 docker run --rm --name codesearch-server \
   -p 8100:8100 \
-  -e OPENROUTER_API_KEY \
+  -e CODESEARCH_LLM_API_KEY \
+  -e CODESEARCH_LLM_BASE_URL \
   -e MILVUS_HOST=host.docker.internal \
   -e MILVUS_PORT=19530 \
   -e CODESEARCH_INDEX_ROOTS=/repo \
@@ -44,7 +45,8 @@ Default `CMD` is `codesearch-server`. For CLI:
 
 ```sh
 docker run --rm \
-  -e OPENROUTER_API_KEY \
+  -e CODESEARCH_LLM_API_KEY \
+  -e CODESEARCH_LLM_BASE_URL \
   -e MILVUS_HOST=host.docker.internal \
   -v /path/to/your/repo:/repo \
   --entrypoint codesearch \

@@ -94,10 +94,22 @@ def reconcile_existing(
     revision: str,
     instance_id: str,
 ) -> tuple[list[dict], list[str]]:
-    """已入库文件追加 revision/instance 标记；未入库文件进入待嵌入列表。
+    """按**文件内容哈希**决定复用已有 chunk 还是重新切块/嵌入。
 
-    返回 (records_to_upsert, hashes_to_embed)。纯函数，行为与旧
-    `find_files_in_collection` 的核心循环一致。
+    调用方先用 ``fetch_records_by_hashes(all_hashes)`` 从 collection 拉回
+    ``existing_records``（命中条件：记录的 ``file_hash`` 落在本次仓库文件哈希集合里）。
+    粒度是**整文件**内容哈希，不是单条 snippet id。
+
+    对每个 ``file_hash``：
+
+    * **哈希已在 collection 中**：该文件内容未变，对应 chunk 记录可复用。
+      若记录的 ``commits`` 尚无本次 ``revision``，则追加；``instance_ids``
+      同理追加 ``instance_id``。有变更的记录进入 ``records_to_upsert``，
+      **不**进入 ``hashes_to_embed``（不再切块/嵌入）。
+    * **哈希不在 collection 中**：视为新文件（或内容已改导致哈希变了），
+      将该 hash 放入 ``hashes_to_embed``，后续切块并构造新记录插入。
+
+    返回 ``(records_to_upsert, hashes_to_embed)``。
     """
     by_hash: dict[str, list[dict]] = {}
     for record in existing_records:

@@ -59,6 +59,7 @@ class CodeSearchRetriever:
         return self._store
 
     def _ensure_llms(self) -> tuple[LLMClient, LLMClient]:
+        """``search`` 专用：返回非空的 (main, filter)。缺则按 config.llm 创建。"""
         if self._main_llm is None or self._filter_llm is None:
             from openjiuwen_codesearch.llm.factory import create_llm_client
 

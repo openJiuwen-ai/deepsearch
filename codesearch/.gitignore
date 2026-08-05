@@ -12,8 +12,9 @@ _emb_*.db
 *.egg-info/
 .DS_Store
 
-# ContextBench 以 git submodule 引入（见 README），本地拷贝不入库
-third_party/
+third_party/*
+!third_party/contextbench
+!third_party/contextbench/**
 
 # 构建与测试产物（本地生成，不入库）
 build/

@@ -103,18 +103,24 @@ codesearch index --repo /path/to/your/repo --collection my_repo
 ```
 
 ```sh
-export OPENROUTER_API_KEY="your-key"
+export CODESEARCH_LLM_API_KEY="your-key"
+export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"   # 任意 OpenAI 兼容端点
+# 可选：覆盖默认模型（默认 main=openai/gpt-5，filter=openai/gpt-5-mini）
+# export CODESEARCH_LLM_MODEL="openai/gpt-5"
+# export CODESEARCH_FILTER_LLM_MODEL="openai/gpt-5-mini"
 codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
 ```
 
-Python API 用法、参数说明与输出格式见 [快速开始](docs/zh/3.快速上手/3.快速上手.md)。
+检索使用两个模型：**main**（多轮决策）默认 `openai/gpt-5`，**filter**（逐行提取）默认 `openai/gpt-5-mini`。换端点时请把模型名改成该服务实际支持的名字。Python API 与完整说明见 [快速开始](docs/zh/3.快速上手/3.快速上手.md)。
 
 # 📊 评测
 
 可在 [ContextBench](docs/zh/3.快速上手/3.快速上手.md) 上评估检索质量——该数据集
-由真实仓库 issue 与标注好的上下文答案组成。数据集以 git submodule 引入：
+由真实仓库 issue 与标注好的上下文答案组成。数据集以 git submodule 引入
+（登记在仓库根 `.gitmodules`，路径 `codesearch/third_party/contextbench`）：
 
 ```sh
+# 在 monorepo 根目录执行
 git submodule update --init --recursive
 ```
 

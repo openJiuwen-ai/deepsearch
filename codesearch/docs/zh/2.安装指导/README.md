@@ -61,7 +61,7 @@ HTTP 形态同样：`POST /api/v1/index` 的 `repo_path` 必须是服务进程�
 |---|---|---|
 | Python | >= 3.11 | |
 | Milvus | >= 2.5（推荐 2.6.x） | 索引与检索均需要；全文检索依赖 2.5+ 的 BM25 Function |
-| LLM API Key | `OPENROUTER_API_KEY` 或任意 OpenAI 兼容端点 | 仅检索需要；默认稀疏索引模式**不需要** |
+| LLM API Key | `CODESEARCH_LLM_API_KEY` + `CODESEARCH_LLM_BASE_URL`（OpenAI 兼容） | 仅检索需要；默认稀疏索引模式**不需要** |
 
 > **语言范围**：当前语法切块器 **仅支持 Python（`.py`）**。对其它语言仓库执行
 > 索引会得到 0 个文件，属预期行为，不是安装失败。
@@ -118,7 +118,10 @@ codesearch-server          # 源码部署亦可用 python start_backend.py
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `OPENROUTER_API_KEY` | 空 | LLM API 密钥（检索必需） |
+| `CODESEARCH_LLM_API_KEY` | 空 | LLM API 密钥（检索必需） |
+| `CODESEARCH_LLM_BASE_URL` | 空 | OpenAI 兼容端点（须显式配置，例如 `https://api.openai.com/v1`） |
+| `CODESEARCH_LLM_MODEL` | `openai/gpt-5` | **main** 模型（多轮检索决策）；不设则用此默认 |
+| `CODESEARCH_FILTER_LLM_MODEL` | `openai/gpt-5-mini` | **filter** 模型（逐行提取）；不设则用此默认 |
 | `MILVUS_HOST` | `localhost` | 向量库地址 |
 | `MILVUS_PORT` | `19530` | 向量库端口 |
 | `MILVUS_TOKEN` | 空 | 向量库鉴权（`user:password` 或 API token） |
@@ -127,7 +130,7 @@ codesearch-server          # 源码部署亦可用 python start_backend.py
 | `CODESEARCH_LOG_LEVEL` | `INFO` | 服务日志级别 |
 | `CODESEARCH_INDEX_ROOTS` | 空 | 允许索引的根目录白名单（`:` 分隔）；留空则 `/api/v1/index` 返回 403 |
 
-也可以不使用环境变量，直接构造 `CodeSearchConfig` 注入。
+也可以不使用环境变量，直接构造 `CodeSearchConfig`（字段与 deepsearch 一致：`model_name` / `base_url` / `api_key`）注入。检索固定使用 **main + filter** 两个模型；只配 key/base_url 时模型名取上表默认值，换端点时请同步改 `CODESEARCH_LLM_MODEL` / `CODESEARCH_FILTER_LLM_MODEL`（或代码里的 `model_name`）。
 
 ## Milvus 部署
 

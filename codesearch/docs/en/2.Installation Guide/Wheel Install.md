@@ -27,7 +27,11 @@ With uv, add `--prerelease=allow` (openJiuwen pins `a2a-sdk==1.0.0a0`).
 ```sh
 git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
 
-export OPENROUTER_API_KEY="your-key"
+export CODESEARCH_LLM_API_KEY="your-key"
+export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"   # any OpenAI-compatible endpoint
+# optional: defaults main=openai/gpt-5, filter=openai/gpt-5-mini
+# export CODESEARCH_LLM_MODEL="openai/gpt-5"
+# export CODESEARCH_FILTER_LLM_MODEL="openai/gpt-5-mini"
 export MILVUS_HOST=localhost MILVUS_PORT=19530
 export CODESEARCH_INDEX_ROOTS="/data/repos"
 codesearch index --repo /data/repos/agent-core --collection agent_core

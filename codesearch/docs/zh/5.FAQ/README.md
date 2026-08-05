@@ -78,7 +78,11 @@ export CODESEARCH_INDEX_ROOTS="/data/repos"
 可据此按所用端点的单价折算费用（结果本身不含金额）。
 
 **能否使用本地模型或其他厂商的模型？**  
-可以。`LLMConfig` 接受任意 OpenAI 兼容端点，主模型与筛选模型可分别配置。
+可以。须配置 `CODESEARCH_LLM_API_KEY` 与 `CODESEARCH_LLM_BASE_URL`（任意 OpenAI 兼容端点）。  
+检索使用两个模型：**main**（决策）默认 `openai/gpt-5`，**filter**（逐行提取）默认 `openai/gpt-5-mini`；  
+可用 `CODESEARCH_LLM_MODEL` / `CODESEARCH_FILTER_LLM_MODEL` 覆盖，或在代码里构造 `LLMSuite`。  
+换 Ollama / 自建网关时请把模型名改成该端点实际支持的名字。详见
+[快速上手](../3.快速上手/3.快速上手.md) 与 [安装指导 · 环境变量](../2.安装指导/README.md#环境变量)。
 
 ## 运行
 

@@ -16,7 +16,7 @@
 |---|---|
 | Python | >= 3.11（建议独立虚拟环境） |
 | Milvus | >= 2.5（推荐 2.6.x） |
-| LLM API Key | `OPENROUTER_API_KEY`（检索需要） |
+| LLM API Key | `CODESEARCH_LLM_API_KEY` + `CODESEARCH_LLM_BASE_URL`（检索需要） |
 
 > **待索引的代码仓**：须是运行 `codesearch` / `codesearch-server` 的机器上的
 > **本地目录**。远程 git 仓库请先 clone，再对本地路径建索引。详见
@@ -64,7 +64,11 @@ codesearch-server --help   # 或直接 codesearch-server 启动
 git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
 export TARGET_REPO=/data/repos/agent-core
 
-export OPENROUTER_API_KEY="your-key"
+export CODESEARCH_LLM_API_KEY="your-key"
+export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"   # 任意 OpenAI 兼容端点
+# 可选：默认 main=openai/gpt-5，filter=openai/gpt-5-mini
+# export CODESEARCH_LLM_MODEL="openai/gpt-5"
+# export CODESEARCH_FILTER_LLM_MODEL="openai/gpt-5-mini"
 export MILVUS_HOST=localhost MILVUS_PORT=19530
 export CODESEARCH_HOST=0.0.0.0 CODESEARCH_PORT=8100
 export CODESEARCH_INDEX_ROOTS="/data/repos"
