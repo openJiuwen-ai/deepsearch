@@ -13,9 +13,16 @@ and do not add facts, numbers, entities, examples, or judgments from outside the
 **Abstract**
   - Output **exactly one block of text** - no bullet points, no headings, no line breaks, no paragraph breaks 
   - Summarize only factual, critical information derived from the sub-reports - avoid vague, generic, or speculative statements.
-  - Key information must be highlighted in bold font.(e.g., **18%**, **关键信息**).
+  - Highlight key numbers and terms in bold (e.g., **18%**, **关键信息**). Use inline math `$...$` for formulas (e.g., `$FV=PV\cdot e^{rT}$`), never bold-wrap formulas.
 
 Do not include any section titles (e.g., "摘要"), metadata, or explanatory notes. Begin directly with the summary content.
+
+## Mathematical Formula Syntax
+- The abstract is a single paragraph; use **only inline math** `$...$` (single dollar), never block math `$$...$$`.
+- Use standard LaTeX inside math: `\ln`, `e^{rT}`, `\frac`, `\sqrt{}`, `\sigma`, `\mu`, `\Pi`.
+- Do NOT wrap formulas in bold (`**...**`); bold is reserved for numbers and key terms only.
+- Balance every delimiter pair: each `\left` needs a matching `\right`, each `{` a matching `}`.
+- Keep each formula self-contained; a malformed formula breaks HTML and DOCX rendering.
 
 {% if audience_role or tone %}
 ## Report Detail Constraints
