@@ -61,8 +61,7 @@ def _section_list_description(section_num: int, include_format_requirements: boo
         "Put substantive research scope, time ranges, dimensions, examples, and other "
         "sub-requirements inside the relevant description, not as extra top-level sections. "
         "Put tables, exact columns, rows, enumeration, length/style constraints, and source-use "
-        "restrictions inside format_requirements. Put requests for charts, diagrams, flows, or "
-        "visual relationships in visualization_requirements instead of format_requirements. "
+        "restrictions inside format_requirements. "
         if include_format_requirements
         else "Put bullets, nested lists, tables, time ranges, dimensions, examples, and other "
         "sub-requirements inside the relevant description, not as extra top-level sections. "
@@ -112,28 +111,12 @@ def _format_requirements_description() -> str:
     return (
         "Output format requirements that apply to this section, extracted from the user request. "
         "Include table requirements, exact column names/order, required row objects, item-by-item "
-        "enumeration, length/style constraints, source restrictions, and non-visual deliverable "
-        "format rules. Do not put chart, diagram, flow, or visual relationship requests here. "
+        "enumeration, length/style constraints, source restrictions, and deliverable format rules. "
         "Use an empty array [] when there are no section-specific format requirements."
     )
 
 
-def _visualization_requirements_description(vlm_chart_generator_enable: bool = False) -> str:
-    description = (
-        "Visualization intent for this section, such as a requested chart, diagram, process, "
-        "or relationship view. Keep the requested subject, stages, entities, and relationships "
-        "here; keep factual research scope in description. Use [] when the user did not request "
-        "a visualization."
-    )
-    if vlm_chart_generator_enable:
-        description += (
-            " In VLM chart mode this is planning metadata only: the section writer must not "
-            "render Mermaid or chart code in the prose."
-        )
-    return description
-
-
-def _normalize_string_list(value) -> list[str]:
+def _normalize_format_requirements(value) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if str(item).strip()]
     if isinstance(value, str) and value.strip():
@@ -149,11 +132,8 @@ def generate_outline(
         Section(
             title=section.get("title", ""),
             description=section.get("description", ""),
-            format_requirements=_normalize_string_list(
+            format_requirements=_normalize_format_requirements(
                 section.get("format_requirements", [])
-            ),
-            visualization_requirements=_normalize_string_list(
-                section.get("visualization_requirements", [])
             ),
             is_core_section=section.get("is_core_section", False),
             id=section.get("id", ""),
@@ -195,7 +175,7 @@ def generate_outline(
     return outline
 
 
-def create_outline_tool(section_num: int, vlm_chart_generator_enable: bool = False):
+def create_outline_tool(section_num: int):
     """获取outline生成工具"""
 
     card = ToolCard(
@@ -231,15 +211,6 @@ def create_outline_tool(section_num: int, vlm_chart_generator_enable: bool = Fal
                             "format_requirements": {
                                 "type": "array",
                                 "description": _format_requirements_description(),
-                                "items": {
-                                    "type": "string"
-                                },
-                            },
-                            "visualization_requirements": {
-                                "type": "array",
-                                "description": _visualization_requirements_description(
-                                    vlm_chart_generator_enable
-                                ),
                                 "items": {
                                     "type": "string"
                                 },
@@ -297,7 +268,7 @@ def create_outline_tool(section_num: int, vlm_chart_generator_enable: bool = Fal
     return outline_tool
 
 
-def creat_dep_driving_outline_tool(section_num: int, vlm_chart_generator_enable: bool = False):
+def creat_dep_driving_outline_tool(section_num: int):
     """获取依赖驱动大纲生成工具"""
     card = ToolCard(
         id="dep_driving_generate_outline",
@@ -337,15 +308,6 @@ def creat_dep_driving_outline_tool(section_num: int, vlm_chart_generator_enable:
                             "format_requirements": {
                                 "type": "array",
                                 "description": _format_requirements_description(),
-                                "items": {
-                                    "type": "string"
-                                },
-                            },
-                            "visualization_requirements": {
-                                "type": "array",
-                                "description": _visualization_requirements_description(
-                                    vlm_chart_generator_enable
-                                ),
                                 "items": {
                                     "type": "string"
                                 },
@@ -569,19 +531,9 @@ class Outliner:
         error_msg = ""
         section_num = current_inputs.get("section_num")
         if self.with_dep_driving:
-            default_tool = creat_dep_driving_outline_tool(
-                section_num,
-                vlm_chart_generator_enable=current_inputs.get(
-                    "vlm_chart_generator_enable", False
-                ),
-            )
+            default_tool = creat_dep_driving_outline_tool(section_num)
         else:
-            default_tool = create_outline_tool(
-                section_num,
-                vlm_chart_generator_enable=current_inputs.get(
-                    "vlm_chart_generator_enable", False
-                ),
-            )
+            default_tool = create_outline_tool(section_num)
         tools = [default_tool]
         api_tools = build_runtime_api_tools(
             current_inputs.get("api_tools_config", {}).get("query_understanding_tools", []),

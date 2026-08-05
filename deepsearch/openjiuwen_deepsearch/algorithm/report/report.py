@@ -884,13 +884,7 @@ class Reporter:
         is_dict = isinstance(outline, dict)
         obj = Outline.model_validate(outline) if is_dict else outline
 
-        data = obj.model_dump(
-            exclude={
-                "sections": {
-                    "__all__": {"plans", "doc_selection_debug", "visualization_requirements"}
-                }
-            }
-        )
+        data = obj.model_dump(exclude={"sections": {"__all__": {"plans", "doc_selection_debug"}}})
 
         return data if is_dict else Outline.model_validate(data)
 

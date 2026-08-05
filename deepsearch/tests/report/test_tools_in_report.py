@@ -604,7 +604,6 @@ def _make_outline_dict():
                 "title": "Chapter One",
                 "description": "desc one",
                 "format_requirements": [],
-                "visualization_requirements": ["Show the process relationships"],
                 "is_core_section": True,
                 "parent_ids": [],
                 "relationships": [],
@@ -651,7 +650,6 @@ def test_export_outline_without_plans_strips_plans_from_dict():
     for sec in result.get("sections", []):
         assert "plans" not in sec or sec["plans"] == []
         assert "step_result" not in str(sec)
-        assert "visualization_requirements" not in sec
 
     # Title and section metadata are preserved
     assert result["title"] == "Test Report"
@@ -707,7 +705,6 @@ def test_export_outline_without_plans_with_outline_object():
         plans=[plan],
         section_focus="market_size",
         focus_dimensions=["size"],
-        visualization_requirements=["Show the process relationships"],
     )
     outline = Outline(
         thought="T" * 10_000,
@@ -721,6 +718,5 @@ def test_export_outline_without_plans_with_outline_object():
     # plans must be stripped
     for sec in result.sections:
         assert sec.plans == []
-        assert sec.visualization_requirements == []
     # step_result must not leak
     assert "R" * 100 not in str(result)
