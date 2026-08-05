@@ -26,7 +26,13 @@ milvus = ["pymilvus>=2.4,<3"]  # 已验证组合：客户端 2.6.x + 服务端 v
 embed = ["aiohttp>=3.9"]
 # 已验证该版本同时提供 foundation.llm 与 workflow/Runner 两组 API
 llm = ["openjiuwen==0.1.10.post3"]
-bench = ["pandas>=2.0", "pyarrow>=14"]
+bench = [
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "tree-sitter>=0.20.4,<0.26",
+    "tree-sitter-languages==1.10.2; python_version < '3.12'",
+    "tree-sitter-language-pack>=0.10; python_version >= '3.12'",
+]
 dev = ["pytest>=8"]
 # 服务形态依赖（随包分发 openjiuwen_codesearch/server/；装 [server] 后可用 codesearch-server）
 server = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic-settings>=2.5"]

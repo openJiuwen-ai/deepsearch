@@ -125,12 +125,13 @@ git submodule update --init --recursive
 ```
 
 ```sh
-pip install -e '.[bench]'
+# 在 codesearch/ 目录
+pip install -e '.[bench,milvus,llm]'   # [bench]=读数+评分；检索另需 milvus/llm
 python -m benchmarks.contextbench.runner --num-instances 32
 ```
 
-预测文件与评分结果输出至 `./results/`，指标覆盖文件、符号、区间、行四个粒度，
-各含 coverage 与 precision。完整说明见
+预测与自动评分结果在 `./results/`。依赖以产品 `[bench]` 为准（含 pandas/
+pyarrow 与 tree-sitter*），不必再装上游 `requirements.txt`。完整说明见
 [快速上手](docs/zh/3.快速上手/3.快速上手.md#评测)。
 
 # 💻 开发指南

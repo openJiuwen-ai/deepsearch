@@ -138,12 +138,14 @@ git submodule update --init --recursive
 ```
 
 ```sh
-pip install -e '.[bench]'
+# from codesearch/
+pip install -e '.[bench,milvus,llm]'   # [bench]=I/O+scoring; milvus/llm for retrieval
 python -m benchmarks.contextbench.runner --num-instances 32
 ```
 
-Predictions and scores are written to `./results/`. Metrics cover file, symbol,
-span and line granularity, each with coverage and precision. Full instructions:
+Predictions and auto-scored metrics go to `./results/`. Use the product
+`[bench]` extra (pandas/pyarrow + tree-sitter*); do not substitute upstream
+`requirements.txt`. Details:
 [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md#benchmarking).
 
 # 💻 Developer guide

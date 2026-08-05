@@ -74,7 +74,7 @@ HTTP 形态同样：`POST /api/v1/index` 的 `repo_path` 必须是服务进程�
 | `server` | fastapi、uvicorn、pydantic-settings | 以 HTTP 服务方式运行 |
 | `llm` | openjiuwen | 工作流图引擎与真实模型调用 |
 | `embed` | aiohttp | 启用稠密向量模式 |
-| `bench` | pandas、pyarrow | 运行评测 |
+| `bench` | pandas、pyarrow、tree-sitter*（<3.12：languages；≥3.12：language-pack） | ContextBench 评测；以本 extra 为准，勿用上游 `requirements.txt` 代替 |
 | `dev` | pytest | 开发与测试 |
 
 核心包仅依赖 pydantic；不安装任何分组也可运行单元测试与内存态检索器。
