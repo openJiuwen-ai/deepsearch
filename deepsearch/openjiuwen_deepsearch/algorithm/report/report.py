@@ -10,6 +10,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Tuple, List, Dict
 from urllib.parse import urlparse
 
@@ -47,6 +48,12 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
     validate_visualization_normalization_schema,
 )
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
+from openjiuwen_deepsearch.algorithm.report.visualization_metrics import (
+    VisualizationTaskMetrics,
+    build_visualization_generation_summary,
+    build_visualization_insert_summary,
+    elapsed_ms,
+)
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.config.config import Config
@@ -137,6 +144,16 @@ class VisualizationInsertRenderContext:
     title_meta_map: dict[int, dict]
     newline: str
     language: str
+
+
+@dataclass
+class VisualizationMermaidContext:
+    visualization_content: dict
+    extracted_obj: dict
+    visualization_dict: dict
+    max_attempt_num: int
+    section_idx: int
+    metrics: VisualizationTaskMetrics | None = None
 
 
 @dataclass
@@ -2741,10 +2758,13 @@ class Reporter:
         section_idx: int,
         section_outline: str,
         max_attempt_num: int,
+        metrics: VisualizationTaskMetrics | None = None,
     ) -> dict:
         """Validate extracted chart data with compliance prompt."""
         payload = (extracted_chart_json or "").strip()
         for attempt in range(max_attempt_num):
+            if attempt > 0 and metrics is not None:
+                metrics.record_retry("chart_compliance")
             try:
                 llm_input = apply_system_prompt(
                     "chart_compliance_validate",
@@ -2815,11 +2835,14 @@ class Reporter:
         origin_content: str,
         section_idx: int,
         max_attempt_num: int,
+        metrics: VisualizationTaskMetrics | None = None,
     ) -> dict:
         """Validate extracted chart data traceability with origin content."""
         payload = (extracted_chart_json or "").strip()
         origin_text = (origin_content or "").strip()
         for attempt in range(max_attempt_num):
+            if attempt > 0 and metrics is not None:
+                metrics.record_retry("chart_traceability")
             try:
                 llm_input = apply_system_prompt(
                     "chart_data_traceability_check",
@@ -2890,15 +2913,23 @@ class Reporter:
         visualization_content: dict,
         max_attempt_num: int,
         section_idx: int,
+        metrics: VisualizationTaskMetrics | None = None,
     ) -> tuple[bool, dict, dict | None]:
         extract_ok = False
         extracted_obj = None
         validation_error = ""
         previous_records: str | None = None
         for i in range(max_attempt_num):
-            visualization_content = await self._extract_data_from_text(
-                visualization_dict, validation_error, previous_records
-            )
+            if i > 0 and metrics is not None:
+                metrics.record_retry("extract_data")
+            extract_started_at = perf_counter()
+            try:
+                visualization_content = await self._extract_data_from_text(
+                    visualization_dict, validation_error, previous_records
+                )
+            finally:
+                if metrics is not None:
+                    metrics.record_stage("extract_data", extract_started_at)
             if not LogManager.is_sensitive():
                 logger.debug("%s [process_visualization_task] Extract data: %s.", EFFECT_SUB_REPORT_TAG,
                              visualization_content)
@@ -2948,12 +2979,16 @@ class Reporter:
                 visualization_content[
                     "sub_section_visualization_content"
                 ] = raw_payload
+                traceability_started_at = perf_counter()
                 traceability = await self._validate_chart_traceability(
                     raw_payload,
                     visualization_dict.get("origin_content", ""),
                     section_idx,
                     max_attempt_num,
+                    metrics,
                 )
+                if metrics is not None:
+                    metrics.record_stage("chart_traceability", traceability_started_at)
                 if not traceability.get("valid", False):
                     traceability_error = (
                         traceability.get("error_msg", "") or ""
@@ -2979,12 +3014,16 @@ class Reporter:
                     previous_records = raw_payload or None
                     extract_ok = False
                     continue
+                compliance_started_at = perf_counter()
                 compliance = await self._validate_chart_compliance(
                     raw_payload,
                     section_idx,
                     visualization_dict.get("section_outline", ""),
                     max_attempt_num,
+                    metrics,
                 )
+                if metrics is not None:
+                    metrics.record_stage("chart_compliance", compliance_started_at)
                 if compliance.get("valid", False):
                     validation_error = ""
                     previous_records = None
@@ -3036,24 +3075,101 @@ class Reporter:
 
     async def _build_visualization_mermaid(
         self,
-        visualization_content: dict,
-        extracted_obj: dict,
-        visualization_dict: dict,
-        max_attempt_num: int,
-        section_idx: int,
+        context: VisualizationMermaidContext,
     ) -> dict:
-        normalized = await self._normalize_visualization_content(
-            visualization_content,
-            extracted_obj,
-            visualization_dict,
-            max_attempt_num,
-            section_idx,
-        )
+        visualization_content = context.visualization_content
+        section_idx = context.section_idx
+        metrics = context.metrics
+        normalize_started_at = perf_counter()
+        normalized = await self._normalize_visualization_content(context)
+        if metrics is not None:
+            metrics.record_stage("normalize_units", normalize_started_at)
         if not normalized:
             return visualization_content
-        if not self._precheck_value_variation(visualization_content, section_idx):
+
+        precheck_started_at = perf_counter()
+        has_value_variation = self._precheck_value_variation(
+            visualization_content, section_idx
+        )
+        if metrics is not None:
+            metrics.record_stage("value_variation_precheck", precheck_started_at)
+        if not has_value_variation:
             return visualization_content
-        return self._generate_mermaid_code(visualization_content, section_idx)
+
+        render_started_at = perf_counter()
+        result = self._generate_mermaid_code(visualization_content, section_idx)
+        if metrics is not None:
+            metrics.record_stage("mermaid_render", render_started_at)
+        return result
+
+    @staticmethod
+    def _parse_visualization_number(value: str) -> int | float | None:
+        normalized_value = value.strip().replace(",", "").replace("，", "")
+        try:
+            numeric_value = Decimal(normalized_value)
+        except (InvalidOperation, ValueError):
+            return None
+        if not numeric_value.is_finite():
+            return None
+        if numeric_value == numeric_value.to_integral_value():
+            return int(numeric_value)
+        return float(numeric_value)
+
+    @staticmethod
+    def _scale_visualization_value(value: int | float, divisor: int) -> int | float:
+        scaled = Decimal(str(value)) / Decimal(divisor)
+        if scaled == scaled.to_integral_value():
+            return int(scaled)
+        return float(scaled)
+
+    @classmethod
+    def _normalize_same_unit_records_locally(
+        cls,
+        records: list,
+        image_type: str,
+    ) -> dict | None:
+        if image_type not in ("bar", "line", "pie"):
+            return None
+
+        normalized_records = []
+        normalized_unit = None
+        for row in records:
+            if not isinstance(row, list) or len(row) != 3:
+                return None
+            x_value, numeric_text, unit_text = row
+            if not (
+                isinstance(x_value, str)
+                and isinstance(numeric_text, str)
+                and isinstance(unit_text, str)
+            ):
+                return None
+            x_value = x_value.strip()
+            unit_text = unit_text.strip()
+            if not x_value or not unit_text:
+                return None
+            if normalized_unit is None:
+                normalized_unit = unit_text
+            if unit_text != normalized_unit:
+                return None
+
+            parsed_value = cls._parse_visualization_number(numeric_text)
+            if parsed_value is None:
+                return None
+            normalized_records.append([x_value, parsed_value])
+
+        if normalized_unit is None:
+            return None
+
+        if normalized_unit.startswith("万"):
+            max_abs_value = max(abs(float(row[1])) for row in normalized_records)
+            if max_abs_value >= 10000:
+                normalized_unit = "亿" + normalized_unit[1:]
+                normalized_records = [
+                    [row[0], cls._scale_visualization_value(row[1], 10000)]
+                    for row in normalized_records
+                ]
+
+        return {"unit": normalized_unit, "records": normalized_records}
 
     @staticmethod
     def _parse_visualization_number(value: str) -> int | float | None:
@@ -3126,12 +3242,14 @@ class Reporter:
 
     async def _normalize_visualization_content(
         self,
-        visualization_content: dict,
-        extracted_obj: dict,
-        visualization_dict: dict,
-        max_attempt_num: int,
-        section_idx: int,
+        context: VisualizationMermaidContext,
     ) -> bool:
+        visualization_content = context.visualization_content
+        extracted_obj = context.extracted_obj
+        visualization_dict = context.visualization_dict
+        max_attempt_num = context.max_attempt_num
+        section_idx = context.section_idx
+        metrics = context.metrics
         # Extracted schema is valid here.
         image_title = extracted_obj.get("image_title", "")
         image_type = extracted_obj.get("image_type", "")
@@ -3191,6 +3309,8 @@ class Reporter:
             "sub_section_visualization_normalize_units", normalize_context
         )
         for j in range(max_attempt_num):
+            if j > 0 and metrics is not None:
+                metrics.record_retry("normalize_units")
             normalize_output = await ainvoke_llm_with_stats(
                 llm=self._llm,
                 messages=normalize_input,
@@ -3246,12 +3366,16 @@ class Reporter:
         """Process one visualization task (LLM content + Mermaid generation)"""
         section_idx = visualization_dict.get("section_idx", 1)
         max_attempt_num = visualization_dict.get("max_attempt_num", 3)
+        metrics = VisualizationTaskMetrics(section_idx=section_idx)
         # Extract structured data
         visualization_content = dict(rs_success=True, visualization_content="")
         origin_content = (visualization_dict.get("origin_content") or "").strip()
         if not origin_content:
             visualization_content["rs_success"] = False
             visualization_content["error_msg"] = "origin_content_empty"
+            visualization_content["_visualization_metrics"] = metrics.finish(
+                False, "origin_content_empty"
+            )
             return visualization_content
         extract_ok, visualization_content, extracted_obj = (
             await self._extract_visualization_data(
@@ -3259,22 +3383,34 @@ class Reporter:
                 visualization_content,
                 max_attempt_num,
                 section_idx,
+                metrics,
             )
         )
         if not extract_ok:
+            visualization_content["_visualization_metrics"] = metrics.finish(
+                False, visualization_content.get("error_msg", "extract_data_failed")
+            )
             return visualization_content
 
-        return await self._build_visualization_mermaid(
-            visualization_content,
-            extracted_obj,
-            visualization_dict,
-            max_attempt_num,
-            section_idx,
+        mermaid_context = VisualizationMermaidContext(
+            visualization_content=visualization_content,
+            extracted_obj=extracted_obj,
+            visualization_dict=visualization_dict,
+            max_attempt_num=max_attempt_num,
+            section_idx=section_idx,
+            metrics=metrics,
         )
+        visualization_content = await self._build_visualization_mermaid(mermaid_context)
+        visualization_content["_visualization_metrics"] = metrics.finish(
+            bool(visualization_content.get("rs_success")),
+            visualization_content.get("error_msg", ""),
+        )
+        return visualization_content
 
     async def _generate_content_for_visualization(self, current_inputs: dict) -> dict:
         """Generate content for visualization with concurrent LLM calls"""
         section_idx = current_inputs.get("section_idx", 1)
+        metrics_started_at = perf_counter()
         # Compliance validation depends on chapter outline; if outline is missing, skip visuals safely.
         section_outline = (current_inputs.get("sub_section_outline", "") or "").strip()
         if not section_outline:
@@ -3309,9 +3445,31 @@ class Reporter:
         visualization_content = self._select_visualization_from_classified_content(
             classified_content_for_visualization
         )
+        source_candidate_count = len(classified_content_for_visualization)
+        pre_budget_candidate_count = len(visualization_content)
+        visualization_content = self._limit_visualization_candidates(
+            visualization_content,
+            current_inputs,
+        )
         n = len(visualization_content)
 
         if n == 0:
+            summary = build_visualization_generation_summary(
+                section_idx=section_idx,
+                source_candidate_count=source_candidate_count,
+                selected_candidate_count=0,
+                generated_mermaid_count=0,
+                task_metrics=[],
+                exception_count=0,
+                wall_time_ms=elapsed_ms(metrics_started_at),
+                pre_budget_candidate_count=pre_budget_candidate_count,
+                candidate_budget=0,
+            )
+            logger.info(
+                "%s [visualization_metrics] generation_summary: %s",
+                EFFECT_SUB_REPORT_TAG,
+                json.dumps(summary, ensure_ascii=False),
+            )
             return dict(rs_success=True, visualization_content=visualization_content)
         # Build all async tasks
         tasks = []
@@ -3335,8 +3493,12 @@ class Reporter:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Aggregate results
+        task_metrics = []
+        exception_count = 0
+        generated_mermaid_count = 0
         for i, res in enumerate(results):
             if isinstance(res, Exception):
+                exception_count += 1
                 logger.error(
                     "%s [generate_sub_section_visualization_content] section_idx: [%s], "
                     "error in task [%s]: %s",
@@ -3348,11 +3510,16 @@ class Reporter:
                 visualization_content[i]["sub_section_visualization_content"] = ""
                 visualization_content[i]["mermaid_content"] = ""
             else:
+                metric = res.get("_visualization_metrics")
+                if isinstance(metric, dict):
+                    task_metrics.append(metric)
                 if res.get("rs_success"):
                     visualization_content[i]["sub_section_visualization_content"] = res[
                         "sub_section_visualization_content"
                     ]
                     visualization_content[i]["mermaid_content"] = res["mermaid_content"]
+                    if res.get("mermaid_content"):
+                        generated_mermaid_count += 1
                 else:
                     visualization_content[i]["sub_section_visualization_content"] = ""
                     visualization_content[i]["mermaid_content"] = ""
@@ -3362,6 +3529,22 @@ class Reporter:
                         section_idx,
                         res.get("error_msg", "Unknown"),
                     )
+        summary = build_visualization_generation_summary(
+            section_idx=section_idx,
+            source_candidate_count=source_candidate_count,
+            selected_candidate_count=n,
+            generated_mermaid_count=generated_mermaid_count,
+            task_metrics=task_metrics,
+            exception_count=exception_count,
+            wall_time_ms=elapsed_ms(metrics_started_at),
+            pre_budget_candidate_count=pre_budget_candidate_count,
+            candidate_budget=n,
+        )
+        logger.info(
+            "%s [visualization_metrics] generation_summary: %s",
+            EFFECT_SUB_REPORT_TAG,
+            json.dumps(summary, ensure_ascii=False),
+        )
         return dict(rs_success=True, visualization_content=visualization_content)
 
     @staticmethod
@@ -3917,6 +4100,184 @@ class Reporter:
                 fallback_visualizations.append(item)
         return selected_visualizations or fallback_visualizations
 
+    @staticmethod
+    def _visualization_candidate_text(item: dict) -> str:
+        parts = []
+        for key in ("title", "original_content", "chunk", "content"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+
+        key_passages = item.get("key_passages")
+        if isinstance(key_passages, list):
+            for passage in key_passages:
+                passage_text = str(passage or "").strip()
+                if passage_text:
+                    parts.append(passage_text)
+
+        return "\n".join(parts)
+
+    @staticmethod
+    def _count_visualization_numbers(item: dict) -> int:
+        text = Reporter._visualization_candidate_text(item)
+        if not text:
+            return 0
+        return len(
+            re.findall(
+                r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?:\s*(?:%|％))?",
+                text,
+            )
+        )
+
+    @staticmethod
+    def _has_visualization_trace(item: dict) -> bool:
+        citation_indices = Reporter._normalize_citation_indices(
+            item.get("citation_indices")
+        )
+        if citation_indices:
+            return True
+
+        citation_indices = Reporter._normalize_citation_indices(
+            [item.get("citation_index"), item.get("index")]
+        )
+        if citation_indices:
+            return True
+
+        return bool(str(item.get("url") or "").strip())
+
+    @staticmethod
+    def _visualization_candidate_signature(item: dict) -> str:
+        text = Reporter._visualization_candidate_text(item).lower()
+        text = re.sub(r"https?://\S+", " ", text)
+        text = re.sub(r"\[citation:\d+\]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:240]
+
+    @classmethod
+    def _deduplicate_visualization_candidates(cls, candidates: list[dict]) -> list[dict]:
+        deduplicated = []
+        seen = set()
+        for item in candidates:
+            signature = cls._visualization_candidate_signature(item)
+            if signature and signature in seen:
+                continue
+            if signature:
+                seen.add(signature)
+            deduplicated.append(item)
+        return deduplicated
+
+    @staticmethod
+    def _rich_visualization_requested(current_inputs: dict) -> bool:
+        text_parts = []
+        for key in (
+            "report_task",
+            "section_description",
+            "section_format_requirements",
+            "report_style",
+            "paragraph_style",
+        ):
+            text_parts.append(str(current_inputs.get(key, "")))
+        text = " ".join(text_parts).lower()
+        rich_markers = (
+            "图文并茂",
+            "多图",
+            "多张图",
+            "多张图表",
+            "图表丰富",
+            "可视化",
+            "visualization",
+            "visualisation",
+            "visualize",
+            "visualise",
+            "multiple charts",
+            "chart-rich",
+            "data charts",
+        )
+        return any(marker in text for marker in rich_markers)
+
+    @staticmethod
+    def _brief_visualization_context(current_inputs: dict) -> bool:
+        text_parts = []
+        for key in ("report_type", "paragraph_style", "report_style", "report_task"):
+            text_parts.append(str(current_inputs.get(key, "")))
+        text = " ".join(text_parts).lower()
+        brief_markers = ("brief", "short", "concise", "短篇", "简短")
+        return any(marker in text for marker in brief_markers)
+
+    @classmethod
+    def _rank_visualization_candidates(cls, candidates: list[dict]) -> list[dict]:
+        ranked = []
+        for order, item in enumerate(candidates):
+            data_density = get_numeric_score(item, "data_density") or 0.0
+            number_count = cls._count_visualization_numbers(item)
+            trace_bonus = 1 if cls._has_visualization_trace(item) else 0
+            score = data_density * 10 + min(number_count, 8) * 2 + trace_bonus * 12
+            if number_count < 2:
+                score -= 12
+            ranked.append((score, data_density, number_count, trace_bonus, -order, item))
+        ranked.sort(reverse=True)
+        ordered = []
+        for ranked_item in ranked:
+            ordered.append(ranked_item[-1])
+        return ordered
+
+    @classmethod
+    def _visualization_candidate_budget(
+        cls,
+        candidates: list[dict],
+        current_inputs: dict,
+    ) -> int:
+        candidate_count = len(candidates)
+        if candidate_count <= 2:
+            return candidate_count
+
+        strong_candidate_count = 0
+        for item in candidates:
+            data_density = get_numeric_score(item, "data_density") or 0.0
+            number_count = cls._count_visualization_numbers(item)
+            if data_density >= 9.0 and number_count >= 3:
+                strong_candidate_count += 1
+
+        rich_visualization = cls._rich_visualization_requested(current_inputs)
+        brief_context = cls._brief_visualization_context(current_inputs)
+
+        limit = 2
+        if strong_candidate_count >= 3:
+            limit = 3
+        if rich_visualization and strong_candidate_count >= 5:
+            limit = 4
+        if brief_context and not rich_visualization:
+            limit = min(limit, 2)
+
+        return max(1, min(candidate_count, limit))
+
+    @classmethod
+    def _limit_visualization_candidates(
+        cls,
+        candidates: list[dict],
+        current_inputs: dict,
+    ) -> list[dict]:
+        if len(candidates) <= 2:
+            return candidates
+
+        deduplicated = cls._deduplicate_visualization_candidates(candidates)
+        ranked = cls._rank_visualization_candidates(deduplicated)
+        budget = cls._visualization_candidate_budget(ranked, current_inputs)
+        limited = ranked[:budget]
+
+        if len(limited) < len(candidates):
+            logger.info(
+                "%s [visualization_budget] section_idx: [%s], candidates: %s, "
+                "deduplicated: %s, selected: %s.",
+                EFFECT_SUB_REPORT_TAG,
+                current_inputs.get("section_idx", 1),
+                len(candidates),
+                len(deduplicated),
+                len(limited),
+            )
+
+        return limited
+
     async def _request_visualization_insert_plan(
         self, context: VisualizationInsertPlanContext
     ) -> dict:
@@ -4118,10 +4479,77 @@ class Reporter:
         )
         return completed
 
+    @staticmethod
+    def _last_valid_visualization_anchor(
+        report_lines: list[str],
+        invalid_rows: set[int],
+        *,
+        allow_heading: bool = False,
+    ) -> int | None:
+        for row_idx in range(len(report_lines), 0, -1):
+            if row_idx in invalid_rows:
+                continue
+            stripped = report_lines[row_idx - 1].strip()
+            if not stripped:
+                continue
+            if not allow_heading and stripped.startswith("#"):
+                continue
+            return row_idx
+        return None
+
+    @classmethod
+    def _single_visualization_insertion(
+        cls,
+        mermaid_map: dict[int, str],
+        title_meta_map: dict[int, dict],
+        report_lines: list[str],
+        invalid_rows: set[int],
+    ) -> list[dict]:
+        if len(mermaid_map) != 1:
+            return []
+
+        index = next(iter(mermaid_map))
+        title_meta = title_meta_map.get(index, {})
+        citation_indices = cls._normalize_citation_indices(
+            title_meta.get("citation_indices")
+        )
+        if not citation_indices:
+            citation_indices = cls._normalize_citation_indices(
+                [title_meta.get("citation_index")]
+            )
+
+        if citation_indices:
+            citation_tokens = [f"[citation:{citation}]" for citation in citation_indices]
+            for row_idx, line in reversed(list(enumerate(report_lines, 1))):
+                if row_idx in invalid_rows:
+                    continue
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if any(token in line for token in citation_tokens):
+                    return [{"after_row": row_idx, "index": index}]
+
+        fallback_row = cls._last_valid_visualization_anchor(
+            report_lines,
+            invalid_rows,
+        )
+        if fallback_row is None:
+            fallback_row = cls._last_valid_visualization_anchor(
+                report_lines,
+                invalid_rows,
+                allow_heading=True,
+            )
+        if fallback_row is None:
+            return []
+        return [{"after_row": fallback_row, "index": index}]
+
     async def _insert_visualization(self, current_inputs: Dict) -> dict:
         """
         Insert placeholders for visualization content in the markdown report.
         """
+        metrics_started_at = perf_counter()
+        section_idx = current_inputs.get("section_idx", 1)
+        original_report = ""
         try:
             report_markdown = current_inputs.get("sub_report_content", "")
             if not isinstance(report_markdown, str):
@@ -4129,7 +4557,35 @@ class Reporter:
 
             original_report = report_markdown
             visualization_list = current_inputs.get("visualization_result", [])
+
+            def log_insert_metrics(
+                valid_mermaid_count: int,
+                planned_insertion_count: int,
+                inserted_mermaid_count: int,
+                planner_mode: str = "",
+            ) -> None:
+                visualization_count = (
+                    len(visualization_list)
+                    if isinstance(visualization_list, list)
+                    else 0
+                )
+                summary = build_visualization_insert_summary(
+                    section_idx=section_idx,
+                    visualization_count=visualization_count,
+                    valid_mermaid_count=valid_mermaid_count,
+                    planned_insertion_count=planned_insertion_count,
+                    inserted_mermaid_count=inserted_mermaid_count,
+                    wall_time_ms=elapsed_ms(metrics_started_at),
+                    planner_mode=planner_mode,
+                )
+                logger.info(
+                    "%s [visualization_metrics] insert_summary: %s",
+                    EFFECT_SUB_REPORT_TAG,
+                    json.dumps(summary, ensure_ascii=False),
+                )
+
             if not isinstance(visualization_list, list) or not visualization_list:
+                log_insert_metrics(0, 0, 0)
                 return dict(rs_success=False, result=original_report)
 
             report_lines = report_markdown.splitlines(keepends=True)
@@ -4197,7 +4653,36 @@ class Reporter:
 
             if not mermaid_map:
                 # No valid visualization blocks, return original content.
+                log_insert_metrics(0, 0, 0)
                 return dict(rs_success=False, result=original_report)
+
+            if len(mermaid_map) == 1:
+                insertions = self._single_visualization_insertion(
+                    mermaid_map,
+                    title_meta_map,
+                    report_lines,
+                    invalid_rows,
+                )
+                if not insertions:
+                    log_insert_metrics(len(mermaid_map), 0, 0, "local_single_chart")
+                    return dict(rs_success=False, result=original_report)
+                rendered = self._apply_visualization_insertions(
+                    VisualizationInsertRenderContext(
+                        report_lines=report_lines,
+                        insertions=insertions,
+                        mermaid_map=mermaid_map,
+                        title_meta_map=title_meta_map,
+                        newline=newline,
+                        language=current_inputs.get("language"),
+                    )
+                )
+                log_insert_metrics(
+                    len(mermaid_map),
+                    len(insertions),
+                    len(insertions),
+                    "local_single_chart",
+                )
+                return dict(rs_success=True, result=rendered)
 
             llm_input_message = numbered_report.rstrip("\r\n") + "\n\n"
             llm_input_message += "=== VISUALIZATION DATA ===\n"
@@ -4219,6 +4704,7 @@ class Reporter:
                 )
             )
             if not plan_result.get("rs_success") or not plan_result.get("plan"):
+                log_insert_metrics(len(mermaid_map), 0, 0, "llm")
                 return dict(rs_success=False, result=original_report)
             plan = plan_result["plan"]
 
@@ -4241,11 +4727,12 @@ class Reporter:
                     language=current_inputs.get("language"),
                 )
             )
+            log_insert_metrics(len(mermaid_map), len(insertions), len(insertions), "llm")
             return dict(rs_success=True, result=rendered)
         except Exception as e:
             logger.error(
                 f"{EFFECT_SUB_REPORT_TAG} Unexpected error when inserting visualization for the section "
-                f"{current_inputs.get('section_idx', 1)}: {str(e)}",
+                f"{section_idx}: {str(e)}",
                 exc_info=True,
             )
             return dict(rs_success=False, result=original_report)

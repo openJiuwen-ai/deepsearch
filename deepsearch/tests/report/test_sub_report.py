@@ -14,6 +14,7 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
 from openjiuwen_deepsearch.algorithm.report.report import (
     Reporter,
     VisualizationInsertPlanContext,
+    VisualizationMermaidContext,
     _get_classified_infos,
 )
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
@@ -629,6 +630,94 @@ def test_select_visualization_uses_eight_point_fallback_when_no_high_density_doc
     assert [item["title"] for item in selected] == ["fallback density"]
 
 
+def _visualization_candidate(
+    title: str,
+    density: float,
+    content: str,
+    *,
+    index: int | None = 1,
+    url: str = "https://example.com/source",
+) -> dict:
+    item = {
+        "title": title,
+        "original_content": content,
+        "scores": {"data_density": density},
+    }
+    if index is not None:
+        item["index"] = index
+    if url:
+        item["url"] = url
+    return item
+
+
+def test_limit_visualization_candidates_keeps_small_candidate_sets():
+    candidates = [
+        _visualization_candidate("one", 9.5, "2020 10 2021 20"),
+        _visualization_candidate("two", 9.2, "A 30 B 40"),
+    ]
+
+    selected = Reporter._limit_visualization_candidates(candidates, {})
+
+    assert selected == candidates
+
+
+def test_limit_visualization_candidates_prefers_dense_numeric_sourced_items():
+    candidates = [
+        _visualization_candidate("weak numeric", 9.9, "only one value 2024"),
+        _visualization_candidate("trend", 9.5, "2019 425 2020 124 2021 213"),
+        _visualization_candidate("comparison", 9.4, "A 24% B 18% C 15%"),
+        _visualization_candidate("structure", 9.3, "2020 27% 2029 22%"),
+        _visualization_candidate("no source", 9.6, "Q1 10 Q2 20 Q3 30", index=None, url=""),
+    ]
+
+    selected = Reporter._limit_visualization_candidates(
+        candidates,
+        {"section_idx": 2},
+    )
+
+    assert [item["title"] for item in selected] == [
+        "trend",
+        "structure",
+        "comparison",
+    ]
+
+
+def test_limit_visualization_candidates_allows_extra_for_rich_visual_request():
+    candidates = [
+        _visualization_candidate(
+            f"candidate-{idx}",
+            9.5,
+            f"metric-{idx} 2020 {idx} 2021 {idx + 1} 2022 {idx + 2}",
+        )
+        for idx in range(6)
+    ]
+
+    selected = Reporter._limit_visualization_candidates(
+        candidates,
+        {"report_task": "请生成图文并茂报告，尽量包含多张图表"},
+    )
+
+    assert len(selected) == 4
+
+
+def test_limit_visualization_candidates_caps_brief_reports_without_rich_request():
+    candidates = [
+        _visualization_candidate(
+            f"candidate-{idx}",
+            9.5,
+            f"metric-{idx} 2020 {idx} 2021 {idx + 1} 2022 {idx + 2}",
+        )
+        for idx in range(5)
+    ]
+
+    selected = Reporter._limit_visualization_candidates(
+        candidates,
+        {"report_type": "brief"},
+    )
+
+    assert len(selected) == 2
+
+
 def _visualization_reporter() -> Reporter:
     reporter = Reporter.__new__(Reporter)
     reporter._llm = object()
@@ -776,11 +865,13 @@ async def test_visualization_normalization_uses_local_same_unit_fast_path():
         new_callable=AsyncMock,
     ) as mocked_llm:
         normalized = await reporter._normalize_visualization_content(
-            visualization_content=visualization_content,
-            extracted_obj=extracted_obj,
-            visualization_dict={"language": "zh-CN"},
-            max_attempt_num=3,
-            section_idx=1,
+            VisualizationMermaidContext(
+                visualization_content=visualization_content,
+                extracted_obj=extracted_obj,
+                visualization_dict={"language": "zh-CN"},
+                max_attempt_num=3,
+                section_idx=1,
+            )
         )
 
     assert normalized is True
@@ -981,19 +1072,73 @@ async def test_insert_visualization_renders_all_chart_citation_indices():
         ],
     }
 
+    mock_ainvoke = AsyncMock(
+        return_value={"content": '{"insertions":[{"after_row":3,"index":1}]}'}
+    )
     with patch(
         "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new=AsyncMock(
-            return_value={"content": '{"insertions":[{"after_row":3,"index":1}]}'}
-        ),
+        new=mock_ainvoke,
     ):
         result = await _visualization_reporter()._insert_visualization(current_inputs)
 
     assert result["rs_success"] is True
+    mock_ainvoke.assert_not_awaited()
     assert (
         "**Vendor revenue comparison[citation:7][citation:8][citation:9]**"
         in result["result"]
     )
+
+
+@pytest.mark.asyncio
+async def test_insert_visualization_single_chart_uses_local_citation_anchor():
+    chart = {
+        "image_title": "Revenue trend",
+        "image_type": "line",
+        "unit": "million USD",
+        "records": [["2022", 10], ["2023", 20], ["2024", 30]],
+    }
+    current_inputs = {
+        "language": "en",
+        "section_idx": 2,
+        "max_generate_retry_num": 1,
+        "sub_report_content": (
+            "# Section\n\n"
+            "Opening paragraph [citation:1].\n\n"
+            "Revenue rose across the period [citation:7].\n\n"
+            "Closing paragraph.\n"
+        ),
+        "visualization_result": [
+            {
+                "url": "https://source.example/revenue",
+                "citation_indices": [7],
+                "sub_section_visualization_content": json.dumps(chart),
+                "mermaid_content": (
+                    'xychart-beta\n    x-axis ["2022", "2023", "2024"]\n'
+                    "    line [10, 20, 30]"
+                ),
+            }
+        ],
+    }
+
+    mock_ainvoke = AsyncMock(
+        return_value={"content": '{"insertions":[{"after_row":7,"index":1}]}'}
+    )
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+        new=mock_ainvoke,
+    ):
+        result = await _visualization_reporter()._insert_visualization(current_inputs)
+
+    assert result["rs_success"] is True
+    mock_ainvoke.assert_not_awaited()
+    rendered = result["result"]
+    assert rendered.count("```mermaid") == 1
+    assert (
+        rendered.index("Revenue rose across the period")
+        < rendered.index("```mermaid")
+        < rendered.index("Closing paragraph.")
+    )
+    assert "**Revenue trend[citation:7]**" in rendered
 
 
 @pytest.mark.asyncio
