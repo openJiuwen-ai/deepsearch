@@ -95,6 +95,62 @@ class CodeSearchRetriever:
                 )
         return self._main_llm, self._filter_llm
 
+    def _retropus_cache_dir(self) -> Optional[Path]:
+        """Per-collection on-disk cache path, or ``None`` when persistence is off."""
+        index_dir = (self.config.retropus.index_dir or "").strip()
+        if not index_dir:
+            return None
+        from openjiuwen_codesearch.retropus.persist import (  # noqa: PLC0415
+            collection_index_dir,
+        )
+
+        return collection_index_dir(index_dir, self.collection_name)
+
+    def _load_retropus_cache(
+        self, repo_dir: Optional[Path] = None
+    ) -> bool:
+        """Populate in-memory Retropus state from disk. Returns True on hit."""
+        cache_dir = self._retropus_cache_dir()
+        if cache_dir is None:
+            return False
+        from openjiuwen_codesearch.retropus.persist import (  # noqa: PLC0415
+            load_retropus_index,
+        )
+
+        loaded = load_retropus_index(
+            cache_dir, config=self.config.retropus, repo_dir=repo_dir
+        )
+        if loaded is None:
+            return False
+        kg, retriever, cached_repo = loaded
+        self._retropus_kg = kg
+        self._retropus_retriever = retriever
+        self._retropus_repo_dir = cached_repo
+        return True
+
+    def _dump_retropus_cache(self) -> None:
+        """Persist current in-memory Retropus index when ``index_dir`` is set."""
+        cache_dir = self._retropus_cache_dir()
+        if (
+            cache_dir is None
+            or self._retropus_kg is None
+            or self._retropus_retriever is None
+            or self._retropus_repo_dir is None
+        ):
+            return
+        from openjiuwen_codesearch.retropus.persist import (  # noqa: PLC0415
+            dump_retropus_index,
+        )
+
+        dump_retropus_index(
+            cache_dir,
+            kg=self._retropus_kg,
+            retriever=self._retropus_retriever,
+            repo_dir=self._retropus_repo_dir,
+            collection=self.collection_name,
+            config=self.config.retropus,
+        )
+
     def _build_retropus_index(self, repo_path: str, reset: bool = False) -> IndexReport:
         try:
             from openjiuwen_codesearch.retropus.index import (  # noqa: PLC0415
@@ -108,15 +164,39 @@ class CodeSearchRetriever:
             ) from e
 
         repo_dir = Path(repo_path).resolve()
-        if reset or self._retropus_repo_dir != repo_dir:
+        retropus_cfg = self.config.retropus
+        cache_dir = self._retropus_cache_dir()
+
+        if reset:
             self._retropus_kg = None
             self._retropus_retriever = None
+            self._retropus_repo_dir = None
+            if cache_dir is not None:
+                from openjiuwen_codesearch.retropus.persist import (  # noqa: PLC0415
+                    clear_retropus_index,
+                )
 
-        retropus_cfg = self.config.retropus
+                clear_retropus_index(cache_dir)
+        elif self._retropus_repo_dir is not None and self._retropus_repo_dir != repo_dir:
+            self._retropus_kg = None
+            self._retropus_retriever = None
+            self._retropus_repo_dir = None
+
+        if self._retropus_kg is None and not reset:
+            if self._load_retropus_cache(repo_dir=repo_dir):
+                kg = self._retropus_kg
+                return IndexReport(
+                    files_total=len(kg.get_file_nodes()),
+                    files_new=0,
+                    files_reused=len(kg.get_file_nodes()),
+                    chunks_inserted=0,
+                )
+
         if self._retropus_kg is None:
             self._retropus_kg = build_index(repo_dir, retropus_cfg)
             self._retropus_retriever = build_retriever(self._retropus_kg, retropus_cfg)
             self._retropus_repo_dir = repo_dir
+            self._dump_retropus_cache()
 
         kg = self._retropus_kg
         return IndexReport(
@@ -221,11 +301,18 @@ class CodeSearchRetriever:
         )
 
         if self._retropus_kg is None or self._retropus_retriever is None:
+            # Separate CLI/process invocations reload from the on-disk dump.
+            self._load_retropus_cache(repo_dir=None)
+
+        if self._retropus_kg is None or self._retropus_retriever is None:
             return CodeSearchResult(
                 hits=[],
                 termination=Termination.INDEX_NOT_READY,
                 turns=0,
-                error="retropus index not ready; call index_repository first",
+                error=(
+                    "retropus index not ready; call index_repository first "
+                    "(or ensure a dump exists under retropus.index_dir)"
+                ),
             )
 
         main_llm, _filter_llm = self._ensure_llms()

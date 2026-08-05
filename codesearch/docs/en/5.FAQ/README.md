@@ -67,6 +67,12 @@ Retropus is never the default. Mixing retropus with a Milvus-backed index on
 the same `collection` returns **409**. Config knobs:
 `CodeSearchConfig.retropus` / [retropus-agent.md](../../feature/framework/retropus-agent.md).
 
+**Does Retropus persist the index across CLI runs?**  
+Yes. After `codesearch --engine retropus index …`, KG + BM25 are written under
+`RETROPUS_INDEX_DIR/<collection>/` (default `./output/retropus/`). A later
+`codesearch --engine retropus search --collection …` reloads that dump. Use
+`--reset` (or change fingerprint knobs such as `CHUNK_SIZE`) to rebuild.
+
 **What do the termination values mean?**
 
 | Value | Meaning |
