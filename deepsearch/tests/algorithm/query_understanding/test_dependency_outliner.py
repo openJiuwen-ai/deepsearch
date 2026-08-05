@@ -97,8 +97,7 @@ class TestDepDrivingOutlineTool:
 
         assert properties["format_requirements"]["type"] == "array"
         assert properties["format_requirements"]["items"]["type"] == "string"
-        assert properties["visualization_requirements"]["type"] == "array"
-        assert properties["visualization_requirements"]["items"]["type"] == "string"
+        assert "visualization_requirements" not in properties
         assert properties["section_focus"]["minLength"] == 1
         assert properties["focus_dimensions"]["minItems"] == 1
         assert {
@@ -122,7 +121,6 @@ class TestDepDrivingOutlineTool:
 
         for field_name in (
             "format_requirements",
-            "visualization_requirements",
             "section_focus",
             "focus_dimensions",
         ):
@@ -163,19 +161,6 @@ class TestDepDrivingOutlineTool:
 
         assert outline.sections[0].format_requirements == requirements
 
-    def test_generate_outline_preserves_visualization_requirements(self):
-        section = self._valid_dependency_section()
-        section["visualization_requirements"] = [
-            "Show the retrieval-to-answer data flow",
-            "Distinguish retrieval and generation stages",
-        ]
-
-        outline = generate_outline("en-US", "RAG", "Explain the pipeline", [section])
-
-        assert outline.sections[0].visualization_requirements == section[
-            "visualization_requirements"
-        ]
-
     @pytest.mark.parametrize(
         "prompt_name",
         ["dep_driving_outliner", "dep_driving_outliner_interaction"],
@@ -196,7 +181,6 @@ class TestDepDrivingOutlineTool:
         ).lower()
 
         assert "format_requirements" in rendered
-        assert "visualization_requirements" in rendered
         assert "exact column" in rendered
         assert "required row" in rendered
         assert "item-by-item" in rendered
@@ -227,7 +211,6 @@ class TestDepDrivingOutlineTool:
             "title": "Product comparison",
             "description": "Compare product price, advantages, and risks.",
             "format_requirements": [],
-            "visualization_requirements": [],
             "id": "1",
             "parent_ids": [],
             "relationships": [],

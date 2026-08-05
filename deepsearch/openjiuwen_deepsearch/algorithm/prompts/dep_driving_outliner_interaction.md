@@ -78,23 +78,18 @@ For every section returned through the updated outline tool:
 - Put substantive research scope, entities, time ranges, questions, analytical dimensions, and dependency relationships
   in `description`.
 - Put Markdown table requirements, exact column names and order, required row objects, item-by-item enumeration,
-  length or style rules, source restrictions, and non-visual deliverable format rules in `format_requirements`.
-- Put requested charts, diagrams, processes, or relationship views in `visualization_requirements`, not in
-  `format_requirements`; keep factual research scope in `description`.
+  length or style rules, source restrictions, and deliverable format rules in `format_requirements`.
 - Preserve user-provided labels and ordering exactly. Do not duplicate the same format constraint in `description`.
 - Use an empty array `[]` when no section-specific format requirement exists; never omit `format_requirements`.
-- Use an empty array `[]` in `visualization_requirements` when the user did not request a visualization.
 - Provide a non-empty `section_focus` and at least one item in `focus_dimensions` for every section.
 - When current user feedback adds, removes, or changes an output-format constraint, update the corresponding section's
   `format_requirements`; do not update only `description`.
 
-{% if vlm_chart_generator_enable %}
-## VLM Visualization Ownership
-- The chart pipeline owns chart selection, image generation, captions, and insertion. Keep the chapter prose
-  self-contained without chart-dependent wording.
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline owns chart selection, image generation, captions, and insertion.
+- Keep chapter prose self-contained without chart-dependent wording.
 - Do not place Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图”
   in the outline fields or chapter prose.
-{% endif %}
 
 ---
 

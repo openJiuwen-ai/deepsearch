@@ -48,9 +48,7 @@ If an explicit structure exists, it is authoritative:
 - Put research scope, dimensions, criteria, examples, time ranges, and other substantive sub-requirements inside the
   relevant section `description`. Put output format requirements, table requirements, exact columns/rows,
   item-by-item enumeration, length/style constraints, and source-use restrictions inside the relevant
-  `format_requirements` array. Put chart, diagram, process, or relationship-view requests in the separate
-  `visualization_requirements` array; do not mix them into `format_requirements` or the prose-writing scope.
-  Do not promote either field to top-level sections.
+  `format_requirements` array. Do not promote them to top-level sections.
 - Numbered or bold items under a named/lettered major part are subordinate requirements of that major part, even if they
   look like section titles.
 - When a named/lettered major part contains an explicit ordered list of items that the final report should cover
@@ -131,19 +129,15 @@ For each section in the outline, you MUST assign:
 - `focus_dimensions`: 2-4 specific analytical dimensions this section primarily owns. Each dimension should have a primary owner section, but may be referenced as supporting context in other sections. Avoid making the same dimension the primary focus of multiple sections.
 - `format_requirements`: section-specific output constraints from the user request. Use this field for table format,
   exact column names/order, required row objects, item-by-item enumeration, length/style constraints, source-use
-  restrictions, and non-visual deliverable format rules. Use `[]` when none apply. Keep `description` concise and
-  focused on research scope instead of copying format constraints into it.
-- `visualization_requirements`: optional chart/diagram intent for this section. Preserve the requested subject,
-  stages, entities, and relationships here, and use `[]` when no visualization is requested. This field is metadata
-  for the controlled chart pipeline, not prose to render in the chapter.
+  restrictions, and deliverable format rules. Use `[]` when none apply. Keep `description` concise and focused on
+  research scope instead of copying format constraints into it.
 
-{% if vlm_chart_generator_enable %}
-## VLM Visualization Ownership
-- Keep every chapter understandable without a chart. The VLM chart pipeline, not the chapter writer, owns chart
-  selection, image generation, captions, and insertion.
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline, not the outline or chapter writer, owns chart selection, image generation,
+  captions, and insertion.
+- Keep every chapter understandable without a chart.
 - Do not put Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图” in
   `description`, `format_requirements`, or the generated chapter prose.
-{% endif %}
 
 ## Execution Constraints
 - **Target Number of Sections:** {{ section_num }}. Match this target unless the user explicitly specifies a different
