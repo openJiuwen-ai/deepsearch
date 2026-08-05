@@ -58,14 +58,21 @@ openJiuwen 的传递依赖包含预发布版本，使用 uv 时加 `--prerelease
 **如何启用 Retropus？相关环境变量有哪些？**
 安装 `pip install 'openjiuwen-codesearch[retropus]'`，并设置
 `CodeSearchConfig.agent.engine = "retropus"`，或
+`codesearch --engine retropus …` /
 `python -m benchmarks.contextbench.runner --engine retropus`，或在 HTTP
 `POST /api/v1/index` / `/api/v1/search` 请求体中传 `"engine": "retropus"`
 （默认仍为 `auto`，不会自动启用 Retropus）。`ENGINE=` 不是环境变量。
 循环与索引参数见 `CodeSearchConfig.retropus`（`MAX_ROUNDS` /
-`MAX_TOOL_CALLS` / `FEAT_*` 等），完整表：
+`MAX_TOOL_CALLS` / `FEAT_*` / `RETROPUS_INDEX_DIR` 等），完整表：
 [retropus-agent.md](../../feature/framework/retropus-agent.md)；
 模板：[`.env.example`](../../../.env.example)。Retropus 不使用 Milvus；
 若同一 `collection` 已用另一后端索引过，search 会返回 409。
+
+**Retropus 索引能否跨 CLI 进程复用？**
+可以。`codesearch --engine retropus index …` 会把 KG + BM25 写入
+`RETROPUS_INDEX_DIR/<collection>/`（默认 `./output/retropus/`），随后
+`codesearch --engine retropus search --collection …` 会加载该落盘缓存。
+`--reset` 或改动指纹相关配置（如 `CHUNK_SIZE`）会触发重建。
 
 ## 运行
 

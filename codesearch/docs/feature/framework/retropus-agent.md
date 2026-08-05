@@ -14,11 +14,15 @@ CodeSearch 默认五工具注册表严格隔离。
 
 ## 核心流程
 
-1. `CodeSearchConfig.agent.engine = "retropus"`（程序赋值、CLI / ContextBench
-   `--engine retropus`，或 HTTP 请求体 `"engine": "retropus"`；**无** `ENGINE=`
-   环境变量；默认仍为 `auto`，不会自动走 Retropus）
-2. `index_repository(repo_path)` → vendored `build_index` + `build_retriever`（无 Milvus）
-3. `search(query)` → `RetropusRunContext` + `RetropusCodeSearchAgent`
+1. `CodeSearchConfig.agent.engine = "retropus"`（程序赋值、`codesearch --engine
+   retropus` / ContextBench `--engine retropus`，或 HTTP 请求体
+   `"engine": "retropus"`；**无** `ENGINE=` 环境变量；默认仍为 `auto`，不会自动走
+   Retropus）
+2. `index_repository(repo_path)` → vendored `build_index` + `build_retriever`（无
+   Milvus）；成功后将 KG + BM25 **落盘**到
+   `{retropus.index_dir}/{collection}/`（默认 `./output/retropus/…`；空串关闭）
+3. `search(query)` → 若进程内无索引则从落盘缓存加载 → `RetropusRunContext` +
+   `RetropusCodeSearchAgent`
 4. `AbstractReactEngine.run`：`reasoning_step` → `tool_step` →（终止时）`finalize`
 5. `finalize`：`tools.final_spans()`（必要时 retriever pad）→ `spans_to_hits` →
    `CodeSearchResult.hits`
@@ -54,11 +58,16 @@ LLM 凭证仍在 `CodeSearchConfig.llm`（`OPENAI_API_KEY` / `OPENAI_BASE_URL` /
 | 字段 | 环境变量 | 默认 | 说明 |
 |---|---|---|---|
 | `retriever` | `RETRIEVER` | `bm25` | 仅支持 `bm25`；其他值在 `build_retriever` 抛错 |
+| `index_dir` | `RETROPUS_INDEX_DIR` | `./output/retropus` | KG+BM25 落盘根目录；按 `collection` 分子目录；空串关闭持久化 |
 | `max_ast_depth` | `MAX_AST_DEPTH` | `6` | KG 构建时 AST 遍历深度（需足以覆盖函数/类定义节点） |
 | `chunk_size` | `CHUNK_SIZE` | `1000` | 非代码文本切块大小 |
 | `chunk_overlap` | `CHUNK_OVERLAP` | `200` | 文本切块重叠 |
 | `code_aware_tokenizer` | `CODE_AWARE_TOKENIZER` | `false` | BM25 用代码感知分词（拆标识符）而非 bm25s 默认分词 |
 | `tokenize_workers` | `TOKENIZE_WORKERS` | `max(1, cpu_count-1)` | 语料分词并行度 |
+
+落盘布局（`retropus/persist.py`）：`manifest.json`（schema / repo / fingerprint）、
+`kg.pkl`、`documents.json`、`bm25/`（bm25s）。指纹含 `max_ast_depth` /
+`chunk_*` / `code_aware_tokenizer` / `retriever`；不匹配或 `reset=True` 时重建。
 
 ### Agent 循环边界
 
@@ -124,7 +133,8 @@ are handled by a transparent retry without the key in
 
 - LLM：仅 `LLMClient.invoke`（openjiuwen；可传 `prompt_cache_key=`）；不使用上游
   `retropus.llm.LLMClient`。
-- 索引：进程内 KG + BM25，缓存于 `CodeSearchRetriever` 实例（按 `repo_dir`；无 Milvus）。
+- 索引：进程内 KG + BM25，并按 `collection` 落盘到 `retropus.index_dir`（无 Milvus）。
+  HTTP 仍按实例缓存；CLI 跨进程靠落盘复用。
 - 可选依赖：`tree-sitter` / `bm25s` 等，见 `pyproject.toml` 的 `[retropus]` extra。
 
 ## 边界与错误处理
@@ -144,6 +154,8 @@ are handled by a transparent retry without the key in
 - `tests/unit/test_retropus_prompt_cache.py`：`prompt_cache_key` 稳定性与 invoke 透传
 - `tests/unit/test_retropus_mandatory_return_spans.py`：强制补齐与 legacy fallback
 - `tests/unit/test_retropus_text_splitter.py`：文本切块
+- `tests/unit/test_retropus_persist.py`：KG/BM25 落盘与跨实例复用
+- `tests/unit/test_cli_engine.py`：CLI `--engine` / `--index-dir`
 
 ## 关键代码路径
 
@@ -156,16 +168,20 @@ are handled by a transparent retry without the key in
 | `algorithm/search_tools/graph_tools.py` | Retropus expand_* ToolSpec + `GraphExpandTools` mixin |
 | `algorithm/prompts/{system,inherits,expand_imports,...}.md` + `retropus.py` | Retropus 系统/工具观察提示词 |
 | `retropus/graph/imports.py` | 多语言 `IMPORTS` 边构建与 `ImportIndex` |
+| `retropus/persist.py` | KG + BM25 落盘 / 加载 |
 | `retropus/` | 厂商化 KG / BM25 索引运行时 |
 | `config/agent.py` | `RetropusSearchAgentConfig` + `from_env` |
-| `api/retriever.py` | engine 分支与索引缓存；`engine_keeps_index_in_process` |
+| `api/retriever.py` | engine 分支、落盘复用与进程内缓存；`engine_keeps_index_in_process` |
+| `cli.py` | `--engine` / `--index-dir` |
 | `server/schemas.py` / `server/routers/api.py` | HTTP `engine` 字段、进程内缓存与跨后端 409 |
 
 ## 已知限制与待办 / 相关文档
 
 - 无 graph 形态 Retropus。
+- 落盘缓存不按文件内容哈希失效；仓库改动后需 `--reset` 或清
+  `RETROPUS_INDEX_DIR`。
 - 上游 ContextBench bench runner 不随包发布；本仓
   `python -m benchmarks.contextbench.runner --engine retropus` 走产品 API。
 - 相关： [codesearch-workflow.md](./codesearch-workflow.md) /
   [search-agent.md](../algorithm/search-agent.md) /
-  [README 关键配置](../../../README.md#关键配置)。
+  [README 引擎](../../../README.md)。

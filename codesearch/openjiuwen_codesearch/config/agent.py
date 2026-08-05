@@ -72,6 +72,8 @@ class RetropusSearchAgentConfig(BaseModel):
     """
 
     retriever: str = "bm25"
+    # On-disk dump of KG + BM25 (per collection). Empty disables persistence.
+    index_dir: str = "./output/retropus"
     max_tool_calls: int = 24
     max_rounds: int = 12
     max_final_spans: int = 25
@@ -139,6 +141,10 @@ class RetropusSearchAgentConfig(BaseModel):
 
         return cls(
             retriever=retriever,
+            index_dir=(
+                _first_env("RETROPUS_INDEX_DIR", default=defaults.index_dir)
+                or defaults.index_dir
+            ),
             max_tool_calls=_int_env(
                 "MAX_TOOL_CALLS", default=defaults.max_tool_calls
             ),

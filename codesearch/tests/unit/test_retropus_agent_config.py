@@ -18,6 +18,7 @@ _RETROPUS_ENV_KEYS = (
     "MIN_MANDATORY_RETURN_SPANS",
     "RETROPUS_MIN_MANDATORY_RETURN_SPANS",
     "RETRIEVER",
+    "RETROPUS_INDEX_DIR",
     "TOKENIZE_WORKERS",
     "FEAT_ALL",
     "FEAT_BAN_TESTS",
@@ -139,3 +140,11 @@ def test_config_reads_obs_and_read_limits_env(monkeypatch, tmp_path):
     cfg = RetropusSearchAgentConfig.from_env()
     assert cfg.max_obs_chars == 1200
     assert cfg.max_read_lines == 80
+
+
+def test_config_reads_retropus_index_dir_env(monkeypatch, tmp_path):
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("RETROPUS_INDEX_DIR", str(tmp_path / "idx"))
+
+    cfg = RetropusSearchAgentConfig.from_env()
+    assert cfg.index_dir == str(tmp_path / "idx")
