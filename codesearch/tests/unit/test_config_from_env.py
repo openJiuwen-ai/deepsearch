@@ -1,9 +1,10 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""CodeSearchConfig.from_env()：仅 CODESEARCH_LLM_API_KEY / CODESEARCH_LLM_BASE_URL。"""
+"""CodeSearchConfig.from_env()：进程环境 + .env 文件。"""
 
 import pytest
 
+import openjiuwen_codesearch.config.env_file as env_file_mod
 from openjiuwen_codesearch.config.config import CodeSearchConfig
 
 
@@ -20,6 +21,7 @@ def _clear_llm_env(monkeypatch):
         "CODESEARCH_FILTER_LLM_MODEL",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(env_file_mod, "_LOADED", False)
 
 
 def test_from_env_reads_api_key_and_base_url(monkeypatch):
@@ -48,3 +50,42 @@ def test_from_env_missing_key_is_empty(monkeypatch):
     cfg = CodeSearchConfig.from_env()
     assert _key(cfg) == ""
     assert cfg.llm.main.base_url == ""
+
+
+def test_from_env_loads_dotenv_file(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "CODESEARCH_LLM_API_KEY=from-dotenv\n"
+        "CODESEARCH_LLM_BASE_URL=https://dotenv.example/v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    cfg = CodeSearchConfig.from_env()
+    assert _key(cfg) == "from-dotenv"
+    assert cfg.llm.main.base_url == "https://dotenv.example/v1"
+
+
+def test_from_env_dotenv_overrides_export(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "CODESEARCH_LLM_API_KEY=from-dotenv\n"
+        "CODESEARCH_LLM_BASE_URL=https://dotenv.example/v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODESEARCH_LLM_API_KEY", "from-export")
+
+    cfg = CodeSearchConfig.from_env()
+    assert _key(cfg) == "from-dotenv"
+    assert cfg.llm.main.base_url == "https://dotenv.example/v1"
+
+
+def test_from_env_export_works_without_dotenv(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)  # no .env here
+    monkeypatch.setenv("CODESEARCH_LLM_API_KEY", "from-export")
+    monkeypatch.setenv("CODESEARCH_LLM_BASE_URL", "https://export.example/v1")
+
+    cfg = CodeSearchConfig.from_env()
+    assert _key(cfg) == "from-export"
+    assert cfg.llm.main.base_url == "https://export.example/v1"

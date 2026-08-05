@@ -8,6 +8,7 @@ requires-python = ">=3.11,<3.14"
 license = { text = "Apache-2.0" }
 dependencies = [
     "pydantic>=2.5",
+    "python-dotenv>=1.0",
     # search 场景公共能力包（同仓 base/；源码安装时先 `pip install -e ../base`）
     "openjiuwen-search-base[workflow,milvus,embed]==0.2.*",
 ]

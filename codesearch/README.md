@@ -115,15 +115,21 @@ codesearch index --repo /path/to/your/repo --collection my_repo
 ```
 
 ```sh
-export CODESEARCH_LLM_API_KEY="your-key"
-export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"   # any OpenAI-compatible endpoint
-# optional: override defaults (main=openai/gpt-5, filter=openai/gpt-5-mini)
-# export CODESEARCH_LLM_MODEL="openai/gpt-5"
+# Preferred: copy the template to .env and fill in values
+# (.env overrides same-named exports; use export only when no .env applies)
+cp .env.example .env
+# edit .env: CODESEARCH_LLM_API_KEY / CODESEARCH_LLM_BASE_URL (and optional model names)
+
+# Fallback (no .env, Docker -e, etc.):
+# export CODESEARCH_LLM_API_KEY="your-key"
+# export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"
+# export CODESEARCH_LLM_MODEL="openai/gpt-5"            # optional
 # export CODESEARCH_FILTER_LLM_MODEL="openai/gpt-5-mini"
+
 codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
 ```
 
-Search uses two models: **main** (multi-turn decisions) defaults to `openai/gpt-5`, **filter** (line extraction) defaults to `openai/gpt-5-mini`. When pointing at another endpoint, set model names your provider actually supports. Python API and full options: [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md).
+Priority and the full variable table: [Installation · Environment variables](docs/en/2.Installation%20Guide/README.md#environment-variables). Search uses two models: **main** (multi-turn decisions) defaults to `openai/gpt-5`, **filter** (line extraction) defaults to `openai/gpt-5-mini`. When pointing at another endpoint, set model names your provider actually supports. Python API and full options: [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md).
 
 # 📊 Benchmarking
 

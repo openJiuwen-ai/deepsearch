@@ -96,7 +96,12 @@ Default `0.0.0.0:8100`; docs at `/docs`, health at `/api/health`.
 
 ## Environment variables
 
-See `.env.example`.
+See `.env.example`. Prefer `.env`; fall back to process env when needed:
+
+1. **`.env` file (wins)**: `cp .env.example .env`, place it in the process cwd (or up to 4 parents). Keys in the file **override** same-named `export` values;
+2. **Process env** (when no `.env` is found, or a key is absent): `export` / Docker `-e` / orchestrator injection.
+
+SDK/CLI reads via `CodeSearchConfig.from_env()`; the HTTP server also uses `CODESEARCH_`-prefixed listen settings.
 
 | Variable | Default | Description |
 |---|---|---|

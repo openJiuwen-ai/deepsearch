@@ -5,6 +5,7 @@ import os
 from pydantic import BaseModel, Field
 
 from openjiuwen_codesearch.config.agent import SearchAgentConfig
+from openjiuwen_codesearch.config.env_file import ensure_dotenv_loaded
 from openjiuwen_codesearch.config.index import (
     EmbedConfig,
     IndexConfig,
@@ -28,6 +29,9 @@ class CodeSearchConfig(BaseModel):
     def from_env(cls) -> "CodeSearchConfig":
         """从环境变量组装配置（OpenAI 兼容端点）。
 
+        会先尝试加载 cwd（及向上若干层）中的 ``.env`` 到进程环境；
+        ``.env`` 中的键覆盖同名 ``export``；找不到 ``.env`` 时仍读进程环境。
+
         与 deepsearch ``LLMConfig`` 一致，检索侧只认两组字段：
           ``api_key`` ← ``CODESEARCH_LLM_API_KEY``
           ``base_url`` ← ``CODESEARCH_LLM_BASE_URL``（默认空，须显式配置）
@@ -37,6 +41,7 @@ class CodeSearchConfig(BaseModel):
 
         Milvus：``MILVUS_HOST`` / ``MILVUS_PORT`` / ``MILVUS_TOKEN``。
         """
+        ensure_dotenv_loaded()
         api_key = os.getenv("CODESEARCH_LLM_API_KEY", "")
         base_url = os.getenv("CODESEARCH_LLM_BASE_URL", "")
         main_model = os.getenv("CODESEARCH_LLM_MODEL", "openai/gpt-5")

@@ -9,8 +9,9 @@
 返回值约定：阶段函数返回 `Termination | None`；None 表示继续循环。
 """
 
+import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from openjiuwen_codesearch.algorithm.memory_ops import construct_final_hits
 from openjiuwen_codesearch.algorithm.reasoning import (
@@ -37,6 +38,17 @@ def get_registry() -> dict[str, ToolSpec]:
     if _REGISTRY is None:
         _REGISTRY = build_default_registry()
     return _REGISTRY
+
+
+def _format_tool_args(arguments: Any) -> str:
+    if arguments is None:
+        return "{}"
+    if isinstance(arguments, str):
+        return arguments
+    try:
+        return json.dumps(arguments, ensure_ascii=False, default=str)
+    except TypeError:
+        return repr(arguments)
 
 
 async def reasoning_step(ctx: CodeSearchRunContext) -> Optional[Termination]:
@@ -85,6 +97,14 @@ async def reasoning_step(ctx: CodeSearchRunContext) -> Optional[Termination]:
         return Termination.NO_TOOL_CALL
 
     ctx.pending_calls = list(response.tool_calls)
+    for call in ctx.pending_calls:
+        logger.info(
+            "   🛠️  Tool [%d/%d turns]: %s args=%s",
+            ctx.turn,
+            agent_cfg.max_turns,
+            call.name,
+            _format_tool_args(call.arguments),
+        )
     return None
 
 

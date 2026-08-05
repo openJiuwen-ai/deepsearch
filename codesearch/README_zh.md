@@ -103,15 +103,20 @@ codesearch index --repo /path/to/your/repo --collection my_repo
 ```
 
 ```sh
-export CODESEARCH_LLM_API_KEY="your-key"
-export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"   # 任意 OpenAI 兼容端点
-# 可选：覆盖默认模型（默认 main=openai/gpt-5，filter=openai/gpt-5-mini）
-# export CODESEARCH_LLM_MODEL="openai/gpt-5"
+# 推荐：复制模板为 .env 并填写（.env 覆盖同名 export；无 .env 时再用 export）
+cp .env.example .env
+# 编辑 .env：CODESEARCH_LLM_API_KEY / CODESEARCH_LLM_BASE_URL（及可选模型名）
+
+# 备选（无 .env、Docker -e 等场景）：
+# export CODESEARCH_LLM_API_KEY="your-key"
+# export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"
+# export CODESEARCH_LLM_MODEL="openai/gpt-5"            # 可选，默认见上
 # export CODESEARCH_FILTER_LLM_MODEL="openai/gpt-5-mini"
+
 codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
 ```
 
-检索使用两个模型：**main**（多轮决策）默认 `openai/gpt-5`，**filter**（逐行提取）默认 `openai/gpt-5-mini`。换端点时请把模型名改成该服务实际支持的名字。Python API 与完整说明见 [快速开始](docs/zh/3.快速上手/3.快速上手.md)。
+配置优先级与变量表见 [安装指导 · 环境变量](docs/zh/2.安装指导/README.md#环境变量)。检索使用两个模型：**main**（多轮决策）默认 `openai/gpt-5`，**filter**（逐行提取）默认 `openai/gpt-5-mini`。换端点时请把模型名改成该服务实际支持的名字。Python API 与完整说明见 [快速开始](docs/zh/3.快速上手/3.快速上手.md)。
 
 # 📊 评测
 

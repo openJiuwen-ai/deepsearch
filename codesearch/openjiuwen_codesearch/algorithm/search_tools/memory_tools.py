@@ -63,6 +63,14 @@ async def execute_delete(env, args: dict) -> ToolOutcome:
     reasoning = args.get("reasoning", "")
     deleted = env.memory.delete(snippet_ids)
     logger.info("Agent deleted %d snippets. Reasoning: %s", deleted, reasoning)
+    logger.info(
+        "   🗑️  Agent delete_snippets [%d/%d turns]: deleted=%d ids=%s reasoning=%s",
+        env.turn,
+        env.config.agent.max_turns,
+        deleted,
+        snippet_ids,
+        reasoning,
+    )
     message = (
         f"Successfully deleted {deleted} snippets from your CURRENT SAVED SNIPPETS memory."
         f"\nYour Reasoning: {reasoning}"
@@ -73,6 +81,13 @@ async def execute_delete(env, args: dict) -> ToolOutcome:
 async def execute_submit(env, args: dict) -> ToolOutcome:
     snippet_ids = [sid for sid in args.get("snippet_ids", []) if isinstance(sid, int)]
     logger.info("Agent submitted %d final snippets.", len(snippet_ids))
+    logger.info(
+        "   ✅ Agent submit_final_snippets [%d/%d turns]: count=%d ids=%s",
+        env.turn,
+        env.config.agent.max_turns,
+        len(snippet_ids),
+        snippet_ids,
+    )
     return ToolOutcome(submitted_ids=snippet_ids)
 
 

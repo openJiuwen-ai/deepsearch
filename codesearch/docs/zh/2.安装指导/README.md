@@ -113,8 +113,12 @@ codesearch-server          # 源码部署亦可用 python start_backend.py
 
 ## 环境变量
 
-模板见 [.env.example](../../../.env.example)。SDK 侧变量在
-`CodeSearchConfig.from_env()` 读取；服务侧为 `CODESEARCH_` 前缀。
+模板见 [.env.example](../../../.env.example)。推荐用 `.env`，也可退回进程环境：
+
+1. **`.env` 文件（优先）**：`cp .env.example .env` 后填写，放在启动时的当前目录（或向上最多 4 层）。文件中的键会**覆盖**同名 `export`；
+2. **进程环境（无 `.env` 或未命中该键时）**：`export` / Docker `-e` / 编排注入。
+
+SDK/CLI 经 `CodeSearchConfig.from_env()` 读取；服务侧另有 `CODESEARCH_` 前缀的监听参数。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
