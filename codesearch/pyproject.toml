@@ -30,9 +30,8 @@ llm = ["openjiuwen==0.1.10.post3"]
 bench = [
     "pandas>=2.0",
     "pyarrow>=14",
-    "tree-sitter>=0.20.4,<0.26",
-    "tree-sitter-languages==1.10.2; python_version < '3.12'",
-    "tree-sitter-language-pack>=0.10; python_version >= '3.12'",
+    "tree-sitter==0.25.2",
+    "tree-sitter-language-pack==1.12.5",
 ]
 dev = ["pytest>=8"]
 # 服务形态依赖（随包分发 openjiuwen_codesearch/server/；装 [server] 后可用 codesearch-server）
