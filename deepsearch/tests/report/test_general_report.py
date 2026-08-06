@@ -403,7 +403,9 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
 
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_generate_report_rejects_mermaid_before_vlm_mode(mock_llm_context):
+async def test_generate_report_rejects_mermaid_when_controlled_visualization_is_disabled(
+    mock_llm_context,
+):
     reporter = Reporter("basic")
     outline = Outline(
         title="Test report",

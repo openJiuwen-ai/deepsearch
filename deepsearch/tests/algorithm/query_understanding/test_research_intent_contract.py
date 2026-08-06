@@ -304,7 +304,6 @@ def test_sub_report_prompts_always_forbid_body_mermaid(prompt_name):
         "report_type": "brief",
         "paragraph_style": "concise",
         "current_chapter_outline": "1 Market overview",
-        "visualization_enable": False,
     }
 
     prompts = apply_system_prompt(prompt_name, context)

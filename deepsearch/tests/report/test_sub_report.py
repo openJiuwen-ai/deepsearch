@@ -297,8 +297,11 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         llm_context.reset(token)
 
 
+@pytest.mark.parametrize("visualization_enable", [False, True])
 @pytest.mark.asyncio
-async def test_write_subsection_reports_rejects_mermaid_source_when_visualization_disabled():
+async def test_write_subsection_reports_rejects_mermaid_source_in_all_modes(
+    visualization_enable,
+):
     token = llm_context.set({"mock_model": object()})
     try:
         reporter = Reporter("mock_model")
@@ -334,7 +337,7 @@ async def test_write_subsection_reports_rejects_mermaid_source_when_visualizatio
             "sub_report_background_knowledge": [],
             "report_type": "professional",
             "paragraph_style": "detailed",
-            "visualization_enable": False,
+            "visualization_enable": visualization_enable,
         }
 
         with patch(
@@ -353,8 +356,11 @@ async def test_write_subsection_reports_rejects_mermaid_source_when_visualizatio
         llm_context.reset(token)
 
 
+@pytest.mark.parametrize("visualization_enable", [False, True])
 @pytest.mark.asyncio
-async def test_write_subsection_reports_accepts_clean_retry_after_mermaid_rejection():
+async def test_write_subsection_reports_accepts_clean_retry_after_mermaid_rejection(
+    visualization_enable,
+):
     token = llm_context.set({"mock_model": object()})
     try:
         reporter = Reporter("mock_model")
@@ -380,7 +386,7 @@ async def test_write_subsection_reports_accepts_clean_retry_after_mermaid_reject
             "sub_report_background_knowledge": [],
             "report_type": "professional",
             "paragraph_style": "detailed",
-            "visualization_enable": False,
+            "visualization_enable": visualization_enable,
         }
         mermaid_content = "# 1 Process\n\n```mermaid\nflowchart TD\n  A --> B\n```"
         clean_content = "# 1 Process\n\nThe process has two stages [citation:1]."
