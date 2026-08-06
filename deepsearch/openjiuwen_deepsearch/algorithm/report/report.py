@@ -780,10 +780,10 @@ class Reporter:
     def _contains_mermaid_source(content: str) -> bool:
         """Detect Mermaid source in a chapter draft without modifying the draft.
 
-        VLM mode owns chart rendering and insertion, so a chapter draft must not
-        contain Mermaid source. This validator deliberately rejects invalid
-        output and lets the existing bounded retry loop request a new draft;
-        it never removes arbitrary report text after generation.
+        Chart source is owned by the controlled chart pipeline, so a chapter
+        draft must not contain Mermaid source. This validator deliberately
+        rejects invalid output and lets the existing bounded retry loop request
+        a new draft; it never removes arbitrary report text after generation.
         """
         if not content:
             return False
@@ -1082,10 +1082,10 @@ class Reporter:
             f"{sub_report_res.get('sub_references')}\n\n"
         )
 
-        # VLM mode owns chart rendering and insertion. Do not pass a report
-        # containing chart source to the next node, even if it came from a
-        # pre-existing or alternate report path that bypassed chapter retry.
-        # Reject the draft instead of deleting arbitrary body text locally.
+        # Do not pass chart source to the next node when no controlled
+        # visualization insertion is active, even if it came from a pre-existing
+        # or alternate report path that bypassed chapter retry. Reject the draft
+        # instead of deleting arbitrary body text locally.
         if (
             not self.gen_report_context.get("visualization_enable", True)
             and self._contains_mermaid_source(report_content)
@@ -4045,14 +4045,11 @@ class Reporter:
                 llm_output.get("content", "")
             )
 
-            # In VLM mode, chart source belongs to the chart pipeline rather
-            # than the chapter body. Reject an invalid draft so the existing
-            # bounded retry loop can regenerate it; do not strip arbitrary
-            # text after the fact.
-            if (
-                not current_inputs.get("visualization_enable", True)
-                and self._contains_mermaid_source(current_inputs["sub_report_content"])
-            ):
+            # Chart source belongs to the controlled chart pipeline rather than
+            # the chapter body. Reject an invalid draft so the existing bounded
+            # retry loop can regenerate it; do not strip arbitrary text after
+            # the fact.
+            if self._contains_mermaid_source(current_inputs["sub_report_content"]):
                 logger.warning(
                     "%s [write_subsection_reports] section_idx: [%s] "
                     "rejected Mermaid/chart source in chapter draft; retry.",
