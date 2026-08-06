@@ -119,10 +119,12 @@ INTERNAL_CALLBACK_LABEL_PATTERN = re.compile(
 MERMAID_SYNTAX_LINE_PATTERN = re.compile(
     r"(?im)^\s*(?:"
     r"(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\b|"
-    r"sequenceDiagram|stateDiagram(?:-v2)?|classDiagram|"
-    r"erDiagram|journey|gantt|pie|timeline|mindmap|quadrantChart|"
-    r"xychart-beta|sankey-beta|block-beta|gitGraph|C4Context"
-    r")\b"
+    r"(?:sequenceDiagram|stateDiagram(?:-v2)?|classDiagram|erDiagram|"
+    r"mindmap|quadrantChart|xychart-beta|sankey-beta|block-beta|"
+    r"gitGraph|C4Context)\s*$|"
+    r"(?:journey|gantt|pie|timeline)"
+    r"(?:\s+(?:title|showData)\b.*)?\s*$"
+    r")"
 )
 FENCED_BLOCK_PATTERN = re.compile(
     r"(?ms)^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[^\r\n]*)\r?\n"
@@ -759,7 +761,7 @@ class Reporter:
             if "mermaid" in info or MERMAID_SYNTAX_LINE_PATTERN.search(body):
                 return True
 
-        return bool(MERMAID_SYNTAX_LINE_PATTERN.search(content))
+        return False
 
     @staticmethod
     def is_valid_chapter_format(text, section_idx) -> bool:
@@ -1046,22 +1048,6 @@ class Reporter:
             f"{ArticlePart.get_title('reference', gen_report_context['language'])}"
             f"{sub_report_res.get('sub_references')}\n\n"
         )
-
-        # Do not pass chart source to the next node when no controlled
-        # visualization insertion is active, even if it came from a pre-existing
-        # or alternate report path that bypassed chapter retry. Reject the draft
-        # instead of deleting arbitrary body text locally.
-        if (
-            not self.gen_report_context.get("visualization_enable", True)
-            and self._contains_mermaid_source(report_content)
-        ):
-            logger.error(
-                "[generate_report] rejected Mermaid/chart source in assembled report; "
-                "report body was not accepted."
-            )
-            return False, _format_report_error(
-                "generated report contains Mermaid or chart source"
-            )
 
         self.gen_report_context["report"] = report_content
         if LogManager.is_sensitive():
@@ -3752,9 +3738,6 @@ class Reporter:
                 dict(
                     messages=[dict(role="user", content=sub_content_message)],
                     language=current_inputs.get("language"),
-                    visualization_enable=current_inputs.get(
-                        "visualization_enable", True
-                    ),
                     section_iscore=current_inputs.get("section_iscore", False),
                     report_type=report_type,
                     paragraph_style=current_inputs.get("paragraph_style", "detailed"),

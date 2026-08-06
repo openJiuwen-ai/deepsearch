@@ -48,7 +48,13 @@ def _report_doc(idx: int, *, url: str | None = None, content: str | None = None)
     [
         ("```mermaid\nflowchart TD\n  A --> B\n```", True),
         ("```\nsequenceDiagram\n  A->>B: ping\n```", True),
+        ("```text\npie\n  \"Dogs\" : 35\n```", True),
+        ("```text\ntimeline title Product history\n  2024 : Launch\n```", True),
         ("```python\ngraph = {'A': 'B'}\n```", False),
+        ("Pie charts are not used in this report.", False),
+        ("Timeline analysis is described in prose.", False),
+        ("Journey outcomes are discussed in prose.", False),
+        ("Gantt charts are not used in this report.", False),
         ("The report explains how Mermaid is used by the renderer.", False),
     ],
 )
