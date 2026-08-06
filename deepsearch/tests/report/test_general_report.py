@@ -399,3 +399,52 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     success, report_str = await reporter.generate_report(current_inputs)
 
     assert success is True
+
+
+@pytest.mark.asyncio
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+async def test_generate_report_rejects_mermaid_before_vlm_mode(mock_llm_context):
+    reporter = Reporter("basic")
+    outline = Outline(
+        title="Test report",
+        thought="Explain the process.",
+        sections=[Section(title="Process", description="Explain the process.")],
+    )
+    current_report = Report(
+        report_task="Explain the process.",
+        sub_reports=[
+            SubReport(
+                section_id="1",
+                section_task="Process",
+                content=SubReportContent(
+                    sub_report_content_text="# Process\n\nClean prose.",
+                    sub_report_content_summary="Clean prose.",
+                ),
+            )
+        ],
+    )
+    reporter._process_sub_report = AsyncMock(
+        return_value={
+            "sub_reports_content": (
+                "# Process\n\n```mermaid\nflowchart TD\n  A --> B\n```"
+            ),
+            "sub_references": "",
+            "refreshed_all_classified_contents": [],
+        }
+    )
+    reporter.generate_abstract = AsyncMock(return_value="Abstract")
+    reporter.generate_conclusion = AsyncMock(return_value="Conclusion")
+
+    success, report_str = await reporter.generate_report(
+        {
+            "current_outline": outline,
+            "current_report": current_report,
+            "language": CHINESE,
+            "report_task": "Explain the process.",
+            "visualization_enable": False,
+        }
+    )
+
+    assert success is False
+    assert "Mermaid" in report_str
+    assert "report" not in reporter.gen_report_context
