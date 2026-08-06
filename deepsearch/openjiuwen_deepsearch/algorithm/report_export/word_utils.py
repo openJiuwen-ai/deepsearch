@@ -705,13 +705,31 @@ def _latex_to_omml(latex: str) -> str:
 
 def _normalize_latex_for_omml(latex: str) -> str:
     """Normalize valid LaTeX forms that mathml2omml cannot parse directly."""
-    previous = _strip_latex_alignment_markers(latex)
+    previous = _merge_arg_min_max(_strip_latex_alignment_markers(latex))
     for _ in range(8):
         current = _wrap_grouped_command_powers(previous)
         if current == previous:
             return current
         previous = current
     return previous
+
+
+_ARG_MIN_MAX_RE = re.compile(r"\\arg\s*\\(min|max)(?![a-zA-Z])")
+
+
+def _merge_arg_min_max(latex: str) -> str:
+    """Rewrite ``\\arg\\min`` / ``\\arg\\max`` as ``\\operatorname{arg\\,min/max}``.
+
+    latex2mathml 3.81 does not recognize ``\\arg`` and emits the whole
+    ``\\arg`` token verbatim as ``<mi>\\arg</mi>`` (backslash kept). Word
+    renders that as a visible ``\\argmin``. ``\\operatorname{arg\\,min}``
+    drives latex2mathml's operator path and yields a MathML ``<mo>`` with
+    no backslash, matching LaTeX's standard ``arg min`` rendering.
+    """
+    return _ARG_MIN_MAX_RE.sub(
+        lambda m: r"\operatorname{arg\," + m.group(1) + "}",
+        latex,
+    )
 
 
 def _strip_latex_alignment_markers(latex: str) -> str:

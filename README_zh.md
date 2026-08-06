@@ -37,7 +37,7 @@ openJiuwen-DeepSearch面向企业与消费者提供深度搜索与深度研究�
 
 openJiuwen-DeepSearch的系统架构如下图所示。openJiuwen-DeepSearch主要基于openJiuwen agent-core构建，可以对接不同大模型及工具能力。
 DeepSearch主要由管理器、查询规划、信息收集、理解分析和内容生成等部分组成，其中：
-![image](./docs/zh/images/architecture.png)
+![image](./deepsearch/docs/zh/images/architecture.png)
 
 - **管理器**：提供基于openJiuwen agent-core框架进行Agent创建、编排流程管理、配置管理等能力。支撑智能体之间任务实现合理配合及高效运作。
 - **查询规划**：提供基于意图识别的查询路由、结构规划、任务分解、查询改写等查询理解功能，实现对用户真实意图的捕捉及任务编排。
@@ -62,22 +62,22 @@ openJiuwen Studio作为一站式AI Agent开发平台，提供了从开发到部�
 
 以下方式适用于希望**直接使用完整系统**（包含前端界面）的用户。
 
- * Windows 系统快速安装指南：[Windows 安装指导](./docs/zh/2.安装指导/DeepSearch完整版/Windows系统安装.md)
- * MacOS 系统快速安装指南：[MacOS 安装指导](./docs/zh/2.安装指导/DeepSearch完整版/MacOS系统安装.md)
- * Linux 系统快速安装指南：[Linux 安装指导](./docs/zh/2.安装指导/DeepSearch完整版/Linux系统安装.md)
+ * Windows 系统快速安装指南：[Windows 安装指导](./deepsearch/docs/zh/2.安装指导/DeepSearch完整版/Windows系统安装.md)
+ * MacOS 系统快速安装指南：[MacOS 安装指导](./deepsearch/docs/zh/2.安装指导/DeepSearch完整版/MacOS系统安装.md)
+ * Linux 系统快速安装指南：[Linux 安装指导](./deepsearch/docs/zh/2.安装指导/DeepSearch完整版/Linux系统安装.md)
 
 ## 其他安装方式
  	 
 如果您需要进行二次开发、定制化部署或源码级调试，可以参考开发者安装方式。
-详细文档请参阅：[SDK安装指导](./docs/zh/2.安装指导/DeepSearch_SDK/README.md)。
+详细文档请参阅：[SDK安装指导](./deepsearch/docs/zh/2.安装指导/DeepSearch_SDK/README.md)。
 
 # 🚀 快速上手
 以下视频帮助您快速了解 DeepSearch 的核心功能与使用流程。
 
-![DeepSearch快速上手](./docs/zh/images/DeepSearch介绍.gif)
+![DeepSearch快速上手](./deepsearch/docs/zh/images/DeepSearch介绍.gif)
 
 👉 如需完整清晰的演示视频，可点击下载[完整视频](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/readme/9e6e857a424167500d4b4277485ea9b1_raw.mp4) <br>
-👉 更多详情指导详见[快速上手](./docs/zh/3.快速上手/3.快速上手.md)。
+👉 更多详情指导详见[快速上手](./deepsearch/docs/zh/3.快速上手/3.快速上手.md)。
 
 **_注意：_**
 
@@ -86,19 +86,17 @@ openJiuwen Studio作为一站式AI Agent开发平台，提供了从开发到部�
 * **_使用思考类模型时，由于包含更复杂的推理与分析过程，报告生成耗时会显著增加。如对生成速度有要求，建议优先使用非思考模型。_**
 
 # 💻 开发指南
-想利用 DeepSearch 源码进行开发，请参考[开发指南](./docs/zh/4.开发指南/README.md)，期待您的加入。
+想利用 DeepSearch 源码进行开发，请参考[开发指南](./deepsearch/docs/zh/4.开发指南/README.md)，期待您的加入。
 
 **_注意：_**
 
 **_除HITL/终止等针对同一个任务的场景外，每次调用deepsearch SDK的run接口使用服务时，需要传入不同的conversation_id，不允许使用相同的conversation_id二次传入。_**
 
 # ❓ FAQ
-更多常见问题详见[FAQ](./docs/zh/5.FAQ/README.md)。
+更多常见问题详见[FAQ](./deepsearch/docs/zh/5.FAQ/README.md)。
 
 # ⚖️ 许可证
 本项目采用 Apache 2.0 许可证。详见 [LICENSE](LICENSE) 文件。
 
 # 🤝 贡献方式
 欢迎提交 Issue 和 Pull Request！详情请参考[贡献指南](https://www.openjiuwen.com/contribute)。
-
-本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。
