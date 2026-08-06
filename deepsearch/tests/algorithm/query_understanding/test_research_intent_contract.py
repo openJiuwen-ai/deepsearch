@@ -310,9 +310,10 @@ def test_sub_report_prompts_always_forbid_body_mermaid(prompt_name):
     prompts = apply_system_prompt(prompt_name, context)
     system_prompt = prompts[0]["content"]
 
-    assert "Do NOT output Mermaid code fences" in system_prompt
-    assert "hand-written chart blocks" in system_prompt
-    assert "report visualization/chart pipeline" in system_prompt
+    assert "Hard output contract" in system_prompt
+    assert "Do NOT output Mermaid syntax" in system_prompt
+    assert "fenced/indented chart block" in system_prompt
+    assert "controlled chart pipeline handles chart selection" in system_prompt
 
 
 def test_sub_report_prompt_renders_section_local_contract_context():
