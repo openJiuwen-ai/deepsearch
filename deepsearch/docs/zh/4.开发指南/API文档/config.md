@@ -141,7 +141,7 @@ bocha 30
 - `jina` 的 `search_url` 为空时，会自动回退到 `https://s.jina.ai`；国内网络环境如无法访问该默认地址，可显式配置 `search_url="https://s.jinaai.cn"`，也可填入私有化部署或代理转发地址。
 - `bocha`、`perplexity` 通过 harness `web_tools` 适配层访问搜索能力，仅当底层 provider 支持地址覆盖时，`search_url` 才会生效。国内网络环境如无法访问 Perplexity 默认服务，需要配置可访问的代理或转发地址，并通过 `search_url` 显式覆盖。
 - `web_search_tool` 返回结果进入 Collector 前会统一归一化为 `title`、`url`、`content`、`type` 等字段；字段别名如 `link`、`source_url`、`snippet`、`summary`、`answer` 会在 Collector 中兼容处理。
-- 预抓取网页正文以及最终进入 `run_doc_evaluation` 的内容都会按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 进行裁剪，以限制网页搜索结果对后续评估链路的上下文占用。
+- 预抓取网页正文以及最终进入下游处理的内容都会按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 进行裁剪，以限制网页搜索结果对后续链路的上下文占用。
 
 ## class openjiuwen_deepsearch.config.config.EmbedModelConfig
 ```python

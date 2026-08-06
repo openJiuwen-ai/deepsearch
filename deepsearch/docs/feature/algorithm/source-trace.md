@@ -42,6 +42,7 @@
 
 主要测试：
 
+- `tests/algorithm/test_source_tracer.py`
 - `tests/source_tracer/test_source_tracer.py`
 - `tests/source_tracer/test_source_tracer_node.py`
 - `tests/source_tracer/test_sub_source_tracer_node.py`
@@ -56,15 +57,24 @@
 ## 核心流程
 
 1. `SourceTracer` 接收报告、classified content 和 LLM 模型名。
-2. 前置覆盖率检查判断是否需要生成新引用。
-3. 报告和搜索记录预处理，移除参考文献区并裁剪过长内容。
-4. 内容识别模块找出需要引用的句子。
-5. 来源匹配模块按 source type 调用 LLM 或匹配算法生成候选引用。
-6. `add_source` 将引用插入报告并生成 data items。
-7. citation checker 校验并重建段落，只保留有效引用。
-8. 参考文献区被追加或更新，前端 citation data 被组织输出。
+2. `transform_search_record` 将 classified_content 转换为搜索记录，兼容新旧字段名（`doc_url`→`url`、`doc_title`→`title`、`passage_text`→`original_content`），按 URL 去重。
+3. 前置覆盖率检查判断是否需要生成新引用。
+4. 报告和搜索记录预处理，移除参考文献区并裁剪过长内容。
+5. 内容识别模块找出需要引用的句子。
+6. 来源匹配模块按 source type 调用 LLM 或匹配算法生成候选引用。
+7. `add_source` 将引用插入报告并生成 data items。
+8. citation checker 校验并重建段落，只保留有效引用。
+9. 参考文献区被追加或更新，前端 citation data 被组织输出。
 
 ## 数据契约与依赖
+
+字段映射（passage-level 新字段名 → 溯源模块统一字段名）：
+
+source_tracer 在 3 处对新旧字段名做了兼容映射，统一输出 `url`/`title`/`content`：
+
+1. **`transform_search_record`**（`source_tracer.py`）：`doc_url`→`url`、`doc_title`→`title`、`passage_text`→`content`（或 `url`/`title`/`original_content` 旧字段名直接透传）
+2. **`_build_citation_mapping`**（`source_tracer_preprocessors.py`）：`doc_title`→`title`、`doc_url`→`url`、`passage_text`→`content`（或旧字段名直接透传）
+3. **`classify_search_record`**（`source_tracer_infer/infer_extract_info.py`）：`doc_title`→`title`、`doc_url`→`url`、`passage_text`→`content`（或旧字段名直接透传）
 
 关键输入：
 

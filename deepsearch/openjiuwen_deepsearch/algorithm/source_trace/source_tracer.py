@@ -50,26 +50,48 @@ class SourceTracer:
         """将子报告生成过程中使用的top-K文章信息转换为溯源模块使用的搜索记录格式。
 
         Args:
-            classified_content (list): 子报告生成过程中使用的子报告生成过程中使用的top-K文章信息，每个元素为包含url、title和original_content的字典
+            classified_content (list): 子报告生成过程中使用的top-K文章信息，
+                每个元素为包含doc_url/doc_title/passage_text或url/title/original_content的字典
 
         Returns:
             dict: 溯源模块使用的搜索记录，格式为{'search_record': [{'url': str, 'title': str, 'content': str}, ...]}
         """
         if not classified_content:
+            logger.warning("[TRACE_DIAG] transform_search_record: classified_content 为空, search_record 将为空")
             return {}
         filtered_content = []
+        skipped_non_dict = 0
+        skipped_missing_field = 0
+        sample_keys = None
+        # Note: do NOT deduplicate by URL here. In passage-level mode the same
+        # URL legitimately carries multiple distinct passage_text entries, and
+        # dropping them here starves match_sources of supporting evidence and
+        # reduces generated references. Exact duplicates (same url+title+content)
+        # are handled later by is_duplicate_record in preprocess_search_record.
         for item in classified_content:
-            if isinstance(item, dict):
-                # 检查是否同时拥有url、title、original_content三个字段
-                if "url" in item and "title" in item and "original_content" in item:
-                    filtered_item = {
-                        "url": item["url"],
-                        "title": item["title"],
-                        # 将original_content改为content，方便后续识别使用
-                        "content": item["original_content"]
-                    }
-                    filtered_content.append(filtered_item)
+            if not isinstance(item, dict):
+                skipped_non_dict += 1
+                continue
+            if sample_keys is None:
+                sample_keys = sorted(list(item.keys()))
+            url = item.get("url") or item.get("doc_url") or ""
+            title = item.get("title") or item.get("doc_title") or ""
+            content = item.get("original_content") or item.get("passage_text") or ""
+            if url and title and content:
+                filtered_item = {
+                    "url": url,
+                    "title": title,
+                    "content": content,
+                }
+                filtered_content.append(filtered_item)
+            else:
+                skipped_missing_field += 1
 
+        logger.info(
+            "[TRACE_DIAG] transform_search_record: input=%d, output=%d, "
+            "skipped_non_dict=%d, skipped_missing_field=%d, sample_keys=%s",
+            len(classified_content), len(filtered_content), skipped_non_dict, skipped_missing_field, sample_keys,
+        )
         search_record = dict(search_record=filtered_content)
         return search_record
 
@@ -213,11 +235,24 @@ class SourceTracer:
             _, preprocessed_report = preprocess_report(self._report)
 
             # 预处理搜索记录
+            input_record_count = (
+                len(self._search_record.get("search_record", []))
+                if isinstance(self._search_record, dict) else 0
+            )
+            logger.info("[TRACE_DIAG] research_trace_source: search_record input count=%d", input_record_count)
             preprocessed_search_record = preprocess_search_record(self._search_record,
                                                                   self._search_record_max_content_len)
             if not preprocessed_search_record:
-                logger.warning("[research_trace_source] 预处理搜索记录失败，退出溯源")
+                logger.warning(
+                    "[TRACE_DIAG] research_trace_source: preprocess_search_record "
+                    "返回空, 退出溯源 (input count=%d)", input_record_count
+                )
                 return
+            preprocessed_count = (
+                len(preprocessed_search_record.get("search_record", []))
+                if isinstance(preprocessed_search_record, dict) else 0
+            )
+            logger.info("[TRACE_DIAG] research_trace_source: preprocessed_search_record count=%d", preprocessed_count)
             if not LogManager.is_sensitive():
                 logger.debug(
                     f"[research_trace_source] 预处理后的搜索记录: %s",
@@ -227,8 +262,12 @@ class SourceTracer:
             content_recognition_result = await recognize_content_to_cite(
                 preprocessed_report, self._similarity_threshold, self._llm_model_name)
             if not content_recognition_result:
-                logger.warning("[research_trace_source] 未识别到需要增加引用的内容")
+                logger.warning("[TRACE_DIAG] research_trace_source: recognize_content_to_cite 未识别到需要引用的内容")
                 return
+            logger.info(
+                "[TRACE_DIAG] research_trace_source: content_recognition_result count=%d",
+                len(content_recognition_result) if isinstance(content_recognition_result, (list, dict)) else 1
+            )
 
             # 获取溯源匹配结果
             trace_results = await match_sources(
@@ -238,12 +277,23 @@ class SourceTracer:
                 self._llm_model_name
             )
             if not trace_results:
-                logger.warning("[research_trace_source] 未获取到有效溯源结果")
+                logger.warning(
+                    "[TRACE_DIAG] research_trace_source: match_sources "
+                    "未获取到有效溯源结果 (input records=%d)", preprocessed_count
+                )
                 return
+            logger.info(
+                "[TRACE_DIAG] research_trace_source: match_sources trace_results count=%d",
+                len(trace_results) if isinstance(trace_results, (list, dict)) else 1
+            )
 
             # 生成溯源引用信息datas
             datas = generate_source_datas(preprocessed_report, preprocessed_search_record, trace_results)
             self._trace_source_datas = datas
+            logger.info(
+                "[TRACE_DIAG] research_trace_source: generate_source_datas count=%d",
+                len(datas) if isinstance(datas, list) else 0
+            )
 
         except Exception as e:
             raise CustomValueException(StatusCode.SOURCE_TRACER_TRACE_SOURCE_ERROR.code,
@@ -259,6 +309,10 @@ class SourceTracer:
         """
         try:
             datas = self._trace_source_datas
+            logger.info(
+                "[TRACE_DIAG] add_source_to_report: trace_source_datas input count=%d",
+                len(datas) if isinstance(datas, list) else 0
+            )
             # 针对完整report，先进行预处理，删除文末参考文献章节
             removed_section, preprocessed_report = preprocess_report(self._report)
 
@@ -267,14 +321,26 @@ class SourceTracer:
                 preprocessed_report, self._classified_content)
             origin_report_datas = origin_report_dict.get("origin_report_data", [])
             need_add_source_report = origin_report_dict.get("modified_report", "")
+            logger.info(
+                "[TRACE_DIAG] add_source_to_report: origin_report_datas count=%d",
+                len(origin_report_datas) if isinstance(origin_report_datas, list) else 0
+            )
 
             # 对文中自带的引用内容和传入的引用信息列表做合并排序
             all_datas = merge_source_datas(
                 need_add_source_report, datas, origin_report_datas)
+            logger.info(
+                "[TRACE_DIAG] add_source_to_report: merge_source_datas count=%d",
+                len(all_datas) if isinstance(all_datas, list) else 0
+            )
 
             # 使用datas列表，对原始报告文本进行来源引用添加
             added_source_report, all_datas = add_source_references(need_add_source_report, all_datas)
             added_source_report = added_source_report + removed_section
+            logger.info(
+                "[TRACE_DIAG] add_source_to_report: add_source_references final count=%d",
+                len(all_datas) if isinstance(all_datas, list) else 0
+            )
 
             if not LogManager.is_sensitive():
                 logger.info(f'[add_source_to_report] 添加来源引用后的报告 {added_source_report}')

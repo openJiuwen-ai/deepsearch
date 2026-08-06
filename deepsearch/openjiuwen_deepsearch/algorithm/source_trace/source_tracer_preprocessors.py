@@ -464,9 +464,9 @@ def _build_citation_mapping(classified_content: List) -> Dict:
         index = content.get("index", 0)
         if index == 0:
             continue
-        title = _normalize_citation_title(content.get("title", ""))
-        url = content.get("url", "")
-        content = content.get("original_content", "")
+        title = _normalize_citation_title(content.get("title", "") or content.get("doc_title", ""))
+        url = content.get("url", "") or content.get("doc_url", "")
+        content = content.get("original_content", "") or content.get("passage_text", "")
 
         # 如果该index已存在，则把content补充在原content后
         if index in citation_mapping:

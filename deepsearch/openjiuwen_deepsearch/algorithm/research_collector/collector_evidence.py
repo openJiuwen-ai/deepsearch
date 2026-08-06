@@ -19,7 +19,6 @@ TRACKING_QUERY_PREFIXES = ("utm_",)
 TRACKING_QUERY_KEYS = {"spm", "from", "source", "ref", "fbclid", "gclid"}
 MAX_PASSAGE_LENGTH = 500
 DEFAULT_KEY_PASSAGE_COUNT = 5
-SCORE_KEYS = ("authority", "relevance", "answerability", "data_density")
 
 
 @dataclass
@@ -273,20 +272,176 @@ def extract_source(url: str) -> str:
         return ""
 
 
-def split_passages(content: str) -> list[str]:
-    """把正文切分为适合评分的段落。
+def split_passages(content: str, max_length: int = 500, overlap: int = 200) -> list[str]:
+    """把正文切分为结构化的段落。
 
-    中文句末标点可直接切分；英文句点仅在后接空白或文本结束时作为句末，
-    避免把 `1.5%`、`3.10.2`、`example.com` 等数字或域名拆碎。
+    依据 COINS 2025 基准实验推荐：
+    - 以句子级切分为主要策略（优于固定长度/语义切分）
+    - 窗口大小 max_length（默认 500 字符，约 512 token）
+    - 片段间保留 overlap（默认 200 字符）的上下文重叠
+
+    流程：
+    1. 按空行分为块
+    2. 表格/列表块保持完整（超长时按行切分，保留表头）
+    3. 普通块：按句号切分 → 句子级贪心累积到 max_length → 片段间保留 overlap 重叠
+    4. 合并短片段（< 40 字符）到上一段
 
     Args:
         content: 原始正文。
+        max_length: 单个段落最大字符数。
+        overlap: 片段间重叠字符数。
 
     Returns:
         已去空白的段落列表。
     """
-    raw_parts = re.split(r"(?:\n\s*\n|\n|(?<=[。！？!?])|(?<=\.)(?=\s|$))", content or "")
-    return [part.strip() for part in raw_parts if part and part.strip()]
+    if not content or not content.strip():
+        return []
+
+    # Step 1: 按空行分段
+    raw_blocks = re.split(r"\n\s*\n", content)
+    blocks: list[str] = []
+    for block in raw_blocks:
+        block = block.strip()
+        if not block:
+            continue
+        blocks.append(block)
+
+    # Step 2: 对每个块应用句子级切分
+    passages: list[str] = []
+    for block in blocks:
+        lines = block.split("\n")
+
+        # 表格/列表块：保持完整或按行切分
+        if _is_markdown_table(block) or _is_structured_block(lines):
+            if len(block) <= max_length:
+                passages.append(block)
+            elif _is_markdown_table(block):
+                passages.extend(_split_long_table(block, max_length))
+            else:
+                passages.append(block)  # 列表块不拆
+            continue
+
+        # 普通文本块：句子级切分 + 滑动窗口
+        sentences = re.split(r"(?<=[。！？!?])\s*|(?<=\.)\s+(?=[A-Z])", block)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        if not sentences:
+            continue
+
+        current: list[str] = []
+        for sentence in sentences:
+            if current and len("".join(current) + sentence) > max_length:
+                passages.append("".join(current))
+                # 从末尾向前贪心取 overlap 字符的句子作为重叠
+                overlap_sentences: list[str] = []
+                overlap_len = 0
+                for prev_sentence in reversed(current):
+                    if overlap_len + len(prev_sentence) > overlap:
+                        break
+                    overlap_sentences.insert(0, prev_sentence)
+                    overlap_len += len(prev_sentence)
+                current = list(overlap_sentences) + [sentence] if overlap_sentences else [sentence]
+            else:
+                current.append(sentence)
+
+        if current:
+            passages.append("".join(current))
+
+    # Step 3: 合并短片段（< 40 字符）到上一段
+    merged: list[str] = []
+    for passage in passages:
+        passage = passage.strip()
+        if not passage:
+            continue
+        if merged and len(passage) < 40:
+            merged[-1] = merged[-1] + "\n" + passage
+        else:
+            merged.append(passage)
+
+    return merged
+
+
+def _is_structured_block(lines: list[str]) -> bool:
+    """检测是否是表格/列表块，如果是则不应拆分。
+
+    判定规则：超过一半的行包含表格/列表特征。
+    """
+    if len(lines) < 3:
+        return False
+    structured_count = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # 表格行（含 |）
+        if "|" in line:
+            structured_count += 1
+        # Markdown 表格分隔行
+        elif re.match(r"^\|?[\s\-:|]+\|?$", line):
+            structured_count += 1
+        # 列表项（1. / - / * / 数字.）
+        elif re.match(r"^\d+[.、)]", line) or re.match(r"^[-*•]", line):
+            structured_count += 1
+    total = max(1, len([line for line in lines if line.strip()]))
+    return structured_count / total > 0.5
+
+
+def _is_markdown_table(passage: str) -> bool:
+    """检测段落是否是 Markdown 表格。
+
+    Markdown 表格的结构：
+    | 列1 | 列2 |
+    | --- | --- |
+    | 数据1 | 数据2 |
+    """
+    lines = passage.strip().split("\n")
+    if len(lines) < 3:
+        return False
+    # 第一行必须含 |（表头行）
+    if "|" not in lines[0]:
+        return False
+    # 第二行必须是分隔行（|---|---| 或 |:---|:---:|）
+    if not re.match(r"^\|?[\s\-:|]+\|?$", lines[1].strip()):
+        return False
+    # 至少有一行数据行（含 |）
+    return any("|" in line for line in lines[2:])
+
+
+def _split_long_table(passage: str, max_length: int = 500) -> list[str]:
+    """将超长 Markdown 表格按行切分，每个片段保留表头。
+
+    确保表格结构不丢失：每个片段都包含完整的表头行和分隔行，
+    数据行按 max_length 预算贪心累积。
+    """
+    lines = passage.strip().split("\n")
+    # 提取表头行 + 分隔行（前两行）
+    header_lines = lines[:2]
+    data_lines = lines[2:]
+    header_block = "\n".join(header_lines)
+    header_len = len(header_block)
+
+    # 如果表头本身已超限，无法安全切分，回退到硬截断
+    if header_len >= max_length:
+        return [passage[:max_length]]
+
+    result: list[str] = []
+    current_rows: list[str] = []
+    current_len = header_len
+
+    for row in data_lines:
+        row_len = len(row) + 1  # +1 for \n
+        if current_rows and current_len + row_len > max_length:
+            # 当前片段已满，输出
+            result.append(header_block + "\n" + "\n".join(current_rows))
+            current_rows = [row]
+            current_len = header_len + row_len
+        else:
+            current_rows.append(row)
+            current_len += row_len
+
+    if current_rows:
+        result.append(header_block + "\n" + "\n".join(current_rows))
+
+    return result if result else [passage[:max_length]]
 
 
 def extract_keywords(query: str, title: str = "") -> list[str]:
@@ -448,18 +603,12 @@ def build_evidence_atom(
         "url": url,
         "source": extract_source(url),
         "publish_time": canonical_publish_time or "未提供时间信息",
+        "doc_time": canonical_publish_time or "未提供时间信息",
         "query": query,
         "key_passages": key_passages,
-        "scores": {
-            "authority": None,
-            "relevance": None,
-            "answerability": None,
-            "data_density": None,
-        },
         "content_ref": content_ref,
     }
     doc_info = {**base, "original_content": content}
-    normalize_doc_info_scores_and_time(doc_info)
     return base, doc_info
 
 
@@ -486,7 +635,7 @@ def _compact_doc(doc: dict[str, Any]) -> dict[str, Any]:
     Returns:
         不含 original_content 的 evidence 视图。
     """
-    return {
+    result = {
         "source_id": doc.get("source_id") or doc.get("doc_id", ""),
         "doc_id": doc.get("doc_id", ""),
         "title": _truncate_text(doc.get("title", ""), 120),
@@ -495,9 +644,11 @@ def _compact_doc(doc: dict[str, Any]) -> dict[str, Any]:
         "publish_time": doc.get("publish_time") or doc.get("doc_time", ""),
         "query": doc.get("query", ""),
         "key_passages": [_truncate_text(passage, MAX_PASSAGE_LENGTH) for passage in doc.get("key_passages", [])],
-        "scores": doc.get("scores", {}),
         "content_ref": doc.get("content_ref", {}),
     }
+    if doc.get("scores"):
+        result["scores"] = doc["scores"]
+    return result
 
 
 def _compact_supervisor_doc(doc: dict[str, Any]) -> dict[str, Any]:
@@ -510,15 +661,17 @@ def _compact_supervisor_doc(doc: dict[str, Any]) -> dict[str, Any]:
         字段级截断后的 supervisor evidence 行。
     """
     compact = _compact_doc(doc)
-    return {
+    result = {
         "source_id": compact["source_id"],
         "doc_id": compact["doc_id"],
         "title": compact["title"],
         "source": compact["source"],
         "publish_time": compact["publish_time"],
         "key_passages": compact["key_passages"],
-        "scores": compact["scores"],
     }
+    if doc.get("scores"):
+        result["scores"] = doc["scores"]
+    return result
 
 
 def build_evaluation_documents(doc_infos: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -533,23 +686,6 @@ def build_evaluation_documents(doc_infos: list[dict[str, Any]]) -> list[dict[str
     return [_compact_doc(doc) for doc in doc_infos if isinstance(doc, dict)]
 
 
-def _evidence_sort_key(doc: dict[str, Any]) -> tuple[float, float, float]:
-    """构造 evidence 排序键。
-
-    Args:
-        doc: evidence 文档。
-
-    Returns:
-        relevance、answerability、data_density 三元组。
-    """
-    scores = doc.get("scores", {}) if isinstance(doc.get("scores"), dict) else {}
-    return (
-        scores.get("relevance") or 0,
-        scores.get("answerability") or 0,
-        scores.get("data_density") or 0,
-    )
-
-
 def build_supervisor_evidence_table(
     doc_infos: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -559,13 +695,9 @@ def build_supervisor_evidence_table(
         doc_infos: 完整兼容 doc_infos。
 
     Returns:
-        按证据分数排序后的 compact evidence table。
+        compact evidence table。
     """
-    ranked_docs = sorted(
-        [doc for doc in doc_infos if isinstance(doc, dict)],
-        key=_evidence_sort_key,
-        reverse=True,
-    )
+    ranked_docs = [doc for doc in doc_infos if isinstance(doc, dict)]
     return [_compact_supervisor_doc(doc) for doc in ranked_docs]
 
 
@@ -581,48 +713,7 @@ def build_summary_evidence_pack(
         面向总结节点的轻量 evidence pack。
     """
     compact_docs = [_compact_doc(doc) for doc in doc_infos if isinstance(doc, dict)]
-    compact_docs.sort(key=_evidence_sort_key, reverse=True)
     return {
         "sources": compact_docs,
         "source_ids": [doc.get("source_id", "") for doc in compact_docs],
     }
-
-
-def _to_float_or_none(value: Any) -> float | None:
-    """把 evaluator 输出转换为浮点分数。
-
-    Args:
-        value: evaluator 输出的原始分数。
-
-    Returns:
-        可解析时返回 float；缺失或非法时返回 None。
-    """
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def normalize_scores(scores: dict[str, Any] | None) -> dict[str, float | None]:
-    """规范化评分字段。
-
-    Args:
-        scores: evaluator 输出的原始 scores。
-
-    Returns:
-        包含四个固定评分维度的字典。
-    """
-    scores = scores if isinstance(scores, dict) else {}
-    return {key: _to_float_or_none(scores.get(key)) for key in SCORE_KEYS}
-
-
-def normalize_doc_info_scores_and_time(doc_info: dict[str, Any]) -> dict[str, Any]:
-    """Normalize structured scores and canonical time fields on doc_info."""
-    scores = normalize_scores(doc_info.get("scores"))
-    doc_info["scores"] = scores
-    publish_time = doc_info.get("publish_time") or doc_info.get("doc_time") or "未提供时间信息"
-    doc_info["publish_time"] = publish_time
-    doc_info["doc_time"] = publish_time
-    return doc_info

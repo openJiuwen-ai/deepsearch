@@ -11,9 +11,12 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_buil
     normalize_search_query_item,
     route_secondary_search_engine_for_query,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
-    DirectSearchRequest,
-    InfoRetrievalNode,
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, DirectSearchRequest
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
+    EvidenceLedger,
+    build_ledger_brief,
+    ensure_ledger,
+    merge_ledger_update,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import (
@@ -170,8 +173,7 @@ async def test_llm_tool_calling_path_runs_query_secondary_engine(search_method):
 
     with patch.object(node, "_collector_llm", AsyncMock(return_value=(state, agent_input))), \
             patch.object(node, "_prepare_collector_tool", return_value=([], {"web_search_tool": web_tool})), \
-            patch.object(node, "_structure_result", AsyncMock(return_value=([], [], {}))), \
-            patch.object(node, "_process_post_process_result", return_value=[]):
+            patch.object(node, "_structure_result", AsyncMock(return_value=([], {}))):
         await node._collector_main(state)
 
     web_tool.invoke.assert_awaited_once_with({
@@ -199,8 +201,7 @@ async def test_llm_tool_calling_path_skips_duplicate_secondary_engine():
 
     with patch.object(node, "_collector_llm", AsyncMock(return_value=(state, agent_input))), \
             patch.object(node, "_prepare_collector_tool", return_value=([], {"web_search_tool": web_tool})), \
-            patch.object(node, "_structure_result", AsyncMock(return_value=([], [], {}))), \
-            patch.object(node, "_process_post_process_result", return_value=[]):
+            patch.object(node, "_structure_result", AsyncMock(return_value=([], {}))):
         await node._collector_main(state)
 
     web_tool.invoke.assert_not_awaited()

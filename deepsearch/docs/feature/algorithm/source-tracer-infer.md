@@ -45,13 +45,14 @@
 
 1. `SourceTracerInfer.run` 获取报告、语言、模型名和 source tracer response。
 2. 如未提供 `conclusion_with_records`，先从报告和溯源信息中提取结论及搜索记录。
-3. 每个结论并发执行 `async_run`。
-4. 筛选与结论相关的引用资料。
-5. LLM 生成推理过程，并过滤低质量推理。
-6. 推理被结构化为节点关系。
-7. `NumberNode` 给 citation、结论和中间推理节点编号。
-8. `SupplementGraph` 删除自环、修补非连通图并剪枝。
-9. HTML 生成后编码为 base64，并把推理标记写回报告。
+3. `classify_search_record` 对搜索记录按章节索引分类，兼容新旧字段名：`doc_title`→`title`、`doc_url`→`url`、`passage_text`→`content`（或 `title`/`url`/`original_content` 旧字段名直接透传）。
+4. 每个结论并发执行 `async_run`。
+5. 筛选与结论相关的引用资料。
+6. LLM 生成推理过程，并过滤低质量推理。
+7. 推理被结构化为节点关系。
+8. `NumberNode` 给 citation、结论和中间推理节点编号。
+9. `SupplementGraph` 删除自环、修补非连通图并剪枝。
+10. HTML 生成后编码为 base64，并把推理标记写回报告。
 
 ## 数据契约与依赖
 
@@ -73,7 +74,7 @@
 ## 边界与错误处理
 
 - 单个结论处理失败时返回空 infer message，不应阻塞其他结论。
-- 结论或搜索记录为空时跳过当前推理。
+- 结论或搜索记录为空时跳过当前推理（`async_run` 中 `extract_reference` 返回空或 conclusion 为空时提前返回，不调用 `infer`，避免无效 LLM 调用）。
 - LLM 输出必须经过类型和长度检测。
 - 图修补会删除自环、捏造节点和不连通的非关键子图。
 - HTML base64 会做反解校验，失败时抛出异常并跳过当前结论。

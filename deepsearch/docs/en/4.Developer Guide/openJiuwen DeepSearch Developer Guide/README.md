@@ -89,7 +89,7 @@ Integration notes:
 Search results are also bounded before they reach the collector LLM path:
 
 - Prefetched webpage bodies from the harness-based adapters are truncated to `MAX_COLLECTOR_DOC_CONTENT_LENGTH`.
-- `InfoRetrievalNode._structure_result` applies the same bound again before passing `contents` into `run_doc_evaluation`.
+- `InfoRetrievalNode._structure_result` applies the same bound again before passing `contents` into downstream processing.
 - Collector-side normalization stores web results in a stable `title` / `url` / `content` / `type` shape and accepts aliases such as `link`, `source_url`, `snippet`, `summary`, and `answer`.
 
 > Register with the vendor for `search_api_key`. For public engines such as Jina, `search_url` can be left empty to use the built-in default endpoint. In China network environments, set Jina `search_url` to `https://s.jinaai.cn`; also provide `search_url` when you need a vendor-specific, privately deployed, or proxy-forwarded URL.

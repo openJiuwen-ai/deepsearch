@@ -7,8 +7,6 @@ import pytest
 from openjiuwen_deepsearch.algorithm.report import table_caption_utils
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
-    build_classify_scores,
-    build_compact_classify_doc_infos_text,
     format_key_passage_block,
     normalize_key_passages,
 )
@@ -25,11 +23,10 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_
 
 def _classified_doc(title: str, url: str, source_id: str, relevance: float) -> dict:
     return {
-        "title": title,
-        "url": url,
+        "doc_title": title,
+        "doc_url": url,
         "source_id": source_id,
-        "original_content": f"{title} content",
-        "key_passages": [f"{title} passage"],
+        "passage_text": f"{title} passage",
         "scores": {"relevance": relevance, "answerability": 0, "authority": 0, "data_density": 0},
     }
 
@@ -48,83 +45,6 @@ def test_normalize_key_passages_cleans_non_standard_values():
     assert normalize_key_passages(["alpha", "", None, " beta "]) == ["alpha", "beta"]
     assert normalize_key_passages("single passage") == ["single passage"]
     assert normalize_key_passages(None) == []
-
-
-def test_build_classify_scores_prefers_scores_over_legacy_fields():
-    doc_info = {
-        "scores": {"relevance": 0.9, "authority": 0.8},
-        "source_authority": "legacy authority",
-        "task_relevance": "legacy relevance",
-        "information_richness": "legacy richness",
-        "data_density": "legacy density",
-    }
-
-    assert build_classify_scores(doc_info) == {"relevance": 0.9, "authority": 0.8}
-
-
-def test_build_classify_scores_ignores_legacy_score_fields():
-    doc_info = {
-        "source_authority": "high",
-        "task_relevance": "medium",
-        "information_richness": "rich",
-        "data_density": "dense",
-    }
-
-    assert build_classify_scores(doc_info) == {}
-
-
-def test_build_compact_classify_doc_infos_text_excludes_full_content_and_internal_fields():
-    output = build_compact_classify_doc_infos_text([
-        {
-            "doc_id": "web_1",
-            "source_id": "web_1_p1",
-            "url": "https://example.com/a",
-            "title": "Example title",
-            "doc_time": "2026-05",
-            "publish_time": "2026-05-10",
-            "original_content": "SECRET FULL CONTENT",
-            "query": "hidden query",
-            "content_ref": {"type": "source_store", "source_id": "web_1_p1"},
-            "scores": {"relevance": 0.9, "authority": 0.8},
-            "source_authority": "legacy authority",
-            "key_passages": ["passage 1", "passage 2"],
-        },
-        {
-            "url": "https://example.com/b",
-            "title": "Empty evidence",
-            "key_passages": [],
-        },
-    ])
-
-    assert "Document 1:" in output
-    assert "url: https://example.com/a" in output
-    assert "title: Example title" in output
-    assert "doc_time: 2026-05" in output
-    assert "publish_time: 2026-05-10" in output
-    assert "scores:" in output
-    assert "relevance: 0.9" in output
-    assert "authority: 0.8" in output
-    assert "key passages:" in output
-    assert "- passage 1" in output
-    assert "Document 2:" in output
-    assert "[]" in output
-    assert "original_content" not in output
-    assert "SECRET FULL CONTENT" not in output
-    assert "doc_id" not in output
-    assert "source_id" not in output
-    assert "content_ref" not in output
-    assert "hidden query" not in output
-    assert "legacy authority" not in output
-
-
-def test_report_package_exports_compact_doc_info_helpers():
-    from openjiuwen_deepsearch.algorithm.report import (
-        build_compact_classify_doc_infos_text as package_build_compact,
-        compact_doc_info,
-    )
-
-    assert package_build_compact is build_compact_classify_doc_infos_text
-    assert compact_doc_info.build_compact_classify_doc_infos_text is build_compact_classify_doc_infos_text
 
 
 @pytest.mark.asyncio
@@ -578,90 +498,6 @@ def test_sub_report_retry_feedback_sanitizes_provider_exception_text():
     assert "openAI API async stream error" not in feedback
 
 
-def test_build_compact_classify_doc_infos_text_zero_based():
-    """Coverage-matrix flow uses start=0 so 'Document 0' maps to 'doc_0'."""
-    output = build_compact_classify_doc_infos_text(
-        [{"url": "https://example.com/a", "title": "Doc A", "key_passages": []}],
-        start=0,
-    )
-    assert "Document 0:" in output
-    assert "Document 1:" not in output
-
-
-def test_coverage_matrix_formatter_output_matches_prompt_keys():
-    """Round-trip: formatter start=0 output must align with prompt's doc_0-based keys."""
-    docs = [
-        {"url": "https://example.com/a", "title": "Doc A", "key_passages": ["p1"]},
-        {"url": "https://example.com/b", "title": "Doc B", "key_passages": ["p2"]},
-    ]
-    text = build_compact_classify_doc_infos_text(docs, start=0)
-    # Prompt expects doc_0, doc_1 ... so input must number from 0
-    for i in range(len(docs)):
-        assert f"Document {i}:" in text
-    # Must NOT contain 1-based numbering when start=0
-    assert f"Document {len(docs)}:" not in text
-
-
-def test_coverage_matrix_prompt_does_not_request_rationale_passage_indices():
-    rendered = apply_system_prompt(
-        "coverage_matrix_evaluator",
-        {"messages": [{"role": "user", "content": "documents"}]},
-    )
-    prompt_text = "\n".join(message["content"] for message in rendered)
-
-    assert "evidence_passage_indices" not in prompt_text
-    assert "0-based key passage indices" not in prompt_text
-
-
-@pytest.mark.parametrize("has_template", [False, True])
-def test_subsection_outline_prompt_explains_structured_evidence_for_all_routes(has_template):
-    rendered = apply_system_prompt(
-        "sub_section_outline",
-        {
-            "messages": [{"role": "user", "content": "Structured evidence guidance"}],
-            "has_template": has_template,
-            "section_idx": 1,
-            "section_title": "Section",
-            "language": ENGLISH,
-        },
-    )
-    prompt_text = "\n".join(message["content"] for message in rendered)
-    normalized_prompt = " ".join(prompt_text.split())
-
-    assert "use covered primary dimensions first" in normalized_prompt
-    assert "do not create a factual subsection solely from an uncovered dimension" in normalized_prompt.lower()
-    assert "Do not mechanically turn every dimension into a subsection" in normalized_prompt
-    assert "User-specified titles and template-required structure remain authoritative" in normalized_prompt
-    assert "Explicit user-specified structure has the highest priority" in normalized_prompt
-    assert "Structured Evidence Guidance controls evidence selection only" in normalized_prompt
-    assert "explicitly requests the current section to contain only one table" in normalized_prompt
-    assert "For such a single-table-only section" in normalized_prompt
-    assert "A request to include one table does not by itself require a flat outline" in normalized_prompt
-    assert "preserve that exact granularity" in normalized_prompt
-    assert "Do not further subdivide a user-defined category" in normalized_prompt
-
-
-@pytest.mark.parametrize("prompt_name", ["sub_report_markdown", "sub_report_brief_markdown"])
-def test_subreport_prompts_share_structured_evidence_semantics(prompt_name):
-    rendered = apply_system_prompt(
-        prompt_name,
-        {"messages": [{"role": "user", "content": "Structured evidence guidance"}]},
-    )
-    prompt_text = "\n".join(message["content"] for message in rendered)
-    normalized_prompt = " ".join(prompt_text.split())
-
-    assert "dimension-to-citation mapping" in normalized_prompt
-    assert "must not be treated as a source of factual evidence" in normalized_prompt
-    assert "Do not expose the guidance's coverage labels or evidence-selection process" in normalized_prompt
-    assert "Silently omit optional content that depends only on an uncovered dimension" in normalized_prompt
-    assert "preserve that required structure" in normalized_prompt
-    assert "directly supported by covered citations" in normalized_prompt
-    assert "Do not use an uncovered dimension as permission to add uncited synthesis" in normalized_prompt
-    assert "Do not narrate the internal evidence process" in normalized_prompt
-    assert "remaining evidence limitation" not in normalized_prompt
-    assert "collected evidence remains the authoritative source" in normalized_prompt.lower()
-
-
 def test_format_key_passage_block_only_outputs_passages():
     output = format_key_passage_block(
         {
@@ -687,36 +523,36 @@ def test_format_key_passage_block_only_outputs_passages():
     assert "SECRET FULL CONTENT" not in output
 
 
-def test_select_visualization_uses_structured_scores_data_density():
+def test_select_visualization_selects_high_data_density():
     selected = Reporter._select_visualization_from_classified_content([
         {
-            "title": "high density",
-            "scores": {"data_density": 9},
-            "data_density": "legacy low score: 1",
+            "doc_title": "high density",
+            "data_density": 0.9,
         },
         {
-            "title": "low density",
-            "scores": {"data_density": 8.9},
-            "data_density": "legacy high score: 10",
+            "doc_title": "low density",
+            "data_density": 0.5,
         },
     ])
 
-    assert [item["title"] for item in selected] == ["high density"]
+    assert [item["doc_title"] for item in selected] == ["high density"]
 
 
 def test_select_visualization_uses_eight_point_fallback_when_no_high_density_docs():
+    """data_density >= 0.9 优先, 不足时回退到 >= 0.8 的项。
+    """
     selected = Reporter._select_visualization_from_classified_content([
         {
-            "title": "fallback density",
-            "scores": {"data_density": 8.2},
+            "doc_title": "fallback density",
+            "data_density": 0.8,
         },
         {
-            "title": "too sparse",
-            "scores": {"data_density": 7.9},
+            "doc_title": "too sparse",
+            "data_density": 0.7,
         },
     ])
 
-    assert [item["title"] for item in selected] == ["fallback density"]
+    assert [item["doc_title"] for item in selected] == ["fallback density"]
 
 
 def _visualization_reporter() -> Reporter:
@@ -1013,15 +849,15 @@ async def test_insert_visualization_keeps_multiple_charts_from_same_source_url()
         "section_idx": 1,
         "max_generate_retry_num": 1,
         "sub_report_content": "# Section\n\nParagraph one.\n\nParagraph two.\n",
-        "classified_content": [{"url": "https://example.com/source", "index": 7}],
+        "classified_content": [{"doc_url": "https://example.com/source", "index": 7}],
         "visualization_result": [
             {
-                "url": "https://example.com/source",
+                "doc_url": "https://example.com/source",
                 "sub_section_visualization_content": json.dumps(chart_one),
                 "mermaid_content": 'xychart-beta\n    x-axis ["2022", "2023", "2024"]\n    line [1, 2, 3]',
             },
             {
-                "url": "https://example.com/source",
+                "doc_url": "https://example.com/source",
                 "sub_section_visualization_content": json.dumps(chart_two),
                 "mermaid_content": 'xychart-beta\n    x-axis ["A", "B", "C"]\n    bar [3, 2, 1]',
             },
@@ -1059,7 +895,7 @@ async def test_insert_visualization_renders_all_chart_citation_indices():
         "sub_report_content": "# Section\n\nVendor comparison paragraph.\n",
         "visualization_result": [
             {
-                "url": "https://source.example/vendor-revenue",
+                "doc_url": "https://source.example/vendor-revenue",
                 "citation_indices": [7, "8", 7, 0, "bad", 9],
                 "index": "bad",
                 "sub_section_visualization_content": json.dumps(chart),
@@ -1105,15 +941,15 @@ async def test_insert_visualization_completes_missing_chart_indices_from_llm_pla
         "section_idx": 1,
         "max_generate_retry_num": 1,
         "sub_report_content": "# Section\n\nParagraph one.\n\nParagraph two.\n",
-        "classified_content": [{"url": "https://example.com/source", "index": 3}],
+        "classified_content": [{"doc_url": "https://example.com/source", "index": 3}],
         "visualization_result": [
             {
-                "url": "https://example.com/source",
+                "doc_url": "https://example.com/source",
                 "sub_section_visualization_content": json.dumps(chart_one),
                 "mermaid_content": 'xychart-beta\n    x-axis ["2021", "2022", "2023"]\n    line [12, 18, 27]',
             },
             {
-                "url": "https://example.com/source",
+                "doc_url": "https://example.com/source",
                 "sub_section_visualization_content": json.dumps(chart_two),
                 "mermaid_content": 'xychart-beta\n    x-axis ["Enterprise", "SMB", "Individual"]\n    bar [4.2, 7.5, 11.3]',
             },
@@ -1685,43 +1521,16 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     async def mock_ainvoke_llm_with_stats(llm, messages, llm_type: str = "basic", agent_name="AI", schema=None,
                                           tools=None, need_stream_out=False):
         # 遍历 messages 里的 dict，检查 content 字段
-        if any("content analyst" in msg.get("content", "").lower() for msg in messages):
-            return {"content": '{"coverage_matrix": {"doc_0": {"rationale_1": 0.8, "rationale_2": 0.5}}, "reliability_scores": {"doc_0": 0.75}, "noise_scores": {"doc_0": 0.2}}'}
+        if any("extract relevant passages" in msg.get("content", "").lower() for msg in messages):
+            return {"content": '{"documents": [{"doc_index": 0, "passages": [{"text": "fake original_content", "rationale_ids": ["rationale_1", "rationale_2"], "scores": {"rationale_1": {"coverage": 0.8, "reliability": 0.75, "analysis": 0.7, "presentation": 0.6, "total_score": 0.77}, "rationale_2": {"coverage": 0.5, "reliability": 0.6, "analysis": 0.5, "presentation": 0.5, "total_score": 0.53}}}]}]}'}
         elif any("research analyst" in msg.get("content", "").lower() for msg in messages):
             return {"content": '{"rationales": [{"id": "rationale_1", "description": "企业经营状况分析"}, {"id": "rationale_2", "description": "行业竞争格局"}]}'}
         elif any("classification" in msg.get("content", "") for msg in messages):
-            user_content = next(msg.get("content", "") for msg in messages if msg.get("role") == "user")
-            assert "url: fake_url" in user_content
-            assert "title: XX有限公司 - 企业详情" in user_content
-            assert "doc_time: 2024 8月" in user_content
-            assert "publish_time: 2024 8月" in user_content
-            assert "scores:" in user_content
-            assert "authority: 8" in user_content
-            assert "relevance: 9" in user_content
-            assert "answerability: 7" in user_content
-            assert "data_density: 6" in user_content
-            assert "key passages:" in user_content
-            assert "- fake passage" in user_content
-            assert "fake original_content" not in user_content
-            assert "original_content" not in user_content
-            assert "doc_id" not in user_content
-            assert "source_id" not in user_content
-            assert "content_ref" not in user_content
-            assert "query:" not in user_content
-            assert "key_passages" not in user_content
             return {"content": '{\"chapter\": \"企业经营与行业分析\", \"selected_url_list\": [\"fake_url\"]}'}
         elif any("subsection outline" in msg.get("content", "") for msg in messages):
             return {"content": "3 企业经营与行业分析\n3.1 经营风险评价\n3.2 杠杆风险评估"}
         elif any("professional sub report writer" in msg.get("content", "") for msg in messages):
             user_content = next(msg.get("content", "") for msg in messages if msg.get("role") == "user")
-            assert "scores:" in user_content
-            assert "authority: 8" in user_content
-            assert "relevance: 9" in user_content
-            assert "answerability: 7" in user_content
-            assert "data_density: 6" in user_content
-            assert "source_authority" not in user_content
-            assert "task_relevance" not in user_content
-            assert "information_richness" not in user_content
             assert "fake original_content" in user_content
             return {"content": "# 3 企业经营与行业分析\n\n## 3.1 经营风险评价\nfake content 1\n\n## 3.2 杠杆风险评估\nfake content 2"}
         elif any("structured sidecar" in msg.get("content", "") for msg in messages):
@@ -1749,7 +1558,7 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
         section_task='企业经营与行业分析',
         section_iscore=True,
         section_description='fake section_description',
-        doc_infos=[{
+        passages=[{
             'doc_id': 'web_1',
             'source_id': 'web_1_p123',
             'doc_time': '2024 8月',
@@ -1770,7 +1579,8 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     success, report, sub_report_content, classified_content = await reporter.generate_sub_report(current_inputs)
 
     assert success is True
-    assert current_inputs["sub_section_core_content"] == ["Document 1 key passages:\n- fake passage"]
+    # passage_text 重构后: passage_text 来自 original_content 分段, 而非 key_passages
+    assert current_inputs["sub_section_core_content"] == ["Document 1 key passages:\n- fake original_content"]
     assert current_inputs["sub_report_summary"] == "经营与行业摘要"
     assert current_inputs["sub_report_chapter_sidecar"].chapter_summary == "经营与行业摘要"
 
@@ -1811,7 +1621,7 @@ async def test_generate_sub_report_retries_writer_with_failure_feedback():
             section_task="Film Market",
             section_iscore=False,
             section_description="Write the final chapter.",
-            doc_infos=[],
+            passages=[],
             gathered_info=[],
             sub_report_background_knowledge=[
                 {"section_id": "3", "content_summary": "Earlier chapters covered box-office recovery."}
@@ -1853,111 +1663,153 @@ async def test_generate_sub_report_retries_writer_with_failure_feedback():
 
 
 def test_get_classified_infos_returns_all_selected_distinct_variants():
-    """selected_docs with two different source_id variants under same URL: both kept."""
+    """段落级选择: 同一 URL 下不同 passage 均保留, 引用按 URL 去重(仅一条)."""
     doc_infos = [
         {
-            "title": "A",
-            "url": "https://example.com/same",
-            "original_content": "variant A",
-            "key_passages": ["passage A"],
+            "doc_title": "A",
+            "doc_url": "https://example.com/same",
+            "passage_text": "passage A",
         },
         {
-            "title": "A",
-            "url": "https://example.com/same",
-            "original_content": "variant B",
-            "key_passages": ["passage B"],
+            "doc_title": "A",
+            "doc_url": "https://example.com/same",
+            "passage_text": "passage B",
         },
-        {"title": "B", "url": "https://example.com/other", "original_content": "other"},
+        {"doc_title": "B", "doc_url": "https://example.com/other", "passage_text": "other"},
     ]
-    # Matrix selected first two variants (different content -> different source_key, both kept)
+    # Matrix selected first two passages (same URL, different passage_text)
     selected_docs = [doc_infos[0], doc_infos[1]]
-    marginal_values = [0.6, 0.5]
 
-    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
+    classified_infos, classified_doc_infos, _ = _get_classified_infos(selected_docs)
 
+    # references 去重: 同一 URL 只出现一次
     assert classified_infos["references"] == ["[A](https://example.com/same)"]
-    assert classified_infos["core_content_list"] == [
-        "Document 1 key passages:\n- passage A",
-        "Document 2 key passages:\n- passage B",
-    ]
+    # core_content_list 保留所有段落 (passage_text fallback 到 key passages)
+    assert len(classified_infos["core_content_list"]) == 2
     assert classified_doc_infos == doc_infos[:2]
 
 
 def test_get_classified_infos_deduplicates_same_content_without_source_id():
-    """selected_docs with two same-content variants (no source_id): keep only high-marginal-value one."""
+    """段落级选择: 不再按 source_key 去重内容, 每个 passage 独立保留。
+
+    旧实现按 source_key 分组并保留分数最高的一项;
+    新实现改为段落级迭代, 所有 selected_docs 均保留, 引用按 URL 去重。
+    """
     doc_infos = [
         {
-            "title": "A low",
-            "url": "https://example.com/same",
-            "original_content": "same content",
-            "key_passages": ["low passage"],
+            "doc_title": "A low",
+            "doc_url": "https://example.com/same",
+            "passage_text": "low passage",
             "scores": {"relevance": 1},
         },
         {
-            "title": "A high",
-            "url": "https://example.com/same",
-            "original_content": "same content",
-            "key_passages": ["high passage"],
+            "doc_title": "A high",
+            "doc_url": "https://example.com/same",
+            "passage_text": "high passage",
             "scores": {"relevance": 9},
         },
     ]
-    # Matrix selected two variants (same content, no source_id -> same source_key, dedup keeps high mv)
     selected_docs = [doc_infos[0], doc_infos[1]]
-    marginal_values = [0.1, 0.9]
 
-    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
+    classified_infos, classified_doc_infos, _ = _get_classified_infos(selected_docs)
 
-    assert classified_infos["core_content_list"] == ["Document 1 key passages:\n- high passage"]
-    assert classified_doc_infos == [doc_infos[1]]
+    # 新实现: 两个段落都保留 (不再按 source_key 去重)
+    assert len(classified_infos["core_content_list"]) == 2
+    assert len(classified_doc_infos) == 2
+    # 引用按 URL 去重, 同一 URL 只有一条引用
+    assert len(classified_infos["references"]) == 1
 
 
 def test_get_classified_infos_keeps_top10_source_ids_by_score():
-    """selected_docs with 12 variants, max_count=10: keep top 10 by marginal_value."""
+    """段落级选择: 不再限制 max_source_id_count, 所有 selected_docs 均保留。
+
+    旧实现按分数排序并限制 max_source_id_count=10;
+    新实现忽略 max_source_id_count, 直接返回所有 selected_docs。
+    """
     doc_infos = [
         _classified_doc(f"doc-{idx}", "https://example.com/same", f"source-{idx}", idx * 0.8)
         for idx in range(12)
     ]
     selected_docs = list(doc_infos)  # matrix selected all 12
-    # marginal_value positively correlated with idx, ensuring top10 is source-2..source-11
-    marginal_values = [idx * 0.1 for idx in range(12)]
 
-    classified_infos, classified_doc_infos = _get_classified_infos(
-        selected_docs, marginal_values, max_source_id_count=10
+    classified_infos, classified_doc_infos, _ = _get_classified_infos(
+        selected_docs
     )
 
-    assert len(classified_doc_infos) == 10
-    assert {doc["source_id"] for doc in classified_doc_infos} == {
-        f"source-{idx}" for idx in range(2, 12)
-    }
-    assert classified_doc_infos[0]["source_id"] == "source-11"
-    assert len(classified_infos["core_content_list"]) == 10
-    assert classified_infos["references"] == ["[doc\\-11](https://example.com/same)"]
+    # 新实现: 不再限制数量, 全部 12 个段落保留
+    assert len(classified_doc_infos) == 12
+    assert len(classified_infos["core_content_list"]) == 12
+    # 引用按 URL 去重, 12 个段落同一 URL 只有一条引用
+    assert len(classified_infos["references"]) == 1
 
 
 def test_get_classified_infos_keeps_each_selected_url_before_filling_variants():
-    """selected_docs with a-0, a-1, b, max_count=2: pick one representative per URL first."""
+    """段落级选择: 不再按 URL 分组选代表, 所有段落保留, 引用按 URL 去重。
+
+    旧实现先按 URL 选代表, 再用剩余配额补充;
+    新实现直接迭代所有 selected_docs, 每个不同 URL 生成一条引用。
+    """
     doc_infos = [
         _classified_doc("A-0", "https://example.com/a", "a-0", 10),
         _classified_doc("A-1", "https://example.com/a", "a-1", 9),
         _classified_doc("B", "https://example.com/b", "b-0", 1),
     ]
     selected_docs = [doc_infos[0], doc_infos[1], doc_infos[2]]
-    marginal_values = [0.9, 0.8, 0.1]
 
-    classified_infos, classified_doc_infos = _get_classified_infos(
-        selected_docs, marginal_values, max_source_id_count=2
+    classified_infos, classified_doc_infos, _ = _get_classified_infos(
+        selected_docs
     )
 
-    assert [doc["url"] for doc in classified_doc_infos] == ["https://example.com/a", "https://example.com/b"]
-    assert classified_infos["references"] == [
-        "[A\\-0](https://example.com/a)",
-        "[B](https://example.com/b)",
+    # 新实现: 不再限制数量, 3 个段落全部保留
+    assert [doc["doc_url"] for doc in classified_doc_infos] == [
+        "https://example.com/a", "https://example.com/a", "https://example.com/b"
     ]
+    # 引用按 URL 去重: a 和 b 两个不同 URL, 两条引用
+    assert len(classified_infos["references"]) == 2
+
+
+def test_get_classified_infos_passage_text_fallback_to_key_passages():
+    """passage_text 截断移除: passage_text 字段直接作为 key passage, 无需截断。
+
+    验证 passage_text 字段被 format_key_passage_block 正确使用,
+    不再经过 original_content 中转或截断处理。
+    """
+    long_passage = "这是一段很长的段落内容, " * 20  # 超过常规截断长度
+    selected_docs = [
+        {
+            "doc_title": "长段落文档",
+            "doc_url": "https://example.com/long",
+            "passage_text": long_passage,
+        }
+    ]
+
+    classified_infos, classified_doc_infos, _ = _get_classified_infos(
+        selected_docs
+    )
+
+    # passage_text 应完整出现在 core_content_list 中, 不被截断
+    assert len(classified_infos["core_content_list"]) == 1
+    assert long_passage in classified_infos["core_content_list"][0]
+    assert classified_doc_infos == selected_docs
+
+
+def test_get_classified_infos_no_doc_url_returns_empty():
+    """所有 selected_docs 都没有 doc_url 字段时返回空字典。"""
+    selected_docs = [
+        {"doc_title": "无URL", "passage_text": "段落"},
+    ]
+
+    classified_infos, classified_doc_infos, _ = _get_classified_infos(
+        selected_docs
+    )
+
+    assert classified_infos == {}
+    assert classified_doc_infos == []
 
 
 def test_get_classified_infos_with_empty_selected_docs_returns_empty():
     """Empty selected_docs returns empty."""
-    classified_infos, classified_doc_infos = _get_classified_infos([], [])
+    classified_infos, classified_doc_infos, _ = _get_classified_infos([])
 
     assert classified_infos == {}
     assert classified_doc_infos == []
@@ -1967,16 +1819,22 @@ def test_get_classified_infos_returns_keys_aligned_after_deduplication():
     first = _classified_doc("Lower", "https://example.com/a", "same-source", 0.8)
     second = _classified_doc("Higher", "https://example.com/a", "same-source", 0.9)
 
+    # Without filtered_passages, keys fall back to sequential indices
     classified_infos, classified_doc_infos, classified_doc_keys = _get_classified_infos(
         [first, second],
-        [0.2, 0.8],
-        selected_doc_keys=["doc_3", "doc_7"],
-        return_doc_keys=True,
     )
 
     assert classified_infos["core_content_list"]
-    assert classified_doc_infos == [second]
-    assert classified_doc_keys == ["doc_7"]
+    assert classified_doc_infos == [first, second]
+    assert classified_doc_keys == ["passage_0", "passage_1"]
+
+    # With filtered_passages, keys map back to original indices
+    filtered = [first, second]  # same list, so identity mapping applies
+    _, _, classified_doc_keys = _get_classified_infos(
+        [first, second],
+        filtered_passages=filtered,
+    )
+    assert classified_doc_keys == ["passage_0", "passage_1"]
 
 
 @pytest.mark.asyncio
@@ -2022,7 +1880,7 @@ async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, 
         section_task='企业经营分析',
         section_iscore=False,
         section_description='结合父章节摘要继续撰写',
-        doc_infos=[],
+        passages=[],
         gathered_info=[],
         sub_report_background_knowledge=[
             {"section_id": "1", "content_summary": "父章节总结：公司主营业务稳定，收入结构清晰。"}
@@ -2492,53 +2350,6 @@ async def test_generate_section_rationales_exhaustion_propagates_last_error():
 
 
 @pytest.mark.asyncio
-async def test_eval_coverage_batch_retries_with_failure_feedback():
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        docs = [
-            {
-                "title": "doc-0",
-                "url": "https://example.com/0",
-                "original_content": "content-0",
-                "key_passages": ["passage-0"],
-                "scores": {"authority": 8, "relevance": 9, "answerability": 8, "data_density": 7},
-            }
-        ]
-        section_ctx = {
-            "section_task": "1 Export",
-            "section_description": "desc",
-            "section_idx": 1,
-            "max_retries": 2,
-        }
-        calls = []
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-        ) as mock_ainvoke:
-            async def side_effect(llm, messages, **kwargs):
-                calls.append(messages)
-                if len(calls) == 1:
-                    return {"content": "not a json"}
-                return {"content": '{"coverage_matrix": {"doc_0": {"r1": 0.8}}, "reliability_scores": {"doc_0": 0.9}, "noise_scores": {"doc_0": 0.1}}'}
-            mock_ainvoke.side_effect = side_effect
-            data, batch_docs, last_error = await reporter._eval_coverage_batch(
-                docs, 0, "r1: export data", section_ctx
-            )
-        assert data["coverage_matrix"]["doc_0"] == {"r1": 0.8}
-        assert last_error == ""
-        assert len(calls) == 2
-        first_prompt = "\n".join(m.get("content", "") for m in calls[0])
-        assert "<retry_feedback>" not in first_prompt
-        feedback_message = calls[1][-1]
-        assert feedback_message["role"] == "user"
-        assert "<retry_feedback>" in feedback_message["content"]
-        assert "failed to parse" in feedback_message["content"]
-    finally:
-        llm_context.reset(token)
-
-
-@pytest.mark.asyncio
 async def test_generate_section_rationales_truncates_retry_feedback_but_not_log(caplog):
     token = llm_context.set({"mock_model": object()})
     try:
@@ -2586,7 +2397,7 @@ async def test_generate_sub_report_hides_error_detail_in_sensitive_mode():
             "report_task": "task",
             "section_task": "1 章节",
             "section_description": "desc",
-            "doc_infos": [
+            "passages": [
                 {
                     "doc_id": "web_1",
                     "url": "fake_url",
@@ -2681,7 +2492,7 @@ async def test_generate_sub_report_degrades_when_all_coverage_batches_fail(mock_
         section_iscore=True,
         section_description='fake section_description',
         visualization_enable=False,
-        doc_infos=[{
+        passages=[{
             'doc_id': 'web_1',
             'source_id': 'web_1_p123',
             'doc_time': '2024 8月',
@@ -2722,8 +2533,8 @@ async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(moc
                                           tools=None, need_stream_out=False):
         if any("research analyst" in msg.get("content", "").lower() for msg in messages):
             return {"content": '{"rationales": [{"id": "rationale_1", "description": "企业经营状况分析", "type": "factual"}]}'}
-        elif any("content analyst" in msg.get("content", "").lower() for msg in messages):
-            return {"content": '{"coverage_matrix": {"doc_0": {"rationale_1": 0.8}}, "reliability_scores": {"doc_0": 0.75}, "noise_scores": {"doc_0": 0.2}}'}
+        elif any("extract relevant passages" in msg.get("content", "").lower() for msg in messages):
+            return {"content": '{"documents": [{"doc_index": 0, "passages": [{"text": "fake original_content", "rationale_ids": ["rationale_1"], "scores": {"rationale_1": {"coverage": 0.8, "reliability": 0.75, "analysis": 0.7, "presentation": 0.6, "total_score": 0.77}}}]}]}'}
         elif any("subsection outline" in msg.get("content", "") for msg in messages):
             return {"content": "3 企业经营与行业分析\n3.1 经营风险评价"}
         elif any("professional sub report writer" in msg.get("content", "") for msg in messages):
@@ -2750,7 +2561,7 @@ async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(moc
         section_iscore=True,
         section_description='fake section_description',
         visualization_enable=False,
-        doc_infos=[{
+        passages=[{
             'doc_id': 'web_1',
             'source_id': 'web_1_p123',
             'doc_time': '2024 8月',

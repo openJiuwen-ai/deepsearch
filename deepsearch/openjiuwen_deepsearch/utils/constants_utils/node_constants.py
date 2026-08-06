@@ -89,7 +89,7 @@ class AgentLlmName(enum.Enum):
 
     SUB_REPORTER = NodeId.SUB_REPORTER.value
     SUB_REPORTER_RATIONALE_GENERATOR = "sub_reporter_rationale_generator"
-    SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR = "sub_reporter_coverage_matrix_evaluator"
+    SUB_REPORTER_PASSAGES_EXTRACTOR = "sub_reporter_passages_extractor"
     SUB_REPORTER_OUTLINE = "sub_reporter_outline"
     SUB_REPORTER_VISUALIZATION_CONTENT = "sub_reporter_visualization_content"
     SUB_REPORTER_CHART_COMPLIANCE = "sub_reporter_chart_compliance"

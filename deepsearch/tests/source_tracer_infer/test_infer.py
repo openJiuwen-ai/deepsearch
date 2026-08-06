@@ -8,6 +8,9 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTrac
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
     GraphInfo,
 )
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info import (
+    ResearchInferPreprocess,
+)
 
 
 class TestSourceTracerInfer:
@@ -334,7 +337,7 @@ class TestSourceTracerInfer:
         with patch.object(
             self.source_tracer_infer, "extract_reference", new_callable=AsyncMock
         ) as mock_extract:
-            mock_extract.return_value = {"conclusion": "test", "reference": []}
+            mock_extract.return_value = {"conclusion": "test", "reference": [{"id": 0, "content": "test content"}]}
 
             with patch.object(
                 self.source_tracer_infer, "infer", new_callable=AsyncMock
@@ -414,6 +417,116 @@ class TestSourceTracerInfer:
 
             assert infer_message == {}
             assert checked_graph is None
+
+    @pytest.mark.asyncio
+    async def test_async_run_skips_when_conclusion_key_missing(self):
+        """空结论守卫: extract_reference 返回的字典缺少 conclusion 键时应跳过推理。
+
+        覆盖 guard 条件 `not conclusion_and_evidences.get("conclusion")`:
+        返回 {"reference": [...]} 但没有 conclusion 键时, .get() 返回 None,
+        应触发 guard 提前返回, 且不调用 infer (避免无效 LLM 调用)。
+        """
+        datas = {"conclusion": ["test"], "search_records": [{"content": "test"}]}
+
+        with patch.object(
+            self.source_tracer_infer, "extract_reference", new_callable=AsyncMock
+        ) as mock_extract:
+            mock_extract.return_value = {"reference": [{"id": 0, "content": "test"}]}
+
+            with patch.object(
+                self.source_tracer_infer, "infer", new_callable=AsyncMock
+            ) as mock_infer:
+                infer_message, checked_graph = (
+                    await self.source_tracer_infer.async_run(datas)
+                )
+
+                assert infer_message == {}
+                assert checked_graph is None
+                # 关键断言: guard 触发时不应调用 infer, 避免无效 LLM 调用
+                mock_infer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_run_skips_when_conclusion_is_empty_string(self):
+        """空结论守卫: conclusion 为空字符串时应跳过推理。
+
+        覆盖 guard 条件 `not conclusion_and_evidences.get("conclusion")`:
+        返回 {"conclusion": "", "reference": [...]} 时, 空字符串为 falsy,
+        应触发 guard 提前返回, 且不调用 infer。
+        """
+        datas = {"conclusion": [""], "search_records": [{"content": "test"}]}
+
+        with patch.object(
+            self.source_tracer_infer, "extract_reference", new_callable=AsyncMock
+        ) as mock_extract:
+            mock_extract.return_value = {
+                "conclusion": "",
+                "reference": [{"id": 0, "content": "test"}],
+            }
+
+            with patch.object(
+                self.source_tracer_infer, "infer", new_callable=AsyncMock
+            ) as mock_infer:
+                infer_message, checked_graph = (
+                    await self.source_tracer_infer.async_run(datas)
+                )
+
+                assert infer_message == {}
+                assert checked_graph is None
+                mock_infer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_run_skips_when_conclusion_is_none(self):
+        """空结论守卫: conclusion 为 None 时应跳过推理。
+
+        覆盖 guard 条件 `not conclusion_and_evidences.get("conclusion")`:
+        返回 {"conclusion": None, ...} 时, None 为 falsy,
+        应触发 guard 提前返回, 且不调用 infer。
+        """
+        datas = {"conclusion": [], "search_records": [{"content": "test"}]}
+
+        with patch.object(
+            self.source_tracer_infer, "extract_reference", new_callable=AsyncMock
+        ) as mock_extract:
+            mock_extract.return_value = {
+                "conclusion": None,
+                "reference": [{"id": 0, "content": "test"}],
+            }
+
+            with patch.object(
+                self.source_tracer_infer, "infer", new_callable=AsyncMock
+            ) as mock_infer:
+                infer_message, checked_graph = (
+                    await self.source_tracer_infer.async_run(datas)
+                )
+
+                assert infer_message == {}
+                assert checked_graph is None
+                mock_infer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_run_skips_when_extract_reference_returns_none(self):
+        """空结论守卫: extract_reference 返回 None 时应跳过推理。
+
+        覆盖 guard 条件 `not conclusion_and_evidences`:
+        返回 None 时, 应触发 guard 提前返回, 且不调用 infer。
+        """
+        datas = {"conclusion": [], "search_records": []}
+
+        with patch.object(
+            self.source_tracer_infer, "extract_reference", new_callable=AsyncMock
+        ) as mock_extract:
+            mock_extract.return_value = None
+
+            with patch.object(
+                self.source_tracer_infer, "infer", new_callable=AsyncMock
+            ) as mock_infer:
+                infer_message, checked_graph = (
+                    await self.source_tracer_infer.async_run(datas)
+                )
+
+                assert infer_message == {}
+                assert checked_graph is None
+                mock_infer.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_async_run_error_handling(self):
@@ -551,3 +664,91 @@ class TestSourceTracerInfer:
 
             assert len(infer_messages) == 0  # Should be filtered out
             assert len(checker_infos["graph_infos"]) == 0
+
+
+class TestClassifySearchRecordPassageLevel:
+    """classify_search_record 新旧字段格式的测试用例。"""
+
+    def _make_preprocess(self, search_records):
+        """Create a ResearchInferPreprocess with the given search_records."""
+        context = {
+            "language": "zh-CN",
+            "llm_model_name": "mock_model",
+            "source_tracer_response": "test response",
+            "all_classified_contents": search_records,
+        }
+        return ResearchInferPreprocess(context)
+
+    def test_passage_level_fields(self):
+        """passage-level 字段(doc_title/doc_url/passage_text)应正确映射为 title/url/content。"""
+        search_records = [
+            [
+                {"doc_title": "文章A", "doc_url": "https://a.com", "passage_text": "正文A"},
+            ],
+        ]
+        preprocess = self._make_preprocess(search_records)
+        preprocess.classify_search_record()
+
+        assert 0 in preprocess.search_record_with_index
+        records = preprocess.search_record_with_index[0]
+        assert len(records) == 1
+        assert records[0]["title"] == "文章A"
+        assert records[0]["url"] == "https://a.com"
+        assert records[0]["content"] == "正文A"
+
+    def test_old_fields_still_work(self):
+        """旧字段名(title/url/original_content)仍应正常工作。"""
+        search_records = [
+            [
+                {"title": "旧标题", "url": "https://old.com", "original_content": "旧正文"},
+            ],
+        ]
+        preprocess = self._make_preprocess(search_records)
+        preprocess.classify_search_record()
+
+        records = preprocess.search_record_with_index[0]
+        assert len(records) == 1
+        assert records[0]["title"] == "旧标题"
+        assert records[0]["url"] == "https://old.com"
+        assert records[0]["content"] == "旧正文"
+
+    def test_new_fields_used_when_old_empty(self):
+        """当旧字段为空时，应回退到新字段。"""
+        search_records = [
+            [
+                {
+                    "title": "",
+                    "url": "",
+                    "original_content": "",
+                    "doc_title": "新标题",
+                    "doc_url": "https://new.com",
+                    "passage_text": "新正文",
+                },
+            ],
+        ]
+        preprocess = self._make_preprocess(search_records)
+        preprocess.classify_search_record()
+
+        records = preprocess.search_record_with_index[0]
+        assert len(records) == 1
+        assert records[0]["title"] == "新标题"
+        assert records[0]["url"] == "https://new.com"
+        assert records[0]["content"] == "新正文"
+
+    def test_multiple_sections(self):
+        """多个章节的搜索记录应分别映射。"""
+        search_records = [
+            [
+                {"doc_title": "章节1文章", "doc_url": "https://s1.com", "passage_text": "章节1正文"},
+            ],
+            [
+                {"doc_title": "章节2文章", "doc_url": "https://s2.com", "passage_text": "章节2正文"},
+            ],
+        ]
+        preprocess = self._make_preprocess(search_records)
+        preprocess.classify_search_record()
+
+        assert 0 in preprocess.search_record_with_index
+        assert 1 in preprocess.search_record_with_index
+        assert preprocess.search_record_with_index[0][0]["title"] == "章节1文章"
+        assert preprocess.search_record_with_index[1][0]["title"] == "章节2文章"

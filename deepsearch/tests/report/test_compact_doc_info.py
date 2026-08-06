@@ -7,12 +7,12 @@ from openjiuwen_deepsearch.algorithm.report.report import Reporter
 def test_build_structured_evidence_guide_maps_selected_docs_to_dimensions():
     first = {
         "index": 1,
-        "title": "Market report",
+        "doc_title": "Market report",
         "key_passages": ["Market reached 10 billion.", "Growth was 20%.", "Unused third passage."],
     }
     second = {
         "index": 2,
-        "title": "Risk report",
+        "doc_title": "Risk report",
         "key_passages": ["Costs remain high."],
     }
     rationales = [
@@ -21,16 +21,16 @@ def test_build_structured_evidence_guide_maps_selected_docs_to_dimensions():
         {"id": "R3", "description": "Policy impact", "priority": "primary"},
     ]
     coverage_result = {
-        "filtered_docs": [first, second],
+        "filtered_passages": [first, second],
         "coverage_matrix": {
-            "doc_0": {"R1": 0.9, "R2": 0.1, "R3": 0.0},
-            "doc_1": {"R1": 0.2, "R2": 0.4, "R3": 0.0},
+            "passage_0": {"R1": 0.9, "R2": 0.1, "R3": 0.0},
+            "passage_1": {"R1": 0.2, "R2": 0.4, "R3": 0.0},
         },
     }
 
     guide = build_structured_evidence_guide(
         [first, second], rationales, coverage_result,
-        selected_doc_keys=["doc_0", "doc_1"],
+        selected_passage_keys=["passage_0", "passage_1"],
     )
 
     assert "R1 [primary, covered]: Market size" in guide
@@ -43,19 +43,19 @@ def test_build_structured_evidence_guide_maps_selected_docs_to_dimensions():
 
 
 def test_build_structured_evidence_guide_returns_empty_without_matrix_rows():
-    doc = {"index": 1, "title": "Document", "key_passages": ["Evidence"]}
+    doc = {"index": 1, "doc_title": "Document", "key_passages": ["Evidence"]}
 
     assert build_structured_evidence_guide(
         [doc],
         [{"id": "R1", "description": "Dimension"}],
-        {"filtered_docs": [doc], "coverage_matrix": {}},
-        selected_doc_keys=["doc_0"],
+        {"filtered_passages": [doc], "coverage_matrix": {}},
+        selected_passage_keys=["passage_0"],
     ) == ""
 
 
 def test_build_structured_evidence_guide_limits_each_rationale_to_top_three_citations():
     docs = [
-        {"index": index + 1, "title": f"Document {index + 1}", "key_passages": ["unused"]}
+        {"index": index + 1, "doc_title": f"Document {index + 1}", "key_passages": ["unused"]}
         for index in range(4)
     ]
     guide = build_structured_evidence_guide(
@@ -63,13 +63,13 @@ def test_build_structured_evidence_guide_limits_each_rationale_to_top_three_cita
         [{"id": "R1", "description": "Market size", "priority": "primary"}],
         {
             "coverage_matrix": {
-                "doc_0": {"R1": 0.4},
-                "doc_1": {"R1": 0.9},
-                "doc_2": {"R1": 0.7},
-                "doc_3": {"R1": 0.8},
+                "passage_0": {"R1": 0.4},
+                "passage_1": {"R1": 0.9},
+                "passage_2": {"R1": 0.7},
+                "passage_3": {"R1": 0.8},
             },
         },
-        selected_doc_keys=["doc_0", "doc_1", "doc_2", "doc_3"],
+        selected_passage_keys=["passage_0", "passage_1", "passage_2", "passage_3"],
     )
 
     assert "[citation:2] Document 2 (coverage: 0.90)" in guide
@@ -81,18 +81,18 @@ def test_build_structured_evidence_guide_limits_each_rationale_to_top_three_cita
 
 def test_build_structured_evidence_guide_returns_empty_for_misaligned_doc_keys(caplog):
     caplog.set_level("WARNING")
-    doc = {"index": 1, "title": "Document", "key_passages": ["Evidence"]}
+    doc = {"index": 1, "doc_title": "Document", "key_passages": ["Evidence"]}
 
     assert build_structured_evidence_guide(
         [doc],
         [{"id": "R1", "description": "Dimension"}],
         {
-            "filtered_docs": [doc],
-            "coverage_matrix": {"doc_0": {"R1": 0.9}},
+            "filtered_passages": [doc],
+            "coverage_matrix": {"passage_0": {"R1": 0.9}},
         },
-        selected_doc_keys=[],
+        selected_passage_keys=[],
     ) == ""
-    assert "selected docs and stable keys are misaligned" in caplog.text
+    assert "selected passages and stable keys are misaligned" in caplog.text
 
 
 def test_log_structured_evidence_build_keeps_info_diagnostics_compact(caplog):
@@ -100,11 +100,11 @@ def test_log_structured_evidence_build_keeps_info_diagnostics_compact(caplog):
     Reporter._log_structured_evidence_build(
         section_idx=2,
         rationales=[{"id": "R1", "description": "Market size"}],
-        coverage_result={"coverage_matrix": {"doc_0": {"R1": 0.9}}},
+        coverage_result={"coverage_matrix": {"passage_0": {"R1": 0.9}}},
         classified_doc_infos=[{
             "index": 1,
-            "title": "Market report",
-            "url": "https://example.com/market",
+            "doc_title": "Market report",
+            "doc_url": "https://example.com/market",
             "key_passages": ["Market reached 10 billion."],
             "original_content": "FULL CONTENT MUST NOT BE LOGGED",
         }],

@@ -2,12 +2,12 @@
 
 ## 维护范围
 
-本文档覆盖 `openjiuwen_deepsearch/algorithm/report/` 下的报告生成能力，包括子报告生成、信息维度矩阵文档选择、候选文档预筛、Markdown 标题清理、表格标题归一、可视化 Mermaid 片段生成和最终报告拼接。
+本文档覆盖 `openjiuwen_deepsearch/algorithm/report/` 下的报告生成能力，包括子报告生成、信息维度矩阵段落选择、候选文档预筛、Markdown 标题清理、表格标题归一、可视化 Mermaid 片段生成和最终报告拼接。
 
 本文档不覆盖报告模板上传解析、服务端报告格式转换、全局溯源后处理和 VLM 图表文件生成。子能力细节见：
 
 - [子报告生成](./report-generation/sub-report-generation.md)
-- [信息维度矩阵文档选择](./report-generation/coverage-matrix-doc-selection.md)
+- [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)
 - [候选文档预筛](./report-generation/doc-prefilter.md)
 - [表格 Caption](./report-generation/table-caption.md)
 - [Markdown 可视化](./report-generation/visualization-markdown.md)
@@ -27,7 +27,6 @@
 ## 关键代码路径
 
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
-- n-gram 工具：`openjiuwen_deepsearch/algorithm/report/ngram_utils.py`
 - 报告配置：`openjiuwen_deepsearch/algorithm/report/config.py`
 - 文档预筛：`openjiuwen_deepsearch/algorithm/report/doc_prefilter.py`
 - compact doc info：`openjiuwen_deepsearch/algorithm/report/compact_doc_info.py`
@@ -37,7 +36,7 @@
 相关 Prompt：
 
 - `openjiuwen_deepsearch/algorithm/prompts/rationale_generator.md`
-- `openjiuwen_deepsearch/algorithm/prompts/coverage_matrix_evaluator.md`
+- `openjiuwen_deepsearch/algorithm/prompts/passages_extractor.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_brief_markdown.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`
@@ -53,7 +52,6 @@
 - `tests/report/test_general_report.py`
 - `tests/report/test_sub_report.py`
 - `tests/report/test_doc_selection.py`
-- `tests/report/test_ngram_utils.py`
 - `tests/report/test_step_summaries.py`
 - `tests/report/test_doc_prefilter.py`
 - `tests/report/test_chapter_sidecar.py`
@@ -63,7 +61,7 @@
 
 1. Reporter 读取 outline、章节计划、采集结果和报告语言。
 2. 候选资料通过 doc prefilter 去重、评分、分桶和批处理。
-3. 信息维度矩阵文档选择：rationale 生成 → n-gram 粗筛（中文单字拆分）→ 覆盖矩阵分批并行评估（并发上限 5）→ 贪心子模选择 → elbow 截断 → 覆盖校验（详见 [信息维度矩阵文档选择](./report-generation/coverage-matrix-doc-selection.md)）。
+3. 信息维度矩阵段落选择：rationale 生成 → 段落抽取+3 维度评分（coverage 0.8 / reliability 0.1 / data_density 0.1）→ 按 rationale top-k 选择 → 覆盖校验（详见 [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)）。
 4. 子报告 Prompt 根据章节契约、选中文档和历史上下文生成 Markdown。
 5. 报告工具清理标题编号、规范化表格标题，并按报告类型生成摘要、结论或建议。
 6. 可视化内容如需插入，先抽取结构化数据并校验 schema，再生成 Mermaid 或交给图表模块。
@@ -110,7 +108,7 @@ uv run pytest tests/report/test_doc_prefilter.py
 ## 相关文档
 
 - [子报告生成](./report-generation/sub-report-generation.md)
-- [信息维度矩阵文档选择](./report-generation/coverage-matrix-doc-selection.md)
+- [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)
 - [候选文档预筛](./report-generation/doc-prefilter.md)
 - [表格 Caption](./report-generation/table-caption.md)
 - [Markdown 可视化](./report-generation/visualization-markdown.md)

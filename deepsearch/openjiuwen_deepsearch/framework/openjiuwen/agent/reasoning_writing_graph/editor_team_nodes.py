@@ -390,7 +390,7 @@ class SubReporterNode(BaseNode):
             section_format_requirements=session.get_global_state(
                 "section_context.section_format_requirements"
             ) or [],
-            doc_infos=_collect_doc_infos(session.get_global_state("section_context.history_plans")),
+            passages=_collect_doc_infos(session.get_global_state("section_context.history_plans")),
             step_summaries=_collect_step_summaries(session.get_global_state("section_context.history_plans")),
             current_outline=session.get_global_state("section_context.current_outline")
             if session.get_global_state("section_context.current_outline") else "",
@@ -429,9 +429,9 @@ class SubReporterNode(BaseNode):
         return self._post_handle(inputs, updating_state, session, context)
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        doc_infos = algorithm_output.get("doc_infos") or []
+        passages = algorithm_output.get("passages") or []
         detail_msg = (
-            f"{algorithm_output.get('msg')}, doc_infos_num:{len(doc_infos)}, "
+            f"{algorithm_output.get('msg')}, passages_num:{len(passages)}, "
             f"classified_content_num:{len(algorithm_output.get('classified_content', []))}"
         )
         if algorithm_output.get("success") and algorithm_output.get("sub_report_content"):
@@ -452,7 +452,7 @@ class SubReporterNode(BaseNode):
             section_idx=algorithm_output.get("section_idx"),
             report_task=algorithm_output.get("report_task"),
             section_task=algorithm_output.get("section_task"),
-            doc_infos=doc_infos,
+            passages=passages,
         )
         sub_report_content = SubReportContent(
             classified_content=algorithm_output.get("classified_content", []),
@@ -504,6 +504,16 @@ class SubSourceTracerNode(BaseNode):
         else:
             report = ""
             classified_content = []
+
+        cc_count = len(classified_content) if isinstance(classified_content, list) else 0
+        cc_sample_keys = (
+            sorted(list(classified_content[0].keys()))
+            if cc_count > 0 and isinstance(classified_content[0], dict) else None
+        )
+        logger.info(
+            "[TRACE_DIAG] SubSourceTracer _pre_handle: classified_content count=%d, sample_keys=%s",
+            cc_count, cc_sample_keys,
+        )
 
         return dict(
             report=report,

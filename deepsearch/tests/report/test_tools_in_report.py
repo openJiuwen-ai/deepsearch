@@ -414,26 +414,24 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
 
 # 测试 _get_classified_infos 函数
 @pytest.mark.parametrize(
-    "selected_docs, marginal_values, expected_infos, expected_docs",
+    "selected_docs, expected_infos, expected_docs",
     [
         # selected_docs is empty
-        ([], [], {}, []),
+        ([], {}, []),
 
         # single match
         (
-                [{"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]}],
-                [0.5],
+                [{"doc_url": "http://a.com", "doc_title": "A", "passage_text": "passageA"}],
                 {"references": ["[A](http://a.com)"], "core_content_list": ["Document 1 key passages:\n- passageA"]},
-                [{"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]}],
+                [{"doc_url": "http://a.com", "doc_title": "A", "passage_text": "passageA"}],
         ),
 
         # two selected variants (from different URLs)
         (
                 [
-                    {"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]},
-                    {"url": "http://b.com", "title": "B", "original_content": "contentB", "key_passages": ["passageB"]},
+                    {"doc_url": "http://a.com", "doc_title": "A", "passage_text": "passageA"},
+                    {"doc_url": "http://b.com", "doc_title": "B", "passage_text": "passageB"},
                 ],
-                [0.5, 0.4],
                 {
                     "references": [
                         "[A](http://a.com)",
@@ -445,20 +443,18 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
                     ]
                 },
                 [
-                    {"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]},
-                    {"url": "http://b.com", "title": "B", "original_content": "contentB", "key_passages": ["passageB"]},
+                    {"doc_url": "http://a.com", "doc_title": "A", "passage_text": "passageA"},
+                    {"doc_url": "http://b.com", "doc_title": "B", "passage_text": "passageB"},
                 ],
         ),
         (
                 [
                     {
-                        "url": "https://example.test/",
-                        "title": "x](javascript:alert(1)) [safe",
-                        "original_content": "contentA",
-                        "key_passages": [],
+                        "doc_url": "https://example.test/",
+                        "doc_title": "x](javascript:alert(1)) [safe",
+                        "passage_text": "",
                     }
                 ],
-                [0.5],
                 {
                     "references": [
                         "[x\\]\\(javascript:alert\\(1\\)\\) \\[safe](https://example.test/)"
@@ -467,26 +463,24 @@ def test_replace_citations_and_classified_index(paragraphs, classified_contents,
                 },
                 [
                     {
-                        "url": "https://example.test/",
-                        "title": "x](javascript:alert(1)) [safe",
-                        "original_content": "contentA",
-                        "key_passages": [],
+                        "doc_url": "https://example.test/",
+                        "doc_title": "x](javascript:alert(1)) [safe",
+                        "passage_text": "",
                     }
                 ],
         ),
         (
-                [{"url": "javascript:alert(2)", "title": "benign", "original_content": "contentB", "key_passages": ["passageB"]}],
-                [0.5],
+                [{"doc_url": "javascript:alert(2)", "doc_title": "benign", "passage_text": "passageB"}],
                 {
                     "references": ["benign (javascript:alert\\(2\\))"],
                     "core_content_list": ["Document 1 key passages:\n- passageB"],
                 },
-                [{"url": "javascript:alert(2)", "title": "benign", "original_content": "contentB", "key_passages": ["passageB"]}],
+                [{"doc_url": "javascript:alert(2)", "doc_title": "benign", "passage_text": "passageB"}],
         ),
     ],
 )
-def test_get_classified_infos(selected_docs, marginal_values, expected_infos, expected_docs):
-    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
+def test_get_classified_infos(selected_docs, expected_infos, expected_docs):
+    classified_infos, classified_doc_infos, _ = _get_classified_infos(selected_docs)
 
     assert classified_infos == expected_infos
     assert classified_doc_infos == expected_docs

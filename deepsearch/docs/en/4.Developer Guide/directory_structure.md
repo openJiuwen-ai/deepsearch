@@ -62,7 +62,6 @@ openjiuwen_deepsearch/
   - `template_utils.py`
 - **research_collector/** - Information collection and evaluation
   - `collector_function.py`
-  - `doc_evaluation.py`
   - `tool_log.py`
 - **source_trace/** - Provenance module
   - `source_tracer.py`
