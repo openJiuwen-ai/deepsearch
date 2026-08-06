@@ -234,7 +234,6 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
             "report_type": "professional",
             "paragraph_style": "detailed",
             "visualization_enable": False,
-            "vlm_chart_generator_enable": True,
         }
 
         with patch(
@@ -279,8 +278,6 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         assert "program_comparison" in rendered_prompt
         assert "eligibility, exclusion_risk" in rendered_prompt
         assert "must NOT output the final recommendation" in rendered_prompt
-        assert "self-contained without a chart" in rendered_prompt
-        assert "forward references" in rendered_prompt
         assert "Mermaid code fences" in rendered_prompt
     finally:
         llm_context.reset(token)

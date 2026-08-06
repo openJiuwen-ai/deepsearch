@@ -3697,9 +3697,6 @@ class Reporter:
                     visualization_enable=current_inputs.get(
                         "visualization_enable", True
                     ),
-                    vlm_chart_generator_enable=bool(
-                        current_inputs.get("vlm_chart_generator_enable", False)
-                    ),
                     section_iscore=current_inputs.get("section_iscore", False),
                     report_type=report_type,
                     paragraph_style=current_inputs.get("paragraph_style", "detailed"),
