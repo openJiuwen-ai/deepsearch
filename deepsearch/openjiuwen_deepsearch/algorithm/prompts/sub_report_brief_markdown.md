@@ -102,8 +102,8 @@ format_requirements: {{ current_section_format_requirements }}
 - For optional tables that are not explicitly required by the user, `format_requirements`, or the current chapter outline, prefer at most **1 table** for the whole chapter and skip them when they do not improve clarity.
 - Required tables are exempt from the one-table preference: if the user, `format_requirements`, or the current chapter outline requires multiple tables, exact columns, or specific row objects, preserve those requirements and keep each table concise.
 - If a table is used, write one intro sentence above it and exactly one concise plain-text caption below it; keep the caption to the table's subject/scope only. Do not manually number the table or add extra table notes/blockquotes such as "表格说明", "表说明", "Table note", or "Note".
-- Do NOT output Mermaid code fences, chart code, or hand-written chart blocks in this brief chapter body.
-- If the user asks for charts, diagrams, or Mermaid content, satisfy the request with source-backed prose/tables only here; any controlled chart rendering or insertion is handled by the report visualization/chart pipeline after this draft.
+- **Hard output contract**: this draft may contain only Markdown headings, source-backed prose, lists, and Markdown tables. Do NOT output Mermaid syntax, chart source, chart code, or any fenced/indented chart block, even when the user or outline asks for a chart, diagram, process, or Mermaid content.
+- If a heading requests a diagram or flow, keep the heading but express the stages, relationships, and decisions as prose, lists, or a table. Never reproduce a visual as source code; the controlled chart pipeline handles chart selection, rendering, captions, and insertion after this draft.
 - Avoid long historical background, repeated context, and generic transition language.
 
 ## 4) Content Prioritization

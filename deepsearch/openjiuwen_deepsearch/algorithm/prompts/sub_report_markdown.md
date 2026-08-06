@@ -148,8 +148,8 @@ format_requirements: {{ current_section_format_requirements }}
     - Every number, date, amount, percentage, ranking, company name, policy name, and table cell must be traceable to the provided Collected Information.
     - Do not calculate derived metrics, comparisons, trends, or rankings unless the required source values are present and cited.
 - **Visualization Boundary**:
-    - Do NOT output Mermaid code fences, chart code, or hand-written chart blocks in this chapter body.
-    - If the user asks for charts, diagrams, or Mermaid content, satisfy the request with source-backed prose/tables only here; any controlled chart rendering or insertion is handled by the report visualization/chart pipeline after this draft.
+    - **Hard output contract**: this draft may contain only Markdown headings, source-backed prose, lists, and Markdown tables. Do NOT output Mermaid syntax, chart source, chart code, or any fenced/indented chart block, even when the user or outline asks for a chart, diagram, process, or Mermaid content.
+    - If a heading requests a diagram or flow, keep the heading but express the stages, relationships, and decisions as prose, lists, or a table. Never reproduce a visual as source code; the controlled chart pipeline handles chart selection, rendering, captions, and insertion after this draft.
 - **Language**: The output language must be **{{language}}**.
 
 # Writing Strategy
