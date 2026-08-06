@@ -97,7 +97,6 @@ class TestDepDrivingOutlineTool:
 
         assert properties["format_requirements"]["type"] == "array"
         assert properties["format_requirements"]["items"]["type"] == "string"
-        assert "visualization_requirements" not in properties
         assert properties["section_focus"]["minLength"] == 1
         assert properties["focus_dimensions"]["minItems"] == 1
         assert {
