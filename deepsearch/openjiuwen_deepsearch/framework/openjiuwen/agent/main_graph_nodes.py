@@ -647,9 +647,6 @@ class ReporterNode(BaseNode):
         llm_model_name = adapt_llm_model_name(session, NodeId.REPORTER.value)
 
         visualization_enable = session.get_global_state("config.visualization_enable")
-        vlm_chart_generator_enable = bool(
-            session.get_global_state("config.vlm_chart_generator_enable")
-        )
         rtp = session.get_global_state("search_context.report_type_policy") or {}
         research_intent = session.get_global_state("search_context.research_intent") or {}
         audience_role = (research_intent.get("audience_role", "") or "").strip()
@@ -666,7 +663,6 @@ class ReporterNode(BaseNode):
             user_query=session.get_global_state("search_context.original_query"),
             llm_model_name=llm_model_name,
             visualization_enable=visualization_enable,
-            vlm_chart_generator_enable=vlm_chart_generator_enable,
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             report_type_policy=rtp,
@@ -965,9 +961,6 @@ class OutlineNode(BaseNode):
             section_num = configured_section_num
         audience_role = research_intent.get("audience_role") or ""
         tone = research_intent.get("tone") or ""
-        vlm_chart_generator_enable = bool(
-            session.get_global_state("config.vlm_chart_generator_enable")
-        )
         result = dict(
             messages=messages,
             user_feedback=user_feedback,
@@ -990,7 +983,6 @@ class OutlineNode(BaseNode):
             require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
             audience_role=audience_role,
             tone=tone,
-            vlm_chart_generator_enable=vlm_chart_generator_enable,
         )
         result.update(build_research_intent_prompt_context(research_intent))
         return result
