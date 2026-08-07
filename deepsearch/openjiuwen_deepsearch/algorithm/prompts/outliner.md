@@ -132,6 +132,13 @@ For each section in the outline, you MUST assign:
   restrictions, and deliverable format rules. Use `[]` when none apply. Keep `description` concise and focused on
   research scope instead of copying format constraints into it.
 
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline, not the outline or chapter writer, owns chart selection, image generation,
+  captions, and insertion.
+- Keep every chapter understandable without a chart.
+- Do not put Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图” in
+  `description`, `format_requirements`, or the generated chapter prose.
+
 ## Execution Constraints
 - **Target Number of Sections:** {{ section_num }}. Match this target unless the user explicitly specifies a different
   major-section structure; in that case, follow the user.

@@ -54,6 +54,11 @@ Users may modify the outline by:
 
 The **user-edited outline represents the intended structure** and should be treated as the primary reference.
 
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline owns chart selection, image generation, captions, and insertion.
+- Keep the outline and chapter prose self-contained without chart-dependent wording.
+- Do not add Mermaid/chart code, chart captions, or forward references such as “下图”“见图”“如下图”.
+
 ---
 
 # Core Editing Principles
