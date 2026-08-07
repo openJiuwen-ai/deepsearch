@@ -43,6 +43,25 @@ def _report_doc(idx: int, *, url: str | None = None, content: str | None = None)
     }
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("```mermaid\nflowchart TD\n  A --> B\n```", True),
+        ("```\nsequenceDiagram\n  A->>B: ping\n```", True),
+        ("```text\npie\n  \"Dogs\" : 35\n```", True),
+        ("```text\ntimeline title Product history\n  2024 : Launch\n```", True),
+        ("```python\ngraph = {'A': 'B'}\n```", False),
+        ("Pie charts are not used in this report.", False),
+        ("Timeline analysis is described in prose.", False),
+        ("Journey outcomes are discussed in prose.", False),
+        ("Gantt charts are not used in this report.", False),
+        ("The report explains how Mermaid is used by the renderer.", False),
+    ],
+)
+def test_contains_mermaid_source_detects_chart_source_without_removing_text(content, expected):
+    assert Reporter._contains_mermaid_source(content) is expected
+
+
 def test_normalize_key_passages_cleans_non_standard_values():
     assert normalize_key_passages(["alpha", "", None, " beta "]) == ["alpha", "beta"]
     assert normalize_key_passages("single passage") == ["single passage"]
@@ -278,6 +297,136 @@ async def test_write_subsection_reports_calls_llm_with_output_constraint_context
         assert "program_comparison" in rendered_prompt
         assert "eligibility, exclusion_risk" in rendered_prompt
         assert "must NOT output the final recommendation" in rendered_prompt
+        assert "Hard output contract" in rendered_prompt
+        assert "Mermaid syntax" in rendered_prompt
+    finally:
+        llm_context.reset(token)
+
+
+@pytest.mark.parametrize("visualization_enable", [False, True])
+@pytest.mark.asyncio
+async def test_write_subsection_reports_rejects_mermaid_source_in_all_modes(
+    visualization_enable,
+):
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        mermaid_content = (
+            "# 1 Process\n"
+            "\n"
+            "The process is summarized below.\n"
+            "\n"
+            "```mermaid\n"
+            "flowchart TD\n"
+            "  A --> B\n"
+            "```"
+        )
+        current_inputs = {
+            "language": ENGLISH,
+            "section_idx": "1",
+            "section_task": "1 Process",
+            "section_description": "Explain the process.",
+            "section_format_requirements": [],
+            "report_task": "Explain the process.",
+            "current_outline": "1 Process",
+            "sub_section_outline": "1 Process",
+            "current_subsection": "1 Process",
+            "classified_content": [
+                {
+                    "index": 1,
+                    "doc_time": "2026",
+                    "original_content": "The process has two stages.",
+                    "scores": {},
+                }
+            ],
+            "sub_section_references": [],
+            "sub_report_background_knowledge": [],
+            "report_type": "professional",
+            "paragraph_style": "detailed",
+            "visualization_enable": visualization_enable,
+        }
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new=AsyncMock(return_value={"content": mermaid_content}),
+        ):
+            result = await reporter._write_subsection_reports(current_inputs)
+
+        assert result["success"] is False
+        assert "Mermaid" in result["result"]
+        assert current_inputs["sub_report_content"] == mermaid_content
+        retry_feedback = Reporter._sub_report_retry_feedback_from_failure(result["result"])
+        assert "error_code: MERMAID_OUTPUT_FORBIDDEN" in retry_feedback
+        assert "location: chapter_visualization" in retry_feedback
+    finally:
+        llm_context.reset(token)
+
+
+@pytest.mark.parametrize("visualization_enable", [False, True])
+@pytest.mark.asyncio
+async def test_write_subsection_reports_accepts_clean_retry_after_mermaid_rejection(
+    visualization_enable,
+):
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "language": ENGLISH,
+            "section_idx": "1",
+            "section_task": "1 Process",
+            "section_description": "Explain the process.",
+            "section_format_requirements": [],
+            "report_task": "Explain the process.",
+            "current_outline": "1 Process",
+            "sub_section_outline": "1 Process",
+            "current_subsection": "1 Process",
+            "classified_content": [
+                {
+                    "index": 1,
+                    "doc_time": "2026",
+                    "original_content": "The process has two stages.",
+                    "scores": {},
+                }
+            ],
+            "sub_section_references": [],
+            "sub_report_background_knowledge": [],
+            "report_type": "professional",
+            "paragraph_style": "detailed",
+            "visualization_enable": visualization_enable,
+        }
+        mermaid_content = "# 1 Process\n\n```mermaid\nflowchart TD\n  A --> B\n```"
+        clean_content = "# 1 Process\n\nThe process has two stages [citation:1]."
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new=AsyncMock(
+                side_effect=[
+                    {"content": mermaid_content},
+                    {"content": clean_content},
+                ]
+            ),
+        ) as mock_ainvoke, patch.object(
+            reporter,
+            "_generate_sub_report_sidecar",
+            new_callable=AsyncMock,
+            return_value={"sidecar": None, "summary": "summary", "warning": ""},
+        ):
+            first = await reporter._write_subsection_reports(current_inputs)
+            current_inputs["sub_report_retry_feedback"] = (
+                Reporter._sub_report_retry_feedback_from_failure(first["result"])
+            )
+            second = await reporter._write_subsection_reports(current_inputs)
+
+        assert first["success"] is False
+        assert second["success"] is True
+        assert current_inputs["sub_report_content"] == "# Process\n\nThe process has two stages [citation:1]."
+        assert mock_ainvoke.await_count == 2
+        retry_prompt = "\n".join(
+            message["content"]
+            for message in mock_ainvoke.call_args_list[1].kwargs["messages"]
+        )
+        assert "MERMAID_OUTPUT_FORBIDDEN" in retry_prompt
+        assert "chart source" in retry_prompt
     finally:
         llm_context.reset(token)
 

@@ -52,6 +52,12 @@ understand the context and refine the outline more accurately:
 
 {{ user_feedback }}
 
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline owns chart selection, image generation, captions, and insertion.
+- Keep the outline and chapter prose self-contained without chart-dependent wording.
+- Do not place Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图”
+  in the outline fields or chapter prose.
+
 ---
 
 # Previous User Feedback (Interaction History)

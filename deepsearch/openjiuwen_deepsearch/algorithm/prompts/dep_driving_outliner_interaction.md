@@ -85,6 +85,12 @@ For every section returned through the updated outline tool:
 - When current user feedback adds, removes, or changes an output-format constraint, update the corresponding section's
   `format_requirements`; do not update only `description`.
 
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline owns chart selection, image generation, captions, and insertion.
+- Keep chapter prose self-contained without chart-dependent wording.
+- Do not place Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图”
+  in the outline fields or chapter prose.
+
 ---
 
 # Reference Report Template

@@ -116,6 +116,20 @@ INTERNAL_CALLBACK_LABEL_PATTERN = re.compile(
     r"\]\s*",
     re.IGNORECASE,
 )
+MERMAID_SYNTAX_LINE_PATTERN = re.compile(
+    r"(?im)^\s*(?:"
+    r"(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\b|"
+    r"(?:sequenceDiagram|stateDiagram(?:-v2)?|classDiagram|erDiagram|"
+    r"mindmap|quadrantChart|xychart-beta|sankey-beta|block-beta|"
+    r"gitGraph|C4Context)\s*$|"
+    r"(?:journey|gantt|pie|timeline)"
+    r"(?:\s+(?:title|showData)\b.*)?\s*$"
+    r")"
+)
+FENCED_BLOCK_PATTERN = re.compile(
+    r"(?ms)^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[^\r\n]*)\r?\n"
+    r"(?P<body>.*?)[ \t]*(?P=fence)[ \t]*$"
+)
 
 
 
@@ -607,6 +621,7 @@ class Reporter:
             "OUTLINE_HEADING_MISSING",
             "DUPLICATE_SUBSECTION_HEADINGS",
             "SUB_REPORT_CONTENT_EMPTY",
+            "MERMAID_OUTPUT_FORBIDDEN",
             "MISSING_SECTION_CONTEXT",
             "SUB_REPORT_GENERATION_EXCEPTION",
             "SUB_REPORT_RETRY_REQUIRED",
@@ -642,6 +657,12 @@ class Reporter:
             )
         elif error_code == "MISSING_SECTION_CONTEXT":
             action = "Retry only after required section title, outline, and evidence context are available."
+        elif error_code == "MERMAID_OUTPUT_FORBIDDEN":
+            action = (
+                "Regenerate the chapter as prose, lists, or Markdown tables only. "
+                "Keep the required headings, but do not emit Mermaid syntax, chart source, "
+                "or any chart code fence."
+            )
         elif error_code == "SUB_REPORT_GENERATION_EXCEPTION":
             action = (
                 "Regenerate from the provided evidence and constraints; "
@@ -673,14 +694,12 @@ class Reporter:
                 if field_match:
                     fields[key] = field_match.group(1)
             error_code = code_match.group(1)
-            location = (
-                "markdown_headings"
-                if (
-                    error_code.startswith("HEADING")
-                    or error_code == "DUPLICATE_SUBSECTION_HEADINGS"
-                )
-                else "chapter"
-            )
+            if error_code.startswith("HEADING") or error_code == "DUPLICATE_SUBSECTION_HEADINGS":
+                location = "markdown_headings"
+            elif error_code == "MERMAID_OUTPUT_FORBIDDEN":
+                location = "chapter_visualization"
+            else:
+                location = "chapter"
             return cls._build_sub_report_retry_feedback(error_code, location, fields)
 
         heading_patterns = [
@@ -733,6 +752,11 @@ class Reporter:
                 "SUB_REPORT_CONTENT_EMPTY",
                 "chapter",
             )
+        if "mermaid" in reason_lower or "chart source" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "MERMAID_OUTPUT_FORBIDDEN",
+                "chapter_visualization",
+            )
         if (
             "missing 'section_task'" in reason_lower
             or "missing 'section_task' or sub section outline" in reason_lower
@@ -751,6 +775,26 @@ class Reporter:
             )
 
         return cls._build_sub_report_retry_feedback("SUB_REPORT_RETRY_REQUIRED", "chapter")
+
+    @staticmethod
+    def _contains_mermaid_source(content: str) -> bool:
+        """Detect Mermaid source in a chapter draft without modifying the draft.
+
+        Chart source is owned by the controlled chart pipeline, so a chapter
+        draft must not contain Mermaid source. This validator deliberately
+        rejects invalid output and lets the existing bounded retry loop request
+        a new draft; it never removes arbitrary report text after generation.
+        """
+        if not content:
+            return False
+
+        for block in FENCED_BLOCK_PATTERN.finditer(content):
+            info = block.group("info").strip().lower()
+            body = block.group("body")
+            if "mermaid" in info or MERMAID_SYNTAX_LINE_PATTERN.search(body):
+                return True
+
+        return False
 
     @staticmethod
     def is_valid_chapter_format(text, section_idx) -> bool:
@@ -3728,9 +3772,6 @@ class Reporter:
                 dict(
                     messages=[dict(role="user", content=sub_content_message)],
                     language=current_inputs.get("language"),
-                    visualization_enable=current_inputs.get(
-                        "visualization_enable", True
-                    ),
                     section_iscore=current_inputs.get("section_iscore", False),
                     report_type=report_type,
                     paragraph_style=current_inputs.get("paragraph_style", "detailed"),
@@ -3783,6 +3824,25 @@ class Reporter:
             current_inputs["sub_report_content"] = self._clean_internal_callback_labels(
                 llm_output.get("content", "")
             )
+
+            # Chart source belongs to the controlled chart pipeline rather than
+            # the chapter body. Reject an invalid draft so the existing bounded
+            # retry loop can regenerate it; do not strip arbitrary text after
+            # the fact.
+            if self._contains_mermaid_source(current_inputs["sub_report_content"]):
+                logger.warning(
+                    "%s [write_subsection_reports] section_idx: [%s] "
+                    "rejected Mermaid/chart source in chapter draft; retry.",
+                    EFFECT_SUB_REPORT_TAG,
+                    current_inputs.get("section_idx", 1),
+                )
+                return dict(
+                    success=False,
+                    result=(
+                        "generated chapter contains Mermaid or chart source; "
+                        "write prose, lists, or Markdown tables only"
+                    ),
+                )
 
             # Insert visualization content
             if current_inputs.get("visualization_enable", True):
