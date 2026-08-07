@@ -259,19 +259,12 @@ def resolve_module_to_existing_file(
         if cand in known_files:
             return cand
     # Suffix match: ``pkg/mod`` → ``src/pkg/mod.py`` when unique among known files.
-    py_suffix = f"/{mod}.py"
-    init_suffix = f"/{mod}/__init__.py"
-    py_exact = f"{mod}.py"
-    init_exact = f"{mod}/__init__.py"
-    suffix_hits = []
-    for known in known_files:
-        if (
-            known.endswith(py_suffix)
-            or known.endswith(init_suffix)
-            or known == py_exact
-            or known == init_exact
-        ):
-            suffix_hits.append(known)
+    # Exact ``mod.py`` / ``mod/__init__.py`` already returned above; endswith
+    # accepts a suffix tuple (no multi-or boolean chain).
+    module_suffixes = (f"/{mod}.py", f"/{mod}/__init__.py")
+    suffix_hits = [
+        known for known in known_files if known.endswith(module_suffixes)
+    ]
     seen: Set[str] = set()
     uniq: List[str] = []
     for f in suffix_hits:
