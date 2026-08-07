@@ -24,13 +24,9 @@ def client():
 @pytest.fixture(autouse=True)
 def _clear_server_runtime_state():
     """Isolate process-local caches between tests."""
-    api_mod.jobs.clear()
-    api_mod._retrievers.clear()
-    api_mod._indexed_engines.clear()
+    api_mod.clear_runtime_state()
     yield
-    api_mod.jobs.clear()
-    api_mod._retrievers.clear()
-    api_mod._indexed_engines.clear()
+    api_mod.clear_runtime_state()
 
 
 def test_health(client):
@@ -204,8 +200,8 @@ class TestEngineRouting:
         job_id = idx.json()["job_id"]
         status = client.get(f"/api/v1/jobs/{job_id}")
         assert status.json()["status"] == "succeeded"
-        assert ("c1", "retropus") in api_mod._retrievers
-        assert api_mod._indexed_engines["c1"] == "retropus"
+        assert api_mod.is_retriever_cached("c1", "retropus")
+        assert api_mod.get_indexed_engine("c1") == "retropus"
         assert created_engines == ["retropus"]
         assert instances[0].close.await_count == 0
 
@@ -226,7 +222,7 @@ class TestEngineRouting:
         instances[0].search.assert_awaited_once()
 
     def test_engine_backend_mismatch_returns_409(self, monkeypatch, tmp_path):
-        api_mod._indexed_engines["c1"] = "retropus"
+        api_mod.set_indexed_engine("c1", "retropus")
         client = self._client(monkeypatch, str(tmp_path))
         r = client.post(
             "/api/v1/search",
@@ -256,6 +252,6 @@ class TestEngineRouting:
         job_id = idx.json()["job_id"]
         assert client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded"
         assert created_engines == ["auto"]
-        assert api_mod._indexed_engines["c2"] == "auto"
-        assert ("c2", "auto") not in api_mod._retrievers  # closed after milvus index
+        assert api_mod.get_indexed_engine("c2") == "auto"
+        assert not api_mod.is_retriever_cached("c2", "auto")  # closed after milvus index
         assert instances[0].close.await_count == 1

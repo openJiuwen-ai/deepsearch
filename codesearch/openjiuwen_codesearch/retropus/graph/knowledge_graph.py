@@ -18,9 +18,6 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-import igittigitt
-from tqdm import tqdm
-
 from openjiuwen_codesearch.retropus.graph.file_graph_builder import FileGraphBuilder
 from openjiuwen_codesearch.retropus.graph.graph_types import (
     ASTNode,
@@ -64,6 +61,8 @@ class KnowledgeGraph:
     ):
         """Initializes an empty or pre-populated knowledge graph."""
         self.max_ast_depth = max_ast_depth
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
         self.root_node_id = root_node_id
         self._root_node = root_node
         self._knowledge_graph_nodes = (
@@ -213,6 +212,10 @@ class KnowledgeGraph:
 
     def _build_graph(self, root_dir: Path):
         """Builds knowledge graph for a codebase at a location."""
+        # Heavy deps stay optional until build (unit tests import KG for dump/load).
+        import igittigitt  # guarded: retropus extra
+        from tqdm import tqdm  # guarded: progress bar only needed during build
+
         self._invalidate_indexes()
         root_dir = root_dir.absolute()
         t0 = time.perf_counter()
@@ -284,7 +287,7 @@ class KnowledgeGraph:
                 next_node_id, kg_nodes, kg_edges = self._file_graph_builder.build_file_graph(
                     kg_file_path_node, file, self._next_node_id
                 )
-            except (UnicodeDecodeError, ValueError, OSError) as exc:
+            except (ValueError, OSError) as exc:
                 self._logger.warning(f"Skipping {file}: {exc}")
                 continue
             self._next_node_id = next_node_id
@@ -340,6 +343,29 @@ class KnowledgeGraph:
             time.perf_counter() - t0,
         )
 
+    @property
+    def root_node(self) -> Optional[KnowledgeGraphNode]:
+        """Root directory node, if the graph has been built or restored."""
+        return self._root_node
+
+    def get_all_nodes(self) -> Sequence[KnowledgeGraphNode]:
+        """All KG nodes (file / AST / text), in insertion order."""
+        return list(self._knowledge_graph_nodes)
+
+    def get_all_edges(self) -> Sequence[KnowledgeGraphEdge]:
+        """All KG edges, in insertion order."""
+        return list(self._knowledge_graph_edges)
+
+    def get_imports_labels_map(self) -> Dict[Tuple[int, int], str]:
+        """Copy of ``(importer_id, imported_id) → local binding name`` labels."""
+        return dict(self._cached_imports_labels)
+
+    def set_imports_labels_map(
+        self, labels: Mapping[Tuple[int, int], str]
+    ) -> None:
+        """Replace cached IMPORTS edge labels (used when restoring from disk)."""
+        self._cached_imports_labels = dict(labels)
+
     def get_file_tree(self, max_depth: int = 5, max_lines: int = 5000) -> str:
         """Generate a tree-like string representation of the file structure."""
         file_node_adjacency_dict = self._get_file_node_adjacency_dict()
@@ -350,10 +376,10 @@ class KnowledgeGraph:
         result_lines = []
 
         # Box-drawing characters and indentation constants
-        SPACE = "    "  # Indentation for levels without children
-        BRANCH = "|   "  # Vertical line for intermediate children
-        TEE = "├── "  # Entry for a non-final child
-        LAST = "└── "  # Entry for the last child
+        space = "    "  # Indentation for levels without children
+        branch = "|   "  # Vertical line for intermediate children
+        tee = "├── "  # Entry for a non-final child
+        last = "└── "  # Entry for the last child
 
         while stack and (len(result_lines)) < max_lines:
             file_node, depth, prefix, is_last = stack.pop()
@@ -363,7 +389,7 @@ class KnowledgeGraph:
                 continue
 
             # Choose the connector character depending on whether this is the last child
-            pointer = LAST if is_last else TEE
+            pointer = last if is_last else tee
             line_prefix = "" if depth == 0 else prefix + pointer
 
             # Add the current file or directory to the result lines
@@ -376,7 +402,7 @@ class KnowledgeGraph:
 
             # Traverse the children in reverse order to maintain the correct tree shape
             for i in range(len(sorted_children_file_node) - 1, -1, -1):
-                extension = SPACE if is_last else BRANCH  # Update prefix for children
+                extension = space if is_last else branch  # Update prefix for children
                 new_prefix = "" if depth == 0 else prefix + extension
                 stack.append(
                     (
@@ -409,25 +435,29 @@ class KnowledgeGraph:
     def get_file_nodes(self) -> Sequence[KnowledgeGraphNode]:
         """All ``FileNode`` wrappers (files and directories)."""
         self._ensure_node_indexes()
-        assert self._cached_file_nodes is not None
+        if self._cached_file_nodes is None:
+            raise RuntimeError("file node index not built")
         return self._cached_file_nodes
 
     def get_ast_nodes(self) -> Sequence[KnowledgeGraphNode]:
         """All ``ASTNode`` wrappers."""
         self._ensure_node_indexes()
-        assert self._cached_ast_nodes is not None
+        if self._cached_ast_nodes is None:
+            raise RuntimeError("ast node index not built")
         return self._cached_ast_nodes
 
     def get_text_nodes(self) -> Sequence[KnowledgeGraphNode]:
         """All ``TextNode`` wrappers (markdown / text chunks)."""
         self._ensure_node_indexes()
-        assert self._cached_text_nodes is not None
+        if self._cached_text_nodes is None:
+            raise RuntimeError("text node index not built")
         return self._cached_text_nodes
 
     def _edges_of_type(self, edge_type: KnowledgeGraphEdgeType) -> Sequence[KnowledgeGraphEdge]:
         """Return edges of ``edge_type`` from the lazy edge-type index."""
         self._ensure_edge_indexes()
-        assert self._cached_edges_by_type is not None
+        if self._cached_edges_by_type is None:
+            raise RuntimeError("edge-type index not built")
         return self._cached_edges_by_type[edge_type]
 
     def get_has_ast_edges(self) -> Sequence[KnowledgeGraphEdge]:
@@ -467,8 +497,8 @@ class KnowledgeGraph:
     ) -> Sequence[KnowledgeGraphNode]:
         """1-hop import targets and importers of a FileNode."""
         self._ensure_edge_indexes()
-        assert self._cached_imports_out is not None
-        assert self._cached_imports_in is not None
+        if self._cached_imports_out is None or self._cached_imports_in is None:
+            raise RuntimeError("imports adjacency index not built")
         out = list(self._cached_imports_out.get(file_node.node_id, ()))
         incoming = list(self._cached_imports_in.get(file_node.node_id, ()))
         seen = {file_node.node_id}
@@ -485,8 +515,8 @@ class KnowledgeGraph:
     ) -> Sequence[KnowledgeGraphNode]:
         """1-hop superclass and subclass neighbors of a class AST node."""
         self._ensure_edge_indexes()
-        assert self._cached_inherits_out is not None
-        assert self._cached_inherits_in is not None
+        if self._cached_inherits_out is None or self._cached_inherits_in is None:
+            raise RuntimeError("inherits adjacency index not built")
         return inheritance_neighbors(
             class_ast.node_id, self._cached_inherits_out, self._cached_inherits_in
         )
@@ -494,30 +524,36 @@ class KnowledgeGraph:
     def get_file_for_ast(self, ast_node: KnowledgeGraphNode) -> Optional[KnowledgeGraphNode]:
         """Owning FileNode for a non-root AST node, if known."""
         self._ensure_edge_indexes()
-        assert self._cached_ast_to_file is not None
+        if self._cached_ast_to_file is None:
+            raise RuntimeError("ast-to-file index not built")
         return self._cached_ast_to_file.get(ast_node.node_id)
 
     def get_ast_to_file_map(self) -> Mapping[int, KnowledgeGraphNode]:
         """Map non-root AST node_id → owning FileNode (built once)."""
         self._ensure_edge_indexes()
-        assert self._cached_ast_to_file is not None
+        if self._cached_ast_to_file is None:
+            raise RuntimeError("ast-to-file index not built")
         return self._cached_ast_to_file
 
     def get_ast_file_pairs(self) -> Sequence[Tuple[KnowledgeGraphNode, KnowledgeGraphNode]]:
         """Cached ``(file_node, non_root_ast_node)`` pairs for retrieval indexing."""
         self._ensure_edge_indexes()
-        assert self._cached_ast_file_pairs is not None
+        if self._cached_ast_file_pairs is None:
+            raise RuntimeError("ast-file pairs index not built")
         return self._cached_ast_file_pairs
 
     def find_file_node_for_text_node(self, text_node: KnowledgeGraphNode) -> KnowledgeGraphNode:
         """Owning FileNode for a TextNode, using cached NEXT_CHUNK / HAS_TEXT maps."""
         self._ensure_edge_indexes()
-        assert self._cached_next_chunk_reverse is not None
-        assert self._cached_text_to_file is not None
+        if self._cached_next_chunk_reverse is None or self._cached_text_to_file is None:
+            raise RuntimeError("text-to-file index not built")
         current_id = text_node.node_id
         while current_id in self._cached_next_chunk_reverse:
             current_id = self._cached_next_chunk_reverse[current_id].node_id
-        return self._cached_text_to_file[current_id]
+        file_node = self._cached_text_to_file.get(current_id)
+        if file_node is None:
+            raise KeyError(f"no file node for text node id {current_id}")
+        return file_node
 
     def get_neo4j_file_nodes(self) -> Sequence[Neo4jFileNode]:
         """Serialize file nodes to Neo4j-shaped dicts."""
@@ -558,7 +594,8 @@ class KnowledgeGraph:
     def get_parent_to_children_map(self) -> Mapping[int, Sequence[KnowledgeGraphNode]]:
         """Returns a mapping from parent AST node IDs to their child AST nodes."""
         self._ensure_edge_indexes()
-        assert self._cached_parent_to_children is not None
+        if self._cached_parent_to_children is None:
+            raise RuntimeError("parent-to-children index not built")
         return self._cached_parent_to_children
 
     def __eq__(self, other: "KnowledgeGraph") -> bool:

@@ -52,7 +52,8 @@ class LLMClient(Protocol):
         messages: list[ChatMessage],
         tools: Optional[list[dict]] = None,
         **kwargs: Any,
-    ) -> LLMResponse: ...
+    ) -> LLMResponse:
+        ...
 
 
 def strip_unsupported_prompt_cache_key(
@@ -153,7 +154,8 @@ class OpenJiuwenLLMClient:
             ),
         )
 
-    def _to_provider_messages(self, messages: list[ChatMessage]) -> list[Any]:
+    @staticmethod
+    def _to_provider_messages(messages: list[ChatMessage]) -> list[Any]:
         from openjiuwen.core.foundation.llm import ToolMessage, UserMessage
 
         try:

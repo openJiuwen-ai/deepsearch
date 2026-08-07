@@ -9,10 +9,13 @@ Never register these into CodeSearch ``build_default_registry``.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from openjiuwen_codesearch.algorithm.search_tools.registry import ToolOutcome, ToolSpec
 from openjiuwen_codesearch.retropus.path_utils import is_test_path  # re-export
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_rel_path(path: str) -> str:
@@ -20,7 +23,7 @@ def normalize_rel_path(path: str) -> str:
     p = (path or "").strip().replace("\\", "/")
     for prefix in ("/testbed/", "/workspace/", "/repo/", "testbed/", "workspace/", "repo/"):
         if p.startswith(prefix):
-            p = p[len(prefix) :]
+            p = p[len(prefix):]
     while p.startswith("./"):
         p = p[2:]
     return p.lstrip("/")
@@ -181,6 +184,13 @@ class GraphExpandTools:
     ``_rel_to_file_node``, and ``selected_files()``.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._second_file_probed = False
+        self._inheritance_expanded = False
+        self._import_index = None
+        self._defs_by_file: Optional[Dict[str, List[Tuple[int, int, Any]]]] = None
+
     def expand_file_defs(self, path: str, query: Optional[str] = None) -> str:
         from openjiuwen_codesearch.algorithm.prompts.retropus import (  # noqa: PLC0415
             EXPAND_DEFS_HEADER,
@@ -199,7 +209,7 @@ class GraphExpandTools:
             self._second_file_probed = True
 
         q = (query or "").strip() or self.issue_text[:500]
-        defs = self._definitions_in_file(rel)
+        defs = self.definitions_in_file(rel)
         if not defs:
             return f"No definition AST nodes found in {rel}."
 
@@ -241,7 +251,7 @@ class GraphExpandTools:
             spans_by_file.setdefault(span["file"], []).append((span["start"], span["end"]))
 
         for rel in files:
-            defs = self._definitions_in_file(rel)
+            defs = self.definitions_in_file(rel)
             file_spans = spans_by_file.get(rel)
             for start, end, node in defs:
                 if not is_class_ast_type(node.node.type):
@@ -271,6 +281,11 @@ class GraphExpandTools:
             try:
                 neighbors = self.kg.get_inheritance_neighbors(class_node)
             except Exception:
+                logger.debug(
+                    "inheritance neighbors lookup failed for node %s",
+                    getattr(class_node, "node_id", class_node),
+                    exc_info=True,
+                )
                 continue
             for neighbor in neighbors:
                 file_node = self.kg.get_file_for_ast(neighbor)
@@ -325,7 +340,7 @@ class GraphExpandTools:
             # Fall back to all class defs in seed files when spans don't overlap a class.
             class_seeds = []
             for rel in seed_files:
-                for start, end, node in self._definitions_in_file(rel):
+                for start, end, node in self.definitions_in_file(rel):
                     if is_class_ast_type(node.node.type):
                         class_seeds.append((rel, start, end, node))
 
@@ -523,7 +538,7 @@ class GraphExpandTools:
         if self._defs_by_file is not None:
             return self._defs_by_file
         by_file: Dict[str, List[Tuple[int, int, Any]]] = {}
-        for file_node, ast_node in self.retriever._iter_ast_candidates(self._file_nodes):
+        for file_node, ast_node in self.retriever.iter_ast_candidates(self._file_nodes):
             if not isinstance(ast_node.node, ASTNode):
                 continue
             if not is_definition_ast_type(ast_node.node.type):
@@ -535,5 +550,5 @@ class GraphExpandTools:
         self._defs_by_file = by_file
         return by_file
 
-    def _definitions_in_file(self, rel: str) -> List[Tuple[int, int, Any]]:
+    def definitions_in_file(self, rel: str) -> List[Tuple[int, int, Any]]:
         return list(self._ensure_defs_index().get(rel, []))

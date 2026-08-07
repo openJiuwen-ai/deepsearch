@@ -100,7 +100,7 @@ def _split_text(
             break
         if re.search(re.escape(candidate), text):
             separator = candidate
-            new_separators = separators[i + 1 :]
+            new_separators = separators[i + 1:]
             break
 
     splits = _split_with_separator(text, separator)

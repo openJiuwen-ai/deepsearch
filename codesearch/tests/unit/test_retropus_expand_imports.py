@@ -148,12 +148,14 @@ def test_build_imports_edges_and_tool_from_kg(tmp_path: Path):
     assert "pkg/b.py" in neighbor_paths
     assert "pkg/d.py" in neighbor_paths
 
-    a_to_b = next(
-        e
-        for e in edges
-        if e.source.node.relative_path.endswith("pkg/a.py")
-        and e.target.node.relative_path.endswith("pkg/b.py")
-    )
+    a_to_b = None
+    for e in edges:
+        if e.source.node.relative_path.endswith("pkg/a.py") and e.target.node.relative_path.endswith(
+            "pkg/b.py"
+        ):
+            a_to_b = e
+            break
+    assert a_to_b is not None
     assert kg.get_imports_label(a_to_b.source.node_id, a_to_b.target.node_id) == "b"
 
     index = import_index_from_kg(kg)

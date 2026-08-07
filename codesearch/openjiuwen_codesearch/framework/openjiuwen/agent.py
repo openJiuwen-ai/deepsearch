@@ -37,7 +37,7 @@ def _read_span_text(repo_dir: Path, file_path: str, start: int, end: int) -> str
         full = repo_dir / file_path
         lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
         # retropus spans are 1-indexed inclusive
-        chunk = lines[max(0, start - 1) : end]
+        chunk = lines[max(0, start - 1):end]
         return "\n".join(chunk)
     except OSError:
         return ""

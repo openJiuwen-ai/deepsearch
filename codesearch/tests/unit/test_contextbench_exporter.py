@@ -40,7 +40,11 @@ def test_write_eval_summary_writes_json(tmp_path, monkeypatch):
         "final_file": {"coverage": 1.0, "precision": 0.5, "f1": 0.666},
     }
     fake_mod = types.ModuleType("contextbench.evaluate")
-    fake_mod.aggregate_results = lambda rows, **_kw: dict(fake_agg)
+
+    def _aggregate_results(rows, **_kw):
+        return dict(fake_agg)
+
+    fake_mod.aggregate_results = _aggregate_results
     monkeypatch.setitem(sys.modules, "contextbench.evaluate", fake_mod)
     # Parent package may also be missing in a bare unit env.
     if "contextbench" not in sys.modules:

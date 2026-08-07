@@ -15,6 +15,7 @@ rather than linked to the wrong type.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -30,6 +31,8 @@ from openjiuwen_codesearch.retropus.graph.imports import (  # noqa: F401
     parse_python_import_map,
 )
 from openjiuwen_codesearch.retropus.path_utils import is_test_path
+
+logger = logging.getLogger(__name__)
 
 _DEFINITION_KEYWORDS = (
     "function",
@@ -226,7 +229,7 @@ def _matching_brace_body(text: str, open_idx: int) -> Optional[str]:
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                return text[open_idx + 1 : i]
+                return text[open_idx + 1:i]
     return None
 
 
@@ -279,7 +282,7 @@ def _extract_oo_class(text: str) -> Optional[Tuple[str, List[str]]]:
     # Python classes are handled earlier; a trailing ``:`` before ``{`` is Python.
     # If this looks like Python but failed the Python regex, still skip.
     name = match.group(1)
-    header = _strip_angle_generics(_header_before_body(text[match.start() :]))
+    header = _strip_angle_generics(_header_before_body(text[match.start():]))
     if re.search(r"\)\s*:", header) or re.search(
         rf"\bclass\s+{re.escape(name)}\s*:", header
     ):
@@ -312,7 +315,7 @@ def _extract_oo_interface(text: str) -> Optional[Tuple[str, List[str]]]:
     if not match:
         return None
     name = match.group(1)
-    header = _strip_angle_generics(_header_before_body(text[match.start() :]))
+    header = _strip_angle_generics(_header_before_body(text[match.start():]))
     bases: List[str] = []
     extends = re.search(r"\bextends\s+(.+)$", header)
     if extends:
@@ -334,7 +337,7 @@ def _extract_cpp_class_struct(text: str) -> Optional[Tuple[str, List[str]]]:
     # Base clause: ``class Name : public Base, private Other``
     colon = re.search(
         rf"\b{keyword}\s+{re.escape(name)}\b[^:{{;]*:\s*([^{{;]+)",
-        _strip_angle_generics(text[match.start() :]),
+        _strip_angle_generics(text[match.start():]),
         re.M,
     )
     if colon:
@@ -419,7 +422,7 @@ def _extract_rust_trait(text: str) -> Optional[Tuple[str, List[str]]]:
     if not match:
         return None
     name = match.group(1)
-    header = _strip_angle_generics(_header_before_body(text[match.start() :]))
+    header = _strip_angle_generics(_header_before_body(text[match.start():]))
     bases: List[str] = []
     bounds = re.search(rf"\btrait\s+{re.escape(name)}\s*:\s*(.+)$", header)
     if bounds:
@@ -680,6 +683,11 @@ def boost_ranked_files_with_inherits(
         try:
             neighbors = kg.get_inheritance_neighbors(seed_ast)
         except Exception:
+            logger.debug(
+                "inheritance neighbors lookup failed for seed %s",
+                getattr(seed_ast, "node_id", seed_ast),
+                exc_info=True,
+            )
             continue
         for neighbor in neighbors:
             file_node = kg.get_file_for_ast(neighbor)

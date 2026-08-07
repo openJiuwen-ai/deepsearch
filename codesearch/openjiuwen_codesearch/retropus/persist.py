@@ -63,22 +63,22 @@ def config_fingerprint(config: RetropusSearchAgentConfig) -> dict[str, Any]:
 
 
 def _node_by_id(kg: KnowledgeGraph) -> dict[int, KnowledgeGraphNode]:
-    return {n.node_id: n for n in kg._knowledge_graph_nodes}  # noqa: SLF001
+    return {n.node_id: n for n in kg.get_all_nodes()}
 
 
 def dump_knowledge_graph(kg: KnowledgeGraph, path: Path) -> None:
     """Serialize KG nodes/edges/labels (pickle; local trusted cache)."""
     payload = {
         "max_ast_depth": kg.max_ast_depth,
-        "chunk_size": kg._file_graph_builder.chunk_size,  # noqa: SLF001
-        "chunk_overlap": kg._file_graph_builder.chunk_overlap,  # noqa: SLF001
+        "chunk_size": kg.chunk_size,
+        "chunk_overlap": kg.chunk_overlap,
         "root_node_id": kg.root_node_id,
-        "root_node": kg._root_node,  # noqa: SLF001
-        "nodes": list(kg._knowledge_graph_nodes),  # noqa: SLF001
-        "edges": list(kg._knowledge_graph_edges),  # noqa: SLF001
+        "root_node": kg.root_node,
+        "nodes": list(kg.get_all_nodes()),
+        "edges": list(kg.get_all_edges()),
         "imports_labels": [
             [src, tgt, label]
-            for (src, tgt), label in kg._cached_imports_labels.items()  # noqa: SLF001
+            for (src, tgt), label in kg.get_imports_labels_map().items()
         ],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,7 +104,7 @@ def load_knowledge_graph(path: Path) -> KnowledgeGraph:
     for row in payload.get("imports_labels") or ():
         src, tgt, label = row
         labels[(int(src), int(tgt))] = str(label)
-    kg._cached_imports_labels = labels  # noqa: SLF001
+    kg.set_imports_labels_map(labels)
     return kg
 
 
@@ -115,7 +115,10 @@ def dump_bm25_retriever(retriever: Any, directory: Path) -> None:
     subdirectory (only ``documents.json`` with ``[]``).
     """
     directory.mkdir(parents=True, exist_ok=True)
-    docs = list(getattr(retriever, "_documents", []) or [])
+    if hasattr(retriever, "get_documents"):
+        docs = list(retriever.get_documents())
+    else:
+        docs = []
     doc_rows = [
         {
             "kind": doc.kind,
@@ -150,7 +153,6 @@ def load_bm25_retriever(
     """Restore a :class:`BM25Retriever` bound to ``kg`` from a dump."""
     from openjiuwen_codesearch.retropus.retrievers.bm25 import (  # noqa: PLC0415
         BM25Retriever,
-        _Document,
     )
 
     docs_path = directory / DOCUMENTS_NAME
@@ -168,14 +170,16 @@ def load_bm25_retriever(
                 f"BM25 document refers to missing KG node "
                 f"(file={row.get('file_node_id')}, node={row.get('node_id')})"
             )
-        documents.append(_Document(str(row["kind"]), file_node, node))
+        documents.append(
+            BM25Retriever.make_document(str(row["kind"]), file_node, node)
+        )
 
     out = BM25Retriever(
         kg,
         code_aware_tokenizer=config.code_aware_tokenizer,
         tokenize_workers=config.tokenize_workers,
     )
-    out._documents = documents  # noqa: SLF001
+    out.set_documents(documents)
 
     bm25_dir = directory / BM25_DIRNAME
     if not documents:

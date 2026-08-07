@@ -155,7 +155,8 @@ def test_retropus_registry_reuses_delete_snippets_executor():
     assert registry["delete_snippets"].executor is execute_delete
 
     class Memory:
-        def delete(self, snippet_ids):
+        @staticmethod
+        def delete(snippet_ids):
             assert snippet_ids == [1, 3]
             return 2
 

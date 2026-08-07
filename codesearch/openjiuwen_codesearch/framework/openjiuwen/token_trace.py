@@ -5,18 +5,18 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping, MutableMapping, Optional
 
 
 def total_input_tokens(tokens_by_stage: Mapping[str, tuple[int, int]]) -> int:
     """Sum recorded input tokens across stages."""
-    return sum(i for i, _ in tokens_by_stage.values())
+    return sum(input_tokens for input_tokens, _ in tokens_by_stage.values())
 
 
 def total_output_tokens(tokens_by_stage: Mapping[str, tuple[int, int]]) -> int:
     """Sum recorded output tokens across stages."""
-    return sum(o for _, o in tokens_by_stage.values())
+    return sum(output_tokens for _, output_tokens in tokens_by_stage.values())
 
 
 def add_tokens(
@@ -48,6 +48,6 @@ def build_trace_path(
     """Build ``{trace_dir}/{stamp}/{stem_prefix}{safe_label}.jsonl`` or ``None``."""
     if not trace_dir:
         return None
-    stamp = datetime.now().strftime("%Y%m%d__%H%M%S_%f")
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d__%H%M%S_%f")
     safe = str(safe_label).replace("/", "_")[:64]
     return os.path.join(trace_dir, stamp, f"{stem_prefix}{safe}.jsonl")

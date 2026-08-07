@@ -21,24 +21,25 @@ from openjiuwen_codesearch.llm.factory import LLMResponse
 from tests.conftest import FakeLLM, run, tool_call_response
 
 
-CORE_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": n,
-            "description": n,
-            "parameters": {"type": "object", "properties": {}},
-        },
-    }
-    for n in (
-        "search_code",
-        "search_text",
-        "get_repo_structure",
-        "read_file",
-        "add_context",
-        "finish",
+CORE_SCHEMAS = []
+for n in (
+    "search_code",
+    "search_text",
+    "get_repo_structure",
+    "read_file",
+    "add_context",
+    "finish",
+):
+    CORE_SCHEMAS.append(
+        {
+            "type": "function",
+            "function": {
+                "name": n,
+                "description": n,
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
     )
-]
 
 
 class FakeRetropusTools:
@@ -51,7 +52,8 @@ class FakeRetropusTools:
             feat_inherits_expand=False,
         )
 
-    def tool_schemas(self):
+    @staticmethod
+    def tool_schemas():
         return list(CORE_SCHEMAS)
 
     def dispatch(self, name: str, args: dict) -> str:
@@ -233,9 +235,7 @@ def test_retriever_retropus_index_skips_milvus(monkeypatch):
     monkeypatch.setattr(r, "_ensure_store", boom)
 
     def fake_build(repo_path, reset=False):
-        r._retropus_kg = MagicMock()
-        r._retropus_retriever = MagicMock()
-        r._retropus_repo_dir = Path(repo_path)
+        r.set_retropus_index(MagicMock(), MagicMock(), Path(repo_path))
         from openjiuwen_codesearch.api.models import IndexReport
 
         return IndexReport(files_total=2, files_new=2, chunks_inserted=1)
@@ -243,7 +243,7 @@ def test_retriever_retropus_index_skips_milvus(monkeypatch):
     monkeypatch.setattr(r, "_build_retropus_index", fake_build)
     report = run(r.index_repository("/tmp/fake_repo"))
     assert report.files_total == 2
-    assert r._store is None
+    assert r.get_store() is None
 
 
 def test_engine_keeps_index_in_process_only_retropus():

@@ -13,7 +13,6 @@ from openjiuwen_codesearch.retropus.graph.graph_types import (
     TextNode,
 )
 from openjiuwen_codesearch.retropus.graph.text_splitter import split_text
-from openjiuwen_codesearch.retropus.parser import tree_sitter_parser
 
 
 @dataclass
@@ -45,11 +44,15 @@ class FileGraphBuilder:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
-    def support_code_file(self, file: Path) -> bool:
+    @staticmethod
+    def support_code_file(file: Path) -> bool:
         """True if ``file`` can be parsed into an AST with tree-sitter."""
+        from openjiuwen_codesearch.retropus.parser import tree_sitter_parser  # guarded
+
         return tree_sitter_parser.supports_file(file)
 
-    def support_text_file(self, file: Path) -> bool:
+    @staticmethod
+    def support_text_file(file: Path) -> bool:
         """True if ``file`` is treated as plain text (markdown / rst / txt)."""
         return file.suffix in [".markdown", ".md", ".txt", ".rst"]
 
@@ -77,7 +80,9 @@ class FileGraphBuilder:
         tree_sitter_nodes = []
         tree_sitter_edges = []
 
-        # Parse the file into a tree-sitter AST
+        # Parse the file into a tree-sitter AST (lazy: retropus extra)
+        from openjiuwen_codesearch.retropus.parser import tree_sitter_parser  # guarded
+
         tree = tree_sitter_parser.parse(file)
         if tree.root_node.has_error or tree.root_node.child_count == 0:
             # Return empty results if the file cannot be parsed properly
@@ -140,12 +145,10 @@ class FileGraphBuilder:
     ) -> Tuple[int, Sequence[KnowledgeGraphNode], Sequence[KnowledgeGraphEdge]]:
         """Split a text file into chunks and attach them as ``HAS_TEXT`` / ``NEXT_CHUNK``."""
         text = file.open(encoding="utf-8").read()
-        chunks = [
-            TextChunk(text=chunk)
-            for chunk in split_text(
-                text, chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
-            )
-        ]
+        chunk_texts = split_text(
+            text, chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
+        )
+        chunks = [TextChunk(text=chunk) for chunk in chunk_texts]
 
         # Calculate line positions for the entire text
         lines = text.split("\n")
@@ -190,8 +193,8 @@ class FileGraphBuilder:
 
         return self._chunks_to_file_graph(chunks, parent_node, next_node_id)
 
+    @staticmethod
     def _chunks_to_file_graph(
-        self,
         chunks: Sequence[TextChunk],
         parent_node: KnowledgeGraphNode,
         next_node_id: int,

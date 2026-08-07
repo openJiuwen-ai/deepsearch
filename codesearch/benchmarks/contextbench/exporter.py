@@ -68,7 +68,7 @@ def write_eval_summary(
 
     # Reuse official micro-average aggregation so the JSON matches the printed banner.
     if contextbench_dir not in sys.path:
-        sys.path.insert(0, contextbench_dir)
+        sys.path.append(contextbench_dir)
     from contextbench.evaluate import aggregate_results
 
     summary = aggregate_results(rows)
@@ -114,12 +114,13 @@ def run_eval(
     env["PYTHONPATH"] = contextbench_dir + os.pathsep + env.get("PYTHONPATH", "")
     logger.info("Starting eval for %s", pred_file)
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    # EVALUATION summary is on evaluate's stdout; reprint it last.
-    print(result.stdout or "", flush=True)
+    # EVALUATION summary is on evaluate's stdout; surface it via logger.
+    if result.stdout:
+        logger.info("%s", result.stdout.rstrip("\n"))
     if os.path.isfile(metrics_path):
         summary_path = write_eval_summary(metrics_path, contextbench_dir=contextbench_dir)
         if summary_path:
-            print(f"Summary written to {summary_path}", flush=True)
+            logger.info("Summary written to %s", summary_path)
     if result.returncode != 0:
         logger.error("Eval failed with return code %s", result.returncode)
     return result.returncode

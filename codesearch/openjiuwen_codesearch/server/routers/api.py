@@ -24,7 +24,7 @@ import uuid
 from collections import OrderedDict
 from importlib.metadata import version
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -176,6 +176,28 @@ async def shutdown_retrievers() -> None:
             await retriever.close()
         except Exception:  # 关停阶段尽力而为，单个失败不影响其余
             logger.exception("failed to close retriever during shutdown")
+
+
+def clear_runtime_state() -> None:
+    """Clear process-local jobs and retriever caches (for tests)."""
+    jobs.clear()
+    _retrievers.clear()
+    _indexed_engines.clear()
+
+
+def is_retriever_cached(collection: str, engine: EngineName) -> bool:
+    """True when a live retriever is cached for ``(collection, engine)``."""
+    return (collection, engine) in _retrievers
+
+
+def get_indexed_engine(collection: str) -> Optional[EngineName]:
+    """Return the engine recorded for the last successful index of ``collection``."""
+    return _indexed_engines.get(collection)
+
+
+def set_indexed_engine(collection: str, engine: EngineName) -> None:
+    """Record which engine last indexed ``collection`` (tests / internal use)."""
+    _indexed_engines[collection] = engine
 
 
 @api_router.get("/health", response_model=HealthResponse)

@@ -85,6 +85,7 @@ class RetrievalTools(GraphExpandTools):
             FileNode,
         )
 
+        super().__init__()
         self.kg = kg
         self.retriever = retriever
         self.repo_dir = Path(repo_dir)
@@ -103,12 +104,7 @@ class RetrievalTools(GraphExpandTools):
             for n in self._file_nodes
             if isinstance(n.node, FileNode)
         }
-        # file_rel -> list of (start, end, kg_node) for definition AST nodes
-        self._defs_by_file: Optional[Dict[str, List[Tuple[int, int, Any]]]] = None
         self._expanded_files: set[str] = set()
-        self._second_file_probed = False
-        self._inheritance_expanded = False
-        self._import_index = None
         # Minimal surface for ``memory_tools.execute_delete`` (env.memory.delete).
         self.memory = _RetropusSpanMemory(self)
 

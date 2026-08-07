@@ -215,9 +215,15 @@ def definition_label(ast_node: KnowledgeGraphNode) -> str:
 
 def _ast_contains(outer: KnowledgeGraphNode, inner: KnowledgeGraphNode) -> bool:
     """True if ``outer``'s line range strictly encloses ``inner``'s (same file)."""
-    o, i = outer.node, inner.node
-    if o.start_line <= i.start_line and o.end_line >= i.end_line:
-        return (o.start_line, o.end_line) != (i.start_line, i.end_line)
+    outer_node, inner_node = outer.node, inner.node
+    if (
+        outer_node.start_line <= inner_node.start_line
+        and outer_node.end_line >= inner_node.end_line
+    ):
+        return (outer_node.start_line, outer_node.end_line) != (
+            inner_node.start_line,
+            inner_node.end_line,
+        )
     return False
 
 
@@ -314,6 +320,21 @@ class BM25Retriever(AbstractBaseRetriever):
         self.retriever: Optional[bm25s.BM25] = None
         self._documents: List[_Document] = []
 
+    def get_documents(self) -> List[_Document]:
+        """Corpus rows currently bound to the BM25 index (may be empty)."""
+        return list(self._documents)
+
+    def set_documents(self, documents: Sequence[_Document]) -> None:
+        """Replace corpus rows (used when restoring an index from disk)."""
+        self._documents = list(documents)
+
+    @staticmethod
+    def make_document(
+        kind: str, file_node: KnowledgeGraphNode, node: KnowledgeGraphNode
+    ) -> _Document:
+        """Build a corpus row for persist/restore without exposing ``_Document``."""
+        return _Document(kind, file_node, node)
+
     # ------------------------------------------------------------------ #
     #                         Index construction                         #
     # ------------------------------------------------------------------ #
@@ -343,7 +364,7 @@ class BM25Retriever(AbstractBaseRetriever):
         documents: List[_Document] = []
 
         # Uses KG's cached AST→file map (built once after parse).
-        for file_node, ast_node in self._iter_ast_candidates(list(self.kg.get_file_nodes())):
+        for file_node, ast_node in self.iter_ast_candidates(list(self.kg.get_file_nodes())):
             documents.append(_Document("ast", file_node, ast_node))
         n_ast = len(documents)
         logger.info(

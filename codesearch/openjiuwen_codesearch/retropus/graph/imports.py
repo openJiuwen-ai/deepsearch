@@ -259,14 +259,19 @@ def resolve_module_to_existing_file(
         if cand in known_files:
             return cand
     # Suffix match: ``pkg/mod`` → ``src/pkg/mod.py`` when unique among known files.
-    suffix_hits = [
-        f
-        for f in known_files
-        if f.endswith(f"/{mod}.py")
-        or f.endswith(f"/{mod}/__init__.py")
-        or f == f"{mod}.py"
-        or f == f"{mod}/__init__.py"
-    ]
+    py_suffix = f"/{mod}.py"
+    init_suffix = f"/{mod}/__init__.py"
+    py_exact = f"{mod}.py"
+    init_exact = f"{mod}/__init__.py"
+    suffix_hits = []
+    for known in known_files:
+        if (
+            known.endswith(py_suffix)
+            or known.endswith(init_suffix)
+            or known == py_exact
+            or known == init_exact
+        ):
+            suffix_hits.append(known)
     seen: Set[str] = set()
     uniq: List[str] = []
     for f in suffix_hits:
@@ -571,7 +576,10 @@ def _resolve_go_import_path(
     best = [c for c in candidates if len(c) == best_len]
     if len(best) != 1:
         return None
-    return _pick_go_package_file(by_dir[best[0]], best[0])
+    package_files = by_dir.get(best[0])
+    if package_files is None:
+        return None
+    return _pick_go_package_file(package_files, best[0])
 
 
 def _resolve_go_targets(
@@ -811,6 +819,7 @@ _INCLUDE_RE = re.compile(
     r"""^\s*#\s*include\s*([<"])([^>"]+)[>"]""",
     re.M,
 )
+
 
 def _resolve_include(
     from_file: str,

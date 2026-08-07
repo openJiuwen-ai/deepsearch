@@ -50,9 +50,13 @@ def test_finish_suggests_but_does_not_block_inheritance(tmp_path: Path):
         retriever=FakeRetriever(),
         feat_inherits_expand=True,
     )
-    tools._definitions_in_file = lambda rel: [  # type: ignore[method-assign]
-        (1, 2, sub_ast) if rel == "pkg/child.py" else (1, 2, base_ast)
-    ]
+
+    def _defs_in_file(rel):
+        if rel == "pkg/child.py":
+            return [(1, 2, sub_ast)]
+        return [(1, 2, base_ast)]
+
+    tools.definitions_in_file = _defs_in_file  # type: ignore[method-assign]
 
     tools.add_context("pkg/child.py", 1, 2)
     allowed = tools.finish()

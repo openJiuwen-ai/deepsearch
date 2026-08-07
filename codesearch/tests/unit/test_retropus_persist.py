@@ -58,7 +58,7 @@ def _mini_kg() -> KnowledgeGraph:
         knowledge_graph_nodes=nodes,
         knowledge_graph_edges=edges,
     )
-    kg._cached_imports_labels = {(1, 1): "self"}  # noqa: SLF001
+    kg.set_imports_labels_map({(1, 1): "self"})
     return kg
 
 
@@ -73,9 +73,11 @@ def test_dump_load_knowledge_graph(tmp_path: Path):
     dump_knowledge_graph(kg, path)
     loaded = load_knowledge_graph(path)
 
-    assert len(loaded._knowledge_graph_nodes) == 4  # noqa: SLF001
-    assert len(loaded._knowledge_graph_edges) == 3  # noqa: SLF001
+    assert len(loaded.get_all_nodes()) == 4
+    assert len(loaded.get_all_edges()) == 3
     assert loaded.max_ast_depth == 6
+    assert loaded.chunk_size == 1000
+    assert loaded.chunk_overlap == 200
     assert loaded.get_imports_label(1, 1) == "self"
     assert loaded.get_file_nodes()[0].node.relative_path in (".", "a.py")
 
@@ -134,7 +136,7 @@ def test_dump_load_retropus_index_roundtrip(tmp_path: Path):
     kg2, ret2, repo2 = loaded
     assert repo2 == repo.resolve()
     assert len(kg2.get_ast_nodes()) == len(kg.get_ast_nodes())
-    assert len(ret2._documents) == len(retriever._documents)  # noqa: SLF001
+    assert len(ret2.get_documents()) == len(retriever.get_documents())
 
     # Wrong repo → miss
     assert load_retropus_index(cache, config=cfg, repo_dir=tmp_path / "other") is None
@@ -175,5 +177,5 @@ def test_retriever_reuses_disk_cache_across_instances(tmp_path: Path):
     assert report2.files_reused >= 1
     assert report2.files_new == 0
     assert report2.chunks_inserted == 0
-    assert r2._retropus_kg is not None  # noqa: SLF001
+    assert r2.has_retropus_index()
     asyncio.run(r2.close())

@@ -24,7 +24,7 @@ class AbstractBaseRetriever(ABC):
         """Find the FileNode that owns the given TextNode (following NEXT_CHUNK to root)."""
         return self.kg.find_file_node_for_text_node(text_node)
 
-    def _iter_ast_candidates(
+    def iter_ast_candidates(
         self, target_file_nodes: List[KnowledgeGraphNode]
     ) -> Sequence[Tuple[KnowledgeGraphNode, KnowledgeGraphNode]]:
         """Return (file_node, ast_node) pairs for non-root AST nodes under the given files."""

@@ -69,6 +69,21 @@ class CodeSearchRetriever:
         """See :meth:`engine_keeps_index_in_process`."""
         return self.engine_keeps_index_in_process(self.config.agent.engine)
 
+    def has_retropus_index(self) -> bool:
+        """True when an in-memory Retropus KG has been built or loaded."""
+        return self._retropus_kg is not None
+
+    def set_retropus_index(
+        self,
+        kg: Any,
+        retriever: Any,
+        repo_dir: Optional[Path | str],
+    ) -> None:
+        """Install an in-memory Retropus index (tests / advanced wiring)."""
+        self._retropus_kg = kg
+        self._retropus_retriever = retriever
+        self._retropus_repo_dir = Path(repo_dir) if repo_dir is not None else None
+
     # ---------- lazy wiring ----------
     def _ensure_store(self, reset: bool = False):
         if self._store is None:
@@ -132,12 +147,14 @@ class CodeSearchRetriever:
     def _dump_retropus_cache(self) -> None:
         """Persist current in-memory Retropus index when ``index_dir`` is set."""
         cache_dir = self._retropus_cache_dir()
-        if (
-            cache_dir is None
-            or self._retropus_kg is None
+        if cache_dir is None:
+            return
+        missing_state = (
+            self._retropus_kg is None
             or self._retropus_retriever is None
             or self._retropus_repo_dir is None
-        ):
+        )
+        if missing_state:
             return
         from openjiuwen_codesearch.retropus.persist import (  # noqa: PLC0415
             dump_retropus_index,
