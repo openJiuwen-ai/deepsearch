@@ -1,0 +1,9 @@
+.DS_Store
+.venv*/
+__pycache__/
+*.egg-info/
+uv.lock
+logs/
+.cursor/
+
+testdata/

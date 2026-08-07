@@ -1,0 +1,24 @@
+# 运行产物与本地环境（开源仓不携带任何实验数据）
+.venv*/
+__pycache__/
+*.pyc
+results/
+agent_logs/
+repos/
+tmp/
+_emb_*.db
+*.log
+.pytest_cache/
+*.egg-info/
+.DS_Store
+
+third_party/*
+!third_party/contextbench
+!third_party/contextbench/**
+
+# 构建与测试产物（本地生成，不入库）
+build/
+dist/
+.coverage
+coverage.xml
+outputs/

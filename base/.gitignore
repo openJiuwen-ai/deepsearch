@@ -1,0 +1,11 @@
+__pycache__/
+*.egg-info/
+.venv*/
+.pytest_cache/
+
+# 构建与测试产物（本地生成，不入库）
+build/
+dist/
+.coverage
+coverage.xml
+outputs/
