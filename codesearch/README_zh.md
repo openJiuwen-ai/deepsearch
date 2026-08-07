@@ -68,6 +68,9 @@ search 场景公共能力沉淀于 `openjiuwen-search-base`。详见
 python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
 ```
 
+计划使用 `engine=retropus`（进程内知识图谱 + BM25，不依赖 Milvus）时，
+额外加装 `retropus` 分组：`'.[dev,llm,retropus]'`。
+
 以 HTTP 服务方式运行：
 
 ```sh

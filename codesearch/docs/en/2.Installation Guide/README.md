@@ -63,7 +63,8 @@ The product does **not** fetch remote repositories for you. Names like
 | `server` | fastapi, uvicorn, pydantic-settings | HTTP service |
 | `llm` | openjiuwen | Workflow engine and model calls |
 | `embed` | aiohttp | Dense-vector mode |
-| `bench` | pandas, pyarrow | Benchmarks |
+| `bench` | pandas, pyarrow, tree-sitter* | ContextBench eval |
+| `retropus` | tree-sitter*, igittigitt, bm25s | Retropus engine (in-process KG + BM25, no Milvus) |
 | `dev` | pytest | Development |
 
 The server ships inside the package (`openjiuwen_codesearch/server/`); after

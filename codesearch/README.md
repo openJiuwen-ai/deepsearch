@@ -78,6 +78,9 @@ Four deployment options are supported: local source, wheel package, Docker image
 python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
 ```
 
+Add the `retropus` extra when you plan to use `engine=retropus`
+(in-process knowledge graph + BM25, no Milvus): `'.[dev,llm,retropus]'`.
+
 Run it as an HTTP service:
 
 ```sh

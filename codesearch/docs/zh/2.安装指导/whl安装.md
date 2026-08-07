@@ -48,6 +48,8 @@ uv pip install --python .venv/bin/python \
 
 > openJiuwen 锁定了预发布包 `a2a-sdk==1.0.0a0`。`pip` 对精确 pin 的预发布
 > 一般可直接安装；`uv` 需加 `--prerelease=allow`。
+> 若使用 `engine=retropus`，在 codesearch wheel 的 extras 中追加 `retropus`
+> （见[安装指导总览 · 可选依赖分组](./README.md#可选依赖分组)）。
 
 安装完成后应能直接调用：
 
