@@ -28,11 +28,11 @@ Manual full-edition setup requires installing dependencies, fetching source, and
 Manual install guides by OS:
 
 - **Windows**
-  - [Studio](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.8/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/%E6%9C%AC%E5%9C%B0%E5%AE%89%E8%A3%85/Windows%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md): see section “Method 2: Full manual installation”.
+  - [Studio](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.9/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/%E6%9C%AC%E5%9C%B0%E5%AE%89%E8%A3%85/Windows%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md): see section “Method 2: Full manual installation”.
   - [DeepSearch SDK](../DeepSearch_SDK/Local%20Installation/Windows%20Installation.md): see section “Method 2: Full manual installation”.
 - **Linux**
-  - [Studio](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.8/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/%E6%9C%AC%E5%9C%B0%E5%AE%89%E8%A3%85/Linux%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md): see section “Method 2: Full manual installation”.
+  - [Studio](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.9/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/%E6%9C%AC%E5%9C%B0%E5%AE%89%E8%A3%85/Linux%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md): see section “Method 2: Full manual installation”.
   - [DeepSearch SDK](../DeepSearch_SDK/Local%20Installation/Linux%20Installation.md): see section “Method 2: Full manual installation”.
 - **macOS**
-  - [Studio](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.8/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/%E6%9C%AC%E5%9C%B0%E5%AE%89%E8%A3%85/MacOS%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md): see section “Method 2: Full manual installation”.
+  - [Studio](https://gitcode.com/openJiuwen/agent-studio/blob/v0.1.9/docs/zh/2.%E5%AE%89%E8%A3%85%E6%8C%87%E5%AF%BC/%E6%9C%AC%E5%9C%B0%E5%AE%89%E8%A3%85/MacOS%E7%B3%BB%E7%BB%9F%E5%AE%89%E8%A3%85.md): see section “Method 2: Full manual installation”.
   - [DeepSearch SDK](../DeepSearch_SDK/Local%20Installation/macOS%20Installation.md): see section “Method 2: Full manual installation”.

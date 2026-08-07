@@ -37,8 +37,8 @@ Ensure the machine meets:
 
 ### 1. Download the package (skip if you already have it)
 
-* x86_64: [DeepSearch v0.1.8](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.8_amd64.zip)
-* ARM64: [DeepSearch v0.1.8](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.8_arm64.zip)
+* x86_64: [DeepSearch v0.1.9](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.9_amd64.zip)
+* ARM64: [DeepSearch v0.1.9](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/deployTool_0.1.9_arm64.zip)
 
 ### 2. Start DeepSearch
 
