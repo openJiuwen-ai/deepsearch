@@ -1,4 +1,4 @@
-"""Type definition for nodes and edges in the knowledge graph (copied from Prometheus)."""
+"""Type definition for nodes and edges in the knowledge graph (based on Prometheus)."""
 
 import dataclasses
 import enum
@@ -62,17 +62,17 @@ class KnowledgeGraphNode:
     node_id: int
     node: Union[FileNode, ASTNode, TextNode]
 
-    def to_neo4j_node(self) -> Union["Neo4jFileNode", "Neo4jASTNode", "Neo4jTextNode"]:
-        """Convert the KnowledgeGraphNode into a Neo4j node format."""
+    def to_dict(self) -> Union["FileNodeDict", "ASTNodeDict", "TextNodeDict"]:
+        """Convert the KnowledgeGraphNode into a serializable dict."""
         match self.node:
             case FileNode():
-                return Neo4jFileNode(
+                return FileNodeDict(
                     node_id=self.node_id,
                     basename=self.node.basename,
                     relative_path=self.node.relative_path,
                 )
             case ASTNode():
-                return Neo4jASTNode(
+                return ASTNodeDict(
                     node_id=self.node_id,
                     type=self.node.type,
                     start_line=self.node.start_line,
@@ -80,7 +80,7 @@ class KnowledgeGraphNode:
                     text=self.node.text,
                 )
             case TextNode():
-                return Neo4jTextNode(
+                return TextNodeDict(
                     node_id=self.node_id,
                     text=self.node.text,
                     start_line=self.node.start_line,
@@ -90,8 +90,8 @@ class KnowledgeGraphNode:
                 raise ValueError("Unknown KnowledgeGraphNode.node type")
 
     @classmethod
-    def from_neo4j_file_node(cls, node: "Neo4jFileNode") -> "KnowledgeGraphNode":
-        """Rebuild a ``KnowledgeGraphNode`` wrapping a ``FileNode`` from Neo4j dict fields."""
+    def from_file_node_dict(cls, node: "FileNodeDict") -> "KnowledgeGraphNode":
+        """Rebuild a ``KnowledgeGraphNode`` wrapping a ``FileNode`` from dict fields."""
         return cls(
             node_id=node["node_id"],
             node=FileNode(
@@ -101,8 +101,8 @@ class KnowledgeGraphNode:
         )
 
     @classmethod
-    def from_neo4j_ast_node(cls, node: "Neo4jASTNode") -> "KnowledgeGraphNode":
-        """Rebuild a ``KnowledgeGraphNode`` wrapping an ``ASTNode`` from Neo4j dict fields."""
+    def from_ast_node_dict(cls, node: "ASTNodeDict") -> "KnowledgeGraphNode":
+        """Rebuild a ``KnowledgeGraphNode`` wrapping an ``ASTNode`` from dict fields."""
         return cls(
             node_id=node["node_id"],
             node=ASTNode(
@@ -114,8 +114,8 @@ class KnowledgeGraphNode:
         )
 
     @classmethod
-    def from_neo4j_text_node(cls, node: "Neo4jTextNode") -> "KnowledgeGraphNode":
-        """Rebuild a ``KnowledgeGraphNode`` wrapping a ``TextNode`` from Neo4j dict fields."""
+    def from_text_node_dict(cls, node: "TextNodeDict") -> "KnowledgeGraphNode":
+        """Rebuild a ``KnowledgeGraphNode`` wrapping a ``TextNode`` from dict fields."""
         return cls(
             node_id=node["node_id"],
             node=TextNode(
@@ -152,65 +152,65 @@ class KnowledgeGraphEdge:
     target: KnowledgeGraphNode
     type: KnowledgeGraphEdgeType
 
-    def to_neo4j_edge(
+    def to_edge_dict(
         self,
     ) -> Union[
-        "Neo4jHasFileEdge",
-        "Neo4jHasASTEdge",
-        "Neo4jParentOfEdge",
-        "Neo4jHasTextEdge",
-        "Neo4jNextChunkEdge",
-        "Neo4jInheritsEdge",
-        "Neo4jImportsEdge",
+        "HasFileEdge",
+        "HasASTEdge",
+        "ParentOfEdge",
+        "HasTextEdge",
+        "NextChunkEdge",
+        "InheritsEdge",
+        "ImportsEdge",
     ]:
-        """Convert the KnowledgeGraphEdge into a Neo4j edge format."""
+        """Convert the KnowledgeGraphEdge into a serializable edge dict."""
         match self.type:
             case KnowledgeGraphEdgeType.has_file:
-                return Neo4jHasFileEdge(
-                    source=self.source.to_neo4j_node(),
-                    target=self.target.to_neo4j_node(),
+                return HasFileEdge(
+                    source=self.source.to_dict(),
+                    target=self.target.to_dict(),
                 )
             case KnowledgeGraphEdgeType.has_ast:
-                return Neo4jHasASTEdge(
-                    source=self.source.to_neo4j_node(),
-                    target=self.target.to_neo4j_node(),
+                return HasASTEdge(
+                    source=self.source.to_dict(),
+                    target=self.target.to_dict(),
                 )
             case KnowledgeGraphEdgeType.parent_of:
-                return Neo4jParentOfEdge(
-                    source=self.source.to_neo4j_node(),
-                    target=self.target.to_neo4j_node(),
+                return ParentOfEdge(
+                    source=self.source.to_dict(),
+                    target=self.target.to_dict(),
                 )
             case KnowledgeGraphEdgeType.has_text:
-                return Neo4jHasTextEdge(
-                    source=self.source.to_neo4j_node(),
-                    target=self.target.to_neo4j_node(),
+                return HasTextEdge(
+                    source=self.source.to_dict(),
+                    target=self.target.to_dict(),
                 )
             case KnowledgeGraphEdgeType.next_chunk:
-                return Neo4jNextChunkEdge(
-                    source=self.source.to_neo4j_node(),
-                    target=self.target.to_neo4j_node(),
+                return NextChunkEdge(
+                    source=self.source.to_dict(),
+                    target=self.target.to_dict(),
                 )
             case KnowledgeGraphEdgeType.inherits:
-                return Neo4jInheritsEdge(
-                    source=self.source.to_neo4j_node(),
-                    target=self.target.to_neo4j_node(),
+                return InheritsEdge(
+                    source=self.source.to_dict(),
+                    target=self.target.to_dict(),
                 )
             case KnowledgeGraphEdgeType.imports:
-                return Neo4jImportsEdge(
-                    source=self.source.to_neo4j_node(),
-                    target=self.target.to_neo4j_node(),
+                return ImportsEdge(
+                    source=self.source.to_dict(),
+                    target=self.target.to_dict(),
                 )
             case _:
                 raise ValueError(f"Unknown edge type: {self.type}")
 
 
 ###############################################################################
-#                              Neo4j types                                    #
+#                         Serializable dict types                             #
 ###############################################################################
 
 
-class Neo4jMetadataNode(TypedDict):
-    """Repo-level metadata attached when exporting a graph to Neo4j."""
+class MetadataNode(TypedDict):
+    """Repo-level metadata attached when serializing a graph."""
 
     codebase_source: str
     local_path: str
@@ -218,16 +218,16 @@ class Neo4jMetadataNode(TypedDict):
     commit_id: str
 
 
-class Neo4jFileNode(TypedDict):
-    """Neo4j property dict for a ``FileNode``."""
+class FileNodeDict(TypedDict):
+    """Serializable property dict for a ``FileNode``."""
 
     node_id: int
     basename: str
     relative_path: str
 
 
-class Neo4jASTNode(TypedDict):
-    """Neo4j property dict for an ``ASTNode``."""
+class ASTNodeDict(TypedDict):
+    """Serializable property dict for an ``ASTNode``."""
 
     node_id: int
     type: str
@@ -236,8 +236,8 @@ class Neo4jASTNode(TypedDict):
     text: str
 
 
-class Neo4jTextNode(TypedDict):
-    """Neo4j property dict for a ``TextNode``."""
+class TextNodeDict(TypedDict):
+    """Serializable property dict for a ``TextNode``."""
 
     node_id: int
     text: str
@@ -245,50 +245,50 @@ class Neo4jTextNode(TypedDict):
     end_line: int
 
 
-class Neo4jHasFileEdge(TypedDict):
-    """Neo4j edge dict for ``HAS_FILE`` (directory → child file/dir)."""
+class HasFileEdge(TypedDict):
+    """Serializable edge dict for ``HAS_FILE`` (directory → child file/dir)."""
 
-    source: Neo4jFileNode
-    target: Neo4jFileNode
-
-
-class Neo4jHasASTEdge(TypedDict):
-    """Neo4j edge dict for ``HAS_AST`` (file → AST root)."""
-
-    source: Neo4jFileNode
-    target: Neo4jASTNode
+    source: FileNodeDict
+    target: FileNodeDict
 
 
-class Neo4jParentOfEdge(TypedDict):
-    """Neo4j edge dict for ``PARENT_OF`` (AST parent → AST child)."""
+class HasASTEdge(TypedDict):
+    """Serializable edge dict for ``HAS_AST`` (file → AST root)."""
 
-    source: Neo4jASTNode
-    target: Neo4jASTNode
-
-
-class Neo4jHasTextEdge(TypedDict):
-    """Neo4j edge dict for ``HAS_TEXT`` (file → text chunk)."""
-
-    source: Neo4jFileNode
-    target: Neo4jTextNode
+    source: FileNodeDict
+    target: ASTNodeDict
 
 
-class Neo4jNextChunkEdge(TypedDict):
-    """Neo4j edge dict for ``NEXT_CHUNK`` (text chunk → next chunk)."""
+class ParentOfEdge(TypedDict):
+    """Serializable edge dict for ``PARENT_OF`` (AST parent → AST child)."""
 
-    source: Neo4jTextNode
-    target: Neo4jTextNode
-
-
-class Neo4jInheritsEdge(TypedDict):
-    """Neo4j edge dict for ``INHERITS`` (subtype AST → supertype AST)."""
-
-    source: Neo4jASTNode
-    target: Neo4jASTNode
+    source: ASTNodeDict
+    target: ASTNodeDict
 
 
-class Neo4jImportsEdge(TypedDict):
-    """Neo4j edge dict for ``IMPORTS`` (importer file → imported file)."""
+class HasTextEdge(TypedDict):
+    """Serializable edge dict for ``HAS_TEXT`` (file → text chunk)."""
 
-    source: Neo4jFileNode
-    target: Neo4jFileNode
+    source: FileNodeDict
+    target: TextNodeDict
+
+
+class NextChunkEdge(TypedDict):
+    """Serializable edge dict for ``NEXT_CHUNK`` (text chunk → next chunk)."""
+
+    source: TextNodeDict
+    target: TextNodeDict
+
+
+class InheritsEdge(TypedDict):
+    """Serializable edge dict for ``INHERITS`` (subtype AST → supertype AST)."""
+
+    source: ASTNodeDict
+    target: ASTNodeDict
+
+
+class ImportsEdge(TypedDict):
+    """Serializable edge dict for ``IMPORTS`` (importer file → imported file)."""
+
+    source: FileNodeDict
+    target: FileNodeDict

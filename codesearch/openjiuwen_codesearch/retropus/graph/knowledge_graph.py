@@ -1,4 +1,4 @@
-"""The in-memory knowledge graph representation of a codebase (copied from Prometheus).
+"""The in-memory knowledge graph representation of a codebase (based on Prometheus).
 
 Node types:
 * FileNode: Represent a file/dir
@@ -8,7 +8,7 @@ Node types:
 Edge types:
 * HAS_FILE, HAS_AST, HAS_TEXT, PARENT_OF, NEXT_CHUNK, INHERITS, IMPORTS
 
-The graph is built fully in memory (Retropus has no Neo4j dependency).
+The graph is built fully in memory.
 """
 
 import asyncio
@@ -21,20 +21,20 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 from openjiuwen_codesearch.retropus.graph.file_graph_builder import FileGraphBuilder
 from openjiuwen_codesearch.retropus.graph.graph_types import (
     ASTNode,
+    ASTNodeDict,
     FileNode,
+    FileNodeDict,
+    HasASTEdge,
+    HasFileEdge,
+    HasTextEdge,
+    InheritsEdge,
     KnowledgeGraphEdge,
     KnowledgeGraphEdgeType,
     KnowledgeGraphNode,
-    Neo4jASTNode,
-    Neo4jFileNode,
-    Neo4jHasASTEdge,
-    Neo4jHasFileEdge,
-    Neo4jHasTextEdge,
-    Neo4jInheritsEdge,
-    Neo4jNextChunkEdge,
-    Neo4jParentOfEdge,
-    Neo4jTextNode,
+    NextChunkEdge,
+    ParentOfEdge,
     TextNode,
+    TextNodeDict,
 )
 from openjiuwen_codesearch.retropus.graph.inherits import build_inherits_edges, inheritance_neighbors
 from openjiuwen_codesearch.retropus.graph.imports import build_imports_edges
@@ -555,41 +555,41 @@ class KnowledgeGraph:
             raise KeyError(f"no file node for text node id {current_id}")
         return file_node
 
-    def get_neo4j_file_nodes(self) -> Sequence[Neo4jFileNode]:
-        """Serialize file nodes to Neo4j-shaped dicts."""
-        return [kg_node.to_neo4j_node() for kg_node in self.get_file_nodes()]
+    def get_file_node_dicts(self) -> Sequence[FileNodeDict]:
+        """Serialize file nodes to dicts."""
+        return [kg_node.to_dict() for kg_node in self.get_file_nodes()]
 
-    def get_neo4j_ast_nodes(self) -> Sequence[Neo4jASTNode]:
-        """Serialize AST nodes to Neo4j-shaped dicts."""
-        return [kg_node.to_neo4j_node() for kg_node in self.get_ast_nodes()]
+    def get_ast_node_dicts(self) -> Sequence[ASTNodeDict]:
+        """Serialize AST nodes to dicts."""
+        return [kg_node.to_dict() for kg_node in self.get_ast_nodes()]
 
-    def get_neo4j_text_nodes(self) -> Sequence[Neo4jTextNode]:
-        """Serialize text nodes to Neo4j-shaped dicts."""
-        return [kg_node.to_neo4j_node() for kg_node in self.get_text_nodes()]
+    def get_text_node_dicts(self) -> Sequence[TextNodeDict]:
+        """Serialize text nodes to dicts."""
+        return [kg_node.to_dict() for kg_node in self.get_text_nodes()]
 
-    def get_neo4j_has_ast_edges(self) -> Sequence[Neo4jHasASTEdge]:
-        """Serialize ``HAS_AST`` edges to Neo4j-shaped dicts."""
-        return [kg_edge.to_neo4j_edge() for kg_edge in self.get_has_ast_edges()]
+    def get_has_ast_edge_dicts(self) -> Sequence[HasASTEdge]:
+        """Serialize ``HAS_AST`` edges to dicts."""
+        return [kg_edge.to_edge_dict() for kg_edge in self.get_has_ast_edges()]
 
-    def get_neo4j_has_file_edges(self) -> Sequence[Neo4jHasFileEdge]:
-        """Serialize ``HAS_FILE`` edges to Neo4j-shaped dicts."""
-        return [kg_edge.to_neo4j_edge() for kg_edge in self.get_has_file_edges()]
+    def get_has_file_edge_dicts(self) -> Sequence[HasFileEdge]:
+        """Serialize ``HAS_FILE`` edges to dicts."""
+        return [kg_edge.to_edge_dict() for kg_edge in self.get_has_file_edges()]
 
-    def get_neo4j_has_text_edges(self) -> Sequence[Neo4jHasTextEdge]:
-        """Serialize ``HAS_TEXT`` edges to Neo4j-shaped dicts."""
-        return [kg_edge.to_neo4j_edge() for kg_edge in self.get_has_text_edges()]
+    def get_has_text_edge_dicts(self) -> Sequence[HasTextEdge]:
+        """Serialize ``HAS_TEXT`` edges to dicts."""
+        return [kg_edge.to_edge_dict() for kg_edge in self.get_has_text_edges()]
 
-    def get_neo4j_next_chunk_edges(self) -> Sequence[Neo4jNextChunkEdge]:
-        """Serialize ``NEXT_CHUNK`` edges to Neo4j-shaped dicts."""
-        return [kg_edge.to_neo4j_edge() for kg_edge in self.get_next_chunk_edges()]
+    def get_next_chunk_edge_dicts(self) -> Sequence[NextChunkEdge]:
+        """Serialize ``NEXT_CHUNK`` edges to dicts."""
+        return [kg_edge.to_edge_dict() for kg_edge in self.get_next_chunk_edges()]
 
-    def get_neo4j_parent_of_edges(self) -> Sequence[Neo4jParentOfEdge]:
-        """Serialize ``PARENT_OF`` edges to Neo4j-shaped dicts."""
-        return [kg_edge.to_neo4j_edge() for kg_edge in self.get_parent_of_edges()]
+    def get_parent_of_edge_dicts(self) -> Sequence[ParentOfEdge]:
+        """Serialize ``PARENT_OF`` edges to dicts."""
+        return [kg_edge.to_edge_dict() for kg_edge in self.get_parent_of_edges()]
 
-    def get_neo4j_inherits_edges(self) -> Sequence[Neo4jInheritsEdge]:
-        """Serialize ``INHERITS`` edges to Neo4j-shaped dicts."""
-        return [kg_edge.to_neo4j_edge() for kg_edge in self.get_inherits_edges()]
+    def get_inherits_edge_dicts(self) -> Sequence[InheritsEdge]:
+        """Serialize ``INHERITS`` edges to dicts."""
+        return [kg_edge.to_edge_dict() for kg_edge in self.get_inherits_edges()]
 
     def get_parent_to_children_map(self) -> Mapping[int, Sequence[KnowledgeGraphNode]]:
         """Returns a mapping from parent AST node IDs to their child AST nodes."""

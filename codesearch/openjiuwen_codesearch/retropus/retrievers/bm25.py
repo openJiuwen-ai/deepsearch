@@ -1,4 +1,4 @@
-"""BM25-based knowledge-graph text retrieval using ``bm25s`` (copied from Prometheus).
+"""BM25-based knowledge-graph text retrieval using ``bm25s``.
 
 The knowledge graph is tokenized and indexed **once** (lazily, on the first
 search) into a single persistent ``bm25s.BM25`` instance kept on
@@ -44,8 +44,7 @@ EMPTY_DATA_MESSAGE = "Your query returned empty result, please try a different q
 def format_knowledge_graph_data(data: Sequence[Mapping[str, Any]]) -> str:
     """Format retriever result dicts into a readable string for the LLM.
 
-    Copied from Prometheus's ``format_knowledge_graph_data`` (the Neo4j-era name is
-    kept so the copied retrievers work unchanged).
+    Copied from Prometheus's ``format_knowledge_graph_data``.
 
     Emits a static header first, then results with keys in sorted order so the
     observation prefix stays byte-stable across similar queries.
