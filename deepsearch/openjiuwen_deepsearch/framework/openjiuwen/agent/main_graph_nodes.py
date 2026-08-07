@@ -215,6 +215,9 @@ class StartNode(Start):
             agent_config["info_collector_webpage_enrich_enable"] = origin_agent_config.get(
                 "info_collector_webpage_enrich_enable", False
             )
+            agent_config["info_collector_article_link_follow_enable"] = origin_agent_config.get(
+                "info_collector_article_link_follow_enable", False
+            )
             agent_config["web_search_engine_config"] = WebSearchEngineConfig(
                 search_engine_name=origin_agent_config.get("web_search_engine_config", {}).get("search_engine_name", "")
             )

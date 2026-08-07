@@ -464,6 +464,27 @@ def validate_runtime_request_url(url: str) -> None:
     )
 
 
+def validate_public_web_url(url: str) -> None:
+    """Require an HTTP(S) URL whose host resolves only to public addresses."""
+    parsed = urlparse(url)
+    if parsed.username is not None or parsed.password is not None:
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(
+                e=_unsafe_http_service_url_exception_detail(
+                    url,
+                    "embedded credentials are blocked",
+                    "article link follow url",
+                )
+            ),
+        )
+    _validate_http_url_for_ssrf(
+        url,
+        relaxed=False,
+        service_label="article link follow url",
+    )
+
+
 def validate_embedding_service_url(url: str) -> None:
     """
     Validate embedding HTTP service base URL to reduce SSRF risk.

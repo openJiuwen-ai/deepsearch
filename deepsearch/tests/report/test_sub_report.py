@@ -1734,7 +1734,7 @@ def test_table_caption_line_override_keeps_existing_on_conflict(caplog):
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
+async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm, caplog):
     mock_session = MagicMock()
     mock_session.write_custom_stream = AsyncMock()
     token = session_context.set(mock_session)
@@ -1820,13 +1820,15 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
             'scores': {'authority': 8, 'relevance': 9, 'answerability': 7, 'data_density': 6},
             'key_passages': ['fake passage'],
             'content_ref': {'type': 'source_store', 'source_id': 'web_1_p123'},
+            'discovery': {'method': 'article_link_follow', 'depth': 1},
         }],
         gathered_info=[{'url': 'fake_url', 'title': 'XX有限公司 - 企业详情', 'content': 'fake content'}],
         sub_evaluation_details='',
         max_generate_retry_num=3,
         max_sub_report_evaluate_num=0
     )
-    success, report, sub_report_content, classified_content = await reporter.generate_sub_report(current_inputs)
+    with caplog.at_level(logging.INFO):
+        success, report, sub_report_content, classified_content = await reporter.generate_sub_report(current_inputs)
 
     assert success is True
     assert current_inputs["sub_section_core_content"] == ["Document 1 key passages:\n- fake passage"]
@@ -1834,6 +1836,47 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm):
     assert current_inputs["sub_report_chapter_sidecar"].chapter_summary == "经营与行业摘要"
 
 
+    assert any("phase=report_candidate" in message and "urls=fake_url" in message for message in caplog.messages)
+    assert any("phase=report_prefilter" in message and "outcome=included" in message for message in caplog.messages)
+    assert any(
+        "phase=report_classification" in message
+        and "outcome=selected" in message
+        for message in caplog.messages
+    )
+
+
+@pytest.mark.asyncio
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+async def test_generate_sub_report_logs_followed_rationale_failure_terminal_outcome(
+    mock_llm_cls,
+    caplog,
+):
+    class ReporterWithEmptyRationales(Reporter):
+        async def _generate_section_rationales(self, *args, **kwargs):
+            return [], ""
+
+    reporter = ReporterWithEmptyRationales("basic")
+    followed_url = "https://example.com/followed-rationale-failure"
+
+    with caplog.at_level(logging.INFO):
+        success, _, _, _ = await reporter.generate_sub_report({
+            "section_idx": 2,
+            "section_task": "section",
+            "doc_infos": [{
+                **_report_doc(1, url=followed_url),
+                "source_id": "followed-source",
+                "discovery": {"method": "article_link_follow", "depth": 1},
+            }],
+        })
+
+    assert success is False
+    assert any(
+        "phase=report_classification" in message
+        and followed_url in message
+        and "outcome=not_selected" in message
+        and "reason=rationale_generation_failed" in message
+        for message in caplog.messages
+    )
 @pytest.mark.asyncio
 async def test_generate_sub_report_retries_writer_with_failure_feedback():
     mock_session = MagicMock()

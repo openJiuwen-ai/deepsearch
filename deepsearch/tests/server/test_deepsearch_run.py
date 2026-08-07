@@ -118,6 +118,20 @@ def test_deep_search_request_accepts_hybrid_execution_method():
     assert request.execution_method == "hybrid"
 
 
+def test_deep_search_request_defaults_article_link_follow_disabled():
+    request = _build_request()
+
+    assert request.info_collector_article_link_follow_enable is False
+
+
+def test_deep_search_request_accepts_article_link_follow_enable():
+    request_data = _build_request().model_dump(exclude_none=True)
+    request_data["info_collector_article_link_follow_enable"] = True
+    request = DeepSearchRequest.model_validate(request_data)
+
+    assert request.info_collector_article_link_follow_enable is True
+
+
 def test_deep_search_request_rejects_invalid_conversation_id():
     with pytest.raises(ValidationError) as exc_info:
         DeepSearchRequest(

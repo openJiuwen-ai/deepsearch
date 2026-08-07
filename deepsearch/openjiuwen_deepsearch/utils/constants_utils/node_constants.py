@@ -74,6 +74,7 @@ class AgentLlmName(enum.Enum):
     COLLECTOR_INFO_RETRIEVAL = NodeId.COLLECTOR_INFO.value
     COLLECTOR_WEBPAGE_ENRICHMENT_SELECTION = "collector_webpage_enrichment_selection"
     COLLECTOR_WEBPAGE_ENRICHMENT_COMPRESSION = "collector_webpage_enrichment_compression"
+    COLLECTOR_ARTICLE_LINK_FOLLOW_COMPRESSION = "collector_article_link_follow_compression"
     COLLECTOR_SUPERVISOR = NodeId.COLLECTOR_SUPERVISOR.value
     COLLECTOR_SUMMARY = NodeId.COLLECTOR_SUMMARY.value
 

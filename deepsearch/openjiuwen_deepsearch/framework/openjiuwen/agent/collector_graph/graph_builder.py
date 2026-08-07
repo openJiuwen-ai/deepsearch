@@ -855,7 +855,10 @@ def build_info_collector_sub_graph() -> Workflow:
     sub_workflow.add_connection(NodeId.START.value, NodeId.COLLECTOR_QUERY_GEN.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_QUERY_GEN.value, NodeId.COLLECTOR_INFO.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_INFO.value, NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value)
-    sub_workflow.add_connection(NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value, NodeId.COLLECTOR_SUPERVISOR.value)
+    sub_workflow.add_connection(
+        NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value,
+        NodeId.COLLECTOR_SUPERVISOR.value,
+    )
     supervisor_router = init_router(NodeId.COLLECTOR_SUPERVISOR.value,
                                     [NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_INFO.value])
     sub_workflow.add_conditional_connection(NodeId.COLLECTOR_SUPERVISOR.value, router=supervisor_router)

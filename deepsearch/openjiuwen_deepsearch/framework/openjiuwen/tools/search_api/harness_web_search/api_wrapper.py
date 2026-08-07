@@ -4,10 +4,14 @@
 import asyncio
 import logging
 import os
+import re
 import threading
+import time
 from contextlib import contextmanager
-from typing import Any, ClassVar, Generic, Optional, TypeVar
+from typing import Any, Callable, ClassVar, Generic, Optional, TypeVar
+from urllib.parse import urljoin
 
+import requests
 from openjiuwen.harness.tools.web_tools import WebFetchWebpageTool, WebPaidSearchTool
 from pydantic import BaseModel, ConfigDict, SecretStr
 
@@ -23,6 +27,11 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 HARNESS_FETCHED_CONTENT_MAX_LENGTH = MAX_COLLECTOR_DOC_CONTENT_LENGTH
+_DIRECT_FETCH_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; openJiuwen-DeepSearch/1.0)",
+}
+_REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
+_MAX_SAFE_REDIRECTS = 5
 
 
 class WebFetchWebpageAdapter(WebFetchWebpageTool):
@@ -32,6 +41,53 @@ class WebFetchWebpageAdapter(WebFetchWebpageTool):
     def fetch_webpage_sync(cls, url: str, timeout_seconds: int) -> dict[str, str | int]:
         """Fetch webpage content through the inherited web_tools implementation."""
         return dict(cls._fetch_webpage_sync(url, timeout_seconds))
+
+    @classmethod
+    def fetch_webpage_direct_sync(
+        cls,
+        url: str,
+        timeout_seconds: int,
+        validate_url: Callable[[str], None],
+    ) -> dict[str, str | int]:
+        """Fetch directly while validating every redirect target before access."""
+        current_url = url
+        deadline = time.monotonic() + float(timeout_seconds)
+        for redirect_count in range(_MAX_SAFE_REDIRECTS + 1):
+            validate_url(current_url)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("direct webpage fetch deadline exceeded")
+            response = requests.get(
+                current_url,
+                headers=_DIRECT_FETCH_HEADERS,
+                timeout=remaining,
+                allow_redirects=False,
+            )
+            if response.status_code in _REDIRECT_STATUS_CODES:
+                location = str(response.headers.get("Location") or "").strip()
+                response.close()
+                if not location:
+                    raise ValueError("redirect response has no Location header")
+                if redirect_count >= _MAX_SAFE_REDIRECTS:
+                    raise ValueError("too many webpage redirects")
+                current_url = urljoin(current_url, location)
+                continue
+
+            response.raise_for_status()
+            text = cls._decode_response_text(response)
+            content_type = str(response.headers.get("Content-Type") or "")
+            title = ""
+            if "html" in content_type.casefold():
+                title, text = cls._extract_main_text_from_html(text)
+            else:
+                text = re.sub(r"\s+", " ", text).strip()
+            return {
+                "url": str(response.url or current_url),
+                "status_code": response.status_code,
+                "title": title,
+                "content": text,
+            }
+        raise ValueError("too many webpage redirects")
 
     @classmethod
     def fetch_via_jina_reader_sync(cls, url: str, timeout_seconds: int) -> dict[str, str | int]:

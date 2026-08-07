@@ -15,6 +15,9 @@ from openjiuwen.core.workflow.workflow import Workflow
 from openjiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerConfig
 from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import deduplicate_doc_infos
+from openjiuwen_deepsearch.algorithm.report.article_link_follow_diagnostics import (
+    log_report_final_references,
+)
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
 from openjiuwen_deepsearch.common.common_constants import CHINESE
@@ -574,6 +577,18 @@ class SubSourceTracerNode(BaseNode):
 
         # 获取现有的 sub_report_content 对象并更新
         sub_report_content_obj = session.get_global_state("section_context.sub_report_content")
+        classified_content = (
+            sub_report_content_obj.classified_content
+            if sub_report_content_obj and isinstance(sub_report_content_obj, SubReportContent)
+            else []
+        )
+        log_report_final_references(
+            logger,
+            session.get_global_state("section_context.section_idx") or 1,
+            classified_content,
+            modified_report,
+            trace_source_datas,
+        )
         if sub_report_content_obj and isinstance(sub_report_content_obj, SubReportContent):
             sub_report_content_obj.sub_report_content_text = modified_report
             sub_report_content_obj.sub_report_trace_source_datas = trace_source_datas

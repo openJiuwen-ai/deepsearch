@@ -293,8 +293,8 @@ def tool_invoke_log_async(func):
             if kwargs.get("query") and not LogManager.is_sensitive():
                 search_stat["query"] = kwargs.get("query")
 
-            if (isinstance(result, dict) and 
-                result.get("search_results") and 
+            if (isinstance(result, dict) and
+                result.get("search_results") and
                 isinstance(result.get("search_results"), list)):
                 res_len_list = []
                 for search_result in result.get("search_results"):

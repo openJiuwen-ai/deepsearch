@@ -1,6 +1,7 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+import logging
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -330,6 +331,66 @@ class TestSubSourceTracerNode:
         assert isinstance(updated_sub_report, SubReportContent)
         assert updated_sub_report.sub_report_content_text == ""
         assert updated_sub_report.sub_report_trace_source_datas == []
+
+    @staticmethod
+    def test_post_handle_logs_article_link_follow_final_reference_outcomes(
+        sub_source_tracer_node,
+        mock_session,
+        caplog,
+    ):
+        traced_url = "https://example.com/traced-followed"
+        missing_url = "https://example.com/missing-followed"
+        existing_sub_report = SubReportContent(
+            sub_report_content_text="Original content",
+            classified_content=[
+                {
+                    "url": traced_url,
+                    "source_id": "traced-source",
+                    "discovery": {"method": "article_link_follow", "depth": 1},
+                },
+                {
+                    "url": missing_url,
+                    "source_id": "missing-source",
+                    "discovery": {"method": "article_link_follow", "depth": 1},
+                },
+            ],
+        )
+
+        def get_global_state(key):
+            if key == "section_context.sub_report_content":
+                return existing_sub_report
+            if key == "section_context.section_idx":
+                return 2
+            return None
+
+        mock_session.get_global_state.side_effect = get_global_state
+        algorithm_output = {
+            "trace_source_datas": [{"source_id": "traced-source"}],
+            "modified_report": "Final report without literal followed URLs.",
+        }
+
+        with caplog.at_level(logging.INFO):
+            result = sub_source_tracer_node.post_handle(
+                None,
+                algorithm_output,
+                mock_session,
+                None,
+            )
+
+        assert result["next_node"] == NodeId.END.value
+        assert any(
+            "phase=report_final_reference" in message
+            and traced_url in message
+            and "outcome=cited" in message
+            and "trace_source_match=true" in message
+            for message in caplog.messages
+        )
+        assert any(
+            "phase=report_final_reference" in message
+            and missing_url in message
+            and "outcome=not_cited" in message
+            for message in caplog.messages
+        )
 
     # ========== 覆盖率预检查集成测试（Commit f2381df 性能优化） ==========
 

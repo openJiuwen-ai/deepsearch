@@ -3,6 +3,7 @@
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
     EvidenceLedger,
+    append_link_attempts,
     append_attempted_queries,
     build_ledger_brief,
     ensure_ledger,
@@ -94,3 +95,26 @@ def test_build_ledger_brief_includes_non_empty_sections():
 def test_build_ledger_brief_returns_empty_string_for_empty_ledger():
     """Empty ledgers should not add prompt noise."""
     assert build_ledger_brief(EvidenceLedger()) == ""
+
+
+def test_legacy_ledger_defaults_link_lists_to_empty():
+    ledger = ensure_ledger({"attempted_queries": ["q"]})
+
+    assert ledger.attempted_links == []
+    assert ledger.successful_links == []
+    assert ledger.failed_links == []
+
+
+def test_append_link_attempts_preserves_order_and_deduplicates():
+    ledger = ensure_ledger(None)
+
+    updated = append_link_attempts(
+        ledger,
+        attempted=["https://example.com/b", "https://example.com/b"],
+        successful=["https://example.com/b"],
+        failed=[],
+    )
+
+    assert updated.attempted_links == ["https://example.com/b"]
+    assert updated.successful_links == ["https://example.com/b"]
+    assert updated.failed_links == []
