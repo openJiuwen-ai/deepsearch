@@ -1,13 +1,14 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""AbstractReactEngine 与 CodeSearch / Retropus 具体引擎。
+"""CodeSearchAgent（react）与 RetropusCodeSearchAgent。
 
-react 形态由 ``AbstractReactEngine.run`` 的 while 循环驱动；图形态
-（``GraphCodeSearchAgent``）复用 ``CodeSearchAgent`` 的同一份阶段方法，
-仅驱动方式不同。无实例运行态（全部在 RunContext），同一实例可安全并发 run。
+react 形态由 ``CodeSearchAgent.run`` 的 while 循环驱动，直接调用 steps.py 的
+``reasoning_step`` / ``tool_step`` / ``finalize``，与图形态（workflow.py 的
+``GraphCodeSearchAgent``）共享同一份阶段逻辑。无实例运行态（全部在 RunContext），
+同一实例可安全并发 run。
 
-RetropusCodeSearchAgent 使用独立的 retropus registry，不触碰 CodeSearch 的
-``get_registry()``。
+``RetropusCodeSearchAgent`` 走 ``AbstractReactEngine`` 控制流，使用独立的
+retropus registry，不触碰 CodeSearch 的 ``get_registry()``。
 """
 
 from __future__ import annotations
@@ -17,16 +18,10 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
 
-from openjiuwen_codesearch.algorithm.memory_ops import construct_final_hits
-from openjiuwen_codesearch.algorithm.reasoning import (
-    TURN_LIMIT_WARNING,
-    build_base_prompt,
-    run_reasoning_turn,
-)
 from openjiuwen_codesearch.algorithm.search_tools.registry import registry_schemas
 from openjiuwen_codesearch.domain.result import CodeSearchResult, FinalHit, Termination
 from openjiuwen_codesearch.framework.openjiuwen.runtime_context import CodeSearchRunContext
-from openjiuwen_codesearch.framework.openjiuwen.steps import get_registry
+from openjiuwen_codesearch.framework.openjiuwen.steps import finalize, reasoning_step, tool_step
 from openjiuwen_codesearch.llm.factory import ChatMessage
 
 if TYPE_CHECKING:
@@ -97,151 +92,18 @@ class AbstractReactEngine(ABC, Generic[TContext]):
         ...
 
 
-class CodeSearchAgent(AbstractReactEngine[CodeSearchRunContext]):
+class CodeSearchAgent:
+    """react 形态：直接复用 steps.py 的阶段函数，与图形态输出逐字节一致。"""
+
     async def run(self, ctx: CodeSearchRunContext) -> CodeSearchResult:
         logger.info("Starting multi-turn agentic retrieval loop (react engine)...")
-        return await super().run(ctx)
-
-    async def reasoning_step(self, ctx: CodeSearchRunContext) -> Optional[Termination]:
-        agent_cfg = ctx.config.agent
-
-        # fail-fast：索引未就绪不进循环（旧实现会空搜整整 max_turns 轮）
-        if ctx.turn == 0 and not await ctx.retriever.has_revision(ctx.revision):
-            return Termination.INDEX_NOT_READY
-        if ctx.turn >= agent_cfg.max_turns:
-            return Termination.MAX_TURNS
-
-        ctx.turn += 1
-        logger.info("Turn %d/%d...", ctx.turn, agent_cfg.max_turns)
-        if not ctx.base_prompt:
-            ctx.base_prompt = build_base_prompt(ctx.query, ctx.top_k)
-
-        memory_text = ctx.memory.render()
-        try:
-            response = await run_reasoning_turn(
-                ctx.main_llm,
-                ctx.base_prompt,
-                memory_text,
-                ctx.history,
-                registry_schemas(get_registry()),
-            )
-        except Exception as e:  # noqa: BLE001  LLM 失败走降级出口
-            logger.error("LLM API call failed: %s. Breaking loop.", e)
-            ctx.error = str(e)
-            return Termination.LLM_ERROR
-
-        ctx.add_tokens("main_llm", response.input_tokens, response.output_tokens)
-        ctx.write_trace(
-            {
-                "turn": ctx.turn,
-                "query": ctx.query,
-                "memory": memory_text,
-                "completion": {
-                    "content": response.content,
-                    "tool_calls": [c.model_dump() for c in response.tool_calls],
-                },
-            }
-        )
-        ctx.history.append(
-            ChatMessage(role="assistant", content=response.content or "", raw=response.raw)
-        )
-
-        if not response.tool_calls:
-            logger.warning("LLM stopped tool calling early. Breaking loop.")
-            return Termination.NO_TOOL_CALL
-
-        ctx.pending_calls = list(response.tool_calls)
-        return None
-
-    async def tool_step(self, ctx: CodeSearchRunContext) -> Optional[Termination]:
-        agent_cfg = ctx.config.agent
-        registry = get_registry()
-        calls, ctx.pending_calls = ctx.pending_calls, []
-
-        searched_this_turn = False
-        added_this_turn = 0
-        for call in calls:
-            spec = registry.get(call.name)
-            if spec is None:
-                ctx.history.append(
-                    ChatMessage(
-                        role="tool",
-                        tool_call_id=call.call_id,
-                        content=f"Error: unknown tool '{call.name}'.",
-                    )
-                )
-                continue
-            try:
-                outcome = await spec.executor(ctx, call.arguments)
-            except Exception as e:  # noqa: BLE001  单工具失败不终止循环
-                logger.error("Tool '%s' failed: %s", call.name, e)
-                ctx.history.append(
-                    ChatMessage(
-                        role="tool",
-                        tool_call_id=call.call_id,
-                        content=f"Error executing {call.name}: {e}",
-                    )
-                )
-                continue
-
-            ctx.add_tokens("filter_llm", *outcome.filter_tokens)
-
-            if outcome.submitted_ids is not None:
-                ctx.submitted_ids = outcome.submitted_ids
-                return Termination.SUBMITTED
-
-            searched_this_turn = searched_this_turn or outcome.searched
-            added_this_turn += outcome.added_snippets
-            ctx.history.append(
-                ChatMessage(role="tool", tool_call_id=call.call_id, content=outcome.message)
-            )
-
-        # 停滞终止：只统计"发生了检索却零新增"的轮次
-        if searched_this_turn:
-            if added_this_turn == 0:
-                ctx.empty_search_rounds += 1
-            else:
-                ctx.empty_search_rounds = 0
-            if ctx.empty_search_rounds >= agent_cfg.stagnation_rounds:
-                logger.warning(
-                    "No new snippets for %d consecutive search rounds. Stopping early.",
-                    ctx.empty_search_rounds,
-                )
-                return Termination.STAGNATED
-
-        # 轮次临界警告（与旧实现一致：最后 warn_before_turns 轮追加）
-        if ctx.turn > agent_cfg.max_turns - agent_cfg.warn_before_turns:
-            ctx.history.append(ChatMessage(role="user", content=TURN_LIMIT_WARNING))
-        return None
-
-    def finalize(
-        self, ctx: CodeSearchRunContext, termination: Termination
-    ) -> CodeSearchResult:
-        ctx.termination = termination
-        if termination == Termination.SUBMITTED:
-            hits = construct_final_hits(ctx.submitted_ids[: ctx.top_k], ctx.memory)
-        elif termination == Termination.INDEX_NOT_READY:
-            hits = []
-        else:
-            logger.warning(
-                "Agentic loop ended (%s). Returning snippets from memory.", termination
-            )
-            hits = construct_final_hits(ctx.memory.saved_ids()[: ctx.top_k], ctx.memory)
-        logger.info(
-            "Token usage for this issue: input=%d output=%d",
-            ctx.total_input_tokens,
-            ctx.total_output_tokens,
-        )
-        result = CodeSearchResult(
-            hits=hits,
-            termination=termination,
-            turns=ctx.turn,
-            total_input_tokens=ctx.total_input_tokens,
-            total_output_tokens=ctx.total_output_tokens,
-            error=ctx.error,
-        )
-        ctx.result = result
-        return result
+        while True:
+            termination = await reasoning_step(ctx)
+            if termination is not None:
+                return finalize(ctx, termination)
+            termination = await tool_step(ctx)
+            if termination is not None:
+                return finalize(ctx, termination)
 
 
 class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):

@@ -49,6 +49,14 @@ async def execute(env, args: dict) -> ToolOutcome:
     start_line = int(args["start_line"])
     end_line = int(args["end_line"])
     logger.info("Agent expanding context: %s lines %s-%s", target_file, start_line, end_line)
+    logger.info(
+        "   📜 Agent expanding context [%d/%d turns]: %s lines %s-%s",
+        env.turn,
+        env.config.agent.max_turns,
+        target_file,
+        start_line,
+        end_line,
+    )
 
     chunks = await env.retriever.fetch_overlapping(
         env.revision, target_file, start_line, end_line

@@ -40,7 +40,12 @@ def test_delete_snippets_removes_span_by_id(tmp_path):
     assert "id=2" in msg2
     assert len(tools.final_spans()) == 2
 
-    env = SimpleNamespace(tools=tools, memory=tools.memory)
+    env = SimpleNamespace(
+        tools=tools,
+        memory=tools.memory,
+        turn=1,
+        config=SimpleNamespace(agent=SimpleNamespace(max_turns=12)),
+    )
     outcome = run(
         execute_delete(env, {"snippet_ids": [1], "reasoning": "wrong file"})
     )

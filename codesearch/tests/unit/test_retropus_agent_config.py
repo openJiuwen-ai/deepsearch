@@ -1,9 +1,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Env → RetropusSearchAgentConfig (agent/runner path)."""
 
-import os
-
-import openjiuwen_codesearch.config.config as cfg_mod
+import openjiuwen_codesearch.config.env_file as env_file_mod
 from openjiuwen_codesearch.config.agent import RetropusSearchAgentConfig
 from openjiuwen_codesearch.config.config import CodeSearchConfig
 
@@ -32,11 +30,10 @@ _RETROPUS_ENV_KEYS = (
 
 
 def _isolate_env(monkeypatch, tmp_path, *, contents: str = "") -> None:
-    """Point dotenv loader at a temp file and clear Retropus knobs."""
-    env_file = tmp_path / ".env"
-    env_file.write_text(contents, encoding="utf-8")
-    monkeypatch.setattr(cfg_mod, "_DEFAULT_ENV_FILE", env_file)
-    monkeypatch.setattr(cfg_mod, "_DOTENV_LOADED", False)
+    """Point the dotenv loader at a temp cwd and clear Retropus knobs."""
+    (tmp_path / ".env").write_text(contents, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(env_file_mod, "_LOADED", False)
     for key in _RETROPUS_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
 
@@ -83,7 +80,8 @@ def test_retropus_agent_config_reads_feat_delete_snippets(monkeypatch, tmp_path)
 
 def test_codesearch_config_from_env_populates_retropus(monkeypatch, tmp_path):
     _isolate_env(monkeypatch, tmp_path)
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("CODESEARCH_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("CODESEARCH_LLM_BASE_URL", "https://api.example.com/v1")
     monkeypatch.setenv("MAX_ROUNDS", "4")
     monkeypatch.setenv("FEAT_BAN_TESTS", "1")
 
@@ -92,8 +90,8 @@ def test_codesearch_config_from_env_populates_retropus(monkeypatch, tmp_path):
     assert config.retropus.feat_ban_tests is True
 
 
-def test_from_env_respects_existing_os_environ_over_dotenv(monkeypatch, tmp_path):
-    """Process env wins; mirrors CodeSearchConfig._load_dotenv(override=False)."""
+def test_from_env_dotenv_overrides_export(monkeypatch, tmp_path):
+    """``.env`` wins over ``export``; mirrors ``ensure_dotenv_loaded(override=True)``."""
     _isolate_env(
         monkeypatch,
         tmp_path,
@@ -103,9 +101,8 @@ def test_from_env_respects_existing_os_environ_over_dotenv(monkeypatch, tmp_path
     monkeypatch.setenv("FEAT_BAN_TESTS", "0")
 
     cfg = RetropusSearchAgentConfig.from_env()
-    assert cfg.max_rounds == 2
-    assert cfg.feat_ban_tests is False
-    assert os.environ["MAX_ROUNDS"] == "2"
+    assert cfg.max_rounds == 99
+    assert cfg.feat_ban_tests is True
 
 
 def test_config_reads_min_mandatory_return_spans_env(monkeypatch, tmp_path):

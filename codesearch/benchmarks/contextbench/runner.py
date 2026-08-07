@@ -144,7 +144,7 @@ async def _run_milvus_benchmark(
                 result.total_input_tokens, result.total_output_tokens,
             )
 
-        store = retriever._store
+        store = retriever.get_store()
         if store is not None and hasattr(store, "release"):
             await store.release()
             logger.info("Released collection '%s' from memory.", collection)
@@ -200,19 +200,19 @@ def _config_from_args(args) -> CodeSearchConfig:
         config.agent.engine = args.engine
     if args.model:
         api_key = config.llm.main.api_key
-        api_base = config.llm.main.api_base
+        base_url = config.llm.main.base_url
         config.llm = LLMSuite(
             main=LLMConfig(
                 model_name=args.model,
                 api_key=api_key,
-                api_base=api_base,
+                base_url=base_url,
                 temperature=config.llm.main.temperature,
                 max_tokens=config.llm.main.max_tokens,
             ),
             filter=LLMConfig(
                 model_name=args.model,
                 api_key=api_key,
-                api_base=api_base,
+                base_url=base_url,
                 temperature=config.llm.filter.temperature,
                 max_tokens=config.llm.filter.max_tokens,
             ),

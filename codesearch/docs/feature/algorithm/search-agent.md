@@ -9,10 +9,12 @@ Retropus 工具与配置见 [retropus-agent.md](../framework/retropus-agent.md)�
 
 ## 双模型架构
 
-| 角色 | 默认模型 | 职责 |
-|---|---|---|
-| 决策模型 | openai/gpt-5 | 多轮工具调用：搜什么、看哪里、何时提交 |
-| 过滤模型 | openai/gpt-5-mini | 对每个检索到的 chunk 逐行提取与 issue 相关的行区间（`save_relevant_lines` 结构化输出，有界并发） |
+| 角色 | 默认模型 | 环境变量 | 职责 |
+|---|---|---|---|
+| 决策模型（main） | `openai/gpt-5` | `CODESEARCH_LLM_MODEL` | 多轮工具调用：搜什么、看哪里、何时提交 |
+| 过滤模型（filter） | `openai/gpt-5-mini` | `CODESEARCH_FILTER_LLM_MODEL` | 对每个检索到的 chunk 逐行提取与 issue 相关的行区间（`save_relevant_lines` 结构化输出，有界并发） |
+
+密钥与端点：`CODESEARCH_LLM_API_KEY` / `CODESEARCH_LLM_BASE_URL`（见产品文档安装指导）。
 
 用量结构：决策模型调用次数少但单次输入大（累积记忆随轮次增长），
 过滤模型调用次数多而单次输入小（每次只看一个 chunk）。

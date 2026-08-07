@@ -187,9 +187,9 @@ def test_retriever_search_index_not_ready():
     assert result.hits == []
 
 
-def test_agents_subclass_abstract_react_engine():
-    assert issubclass(CodeSearchAgent, AbstractReactEngine)
+def test_retropus_agent_subclasses_abstract_react_engine():
     assert issubclass(RetropusCodeSearchAgent, AbstractReactEngine)
+    assert not issubclass(CodeSearchAgent, AbstractReactEngine)
 
 
 def test_retropus_nudge_continues_to_second_llm_turn(tmp_path):

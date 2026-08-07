@@ -16,7 +16,8 @@ from openjiuwen_search_base.security import SecretInput, reveal_secret, to_secre
 
 
 class LLMConfig(BaseModel):
-    """OpenAI 兼容端点的通用客户端配置。
+    """OpenAI 兼容端点配置，字段与 deepsearch ``LLMConfig`` 对齐：
+    ``model_name`` / ``base_url`` / ``api_key``。
 
     密钥以 `bytearray` 存储（与 openJiuwen 系列产品一致），仅在发起调用时解码，
     避免不可变字符串在进程内长期驻留且无法擦除；构造时可直接传字符串。
@@ -26,7 +27,7 @@ class LLMConfig(BaseModel):
 
     model_name: str
     api_key: bytearray = Field(default_factory=bytearray)
-    api_base: str = "https://openrouter.ai/api/v1"
+    base_url: str = ""
     temperature: float = 0.0
     max_tokens: int = 8192
     # verify_ssl=True 时底层客户端要求显式提供 CA 证书路径；
@@ -141,7 +142,7 @@ class OpenJiuwenLLMClient:
                 client_id=client_id,
                 client_provider="OpenAI",  # OpenRouter 等走 OpenAI 兼容 API
                 api_key=reveal_secret(config.api_key),
-                api_base=config.api_base,
+                api_base=config.base_url,  # openjiuwen SDK 参数名仍是 api_base
                 verify_ssl=config.verify_ssl,
                 **client_kwargs,
             ),

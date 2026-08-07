@@ -11,6 +11,10 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from openjiuwen_codesearch.config.env_file import ensure_dotenv_loaded
+
+ensure_dotenv_loaded()
+
 
 class ServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CODESEARCH_", env_file=".env", extra="ignore")

@@ -50,7 +50,7 @@ The product does **not** fetch remote repositories for you. Names like
 |---|---|---|
 | Python | >= 3.11 | |
 | Milvus | >= 2.5 (2.6.x recommended) | Indexing and retrieval; BM25 Function needs 2.5+ |
-| LLM API key | `OPENAI_API_KEY` / `OPENAI_BASE_URL` (OpenRouter by default) or any OpenAI-compatible endpoint | Retrieval only; sparse indexing needs **no** key |
+| LLM API key | `CODESEARCH_LLM_API_KEY` + `CODESEARCH_LLM_BASE_URL` (OpenAI-compatible) | Retrieval only; sparse indexing needs **no** key |
 
 > **Language scope**: the syntax chunker supports **Python (`.py`) only**.
 > Indexing other languages yields 0 files — expected.
@@ -63,7 +63,8 @@ The product does **not** fetch remote repositories for you. Names like
 | `server` | fastapi, uvicorn, pydantic-settings | HTTP service |
 | `llm` | openjiuwen | Workflow engine and model calls |
 | `embed` | aiohttp | Dense-vector mode |
-| `bench` | pandas, pyarrow | Benchmarks |
+| `bench` | pandas, pyarrow, tree-sitter* (<3.12: languages; ≥3.12: language-pack) | ContextBench eval; use this extra, not upstream `requirements.txt` |
+| `retropus` | tree-sitter*, igittigitt, bm25s, numpy | Retropus engine (in-process KG + BM25, no Milvus) |
 | `dev` | pytest | Development |
 
 The server ships inside the package (`openjiuwen_codesearch/server/`); after
@@ -96,12 +97,19 @@ Default `0.0.0.0:8100`; docs at `/docs`, health at `/api/health`.
 
 ## Environment variables
 
-See `.env.example`.
+See `.env.example`. Prefer `.env`; fall back to process env when needed:
+
+1. **`.env` file (wins)**: `cp .env.example .env`, place it in the process cwd (or up to 4 parents). Keys in the file **override** same-named `export` values;
+2. **Process env** (when no `.env` is found, or a key is absent): `export` / Docker `-e` / orchestrator injection.
+
+SDK/CLI reads via `CodeSearchConfig.from_env()`; the HTTP server also uses `CODESEARCH_`-prefixed listen settings.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | empty | LLM key (retrieval) |
-| `OPENAI_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-compatible API base |
+| `CODESEARCH_LLM_API_KEY` | empty | LLM API key (retrieval) |
+| `CODESEARCH_LLM_BASE_URL` | empty | OpenAI-compatible endpoint (required for search, e.g. `https://api.openai.com/v1`) |
+| `CODESEARCH_LLM_MODEL` | `openai/gpt-5` | **main** model (multi-turn search decisions); omit to use this default |
+| `CODESEARCH_FILTER_LLM_MODEL` | `openai/gpt-5-mini` | **filter** model (line extraction); omit to use this default |
 | `MILVUS_HOST` | `localhost` | Vector store host |
 | `MILVUS_PORT` | `19530` | Vector store port |
 | `MILVUS_TOKEN` | empty | Credentials |
@@ -109,6 +117,8 @@ See `.env.example`.
 | `CODESEARCH_PORT` | `8100` | Port |
 | `CODESEARCH_LOG_LEVEL` | `INFO` | Log level |
 | `CODESEARCH_INDEX_ROOTS` | empty | Index whitelist; empty → index API 403 |
+
+You can also build a `CodeSearchConfig` in code (field names match deepsearch: `model_name` / `base_url` / `api_key`). Search always uses **main + filter**; with only key/base_url set, model names take the table defaults — change `CODESEARCH_LLM_MODEL` / `CODESEARCH_FILTER_LLM_MODEL` (or `model_name` in code) when switching endpoints.
 
 ## Milvus
 

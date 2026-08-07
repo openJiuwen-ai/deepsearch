@@ -30,7 +30,7 @@ and automated repair pipelines.
 
 - **Code-aware hybrid indexing**
     + Syntax-aware chunking along function and class boundaries, so every
-      chunk is a complete semantic unit.
+      chunk is a complete semantic unit (**Python only for now**).
     + Dual sparse retrieval: token BM25 for semantic keywords, character
       trigram BM25 for exact substrings such as `data.sum()` or stack traces;
       optional dense-vector hybrid search.
@@ -72,24 +72,42 @@ See the [developer guide](docs/en/4.Developer%20Guide/README.md).
 
 # 📦 Installation
 
-Four deployment options are supported: local source, wheel package, Docker image, and HTTP service.
+Three deployment options: **local source**, **Docker image** (build yourself),
+and **official wheels** (download `openjiuwen-search-base` +
+`openjiuwen-codesearch` from the release URL).
 
-```sh
-python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm]'
-```
-
-Run it as an HTTP service:
-
-```sh
-pip install -e '.[milvus,llm,server]' && codesearch-server
-```
-
-Listens on `0.0.0.0:8100` and exposes health, search and indexing-job endpoints.
-The service has no built-in authentication and the indexing endpoint reads
-directories on the server host, so it only accepts paths under
-`CODESEARCH_INDEX_ROOTS` (indexing is refused until that is set).
-Full steps, dependency groups, Milvus deployment and environment variables:
+Start with the [Quick Guide](docs/en/2.Installation%20Guide/Quick%20Guide.md);
+shared env / Milvus / **local repo path** / security notes:
 [Installation Guide](docs/en/2.Installation%20Guide/README.md).
+
+Source install example (install sibling `base` together):
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm,server]'
+```
+
+Add the `retropus` extra when you plan to use `engine=retropus`
+(in-process knowledge graph + BM25, no Milvus): `'.[dev,llm,retropus]'`.
+
+Indexing needs a **local directory** (clone remotes first); search uses the
+collection name you chose at index time:
+
+```sh
+git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
+codesearch index --repo /data/repos/agent-core --collection agent_core
+codesearch search --collection agent_core --query "..."
+```
+
+Run as an HTTP service:
+
+```sh
+codesearch-server
+```
+
+Listens on `0.0.0.0:8100`. The service has **no built-in authentication**;
+`/api/v1/index` only accepts paths under `CODESEARCH_INDEX_ROOTS` (returns 403
+when unset — expected). Indexing currently supports **Python (`.py`) only**.
+Full steps: [Installation Guide](docs/en/2.Installation%20Guide/README.md).
 
 # 🚀 Quick start
 
@@ -100,12 +118,21 @@ codesearch index --repo /path/to/your/repo --collection my_repo
 ```
 
 ```sh
-export OPENAI_API_KEY="sk-or-v1-..."
-export OPENAI_BASE_URL="https://openrouter.ai/api/v1"   # default; can omit
+# Preferred: copy the template to .env and fill in values
+# (.env overrides same-named exports; use export only when no .env applies)
+cp .env.example .env
+# edit .env: CODESEARCH_LLM_API_KEY / CODESEARCH_LLM_BASE_URL (and optional model names)
+
+# Fallback (no .env, Docker -e, etc.):
+# export CODESEARCH_LLM_API_KEY="your-key"
+# export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"
+# export CODESEARCH_LLM_MODEL="openai/gpt-5"            # optional
+# export CODESEARCH_FILTER_LLM_MODEL="openai/gpt-5-mini"
+
 codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
 ```
 
-Python API, options and output format: [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md).
+Priority and the full variable table: [Installation · Environment variables](docs/en/2.Installation%20Guide/README.md#environment-variables). Search uses two models: **main** (multi-turn decisions) defaults to `openai/gpt-5`, **filter** (line extraction) defaults to `openai/gpt-5-mini`. When pointing at another endpoint, set model names your provider actually supports. Python API and full options: [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md).
 
 # ⚙️ Engines
 
@@ -129,7 +156,7 @@ There is **no** `ENGINE=` environment variable. Set it in code, HTTP, or CLI:
 | **HTTP API** | Optional JSON field `"engine"` on `POST /api/v1/index` and `POST /api/v1/search` (default `"auto"`). Use the **same** engine for index and search; mixing Retropus with a Milvus-backed collection returns **409**. |
 | **`codesearch` CLI** | `codesearch --engine retropus index --repo … --collection my_repo` then `codesearch --engine retropus search --collection my_repo --query "…"`. Optional `--index-dir` / `RETROPUS_INDEX_DIR`. |
 | **ContextBench CLI** | `python -m benchmarks.contextbench.runner --engine retropus` (also accepts `auto` / `graph` / `react`). |
-| **Env vars** | Engine name is not env-driven. Backend knobs still apply: `MILVUS_*` for `graph`/`react`/`auto`; `MAX_*` / `FEAT_*` / `RETROPUS_INDEX_DIR` under `CodeSearchConfig.retropus` when using Retropus (see [`.env.example`](.env.example)). |
+| **Env vars** | Engine name is not env-driven. Backend knobs still apply: `MILVUS_*` for `graph`/`react`/`auto`; `MAX_*` / `FEAT_*` / `RETROPUS_INDEX_DIR` under `CodeSearchConfig.retropus` when using Retropus (see [`.env.example`](.env.example)). LLM credentials are shared: `CODESEARCH_LLM_API_KEY` / `CODESEARCH_LLM_BASE_URL`. |
 
 ```python
 from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
@@ -146,19 +173,23 @@ Graph/react workflow: [codesearch-workflow.md](docs/feature/framework/codesearch
 
 Retrieval quality can be measured on [ContextBench](docs/en/3.Quick%20Start/3.Quick%20Start.md),
 a benchmark of real repository issues with annotated ground-truth context.
-The dataset is pulled in as a git submodule:
+The dataset is pulled in as a git submodule (see repo-root `.gitmodules`,
+path `codesearch/third_party/contextbench`):
 
 ```sh
+# from the monorepo root
 git submodule update --init --recursive
 ```
 
 ```sh
-pip install -e '.[bench]'
+# from codesearch/
+pip install -e '.[bench,milvus,llm]'   # [bench]=I/O+scoring; milvus/llm for retrieval
 python -m benchmarks.contextbench.runner --num-instances 32
 ```
 
-Predictions and scores are written to `./results/`. Metrics cover file, symbol,
-span and line granularity, each with coverage and precision. Full instructions:
+Predictions and auto-scored metrics go to `./results/`. Use the product
+`[bench]` extra (pandas/pyarrow + tree-sitter*); do not substitute upstream
+`requirements.txt`. Details:
 [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md#benchmarking).
 
 # 💻 Developer guide
