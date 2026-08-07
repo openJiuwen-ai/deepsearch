@@ -87,6 +87,9 @@ codesearch index --repo /data/repos/agent-core --collection agent_core
 codesearch search --collection agent_core --query "..."
 ```
 
+计划使用 `engine=retropus`（进程内知识图谱 + BM25，不依赖 Milvus）时，
+额外加装 `retropus` 分组：`'.[dev,llm,retropus]'`。
+
 以 HTTP 服务方式运行：
 
 ```sh
