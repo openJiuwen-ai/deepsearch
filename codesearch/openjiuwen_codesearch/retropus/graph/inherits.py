@@ -13,8 +13,6 @@ Resolution is precision-first: ambiguous base names are left unresolved
 rather than linked to the wrong type.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 from pathlib import Path

@@ -5,8 +5,6 @@ separators ``["\\n\\n", "\\n", " ", ""]``, ``keep_separator=True`` (attach at
 start), and ``strip_whitespace=True``.
 """
 
-from __future__ import annotations
-
 import re
 from typing import List, Sequence
 

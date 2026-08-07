@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Shared fakes for Retropus unit tests (no tree-sitter / bm25s)."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional

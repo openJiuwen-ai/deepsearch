@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Unit tests for ContextBench prediction export / eval summary helpers."""
 
-from __future__ import annotations
-
 import json
 import sys
 import types

@@ -17,8 +17,6 @@ Resolution is limited to paths that exist among KG file nodes (in-repo only).
 Ambiguous targets are left unresolved rather than linked incorrectly.
 """
 
-from __future__ import annotations
-
 import re
 from dataclasses import dataclass, field
 from pathlib import Path

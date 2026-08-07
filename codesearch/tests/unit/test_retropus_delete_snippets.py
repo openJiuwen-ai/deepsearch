@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """FEAT_DELETE_SNIPPETS: register + execute CodeSearch delete_snippets on Retropus spans."""
 
-from __future__ import annotations
-
 from types import SimpleNamespace
 
 from openjiuwen_codesearch.algorithm.search_tools.memory_tools import execute_delete

@@ -6,8 +6,6 @@ Heavy state stays on ``RetrievalTools`` (via mixin); executors call ``env.tools`
 Never register these into CodeSearch ``build_default_registry``.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Tuple

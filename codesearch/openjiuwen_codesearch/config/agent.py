@@ -1,6 +1,5 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-from __future__ import annotations
 
 import os
 from typing import Literal, Optional
@@ -110,7 +109,7 @@ class RetropusSearchAgentConfig(BaseModel):
         return [name for name, on in self.feature_flags().items() if on]
 
     @classmethod
-    def from_env(cls) -> RetropusSearchAgentConfig:
+    def from_env(cls) -> "RetropusSearchAgentConfig":
         """Build from process env (and ``.env`` if present)."""
         from openjiuwen_codesearch.config.env_file import (  # noqa: PLC0415
             ensure_dotenv_loaded,

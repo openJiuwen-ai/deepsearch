@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Shared token/trace helpers used by CodeSearch and Retropus run contexts."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

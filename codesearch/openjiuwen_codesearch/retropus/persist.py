@@ -15,8 +15,6 @@ Cache is keyed by ``collection`` name. A hit requires matching
 index to rebuild.
 """
 
-from __future__ import annotations
-
 import json
 import pickle
 import re

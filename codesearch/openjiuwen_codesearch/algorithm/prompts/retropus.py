@@ -14,8 +14,6 @@ the first user message.
 Templates live as ``algorithm/prompts/*.md`` and are loaded via ``load_prompt``.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 from typing import Any, Optional

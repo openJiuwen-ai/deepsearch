@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Shared path helpers for Retropus KG / retrieval tooling."""
 
-from __future__ import annotations
-
 import re
 
 # Union of patterns formerly duplicated in graph_tools + inherits (keep in sync).

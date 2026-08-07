@@ -7,8 +7,6 @@ optional ``delete_snippets`` reuses ``memory_tools.execute_delete``.
 Never merge into the default CodeSearch registry.
 """
 
-from __future__ import annotations
-
 import asyncio
 import re
 from pathlib import Path

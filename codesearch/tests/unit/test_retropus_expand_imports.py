@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Tests for expand_imports tool and KG IMPORTS edges (no tree-sitter / bm25s)."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from openjiuwen_codesearch.algorithm.prompts import load_prompt

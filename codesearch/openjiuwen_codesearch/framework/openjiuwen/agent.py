@@ -11,8 +11,6 @@ react 形态由 ``CodeSearchAgent.run`` 的 while 循环驱动，直接调用 st
 retropus registry，不触碰 CodeSearch 的 ``get_registry()``。
 """
 
-from __future__ import annotations
-
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path

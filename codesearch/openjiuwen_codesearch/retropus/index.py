@@ -1,7 +1,5 @@
 """Build a Retropus knowledge-graph index from a checked-out repository."""
 
-from __future__ import annotations
-
 import asyncio
 import time
 from pathlib import Path

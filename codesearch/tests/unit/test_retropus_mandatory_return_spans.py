@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Tests for min_mandatory_return_spans end-of-run padding."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock

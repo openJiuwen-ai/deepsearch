@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Shared token accounting + JSONL trace helpers for run contexts."""
 
-from __future__ import annotations
-
 import json
 import os
 from datetime import datetime, timezone

@@ -70,12 +70,6 @@ async def _run(args: argparse.Namespace) -> int:
         logger.error("Provide --query or --query-file")
         return 2
 
-    # Retropus search can reload a prior dump; optional --repo re-indexes first.
-    if config.agent.engine == "retropus" and args.repo:
-        await retriever.index_repository(
-            args.repo, revision=args.revision, reset=args.reset
-        )
-
     result = await retriever.search(query, revision=args.revision, top_k=args.top_k)
     logger.info(
         "Termination: %s | turns=%d | tokens=%din/%dout",
@@ -124,17 +118,6 @@ def main() -> None:
     p_search.add_argument("--collection", default="local_repo")
     p_search.add_argument("--revision", default="local")
     p_search.add_argument("--top-k", type=int, default=20)
-    p_search.add_argument(
-        "--repo",
-        default="",
-        help="For engine=retropus: index this repo before search "
-        "(otherwise reload dump for --collection)",
-    )
-    p_search.add_argument(
-        "--reset",
-        action="store_true",
-        help="For engine=retropus with --repo: rebuild and replace the dump",
-    )
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")

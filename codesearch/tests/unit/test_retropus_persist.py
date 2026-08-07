@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """On-disk Retropus KG / BM25 dump-load (no tree-sitter required for KG tests)."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

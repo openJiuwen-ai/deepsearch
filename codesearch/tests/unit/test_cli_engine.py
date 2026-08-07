@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """CLI --engine / --index-dir wiring (no network / Milvus)."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 from pathlib import Path

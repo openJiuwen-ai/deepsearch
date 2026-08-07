@@ -6,8 +6,6 @@ search) into a single persistent ``bm25s.BM25`` instance kept on
 against it. Call :meth:`reindex` if the underlying knowledge graph changes.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re
