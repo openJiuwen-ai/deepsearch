@@ -9,7 +9,7 @@ editable mode.
 |---|---|
 | Python | >= 3.11 |
 | Milvus | >= 2.5 (2.6.x recommended) |
-| LLM API key | `OPENAI_API_KEY` (retrieval only; `OPENAI_BASE_URL` defaults to OpenRouter) |
+| LLM API key | `CODESEARCH_LLM_API_KEY` + `CODESEARCH_LLM_BASE_URL` (retrieval only) |
 
 ```text
 <repo_root>/
@@ -45,8 +45,11 @@ See also [Quick Start](../3.Quick%20Start/3.Quick%20Start.md).
 ## Run
 
 ```sh
-export OPENAI_API_KEY="your-key"
-export OPENAI_BASE_URL="https://openrouter.ai/api/v1"   # default; can omit
+export CODESEARCH_LLM_API_KEY="your-key"
+export CODESEARCH_LLM_BASE_URL="https://api.openai.com/v1"   # any OpenAI-compatible endpoint
+# optional: defaults main=openai/gpt-5, filter=openai/gpt-5-mini
+# export CODESEARCH_LLM_MODEL="openai/gpt-5"
+# export CODESEARCH_FILTER_LLM_MODEL="openai/gpt-5-mini"
 export MILVUS_HOST=localhost MILVUS_PORT=19530
 export CODESEARCH_INDEX_ROOTS="/data/repos"
 

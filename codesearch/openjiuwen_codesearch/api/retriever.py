@@ -84,6 +84,7 @@ class CodeSearchRetriever:
         return self._store
 
     def _ensure_llms(self) -> tuple[LLMClient, LLMClient]:
+        """``search`` 专用：返回非空的 (main, filter)。缺则按 config.llm 创建。"""
         if self._main_llm is None or self._filter_llm is None:
             from openjiuwen_codesearch.llm.factory import create_llm_client
 
@@ -328,7 +329,12 @@ class CodeSearchRetriever:
         )
         return await RetropusCodeSearchAgent().run(ctx)
 
+    def get_store(self):
+        """返回当前底层 store（可能尚未惰性创建）。"""
+        return self._store
+
     # ---------- 生命周期 ----------
+
     async def close(self) -> None:
         """释放持有的连接资源（Milvus 连接别名等）。支持 async with 用法。"""
         if self._store is not None and hasattr(self._store, "close"):

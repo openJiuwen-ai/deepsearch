@@ -5,7 +5,8 @@
 # 构建上下文必须是仓库根（需要同时拷贝 base/ 与 codesearch/）：
 #   docker build -f codesearch/docker/Dockerfile -t openjiuwen-codesearch:0.2.0 .
 # 运行示例（服务形态，连接宿主 Milvus）：
-#   docker run --rm -p 8100:8100 -e OPENAI_API_KEY -e OPENAI_BASE_URL -e MILVUS_HOST=host.docker.internal \
+#   docker run --rm -p 8100:8100 -e CODESEARCH_LLM_API_KEY -e CODESEARCH_LLM_BASE_URL \
+#     -e MILVUS_HOST=host.docker.internal \
 #     -v /path/to/repo:/repo -v $(pwd)/output:/app/output openjiuwen-codesearch:0.2.0
 
 ARG BASE_IMAGE=python:3.11-slim-bookworm

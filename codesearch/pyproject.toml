@@ -8,6 +8,7 @@ requires-python = ">=3.11,<3.14"
 license = { text = "Apache-2.0" }
 dependencies = [
     "pydantic>=2.5",
+    "python-dotenv>=1.0",
     # search 场景公共能力包（同仓 base/；源码安装时先 `pip install -e ../base`）
     "openjiuwen-search-base[workflow,milvus,embed]==0.2.*",
 ]
@@ -26,16 +27,22 @@ milvus = ["pymilvus>=2.4,<3"]  # 已验证组合：客户端 2.6.x + 服务端 v
 embed = ["aiohttp>=3.9"]
 # 已验证该版本同时提供 foundation.llm 与 workflow/Runner 两组 API
 llm = ["openjiuwen==0.1.10.post3"]
-bench = ["pandas>=2.0", "pyarrow>=14"]
+bench = [
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "tree-sitter==0.25.2",
+    "tree-sitter-language-pack==1.12.5",
+]
+# Retropus 引擎：进程内 KG（tree-sitter）+ BM25，无 Milvus。
+# tree-sitter 两个 pin 必须与 bench 一致，否则 `[bench,retropus]` 无法共存。
 retropus = [
     "tree-sitter==0.25.2",
-    "tree-sitter-language-pack==0.10.0",
+    "tree-sitter-language-pack==1.12.5",
     "igittigitt>=2.1.5",
     "bm25s>=0.2.0",
-    "numpy>=1.24",
 ]
 dev = ["pytest>=8"]
-# 服务形态（源码/镜像部署，不进 wheel：packages.find 只收 openjiuwen_codesearch*）
+# 服务形态依赖（随包分发 openjiuwen_codesearch/server/；装 [server] 后可用 codesearch-server）
 server = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic-settings>=2.5"]
 
 [project.scripts]

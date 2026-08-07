@@ -10,7 +10,7 @@
 ## 功能目的
 
 把多轮检索循环以 openJiuwen workflow 图形态承载（Studio/Ops 可观测），同时保留
-纯代码循环兜底；两引擎共享 `CodeSearchAgent` 的阶段方法，行为逐字节一致。
+纯代码循环兜底；两引擎共享同一份阶段逻辑，行为逐字节一致。
 
 ## 图结构
 
@@ -21,9 +21,9 @@ START → REASONING ⇄ TOOL（自环），两者均可路由 END
 | 节点 | 调用 | 路由输出（next_node） |
 |---|---|---|
 | `CSStartNode` (Start) | 校验 run_id 注册表命中 | → reasoning（固定边） |
-| `ReasoningNode` | `CodeSearchAgent.reasoning_step`：fail-fast / 轮次上限 / 一轮 LLM 决策 | tool / end |
-| `ToolNode` | `CodeSearchAgent.tool_step`：批量执行 pending 工具调用、过滤入记忆、停滞计数、临界警告 | reasoning / end |
-| `CSEndNode` (End) | `CodeSearchAgent.finalize`：按 Termination 构造最终结果 | — |
+| `ReasoningNode` | `steps.reasoning_step`：fail-fast / 轮次上限 / 一轮 LLM 决策 | tool / end |
+| `ToolNode` | `steps.tool_step`：批量执行 pending 工具调用、过滤入记忆、停滞计数、临界警告 | reasoning / end |
+| `CSEndNode` (End) | `steps.finalize`：按 Termination 构造最终结果 | — |
 
 路由基于 `Termination` 枚举写入 `next_node`（BranchRouter 条件
 `${节点.next_node} == '目标'`），禁止业务字符串比较。
@@ -48,10 +48,10 @@ START → REASONING ⇄ TOOL（自环），两者均可路由 END
 
 | 文件 | 内容 |
 |---|---|
-| `framework/openjiuwen/agent.py` | `AbstractReactEngine` + `CodeSearchAgent` 阶段方法（react while 循环） |
-| `framework/openjiuwen/steps.py` | CodeSearch 默认工具 `get_registry()` |
+| `framework/openjiuwen/steps.py` | 阶段函数（两引擎共享的全部循环逻辑） |
 | `framework/openjiuwen/workflow.py` | 图组装、注册、GraphCodeSearchAgent、超时注入 |
-| `framework/openjiuwen/nodes.py` | 四节点薄包装（调用共享 `CodeSearchAgent` 实例） |
+| `framework/openjiuwen/nodes.py` | 四节点薄包装 |
 | `framework/openjiuwen/base_node.py` | 薄壳 → **base 包** `openjiuwen_search_base.workflow`（三段式 BaseNode + init_router） |
 | `framework/openjiuwen/runtime_context.py` | CodeSearchRunContext + 运行注册表（注册表实现在 **base 包** `openjiuwen_search_base.runtime`） |
+| `framework/openjiuwen/agent.py` | `AbstractReactEngine` + react 引擎（同一 steps 的 while 循环驱动）；Retropus 引擎亦在此 |
 | `server/routers/api.py` | HTTP 服务出口：检索同步返回、索引转后台作业 |

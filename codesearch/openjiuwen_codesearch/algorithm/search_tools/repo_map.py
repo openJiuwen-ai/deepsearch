@@ -22,6 +22,11 @@ SCHEMA = {
 
 async def execute(env, args: dict) -> ToolOutcome:
     logger.info("Agent requested repo map")
+    logger.info(
+        "   🗺️  Agent view_repo_map [%d/%d turns]",
+        env.turn,
+        env.config.agent.max_turns,
+    )
     repo_map_str = await env.retriever.get_repo_map(env.revision)
     return ToolOutcome(message=repo_map_str)
 

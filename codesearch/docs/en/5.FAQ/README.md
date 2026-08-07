@@ -89,7 +89,13 @@ Yes. After `codesearch --engine retropus index …`, KG + BM25 are written under
 `total_output_tokens`.
 
 **Can I use local or third-party models?**  
-Yes — any OpenAI-compatible endpoint; decision and filter models are independent.
+Yes. Set `CODESEARCH_LLM_API_KEY` and `CODESEARCH_LLM_BASE_URL` (any OpenAI-compatible
+endpoint). Search uses two models: **main** (defaults to `openai/gpt-5`) and
+**filter** (defaults to `openai/gpt-5-mini`). Override with
+`CODESEARCH_LLM_MODEL` / `CODESEARCH_FILTER_LLM_MODEL`, or build an `LLMSuite` in
+code. When switching endpoints, use model names that provider actually supports.
+See [Quick Start](../3.Quick%20Start/3.Quick%20Start.md) and
+[Installation · Environment variables](../2.Installation%20Guide/README.md#environment-variables).
 
 ## Runtime
 

@@ -55,8 +55,17 @@ async def execute(env, args: dict) -> ToolOutcome:
     search_query = args.get("search_query", env.query)
     use_trigram = bool(args.get("use_trigram", False))
     target_file = args.get("target_file")
+    max_turns = env.config.agent.max_turns
     logger.info(
         "Agent search: query=%r trigram=%s file=%s", search_query, use_trigram, target_file
+    )
+    logger.info(
+        "   🔍 Agent Search [%d/%d turns]: query='%s', trigram=%s, file=%s",
+        env.turn,
+        max_turns,
+        search_query,
+        use_trigram,
+        target_file,
     )
 
     if target_file and "file:" not in search_query.lower():

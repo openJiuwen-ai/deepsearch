@@ -1,6 +1,8 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Retropus registry isolation — no tree-sitter / bm25s required."""
 
+from types import SimpleNamespace
+
 from openjiuwen_codesearch.algorithm.search_tools import build_default_registry
 from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (
     build_retropus_registry,
@@ -159,6 +161,8 @@ def test_retropus_registry_reuses_delete_snippets_executor():
 
     class Env:
         memory = Memory()
+        turn = 1
+        config = SimpleNamespace(agent=SimpleNamespace(max_turns=12))
 
     outcome = run(
         registry["delete_snippets"].executor(

@@ -111,11 +111,12 @@ class RetropusSearchAgentConfig(BaseModel):
 
     @classmethod
     def from_env(cls) -> RetropusSearchAgentConfig:
-        """Build from process env (and ``codesearch/.env`` if present)."""
-        # Lazy import avoids circular import with CodeSearchConfig.
-        from openjiuwen_codesearch.config import config as cfg_mod  # noqa: PLC0415
+        """Build from process env (and ``.env`` if present)."""
+        from openjiuwen_codesearch.config.env_file import (  # noqa: PLC0415
+            ensure_dotenv_loaded,
+        )
 
-        cfg_mod._load_dotenv()
+        ensure_dotenv_loaded()
 
         defaults = cls()
         retriever = (_first_env("RETRIEVER", default=defaults.retriever) or "bm25").lower()

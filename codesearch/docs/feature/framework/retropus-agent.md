@@ -50,8 +50,9 @@ CodeSearch 默认五工具注册表严格隔离。
 全部字段在 `RetropusSearchAgentConfig`（`openjiuwen_codesearch/config/agent.py`）。
 经 `CodeSearchConfig.from_env()` → `RetropusSearchAgentConfig.from_env()` 从
 `codesearch/.env`（若存在）与进程环境加载；进程环境优先于 `.env`。
-LLM 凭证仍在 `CodeSearchConfig.llm`（`OPENAI_API_KEY` / `OPENAI_BASE_URL` / `MODEL`），
-不在本块。示例见仓库根 [`.env.example`](../../../.env.example)。
+LLM 凭证仍在 `CodeSearchConfig.llm`（`CODESEARCH_LLM_API_KEY` /
+`CODESEARCH_LLM_BASE_URL` / `CODESEARCH_LLM_MODEL`），不在本块。示例见仓库根
+[`.env.example`](../../../.env.example)。
 
 ### 索引 / 检索后端
 
