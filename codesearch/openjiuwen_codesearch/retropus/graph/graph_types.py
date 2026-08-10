@@ -123,7 +123,8 @@ class KnowledgeGraphEdge:
 
 def _serialize_file(kg: KnowledgeGraphNode) -> "FileNodeDict":
     n = kg.node
-    assert isinstance(n, FileNode)
+    if not isinstance(n, FileNode):
+        raise TypeError(f"expected FileNode payload, got {type(n)!r}")
     return FileNodeDict(
         node_id=kg.node_id,
         basename=n.basename,
@@ -133,7 +134,8 @@ def _serialize_file(kg: KnowledgeGraphNode) -> "FileNodeDict":
 
 def _serialize_ast(kg: KnowledgeGraphNode) -> "ASTNodeDict":
     n = kg.node
-    assert isinstance(n, ASTNode)
+    if not isinstance(n, ASTNode):
+        raise TypeError(f"expected ASTNode payload, got {type(n)!r}")
     return ASTNodeDict(
         node_id=kg.node_id,
         type=n.type,
@@ -145,7 +147,8 @@ def _serialize_ast(kg: KnowledgeGraphNode) -> "ASTNodeDict":
 
 def _serialize_text(kg: KnowledgeGraphNode) -> "TextNodeDict":
     n = kg.node
-    assert isinstance(n, TextNode)
+    if not isinstance(n, TextNode):
+        raise TypeError(f"expected TextNode payload, got {type(n)!r}")
     return TextNodeDict(
         node_id=kg.node_id,
         text=n.text,

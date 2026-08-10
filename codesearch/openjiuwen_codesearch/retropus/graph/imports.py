@@ -1,7 +1,7 @@
 """Multi-language import graph over knowledge-graph file nodes.
 
 ``IMPORTS`` edges are FileNode → FileNode (importer → imported module), built
-into the KG at graph-construction time. An inverted adjacency is derived from
+into the KnowledgeGraph at graph-construction time. An inverted adjacency is derived from
 those edges for "who imports me?".
 
 Coverage spans all ContextBench languages:
@@ -13,7 +13,7 @@ Coverage spans all ContextBench languages:
 * Rust — ``use`` / ``mod`` (crate-local + relative)
 * C / C++ — ``#include "…"`` / ``#include <…>`` (in-repo only)
 
-Resolution is limited to paths that exist among KG file nodes (in-repo only).
+Resolution is limited to paths that exist among KnowledgeGraph file nodes (in-repo only).
 Ambiguous targets are left unresolved rather than linked incorrectly.
 """
 
@@ -245,7 +245,7 @@ def resolve_module_to_existing_file(
     mod_path: str,
     known_files: Set[str],
 ) -> Optional[str]:
-    """Map a slash module path (no extension) to an existing KG file path."""
+    """Map a slash module path (no extension) to an existing KnowledgeGraph file path."""
     mod = (mod_path or "").replace("\\", "/").replace(".", "/").strip("/")
     if not mod:
         return None
@@ -882,7 +882,7 @@ def resolve_import_targets(
     from_file: str,
     known_files: Set[str],
 ) -> List[Tuple[str, str]]:
-    """Resolve imports in ``from_file`` to existing KG paths.
+    """Resolve imports in ``from_file`` to existing KnowledgeGraph paths.
 
     Returns ``[(target_rel, local_name), ...]`` (deduped by target).
 
@@ -899,7 +899,7 @@ def resolve_import_targets(
 
 @dataclass
 class ImportIndex:
-    """Bidirectional import graph among KG file paths."""
+    """Bidirectional import graph among KnowledgeGraph file paths."""
 
     outgoing: Dict[str, List[Tuple[str, str]]] = field(default_factory=dict)
     incoming: Dict[str, List[Tuple[str, str]]] = field(default_factory=dict)
@@ -1027,7 +1027,7 @@ def build_import_index(
 ) -> ImportIndex:
     """Parse importable source files under ``repo_root`` in ``file_rels``.
 
-    Fallback when a live KG with ``IMPORTS`` edges is unavailable (tests).
+    Fallback when a live KnowledgeGraph with ``IMPORTS`` edges is unavailable (tests).
     Only edges whose endpoints both exist in ``file_rels`` are kept.
     """
     root = Path(repo_root)
@@ -1052,7 +1052,7 @@ def build_import_index(
 
 
 def import_index_from_kg(kg: object) -> ImportIndex:
-    """Project KG ``IMPORTS`` edges into an :class:`ImportIndex` for tools."""
+    """Project KnowledgeGraph ``IMPORTS`` edges into an :class:`ImportIndex` for tools."""
     get_edges = getattr(kg, "get_imports_edges", None)
     get_files = getattr(kg, "get_file_nodes", None)
     get_label = getattr(kg, "get_imports_label", None)
@@ -1085,7 +1085,7 @@ def import_index_from_kg(kg: object) -> ImportIndex:
 
 
 def collect_kg_file_paths(file_nodes: Iterable[object]) -> List[str]:
-    """Extract repo-relative paths from KG file nodes."""
+    """Extract repo-relative paths from KnowledgeGraph file nodes."""
     out: List[str] = []
     for n in file_nodes:
         node = getattr(n, "node", None)

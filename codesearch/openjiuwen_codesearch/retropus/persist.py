@@ -50,7 +50,7 @@ def collection_index_dir(index_dir: str | Path, collection: str) -> Path:
 
 
 def config_fingerprint(config: RetropusSearchAgentConfig) -> dict[str, Any]:
-    """Fields that affect KG / BM25 contents (not agent-loop knobs)."""
+    """Fields that affect KnowledgeGraph / BM25 contents (not agent-loop knobs)."""
     return {
         "retriever": config.retriever,
         "max_ast_depth": config.max_ast_depth,
@@ -65,7 +65,7 @@ def _node_by_id(kg: KnowledgeGraph) -> dict[int, KnowledgeGraphNode]:
 
 
 def dump_knowledge_graph(kg: KnowledgeGraph, path: Path) -> None:
-    """Serialize KG nodes/edges/labels (pickle; local trusted cache)."""
+    """Serialize KnowledgeGraph nodes/edges/labels (pickle; local trusted cache)."""
     payload = {
         "max_ast_depth": kg.max_ast_depth,
         "chunk_size": kg.chunk_size,
@@ -139,7 +139,7 @@ def dump_bm25_retriever(retriever: Any, directory: Path) -> None:
         return
 
     bm25_dir.mkdir(parents=True, exist_ok=True)
-    # Corpus text is recoverable from the KG; keep the sparse index only.
+    # Corpus text is recoverable from the KnowledgeGraph; keep the sparse index only.
     underlying.save(str(bm25_dir), corpus=None)
 
 
@@ -165,7 +165,7 @@ def load_bm25_retriever(
         node = by_id.get(int(row["node_id"]))
         if file_node is None or node is None:
             raise ValueError(
-                f"BM25 document refers to missing KG node "
+                f"BM25 document refers to missing KnowledgeGraph node "
                 f"(file={row.get('file_node_id')}, node={row.get('node_id')})"
             )
         documents.append(

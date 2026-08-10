@@ -292,7 +292,7 @@ class _Document:
 
 
 class BM25Retriever(AbstractBaseRetriever):
-    """Rank AST/Text nodes with BM25 via :mod:`bm25s`, indexing the KG only once."""
+    """Rank AST/Text nodes with BM25 via :mod:`bm25s`, indexing the KnowledgeGraph only once."""
 
     def __init__(
         self,
@@ -358,7 +358,7 @@ class BM25Retriever(AbstractBaseRetriever):
         t0 = time.perf_counter()
         documents: List[_Document] = []
 
-        # Uses KG's cached AST→file map (built once after parse).
+        # Uses KnowledgeGraph's cached AST→file map (built once after parse).
         for file_node, ast_node in self.iter_ast_candidates(list(self.kg.get_file_nodes())):
             documents.append(_Document("ast", file_node, ast_node))
         n_ast = len(documents)

@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""On-disk Retropus KG / BM25 dump-load (no tree-sitter required for KG tests)."""
+"""On-disk Retropus KnowledgeGraph / BM25 dump-load (no tree-sitter required for KnowledgeGraph tests)."""
 
 from pathlib import Path
 

@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Tests for expand_imports tool and KG IMPORTS edges (no tree-sitter / bm25s)."""
+"""Tests for expand_imports tool and KnowledgeGraph IMPORTS edges (no tree-sitter / bm25s)."""
 
 from pathlib import Path
 
@@ -23,7 +23,7 @@ from tests.unit.retropus_fixtures import make_retropus_tools
 
 
 class _KgWithImports:
-    """Minimal KG stand-in exposing IMPORTS edges built by ``build_imports_edges``."""
+    """Minimal KnowledgeGraph stand-in exposing IMPORTS edges built by ``build_imports_edges``."""
 
     def __init__(self, edges, labels, file_nodes):
         self._edges = edges

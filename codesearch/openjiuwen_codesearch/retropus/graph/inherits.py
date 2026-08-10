@@ -648,7 +648,7 @@ def boost_ranked_files_with_inherits(
 
     Neighbors receive ``seed_score * score_factor`` (or keep their own score if
     higher). New files introduced by inheritance are eligible for the final
-    top-k cut. No-op when the KG has no INHERITS edges.
+    top-k cut. No-op when the KnowledgeGraph has no INHERITS edges.
     """
     if not ranked_files:
         return ranked_files

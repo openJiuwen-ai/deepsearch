@@ -13,6 +13,18 @@ from typing import List, Sequence
 _DEFAULT_SEPARATORS: Sequence[str] = ("\n\n", "\n", " ", "")
 
 
+def _check_limits(*, size: int, overlap: int) -> None:
+    """Validate chunk sizing before splitting."""
+    if size < 1:
+        raise ValueError(f"invalid chunk_size {size}: expected a positive integer")
+    if overlap < 0:
+        raise ValueError(f"invalid chunk_overlap {overlap}: expected a non-negative integer")
+    if overlap > size:
+        raise ValueError(
+            f"invalid chunk_overlap {overlap}: cannot exceed chunk_size {size}"
+        )
+
+
 def split_text(
     text: str,
     *,
@@ -21,14 +33,7 @@ def split_text(
     separators: Sequence[str] = _DEFAULT_SEPARATORS,
 ) -> List[str]:
     """Split ``text`` into overlapping chunks preferring coarser separators."""
-    if chunk_size <= 0:
-        raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
-    if chunk_overlap < 0:
-        raise ValueError(f"chunk_overlap must be >= 0, got {chunk_overlap}")
-    if chunk_overlap > chunk_size:
-        raise ValueError(
-            f"chunk_overlap ({chunk_overlap}) must be <= chunk_size ({chunk_size})"
-        )
+    _check_limits(size=chunk_size, overlap=chunk_overlap)
     if not text:
         return []
     return _recursive_split(
@@ -57,13 +62,6 @@ def _keep_separator_split(text: str, separator: str) -> List[str]:
 def _emit(parts: List[str], joiner: str) -> str | None:
     text = joiner.join(parts).strip()
     return text or None
-
-
-def _window_len(parts: List[str], joiner_len: int) -> int:
-    n = len(parts)
-    if n == 0:
-        return 0
-    return sum(map(len, parts)) + joiner_len * (n - 1)
 
 
 def _pack_windows(
@@ -106,7 +104,7 @@ def _pick_separator(text: str, separators: List[str]) -> tuple[str, List[str]]:
         if not sep:
             return sep, []
         if re.search(re.escape(sep), text):
-            return sep, separators[i + 1 :]
+            return sep, separators[i + 1:]
     return separators[-1], []
 
 

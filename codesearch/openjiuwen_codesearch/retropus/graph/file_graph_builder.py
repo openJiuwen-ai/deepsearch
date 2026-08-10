@@ -5,30 +5,21 @@ from __future__ import annotations
 
 import bisect
 from collections import deque
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, List, Sequence, Tuple
 
 from openjiuwen_codesearch.retropus.graph.graph_types import (
     ASTNode,
     KnowledgeGraphEdge,
     KnowledgeGraphEdgeType,
     KnowledgeGraphNode,
-    TextNode,
 )
 from openjiuwen_codesearch.retropus.graph.text_splitter import split_text
 
-_TEXT_SUFFIXES = frozenset({".markdown", ".md", ".txt", ".rst"})
+# Plain-text / markup suffixes handled by the chunking path.
+_DOC_SUFFIXES = (".md", ".markdown", ".rst", ".txt")
 
-GraphBuildResult = Tuple[int, Sequence[KnowledgeGraphNode], Sequence[KnowledgeGraphEdge]]
-
-
-@dataclass
-class _Chunk:
-    """Internal text piece plus optional line-span metadata."""
-
-    text: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+_Subgraph = Tuple[int, Sequence[KnowledgeGraphNode], Sequence[KnowledgeGraphEdge]]
 
 
 class FileGraphBuilder:
@@ -49,7 +40,7 @@ class FileGraphBuilder:
     @staticmethod
     def support_text_file(file: Path) -> bool:
         """True for markdown / rst / plain-text documents."""
-        return file.suffix.lower() in _TEXT_SUFFIXES
+        return file.suffix.lower() in _DOC_SUFFIXES
 
     def supports_file(self, file: Path) -> bool:
         """Whether this builder can index ``file``."""
@@ -57,7 +48,7 @@ class FileGraphBuilder:
 
     def build_file_graph(
         self, parent_node: KnowledgeGraphNode, file: Path, next_node_id: int
-    ) -> GraphBuildResult:
+    ) -> _Subgraph:
         """Attach AST or text-chunk subgraph under ``parent_node``."""
         if self.support_code_file(file):
             return self._build_ast_subgraph(parent_node, file, next_node_id)
@@ -65,19 +56,19 @@ class FileGraphBuilder:
 
     def _build_ast_subgraph(
         self, parent_node: KnowledgeGraphNode, file: Path, next_node_id: int
-    ) -> GraphBuildResult:
+    ) -> _Subgraph:
         """DFS-walk a tree-sitter tree into ``PARENT_OF`` / ``HAS_AST`` edges."""
         from openjiuwen_codesearch.retropus.parser import tree_sitter_parser  # guarded
 
         tree = tree_sitter_parser.parse(file)
         root = tree.root_node
         if root.has_error or root.child_count == 0:
-            return next_node_id, [], []
+            return next_node_id, (), ()
 
         nodes: List[KnowledgeGraphNode] = []
         edges: List[KnowledgeGraphEdge] = []
 
-        def _wrap(ts_node) -> KnowledgeGraphNode:
+        def _wrap(ts_node: Any) -> KnowledgeGraphNode:
             nonlocal next_node_id
             payload = ASTNode(
                 type=ts_node.type,
@@ -113,65 +104,70 @@ class FileGraphBuilder:
 
     def _build_text_subgraph(
         self, parent_node: KnowledgeGraphNode, file: Path, next_node_id: int
-    ) -> GraphBuildResult:
+    ) -> _Subgraph:
         """Chunk a text file and wire ``HAS_TEXT`` / ``NEXT_CHUNK`` edges."""
+        from openjiuwen_codesearch.retropus.graph.graph_types import TextNode
+
         body = file.read_text(encoding="utf-8")
         pieces = split_text(
             body, chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
         )
-        chunks = [_Chunk(text=p) for p in pieces]
-        self._annotate_line_spans(body, chunks)
-        return self._link_text_chunks(chunks, parent_node, next_node_id)
+        spans = _line_spans_for_pieces(body, pieces)
+        return _chain_text_nodes(pieces, spans, parent_node, next_node_id, TextNode)
 
-    @staticmethod
-    def _annotate_line_spans(body: str, chunks: Sequence[_Chunk]) -> None:
-        """Attach 0-based start/end line metadata by locating each chunk in ``body``."""
-        # Byte offset of each line start (line 0 → 0).
-        line_starts = [0]
-        for i, ch in enumerate(body):
-            if ch == "\n":
-                line_starts.append(i + 1)
 
-        cursor = 0
-        for chunk in chunks:
-            start = body.find(chunk.text, cursor)
+def _line_spans_for_pieces(
+    body: str, pieces: Sequence[str]
+) -> List[Tuple[int, int]]:
+    """Map each piece to (start_line, end_line) using bisect_right convention."""
+    line_starts = [0]
+    for i, ch in enumerate(body):
+        if ch == "\n":
+            line_starts.append(i + 1)
+
+    spans: List[Tuple[int, int]] = []
+    cursor = 0
+    for piece in pieces:
+        start = body.find(piece, cursor)
+        if start < 0:
+            start = body.find(piece)
             if start < 0:
-                start = body.find(chunk.text)
-                if start < 0:
-                    raise ValueError("Chunk text not found in original text.")
-            end = start + len(chunk.text)
-            cursor = end
-            # Same convention as historical Retropus text spans: first line-start
-            # strictly after the offset (bisect_right), not the containing line.
-            chunk.metadata["start_line"] = bisect.bisect_right(line_starts, start)
-            chunk.metadata["end_line"] = bisect.bisect_right(line_starts, end)
-
-    @staticmethod
-    def _link_text_chunks(
-        chunks: Sequence[_Chunk],
-        parent_node: KnowledgeGraphNode,
-        next_node_id: int,
-    ) -> GraphBuildResult:
-        nodes: List[KnowledgeGraphNode] = []
-        edges: List[KnowledgeGraphEdge] = []
-        prev: KnowledgeGraphNode | None = None
-
-        for chunk in chunks:
-            payload = TextNode(
-                text=chunk.text,
-                start_line=int(chunk.metadata.get("start_line", 0)),
-                end_line=int(chunk.metadata.get("end_line", 0)),
+                raise ValueError("Chunk text not found in original text.")
+        end = start + len(piece)
+        cursor = end
+        # Historical Retropus convention: first line-start strictly after offset.
+        spans.append(
+            (
+                bisect.bisect_right(line_starts, start),
+                bisect.bisect_right(line_starts, end),
             )
-            kg = KnowledgeGraphNode(next_node_id, payload)
-            next_node_id += 1
-            nodes.append(kg)
+        )
+    return spans
+
+
+def _chain_text_nodes(
+    pieces: Sequence[str],
+    spans: Sequence[Tuple[int, int]],
+    parent_node: KnowledgeGraphNode,
+    next_node_id: int,
+    text_node_cls: Any,
+) -> _Subgraph:
+    nodes: List[KnowledgeGraphNode] = []
+    edges: List[KnowledgeGraphEdge] = []
+    prev: KnowledgeGraphNode | None = None
+
+    for piece, (start_line, end_line) in zip(pieces, spans):
+        payload = text_node_cls(text=piece, start_line=start_line, end_line=end_line)
+        kg = KnowledgeGraphNode(next_node_id, payload)
+        next_node_id += 1
+        nodes.append(kg)
+        edges.append(
+            KnowledgeGraphEdge(parent_node, kg, KnowledgeGraphEdgeType.has_text)
+        )
+        if prev is not None:
             edges.append(
-                KnowledgeGraphEdge(parent_node, kg, KnowledgeGraphEdgeType.has_text)
+                KnowledgeGraphEdge(prev, kg, KnowledgeGraphEdgeType.next_chunk)
             )
-            if prev is not None:
-                edges.append(
-                    KnowledgeGraphEdge(prev, kg, KnowledgeGraphEdgeType.next_chunk)
-                )
-            prev = kg
+        prev = kg
 
-        return next_node_id, nodes, edges
+    return next_node_id, nodes, edges
