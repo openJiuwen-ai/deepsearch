@@ -1,6 +1,7 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import asyncio
+import hashlib
 import html
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -24,6 +25,7 @@ from tenacity import (
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_compact_classify_doc_infos_text,
+    build_structured_evidence_guide,
     format_scores_inline,
     format_key_passage_block,
     get_numeric_score,
@@ -1194,6 +1196,7 @@ class Reporter:
             current_inputs["sub_section_core_content_from_background_knowledge"] = True
             current_inputs["sub_section_references"] = []
             current_inputs["classified_content"] = []
+            current_inputs["structured_evidence_guide"] = ""
             classified_content = []
         else:
             # New flow: rationale generation → coverage matrix → greedy optimization → elbow cutoff → verify
@@ -1232,24 +1235,34 @@ class Reporter:
                 selected_docs = (coverage_result.get("filtered_docs") or doc_infos)[
                     :classify_doc_infos_res_top_k_num
                 ]
+                selected_doc_keys = [
+                    f"doc_{idx}" for idx in range(len(selected_docs))
+                ]
                 selected_marginal_values = [0.0] * len(selected_docs)
                 verify_result = None
             else:
-                selected_docs, marginal_values = self._optimize_document_set(
+                selected_docs, marginal_values, selected_doc_keys = self._optimize_document_set(
                     doc_infos, rationales, coverage_result,
-                    top_k=classify_doc_infos_res_top_k_num
+                    top_k=classify_doc_infos_res_top_k_num,
+                    return_doc_keys=True,
                 )
 
-                # Build marginal_value map by object identity so _elbow_cutoff's subset can be aligned back
-                mv_by_id = {id(doc): mv for doc, mv in zip(selected_docs, marginal_values)}
+                marginal_value_by_key = dict(
+                    zip(selected_doc_keys, marginal_values, strict=True)
+                )
 
-                selected_docs = self._elbow_cutoff(
+                selected_docs, selected_doc_keys = self._elbow_cutoff(
                     selected_docs, marginal_values, classify_doc_infos_res_top_k_num,
                     coverage_ctx={"coverage_result": coverage_result, "rationales": rationales},
                     fallback_docs=doc_infos,
+                    selected_doc_keys=selected_doc_keys,
+                    return_doc_keys=True,
                 )
 
-                selected_marginal_values = [mv_by_id.get(id(doc), 0.0) for doc in selected_docs]
+                selected_marginal_values = [
+                    marginal_value_by_key.get(doc_key, 0.0)
+                    for doc_key in selected_doc_keys
+                ]
 
                 verify_result = self._verify_coverage(
                     selected_docs, rationales, coverage_result, section_idx,
@@ -1287,10 +1300,12 @@ class Reporter:
                 )
                 return False, _format_sub_report_error("no valid URLs in selected docs"), "", []
 
-            classified_infos, classified_doc_infos = _get_classified_infos(
+            classified_infos, classified_doc_infos, classified_doc_keys = _get_classified_infos(
                 selected_docs,
                 selected_marginal_values,
                 max_source_id_count=classify_doc_infos_res_top_k_num,
+                selected_doc_keys=selected_doc_keys,
+                return_doc_keys=True,
             )
             current_inputs["sub_section_core_content"] = classified_infos.get(
                 "core_content_list", []
@@ -1302,6 +1317,19 @@ class Reporter:
             for idx, doc_info in enumerate(classified_doc_infos):
                 doc_info.pop("query", None)
                 doc_info["index"] = idx + 1
+            current_inputs["structured_evidence_guide"] = build_structured_evidence_guide(
+                classified_doc_infos,
+                rationales,
+                coverage_result,
+                selected_doc_keys=classified_doc_keys,
+            )
+            self._log_structured_evidence_build(
+                section_idx=section_idx,
+                rationales=rationales,
+                coverage_result=coverage_result,
+                classified_doc_infos=classified_doc_infos,
+                structured_evidence_guide=current_inputs["structured_evidence_guide"],
+            )
             current_inputs["classified_content"] = classified_doc_infos
             classified_content = classified_doc_infos
             if LogManager.is_sensitive():
@@ -2195,7 +2223,12 @@ class Reporter:
 
     @staticmethod
     def _optimize_document_set(
-        doc_infos: list, rationales: list, coverage_result: dict, top_k: int = 20
+        doc_infos: list,
+        rationales: list,
+        coverage_result: dict,
+        top_k: int = 20,
+        *,
+        return_doc_keys: bool = False,
     ) -> tuple:
         """Greedy submodular document selection (0 LLM calls).
 
@@ -2288,6 +2321,12 @@ class Reporter:
             sum(1 for v in covered.values() if v >= 0.3), len(rationale_ids),
         )
 
+        if return_doc_keys:
+            return (
+                selected_docs,
+                marginal_values,
+                [f"doc_{idx}" for idx in selected_indices],
+            )
         return selected_docs, marginal_values
 
     @staticmethod
@@ -2297,7 +2336,10 @@ class Reporter:
         top_k: int = 20,
         coverage_ctx: dict | None = None,
         fallback_docs: list | None = None,
-    ) -> list:
+        *,
+        selected_doc_keys: list[str] | None = None,
+        return_doc_keys: bool = False,
+    ):
         """Elbow detection + rationale-coverage-aware adaptive cutoff (0 LLM calls).
 
         First detects the marginal value drop (elbow). After the elbow, instead
@@ -2315,8 +2357,15 @@ class Reporter:
         Returns:
             Cutoff document list.
         """
+        aligned_keys = list(selected_doc_keys or [])
+        if return_doc_keys and len(aligned_keys) != len(selected_docs):
+            raise ValueError("selected docs and stable keys must be aligned")
+
+        def _result(docs: list, keys: list[str]):
+            return (docs, keys) if return_doc_keys else docs
+
         if len(selected_docs) <= 3:
-            return selected_docs
+            return _result(selected_docs, aligned_keys)
 
         # Compute adjacent marginal value differences
         diffs = [
@@ -2325,7 +2374,7 @@ class Reporter:
         ]
 
         if not diffs:
-            return selected_docs[:top_k]
+            return _result(selected_docs[:top_k], aligned_keys[:top_k])
 
         # Find max difference point (elbow)
         max_diff = max(diffs)
@@ -2333,7 +2382,7 @@ class Reporter:
 
         # Only cut off when max diff is significantly larger than mean diff
         if not (max_diff > mean_diff * 2 and max_diff > 0.05):
-            return selected_docs[:top_k]
+            return _result(selected_docs[:top_k], aligned_keys[:top_k])
 
         elbow_idx = diffs.index(max_diff)
         # Start from the first doc after elbow (the first dropped doc)
@@ -2356,8 +2405,8 @@ class Reporter:
                     "%s [elbow_cutoff] elbow at index %s, cutting from %s to %s docs (no coverage check)",
                     EFFECT_SUB_REPORT_TAG, elbow_idx, len(selected_docs), cutoff,
                 )
-                return selected_docs[:cutoff]
-            return selected_docs[:top_k]
+                return _result(selected_docs[:cutoff], aligned_keys[:cutoff])
+            return _result(selected_docs[:top_k], aligned_keys[:top_k])
 
         coverage_matrix = coverage_result.get("coverage_matrix", {})
         filtered_docs = coverage_result.get("filtered_docs", fallback_docs or selected_docs)
@@ -2367,8 +2416,10 @@ class Reporter:
         # handle same-URL different-content doc variants in filtered_docs.
         doc_to_idx = {id(doc): idx for idx, doc in enumerate(filtered_docs)}
 
-        def _get_doc_cov(doc: dict) -> dict:
+        def _get_doc_cov(doc: dict, doc_key: str = "") -> dict:
             """Get coverage scores for a doc from the coverage matrix."""
+            if doc_key:
+                return coverage_matrix.get(doc_key, {})
             idx = doc_to_idx.get(id(doc))
             if idx is None:
                 return {}
@@ -2376,11 +2427,13 @@ class Reporter:
 
         # Start with all pre-elbow docs
         kept_docs = list(selected_docs[:cutoff])
+        kept_keys = aligned_keys[:cutoff]
 
         # Compute max coverage per rationale from pre-elbow docs
         max_covered = {rid: 0.0 for rid in rationale_ids}
-        for doc in kept_docs:
-            doc_cov = _get_doc_cov(doc)
+        for index, doc in enumerate(kept_docs):
+            doc_key = kept_keys[index] if index < len(kept_keys) else ""
+            doc_cov = _get_doc_cov(doc, doc_key)
             for rid in rationale_ids:
                 cov = doc_cov.get(rid, 0.0)
                 if cov > max_covered[rid]:
@@ -2389,7 +2442,8 @@ class Reporter:
         # Iterate through ALL post-elbow docs, keep any that improves a rationale
         extra_kept = 0
         for i in range(cutoff, len(selected_docs)):
-            doc_cov = _get_doc_cov(selected_docs[i])
+            doc_key = aligned_keys[i] if i < len(aligned_keys) else ""
+            doc_cov = _get_doc_cov(selected_docs[i], doc_key)
             improves = False
             for rid in rationale_ids:
                 cov = doc_cov.get(rid, 0.0)
@@ -2398,6 +2452,8 @@ class Reporter:
                     break
             if improves:
                 kept_docs.append(selected_docs[i])
+                if aligned_keys:
+                    kept_keys.append(doc_key)
                 extra_kept += 1
                 for rid in rationale_ids:
                     cov = doc_cov.get(rid, 0.0)
@@ -2417,12 +2473,13 @@ class Reporter:
         if len(kept_docs) > top_k:
             dropped = len(kept_docs) - top_k
             kept_docs = kept_docs[:top_k]
+            kept_keys = kept_keys[:top_k]
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [elbow_cutoff] capped to top_k={top_k}, "
                 f"dropped {dropped} docs"
             )
 
-        return kept_docs
+        return _result(kept_docs, kept_keys)
 
     @staticmethod
     def _verify_coverage(
@@ -2582,7 +2639,128 @@ class Reporter:
             "verify_result": verify_result or {},
         }
 
-    async def _generate_sub_section_outline(self, current_inputs: dict, failure_feedback: str = "") -> dict:
+    @staticmethod
+    def _log_structured_evidence_build(
+        section_idx,
+        rationales: list,
+        coverage_result: dict,
+        classified_doc_infos: list,
+        structured_evidence_guide: str,
+    ) -> None:
+        """Log the structured-evidence build boundary for end-to-end diagnostics."""
+        statuses = re.findall(
+            r"\[[^,\]]+,\s*(covered|weak|uncovered)\]",
+            structured_evidence_guide,
+        )
+        guide_hash = (
+            hashlib.sha256(structured_evidence_guide.encode("utf-8")).hexdigest()[:12]
+            if structured_evidence_guide
+            else ""
+        )
+        logger.info(
+            "[structured_evidence][build] section_idx=%s built=%s "
+            "rationales=%s covered=%s weak=%s uncovered=%s "
+            "classified_docs=%s guide_chars=%s guide_hash=%s",
+            section_idx,
+            str(bool(structured_evidence_guide)).lower(),
+            len(rationales),
+            statuses.count("covered"),
+            statuses.count("weak"),
+            statuses.count("uncovered"),
+            len(classified_doc_infos),
+            len(structured_evidence_guide),
+            guide_hash,
+        )
+        if LogManager.is_sensitive():
+            return
+        compact_docs = [
+            {
+                "index": doc.get("index"),
+                "title": doc.get("title", ""),
+                "url": doc.get("url", ""),
+                "key_passages": doc.get("key_passages", []),
+            }
+            for doc in classified_doc_infos
+        ]
+        compact_coverage = {
+            "coverage_matrix": coverage_result.get("coverage_matrix", {}),
+            "reliability_scores": coverage_result.get("reliability_scores", {}),
+            "noise_scores": coverage_result.get("noise_scores", {}),
+        }
+        logger.debug(
+            "[structured_evidence][build] section_idx=%s\n"
+            "rationales=%s\ncoverage_result=%s\nclassified_doc_infos=%s\n"
+            "structured_evidence_guide=\n%s",
+            section_idx,
+            rationales,
+            compact_coverage,
+            compact_docs,
+            structured_evidence_guide,
+        )
+
+    @staticmethod
+    def _log_structured_evidence_target(
+        section_idx,
+        target: str,
+        llm_input: list,
+        structured_evidence_guide: str,
+        expected_citation_blocks: int | None = None,
+    ) -> None:
+        """Log whether structured evidence reached a downstream LLM input."""
+        rendered_input = "\n".join(
+            str(message.get("content", ""))
+            for message in llm_input
+            if isinstance(message, dict)
+        )
+        guide_present = bool(structured_evidence_guide)
+        exact_guide_in_input = guide_present and structured_evidence_guide in rendered_input
+        guide_hash = (
+            hashlib.sha256(structured_evidence_guide.encode("utf-8")).hexdigest()[:12]
+            if guide_present
+            else ""
+        )
+        if target == "sub_outline":
+            markers = (
+                "contains_structured_evidence_guidance="
+                f"{str(exact_guide_in_input).lower()}"
+            )
+        else:
+            contains_heading = "# Structured Evidence Guidance" in rendered_input
+            contains_collected = "# Collected Evidence" in rendered_input
+            citation_begin_count = len(re.findall(r"\[citation:\d+ begin\]", rendered_input))
+            citation_end_count = len(re.findall(r"\[citation:\d+ end\]", rendered_input))
+            if expected_citation_blocks is None:
+                balanced_citation_blocks = (
+                    citation_begin_count > 0
+                    and citation_begin_count == citation_end_count
+                )
+            else:
+                balanced_citation_blocks = (
+                    citation_begin_count
+                    == citation_end_count
+                    == expected_citation_blocks
+                )
+            markers = (
+                f"contains_structured_evidence_heading={str(contains_heading).lower()} "
+                f"contains_collected_evidence_heading={str(contains_collected).lower()} "
+                f"citation_blocks={citation_begin_count} "
+                f"balanced_citation_blocks={str(balanced_citation_blocks).lower()}"
+            )
+        logger.info(
+            "[structured_evidence][%s] section_idx=%s guide_present=%s "
+            "exact_guide_in_input=%s guide_chars=%s guide_hash=%s %s",
+            target,
+            section_idx,
+            str(guide_present).lower(),
+            str(exact_guide_in_input).lower(),
+            len(structured_evidence_guide),
+            guide_hash,
+            markers,
+        )
+
+    async def _generate_sub_section_outline(
+        self, current_inputs: dict, failure_feedback: str = ""
+    ) -> dict:
         """Generate subsection outline"""
         section_idx = current_inputs.get("section_idx", 1)  # Section index
         logger.info(
@@ -2634,6 +2812,9 @@ class Reporter:
                 f"Section description is {section_description},"
                 f"Section format requirements are {section_format_requirements},"
             )
+            structured_evidence_guide = current_inputs.get("structured_evidence_guide", "")
+            if structured_evidence_guide:
+                sub_content_message += f"\n\n{structured_evidence_guide}"
             tmp_context = {}
             tmp_context["messages"] = [dict(role="user", content=sub_content_message)]
             tmp_context["section_idx"] = section_idx
@@ -2663,6 +2844,12 @@ class Reporter:
             )
             llm_input = apply_system_prompt("sub_section_outline", tmp_context)
             _append_retry_feedback_message(llm_input, failure_feedback)
+            self._log_structured_evidence_target(
+                section_idx,
+                "sub_outline",
+                llm_input,
+                structured_evidence_guide,
+            )
             if not LogManager.is_sensitive():
                 logger.debug(
                     "%s [generate_sub_section_outline] section_idx: [%s] llm_input is %s",
@@ -3741,6 +3928,12 @@ class Reporter:
                 "do not copy these fields into the report body.\n"
                 f"{retry_feedback}\n\n"
             )
+        structured_evidence_guide = current_inputs.get("structured_evidence_guide", "")
+        structured_evidence_prompt = (
+            f"# Structured Evidence Guidance\n{structured_evidence_guide}\n\n"
+            if structured_evidence_guide
+            else ""
+        )
         sub_content_message = (
             "# Current Top-Level Section\n"
             f"section_id: {current_inputs.get('section_idx', 1)}\n"
@@ -3753,6 +3946,7 @@ class Reporter:
             f"{current_chapter_outline}\n\n"
             "# Current Subsection\n"
             f"{current_subsection}\n\n"
+            f"{structured_evidence_prompt}"
             "# Collected Evidence\n"
             f"{infos}\n\n"
             "# References\n"
@@ -3791,6 +3985,15 @@ class Reporter:
                     **build_research_intent_prompt_context(
                         current_inputs.get("research_intent")
                     ),
+                ),
+            )
+            self._log_structured_evidence_target(
+                current_inputs.get("section_idx", 1),
+                "sub_report",
+                llm_input,
+                structured_evidence_guide,
+                expected_citation_blocks=len(
+                    current_inputs.get("classified_content", [])
                 ),
             )
 
@@ -4405,6 +4608,9 @@ def _get_classified_infos(
     selected_docs: list[dict],
     marginal_values: list[float],
     max_source_id_count: int | None = 10,
+    *,
+    selected_doc_keys: list[str] | None = None,
+    return_doc_keys: bool = False,
 ):
     """Extract downstream writing inputs from matrix-selected doc variants.
 
@@ -4418,10 +4624,13 @@ def _get_classified_infos(
             score when picking representatives within the same source_key group,
             better matching the coverage semantics of the matrix.
         max_source_id_count: max number of content variants to keep.
+        selected_doc_keys: stable coverage-matrix keys aligned with selected_docs.
+        return_doc_keys: return the stable keys aligned with the final deduplicated
+            classified_doc_infos list.
 
     Returns:
-        Tuple of (classified_infos with references and core_content_list,
-        classified_doc_infos list).
+        Tuple of (classified_infos, classified_doc_infos), or the same tuple plus
+        classified_doc_keys when return_doc_keys is true.
     """
     def escape_markdown_text(value: object) -> str:
         text = str(value or "")
@@ -4451,7 +4660,7 @@ def _get_classified_infos(
         logger.error(
             f"{EFFECT_SUB_REPORT_TAG} No selected docs found. can not get classified infos."
         )
-        return {}, []
+        return ({}, [], []) if return_doc_keys else ({}, [])
 
     # Use only matrix-selected concrete variants; do not expand to other
     # variants under the same URL, otherwise matrix-rejected low-coverage /
@@ -4461,82 +4670,88 @@ def _get_classified_infos(
         logger.error(
             f"{EFFECT_SUB_REPORT_TAG} No urls found. can not get classified infos."
         )
-        return {}, []
+        return ({}, [], []) if return_doc_keys else ({}, [])
     classified_infos = {"references": [], "core_content_list": []}
     classified_doc_infos = []
 
-    matched_items: list[dict] = []
-    matched_order: dict[int, int] = {}
-    matched_by_url: dict[str, list[dict]] = {}
-    for item in selected_docs:
+    if return_doc_keys and len(selected_doc_keys or []) != len(selected_docs):
+        raise ValueError("selected docs and stable keys must be aligned")
+
+    matched_items: list[tuple[dict, int, float, str]] = []
+    matched_by_url: dict[str, list[tuple[dict, int, float, str]]] = {}
+    aligned_keys = selected_doc_keys or [""] * len(selected_docs)
+    for order, (item, marginal_value, doc_key) in enumerate(
+        zip(selected_docs, marginal_values, aligned_keys, strict=True)
+    ):
         url = str(item.get("url") or "")
         if not url:
             continue
-        matched_order[id(item)] = len(matched_items)
-        matched_items.append(item)
-        matched_by_url.setdefault(url, []).append(item)
+        record = (item, order, marginal_value, doc_key)
+        matched_items.append(record)
+        matched_by_url.setdefault(url, []).append(record)
 
-    # marginal_value map: id(doc) -> greedy selection marginal value, index-aligned with selected_docs
-    mv_map = {id(doc): mv for doc, mv in zip(selected_docs, marginal_values)}
-
-    def source_key_for(item: dict) -> str:
+    def source_key_for(record: tuple[dict, int, float, str]) -> str:
         # Writing stage looks up original doc_infos, so reuse the pre-filter
         # content variant key here; otherwise same-content duplicates without
         # source_id may bypass pre-filter dedup and re-enter writing inputs.
-        return build_doc_variant_key(item)
+        return build_doc_variant_key(record[0])
 
-    def item_rank_key(item: dict) -> tuple[float, int, int]:
+    def item_rank_key(record: tuple[dict, int, float, str]) -> tuple[float, int, int]:
+        item, order, marginal_value, _ = record
         return (
-            mv_map.get(id(item), 0.0),
+            marginal_value,
             len(str(item.get("original_content") or "")),
-            -matched_order.get(id(item), 0),
+            -order,
         )
 
-    def best_representatives(items: list[dict]) -> list[dict]:
-        source_representatives: dict[str, dict] = {}
-        for item in items:
-            source_key = source_key_for(item)
+    def best_representatives(
+        records: list[tuple[dict, int, float, str]],
+    ) -> list[tuple[dict, int, float, str]]:
+        source_representatives: dict[str, tuple[dict, int, float, str]] = {}
+        for record in records:
+            source_key = source_key_for(record)
             current = source_representatives.get(source_key)
-            if current is None or item_rank_key(item) > item_rank_key(current):
-                source_representatives[source_key] = item
+            if current is None or item_rank_key(record) > item_rank_key(current):
+                source_representatives[source_key] = record
         return sorted(source_representatives.values(), key=item_rank_key, reverse=True)
 
-    selected_items: list[dict] = []
+    selected_records: list[tuple[dict, int, float, str]] = []
     selected_source_keys: set[str] = set()
     max_count = None if max_source_id_count is None else max(0, int(max_source_id_count))
 
     if max_count is not None:
         for url in effective_urls:
-            if len(selected_items) >= max_count:
+            if len(selected_records) >= max_count:
                 break
             representatives = best_representatives(matched_by_url.get(url, []))
             if not representatives:
                 continue
-            top_item = representatives[0]
-            source_key = source_key_for(top_item)
+            top_record = representatives[0]
+            source_key = source_key_for(top_record)
             if source_key in selected_source_keys:
                 continue
-            selected_items.append(top_item)
+            selected_records.append(top_record)
             selected_source_keys.add(source_key)
 
     remaining_representatives = best_representatives(matched_items)
     if max_count is None:
-        selected_items = remaining_representatives
+        selected_records = remaining_representatives
     else:
-        for item in remaining_representatives:
-            if len(selected_items) >= max_count:
+        for record in remaining_representatives:
+            if len(selected_records) >= max_count:
                 break
-            source_key = source_key_for(item)
+            source_key = source_key_for(record)
             if source_key in selected_source_keys:
                 continue
-            selected_items.append(item)
+            selected_records.append(record)
             selected_source_keys.add(source_key)
 
     if max_count is not None:
-        selected_items = selected_items[:max_count]
+        selected_records = selected_records[:max_count]
 
     seen_reference_urls: set[str] = set()
-    for item in selected_items:
+    classified_doc_keys: list[str] = []
+    for item, _, _, doc_key in selected_records:
         item_url = str(item.get("url") or "")
         if item_url not in seen_reference_urls:
             classified_infos["references"].append(
@@ -4547,4 +4762,7 @@ def _get_classified_infos(
             format_key_passage_block(item, len(classified_doc_infos) + 1)
         )
         classified_doc_infos.append(item)
+        classified_doc_keys.append(doc_key)
+    if return_doc_keys:
+        return classified_infos, classified_doc_infos, classified_doc_keys
     return classified_infos, classified_doc_infos

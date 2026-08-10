@@ -5,6 +5,7 @@ These are pure-algorithm methods (0 LLM calls).
 """
 
 import asyncio
+from copy import deepcopy
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -68,6 +69,25 @@ def test_optimize_selects_high_coverage_docs_first():
     assert "目的国分析" in selected_titles
     # marginal values should be descending
     assert values == sorted(values, reverse=True)
+
+
+def test_optimize_can_return_stable_keys_aligned_with_selected_docs():
+    reporter = _make_reporter()
+    docs = [_doc(0, "lower"), _doc(1, "higher")]
+    rationales = [_rationale("r1", "topic")]
+    coverage = _coverage_result(
+        docs,
+        {"doc_0": {"r1": 0.4}, "doc_1": {"r1": 0.9}},
+        reliability={"doc_0": 1.0, "doc_1": 1.0},
+    )
+
+    selected, values, selected_keys = reporter._optimize_document_set(
+        docs, rationales, coverage, top_k=2, return_doc_keys=True
+    )
+
+    assert [doc["title"] for doc in selected] == ["higher"]
+    assert len(values) == 1
+    assert selected_keys == ["doc_1"]
 
 
 def test_optimize_stops_when_marginal_value_zero():
@@ -171,6 +191,39 @@ def test_elbow_cutoff_detects_elbow():
     # Should cut around index 3+2=5
     assert len(result) <= 6
     assert len(result) >= 4
+
+
+def test_elbow_cutoff_keeps_stable_keys_aligned_without_identity_lookup():
+    reporter = _make_reporter()
+    filtered_docs = [_doc(i) for i in range(6)]
+    docs = deepcopy(filtered_docs)
+    keys = [f"doc_{i}" for i in range(6)]
+    coverage_result = _coverage_result(
+        filtered_docs,
+        {
+            "doc_0": {"r1": 0.9, "r2": 0.0},
+            "doc_1": {"r1": 0.8, "r2": 0.0},
+            "doc_2": {"r1": 0.7, "r2": 0.0},
+            "doc_3": {"r1": 0.1, "r2": 0.0},
+            "doc_4": {"r1": 0.0, "r2": 0.8},
+            "doc_5": {"r1": 0.0, "r2": 0.0},
+        },
+    )
+
+    kept_docs, kept_keys = reporter._elbow_cutoff(
+        docs,
+        [1.0, 0.9, 0.8, 0.05, 0.04, 0.03],
+        top_k=6,
+        coverage_ctx={
+            "coverage_result": coverage_result,
+            "rationales": [_rationale("r1", "first"), _rationale("r2", "second")],
+        },
+        selected_doc_keys=keys,
+        return_doc_keys=True,
+    )
+
+    assert [doc["title"] for doc in kept_docs] == ["doc-0", "doc-1", "doc-2", "doc-4"]
+    assert kept_keys == ["doc_0", "doc_1", "doc_2", "doc_4"]
 
 
 def test_elbow_cutoff_no_clear_elbow_returns_top_k():
@@ -452,6 +505,7 @@ def test_evaluate_coverage_matrix_multi_batch_merges_keys():
     # Batch 1 local doc_0 → global doc_15
     assert "doc_15" in result["coverage_matrix"]
     assert "doc_24" in result["coverage_matrix"]
+    assert "evidence_passage_indices" not in result
 
 
 def test_evaluate_coverage_matrix_empty_docs():

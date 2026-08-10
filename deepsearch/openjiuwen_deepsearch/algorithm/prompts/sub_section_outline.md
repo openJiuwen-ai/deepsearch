@@ -26,6 +26,23 @@ description: {{ section_description }}
 format_requirements: {{ section_format_requirements }}
 </current_section>
 
+# Structure Priority (Strict)
+
+- Explicit user-specified structure has the highest priority, including heading count, hierarchy, title text, order,
+  and requested output form.
+- The current outline and current section must preserve that user-specified structure. Template requirements apply only
+  when they do not conflict with explicit user structure or the current section description.
+- Structured Evidence Guidance controls evidence selection only. It must not create, split, merge, rename, reorder, or
+  promote headings.
+- If the user explicitly requests the current section to contain only one table and does not specify subsection titles
+  or additional content blocks, keep the outline flat: output only the Level 1 section heading.
+- For such a single-table-only section, represent categories and comparison dimensions as table rows or columns rather
+  than Level 2 headings.
+- A request to include one table does not by itself require a flat outline. Preserve explicitly requested subsections
+  when the section also requires separate analysis, categories, objects, questions, or other content blocks.
+- When the user specifies a subsection count, category set, or categorization level, preserve that exact granularity.
+- Do not further subdivide a user-defined category unless the user explicitly requests another heading level.
+
 # User-Specified Subsection Preservation
 
 - If the user explicitly specified subsection titles for the current section, follow that count, title text, and order.
@@ -55,6 +72,12 @@ format_requirements: {{ section_format_requirements }}
   contract clearly requires separate comparison axes, categories, stages, mechanisms, objects, questions, or steps.
 - Output only one Level 1 heading for the current top-level section and Level 2 subsection headings. Do not output JSON,
   serialized subsection objects, or strings such as `"title":`, `"description":`, or `}, {`.
+
+## Structured Evidence Guidance
+
+When structured evidence guidance is provided, use covered primary dimensions first and treat weak dimensions cautiously.
+Do not create a factual subsection solely from an uncovered dimension. Do not mechanically turn every dimension into a
+subsection. User-specified titles and template-required structure remain authoritative.
 
 {% if report_type == "brief" %}
 ## Brief Mode (Strict)
