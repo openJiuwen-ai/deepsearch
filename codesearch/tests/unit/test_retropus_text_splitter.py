@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Unit tests for the vendored recursive character text splitter."""
+"""Unit tests for the recursive character text splitter."""
 
 from openjiuwen_codesearch.retropus.graph.text_splitter import split_text
 

@@ -1,15 +1,7 @@
-"""The in-memory knowledge graph representation of a codebase (based on Prometheus).
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""In-memory repository knowledge graph (files, AST nodes, text chunks)."""
 
-Node types:
-* FileNode: Represent a file/dir
-* ASTNode: Represent a tree-sitter node
-* TextNode: Represent a string
-
-Edge types:
-* HAS_FILE, HAS_AST, HAS_TEXT, PARENT_OF, NEXT_CHUNK, INHERITS, IMPORTS
-
-The graph is built fully in memory.
-"""
+from __future__ import annotations
 
 import asyncio
 import itertools
@@ -36,18 +28,13 @@ from openjiuwen_codesearch.retropus.graph.graph_types import (
     TextNode,
     TextNodeDict,
 )
-from openjiuwen_codesearch.retropus.graph.inherits import build_inherits_edges, inheritance_neighbors
 from openjiuwen_codesearch.retropus.graph.imports import build_imports_edges
+from openjiuwen_codesearch.retropus.graph.inherits import build_inherits_edges, inheritance_neighbors
 from openjiuwen_codesearch.utils.log_utils import get_logger
 
 
 class KnowledgeGraph:
-    """In-memory file / AST / text graph for one repository.
-
-    Built by walking the repo tree, parsing supported files, then attaching
-    ``INHERITS`` and ``IMPORTS`` edges. Lazy indexes back adjacency and
-    node-type views used by retrieval and expand tools.
-    """
+    """File / AST / text graph for one repository, with lazy adjacency indexes."""
 
     def __init__(
         self,
@@ -59,253 +46,223 @@ class KnowledgeGraph:
         knowledge_graph_nodes: Optional[Sequence[KnowledgeGraphNode]] = None,
         knowledge_graph_edges: Optional[Sequence[KnowledgeGraphEdge]] = None,
     ):
-        """Initializes an empty or pre-populated knowledge graph."""
         self.max_ast_depth = max_ast_depth
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.root_node_id = root_node_id
         self._root_node = root_node
-        self._knowledge_graph_nodes = (
-            knowledge_graph_nodes if knowledge_graph_nodes is not None else []
+        self._knowledge_graph_nodes: List[KnowledgeGraphNode] = (
+            list(knowledge_graph_nodes) if knowledge_graph_nodes is not None else []
         )
-        self._knowledge_graph_edges = (
-            knowledge_graph_edges if knowledge_graph_edges is not None else []
+        self._knowledge_graph_edges: List[KnowledgeGraphEdge] = (
+            list(knowledge_graph_edges) if knowledge_graph_edges is not None else []
         )
         self._next_node_id = root_node_id + len(self._knowledge_graph_nodes)
-
         self._file_graph_builder = FileGraphBuilder(max_ast_depth, chunk_size, chunk_overlap)
         self._logger = get_logger(__name__)
+        self._reset_caches()
 
-        # Lazy indexes — rebuilt on first access after the graph is populated.
-        self._cached_file_nodes: Optional[List[KnowledgeGraphNode]] = None
-        self._cached_ast_nodes: Optional[List[KnowledgeGraphNode]] = None
-        self._cached_text_nodes: Optional[List[KnowledgeGraphNode]] = None
-        self._cached_edges_by_type: Optional[
+    # ------------------------------------------------------------------ caches
+    def _reset_caches(self) -> None:
+        self._file_nodes: Optional[List[KnowledgeGraphNode]] = None
+        self._ast_nodes: Optional[List[KnowledgeGraphNode]] = None
+        self._text_nodes: Optional[List[KnowledgeGraphNode]] = None
+        self._edges_by_type: Optional[
             Mapping[KnowledgeGraphEdgeType, List[KnowledgeGraphEdge]]
         ] = None
-        self._cached_parent_to_children: Optional[Mapping[int, List[KnowledgeGraphNode]]] = None
-        self._cached_next_chunk_reverse: Optional[Mapping[int, KnowledgeGraphNode]] = None
-        self._cached_text_to_file: Optional[Mapping[int, KnowledgeGraphNode]] = None
-        self._cached_ast_to_file: Optional[Mapping[int, KnowledgeGraphNode]] = None
-        self._cached_ast_file_pairs: Optional[
+        self._parent_children: Optional[Mapping[int, List[KnowledgeGraphNode]]] = None
+        self._prev_chunk: Optional[Mapping[int, KnowledgeGraphNode]] = None
+        self._text_owner: Optional[Mapping[int, KnowledgeGraphNode]] = None
+        self._ast_owner: Optional[Mapping[int, KnowledgeGraphNode]] = None
+        self._ast_file_pairs: Optional[
             List[Tuple[KnowledgeGraphNode, KnowledgeGraphNode]]
         ] = None
-        self._cached_inherits_out: Optional[Dict[int, List[KnowledgeGraphNode]]] = None
-        self._cached_inherits_in: Optional[Dict[int, List[KnowledgeGraphNode]]] = None
-        # class AST node_id → owning FileNode
-        self._cached_class_to_file: Optional[Dict[int, KnowledgeGraphNode]] = None
-        self._cached_imports_out: Optional[Dict[int, List[KnowledgeGraphNode]]] = None
-        self._cached_imports_in: Optional[Dict[int, List[KnowledgeGraphNode]]] = None
-        # (importer_id, imported_id) → local binding name
-        self._cached_imports_labels: Dict[Tuple[int, int], str] = {}
+        self._inherits_out: Optional[Dict[int, List[KnowledgeGraphNode]]] = None
+        self._inherits_in: Optional[Dict[int, List[KnowledgeGraphNode]]] = None
+        self._class_owner: Optional[Dict[int, KnowledgeGraphNode]] = None
+        self._imports_out: Optional[Dict[int, List[KnowledgeGraphNode]]] = None
+        self._imports_in: Optional[Dict[int, List[KnowledgeGraphNode]]] = None
+        self._imports_labels: Dict[Tuple[int, int], str] = {}
 
     def _invalidate_indexes(self) -> None:
-        """Clear all lazy node/edge caches (call after mutating the graph)."""
-        self._cached_file_nodes = None
-        self._cached_ast_nodes = None
-        self._cached_text_nodes = None
-        self._cached_edges_by_type = None
-        self._cached_parent_to_children = None
-        self._cached_next_chunk_reverse = None
-        self._cached_text_to_file = None
-        self._cached_ast_to_file = None
-        self._cached_ast_file_pairs = None
-        self._cached_inherits_out = None
-        self._cached_inherits_in = None
-        self._cached_class_to_file = None
-        self._cached_imports_out = None
-        self._cached_imports_in = None
-        self._cached_imports_labels = {}
+        """Drop lazy indexes after the vertex/edge sets change."""
+        labels = self._imports_labels
+        self._reset_caches()
+        # Preserve labels unless caller clears them explicitly during rebuild.
+        self._imports_labels = labels
 
-    def _ensure_node_indexes(self) -> None:
-        """Partition nodes into cached file / AST / text lists on first use."""
-        if self._cached_file_nodes is not None:
+    def _partition_nodes(self) -> None:
+        if self._file_nodes is not None:
             return
         files: List[KnowledgeGraphNode] = []
         asts: List[KnowledgeGraphNode] = []
         texts: List[KnowledgeGraphNode] = []
-        for kg_node in self._knowledge_graph_nodes:
-            node = kg_node.node
-            if isinstance(node, FileNode):
-                files.append(kg_node)
-            elif isinstance(node, ASTNode):
-                asts.append(kg_node)
-            elif isinstance(node, TextNode):
-                texts.append(kg_node)
-        self._cached_file_nodes = files
-        self._cached_ast_nodes = asts
-        self._cached_text_nodes = texts
+        for kg in self._knowledge_graph_nodes:
+            payload = kg.node
+            if isinstance(payload, FileNode):
+                files.append(kg)
+            elif isinstance(payload, ASTNode):
+                asts.append(kg)
+            elif isinstance(payload, TextNode):
+                texts.append(kg)
+        self._file_nodes = files
+        self._ast_nodes = asts
+        self._text_nodes = texts
 
-    def _ensure_edge_indexes(self) -> None:
-        """Build edge-type buckets and adjacency maps used by retrieval/expand."""
-        if self._cached_edges_by_type is not None:
+    def _ensure_node_indexes(self) -> None:
+        self._partition_nodes()
+
+    def _build_edge_indexes(self) -> None:
+        if self._edges_by_type is not None:
             return
-        by_type: dict[KnowledgeGraphEdgeType, List[KnowledgeGraphEdge]] = {
-            edge_type: [] for edge_type in KnowledgeGraphEdgeType
+
+        buckets: dict[KnowledgeGraphEdgeType, List[KnowledgeGraphEdge]] = {
+            kind: [] for kind in KnowledgeGraphEdgeType
         }
         for edge in self._knowledge_graph_edges:
-            by_type[edge.type].append(edge)
-        self._cached_edges_by_type = by_type
+            buckets[edge.type].append(edge)
+        self._edges_by_type = buckets
 
-        parent_to_children: dict[int, List[KnowledgeGraphNode]] = {}
-        for edge in by_type[KnowledgeGraphEdgeType.parent_of]:
-            parent_to_children.setdefault(edge.source.node_id, []).append(edge.target)
-        self._cached_parent_to_children = parent_to_children
+        children: dict[int, List[KnowledgeGraphNode]] = {}
+        for edge in buckets[KnowledgeGraphEdgeType.parent_of]:
+            children.setdefault(edge.source.node_id, []).append(edge.target)
+        self._parent_children = children
 
-        self._cached_next_chunk_reverse = {
-            edge.target.node_id: edge.source
-            for edge in by_type[KnowledgeGraphEdgeType.next_chunk]
+        self._prev_chunk = {
+            e.target.node_id: e.source
+            for e in buckets[KnowledgeGraphEdgeType.next_chunk]
         }
-        self._cached_text_to_file = {
-            edge.target.node_id: edge.source
-            for edge in by_type[KnowledgeGraphEdgeType.has_text]
+        self._text_owner = {
+            e.target.node_id: e.source
+            for e in buckets[KnowledgeGraphEdgeType.has_text]
         }
 
-        # Walk each file's AST once so BM25 collection is O(N) with no repeated scans.
-        # Pairs are (file_node, non-root ast_node) — the file-level AST root is skipped.
-        ast_to_file: dict[int, KnowledgeGraphNode] = {}
-        ast_file_pairs: List[Tuple[KnowledgeGraphNode, KnowledgeGraphNode]] = []
-        parent_to_children_map = parent_to_children
-        for edge in by_type[KnowledgeGraphEdgeType.has_ast]:
-            file_node = edge.source
-            root_ast = edge.target
-            stack = list(parent_to_children_map.get(root_ast.node_id, ()))
-            while stack:
-                current = stack.pop()
-                ast_to_file[current.node_id] = file_node
-                ast_file_pairs.append((file_node, current))
-                children = parent_to_children_map.get(current.node_id)
-                if children:
-                    stack.extend(children)
-        self._cached_ast_to_file = ast_to_file
-        self._cached_ast_file_pairs = ast_file_pairs
+        # One DFS per file AST → (file, non-root ast) pairs for BM25.
+        owners: dict[int, KnowledgeGraphNode] = {}
+        pairs: List[Tuple[KnowledgeGraphNode, KnowledgeGraphNode]] = []
+        for edge in buckets[KnowledgeGraphEdgeType.has_ast]:
+            file_kg = edge.source
+            pending = list(children.get(edge.target.node_id, ()))
+            while pending:
+                cur = pending.pop()
+                owners[cur.node_id] = file_kg
+                pairs.append((file_kg, cur))
+                kids = children.get(cur.node_id)
+                if kids:
+                    pending.extend(kids)
+        self._ast_owner = owners
+        self._ast_file_pairs = pairs
 
-        inherits_out: Dict[int, List[KnowledgeGraphNode]] = {}
-        inherits_in: Dict[int, List[KnowledgeGraphNode]] = {}
-        for edge in by_type[KnowledgeGraphEdgeType.inherits]:
-            inherits_out.setdefault(edge.source.node_id, []).append(edge.target)
-            inherits_in.setdefault(edge.target.node_id, []).append(edge.source)
-        self._cached_inherits_out = inherits_out
-        self._cached_inherits_in = inherits_in
+        out_inh: Dict[int, List[KnowledgeGraphNode]] = {}
+        in_inh: Dict[int, List[KnowledgeGraphNode]] = {}
+        for edge in buckets[KnowledgeGraphEdgeType.inherits]:
+            out_inh.setdefault(edge.source.node_id, []).append(edge.target)
+            in_inh.setdefault(edge.target.node_id, []).append(edge.source)
+        self._inherits_out = out_inh
+        self._inherits_in = in_inh
 
-        class_to_file: Dict[int, KnowledgeGraphNode] = {}
-        for edge in by_type[KnowledgeGraphEdgeType.inherits]:
-            src_file = ast_to_file.get(edge.source.node_id)
-            tgt_file = ast_to_file.get(edge.target.node_id)
-            if src_file is not None:
-                class_to_file[edge.source.node_id] = src_file
-            if tgt_file is not None:
-                class_to_file[edge.target.node_id] = tgt_file
-        self._cached_class_to_file = class_to_file
+        class_files: Dict[int, KnowledgeGraphNode] = {}
+        for edge in buckets[KnowledgeGraphEdgeType.inherits]:
+            src_f = owners.get(edge.source.node_id)
+            tgt_f = owners.get(edge.target.node_id)
+            if src_f is not None:
+                class_files[edge.source.node_id] = src_f
+            if tgt_f is not None:
+                class_files[edge.target.node_id] = tgt_f
+        self._class_owner = class_files
 
-        imports_out: Dict[int, List[KnowledgeGraphNode]] = {}
-        imports_in: Dict[int, List[KnowledgeGraphNode]] = {}
-        for edge in by_type[KnowledgeGraphEdgeType.imports]:
-            imports_out.setdefault(edge.source.node_id, []).append(edge.target)
-            imports_in.setdefault(edge.target.node_id, []).append(edge.source)
-        self._cached_imports_out = imports_out
-        self._cached_imports_in = imports_in
+        out_imp: Dict[int, List[KnowledgeGraphNode]] = {}
+        in_imp: Dict[int, List[KnowledgeGraphNode]] = {}
+        for edge in buckets[KnowledgeGraphEdgeType.imports]:
+            out_imp.setdefault(edge.source.node_id, []).append(edge.target)
+            in_imp.setdefault(edge.target.node_id, []).append(edge.source)
+        self._imports_out = out_imp
+        self._imports_in = in_imp
 
-    async def build_graph(self, root_dir: Path):
-        """Asynchronously builds knowledge graph for a codebase at a location."""
+    def _ensure_edge_indexes(self) -> None:
+        self._build_edge_indexes()
+
+    # ------------------------------------------------------------------ build
+    async def build_graph(self, root_dir: Path) -> None:
+        """Build the graph for ``root_dir`` on a worker thread."""
         await asyncio.to_thread(self._build_graph, root_dir)
 
-    def _build_graph(self, root_dir: Path):
-        """Builds knowledge graph for a codebase at a location."""
-        # Heavy deps stay optional until build (unit tests import KG for dump/load).
+    def _build_graph(self, root_dir: Path) -> None:
         import igittigitt  # guarded: retropus extra
-        from tqdm import tqdm  # guarded: progress bar only needed during build
+        from tqdm import tqdm  # guarded: build-time progress only
 
         self._invalidate_indexes()
+        self._imports_labels = {}
         root_dir = root_dir.absolute()
-        t0 = time.perf_counter()
+        started = time.perf_counter()
         self._logger.info("KG: scanning repository tree under %s", root_dir)
-        gitignore_parser = igittigitt.IgnoreParser()
-        gitignore_parser.parse_rule_files(root_dir)
-        gitignore_parser.add_rule(".git", root_dir)
 
-        # The root node for the whole graph
-        root_dir_node = FileNode(basename=root_dir.name, relative_path=".")
-        kg_root_dir_node = KnowledgeGraphNode(self._next_node_id, root_dir_node)
+        ignore = igittigitt.IgnoreParser()
+        ignore.parse_rule_files(root_dir)
+        ignore.add_rule(".git", root_dir)
+
+        root_payload = FileNode(basename=root_dir.name, relative_path=".")
+        root_kg = KnowledgeGraphNode(self._next_node_id, root_payload)
         self._next_node_id += 1
-        self._knowledge_graph_nodes.append(kg_root_dir_node)
-        self._root_node = kg_root_dir_node
+        self._knowledge_graph_nodes.append(root_kg)
+        self._root_node = root_kg
 
-        file_stack = deque()
-        file_stack.append((root_dir, kg_root_dir_node))
-        files_to_parse: List[Tuple[Path, KnowledgeGraphNode]] = []
+        walk: deque[tuple[Path, KnowledgeGraphNode]] = deque([(root_dir, root_kg)])
+        to_parse: List[Tuple[Path, KnowledgeGraphNode]] = []
 
-        # Walk the tree first so parsing can show a determinate progress bar.
-        while file_stack:
-            file, kg_file_path_node = file_stack.pop()
-
-            # If the file is a directory, we create FileNode for all supported children files.
-            if file.is_dir():
-                self._logger.debug(f"Processing directory {file}")
-                for child_file in sorted(file.iterdir()):
-                    # Skip if the file does not exist (broken symlink).
-                    if not child_file.exists():
+        while walk:
+            path, parent_kg = walk.pop()
+            if path.is_dir():
+                self._logger.debug("Processing directory %s", path)
+                for child in sorted(path.iterdir()):
+                    if not child.exists():
                         continue
-
-                    # Skip if the child is not a file or it is not supported by the file graph builder.
-                    if child_file.is_file() and not self._file_graph_builder.supports_file(
-                        child_file
-                    ):
+                    if child.is_file() and not self._file_graph_builder.supports_file(child):
                         continue
-
-                    if gitignore_parser.match(child_file):
+                    if ignore.match(child):
                         continue
-
-                    child_file_node = FileNode(
-                        basename=child_file.name,
-                        relative_path=child_file.relative_to(root_dir).as_posix(),
+                    child_payload = FileNode(
+                        basename=child.name,
+                        relative_path=child.relative_to(root_dir).as_posix(),
                     )
-                    kg_child_file_node = KnowledgeGraphNode(self._next_node_id, child_file_node)
+                    child_kg = KnowledgeGraphNode(self._next_node_id, child_payload)
                     self._next_node_id += 1
-                    self._knowledge_graph_nodes.append(kg_child_file_node)
+                    self._knowledge_graph_nodes.append(child_kg)
                     self._knowledge_graph_edges.append(
                         KnowledgeGraphEdge(
-                            kg_file_path_node,
-                            kg_child_file_node,
-                            KnowledgeGraphEdgeType.has_file,
+                            parent_kg, child_kg, KnowledgeGraphEdgeType.has_file
                         )
                     )
-
-                    file_stack.append((child_file, kg_child_file_node))
+                    walk.append((child, child_kg))
             else:
-                files_to_parse.append((file, kg_file_path_node))
+                to_parse.append((path, parent_kg))
 
-        self._logger.info("KG: parsing %d files with tree-sitter", len(files_to_parse))
-        for file, kg_file_path_node in tqdm(
-            files_to_parse,
-            desc="KG parse",
-            unit="file",
-            leave=False,
-        ):
-            self._logger.debug(f"Processing file {file}")
+        self._logger.info("KG: parsing %d files with tree-sitter", len(to_parse))
+        for path, file_kg in tqdm(to_parse, desc="KG parse", unit="file", leave=False):
+            self._logger.debug("Processing file %s", path)
             try:
-                next_node_id, kg_nodes, kg_edges = self._file_graph_builder.build_file_graph(
-                    kg_file_path_node, file, self._next_node_id
+                self._next_node_id, kg_nodes, kg_edges = (
+                    self._file_graph_builder.build_file_graph(
+                        file_kg, path, self._next_node_id
+                    )
                 )
             except (ValueError, OSError) as exc:
-                self._logger.warning(f"Skipping {file}: {exc}")
+                self._logger.warning("Skipping %s: %s", path, exc)
                 continue
-            self._next_node_id = next_node_id
             self._knowledge_graph_nodes.extend(kg_nodes)
             self._knowledge_graph_edges.extend(kg_edges)
 
-        # First-pass indexes (needed to walk AST→file for inheritance resolution).
         index_t0 = time.perf_counter()
-        self._ensure_node_indexes()
-        self._ensure_edge_indexes()
+        self._partition_nodes()
+        self._build_edge_indexes()
 
         inherit_t0 = time.perf_counter()
-        inherit_edges = build_inherits_edges(self._cached_ast_file_pairs or ())
+        inherit_edges = build_inherits_edges(self._ast_file_pairs or ())
         inherit_s = time.perf_counter() - inherit_t0
 
         imports_t0 = time.perf_counter()
         import_edges, import_labels = build_imports_edges(
-            self._cached_file_nodes or (), repo_root=root_dir
+            self._file_nodes or (), repo_root=root_dir
         )
         imports_s = time.perf_counter() - imports_t0
 
@@ -314,15 +271,16 @@ class KnowledgeGraph:
                 self._knowledge_graph_edges.extend(inherit_edges)
             if import_edges:
                 self._knowledge_graph_edges.extend(import_edges)
-                self._cached_imports_labels = import_labels
-            # Rebuild edge indexes so INHERITS / IMPORTS adjacency is available.
-            self._cached_edges_by_type = None
-            self._cached_inherits_out = None
-            self._cached_inherits_in = None
-            self._cached_class_to_file = None
-            self._cached_imports_out = None
-            self._cached_imports_in = None
-            self._ensure_edge_indexes()
+                self._imports_labels = import_labels
+            # Force edge-index rebuild so new relation types are visible.
+            self._edges_by_type = None
+            self._inherits_out = None
+            self._inherits_in = None
+            self._class_owner = None
+            self._imports_out = None
+            self._imports_in = None
+            self._build_edge_indexes()
+
         self._logger.info(
             "KG: INHERITS edges=%d (%.1fs); IMPORTS edges=%d (%.1fs); "
             "indexes ready (searchable_ast=%d, %.1fs)",
@@ -330,7 +288,7 @@ class KnowledgeGraph:
             inherit_s,
             len(import_edges),
             imports_s,
-            len(self._cached_ast_file_pairs or ()),
+            len(self._ast_file_pairs or ()),
             time.perf_counter() - index_t0,
         )
         self._logger.info(
@@ -340,286 +298,214 @@ class KnowledgeGraph:
             len(self.get_text_nodes()),
             len(inherit_edges),
             len(import_edges),
-            time.perf_counter() - t0,
+            time.perf_counter() - started,
         )
 
+    # --------------------------------------------------------------- accessors
     @property
     def root_node(self) -> Optional[KnowledgeGraphNode]:
-        """Root directory node, if the graph has been built or restored."""
         return self._root_node
 
     def get_all_nodes(self) -> Sequence[KnowledgeGraphNode]:
-        """All KG nodes (file / AST / text), in insertion order."""
         return list(self._knowledge_graph_nodes)
 
     def get_all_edges(self) -> Sequence[KnowledgeGraphEdge]:
-        """All KG edges, in insertion order."""
         return list(self._knowledge_graph_edges)
 
     def get_imports_labels_map(self) -> Dict[Tuple[int, int], str]:
-        """Copy of ``(importer_id, imported_id) → local binding name`` labels."""
-        return dict(self._cached_imports_labels)
+        return dict(self._imports_labels)
 
-    def set_imports_labels_map(
-        self, labels: Mapping[Tuple[int, int], str]
-    ) -> None:
-        """Replace cached IMPORTS edge labels (used when restoring from disk)."""
-        self._cached_imports_labels = dict(labels)
+    def set_imports_labels_map(self, labels: Mapping[Tuple[int, int], str]) -> None:
+        self._imports_labels = dict(labels)
 
     def get_file_tree(self, max_depth: int = 5, max_lines: int = 5000) -> str:
-        """Generate a tree-like string representation of the file structure."""
-        file_node_adjacency_dict = self._get_file_node_adjacency_dict()
+        """Render a box-drawing tree of ``HAS_FILE`` children under the root."""
+        adjacency = self._file_adjacency()
+        lines: List[str] = []
+        # stack: (node, depth, prefix_before_connector, is_last)
+        stack: deque[
+            tuple[KnowledgeGraphNode, int, str, bool | None]
+        ] = deque([(self._root_node, 0, "", None)])  # type: ignore[list-item]
 
-        # Each stack entry contains: (current_node, depth, prefix_string, is_last_child)
-        stack = deque()
-        stack.append((self._root_node, 0, "", None))
-        result_lines = []
+        indent_blank = "    "
+        indent_pipe = "|   "
+        connector_mid = "├── "
+        connector_end = "└── "
 
-        # Box-drawing characters and indentation constants
-        space = "    "  # Indentation for levels without children
-        branch = "|   "  # Vertical line for intermediate children
-        tee = "├── "  # Entry for a non-final child
-        last = "└── "  # Entry for the last child
-
-        while stack and (len(result_lines)) < max_lines:
-            file_node, depth, prefix, is_last = stack.pop()
-
-            # Skip if we've exceeded max_depth
-            if depth > max_depth:
+        while stack and len(lines) < max_lines:
+            node, depth, prefix, is_last = stack.pop()
+            if node is None or depth > max_depth:
                 continue
+            if depth == 0:
+                lines.append(node.node.basename)
+            else:
+                tip = connector_end if is_last else connector_mid
+                lines.append(f"{prefix}{tip}{node.node.basename}")
 
-            # Choose the connector character depending on whether this is the last child
-            pointer = last if is_last else tee
-            line_prefix = "" if depth == 0 else prefix + pointer
+            kids = sorted(adjacency[node], key=lambda n: n.node.basename)
+            for idx in range(len(kids) - 1, -1, -1):
+                last_child = idx == len(kids) - 1
+                child_prefix = ""
+                if depth > 0:
+                    child_prefix = prefix + (indent_blank if is_last else indent_pipe)
+                stack.append((kids[idx], depth + 1, child_prefix, last_child))
 
-            # Add the current file or directory to the result lines
-            result_lines.append(line_prefix + file_node.node.basename)
-
-            # Get the current node's children and sort them alphabetically by name
-            sorted_children_file_node = sorted(
-                file_node_adjacency_dict[file_node], key=lambda x: x.node.basename
-            )
-
-            # Traverse the children in reverse order to maintain the correct tree shape
-            for i in range(len(sorted_children_file_node) - 1, -1, -1):
-                extension = space if is_last else branch  # Update prefix for children
-                new_prefix = "" if depth == 0 else prefix + extension
-                stack.append(
-                    (
-                        sorted_children_file_node[i],
-                        depth + 1,
-                        new_prefix,
-                        i == len(sorted_children_file_node) - 1,  # True if last child
-                    )
-                )
-
-        # Join all lines into a single string for output
-        return "\n".join(result_lines)
+        return "\n".join(lines)
 
     def get_all_ast_node_types(self) -> Sequence[str]:
-        """Return the distinct tree-sitter node types present in the graph."""
-        ast_node_types = set()
-        for ast_node in self.get_ast_nodes():
-            ast_node_types.add(ast_node.node.type)
-        return list(ast_node_types)
+        return list({n.node.type for n in self.get_ast_nodes()})
+
+    def _file_adjacency(
+        self,
+    ) -> Mapping[KnowledgeGraphNode, Sequence[KnowledgeGraphNode]]:
+        adj: dict[KnowledgeGraphNode, list[KnowledgeGraphNode]] = defaultdict(list)
+        for edge in self.get_has_file_edges():
+            adj[edge.source].append(edge.target)
+        return adj
 
     def _get_file_node_adjacency_dict(
         self,
     ) -> Mapping[KnowledgeGraphNode, Sequence[KnowledgeGraphNode]]:
-        """Map each directory ``FileNode`` to its ``HAS_FILE`` children."""
-        file_node_adjacency_dict = defaultdict(list)
-        for has_file_edge in self.get_has_file_edges():
-            file_node_adjacency_dict[has_file_edge.source].append(has_file_edge.target)
-        return file_node_adjacency_dict
+        return self._file_adjacency()
 
     def get_file_nodes(self) -> Sequence[KnowledgeGraphNode]:
-        """All ``FileNode`` wrappers (files and directories)."""
-        self._ensure_node_indexes()
-        if self._cached_file_nodes is None:
-            raise RuntimeError("file node index not built")
-        return self._cached_file_nodes
+        self._partition_nodes()
+        assert self._file_nodes is not None
+        return self._file_nodes
 
     def get_ast_nodes(self) -> Sequence[KnowledgeGraphNode]:
-        """All ``ASTNode`` wrappers."""
-        self._ensure_node_indexes()
-        if self._cached_ast_nodes is None:
-            raise RuntimeError("ast node index not built")
-        return self._cached_ast_nodes
+        self._partition_nodes()
+        assert self._ast_nodes is not None
+        return self._ast_nodes
 
     def get_text_nodes(self) -> Sequence[KnowledgeGraphNode]:
-        """All ``TextNode`` wrappers (markdown / text chunks)."""
-        self._ensure_node_indexes()
-        if self._cached_text_nodes is None:
-            raise RuntimeError("text node index not built")
-        return self._cached_text_nodes
+        self._partition_nodes()
+        assert self._text_nodes is not None
+        return self._text_nodes
 
     def _edges_of_type(self, edge_type: KnowledgeGraphEdgeType) -> Sequence[KnowledgeGraphEdge]:
-        """Return edges of ``edge_type`` from the lazy edge-type index."""
-        self._ensure_edge_indexes()
-        if self._cached_edges_by_type is None:
-            raise RuntimeError("edge-type index not built")
-        return self._cached_edges_by_type[edge_type]
+        self._build_edge_indexes()
+        assert self._edges_by_type is not None
+        return self._edges_by_type[edge_type]
 
     def get_has_ast_edges(self) -> Sequence[KnowledgeGraphEdge]:
-        """``HAS_AST`` edges (file → AST root)."""
         return self._edges_of_type(KnowledgeGraphEdgeType.has_ast)
 
     def get_has_file_edges(self) -> Sequence[KnowledgeGraphEdge]:
-        """``HAS_FILE`` edges (directory → child file/dir)."""
         return self._edges_of_type(KnowledgeGraphEdgeType.has_file)
 
     def get_has_text_edges(self) -> Sequence[KnowledgeGraphEdge]:
-        """``HAS_TEXT`` edges (file → text chunk)."""
         return self._edges_of_type(KnowledgeGraphEdgeType.has_text)
 
     def get_next_chunk_edges(self) -> Sequence[KnowledgeGraphEdge]:
-        """``NEXT_CHUNK`` edges chaining consecutive text chunks."""
         return self._edges_of_type(KnowledgeGraphEdgeType.next_chunk)
 
     def get_parent_of_edges(self) -> Sequence[KnowledgeGraphEdge]:
-        """``PARENT_OF`` edges (AST parent → child)."""
         return self._edges_of_type(KnowledgeGraphEdgeType.parent_of)
 
     def get_inherits_edges(self) -> Sequence[KnowledgeGraphEdge]:
-        """``INHERITS`` edges (subtype → supertype)."""
         return self._edges_of_type(KnowledgeGraphEdgeType.inherits)
 
     def get_imports_edges(self) -> Sequence[KnowledgeGraphEdge]:
-        """``IMPORTS`` edges (importer file → imported file)."""
         return self._edges_of_type(KnowledgeGraphEdgeType.imports)
 
     def get_imports_label(self, source_id: int, target_id: int) -> str:
-        """Local binding name for an IMPORTS edge, if recorded at build time."""
-        return self._cached_imports_labels.get((source_id, target_id), "")
+        return self._imports_labels.get((source_id, target_id), "")
 
     def get_import_neighbors(
         self, file_node: KnowledgeGraphNode
     ) -> Sequence[KnowledgeGraphNode]:
-        """1-hop import targets and importers of a FileNode."""
-        self._ensure_edge_indexes()
-        if self._cached_imports_out is None or self._cached_imports_in is None:
-            raise RuntimeError("imports adjacency index not built")
-        out = list(self._cached_imports_out.get(file_node.node_id, ()))
-        incoming = list(self._cached_imports_in.get(file_node.node_id, ()))
-        seen = {file_node.node_id}
+        self._build_edge_indexes()
+        assert self._imports_out is not None and self._imports_in is not None
         merged: List[KnowledgeGraphNode] = []
-        for n in out + incoming:
-            if n.node_id in seen:
-                continue
-            seen.add(n.node_id)
-            merged.append(n)
+        seen = {file_node.node_id}
+        for n in self._imports_out.get(file_node.node_id, ()) + self._imports_in.get(
+            file_node.node_id, ()
+        ):
+            if n.node_id not in seen:
+                seen.add(n.node_id)
+                merged.append(n)
         return merged
 
     def get_inheritance_neighbors(
         self, class_ast: KnowledgeGraphNode
     ) -> Sequence[KnowledgeGraphNode]:
-        """1-hop superclass and subclass neighbors of a class AST node."""
-        self._ensure_edge_indexes()
-        if self._cached_inherits_out is None or self._cached_inherits_in is None:
-            raise RuntimeError("inherits adjacency index not built")
+        self._build_edge_indexes()
+        assert self._inherits_out is not None and self._inherits_in is not None
         return inheritance_neighbors(
-            class_ast.node_id, self._cached_inherits_out, self._cached_inherits_in
+            class_ast.node_id, self._inherits_out, self._inherits_in
         )
 
     def get_file_for_ast(self, ast_node: KnowledgeGraphNode) -> Optional[KnowledgeGraphNode]:
-        """Owning FileNode for a non-root AST node, if known."""
-        self._ensure_edge_indexes()
-        if self._cached_ast_to_file is None:
-            raise RuntimeError("ast-to-file index not built")
-        return self._cached_ast_to_file.get(ast_node.node_id)
+        self._build_edge_indexes()
+        assert self._ast_owner is not None
+        return self._ast_owner.get(ast_node.node_id)
 
     def get_ast_to_file_map(self) -> Mapping[int, KnowledgeGraphNode]:
-        """Map non-root AST node_id → owning FileNode (built once)."""
-        self._ensure_edge_indexes()
-        if self._cached_ast_to_file is None:
-            raise RuntimeError("ast-to-file index not built")
-        return self._cached_ast_to_file
+        self._build_edge_indexes()
+        assert self._ast_owner is not None
+        return self._ast_owner
 
     def get_ast_file_pairs(self) -> Sequence[Tuple[KnowledgeGraphNode, KnowledgeGraphNode]]:
-        """Cached ``(file_node, non_root_ast_node)`` pairs for retrieval indexing."""
-        self._ensure_edge_indexes()
-        if self._cached_ast_file_pairs is None:
-            raise RuntimeError("ast-file pairs index not built")
-        return self._cached_ast_file_pairs
+        self._build_edge_indexes()
+        assert self._ast_file_pairs is not None
+        return self._ast_file_pairs
 
     def find_file_node_for_text_node(self, text_node: KnowledgeGraphNode) -> KnowledgeGraphNode:
-        """Owning FileNode for a TextNode, using cached NEXT_CHUNK / HAS_TEXT maps."""
-        self._ensure_edge_indexes()
-        if self._cached_next_chunk_reverse is None or self._cached_text_to_file is None:
-            raise RuntimeError("text-to-file index not built")
-        current_id = text_node.node_id
-        while current_id in self._cached_next_chunk_reverse:
-            current_id = self._cached_next_chunk_reverse[current_id].node_id
-        file_node = self._cached_text_to_file.get(current_id)
-        if file_node is None:
-            raise KeyError(f"no file node for text node id {current_id}")
-        return file_node
+        """Walk ``NEXT_CHUNK`` backward to the first chunk, then ``HAS_TEXT``."""
+        self._build_edge_indexes()
+        assert self._prev_chunk is not None and self._text_owner is not None
+        nid = text_node.node_id
+        while nid in self._prev_chunk:
+            nid = self._prev_chunk[nid].node_id
+        owner = self._text_owner.get(nid)
+        if owner is None:
+            raise KeyError(f"no file node for text node id {nid}")
+        return owner
 
     def get_file_node_dicts(self) -> Sequence[FileNodeDict]:
-        """Serialize file nodes to dicts."""
-        return [kg_node.to_dict() for kg_node in self.get_file_nodes()]
+        return [n.to_dict() for n in self.get_file_nodes()]  # type: ignore[misc]
 
     def get_ast_node_dicts(self) -> Sequence[ASTNodeDict]:
-        """Serialize AST nodes to dicts."""
-        return [kg_node.to_dict() for kg_node in self.get_ast_nodes()]
+        return [n.to_dict() for n in self.get_ast_nodes()]  # type: ignore[misc]
 
     def get_text_node_dicts(self) -> Sequence[TextNodeDict]:
-        """Serialize text nodes to dicts."""
-        return [kg_node.to_dict() for kg_node in self.get_text_nodes()]
+        return [n.to_dict() for n in self.get_text_nodes()]  # type: ignore[misc]
 
     def get_has_ast_edge_dicts(self) -> Sequence[HasASTEdge]:
-        """Serialize ``HAS_AST`` edges to dicts."""
-        return [kg_edge.to_edge_dict() for kg_edge in self.get_has_ast_edges()]
+        return [e.to_edge_dict() for e in self.get_has_ast_edges()]  # type: ignore[misc]
 
     def get_has_file_edge_dicts(self) -> Sequence[HasFileEdge]:
-        """Serialize ``HAS_FILE`` edges to dicts."""
-        return [kg_edge.to_edge_dict() for kg_edge in self.get_has_file_edges()]
+        return [e.to_edge_dict() for e in self.get_has_file_edges()]  # type: ignore[misc]
 
     def get_has_text_edge_dicts(self) -> Sequence[HasTextEdge]:
-        """Serialize ``HAS_TEXT`` edges to dicts."""
-        return [kg_edge.to_edge_dict() for kg_edge in self.get_has_text_edges()]
+        return [e.to_edge_dict() for e in self.get_has_text_edges()]  # type: ignore[misc]
 
     def get_next_chunk_edge_dicts(self) -> Sequence[NextChunkEdge]:
-        """Serialize ``NEXT_CHUNK`` edges to dicts."""
-        return [kg_edge.to_edge_dict() for kg_edge in self.get_next_chunk_edges()]
+        return [e.to_edge_dict() for e in self.get_next_chunk_edges()]  # type: ignore[misc]
 
     def get_parent_of_edge_dicts(self) -> Sequence[ParentOfEdge]:
-        """Serialize ``PARENT_OF`` edges to dicts."""
-        return [kg_edge.to_edge_dict() for kg_edge in self.get_parent_of_edges()]
+        return [e.to_edge_dict() for e in self.get_parent_of_edges()]  # type: ignore[misc]
 
     def get_inherits_edge_dicts(self) -> Sequence[InheritsEdge]:
-        """Serialize ``INHERITS`` edges to dicts."""
-        return [kg_edge.to_edge_dict() for kg_edge in self.get_inherits_edges()]
+        return [e.to_edge_dict() for e in self.get_inherits_edges()]  # type: ignore[misc]
 
     def get_parent_to_children_map(self) -> Mapping[int, Sequence[KnowledgeGraphNode]]:
-        """Returns a mapping from parent AST node IDs to their child AST nodes."""
-        self._ensure_edge_indexes()
-        if self._cached_parent_to_children is None:
-            raise RuntimeError("parent-to-children index not built")
-        return self._cached_parent_to_children
+        self._build_edge_indexes()
+        assert self._parent_children is not None
+        return self._parent_children
 
-    def __eq__(self, other: "KnowledgeGraph") -> bool:
-        """True if both graphs contain the same nodes and edges (order-insensitive)."""
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, KnowledgeGraph):
             return False
+        left_nodes = sorted(self._knowledge_graph_nodes, key=lambda n: n.node_id)
+        right_nodes = sorted(other._knowledge_graph_nodes, key=lambda n: n.node_id)
+        if any(a != b for a, b in itertools.zip_longest(left_nodes, right_nodes)):
+            return False
 
-        self._knowledge_graph_nodes.sort(key=lambda x: x.node_id)
-        other._knowledge_graph_nodes.sort(key=lambda x: x.node_id)
+        def _edge_key(e: KnowledgeGraphEdge):
+            return (e.source.node_id, e.target.node_id, e.type)
 
-        for self_kg_node, other_kg_node in itertools.zip_longest(
-            self._knowledge_graph_nodes, other._knowledge_graph_nodes, fillvalue=None
-        ):
-            if self_kg_node != other_kg_node:
-                return False
-
-        self._knowledge_graph_edges.sort(key=lambda x: (x.source.node_id, x.target.node_id, x.type))
-        other._knowledge_graph_edges.sort(
-            key=lambda x: (x.source.node_id, x.target.node_id, x.type)
-        )
-        for self_kg_edge, other_kg_edge in itertools.zip_longest(
-            self._knowledge_graph_edges, other._knowledge_graph_edges, fillvalue=None
-        ):
-            if self_kg_edge != other_kg_edge:
-                return False
-
-        return True
+        left_edges = sorted(self._knowledge_graph_edges, key=_edge_key)
+        right_edges = sorted(other._knowledge_graph_edges, key=_edge_key)
+        return all(a == b for a, b in itertools.zip_longest(left_edges, right_edges))

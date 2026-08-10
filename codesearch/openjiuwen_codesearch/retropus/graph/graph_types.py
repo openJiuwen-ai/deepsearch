@@ -1,33 +1,24 @@
-"""Type definition for nodes and edges in the knowledge graph (based on Prometheus)."""
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""Node / edge value types for the in-memory Retropus knowledge graph."""
 
-import dataclasses
-import enum
-from typing import TypedDict, Union
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Callable, TypedDict, Union
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class FileNode:
-    """A node representing a file/dir.
-
-    Attributes:
-      basename: The basename of a file/dir, like 'bar.py' or 'foo'.
-      relative_path: The relative path from the root path, like 'foo/bar/baz.java'.
-    """
+    """Filesystem entry (file or directory) relative to the repo root."""
 
     basename: str
     relative_path: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ASTNode:
-    """A node representing a tree-sitter node.
-
-    Attributes:
-      type: The tree-sitter node type.
-      start_line: The starting line number. 1-indexed and inclusive.
-      end_line: The ending line number.  1-indexed and inclusive.
-      text: The source code correcpsonding to the node.
-    """
+    """One tree-sitter syntax node with 1-based inclusive line bounds."""
 
     type: str
     start_line: int
@@ -35,118 +26,78 @@ class ASTNode:
     text: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class TextNode:
-    """A node representing a piece of text.
-
-    Attributes:
-      text: A string.
-      start_line: The starting line number.
-      end_line: The ending line number.
-    """
+    """A contiguous text chunk (markdown / plain text) with line bounds."""
 
     text: str
     start_line: int
     end_line: int
 
 
-@dataclasses.dataclass(frozen=True)
-class KnowledgeGraphNode:
-    """A node in the knowledge graph.
+Payload = Union[FileNode, ASTNode, TextNode]
 
-    Attributes:
-      node_id: A id that uniquely identifies a node in the graph.
-      node: The node itself, can be a FileNode, ASTNode or TextNode.
-    """
+
+@dataclass(frozen=True)
+class KnowledgeGraphNode:
+    """Graph vertex: stable integer id + typed payload."""
 
     node_id: int
-    node: Union[FileNode, ASTNode, TextNode]
+    node: Payload
 
     def to_dict(self) -> Union["FileNodeDict", "ASTNodeDict", "TextNodeDict"]:
-        """Convert the KnowledgeGraphNode into a serializable dict."""
-        match self.node:
-            case FileNode():
-                return FileNodeDict(
-                    node_id=self.node_id,
-                    basename=self.node.basename,
-                    relative_path=self.node.relative_path,
-                )
-            case ASTNode():
-                return ASTNodeDict(
-                    node_id=self.node_id,
-                    type=self.node.type,
-                    start_line=self.node.start_line,
-                    end_line=self.node.end_line,
-                    text=self.node.text,
-                )
-            case TextNode():
-                return TextNodeDict(
-                    node_id=self.node_id,
-                    text=self.node.text,
-                    start_line=self.node.start_line,
-                    end_line=self.node.end_line,
-                )
-            case _:
-                raise ValueError("Unknown KnowledgeGraphNode.node type")
+        """Flatten into a JSON-serializable property dict."""
+        serializer = _NODE_SERIALIZERS.get(type(self.node))
+        if serializer is None:
+            raise ValueError(f"unsupported payload type: {type(self.node)!r}")
+        return serializer(self)
 
     @classmethod
-    def from_file_node_dict(cls, node: "FileNodeDict") -> "KnowledgeGraphNode":
-        """Rebuild a ``KnowledgeGraphNode`` wrapping a ``FileNode`` from dict fields."""
+    def from_file_node_dict(cls, data: "FileNodeDict") -> "KnowledgeGraphNode":
         return cls(
-            node_id=node["node_id"],
-            node=FileNode(
-                basename=node["basename"],
-                relative_path=node["relative_path"],
-            ),
+            node_id=data["node_id"],
+            node=FileNode(basename=data["basename"], relative_path=data["relative_path"]),
         )
 
     @classmethod
-    def from_ast_node_dict(cls, node: "ASTNodeDict") -> "KnowledgeGraphNode":
-        """Rebuild a ``KnowledgeGraphNode`` wrapping an ``ASTNode`` from dict fields."""
+    def from_ast_node_dict(cls, data: "ASTNodeDict") -> "KnowledgeGraphNode":
         return cls(
-            node_id=node["node_id"],
+            node_id=data["node_id"],
             node=ASTNode(
-                type=node["type"],
-                start_line=node["start_line"],
-                end_line=node["end_line"],
-                text=node["text"],
+                type=data["type"],
+                start_line=data["start_line"],
+                end_line=data["end_line"],
+                text=data["text"],
             ),
         )
 
     @classmethod
-    def from_text_node_dict(cls, node: "TextNodeDict") -> "KnowledgeGraphNode":
-        """Rebuild a ``KnowledgeGraphNode`` wrapping a ``TextNode`` from dict fields."""
+    def from_text_node_dict(cls, data: "TextNodeDict") -> "KnowledgeGraphNode":
         return cls(
-            node_id=node["node_id"],
+            node_id=data["node_id"],
             node=TextNode(
-                text=node["text"],
-                start_line=node["start_line"],
-                end_line=node["end_line"],
+                text=data["text"],
+                start_line=data["start_line"],
+                end_line=data["end_line"],
             ),
         )
 
 
-class KnowledgeGraphEdgeType(enum.StrEnum):
-    """Enum of all knowledge graph edge types"""
+class KnowledgeGraphEdgeType(StrEnum):
+    """Directed relationship labels between knowledge-graph nodes."""
 
-    parent_of = "PARENT_OF"  # ASTNode -> ASTNode
-    has_file = "HAS_FILE"  # FileNode -> FileNode
-    has_ast = "HAS_AST"  # FileNode -> ASTNode
-    has_text = "HAS_TEXT"  # FileNode -> TextNode
-    next_chunk = "NEXT_CHUNK"  # TextNode -> TextNode
-    inherits = "INHERITS"  # ASTNode (subclass) -> ASTNode (superclass)
-    imports = "IMPORTS"  # FileNode (importer) -> FileNode (imported module)
+    parent_of = "PARENT_OF"  # AST → AST
+    has_file = "HAS_FILE"  # dir File → child File
+    has_ast = "HAS_AST"  # File → AST root
+    has_text = "HAS_TEXT"  # File → Text chunk
+    next_chunk = "NEXT_CHUNK"  # Text → Text
+    inherits = "INHERITS"  # subtype AST → supertype AST
+    imports = "IMPORTS"  # importer File → imported File
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class KnowledgeGraphEdge:
-    """An edge in the knowledge graph.
-
-    Attributes:
-      source: The source knowledge graph node.
-      target: The target knowledge graph node.
-      type: The knowledge graph edge type.
-    """
+    """Directed edge between two ``KnowledgeGraphNode`` vertices."""
 
     source: KnowledgeGraphNode
     target: KnowledgeGraphNode
@@ -163,50 +114,93 @@ class KnowledgeGraphEdge:
         "InheritsEdge",
         "ImportsEdge",
     ]:
-        """Convert the KnowledgeGraphEdge into a serializable edge dict."""
-        match self.type:
-            case KnowledgeGraphEdgeType.has_file:
-                return HasFileEdge(
-                    source=self.source.to_dict(),
-                    target=self.target.to_dict(),
-                )
-            case KnowledgeGraphEdgeType.has_ast:
-                return HasASTEdge(
-                    source=self.source.to_dict(),
-                    target=self.target.to_dict(),
-                )
-            case KnowledgeGraphEdgeType.parent_of:
-                return ParentOfEdge(
-                    source=self.source.to_dict(),
-                    target=self.target.to_dict(),
-                )
-            case KnowledgeGraphEdgeType.has_text:
-                return HasTextEdge(
-                    source=self.source.to_dict(),
-                    target=self.target.to_dict(),
-                )
-            case KnowledgeGraphEdgeType.next_chunk:
-                return NextChunkEdge(
-                    source=self.source.to_dict(),
-                    target=self.target.to_dict(),
-                )
-            case KnowledgeGraphEdgeType.inherits:
-                return InheritsEdge(
-                    source=self.source.to_dict(),
-                    target=self.target.to_dict(),
-                )
-            case KnowledgeGraphEdgeType.imports:
-                return ImportsEdge(
-                    source=self.source.to_dict(),
-                    target=self.target.to_dict(),
-                )
-            case _:
-                raise ValueError(f"Unknown edge type: {self.type}")
+        """Serialize as a typed edge dict (source/target already flattened)."""
+        builder = _EDGE_SERIALIZERS.get(self.type)
+        if builder is None:
+            raise ValueError(f"unknown edge type: {self.type}")
+        return builder(self.source.to_dict(), self.target.to_dict())
 
 
-###############################################################################
-#                         Serializable dict types                             #
-###############################################################################
+def _serialize_file(kg: KnowledgeGraphNode) -> "FileNodeDict":
+    n = kg.node
+    assert isinstance(n, FileNode)
+    return FileNodeDict(
+        node_id=kg.node_id,
+        basename=n.basename,
+        relative_path=n.relative_path,
+    )
+
+
+def _serialize_ast(kg: KnowledgeGraphNode) -> "ASTNodeDict":
+    n = kg.node
+    assert isinstance(n, ASTNode)
+    return ASTNodeDict(
+        node_id=kg.node_id,
+        type=n.type,
+        start_line=n.start_line,
+        end_line=n.end_line,
+        text=n.text,
+    )
+
+
+def _serialize_text(kg: KnowledgeGraphNode) -> "TextNodeDict":
+    n = kg.node
+    assert isinstance(n, TextNode)
+    return TextNodeDict(
+        node_id=kg.node_id,
+        text=n.text,
+        start_line=n.start_line,
+        end_line=n.end_line,
+    )
+
+
+_NODE_SERIALIZERS: dict[type, Callable[[KnowledgeGraphNode], object]] = {
+    FileNode: _serialize_file,
+    ASTNode: _serialize_ast,
+    TextNode: _serialize_text,
+}
+
+
+def _edge_has_file(src, tgt) -> "HasFileEdge":
+    return HasFileEdge(source=src, target=tgt)
+
+
+def _edge_has_ast(src, tgt) -> "HasASTEdge":
+    return HasASTEdge(source=src, target=tgt)
+
+
+def _edge_parent_of(src, tgt) -> "ParentOfEdge":
+    return ParentOfEdge(source=src, target=tgt)
+
+
+def _edge_has_text(src, tgt) -> "HasTextEdge":
+    return HasTextEdge(source=src, target=tgt)
+
+
+def _edge_next_chunk(src, tgt) -> "NextChunkEdge":
+    return NextChunkEdge(source=src, target=tgt)
+
+
+def _edge_inherits(src, tgt) -> "InheritsEdge":
+    return InheritsEdge(source=src, target=tgt)
+
+
+def _edge_imports(src, tgt) -> "ImportsEdge":
+    return ImportsEdge(source=src, target=tgt)
+
+
+_EDGE_SERIALIZERS = {
+    KnowledgeGraphEdgeType.has_file: _edge_has_file,
+    KnowledgeGraphEdgeType.has_ast: _edge_has_ast,
+    KnowledgeGraphEdgeType.parent_of: _edge_parent_of,
+    KnowledgeGraphEdgeType.has_text: _edge_has_text,
+    KnowledgeGraphEdgeType.next_chunk: _edge_next_chunk,
+    KnowledgeGraphEdgeType.inherits: _edge_inherits,
+    KnowledgeGraphEdgeType.imports: _edge_imports,
+}
+
+
+# ---- Wire / persistence shapes (unchanged field names for dump compatibility) ----
 
 
 class MetadataNode(TypedDict):
@@ -219,16 +213,12 @@ class MetadataNode(TypedDict):
 
 
 class FileNodeDict(TypedDict):
-    """Serializable property dict for a ``FileNode``."""
-
     node_id: int
     basename: str
     relative_path: str
 
 
 class ASTNodeDict(TypedDict):
-    """Serializable property dict for an ``ASTNode``."""
-
     node_id: int
     type: str
     start_line: int
@@ -237,8 +227,6 @@ class ASTNodeDict(TypedDict):
 
 
 class TextNodeDict(TypedDict):
-    """Serializable property dict for a ``TextNode``."""
-
     node_id: int
     text: str
     start_line: int
@@ -246,49 +234,35 @@ class TextNodeDict(TypedDict):
 
 
 class HasFileEdge(TypedDict):
-    """Serializable edge dict for ``HAS_FILE`` (directory → child file/dir)."""
-
     source: FileNodeDict
     target: FileNodeDict
 
 
 class HasASTEdge(TypedDict):
-    """Serializable edge dict for ``HAS_AST`` (file → AST root)."""
-
     source: FileNodeDict
     target: ASTNodeDict
 
 
 class ParentOfEdge(TypedDict):
-    """Serializable edge dict for ``PARENT_OF`` (AST parent → AST child)."""
-
     source: ASTNodeDict
     target: ASTNodeDict
 
 
 class HasTextEdge(TypedDict):
-    """Serializable edge dict for ``HAS_TEXT`` (file → text chunk)."""
-
     source: FileNodeDict
     target: TextNodeDict
 
 
 class NextChunkEdge(TypedDict):
-    """Serializable edge dict for ``NEXT_CHUNK`` (text chunk → next chunk)."""
-
     source: TextNodeDict
     target: TextNodeDict
 
 
 class InheritsEdge(TypedDict):
-    """Serializable edge dict for ``INHERITS`` (subtype AST → supertype AST)."""
-
     source: ASTNodeDict
     target: ASTNodeDict
 
 
 class ImportsEdge(TypedDict):
-    """Serializable edge dict for ``IMPORTS`` (importer file → imported file)."""
-
     source: FileNodeDict
     target: FileNodeDict

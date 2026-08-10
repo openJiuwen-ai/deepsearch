@@ -40,25 +40,23 @@ EMPTY_DATA_MESSAGE = "Your query returned empty result, please try a different q
 
 
 def format_knowledge_graph_data(data: Sequence[Mapping[str, Any]]) -> str:
-    """Format retriever result dicts into a readable string for the LLM.
+    """Render retriever hit dicts as a stable, LLM-readable observation block.
 
-    Copied from Prometheus's ``format_knowledge_graph_data``.
-
-    Emits a static header first, then results with keys in sorted order so the
-    observation prefix stays byte-stable across similar queries.
+    Header text is fixed; each hit's keys are emitted in sorted order so
+    similar queries keep a byte-stable prefix for prompt caching.
     """
     if not data:
         return EMPTY_DATA_MESSAGE
 
-    output = (
+    parts = [
         "Retriever results (inspect with read_file, then add_context for tight spans):\n\n"
-    )
+    ]
     for index, row_result in enumerate(data):
-        output += f"Result {index + 1}:\n"
+        parts.append(f"Result {index + 1}:\n")
         for key in sorted(row_result.keys()):
-            output += f"{key}: {str(row_result[key])}\n"
-        output += "\n\n"
-    return output.strip()
+            parts.append(f"{key}: {str(row_result[key])}\n")
+        parts.append("\n\n")
+    return "".join(parts).strip()
 
 
 def _split_identifier(ident: str) -> List[str]:

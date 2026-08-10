@@ -1,13 +1,14 @@
-"""Recursive character text splitter (LangChain-compatible, no langchain deps).
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""Recursive character text splitter (LangChain-compatible behaviour, no langchain deps).
 
-Matches ``langchain_text_splitters.RecursiveCharacterTextSplitter`` defaults:
-separators ``["\\n\\n", "\\n", " ", ""]``, ``keep_separator=True`` (attach at
-start), and ``strip_whitespace=True``.
+Separator preference: ``["\\n\\n", "\\n", " ", ""]``. Separator is kept at the
+start of the following piece; chunks are stripped of leading/trailing whitespace.
 """
+
+from __future__ import annotations
 
 import re
 from typing import List, Sequence
-
 
 _DEFAULT_SEPARATORS: Sequence[str] = ("\n\n", "\n", " ", "")
 
@@ -28,116 +29,130 @@ def split_text(
         raise ValueError(
             f"chunk_overlap ({chunk_overlap}) must be <= chunk_size ({chunk_size})"
         )
-    return _split_text(text, list(separators), chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    if not text:
+        return []
+    return _recursive_split(
+        text,
+        list(separators),
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
 
 
-def _split_with_separator(text: str, separator: str) -> List[str]:
-    """Split ``text`` keeping the separator attached to the following piece."""
+def _keep_separator_split(text: str, separator: str) -> List[str]:
+    """Split so each separator stays glued to the piece that follows it."""
     if not separator:
-        return [ch for ch in text if ch]
-    parts = re.split(f"({re.escape(separator)})", text)
-    # parts: [pre, sep, mid, sep, mid, ..., post]
-    merged = [parts[i] + parts[i + 1] for i in range(1, len(parts), 2)]
-    if len(parts) % 2 == 0:
-        merged.append(parts[-1])
-    return [s for s in [parts[0], *merged] if s]
+        return list(text)
+    tokens = re.split(f"({re.escape(separator)})", text)
+    out: List[str] = []
+    if tokens and tokens[0]:
+        out.append(tokens[0])
+    for i in range(1, len(tokens), 2):
+        sep = tokens[i]
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+        out.append(sep + nxt)
+    return [p for p in out if p]
 
 
-def _join_docs(docs: List[str], separator: str) -> str | None:
-    """Join split pieces with ``separator``, returning ``None`` for empty/whitespace."""
-    text = separator.join(docs).strip()
+def _emit(parts: List[str], joiner: str) -> str | None:
+    text = joiner.join(parts).strip()
     return text or None
 
 
-def _merge_splits(
-    splits: List[str],
-    separator: str,
+def _window_len(parts: List[str], joiner_len: int) -> int:
+    n = len(parts)
+    if n == 0:
+        return 0
+    return sum(map(len, parts)) + joiner_len * (n - 1)
+
+
+def _pack_windows(
+    pieces: List[str],
+    joiner: str,
     *,
     chunk_size: int,
     chunk_overlap: int,
 ) -> List[str]:
-    """Greedily merge ``splits`` into chunks of at most ``chunk_size`` with overlap."""
-    separator_len = len(separator)
-    docs: List[str] = []
-    current_doc: List[str] = []
-    total = 0
-    for piece in splits:
-        piece_len = len(piece)
-        projected = total + piece_len + (separator_len if current_doc else 0)
-        if projected > chunk_size and current_doc:
-            doc = _join_docs(current_doc, separator)
-            if doc is not None:
-                docs.append(doc)
-            while total > chunk_overlap or (
-                total + piece_len + (separator_len if current_doc else 0) > chunk_size
-                and total > 0
+    """Accumulate pieces into sized windows; retain ``chunk_overlap`` chars."""
+    jlen = len(joiner)
+    result: List[str] = []
+    window: List[str] = []
+    used = 0
+
+    for piece in pieces:
+        add = len(piece) + (jlen if window else 0)
+        if used + add > chunk_size and window:
+            chunk = _emit(window, joiner)
+            if chunk is not None:
+                result.append(chunk)
+            # Trim from the left until overlap budget + new piece fit.
+            while window and (
+                used > chunk_overlap
+                or used + len(piece) + (jlen if window else 0) > chunk_size
             ):
-                total -= len(current_doc[0]) + (separator_len if len(current_doc) > 1 else 0)
-                current_doc = current_doc[1:]
-        current_doc.append(piece)
-        total += piece_len + (separator_len if len(current_doc) > 1 else 0)
-    doc = _join_docs(current_doc, separator)
-    if doc is not None:
-        docs.append(doc)
-    return docs
+                head = window.pop(0)
+                used -= len(head) + (jlen if window else 0)
+        window.append(piece)
+        used += len(piece) + (jlen if len(window) > 1 else 0)
+
+    chunk = _emit(window, joiner)
+    if chunk is not None:
+        result.append(chunk)
+    return result
 
 
-def _split_text(
+def _pick_separator(text: str, separators: List[str]) -> tuple[str, List[str]]:
+    for i, sep in enumerate(separators):
+        if not sep:
+            return sep, []
+        if re.search(re.escape(sep), text):
+            return sep, separators[i + 1 :]
+    return separators[-1], []
+
+
+def _recursive_split(
     text: str,
     separators: List[str],
     *,
     chunk_size: int,
     chunk_overlap: int,
 ) -> List[str]:
-    """Recursively split ``text`` with the coarsest matching separator, then merge."""
-    separator = separators[-1]
-    new_separators: List[str] = []
-    for i, candidate in enumerate(separators):
-        if not candidate:
-            separator = candidate
-            break
-        if re.search(re.escape(candidate), text):
-            separator = candidate
-            new_separators = separators[i + 1:]
-            break
+    sep, finer = _pick_separator(text, separators)
+    parts = _keep_separator_split(text, sep)
+    # Separators already live inside ``parts`` → pack with empty joiner.
+    joiner = ""
 
-    splits = _split_with_separator(text, separator)
-    # Separators are already attached to splits, so merge with "".
-    merge_separator = ""
-    final_chunks: List[str] = []
-    good_splits: List[str] = []
-    for piece in splits:
-        if len(piece) < chunk_size:
-            good_splits.append(piece)
+    out: List[str] = []
+    pending: List[str] = []
+
+    def flush() -> None:
+        nonlocal pending
+        if pending:
+            out.extend(
+                _pack_windows(
+                    pending,
+                    joiner,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                )
+            )
+            pending = []
+
+    for part in parts:
+        if len(part) < chunk_size:
+            pending.append(part)
             continue
-        if good_splits:
-            final_chunks.extend(
-                _merge_splits(
-                    good_splits,
-                    merge_separator,
+        flush()
+        if finer:
+            out.extend(
+                _recursive_split(
+                    part,
+                    finer,
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                 )
             )
-            good_splits = []
-        if not new_separators:
-            final_chunks.append(piece)
         else:
-            final_chunks.extend(
-                _split_text(
-                    piece,
-                    new_separators,
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                )
-            )
-    if good_splits:
-        final_chunks.extend(
-            _merge_splits(
-                good_splits,
-                merge_separator,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-            )
-        )
-    return final_chunks
+            out.append(part)
+    flush()
+    return out

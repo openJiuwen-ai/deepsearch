@@ -1,11 +1,15 @@
-import enum
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""Map filesystem paths to tree-sitter language identifiers."""
+
+from __future__ import annotations
+
+from enum import StrEnum
 from pathlib import Path
 
 
-class FileType(enum.StrEnum):
-    """Enum of all tree-sitter supported file types"""
+class FileType(StrEnum):
+    """Languages / config formats we can feed to tree-sitter."""
 
-    # Supported programming languages
     BASH = "bash"
     C = "c"
     CSHARP = "csharp"
@@ -23,61 +27,47 @@ class FileType(enum.StrEnum):
     RUBY = "ruby"
     TYPESCRIPT = "typescript"
     HTML = "html"
-    # configuration files
     YAML = "yaml"
     XML = "xml"
     PROPERTIES = "properties"
-    # Unknown file type
     UNKNOWN = "UNKNOWN"
 
     @classmethod
-    def from_path(cls, path: Path):
-        """Map a filesystem path to a tree-sitter ``FileType`` (or ``UNKNOWN``)."""
-        # Determine the file type based on the file extension or name
-        if path.name.lower() == "dockerfile":
-            return cls.DOCKERFILE
+    def from_path(cls, path: Path) -> FileType:
+        """Infer type from basename / suffix; ``UNKNOWN`` when unsupported."""
+        return resolve_file_type(path)
 
-        # Use suffix matching for other file types
-        match path.suffix:
-            case ".sh" | ".bash":
-                return cls.BASH
-            case ".c":
-                return cls.C
-            case ".cs":
-                return cls.CSHARP
-            case ".css":
-                return cls.CSS
-            case ".cpp" | ".cc" | ".cxx":
-                return cls.CPP
-            case ".go":
-                return cls.GO
-            case ".java":
-                return cls.JAVA
-            case ".js":
-                return cls.JAVASCRIPT
-            case ".kt":
-                return cls.KOTLIN
-            case ".php":
-                return cls.PHP
-            case ".py":
-                return cls.PYTHON
-            case ".sql":
-                return cls.SQL
-            case ".rs":
-                return cls.RUST
-            case ".rb":
-                return cls.RUBY
-            case ".ts":
-                return cls.TYPESCRIPT
-            case ".html":
-                return cls.HTML
-            # configuration files
-            case ".yaml" | ".yml":
-                return cls.YAML
-            case ".xml":
-                return cls.XML
-            case ".properties":
-                return cls.PROPERTIES
-            # If the file type is not recognized, return UNKNOWN
-            case _:
-                return cls.UNKNOWN
+
+# Extension → language. Lookups are O(1); special filenames handled separately.
+_SUFFIX_TO_TYPE: dict[str, FileType] = {
+    ".sh": FileType.BASH,
+    ".bash": FileType.BASH,
+    ".c": FileType.C,
+    ".cs": FileType.CSHARP,
+    ".css": FileType.CSS,
+    ".cpp": FileType.CPP,
+    ".cc": FileType.CPP,
+    ".cxx": FileType.CPP,
+    ".go": FileType.GO,
+    ".java": FileType.JAVA,
+    ".js": FileType.JAVASCRIPT,
+    ".kt": FileType.KOTLIN,
+    ".php": FileType.PHP,
+    ".py": FileType.PYTHON,
+    ".sql": FileType.SQL,
+    ".rs": FileType.RUST,
+    ".rb": FileType.RUBY,
+    ".ts": FileType.TYPESCRIPT,
+    ".html": FileType.HTML,
+    ".yaml": FileType.YAML,
+    ".yml": FileType.YAML,
+    ".xml": FileType.XML,
+    ".properties": FileType.PROPERTIES,
+}
+
+
+def resolve_file_type(path: Path) -> FileType:
+    """Infer ``FileType`` from basename / suffix; ``UNKNOWN`` when unsupported."""
+    if path.name.lower() == "dockerfile":
+        return FileType.DOCKERFILE
+    return _SUFFIX_TO_TYPE.get(path.suffix.lower(), FileType.UNKNOWN)

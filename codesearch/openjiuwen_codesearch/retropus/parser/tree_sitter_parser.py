@@ -1,10 +1,7 @@
-"""
-Tree-sitter-based code parsing module (copied from Prometheus).
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""Parse source files into tree-sitter syntax trees."""
 
-This module provides functionality to parse source code files using tree-sitter,
-supporting multiple programming languages. It handles file type detection and
-parsing operations, returning a syntax tree representation of the source code.
-"""
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -13,8 +10,8 @@ from tree_sitter_language_pack import get_parser
 
 from openjiuwen_codesearch.retropus.parser.file_types import FileType
 
-FILE_TYPE_TO_LANG = {
-    # Supported programming languages
+# FileType → tree-sitter-language-pack language key.
+_LANG_BY_TYPE: dict[FileType, str] = {
     FileType.BASH: "bash",
     FileType.C: "c",
     FileType.CSHARP: "csharp",
@@ -32,38 +29,29 @@ FILE_TYPE_TO_LANG = {
     FileType.RUBY: "ruby",
     FileType.TYPESCRIPT: "typescript",
     FileType.HTML: "html",
-    # Configuration files
     FileType.YAML: "yaml",
     FileType.XML: "xml",
     FileType.PROPERTIES: "properties",
 }
 
+# Back-compat alias used by older call sites / tests.
+FILE_TYPE_TO_LANG = _LANG_BY_TYPE
+
+
+def language_for(path: Path) -> str | None:
+    """Return the tree-sitter language key for ``path``, or ``None``."""
+    return _LANG_BY_TYPE.get(FileType.from_path(path))
+
 
 def supports_file(file: Path) -> bool:
-    """Checks if the parser supports a given file type.
-
-    Args:
-      file: A Path object representing the file to check.
-
-    Returns:
-      bool: True if the file type is supported, False otherwise.
-    """
-    file_type = FileType.from_path(file)
-    return file_type in FILE_TYPE_TO_LANG
+    """Whether ``file`` has a registered tree-sitter grammar."""
+    return language_for(file) is not None
 
 
 def parse(file: Path) -> Tree:
-    """Parses a source code file using the appropriate tree-sitter parser.
-
-    Args:
-      file: A Path object representing the file to parse.
-
-    Returns:
-      Tree: A tree-sitter Tree object representing the parsed syntax tree.
-    """
-    file_type = FileType.from_path(file)
-    lang = FILE_TYPE_TO_LANG.get(file_type, None)
-
-    lang_parser = get_parser(lang)
-    with file.open("rb") as f:
-        return lang_parser.parse(f.read())
+    """Parse ``file`` bytes with the matching grammar; raises if unsupported."""
+    lang = language_for(file)
+    if lang is None:
+        raise ValueError(f"unsupported file type for tree-sitter: {file}")
+    parser = get_parser(lang)
+    return parser.parse(file.read_bytes())

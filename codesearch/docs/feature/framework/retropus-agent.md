@@ -18,7 +18,7 @@ CodeSearch 默认五工具注册表严格隔离。
    retropus` / ContextBench `--engine retropus`，或 HTTP 请求体
    `"engine": "retropus"`；**无** `ENGINE=` 环境变量；默认仍为 `auto`，不会自动走
    Retropus）
-2. `index_repository(repo_path)` → vendored `build_index` + `build_retriever`（无
+2. `index_repository(repo_path)` → `build_index` + `build_retriever`（无
    Milvus）；成功后将 KG + BM25 **落盘**到
    `{retropus.index_dir}/{collection}/`（默认 `./output/retropus/…`；空串关闭）
 3. `search(query)` → 若进程内无索引则从落盘缓存加载 → `RetropusRunContext` +
