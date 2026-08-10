@@ -425,7 +425,9 @@ class KnowledgeGraph:
 
     def get_parent_to_children_map(self) -> Mapping[int, Sequence[KnowledgeGraphNode]]:
         self._rebuild_arc_maps()
-        return kg_views.require_index(self._ast_kids, "parent-to-children index not built")  # type: ignore[return-value]
+        return kg_views.require_index(  # type: ignore[return-value]
+            self._ast_kids, "parent-to-children index not built"
+        )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, KnowledgeGraph):
