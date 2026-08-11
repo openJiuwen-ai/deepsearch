@@ -1,0 +1,21 @@
+# -*- coding: UTF-8 -*-
+# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+import enum
+
+
+class SearchEngine(enum.Enum):
+    TAVILY = "tavily"
+    PUBMED = "pubmed"
+    ARXIV = "arxiv"
+    GOOGLE = "google"
+    XUNFEI = "xunfei"
+    PETAL = "petal"
+    BOCHA = "bocha"
+    JINA = "jina"
+    PERPLEXITY = "perplexity"
+    SERPER = "serper"
+
+
+class LocalSearch(enum.Enum):
+    OPENAPI = "openapi"
+    NATIVE = "native"

@@ -1,8 +1,0 @@
-{
-  "llm_config": {},
-  "per_question_params": {},
-  "search_fetch_config": {
-    "jina_api_key": "placeholder",
-    "serper_api_key": "placeholder"
-  }
-}
