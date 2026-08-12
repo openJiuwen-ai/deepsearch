@@ -69,6 +69,33 @@ def test_deduplicate_doc_infos_keeps_high_score_for_same_url_and_same_content():
     assert result[0]["title"] == "doc-2"
 
 
+def test_deduplicate_doc_infos_preserves_academic_provenance_from_discarded_duplicate():
+    academic = _doc(1, url="https://example.com/paper", content="same content", relevance=1)
+    academic.update({
+        "academic_source": "pubmed",
+        "academic_source_id": "38132429",
+        "pmcid": "PMC10740908",
+        "evidence_content_type": "full_text",
+        "evidence_content_chars": 1200,
+        "full_text_format": "jats_xml",
+        "full_text_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10740908/",
+    })
+    tavily = _doc(2, url="https://example.com/paper", content="same content", relevance=9)
+    tavily["evidence_content_type"] = "abstract"
+
+    result = deduplicate_doc_infos([academic, tavily])
+
+    assert len(result) == 1
+    assert result[0]["title"] == "doc-2"
+    assert result[0]["academic_source"] == "pubmed"
+    assert result[0]["academic_source_id"] == "38132429"
+    assert result[0]["pmcid"] == "PMC10740908"
+    assert result[0]["evidence_content_type"] == "abstract"
+    assert "evidence_content_chars" not in result[0]
+    assert "full_text_format" not in result[0]
+    assert "full_text_url" not in result[0]
+
+
 def test_deduplicate_doc_infos_keeps_same_url_with_different_content():
     first = _doc(1, url="https://example.com/a", content="正文 A")
     second = _doc(2, url="https://www.example.com/a#frag", content="正文 B")

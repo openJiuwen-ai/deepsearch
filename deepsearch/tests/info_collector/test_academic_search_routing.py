@@ -47,14 +47,21 @@ def test_vertical_search_engines_are_registered_but_not_primary_configurable():
 
 
 def test_web_search_context_registers_academic_engines_for_research_only():
-    config = AgentConfig(web_search_engine_config={"search_engine_name": "jina"})
+    config = AgentConfig(web_search_engine_config={
+        "search_engine_name": "jina",
+        "max_web_search_results": 3,
+    })
 
     research_token = _initialize_web_search_context_from_agent_config(
         config,
         include_academic_engines=True,
     )
     try:
-        assert set(web_search_context.get()) == {"jina", "pubmed", "arxiv"}
+        engines = web_search_context.get()
+        assert set(engines) == {"jina", "pubmed", "arxiv"}
+        assert engines["jina"].max_web_search_results == 3
+        assert engines["pubmed"].max_web_search_results == 1
+        assert engines["arxiv"].max_web_search_results == 1
     finally:
         web_search_context.reset(research_token)
 
@@ -410,6 +417,38 @@ async def test_direct_primary_error_keeps_retry_behavior():
         "query": "general query",
         "search_engine_name": "tavily",
     }
+
+
+@pytest.mark.asyncio
+async def test_direct_primary_pubmed_non_retryable_error_is_not_replayed():
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "clinical evidence",
+        "web_search_engine_name": "pubmed",
+    }
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(return_value={
+        "search_engine": "pubmed",
+        "search_results": [],
+        "error": "429 Too Many Requests",
+        "retryable": False,
+    })
+
+    result = await node._direct_search_with_retry(
+        DirectSearchRequest(
+            tool=web_tool,
+            tool_name="web_search_tool",
+            query="medical LLM calibration",
+            search_engine_name="pubmed",
+            fallback_to_default=False,
+            retry_on_error=True,
+        ),
+        state,
+    )
+
+    assert result is None
+    web_tool.invoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio

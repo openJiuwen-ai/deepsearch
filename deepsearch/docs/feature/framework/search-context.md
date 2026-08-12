@@ -50,7 +50,8 @@
 - `Outline.sections[*].section_focus` 和 `focus_dimensions` 会生成章节局部合同。
 - `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL、禁引文章标题（`exclude_titles`）、域名约束和可空 `temporal_scope`。
 - `TemporalScope` 的 `constraint_type` 为 `source_date` 或 `content_date`，并要求 `start_date` /
-  `end_date` 至少存在一个包含边界。`source_date` 可由 Tavily 原生日期参数和 Tavily 发表日期后置过滤共同执行；
+  `end_date` 至少存在一个包含边界。`source_date` 可由 Tavily 原生日期参数与后置过滤共同执行；PubMed 和 arXiv
+  的 `published` 由 collector 归一化后执行后置过滤。只有年份或年月的学术日期按可能日期区间保守判断，仅在整个区间越界时删除；
   `content_date` 只通过 collector query 表达事实或数据的时间范围，不按来源发布日期过滤。
 - `build_temporal_scope_prompt_context()` 只为 collector query 与补搜 Prompt 生成
   `has_temporal_scope` 和 `temporal_scope_instruction`，不改变其他研究阶段的 Prompt 契约。

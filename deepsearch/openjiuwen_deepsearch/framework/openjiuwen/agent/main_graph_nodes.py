@@ -118,6 +118,7 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
     get_current_time,
 )
 from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
+from openjiuwen_deepsearch.utils.academic_full_text_audit import emit_cited_academic_full_text_events
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     model_context,
@@ -1335,6 +1336,11 @@ class SourceTracerNode(BaseNode):
         else:
             current_report.checked_trace_source_report_content = checked_trace_source_report_content
             current_report.checked_trace_source_datas = checked_trace_source_datas
+            emit_cited_academic_full_text_events(
+                logger,
+                checked_trace_source_datas,
+                current_report.all_classified_contents,
+            )
             session.update_global_state({"search_context.current_report": current_report})
 
         session.update_global_state(

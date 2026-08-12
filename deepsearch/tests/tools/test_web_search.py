@@ -6,9 +6,13 @@ import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+import httpx
 from pydantic import SecretStr
 
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper import TavilySearchAPIWrapper
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed import (
+    PubMedSearchAPIWrapper,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
     apply_web_search_domain_constraints,
     apply_web_search_temporal_scope,
@@ -24,6 +28,54 @@ def test_web_search_tool_card_does_not_expose_temporal_parameters():
     properties = create_web_search_tool().card.input_params["properties"]
 
     assert set(properties) == {"query", "search_engine_name"}
+
+
+@pytest.mark.asyncio
+async def test_unknown_pubmed_failure_is_not_retryable():
+    wrapper = PubMedSearchAPIWrapper()
+    wrapper.aresults = AsyncMock(side_effect=RuntimeError("429 Too Many Requests"))
+
+    with patch(
+        'openjiuwen_deepsearch.framework.openjiuwen.tools.web_search.web_search_context'
+    ) as mock_ctx, patch.object(qps_rate_limiter, "acquire", new=AsyncMock()):
+        mock_ctx.get.return_value = {"pubmed": wrapper}
+        result = await run_web_search("medical LLM calibration", "pubmed")
+
+    assert result["retryable"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status_code", "retryable"), [(400, False), (429, True), (503, True)])
+async def test_web_search_classifies_http_failures(status_code, retryable):
+    wrapper = PubMedSearchAPIWrapper()
+    request = httpx.Request("GET", "https://example.com")
+    response = httpx.Response(status_code, request=request)
+    wrapper.aresults = AsyncMock(side_effect=httpx.HTTPStatusError(
+        f"status {status_code}", request=request, response=response,
+    ))
+
+    with patch(
+        'openjiuwen_deepsearch.framework.openjiuwen.tools.web_search.web_search_context'
+    ) as mock_ctx, patch.object(qps_rate_limiter, "acquire", new=AsyncMock()):
+        mock_ctx.get.return_value = {"pubmed": wrapper}
+        result = await run_web_search("medical LLM calibration", "pubmed")
+
+    assert result["retryable"] is retryable
+
+
+@pytest.mark.asyncio
+async def test_web_search_classifies_connection_failure_as_retryable():
+    wrapper = PubMedSearchAPIWrapper()
+    request = httpx.Request("GET", "https://example.com")
+    wrapper.aresults = AsyncMock(side_effect=httpx.ConnectError("connection failed", request=request))
+
+    with patch(
+        'openjiuwen_deepsearch.framework.openjiuwen.tools.web_search.web_search_context'
+    ) as mock_ctx, patch.object(qps_rate_limiter, "acquire", new=AsyncMock()):
+        mock_ctx.get.return_value = {"pubmed": wrapper}
+        result = await run_web_search("medical LLM calibration", "pubmed")
+
+    assert result["retryable"] is True
 
 
 class TestWebSearchRateLimit:

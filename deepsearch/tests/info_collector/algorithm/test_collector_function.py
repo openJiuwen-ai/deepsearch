@@ -1,3 +1,5 @@
+import ast
+import inspect
 import pytest
 import json
 from unittest.mock import Mock, AsyncMock, patch
@@ -10,8 +12,15 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
     process_local_search_common, remove_duplicate_items, create_tool_message, \
     filter_search_results_by_exclude_domains, filter_search_results_by_exclude_urls, \
     filter_web_records_by_temporal_scope, is_title_blocked, _normalize_web_search_item
+import openjiuwen_deepsearch.algorithm.research_collector.collector_function as collector_function
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.collector_function"
+
+
+def test_scholarly_date_parser_avoids_complex_comprehensions():
+    tree = ast.parse(inspect.getsource(collector_function._parse_scholarly_published_date))
+
+    assert not any(isinstance(node, ast.DictComp) for node in ast.walk(tree))
 
 class TestProcessToolCall:
     """测试 process_tool_call 函数"""
@@ -616,6 +625,116 @@ class TestSearchResultProcessing:
             "parsed_date": "2020-01-02",
         }
 
+    def test_normalize_scholarly_result_preserves_metadata_and_full_text(self):
+        normalized = _normalize_web_search_item({
+            "title": "Open study",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+            "content": "Abstract remains the normal content.",
+            "source": "pubmed",
+            "source_id": "1",
+            "doi": "10.1000/test",
+            "pmcid": "PMC1",
+            "full_text": "Complete official article text.",
+            "content_type": "full_text",
+            "full_text_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/",
+            "full_text_format": "jats_xml",
+            "full_text_status": "available",
+            "full_text_truncated": False,
+        })
+
+        assert normalized["content"] == "Abstract remains the normal content."
+        assert normalized["academic_source"] == "pubmed"
+        assert normalized["academic_source_id"] == "1"
+        assert normalized["doi"] == "10.1000/test"
+        assert normalized["pmcid"] == "PMC1"
+        assert normalized["full_text"] == "Complete official article text."
+        assert normalized["content_type"] == "full_text"
+        assert normalized["full_text_url"].startswith("https://pmc.ncbi.nlm.nih.gov/")
+        assert normalized["full_text_format"] == "jats_xml"
+        assert normalized["full_text_status"] == "available"
+        assert normalized["full_text_truncated"] is False
+
+    @pytest.mark.parametrize(("source", "published", "parsed", "earliest", "latest", "precision"), [
+        ("arxiv", "2024-03-04T12:30:00Z", "2024-03-04", "2024-03-04", "2024-03-04", "day"),
+        ("pubmed", "2024 Jan 2", "2024-01-02", "2024-01-02", "2024-01-02", "day"),
+        ("pubmed", "2024 Jan", "", "2024-01-01", "2024-01-31", "month"),
+        ("pubmed", "2024", "", "2024-01-01", "2024-12-31", "year"),
+    ])
+    def test_normalize_scholarly_result_converts_published_date(
+            self, source, published, parsed, earliest, latest, precision,
+    ):
+        normalized = _normalize_web_search_item({
+            "title": "Dated paper",
+            "url": f"https://example.com/{source}",
+            "content": "abstract",
+            "source": source,
+            "source_id": "paper-1",
+            "published": published,
+        }, include_date_metadata=True)
+
+        assert normalized["date_metadata"] == {
+            "field": "published",
+            "type": "published",
+            "value": published,
+            "parsed_date": parsed,
+            "earliest_date": earliest,
+            "latest_date": latest,
+            "precision": precision,
+        }
+
+    @pytest.mark.parametrize(("published", "scope", "kept"), [
+        ("2024", {"start_date": "2024-06-01"}, True),
+        ("2023", {"start_date": "2024-06-01"}, False),
+        ("2024 Mar", {"start_date": "2024-03-15"}, True),
+        ("2024 Feb", {"start_date": "2024-03-15"}, False),
+        ("2024", {"end_date": "2024-06-01"}, True),
+        ("2025", {"end_date": "2024-06-01"}, False),
+    ])
+    def test_source_date_filter_uses_scholarly_date_range_conservatively(self, published, scope, kept):
+        record = _normalize_web_search_item({
+            "title": "Partial-date paper",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+            "content": "abstract",
+            "source": "pubmed",
+            "source_id": "1",
+            "published": published,
+        }, include_date_metadata=True)
+
+        result = filter_web_records_by_temporal_scope([record], {
+            "constraint_type": "source_date",
+            **scope,
+        })
+
+        assert bool(result) is kept
+
+    def test_source_date_filter_drops_out_of_range_scholarly_result(self):
+        records = [
+            _normalize_web_search_item({
+                "title": "Old PubMed paper",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+                "content": "abstract",
+                "source": "pubmed",
+                "source_id": "1",
+                "published": "2019 Dec 31",
+            }, include_date_metadata=True),
+            _normalize_web_search_item({
+                "title": "Current arXiv paper",
+                "url": "https://arxiv.org/abs/2401.00001",
+                "content": "abstract",
+                "source": "arxiv",
+                "source_id": "2401.00001",
+                "published": "2024-01-02T00:00:00Z",
+            }, include_date_metadata=True),
+        ]
+
+        kept = filter_web_records_by_temporal_scope(records, {
+            "constraint_type": "source_date",
+            "start_date": "2020-01-01",
+            "end_date": "2025-12-31",
+        })
+
+        assert [item["title"] for item in kept] == ["Current arXiv paper"]
+
     def test_source_date_filter_keeps_boundaries_and_unknown_but_drops_out_of_range(self):
         """来源时间过滤应包含边界、保留未知日期并整篇删除越界文档。"""
         records = [
@@ -898,6 +1017,31 @@ class TestWebSearchJiuwen:
             )
             assert tool_result == ["processed_result"]
             assert agent_input == {"modified": True}
+
+    @pytest.mark.parametrize("engine", ["pubmed", "arxiv"])
+    def test_web_search_jiuwen_scholarly_engine_enables_temporal_filter(self, engine):
+        tool_content = {
+            "search_engine": engine,
+            "search_results": [{
+                "title": "Old paper",
+                "url": f"https://example.com/{engine}",
+                "content": "abstract",
+                "source": engine,
+                "source_id": "paper-1",
+                "published": "2019-01-01",
+            }],
+        }
+        self.agent_input["research_intent"] = {
+            "temporal_scope": {
+                "constraint_type": "source_date",
+                "start_date": "2020-01-01",
+            }
+        }
+
+        tool_result, agent_input = web_search_jiuwen(self.agent_input, json.dumps(tool_content))
+
+        assert tool_result == []
+        assert agent_input["web_page_search_record"] == []
 
 
 class TestProcessLocalSearchResult:

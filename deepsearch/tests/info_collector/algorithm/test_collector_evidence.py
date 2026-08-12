@@ -1,3 +1,5 @@
+import json
+
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     CollectorSourceStore,
     build_content_dedup_hash,
@@ -16,6 +18,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     read_content_by_ref,
     split_passages,
 )
+from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 
 
 def test_generate_doc_id_is_stable_for_same_web_source():
@@ -206,6 +209,70 @@ def test_build_evidence_atom_excludes_original_content_from_atom():
     assert store.read(atom["source_id"]) == record["content"]
 
 
+def test_build_evidence_atom_prefers_available_academic_full_text(caplog):
+    caplog.set_level("INFO")
+    store = CollectorSourceStore()
+    record = {
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+        "title": "Profile of Orthodontic Use across Demographics",
+        "content": "Abstract only.",
+        "full_text": "Official PMC body text with methods and results.",
+        "full_text_status": "available",
+        "full_text_format": "jats_xml",
+        "full_text_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10742803/",
+        "full_text_truncated": False,
+        "academic_source": "pubmed",
+        "academic_source_id": "38132429",
+        "pmcid": "PMC10742803",
+        "doi": "10.3390/dj11120291",
+        "type": "page",
+    }
+
+    token = session_id_ctx.set("collector-test")
+    try:
+        atom, doc_info = build_evidence_atom(record=record, query="orthodontic use", source_store=store)
+    finally:
+        session_id_ctx.reset(token)
+
+    assert doc_info["original_content"] == record["full_text"]
+    assert doc_info["evidence_content_type"] == "full_text"
+    assert doc_info["academic_source"] == "pubmed"
+    assert doc_info["academic_source_id"] == "38132429"
+    assert doc_info["pmcid"] == "PMC10742803"
+    assert doc_info["doi"] == "10.3390/dj11120291"
+    assert doc_info["full_text_format"] == "jats_xml"
+    assert doc_info["full_text_url"] == record["full_text_url"]
+    assert doc_info["full_text_truncated"] is False
+    assert atom["evidence_content_type"] == "full_text"
+    assert atom["evidence_content_chars"] == len(record["full_text"])
+    assert doc_info["evidence_content_chars"] == len(record["full_text"])
+    assert store.read(atom["source_id"]) == record["full_text"]
+    assert '"event": "entered"' in caplog.text
+    assert '"paper_id": "38132429"' in caplog.text
+    payload = json.loads(caplog.messages[-1].split("ACADEMIC_FULL_TEXT_AUDIT ", 1)[1])
+    assert payload["full_text_chars"] == len(record["full_text"])
+
+
+def test_build_evidence_atom_falls_back_to_abstract_when_full_text_failed():
+    store = CollectorSourceStore()
+    record = {
+        "url": "https://arxiv.org/abs/1234.5678",
+        "title": "Example",
+        "content": "Available abstract.",
+        "full_text": "",
+        "full_text_status": "failed",
+        "academic_source": "arxiv",
+        "academic_source_id": "1234.5678",
+        "type": "page",
+    }
+
+    atom, doc_info = build_evidence_atom(record=record, query="example", source_store=store)
+
+    assert doc_info["original_content"] == record["content"]
+    assert doc_info["evidence_content_type"] == "abstract"
+    assert atom["evidence_content_type"] == "abstract"
+
+
 def test_build_evidence_atom_keeps_distinct_content_for_same_doc_id():
     """同 URL/title 的不同 content 应保留为同 doc_id 下的不同 evidence。"""
     store = CollectorSourceStore()
@@ -284,6 +351,53 @@ def test_build_evidence_atom_preserves_canonical_publication_date():
     assert atom["publish_time"] == "2024-06-01"
     assert doc_info["publish_time"] == "2024-06-01"
     assert evaluation_docs[0]["publish_time"] == "2024-06-01"
+
+
+def test_build_evidence_atom_preserves_partial_publication_date_without_inventing_day():
+    store = CollectorSourceStore()
+    record = {
+        "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+        "title": "Year-only paper",
+        "content": "abstract",
+        "type": "page",
+        "date_metadata": {
+            "field": "published",
+            "type": "published",
+            "value": "2024",
+            "parsed_date": "",
+            "earliest_date": "2024-01-01",
+            "latest_date": "2024-12-31",
+            "precision": "year",
+        },
+    }
+
+    atom, doc_info = build_evidence_atom(record=record, query="paper", source_store=store)
+
+    assert atom["publish_time"] == "2024"
+    assert doc_info["publish_time"] == "2024"
+
+
+def test_build_evaluation_documents_preserves_academic_provenance():
+    doc_info = {
+        "doc_id": "web_1",
+        "source_id": "web_1_source",
+        "title": "Academic paper",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+        "source": "pubmed.ncbi.nlm.nih.gov",
+        "academic_source": "pubmed",
+        "academic_source_id": "38132429",
+        "pmcid": "PMC10740908",
+        "evidence_content_type": "full_text",
+        "evidence_content_chars": 321,
+    }
+
+    compact = build_evaluation_documents([doc_info])[0]
+
+    assert compact["academic_source"] == "pubmed"
+    assert compact["academic_source_id"] == "38132429"
+    assert compact["pmcid"] == "PMC10740908"
+    assert compact["evidence_content_type"] == "full_text"
+    assert compact["evidence_content_chars"] == 321
 
 
 def test_build_prompt_views_never_include_original_content():

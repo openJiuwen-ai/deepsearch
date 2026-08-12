@@ -195,6 +195,7 @@ def _initialize_web_search_context_from_agent_config(
             academic_config["search_engine_name"] = engine_name
             academic_config["search_url"] = ""
             academic_config["search_api_key"] = bytearray()
+            academic_config["max_web_search_results"] = 1
             web_engine_configs[engine_name] = academic_config
     web_search_token = web_search_context.set(
         {

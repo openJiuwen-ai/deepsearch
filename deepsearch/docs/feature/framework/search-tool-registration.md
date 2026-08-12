@@ -74,9 +74,11 @@ contextvar，避免节点直接持有全局工具对象。
 - PubMed wrapper 使用 `ESearch -> EFetch XML`。返回 item 的 `content` 优先使用 abstract 或 structured abstract；
   无 abstract 时才退回期刊、发布日期和作者等书目信息。
 - arXiv wrapper 使用 Atom API。返回 item 的 `content` 使用论文 summary，`url` 使用 arXiv entry id。
-- PubMed 和 arXiv wrapper 不做 provider 级预请求限流；请求节流仅依赖统一 web 搜索工具上的全局
-  `web_search_max_qps` 配置。HTTP 429、PubMed ESearch/EFetch 错误 payload 或异常响应会作为搜索错误返回给上层，
-  由 collector 根据 primary/secondary 策略决定 retry、fail-fast 或 fallback。
+- PubMed 的 ESearch、PubMed EFetch 和 PMC EFetch 在进程内跨 wrapper 实例共享请求间隔；arXiv Atom API 同样共享请求间隔，
+  HTML/PDF 全文下载在进程内共享并发上限 2。429 冷却会同时约束对应 provider 的后续请求。
+- HTTP 429、500、502、503、504、连接错误和超时最多尝试 3 次；429 优先遵守最长 30 秒的 `Retry-After`，
+  其余临时错误按 1 秒、2 秒退避。其他 4xx、错误 payload 和内容解析错误不做网络重试，耗尽后交由 collector 的
+  primary/secondary 策略决定 fail-fast 或 fallback。统一 web 搜索工具的 `web_search_max_qps` 仍约束顶层工具调用频率。
 
 ## 边界与错误处理
 

@@ -61,6 +61,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
+from openjiuwen_deepsearch.utils.academic_full_text_audit import emit_selected_academic_full_text_events
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
@@ -1338,6 +1339,7 @@ class Reporter:
                     f"selected_content len: {len(classified_content)}"
                 )
         classified_content = current_inputs.get("classified_content", [])
+        emit_selected_academic_full_text_events(logger, classified_content)
         if not LogManager.is_sensitive():
             logger.debug(
                 "%s [generate_sub_report] section_idx: [%s], sub section content is: [%s], "
