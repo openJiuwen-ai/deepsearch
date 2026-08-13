@@ -4,6 +4,7 @@
 
 用法：
     python -m benchmarks.contextbench.runner --num-repos 4
+    python -m benchmarks.contextbench.runner --engine graph --num-instances 5
     python -m benchmarks.contextbench.runner --engine retropus --num-instances 5
 """
 
@@ -24,6 +25,8 @@ from benchmarks.contextbench.dataset import (
 from benchmarks.contextbench.exporter import append_prediction, run_eval, write_predictions
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_CONTEXTBENCH_ENGINE = "graph"
 
 
 def _result_to_pred(instance_id: str, result) -> dict:
@@ -196,8 +199,7 @@ def _config_from_args(args) -> CodeSearchConfig:
         config.milvus.host = args.milvus_host
     if args.milvus_port:
         config.milvus.port = args.milvus_port
-    if args.engine:
-        config.agent.engine = args.engine
+    config.agent.engine = args.engine
     if args.model:
         api_key = config.llm.main.api_key
         base_url = config.llm.main.base_url
@@ -236,9 +238,9 @@ def main() -> None:
     parser.add_argument("--milvus-port", default="", help="Milvus port (default 19530)")
     parser.add_argument(
         "--engine",
-        default="",
-        choices=["", "auto", "react", "graph", "retropus"],
-        help="Override SearchAgentConfig.engine",
+        default=DEFAULT_CONTEXTBENCH_ENGINE,
+        choices=["react", "graph", "retropus"],
+        help=f"SearchAgentConfig.engine (default: {DEFAULT_CONTEXTBENCH_ENGINE})",
     )
     parser.add_argument(
         "--model",

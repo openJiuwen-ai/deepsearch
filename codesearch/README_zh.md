@@ -145,7 +145,7 @@ codesearch search --collection my_repo --query "TypeError when calling foo() wit
 | **Python SDK** | 构造 `CodeSearchRetriever` 前设置 `config.agent.engine = "retropus"`（或 `"graph"` / `"react"` / `"auto"`）。字段：`openjiuwen_codesearch/config/agent.py` 中的 `SearchAgentConfig.engine`。 |
 | **HTTP API** | `POST /api/v1/index` 与 `POST /api/v1/search` 请求体可选 `"engine"`（默认 `"auto"`）。索引与检索须使用**同一**引擎；Retropus 与 Milvus 索引混用返回 **409**。 |
 | **`codesearch` CLI** | `codesearch --engine retropus index --repo … --collection my_repo`，再 `codesearch --engine retropus search --collection my_repo --query "…"`。可用 `--index-dir` / `RETROPUS_INDEX_DIR`。 |
-| **ContextBench CLI** | `python -m benchmarks.contextbench.runner --engine retropus`（亦接受 `auto` / `graph` / `react`）。 |
+| **ContextBench CLI** | `python -m benchmarks.contextbench.runner --engine retropus`（亦 `--engine graph` / `react`；默认 `graph`）。 |
 | **环境变量** | 引擎名本身不由环境变量选择。后端相关变量仍生效：`graph`/`react`/`auto` 用 `MILVUS_*`；Retropus 用 `CodeSearchConfig.retropus` 下的 `MAX_*` / `FEAT_*` / `RETROPUS_INDEX_DIR` 等（见 [`.env.example`](.env.example)）。LLM 凭证各引擎共用：`CODESEARCH_LLM_API_KEY` / `CODESEARCH_LLM_BASE_URL`。 |
 
 ```python

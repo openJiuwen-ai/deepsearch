@@ -155,7 +155,7 @@ There is **no** `ENGINE=` environment variable. Set it in code, HTTP, or CLI:
 | **Python SDK** | `config.agent.engine = "retropus"` (or `"graph"` / `"react"` / `"auto"`) on a `CodeSearchConfig` before building `CodeSearchRetriever`. Field: `SearchAgentConfig.engine` in `openjiuwen_codesearch/config/agent.py`. |
 | **HTTP API** | Optional JSON field `"engine"` on `POST /api/v1/index` and `POST /api/v1/search` (default `"auto"`). Use the **same** engine for index and search; mixing Retropus with a Milvus-backed collection returns **409**. |
 | **`codesearch` CLI** | `codesearch --engine retropus index --repo … --collection my_repo` then `codesearch --engine retropus search --collection my_repo --query "…"`. Optional `--index-dir` / `RETROPUS_INDEX_DIR`. |
-| **ContextBench CLI** | `python -m benchmarks.contextbench.runner --engine retropus` (also accepts `auto` / `graph` / `react`). |
+| **ContextBench CLI** | `python -m benchmarks.contextbench.runner --engine retropus` (also `--engine graph` / `react`; default `graph`). |
 | **Env vars** | Engine name is not env-driven. Backend knobs still apply: `MILVUS_*` for `graph`/`react`/`auto`; `MAX_*` / `FEAT_*` / `RETROPUS_INDEX_DIR` under `CodeSearchConfig.retropus` when using Retropus (see [`.env.example`](.env.example)). LLM credentials are shared: `CODESEARCH_LLM_API_KEY` / `CODESEARCH_LLM_BASE_URL`. |
 
 ```python
