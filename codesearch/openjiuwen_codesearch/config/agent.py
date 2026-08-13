@@ -9,6 +9,9 @@ from pydantic import BaseModel
 # Local default so importing this module does not pull bm25s/numpy.
 DEFAULT_TOKENIZE_WORKERS = max(1, (os.cpu_count() or 4) - 1)
 
+# CLI / SDK / HTTP default engine (`SearchAgentConfig.engine` when unset).
+DEFAULT_ENGINE: Literal["react", "graph", "retropus"] = "graph"
+
 # Short names for Feat_* fields / FEAT_* env vars (defaults live on the model).
 FEATURE_FLAGS = (
     "ban_tests",
@@ -48,8 +51,8 @@ def _bool_env(*names: str, default: bool) -> bool:
 
 class SearchAgentConfig(BaseModel):
     # 引擎：graph = openjiuwen workflow 图形态（默认，SDK 亮点，Studio/Ops 可观测）；
-    # react = 纯代码循环（openjiuwen 不可用时的兜底）；auto = graph 可用则 graph。
-    engine: Literal["auto", "react", "graph", "retropus"] = "auto"
+    # react = 纯代码循环（无 openjiuwen 依赖）；retropus = KG/BM25 独立路径。
+    engine: Literal["react", "graph", "retropus"] = DEFAULT_ENGINE
     max_turns: int = 20
     warn_before_turns: int = 2        # 距上限 N 轮时注入"必须提交"警告
     # graph 引擎的 workflow 执行超时（openjiuwen 默认仅 60s，多轮检索必须放宽）

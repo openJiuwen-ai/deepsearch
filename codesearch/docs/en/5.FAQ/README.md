@@ -58,7 +58,7 @@ Not in default sparse mode. Needed only for dense-vector mode.
 No data for that collection/revision. Run `index` first; keep `--revision`
 consistent (default `local`). For Retropus over HTTP, pass
 `"engine": "retropus"` on both `/api/v1/index` and `/api/v1/search` (default
-remains `auto`).
+is `graph`).
 
 **How do I enable Retropus on the HTTP API?**  
 Install `pip install 'openjiuwen-codesearch[retropus]'` and pass

@@ -226,13 +226,13 @@ class TestEngineRouting:
         client = self._client(monkeypatch, str(tmp_path))
         r = client.post(
             "/api/v1/search",
-            json={"query": "q", "collection": "c1", "engine": "auto"},
+            json={"query": "q", "collection": "c1", "engine": "graph"},
         )
         assert r.status_code == 409
         assert "retropus" in r.json()["detail"]
 
-    def test_default_engine_is_auto_not_retropus(self, monkeypatch, tmp_path):
-        """Omit engine → auto; milvus path still closes after index."""
+    def test_default_engine_is_graph_not_retropus(self, monkeypatch, tmp_path):
+        """Omit engine → graph; milvus path still closes after index."""
         repo = tmp_path / "repo"
         repo.mkdir()
         client = self._client(monkeypatch, str(tmp_path))
@@ -251,7 +251,7 @@ class TestEngineRouting:
         assert idx.status_code == 202
         job_id = idx.json()["job_id"]
         assert client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded"
-        assert created_engines == ["auto"]
-        assert api_mod.get_indexed_engine("c2") == "auto"
-        assert not api_mod.is_retriever_cached("c2", "auto")  # closed after milvus index
+        assert created_engines == ["graph"]
+        assert api_mod.get_indexed_engine("c2") == "graph"
+        assert not api_mod.is_retriever_cached("c2", "graph")  # closed after milvus index
         assert instances[0].close.await_count == 1

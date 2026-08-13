@@ -7,7 +7,7 @@
 - **索引**是分钟级长任务，交后台执行并返回 job_id，由 `/jobs/{id}` 轮询状态；
   作业状态保存在进程内存（单进程服务足够；多副本部署需换外部存储），
   并设条数上限，避免长驻进程无界增长。
-- **引擎**：请求体可选 `engine`（默认 `auto`）；`retropus` 须显式指定。
+- **引擎**：请求体可选 `engine`（默认 `graph`）；`retropus` 须显式指定。
   缓存键为 `(collection, engine)`。Retropus 索引驻留进程内，索引成功后
   不得 `close()`；Milvus 族仍可索引后释放句柄。同 collection 若已用另一
   后端（retropus ↔ milvus）索引过，search 返回 409。

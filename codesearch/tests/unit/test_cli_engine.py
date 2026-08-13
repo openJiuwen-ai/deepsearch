@@ -42,7 +42,7 @@ def test_cli_sets_retropus_engine_and_index_dir(tmp_path: Path):
     with patch("openjiuwen_codesearch.cli.CodeSearchRetriever", return_value=fake) as ctor:
         with patch("openjiuwen_codesearch.cli.CodeSearchConfig.from_env") as from_env:
             cfg = from_env.return_value
-            cfg.agent.engine = "auto"
+            cfg.agent.engine = "graph"
             cfg.retropus.index_dir = "./output/retropus"
             cfg.milvus.host = "localhost"
             cfg.milvus.port = "19530"

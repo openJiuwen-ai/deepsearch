@@ -16,7 +16,7 @@ CodeSearch 默认五工具注册表严格隔离。
 
 1. `CodeSearchConfig.agent.engine = "retropus"`（程序赋值、`codesearch --engine
    retropus` / ContextBench `--engine retropus`，或 HTTP 请求体
-   `"engine": "retropus"`；**无** `ENGINE=` 环境变量；默认仍为 `auto`，不会自动走
+   `"engine": "retropus"`；**无** `ENGINE=` 环境变量；默认 `graph`，不会自动走
    Retropus）
 2. `index_repository(repo_path)` → `build_index` + `build_retriever`（无
    Milvus）；成功后将 KG + BM25 **落盘**到
@@ -30,7 +30,7 @@ CodeSearch 默认五工具注册表严格隔离。
 ## HTTP 服务
 
 `POST /api/v1/index` 与 `POST /api/v1/search` 接受可选字段 `engine`
-（`auto` | `react` | `graph` | `retropus`，**默认 `auto`**）。Retropus 必须显式传
+（`react` | `graph` | `retropus`，**默认 `graph`**）。Retropus 必须显式传
 `"engine": "retropus"`；索引与检索须使用同一后端（retropus ↔ milvus 混用返回
 **409**）。服务按 `(collection, engine)` 缓存检索器；Retropus 的 KG/BM25 驻留
 进程内存，索引作业成功后不会 `close()` 该实例（与 Milvus 路径不同）。
@@ -116,7 +116,7 @@ Retropus 循环使用 `config.retropus` 的 `max_rounds` / `max_tool_calls`，
 
 | 字段 | 用途 |
 |---|---|
-| `agent.engine` | 必须为 `"retropus"` 才走本引擎（默认 `auto`，需显式设置） |
+| `agent.engine` | 必须为 `"retropus"` 才走本引擎（默认 `graph`，需显式设置） |
 | `agent.trace_dir` | 非空时写 `retropus_*.jsonl` 轨迹（默认 `agent_logs`；空串关闭） |
 | `agent.retrieve_topk` | ContextBench runner 的 `search(..., top_k=...)`；与 `max_final_spans` 共同限制输出 |
 

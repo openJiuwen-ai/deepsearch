@@ -60,7 +60,7 @@ export CODESEARCH_INDEX_ROOTS="/data/repos"
 该集合或该版本尚无索引数据。请先执行 `index`，并确认检索时的 `--revision`
 与索引时一致（两者默认均为 `local`）。走 HTTP 使用 Retropus 时，
 `/api/v1/index` 与 `/api/v1/search` 都要传 `"engine": "retropus"`
-（默认仍为 `auto`）。
+（默认为 `graph`）。
 
 **检索结果的终止方式是什么意思？**
 
@@ -92,7 +92,7 @@ export CODESEARCH_INDEX_ROOTS="/data/repos"
 `codesearch --engine retropus …` /
 `python -m benchmarks.contextbench.runner --engine retropus`，或在 HTTP
 `POST /api/v1/index` / `/api/v1/search` 请求体中传 `"engine": "retropus"`
-（默认仍为 `auto`，不会自动启用 Retropus）。`ENGINE=` 不是环境变量。
+（默认为 `graph`，不会自动启用 Retropus）。`ENGINE=` 不是环境变量。
 循环与索引参数见 `CodeSearchConfig.retropus`（`MAX_ROUNDS` /
 `MAX_TOOL_CALLS` / `FEAT_*` / `RETROPUS_INDEX_DIR` 等），完整表：
 [retropus-agent.md](../../feature/framework/retropus-agent.md)；

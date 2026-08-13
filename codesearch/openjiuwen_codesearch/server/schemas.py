@@ -6,8 +6,10 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-# 与 SearchAgentConfig.engine 对齐；默认 auto，不把 retropus 设为默认
-EngineName = Literal["auto", "react", "graph", "retropus"]
+from openjiuwen_codesearch.config.agent import DEFAULT_ENGINE
+
+# 与 SearchAgentConfig.engine 对齐；默认 graph，不把 retropus 设为默认
+EngineName = Literal["react", "graph", "retropus"]
 
 
 class SearchRequest(BaseModel):
@@ -16,7 +18,7 @@ class SearchRequest(BaseModel):
     revision: str = Field(default="local", description="版本标签，需与索引时一致")
     top_k: int = Field(default=20, ge=1, le=100)
     engine: EngineName = Field(
-        default="auto",
+        default=DEFAULT_ENGINE,
         description="检索引擎；retropus 需显式指定，且须与索引时一致",
     )
 
@@ -42,7 +44,7 @@ class IndexRequest(BaseModel):
     revision: str = "local"
     reset: bool = False
     engine: EngineName = Field(
-        default="auto",
+        default=DEFAULT_ENGINE,
         description="索引引擎；retropus 需显式指定（进程内 KG/BM25，无 Milvus）",
     )
 

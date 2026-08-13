@@ -14,6 +14,7 @@ import logging
 import os
 
 from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
+from openjiuwen_codesearch.config.agent import DEFAULT_ENGINE
 from openjiuwen_codesearch.config.llm import LLMConfig, LLMSuite
 
 from benchmarks.contextbench.dataset import (
@@ -25,8 +26,6 @@ from benchmarks.contextbench.dataset import (
 from benchmarks.contextbench.exporter import append_prediction, run_eval, write_predictions
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_CONTEXTBENCH_ENGINE = "graph"
 
 
 def _result_to_pred(instance_id: str, result) -> dict:
@@ -238,9 +237,9 @@ def main() -> None:
     parser.add_argument("--milvus-port", default="", help="Milvus port (default 19530)")
     parser.add_argument(
         "--engine",
-        default=DEFAULT_CONTEXTBENCH_ENGINE,
+        default=DEFAULT_ENGINE,
         choices=["react", "graph", "retropus"],
-        help=f"SearchAgentConfig.engine (default: {DEFAULT_CONTEXTBENCH_ENGINE})",
+        help=f"SearchAgentConfig.engine (default: {DEFAULT_ENGINE})",
     )
     parser.add_argument(
         "--model",

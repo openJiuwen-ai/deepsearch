@@ -81,7 +81,7 @@ Default `0.0.0.0:8100`; docs at `/docs`, health at `/api/health`.
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/health` | GET | Health |
-| `/api/v1/search` | POST | Synchronous search; optional `engine` (default `auto`; use `"retropus"` explicitly) |
+| `/api/v1/search` | POST | Synchronous search; optional `engine` (default `graph`; use `"retropus"` explicitly) |
 | `/api/v1/index` | POST | Indexing job; optional `engine` (same); **403 if `CODESEARCH_INDEX_ROOTS` unset** |
 | `/api/v1/jobs/{job_id}` | GET | Job status |
 

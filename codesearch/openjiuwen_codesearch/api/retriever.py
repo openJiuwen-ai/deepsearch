@@ -274,7 +274,7 @@ class CodeSearchRetriever:
         engine = self.config.agent.engine
         if engine == "retropus":
             return RetropusCodeSearchAgent()
-        if engine in ("graph", "auto"):
+        if engine == "graph":
             try:
                 from openjiuwen_codesearch.framework.openjiuwen.workflow import (
                     GraphCodeSearchAgent,
@@ -282,12 +282,10 @@ class CodeSearchRetriever:
 
                 return GraphCodeSearchAgent()
             except ImportError as e:
-                if engine == "graph":
-                    raise ImportError(
-                        "engine='graph' requires openjiuwen to be installed "
-                        "(pip install 'openjiuwen-codesearch[llm]')"
-                    ) from e
-                logger.warning("openjiuwen unavailable (%s); falling back to react engine.", e)
+                raise ImportError(
+                    "engine='graph' requires openjiuwen to be installed "
+                    "(pip install 'openjiuwen-codesearch[llm]')"
+                ) from e
         return CodeSearchAgent()
 
     async def search(

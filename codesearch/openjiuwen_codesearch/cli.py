@@ -16,6 +16,7 @@ import logging
 import sys
 
 from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
+from openjiuwen_codesearch.config.agent import DEFAULT_ENGINE
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,7 @@ async def _run(args: argparse.Namespace) -> int:
         config.milvus.host = args.milvus_host
     if args.milvus_port:
         config.milvus.port = args.milvus_port
-    if args.engine:
-        config.agent.engine = args.engine
+    config.agent.engine = args.engine
     if getattr(args, "index_dir", None):
         config.retropus.index_dir = args.index_dir
 
@@ -91,9 +91,9 @@ def main() -> None:
     parser.add_argument("--milvus-port", default="", help="Milvus port (default 19530)")
     parser.add_argument(
         "--engine",
-        default="",
-        choices=["", "auto", "react", "graph", "retropus"],
-        help="Override SearchAgentConfig.engine (default: auto from config)",
+        default=DEFAULT_ENGINE,
+        choices=["react", "graph", "retropus"],
+        help=f"SearchAgentConfig.engine (default: {DEFAULT_ENGINE})",
     )
     parser.add_argument(
         "--index-dir",
