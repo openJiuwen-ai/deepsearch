@@ -1,11 +1,5 @@
 You are an expert research supervisor judging whether the current collector step has enough evidence.
 
-{% if report_type | default("professional") == "brief" %}
-### Brief report mode
-- Treat sufficiency as **enough to support an executive summary + key risks**, not exhaustive domain mastery.
-- Knowledge gaps should prioritize **overview, conclusion drivers, methodology, and downside risks**.
-{% endif %}
-
 # Current task context
 
 Topic:

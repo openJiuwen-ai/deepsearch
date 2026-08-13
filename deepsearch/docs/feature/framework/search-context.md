@@ -13,7 +13,7 @@
 ## 可见行为
 
 - 主图从 `SearchContext` 初始化用户 query、语言、消息、模板、搜索模式和最终结果。
-- 研究报告流程会逐步填充 `research_intent`、`report_type_policy`、`current_outline`、`current_report` 和 `final_result`。
+- 研究报告流程会逐步填充 `research_intent`、`report_type_policy`、`current_report` 和 `final_result`；专业版还会填充 `current_outline`，Brief 则使用独立的 `brief_state`。
 - 大纲交互会追加 `outline_interactions`。
 - hybrid 大纲路由会写入 `outline_execution_method`，用于固定本次大纲生成、交互接受和写作团队选择。
 - 用户反馈处理会更新 `feedback_interaction_count`、`feedback_snapshot_sent` 和 `rewrite_history`。
@@ -55,6 +55,7 @@
 - `build_temporal_scope_prompt_context()` 只为 collector query 与补搜 Prompt 生成
   `has_temporal_scope` 和 `temporal_scope_instruction`，不改变其他研究阶段的 Prompt 契约。
 - `outline_execution_method` 保存本次大纲实际执行方式，当前有效值为 `parallel` 或 `dependency_driving`；缺失或非法时按普通并行大纲处理。
+- `brief_state` 是可空的持久化字典，保存 `BriefWorkflowState`：精简大纲、最终证据、已执行 Query 和搜索结果、审阅写作指引、章节正文及核心摘要。它只供 Brief 分支节点读取，不作为专业版章节子图输入。
 
 ## 边界与错误处理
 
@@ -76,3 +77,4 @@
 - [章节推理与写作子工作流](./section-reasoning-writing-sub-workflows.md)
 - [DeepSearch 搜索子工作流](./deepsearch-sub-workflows.md)
 - [查询理解](../algorithm/query-understanding.md)
+- [Brief 精简版报告工作流](../algorithm/brief-report.md)

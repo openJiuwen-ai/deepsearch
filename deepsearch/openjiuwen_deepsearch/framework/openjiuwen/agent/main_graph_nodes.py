@@ -393,7 +393,11 @@ class IntentRecognitionNode(BaseNode):
         ))
 
         human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
-        next_node = NodeId.GENERATE_QUESTIONS.value if human_in_the_loop else NodeId.OUTLINE.value
+        next_node = (
+            NodeId.GENERATE_QUESTIONS.value
+            if human_in_the_loop
+            else (NodeId.BRIEF_OUTLINE.value if report_policy.report_type == "brief" else NodeId.OUTLINE.value)
+        )
 
         logger.info("[IntentRecognitionNode] End IntentRecognitionNode, next_node=%s", next_node)
         return dict(language=lang, human_in_the_loop=human_in_the_loop, next_node=next_node)
@@ -626,7 +630,10 @@ class FeedbackHandlerNode(BaseNode):
             session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0, NodeType.MAIN.value, output_content=user_feedback)
         )
         logger.info(f"[FeedbackHandlerNode] End FeedbackHandlerNode.")
-        return dict(next_node=NodeId.OUTLINE.value)
+        policy = session.get_global_state("search_context.report_type_policy") or {}
+        return dict(
+            next_node=NodeId.BRIEF_OUTLINE.value if policy.get("report_type") == "brief" else NodeId.OUTLINE.value
+        )
 
 
 class ReporterNode(BaseNode):
@@ -1206,8 +1213,12 @@ class DependencyOutlineNode(OutlineNode):
 
 
 class SourceTracerNode(BaseNode):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        next_node: str = NodeId.SOURCE_TRACER_INFER.value,
+    ) -> None:
         super().__init__()
+        self.next_node = next_node
 
     @staticmethod
     async def build_citation_checker_result(citation_checker_info, datas, llm_model):
@@ -1360,7 +1371,7 @@ class SourceTracerNode(BaseNode):
             f"[SourceTracerNode] source_tracer_result: " f"{'*' if LogManager.is_sensitive() else source_tracer_result}"
         )
 
-        return dict(next_node=NodeId.SOURCE_TRACER_INFER.value)
+        return dict(next_node=self.next_node)
 
 
 class OutlineInteractionNode(BaseNode):

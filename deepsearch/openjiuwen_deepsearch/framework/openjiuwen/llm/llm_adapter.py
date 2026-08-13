@@ -31,6 +31,11 @@ NODE_LLM_MAPPING = {
     NodeId.INFO_COLLECTOR.value: LlmConfigCategory.INFO_COLLECTING.value,
     NodeId.SUB_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
     NodeId.VLM_CHART_GENERATOR.value: LlmConfigCategory.VLM_CHART_GENERATING.value,
+    NodeId.BRIEF_OUTLINE.value: LlmConfigCategory.PLAN_UNDERSTANDING.value,
+    NodeId.BRIEF_INFO_COLLECTOR.value: LlmConfigCategory.INFO_COLLECTING.value,
+    NodeId.BRIEF_EVIDENCE_REVIEWER.value: LlmConfigCategory.INFO_COLLECTING.value,
+    NodeId.BRIEF_SUB_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
+    NodeId.BRIEF_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
 }
 
 

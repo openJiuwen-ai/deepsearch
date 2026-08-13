@@ -10,11 +10,6 @@ Your responsibility is to **incrementally refine the existing outline based on u
 
 Avoid regenerating a completely new outline unless the feedback explicitly requires major restructuring.
 
-{% if report_type == "brief" %}
-## Report type: Brief
-- When refining, **compress** non-essential branches; keep orientation toward **executive readability, key conclusions, and explicit risks/limits**.
-{% endif %}
-
 {% if audience_role or tone %}
 ## Report Detail Constraints
 {% if audience_role %}

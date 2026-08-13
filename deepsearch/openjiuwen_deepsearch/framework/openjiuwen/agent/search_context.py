@@ -355,6 +355,10 @@ class SearchContext(BaseModel):
         default_factory=ReportTypePolicy,
         description="报告类型策略，意图识别后确认，供大纲/规划/收集/写作消费",
     )
+    brief_state: Dict[str, Any] | None = Field(
+        default=None,
+        description="独立 Brief 工作流的序列化状态；专业版保持为空。",
+    )
     messages: List[Message] = Field(default_factory=list, description="对话消息列表")
     language: str = Field(default="zh-CN", description="语言")
     report_template: str = Field(default="", description="模板内容")

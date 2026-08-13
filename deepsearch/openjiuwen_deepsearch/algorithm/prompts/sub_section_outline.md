@@ -81,13 +81,6 @@ When structured evidence guidance is provided, use covered primary dimensions fi
 Do not create a factual subsection solely from an uncovered dimension. Do not mechanically turn every dimension into a
 subsection. User-specified titles and template-required structure remain authoritative.
 
-{% if report_type == "brief" %}
-## Brief Mode (Strict)
-- This is a brief report. Keep subsection design compact and decision-oriented.
-- Subsection titles should be conclusion-oriented and high-signal; avoid decorative background splits.
-- Avoid taxonomy-style decomposition that expands scope without improving judgment value.
-{% endif %}
-
 {% if section_focus or has_allowed_dimensions or is_final_decision_section or task_type or has_required_dimensions or has_comparison_targets %}
 ## Chapter Writing Directive
 
