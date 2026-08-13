@@ -14,7 +14,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     SubReportContent,
     build_research_intent_prompt_context,
 )
-from openjiuwen_deepsearch.common.common_constants import CHINESE
+from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 
 
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
@@ -323,6 +323,59 @@ def test_clean_markdown_headers_still_strips_real_section_numbers():
     assert "## 中美欧AI PC出货量与渗透率量化对标" in cleaned
 
 
+def test_build_table_of_contents_only_lists_real_level_one_chapters():
+    sub_reports_content = """# 1. 第一章
+
+## 1.1 二级标题
+
+```mermaid
+# Mermaid 中的文本不是章节
+```
+
+~~~markdown
+# 代码块中的文本也不是章节
+~~~
+
+# 2. 第二章 ###
+"""
+
+    table_of_contents = Reporter._build_table_of_contents(
+        sub_reports_content,
+        CHINESE,
+    )
+
+    assert table_of_contents == "# 目录\n\n- [1. 第一章](#chapter-1)\n- [2. 第二章](#chapter-2)"
+
+
+def test_build_table_of_contents_uses_english_title():
+    table_of_contents = Reporter._build_table_of_contents(
+        "# 1. Market Overview\n\n## 1.1 Details",
+        ENGLISH,
+    )
+
+    assert table_of_contents == "# Table of Contents\n\n- [1. Market Overview](#chapter-1)"
+
+
+def test_add_table_of_contents_anchors_ignores_fenced_headings_and_is_idempotent():
+    content = """# 1. 第一章
+
+```markdown
+# 不是章节
+```
+
+# 2. 第二章
+"""
+
+    anchored = Reporter._add_table_of_contents_anchors(content)
+
+    assert anchored.count('<a id="chapter-1"></a>') == 1
+    assert anchored.count('<a id="chapter-2"></a>') == 1
+    assert '<a id="chapter-3"></a>' not in anchored
+    assert '<a id="chapter-1"></a>\n# 1. 第一章' in anchored
+    assert '<a id="chapter-2"></a>\n# 2. 第二章' in anchored
+    assert Reporter._add_table_of_contents_anchors(anchored) == anchored
+
+
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
@@ -399,3 +452,12 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     success, report_str = await reporter.generate_report(current_inputs)
 
     assert success is True
+    report_content = current_inputs["report"]
+    toc_start = report_content.index("# 目录")
+    abstract_start = report_content.index("# 摘要")
+    chapter_start = report_content.index("# 1. 企业基本情况分析")
+    assert report_content.startswith("# XX有限公司尽职调查报告\n\n# 目录")
+    assert toc_start < abstract_start < chapter_start
+    assert "- [1. 企业基本情况分析](#chapter-1)" in report_content[toc_start:abstract_start]
+    assert '<a id="chapter-1"></a>\n# 1. 企业基本情况分析' in report_content
+    assert "1.1 基础信息" not in report_content[toc_start:abstract_start]

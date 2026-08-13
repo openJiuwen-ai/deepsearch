@@ -137,6 +137,7 @@ class ArticlePart:
         },
     }
     titles = {
+        "toc": {CHINESE: "# 目录\n\n", ENGLISH: "# Table of Contents\n\n"},
         "abstract": {CHINESE: "# 摘要\n\n", ENGLISH: "# Abstract\n\n"},
         "conclusion": {CHINESE: "# 结论\n\n", ENGLISH: "# Conclusion\n\n"},
         "reference": {CHINESE: "# 参考文章\n\n", ENGLISH: "# Reference Articles\n\n"},
