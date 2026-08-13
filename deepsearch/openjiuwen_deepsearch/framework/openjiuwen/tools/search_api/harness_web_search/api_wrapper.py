@@ -8,7 +8,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any, ClassVar, Generic, Optional, TypeVar
 
-from openjiuwen.harness.tools.web_tools import WebFetchWebpageTool, WebPaidSearchTool
+from openjiuwen.harness.tools.web import WebFetchWebpageTool, WebPaidSearchTool, _http
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from openjiuwen_deepsearch.common.common_constants import (
@@ -31,7 +31,10 @@ class WebFetchWebpageAdapter(WebFetchWebpageTool):
     @classmethod
     def fetch_webpage_sync(cls, url: str, timeout_seconds: int) -> dict[str, str | int]:
         """Fetch webpage content through the inherited web_tools implementation."""
-        return dict(cls._fetch_webpage_sync(url, timeout_seconds))
+        async def _fetch_coro():
+            async with _http.new_session() as session:
+                return await cls._fetch_webpage(session, url, timeout_seconds, cls._byte_cap())
+        return dict(asyncio.run(_fetch_coro()))
 
     @classmethod
     def fetch_via_jina_reader_sync(cls, url: str, timeout_seconds: int) -> dict[str, str | int]:
@@ -44,7 +47,10 @@ class WebFetchWebpageAdapter(WebFetchWebpageTool):
         Returns:
             包含 URL、状态码、标题和正文的抓取结果。
         """
-        return dict(cls._fetch_via_jina_reader_sync(url, timeout_seconds))
+        async def _jina_coro():
+            async with _http.new_session() as session:
+                return await cls._fetch_via_jina_reader(session, url, timeout_seconds, cls._byte_cap())
+        return dict(asyncio.run(_jina_coro()))
 
 
 _PROVIDER_KEY_ENV = {
@@ -92,8 +98,8 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
     _provider_runner_names: ClassVar[dict[str, str]] = {
-        "bocha": "_bocha_search_sync",
-        "perplexity": "_perplexity_search_sync",
+        "bocha": "_bocha_search",
+        "perplexity": "_perplexity_search",
     }
 
     def model_post_init(self, __context: Any) -> None:
@@ -158,8 +164,11 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
         timeout_seconds = self._resolved_timeout_seconds(provider=provider, minimum=10)
         max_results = max(1, min(int(self.max_web_search_results or 5), 20))
 
+        async def _search_coro():
+            async with _http.new_session() as session:
+                return await runner(session, query=query, max_results=max_results, timeout_seconds=timeout_seconds)
         with _temporary_env(env_values):
-            return runner(query=query, max_results=max_results, timeout_seconds=timeout_seconds)
+            return asyncio.run(_search_coro())
 
     def _build_result_from_url(self, *, url: str, provider: str, answer: str) -> dict[str, Any]:
         """Build a normalized result, fetching raw page content when possible."""
