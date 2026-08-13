@@ -82,7 +82,7 @@ backend = [
     "uvicorn[standard]>=0.35",
     "pydantic==2.11.7",
     "python-dotenv>=1.2.1",
-    "sqlalchemy==2.0.41",
+    "sqlalchemy[asyncio]>=2.0.41,<2.1",
     "pydantic-settings==2.5.2",
     "requests==2.32.3",
     "pycryptodome==3.23.0",
