@@ -303,6 +303,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
             "full_text_status": "available",
             "full_text_truncated": truncated,
         })
+
     @staticmethod
     def _parse_ids(raw: Any) -> list[str]:
         if not isinstance(raw, dict):

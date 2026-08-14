@@ -370,6 +370,7 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
             "full_text_status": "available",
             "full_text_truncated": truncated,
         })
+
     @staticmethod
     def _is_error_entry(arxiv_id: str, title: str) -> bool:
         return title.strip().casefold() == "error" and "/api/errors#" in arxiv_id
