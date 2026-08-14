@@ -8,6 +8,7 @@
 
 - HTML 导出会生成完整 HTML 文件并注入报告 CSS。
 - HTML 导出保留报告目录的 `#chapter-N` 链接与章节锚点，普通页面和美化页面均可点击跳转。
+- 美化 HTML 按报告顺序保留目录、摘要和章节：摘要位于目录之后、正文首章之前。
 - HTML 中数学公式通过 KaTeX 脚本（`katex.min.js` + `auto-render.min.js` + `katex.min.css`，版本固定 0.16.11）渲染，使用 `$...$` / `$$...$$` 作为定界符；`\bm` 宏映射为 `\boldsymbol{#1}`，`throwOnError=false` 保证无法解析的公式不打断页面渲染。
 - HTML 在 KaTeX 渲染前会做"货币美元保护"：遍历正文文本节点，把 `$` + 数字开头且不像公式的片段替换为全角 `＄`（U+FF04）占位符，渲染完成后还原为 `$`，避免 `$4`、`$1,200.50` 等金额被 KaTeX 误配对为公式定界符。
 - DOCX 导出使用纯 Python 流水线从 Markdown 生成 Word 文件。
