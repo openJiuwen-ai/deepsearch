@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 from docx import Document
 import pytest
@@ -104,6 +105,61 @@ def test_render_markdown_html_fragment_preserves_shared_semantics() -> None:
     assert '<sup class="citation">' in fragment
     assert 'target="_blank"' in fragment
     assert '<div class="table-wrap">' in fragment
+
+
+def test_docx_export_converts_report_toc_to_internal_links(tmp_path: Path) -> None:
+    """DOCX 目录应链接到章节书签，而不是创建伪外部链接。"""
+    from openjiuwen_deepsearch.algorithm.report_export.docx_export import convert_md_to_docx
+
+    markdown_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    markdown_path.write_text(
+        "# 报告\n\n"
+        "# 目录\n\n"
+        "[第一章](#chapter-1)\n\n"
+        "[第二章](#chapter-2)\n\n"
+        '<a id="chapter-1"></a>\n'
+        "# 第一章\n\n正文。\n\n"
+        '<a id="chapter-2"></a>\n'
+        "# 第二章\n\n[外部链接](https://example.com)\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_docx(markdown_path, docx_path)
+
+    with zipfile.ZipFile(docx_path) as archive:
+        document = ElementTree.fromstring(archive.read("word/document.xml"))
+        relationships = archive.read("word/_rels/document.xml.rels").decode("utf-8")
+
+    word_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    bookmark_names = {
+        node.get(f"{{{word_ns}}}name")
+        for node in document.findall(f".//{{{word_ns}}}bookmarkStart")
+    }
+    internal_links = [
+        node
+        for node in document.findall(f".//{{{word_ns}}}hyperlink")
+        if node.get(f"{{{word_ns}}}anchor")
+    ]
+
+    assert {"chapter_1", "chapter_2"}.issubset(bookmark_names)
+    assert {
+        node.get(f"{{{word_ns}}}anchor") for node in internal_links
+    } == {"chapter_1", "chapter_2"}
+    assert all(node.get(f"{{{rel_ns}}}id") is None for node in internal_links)
+    toc_paragraphs = [
+        paragraph
+        for paragraph in document.findall(f".//{{{word_ns}}}p")
+        if paragraph.find(f".//{{{word_ns}}}hyperlink[@{{{word_ns}}}anchor]") is not None
+    ]
+    assert all(
+        paragraph.find(f".//{{{word_ns}}}numPr") is None
+        for paragraph in toc_paragraphs
+    )
+    assert "#chapter-1" not in relationships
+    assert "#chapter-2" not in relationships
+    assert "https://example.com" in relationships
 
 
 def test_exporters_do_not_preprocess_mermaid_again_in_renderer(

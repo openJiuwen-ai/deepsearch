@@ -1493,8 +1493,8 @@ class Reporter:
         if not headings:
             return toc_title
 
-        toc_entries = "\n".join(
-            "- [{0}](#chapter-{1})".format(heading["title"], index)
+        toc_entries = "\n\n".join(
+            "[{0}](#chapter-{1})".format(heading["title"], index)
             for index, heading in enumerate(headings, start=1)
         )
         return f"{toc_title}\n\n{toc_entries}"

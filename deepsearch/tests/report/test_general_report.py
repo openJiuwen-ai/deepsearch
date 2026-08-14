@@ -344,7 +344,7 @@ def test_build_table_of_contents_only_lists_real_level_one_chapters():
         CHINESE,
     )
 
-    assert table_of_contents == "# 目录\n\n- [1. 第一章](#chapter-1)\n- [2. 第二章](#chapter-2)"
+    assert table_of_contents == "# 目录\n\n[1. 第一章](#chapter-1)\n\n[2. 第二章](#chapter-2)"
 
 
 def test_build_table_of_contents_uses_english_title():
@@ -353,7 +353,7 @@ def test_build_table_of_contents_uses_english_title():
         ENGLISH,
     )
 
-    assert table_of_contents == "# Table of Contents\n\n- [1. Market Overview](#chapter-1)"
+    assert table_of_contents == "# Table of Contents\n\n[1. Market Overview](#chapter-1)"
 
 
 def test_add_table_of_contents_anchors_ignores_fenced_headings_and_is_idempotent():
@@ -458,6 +458,7 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     chapter_start = report_content.index("# 1. 企业基本情况分析")
     assert report_content.startswith("# XX有限公司尽职调查报告\n\n# 目录")
     assert toc_start < abstract_start < chapter_start
-    assert "- [1. 企业基本情况分析](#chapter-1)" in report_content[toc_start:abstract_start]
+    assert "[1. 企业基本情况分析](#chapter-1)" in report_content[toc_start:abstract_start]
+    assert "\n- [" not in report_content[toc_start:abstract_start]
     assert '<a id="chapter-1"></a>\n# 1. 企业基本情况分析' in report_content
     assert "1.1 基础信息" not in report_content[toc_start:abstract_start]

@@ -36,8 +36,9 @@ def test_render_outline_report_uses_native_clickable_toc_and_anchors():
 
     assert report.startswith("# 全球票房与流媒体竞争\n\n# 目录")
     assert "## 大纲" in report
-    assert "- [1. 全球票房变化](#chapter-1)" in report
-    assert "- [2. 流媒体平台竞争](#chapter-2)" in report
+    assert "[1. 全球票房变化](#chapter-1)" in report
+    assert "[2. 流媒体平台竞争](#chapter-2)" in report
+    assert "\n- [" not in report
     assert '<a id="chapter-1"></a>\n# 1. 全球票房变化' in report
     assert '<a id="chapter-2"></a>\n# 2. 流媒体平台竞争' in report
     assert "# 这不是章节标题" not in [

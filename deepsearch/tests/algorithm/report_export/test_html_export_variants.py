@@ -46,3 +46,37 @@ def test_html_export_variants_share_mermaid_rendering_and_limit_styled_dom(tmp_p
     assert styled.select_one(".mermaid-wrap svg.chart-svg") is not None
     assert standard.select_one("main.report-shell") is None
     assert styled.select_one("main.report-shell") is not None
+
+
+def test_html_export_variants_preserve_clickable_report_toc(tmp_path) -> None:
+    """普通与美化 HTML 都应保留目录链接及对应章节锚点。"""
+    from openjiuwen_deepsearch.algorithm.report_export.html_export import (
+        ConvertOptions,
+        convert_md_to_html,
+    )
+
+    source = tmp_path / "report.md"
+    source.write_text(
+        "# 报告\n\n"
+        "# 目录\n\n"
+        "[第一章](#chapter-1)\n\n"
+        "[第二章](#chapter-2)\n\n"
+        '<a id="chapter-1"></a>\n'
+        "# 第一章\n\n正文。\n\n"
+        '<a id="chapter-2"></a>\n'
+        "# 第二章\n",
+        encoding="utf-8",
+    )
+
+    variants = (
+        (tmp_path / "standard.html", None),
+        (tmp_path / "styled.html", ConvertOptions(page_variant="styled")),
+    )
+    for target, options in variants:
+        convert_md_to_html(source, target, options=options)
+        html = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
+        for index in (1, 2):
+            link = html.select_one(f'a[href="#chapter-{index}"]')
+            assert link is not None
+            assert link.find_parent("li") is None
+            assert html.select_one(f'#chapter-{index}') is not None
