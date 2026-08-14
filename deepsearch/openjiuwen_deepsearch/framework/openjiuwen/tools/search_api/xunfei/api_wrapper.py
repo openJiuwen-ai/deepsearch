@@ -172,7 +172,7 @@ class XunfeiSearchAPIWrapper(BaseModel, Generic[T]):
         else:
             connector = aiohttp.TCPConnector(limit=2 ** 32, ssl=ssl_verify)
         
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True) as session:
             async with session.post(
                     search_url, json=search_data, headers=search_headers, raise_for_status=False
             ) as response:
