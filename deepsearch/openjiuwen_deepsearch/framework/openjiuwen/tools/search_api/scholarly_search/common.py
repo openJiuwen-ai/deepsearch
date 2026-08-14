@@ -219,10 +219,36 @@ def ssl_verify() -> Union[str, bool]:
     return ssl_cert if ssl_verify_value else False
 
 
+def parse_boolean_extension(ext: dict, key: str, *, default: bool) -> bool:
+    if key not in ext:
+        return default
+    value = ext[key]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    raise ValueError(f"{key} must be a boolean or 'true'/'false' string")
+
+
+def is_scholarly_search_enabled(extension: dict | None) -> bool:
+    return parse_boolean_extension(
+        extension or {},
+        "scholarly_search_enabled",
+        default=False,
+    )
+
+
 def apply_full_text_extension_config(wrapper: Any, extension: dict | None) -> None:
     ext = extension or {}
-    if "scholarly_fetch_full_text" in ext:
-        wrapper.fetch_full_text = bool(ext["scholarly_fetch_full_text"])
+    wrapper.fetch_full_text = parse_boolean_extension(
+        ext,
+        "scholarly_fetch_full_text",
+        default=wrapper.fetch_full_text,
+    )
     mappings = {
         "scholarly_max_full_text_results": ("max_full_text_results", 0),
         "scholarly_full_text_timeout_seconds": ("full_text_timeout_seconds", 1),

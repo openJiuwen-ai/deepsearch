@@ -28,7 +28,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     sync_request_with_retry,
     truncate,
 )
-from openjiuwen_deepsearch.utils.academic_full_text_audit import emit_academic_full_text_event
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -36,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 def _full_text_fields() -> dict[str, Any]:
     return {
+        "skip_webpage_enrichment": True,
         "full_text": "",
         "content_type": "abstract",
         "full_text_url": "",
@@ -127,7 +127,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
 
     @staticmethod
     def _exact_pmid(query: str) -> str:
-        match = re.fullmatch(r"\s*(?:PMID\s*:\s*)?(\d+)\s*", str(query or ""), re.IGNORECASE)
+        match = re.fullmatch(r"\s*PMID\s*:\s*(\d+)\s*", str(query or ""), re.IGNORECASE)
         return match.group(1) if match else ""
 
     async def _aget_json(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
@@ -303,8 +303,6 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
             "full_text_status": "available",
             "full_text_truncated": truncated,
         })
-        emit_academic_full_text_event(logger, "returned", row)
-
     @staticmethod
     def _parse_ids(raw: Any) -> list[str]:
         if not isinstance(raw, dict):

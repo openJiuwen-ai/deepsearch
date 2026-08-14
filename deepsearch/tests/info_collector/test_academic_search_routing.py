@@ -50,12 +50,10 @@ def test_web_search_context_registers_academic_engines_for_research_only():
     config = AgentConfig(web_search_engine_config={
         "search_engine_name": "jina",
         "max_web_search_results": 3,
+        "extension": {"scholarly_search_enabled": True},
     })
 
-    research_token = _initialize_web_search_context_from_agent_config(
-        config,
-        include_academic_engines=True,
-    )
+    research_token = _initialize_web_search_context_from_agent_config(config)
     try:
         engines = web_search_context.get()
         assert set(engines) == {"jina", "pubmed", "arxiv"}
@@ -65,11 +63,47 @@ def test_web_search_context_registers_academic_engines_for_research_only():
     finally:
         web_search_context.reset(research_token)
 
-    deepsearch_token = _initialize_web_search_context_from_agent_config(config)
+    disabled_config = AgentConfig(web_search_engine_config={"search_engine_name": "jina"})
+    deepsearch_token = _initialize_web_search_context_from_agent_config(disabled_config)
     try:
         assert set(web_search_context.get()) == {"jina"}
     finally:
         web_search_context.reset(deepsearch_token)
+
+
+def test_disabled_scholarly_search_removes_query_level_vertical_route():
+    assert normalize_search_query_item(
+        SearchQueryItem(query="glioblastoma trial", search_engine_name="pubmed"),
+        enable_scholarly_search=False,
+    ).search_engine_name == ""
+    assert normalize_search_query_item(
+        "LLM RAG benchmark",
+        enable_scholarly_search=False,
+    ).search_engine_name == ""
+
+
+@pytest.mark.parametrize("configured", [False, "false", " FALSE "])
+def test_scholarly_search_switch_is_disabled_by_default_or_false(configured):
+    config = AgentConfig(web_search_engine_config={
+        "search_engine_name": "jina",
+        "extension": {"scholarly_search_enabled": configured},
+    })
+
+    token = _initialize_web_search_context_from_agent_config(config)
+    try:
+        assert set(web_search_context.get()) == {"jina"}
+    finally:
+        web_search_context.reset(token)
+
+
+def test_scholarly_search_switch_rejects_invalid_string():
+    config = AgentConfig(web_search_engine_config={
+        "search_engine_name": "jina",
+        "extension": {"scholarly_search_enabled": "yes"},
+    })
+
+    with pytest.raises(ValueError, match="scholarly_search_enabled"):
+        _initialize_web_search_context_from_agent_config(config)
 
 
 def test_query_object_and_retrieval_query_carry_secondary_engine():

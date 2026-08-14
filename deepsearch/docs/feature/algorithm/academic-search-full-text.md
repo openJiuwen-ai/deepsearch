@@ -1,66 +1,46 @@
-# Academic search full-text enrichment
+# 学术搜索全文增强
 
-## Purpose
+## 目的
 
-PubMed and arXiv search results preserve the abstract or bibliographic fallback in `content`. Each query returns at most one result by default, and the search wrappers attempt to retrieve its full text from official open-access sources.
+PubMed 和 arXiv 搜索结果在 `content` 中保留摘要或书目信息回退。每个 query 默认最多返回一条结果，搜索 wrapper 会尝试从官方开放来源获取该论文的全文。
 
-## Behavior and data contract
+学术垂直搜索默认关闭。只有在 `web_search_engine_config.extension` 中显式设置 `scholarly_search_enabled=true` 后，Collector 才会注册 PubMed 和 arXiv，并允许 query 级路由选择对应引擎。
 
-- PubMed uses PMCID to retrieve PMC JATS XML.
-- arXiv prefers official HTML and falls back to the official PDF.
-- Full text is stored separately in `full_text`; `content` remains the abstract.
-- When an available scholarly result enters Collector, `full_text` becomes the evidence `original_content`; the abstract remains the fallback when enrichment is unavailable or failed.
-- `content_type`, `full_text_url`, `full_text_format`, `full_text_status`, and `full_text_truncated` describe availability and provenance.
-- `academic_source`, `academic_source_id`, and `evidence_content_type` survive document selection so writing and final citations can be audited without logging article content.
-- PubMed and arXiv `published` values participate in Collector `source_date` filtering. Exact dates compare directly; year-only and month-only values are treated as possible date ranges and are removed only when the entire range is outside the requested bounds.
-- Missing, failed, or malformed full text never blocks the normal search result.
-- The wrappers pass the model-generated query through unchanged. All PubMed E-utilities operations share one process-local request schedule across wrapper instances. arXiv Atom API calls share a request schedule, while official HTML/PDF downloads share a process-local concurrency limit of two; a 429 cooldown applies to both paths.
-- HTTP 429, 500, 502, 503, 504, connection failures, and timeouts are attempted at most three times. `Retry-After` is honored up to 30 seconds; otherwise retries use one- and two-second exponential delays. Other 4xx responses and content parsing errors are not retried.
-- arXiv follows redirects for HTML and PDF downloads. Legacy arXiv identifiers retain their archive category when a PDF URL is constructed.
+## 行为与数据契约
 
-## End-to-end audit
+- PubMed 通过 PMCID 从 PMC 获取 JATS XML 全文。
+- arXiv 优先获取官方 HTML 全文，不可用时回退到官方 PDF。
+- 全文单独保存在 `full_text` 中，`content` 始终保留摘要。
+- 学术结果进入 Collector 时，可用的 `full_text` 会成为 evidence 的 `original_content`；全文不可用或获取失败时继续使用摘要。
+- `content_type`、`full_text_url`、`full_text_format`、`full_text_status` 和 `full_text_truncated` 描述全文状态及来源。
+- 全文缺失、获取失败或内容格式异常不会阻断正常搜索结果。
+- wrapper 不改写模型生成的 query。
+- PubMed ESearch、PubMed EFetch 和 PMC EFetch 在进程内跨 wrapper 实例共享请求调度。
+- arXiv Atom API 调用共享请求调度，HTML/PDF 下载共享进程内并发上限 2；HTTP 429 冷却同时作用于两个路径。
+- HTTP 429、500、502、503、504、连接失败和超时最多尝试 3 次。`Retry-After` 最多等待 30 秒；未提供时按 1 秒、2 秒退避。其他 4xx 和内容解析错误不重试。
+- arXiv HTML/PDF 下载允许重定向；构造旧版 arXiv PDF URL 时保留 archive category。
 
-Each successful full-text document emits structured, content-free events to `common.log` at four stages:
+## 配置
 
-- `returned`: an official full text was retrieved;
-- `entered`: that full text became Collector evidence;
-- `selected`: Reporter selected that full-text evidence for writing;
-- `cited`: the final checked citations retained that document.
+`web_search_engine_config.extension` 支持以下配置：
 
-Use a dedicated log directory for one experiment, then summarize its `common.log`:
+- `scholarly_search_enabled`：是否启用 PubMed 和 arXiv 垂直搜索，默认 `false`；
+- `scholarly_fetch_full_text`：是否获取全文，默认 `true`；
+- `scholarly_max_full_text_results`：每次最多获取全文的结果数，默认 `1`；
+- `scholarly_full_text_timeout_seconds`：全文请求超时时间，默认 `30` 秒；
+- `scholarly_max_full_text_length`：全文最大字符数，默认使用 Collector 文档内容上限；
+- `pubmed_requests_per_second`：PubMed 请求速率，默认 `1/3`，作用于 ESearch、PubMed EFetch 和 PMC EFetch；
+- `arxiv_requests_per_second`：arXiv Atom API 请求速率，默认 `1/3`。
 
-```powershell
-& ".\.venv\Scripts\python.exe" -m openjiuwen_deepsearch.utils.academic_full_text_audit `
-  "<experiment-log-dir>\common\common.log" `
-  --conversation-id "<conversation-id>" `
-  --output "<experiment-log-dir>\academic_full_text_summary.json"
-```
+学术搜索结果数默认也是 `1`。调用方构造 wrapper 时仍可通过 `max_web_search_results` 显式覆盖。
+布尔配置只接受布尔值或大小写不敏感的字符串 `"true"`、`"false"`，其他值会在初始化时明确报错。
 
-Every formal audit event carries the `conversation_id` from the active workflow logging context, whose lifetime is bounded and reset by the workflow runner. Calls made without that active context skip formal audit emission without failing search, even if another session object remains in the task context. The CLI requires `--conversation-id` and reports only that conversation's raw full-text return events, unique returned papers, and unique papers reaching Collector, writing selection, and final citation for PubMed and arXiv separately. Legacy events without a conversation ID are intentionally excluded.
-
-## Configuration
-
-`web_search_engine_config.extension` accepts:
-
-- `scholarly_fetch_full_text` (default `true`)
-- `scholarly_max_full_text_results` (default `1`)
-- `scholarly_full_text_timeout_seconds` (default `30`)
-- `scholarly_max_full_text_length` (default: Collector document content limit)
-- `pubmed_requests_per_second` (default `1/3`; applies to ESearch, PubMed EFetch, and PMC EFetch through a process-local shared schedule)
-- `arxiv_requests_per_second` (default `1/3`; applies to Atom API calls through a process-local shared schedule)
-
-The normal scholarly result limit is also `1` by default. A caller can still explicitly supply a different `max_web_search_results` when constructing a wrapper.
-
-## Key paths and tests
+## 关键代码与测试
 
 - `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/pubmed.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/arxiv.py`
 - `openjiuwen_deepsearch/algorithm/research_collector/collector_function.py`
 - `openjiuwen_deepsearch/algorithm/research_collector/collector_evidence.py`
-- `openjiuwen_deepsearch/algorithm/report/report.py`
-- `openjiuwen_deepsearch/framework/openjiuwen/agent/main_graph_nodes.py`
-- `openjiuwen_deepsearch/utils/academic_full_text_audit.py`
 - `tests/tools/search_api/test_scholarly_search.py`
 - `tests/info_collector/algorithm/test_collector_function.py`
 - `tests/info_collector/algorithm/test_collector_evidence.py`
-- `tests/utils/test_academic_full_text_audit.py`

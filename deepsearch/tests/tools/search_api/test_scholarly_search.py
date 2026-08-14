@@ -15,7 +15,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     reset_scholarly_request_controls,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed import PubMedSearchAPIWrapper
-from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 
 
 class DummyResponse:
@@ -106,6 +105,27 @@ def test_scholarly_full_text_config_can_be_overridden_through_extension(wrapper_
     assert wrapper.max_full_text_length == 4321
 
 
+@pytest.mark.parametrize(("configured", "expected"), [
+    (False, False),
+    (True, True),
+    ("false", False),
+    (" FALSE ", False),
+    ("true", True),
+    (" TRUE ", True),
+])
+@pytest.mark.parametrize("wrapper_class", [PubMedSearchAPIWrapper, ArxivSearchAPIWrapper])
+def test_scholarly_fetch_full_text_parses_boolean_extension(wrapper_class, configured, expected):
+    wrapper = wrapper_class(extension={"scholarly_fetch_full_text": configured})
+
+    assert wrapper.fetch_full_text is expected
+
+
+@pytest.mark.parametrize("wrapper_class", [PubMedSearchAPIWrapper, ArxivSearchAPIWrapper])
+def test_scholarly_fetch_full_text_rejects_invalid_boolean_extension(wrapper_class):
+    with pytest.raises(ValueError, match="scholarly_fetch_full_text"):
+        wrapper_class(extension={"scholarly_fetch_full_text": "no"})
+
+
 @pytest.mark.parametrize("wrapper_class", [PubMedSearchAPIWrapper, ArxivSearchAPIWrapper])
 def test_scholarly_search_defaults_to_one_result_per_query(wrapper_class):
     wrapper = wrapper_class()
@@ -159,6 +179,19 @@ def test_pubmed_results_fetches_exact_pmid_without_esearch():
     assert get_text.call_args.kwargs["params"]["id"] == "38132429"
 
 
+def test_pubmed_bare_numeric_query_uses_esearch():
+    wrapper = PubMedSearchAPIWrapper(fetch_full_text=False)
+
+    with patch.object(wrapper, "_search_ids", return_value=[]) as search_ids, \
+            patch.object(wrapper, "_get_text") as get_text:
+        result = wrapper.results("2024")
+
+    assert result == []
+    search_ids.assert_called_once()
+    assert search_ids.call_args.args[0] == "2024"
+    get_text.assert_not_called()
+
+
 def test_pubmed_exact_pmid_does_not_match_descriptive_query():
     wrapper = PubMedSearchAPIWrapper()
 
@@ -209,6 +242,7 @@ def test_pubmed_parse_fetch_xml_prefers_structured_abstract_content():
     assert rows[0]["full_text"] == ""
     assert rows[0]["content_type"] == "abstract"
     assert rows[0]["full_text_status"] == "unavailable"
+    assert rows[0]["skip_webpage_enrichment"] is True
 
 
 def test_pubmed_parse_fetch_xml_extracts_pmcid():
@@ -296,8 +330,7 @@ def test_pubmed_results_does_not_fetch_pmc_when_full_text_disabled():
     assert results[0]["content"] == "Abstract."
 
 
-def test_pubmed_enrich_rows_fetches_only_configured_pmc_results(caplog):
-    caplog.set_level("INFO")
+def test_pubmed_enrich_rows_fetches_only_configured_pmc_results():
     wrapper = PubMedSearchAPIWrapper(max_full_text_results=1)
     rows = [
         {"source": "pubmed", "source_id": "1", "content": "Abstract 1", "pmcid": "PMC1", "full_text_status": "unavailable"},
@@ -305,12 +338,8 @@ def test_pubmed_enrich_rows_fetches_only_configured_pmc_results(caplog):
     ]
     pmc_xml = "<article><body><sec><title>Body</title><p>Complete article text.</p></sec></body></article>"
 
-    token = session_id_ctx.set("scholarly-search-test")
-    try:
-        with patch.object(wrapper, "_get_text", return_value=pmc_xml) as get_text:
-            enriched = wrapper._enrich_rows_sync(rows, verify=False)
-    finally:
-        session_id_ctx.reset(token)
+    with patch.object(wrapper, "_get_text", return_value=pmc_xml) as get_text:
+        enriched = wrapper._enrich_rows_sync(rows, verify=False)
 
     assert get_text.call_count == 1
     assert get_text.call_args.kwargs["params"]["db"] == "pmc"
@@ -320,8 +349,6 @@ def test_pubmed_enrich_rows_fetches_only_configured_pmc_results(caplog):
     assert enriched[0]["full_text_format"] == "jats_xml"
     assert enriched[0]["full_text_status"] == "available"
     assert enriched[1]["full_text_status"] == "unavailable"
-    assert '"engine": "pubmed"' in caplog.text
-    assert '"event": "returned"' in caplog.text
 
 
 def test_pubmed_enrich_rows_marks_one_pmc_failure_without_losing_abstract():
@@ -616,6 +643,7 @@ def test_arxiv_parse_atom_adds_full_text_contract_without_changing_summary():
     assert rows[0]["full_text"] == ""
     assert rows[0]["content_type"] == "abstract"
     assert rows[0]["full_text_status"] == "unavailable"
+    assert rows[0]["skip_webpage_enrichment"] is True
 
 
 def test_arxiv_parse_atom_preserves_legacy_identifier_category():
@@ -651,8 +679,7 @@ def test_arxiv_parse_html_extracts_article_and_removes_navigation():
     assert truncated is False
 
 
-def test_arxiv_enrich_rows_prefers_html_and_respects_limit(caplog):
-    caplog.set_level("INFO")
+def test_arxiv_enrich_rows_prefers_html_and_respects_limit():
     wrapper = ArxivSearchAPIWrapper(max_full_text_results=1, min_full_text_length=20)
     rows = [
         {"source": "arxiv", "source_id": "2501.00001v1", "content": "Summary 1", "full_text_status": "unavailable"},
@@ -660,13 +687,9 @@ def test_arxiv_enrich_rows_prefers_html_and_respects_limit(caplog):
     ]
     html = "<article><h1>Study</h1><p>This is sufficiently long official HTML full text.</p></article>"
 
-    token = session_id_ctx.set("scholarly-search-test")
-    try:
-        with patch.object(wrapper, "_get_text", return_value=html) as get_text, \
-                patch.object(wrapper, "_get_bytes") as get_bytes:
-            enriched = wrapper._enrich_rows_sync(rows)
-    finally:
-        session_id_ctx.reset(token)
+    with patch.object(wrapper, "_get_text", return_value=html) as get_text, \
+            patch.object(wrapper, "_get_bytes") as get_bytes:
+        enriched = wrapper._enrich_rows_sync(rows)
 
     assert get_text.call_count == 1
     get_bytes.assert_not_called()
@@ -674,8 +697,6 @@ def test_arxiv_enrich_rows_prefers_html_and_respects_limit(caplog):
     assert enriched[0]["full_text_status"] == "available"
     assert enriched[0]["full_text_format"] == "html"
     assert enriched[1]["full_text_status"] == "unavailable"
-    assert '"engine": "arxiv"' in caplog.text
-    assert '"event": "returned"' in caplog.text
 
 
 def test_arxiv_enrich_rows_falls_back_to_pdf():

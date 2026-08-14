@@ -4,7 +4,6 @@
 import json
 import logging
 import re
-from calendar import monthrange
 from datetime import date
 from html import unescape
 from typing import Any
@@ -21,21 +20,6 @@ from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_fr
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
-
-SCHOLARLY_MONTH_NAMES = {
-    "jan": 1, "january": 1,
-    "feb": 2, "february": 2,
-    "mar": 3, "march": 3,
-    "apr": 4, "april": 4,
-    "may": 5,
-    "jun": 6, "june": 6,
-    "jul": 7, "july": 7,
-    "aug": 8, "august": 8,
-    "sep": 9, "sept": 9, "september": 9,
-    "oct": 10, "october": 10,
-    "nov": 11, "november": 11,
-    "dec": 12, "december": 12,
-}
 
 
 def _get_exclude_domains(agent_input: dict) -> list[str]:
@@ -349,13 +333,6 @@ def web_search_jiuwen(agent_input: dict, tool_content: Any) -> (list, dict):
         tool_result, agent_input = process_google_search_result(agent_input, results)
     elif engine == "tavily":
         tool_result, agent_input = process_tavily_search_result(agent_input, results)
-    elif engine in {"pubmed", "arxiv"}:
-        tool_result, agent_input = process_common_search_result(
-            agent_input,
-            results,
-            include_date_metadata=True,
-            apply_temporal_filter=True,
-        )
     else:
         tool_result, agent_input = process_common_search_result(agent_input, results)
 
@@ -392,59 +369,6 @@ def _parse_absolute_date(value: Any) -> date | None:
         return None
 
 
-def _parse_scholarly_published_date(value: Any) -> dict[str, str] | None:
-    text = " ".join(str(value or "").strip().split())
-    if not text:
-        return None
-    iso_prefix = re.match(r"^(\d{4})-(\d{2})-(\d{2})", text)
-    if iso_prefix:
-        try:
-            parsed = date(*(int(part) for part in iso_prefix.groups()))
-        except ValueError:
-            return None
-        iso_date = parsed.isoformat()
-        return {
-            "parsed_date": iso_date,
-            "earliest_date": iso_date,
-            "latest_date": iso_date,
-            "precision": "day",
-        }
-
-    match = re.fullmatch(r"(\d{4})(?:\s+([A-Za-z]{3,9}))?(?:\s+(\d{1,2}))?", text)
-    if not match:
-        return None
-    year_text, month_text, day_text = match.groups()
-    month = SCHOLARLY_MONTH_NAMES.get(str(month_text or "").casefold(), 1 if not month_text else 0)
-    if not month:
-        return None
-    year = int(year_text)
-    try:
-        if day_text:
-            parsed = date(year, month, int(day_text))
-            iso_date = parsed.isoformat()
-            return {
-                "parsed_date": iso_date,
-                "earliest_date": iso_date,
-                "latest_date": iso_date,
-                "precision": "day",
-            }
-        if month_text:
-            return {
-                "parsed_date": "",
-                "earliest_date": date(year, month, 1).isoformat(),
-                "latest_date": date(year, month, monthrange(year, month)[1]).isoformat(),
-                "precision": "month",
-            }
-        return {
-            "parsed_date": "",
-            "earliest_date": date(year, 1, 1).isoformat(),
-            "latest_date": date(year, 12, 31).isoformat(),
-            "precision": "year",
-        }
-    except ValueError:
-        return None
-
-
 def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -> dict | None:
     """归一化 web 结果，并按需附加 Tavily 的发表日期。
 
@@ -473,22 +397,19 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
         "url": url[:MAX_URL_LENGTH],
         "content": content[:MAX_SEARCH_CONTENT_LENGTH],
     }
-    academic_source = str(item.get("source") or "").strip().casefold()
-    if academic_source in {"pubmed", "arxiv"}:
-        normalized["academic_source"] = academic_source
-        academic_source_id = str(item.get("source_id") or "").strip()
-        if academic_source_id:
-            normalized["academic_source_id"] = academic_source_id
-        for key in ("doi", "pmcid"):
-            value = str(item.get(key) or "").strip()
-            if value:
-                normalized[key] = value
-        normalized["full_text"] = str(item.get("full_text") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
+    full_text_status = str(item.get("full_text_status") or "").strip().casefold()
+    if full_text_status in {"available", "unavailable", "failed"}:
+        full_text = str(item.get("full_text") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
+        if full_text_status == "available" and not full_text.strip():
+            full_text_status = "unavailable"
+        normalized["full_text"] = full_text
         normalized["content_type"] = str(item.get("content_type") or "abstract")
         normalized["full_text_url"] = str(item.get("full_text_url") or "")[:MAX_URL_LENGTH]
         normalized["full_text_format"] = str(item.get("full_text_format") or "")
-        normalized["full_text_status"] = str(item.get("full_text_status") or "unavailable")
-        normalized["full_text_truncated"] = bool(item.get("full_text_truncated", False))
+        normalized["full_text_status"] = full_text_status
+        normalized["full_text_truncated"] = item.get("full_text_truncated") is True
+    if item.get("skip_webpage_enrichment") is True:
+        normalized["skip_webpage_enrichment"] = True
     if include_date_metadata:
         raw_date = item.get("source_date")
         source_date_type = str(item.get("source_date_type") or "").strip()
@@ -500,18 +421,6 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
                 "value": str(raw_date)[:MAX_SEARCH_CONTENT_LENGTH],
                 "parsed_date": parsed_date.isoformat() if parsed_date else "",
             }
-        elif academic_source in {"pubmed", "arxiv"}:
-            published = item.get("published")
-            date_range = _parse_scholarly_published_date(published)
-            if published is not None and str(published).strip():
-                normalized["date_metadata"] = {
-                    "field": "published",
-                    "type": "published",
-                    "value": str(published)[:MAX_SEARCH_CONTENT_LENGTH],
-                    "parsed_date": date_range["parsed_date"] if date_range else "",
-                }
-                if date_range:
-                    normalized["date_metadata"].update(date_range)
     return normalized
 
 
@@ -546,19 +455,16 @@ def filter_web_records_by_temporal_scope(
     for record in records:
         metadata = record.get("date_metadata") or {}
         parsed_text = metadata.get("parsed_date") or ""
-        earliest_date = _parse_absolute_date(metadata.get("earliest_date") or parsed_text)
-        latest_date = _parse_absolute_date(metadata.get("latest_date") or parsed_text)
-        if earliest_date is None and latest_date is None:
+        parsed_date = _parse_absolute_date(parsed_text)
+        if parsed_date is None:
             date_unknown += 1
             kept.append(record)
             continue
-        earliest_date = earliest_date or latest_date
-        latest_date = latest_date or earliest_date
 
         reason = ""
-        if scope.start_date and latest_date < scope.start_date:
+        if scope.start_date and parsed_date < scope.start_date:
             reason = "before_start_date"
-        elif scope.end_date and earliest_date > scope.end_date:
+        elif scope.end_date and parsed_date > scope.end_date:
             reason = "after_end_date"
         if not reason:
             kept.append(record)
@@ -665,13 +571,7 @@ def process_google_search_result(agent_input: dict, tool_content: Any) -> (list,
     return tool_result, agent_input
 
 
-def process_common_search_result(
-        agent_input: dict,
-        tool_content: Any,
-        *,
-        include_date_metadata: bool = False,
-        apply_temporal_filter: bool = False,
-) -> (list, dict):
+def process_common_search_result(agent_input: dict, tool_content: Any) -> (list, dict):
     """标准搜索工具结果处理方法"""
     original_records = agent_input.get("web_page_search_record", [])
     if not isinstance(original_records, list):
@@ -684,12 +584,9 @@ def process_common_search_result(
             tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
         added_records = []
         for item in tool_result:
-            new_item = _normalize_web_search_item(item, include_date_metadata=include_date_metadata)
+            new_item = _normalize_web_search_item(item)
             if new_item is not None:
                 added_records.append(new_item)
-        if apply_temporal_filter:
-            added_records = _apply_temporal_filter(agent_input, added_records)
-            tool_result = added_records
         combined_records = original_records + added_records
         agent_input["web_page_search_record"] = remove_duplicate_items(combined_records)
     except Exception as e:

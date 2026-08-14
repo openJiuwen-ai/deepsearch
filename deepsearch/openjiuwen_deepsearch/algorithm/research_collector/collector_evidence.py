@@ -12,7 +12,6 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
-from openjiuwen_deepsearch.utils.academic_full_text_audit import emit_academic_full_text_event
 
 logger = logging.getLogger(__name__)
 
@@ -426,7 +425,6 @@ def build_evidence_atom(
     content = str(full_text if use_full_text else record.get("content") or "")[
         :MAX_COLLECTOR_DOC_CONTENT_LENGTH
     ]
-    evidence_content_type = "full_text" if use_full_text else "abstract"
     source_type = (
         "local"
         if str(record.get("type") or "").lower() == "text" or url.startswith("localdataset://")
@@ -446,9 +444,7 @@ def build_evidence_atom(
     date_metadata = record.get("date_metadata") or {}
     canonical_publish_time = ""
     if date_metadata.get("type") == "published":
-        canonical_publish_time = str(
-            date_metadata.get("parsed_date") or date_metadata.get("value") or ""
-        )
+        canonical_publish_time = str(date_metadata.get("parsed_date") or "")
     base = {
         "doc_id": doc_id,
         "source_id": source_id,
@@ -465,23 +461,11 @@ def build_evidence_atom(
             "data_density": None,
         },
         "content_ref": content_ref,
-        "evidence_content_type": evidence_content_type,
-        "evidence_content_chars": len(content),
     }
-    for key in (
-        "academic_source",
-        "academic_source_id",
-        "doi",
-        "pmcid",
-        "full_text_format",
-        "full_text_url",
-        "full_text_truncated",
-    ):
-        if key in record:
-            base[key] = record[key]
+    if record.get("skip_webpage_enrichment") is True:
+        base["skip_webpage_enrichment"] = True
     doc_info = {**base, "original_content": content}
     normalize_doc_info_scores_and_time(doc_info)
-    emit_academic_full_text_event(logger, "entered", doc_info)
     return base, doc_info
 
 
@@ -508,7 +492,7 @@ def _compact_doc(doc: dict[str, Any]) -> dict[str, Any]:
     Returns:
         不含 original_content 的 evidence 视图。
     """
-    compact = {
+    return {
         "source_id": doc.get("source_id") or doc.get("doc_id", ""),
         "doc_id": doc.get("doc_id", ""),
         "title": _truncate_text(doc.get("title", ""), 120),
@@ -520,20 +504,6 @@ def _compact_doc(doc: dict[str, Any]) -> dict[str, Any]:
         "scores": doc.get("scores", {}),
         "content_ref": doc.get("content_ref", {}),
     }
-    for key in (
-        "academic_source",
-        "academic_source_id",
-        "doi",
-        "pmcid",
-        "evidence_content_type",
-        "evidence_content_chars",
-        "full_text_format",
-        "full_text_url",
-        "full_text_truncated",
-    ):
-        if key in doc:
-            compact[key] = doc[key]
-    return compact
 
 
 def _compact_supervisor_doc(doc: dict[str, Any]) -> dict[str, Any]:

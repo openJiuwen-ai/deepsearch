@@ -34,7 +34,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     sync_request_with_retry,
     truncate,
 )
-from openjiuwen_deepsearch.utils.academic_full_text_audit import emit_academic_full_text_event
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -42,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 def _full_text_fields() -> dict[str, Any]:
     return {
+        "skip_webpage_enrichment": True,
         "full_text": "",
         "content_type": "abstract",
         "full_text_url": "",
@@ -370,8 +370,6 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
             "full_text_status": "available",
             "full_text_truncated": truncated,
         })
-        emit_academic_full_text_event(logger, "returned", row)
-
     @staticmethod
     def _is_error_entry(arxiv_id: str, title: str) -> bool:
         return title.strip().casefold() == "error" and "/api/errors#" in arxiv_id
