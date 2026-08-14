@@ -49,7 +49,7 @@ def test_html_export_variants_share_mermaid_rendering_and_limit_styled_dom(tmp_p
 
 
 def test_html_export_variants_preserve_clickable_report_toc(tmp_path) -> None:
-    """普通与美化 HTML 都应保留目录链接及对应章节锚点。"""
+    """普通与美化 HTML 都应保留目录链接及对应章节 ID。"""
     from openjiuwen_deepsearch.algorithm.report_export.html_export import (
         ConvertOptions,
         convert_md_to_html,
@@ -61,9 +61,7 @@ def test_html_export_variants_preserve_clickable_report_toc(tmp_path) -> None:
         "# 目录\n\n"
         "[第一章](#chapter-1)\n\n"
         "[第二章](#chapter-2)\n\n"
-        '<a id="chapter-1"></a>\n'
         "# 第一章\n\n正文。\n\n"
-        '<a id="chapter-2"></a>\n'
         "# 第二章\n",
         encoding="utf-8",
     )
@@ -79,4 +77,28 @@ def test_html_export_variants_preserve_clickable_report_toc(tmp_path) -> None:
             link = html.select_one(f'a[href="#chapter-{index}"]')
             assert link is not None
             assert link.find_parent("li") is None
-            assert html.select_one(f'#chapter-{index}') is not None
+            target = html.select_one(f'h1#chapter-{index}')
+            assert target is not None
+            assert target.find_parent("p") is None
+
+
+def test_html_export_places_generated_chapter_ids_on_h1(tmp_path) -> None:
+    """生成的章节 ID 应直接位于 H1 上，不产生额外空段落。"""
+    from openjiuwen_deepsearch.algorithm.report_export.html_export import convert_md_to_html
+
+    source = tmp_path / "report.md"
+    target = tmp_path / "report.html"
+    source.write_text(
+        "# 报告\n\n"
+        "# 目录\n\n[1. 第一章](#chapter-1)\n\n"
+        "# 1. 第一章\n\n正文\n",
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(source, target)
+    soup = BeautifulSoup(target.read_text(encoding="utf-8"), "html.parser")
+    heading = soup.select_one("h1#chapter-1")
+
+    assert heading is not None
+    assert soup.select_one("a#chapter-1") is None
+    assert heading.find_parent("p") is None

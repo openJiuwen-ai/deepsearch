@@ -356,7 +356,7 @@ def test_build_table_of_contents_uses_english_title():
     assert table_of_contents == "# Table of Contents\n\n[1. Market Overview](#chapter-1)"
 
 
-def test_add_table_of_contents_anchors_ignores_fenced_headings_and_is_idempotent():
+def test_extract_level_one_headings_ignores_fenced_headings():
     content = """# 1. 第一章
 
 ```markdown
@@ -366,14 +366,9 @@ def test_add_table_of_contents_anchors_ignores_fenced_headings_and_is_idempotent
 # 2. 第二章
 """
 
-    anchored = Reporter._add_table_of_contents_anchors(content)
+    headings = Reporter._extract_level_one_headings(content)
 
-    assert anchored.count('<a id="chapter-1"></a>') == 1
-    assert anchored.count('<a id="chapter-2"></a>') == 1
-    assert '<a id="chapter-3"></a>' not in anchored
-    assert '<a id="chapter-1"></a>\n# 1. 第一章' in anchored
-    assert '<a id="chapter-2"></a>\n# 2. 第二章' in anchored
-    assert Reporter._add_table_of_contents_anchors(anchored) == anchored
+    assert [heading["title"] for heading in headings] == ["1. 第一章", "2. 第二章"]
 
 
 @pytest.mark.asyncio
@@ -460,5 +455,6 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     assert toc_start < abstract_start < chapter_start
     assert "[1. 企业基本情况分析](#chapter-1)" in report_content[toc_start:abstract_start]
     assert "\n- [" not in report_content[toc_start:abstract_start]
-    assert '<a id="chapter-1"></a>\n# 1. 企业基本情况分析' in report_content
+    assert '<a id="chapter-' not in report_content
+    assert "# 1. 企业基本情况分析" in report_content
     assert "1.1 基础信息" not in report_content[toc_start:abstract_start]

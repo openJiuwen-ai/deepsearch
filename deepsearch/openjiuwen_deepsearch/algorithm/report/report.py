@@ -1075,7 +1075,6 @@ class Reporter:
             _outline_title = current_outline.get("title", "")
         else:
             _outline_title = getattr(current_outline, "title", "")
-        sub_reports_content = self._add_table_of_contents_anchors(sub_reports_content)
         table_of_contents = self._build_table_of_contents(
             sub_reports_content,
             gen_report_context["language"],
@@ -1537,29 +1536,6 @@ class Reporter:
             offset += len(line)
 
         return headings
-
-    @staticmethod
-    def _add_table_of_contents_anchors(sub_reports_content: str) -> str:
-        """Add stable HTML anchors immediately before each real H1 chapter."""
-        anchor_line_pattern = re.compile(
-            r'(?m)^[ \t]*<a id="chapter-\d+"></a>[ \t]*(?:\r?\n|$)'
-        )
-        normalized = anchor_line_pattern.sub("", sub_reports_content or "")
-        headings = Reporter._extract_level_one_headings(normalized)
-        if not headings:
-            return normalized
-
-        newline = "\r\n" if "\r\n" in normalized else "\n"
-        for index, heading in reversed(list(enumerate(headings, start=1))):
-            anchor = '<a id="chapter-{}"></a>'.format(index)
-            position = heading["offset"]
-            normalized = (
-                normalized[:position]
-                + anchor
-                + newline
-                + normalized[position:]
-            )
-        return normalized
 
     def _post_process_abstract(self, content: str) -> str:
         language = self.gen_report_context["language"]

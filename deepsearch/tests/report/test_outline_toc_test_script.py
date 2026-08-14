@@ -9,7 +9,7 @@ def _render_outline_body(outline):
     return "\n\n".join(blocks)
 
 
-def test_render_outline_report_uses_native_clickable_toc_and_anchors():
+def test_render_outline_report_uses_native_clickable_toc():
     outline = Outline(
         language="zh-CN",
         title="全球票房与流媒体竞争",
@@ -30,7 +30,7 @@ def test_render_outline_report_uses_native_clickable_toc_and_anchors():
         ],
     )
 
-    body = Reporter._add_table_of_contents_anchors(_render_outline_body(outline))
+    body = _render_outline_body(outline)
     toc = Reporter._build_table_of_contents(body, "zh-CN")
     report = f"# {outline.title}\n\n{toc}\n\n## 大纲\n\n{body}\n"
 
@@ -39,8 +39,9 @@ def test_render_outline_report_uses_native_clickable_toc_and_anchors():
     assert "[1. 全球票房变化](#chapter-1)" in report
     assert "[2. 流媒体平台竞争](#chapter-2)" in report
     assert "\n- [" not in report
-    assert '<a id="chapter-1"></a>\n# 1. 全球票房变化' in report
-    assert '<a id="chapter-2"></a>\n# 2. 流媒体平台竞争' in report
+    assert "# 1. 全球票房变化" in report
+    assert "# 2. 流媒体平台竞争" in report
+    assert '<a id="chapter-' not in report
     assert "# 这不是章节标题" not in [
         item["title"] for item in Reporter._extract_level_one_headings(report)
     ]

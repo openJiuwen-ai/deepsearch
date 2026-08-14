@@ -475,16 +475,30 @@ def _word_bookmark_name(value: str) -> str:
 def _prepare_heading_bookmarks(container) -> None:
     """Move standalone HTML anchors onto their following heading elements."""
     bookmark_id = 0
+
+    def _set_bookmark(heading, anchor_id: str) -> None:
+        nonlocal bookmark_id
+        if heading.get("data-docx-bookmark-name") is not None:
+            return
+        heading["data-docx-bookmark-name"] = _word_bookmark_name(anchor_id)
+        heading["data-docx-bookmark-id"] = str(bookmark_id)
+        bookmark_id += 1
+
+    for heading in container.find_all(list(HEADING_TAGS)):
+        heading_id = heading.get("id", "")
+        if re.fullmatch(r"chapter-\d+", heading_id):
+            _set_bookmark(heading, heading_id)
+
     for anchor in list(container.select("a[id]:not([href])")):
         if anchor.get_text(strip=True):
             continue
-        heading = anchor.find_next(lambda tag: tag.name in HEADING_TAGS)
+        heading = anchor.find_parent(lambda tag: tag.name in HEADING_TAGS)
+        if heading is None:
+            heading = anchor.find_next(lambda tag: tag.name in HEADING_TAGS)
         if heading is None:
             continue
 
-        heading["data-docx-bookmark-name"] = _word_bookmark_name(anchor["id"])
-        heading["data-docx-bookmark-id"] = str(bookmark_id)
-        bookmark_id += 1
+        _set_bookmark(heading, anchor["id"])
 
         parent = anchor.parent
         if parent is not None and parent.name == "p" and not parent.get_text(strip=True):

@@ -7,12 +7,12 @@
 ## 可见行为
 
 - HTML 导出会生成完整 HTML 文件并注入报告 CSS。
-- HTML 导出保留报告目录的 `#chapter-N` 链接与章节锚点，普通页面和美化页面均可点击跳转。
+- HTML 导出在转换层根据报告目录链接给对应 H1 添加 `id="chapter-N"`，普通页面和美化页面均可点击跳转；生成的 `report.md` 不包含 HTML 锚点。
 - 美化 HTML 按报告顺序保留目录、摘要和章节：摘要位于目录之后、正文首章之前。
 - HTML 中数学公式通过 KaTeX 脚本（`katex.min.js` + `auto-render.min.js` + `katex.min.css`，版本固定 0.16.11）渲染，使用 `$...$` / `$$...$$` 作为定界符；`\bm` 宏映射为 `\boldsymbol{#1}`，`throwOnError=false` 保证无法解析的公式不打断页面渲染。
 - HTML 在 KaTeX 渲染前会做"货币美元保护"：遍历正文文本节点，把 `$` + 数字开头且不像公式的片段替换为全角 `＄`（U+FF04）占位符，渲染完成后还原为 `$`，避免 `$4`、`$1,200.50` 等金额被 KaTeX 误配对为公式定界符。
 - DOCX 导出使用纯 Python 流水线从 Markdown 生成 Word 文件。
-- DOCX 导出将 `#chapter-N` 目录链接转换为 Word 内部超链接，并将对应章节锚点转换为书签；普通外部链接行为不变。
+- DOCX 导出在转换层将 `#chapter-N` 目录链接转换为 Word 内部超链接，并将对应 H1 ID 转换为书签；普通外部链接行为不变。
 - HTML 路径通过 `conversion_utils.protect_math_spans`、DOCX 路径通过 `word_utils._iter_math_spans` 切分公式段；两者复用 `conversion_utils` 中的公式判别函数 `_is_likely_inline_math` / 货币判别函数 `_is_currency_start` / `_find_inline_math_end` / `_is_escaped` / `_is_double_dollar`，保证两侧对"哪些 `$...$` 是公式、哪些是货币或纯文本"的判定一致。
 - DOCX 超链接文本中若包含 `$...$` 或 `$$...$$`，会把公式段单独切出并转为 OMML 公式 run，其余文本保持为普通文本 run；HTML 实体先经 `html.unescape` 解码再进入公式处理。
 - DOCX 列表嵌套按列表类型显式分支：同类型嵌套（`ul→ul` / `ol→ol`）沿用同一编号并增加缩进层级；异类型嵌套（如 `ul` 内含 `ol`）创建独立编号，避免编号串号。

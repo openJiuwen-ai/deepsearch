@@ -107,6 +107,30 @@ def test_render_markdown_html_fragment_preserves_shared_semantics() -> None:
     assert '<div class="table-wrap">' in fragment
 
 
+def test_add_report_chapter_ids_matches_toc_and_ignores_fenced_headings() -> None:
+    """导出层只给目录引用的真实 H1 添加章节 ID。"""
+    from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
+        add_report_chapter_ids,
+    )
+
+    markdown_text = (
+        "# 报告\n\n"
+        "# 目录\n\n"
+        "[1. 第一章](#chapter-1)\n\n"
+        "[2. 第二章](#chapter-2)\n\n"
+        "```markdown\n# 1. 第一章\n```\n\n"
+        "# 1. 第一章\n\n正文\n\n"
+        "# 2. 第二章\n"
+    )
+
+    converted = add_report_chapter_ids(markdown_text)
+
+    assert "```markdown\n# 1. 第一章\n```" in converted
+    assert "# 1. 第一章 {#chapter-1}" in converted
+    assert "# 2. 第二章 {#chapter-2}" in converted
+    assert add_report_chapter_ids(converted) == converted
+
+
 def test_docx_export_converts_report_toc_to_internal_links(tmp_path: Path) -> None:
     """DOCX 目录应链接到章节书签，而不是创建伪外部链接。"""
     from openjiuwen_deepsearch.algorithm.report_export.docx_export import convert_md_to_docx
@@ -118,9 +142,7 @@ def test_docx_export_converts_report_toc_to_internal_links(tmp_path: Path) -> No
         "# 目录\n\n"
         "[第一章](#chapter-1)\n\n"
         "[第二章](#chapter-2)\n\n"
-        '<a id="chapter-1"></a>\n'
         "# 第一章\n\n正文。\n\n"
-        '<a id="chapter-2"></a>\n'
         "# 第二章\n\n[外部链接](https://example.com)\n",
         encoding="utf-8",
     )
