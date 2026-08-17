@@ -23,9 +23,9 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     NCBI_REQUEST_CONTROL,
     ScholarlySearchResponseError,
     apply_full_text_extension_config,
-    async_request_with_retry,
+    async_request_once,
     ssl_verify,
-    sync_request_with_retry,
+    sync_request_once,
     truncate,
 )
 
@@ -141,7 +141,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return response.text
 
     async def _aget_response(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
-        return await async_request_with_retry(
+        return await async_request_once(
             lambda: client.get(url, params=params),
             self._wait_for_async_rate_limit,
             control=NCBI_REQUEST_CONTROL,
@@ -164,7 +164,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return response.text
 
     def _get_response(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> Any:
-        return sync_request_with_retry(
+        return sync_request_once(
             lambda: requests.get(
                 url,
                 params=params,

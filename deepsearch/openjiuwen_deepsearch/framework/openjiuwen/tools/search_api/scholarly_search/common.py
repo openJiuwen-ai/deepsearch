@@ -20,7 +20,6 @@ DEFAULT_PUBMED_SEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 DEFAULT_ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
 ATOM_NAMESPACE = "http" + "://www.w3.org/2005/Atom"
 RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
-DEFAULT_MAX_ATTEMPTS = 3
 MAX_RETRY_DELAY_SECONDS = 30.0
 R = TypeVar("R")
 
@@ -128,7 +127,7 @@ def is_transient_connection_error(error: BaseException) -> bool:
     ))
 
 
-def _retry_delay(response: Any, failed_attempt: int) -> float:
+def _retry_after_delay(response: Any) -> float:
     if int(getattr(response, "status_code", 0) or 0) == 429:
         raw = str((getattr(response, "headers", {}) or {}).get("Retry-After", "")).strip()
         if raw:
@@ -145,69 +144,37 @@ def _retry_delay(response: Any, failed_attempt: int) -> float:
                     )
                 except (TypeError, ValueError, OverflowError):
                     pass
-    return min(MAX_RETRY_DELAY_SECONDS, float(2 ** (failed_attempt - 1)))
+    return 1.0
 
 
-async def async_request_with_retry(
+async def async_request_once(
         request: Callable[[], Awaitable[R]],
         before_attempt: Callable[[], Awaitable[None]],
         *,
         control: ServiceRequestControl,
-        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> R:
-    attempts = max(1, int(max_attempts))
-    for attempt in range(1, attempts + 1):
-        await before_attempt()
-        try:
-            response = await request()
-        except Exception as exc:
-            if not is_transient_connection_error(exc) or attempt >= attempts:
-                raise
-            await asyncio.sleep(min(MAX_RETRY_DELAY_SECONDS, float(2 ** (attempt - 1))))
-            continue
-        status = int(getattr(response, "status_code", 0) or 0)
-        if status in RETRYABLE_HTTP_STATUSES:
-            delay = _retry_delay(response, attempt)
-            if status == 429:
-                control.defer(delay)
-            if attempt < attempts and status != 429:
-                await asyncio.sleep(delay)
-            if attempt < attempts:
-                continue
-        response.raise_for_status()
-        return response
-    raise RuntimeError("scholarly request retry loop exhausted")
+    await before_attempt()
+    response = await request()
+    status = int(getattr(response, "status_code", 0) or 0)
+    if status == 429:
+        control.defer(_retry_after_delay(response))
+    response.raise_for_status()
+    return response
 
 
-def sync_request_with_retry(
+def sync_request_once(
         request: Callable[[], R],
         before_attempt: Callable[[], None],
         *,
         control: ServiceRequestControl,
-        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> R:
-    attempts = max(1, int(max_attempts))
-    for attempt in range(1, attempts + 1):
-        before_attempt()
-        try:
-            response = request()
-        except Exception as exc:
-            if not is_transient_connection_error(exc) or attempt >= attempts:
-                raise
-            time.sleep(min(MAX_RETRY_DELAY_SECONDS, float(2 ** (attempt - 1))))
-            continue
-        status = int(getattr(response, "status_code", 0) or 0)
-        if status in RETRYABLE_HTTP_STATUSES:
-            delay = _retry_delay(response, attempt)
-            if status == 429:
-                control.defer(delay)
-            if attempt < attempts and status != 429:
-                time.sleep(delay)
-            if attempt < attempts:
-                continue
-        response.raise_for_status()
-        return response
-    raise RuntimeError("scholarly request retry loop exhausted")
+    before_attempt()
+    response = request()
+    status = int(getattr(response, "status_code", 0) or 0)
+    if status == 429:
+        control.defer(_retry_after_delay(response))
+    response.raise_for_status()
+    return response
 
 
 def truncate(value: Any, limit: int) -> str:

@@ -17,7 +17,9 @@ PubMed 和 arXiv 搜索结果在 `content` 中保留摘要或书目信息回退�
 - wrapper 不改写模型生成的 query。
 - PubMed ESearch、PubMed EFetch 和 PMC EFetch 在进程内跨 wrapper 实例共享请求调度。
 - arXiv Atom API 调用共享请求调度，HTML/PDF 下载共享进程内并发上限 2；HTTP 429 冷却同时作用于两个路径。
-- HTTP 429、500、502、503、504、连接失败和超时最多尝试 3 次。`Retry-After` 最多等待 30 秒；未提供时按 1 秒、2 秒退避。其他 4xx 和内容解析错误不重试。
+- 学术 wrapper 对同一个 HTTP 请求只发送一次，不在内部重试。HTTP 429 的 `Retry-After` 最多记录为 30 秒进程内冷却，并作用于后续请求。
+- PubMed 和 arXiv 作为 query 级 secondary engine 调用。搜索失败是否重试由 Collector 统一决定，最多尝试 3 次，因此不会与 wrapper 叠加成 `3 × 3` 次请求；不可重试错误只调用一次。
+- PMC 全文和 arXiv HTML/PDF 获取失败时同样不重试，直接保留已有摘要并将 `full_text_status` 标记为 `failed`。arXiv HTML 不可用后尝试 PDF 属于备用来源切换，不是对同一个请求重试。
 - arXiv HTML/PDF 下载允许重定向；构造旧版 arXiv PDF URL 时保留 archive category。
 
 ## 配置

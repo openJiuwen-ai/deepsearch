@@ -328,7 +328,7 @@ class InfoRetrievalNode(BaseNode):
                                 query=query,
                                 search_engine_name=engine_name,
                                 fallback_to_default=fallback_to_default,
-                                retry_on_error=engine_name == default_search_engine_name,
+                                retry_on_error=True,
                             ),
                             state,
                         )
@@ -670,7 +670,7 @@ class InfoRetrievalNode(BaseNode):
                 query=query,
                 search_engine_name=secondary_engine,
                 fallback_to_default=fallback_to_default,
-                retry_on_error=False,
+                retry_on_error=True,
             ),
             state,
         )

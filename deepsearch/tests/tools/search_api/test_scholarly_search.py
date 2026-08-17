@@ -476,42 +476,38 @@ async def test_pubmed_async_request_keeps_ids_when_esearch_also_has_warning():
 
 
 @pytest.mark.asyncio
-async def test_pubmed_async_request_retries_429_and_honors_retry_after():
+async def test_pubmed_async_request_does_not_retry_429_and_records_retry_after():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(side_effect=[
-        DummyResponse(status_code=429, headers={"Retry-After": "7"}),
-        DummyResponse(json_data={"esearchresult": {"idlist": ["38132429"]}}),
-    ])
+    client.get = AsyncMock(return_value=DummyResponse(
+        status_code=429,
+        headers={"Retry-After": "7"},
+    ))
 
     with patch.object(wrapper, "_wait_for_async_rate_limit", AsyncMock()) as rate_limit, \
             patch(
                 "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common."
                 "NCBI_REQUEST_CONTROL.defer"
             ) as defer:
-        raw = await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
+        with pytest.raises(RuntimeError, match="status 429"):
+            await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
 
-    assert wrapper._parse_ids(raw) == ["38132429"]
-    assert client.get.await_count == 2
-    assert rate_limit.await_count == 2
+    assert client.get.await_count == 1
+    assert rate_limit.await_count == 1
     defer.assert_called_once_with(7.0)
 
 
 @pytest.mark.asyncio
-async def test_pubmed_async_request_stops_after_three_503_responses():
+async def test_pubmed_async_request_does_not_retry_503_response():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
     client.get = AsyncMock(return_value=DummyResponse(status_code=503))
 
     with patch.object(wrapper, "_wait_for_async_rate_limit", AsyncMock()), \
-            patch(
-                "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common.asyncio.sleep",
-                new_callable=AsyncMock,
-            ) as sleep, pytest.raises(RuntimeError, match="status 503"):
+            pytest.raises(RuntimeError, match="status 503"):
         await wrapper._aget_text(client, "https://example.com/efetch.fcgi", {})
 
-    assert client.get.await_count == 3
-    assert [call.args[0] for call in sleep.await_args_list] == [1.0, 2.0]
+    assert client.get.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -529,8 +525,8 @@ async def test_pubmed_terminal_429_still_updates_shared_cooldown():
     ) as defer, pytest.raises(RuntimeError, match="status 429"):
         await wrapper._aget_text(client, "https://example.com/efetch.fcgi", {})
 
-    assert client.get.await_count == 3
-    assert defer.call_count == 3
+    assert client.get.await_count == 1
+    defer.assert_called_once_with(7.0)
 
 
 @pytest.mark.asyncio
@@ -574,21 +570,18 @@ async def test_pubmed_rate_limits_efetch_requests_too():
     rate_limit.assert_awaited_once()
 
 
-def test_pubmed_sync_request_retries_temporary_connection_error():
+def test_pubmed_sync_request_does_not_retry_temporary_connection_error():
     wrapper = PubMedSearchAPIWrapper()
 
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed.requests.get",
-        side_effect=[requests.ConnectionError("temporary"), DummyResponse(text="ok")],
+        side_effect=requests.ConnectionError("temporary"),
     ) as get:
-        with patch.object(wrapper, "_wait_for_sync_rate_limit"), patch(
-            "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common.time.sleep"
-        ) as sleep:
-            text = wrapper._get_text("https://example.com/efetch.fcgi", {}, False)
+        with patch.object(wrapper, "_wait_for_sync_rate_limit"), \
+                pytest.raises(requests.ConnectionError, match="temporary"):
+            wrapper._get_text("https://example.com/efetch.fcgi", {}, False)
 
-    assert text == "ok"
-    assert get.call_count == 2
-    sleep.assert_called_once_with(1.0)
+    assert get.call_count == 1
 
 
 def test_pubmed_parse_ids_allows_valid_empty_result_without_error_payload():
@@ -759,19 +752,19 @@ def test_arxiv_enrich_rows_marks_failure_and_keeps_summary():
 
 
 @pytest.mark.asyncio
-async def test_arxiv_async_request_retries_http_429_error():
+async def test_arxiv_async_request_does_not_retry_http_429_error():
     wrapper = ArxivSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(side_effect=[
-        DummyResponse(status_code=429, headers={"Retry-After": "0"}),
-        DummyResponse(text="<feed />"),
-    ])
+    client.get = AsyncMock(return_value=DummyResponse(
+        status_code=429,
+        headers={"Retry-After": "0"},
+    ))
 
-    with patch.object(wrapper, "_wait_for_async_rate_limit", AsyncMock()):
-        text = await wrapper._aget_text(client, "https://example.com/api/query")
+    with patch.object(wrapper, "_wait_for_async_rate_limit", AsyncMock()), \
+            pytest.raises(RuntimeError, match="status 429"):
+        await wrapper._aget_text(client, "https://example.com/api/query")
 
-    assert text == "<feed />"
-    assert client.get.await_count == 2
+    assert client.get.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -913,19 +906,16 @@ def test_arxiv_pdf_extraction_stops_after_reaching_character_limit():
 
 
 @pytest.mark.asyncio
-async def test_arxiv_async_request_retries_temporary_connection_error():
+async def test_arxiv_async_request_does_not_retry_temporary_connection_error():
     wrapper = ArxivSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(side_effect=[
-        httpx.ConnectError("temporary"),
-        DummyResponse(text="<feed />"),
-    ])
+    client.get = AsyncMock(side_effect=httpx.ConnectError("temporary"))
 
-    with patch.object(wrapper, "_wait_for_async_rate_limit", AsyncMock()):
-        text = await wrapper._aget_text(client, "https://example.com/api/query")
+    with patch.object(wrapper, "_wait_for_async_rate_limit", AsyncMock()), \
+            pytest.raises(httpx.ConnectError, match="temporary"):
+        await wrapper._aget_text(client, "https://example.com/api/query")
 
-    assert text == "<feed />"
-    assert client.get.await_count == 2
+    assert client.get.await_count == 1
 
 
 @pytest.mark.asyncio

@@ -27,11 +27,11 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     DEFAULT_ARXIV_SEARCH_URL,
     ScholarlySearchResponseError,
     apply_full_text_extension_config,
-    async_request_with_retry,
+    async_request_once,
     http_status_code,
     is_transient_connection_error,
     ssl_verify,
-    sync_request_with_retry,
+    sync_request_once,
     truncate,
 )
 
@@ -123,13 +123,13 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
             else lambda: ARXIV_REQUEST_CONTROL.wait_async()
         )
         if rate_limit:
-            return await async_request_with_retry(
+            return await async_request_once(
                 lambda: client.get(url),
                 before_attempt,
                 control=ARXIV_REQUEST_CONTROL,
             )
         async with ARXIV_DOWNLOAD_LIMITER.async_slot():
-            return await async_request_with_retry(
+            return await async_request_once(
                 lambda: client.get(url),
                 before_attempt,
                 control=ARXIV_REQUEST_CONTROL,
@@ -150,13 +150,13 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
             else lambda: ARXIV_REQUEST_CONTROL.wait_sync()
         )
         if rate_limit:
-            return sync_request_with_retry(
+            return sync_request_once(
                 request,
                 before_attempt,
                 control=ARXIV_REQUEST_CONTROL,
             )
         with ARXIV_DOWNLOAD_LIMITER.sync_slot():
-            return sync_request_with_retry(
+            return sync_request_once(
                 request,
                 before_attempt,
                 control=ARXIV_REQUEST_CONTROL,
