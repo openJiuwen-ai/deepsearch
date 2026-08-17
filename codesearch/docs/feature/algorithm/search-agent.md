@@ -2,8 +2,10 @@
 
 ## 维护范围
 
-检索智能体的算法层：工具集、过滤智能体、片段记忆、提示词组织。
-编排与图结构见 [codesearch-workflow.md](../framework/codesearch-workflow.md)。
+检索智能体的算法层：工具集、过滤智能体、片段记忆、提示词组织
+（CodeSearch `react`/`graph` 五工具路径）。
+编排与图结构见 [codesearch-workflow.md](../framework/codesearch-workflow.md)；
+Retropus 工具与配置见 [retropus-agent.md](../framework/retropus-agent.md)。
 
 ## 双模型架构
 
@@ -42,7 +44,8 @@
 ## 提示词
 
 `algorithm/prompts/*.md` 文件化（`code_search.md` 主提示词含 `{topk}` 约束，
-`filter_chunk.md` 过滤提示词），类级缓存加载。
+`filter_chunk.md` 过滤提示词；Retropus 见 `retropus_*.md` + `retropus.py`），
+类级缓存加载。
 
 ## 提前终止
 

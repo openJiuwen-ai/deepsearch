@@ -58,7 +58,9 @@ export CODESEARCH_INDEX_ROOTS="/data/repos"
 
 **检索返回 `index_not_ready`？**  
 该集合或该版本尚无索引数据。请先执行 `index`，并确认检索时的 `--revision`
-与索引时一致（两者默认均为 `local`）。
+与索引时一致（两者默认均为 `local`）。走 HTTP 使用 Retropus 时，
+`/api/v1/index` 与 `/api/v1/search` 都要传 `"engine": "retropus"`
+（默认为 `graph`）。
 
 **检索结果的终止方式是什么意思？**
 
@@ -83,6 +85,26 @@ export CODESEARCH_INDEX_ROOTS="/data/repos"
 可用 `CODESEARCH_LLM_MODEL` / `CODESEARCH_FILTER_LLM_MODEL` 覆盖，或在代码里构造 `LLMSuite`。  
 换 Ollama / 自建网关时请把模型名改成该端点实际支持的名字。详见
 [快速上手](../3.快速上手/3.快速上手.md) 与 [安装指导 · 环境变量](../2.安装指导/README.md#环境变量)。
+
+**如何启用 Retropus？相关环境变量有哪些？**  
+安装 `pip install 'openjiuwen-codesearch[retropus]'`，并设置
+`CodeSearchConfig.agent.engine = "retropus"`，或
+`codesearch --engine retropus …` /
+`python -m benchmarks.contextbench.runner --engine retropus`，或在 HTTP
+`POST /api/v1/index` / `/api/v1/search` 请求体中传 `"engine": "retropus"`
+（默认为 `graph`，不会自动启用 Retropus）。`ENGINE=` 不是环境变量。
+循环与索引参数见 `CodeSearchConfig.retropus`（`MAX_ROUNDS` /
+`MAX_TOOL_CALLS` / `FEAT_*` / `RETROPUS_INDEX_DIR` 等），完整表：
+[retropus-agent.md](../../feature/framework/retropus-agent.md)；
+模板：[`.env.example`](../../../.env.example)。LLM 凭证仍用
+`CODESEARCH_LLM_API_KEY` / `CODESEARCH_LLM_BASE_URL`。Retropus 不使用 Milvus；
+若同一 `collection` 已用另一后端索引过，search 会返回 409。
+
+**Retropus 索引能否跨 CLI 进程复用？**  
+可以。`codesearch --engine retropus index …` 会把 KG + BM25 写入
+`RETROPUS_INDEX_DIR/<collection>/`（默认 `./output/retropus/`），随后
+`codesearch --engine retropus search --collection …` 会加载该落盘缓存。
+`--reset` 或改动指纹相关配置（如 `CHUNK_SIZE`）会触发重建。
 
 ## 运行
 

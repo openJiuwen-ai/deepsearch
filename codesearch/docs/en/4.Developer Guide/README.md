@@ -27,9 +27,8 @@ Dependencies flow in one direction only (right depends on left):
 
 | Value | Meaning |
 |---|---|
-| `graph` | openJiuwen workflow graph, node-level observability |
+| `graph` (default) | openJiuwen workflow graph, node-level observability |
 | `react` | Plain code loop, no framework dependency |
-| `auto` (default) | Use `graph` when available, otherwise fall back to `react` |
 
 Both engines share the stage functions in `framework/openjiuwen/steps.py`;
 integration tests lock their outputs to be byte-identical. See the

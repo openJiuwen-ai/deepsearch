@@ -21,6 +21,8 @@ pip install \
 ```
 
 With uv, add `--prerelease=allow` (openJiuwen pins `a2a-sdk==1.0.0a0`).
+For Retropus (`engine=retropus`), include the `retropus` extra in the
+codesearch wheel brackets (see [optional dependency groups](./README.md#optional-dependency-groups)).
 
 ## Run
 

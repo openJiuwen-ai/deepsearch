@@ -86,6 +86,9 @@ Source install example (install sibling `base` together):
 python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm,server]'
 ```
 
+Add the `retropus` extra when you plan to use `engine=retropus`
+(in-process knowledge graph + BM25, no Milvus): `'.[dev,llm,retropus]'`.
+
 Indexing needs a **local directory** (clone remotes first); search uses the
 collection name you chose at index time:
 
@@ -130,6 +133,40 @@ codesearch search --collection my_repo --query "TypeError when calling foo() wit
 ```
 
 Priority and the full variable table: [Installation · Environment variables](docs/en/2.Installation%20Guide/README.md#environment-variables). Search uses two models: **main** (multi-turn decisions) defaults to `openai/gpt-5`, **filter** (line extraction) defaults to `openai/gpt-5-mini`. When pointing at another endpoint, set model names your provider actually supports. Python API and full options: [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md).
+
+# ⚙️ Engines
+
+`CodeSearchConfig.agent.engine` selects how indexing and retrieval run
+(`graph` | `react` | `retropus`). Default is `graph`.
+
+| Engine | What it does |
+|---|---|
+| `graph` | Default product path: retrieval loop as an openJiuwen workflow graph (node-level observability). Indexes into **Milvus** (dual sparse BM25). Needs `[llm]`. |
+| `react` | Same Milvus index and loop stages as `graph`, but a plain Python agent loop (no workflow graph). Outputs are tested to match `graph` byte-for-byte. |
+| `retropus` | Separate agent + tool set with a knowledge graph and BM25 (no Milvus). Index is kept in memory and **dumped under** `RETROPUS_INDEX_DIR` (default `./output/retropus/<collection>/`) for reuse. Must be set explicitly. Needs `[retropus]`. |
+
+### How to select an engine
+
+There is **no** `ENGINE=` environment variable. Set it in code, HTTP, or CLI:
+
+| Surface | How |
+|---|---|
+| **Python SDK** | `config.agent.engine = "retropus"` (or `"graph"` / `"react"`) on a `CodeSearchConfig` before building `CodeSearchRetriever`. Field: `SearchAgentConfig.engine` in `openjiuwen_codesearch/config/agent.py` (default `graph`). |
+| **HTTP API** | Optional JSON field `"engine"` on `POST /api/v1/index` and `POST /api/v1/search` (default `"graph"`). Use the **same** engine for index and search; mixing Retropus with a Milvus-backed collection returns **409**. |
+| **`codesearch` CLI** | `codesearch --engine retropus index --repo … --collection my_repo` then `codesearch --engine retropus search --collection my_repo --query "…"`. Default engine is `graph`; optional `--index-dir` / `RETROPUS_INDEX_DIR`. |
+| **ContextBench CLI** | `python -m benchmarks.contextbench.runner --engine retropus` (also `--engine graph` / `react`; default `graph`). |
+| **Env vars** | Engine name is not env-driven. Backend knobs still apply: `MILVUS_*` for `graph`/`react`; `MAX_*` / `FEAT_*` / `RETROPUS_INDEX_DIR` under `CodeSearchConfig.retropus` when using Retropus (see [`.env.example`](.env.example)). LLM credentials are shared: `CODESEARCH_LLM_API_KEY` / `CODESEARCH_LLM_BASE_URL`. |
+
+```python
+from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
+
+config = CodeSearchConfig.from_env()
+config.agent.engine = "retropus"  # or "graph" / "react"
+retriever = CodeSearchRetriever(config=config)
+```
+
+Retropus design and knobs: [retropus-agent.md](docs/feature/framework/retropus-agent.md).
+Graph/react workflow: [codesearch-workflow.md](docs/feature/framework/codesearch-workflow.md).
 
 # 📊 Benchmarking
 

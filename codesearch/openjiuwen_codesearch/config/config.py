@@ -4,7 +4,10 @@ import os
 
 from pydantic import BaseModel, Field
 
-from openjiuwen_codesearch.config.agent import SearchAgentConfig
+from openjiuwen_codesearch.config.agent import (
+    RetropusSearchAgentConfig,
+    SearchAgentConfig,
+)
 from openjiuwen_codesearch.config.env_file import ensure_dotenv_loaded
 from openjiuwen_codesearch.config.index import (
     EmbedConfig,
@@ -24,6 +27,9 @@ class CodeSearchConfig(BaseModel):
     milvus: MilvusConfig = Field(default_factory=MilvusConfig)
     index: IndexConfig = Field(default_factory=IndexConfig)
     agent: SearchAgentConfig = Field(default_factory=SearchAgentConfig)
+    retropus: RetropusSearchAgentConfig = Field(
+        default_factory=RetropusSearchAgentConfig
+    )
 
     @classmethod
     def from_env(cls) -> "CodeSearchConfig":
@@ -40,6 +46,8 @@ class CodeSearchConfig(BaseModel):
           ``CODESEARCH_LLM_MODEL``（主）、``CODESEARCH_FILTER_LLM_MODEL``（过滤）
 
         Milvus：``MILVUS_HOST`` / ``MILVUS_PORT`` / ``MILVUS_TOKEN``。
+        Retropus：``MAX_*`` / ``FEAT_*`` / ``RETRIEVER`` 等 → ``retropus``
+        （供 ``RetropusCodeSearchAgent`` 与 contextbench runner 使用）。
         """
         ensure_dotenv_loaded()
         api_key = os.getenv("CODESEARCH_LLM_API_KEY", "")
@@ -64,4 +72,5 @@ class CodeSearchConfig(BaseModel):
                 port=os.getenv("MILVUS_PORT", "19530"),
                 token=os.getenv("MILVUS_TOKEN", ""),
             ),
+            retropus=RetropusSearchAgentConfig.from_env(),
         )

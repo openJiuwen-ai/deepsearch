@@ -1,4 +1,5 @@
 # 运行产物与本地环境（开源仓不携带任何实验数据）
+.env
 .venv*/
 __pycache__/
 *.pyc
@@ -12,6 +13,7 @@ _emb_*.db
 *.egg-info/
 .DS_Store
 
+# ContextBench 以 git submodule 引入（见 README）；其余本地拷贝不入库
 third_party/*
 !third_party/contextbench
 !third_party/contextbench/**
@@ -22,3 +24,4 @@ dist/
 .coverage
 coverage.xml
 outputs/
+output/

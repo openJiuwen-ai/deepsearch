@@ -1,0 +1,128 @@
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""Per-run state for RetropusCodeSearchAgent (isolated from CodeSearchRunContext)."""
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
+
+from openjiuwen_codesearch.config.config import CodeSearchConfig
+from openjiuwen_codesearch.domain.models import ToolCall
+from openjiuwen_codesearch.domain.result import Termination
+from openjiuwen_codesearch.framework.openjiuwen.token_trace import (
+    add_tokens as _add_tokens,
+    build_trace_path,
+    total_input_tokens as _total_input_tokens,
+    total_output_tokens as _total_output_tokens,
+    write_trace as _write_trace,
+)
+from openjiuwen_codesearch.llm.factory import ChatMessage, LLMClient
+
+if TYPE_CHECKING:
+    from openjiuwen_codesearch.config.agent import RetropusSearchAgentConfig
+    from openjiuwen_codesearch.domain.result import CodeSearchResult
+    from openjiuwen_codesearch.retropus.graph.knowledge_graph import KnowledgeGraph
+    from openjiuwen_codesearch.retropus.retrievers.base import AbstractBaseRetriever
+    from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (
+        RetrievalTools,
+    )
+
+
+@dataclass
+class RetropusRunContext:
+    """Mutable per-run state for ``RetropusCodeSearchAgent`` (not shared across runs)."""
+
+    config: CodeSearchConfig
+    retropus_config: "RetropusSearchAgentConfig"
+    query: str
+    top_k: int
+    repo_dir: Path
+    kg: Any
+    retriever: Any
+    main_llm: LLMClient
+    tools: Any  # RetrievalTools-like
+    trace_path: Optional[str] = None
+
+    # loop state
+    turn: int = 0
+    tool_calls_made: int = 0
+    nudges: int = 0
+    finish_requested: bool = False
+    finish_blocked: bool = False
+    history: list[ChatMessage] = field(default_factory=list)
+    pending_calls: list[ToolCall] = field(default_factory=list)
+    system_prompt: str = ""
+    prompt_cache_key: Optional[str] = None
+    issue_text: str = ""
+    termination: Optional[Termination] = None
+    error: str = ""
+    tokens_by_stage: dict[str, tuple[int, int]] = field(default_factory=dict)
+    result: Optional["CodeSearchResult"] = None
+
+    @property
+    def memory(self) -> Any:
+        """Span-memory adapter for ``delete_snippets`` (``memory_tools.execute_delete``)."""
+        return self.tools.memory
+
+    @property
+    def total_input_tokens(self) -> int:
+        """Sum of recorded input tokens across all stages."""
+        return _total_input_tokens(self.tokens_by_stage)
+
+    @property
+    def total_output_tokens(self) -> int:
+        """Sum of recorded output tokens across all stages."""
+        return _total_output_tokens(self.tokens_by_stage)
+
+    def add_tokens(self, stage: str, input_tokens: int, output_tokens: int) -> None:
+        """Accumulate token usage for ``stage`` (additive across calls)."""
+        _add_tokens(self.tokens_by_stage, stage, input_tokens, output_tokens)
+
+    def write_trace(self, record: dict[str, Any]) -> None:
+        """Append one JSONL trace record when ``trace_path`` is configured."""
+        _write_trace(self.trace_path, record)
+
+
+def build_retropus_run_context(
+    *,
+    config: CodeSearchConfig,
+    query: str,
+    top_k: int,
+    repo_dir: Path,
+    kg: Any,
+    retriever: Any,
+    main_llm: LLMClient,
+    issue_title: str = "",
+    issue_body: str = "",
+) -> RetropusRunContext:
+    """Construct run context, ``RetrievalTools``, issue text, and optional trace path."""
+    from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (  # noqa: PLC0415
+        RetrievalTools,
+    )
+
+    retropus_config = config.retropus
+    issue_text = (issue_title or "").strip()
+    body = (issue_body or query or "").strip()
+    if body:
+        issue_text = f"{issue_text}\n\n{body}" if issue_text else body
+    if not issue_text:
+        issue_text = query
+
+    tools = RetrievalTools(
+        kg, retriever, Path(repo_dir), retropus_config, issue_text=issue_text
+    )
+
+    return RetropusRunContext(
+        config=config.model_copy(deep=True),
+        retropus_config=retropus_config,
+        query=query,
+        top_k=top_k,
+        repo_dir=Path(repo_dir),
+        kg=kg,
+        retriever=retriever,
+        main_llm=main_llm,
+        tools=tools,
+        issue_text=issue_text,
+        trace_path=build_trace_path(
+            config.agent.trace_dir, str(repo_dir), stem_prefix="retropus_"
+        ),
+    )

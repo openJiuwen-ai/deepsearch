@@ -4,7 +4,8 @@
 
 本文档覆盖 `framework/openjiuwen/` 的编排行为：`code_search` workflow 的图结构、
 双引擎（graph/react）等价性、per-run 运行隔离、超时注入与终止条件。
-不覆盖检索算法与提示词细节（见 [search-agent.md](../algorithm/search-agent.md)）。
+不覆盖检索算法与提示词细节（见 [search-agent.md](../algorithm/search-agent.md)），
+也不覆盖 `engine=retropus`（见 [retropus-agent.md](./retropus-agent.md)）。
 
 ## 功能目的
 
@@ -52,5 +53,5 @@ START → REASONING ⇄ TOOL（自环），两者均可路由 END
 | `framework/openjiuwen/nodes.py` | 四节点薄包装 |
 | `framework/openjiuwen/base_node.py` | 薄壳 → **base 包** `openjiuwen_search_base.workflow`（三段式 BaseNode + init_router） |
 | `framework/openjiuwen/runtime_context.py` | CodeSearchRunContext + 运行注册表（注册表实现在 **base 包** `openjiuwen_search_base.runtime`） |
-| `framework/openjiuwen/agent.py` | react 引擎（同一 steps 的 while 循环驱动） |
+| `framework/openjiuwen/agent.py` | `AbstractReactEngine` + react 引擎（同一 steps 的 while 循环驱动）；Retropus 引擎亦在此 |
 | `server/routers/api.py` | HTTP 服务出口：检索同步返回、索引转后台作业 |
