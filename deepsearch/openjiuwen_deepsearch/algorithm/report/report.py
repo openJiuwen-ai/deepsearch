@@ -39,6 +39,9 @@ from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
     build_doc_variant_key,
 )
+from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
+    find_exact_target_paper_facts,
+)
 from openjiuwen_deepsearch.algorithm.report.report_utils import (
     ArticlePart,
     MarkdownOutlineRenumber,
@@ -66,6 +69,49 @@ from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmN
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_exact_target_documents(
+    selected_docs: list[dict], candidate_docs: list[dict], target_papers: list[dict] | None,
+) -> list[dict]:
+    """Keep exact user-targeted papers in a subsection once they are available as evidence."""
+    result = list(selected_docs)
+    required_docs = []
+    selected_keys = {
+        (str(doc.get("source_id") or ""), str(doc.get("url") or ""))
+        for doc in result
+    }
+    for candidate in candidate_docs:
+        if not isinstance(candidate, dict) or not find_exact_target_paper_facts(target_papers, [candidate]):
+            continue
+        key = (str(candidate.get("source_id") or ""), str(candidate.get("url") or ""))
+        if key not in selected_keys:
+            required_docs.append(candidate)
+            selected_keys.add(key)
+    return required_docs + result
+
+
+def _final_classification_limit(top_k: int, selected_docs: list[dict]) -> int:
+    """Do not re-trim documents that were force-added after matrix selection."""
+    return max(top_k, len(selected_docs))
+
+
+def required_target_citation_indexes(
+    classified_docs: list[dict], target_papers: list[dict] | None,
+) -> list[int]:
+    """Return citation indexes for confirmed target papers present in a subsection."""
+    result = []
+    for target_paper in target_papers or []:
+        for doc in classified_docs:
+            index = int(doc.get("index", 0))
+            if (
+                index > 0
+                and index not in result
+                and find_exact_target_paper_facts([target_paper], [doc])
+            ):
+                result.append(index)
+                break
+    return result
 
 
 def _format_report_error(detail: str | BaseException) -> str:
@@ -625,6 +671,7 @@ class Reporter:
             "SUB_REPORT_CONTENT_EMPTY",
             "MERMAID_OUTPUT_FORBIDDEN",
             "MISSING_SECTION_CONTEXT",
+            "MISSING_REQUIRED_TARGET_CITATIONS",
             "SUB_REPORT_GENERATION_EXCEPTION",
             "SUB_REPORT_RETRY_REQUIRED",
         }
@@ -649,6 +696,18 @@ class Reporter:
                 else str(int(match.group(1)))
             )
             lines.append(f"{key}: {safe_value}")
+        missing_citation_indexes = (fields or {}).get("missing_citation_indexes")
+        if missing_citation_indexes is not None:
+            match = re.fullmatch(
+                r"[1-9]\d*(?:\s*,\s*[1-9]\d*)*",
+                str(missing_citation_indexes).strip(),
+            )
+            if match:
+                safe_indexes = ",".join(
+                    str(int(value.strip()))
+                    for value in match.group(0).split(",")
+                )
+                lines.append(f"missing_citation_indexes: {safe_indexes}")
         if error_code.startswith("HEADING") or error_code in {
             "OUTLINE_HEADING_MISSING",
             "DUPLICATE_SUBSECTION_HEADINGS",
@@ -664,6 +723,11 @@ class Reporter:
                 "Regenerate the chapter as prose, lists, or Markdown tables only. "
                 "Keep the required headings, but do not emit Mermaid syntax, chart source, "
                 "or any chart code fence."
+            )
+        elif error_code == "MISSING_REQUIRED_TARGET_CITATIONS":
+            action = (
+                "Regenerate the chapter and cite every listed evidence block using its exact "
+                "[citation:N] marker."
             )
         elif error_code == "SUB_REPORT_GENERATION_EXCEPTION":
             action = (
@@ -696,10 +760,19 @@ class Reporter:
                 if field_match:
                     fields[key] = field_match.group(1)
             error_code = code_match.group(1)
+            citation_match = re.search(
+                r"(?m)^\s*missing_citation_indexes:\s*"
+                r"([1-9]\d*(?:\s*,\s*[1-9]\d*)*)\s*$",
+                reason,
+            )
+            if citation_match:
+                fields["missing_citation_indexes"] = citation_match.group(1)
             if error_code.startswith("HEADING") or error_code == "DUPLICATE_SUBSECTION_HEADINGS":
                 location = "markdown_headings"
             elif error_code == "MERMAID_OUTPUT_FORBIDDEN":
                 location = "chapter_visualization"
+            elif error_code == "MISSING_REQUIRED_TARGET_CITATIONS":
+                location = "chapter_citations"
             else:
                 location = "chapter"
             return cls._build_sub_report_retry_feedback(error_code, location, fields)
@@ -1271,6 +1344,22 @@ class Reporter:
 
             # Write doc-selection debug info back to Section for ResultExporter
             # Placed before early returns so debug data is captured on all exit paths
+            research_intent = current_inputs.get("research_intent") or {}
+            target_papers = (
+                research_intent.get("target_papers", [])
+                if isinstance(research_intent, dict)
+                else getattr(research_intent, "target_papers", [])
+            )
+            forced_docs = ensure_exact_target_documents(selected_docs, doc_infos, target_papers)
+            if len(forced_docs) > len(selected_docs):
+                forced_count = len(forced_docs) - len(selected_docs)
+                selected_docs = forced_docs
+                selected_doc_keys = [
+                    *(f"required_target_{index}" for index in range(forced_count)),
+                    *selected_doc_keys,
+                ]
+                selected_marginal_values = [0.0] * forced_count + selected_marginal_values
+
             self._write_doc_selection_debug(
                 current_inputs,
                 DocSelectionContext(
@@ -1303,7 +1392,9 @@ class Reporter:
             classified_infos, classified_doc_infos, classified_doc_keys = _get_classified_infos(
                 selected_docs,
                 selected_marginal_values,
-                max_source_id_count=classify_doc_infos_res_top_k_num,
+                max_source_id_count=_final_classification_limit(
+                    classify_doc_infos_res_top_k_num, selected_docs
+                ),
                 selected_doc_keys=selected_doc_keys,
                 return_doc_keys=True,
             )
@@ -1317,6 +1408,15 @@ class Reporter:
             for idx, doc_info in enumerate(classified_doc_infos):
                 doc_info.pop("query", None)
                 doc_info["index"] = idx + 1
+            research_intent = current_inputs.get("research_intent") or {}
+            target_papers = (
+                research_intent.get("target_papers", [])
+                if isinstance(research_intent, dict)
+                else getattr(research_intent, "target_papers", [])
+            )
+            current_inputs["required_target_citation_indexes"] = required_target_citation_indexes(
+                classified_doc_infos, target_papers
+            )
             current_inputs["structured_evidence_guide"] = build_structured_evidence_guide(
                 classified_doc_infos,
                 rationales,
@@ -3889,6 +3989,12 @@ class Reporter:
                 f"scores: {format_scores_inline(item)}|||"
                 f"content: {item.get('original_content', '')}[citation:{item.get('index', 1)} end]"
             )
+        required_target_citations = current_inputs.get("required_target_citation_indexes", [])
+        required_target_citation_instruction = (
+            "The following citations are user-specified papers and MUST each be cited at least once "
+            f"in this chapter body: {', '.join(f'[citation:{index}]' for index in required_target_citations)}.\n\n"
+            if required_target_citations else ""
+        )
         current_outline = current_inputs.get("current_outline", {})
         current_outline_without_plans = Reporter.export_outline_without_plans(
             current_outline
@@ -3949,6 +4055,7 @@ class Reporter:
             f"{structured_evidence_prompt}"
             "# Collected Evidence\n"
             f"{infos}\n\n"
+            f"{required_target_citation_instruction}"
             "# References\n"
             f"{current_inputs.get('sub_section_references', '')}\n\n"
             f"{background_knowledge_prompt}"

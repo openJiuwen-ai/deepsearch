@@ -18,6 +18,30 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
 )
 
 
+def test_build_evidence_atom_preserves_academic_identifiers_without_replacing_source_id():
+    record = {
+        "type": "page",
+        "title": "Paper",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/",
+        "content": "Abstract",
+        "academic_source": "pubmed",
+        "academic_source_id": "38202877",
+        "doi": "10.1000/ABC",
+    }
+
+    atom, doc_info = build_evidence_atom(
+        record=record,
+        query="38202877",
+        source_store=CollectorSourceStore(),
+    )
+
+    assert atom["academic_source"] == doc_info["academic_source"] == "pubmed"
+    assert atom["academic_source_id"] == doc_info["academic_source_id"] == "38202877"
+    assert atom["doi"] == doc_info["doi"] == "10.1000/ABC"
+    assert atom["source_id"] == doc_info["source_id"]
+    assert atom["source_id"] != "38202877"
+
+
 def test_generate_doc_id_is_stable_for_same_web_source():
     first = generate_doc_id(url="https://example.com/a?utm_source=x", title="Alpha", source_type="web")
     second = generate_doc_id(url="https://example.com/a?utm_source=y", title="Alpha", source_type="web")

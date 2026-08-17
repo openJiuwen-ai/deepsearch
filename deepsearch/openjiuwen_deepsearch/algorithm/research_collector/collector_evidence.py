@@ -464,6 +464,10 @@ def build_evidence_atom(
     }
     if record.get("skip_webpage_enrichment") is True:
         base["skip_webpage_enrichment"] = True
+    for metadata_key in ("academic_source", "academic_source_id", "doi"):
+        metadata_value = str(record.get(metadata_key) or "").strip()
+        if metadata_value:
+            base[metadata_key] = metadata_value
     doc_info = {**base, "original_content": content}
     normalize_doc_info_scores_and_time(doc_info)
     return base, doc_info

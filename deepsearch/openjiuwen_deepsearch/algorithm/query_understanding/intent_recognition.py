@@ -10,9 +10,17 @@ from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
+    normalize_arxiv_id,
+    normalize_doi,
+    normalize_pmid,
+    normalize_title,
+)
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import canonicalize_url
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ReportTypePolicy,
     ResearchIntent,
+    TargetPaper,
     TemporalScope,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_search
@@ -29,6 +37,12 @@ EMIT_INTENT_TOOL = "emit_report_intent"
 _DEFAULT_WEB_SEARCH_ENGINE = "petal"
 _VALID_REPORT_TYPES = frozenset({"professional", "brief"})
 MAX_RESEARCH_QUERY_LENGTH = 390
+_PMID_IN_QUERY_RE = re.compile(r"(?i)pmid\s*[:#]?\s*(\d+)")
+_DOI_IN_QUERY_RE = re.compile(r"(?i)(?:doi\s*[:#]?\s*)?(10\.\d{4,9}/[-._;()/:a-z0-9]+)")
+_ARXIV_IN_QUERY_RE = re.compile(
+    r"(?i)(?:arxiv\s*[:#]?\s*)?((?:\d{4}\.\d{4,5}|[a-z][a-z0-9.-]*/\d{7})(?:v\d+)?)"
+)
+_HTTP_URL_IN_QUERY_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
 
 def normalize_research_query(raw: str | None) -> str:
@@ -89,11 +103,54 @@ class IntentRecognitionResult(BaseModel):
 def _default_fallback(original_query: str | None) -> IntentRecognitionResult:
     text = original_query if original_query is not None else ""
     stripped = (text or "").strip()
+    target_papers = _extract_explicit_target_papers(stripped)
     return IntentRecognitionResult(
         original_query=text,
         research_query=normalize_research_query(stripped),
-        research_intent=ResearchIntent(),
+        research_intent=ResearchIntent(
+            include_url=[paper.url for paper in target_papers if paper.url],
+            target_papers=target_papers,
+        ),
     )
+
+
+def _extract_explicit_target_papers(query: str) -> list[TargetPaper]:
+    """Recover deterministic academic identifiers and paper URLs when intent LLM is unavailable."""
+    papers: list[TargetPaper] = []
+    seen: set[tuple[str, str]] = set()
+    url_spans: list[tuple[int, int]] = []
+    for match in _HTTP_URL_IN_QUERY_RE.finditer(query or ""):
+        url_spans.append(match.span())
+        url = match.group(0).rstrip(".,;:)")
+        pmid = normalize_pmid(url)
+        arxiv_id = normalize_arxiv_id(url)
+        if not (pmid or arxiv_id):
+            continue
+        key = ("url", url.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        payload = {"url": url}
+        if pmid:
+            payload["pmid"] = pmid
+        if arxiv_id:
+            payload["arxiv_id"] = arxiv_id
+        papers.append(TargetPaper(**payload))
+    for field_name, pattern in (
+        ("pmid", _PMID_IN_QUERY_RE),
+        ("doi", _DOI_IN_QUERY_RE),
+        ("arxiv_id", _ARXIV_IN_QUERY_RE),
+    ):
+        for match in pattern.finditer(query or ""):
+            if any(start <= match.start() and match.end() <= end for start, end in url_spans):
+                continue
+            value = match.group(1).rstrip(".,;:)")
+            key = (field_name, value.casefold())
+            if not value or key in seen:
+                continue
+            seen.add(key)
+            papers.append(TargetPaper(**{field_name: value}))
+    return papers
 
 
 def _to_str_list(raw) -> list[str]:
@@ -163,6 +220,66 @@ def _normalize_temporal_scope(raw: object) -> TemporalScope | None:
         return None
 
 
+def _normalize_target_papers(raw: object) -> list[TargetPaper]:
+    """Normalize valid target-paper items and discard malformed LLM output."""
+    if not isinstance(raw, list):
+        return []
+    field_names = ("title", "pmid", "doi", "arxiv_id", "url", "dataset", "data_year", "topic")
+    papers: list[TargetPaper] = []
+    identity_to_index: dict[tuple[str, str], int] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        payload = {name: str(item.get(name) or "").strip() for name in field_names}
+        try:
+            paper = TargetPaper.model_validate(payload)
+        except (ValidationError, TypeError, ValueError):
+            continue
+        paper.pmid = normalize_pmid(paper.pmid)
+        paper.doi = normalize_doi(paper.doi)
+        paper.arxiv_id = normalize_arxiv_id(paper.arxiv_id)
+        if paper.url:
+            pmid = normalize_pmid(paper.url)
+            arxiv_id = normalize_arxiv_id(paper.url)
+            if pmid and not paper.pmid:
+                paper.pmid = pmid
+            if arxiv_id and not paper.arxiv_id:
+                paper.arxiv_id = arxiv_id
+
+        identities = [
+            (kind, value)
+            for kind, value in (
+                ("pmid", paper.pmid),
+                ("doi", paper.doi),
+                ("arxiv_id", paper.arxiv_id),
+                ("url", canonicalize_url(paper.url) if paper.url else ""),
+                ("title", normalize_title(paper.title)),
+            )
+            if value
+        ]
+        if not identities:
+            fallback = tuple(getattr(paper, name).casefold() for name in field_names)
+            identities.append(("fallback", "\0".join(fallback)))
+        duplicate_index = next(
+            (identity_to_index[identity] for identity in identities if identity in identity_to_index),
+            None,
+        )
+        if duplicate_index is not None:
+            existing = papers[duplicate_index]
+            for name in field_names:
+                if not getattr(existing, name) and getattr(paper, name):
+                    setattr(existing, name, getattr(paper, name))
+            for identity in identities:
+                identity_to_index[identity] = duplicate_index
+            continue
+
+        duplicate_index = len(papers)
+        papers.append(paper)
+        for identity in identities:
+            identity_to_index[identity] = duplicate_index
+    return papers
+
+
 def _normalize_research_intent(data: dict) -> ResearchIntent:
     """归一化意图识别工具参数。
 
@@ -207,6 +324,11 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
             include_domains.append(domain)
     include_domains = _dedupe_preserve_order(include_domains)
 
+    target_papers = _normalize_target_papers(data.get("target_papers"))
+    for paper in target_papers:
+        if paper.url and paper.url not in include_url:
+            include_url.append(paper.url)
+
     return ResearchIntent(
         task_type=_normalize_task_type(data.get("task_type")),
         required_dimensions=_dedupe_preserve_order(_to_str_list(data.get("required_dimensions"))),
@@ -221,6 +343,7 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         include_domains=include_domains,
         exclude_domains=exclude_domains,
         temporal_scope=_normalize_temporal_scope(data.get("temporal_scope")),
+        target_papers=target_papers,
     )
 
 
@@ -234,6 +357,27 @@ async def _emit_report_intent(**kwargs) -> IntentRecognitionResult:
         research_intent=_normalize_research_intent(kwargs),
         lang=language,
     )
+
+
+def _merge_explicit_target_papers(intent: ResearchIntent, original_query: str) -> ResearchIntent:
+    """Supplement a successful model intent with identifiers stated verbatim by the user."""
+    explicit_papers = _extract_explicit_target_papers(original_query)
+    if not explicit_papers:
+        return intent
+
+    target_papers = _normalize_target_papers([
+        *(paper.model_dump() for paper in intent.target_papers),
+        *(paper.model_dump() for paper in explicit_papers),
+    ])
+    include_url = list(intent.include_url)
+    for paper in target_papers:
+        if paper.url and paper.url not in include_url:
+            include_url.append(paper.url)
+
+    return intent.model_copy(update={
+        "target_papers": target_papers,
+        "include_url": include_url,
+    })
 
 
 def _log_exclude_intent(result: IntentRecognitionResult, original_query: str) -> None:
@@ -376,6 +520,27 @@ def _create_emit_intent_tool() -> LocalFunction:
                         "is NOT site-level exclusion."
                     ),
                 },
+                "target_papers": {
+                    "type": "array",
+                    "description": (
+                        "Papers explicitly identified by title, URL, PMID, DOI, or arXiv ID, or implicitly "
+                        "described by dataset, data year, and discriminative topic clues. Do not invent values."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "title": {"type": "string", "description": "User-supplied full paper title."},
+                            "pmid": {"type": "string", "description": "User-supplied PubMed PMID."},
+                            "doi": {"type": "string", "description": "User-supplied DOI."},
+                            "arxiv_id": {"type": "string", "description": "User-supplied arXiv ID."},
+                            "url": {"type": "string", "description": "User-supplied academic paper URL."},
+                            "dataset": {"type": "string", "description": "Named dataset clue."},
+                            "data_year": {"type": "string", "description": "Dataset observation year clue."},
+                            "topic": {"type": "string", "description": "Discriminative study-topic clue."},
+                        },
+                    },
+                },
                 "temporal_scope": {
                     "type": "object",
                     "description": (
@@ -456,10 +621,12 @@ async def _invoke_llm_for_intent(
     research_query = normalize_research_query(tool_result.research_query) or normalize_research_query(
         original_query
     )
+    merged_intent = _merge_explicit_target_papers(tool_result.research_intent, original_query)
     result = tool_result.model_copy(
         update={
             "original_query": original_query,
             "research_query": research_query,
+            "research_intent": merged_intent,
         }
     )
     return (result, response)

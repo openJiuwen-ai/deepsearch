@@ -72,6 +72,8 @@
 关键输出契约：
 
 - `ResearchIntent`：承载任务类型、分析维度、对比对象、章节数、受众、语气、报告类型、来源排除规则和可空 `temporal_scope`。来源排除中，`include_url`/`exclude_url` 为链接级，`exclude_titles` 为文章标题级，`include_domains`/`exclude_domains` 为站点级；文章级排除只走链接与标题字段，不得派生为整域排除。
+- `ResearchIntent.target_papers`：表达用户明确或隐式指定的目标论文约束。每项只包含 `title`、`pmid`、`doi`、`arxiv_id`、`dataset`、`data_year`、`topic` 七个可空字符串字段；显式标识与隐式指纹共用该结构，至少一个字段非空。意图识别只提取用户提供的信息，不搜索、不生成或持久化 `search_terms`。
+- `target_papers.data_year` 是论文所用数据的年份，不等同于资料发表时间，也不得据此生成 `temporal_scope`。目标论文的查询翻译、垂域路由与检索全部由 collector 执行。
 - `TemporalScope`：`constraint_type` 为 `source_date` 或 `content_date`；`start_date` / `end_date` 为可空 ISO 日期，
   但至少存在一个边界，且开始日期不得晚于结束日期。
 - 意图 tool schema 仅使用基础字段约束；模型输出会经过 `TemporalScope` 二次校验，非法或缺少日期边界的对象按既定兼容策略降级为空约束。

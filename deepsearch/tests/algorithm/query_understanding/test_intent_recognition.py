@@ -8,6 +8,8 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     IntentRecognitionResult,
     MAX_RESEARCH_QUERY_LENGTH,
     _create_emit_intent_tool,
+    _default_fallback,
+    _normalize_research_intent,
     _to_str_list,
     classify_and_recognize_intent,
     normalize_research_query,
@@ -94,6 +96,104 @@ def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
     assert "oneOf" not in temporal_schema
 
 
+def test_target_paper_url_is_preserved_and_added_to_include_url():
+    intent = _normalize_research_intent({
+        "target_papers": [{"url": "https://journal.example.org/article/42"}],
+    })
+
+    assert intent.target_papers[0].url == "https://journal.example.org/article/42"
+    assert intent.include_url == ["https://journal.example.org/article/42"]
+
+
+def test_normalize_intent_identifies_arxiv_id_from_target_paper_url():
+    intent = _normalize_research_intent({
+        "target_papers": [{"url": "https://arxiv.org/abs/1706.03762v7"}],
+    })
+
+    assert intent.target_papers[0].url == "https://arxiv.org/abs/1706.03762v7"
+    assert intent.target_papers[0].arxiv_id == "1706.03762"
+
+    tool = _create_emit_intent_tool()
+    assert "url" in tool.card.input_params["properties"]["target_papers"]["items"]["properties"]
+
+
+def test_normalize_target_papers_merges_canonical_arxiv_duplicates():
+    intent = _normalize_research_intent({
+        "target_papers": [
+            {
+                "title": "Attention Is All You Need",
+                "arxiv_id": "1706.03762v7",
+            },
+            {
+                "arxiv_id": "1706.03762",
+                "url": "https://arxiv.org/abs/1706.03762v7",
+            },
+        ],
+    })
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in intent.target_papers] == [{
+        "title": "Attention Is All You Need",
+        "arxiv_id": "1706.03762",
+        "url": "https://arxiv.org/abs/1706.03762v7",
+    }]
+
+
+@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
+def test_intent_prompts_require_paper_urls_in_both_intent_chains(prompt_name):
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+
+    assert "target_papers" in prompt
+    assert "include_url" in prompt
+    assert "paper URL" in prompt
+
+
+def test_normalize_target_papers_drops_empty_items_and_deduplicates():
+    intent = _normalize_research_intent({
+        "target_papers": [
+            {"pmid": " 38202877 ", "title": "Paper"},
+            {"pmid": "38202877", "title": "Paper"},
+            {},
+            "invalid",
+            {"dataset": "MEPS", "data_year": 2019, "topic": "orthodontic treatment"},
+            {"dataset": "MEPS", "data_year": "2019", "topic": "orthodontic treatment"},
+        ]
+    })
+
+    assert [paper.model_dump() for paper in intent.target_papers] == [
+        {
+                "title": "Paper", "pmid": "38202877", "doi": "", "arxiv_id": "", "url": "",
+            "dataset": "", "data_year": "", "topic": "",
+        },
+        {
+                "title": "", "pmid": "", "doi": "", "arxiv_id": "", "url": "",
+            "dataset": "MEPS", "data_year": "2019", "topic": "orthodontic treatment",
+        },
+    ]
+
+
+def test_emit_intent_tool_declares_target_papers_without_search_terms():
+    schema = _create_emit_intent_tool().card.input_params
+    target_schema = schema["properties"]["target_papers"]
+
+    assert target_schema["type"] == "array"
+    assert set(target_schema["items"]["properties"]) == {
+        "title", "pmid", "doi", "arxiv_id", "url", "dataset", "data_year", "topic",
+    }
+    assert "search_terms" not in target_schema["items"]["properties"]
+
+
+@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
+def test_intent_prompt_defines_target_paper_contract(prompt_name):
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+
+    assert "target_papers" in prompt
+    assert all(identifier in prompt for identifier in ("PMID", "DOI", "arXiv ID"))
+    assert all(clue in prompt for clue in ("dataset", "data year", "topic"))
+    assert "Do not invent" in prompt
+    assert "search_terms" in prompt
+    assert "not temporal_scope" in prompt
+
+
 @pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
 def test_intent_prompt_defines_temporal_normalization_rules(prompt_name):
     """两个意图 Prompt 必须使用一致的模糊日期与包含边界规则。"""
@@ -145,6 +245,93 @@ async def test_recognize_report_intent_exception_fallback():
     assert result.research_intent.section_count is None
     assert result.research_intent.report_type is None
     assert "is_fallback" not in result.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("请分析 PMID 38132429 对应论文", {"pmid": "38132429"}),
+        ("请分析 DOI: 10.1000/Example.1", {"doi": "10.1000/Example.1"}),
+        ("请分析 arXiv: 1706.03762v7", {"arxiv_id": "1706.03762v7"}),
+    ],
+)
+async def test_recognize_report_intent_fallback_preserves_explicit_paper_identifier(query, expected):
+    """Intent failures must not discard explicit paper constraints."""
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("llm down"),
+    ):
+        result = await recognize_report_intent({"original_query": query, "llm_model_name": "basic"})
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_successful_intent_merges_explicit_target_paper_omitted_by_llm():
+    response = {
+        "tool_calls": [{
+            "name": "emit_report_intent",
+            "args": {
+                "research_query": "Transformer architecture",
+                "language": "zh-CN",
+                "target_papers": [],
+            },
+        }],
+    }
+    query = "请使用 https://arxiv.org/abs/1706.03762v7 这篇论文"
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await recognize_report_intent({"original_query": query, "llm_model_name": "basic"})
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [{
+        "url": "https://arxiv.org/abs/1706.03762v7",
+        "arxiv_id": "1706.03762",
+    }]
+    assert "https://arxiv.org/abs/1706.03762v7" in result.research_intent.include_url
+    assert "arxiv.org" not in result.research_intent.include_domains
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("请分析 PMID 38132429 对应论文", {"pmid": "38132429"}),
+        ("请分析 DOI: 10.1000/Example.1", {"doi": "10.1000/Example.1"}),
+        ("请分析 arXiv: 1706.03762v7", {"arxiv_id": "1706.03762v7"}),
+    ],
+)
+def test_default_fallback_preserves_explicit_paper_identifier(query, expected):
+    result = _default_fallback(query)
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [expected]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "请使用 https://pubmed.ncbi.nlm.nih.gov/38132429/ 这篇论文",
+            {"url": "https://pubmed.ncbi.nlm.nih.gov/38132429/", "pmid": "38132429"},
+        ),
+        (
+            "请使用 https://arxiv.org/abs/1706.03762v7 这篇论文",
+            {"url": "https://arxiv.org/abs/1706.03762v7", "arxiv_id": "1706.03762"},
+        ),
+    ],
+)
+def test_default_fallback_preserves_and_identifies_academic_paper_url(query, expected):
+    result = _default_fallback(query)
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [expected]
 
 
 @pytest.mark.asyncio

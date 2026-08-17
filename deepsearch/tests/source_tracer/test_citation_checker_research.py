@@ -416,6 +416,48 @@ class TestResearchCitationChecker:
         assert result_text == expected_text
         assert [item["reference_index"] for item in result_datas] == [1, 1]
 
+    def test_transform_references_deduplicates_arxiv_abs_and_html_urls(self):
+        abs_url = "http://arxiv.org/abs/1706.03762v7"
+        html_url = "https://arxiv.org/html/1706.03762v7"
+        text = {
+            "article": (
+                f"摘要[source_tracer_result][Attention Is All You Need]({abs_url})，"
+                f"正文[source_tracer_result][Attention Is All You Need - arXiv]({html_url})。"
+            )
+        }
+        datas = [
+            {"url": abs_url, "title": "Attention Is All You Need", "valid": True},
+            {"url": html_url, "title": "Attention Is All You Need - arXiv", "valid": True},
+        ]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert [item["reference_index"] for item in result_datas] == [1, 1]
+        assert result_text.count("\n[1]. [") == 1
+        assert "\n[2]. [" not in result_text
+        assert f"[1]. [Attention Is All You Need]({abs_url})" in result_text
+
+    def test_transform_references_deduplicates_pubmed_url_trailing_slash(self):
+        slash_url = "https://pubmed.ncbi.nlm.nih.gov/38132429/"
+        bare_url = "https://pubmed.ncbi.nlm.nih.gov/38132429"
+        text = {
+            "article": (
+                f"摘要[source_tracer_result][Profile of Orthodontic Use]({slash_url})，"
+                f"正文[source_tracer_result][Profile of Orthodontic Use across Demographics]({bare_url})。"
+            )
+        }
+        datas = [
+            {"url": slash_url, "title": "Profile of Orthodontic Use", "valid": True},
+            {"url": bare_url, "title": "Profile of Orthodontic Use across Demographics", "valid": True},
+        ]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert [item["reference_index"] for item in result_datas] == [1, 1]
+        assert result_text.count("\n[1]. [") == 1
+        assert "\n[2]. [" not in result_text
+        assert f"[1]. [Profile of Orthodontic Use]({slash_url})" in result_text
+
     def test_transform_references_deduplicates_same_url_separated_only_by_other_citation(self):
         """相同 URL 中间只隔其他引用时仍按相邻重复引用去重。"""
         url_a = "https://example.com/a_(b_(c))"

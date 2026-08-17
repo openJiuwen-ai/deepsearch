@@ -609,6 +609,49 @@ def test_arxiv_parse_atom_rejects_invalid_or_non_feed_response():
         wrapper._parse_atom("<html><body>Service unavailable</body></html>")
 
 
+def test_arxiv_exact_identifiers_use_id_list_while_topics_use_search_query():
+    wrapper = ArxivSearchAPIWrapper(fetch_full_text=False)
+
+    modern_url = wrapper._build_url("arXiv:2401.01234v2")
+    scheme_less_url = wrapper._build_url("arxiv.org/abs/2401.01234v2")
+    legacy_url = wrapper._build_url("hep-th/9901001v3")
+    topic_url = wrapper._build_url("graph neural network survey")
+
+    assert "id_list=2401.01234" in modern_url
+    assert "id_list=2401.01234" in scheme_less_url
+    assert "id_list=hep-th%2F9901001" in legacy_url
+    assert "search_query=" not in modern_url
+    assert "search_query=" not in legacy_url
+    assert "search_query=all:graph+neural+network+survey" in topic_url
+
+
+def test_arxiv_results_routes_exact_identifier_to_id_list():
+    wrapper = ArxivSearchAPIWrapper(fetch_full_text=False)
+    empty_feed = '<feed xmlns="http://www.w3.org/2005/Atom"></feed>'
+
+    with patch.object(wrapper, "_get_text", return_value=empty_feed) as get_text:
+        assert wrapper.results("https://arxiv.org/abs/2401.01234v2") == []
+
+    assert "id_list=2401.01234" in get_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_arxiv_aresults_routes_exact_legacy_identifier_to_id_list():
+    wrapper = ArxivSearchAPIWrapper(fetch_full_text=False)
+    client = Mock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    empty_feed = '<feed xmlns="http://www.w3.org/2005/Atom"></feed>'
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.arxiv.httpx.AsyncClient",
+        return_value=client,
+    ), patch.object(wrapper, "_aget_text", AsyncMock(return_value=empty_feed)) as get_text:
+        assert await wrapper.aresults("arXiv:hep-th/9901001v3") == []
+
+    assert "id_list=hep-th%2F9901001" in get_text.await_args.args[1]
+
+
 def test_arxiv_parse_atom_allows_valid_empty_feed():
     wrapper = ArxivSearchAPIWrapper()
 
