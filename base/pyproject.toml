@@ -28,6 +28,7 @@ ci = [
     "pytest-cov>=6",
     "pytest-html>=4",
     "coverage>=7",
+    "python-dotenv",
 ]
 
 [tool.coverage.run]
