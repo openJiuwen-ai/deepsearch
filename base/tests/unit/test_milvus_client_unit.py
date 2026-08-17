@@ -8,7 +8,7 @@ pytest.importorskip("pymilvus", reason="store 模块 import pymilvus（extras: m
 
 from openjiuwen_search_base.milvus.store import MilvusCollectionClient
 
-from tests.conftest_helpers import run
+from tests.unit.conftest_helpers import run
 
 
 class _Field:
