@@ -41,7 +41,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, web_search_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -193,10 +193,16 @@ def route_secondary_search_engine_for_query(query: str) -> str:
     return ""
 
 
-def normalize_search_query_item(item: str | SearchQueryItem) -> SearchQueryItem:
+def normalize_search_query_item(
+        item: str | SearchQueryItem,
+        *,
+        enable_scholarly_search: bool = True,
+) -> SearchQueryItem:
     if isinstance(item, SearchQueryItem):
         query = item.query
-        if "search_engine_name" in item.model_fields_set:
+        if not enable_scholarly_search:
+            secondary_engine = ""
+        elif "search_engine_name" in item.model_fields_set:
             secondary_engine = item.search_engine_name
         else:
             secondary_engine = route_secondary_search_engine_for_query(query)
@@ -204,8 +210,20 @@ def normalize_search_query_item(item: str | SearchQueryItem) -> SearchQueryItem:
     query = str(item)
     return SearchQueryItem(
         query=query,
-        search_engine_name=route_secondary_search_engine_for_query(query),
+        search_engine_name=(
+            route_secondary_search_engine_for_query(query)
+            if enable_scholarly_search
+            else ""
+        ),
     )
+
+
+def _scholarly_search_is_available() -> bool:
+    try:
+        engines = web_search_context.get()
+    except LookupError:
+        return False
+    return "pubmed" in engines or "arxiv" in engines
 
 
 def _fallback_search_query_list(
@@ -347,7 +365,14 @@ class GenerateQueryNode(BaseNode):
         return node_output
 
     def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, session: Session, context: ModelContext):
-        query_items = [normalize_search_query_item(query) for query in algorithm_output.queries]
+        scholarly_search_enabled = _scholarly_search_is_available()
+        query_items = [
+            normalize_search_query_item(
+                query,
+                enable_scholarly_search=scholarly_search_enabled,
+            )
+            for query in algorithm_output.queries
+        ]
         search_queries = [RetrievalQuery(
             query=item.query,
             search_engine_name=item.search_engine_name,
@@ -568,9 +593,14 @@ class SupervisorNode(BaseNode):
                 next_queries = [updated_ledger.missing_evidence[0]]
             elif reflection.knowledge_gap:
                 next_queries = [reflection.knowledge_gap]
+        scholarly_search_enabled = _scholarly_search_is_available()
         search_queries = [RetrievalQuery(
             query=query,
-            search_engine_name=route_secondary_search_engine_for_query(query),
+            search_engine_name=(
+                route_secondary_search_engine_for_query(query)
+                if scholarly_search_enabled
+                else ""
+            ),
         ) for query in next_queries]
         session.update_global_state({"collector_context.search_queries": search_queries})
 

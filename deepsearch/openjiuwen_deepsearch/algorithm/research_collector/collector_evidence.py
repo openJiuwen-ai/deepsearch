@@ -420,7 +420,11 @@ def build_evidence_atom(
     """
     url = str(record.get("url") or "")
     title = str(record.get("title") or "Untitled")
-    content = str(record.get("content") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
+    full_text = str(record.get("full_text") or "")
+    use_full_text = record.get("full_text_status") == "available" and bool(full_text.strip())
+    content = str(full_text if use_full_text else record.get("content") or "")[
+        :MAX_COLLECTOR_DOC_CONTENT_LENGTH
+    ]
     source_type = (
         "local"
         if str(record.get("type") or "").lower() == "text" or url.startswith("localdataset://")
@@ -458,6 +462,8 @@ def build_evidence_atom(
         },
         "content_ref": content_ref,
     }
+    if record.get("skip_webpage_enrichment") is True:
+        base["skip_webpage_enrichment"] = True
     doc_info = {**base, "original_content": content}
     normalize_doc_info_scores_and_time(doc_info)
     return base, doc_info

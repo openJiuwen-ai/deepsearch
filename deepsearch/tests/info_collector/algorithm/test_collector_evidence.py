@@ -206,6 +206,42 @@ def test_build_evidence_atom_excludes_original_content_from_atom():
     assert store.read(atom["source_id"]) == record["content"]
 
 
+def test_build_evidence_atom_prefers_available_academic_full_text():
+    store = CollectorSourceStore()
+    record = {
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+        "title": "Profile of Orthodontic Use across Demographics",
+        "content": "Abstract only.",
+        "full_text": "Official PMC body text with methods and results.",
+        "full_text_status": "available",
+        "skip_webpage_enrichment": True,
+        "type": "page",
+    }
+
+    atom, doc_info = build_evidence_atom(record=record, query="orthodontic use", source_store=store)
+
+    assert doc_info["original_content"] == record["full_text"]
+    assert store.read(atom["source_id"]) == record["full_text"]
+    assert atom["skip_webpage_enrichment"] is True
+    assert doc_info["skip_webpage_enrichment"] is True
+
+
+def test_build_evidence_atom_falls_back_to_abstract_when_full_text_failed():
+    store = CollectorSourceStore()
+    record = {
+        "url": "https://arxiv.org/abs/1234.5678",
+        "title": "Example",
+        "content": "Available abstract.",
+        "full_text": "",
+        "full_text_status": "failed",
+        "type": "page",
+    }
+
+    atom, doc_info = build_evidence_atom(record=record, query="example", source_store=store)
+
+    assert doc_info["original_content"] == record["content"]
+
+
 def test_build_evidence_atom_keeps_distinct_content_for_same_doc_id():
     """同 URL/title 的不同 content 应保留为同 doc_id 下的不同 evidence。"""
     store = CollectorSourceStore()

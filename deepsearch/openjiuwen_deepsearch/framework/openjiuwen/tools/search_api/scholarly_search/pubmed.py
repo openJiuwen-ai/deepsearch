@@ -3,22 +3,46 @@
 
 from __future__ import annotations
 
+import asyncio
 import xml.etree.ElementTree as ET
+import logging
+import re
 from typing import Any, Generic, Optional, TypeVar, Union
 
 import httpx
 import requests
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH, MAX_URL_LENGTH
+from openjiuwen_deepsearch.common.common_constants import (
+    MAX_COLLECTOR_DOC_CONTENT_LENGTH,
+    MAX_SEARCH_CONTENT_LENGTH,
+    MAX_URL_LENGTH,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common import (
     DEFAULT_PUBMED_SEARCH_URL,
+    NCBI_REQUEST_CONTROL,
     ScholarlySearchResponseError,
+    apply_full_text_extension_config,
+    async_request_once,
     ssl_verify,
+    sync_request_once,
     truncate,
 )
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
+
+
+def _full_text_fields() -> dict[str, Any]:
+    return {
+        "skip_webpage_enrichment": True,
+        "full_text": "",
+        "content_type": "abstract",
+        "full_text_url": "",
+        "full_text_format": "",
+        "full_text_status": "unavailable",
+        "full_text_truncated": False,
+    }
 
 
 class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
@@ -26,7 +50,12 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
 
     search_api_key: bytearray | bytes | str | None = None
     search_url: SecretStr | str | None = None
-    max_web_search_results: int = 5
+    max_web_search_results: int = 1
+    fetch_full_text: bool = True
+    max_full_text_results: int = 1
+    full_text_timeout_seconds: int = 30
+    max_full_text_length: int = MAX_COLLECTOR_DOC_CONTENT_LENGTH
+    requests_per_second: float = 1 / 3
     extension: Optional[dict] = None
 
     email: str | None = None
@@ -40,12 +69,19 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
             self.email = ext["pubmed_email"]
         if "pubmed_tool" in ext:
             self.tool = ext["pubmed_tool"]
+        if "pubmed_requests_per_second" in ext:
+            try:
+                self.requests_per_second = max(0.1, float(ext["pubmed_requests_per_second"]))
+            except (TypeError, ValueError):
+                pass
+        apply_full_text_extension_config(self, ext)
 
     def results(self, query: str) -> list[dict[str, Any]]:
         if not (query or "").strip():
             return []
         verify = ssl_verify()
-        ids = self._search_ids(query, verify)
+        exact_pmid = self._exact_pmid(query)
+        ids = [exact_pmid] if exact_pmid else self._search_ids(query, verify)
         if not ids:
             return []
         text = self._get_text(
@@ -53,19 +89,24 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
             params=self._fetch_params(ids),
             verify=verify,
         )
-        return self._parse_fetch_xml(text, ids)
+        rows = self._parse_fetch_xml(text, ids)
+        return self._enrich_rows_sync(rows, verify)
 
     async def aresults(self, query: str) -> list[dict[str, Any]]:
         if not (query or "").strip():
             return []
         verify = ssl_verify()
-        async with httpx.AsyncClient(verify=verify, timeout=30) as client:
-            search_raw = await self._aget_json(
-                client,
-                f"{self._resolved_search_url()}/esearch.fcgi",
-                params=self._search_params(query),
-            )
-            ids = self._parse_ids(search_raw)
+        async with httpx.AsyncClient(verify=verify, timeout=self.full_text_timeout_seconds) as client:
+            exact_pmid = self._exact_pmid(query)
+            if exact_pmid:
+                ids = [exact_pmid]
+            else:
+                search_raw = await self._aget_json(
+                    client,
+                    f"{self._resolved_search_url()}/esearch.fcgi",
+                    params=self._search_params(query),
+                )
+                ids = self._parse_ids(search_raw)
             if not ids:
                 return []
             fetch_text = await self._aget_text(
@@ -73,7 +114,8 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
                 f"{self._resolved_search_url()}/efetch.fcgi",
                 params=self._fetch_params(ids),
             )
-            return self._parse_fetch_xml(fetch_text, ids)
+            rows = self._parse_fetch_xml(fetch_text, ids)
+            return await self._enrich_rows_async(rows, client)
 
     def _search_ids(self, query: str, verify: Union[str, bool]) -> list[str]:
         raw = self._get_json(
@@ -83,34 +125,64 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         )
         return self._parse_ids(raw)
 
+    @staticmethod
+    def _exact_pmid(query: str) -> str:
+        match = re.fullmatch(r"\s*PMID\s*:\s*(\d+)\s*", str(query or ""), re.IGNORECASE)
+        return match.group(1) if match else ""
+
     async def _aget_json(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
+        response = await self._aget_response(client, url, params)
         raw = response.json()
         self._raise_for_search_error_payload(raw)
         return raw
 
     async def _aget_text(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> str:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
+        response = await self._aget_response(client, url, params)
         return response.text
 
+    async def _aget_response(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
+        return await async_request_once(
+            lambda: client.get(url, params=params),
+            self._wait_for_async_rate_limit,
+            control=NCBI_REQUEST_CONTROL,
+        )
+
+    async def _wait_for_async_rate_limit(self) -> None:
+        await NCBI_REQUEST_CONTROL.wait_async(self.requests_per_second)
+
+    def _wait_for_sync_rate_limit(self) -> None:
+        NCBI_REQUEST_CONTROL.wait_sync(self.requests_per_second)
+
     def _get_json(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> Any:
-        response = requests.get(url, params=params, verify=verify, timeout=30)
-        response.raise_for_status()
+        response = self._get_response(url, params, verify)
         raw = response.json()
         self._raise_for_search_error_payload(raw)
         return raw
 
     def _get_text(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> str:
-        response = requests.get(url, params=params, verify=verify, timeout=30)
-        response.raise_for_status()
+        response = self._get_response(url, params, verify)
         return response.text
+
+    def _get_response(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> Any:
+        return sync_request_once(
+            lambda: requests.get(
+                url,
+                params=params,
+                verify=verify,
+                timeout=self.full_text_timeout_seconds,
+            ),
+            self._wait_for_sync_rate_limit,
+            control=NCBI_REQUEST_CONTROL,
+        )
 
     def _raise_for_search_error_payload(self, raw: Any) -> None:
         message = self._search_error_message(raw)
         if message:
             raise ScholarlySearchResponseError(f"PubMed ESearch returned error: {message}")
+        esearch = raw.get("esearchresult") if isinstance(raw, dict) else None
+        warning = self._joined_payload_text(esearch.get("errorlist")) if isinstance(esearch, dict) else ""
+        if warning:
+            logger.info("PubMed ESearch returned nonfatal query warning: %s", warning)
 
     @classmethod
     def _search_error_message(cls, raw: Any) -> str:
@@ -121,10 +193,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         if message:
             return message
 
-        esearch = raw.get("esearchresult")
-        if not isinstance(esearch, dict):
-            return ""
-        return cls._joined_payload_text(esearch.get("errorlist"))
+        return ""
 
     @classmethod
     def _joined_payload_text(cls, value: Any) -> str:
@@ -166,6 +235,74 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         if self.email:
             params["email"] = self.email
         return params
+
+    def _pmc_fetch_params(self, pmcid: str) -> dict[str, Any]:
+        params = self._fetch_params([pmcid])
+        params["db"] = "pmc"
+        return params
+
+    def _enrich_rows_sync(self, rows: list[dict[str, Any]], verify: Union[str, bool]) -> list[dict[str, Any]]:
+        if not self.fetch_full_text:
+            return rows
+        limit = max(0, int(self.max_full_text_results))
+        for row in rows[:limit]:
+            pmcid = str(row.get("pmcid") or "").strip()
+            if not pmcid:
+                continue
+            try:
+                text = self._get_text(
+                    f"{self._resolved_search_url()}/efetch.fcgi",
+                    params=self._pmc_fetch_params(pmcid),
+                    verify=verify,
+                )
+                full_text, truncated = self._parse_pmc_xml(text)
+                self._apply_full_text(row, pmcid, full_text, truncated)
+            except Exception as exc:
+                row.update(_full_text_fields())
+                row["full_text_status"] = "failed"
+                logger.warning("Unable to enrich PubMed result %s from PMC: %s", row.get("source_id"), exc)
+        return rows
+
+    async def _enrich_rows_async(
+        self,
+        rows: list[dict[str, Any]],
+        client: httpx.AsyncClient,
+    ) -> list[dict[str, Any]]:
+        if not self.fetch_full_text:
+            return rows
+        limit = max(0, int(self.max_full_text_results))
+        await asyncio.gather(*(self._enrich_one_async(row, client) for row in rows[:limit]))
+        return rows
+
+    async def _enrich_one_async(self, row: dict[str, Any], client: httpx.AsyncClient) -> None:
+        pmcid = str(row.get("pmcid") or "").strip()
+        if not pmcid:
+            return
+        try:
+            text = await self._aget_text(
+                client,
+                f"{self._resolved_search_url()}/efetch.fcgi",
+                params=self._pmc_fetch_params(pmcid),
+            )
+            full_text, truncated = self._parse_pmc_xml(text)
+            self._apply_full_text(row, pmcid, full_text, truncated)
+        except Exception as exc:
+            row.update(_full_text_fields())
+            row["full_text_status"] = "failed"
+            logger.warning("Unable to enrich PubMed result %s from PMC: %s", row.get("source_id"), exc)
+
+    @staticmethod
+    def _apply_full_text(row: dict[str, Any], pmcid: str, full_text: str, truncated: bool) -> None:
+        if not full_text:
+            return
+        row.update({
+            "full_text": full_text,
+            "content_type": "full_text",
+            "full_text_url": f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/",
+            "full_text_format": "jats_xml",
+            "full_text_status": "available",
+            "full_text_truncated": truncated,
+        })
 
     @staticmethod
     def _parse_ids(raw: Any) -> list[str]:
@@ -226,12 +363,70 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
             "authors": authors,
             "journal": truncate(journal, MAX_SEARCH_CONTENT_LENGTH),
             "publication_types": publication_types,
+            **_full_text_fields(),
         }
+        pmcid = self._article_id(article, "pmc")
+        if pmcid:
+            row["pmcid"] = pmcid
         if doi:
             row["doi"] = doi
         if abstract:
             row["abstract"] = truncate(abstract, MAX_SEARCH_CONTENT_LENGTH)
         return row
+
+    def _parse_pmc_xml(self, text: str) -> tuple[str, bool]:
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError as exc:
+            raise ScholarlySearchResponseError("PMC EFetch returned invalid XML") from exc
+        body = root.find(".//body")
+        if body is None:
+            return "", False
+
+        parts: list[str] = []
+        structured_text_descendants: set[ET.Element] = set()
+        for element in body.iter():
+            tag = element.tag.rsplit("}", 1)[-1]
+            if tag in {"title", "p"}:
+                if element in structured_text_descendants:
+                    continue
+                value = self._joined_text(element)
+                if value:
+                    parts.append(value)
+            elif tag == "tr":
+                cells = [
+                    self._joined_text(cell)
+                    for cell in list(element)
+                    if cell.tag.rsplit("}", 1)[-1] in {"th", "td"}
+                ]
+                cells = [cell for cell in cells if cell]
+                if cells:
+                    parts.append(" | ".join(cells))
+            elif tag == "table-wrap":
+                structured_text_descendants.update(element.iter())
+                label = self._joined_text(element.find("label"))
+                caption = self._joined_text(element.find("caption"))
+                value = " ".join(part for part in (label, caption) if part)
+                if value:
+                    parts.append(value)
+            elif tag == "fig":
+                structured_text_descendants.update(element.iter())
+                label = self._joined_text(element.find("label"))
+                caption = self._joined_text(element.find("caption"))
+                value = " ".join(part for part in (label, caption) if part)
+                if value:
+                    parts.append(value)
+
+        normalized = "\n\n".join(dict.fromkeys(parts)).strip()
+        limit = max(0, int(self.max_full_text_length))
+        truncated = bool(limit and len(normalized) > limit)
+        return (normalized[:limit] if limit else ""), truncated
+
+    def _article_id(self, article: ET.Element, id_type: str) -> str:
+        for item in article.findall(".//ArticleId"):
+            if str(item.attrib.get("IdType") or "").casefold() == id_type.casefold():
+                return self._joined_text(item)
+        return ""
 
     def _abstract(self, article: ET.Element) -> str:
         parts = []
