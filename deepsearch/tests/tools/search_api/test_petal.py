@@ -55,6 +55,15 @@ class TestPetalSearchAPIWrapper:
 
             mock_session_context = AsyncMock()
             mock_session_context.__aenter__.return_value = mock_session
+            mock_post_context = AsyncMock()
+            mock_post_context.__aenter__.return_value = mock_response
+            mock_post_context.__aexit__.return_value = None
+
+            mock_session = MagicMock()
+            mock_session.post.return_value = mock_post_context
+
+            mock_session_context = AsyncMock()
+            mock_session_context.__aenter__.return_value = mock_session
             mock_session_context.__aexit__.return_value = None
 
             mock_client_session.return_value = mock_session_context
