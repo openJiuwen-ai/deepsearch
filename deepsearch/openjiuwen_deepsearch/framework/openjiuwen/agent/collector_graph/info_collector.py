@@ -83,16 +83,20 @@ def filter_confirmed_target_locators(
     """Skip exact locator queries for target papers already confirmed."""
     ledger = ensure_ledger(evidence_ledger)
     confirmed = set(ledger.confirmed_target_papers)
-    return [
-        retrieval_query
-        for retrieval_query in retrieval_queries
-        if not any(
-            target_paper_key(target) in confirmed
-            and _is_target_locator_query(retrieval_query.query, target)
-            for target in target_papers
-            if isinstance(target, dict)
-        )
-    ]
+    filtered_queries = []
+    for retrieval_query in retrieval_queries:
+        is_confirmed_locator = False
+        for target in target_papers:
+            if not isinstance(target, dict):
+                continue
+            if target_paper_key(target) not in confirmed:
+                continue
+            if _is_target_locator_query(retrieval_query.query, target):
+                is_confirmed_locator = True
+                break
+        if not is_confirmed_locator:
+            filtered_queries.append(retrieval_query)
+    return filtered_queries
 
 
 @dataclass(frozen=True)
@@ -307,12 +311,17 @@ class InfoRetrievalNode(BaseNode):
             target_papers = research_intent.get("target_papers", [])
         else:
             target_papers = getattr(research_intent, "target_papers", [])
-        academic_documents = [
-            document for document in new_doc_infos
-            if isinstance(document, dict) and any(
-                document.get(key) for key in ("academic_source", "academic_source_id", "doi")
+        academic_documents = []
+        for document in new_doc_infos:
+            if not isinstance(document, dict):
+                continue
+            has_academic_metadata = (
+                bool(document.get("academic_source"))
+                or bool(document.get("academic_source_id"))
+                or bool(document.get("doi"))
             )
-        ]
+            if has_academic_metadata:
+                academic_documents.append(document)
         if target_papers:
             if LogManager.is_sensitive():
                 logger.info(

@@ -246,17 +246,17 @@ def _normalize_target_papers(raw: object) -> list[TargetPaper]:
             if arxiv_id and not paper.arxiv_id:
                 paper.arxiv_id = arxiv_id
 
-        identities = [
-            (kind, value)
-            for kind, value in (
-                ("pmid", paper.pmid),
-                ("doi", paper.doi),
-                ("arxiv_id", paper.arxiv_id),
-                ("url", canonicalize_url(paper.url) if paper.url else ""),
-                ("title", normalize_title(paper.title)),
-            )
-            if value
-        ]
+        identity_values = (
+            ("pmid", paper.pmid),
+            ("doi", paper.doi),
+            ("arxiv_id", paper.arxiv_id),
+            ("url", canonicalize_url(paper.url) if paper.url else ""),
+            ("title", normalize_title(paper.title)),
+        )
+        identities = []
+        for kind, value in identity_values:
+            if value:
+                identities.append((kind, value))
         if not identities:
             fallback = tuple(getattr(paper, name).casefold() for name in field_names)
             identities.append(("fallback", "\0".join(fallback)))

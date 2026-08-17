@@ -141,12 +141,17 @@ def target_papers_still_searchable(
 ) -> list[dict]:
     """Exclude confirmed and exhausted target-paper constraints from locator prompts."""
     ledger = ensure_ledger(ledger)
-    return [
-        paper for paper in papers or []
-        if isinstance(paper, dict)
-        and target_paper_key(paper) not in ledger.confirmed_target_papers
-        and ledger.target_paper_attempts.get(target_paper_key(paper), 0) < MAX_TARGET_PAPER_ATTEMPTS
-    ]
+    searchable_papers = []
+    for paper in papers or []:
+        if not isinstance(paper, dict):
+            continue
+        paper_key = target_paper_key(paper)
+        if paper_key in ledger.confirmed_target_papers:
+            continue
+        if ledger.target_paper_attempts.get(paper_key, 0) >= MAX_TARGET_PAPER_ATTEMPTS:
+            continue
+        searchable_papers.append(paper)
+    return searchable_papers
 
 
 def build_ledger_brief(ledger: EvidenceLedger | dict | None) -> str:
