@@ -46,14 +46,14 @@ class TestPetalSearchAPIWrapper:
             mock_response.status = 200
             mock_response.json.return_value = {"web_pages": []}
 
-            mock_post_context = MagicMock()
+            mock_post_context = AsyncMock()
             mock_post_context.__aenter__.return_value = mock_response
             mock_post_context.__aexit__.return_value = None
 
             mock_session = MagicMock()
             mock_session.post.return_value = mock_post_context
 
-            mock_session_context = MagicMock()
+            mock_session_context = AsyncMock()
             mock_session_context.__aenter__.return_value = mock_session
             mock_session_context.__aexit__.return_value = None
 
