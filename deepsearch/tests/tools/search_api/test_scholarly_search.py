@@ -16,6 +16,9 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed import PubMedSearchAPIWrapper
 
+PUBMED_MODULE = "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed"
+ARXIV_MODULE = "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.arxiv"
+
 
 class DummyResponse:
     def __init__(self, status_code=200, json_data=None, text="", headers=None, content=b""):
@@ -38,6 +41,13 @@ def _reset_scholarly_request_controls():
     reset_scholarly_request_controls()
     yield
     reset_scholarly_request_controls()
+
+
+@pytest.fixture
+def mock_scholarly_ssl_verify():
+    with patch(f"{PUBMED_MODULE}.ssl_verify", return_value=False), \
+            patch(f"{ARXIV_MODULE}.ssl_verify", return_value=False):
+        yield
 
 
 @pytest.mark.asyncio
@@ -140,7 +150,7 @@ def test_scholarly_search_defaults_to_one_request_every_three_seconds(wrapper_cl
 
 
 @pytest.mark.asyncio
-async def test_pubmed_aresults_uses_request_helpers_for_esearch_and_efetch():
+async def test_pubmed_aresults_uses_request_helpers_for_esearch_and_efetch(mock_scholarly_ssl_verify):
     wrapper = PubMedSearchAPIWrapper()
     search_raw = {"esearchresult": {"idlist": ["1"]}}
     fetch_text = """
@@ -167,7 +177,7 @@ async def test_pubmed_aresults_uses_request_helpers_for_esearch_and_efetch():
     assert results[0]["content"] == "Useful abstract."
 
 
-def test_pubmed_results_fetches_exact_pmid_without_esearch():
+def test_pubmed_results_fetches_exact_pmid_without_esearch(mock_scholarly_ssl_verify):
     wrapper = PubMedSearchAPIWrapper(fetch_full_text=False)
     fetch_text = "<PubmedArticleSet></PubmedArticleSet>"
 
@@ -179,7 +189,7 @@ def test_pubmed_results_fetches_exact_pmid_without_esearch():
     assert get_text.call_args.kwargs["params"]["id"] == "38132429"
 
 
-def test_pubmed_bare_numeric_query_uses_esearch():
+def test_pubmed_bare_numeric_query_uses_esearch(mock_scholarly_ssl_verify):
     wrapper = PubMedSearchAPIWrapper(fetch_full_text=False)
 
     with patch.object(wrapper, "_search_ids", return_value=[]) as search_ids, \
@@ -310,7 +320,7 @@ def test_pubmed_parse_pmc_xml_does_not_repeat_paragraphs_inside_tables_or_figure
     assert text.count("Figure caption") == 1
 
 
-def test_pubmed_results_does_not_fetch_pmc_when_full_text_disabled():
+def test_pubmed_results_does_not_fetch_pmc_when_full_text_disabled(mock_scholarly_ssl_verify):
     wrapper = PubMedSearchAPIWrapper(fetch_full_text=False)
     row = {
         "title": "Study",
@@ -943,7 +953,7 @@ async def test_arxiv_async_api_requests_are_spaced_to_avoid_rate_limit_bursts():
 
 
 @pytest.mark.asyncio
-async def test_arxiv_aresults_enables_redirect_following():
+async def test_arxiv_aresults_enables_redirect_following(mock_scholarly_ssl_verify):
     wrapper = ArxivSearchAPIWrapper(fetch_full_text=False)
     client = Mock()
     client.__aenter__ = AsyncMock(return_value=client)
