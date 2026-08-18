@@ -1075,10 +1075,15 @@ class Reporter:
             _outline_title = current_outline.get("title", "")
         else:
             _outline_title = getattr(current_outline, "title", "")
+        table_of_contents = self._build_table_of_contents(
+            sub_reports_content,
+            gen_report_context["language"],
+        )
         report_content = (
             f"{'# ' + _outline_title}\n\n"  # Use outline title directly for report title
+            f"{table_of_contents}\n\n"
             f"{self._post_process_abstract(abstract)}\n\n"
-            f"{sub_report_res.get('sub_reports_content')}\n\n"
+            f"{sub_reports_content}\n\n"
             f"{self._post_process_conclusion(conclusion)}\n\n"
             f"{ArticlePart.get_title('reference', gen_report_context['language'])}"
             f"{sub_report_res.get('sub_references')}\n\n"
@@ -1478,6 +1483,59 @@ class Reporter:
                 "llm output when generating %s with llm: %s", task_type, llm_output
             )
         return llm_output.get("content")
+
+    @staticmethod
+    def _build_table_of_contents(sub_reports_content: str, language: str) -> str:
+        """Build a clickable level-one TOC from the final body headings."""
+        headings = Reporter._extract_level_one_headings(sub_reports_content)
+        toc_title = ArticlePart.get_title("toc", language).strip()
+        if not headings:
+            return toc_title
+
+        toc_entries = "\n\n".join(
+            "[{0}](#chapter-{1})".format(heading["title"], index)
+            for index, heading in enumerate(headings, start=1)
+        )
+        return f"{toc_title}\n\n{toc_entries}"
+
+    @staticmethod
+    def _extract_level_one_headings(sub_reports_content: str) -> list[dict]:
+        """Extract real Markdown H1 headings while ignoring fenced code blocks."""
+        headings = []
+        fence_char = ""
+        fence_length = 0
+
+        offset = 0
+        for line in (sub_reports_content or "").splitlines(keepends=True):
+            content_line = line.rstrip("\r\n")
+            if fence_char:
+                closing_fence = re.match(r"^\s{0,3}(`{3,}|~{3,})\s*$", content_line)
+                if closing_fence:
+                    marker = closing_fence.group(1)
+                    if marker[0] == fence_char and len(marker) >= fence_length:
+                        fence_char = ""
+                        fence_length = 0
+                offset += len(line)
+                continue
+
+            opening_fence = re.match(r"^\s{0,3}(`{3,}|~{3,})", content_line)
+            if opening_fence:
+                marker = opening_fence.group(1)
+                fence_char = marker[0]
+                fence_length = len(marker)
+                offset += len(line)
+                continue
+
+            heading_match = re.match(r"^\s{0,3}#(?!#)\s+(.+?)\s*$", content_line)
+            if heading_match:
+                heading = re.sub(
+                    r"[ \t]+#+[ \t]*$", "", heading_match.group(1)
+                ).strip()
+                if heading:
+                    headings.append({"title": heading, "offset": offset})
+            offset += len(line)
+
+        return headings
 
     def _post_process_abstract(self, content: str) -> str:
         language = self.gen_report_context["language"]
