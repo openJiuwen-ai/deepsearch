@@ -55,7 +55,7 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 
 ## 核心流程
 
-1. 报告生成阶段根据 `classified_content` 的数据密度选择适合可视化的章节资料。
+1. 报告生成阶段根据 `classified_content` 的数据密度选择适合可视化的章节资料。`data_density` 是 `classified_content` 条目的顶级字段（不在 `"scores"` 键内）；全文条目（`is_fulltext=True`）也携带从 passage 聚合的 `data_density`，因此可视化候选池包含全文文档。
 2. 根据章节标题和章节大纲推断期望图型；该结果只作为软约束，不能覆盖真实数据形态。
 3. LLM 从候选原始资料中抽取图表标题、类型、records 和单位。
 4. 抽取结果通过 schema 校验；混合单位、空 records、字段缺失等结果会被拒绝。

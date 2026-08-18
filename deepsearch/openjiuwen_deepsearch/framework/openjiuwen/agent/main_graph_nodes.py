@@ -757,6 +757,7 @@ class EndNode(End):
                 response_content = f"{response_content}\n\n---\n\n{ai_generated_notice}"
                 final_result["response_content"] = response_content
                 session.update_global_state({"search_context.final_result.response_content": response_content})
+
         stats_info_llm = bool(session.get_global_state("config.stats_info_llm"))
         if stats_info_llm:
             session_id = session.get_global_state("config.thread_id")
@@ -838,6 +839,7 @@ class GenerateQuestionsNode(BaseNode):
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
+
         current_inputs = self._pre_handle(inputs, session, context)
         current_executed_num = 0
         max_gen_question_retry_num = current_inputs.get("max_gen_question_retry_num", 5)
@@ -1054,6 +1056,7 @@ class OutlineNode(BaseNode):
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
+
         prompt_name, with_dep_driving, selected_method = self._select_prompt_and_dep_driving(current_inputs)
         self._sync_outline_execution_method(current_inputs, session, selected_method)
         outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=prompt_name)

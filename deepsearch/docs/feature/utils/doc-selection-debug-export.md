@@ -1,24 +1,22 @@
-# 文档选择调试信息导出
+# 段落选择调试信息导出
 
 ## 维护范围
 
-本文档覆盖信息维度矩阵文档选择流程的中间结果（rationales / 覆盖矩阵 / 贪心选择 / 覆盖校验）写入 `Section.doc_selection_debug` 字段，并通过 `ResultExporter` 导出为 JSON 和 Excel 的能力。
+本文档覆盖信息维度矩阵段落选择流程的中间结果（rationales / 覆盖矩阵 / 维度评分 / 选中段落）写入 `Section.doc_selection_debug` 字段，并通过 `ResultExporter` 导出为 JSON 和 Excel 的能力。
 
-本文档不覆盖文档选择算法本身（见 [coverage-matrix-doc-selection.md](../algorithm/report-generation/coverage-matrix-doc-selection.md)）和通用大纲导出（见 [debug-and-export.md](./debug-and-export.md)）。
+本文档不覆盖段落选择算法本身（见 [coverage-matrix-doc-selection.md](../algorithm/report-generation/coverage-matrix-doc-selection.md)）和通用大纲导出（见 [debug-and-export.md](./debug-and-export.md)）。
 
 ## 功能目的
 
-提交 `9fd450a` 引入了信息维度矩阵文档选择方案，但其中间结果（rationales、coverage_result、selected_docs、marginal_values、verify_result）均为 `generate_sub_report` 内的局部变量，只通过散落的 `logger.info/debug/warning` 输出到日志文件，无法结构化排查。
-
-本次修改将这些中间结果写入 `Section.doc_selection_debug` 字段，使其随 `Outline.model_dump()` 自动进入 `ResultExporter` 的 JSON 和 Excel 输出，便于用透视表分析"哪些 section 的哪些维度系统性 uncovered"、"elbow 截断淘汰了哪些高噪声文档"等问题，为调优 β/γ/δ 惩罚系数和 top_k 提供数据支撑。
+将段落选择流程的中间结果写入 `Section.doc_selection_debug` 字段，使其随 `Outline.model_dump()` 自动进入 `ResultExporter` 的 JSON 和 Excel 输出，便于结构化排查"哪些 section 的哪些维度系统性 uncovered"等问题，为调优选择参数提供数据支撑。
 
 ## 可见行为
 
 - `Section` 模型新增可选字段 `doc_selection_debug: Optional[Dict]`，默认 `None`，不影响已有序列化。
-- 仅在走文档选择新流程（`doc_infos` 非空且进入 else 分支）时写入；背景知识回退路径不写入。
+- 仅在走段落选择流程（`doc_infos` 非空且进入 else 分支）时写入；背景知识回退路径不写入。
 - `export_outline_without_plans` 在排除 `plans` 的同时排除 `doc_selection_debug`，确保调试数据不会泄漏到 LLM 提示词（报告生成、章节摘要、sidecar 等）。
 - `ResultExporter.export_outline` 的 JSON 输出自动包含 `doc_selection_debug`（因为 `model_dump()` 序列化全部字段）。
-- `OutlineToExcelExporter` 的 Excel 输出新增 4 个 sheet：信息维度、覆盖矩阵、文档选择、覆盖校验。
+- `OutlineToExcelExporter` 的 Excel 输出新增 4 个 sheet：信息维度、维度Top段落、全文证据、段落证据。
 - 开关仍由 `export_intermediate_results` 控制，与现有大纲导出一致。
 
 ## 关键代码路径
@@ -31,50 +29,73 @@
 
 ## 核心流程
 
-1. `generate_sub_report` 执行文档选择流程（rationale 生成 → n-gram 粗筛 → 覆盖矩阵评估 → 贪心选择 → elbow 截断 → 覆盖校验），中间结果为局部变量。
-2. `_verify_coverage` 的返回值从丢弃改为捕获（`verify_result = self._verify_coverage(...)`）。
-3. `_write_doc_selection_debug` 将 7 类中间结果打包为 dict 并写入 `current_inputs["doc_selection_debug"]`。打包时通过 `DocSelectionContext` dataclass 封装 6 个相关参数，函数签名从 7 参数简化为 2 参数。同时构建 `doc_info_map`（doc_key → {title, url}）供 Excel 覆盖矩阵表展示文档标题和 URL。
-4. `SubReporterNode._do_invoke` 将 `doc_selection_debug` 纳入 `algorithm_output`；`_post_handle` 将其写入 `session.update_global_state({"section_context.doc_selection_debug": ...})`。
-5. `SectionEndNode.invoke` 从 session 读取 `section_context.doc_selection_debug` 并纳入子图最终 payload（`section_state` dict）。
-6. `editor_team_manager_node._parse_section_state` 从子图 payload 提取 `doc_selection_debug`；`_update_state` 将其写入 `section.doc_selection_debug`。
-7. `editor_team_manager_node` 在 sub_report 全部完成后调用 `ResultExporter.export_outline(state.get("outline"), ...)`，Outline 的 `doc_selection_debug` 被 `model_dump()` 序列化进 JSON。
-8. `OutlineToExcelExporter.extract_all_data` 遍历 sections 时调用 `_extract_doc_selection_debug`，将 `doc_selection_debug` 展平为 4 张表的长格式行。
-9. `create_dataframes` 构建 4 个 DataFrame 并设置中文列名。
-10. `export_to_excel` 写入 4 个新 sheet，复用 `sanitize_dataframe` 防公式注入。
-
-> **关键点**：`SectionEndNode` 是子图 payload 的构造者，手动选了 5 个 key（plans/sub_report_content/sub_report_background_knowledge/warning_infos/exception_infos）。必须在其中添加 `doc_selection_debug` 才能打通数据回传链路。`SectionContext` 模型也需添加对应字段，否则 session 中的 dotted key 不会被框架保留。
+1. `generate_sub_report` 执行段落选择流程（rationale 生成 → 段落抽取+3 维度评分 → 按 rationale top-k 选择 → 覆盖校验），中间结果为局部变量。
+2. `_write_doc_selection_debug` 将 6 类中间结果打包为 dict 并写入 `current_inputs["doc_selection_debug"]`。打包时通过 `PassageSelectionContext` dataclass 封装 4 个相关参数，函数签名从多参数简化为 2 参数。同时构建 `passage_info_map`（passage_key → {doc_title, doc_url, passage_text}）供 Excel 表展示文档标题和 URL。
+3. `SubReporterNode._do_invoke` 将 `doc_selection_debug` 纳入 `algorithm_output`；`_post_handle` 将其写入 `session.update_global_state({"section_context.doc_selection_debug": ...})`。
+4. `SectionEndNode.invoke` 从 session 读取 `section_context.doc_selection_debug` 并纳入子图最终 payload（`section_state` dict）。
+5. `editor_team_manager_node._parse_section_state` 从子图 payload 提取 `doc_selection_debug`；`_update_state` 将其写入 `section.doc_selection_debug`。
+6. `editor_team_manager_node` 在 sub_report 全部完成后调用 `ResultExporter.export_outline(state.get("outline"), ...)`，Outline 的 `doc_selection_debug` 被 `model_dump()` 序列化进 JSON。
+7. `OutlineToExcelExporter.extract_all_data` 遍历 sections 时调用 `_extract_doc_selection_debug`，将 `doc_selection_debug` 展平为 4 张表的长格式行。
+8. `create_dataframes` 构建 4 个 DataFrame 并设置中文列名。
+9. `export_to_excel` 写入 4 个新 sheet，复用 `sanitize_dataframe` 防公式注入。
 
 ## doc_selection_debug 数据结构
+
+`doc_selection_debug` 顶级键名保持不变（跨文件数据契约），但内部字段名已更新为段落级。
 
 ```json
 {
     "rationales": [
         {"id": "r1", "description": "...", "type": "quantitative", "priority": "primary"}
     ],
-    "ngram_filter": {"before": 30, "after": 18},
+    "doc_filter": {"before": 30, "after": 18},
     "coverage_matrix": {
-        "doc_0": {"r1": 0.8, "r2": 0.3},
-        "doc_1": {"r1": 0.1, "r2": 0.7}
+        "passage_0": {"r1": 0.8, "r2": 0.3},
+        "passage_1": {"r1": 0.1, "r2": 0.7}
     },
-    "reliability_scores": {"doc_0": 0.75, "doc_1": 0.85},
-    "noise_scores": {"doc_0": 0.2, "doc_1": 0.1},
-    "doc_info_map": {
-        "doc_0": {"title": "...", "url": "..."},
-        "doc_1": {"title": "...", "url": "..."}
+    "dimension_scores": {
+        "passage_0": {
+            "r1": {"coverage": 0.9, "reliability": 0.8, "data_density": 0.7},
+            "r2": {"coverage": 0.3, "reliability": 0.8, "data_density": 0.7}
+        },
+        "passage_1": {
+            "r1": {"coverage": 0.1, "reliability": 0.2, "data_density": 0.6},
+            "r2": {"coverage": 0.7, "reliability": 0.2, "data_density": 0.6}
+        }
     },
-    "selected_docs": [
-        {"doc_key": "doc_0", "title": "...", "url": "...", "marginal_value": 0.82}
+    "passage_info_map": {
+        "passage_0": {"doc_title": "...", "doc_url": "...", "passage_text": "..."},
+        "passage_1": {"doc_title": "...", "doc_url": "...", "passage_text": "..."}
+    },
+    "selected_passages": [
+        {"passage_key": "passage_0", "doc_title": "...", "doc_url": "...", "passage_text": "..."}
     ],
-    "verify_result": {
-        "uncovered_rationales": [],
-        "weak_rationales": [],
-        "coverage_rate": 1.0,
-        "limitations": []
+    "fulltext_evidence": {
+        "fulltext_docs": [
+            {"citation_index": 1, "url": "...", "doc_title": "...", "doc_time": "...",
+             "original_content": "...", "key_passages": [], "reliability": 0.8, "data_density": 0.7,
+             "coverage_scores": {}, "fetch_success": true}
+        ],
+        "remaining_passages": [
+            {"citation_index": 2, "doc_title": "...", "doc_url": "...", "passage_key": "passage_5", "passage_text": "..."}
+        ]
     }
 }
 ```
 
-注意：`selected_docs` 只保留 doc_key/title/url/marginal_value 摘要，不保留完整文档内容，避免 JSON/Excel 体积膨胀。`doc_info_map` 提供 doc_key → {title, url} 映射，供覆盖矩阵表展示文档标题和 URL。
+各字段说明：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `rationales` | list | 该 section 的信息维度列表，每项含 `{id, description, type, priority}` |
+| `doc_filter` | dict | 段落过滤前后的数量，`{before: int, after: int}` |
+| `coverage_matrix` | dict | 每个段落对各 rationale 的覆盖分，`{passage_N: {rationale_id: float}}`，值为 `dimension_scores` 中对应条目的 `coverage` |
+| `dimension_scores` | dict | 每个段落对各 rationale 的评分，`{passage_N: {rationale_id: {coverage, reliability, data_density}}}`。passage dict 通过 `"scores"` 键携带各 rationale 的评分，debug 中的 `dimension_scores` 即来源于此数据。其中 `reliability`/`data_density` 为 passage 级整体评估值（来源可靠性与数据密度是段落整体属性，不随 rationale 变化，LLM 在 passage 顶层输出后镜像到每个 rationale 条目） |
+| `passage_info_map` | dict | 段落元信息映射，`{passage_N: {doc_title, doc_url, passage_text}}`，供 Excel 表展示文档标题、URL 和段落内容 |
+| `selected_passages` | list | 最终选中的段落列表，每项含 `{passage_key, doc_title, doc_url, passage_text}` |
+| `fulltext_evidence` | dict | 全文抽取结果，含 `fulltext_docs`（全文证据列表，含 url/title/original_content（写入 debug payload 时截断为 5000 字）及从 passage 聚合的 `reliability`（取最大值）和 `data_density`（取最大值），`key_passages` 和 `coverage_scores` 恒为空）和 `remaining_passages`（未被全文替代的段落，含 `passage_key` 映射回 coverage_matrix） |
+
+注意：`selected_passages` 只保留 passage_key/doc_title/doc_url/passage_text 摘要，不保留完整文档内容，避免 JSON/Excel 体积膨胀。
 
 ## 新增 Excel sheet
 
@@ -83,33 +104,40 @@
 | 章节ID | 章节标题 | 维度ID | 维度描述 | 维度类型 | 优先级 |
 |--------|----------|--------|----------|----------|--------|
 
-### 覆盖矩阵（coverage_matrix）
+### 维度Top段落（rationale_top_passages）
 
-长表格式，一行 = 一个 doc × rationale 组合，便于透视分析。
+长表格式，一行 = 一个 passage × rationale 组合，按 coverage_matrix 中的覆盖分降序排列，每个 rationale 最多保留 top 15 条。
 
-| 章节ID | 章节标题 | ngram筛选前 | ngram筛选后 | 文档键 | 文档标题 | 文档URL | 维度ID | 覆盖分 | 可信度 | 噪声分 |
-|--------|----------|------------|------------|--------|----------|---------|--------|--------|--------|--------|
+| 章节ID | 章节标题 | 维度ID | 维度描述 | 排名 | 段落键 | 文档标题 | 文档URL | 段落内容 | 覆盖分 | 可信分 | 数据密度 |
+|--------|----------|--------|----------|--------|--------|----------|---------|----------|--------|--------|----------|------|
 
-### 文档选择（doc_selection）
+各列来源：
+- 排名：按 `coverage_matrix[passage_key][rationale_id]` 的值（即 `coverage`）降序排列，1-based
+- 覆盖分：来自 `dimension_scores[passage_key][rationale_id].coverage`
+- 可信分：来自 `dimension_scores[passage_key][rationale_id].reliability`
+- 数据密度：来自 `dimension_scores[passage_key][rationale_id].data_density`
 
-| 章节ID | 章节标题 | 选择序号 | 文档键 | 文档标题 | 文档URL | 边际价值 |
-|--------|----------|----------|--------|----------|---------|----------|
+### 全文证据（fulltext_evidence）
 
-### 覆盖校验（coverage_verify）
+每行 = 一篇全文证据文档。fulltext 的 `coverage_scores` 恒为空（覆盖度评分列为空），但携带从 passage 聚合的 `reliability`（取最大值）和 `data_density`（取最大值）。`original_content` 在写入 debug payload 时即截断为 5000 字（`str[:5000]`），Excel 导出时直接使用已截断的值。
 
-| 章节ID | 章节标题 | 维度ID | 维度描述 | 状态 | 覆盖率 |
-|--------|----------|--------|----------|------|--------|
+| 章节ID | 章节标题 | 证据类型 | Citation编号 | 文档标题 | 文档URL | 发表时间 | 原始正文(截断5000字) | 覆盖度评分 | 抓取成功 |
+|--------|----------|----------|-------------|----------|---------|----------|---------------------|-----------|----------|
 
-状态列：`✓ covered` / `△ weak` / `✗ uncovered`，单元格按状态着色（绿/黄/红）。
+### 段落证据（passage_evidence）
+
+每行 = 一篇剩余段落证据（未被全文替代的段落）。passage_key 无法映射回 coverage_matrix，评分为 0。
+
+| 章节ID | 章节标题 | Citation编号 | 文档标题 | 文档URL | 段落内容 | 覆盖分 | 可信分 | 数据密度 | 最高覆盖分 | 全维度评分 |
+|--------|----------|-------------|----------|---------|----------|--------|--------|----------|----------|----------|
 
 ## 数据契约与依赖
 
-输入依赖（来自文档选择流程）：
+输入依赖（来自段落选择流程）：
 
 - `rationales`：`_generate_section_rationales` 返回的 list[dict]
-- `coverage_result`：`_evaluate_coverage_matrix` 返回的 dict，含 `coverage_matrix` / `reliability_scores` / `noise_scores` / `filtered_docs`
-- `selected_docs` + `selected_marginal_values`：`_optimize_document_set` + `_elbow_cutoff` 后的最终选择
-- `verify_result`：`_verify_coverage` 返回的 dict，含 `uncovered_rationales` / `weak_rationales` / `coverage_rate` / `limitations`
+- `coverage_result`：`_extract_and_score_documents` 返回的 dict，含 `filtered_passages` / `coverage_matrix` / `dimension_scores`
+- `selected_passages`：`_select_by_rationale_coverage` 后的最终选择
 
 输出挂载点：
 
@@ -136,31 +164,25 @@
 |------|----------|------|
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/search_context.py` | 新增字段 | `Section` 新增 `doc_selection_debug: Optional[Dict]` |
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/section_context.py` | 新增字段 | `SectionContext` 新增 `doc_selection_debug: Dict`（保证 session dotted key 保留） |
-| `openjiuwen_deepsearch/algorithm/report/report.py` | 修改 + 新增方法 + 新增 dataclass | 捕获 `_verify_coverage` 返回值；新增 `DocSelectionContext` dataclass 封装 6 个参数；新增 `_write_doc_selection_debug` 写入 `current_inputs["doc_selection_debug"]`；在 `generate_sub_report` 末尾调用 |
+| `openjiuwen_deepsearch/algorithm/report/report.py` | 修改 + 新增方法 + 新增 dataclass | 新增 `PassageSelectionContext` dataclass 封装 4 个参数；新增 `_write_doc_selection_debug` 写入 `current_inputs["doc_selection_debug"]`；在 `generate_sub_report` 末尾调用 |
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/editor_team_nodes.py` | 修改 | `_do_invoke` 将 `doc_selection_debug` 纳入 `algorithm_output`；`_post_handle` 写入 session；`SectionEndNode.invoke` 从 session 读取并纳入 payload |
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/editor_team_manager_node.py` | 修改 | `_parse_section_state` 提取 `doc_selection_debug`；`_update_state` 写入 `section.doc_selection_debug` |
-| `openjiuwen_deepsearch/utils/debug_utils/outline_visualization.py` | 新增方法 + sheet | 新增 `_extract_doc_selection_debug`；`create_dataframes` 新增 4 个 DataFrame；`export_to_excel` 新增 4 个 sheet 写入 |
-| `tests/report/test_doc_selection_debug_export.py` | 新增测试 | 覆盖打包、提取、端到端一致性、模型字段、LLM 输入排除、DataFrame 集成，共 20 个用例 |
+| `openjiuwen_deepsearch/utils/debug_utils/outline_visualization.py` | 新增方法 + sheet | 新增 `_extract_doc_selection_debug`；`create_dataframes` 新增 2 个 DataFrame；`export_to_excel` 新增 2 个 sheet 写入 |
+| `tests/report/test_doc_selection_debug_export.py` | 新增测试 | 覆盖打包、提取、端到端一致性、模型字段、LLM 输入排除、DataFrame 集成 |
 
 ## 测试与验证
 
 ```bash
-# 编译检查
-PYTHONDONTWRITEBYTECODE=1 uv run python -m compileall -q openjiuwen_deepsearch server
+cd d:\Jiuwen\deepsearch-dev\deepsearch
 
-# 文档选择 + 子报告 + 工具测试
-uv run pytest tests/report/test_doc_selection.py tests/report/test_sub_report.py tests/report/test_tools_in_report.py
+# 段落选择算法测试
+python -m pytest tests/report/test_doc_selection.py -x -q
 
-# ngram + step summaries
-uv run pytest tests/report/test_ngram_utils.py tests/report/test_step_summaries.py
-
-# 文档选择调试导出测试
-uv run pytest tests/report/test_doc_selection_debug_export.py
+# 段落选择调试导出测试
+python -m pytest tests/report/test_doc_selection_debug_export.py -x -q
 ```
-
-已验证：1844 + 18 = 1862 个测试全部通过（1 个无关失败），编译无错误。
 
 ## 相关文档
 
-- [信息维度矩阵文档选择](../algorithm/report-generation/coverage-matrix-doc-selection.md)
+- [信息维度矩阵段落选择](../algorithm/report-generation/coverage-matrix-doc-selection.md)
 - [调试与中间结果导出](./debug-and-export.md)

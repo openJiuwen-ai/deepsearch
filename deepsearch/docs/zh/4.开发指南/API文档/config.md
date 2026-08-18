@@ -141,7 +141,7 @@ bocha 30
 - `jina` 的 `search_url` 为空时，会自动回退到 `https://s.jina.ai`；国内网络环境如无法访问该默认地址，可显式配置 `search_url="https://s.jinaai.cn"`，也可填入私有化部署或代理转发地址。
 - `bocha`、`perplexity` 通过 harness `web_tools` 适配层访问搜索能力，仅当底层 provider 支持地址覆盖时，`search_url` 才会生效。国内网络环境如无法访问 Perplexity 默认服务，需要配置可访问的代理或转发地址，并通过 `search_url` 显式覆盖。
 - `web_search_tool` 返回结果进入 Collector 前会统一归一化为 `title`、`url`、`content`、`type` 等字段；字段别名如 `link`、`source_url`、`snippet`、`summary`、`answer` 会在 Collector 中兼容处理。
-- 预抓取网页正文以及最终进入 `run_doc_evaluation` 的内容都会按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 进行裁剪，以限制网页搜索结果对后续评估链路的上下文占用。
+- 预抓取网页正文以及最终进入下游处理的内容都会按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 进行裁剪，以限制网页搜索结果对后续链路的上下文占用。
 
 ## class openjiuwen_deepsearch.config.config.EmbedModelConfig
 ```python
@@ -424,12 +424,12 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_max_search_query_count**(int, 可选)：单轮最大搜索查询数量。默认值：`5`。
 - **info_collector_max_research_loops**(int, 可选)：最大研究循环次数。默认值：`2`。
 - **info_collector_max_tool_call_turns_per_query**(int, 可选)：单个 collector query 最大工具调用轮次。默认值：`2`。
-- **info_collector_max_retry_num**(int, 可选)：最大重试次数。默认值：`3`。
+- **info_collector_max_retry_num**(int, 可选)：信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）。默认值：`3`。
 - **info_collector_webpage_enrich_max_urls**(int, 可选)：网页正文增强每轮最多抓取并增强的 URL 数量。默认值：`3`。
 - **info_collector_webpage_enrich_fetch_timeout_seconds**(int, 可选)：网页正文增强单个 URL 抓取超时时间，单位秒。默认值：`45`。
 
 ### 报告节点参数
-- **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中单次llm处理返回的top_k数量。默认值：`20`。
+- **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中按覆盖度评分在每个 rationale 下选择的 top-k 段落数量。默认值：`15`。
 - **report_max_generate_retry_num**(int, 可选)：生成内容最大重试次数。默认值：`3`。
 - **visualization_enable**(bool, 可选)：报告插图可视化开关。默认值：`False`。
 

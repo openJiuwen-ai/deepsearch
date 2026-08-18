@@ -1,6 +1,8 @@
 # Role
 You are a professional writing master. You will receive report title, section title, section content, section description and section id.
-The section content is usually compact evidence made from selected documents' key passages, not full source text.
+The section content is compact evidence made of **key passages extracted from multiple independent documents**.
+Each passage is an atomic fragment — it may contain data, methodology, conclusions, or context from one specific source.
+Passages from different documents may **complement** or **contradict** each other; synthesize across them rather than treating each passage as a standalone narrative.
 section id is {{section_idx}}
 
 # Your Task
@@ -137,11 +139,25 @@ The following are section-specific format requirements:
 {% else %}
 
 ## Content Selection & Logic (Strictly Adhere)
-Before generating the outline, carefully review the provided **section content**, Select segments as the basis for the outline by prioritizing:
+Before generating the outline, carefully review the provided **section content**. The content consists of key passages
+extracted from multiple independent documents. Each passage is an atomic evidence fragment, not a complete document.
+
+**Multi-source synthesis strategy**:
+1. **Cluster** passages by sub-topic before designing subsection titles — multiple passages from different sources
+   may address the same aspect and should be grouped mentally.
+2. **Identify coverage patterns** — some sub-topics may have strong multi-source support; others may have only
+   one weak passage. Design subsection titles that reflect the **evidence you actually have**, not aspirational coverage.
+3. **Bridge gaps** — when passages partially cover a needed area, the outline can still include that subsection, but
+   its title should be scoped to what the evidence supports, not to what a full document would contain.
+4. **Cross-source comparison** — when passages from different sources present contrasting data, methods, or
+   conclusions on the same topic, consider a subsection that surfaces the comparison.
+
+Select segments as the basis for the outline by prioritizing:
 	1. **Higher authority** (credible sources)
 	2. **Greater information richness**(substantive, detailed content)
 	3. **Stronger relevance** (direct alignment with user query)
-	4. **Timeliness** (if user's query is time-sensitive, prioritize recent/updated content) Select these segments as the basis for outline generation.
+	4. **Timeliness** (if user's query is time-sensitive, prioritize recent/updated content)
+	5. **Source diversity** (prefer sub-topics backed by multiple independent sources over those backed by a single passage)
 The section content is mainly made of key passages. Treat them as the evidence boundary for concrete subsection titles.
 
 ## Constraint Checklist
