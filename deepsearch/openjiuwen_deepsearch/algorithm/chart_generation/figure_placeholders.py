@@ -152,12 +152,11 @@ class FigurePlaceholderGenerator:
             "reference articles",
             "references",
         }
-        report_sections = [
-            section
-            for section in sections[1:]
-            if re.sub(r"\s+", " ", section["title"]).strip().casefold()
-            not in excluded_titles
-        ]
+        report_sections = []
+        for section in sections[1:]:
+            normalized_title = re.sub(r"\s+", " ", section["title"]).strip().casefold()
+            if normalized_title not in excluded_titles:
+                report_sections.append(section)
         for index, section in enumerate(report_sections, start=1):
             section["index"] = index
 
