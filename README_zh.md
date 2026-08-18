@@ -100,3 +100,6 @@ openJiuwen Studio作为一站式AI Agent开发平台，提供了从开发到部�
 
 # 🤝 贡献方式
 欢迎提交 Issue 和 Pull Request！详情请参考[贡献指南](https://www.openjiuwen.com/contribute)。
+
+
+测试禁用词：外乡人滚回去
