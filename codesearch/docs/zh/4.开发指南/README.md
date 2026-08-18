@@ -28,9 +28,8 @@
 
 | 取值 | 含义 |
 |---|---|
-| `graph` | openJiuwen 工作流图形态，节点级可观测 |
+| `graph`（默认） | openJiuwen 工作流图形态，节点级可观测 |
 | `react` | 纯代码循环，无框架依赖的兜底形态 |
-| `auto`（默认） | 框架可用则用 `graph`，否则回退 `react` |
 
 两个引擎共享 `framework/openjiuwen/steps.py` 中的同一份阶段逻辑，集成测试
 锁定二者输出逐字节一致。图结构与运行隔离设计见

@@ -4,6 +4,10 @@
 
     python main.py index --repo /path/to/repo --collection my_repo
     python main.py search --query "issue text..." --collection my_repo --top-k 10
+
+Retropus (``--engine retropus``) dumps KG + BM25 under
+``RETROPUS_INDEX_DIR`` / ``--index-dir`` so a later ``search`` can reload
+without rebuilding.
 """
 
 import argparse
@@ -12,6 +16,7 @@ import logging
 import sys
 
 from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
+from openjiuwen_codesearch.config.agent import DEFAULT_ENGINE
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +27,22 @@ async def _run(args: argparse.Namespace) -> int:
         config.milvus.host = args.milvus_host
     if args.milvus_port:
         config.milvus.port = args.milvus_port
+    config.agent.engine = args.engine
+    if getattr(args, "index_dir", None):
+        config.retropus.index_dir = args.index_dir
+
     if args.command == "index":
         if args.max_files is not None:
             config.index.max_num_files_per_repo = args.max_files
         if args.no_trigram:
-            config.index.enable_trigram = False
+            if config.agent.engine == "retropus":
+                logger.warning("--no-trigram is ignored for engine=retropus")
+            else:
+                config.index.enable_trigram = False
+
+    if config.agent.engine == "retropus" and (args.milvus_host or args.milvus_port):
+        logger.warning("--milvus-host/--milvus-port are ignored for engine=retropus")
+
     retriever = CodeSearchRetriever(config=config, collection_name=args.collection)
 
     if args.command == "index":
@@ -40,6 +56,10 @@ async def _run(args: argparse.Namespace) -> int:
             report.files_reused,
             report.chunks_inserted,
         )
+        if config.agent.engine == "retropus" and config.retropus.index_dir:
+            logger.info(
+                "Retropus dump: %s/%s/", config.retropus.index_dir, args.collection
+            )
         return 0
 
     query = args.query
@@ -58,6 +78,8 @@ async def _run(args: argparse.Namespace) -> int:
         result.total_input_tokens,
         result.total_output_tokens,
     )
+    if result.error:
+        logger.error("Error: %s", result.error)
     for i, hit in enumerate(result.hits, 1):
         logger.info("%2d. %s (L%d-L%d)", i, hit.file_path, hit.start_line, hit.end_line)
     return 0
@@ -67,9 +89,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="codesearch")
     parser.add_argument("--milvus-host", default="", help="Milvus host (default localhost)")
     parser.add_argument("--milvus-port", default="", help="Milvus port (default 19530)")
+    parser.add_argument(
+        "--engine",
+        default=DEFAULT_ENGINE,
+        choices=["react", "graph", "retropus"],
+        help=f"SearchAgentConfig.engine (default: {DEFAULT_ENGINE})",
+    )
+    parser.add_argument(
+        "--index-dir",
+        default="",
+        help="Retropus on-disk index root (overrides RETROPUS_INDEX_DIR)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_index = sub.add_parser("index", help="Index a local repository into Milvus")
+    p_index = sub.add_parser("index", help="Index a local repository")
     p_index.add_argument("--repo", required=True)
     p_index.add_argument("--collection", default="local_repo")
     p_index.add_argument("--revision", default="local")

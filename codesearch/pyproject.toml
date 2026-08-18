@@ -33,6 +33,14 @@ bench = [
     "tree-sitter==0.25.2",
     "tree-sitter-language-pack==1.12.5",
 ]
+# Retropus 引擎：进程内 KG（tree-sitter）+ BM25，无 Milvus。
+# tree-sitter 两个 pin 必须与 bench 一致，否则 `[bench,retropus]` 无法共存。
+retropus = [
+    "tree-sitter==0.25.2",
+    "tree-sitter-language-pack==1.12.5",
+    "igittigitt>=2.1.5",
+    "bm25s>=0.2.0",
+]
 dev = ["pytest>=8"]
 # 服务形态依赖（随包分发 openjiuwen_codesearch/server/；装 [server] 后可用 codesearch-server）
 server = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic-settings>=2.5"]

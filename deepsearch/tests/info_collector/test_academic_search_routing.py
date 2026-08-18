@@ -47,22 +47,63 @@ def test_vertical_search_engines_are_registered_but_not_primary_configurable():
 
 
 def test_web_search_context_registers_academic_engines_for_research_only():
-    config = AgentConfig(web_search_engine_config={"search_engine_name": "jina"})
+    config = AgentConfig(web_search_engine_config={
+        "search_engine_name": "jina",
+        "max_web_search_results": 3,
+        "extension": {"scholarly_search_enabled": True},
+    })
 
-    research_token = _initialize_web_search_context_from_agent_config(
-        config,
-        include_academic_engines=True,
-    )
+    research_token = _initialize_web_search_context_from_agent_config(config)
     try:
-        assert set(web_search_context.get()) == {"jina", "pubmed", "arxiv"}
+        engines = web_search_context.get()
+        assert set(engines) == {"jina", "pubmed", "arxiv"}
+        assert engines["jina"].max_web_search_results == 3
+        assert engines["pubmed"].max_web_search_results == 1
+        assert engines["arxiv"].max_web_search_results == 1
     finally:
         web_search_context.reset(research_token)
 
-    deepsearch_token = _initialize_web_search_context_from_agent_config(config)
+    disabled_config = AgentConfig(web_search_engine_config={"search_engine_name": "jina"})
+    deepsearch_token = _initialize_web_search_context_from_agent_config(disabled_config)
     try:
         assert set(web_search_context.get()) == {"jina"}
     finally:
         web_search_context.reset(deepsearch_token)
+
+
+def test_disabled_scholarly_search_removes_query_level_vertical_route():
+    assert normalize_search_query_item(
+        SearchQueryItem(query="glioblastoma trial", search_engine_name="pubmed"),
+        enable_scholarly_search=False,
+    ).search_engine_name == ""
+    assert normalize_search_query_item(
+        "LLM RAG benchmark",
+        enable_scholarly_search=False,
+    ).search_engine_name == ""
+
+
+@pytest.mark.parametrize("configured", [False, "false", " FALSE "])
+def test_scholarly_search_switch_is_disabled_by_default_or_false(configured):
+    config = AgentConfig(web_search_engine_config={
+        "search_engine_name": "jina",
+        "extension": {"scholarly_search_enabled": configured},
+    })
+
+    token = _initialize_web_search_context_from_agent_config(config)
+    try:
+        assert set(web_search_context.get()) == {"jina"}
+    finally:
+        web_search_context.reset(token)
+
+
+def test_scholarly_search_switch_rejects_invalid_string():
+    config = AgentConfig(web_search_engine_config={
+        "search_engine_name": "jina",
+        "extension": {"scholarly_search_enabled": "yes"},
+    })
+
+    with pytest.raises(ValueError, match="scholarly_search_enabled"):
+        _initialize_web_search_context_from_agent_config(config)
 
 
 def test_query_object_and_retrieval_query_carry_secondary_engine():
@@ -131,6 +172,48 @@ def test_web_search_engine_list_keeps_primary_and_adds_one_secondary():
         "web_search_engine_name": "tavily",
         "secondary_web_search_engine_name": "",
     }) == ["tavily"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("retryable", "expected_secondary_calls"), [(True, 3), (False, 1)])
+async def test_direct_parallel_path_honors_secondary_retryability(
+        retryable,
+        expected_secondary_calls,
+):
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "clinical evidence",
+        "search_query": "glioblastoma clinical trial",
+        "max_tool_call_turns_per_query": 2,
+        "search_method": "web",
+        "web_search_engine_name": "tavily",
+        "secondary_web_search_engine_name": "pubmed",
+        "api_tools_config": {"collector_tools": []},
+    }
+    calls = []
+
+    async def invoke(args):
+        calls.append(args)
+        if args["search_engine_name"] == "tavily":
+            return {"search_engine": "tavily", "search_results": []}
+        return {
+            "search_engine": "pubmed",
+            "search_results": [],
+            "error": "search failed",
+            "retryable": retryable,
+        }
+
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(side_effect=invoke)
+
+    with patch.object(node, "_prepare_collector_tool", return_value=([], {"web_search_tool": web_tool})), \
+            patch.object(node, "_structure_result", AsyncMock(return_value=([], [], {}))), \
+            patch.object(node, "_process_post_process_result", return_value=[]):
+        await node._collector_main(state)
+
+    assert [item["search_engine_name"] for item in calls].count("tavily") == 1
+    assert [item["search_engine_name"] for item in calls].count("pubmed") == expected_secondary_calls
 
 
 def test_agent_called_tool_ignores_message_objects_without_tool_calls():
@@ -280,6 +363,7 @@ async def test_llm_web_path_secondary_error_does_not_repeat_primary_web():
         "search_engine": "pubmed",
         "search_results": [],
         "error": "PubMed ESearch returned error: Invalid term",
+        "retryable": False,
     })
 
     await node._run_secondary_web_search_if_needed(
@@ -296,7 +380,47 @@ async def test_llm_web_path_secondary_error_does_not_repeat_primary_web():
 
 
 @pytest.mark.asyncio
-async def test_direct_parallel_secondary_error_does_not_retry_or_repeat_primary(caplog):
+async def test_llm_secondary_transient_error_is_retried_by_collector_only():
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "clinical evidence",
+        "search_query": "glioblastoma clinical trial",
+        "web_search_engine_name": "tavily",
+        "secondary_web_search_engine_name": "pubmed",
+    }
+    agent_input = _agent_input()
+    agent_input["messages"].append({
+        "role": "assistant",
+        "tool_calls": [{"name": "web_search_tool"}],
+    })
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(return_value={
+        "search_engine": "pubmed",
+        "search_results": [],
+        "error": "503 Service Unavailable",
+        "retryable": True,
+    })
+
+    await node._run_secondary_web_search_if_needed(
+        state,
+        agent_input,
+        {"web_search_tool": web_tool},
+    )
+
+    assert web_tool.invoke.await_count == 3
+    assert all(
+        item.args[0] == {
+            "query": "glioblastoma clinical trial",
+            "search_engine_name": "pubmed",
+        }
+        for item in web_tool.invoke.await_args_list
+    )
+    assert agent_input["web_page_search_record"] == []
+
+
+@pytest.mark.asyncio
+async def test_direct_search_respects_explicitly_disabled_retry_for_returned_error(caplog):
     caplog.set_level("INFO")
     node = InfoRetrievalNode()
     state = {
@@ -335,7 +459,7 @@ async def test_direct_parallel_secondary_error_does_not_retry_or_repeat_primary(
 
 
 @pytest.mark.asyncio
-async def test_direct_parallel_secondary_exception_does_not_retry_or_repeat_primary(caplog):
+async def test_direct_search_respects_explicitly_disabled_retry_for_exception(caplog):
     caplog.set_level("INFO")
     node = InfoRetrievalNode()
     state = {
@@ -413,6 +537,38 @@ async def test_direct_primary_error_keeps_retry_behavior():
 
 
 @pytest.mark.asyncio
+async def test_direct_primary_pubmed_non_retryable_error_is_not_replayed():
+    node = InfoRetrievalNode()
+    state = {
+        "section_idx": 0,
+        "step_title": "clinical evidence",
+        "web_search_engine_name": "pubmed",
+    }
+    web_tool = Mock()
+    web_tool.invoke = AsyncMock(return_value={
+        "search_engine": "pubmed",
+        "search_results": [],
+        "error": "429 Too Many Requests",
+        "retryable": False,
+    })
+
+    result = await node._direct_search_with_retry(
+        DirectSearchRequest(
+            tool=web_tool,
+            tool_name="web_search_tool",
+            query="medical LLM calibration",
+            search_engine_name="pubmed",
+            fallback_to_default=False,
+            retry_on_error=True,
+        ),
+        state,
+    )
+
+    assert result is None
+    web_tool.invoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_single_secondary_error_falls_back_to_primary_engine(caplog):
     caplog.set_level("INFO")
     node = InfoRetrievalNode()
@@ -427,6 +583,7 @@ async def test_single_secondary_error_falls_back_to_primary_engine(caplog):
             "search_engine": "pubmed",
             "search_results": [],
             "error": "PubMed ESearch returned error: Invalid term",
+            "retryable": False,
         },
         {
             "search_engine": "tavily",

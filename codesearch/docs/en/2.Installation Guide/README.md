@@ -64,6 +64,7 @@ The product does **not** fetch remote repositories for you. Names like
 | `llm` | openjiuwen | Workflow engine and model calls |
 | `embed` | aiohttp | Dense-vector mode |
 | `bench` | pandas, pyarrow, tree-sitter* (<3.12: languages; ≥3.12: language-pack) | ContextBench eval; use this extra, not upstream `requirements.txt` |
+| `retropus` | tree-sitter*, igittigitt, bm25s, numpy | Retropus engine (in-process KG + BM25, no Milvus) |
 | `dev` | pytest | Development |
 
 The server ships inside the package (`openjiuwen_codesearch/server/`); after
@@ -80,8 +81,8 @@ Default `0.0.0.0:8100`; docs at `/docs`, health at `/api/health`.
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/health` | GET | Health |
-| `/api/v1/search` | POST | Synchronous search |
-| `/api/v1/index` | POST | Indexing job; **403 if `CODESEARCH_INDEX_ROOTS` unset** |
+| `/api/v1/search` | POST | Synchronous search; optional `engine` (default `graph`; use `"retropus"` explicitly) |
+| `/api/v1/index` | POST | Indexing job; optional `engine` (same); **403 if `CODESEARCH_INDEX_ROOTS` unset** |
 | `/api/v1/jobs/{job_id}` | GET | Job status |
 
 ### Security boundary

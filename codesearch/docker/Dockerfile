@@ -34,7 +34,7 @@ COPY base/ ./base/
 COPY codesearch/ ./codesearch/
 
 RUN pip install --no-cache-dir -i ${INDEX_URL} ./base && \
-    pip install --no-cache-dir -i ${INDEX_URL} "./codesearch[milvus,llm,server]"
+    pip install --no-cache-dir -i ${INDEX_URL} "./codesearch[milvus,llm,server,retropus]"
 
 # 运行产物统一落 /app/output（挂卷持久化）
 RUN mkdir -p /app/output

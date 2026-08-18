@@ -9,3 +9,5 @@ dist/
 .coverage
 coverage.xml
 outputs/
+
+.env

@@ -7,8 +7,6 @@
 找不到 ``.env`` 时仍可依赖 ``export`` / Docker ``-e`` 等进程环境注入。
 """
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 

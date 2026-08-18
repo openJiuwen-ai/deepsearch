@@ -214,6 +214,8 @@ def build_enrichment_candidates(doc_infos: list[dict], limit: int = 10) -> list[
     for index, doc_info in enumerate(doc_infos or []):
         if not isinstance(doc_info, dict):
             continue
+        if doc_info.get("skip_webpage_enrichment") is True:
+            continue
         url = str(doc_info.get("url") or "").strip()
         canonical_url = canonicalize_url(url)
         if not _is_http_url(url) or not canonical_url or canonical_url in seen_urls:

@@ -8,7 +8,11 @@ from datetime import date
 from html import unescape
 from typing import Any
 
-from openjiuwen_deepsearch.common.common_constants import MAX_URL_LENGTH, MAX_SEARCH_CONTENT_LENGTH
+from openjiuwen_deepsearch.common.common_constants import (
+    MAX_COLLECTOR_DOC_CONTENT_LENGTH,
+    MAX_URL_LENGTH,
+    MAX_SEARCH_CONTENT_LENGTH,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload
 from openjiuwen_deepsearch.utils.common_utils.date_utils import (
@@ -400,6 +404,19 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
         "url": url[:MAX_URL_LENGTH],
         "content": content[:MAX_SEARCH_CONTENT_LENGTH],
     }
+    full_text_status = str(item.get("full_text_status") or "").strip().casefold()
+    if full_text_status in {"available", "unavailable", "failed"}:
+        full_text = str(item.get("full_text") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
+        if full_text_status == "available" and not full_text.strip():
+            full_text_status = "unavailable"
+        normalized["full_text"] = full_text
+        normalized["content_type"] = str(item.get("content_type") or "abstract")
+        normalized["full_text_url"] = str(item.get("full_text_url") or "")[:MAX_URL_LENGTH]
+        normalized["full_text_format"] = str(item.get("full_text_format") or "")
+        normalized["full_text_status"] = full_text_status
+        normalized["full_text_truncated"] = item.get("full_text_truncated") is True
+    if item.get("skip_webpage_enrichment") is True:
+        normalized["skip_webpage_enrichment"] = True
     if include_date_metadata:
         raw_date = item.get("source_date")
         source_date_type = str(item.get("source_date_type") or "").strip()

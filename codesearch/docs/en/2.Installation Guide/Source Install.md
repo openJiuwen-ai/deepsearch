@@ -32,7 +32,9 @@ python3 -m venv .venv
 ```
 
 > You must install `../base`. Installing codesearch alone will fail dependency
-> resolution.
+> resolution. Add the `retropus` extra only when using `engine=retropus`
+> (in-process KG + BM25, no Milvus), e.g. `'.[milvus,llm,server,retropus]'`
+> or `'.[dev,llm,retropus]'`. See [optional dependency groups](./README.md#optional-dependency-groups).
 
 See also [Quick Start](../3.Quick%20Start/3.Quick%20Start.md).
 

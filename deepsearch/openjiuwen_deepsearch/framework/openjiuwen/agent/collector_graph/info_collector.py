@@ -347,7 +347,7 @@ class InfoRetrievalNode(BaseNode):
                                 query=query,
                                 search_engine_name=engine_name,
                                 fallback_to_default=fallback_to_default,
-                                retry_on_error=engine_name == default_search_engine_name,
+                                retry_on_error=True,
                             ),
                             state,
                         )
@@ -477,7 +477,12 @@ class InfoRetrievalNode(BaseNode):
         ).strip()
         retry_direct_search = object()
 
-        async def handle_search_failure(error: Any, reason: str, current_try: int):
+        async def handle_search_failure(
+                error: Any,
+                reason: str,
+                current_try: int,
+                retryable: bool = True,
+        ):
             should_fallback_to_default = self._should_fallback_to_default_search(
                 request.search_engine_name,
                 default_search_engine_name,
@@ -538,14 +543,14 @@ class InfoRetrievalNode(BaseNode):
 
             record_llm_retry_log(
                 current_try=current_try,
-                max_retries=max_retries if request.retry_on_error else current_try,
+                max_retries=max_retries if request.retry_on_error and retryable else current_try,
                 section_idx=section_idx,
                 step_title=step_title,
                 operation=operation,
                 error=error,
                 extra_info=f"{request.search_engine_name}: {request.query}",
             )
-            if request.retry_on_error and current_try < max_retries:
+            if request.retry_on_error and retryable and current_try < max_retries:
                 return retry_direct_search
             return None
 
@@ -558,7 +563,12 @@ class InfoRetrievalNode(BaseNode):
                 })
                 if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
                     error_msg = tool_result_raw.get("error", "")
-                    failure_result = await handle_search_failure(error_msg, "returned_error", current_try)
+                    failure_result = await handle_search_failure(
+                        error_msg,
+                        "returned_error",
+                        current_try,
+                        retryable=tool_result_raw.get("retryable", True) is not False,
+                    )
                     if failure_result is retry_direct_search:
                         continue
                     return failure_result
@@ -679,7 +689,7 @@ class InfoRetrievalNode(BaseNode):
                 query=query,
                 search_engine_name=secondary_engine,
                 fallback_to_default=fallback_to_default,
-                retry_on_error=False,
+                retry_on_error=True,
             ),
             state,
         )

@@ -13,6 +13,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.collector_function"
 
+
 class TestProcessToolCall:
     """测试 process_tool_call 函数"""
 
@@ -688,6 +689,44 @@ class TestSearchResultProcessing:
 
         assert normalized is not None
         assert "date_metadata" not in normalized
+
+    def test_normalize_full_text_contract_without_source_specific_logic(self):
+        normalized = _normalize_web_search_item({
+            "title": "Open study",
+            "url": "https://scholar.example.org/papers/1",
+            "content": "Abstract remains the normal content.",
+            "source": "future_scholar",
+            "full_text": "Complete official article text.",
+            "content_type": "full_text",
+            "full_text_url": "https://scholar.example.org/papers/1/full-text",
+            "full_text_format": "html",
+            "full_text_status": "available",
+            "full_text_truncated": False,
+            "skip_webpage_enrichment": True,
+        })
+
+        assert normalized["content"] == "Abstract remains the normal content."
+        assert normalized["full_text"] == "Complete official article text."
+        assert normalized["content_type"] == "full_text"
+        assert normalized["full_text_url"].startswith("https://scholar.example.org/")
+        assert normalized["full_text_format"] == "html"
+        assert normalized["full_text_status"] == "available"
+        assert normalized["full_text_truncated"] is False
+        assert normalized["skip_webpage_enrichment"] is True
+
+    def test_normalize_full_text_contract_does_not_coerce_string_booleans(self):
+        normalized = _normalize_web_search_item({
+            "title": "Open study",
+            "url": "https://scholar.example.org/papers/1",
+            "content": "Abstract.",
+            "full_text_status": "available",
+            "full_text": "Full text.",
+            "full_text_truncated": "false",
+            "skip_webpage_enrichment": "true",
+        })
+
+        assert normalized["full_text_truncated"] is False
+        assert "skip_webpage_enrichment" not in normalized
 
     def test_source_date_filter_keeps_boundaries_and_unknown_but_drops_out_of_range(self):
         """来源时间过滤应包含边界、保留未知日期并整篇删除越界文档。"""
