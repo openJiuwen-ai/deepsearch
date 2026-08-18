@@ -43,7 +43,7 @@ INDENTED_HTML_BLOCK_END_RE = re.compile(
 MARKDOWN_TABLE_ROW_RE = re.compile(r"^[ \t]{0,3}\|")
 MARKDOWN_TABLE_DELIMITER_RE = re.compile(r":?-{1,}:?")
 REPORT_TOC_LINK_RE = re.compile(
-    r"^[ \t]*\[(?P<title>.+?)\]\(\s*#chapter-(?P<index>\d+)\s*\)[ \t]*$",
+    r"^[ \t]*(?:[-+*][ \t]+)?\[(?P<title>.+?)\]\(\s*#chapter-(?P<index>\d+)\s*\)[ \t]*$",
     flags=re.MULTILINE,
 )
 REPORT_CHAPTER_ANCHOR_RE = re.compile(

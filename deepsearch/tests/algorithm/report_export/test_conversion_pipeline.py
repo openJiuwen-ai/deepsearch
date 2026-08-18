@@ -131,6 +131,27 @@ def test_add_report_chapter_ids_matches_toc_and_ignores_fenced_headings() -> Non
     assert add_report_chapter_ids(converted) == converted
 
 
+def test_add_report_chapter_ids_supports_legacy_bulleted_toc() -> None:
+    """Legacy bulleted TOCs should still receive stable H1 chapter IDs."""
+    from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
+        add_report_chapter_ids,
+    )
+
+    markdown_text = (
+        "# Report\n\n"
+        "# Table of Contents\n\n"
+        "- [1. First Chapter](#chapter-1)\n\n"
+        '<a id="chapter-1"></a>\n'
+        "# 1. First Chapter\n\nContent\n"
+    )
+
+    converted = add_report_chapter_ids(markdown_text)
+
+    assert '<a id="chapter-1"></a>' not in converted
+    assert "- [1. First Chapter](#chapter-1)" in converted
+    assert "# 1. First Chapter {#chapter-1}" in converted
+
+
 def test_docx_export_converts_report_toc_to_internal_links(tmp_path: Path) -> None:
     """DOCX 目录应链接到章节书签，而不是创建伪外部链接。"""
     from openjiuwen_deepsearch.algorithm.report_export.docx_export import convert_md_to_docx
