@@ -101,6 +101,25 @@ def _merge_source_store(
         source_store[source_id] = content
 
 
+def doc_time_display_text(doc_time: Any) -> str:
+    """把 evaluator 的 doc_time 归一化为展示文本。
+
+    兼容 doc_evaluation 归一化后的字符串与未经归一化的结构化字典;
+    "Unknown" 与空值视为无时间信息,返回空串。
+
+    Args:
+        doc_time: evaluator 输出的 doc_time 原始值。
+
+    Returns:
+        可展示的时间文本;无有效时间信息时返回空串。
+    """
+    if isinstance(doc_time, dict):
+        text = str(doc_time.get("date") or "").strip()
+    else:
+        text = str(doc_time or "").strip()
+    return "" if text == "Unknown" else text
+
+
 class InfoRetrievalNode(BaseNode):
 
     def __init__(self):
@@ -789,7 +808,7 @@ class InfoRetrievalNode(BaseNode):
             section_idx: 当前章节索引，用于日志。
 
         Returns:
-            已补齐结构化 scores 和兼容期字段的 doc_infos。
+            已补齐结构化 scores、date_info(若有合法 LLM 日期)和兼容期字段的 doc_infos。
         """
         seen_indexes = set()
         for idx, scored in enumerate(scored_result):
@@ -821,9 +840,19 @@ class InfoRetrievalNode(BaseNode):
                 continue
 
             scores = normalize_scores(scored.get("scores"))
-            publish_time = scored.get("publish_time") or scored.get("doc_time") or "未提供时间信息"
             doc_infos[index]["scores"] = scores
-            doc_infos[index]["publish_time"] = publish_time
+
+            # LLM 推断的结构化日期是低置信信号,只挂到 date_info 供后续软排序使用。
+            date_info = scored.get("date_info")
+            if isinstance(date_info, dict) and date_info.get("date"):
+                doc_infos[index]["date_info"] = date_info
+
+            # 不允许低置信的 LLM 日期覆盖引擎元数据等真实 publish_time;
+            # 仅在当前没有时间信息时才用 LLM 文本补齐展示字段。
+            llm_time_text = scored.get("publish_time") or doc_time_display_text(scored.get("doc_time"))
+            current_publish_time = doc_infos[index].get("publish_time")
+            if llm_time_text and (not current_publish_time or current_publish_time == "未提供时间信息"):
+                doc_infos[index]["publish_time"] = llm_time_text
             normalize_doc_info_scores_and_time(doc_infos[index])
             seen_indexes.add(index)
 

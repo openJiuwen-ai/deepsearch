@@ -18,6 +18,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     generate_source_id,
 )
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
+from openjiuwen_deepsearch.utils.common_utils.date_utils import DocDate, merge_doc_dates, parse_date_string
 
 #: 抓取正文默认超时秒数。
 DEFAULT_FETCH_TIMEOUT_SECONDS = 45
@@ -571,6 +572,92 @@ def apply_enrichment_to_doc(
         "content_source": fetched.get("fetch_method", "harness_webpage_fetch"),
     })
     updated["enrichment"] = enrichment
+    return updated
+
+
+#: publish_time 的未知占位符，与 collector_evidence 归一化阶段保持一致。
+UNKNOWN_PUBLISH_TIME = "未提供时间信息"
+
+
+def _doc_date_from_dict(value: Any) -> DocDate | None:
+    """把 DocDate.to_dict() 格式的字典还原为 DocDate。
+
+    Args:
+        value: 待解析的 date_info/doc_date 字典。
+
+    Returns:
+        合法的 DocDate；字段缺失或非法时返回 None。
+    """
+    if not isinstance(value, dict):
+        return None
+    day = parse_date_string(value.get("date"))
+    granularity = value.get("granularity")
+    confidence = value.get("confidence")
+    if (
+        day is None
+        or granularity not in ("year", "month", "day")
+        or confidence not in ("high", "medium", "low")
+    ):
+        return None
+    return DocDate(
+        day=day,
+        granularity=granularity,
+        confidence=confidence,
+        source=str(value.get("source") or ""),
+    )
+
+
+def _doc_date_from_date_metadata(value: Any) -> DocDate | None:
+    """把归一化阶段的引擎 date_metadata 转换为 high 置信 DocDate。
+
+    Args:
+        value: doc_info 上的 date_metadata 字典。
+
+    Returns:
+        引擎 published 日期对应的 DocDate；缺失或非法时返回 None。
+    """
+    if not isinstance(value, dict):
+        return None
+    if str(value.get("type") or "") != "published":
+        return None
+    day = parse_date_string(value.get("parsed_date"))
+    if day is None:
+        return None
+    field = str(value.get("field") or "source_date")
+    return DocDate(day=day, granularity="day", confidence="high", source=f"engine:{field}")
+
+
+def merge_fetched_doc_date(doc_info: dict[str, Any], fetched: dict[str, Any]) -> dict[str, Any]:
+    """把富化抓取顺带的 HTML head 日期合并进 doc_info 的 date_info。
+
+    与 doc 已有日期(已有 date_info、引擎 date_metadata)按 merge_doc_dates
+    规则合并：取最高置信档，同档矛盾降级为 unknown(移除 date_info)。
+    抓取无日期时文档保持不变；publish_time 仍为未知占位符且合并出日期时，
+    同步更新 publish_time 用于展示。
+
+    Args:
+        doc_info: 待写回的 doc_info。
+        fetched: 网页抓取结果，可能携带 ``doc_date``(DocDate.to_dict() 格式)。
+
+    Returns:
+        更新后的 doc_info 副本。
+    """
+    fetched_date = _doc_date_from_dict(fetched.get("doc_date") if isinstance(fetched, dict) else None)
+    if fetched_date is None:
+        return doc_info
+    updated = dict(doc_info)
+    merged = merge_doc_dates([
+        fetched_date,
+        _doc_date_from_dict(updated.get("date_info")),
+        _doc_date_from_date_metadata(updated.get("date_metadata")),
+    ])
+    if merged is None:
+        updated.pop("date_info", None)
+        return updated
+    updated["date_info"] = merged.to_dict()
+    publish_time = str(updated.get("publish_time") or "").strip()
+    if not publish_time or publish_time == UNKNOWN_PUBLISH_TIME:
+        updated["publish_time"] = merged.day.isoformat()
     return updated
 
 

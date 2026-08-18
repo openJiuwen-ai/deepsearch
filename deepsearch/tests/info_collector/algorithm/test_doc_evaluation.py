@@ -4,7 +4,8 @@ from unittest.mock import Mock, patch, AsyncMock
 from openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation import \
     run_doc_evaluation, parse_evaluator_output, process_scored_item, \
     extract_scores, ensure_document_index_field, validate_document_index, \
-    log_content_and_scores, info_evaluator, invoke_llm_with_retry, build_evaluator_messages
+    log_content_and_scores, info_evaluator, invoke_llm_with_retry, build_evaluator_messages, \
+    normalize_doc_time_field
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation"
 
@@ -201,7 +202,12 @@ class TestProcessScoredItem:
 
         result = process_scored_item(scored, 0, self.contents)
 
-        assert result == scored
+        assert result["document_index"] == 1
+        assert result["scores"] == {"relevance": 0.8}
+        assert result["doc_time"] == "2023-01-01"
+        # 可解析的 doc_time 会附加低置信 date_info 四元组
+        assert result["date_info"]["date"] == "2023-01-01"
+        assert result["date_info"]["granularity"] == "day"
 
     def test_process_scored_item_rejects_legacy_content_index(self):
         """测试拒绝旧 content 索引字段。"""
@@ -393,3 +399,174 @@ class TestInvokeLLMWithRetry:
 
             mock_llm_call.assert_called_once()
             assert result == mock_response
+
+
+class TestNormalizeDocTimeField:
+    """测试 doc_time 结构化输出的规范化与兼容解析。"""
+
+    def test_structured_month_granularity(self):
+        """新结构化输出:月粒度日期归一化为 date_info 四元组。"""
+        scored = {
+            "doc_time": {"date": "2024-03", "granularity": "month", "evidence": "2024年3月发布"},
+        }
+
+        result = normalize_doc_time_field(scored)
+
+        assert result["doc_time"] == "2024-03"
+        assert result["date_info"] == {
+            "date": "2024-03-01",
+            "granularity": "month",
+            "confidence": "low",
+            "source": "llm_inferred",
+        }
+
+    def test_structured_day_granularity(self):
+        """新结构化输出:日粒度原样保留。"""
+        scored = {
+            "doc_time": {"date": "2024-03-15", "granularity": "day", "evidence": "on March 15, 2024"},
+        }
+
+        result = normalize_doc_time_field(scored)
+
+        assert result["date_info"]["date"] == "2024-03-15"
+        assert result["date_info"]["granularity"] == "day"
+
+    def test_parsed_finer_than_declared_is_truncated(self):
+        """解析粒度比声明细时截断到声明粒度。"""
+        scored = {
+            "doc_time": {"date": "2024-03-15", "granularity": "month", "evidence": "March 2024"},
+        }
+
+        result = normalize_doc_time_field(scored)
+
+        assert result["date_info"]["date"] == "2024-03-01"
+        assert result["date_info"]["granularity"] == "month"
+
+    def test_declared_finer_than_parsed_falls_back_to_parsed(self):
+        """声明粒度比解析细时以解析为准,不编造更细的精度。"""
+        scored = {
+            "doc_time": {"date": "2024", "granularity": "day", "evidence": "2024 年度报告"},
+        }
+
+        result = normalize_doc_time_field(scored)
+
+        assert result["date_info"]["date"] == "2024-01-01"
+        assert result["date_info"]["granularity"] == "year"
+
+    def test_null_doc_time(self):
+        """doc_time 为 null 时视为未提供。"""
+        result = normalize_doc_time_field({"doc_time": None})
+
+        assert result["doc_time"] == "Unknown"
+        assert "date_info" not in result
+
+    def test_missing_doc_time(self):
+        """doc_time 缺失时视为未提供。"""
+        result = normalize_doc_time_field({})
+
+        assert result["doc_time"] == "Unknown"
+        assert "date_info" not in result
+
+    def test_structured_missing_date_field(self):
+        """结构化输出缺 date 字段时视为未提供。"""
+        scored = {"doc_time": {"granularity": "month", "evidence": "some text"}}
+
+        result = normalize_doc_time_field(scored)
+
+        assert result["doc_time"] == "Unknown"
+        assert "date_info" not in result
+
+    def test_structured_missing_granularity_field(self):
+        """结构化输出缺 granularity 字段时视为未提供,但 doc_time 保留展示文本。"""
+        scored = {"doc_time": {"date": "2024-03", "evidence": "2024年3月"}}
+
+        result = normalize_doc_time_field(scored)
+
+        assert result["doc_time"] == "2024-03"
+        assert "date_info" not in result
+
+    def test_structured_invalid_granularity_value(self):
+        """granularity 声明值非法时视为未提供。"""
+        scored = {"doc_time": {"date": "2024-03", "granularity": "week", "evidence": "x"}}
+
+        result = normalize_doc_time_field(scored)
+
+        assert result["doc_time"] == "2024-03"
+        assert "date_info" not in result
+
+    def test_structured_unparsable_date(self):
+        """date 无法解析时视为未提供,不报错。"""
+        scored = {"doc_time": {"date": "很久以前", "granularity": "year", "evidence": "x"}}
+
+        result = normalize_doc_time_field(scored)
+
+        assert result["doc_time"] == "很久以前"
+        assert "date_info" not in result
+
+    def test_legacy_string_month(self):
+        """旧格式自由文本(月粒度)降级解析成功。"""
+        result = normalize_doc_time_field({"doc_time": "2023 Jun"})
+
+        assert result["doc_time"] == "2023 Jun"
+        assert result["date_info"] == {
+            "date": "2023-06-01",
+            "granularity": "month",
+            "confidence": "low",
+            "source": "llm_inferred",
+        }
+
+    def test_legacy_string_chinese_month(self):
+        """旧格式中文自由文本降级解析成功。"""
+        result = normalize_doc_time_field({"doc_time": "2024年3月"})
+
+        assert result["date_info"]["date"] == "2024-03-01"
+        assert result["date_info"]["granularity"] == "month"
+
+    def test_legacy_string_year_only(self):
+        """旧格式纯年份文本解析为年粒度。"""
+        result = normalize_doc_time_field({"doc_time": "2024"})
+
+        assert result["date_info"]["date"] == "2024-01-01"
+        assert result["date_info"]["granularity"] == "year"
+
+    def test_unknown_string_yields_no_date_info(self):
+        """Unknown 占位字符串不产生 date_info。"""
+        result = normalize_doc_time_field({"doc_time": "Unknown"})
+
+        assert result["doc_time"] == "Unknown"
+        assert "date_info" not in result
+
+    def test_unparsable_legacy_string_yields_no_date_info(self):
+        """无法解析的旧格式文本不产生 date_info,且不报错。"""
+        result = normalize_doc_time_field({"doc_time": "recently"})
+
+        assert result["doc_time"] == "recently"
+        assert "date_info" not in result
+
+    def test_process_scored_item_integrates_structured_doc_time(self):
+        """process_scored_item 全链路:结构化 doc_time 产出 date_info。"""
+        scored = {
+            "document_index": 0,
+            "scores": {"relevance": 8},
+            "doc_time": {"date": "2024-03", "granularity": "month", "evidence": "2024年3月"},
+        }
+        documents = [{"title": "Doc 0", "key_passages": ["content"]}]
+
+        result = process_scored_item(scored, 0, documents)
+
+        assert result is not None
+        assert result["doc_time"] == "2024-03"
+        assert result["date_info"]["date"] == "2024-03-01"
+        assert result["date_info"]["confidence"] == "low"
+        assert result["date_info"]["source"] == "llm_inferred"
+
+    def test_process_scored_item_integrates_legacy_doc_time(self):
+        """process_scored_item 全链路:旧字符串 doc_time 降级解析。"""
+        scored = {"document_index": 0, "scores": {"relevance": 8}, "doc_time": "2023 Jun"}
+        documents = [{"title": "Doc 0", "key_passages": ["content"]}]
+
+        result = process_scored_item(scored, 0, documents)
+
+        assert result is not None
+        assert result["doc_time"] == "2023 Jun"
+        assert result["date_info"]["date"] == "2023-06-01"

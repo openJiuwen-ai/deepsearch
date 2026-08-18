@@ -8,6 +8,7 @@ from typing import Annotated, Optional, List, Any
 from pydantic import Field
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.utils.common_utils.date_utils import parse_partial_date
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import normalize_json_output, ainvoke_llm_with_stats, \
     record_llm_retry_log
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -117,6 +118,7 @@ def process_scored_item(scored: dict, idx: int, documents: List[dict]) -> Option
 
     try:
         scored = ensure_document_index_field(scored, idx)
+        scored = normalize_doc_time_field(scored)
         validate_document_index(scored, documents)
         log_content_and_scores(scored, documents)
         return scored
@@ -169,6 +171,84 @@ def ensure_document_index_field(scored: dict, idx: int) -> dict:
     if "doc_time" not in scored:
         scored["doc_time"] = "Unknown"
     return scored
+
+
+# 粒度从粗到细的排序,用于在声明粒度与解析粒度之间取较粗者。
+_GRANULARITY_ORDER = {"year": 0, "month": 1, "day": 2}
+
+
+def normalize_doc_time_field(scored: dict) -> dict:
+    """规范化 evaluator 输出的 doc_time 字段。
+
+    语义(v2 ①c,见 info_evaluator_doc.md):doc_time 表示正文主要
+    事实/数据所覆盖的时间(content time),不是文档的写作/发布时间;
+    页面框架(导航栏、页眉页脚、侧边栏、"相关文章/推荐阅读"列表)中的
+    日期被 prompt 明确排除,不作为依据。
+
+    兼容两种形态:
+    - 新结构化输出 ``{"date": ..., "granularity": ..., "evidence": ...}``;
+    - 旧版自由文本(如 "2023 Jun"),按声明粒度缺失处理。
+
+    解析成功时在 scored 上写入 date_info 四元组
+    ``{"date": ISO, "granularity": ..., "confidence": "low", "source": "llm_inferred"}``;
+    解析失败或缺字段视为未提供。doc_time 本身始终归一化为可展示字符串
+    (结构化输出取 LLM 给的 date 原文),供下游 prompt 直接渲染。
+
+    Args:
+        scored: 已补齐 document_index/scores 的评分项。
+
+    Returns:
+        归一化 doc_time、按需写入 date_info 后的评分项。
+    """
+
+    raw = scored.get("doc_time")
+    if isinstance(raw, dict):
+        display = str(raw.get("date") or "").strip()
+        declared = raw.get("granularity")
+        # 结构化输出缺少/非法 granularity 声明时视为未提供。
+        date_info = _build_llm_date_info(display, declared) if declared in _GRANULARITY_ORDER else None
+    else:
+        display = str(raw or "").strip()
+        date_info = _build_llm_date_info(display, None)
+    scored["doc_time"] = display or "Unknown"
+    if date_info is not None:
+        scored["date_info"] = date_info
+    else:
+        scored.pop("date_info", None)
+    return scored
+
+
+def _build_llm_date_info(date_text: str, declared_granularity: Optional[str]) -> Optional[dict]:
+    """用 parse_partial_date 校验并归一化 LLM 给的日期。
+
+    输入是 LLM 推断的内容时间(v2 ①c:正文主要事实/数据覆盖的时间,
+    非写作/发布时间),归一化后固定以低置信四元组返回:
+    confidence="low",source="llm_inferred"。
+    粒度取声明粒度与解析粒度中较粗的一个:解析更细时截断到声明粒度,
+    声明比解析细时以解析为准(不编造更细的精度)。代表日期取区间第一天。
+    旧版自由文本传入 declared_granularity=None,直接采用解析粒度。
+    """
+
+    if not date_text or date_text == "Unknown":
+        return None
+    parsed = parse_partial_date(date_text)
+    if parsed is None:
+        return None
+    day, parsed_granularity = parsed
+    granularity = parsed_granularity
+    if declared_granularity is not None \
+            and _GRANULARITY_ORDER[declared_granularity] < _GRANULARITY_ORDER[parsed_granularity]:
+        granularity = declared_granularity
+    if granularity == "year":
+        day = day.replace(month=1, day=1)
+    elif granularity == "month":
+        day = day.replace(day=1)
+    return {
+        "date": day.isoformat(),
+        "granularity": granularity,
+        "confidence": "low",
+        "source": "llm_inferred",
+    }
 
 
 def validate_document_index(scored: dict, documents: List[dict]):

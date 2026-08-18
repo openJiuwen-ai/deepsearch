@@ -117,6 +117,9 @@ def test_build_temporal_scope_prompt_context_handles_missing_scope():
     assert context == {
         "has_temporal_scope": False,
         "temporal_scope_instruction": "",
+        "temporal_embed_in_query": False,
+        "temporal_open_ended": False,
+        "temporal_query_instruction": "",
     }
 
 

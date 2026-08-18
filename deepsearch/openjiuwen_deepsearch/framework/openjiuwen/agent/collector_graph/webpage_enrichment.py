@@ -14,6 +14,12 @@ from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import extract_key_passages
+from openjiuwen_deepsearch.algorithm.research_collector.html_boilerplate_filter import (
+    detect_boilerplate,
+    extract_clean_main_text,
+)
+import requests
+
 from openjiuwen_deepsearch.algorithm.research_collector.webpage_enrichment import (
     DEFAULT_FETCH_TIMEOUT_SECONDS,
     MIN_FETCHED_CONTENT_LENGTH,
@@ -29,6 +35,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.webpage_enrichment impor
     has_pdf_magic,
     has_sufficient_fetched_content,
     is_explicit_pdf_url,
+    merge_fetched_doc_date,
     sanitize_selected_indexes,
     should_replace_original_content,
     synchronize_history_queries,
@@ -41,6 +48,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
     WebFetchWebpageAdapter,
 )
+from openjiuwen_deepsearch.utils.common_utils.date_utils import extract_html_head_date
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
@@ -48,6 +56,49 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 MAX_SELECTION_CANDIDATES = 10
+#: 顺带抓取完整 HTML 的最大字节数(~2MB);同一份 HTML 同时用于
+#: extract_html_head_date 白名单日期解析和 DOM 级噪声过滤净化正文。
+FULL_HTML_FETCH_MAX_BYTES = 2_000_000
+#: 顺带抓取完整 HTML 的独立超时上限，避免拖垮富化整体 deadline。
+FULL_HTML_FETCH_TIMEOUT_SECONDS = 10
+#: 与 harness 直连抓取保持一致的 User-Agent。
+_FULL_HTML_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def _fetch_html_document(url: str, timeout_seconds: int) -> str:
+    """同步流式读取网页完整 HTML(最多 ~2MB),用于日期提取与正文净化。
+
+    Args:
+        url: 目标网页 URL。
+        timeout_seconds: 请求超时时间，单位秒。
+
+    Returns:
+        解码后的 HTML 文本。
+
+    Raises:
+        requests.RequestException: 网络或 HTTP 错误时抛出，由调用方静默降级。
+    """
+    chunks: list[bytes] = []
+    read_bytes = 0
+    with requests.get(
+        url,
+        headers=_FULL_HTML_FETCH_HEADERS,
+        timeout=timeout_seconds,
+        stream=True,
+    ) as response:
+        response.raise_for_status()
+        for chunk in response.iter_content(chunk_size=16384):
+            chunks.append(chunk)
+            read_bytes += len(chunk)
+            if read_bytes >= FULL_HTML_FETCH_MAX_BYTES:
+                break
+    return b"".join(chunks)[:FULL_HTML_FETCH_MAX_BYTES].decode("utf-8", errors="replace")
 
 
 def _remaining_timeout_seconds(deadline: float) -> int:
@@ -381,6 +432,46 @@ class WebPageEnrichmentNode(BaseNode):
             )
             return {}
 
+    async def _fetch_html_date_and_clean_text(
+        self,
+        url: str,
+        deadline: float,
+    ) -> tuple[dict | None, str | None]:
+        """在富化 deadline 内顺带抓取完整 HTML,并派生白名单日期与净化正文。
+
+        harness 直连抓取只返回提取后的正文，没有原始 HTML,因此直连成功后
+        对同一 URL 做一次轻量流式抓取；同一份 HTML 同时用于
+        ``extract_html_head_date`` 日期解析和 DOM 级噪声过滤净化正文。
+        任何失败/解析异常都静默降级，不影响已成功的正文抓取。
+
+        Args:
+            url: 目标网页 URL。
+            deadline: event loop 单调时钟上的整体截止时间。
+
+        Returns:
+            (doc_date, clean_text) 二元组；doc_date 为 DocDate.to_dict() 格式
+            字典或 None,clean_text 为净化正文或 None(抓取失败/净化为空)。
+        """
+        timeout_seconds = min(FULL_HTML_FETCH_TIMEOUT_SECONDS, _remaining_timeout_seconds(deadline))
+        try:
+            html = await asyncio.to_thread(_fetch_html_document, url, timeout_seconds)
+        except Exception as exc:
+            self._log_fetch_event(logging.DEBUG, "full_html_fetch_failed", url, exc=exc)
+            return None, None
+        doc_date_dict: dict | None = None
+        try:
+            doc_date = extract_html_head_date(html)
+            doc_date_dict = doc_date.to_dict() if doc_date is not None else None
+        except Exception as exc:
+            self._log_fetch_event(logging.DEBUG, "head_date_parse_failed", url, exc=exc)
+        clean_text: str | None = None
+        try:
+            extracted = extract_clean_main_text(html)
+            clean_text = extracted if extracted.strip() else None
+        except Exception as exc:
+            self._log_fetch_event(logging.DEBUG, "boilerplate_filter_failed", url, exc=exc)
+        return doc_date_dict, clean_text
+
     async def _fetch_webpage_before_deadline(
         self,
         url: str,
@@ -425,6 +516,22 @@ class WebPageEnrichmentNode(BaseNode):
         direct_pdf_payload = has_pdf_magic(direct_result)
         if not direct_pdf_payload and has_sufficient_fetched_content(direct_result, required_length):
             direct_result["fetch_method"] = "harness_webpage_fetch"
+            head_doc_date, clean_text = await self._fetch_html_date_and_clean_text(url, deadline)
+            if head_doc_date is not None:
+                direct_result["doc_date"] = head_doc_date
+            harness_content = str(direct_result.get("content") or "")
+            if (
+                clean_text is not None
+                and detect_boilerplate(harness_content)
+                and len(clean_text.strip()) >= MIN_FETCHED_CONTENT_LENGTH
+            ):
+                self._log_fetch_event(
+                    logging.INFO,
+                    "boilerplate_replaced",
+                    url,
+                    content_len=len(clean_text),
+                )
+                direct_result["content"] = clean_text
             return direct_result
 
         if direct_pdf_payload:
@@ -490,7 +597,8 @@ class WebPageEnrichmentNode(BaseNode):
         Returns:
             更新后的 doc_info 副本。
         """
-        return apply_enrichment_to_doc(doc_info, evidence, fetched)
+        enriched_doc = apply_enrichment_to_doc(doc_info, evidence, fetched)
+        return merge_fetched_doc_date(enriched_doc, fetched)
 
     async def _enrich_candidate(self, state: dict, loop_docs: list[dict], candidate_index: int) -> dict | None:
         """抓取并压缩单个候选网页。

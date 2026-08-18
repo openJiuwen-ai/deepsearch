@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import html
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from copy import deepcopy
 import json
@@ -35,7 +35,7 @@ from openjiuwen_deepsearch.algorithm.report.ngram_utils import (
     ngram_jaccard_similarity,
     prefilter_by_ngram_coverage,
 )
-from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
+from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, TEMPORAL_TIMELINESS_WEIGHT
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
     build_doc_variant_key,
 )
@@ -60,6 +60,16 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 )
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
+from openjiuwen_deepsearch.utils.common_utils.date_utils import (
+    DocDate,
+    extract_url_date,
+    is_plausible,
+    merge_doc_dates,
+    parse_date_string,
+    parse_partial_date,
+    temporal_status,
+    timeliness_score,
+)
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
@@ -132,6 +142,164 @@ FENCED_BLOCK_PATTERN = re.compile(
     r"(?ms)^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>[^\r\n]*)\r?\n"
     r"(?P<body>.*?)[ \t]*(?P=fence)[ \t]*$"
 )
+
+
+# ---------------------------------------------------------------------------
+# 时效软着陆排序(时间约束强化 v2 ③,设计文档:
+# docs/superpowers/specs/2026-08-17-temporal-constraint-v2-design.md)。
+# temporal_scope 为 None 时整条路径短路,行为与引入前完全一致。
+# ---------------------------------------------------------------------------
+
+_NO_TIME_INFO_TEXT = "未提供时间信息"
+
+
+def _resolve_temporal_scope(
+    current_inputs: dict,
+) -> tuple[date | None, date | None, str | None] | None:
+    """从 current_inputs["research_intent"] 提取时间约束边界与约束对象。
+
+    research_intent 由 ResearchIntent.model_dump() 序列化为 dict 后
+    经 session 流入(SubReporterNode._pre_handle 已透传),其中
+    start_date/end_date 通常是 date 对象,也可能经 JSON 往返后是
+    ISO 字符串,这里统一归一化为 date。无时间约束或边界全空时返回
+    None,下游完全走旧路径。
+
+    返回 (start_date, end_date, constraint_type) 三元组;
+    constraint_type ∈ {"source_date", "content_date", None},取值非法时
+    归一为 None(按 source_date 语义处理,见 _compute_doc_temporal_status)。
+    """
+    research_intent = current_inputs.get("research_intent") or {}
+    if isinstance(research_intent, dict):
+        scope = research_intent.get("temporal_scope")
+    else:
+        scope = getattr(research_intent, "temporal_scope", None)
+    if not scope:
+        return None
+    if isinstance(scope, dict):
+        start_raw = scope.get("start_date")
+        end_raw = scope.get("end_date")
+        constraint_type = scope.get("constraint_type")
+    else:
+        start_raw = getattr(scope, "start_date", None)
+        end_raw = getattr(scope, "end_date", None)
+        constraint_type = getattr(scope, "constraint_type", None)
+    if constraint_type not in ("source_date", "content_date"):
+        constraint_type = None
+
+    def _to_date(value) -> date | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        return parse_date_string(value)
+
+    start_date = _to_date(start_raw)
+    end_date = _to_date(end_raw)
+    if start_date is None and end_date is None:
+        return None
+    return start_date, end_date, constraint_type
+
+
+def _doc_date_from_date_info(date_info) -> DocDate | None:
+    """把 doc_info["date_info"](DocDate.to_dict() 形态)还原为 DocDate。
+
+    date_info 由采集侧并行任务写入;字段缺失或非法时返回 None,
+    由 publish_time / URL 兜底来源接管。
+    """
+    if not isinstance(date_info, dict):
+        return None
+    day = parse_date_string(date_info.get("date"))
+    granularity = date_info.get("granularity")
+    confidence = date_info.get("confidence")
+    if day is None or granularity not in ("year", "month", "day"):
+        return None
+    if confidence not in ("high", "medium", "low"):
+        return None
+    return DocDate(
+        day=day,
+        granularity=granularity,
+        confidence=confidence,
+        source=str(date_info.get("source") or ""),
+    )
+
+
+def _compute_doc_temporal_status(
+    doc_info: dict,
+    temporal_scope: tuple[date | None, date | None] | None,
+    constraint_type: str | None = None,
+) -> tuple[str, float]:
+    """计算单个候选文档的时效状态与排序分。
+
+    日期来源按置信度合并(merge_doc_dates 语义:取最高置信档,
+    同档冲突降级 unknown):① date_info(置信度以存储值为准);
+    ② publish_time 字面解析(high;仅当 date_info 缺失或非低置信时
+    启用——低置信 date_info 场景下 publish_time 只是 LLM 日期的
+    回填展示值,再按 high 解析会置信度膨胀);
+    ③ URL 日期模式兜底(medium)。
+    temporal_scope 为 None 时短路返回 ("unknown", 0.0),零开销;
+    无可用日期同样归 unknown(0 分),绝不猜。
+
+    constraint_type 为 "content_date" 时,violation 的排序分强制为
+    0.0(中性,"只奖不罚"):候选日期来自发布/写作时间(②③ 来源本质上
+    都是发布时间),而发布时间不是"事实时间"的有效证据——发布时间新的
+    文档完全可能内容合规,惩罚它是语义错误(见设计文档③:
+    docs/superpowers/specs/2026-08-17-temporal-constraint-v2-design.md)。
+    compliant 的奖励保留不变;source_date 场景(含 constraint_type 为
+    None 的兜底)沿用原有 -0.5/-1.0 惩罚,逻辑完全不变。
+    状态字符串不受此规则影响(仍如实返回 "violation"),观测日志的
+    分布统计保持真实。
+    """
+    if temporal_scope is None:
+        return "unknown", 0.0
+    start_date, end_date = temporal_scope
+
+    candidates: list[DocDate | None] = [_doc_date_from_date_info(doc_info.get("date_info"))]
+    publish_time = str(doc_info.get("publish_time") or "").strip()
+    # publish_time 可能是 doc_evaluation 用 LLM 推断日期(low)回填的展示值,
+    # 此时再按 high 解析会造成置信度膨胀 → date_info 为低置信(LLM 推断)时
+    # 跳过 publish_time,以其存储置信度为准。date_info 缺失或本身为高置信
+    # 来源时,publish_time 仍作为独立 high 候选参与合并:
+    # 与 date_info 同档冲突会按 merge_doc_dates 语义降级 unknown(不猜)。
+    skip_publish_time = candidates[0] is not None and candidates[0].confidence == "low"
+    if not skip_publish_time and publish_time and publish_time != _NO_TIME_INFO_TEXT:
+        parsed = parse_partial_date(publish_time)
+        if parsed is not None:
+            day, granularity = parsed
+            candidates.append(
+                DocDate(day=day, granularity=granularity,
+                        confidence="high", source="publish_time")
+            )
+    candidates.append(extract_url_date(doc_info.get("url", "")))
+
+    doc_date = merge_doc_dates(candidates)
+    # 合理性兜底:LLM 推断等低置信来源未过 is_plausible 校验,
+    # 未来日期/过老日期在此统一拦截,降级 unknown 不猜。
+    if doc_date is None or not is_plausible(doc_date):
+        return "unknown", 0.0
+    status = temporal_status(doc_date, start_date, end_date)
+    if constraint_type == "content_date" and status == "violation":
+        return status, 0.0
+    return status, timeliness_score(status, doc_date.confidence)
+
+
+def _log_temporal_distribution(section_idx, statuses: list[str]) -> None:
+    """观测日志:本章候选文档的时效状态占比(temporal_scope 为 None 时不调用)。"""
+    total = len(statuses)
+    if total == 0:
+        return
+    counts = {"compliant": 0, "unknown": 0, "violation": 0}
+    for status in statuses:
+        counts[status] = counts.get(status, 0) + 1
+    logger.info(
+        "%s [temporal] section_idx: [%s] candidate temporal status distribution: "
+        "compliant %.1f%% (%s/%s), unknown %.1f%% (%s/%s), violation %.1f%% (%s/%s)",
+        EFFECT_SUB_REPORT_TAG, section_idx,
+        counts["compliant"] / total * 100, counts["compliant"], total,
+        counts["unknown"] / total * 100, counts["unknown"], total,
+        counts["violation"] / total * 100, counts["violation"], total,
+    )
 
 
 
@@ -1176,6 +1344,10 @@ class Reporter:
                 "require_methodology_and_risk", rtp.get("require_methodology_and_risk", False)
             )
         doc_infos = current_inputs.get("doc_infos", [])
+        # 时间约束(v2 ③):从 research_intent 提取 temporal_scope 三元组
+        # (start_date, end_date, constraint_type);
+        # None 表示无时间约束,选材路径与引入前完全一致。
+        temporal_scope = _resolve_temporal_scope(current_inputs)
         background_contents = self._get_background_knowledge_contents(
             current_inputs.get("sub_report_background_knowledge", [])
         )
@@ -1241,11 +1413,32 @@ class Reporter:
                 selected_marginal_values = [0.0] * len(selected_docs)
                 verify_result = None
             else:
+                # 时效软着陆排序:为每个候选文档(与 filtered_docs 下标对齐)
+                # 计算时效状态与排序分;temporal_scope 为 None 时整条路径短路。
+                temporal_statuses = None
+                temporal_scores = None
+                if temporal_scope is not None:
+                    start_date, end_date, constraint_type = temporal_scope
+                    filtered_docs = coverage_result.get("filtered_docs", doc_infos)
+                    temporal_pairs = [
+                        _compute_doc_temporal_status(
+                            doc, (start_date, end_date), constraint_type
+                        )
+                        for doc in filtered_docs
+                    ]
+                    temporal_statuses = [status for status, _ in temporal_pairs]
+                    temporal_scores = [score for _, score in temporal_pairs]
+
                 selected_docs, marginal_values, selected_doc_keys = self._optimize_document_set(
                     doc_infos, rationales, coverage_result,
                     top_k=classify_doc_infos_res_top_k_num,
                     return_doc_keys=True,
+                    temporal_scores=temporal_scores,
                 )
+
+                # 观测日志:选材完成后记录候选文档时效状态占比。
+                if temporal_statuses is not None:
+                    _log_temporal_distribution(section_idx, temporal_statuses)
 
                 marginal_value_by_key = dict(
                     zip(selected_doc_keys, marginal_values, strict=True)
@@ -2229,18 +2422,24 @@ class Reporter:
         top_k: int = 20,
         *,
         return_doc_keys: bool = False,
+        temporal_scores: list | None = None,
     ) -> tuple:
         """Greedy submodular document selection (0 LLM calls).
 
         Inspired by TREC submodular selection + PureCover noise penalty.
         Each round selects the document with the highest marginal value:
             marginal_value = coverage_gain - β×redundancy - γ×noise - δ×untrustworthy
+        时效排序激活时(见 temporal_scores)额外加有界时效项:
+            marginal_value += TEMPORAL_TIMELINESS_WEIGHT × timeliness_score
 
         Args:
             doc_infos: candidate document list (already n-gram filtered).
             rationales: rationale list.
             coverage_result: coverage matrix evaluation result.
             top_k: maximum number of documents to select.
+            temporal_scores: 与 coverage_result["filtered_docs"] 按下标对齐的
+                时效排序分(timeliness_score ∈ [-1.0, 1.0]);为 None 时
+                (无 temporal_scope)完全走旧路径,行为与引入前逐字节一致。
 
         Returns:
             (selected_docs, marginal_values) tuple.
@@ -2264,9 +2463,25 @@ class Reporter:
         selected_ngrams: list = []
         marginal_values: list = []
 
+        # 唯一覆盖豁免集合(仅时效排序激活时计算,保证 temporal 关闭时零行为变化):
+        # 某 rationale 的有效覆盖(>= 0.3,与下方 covered 统计口径一致)只来自
+        # 一个文档时,该文档是"唯一覆盖来源",无论边际价值(含时效惩罚)如何
+        # 都必须保留,否则该 rationale 将彻底失去证据。
+        protected_indices: set = set()
+        if temporal_scores is not None:
+            for rid in rationale_ids:
+                covering = [
+                    idx for idx in range(len(filtered_docs))
+                    if coverage_matrix.get(f"doc_{idx}", {}).get(rid, 0.0) >= 0.3
+                ]
+                if len(covering) == 1:
+                    protected_indices.add(covering[0])
+
         for _ in range(min(top_k, len(filtered_docs))):
             best_idx = -1
             best_value = 0.0
+            best_protected_idx = -1
+            best_protected_value = 0.0
 
             for idx in range(len(filtered_docs)):
                 if idx in selected_indices:
@@ -2297,13 +2512,27 @@ class Reporter:
                 untrustworthy = 1.0 - reliability
 
                 marginal_value = gain - beta * redundancy - gamma * noise - delta * untrustworthy
+                if temporal_scores is not None:
+                    # 有界时效项:w_t 远小于单条 rationale 的 coverage_gain,
+                    # 只做同分决胜,不能盖过真实覆盖差异。
+                    marginal_value = marginal_value + TEMPORAL_TIMELINESS_WEIGHT * temporal_scores[idx]
 
                 if marginal_value > best_value:
                     best_value = marginal_value
                     best_idx = idx
+                if temporal_scores is not None and idx in protected_indices:
+                    if best_protected_idx < 0 or marginal_value > best_protected_value:
+                        best_protected_value = marginal_value
+                        best_protected_idx = idx
 
             if best_idx < 0 or best_value <= 0:
-                break
+                # 唯一覆盖豁免:受保护文档即使边际价值 <= 0 也强制保留,
+                # 并记录其真实边际价值(供观测,不粉饰为正值)。
+                if temporal_scores is not None and best_protected_idx >= 0:
+                    best_idx = best_protected_idx
+                    best_value = best_protected_value
+                else:
+                    break
 
             selected_indices.append(best_idx)
             marginal_values.append(best_value)
