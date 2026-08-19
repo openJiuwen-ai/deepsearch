@@ -1,6 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-"""date_utils 的单元测试:解析、区间判定、URL/HTML 提取、多源合并。"""
+"""date_utils 的单元测试:解析、区间判定、URL 提取、多源合并。"""
 
 from datetime import date
 
@@ -8,7 +8,6 @@ import pytest
 
 from openjiuwen_deepsearch.utils.common_utils.date_utils import (
     DocDate,
-    extract_html_head_date,
     extract_url_date,
     is_plausible,
     merge_doc_dates,
@@ -156,69 +155,6 @@ def test_extract_url_date(url, expected_day, expected_granularity):
         assert result.day == expected_day
         assert result.granularity == expected_granularity
         assert result.confidence == "medium"
-
-
-# ---------------------------------------------------------------------------
-# HTML <head> 白名单提取
-# ---------------------------------------------------------------------------
-
-def test_extract_html_head_date_whitelist_meta():
-    html = """
-    <html><head>
-      <meta property="article:published_time" content="2024-03-15T08:00:00Z">
-      <meta name="keywords" content="2024-01-01 irrelevant">
-    </head><body>2025年12月31日 侧边栏日期不应被收</body></html>
-    """
-    result = extract_html_head_date(html, reference_date=REF)
-    assert result is not None
-    assert result.day == date(2024, 3, 15)
-    assert result.confidence == "high"
-    assert "article:published_time" in result.source
-
-
-def test_extract_html_head_date_jsonld_main_entity_only():
-    html = """
-    <html><head>
-    <script type="application/ld+json">
-    {"@context":"https://schema.org","@type":"NewsArticle","datePublished":"2024-05-01",
-     "comment":{"@type":"Comment","datePublished":"2020-01-01"}}
-    </script>
-    </head></html>
-    """
-    result = extract_html_head_date(html, reference_date=REF)
-    assert result is not None
-    assert result.day == date(2024, 5, 1)
-
-
-def test_extract_html_head_date_published_beats_modified():
-    html = """
-    <html><head>
-      <meta property="article:published_time" content="2024-03-15T08:00:00Z">
-      <meta property="article:modified_time" content="2025-01-01T08:00:00Z">
-    </head></html>
-    """
-    result = extract_html_head_date(html, reference_date=REF)
-    assert result is not None
-    assert result.day == date(2024, 3, 15)
-
-
-def test_extract_html_head_date_conflict_returns_none():
-    html = """
-    <html><head>
-      <meta property="article:published_time" content="2024-03-15T08:00:00Z">
-      <meta name="citation_publication_date" content="2021-06-01">
-    </head></html>
-    """
-    assert extract_html_head_date(html, reference_date=REF) is None
-
-
-def test_extract_html_head_date_rejects_future():
-    html = """
-    <html><head>
-      <meta property="article:published_time" content="2099-01-01T00:00:00Z">
-    </head></html>
-    """
-    assert extract_html_head_date(html, reference_date=REF) is None
 
 
 # ---------------------------------------------------------------------------

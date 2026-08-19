@@ -246,8 +246,8 @@ def _compute_doc_temporal_status(
 
     candidates: list[DocDate | None] = [_doc_date_from_date_info(doc_info.get("date_info"))]
     publish_time = str(doc_info.get("publish_time") or "").strip()
-    # publish_time 可能来自 LLM 日期的回填(info_collector / merge_fetched_doc_date
-    # 在低置信合并结果上补齐展示字段时写入 publish_time_source="llm_backfill"),
+    # publish_time 可能来自 LLM 日期的回填(info_collector 在没有真实 publish_time 时
+    # 用 LLM 文本补齐展示字段,并写入 publish_time_source="llm_backfill"),
     # 此时再按 high 解析会造成置信度膨胀 → 按来源标记跳过。
     # 无标记的 publish_time 是真实引擎发布日期,即使与低置信 date_info 并存也
     # 作为独立 high 候选参与合并(对 source_date 语义这才是正确证据):

@@ -3,12 +3,11 @@
 """网页文档日期的提取与时效判定。
 
 日期与约束都归一化为闭区间,用区间包含关系判定 compliant/violation/unknown;粒度不足(只有年/月)时归 unknown 不猜。
-提取只走白名单(标准 meta/JSON-LD/URL 模式),不做全文扫描。
+提取只走 URL 路径模式,不做全文扫描。
 纯日期工具,不依赖 framework 层。
 """
 
 import calendar
-import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -242,126 +241,6 @@ def extract_url_date(url: str, reference_date: Optional[date] = None) -> Optiona
         if is_plausible(candidate, reference_date):
             return candidate
     return None
-
-
-# ---------------------------------------------------------------------------
-# HTML <head> 白名单日期提取(顺带档)
-# ---------------------------------------------------------------------------
-
-_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
-_META_ATTR_RE = re.compile(r"([\w:.-]+)\s*=\s*[\"']([^\"']*)[\"']")
-_JSONLD_RE = re.compile(
-    r"<script[^>]*type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>",
-    re.IGNORECASE | re.DOTALL,
-)
-
-# 白名单:发布时间语义(OG / schema.org / Dublin Core / 学术 prism·eprints·citation_*)。
-_WHITELIST_PUBLISHED = (
-    "article:published_time",
-    "og:published_time",
-    "citation_publication_date",
-    "citation_online_date",
-    "dc.date",
-    "dc.date.issued",
-    "dcterms.issued",
-    "dcterms.date",
-    "prism.publicationdate",
-    "prism.coverdate",
-    "eprints.date",
-)
-# 白名单:修改/更新时间语义(优先级次之,与发布时间冲突时让位)。
-_WHITELIST_MODIFIED = (
-    "article:modified_time",
-    "og:updated_time",
-    "dcterms.modified",
-    "prism.modificationdate",
-)
-
-# JSON-LD 中只信任这些主实体的日期;Comment/BreadcrumbList 等嵌套实体不收。
-_JSONLD_ARTICLE_TYPES = {
-    "article", "newsarticle", "blogposting", "techarticle",
-    "scholarlyarticle", "report", "webpage",
-}
-
-
-def _parse_meta_tags(html: str) -> list[tuple[str, str]]:
-    """解析 <meta> 标签,返回 (小写键名, content) 列表。"""
-    pairs = []
-    for tag in _META_TAG_RE.findall(html):
-        attrs = dict(_META_ATTR_RE.findall(tag))
-        key = attrs.get("property") or attrs.get("name") or attrs.get("itemprop") or ""
-        content = attrs.get("content", "")
-        if key and content:
-            pairs.append((key.lower(), content.strip()))
-    return pairs
-
-
-def _walk_jsonld(obj: Any, found: list[tuple[str, str]]) -> None:
-    """递归收集 JSON-LD 主实体的 datePublished/dateModified。"""
-    if isinstance(obj, dict):
-        node_type = str(obj.get("@type", "")).lower()
-        if node_type in _JSONLD_ARTICLE_TYPES:
-            for key, rank in (("datePublished", "published"), ("dateModified", "modified")):
-                value = obj.get(key)
-                if isinstance(value, str) and parse_date_string(value) is not None:
-                    found.append((f"jsonld:{rank}", value.strip()))
-        for value in obj.values():
-            _walk_jsonld(value, found)
-    elif isinstance(obj, list):
-        for item in obj:
-            _walk_jsonld(item, found)
-
-
-def extract_html_head_date(
-        html: str,
-        reference_date: Optional[date] = None,
-) -> Optional[DocDate]:
-    """从 HTML(通常只传 <head>)提取发布日期,白名单 + 冲突处理。
-
-    优先级:发布语义标签 > JSON-LD datePublished > 修改语义标签 > JSON-LD dateModified。
-    同优先级候选解析出不同日期 → None(不猜)。所有候选过 is_plausible 校验。
-    """
-    if not html:
-        return None
-    head = html[:200_000]
-
-    ranked: list[tuple[int, str, str]] = []  # (优先级, 来源标识, 原始值)
-    for key, content in _parse_meta_tags(head):
-        if key in _WHITELIST_PUBLISHED:
-            ranked.append((0, f"html_meta:{key}", content))
-        elif key in _WHITELIST_MODIFIED:
-            ranked.append((2, f"html_meta:{key}", content))
-
-    jsonld_found: list[tuple[str, str]] = []
-    for m in _JSONLD_RE.finditer(head):
-        block = m.group(1).strip()
-        try:
-            _walk_jsonld(json.loads(block), jsonld_found)
-        except (ValueError, TypeError):
-            continue
-    for source, value in jsonld_found:
-        ranked.append((1 if source.endswith("published") else 3, source, value))
-
-    best_rank = None
-    best: list[DocDate] = []
-    for rank, source, raw in ranked:
-        parsed = parse_date_string(raw)
-        if parsed is None:
-            continue
-        candidate = DocDate(day=parsed, granularity="day", confidence="high", source=source)
-        if not is_plausible(candidate, reference_date):
-            continue
-        if best_rank is None or rank < best_rank:
-            best_rank, best = rank, [candidate]
-        elif rank == best_rank:
-            best.append(candidate)
-
-    if not best:
-        return None
-    distinct = {c.day for c in best}
-    if len(distinct) > 1:
-        return None
-    return best[0]
 
 
 # ---------------------------------------------------------------------------

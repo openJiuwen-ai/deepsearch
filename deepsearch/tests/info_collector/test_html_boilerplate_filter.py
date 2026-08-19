@@ -300,9 +300,7 @@ _CLEAN_PARAGRAPH = (
 ) * 5
 
 _FULL_HTML_WITH_CHROME = f"""
-<html><head>
-<meta property="article:published_time" content="2025-04-10T08:00:00Z" />
-</head><body>
+<html><body>
 <div class="article-content"><p>{_CLEAN_PARAGRAPH}</p></div>
 <div>
 <a href="/beian1">京ICP备19038936号-1</a>
@@ -330,8 +328,6 @@ async def test_polluted_harness_content_is_replaced_by_clean_text():
     assert result["content"].strip() == _CLEAN_PARAGRAPH
     assert "相关阅读" not in result["content"]
     assert "ICP备" not in result["content"]
-    # 同一份完整 HTML 的日期解析行为保持不变。
-    assert result["doc_date"]["date"] == "2025-04-10"
 
 
 @pytest.mark.asyncio
