@@ -4,9 +4,31 @@
 import json
 import logging
 import re
+from collections import namedtuple
 from datetime import date
 from html import unescape
 from typing import Any
+
+import threading
+
+import jieba
+
+# Initialize jieba's dictionary in a background thread to avoid blocking
+# the asyncio event loop on first call. jieba.cut itself is fast for short
+# title strings (typically < 50 chars).
+_jieba_ready = threading.Event()
+
+
+def _init_jieba():
+    try:
+        jieba.initialize()
+    except Exception as e:
+        logger.warning("jieba initialize failed: %s", e)
+    finally:
+        _jieba_ready.set()
+
+
+threading.Thread(target=_init_jieba, daemon=True).start()
 
 from openjiuwen_deepsearch.common.common_constants import (
     MAX_COLLECTOR_DOC_CONTENT_LENGTH,
@@ -14,7 +36,7 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_SEARCH_CONTENT_LENGTH,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
-from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload
+from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload 
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, is_url_blocked, \
     normalize_domains
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -69,12 +91,71 @@ def _normalize_title_for_match(title: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# CJK 字符范围（用于判断是否需要 jieba 分词）
+_CJK_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+
+def _tokenize_title(normalized_title: str) -> frozenset[str]:
+    """将归一化后的标题拆分为词集合（用于词重叠率计算）.
+
+    英文按空格分词；包含 CJK 字符时使用 jieba 分词后合并。
+    """
+    tokens = set()
+    # 按空格拆分，对每个片段判断是否含 CJK
+    for segment in normalized_title.split():
+        if _CJK_PATTERN.search(segment):
+            _jieba_ready.wait(timeout=2.0)
+            tokens.update(jieba.cut(segment))
+        else:
+            tokens.add(segment)
+    # 过滤中英文常见虚词，避免短标题 Jaccard 误判
+    _stopwords = frozenset({
+        "的", "了", "是", "在", "和", "与", "及", "等", "之", "其",
+        "a", "an", "the", "of", "and", "in", "on", "for", "to",
+    })
+    tokens -= _stopwords
+    return frozenset(tokens)
+
+
+# 预处理的被禁标题结构
+_PreprocessedBlockedTitle = namedtuple("_PreprocessedBlockedTitle", [
+    "raw",            # 原始被禁标题
+    "normalized",     # 归一化后的完整字符串
+    "stripped",       # 剥离聚合站后缀后的字符串
+    "tokens",         # 归一化后的词集合
+    "stripped_tokens",  # 剥离后缀后的词集合
+])
+
+
+def preprocess_blocked_titles(titles: list[str]) -> list[_PreprocessedBlockedTitle]:
+    """预处理被禁标题列表，避免每次匹配重复归一化.
+
+    Returns:
+        预处理后的被禁标题列表，每个元素含归一化字符串、剥离后缀字符串和词集合。
+    """
+    result = []
+    for t in titles:
+        norm = _normalize_title_for_match(t)
+        if not norm:
+            continue
+        stripped = _strip_aggregator_suffix(norm)
+        result.append(_PreprocessedBlockedTitle(
+            raw=t,
+            normalized=norm,
+            stripped=stripped,
+            tokens=_tokenize_title(norm),
+            stripped_tokens=_tokenize_title(stripped),
+        ))
+    return result
+
+
 # 镜像/聚合站点为页面标题追加的站点标记词（如 "原标题 | MDPI"、"原标题 - ProQuest"），
 # 归一化后位于标题尾部时允许剥离后再做精确匹配。只收明确的站点名，避免误剥正文词汇。
 _AGGREGATOR_SUFFIX_TOKENS = {
     "proquest", "mdpi", "researchgate", "sciencedirect", "springer", "springerlink",
     "ieee", "xplore", "nature", "wiley", "semanticscholar", "jstor",
     "acm", "oup", "sage", "tandfonline", "ebsco", "scopus", "bohrium", "aminer", "dblp",
+    "ideals",
 }
 
 
@@ -89,23 +170,69 @@ def _strip_aggregator_suffix(normalized_title: str) -> str:
 def is_title_blocked(title: Any, blocked_titles: list[str]) -> bool:
     """判断标题是否命中用户要求排除的文章标题.
 
-    匹配规则（任一命中即视为 blocked）：归一化后完全相同；或剥离明确的聚合站后缀
-    （``_AGGREGATOR_SUFFIX_TOKENS``，如 ``| MDPI``、`` - ProQuest``）后完全相同。
-    不做子串/包含匹配——被禁标题可能只是另一篇论文标题的前缀，子串规则会误伤不同文献。
+    匹配规则（任一命中即视为 blocked）：
+    1. 归一化后完全相同；
+    2. 剥离聚合站后缀后完全相同；
+    3. 当被禁标题足够长（≥30 归一化字符）时，做包含匹配；
+    4. 词重叠率 ≥ 70% 时视为同一文献（捕获镜像站标题变体）。
     """
     if not blocked_titles:
+        return False
+    preprocessed = preprocess_blocked_titles(blocked_titles)
+    return _is_title_blocked_preprocessed(title, preprocessed)
+
+
+def _is_title_blocked_preprocessed(
+    title: Any,
+    blocked_preprocessed: list[_PreprocessedBlockedTitle],
+) -> bool:
+    """使用预处理后的被禁标题进行匹配（内部函数）."""
+    if not blocked_preprocessed:
         return False
 
     target = _normalize_title_for_match(title)
     if not target:
         return False
     target_stripped = _strip_aggregator_suffix(target)
-    for blocked_title in blocked_titles:
-        blocked = _normalize_title_for_match(blocked_title)
-        if not blocked:
-            continue
-        if target == blocked or target_stripped == _strip_aggregator_suffix(blocked):
+    target_tokens = _tokenize_title(target)
+    target_stripped_tokens = _tokenize_title(target_stripped)
+
+    for bp in blocked_preprocessed:
+        # Rule 1 & 2: exact match (raw and stripped)
+        if target == bp.normalized or target_stripped == bp.stripped:
             return True
+        # Rule 3: containment match for long titles
+        # Skip when blocked title is a strict prefix of target at the START
+        # (e.g. "topic" vs "topic: A Survey" → likely different paper).
+        # But DO block when blocked is in the MIDDLE/END (same paper with
+        # metadata wrapping, e.g. "[PDF] topic Author Name").
+        if len(bp.normalized) >= 30:
+            if bp.tokens and target_tokens and bp.tokens < target_tokens:
+                # Skip only when blocked is a strict prefix AND the extra part
+                # is NOT just aggregator suffix tags (e.g. "topic | IDEALS"
+                # should still be blocked, "topic: A Survey" should not).
+                if target.startswith(bp.normalized) and target_stripped != bp.stripped:
+                    continue
+            if bp.normalized in target:
+                return True
+            if bp.stripped in target_stripped:
+                return True
+        # Rule 4: word overlap (Jaccard similarity) >= 70%
+        if target_tokens and bp.tokens:
+            overlap = len(target_tokens & bp.tokens)
+            union = len(target_tokens | bp.tokens)
+            if union > 0 and overlap / union >= 0.70:
+                # Keep existing prefix/subset skip logic
+                if not (bp.tokens < target_tokens
+                        and target.startswith(bp.normalized)
+                        and target_stripped != bp.stripped):
+                    return True
+        if target_stripped_tokens and bp.stripped_tokens:
+            overlap = len(target_stripped_tokens & bp.stripped_tokens)
+            union = len(target_stripped_tokens | bp.stripped_tokens)
+            if union > 0 and overlap / union >= 0.70:
+                if not (bp.stripped_tokens < target_stripped_tokens and target_stripped.startswith(bp.stripped)):
+                    return True
     return False
 
 
@@ -156,6 +283,9 @@ def filter_search_results_by_exclude_urls(
     if not exclude_urls and not exclude_titles:
         return items
 
+    # 预处理被禁标题，避免循环内重复归一化
+    preprocessed_titles = preprocess_blocked_titles(exclude_titles) if exclude_titles else []
+
     filtered_items = []
     removed_count = 0
     for item in items:
@@ -165,7 +295,7 @@ def filter_search_results_by_exclude_urls(
         item_url = item.get("url") or item.get("link") or item.get("source_url") or ""
         item_title = item.get("title") or item.get("name") or ""
         url_hit = item_url and is_url_blocked(item_url, exclude_urls)
-        title_hit = item_title and is_title_blocked(item_title, exclude_titles)
+        title_hit = bool(item_title and _is_title_blocked_preprocessed(item_title, preprocessed_titles))
         if url_hit or title_hit:
             removed_count += 1
             if LogManager.is_sensitive():
@@ -421,6 +551,10 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
                 "value": str(raw_date)[:MAX_SEARCH_CONTENT_LENGTH],
                 "parsed_date": parsed_date.isoformat() if parsed_date else "",
             }
+    # Preserve relevance score from search APIs (Tavily, etc.)
+    raw_score = item.get("score")
+    if isinstance(raw_score, (int, float)):
+        normalized["score"] = float(raw_score)
     return normalized
 
 

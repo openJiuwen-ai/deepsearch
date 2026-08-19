@@ -474,6 +474,7 @@ class TestSearchResultProcessing:
             "title": "Tavily title",
             "url": "http://tavily.com",
             "content": "C" * MAX_SEARCH_CONTENT_LENGTH,
+            "score": 0.8,
         }
 
     def test_process_google_search_result(self):
@@ -1275,13 +1276,30 @@ class TestIsTitleBlocked:
             ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory (Review)"])
 
     def test_suffix_mirror_hit(self):
-        """镜像站后缀（| MDPI / - ProQuest 形态）剥后缀后精确命中"""
+        """镜像站后缀（| MDPI / - ProQuest / | IDEALS 形态）剥后缀后精确命中"""
         assert is_title_blocked(
             "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | MDPI",
             self.BLOCKED)
         assert is_title_blocked(
             "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory - ProQuest",
             self.BLOCKED)
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | IDEALS",
+            self.BLOCKED)
+
+    def test_ideals_suffix_hit(self):
+        """IDEALS 机构知识库后缀剥离后命中"""
+        blocked = ["A Survey of the Story Elements of Isekai Manga"]
+        assert is_title_blocked(
+            "A survey of the story elements of Isekai manga | IDEALS",
+            blocked)
+
+    def test_metadata_wrapping_hit(self):
+        """被禁标题在目标标题中间位置（同一论文加元数据）应命中"""
+        blocked = ["A Survey of the Story Elements of Isekai Manga"]
+        assert is_title_blocked(
+            "[PDF] A Survey of the Story Elements of Isekai Manga Dr. Paul S. Price",
+            blocked)
 
     def test_same_prefix_different_paper_no_hit(self):
         """同前缀但不同论文不误伤（被禁标题是候选标题的前缀）"""

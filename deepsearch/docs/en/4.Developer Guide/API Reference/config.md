@@ -312,12 +312,12 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_max_search_query_count** (int, optional): Maximum number of search queries in one collector loop. Default value: `5`.
 - **info_collector_max_research_loops** (int, optional): Maximum number of research loops. Default value: `2`.
 - **info_collector_max_tool_call_turns_per_query** (int, optional): Maximum tool-call turns for each collector query. Default value: `2`.
-- **info_collector_max_retry_num** (int, optional): Maximum retry count. Default value: `3`.
+- **info_collector_max_retry_num** (int, optional): Maximum retry count for search tool calls during information collection (e.g. Tavily web search). Default value: `3`.
 - **info_collector_webpage_enrich_max_urls** (int, optional): Maximum number of URLs to fetch and enrich per collector loop. Default value: `3`.
 - **info_collector_webpage_enrich_fetch_timeout_seconds** (int, optional): Timeout in seconds for fetching one webpage during webpage enrichment. Default value: `45`.
 
 ### Reporting parameters
-- **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k number returned by the LLM classification in one pass for a sub-report. Default value: `20`.
+- **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k passages selected per rationale by coverage score in a sub-report (_select_by_rationale_coverage). Default value: `15`.
 - **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
 - **visualization_enable** (bool, optional): Whether to enable visualization illustrations in reports. Default value: `False`.
 

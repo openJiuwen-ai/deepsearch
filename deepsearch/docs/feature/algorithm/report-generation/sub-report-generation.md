@@ -20,12 +20,15 @@
 - 聚焦、简洁且不需要独立比较轴、类别、阶段、机制、对象、问题或步骤的章节，可以生成仅含一级标题的扁平子大纲；需要显式内部结构时仍生成连续编号的二级标题。
 - 子大纲的每个非空行必须是第一行一级标题或后续二级标题。说明文字、代码围栏、正文、空标题、错序标题和其他章节标题均视为非法输出，并触发子大纲重试。
 - 所有传入 LLM prompt 的 outline 均经 `export_outline_without_plans` 处理：剥离 `plans`（含 `step_result`/`evaluation` 等收集结果全文），仅保留章节标题、描述、依赖关系等结构骨架，避免超长输入导致模型 token 超限。
+- 子大纲生成 Prompt 中使用的 fulltext 内容会被截断到 500 字符以控制输入长度；完整 fulltext 内容仍保留给后续子报告写作 Prompt 使用。
 - key passages 只约束模型新增的具体事实、指标、案例、公司名和命名示例，不用于重命名或泛化用户指定的 subsection titles。
+- 全文抽取阶段（`enrich_fulltext_for_section` 为同步调用，非 async），`FullTextEvidence` 会聚合同一 URL 下所有段落的 reliability（取最大值）和 data_density，使全文证据继承段落级的质量评估。
 - 子报告写作严格复用已批准的子大纲标题。单行扁平大纲只允许一个 H1，不得增加子大纲之外的 Markdown 标题；章节要求的结论、建议、启示等内容仍须保留，并使用段落、编号句、列表、表格或加粗引导语表达。
 - professional 写作 Prompt 对标题施加与下游校验一致的硬约束：禁止 H3 及更深标题（深层结构用加粗无序列表表达）、子大纲每一行必须恰好输出为一个 Markdown 标题、禁止子大纲之外的任何 `#`/`##` 标题、标题文字必须逐字复制，并明示"标题不匹配将导致整章校验失败作废"。
 - professional 和 brief 写作 Prompt 都遵循相同的扁平标题契约，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
 - professional 和 brief 写作 Prompt 都无条件禁止正文模型直接输出 Mermaid 代码围栏、图表代码或手写图块；章节正文只能输出可溯源的文字和表格，受控图表插入由后续图表管线处理。若模型仍返回 Mermaid/图表源码，章节输出契约会拒绝该草稿并通过有界重试要求模型改写，不对正文做事后删除。
 - 子报告写作只输出当前顶层章节及其二级标题，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
+- 子报告 Prompt 定义冲突解决优先级：fulltext > 高分段落 > 低分段落。fulltext 没有覆盖分但优先级最高，当多来源对同一事实出现冲突时按此优先级采纳。
 - 子报告失败重试只向下一轮 Prompt 传递受控错误码、位置和计数字段；不会回放模型生成标题、provider 异常或本地校验原始文本。
 - 普通与依赖驱动写作路径都会把 `section_format_requirements` 和 `section_local_contract` 写入
   `SectionContext`。依赖写作工作流不得在开始节点边界将这两个字段退化为 `[]` 或 `{}`，下游
@@ -41,6 +44,7 @@
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
 - 报告配置：`openjiuwen_deepsearch/algorithm/report/config.py`
 - compact doc info：`openjiuwen_deepsearch/algorithm/report/compact_doc_info.py`
+- 全文抽取管线：`openjiuwen_deepsearch/algorithm/report/report_rationale_fulltext.py`（URL 频次选择、分类内容构建）
 
 相关 Prompt：
 
@@ -61,7 +65,7 @@
 1. Reporter 读取 outline section、章节计划和 classified contents。
 2. 构建章节局部契约和资料摘要。
 3. LLM 生成当前章节的子大纲；`Reporter.check_chapter_format()` 逐行验证标题格式和顺序，非法输出进入重试。
-4. 信息维度矩阵文档选择：rationale 生成 → n-gram 粗筛 → 覆盖矩阵评估 → 贪心子模选择 → elbow 截断 → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。
+4. 信息维度矩阵文档选择：rationale 生成 → 抽取式总结+打分 → 按维度 top-k 段落选择（0 分段落不参与选择） → L1/L2 过滤 → 全文抽取（同步调用） → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。
 5. 根据报告类型选择 professional 或 brief 子报告 Prompt，两者共享扁平/层级标题契约。
 6. LLM 按已批准的子大纲生成章节 Markdown。
 7. 标题编号和过深标题被清理，并校验 Markdown 标题与子大纲逐项一致；章节草稿同时校验不含 Mermaid/图表源码，且 Mermaid 语法判断仅针对代码围栏内容，不会因普通正文关键词误判；任一章节校验失败，生成受控重试反馈并重新生成章节。
@@ -117,6 +121,8 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 ## 结构化证据辅助
 
 文档选择完成后，Reporter 使用已有的 rationale 和覆盖矩阵构建精简的结构化证据说明，不增加 LLM 调用。guide 提供维度、优先级、覆盖状态到 citation 的导航，每个维度最多保留三篇覆盖分最高的入选文档；key passages 和完整证据继续由原有的子大纲上下文与 `Collected Evidence` 提供，避免重复内容和额外的模型输出协议。guide builder 接收与最终文档顺序对齐的 `doc_N` 键，用于读取对应的覆盖矩阵行。
+
+被提升为 fulltext 的段落会同时保留在 evidence_guide 中，确保其所属 rationale 的覆盖状态仍被计入，避免这些维度在 guide 中被误标为"未覆盖"。
 
 该说明同时提供给模板化/非模板化子大纲以及 professional/brief 子报告：证据充分的主要信息维度用于辅助组织内容，弱证据要求谨慎表述，未覆盖维度不得作为新增事实的依据。模型仍可基于其他 covered citations 进行明确标识的综合分析，但必须说明剩余证据限制，不得把综合判断表述为来源直接报告的事实。
 

@@ -17,12 +17,8 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
     process_tool_result, remove_duplicate_items
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     CollectorSourceStore,
-    build_evaluation_documents,
     build_evidence_atom,
-    normalize_doc_info_scores_and_time,
-    normalize_scores,
 )
-from openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
@@ -393,18 +389,15 @@ class InfoRetrievalNode(BaseNode):
         if len(agent_input["local_text_search_record"]) > 0:
             local_record = remove_duplicate_items(agent_input["local_text_search_record"])
 
-        doc_infos, scored_result, source_store = await self._structure_result(web_record, local_record, query)
+        doc_infos, source_store = await self._structure_result(web_record, local_record, query)
 
         if LogManager.is_sensitive():
             logger.info(f"section_idx: {section_idx} | "
-                        f"[InfoRetrievalNode] Gathered {len(doc_infos)} items of information. | "
-                        f"Starting to Update doc_infos after post process.")
+                        f"[InfoRetrievalNode] Gathered {len(doc_infos)} items of information.")
         else:
             logger.info(f"section_idx: {section_idx} | step title {step_title} | "
                         f"[InfoRetrievalNode] Collecting info for query: {query} | "
-                        f"Gathered {len(doc_infos)} items of information. | "
-                        f"Starting to Updating doc_infos after post process.")
-        doc_infos = self._process_post_process_result(scored_result, doc_infos, section_idx)
+                        f"Gathered {len(doc_infos)} items of information.")
 
         return {
             "messages": agent_input["messages"],
@@ -762,7 +755,7 @@ class InfoRetrievalNode(BaseNode):
         return state, agent_input
 
     async def _structure_result(self, web_record: list, local_record: list, query: str):
-        """把工具记录转换为 doc_infos、评分结果和 source store。
+        """把工具记录转换为 doc_infos 和 source store。
 
         Args:
             web_record: Web 搜索记录列表。
@@ -770,7 +763,7 @@ class InfoRetrievalNode(BaseNode):
             query: 当前检索 query。
 
         Returns:
-            `(doc_infos, scored_result, source_store)` 三元组。
+            `(doc_infos, source_store)` 二元组。
         """
         source_store = CollectorSourceStore()
         doc_infos = []
@@ -779,65 +772,7 @@ class InfoRetrievalNode(BaseNode):
             _, doc_info = build_evidence_atom(record=record, query=query, source_store=source_store)
             doc_infos.append(doc_info)
 
-        if len(doc_infos) != 0:
-            scored_result = await run_doc_evaluation(
-                query=query,
-                documents=build_evaluation_documents(doc_infos),
-                llm=self.llm
-            )
-        else:
-            scored_result = []
-
-        return doc_infos, scored_result, source_store.to_dict()
-
-    def _process_post_process_result(self, scored_result: list[dict], doc_infos: list, section_idx: int):
-        """把 evaluator 结果合并回 doc_infos。
-
-        Args:
-            scored_result: evaluator 输出的评分结果。
-            doc_infos: 当前 query 生成的兼容 doc_infos。
-            section_idx: 当前章节索引，用于日志。
-
-        Returns:
-            已补齐结构化 scores 和兼容期字段的 doc_infos。
-        """
-        seen_indexes = set()
-        for idx, scored in enumerate(scored_result):
-            if not isinstance(scored, dict):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result is not a dict (type={type(scored).__name__}), skipping index:{idx}")
-                continue
-            if "content" in scored:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result contains deprecated content index, skipping index:{idx}")
-                continue
-            if "document_index" not in scored:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result missing document_index, skipping index:{idx}")
-                continue
-            try:
-                index = int(scored.get("document_index"))
-            except (TypeError, ValueError):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Invalid score result document_index, skipping index:{idx}")
-                continue
-            if index < 0 or index >= len(doc_infos):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result document_index:{index} is out of range, skipping")
-                continue
-            if index in seen_indexes:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Duplicate score result document_index:{index}, skipping")
-                continue
-
-            scores = normalize_scores(scored.get("scores"))
-            publish_time = scored.get("publish_time") or scored.get("doc_time") or "未提供时间信息"
-            doc_infos[index]["scores"] = scores
-            doc_infos[index]["publish_time"] = publish_time
-            normalize_doc_info_scores_and_time(doc_infos[index])
-            seen_indexes.add(index)
-
-        return doc_infos
+        return doc_infos, source_store.to_dict()
 
     def _prepare_collector_tool(self, state: dict):
         """准备信息收集器工具."""

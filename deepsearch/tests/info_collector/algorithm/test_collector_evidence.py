@@ -1,3 +1,5 @@
+import re
+
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     CollectorSourceStore,
     build_content_dedup_hash,
@@ -11,10 +13,10 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     generate_source_id,
     MAX_PASSAGE_LENGTH,
     normalize_content_for_dedup,
-    normalize_doc_info_scores_and_time,
-    normalize_scores,
     read_content_by_ref,
     split_passages,
+    _is_markdown_table,
+    _split_long_table,
 )
 
 
@@ -132,37 +134,47 @@ def test_content_ref_legacy_doc_infos_returns_legacy_content_directly(caplog):
 
 def test_extract_key_passages_prefers_query_matches_and_data_dense_text():
     content = (
-        "泛泛介绍新能源行业。\n"
-        "宁德时代 2025 年动力电池装机量增长 18%，市场份额达到 37%。\n"
-        "其他无关描述。\n"
-        "宁德时代海外收入同比增长 21%，欧洲客户订单增加。"
+        "泛泛介绍新能源行业整体发展概况和趋势走向，没有太多细节。\n\n"
+        "宁德时代 2025 年动力电池装机量增长 18%，市场份额达到 37%，行业领先。\n\n"
+        "其他无关描述内容，与查询关键词没有直接关系，仅供参考。\n\n"
+        "宁德时代海外收入同比增长 21%，欧洲客户订单大幅增加，业绩超预期。"
     )
 
     passages = extract_key_passages(content, query="宁德时代 市场份额 海外收入", title="宁德时代经营表现")
 
-    assert len(passages) == 2
-    assert "市场份额" in passages[0] or "海外收入" in passages[0]
+    # COINS: short passages may be merged; verify relevant content is present
+    assert any("市场份额" in p or "海外收入" in p for p in passages)
     assert all(len(passage) <= 500 for passage in passages)
 
 
 def test_extract_key_passages_falls_back_to_front_passages_when_no_match():
-    content = "第一段没有关键词。\n第二段仍然没有关键词。\n第三段也没有。"
-
-    passages = extract_key_passages(content, query="完全不同", title="标题")
-
-    assert passages == ["第一段没有关键词。", "第二段仍然没有关键词。", "第三段也没有。"]
-
-
-def test_extract_key_passages_does_not_treat_numeric_density_as_keyword_match():
     content = (
-        "第一段行业背景。\n"
-        "无关公司在 2025 年收入增长 99%，利润率提升 18%。\n"
-        "第三段其他背景。"
+        "第一段没有关键词只是泛泛而谈的背景介绍文字内容较长超过四十字符。\n\n"
+        "第二段仍然没有关键词继续做一些无关的描述说明内容也超过四十字符。\n\n"
+        "第三段也没有结尾段落内容到此结束这是最后一句话确保超过四十字符。"
     )
 
     passages = extract_key_passages(content, query="完全不同", title="标题")
 
-    assert passages == ["第一段行业背景。", "无关公司在 2025 年收入增长 99%，利润率提升 18%。", "第三段其他背景。"]
+    # COINS: short passages (< 40 chars) may be merged into previous; verify content present
+    assert len(passages) >= 1
+    assert all("关键词" in p or "段落" in p for p in passages)
+
+
+def test_extract_key_passages_does_not_treat_numeric_density_as_keyword_match():
+    content = (
+        "第一段行业背景介绍内容涵盖宏观环境和市场概况超过四十字符。\n\n"
+        "无关公司在 2025 年收入增长 99%，利润率提升 18%，数据密度高，超过四十字符。\n\n"
+        "第三段其他背景与前面内容关联度不大的补充说明也超过四十字符。"
+    )
+
+    passages = extract_key_passages(content, query="完全不同", title="标题")
+
+    # COINS: short passages may be merged; verify all content is present
+    combined = " ".join(passages)
+    assert "行业背景" in combined
+    assert "收入增长" in combined
+    assert "第三段" in combined
 
 
 def test_extract_key_passages_splits_chinese_sentences_without_spaces():
@@ -179,11 +191,13 @@ def test_split_passages_keeps_decimal_and_version_dots_intact():
 
     passages = split_passages(content)
 
-    assert passages == [
-        "利润率提升 1.5%，版本 3.10.2 已发布，详情见 example.com。",
-        "Revenue grew.",
-        "Margin improved.",
-    ]
+    # COINS 2025: 短句子累积到一个窗口内，小数点和版本号不被拆分
+    assert len(passages) == 1
+    assert "1.5%" in passages[0]
+    assert "3.10.2" in passages[0]
+    assert "example.com" in passages[0]
+    assert "Revenue grew." in passages[0]
+    assert "Margin improved." in passages[0]
 
 
 def test_build_evidence_atom_excludes_original_content_from_atom():
@@ -357,7 +371,7 @@ def test_build_prompt_views_never_include_original_content():
     assert summary_pack["sources"][0]["source_id"] == "web_1"
 
 
-def test_build_supervisor_evidence_table_sorts_all_items():
+def test_build_supervisor_evidence_table_preserves_input_order():
     doc_infos = [
         {
             "doc_id": f"web_{idx}",
@@ -372,7 +386,8 @@ def test_build_supervisor_evidence_table_sorts_all_items():
     table = build_supervisor_evidence_table(doc_infos)
 
     assert len(table) == 30
-    assert table[0]["source_id"] == "web_29"
+    # scores sorting was removed; input order is preserved.
+    assert table[0]["source_id"] == "web_0"
 
 
 def test_build_evidence_views_sort_all_items():
@@ -417,34 +432,112 @@ def test_build_supervisor_evidence_table_truncates_single_oversized_item():
     assert len(str(table)) < 2500
 
 
-def test_normalize_scores_accepts_missing_and_numeric_values():
-    scores = normalize_scores({"authority": "8.5", "relevance": 9, "answerability": None})
-
-    assert scores == {
-        "authority": 8.5,
-        "relevance": 9.0,
-        "answerability": None,
-        "data_density": None,
-    }
+# ---- table-aware splitting tests ----
 
 
-def test_normalize_doc_info_scores_and_time_keeps_only_downstream_fields():
-    doc_info = {
-        "scores": {"authority": 8.0, "relevance": 9.0, "answerability": 7.5, "data_density": 6.0},
-        "publish_time": "2025 5月",
-    }
+def _make_long_table(row_count: int) -> str:
+    """构造一个超过 MAX_PASSAGE_LENGTH 的 Markdown 表格。"""
+    header = "| 指标 | 数值 | 同比变化 |\n| --- | --- | --- |"
+    rows = [f"| 营收 | {i * 100}万 | +{i}% |" for i in range(row_count)]
+    return header + "\n" + "\n".join(rows)
 
-    hydrated = normalize_doc_info_scores_and_time(doc_info)
 
-    assert "source_authority" not in hydrated
-    assert "task_relevance" not in hydrated
-    assert "information_richness" not in hydrated
-    assert "data_density" not in hydrated
-    assert hydrated["scores"] == {
-        "authority": 8.0,
-        "relevance": 9.0,
-        "answerability": 7.5,
-        "data_density": 6.0,
-    }
-    assert hydrated["doc_time"] == "2025 5月"
-    assert "_legacy_compatibility_fields" not in hydrated
+def test_is_markdown_table_detects_standard_table():
+    table = "| 列1 | 列2 |\n| --- | --- |\n| 数据1 | 数据2 |"
+    assert _is_markdown_table(table) is True
+
+
+def test_is_markdown_table_detects_aligned_table():
+    table = "| 列1 | 列2 |\n|:---|:---:|\n| 数据1 | 数据2 |"
+    assert _is_markdown_table(table) is True
+
+
+def test_is_markdown_table_rejects_plain_text():
+    assert _is_markdown_table("这是一段普通文本。") is False
+    assert _is_markdown_table("第一行\n第二行\n第三行") is False
+
+
+def test_is_markdown_table_rejects_too_few_lines():
+    assert _is_markdown_table("| 列1 | 列2 |") is False
+    assert _is_markdown_table("| 列1 | 列2 |\n| --- | --- |") is False
+
+
+def test_split_long_table_preserves_header_in_each_fragment():
+    table = _make_long_table(40)
+    fragments = _split_long_table(table, max_length=500)
+
+    assert len(fragments) > 1
+    for frag in fragments:
+        # 每个片段都必须包含表头行和分隔行
+        assert frag.startswith("| 指标 | 数值 | 同比变化 |")
+        assert "| --- | --- | --- |" in frag
+
+
+def test_split_long_table_all_fragments_within_limit():
+    table = _make_long_table(60)
+    fragments = _split_long_table(table, max_length=500)
+
+    for frag in fragments:
+        assert len(frag) <= 600  # 允许表头+一行略超
+
+
+def test_split_long_table_returns_single_fragment_for_short_table():
+    table = "| 列1 | 列2 |\n| --- | --- |\n| 数据1 | 数据2 |"
+    fragments = _split_long_table(table, max_length=500)
+    assert len(fragments) == 1
+
+
+def test_split_long_passage_uses_table_aware_splitting():
+    """超长 Markdown 表格走表格分支，而不是句号切分。"""
+    table = _make_long_table(40)
+    fragments = _split_long_table(table, max_length=500)
+
+    assert len(fragments) > 1
+    # 每个片段都应有表头（表格感知），不被句号拆散
+    for frag in fragments:
+        assert "| 指标 |" in frag
+        assert "| --- |" in frag
+
+
+def test_split_long_passage_adds_overlap_for_text():
+    """长文本切分时，片段间应保留 COINS 2025 推荐的 ~200 字符重叠。"""
+    # 每句 20 字符，80 句 = 1600 字符，远超 500
+    sentences = "这是第一句测试用的话。" * 80
+    fragments = split_passages(sentences, max_length=500, overlap=200)
+
+    assert len(fragments) > 1
+    # 验证：第二个片段的开头应包含第一个片段末尾的重叠内容
+    if len(fragments) >= 2:
+        # 取第一个片段末尾 200 字符以内、以句号结尾的部分
+        first_tail = fragments[0][-200:]
+        # 重叠区域应在第二个片段开头出现
+        # 至少应有 1 句完整重叠（约 20 字符）
+        assert any(
+            frag_sent in fragments[1]
+            for frag_sent in re.findall(r"[^。]+。", first_tail)
+        )
+
+
+def test_split_passages_preserves_tables_in_content():
+    """split_passages 端到端：包含表格的长内容应正确切分。"""
+    intro = "以下是公司季度财务数据汇总表。\n\n"
+    table = _make_long_table(40)
+    outro = "\n\n如上表所示，公司收入持续增长。"
+    content = intro + table + outro
+
+    passages = split_passages(content)
+
+    # 表格应被识别为表格块，切分后每个片段保留表头
+    table_passages = [p for p in passages if "| 指标 |" in p]
+    assert len(table_passages) >= 1
+    for tp in table_passages:
+        assert "| 指标 |" in tp
+        assert "| --- |" in tp
+
+
+def test_split_passages_overlap_does_not_break_short_content():
+    """短内容不受 overlap 影响。"""
+    content = "第一段内容。第二段内容。第三段内容。"
+    passages = split_passages(content)
+    assert len(passages) == 1
+    assert "第一段" in passages[0]

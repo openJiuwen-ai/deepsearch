@@ -416,7 +416,7 @@ class ServiceConfig(BaseModel):
     )
     info_collector_max_research_loops: int = Field(default=2, description="最大研究循环次数")
     info_collector_max_tool_call_turns_per_query: int = Field(default=2, ge=1, description="单个检索 query 最大工具调用轮次")
-    info_collector_max_retry_num: int = Field(default=3, description="最大重试次数")
+    info_collector_max_retry_num: int = Field(default=3, description="信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）")
     info_collector_allow_programmer: bool = Field(default=False, description="")
     info_collector_webpage_enrich_max_urls: int = Field(
         default=3,
@@ -432,8 +432,11 @@ class ServiceConfig(BaseModel):
     )
 
     # 报告节点参数
-    sub_report_classify_doc_infos_res_top_k_num: int = Field(default=20,
-                                                             description="子报告中单次llm处理返回的top_k数量")
+    sub_report_classify_doc_infos_res_top_k_num: int = Field(
+        default=15,
+        description="子报告中按覆盖度评分在每个 rationale 下选择的"
+                    " top-k 段落数量（_select_by_rationale_coverage 使用）",
+    )
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=True, description="报告插入图表开关")
 

@@ -15,20 +15,17 @@ authoritative source for every factual claim.
 
 # Input Context
 You will write using:
-1. **Collected Information**: Search results wrapped by [citation:X begin] ... [citation:X end].
+1. **Collected Information**: Key passages extracted from **multiple independent documents**, each wrapped by
+   `[citation:X begin]time: ...|||source: ...|||content: ...[citation:X end]`. Each citation is one passage from
+   one source. Passages from different citations may complement or contradict each other — synthesize across them.
 2. **Current Top-Level Section**: The current chapter title, description, and format requirements.
 3. **Current Chapter Outline**: The exact chapter/subchapter structure for this section.
-4. **Overall Outline**: Full report outline for context consistency.
-5. **Background Knowledge**: Condensed context from parent sections.
+4. **Background Knowledge**: Condensed context from parent sections.
 
 # Authoritative Writing Context
 
-Use the overall outline, the current top-level section, and the current chapter outline as authoritative constraints
+Use the current top-level section and the current chapter outline as authoritative constraints
 for this brief chapter. The current chapter outline is the primary writing boundary.
-
-<overall_outline>
-{{ outline }}
-</overall_outline>
 
 <current_section>
 title: {{ current_section }}
@@ -49,7 +46,7 @@ format_requirements: {{ current_section_format_requirements }}
 # User Output Constraint Preservation
 
 - Write only the current top-level section and its Level 2 headings from the current chapter outline.
-- Follow the overall outline, `format_requirements`, and the current chapter outline when they specify output format,
+- Follow the `format_requirements` and the current chapter outline when they specify output format,
   table requirements, item-by-item enumeration, time ranges, data points, source restrictions, or coverage requirements.
 - If the user requested a table, output a Markdown table. Do not replace a required table with prose.
 - If the user specified table columns, use those column names exactly and keep their order.
@@ -81,6 +78,10 @@ format_requirements: {{ current_section_format_requirements }}
 - Every number, date, amount, percentage, ranking, company name, policy name, and table cell must be traceable to the provided Collected Information.
 - Do not calculate derived metrics, comparisons, trends, or rankings unless the required source values are present and cited.
 - Multiple sources are allowed: `[citation:2][citation:7]`.
+- **Passage-level evidence**: Each citation is one passage from one source, not a complete document.
+  Combine multiple passages to build a complete argument. Prefer claims backed by multiple independent citations.
+- When sources present different perspectives rather than contradictions, synthesize them into a nuanced
+  statement rather than choosing one.
 - Do not output separate references in this chapter.
 - Background Knowledge is internal context from prior sections, not an external source.
 - You may refer back to prior sections in natural prose when it improves coherence.

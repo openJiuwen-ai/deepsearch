@@ -51,7 +51,6 @@ class NodeId(enum.Enum):
     COLLECTOR_SUMMARY = "collector_summary"
     COLLECTOR_PROGRAMMER = "collector_programmer"
     COLLECTOR_END = "collector_end"
-    DOC_EVALUATOR = "doc_evaluator"
     INFO_EVALUATOR = "info_evaluator"
     INFO_ORAGNIZER = "info_organizer"
 
@@ -81,7 +80,6 @@ class AgentLlmName(enum.Enum):
     GENERATE_QUESTIONS = NodeId.GENERATE_QUESTIONS.value
     OUTLINE = NodeId.OUTLINE.value
     PLAN_REASONING = NodeId.PLAN_REASONING.value
-    DOC_EVALUATOR = NodeId.DOC_EVALUATOR.value
 
     REPORTER_ABSTRACT = "reporter_abstract"
     REPORTER_CONCLUSION = "reporter_conclusion"
@@ -89,7 +87,7 @@ class AgentLlmName(enum.Enum):
 
     SUB_REPORTER = NodeId.SUB_REPORTER.value
     SUB_REPORTER_RATIONALE_GENERATOR = "sub_reporter_rationale_generator"
-    SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR = "sub_reporter_coverage_matrix_evaluator"
+    SUB_REPORTER_PASSAGES_EXTRACTOR = "sub_reporter_passages_extractor"
     SUB_REPORTER_OUTLINE = "sub_reporter_outline"
     SUB_REPORTER_VISUALIZATION_CONTENT = "sub_reporter_visualization_content"
     SUB_REPORTER_CHART_COMPLIANCE = "sub_reporter_chart_compliance"
