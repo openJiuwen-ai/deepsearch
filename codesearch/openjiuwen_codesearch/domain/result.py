@@ -36,3 +36,11 @@ class CodeSearchResult(BaseModel):
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     error: str = ""
+
+class CodeResolveResult(BaseModel):
+    patch: str = ""
+    termination: Termination
+    turns: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    error: str = ""

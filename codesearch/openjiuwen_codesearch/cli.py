@@ -62,6 +62,26 @@ async def _run(args: argparse.Namespace) -> int:
             )
         return 0
 
+    if args.command == "coder":
+        query = args.query
+        if not query and args.query_file:
+            with open(args.query_file, "r", encoding="utf-8") as f:
+                query = f.read()
+        if not query:
+            logger.error("Provide --query or --query-file")
+            return 2
+
+        from openjiuwen_codesearch.api.coder import CodeResolver
+        resolver = CodeResolver(
+            retriever=retriever,
+            repo_dir=args.repo_dir,
+            config=config,
+        )
+        patch = await resolver.resolve(query, commit=args.revision, max_turns=args.max_turns)
+        print("\n--- GENERATED PATCH ---\n")
+        print(patch)
+        return 0
+
     query = args.query
     if not query and args.query_file:
         with open(args.query_file, "r", encoding="utf-8") as f:
@@ -118,6 +138,14 @@ def main() -> None:
     p_search.add_argument("--collection", default="local_repo")
     p_search.add_argument("--revision", default="local")
     p_search.add_argument("--top-k", type=int, default=20)
+
+    p_coder = sub.add_parser("coder", help="Run the agentic issue resolver")
+    p_coder.add_argument("--query", default="")
+    p_coder.add_argument("--query-file", default="")
+    p_coder.add_argument("--collection", default="local_repo")
+    p_coder.add_argument("--revision", default="local")
+    p_coder.add_argument("--repo-dir", default=".", help="Local path to the repository directory")
+    p_coder.add_argument("--max-turns", type=int, default=40)
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")

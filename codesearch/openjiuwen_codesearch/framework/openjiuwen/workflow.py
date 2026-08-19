@@ -33,6 +33,10 @@ from openjiuwen_codesearch.framework.openjiuwen.nodes import (
     CSStartNode,
     ReasoningNode,
     ToolNode,
+    ResolverStartNode,
+    ResolverReasoningNode,
+    ResolverToolNode,
+    ResolverEndNode,
 )
 from openjiuwen_codesearch.framework.openjiuwen.runtime_context import (
     CodeSearchRunContext,
@@ -43,7 +47,10 @@ from openjiuwen_codesearch.framework.openjiuwen.steps import finalize
 logger = logging.getLogger(__name__)
 
 WORKFLOW_ID = "code_search"
-WORKFLOW_VERSION = "1"
+WORKFLOW_VERSION = "0.0.1"
+
+RESOLVE_WORKFLOW_ID = "code_resolve"
+RESOLVE_WORKFLOW_VERSION = "0.0.1"
 _INPUT_SCHEMA = {"run_id": str, "workflow_name": str}
 
 
@@ -61,6 +68,27 @@ def build_code_search_workflow() -> Workflow:
     flow.add_workflow_comp(NODE_REASONING, ReasoningNode())
     flow.add_workflow_comp(NODE_TOOL, ToolNode())
     flow.set_end_comp(NODE_END, CSEndNode())
+
+    flow.add_connection(NODE_START, NODE_REASONING)
+    flow.add_conditional_connection(
+        NODE_REASONING, router=init_router(NODE_REASONING, [NODE_TOOL, NODE_END])
+    )
+    flow.add_conditional_connection(
+        NODE_TOOL, router=init_router(NODE_TOOL, [NODE_REASONING, NODE_END])
+    )
+    return flow
+
+def build_code_resolve_workflow() -> Workflow:
+    card = WorkflowCard(id=RESOLVE_WORKFLOW_ID, version=RESOLVE_WORKFLOW_VERSION, name=RESOLVE_WORKFLOW_ID)
+    flow = Workflow(card=card)
+    flow.set_start_comp(
+        start_comp_id=NODE_START,
+        component=ResolverStartNode(),
+        inputs_schema={"workflow_name": RESOLVE_WORKFLOW_ID},
+    )
+    flow.add_workflow_comp(NODE_REASONING, ResolverReasoningNode())
+    flow.add_workflow_comp(NODE_TOOL, ResolverToolNode())
+    flow.set_end_comp(NODE_END, ResolverEndNode())
 
     flow.add_connection(NODE_START, NODE_REASONING)
     flow.add_conditional_connection(
@@ -94,6 +122,13 @@ class GraphCodeSearchAgent:
                                     name=WORKFLOW_ID,
                                     description=WORKFLOW_ID,
                                     input_params=_INPUT_SCHEMA,
+                                ),
+                                WorkflowCard(
+                                    id=RESOLVE_WORKFLOW_ID,
+                                    version=RESOLVE_WORKFLOW_VERSION,
+                                    name=RESOLVE_WORKFLOW_ID,
+                                    description=RESOLVE_WORKFLOW_ID,
+                                    input_params=_INPUT_SCHEMA,
                                 )
                             ],
                         )
@@ -106,6 +141,14 @@ class GraphCodeSearchAgent:
                                 factory=build_code_search_workflow,
                                 workflow_name=WORKFLOW_ID,
                                 workflow_description=WORKFLOW_ID,
+                                input_schema=_INPUT_SCHEMA,
+                            ),
+                            WorkflowFactory(
+                                workflow_id=RESOLVE_WORKFLOW_ID,
+                                workflow_version=RESOLVE_WORKFLOW_VERSION,
+                                factory=build_code_resolve_workflow,
+                                workflow_name=RESOLVE_WORKFLOW_ID,
+                                workflow_description=RESOLVE_WORKFLOW_ID,
                                 input_schema=_INPUT_SCHEMA,
                             )
                         ]

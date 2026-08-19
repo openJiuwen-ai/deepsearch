@@ -93,6 +93,7 @@ async def _run_milvus_benchmark(
     rows: list,
     results_dir: str,
     reset_indices: bool,
+    test_mode: str = "retriever",
 ) -> tuple[list, list[tuple[str, str]]]:
     groups: dict[str, list] = {}
     for row in rows:
@@ -103,6 +104,11 @@ async def _run_milvus_benchmark(
     failures: list[tuple[str, str]] = []
     done = 0
     partial_path = os.path.join(results_dir, "partial_predictions.jsonl")
+    patch_dir = os.path.join(results_dir, "coder_patches")
+    if test_mode == "coder":
+        os.makedirs(patch_dir, exist_ok=True)
+        partial_path = os.path.join(patch_dir, "predictions.jsonl")
+
     for collection, group_rows in groups.items():
         retriever = CodeSearchRetriever(config=config, collection_name=collection)
         logger.info("=" * 50)
@@ -119,32 +125,58 @@ async def _run_milvus_benchmark(
                     instance_id=row["instance_id"],
                     reset=(reset_indices and row is group_rows[0]),
                 )
-                indexed_rows.append(row)
+                indexed_rows.append((row, repo_dir))
             except Exception as e:  # 单实例失败不终止长跑
                 logger.error("Index failed for %s: %s", row["instance_id"], e)
                 failures.append((row["instance_id"], f"index: {e}"))
 
-        for row in indexed_rows:
+        for row, repo_dir in indexed_rows:
             try:
-                result = await retriever.search(
-                    row["problem_statement"],
-                    revision=row["base_commit"],
-                    top_k=config.agent.retrieve_topk,
-                )
+                if test_mode == "coder":
+                    from openjiuwen_codesearch.api.coder import CodeResolver
+                    resolver = CodeResolver(
+                        retriever=retriever,
+                        repo_dir=repo_dir,
+                        config=config
+                    )
+                    final_diff = await resolver.resolve(row["problem_statement"], commit=row["base_commit"])
+                    
+                    instance_id = row["instance_id"]
+                    patch_path = os.path.join(patch_dir, f"{instance_id}.patch")
+                    with open(patch_path, "w", encoding="utf-8") as f:
+                        f.write(final_diff)
+                    
+                    pred = {
+                        "instance_id": row.get("original_inst_id", instance_id),
+                        "model_patch": final_diff,
+                        "model_name_or_path": "openjiuwen_coder",
+                    }
+                    preds.append(pred)
+                    import json
+                    with open(partial_path, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(pred, ensure_ascii=False) + "\n")
+                    done += 1
+                    logger.info("[%d/%d] %s: Patch generated", done, len(rows), instance_id)
+                else:
+                    result = await retriever.search(
+                        row["problem_statement"],
+                        revision=row["base_commit"],
+                        top_k=config.agent.retrieve_topk,
+                    )
+                    pred = _result_to_pred(row["instance_id"], result)
+                    preds.append(pred)
+                    append_prediction(partial_path, pred)
+                    done += 1
+                    logger.info(
+                        "[%d/%d] %s: %d hits, termination=%s, tokens=%din/%dout",
+                        done, len(rows), row["instance_id"], len(result.hits),
+                        result.termination.value,
+                        result.total_input_tokens, result.total_output_tokens,
+                    )
             except Exception as e:
-                logger.error("Search failed for %s: %s", row["instance_id"], e)
-                failures.append((row["instance_id"], f"search: {e}"))
+                logger.error("Eval failed for %s: %s", row["instance_id"], e)
+                failures.append((row["instance_id"], f"eval: {e}"))
                 continue
-            pred = _result_to_pred(row["instance_id"], result)
-            preds.append(pred)
-            append_prediction(partial_path, pred)
-            done += 1
-            logger.info(
-                "[%d/%d] %s: %d hits, termination=%s, tokens=%din/%dout",
-                done, len(rows), row["instance_id"], len(result.hits),
-                result.termination.value,
-                result.total_input_tokens, result.total_output_tokens,
-            )
 
         store = retriever.get_store()
         if store is not None and hasattr(store, "release"):
@@ -160,6 +192,7 @@ async def run_benchmark(
     num_instances: int = 4,
     results_dir: str = "./results",
     reset_indices: bool = False,
+    test_mode: str = "retriever",
 ) -> str:
     # worktree 根默认收敛到本工作目录：系统 /tmp 是共享命名空间，
     # 同机他人跑 contextbench 时会发生同 commit worktree 冲突（且 sticky bit
@@ -173,11 +206,16 @@ async def run_benchmark(
         preds, failures = await _run_retropus_benchmark(config, rows, results_dir)
     else:
         preds, failures = await _run_milvus_benchmark(
-            config, rows, results_dir, reset_indices
+            config, rows, results_dir, reset_indices, test_mode
         )
 
     if failures:
         logger.warning("%d instances failed: %s", len(failures), failures)
+
+    if test_mode == "coder":
+        partial_path = os.path.join(results_dir, "coder_patches", "predictions.jsonl")
+        logger.info("Coder patches and predictions saved at %s", partial_path)
+        return partial_path
 
     # 3) 写预测（单文件）并调官方评测
     pred_file = write_predictions(
@@ -246,16 +284,28 @@ def main() -> None:
         default="",
         help="Override main/filter LLM model_name (e.g. openai/gpt-5-mini)",
     )
+    parser.add_argument(
+        "--test-mode",
+        default="retriever",
+        choices=["retriever", "coder"],
+        help="Whether to run retrieval evaluation or generate coder patches.",
+    )
     args = parser.parse_args()
+    
+    from datetime import datetime
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    args.results_dir = f"{args.results_dir}__{stamp}"
 
     logging.basicConfig(level=logging.INFO)
     config = _config_from_args(args)
+    config.agent.trace_dir = os.path.join(args.results_dir, "agent_logs")
     asyncio.run(
         run_benchmark(
             config,
             num_instances=args.num_instances,
             results_dir=args.results_dir,
             reset_indices=args.reset_indices,
+            test_mode=args.test_mode,
         )
     )
 

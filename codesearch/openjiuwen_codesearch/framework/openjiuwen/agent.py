@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
 
 from openjiuwen_codesearch.algorithm.search_tools.registry import registry_schemas
 from openjiuwen_codesearch.domain.result import CodeSearchResult, FinalHit, Termination
-from openjiuwen_codesearch.framework.openjiuwen.runtime_context import CodeSearchRunContext
+from openjiuwen_codesearch.framework.openjiuwen.runtime_context import CodeSearchRunContext, CodeResolveRunContext, run_resolve_session
 from openjiuwen_codesearch.framework.openjiuwen.steps import finalize, reasoning_step, tool_step
 from openjiuwen_codesearch.llm.factory import ChatMessage
 
@@ -357,3 +357,53 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
         )
         ctx.result = result
         return result
+
+class GraphCodeResolveAgent:
+    """Agentic Code Resolver executing via openjiuwen Workflow graph."""
+
+    def __init__(self) -> None:
+        pass
+
+    async def resolve(self, ctx: CodeResolveRunContext) -> str:
+        """Run the resolve loop."""
+        from openjiuwen_codesearch.framework.openjiuwen.workflow import (
+            RESOLVE_WORKFLOW_ID,
+            RESOLVE_WORKFLOW_VERSION,
+            GraphCodeSearchAgent,
+        )
+        from openjiuwen_codesearch.domain.result import Termination
+        from openjiuwen.core.runner.runner import Runner
+        from openjiuwen.core.session import workflow_session_vars
+        from openjiuwen.core.session.constants import WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY
+
+        # Ensure workflows are registered in the global LegacyWorkflowAgent
+        GraphCodeSearchAgent._get_shared_agent()
+
+        with run_resolve_session(ctx) as run_id:
+            session_vars = dict(workflow_session_vars.get() or {})
+            session_vars[WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY] = str(
+                ctx.config.agent.time_limit_seconds
+            )
+            session_token = workflow_session_vars.set(session_vars)
+            
+            try:
+                await Runner.run_workflow(
+                    workflow=f"{RESOLVE_WORKFLOW_ID}_{RESOLVE_WORKFLOW_VERSION}",
+                    inputs={"run_id": run_id, "workflow_name": RESOLVE_WORKFLOW_ID},
+                )
+                if ctx.result is None:
+                    from openjiuwen_codesearch.framework.openjiuwen.steps import finalize_resolve
+                    logger.warning("Resolve Workflow ended without EndNode result; finalizing from context.")
+                    finalize_resolve(ctx, ctx.pending_termination or Termination.LLM_ERROR)
+            except Exception as e:
+                logger.error("Resolve workflow graph execution failed or timed out: %s", e)
+                ctx.pending_termination = Termination.LLM_ERROR
+                ctx.error = f"Workflow Error: {e}"
+                from openjiuwen_codesearch.framework.openjiuwen.steps import finalize_resolve
+                finalize_resolve(ctx, ctx.pending_termination)
+            finally:
+                workflow_session_vars.reset(session_token)
+
+        if not ctx.result:
+            return ""
+        return ctx.result.patch
