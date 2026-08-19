@@ -277,14 +277,53 @@ def build_research_intent_prompt_context(intent: ResearchIntent | dict | None) -
     }
 
 
-def build_temporal_scope_prompt_context(intent: ResearchIntent | dict | None) -> dict:
+def resolve_temporal_embed_in_query(
+    engine_name: str | None,
+    constraint_type: str,
+    secondary_engine_name: str | None = None,
+) -> bool:
+    """当前场景下生成的 query 是否还需要自行携带时间短语。
+
+    按引擎能力 × 约束类型：
+    - tavily × source_date → False（引擎已按 start/end_date 过滤，query 再带时间词是双重约束）；
+    - 其余 → True（其他引擎，或 content_date 场景时间词指向事实时间）。
+    engine_name 取不到可靠值时保守回退 True，避免约束丢失。
+
+    secondary_engine_name：同一批 query 可能被副引擎再跑一遍
+    （info_collector 的 secondary web search）。副引擎非空且不支持原生时间过滤时，
+    即使主引擎是 tavily 也必须嵌入时间词——否则副引擎的结果完全失去时间约束信号。
+    规划器按 step 指派副引擎,query 生成时拿不到的调用点传 None（退化为只看主引擎）。
+    """
+    if constraint_type != "source_date":
+        return True
+    # web_search.py 反向 import 本模块的 TemporalScope，顶层 import 会循环依赖，故函数内延迟加载。
+    from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import TEMPORAL_SCOPE_SEARCH_ENGINES
+    primary = str(engine_name or "").strip().lower()
+    if primary not in TEMPORAL_SCOPE_SEARCH_ENGINES:
+        return True
+    secondary = str(secondary_engine_name or "").strip().lower()
+    if secondary and secondary not in TEMPORAL_SCOPE_SEARCH_ENGINES:
+        return True
+    return False
+
+
+def build_temporal_scope_prompt_context(
+        intent: ResearchIntent | dict | None,
+        engine_name: str | None = None,
+        secondary_engine_name: str | None = None,
+) -> dict:
     """将时间约束转换为研究阶段 prompt 可直接消费的上下文。
 
     Args:
         intent: 结构化研究意图或兼容字典。
+        engine_name: 当前主 web 搜索引擎名称，用于信号矩阵判定 query 是否携带时间；
+            传 None/空时保守按"带时间"处理。
+        secondary_engine_name: 当前 step 的副 web 搜索引擎名称（可能跑同一批 query）；
+            非空且不支持原生时间过滤时，信号矩阵强制 query 携带时间词。
 
     Returns:
-        包含时间约束类型、边界和自然语言指令的 prompt 上下文；无约束时返回空字段。
+        prompt 上下文（约束类型、边界、自然语言指令）；无约束时返回空字段。
+        temporal_embed_in_query 为 False 时，temporal_query_instruction 指示 query 不带时间词。
     """
     if intent is None:
         scope = None
@@ -297,6 +336,9 @@ def build_temporal_scope_prompt_context(intent: ResearchIntent | dict | None) ->
         return {
             "has_temporal_scope": False,
             "temporal_scope_instruction": "",
+            "temporal_embed_in_query": False,
+            "temporal_open_ended": False,
+            "temporal_query_instruction": "",
         }
 
     start_date = scope.start_date.isoformat() if scope.start_date else ""
@@ -313,9 +355,34 @@ def build_temporal_scope_prompt_context(intent: ResearchIntent | dict | None) ->
     else:
         instruction = f"Keep the facts and data {boundary}, using inclusive boundary dates."
 
+    embed_in_query = resolve_temporal_embed_in_query(
+        engine_name, scope.constraint_type, secondary_engine_name
+    )
+    # 开放边界:缺 end_date,语义为"最新";此时 query 必须用 CURRENT_TIME 换算成具体年份/月份。
+    open_ended = scope.end_date is None
+    if not embed_in_query:
+        query_instruction = (
+            "The research time boundary above is already enforced by the search engine's native "
+            "date filters. Do not add any time, date, or year words to the queries; use topical "
+            "keywords only."
+        )
+    elif open_ended:
+        query_instruction = (
+            "Express this boundary naturally in every query. This boundary is open-ended "
+            "(\"latest\" semantics): never use vague time words such as \"latest\" or \"recent\"; "
+            "convert them into a concrete year or month derived from the current time."
+        )
+    else:
+        query_instruction = (
+            "Express this boundary naturally in every query, using the concrete boundary dates above."
+        )
+
     return {
         "has_temporal_scope": True,
         "temporal_scope_instruction": instruction,
+        "temporal_embed_in_query": embed_in_query,
+        "temporal_open_ended": open_ended,
+        "temporal_query_instruction": query_instruction,
     }
 
 

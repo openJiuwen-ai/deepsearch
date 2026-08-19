@@ -251,6 +251,18 @@ def _fallback_search_query_list(
     return SearchQueryList(queries=[step_title] if step_title else [], missing_evidence=[])
 
 
+def _collector_web_search_engine_name(session: Session) -> str:
+    """从全局 config 取当前主 web 搜索引擎名称。
+
+    与 InfoRetrievalNode 同源(session 级 ``config.web_search_engine_config``)。
+    取不到可靠值时返回空字符串,由 resolve_temporal_embed_in_query 保守回退为
+    "query 带时间",避免引擎原生过滤与 query 时间词同时缺失。
+    """
+    engine_config = session.get_global_state("config.web_search_engine_config")
+    engine_name = getattr(engine_config, "search_engine_name", "") or ""
+    return str(engine_name)
+
+
 class StartNode(Start):
     """
     起始节点，初始化 Session global_state 中的 collector_context
@@ -341,7 +353,9 @@ class GenerateQueryNode(BaseNode):
             "language": language,
             "report_type": report_type,
         }
-        agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
+        agent_input.update(build_temporal_scope_prompt_context(
+            state.get("research_intent"), engine_name=_collector_web_search_engine_name(session),
+            secondary_engine_name=state.get("secondary_web_search_engine_name")))
         formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
 
         result: SearchQueryList = await self._invoke_llm_with_retry(
@@ -515,7 +529,9 @@ class SupervisorNode(BaseNode):
             "language": state.get("language", "zh-CN"),
             "report_type": report_type,
         }
-        agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
+        agent_input.update(build_temporal_scope_prompt_context(
+            state.get("research_intent"), engine_name=_collector_web_search_engine_name(session),
+            secondary_engine_name=state.get("secondary_web_search_engine_name")))
         formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
 
         result: Reflection = await self._invoke_llm_with_retry(

@@ -50,10 +50,17 @@
 - `Outline.sections[*].section_focus` 和 `focus_dimensions` 会生成章节局部合同。
 - `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL、禁引文章标题（`exclude_titles`）、域名约束和可空 `temporal_scope`。
 - `TemporalScope` 的 `constraint_type` 为 `source_date` 或 `content_date`，并要求 `start_date` /
-  `end_date` 至少存在一个包含边界。`source_date` 可由 Tavily 原生日期参数和 Tavily 发表日期后置过滤共同执行；
+  `end_date` 至少存在一个包含边界。`source_date` 可由支持原生日期参数的搜索引擎（见
+  `TEMPORAL_SCOPE_SEARCH_ENGINES`，目前仅 Tavily）和统一后置过滤共同执行；
   `content_date` 只通过 collector query 表达事实或数据的时间范围，不按来源发布日期过滤。
-- `build_temporal_scope_prompt_context()` 只为 collector query 与补搜 Prompt 生成
-  `has_temporal_scope` 和 `temporal_scope_instruction`，不改变其他研究阶段的 Prompt 契约。
+- `resolve_temporal_embed_in_query()` 按（引擎能力, constraint_type）信号矩阵决定 query 是否
+  自行携带时间短语：引擎原生过滤已生效的场景（Tavily × `source_date`）返回 False，消除
+  双重约束；引擎名取不到可靠值时保守回退 True。
+- `build_temporal_scope_prompt_context()` 为 collector query 与补搜 Prompt 生成
+  `has_temporal_scope`、`temporal_scope_instruction`、`temporal_embed_in_query`、
+  `temporal_open_ended` 和 `temporal_query_instruction`；开放边界（缺 `end_date`）时
+  Prompt 禁止 latest/recent 等模糊时间词，要求换算成具体年份或月份。
+  不改变其他研究阶段的 Prompt 契约。
 - `outline_execution_method` 保存本次大纲实际执行方式，当前有效值为 `parallel` 或 `dependency_driving`；缺失或非法时按普通并行大纲处理。
 
 ## 边界与错误处理

@@ -492,7 +492,12 @@ class TestSearchResultProcessing:
             self.agent_input, tool_content
         )
 
-        assert result == tool_content
+        assert result == [modified_input["web_page_search_record"][-1]]
+        assert result[0]["type"] == "page"
+        assert result[0]["title"] == "Google Result"
+        assert result[0]["url"] == "http://google.com"
+        assert result[0]["content"] == "Snippet"
+        assert result[0]["date_metadata"]["parsed_date"] == "2020-01-01"
         assert "web_page_search_record" in modified_input
 
     def test_process_common_search_result(self):
@@ -511,7 +516,10 @@ class TestSearchResultProcessing:
             self.agent_input, tool_content
         )
 
-        assert result == tool_content
+        assert result == [modified_input["web_page_search_record"][-1]]
+        assert result[0]["title"] == "Common Result"
+        assert result[0]["url"] == "https://common.com"
+        assert result[0]["date_metadata"]["parsed_date"] == "2020-01-01"
         assert "web_page_search_record" in modified_input
 
     def test_filter_search_results_by_exclude_domains(self):
@@ -594,7 +602,8 @@ class TestSearchResultProcessing:
                 "content": "Summary body",
             },
         ]
-        assert result == tool_content
+        assert [item["title"] for item in result] == ["Alias title", "Summary title"]
+        assert result == expected_records
         assert modified_input["web_page_search_record"][-2:] == expected_records
 
     def test_normalize_tavily_result_consumes_canonical_source_date(self):
@@ -615,6 +624,8 @@ class TestSearchResultProcessing:
             "type": "published",
             "value": "2020-01-02",
             "parsed_date": "2020-01-02",
+            "granularity": "day",
+            "confidence": "high",
         }
 
     def test_normalize_full_text_contract_without_source_specific_logic(self):
@@ -723,8 +734,8 @@ class TestSearchResultProcessing:
         assert kept == [web_record]
         assert len(local_output["local_text_search_record"]) == 1
 
-    def test_process_common_result_keeps_records_without_tavily_temporal_filter(self, caplog):
-        """非 Tavily 结果即使携带日期字段也不执行时间过滤。"""
+    def test_process_common_result_applies_temporal_filter_on_high_confidence_dates(self, caplog):
+        """非 Tavily 结果同样执行统一后置过滤:只删高置信越界,未知日期保留。"""
         agent_input = {
             "web_page_search_record": [],
             "search_query": "policy query",
@@ -749,11 +760,56 @@ class TestSearchResultProcessing:
 
         tool_view, modified_input = process_common_search_result(agent_input, tool_content)
 
-        assert [item["title"] for item in modified_input["web_page_search_record"]] == ["Keep", "Drop", "Unknown"]
-        assert [item["title"] for item in tool_view] == ["Keep", "Drop", "Unknown"]
-        assert all("date_metadata" not in item for item in tool_view)
-        assert "source_date filter applied" not in caplog.text
+        assert [item["title"] for item in modified_input["web_page_search_record"]] == ["Keep", "Unknown"]
+        assert [item["title"] for item in tool_view] == ["Keep", "Unknown"]
+        assert "source_date filter applied. raw=3 kept=2 filtered_out=1" in caplog.text
         assert "secret" not in caplog.text
+
+    def test_temporal_filter_drops_only_high_confidence_violations(self):
+        """过滤口径:高置信 violation 才删;medium 置信 violation 与 unknown 一律保留。"""
+        scope = {"constraint_type": "source_date", "start_date": "2020-06-15", "end_date": "2020-12-31"}
+        records = [
+            # 高置信越界 → 删除
+            _normalize_web_search_item({
+                "title": "HighViolation",
+                "url": "https://example.com/a",
+                "content": "body",
+                "source_date": "2019-06-01",
+                "source_date_type": "published",
+            }, include_date_metadata=True),
+            # medium 置信(URL)越界 → 保留,交给软着陆排序
+            _normalize_web_search_item({
+                "title": "MediumViolation",
+                "url": "https://example.com/2019/06/01/story",
+                "content": "body",
+            }, include_date_metadata=True),
+            # 月粒度与 start 边界交叠,区间说不清 → unknown → 保留
+            _normalize_web_search_item({
+                "title": "MonthUnknown",
+                "url": "https://example.com/2020/06/",
+                "content": "body",
+            }, include_date_metadata=True),
+            # 完全无日期 → unknown → 保留
+            _normalize_web_search_item({
+                "title": "NoDate",
+                "url": "https://example.com/plain",
+                "content": "body",
+            }, include_date_metadata=True),
+            # 高置信 compliant → 保留
+            _normalize_web_search_item({
+                "title": "Compliant",
+                "url": "https://example.com/b",
+                "content": "body",
+                "source_date": "2020-06-15",
+                "source_date_type": "published",
+            }, include_date_metadata=True),
+        ]
+
+        kept = filter_web_records_by_temporal_scope(records, scope)
+
+        assert [item["title"] for item in kept] == [
+            "MediumViolation", "MonthUnknown", "NoDate", "Compliant",
+        ]
 
     def test_tavily_temporal_filter_logs_all_out_of_range_records(self, caplog):
         """Tavily 日志中的越界文档计数应覆盖整批结果。"""

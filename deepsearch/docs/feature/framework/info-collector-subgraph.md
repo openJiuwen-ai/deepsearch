@@ -34,10 +34,12 @@
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/collector_graph/info_collector.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/collector_graph/webpage_enrichment.py`
 - `openjiuwen_deepsearch/algorithm/research_collector/webpage_enrichment.py`
+- `openjiuwen_deepsearch/algorithm/research_collector/html_boilerplate_filter.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/editor_team_nodes.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/dependency_reasoning_team_nodes.py`
 - `tests/framework/test_background_knowledge.py`
 - `tests/info_collector/test_webpage_enrichment.py`
+- `tests/info_collector/test_html_boilerplate_filter.py`
 - `tests/info_collector/algorithm/test_tool_log.py`
 
 ## 核心流程
@@ -76,6 +78,10 @@
 8. 压缩 LLM 同时接收已有 `original_content` 和新抓取正文，合并并保留已有可验证事实；浏览器验证、CAPTCHA、访问拒绝、登录、JavaScript 提示、错误页或重定向占位页视为无效抓取内容并被忽略。输出正文保持网页来源语言，不在证据增强阶段按 collector 的 `language` 翻译；面向用户的语言本地化由后续报告生成处理。写回前限制在 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 以内。
 9. 节点使用已有 `key_passages` 检查数字、单位和设备/数据集标识是否保留；匹配时忽略大小写、空格和标点差异。质量门禁通过后才集中写回 `new_doc_infos_current_loop`、累计 `doc_infos`、`history_queries[*].doc_infos` 和 `source_store`，然后交给 `SupervisorNode`、`SummaryNode` 和最终报告器使用。
 
+直连抓取成功且正文过充分性门槛后，节点会对同一 URL 顺带做一次流式完整 HTML 抓取（上限约 2MB，独立超时上限 10 秒，仍受单 URL 整体 deadline 约束），用于正文净化：`algorithm/research_collector/html_boilerplate_filter.py` 在 DOM 级删除导航/页脚等页面框架内容（链接密度 ≥0.5 且命中中英页面框架特征词，或链接密度 ≥0.85 且链接数 ≥3 的几乎全是链接的块；占全页文本过半的布局容器永不删除），再按 harness 候选选择器思路提取主文本。特征词表与阈值是该模块的模块级常量，参数依据实验推荐方案。
+
+正文取舍：默认仍使用 harness 直连结果；仅当 `detect_boilerplate` 判定 harness 正文命中页面框架特征词、且净化输出达到 `MIN_FETCHED_CONTENT_LENGTH`（200 字符）时，才把抓取正文替换为净化输出，并记录 `boilerplate_replaced` 日志事件。完整 HTML 抓取失败或净化异常全部静默降级，保留 harness 原文，不丢文档；Jina fallback 路径不触发完整 HTML 抓取与净化替换。
+
 增强成功后会刷新：
 
 - `original_content`：压缩后的网页正文证据。
@@ -109,6 +115,7 @@
 - fetch 前 Info 日志记录 URL、候选索引、doc 索引和 scores。
 - fetch 成功后 Info 日志记录 `doc_id/source_id/status_code/raw_len/compressed_len/key_passages/scores`。
 - 普通抓取过短、Jina Reader 失败或质量门禁拒绝替换时记录原因和长度。
+- harness 正文被判定含 chrome 污染并替换为净化输出时，记录 `boilerplate_replaced` 事件和净化后长度；完整 HTML 抓取/日期解析/净化失败只记录 Debug 级固定事件分类。
 - 非敏感模式下 Debug 日志只记录 `original_content` 增强前后的长度，不记录正文全文。
 - 敏感模式下 fetch、质量门禁和候选异常日志只保留固定事件分类与长度，不记录 URL、异常正文、事实锚点、标题或步骤文本。
 
@@ -117,6 +124,14 @@
 - collector 输入包含 `language`、`messages`、`section_idx`、`plan_idx`、`step_idx`、`max_search_query_count`、
   `max_research_loops`、`max_tool_call_turns_per_query`、`report_type`、`research_intent`。
 - collector 输出至少包含 `history_queries`、`doc_infos`、`info_summary`、`evaluation`、`messages`。
+- 文档评估（`info_evaluator_doc` prompt）的 `doc_time` 是结构化输出 `{date, granularity, evidence}`，语义为**正文主要事实/数据
+  所覆盖的时间（content time）**，而非文档的写作/发布时间；`evidence` 必须引自正文主体，页面框架（导航栏、页眉页脚、侧边栏、
+  "相关文章/推荐阅读"列表）中的日期一律不得作为依据。`date` 精度只到正文证据支持的粒度（`YYYY`/`YYYY-MM`/`YYYY-MM-DD`），
+  证据不足时为 `null`；解析侧（`doc_evaluation.normalize_doc_time_field`）用
+  `date_utils.parse_partial_date` 校验归一化，粒度取 LLM 声明与解析结果中较粗者，并兼容旧版自由文本格式。
+- 合法的 LLM 推断日期以低置信四元组 `date_info`（`{date, granularity, confidence=low, source=llm_inferred}`）挂到 `doc_info`，
+  供时效软排序使用；它不覆盖真实 `publish_time`——仅当 `publish_time` 为"未提供时间信息"时才用 LLM 文本补齐展示字段，
+  `doc_time` 字段始终保持可展示字符串。
 - `EvidenceLedger` 记录 accepted/rejected/pending 证据、尝试过的 query 和缺口，供后续采集轮次判断。
 - `CollectorContext.should_continue` 保存 supervisor 对下一轮检索价值的判断；为 `false` 时，collector 清空后续 query
   并进入 summary。
@@ -163,6 +178,7 @@
 - collector 子图使用独立 workflow session，依赖驱动并发时避免共享子图状态。
 - runtime API 响应大小、JSON 深度和容器长度限制由工具层保护。
 - 网页抓取正文少于 200 字符或短于旧证据时不会直接覆盖旧证据；Jina Reader 重试仍不满足动态门槛时按抓取失败处理。
+- DOM 级噪声过滤遵循"宁可漏杀不可错杀"：链接密度与特征词双条件才删除，占全页文本过半的布局容器永不删除；净化输出不足 200 字符或净化流程异常时保留 harness 原文。
 - direct、PDF 和 Jina fallback 共用 `info_collector_webpage_enrich_fetch_timeout_seconds` 指定的整体 deadline；超时保留旧证据。
 - PDF URL 或 PDF 原始响应必须经 Jina Reader 转换为正文；Jina 仍返回 `%PDF-` 原始数据时按抓取失败处理。
 - 压缩结果丢失旧关键片段中的数字或技术标识时，质量门禁拒绝替换并保留旧证据身份；描述性内容允许同义改写或翻译。
@@ -175,6 +191,8 @@
 
 - `uv run pytest tests/framework/test_background_knowledge.py`
 - `uv run pytest tests/info_collector/test_webpage_enrichment.py`
+- `uv run pytest tests/info_collector/test_html_boilerplate_filter.py`
+- 噪声过滤器测试覆盖 camet 同构导航页净化、数据表行零误杀、>50% 容器保护、特征词/链接密度边界、单链接下载行保留，以及污染替换、干净不替换、抓取失败静默降级、净化过短不替换和 Jina 路径不触发净化。
 - `uv run pytest tests/info_collector/algorithm/test_tool_log.py`
 - 网页增强测试覆盖 canonical URL 去重、Prompt 消息隔离、输出语言、整体 fetch deadline、PDF/Jina fallback、质量门禁、敏感日志脱敏、历史 query/最终报告同步和并发异常隔离。
 - `uv run pytest tests/info_collector/test_academic_search_routing.py`

@@ -61,7 +61,11 @@ Low score (0–3): Exhibits minimal or no meaningful data; primarily consists of
 Return a JSON array where each element is a dictionary containing:
 
 - "document_index": the index of the compact evidence document from the input documents list.
-- "doc_time": According to the content of the document, extract the writen time of the document content in the format of year and month(e.g. 2023 Jun/2024 8月).
+- "doc_time": the time period covered by the main facts/data discussed in the document's body content (content time) — NOT the document's writing or publication time. Judge it from the facts, events, and data the body text is about (e.g. "In 2023, exports grew ..." → 2023), not from when the page was authored. It must be a JSON object with:
+  - "date": the inferred content date. Use ONLY the precision supported by the evidence: "YYYY" for year-only evidence, "YYYY-MM" for month-level evidence, "YYYY-MM-DD" for day-level evidence. Never invent a finer precision than the evidence supports.
+  - "granularity": one of "year", "month", "day", matching the precision of "date".
+  - "evidence": a verbatim excerpt from the document's own body content (e.g. its key_passages) that supports this judgment. Do not paraphrase or fabricate it. The excerpt must come from the body itself — dates appearing in page chrome (navigation bars, headers/footers, sidebars, "related articles"/"recommended reading" lists) must be IGNORED and never used as evidence. Likewise, the "publish_time" metadata field, when present, is the page's publication timestamp, not the content time — never copy it into "doc_time".
+  If the content time cannot be inferred from the body evidence, output "doc_time": null instead of guessing.
 - "scores": A nested dictionary containing:
   - "relevance": Relevance score (10-point scale)
   - "answerability": Answerability score (10-point scale)
@@ -73,7 +77,7 @@ Example output format (must be pure json without any Markdown formatting):
 [
   {
     "document_index": 0,
-    "doc_time": "2023 Jun",
+    "doc_time": {"date": "2023-06", "granularity": "month", "evidence": "In June 2023, the study surveyed 1,200 firms and found ..."},
     "scores": {
       "relevance": 9.0,
       "answerability": 8.5,
@@ -83,12 +87,22 @@ Example output format (must be pure json without any Markdown formatting):
   },
   {
     "document_index": 1,
-    "doc_time": "2024 8月",
+    "doc_time": {"date": "2024", "granularity": "year", "evidence": "2024 年度报告"},
     "scores": {
       "relevance": 7.0,
       "answerability": 6.5,
       "authority": 8.0,
       "data_density": 7.0
+    }
+  },
+  {
+    "document_index": 2,
+    "doc_time": null,
+    "scores": {
+      "relevance": 5.0,
+      "answerability": 4.5,
+      "authority": 6.0,
+      "data_density": 5.0
     }
   }
 ]

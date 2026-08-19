@@ -15,6 +15,11 @@ from openjiuwen_deepsearch.common.common_constants import (
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload
+from openjiuwen_deepsearch.utils.common_utils.date_utils import (
+    DocDate,
+    parse_date_string,
+    temporal_status,
+)
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, is_url_blocked, \
     normalize_domains
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -370,11 +375,11 @@ def _parse_absolute_date(value: Any) -> date | None:
 
 
 def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -> dict | None:
-    """归一化 web 结果，并按需附加 Tavily 的发表日期。
+    """归一化 web 结果，并按需附加日期元数据。
 
     Args:
         item: 搜索引擎返回的单条结果。
-        include_date_metadata: 是否读取 Tavily 已归一化的发表日期。
+        include_date_metadata: 是否附加日期元数据（引擎已归一化的发表日期）。
 
     Returns:
         归一化文档；缺少 URL 或输入非法时返回 None。
@@ -420,8 +425,26 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
                 "type": "published",
                 "value": str(raw_date)[:MAX_SEARCH_CONTENT_LENGTH],
                 "parsed_date": parsed_date.isoformat() if parsed_date else "",
+                "granularity": "day",
+                "confidence": "high",
             }
     return normalized
+
+
+def _doc_date_from_record_metadata(metadata: Any) -> DocDate | None:
+    """从归一化记录的 date_metadata 构造 DocDate 四元组。
+
+    引擎原生 published 元数据 → day 粒度/high 置信。无法解析出日期时返回 None（归入 unknown）。
+    """
+    if not isinstance(metadata, dict):
+        return None
+    parsed = parse_date_string(metadata.get("parsed_date") or metadata.get("value"))
+    if parsed is None:
+        return None
+    meta_type = str(metadata.get("type") or "").strip()
+    if meta_type == "published":
+        return DocDate(day=parsed, granularity="day", confidence="high", source="engine_metadata")
+    return None
 
 
 def filter_web_records_by_temporal_scope(
@@ -429,6 +452,10 @@ def filter_web_records_by_temporal_scope(
         temporal_scope: TemporalScope | dict | None,
 ) -> list[dict]:
     """按来源发表时间过滤归一化 web 文档，日期未知时保留召回。
+
+    只对 constraint_type=="source_date" 生效。用 DocDate 区间与约束边界做包含判定，
+    只硬删 status=="violation" 且 confidence=="high"（引擎原生元数据）的记录；
+    unknown、中低置信 violation 一律保留，结构性保护 info_recall。
 
     Args:
         records: 已归一化的 web 文档列表。
@@ -452,32 +479,29 @@ def filter_web_records_by_temporal_scope(
     kept = []
     date_unknown = 0
     filtered_out = 0
+    soft_violation_kept = 0
     for record in records:
-        metadata = record.get("date_metadata") or {}
-        parsed_text = metadata.get("parsed_date") or ""
-        parsed_date = _parse_absolute_date(parsed_text)
-        if parsed_date is None:
+        metadata = record.get("date_metadata") if isinstance(record, dict) else None
+        doc_date = _doc_date_from_record_metadata(metadata)
+        status = temporal_status(doc_date, scope.start_date, scope.end_date)
+        if status == "violation" and doc_date is not None and doc_date.confidence == "high":
+            filtered_out += 1
+            continue
+        if status == "violation":
+            # 中低置信 violation 不硬删，交给后续软着陆排序处理
+            soft_violation_kept += 1
+        elif status == "unknown":
             date_unknown += 1
-            kept.append(record)
-            continue
-
-        reason = ""
-        if scope.start_date and parsed_date < scope.start_date:
-            reason = "before_start_date"
-        elif scope.end_date and parsed_date > scope.end_date:
-            reason = "after_end_date"
-        if not reason:
-            kept.append(record)
-            continue
-
-        filtered_out += 1
+        kept.append(record)
 
     logger.info(
-        "[COLLECTOR FUNCTION] source_date filter applied. raw=%s kept=%s filtered_out=%s date_unknown=%s",
+        "[COLLECTOR FUNCTION] source_date filter applied. raw=%s kept=%s filtered_out=%s date_unknown=%s "
+        "soft_violation_kept=%s",
         len(records),
         len(kept),
         filtered_out,
         date_unknown,
+        soft_violation_kept,
     )
     return kept
 
@@ -555,10 +579,12 @@ def process_google_search_result(agent_input: dict, tool_content: Any) -> (list,
             tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
         added_records = []
         for item in tool_result:
-            new_item = _normalize_web_search_item(item)
+            new_item = _normalize_web_search_item(item, include_date_metadata=True)
             if new_item is None:
                 continue
             added_records.append(new_item)
+        added_records = _apply_temporal_filter(agent_input, added_records)
+        tool_result = added_records
         combined_records = original_records + added_records
         agent_input["web_page_search_record"] = remove_duplicate_items(combined_records)
     except Exception as e:
@@ -584,9 +610,11 @@ def process_common_search_result(agent_input: dict, tool_content: Any) -> (list,
             tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
         added_records = []
         for item in tool_result:
-            new_item = _normalize_web_search_item(item)
+            new_item = _normalize_web_search_item(item, include_date_metadata=True)
             if new_item is not None:
                 added_records.append(new_item)
+        added_records = _apply_temporal_filter(agent_input, added_records)
+        tool_result = added_records
         combined_records = original_records + added_records
         agent_input["web_page_search_record"] = remove_duplicate_items(combined_records)
     except Exception as e:

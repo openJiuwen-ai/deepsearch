@@ -18,8 +18,15 @@ Task description:
 ## Research Time Boundary
 {{ temporal_scope_instruction }}
 - Interpret "latest" as the latest information available within this boundary.
+{% if temporal_embed_in_query %}
 - You must express this boundary naturally in every generated query; do not use provider-specific filter syntax.
+{% if temporal_open_ended %}
+- This boundary is open-ended ("latest" semantics). Never use vague time words such as "latest" or "recent" in a query; convert them into a concrete year or month based on the current time ({{ CURRENT_TIME }}).
+{% endif %}
 - A query may contain at most five topical keywords; the time phrase does not count toward the five topical keywords.
+{% else %}
+- {{ temporal_query_instruction }}
+{% endif %}
 {% endif %}
 
 ## Instructions

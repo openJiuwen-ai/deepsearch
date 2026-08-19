@@ -2,8 +2,12 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import enum
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+# 报告选材的时效加成权重(temporal_scope 为 None 时不生效)。
+TEMPORAL_TIMELINESS_WEIGHT = float(os.environ.get("TEMPORAL_TIMELINESS_WEIGHT", "0.15"))
 
 
 class ReportStyle(enum.Enum):

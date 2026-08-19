@@ -791,6 +791,92 @@ class TestInfoCollectorNode:
         assert "scores" not in result[0]
         assert "doc_time" not in result[0]
 
+    def test_process_post_process_result_merges_date_info(self, info_collector_node):
+        """合法 date_info 应挂到 doc_info,无时间信息时用 LLM 文本补齐 publish_time。"""
+        scored_result = [{
+            "document_index": "0",
+            "scores": {"relevance": 0.9},
+            "doc_time": "2024-03",
+            "date_info": {
+                "date": "2024-03-01",
+                "granularity": "month",
+                "confidence": "low",
+                "source": "llm_inferred",
+            },
+        }]
+        doc_infos = [{"url": "http://example.com/1", "title": "标题1", "publish_time": "未提供时间信息"}]
+
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
+
+        assert result[0]["date_info"]["date"] == "2024-03-01"
+        assert result[0]["date_info"]["confidence"] == "low"
+        assert result[0]["publish_time"] == "2024-03"
+        assert result[0]["doc_time"] == "2024-03"
+
+    def test_process_post_process_result_keeps_real_publish_time(self, info_collector_node):
+        """已有真实 publish_time 时不允许被低置信 LLM 日期覆盖。"""
+        scored_result = [{
+            "document_index": "0",
+            "scores": {"relevance": 0.9},
+            "doc_time": "2024-03",
+            "date_info": {
+                "date": "2024-03-01",
+                "granularity": "month",
+                "confidence": "low",
+                "source": "llm_inferred",
+            },
+        }]
+        doc_infos = [{"url": "http://example.com/1", "title": "标题1", "publish_time": "2023-05-01"}]
+
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
+
+        assert result[0]["publish_time"] == "2023-05-01"
+        assert result[0]["doc_time"] == "2023-05-01"
+        assert result[0]["date_info"]["date"] == "2024-03-01"
+
+    def test_process_post_process_result_raw_structured_doc_time(self, info_collector_node):
+        """未经 doc_evaluation 归一化的结构化 doc_time 字典也能取到展示文本。"""
+        scored_result = [{
+            "document_index": "0",
+            "scores": {"relevance": 0.9},
+            "doc_time": {"date": "2024-03", "granularity": "month", "evidence": "x"},
+        }]
+        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
+
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
+
+        assert result[0]["publish_time"] == "2024-03"
+        assert "date_info" not in result[0]
+
+    def test_process_post_process_result_null_doc_time(self, info_collector_node):
+        """LLM 推断不出时间(null)时不写 date_info,publish_time 保持未提供。"""
+        scored_result = [{
+            "document_index": "0",
+            "scores": {"relevance": 0.9},
+            "doc_time": None,
+        }]
+        doc_infos = [{"url": "http://example.com/1", "title": "标题1", "publish_time": "未提供时间信息"}]
+
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
+
+        assert result[0]["publish_time"] == "未提供时间信息"
+        assert result[0]["doc_time"] == "未提供时间信息"
+        assert "date_info" not in result[0]
+
+    def test_process_post_process_result_unknown_doc_time_not_filled(self, info_collector_node):
+        """Unknown 占位文本不视为有效时间,不覆盖 publish_time。"""
+        scored_result = [{
+            "document_index": "0",
+            "scores": {"relevance": 0.9},
+            "doc_time": "Unknown",
+        }]
+        doc_infos = [{"url": "http://example.com/1", "title": "标题1", "publish_time": "2023-05-01"}]
+
+        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
+
+        assert result[0]["publish_time"] == "2023-05-01"
+        assert "date_info" not in result[0]
+
     def test_prepare_collector_tool_web(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - 联网增强 搜索"""
         state = {"search_method": "web"}
