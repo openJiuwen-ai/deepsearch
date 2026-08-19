@@ -78,9 +78,9 @@ async def execute(env, args: dict) -> ToolOutcome:
     # 先登记本次检索的相关性证据（含已处理过的片段——被反复命中是强信号），
     # 供降级路径按相关性而非写入顺序兜底
     for rank, hit in enumerate(hits):
-        env.memory.record_hit(hit, rank)
+        env.working_memory.record_hit(hit, rank)
 
-    unprocessed = [hit for hit in hits if not env.memory.is_processed(hit.id)]
+    unprocessed = [hit for hit in hits if not (env.memory.is_processed(hit.id) or env.working_memory.is_processed(hit.id))]
     results = await filter_snippets(
         env.filter_llm, env.query, unprocessed, env.filter_concurrency
     )
@@ -88,10 +88,10 @@ async def execute(env, args: dict) -> ToolOutcome:
     added = 0
     filter_in = filter_out = 0
     for snippet, ranges, usage in results:
-        env.memory.mark_processed(snippet)
+        env.working_memory.mark_processed(snippet)
         filter_in += usage[0]
         filter_out += usage[1]
-        if env.memory.add_ranges(snippet, ranges):
+        if env.working_memory.add_ranges(snippet, ranges):
             added += 1
 
     if added == 0:

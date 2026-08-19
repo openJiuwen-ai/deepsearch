@@ -63,9 +63,11 @@ async def reasoning_step(ctx: CodeSearchRunContext) -> Optional[Termination]:
     ctx.turn += 1
     logger.info("Turn %d/%d...", ctx.turn, agent_cfg.max_turns)
     if not ctx.base_prompt:
-        ctx.base_prompt = build_base_prompt(ctx.query, ctx.top_k)
+        ctx.base_prompt = build_base_prompt(ctx.query, ctx.top_k, agent_cfg.max_turns, getattr(ctx, "issue_text", None), getattr(ctx, "past_queries", None))
 
-    memory_text = ctx.memory.render()
+    persistent_str = ctx.memory.render("PERSISTENT MEMORY (Past Queries)")
+    working_str = ctx.working_memory.render("WORKING MEMORY (Current Search)")
+    memory_text = persistent_str + "\n" + working_str
     try:
         response = await run_reasoning_turn(
             ctx.main_llm, ctx.base_prompt, memory_text, ctx.history,
@@ -177,8 +179,17 @@ def finalize(ctx: CodeSearchRunContext, termination: Termination) -> CodeSearchR
     elif termination == Termination.INDEX_NOT_READY:
         hits = []
     else:
-        logger.warning("Agentic loop ended (%s). Returning snippets from memory.", termination)
-        hits = construct_final_hits(ctx.memory.ranked_saved_ids()[: ctx.top_k], ctx.memory)
+        logger.warning("Agentic loop ended (%s). Returning fallback snippets from working memory.", termination)
+        fallback_ids = list(ctx.working_memory.saved.keys())[: ctx.top_k]
+        for sid in fallback_ids:
+            ranges = ctx.working_memory.saved[sid]
+            ctx.memory.add_ranges(ctx.working_memory.cache[sid], ranges)
+            
+        if hasattr(ctx, "past_queries"):
+            recorded_query = ctx.query if getattr(ctx, "issue_text", None) else "Initial Issue Search"
+            ctx.past_queries.append(f"Query: '{recorded_query}' -> Submitted Snippets (Fallback): {fallback_ids}")
+            
+        hits = construct_final_hits(fallback_ids, ctx.memory)
     logger.info(
         "Token usage for this issue: input=%d output=%d",
         ctx.total_input_tokens,

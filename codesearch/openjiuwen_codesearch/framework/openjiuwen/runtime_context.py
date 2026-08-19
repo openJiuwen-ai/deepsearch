@@ -37,6 +37,9 @@ class CodeSearchRunContext:
     main_llm: LLMClient
     filter_llm: LLMClient
     memory: SnippetMemory = field(default_factory=SnippetMemory)
+    working_memory: SnippetMemory = field(default_factory=SnippetMemory)
+    past_queries: list[str] = field(default_factory=list)
+    issue_text: Optional[str] = None
     trace_path: Optional[str] = None
 
     # 运行态
@@ -110,6 +113,7 @@ def build_run_context(
     query: str,
     revision: str,
     top_k: int,
+    issue_text: Optional[str] = None,
     **clients,
 ) -> CodeSearchRunContext:
     retriever = clients["retriever"]
@@ -123,6 +127,7 @@ def build_run_context(
     return CodeSearchRunContext(
         config=config.model_copy(deep=True),
         query=query,
+        issue_text=issue_text,
         revision=revision,
         top_k=top_k,
         retriever=retriever,

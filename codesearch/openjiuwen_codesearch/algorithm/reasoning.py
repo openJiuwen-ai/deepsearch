@@ -6,6 +6,8 @@
 距轮次上限 warn_before_turns 轮时，向历史追加"必须提交"的系统警告。
 """
 
+
+from typing import Optional
 from openjiuwen_codesearch.algorithm.prompts import load_prompt
 from openjiuwen_codesearch.llm.factory import ChatMessage, LLMClient, LLMResponse
 
@@ -15,10 +17,24 @@ TURN_LIMIT_WARNING = (
 )
 
 
-def build_base_prompt(query: str, topk: int) -> str:
+def build_base_prompt(
+    query: str,
+    topk: int,
+    max_turns: int,
+    issue_text: Optional[str] = None,
+    past_queries: Optional[list[str]] = None,
+) -> str:
     """system prompt（含 topk 约束）+ issue 正文。"""
-    system_prompt = load_prompt("code_search").format(topk=topk)
-    return system_prompt + "\n\nIssue:\n" + query
+    system_prompt = load_prompt("code_search").format(topk=topk, max_turns=max_turns)
+
+    if issue_text:
+        query_prompt = f"Original Issue:\n{issue_text}\n\nCurrent Sub-query / Focus:\n{query}"
+    else:
+        query_prompt = f"Issue:\n{query}"
+
+    past_queries_str = "Past Queries:\n" + "\n".join(past_queries) + "\n\n" if past_queries else ""
+
+    return system_prompt + "\n\n" + past_queries_str + query_prompt
 
 
 def build_turn_messages(

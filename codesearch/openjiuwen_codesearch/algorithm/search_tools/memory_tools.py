@@ -24,10 +24,7 @@ DELETE_SCHEMA = {
                 },
                 "reasoning": {
                     "type": "string",
-                    "description": (
-                        "Explanation of why these snippets are not useful, which will "
-                        "help you plan your next move."
-                    ),
+                    "description": "Explanation of why these snippets are not useful, which will help you plan your next move.",
                 },
             },
             "required": ["snippet_ids", "reasoning"],
@@ -61,7 +58,7 @@ SUBMIT_SCHEMA = {
 async def execute_delete(env, args: dict) -> ToolOutcome:
     snippet_ids = args.get("snippet_ids", [])
     reasoning = args.get("reasoning", "")
-    deleted = env.memory.delete(snippet_ids)
+    deleted = env.working_memory.delete(snippet_ids)
     logger.info("Agent deleted %d snippets. Reasoning: %s", deleted, reasoning)
     logger.info(
         "   🗑️  Agent delete_snippets [%d/%d turns]: deleted=%d ids=%s reasoning=%s",
@@ -80,15 +77,19 @@ async def execute_delete(env, args: dict) -> ToolOutcome:
 
 async def execute_submit(env, args: dict) -> ToolOutcome:
     snippet_ids = [sid for sid in args.get("snippet_ids", []) if isinstance(sid, int)]
-    logger.info("Agent submitted %d final snippets.", len(snippet_ids))
-    logger.info(
-        "   ✅ Agent submit_final_snippets [%d/%d turns]: count=%d ids=%s",
-        env.turn,
-        env.config.agent.max_turns,
-        len(snippet_ids),
-        snippet_ids,
-    )
-    return ToolOutcome(submitted_ids=snippet_ids)
+    logger.info("   ✅ Agent submitted %d final snippets.", len(snippet_ids))
+    
+    # Merge submitted snippets from working memory into persistent memory
+    for sid in snippet_ids[:env.search_topk]:
+        if sid in env.working_memory.saved:
+            ranges = env.working_memory.saved[sid]
+            env.memory.add_ranges(env.working_memory.cache[sid], ranges)
+
+    if hasattr(env, "past_queries"):
+        recorded_query = env.query if getattr(env, "issue_text", None) else "Initial Issue Search"
+        env.past_queries.append(f"Query: '{recorded_query}' -> Submitted Snippets: {snippet_ids[:env.search_topk]}")
+
+    return ToolOutcome(submitted_ids=snippet_ids[: env.search_topk])
 
 
 DELETE_SPEC = ToolSpec(name="delete_snippets", schema=DELETE_SCHEMA, executor=execute_delete)
