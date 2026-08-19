@@ -3,8 +3,7 @@
 
 """DOM 级网页正文噪声过滤器:剔除导航/页脚等 chrome 块,避免污染下游日期判断。
 
-只删高链接密度且命中 chrome 特征词的块,或纯链接汤;占全页文本过半的布局
-容器永不删除(宁可漏删不可误删正文)。
+只删高链接密度且命中 chrome 特征词的块,或纯链接汤;占全页文本过半的布局容器永不删除(宁可漏删不可误删正文)。
 """
 
 from __future__ import annotations
@@ -135,8 +134,8 @@ def extract_clean_main_text(html: str) -> str:
 def detect_boilerplate(text: str) -> bool:
     """判断已提取纯文本是否仍含 chrome 污染(命中特征词即判污染)。
 
-    供 harness 直连结果取舍:仅判定污染时才考虑用净化输出替换。已知边界:
-    不含特征词的导航菜单行(如"党建工作/会员之家")检测不到。
+    供 harness 直连结果取舍:仅判定污染时才考虑用净化输出替换。
+    已知边界:不含特征词的导航菜单行(如"党建工作/会员之家")检测不到。
     """
     if not text:
         return False

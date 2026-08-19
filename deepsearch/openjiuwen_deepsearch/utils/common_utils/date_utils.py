@@ -2,9 +2,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 """网页文档日期的提取与时效判定。
 
-日期与约束都归一化为闭区间,用区间包含关系判定 compliant/violation/unknown;
-粒度不足(只有年/月)时归 unknown 不猜。提取只走白名单(标准 meta/JSON-LD/URL
-模式),不做全文扫描。纯日期工具,不依赖 framework 层。
+日期与约束都归一化为闭区间,用区间包含关系判定 compliant/violation/unknown;粒度不足(只有年/月)时归 unknown 不猜。
+提取只走白名单(标准 meta/JSON-LD/URL 模式),不做全文扫描。
+纯日期工具,不依赖 framework 层。
 """
 
 import calendar
@@ -156,8 +156,7 @@ class DocDate:
 def is_plausible(doc_date: DocDate, reference_date: Optional[date] = None) -> bool:
     """合理性校验:拒绝过老或显著未来的日期。
 
-    未来容忍 FUTURE_TOLERANCE_DAYS 天以吸收时区/时钟偏差;超出的(典型如页面
-    "今天"控件、动态时间戳)拒绝。
+    未来容忍 FUTURE_TOLERANCE_DAYS 天以吸收时区/时钟偏差;超出的(典型如页面"今天"控件、动态时间戳)拒绝。
     """
     ref = reference_date or datetime.now(tz=timezone.utc).date()
     lo, hi = doc_date.interval()
@@ -196,8 +195,8 @@ def temporal_status(
 
 
 def timeliness_score(status: TemporalStatus, confidence: Confidence) -> float:
-    """时效状态 + 置信度 → 排序分。unknown 中性(0);compliant 有界奖励;
-    violation 有界惩罚(仅非 high 置信会走到这里,high 置信 violation 已被硬删)。
+    """时效状态 + 置信度 → 排序分。
+    unknown 中性(0);compliant 有界奖励;violation 有界惩罚(仅非 high 置信会走到这里,high 置信 violation 已被硬删)。
     """
     if status == "unknown":
         return 0.0
