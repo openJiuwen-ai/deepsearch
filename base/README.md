@@ -40,7 +40,11 @@ pip install -e '.[workflow,milvus,embed]'   # 按需启用
 ## 测试
 
 ```sh
-pytest tests -W ignore
+uv sync --extra workflow --group ci
+uv run pytest tests/unit -W ignore
+uv run pytest tests/system -W ignore
+# 设置好.env后可运行端到端LLM测试用例
+RUN_LLM_TESTS=1 uv run pytest tests/system/ -W ignore
 ```
 
 ## 许可证

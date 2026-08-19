@@ -19,7 +19,8 @@ class LLMConfig(BaseModel):
     """OpenAI 兼容端点配置，字段与 deepsearch ``LLMConfig`` 对齐：
     ``model_name`` / ``base_url`` / ``api_key``。
 
-    密钥以 ``bytearray`` 存储，仅在发起调用时解码。
+    密钥以 `bytearray` 存储（与 openJiuwen 系列产品一致），仅在发起调用时解码，
+    避免不可变字符串在进程内长期驻留且无法擦除；构造时可直接传字符串。
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -47,9 +48,29 @@ class LLMConfig(BaseModel):
 @runtime_checkable
 class LLMClient(Protocol):
     async def invoke(
-        self, messages: list[ChatMessage], tools: Optional[list[dict]] = None
+        self,
+        messages: list[ChatMessage],
+        tools: Optional[list[dict]] = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         ...
+
+
+def strip_unsupported_prompt_cache_key(
+    exc: BaseException, kwargs: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    """Return kwargs without ``prompt_cache_key`` when ``exc`` says it is unsupported.
+
+    Used by OpenAI-compatible proxies/SDKs that reject unknown request fields.
+    Returns ``None`` when the error is unrelated (caller should re-raise).
+    """
+    if "prompt_cache_key" not in kwargs:
+        return None
+    if isinstance(exc, TypeError):
+        return {k: v for k, v in kwargs.items() if k != "prompt_cache_key"}
+    if "prompt_cache_key" in str(exc).lower():
+        return {k: v for k, v in kwargs.items() if k != "prompt_cache_key"}
+    return None
 
 
 def normalize_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:
@@ -137,6 +158,11 @@ class OpenJiuwenLLMClient:
     def _to_provider_messages(messages: list[ChatMessage]) -> list[Any]:
         from openjiuwen.core.foundation.llm import ToolMessage, UserMessage
 
+        try:
+            from openjiuwen.core.foundation.llm import SystemMessage
+        except ImportError:  # pragma: no cover - older openjiuwen
+            SystemMessage = None  # type: ignore[misc, assignment]
+
         provider_messages: list[Any] = []
         for msg in messages:
             if msg.role == "assistant" and msg.raw is not None:
@@ -145,19 +171,40 @@ class OpenJiuwenLLMClient:
                 provider_messages.append(
                     ToolMessage(tool_call_id=msg.tool_call_id, content=msg.content)
                 )
+            elif msg.role == "system" and SystemMessage is not None:
+                provider_messages.append(SystemMessage(content=msg.content))
             else:
+                # CodeSearch folds system into the first user turn; unknown roles
+                # and missing SystemMessage fall back to UserMessage.
                 provider_messages.append(UserMessage(content=msg.content))
         return provider_messages
 
     async def invoke(
-        self, messages: list[ChatMessage], tools: Optional[list[dict]] = None
+        self,
+        messages: list[ChatMessage],
+        tools: Optional[list[dict]] = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         import asyncio
 
-        response = await asyncio.wait_for(
-            self._model.invoke(self._to_provider_messages(messages), tools=tools or []),
-            timeout=self._config.timeout_seconds,
-        )
+        provider_messages = self._to_provider_messages(messages)
+        tool_list = tools or []
+        call_kwargs = kwargs
+        while True:
+            try:
+                response = await asyncio.wait_for(
+                    self._model.invoke(
+                        provider_messages, tools=tool_list, **call_kwargs
+                    ),
+                    timeout=self._config.timeout_seconds,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001 — inspect then re-raise or retry
+                retry_kwargs = strip_unsupported_prompt_cache_key(exc, call_kwargs)
+                if retry_kwargs is None:
+                    raise
+                call_kwargs = retry_kwargs
+
         input_tokens, output_tokens = extract_usage(response)
         return LLMResponse(
             content=getattr(response, "content", None),

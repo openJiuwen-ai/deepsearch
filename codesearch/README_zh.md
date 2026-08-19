@@ -76,6 +76,9 @@ Milvus、待索引仓库说明与安全边界见
 python3 -m venv .venv && .venv/bin/pip install -e ../base -e '.[dev,milvus,llm,server]'
 ```
 
+计划使用 `engine=retropus`（进程内知识图谱 + BM25，不依赖 Milvus）时，
+额外加装 `retropus` 分组：`'.[dev,llm,retropus]'`。
+
 索引需要**本地仓库目录**（远程仓请先 clone）；检索使用索引时起的集合名：
 
 ```sh
@@ -83,6 +86,9 @@ git clone git@gitcode.com:openJiuwen/agent-core.git /data/repos/agent-core
 codesearch index --repo /data/repos/agent-core --collection agent_core
 codesearch search --collection agent_core --query "..."
 ```
+
+计划使用 `engine=retropus`（进程内知识图谱 + BM25，不依赖 Milvus）时，
+额外加装 `retropus` 分组：`'.[dev,llm,retropus]'`。
 
 以 HTTP 服务方式运行：
 
@@ -117,6 +123,40 @@ codesearch search --collection my_repo --query "TypeError when calling foo() wit
 ```
 
 配置优先级与变量表见 [安装指导 · 环境变量](docs/zh/2.安装指导/README.md#环境变量)。检索使用两个模型：**main**（多轮决策）默认 `openai/gpt-5`，**filter**（逐行提取）默认 `openai/gpt-5-mini`。换端点时请把模型名改成该服务实际支持的名字。Python API 与完整说明见 [快速开始](docs/zh/3.快速上手/3.快速上手.md)。
+
+# ⚙️ 引擎
+
+`CodeSearchConfig.agent.engine` 决定索引与检索走哪条路径
+（`graph` | `react` | `retropus`），默认 `graph`。
+
+| 引擎 | 作用 |
+|---|---|
+| `graph` | 默认产品路径：检索循环以 openJiuwen 工作流图运行（节点级可观测）。索引写入 **Milvus**（双路稀疏 BM25）。需 `[llm]`。 |
+| `react` | 与 `graph` 共用 Milvus 索引与循环阶段，但是纯 Python agent 循环（无工作流图）。测试锁定二者输出逐字节一致。 |
+| `retropus` | 独立 agent 与工具集，知识图谱 + BM25（无 Milvus）。索引驻留内存，并**落盘**到 `RETROPUS_INDEX_DIR`（默认 `./output/retropus/<collection>/`）以便复用。须显式指定。需 `[retropus]`。 |
+
+### 如何选择引擎
+
+**没有** `ENGINE=` 环境变量。在代码、HTTP 或 CLI 中设置：
+
+| 入口 | 方式 |
+|---|---|
+| **Python SDK** | 构造 `CodeSearchRetriever` 前设置 `config.agent.engine = "retropus"`（或 `"graph"` / `"react"`）。字段：`openjiuwen_codesearch/config/agent.py` 中的 `SearchAgentConfig.engine`（默认 `graph`）。 |
+| **HTTP API** | `POST /api/v1/index` 与 `POST /api/v1/search` 请求体可选 `"engine"`（默认 `"graph"`）。索引与检索须使用**同一**引擎；Retropus 与 Milvus 索引混用返回 **409**。 |
+| **`codesearch` CLI** | `codesearch --engine retropus index --repo … --collection my_repo`，再 `codesearch --engine retropus search --collection my_repo --query "…"`。默认引擎为 `graph`；可用 `--index-dir` / `RETROPUS_INDEX_DIR`。 |
+| **ContextBench CLI** | `python -m benchmarks.contextbench.runner --engine retropus`（亦 `--engine graph` / `react`；默认 `graph`）。 |
+| **环境变量** | 引擎名本身不由环境变量选择。后端相关变量仍生效：`graph`/`react` 用 `MILVUS_*`；Retropus 用 `CodeSearchConfig.retropus` 下的 `MAX_*` / `FEAT_*` / `RETROPUS_INDEX_DIR` 等（见 [`.env.example`](.env.example)）。LLM 凭证各引擎共用：`CODESEARCH_LLM_API_KEY` / `CODESEARCH_LLM_BASE_URL`。 |
+
+```python
+from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
+
+config = CodeSearchConfig.from_env()
+config.agent.engine = "retropus"  # 或 "graph" / "react"
+retriever = CodeSearchRetriever(config=config)
+```
+
+Retropus 设计与参数：[retropus-agent.md](docs/feature/framework/retropus-agent.md)。
+graph/react 工作流：[codesearch-workflow.md](docs/feature/framework/codesearch-workflow.md)。
 
 # 📊 评测
 

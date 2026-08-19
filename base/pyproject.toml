@@ -17,7 +17,7 @@ prerelease = "allow"
 [project.optional-dependencies]
 # 与消费方相同的分组模式：核心零重依赖，按需启用。
 # 已验证该版本同时提供 foundation.llm 与 workflow/Runner 两组 API
-workflow = ["openjiuwen==0.1.10.post3", "certifi"]  # 上界收紧：base_node 依赖框架内部路径，升级需显式回归；certifi 为 SSL 默认 CA 包
+workflow = ["openjiuwen", "certifi"]  # certifi 为 SSL 默认 CA 包
 milvus = ["pymilvus>=2.4,<3"]  # 已验证组合：客户端 2.6.x + 服务端 v2.6.18；≥2.5 才有 BM25 Function
 embed = ["aiohttp>=3.9"]
 
@@ -28,6 +28,7 @@ ci = [
     "pytest-cov>=6",
     "pytest-html>=4",
     "coverage>=7",
+    "python-dotenv",
 ]
 
 [tool.coverage.run]
@@ -46,3 +47,6 @@ include = ["openjiuwen_search_base*"]
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = ["-ra", "-q"]
+markers = [
+    "system: requires the workflow extra (openjiuwen) and/or live services",
+]

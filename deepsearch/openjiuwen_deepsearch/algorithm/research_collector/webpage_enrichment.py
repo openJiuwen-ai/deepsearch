@@ -138,25 +138,6 @@ def coerce_fetch_timeout_seconds(value: Any, default: int = DEFAULT_FETCH_TIMEOU
     return timeout
 
 
-def _score_sort_value(doc_info: dict[str, Any]) -> float:
-    """计算候选排序分数。
-
-    Args:
-        doc_info: 搜索结果文档信息。
-
-    Returns:
-        基于 relevance、answerability、data_density 的轻量排序分数。
-    """
-    scores = doc_info.get("scores") if isinstance(doc_info.get("scores"), dict) else {}
-    total = 0.0
-    for key in ("relevance", "answerability", "data_density"):
-        try:
-            total += float(scores.get(key) or 0)
-        except (TypeError, ValueError):
-            continue
-    return total
-
-
 def _build_candidate(index: int, doc_info: dict[str, Any], url: str) -> dict[str, Any]:
     """构造单个内部候选。
 
@@ -166,35 +147,43 @@ def _build_candidate(index: int, doc_info: dict[str, Any], url: str) -> dict[str
         url: 已清理首尾空白的原始 URL。
 
     Returns:
-        包含内部 doc_index 和排序分数的候选字典。
+        包含内部 doc_index 的候选字典。
     """
-    return {
+    candidate = {
         "doc_index": index,
         "url": url,
         "title": doc_info.get("title", ""),
         "source": doc_info.get("source", ""),
         "query": doc_info.get("query", ""),
         "key_passages": doc_info.get("key_passages", []),
-        "scores": doc_info.get("scores", {}),
-        "_sort_score": _score_sort_value(doc_info),
     }
+    if doc_info.get("scores"):
+        candidate["scores"] = doc_info["scores"]
+    return candidate
 
 
 def _rank_and_number_candidates(candidates: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     """排序、截断并补充候选索引。
 
     Args:
-        candidates: 带内部排序分数的候选列表。
+        candidates: 候选列表。
         limit: 最多保留的候选数量。
 
     Returns:
-        已移除内部排序分数并补充 candidate_index 的候选列表。
+        补充 candidate_index 的候选列表。
     """
-    candidates.sort(key=lambda item: item.get("_sort_score", 0), reverse=True)
-    trimmed = candidates[:max(0, int(limit))]
+    def _relevance(c):
+        v = (c.get("scores") or {}).get("relevance")
+        return v if isinstance(v, (int, float)) else 0.0
+
+    sorted_candidates = sorted(
+        candidates,
+        key=_relevance,
+        reverse=True,
+    )
+    trimmed = sorted_candidates[:max(0, int(limit))]
     for candidate_index, item in enumerate(trimmed):
         item["candidate_index"] = candidate_index
-        item.pop("_sort_score", None)
     return trimmed
 
 
@@ -235,7 +224,7 @@ def build_selection_prompt_candidates(candidates: list[dict]) -> list[dict]:
     Returns:
         移除内部 `doc_index` 后的候选列表。
     """
-    visible_keys = ("candidate_index", "url", "title", "source", "query", "key_passages", "scores")
+    visible_keys = ("candidate_index", "url", "title", "source", "query", "key_passages")
     return [
         {key: candidate.get(key, "") for key in visible_keys if key in candidate}
         for candidate in candidates or []
@@ -302,7 +291,6 @@ def build_compression_user_payload(
             "title": doc_info.get("title", ""),
             "url": doc_info.get("url", ""),
             "key_passages": doc_info.get("key_passages", []),
-            "scores": doc_info.get("scores", {}),
         },
         "existing_content": str(doc_info.get("original_content") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH],
         "webpage_content": truncate_raw_content_for_compression(str(fetched.get("content") or "")),

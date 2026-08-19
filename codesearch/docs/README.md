@@ -25,6 +25,7 @@
 | 文档 | 内容 |
 |---|---|
 | [检索工作流](feature/framework/codesearch-workflow.md) | 工作流图结构、双引擎等价性、运行隔离、超时与终止条件 |
+| [Retropus 引擎](feature/framework/retropus-agent.md) | Retropus：`retropus.*` / `MAX_*` / `FEAT_*` 配置与工具隔离 |
 | [检索智能体](feature/algorithm/search-agent.md) | 双模型协同、工具集、片段记忆、提前终止策略 |
 
 新增特性文档请使用 [模板](feature/_template.md)。

@@ -75,6 +75,7 @@ HTTP 形态同样：`POST /api/v1/index` 的 `repo_path` 必须是服务进程�
 | `llm` | openjiuwen | 工作流图引擎与真实模型调用 |
 | `embed` | aiohttp | 启用稠密向量模式 |
 | `bench` | pandas、pyarrow、tree-sitter*（<3.12：languages；≥3.12：language-pack） | ContextBench 评测；以本 extra 为准，勿用上游 `requirements.txt` 代替 |
+| `retropus` | tree-sitter*、igittigitt、bm25s、numpy | Retropus 引擎（进程内 KG + BM25，不依赖 Milvus） |
 | `dev` | pytest | 开发与测试 |
 
 核心包仅依赖 pydantic；不安装任何分组也可运行单元测试与内存态检索器。
@@ -97,8 +98,8 @@ codesearch-server          # 源码部署亦可用 python start_backend.py
 | 接口 | 方法 | 说明 |
 |---|---|---|
 | `/api/health` | GET | 健康检查 |
-| `/api/v1/search` | POST | 同步检索，返回文件与行区间 |
-| `/api/v1/index` | POST | 提交索引作业（长任务），返回 `job_id`；**未配置 `CODESEARCH_INDEX_ROOTS` 时返回 403** |
+| `/api/v1/search` | POST | 同步检索，返回文件与行区间；可选 `engine`（默认 `graph`；Retropus 须显式 `"retropus"`） |
+| `/api/v1/index` | POST | 提交索引作业（长任务），返回 `job_id`；可选 `engine`（同上）；**未配置 `CODESEARCH_INDEX_ROOTS` 时返回 403** |
 | `/api/v1/jobs/{job_id}` | GET | 查询索引作业状态 |
 
 ### 安全边界（必读）

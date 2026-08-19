@@ -153,7 +153,7 @@ def test_sub_reporter_node_stores_sidecar_and_records_downgrade_warning(mock_deb
             "sub_report_chapter_sidecar": sidecar,
             "sub_report_sidecar_warning": "sidecar downgrade warning",
             "classified_content": [],
-            "doc_infos": [],
+            "passages": [],
         },
         session,
         MagicMock(),

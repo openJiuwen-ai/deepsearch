@@ -15,6 +15,9 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_buil
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
     EvidenceLedger,
+    build_ledger_brief,
+    ensure_ledger,
+    merge_ledger_update,
     target_paper_key,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
@@ -336,8 +339,7 @@ async def test_direct_parallel_path_honors_secondary_retryability(
     web_tool.invoke = AsyncMock(side_effect=invoke)
 
     with patch.object(node, "_prepare_collector_tool", return_value=([], {"web_search_tool": web_tool})), \
-            patch.object(node, "_structure_result", AsyncMock(return_value=([], [], {}))), \
-            patch.object(node, "_process_post_process_result", return_value=[]):
+            patch.object(node, "_structure_result", AsyncMock(return_value=([], {}))):
         await node._collector_main(state)
 
     assert [item["search_engine_name"] for item in calls].count("tavily") == 1
@@ -381,8 +383,7 @@ async def test_llm_tool_calling_path_runs_query_secondary_engine(search_method):
 
     with patch.object(node, "_collector_llm", AsyncMock(return_value=(state, agent_input))), \
             patch.object(node, "_prepare_collector_tool", return_value=([], {"web_search_tool": web_tool})), \
-            patch.object(node, "_structure_result", AsyncMock(return_value=([], [], {}))), \
-            patch.object(node, "_process_post_process_result", return_value=[]):
+            patch.object(node, "_structure_result", AsyncMock(return_value=([], {}))):
         await node._collector_main(state)
 
     web_tool.invoke.assert_awaited_once_with({
@@ -410,8 +411,7 @@ async def test_llm_tool_calling_path_skips_duplicate_secondary_engine():
 
     with patch.object(node, "_collector_llm", AsyncMock(return_value=(state, agent_input))), \
             patch.object(node, "_prepare_collector_tool", return_value=([], {"web_search_tool": web_tool})), \
-            patch.object(node, "_structure_result", AsyncMock(return_value=([], [], {}))), \
-            patch.object(node, "_process_post_process_result", return_value=[]):
+            patch.object(node, "_structure_result", AsyncMock(return_value=([], {}))):
         await node._collector_main(state)
 
     web_tool.invoke.assert_not_awaited()
