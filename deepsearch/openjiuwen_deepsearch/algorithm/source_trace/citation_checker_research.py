@@ -8,10 +8,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import CitationVerifyResearch
-from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
-    normalize_arxiv_id,
-    normalize_pmid,
-)
 from openjiuwen_deepsearch.common.exception import CustomIndexException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.markdown_url_utils import extract_markdown_url
@@ -30,15 +26,6 @@ logger = logging.getLogger(__name__)
 def _normalize_citation_title(title: str) -> str:
     """Normalize citation title whitespace for single-line markdown links."""
     return " ".join(str(title or "").split())
-
-
-def _citation_reference_key(url: str) -> str:
-    """Return one stable reference key for equivalent academic URLs."""
-    pmid = normalize_pmid(url)
-    if pmid:
-        return f"pubmed:{pmid}"
-    arxiv_id = normalize_arxiv_id(url)
-    return f"arxiv:{arxiv_id}" if arxiv_id else url
 
 
 @dataclass(frozen=True)
@@ -213,18 +200,14 @@ class CitationCheckerResearch:
             tuple[str, int, int]: 格式化后的引用文本、更新后的引用计数器和引用序号。
         """
         # 如果这个引用已经存在，使用已有的序号
-        reference_key = _citation_reference_key(url)
-        if reference_key in references:
-            safe_title, idx, *_ = references[reference_key]
+        if url in references:
+            safe_title, idx = references[url]
             return f"[checked_citation:{citation_id}][[{idx}]]({url})", ref_counter, idx
 
         # 对标题进行Markdown转义，防止内容注入
         safe_title = escape_markdown_link_text(title)
         # 否则添加新引用并递增计数器
-        if reference_key == url:
-            references[reference_key] = (safe_title, ref_counter)
-        else:
-            references[reference_key] = (safe_title, ref_counter, url)
+        references[url] = (safe_title, ref_counter)
         current_idx = ref_counter
         ref_counter += 1
         return f"[checked_citation:{citation_id}][[{current_idx}]]({url})", ref_counter, current_idx
@@ -241,8 +224,7 @@ class CitationCheckerResearch:
             str: 构建好的参考文献部分内容，每个引用格式为 `[序号]. [标题](URL)`
         """
         reference_section = ""
-        for (reference_key, item) in references.items():
-            url = item[2] if len(item) > 2 else reference_key
+        for (url, item) in references.items():
             # item[0] 是已经转义过的标题，item[1] 是序号
             reference_section += f'[{item[1]}]. [{item[0]}]({url})\n\n'
 

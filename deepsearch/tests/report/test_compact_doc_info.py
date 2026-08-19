@@ -95,6 +95,24 @@ def test_build_structured_evidence_guide_returns_empty_for_misaligned_doc_keys(c
     assert "selected docs and stable keys are misaligned" in caplog.text
 
 
+def test_build_structured_evidence_guide_keeps_scored_docs_when_forced_target_is_unscored(caplog):
+    caplog.set_level("WARNING")
+    target = {"index": 1, "title": "Required target paper", "key_passages": ["Target evidence"]}
+    scored = {"index": 2, "title": "Scored document", "key_passages": ["Scored evidence"]}
+
+    guide = build_structured_evidence_guide(
+        [target, scored],
+        [{"id": "R1", "description": "Analysis dimension", "priority": "primary"}],
+        {"coverage_matrix": {"doc_0": {"R1": 0.9}}},
+        selected_doc_keys=["required_target_0", "doc_0"],
+    )
+
+    assert "R1 [primary, covered]: Analysis dimension" in guide
+    assert "[citation:2] Scored document (coverage: 0.90)" in guide
+    assert "[citation:1] Required target paper" not in guide
+    assert "Building structured evidence guide with unscored documents" in caplog.text
+
+
 def test_log_structured_evidence_build_keeps_info_diagnostics_compact(caplog):
     caplog.set_level("INFO")
     Reporter._log_structured_evidence_build(

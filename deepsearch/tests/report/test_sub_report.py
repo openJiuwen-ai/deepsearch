@@ -17,6 +17,7 @@ from openjiuwen_deepsearch.algorithm.report.report import (
     VisualizationInsertPlanContext,
     _get_classified_infos,
     _final_classification_limit,
+    _forced_document_coverage_keys,
     ensure_exact_target_documents,
     required_target_citation_indexes,
 )
@@ -63,6 +64,17 @@ def test_exact_target_paper_bypasses_subreport_document_selection():
 
     assert result == [target, *selected]
     assert _final_classification_limit(top_k=1, selected_docs=result) == 2
+
+
+def test_forced_target_reuses_coverage_key_when_it_was_scored():
+    other = _report_doc(1)
+    scored_target = _report_doc(2)
+    unscored_target = _report_doc(3)
+
+    assert _forced_document_coverage_keys(
+        [scored_target, unscored_target],
+        {"filtered_docs": [other, scored_target]},
+    ) == ["doc_1", "required_target_1"]
 
 
 def test_exact_target_paper_is_marked_as_a_required_subreport_citation():

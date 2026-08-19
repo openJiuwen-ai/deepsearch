@@ -91,6 +91,20 @@ def ensure_exact_target_documents(
     return required_docs + result
 
 
+def _forced_document_coverage_keys(
+    forced_docs: list[dict], coverage_result: dict,
+) -> list[str]:
+    """Reuse matrix keys for scored forced docs and mark only unscored docs as required."""
+    filtered_docs = coverage_result.get("filtered_docs", [])
+    coverage_keys_by_identity = {
+        id(doc): f"doc_{index}" for index, doc in enumerate(filtered_docs)
+    }
+    return [
+        coverage_keys_by_identity.get(id(doc), f"required_target_{index}")
+        for index, doc in enumerate(forced_docs)
+    ]
+
+
 def _final_classification_limit(top_k: int, selected_docs: list[dict]) -> int:
     """Do not re-trim documents that were force-added after matrix selection."""
     return max(top_k, len(selected_docs))
@@ -1355,7 +1369,9 @@ class Reporter:
                 forced_count = len(forced_docs) - len(selected_docs)
                 selected_docs = forced_docs
                 selected_doc_keys = [
-                    *(f"required_target_{index}" for index in range(forced_count)),
+                    *_forced_document_coverage_keys(
+                        forced_docs[:forced_count], coverage_result
+                    ),
                     *selected_doc_keys,
                 ]
                 selected_marginal_values = [0.0] * forced_count + selected_marginal_values

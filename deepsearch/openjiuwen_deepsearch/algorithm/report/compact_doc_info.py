@@ -133,12 +133,16 @@ def build_structured_evidence_guide(
             "Cannot build structured evidence guide: selected docs and stable keys are misaligned"
         )
         return ""
-    if any(not isinstance(doc_key, str) or doc_key not in coverage_matrix
-           for doc_key in selected_doc_keys):
+    if any(not isinstance(doc_key, str) for doc_key in selected_doc_keys):
         logger.warning(
-            "Cannot build structured evidence guide: selected stable key is missing from coverage matrix"
+            "Cannot build structured evidence guide: selected stable key is invalid"
         )
         return ""
+    if any(doc_key not in coverage_matrix for doc_key in selected_doc_keys):
+        logger.warning(
+            "Building structured evidence guide with unscored documents: "
+            "selected stable key is missing from coverage matrix"
+        )
 
     lines = ["Structured evidence guidance:"]
     for rationale in rationales:

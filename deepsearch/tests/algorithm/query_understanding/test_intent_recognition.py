@@ -247,6 +247,7 @@ async def test_recognize_report_intent_exception_fallback():
     assert "is_fallback" not in result.model_dump()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
