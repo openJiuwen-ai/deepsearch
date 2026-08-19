@@ -62,7 +62,6 @@ from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.common_utils.date_utils import (
     DocDate,
-    extract_url_date,
     is_plausible,
     merge_doc_dates,
     parse_date_string,
@@ -261,8 +260,6 @@ def _compute_doc_temporal_status(
                 DocDate(day=day, granularity=granularity,
                         confidence="high", source="publish_time")
             )
-    candidates.append(extract_url_date(doc_info.get("url", "")))
-
     doc_date = merge_doc_dates(candidates)
     # 合理性兜底:未来/过老日期在此拦截,降级 unknown。
     if doc_date is None or not is_plausible(doc_date):

@@ -78,12 +78,9 @@
 8. 压缩 LLM 同时接收已有 `original_content` 和新抓取正文，合并并保留已有可验证事实；浏览器验证、CAPTCHA、访问拒绝、登录、JavaScript 提示、错误页或重定向占位页视为无效抓取内容并被忽略。输出正文保持网页来源语言，不在证据增强阶段按 collector 的 `language` 翻译；面向用户的语言本地化由后续报告生成处理。写回前限制在 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 以内。
 9. 节点使用已有 `key_passages` 检查数字、单位和设备/数据集标识是否保留；匹配时忽略大小写、空格和标点差异。质量门禁通过后才集中写回 `new_doc_infos_current_loop`、累计 `doc_infos`、`history_queries[*].doc_infos` 和 `source_store`，然后交给 `SupervisorNode`、`SummaryNode` 和最终报告器使用。
 
-直连抓取成功且正文过充分性门槛后，节点会对同一 URL 顺带做一次流式完整 HTML 抓取（上限约 2MB，独立超时上限 10 秒，仍受单 URL 整体 deadline 约束），同一份 HTML 派生两类附加信号：
+直连抓取成功且正文过充分性门槛后，节点会对同一 URL 顺带做一次流式完整 HTML 抓取（上限约 2MB，独立超时上限 10 秒，仍受单 URL 整体 deadline 约束），用于正文净化：`algorithm/research_collector/html_boilerplate_filter.py` 在 DOM 级删除导航/页脚等页面框架内容（链接密度 ≥0.5 且命中中英页面框架特征词，或链接密度 ≥0.85 且链接数 ≥3 的几乎全是链接的块；占全页文本过半的布局容器永不删除），再按 harness 候选选择器思路提取主文本。特征词表与阈值是该模块的模块级常量，参数依据实验推荐方案。
 
-- 白名单发布日期：`extract_html_head_date` 解析 `<head>` meta/JSON-LD，结果以 `doc_date` 挂到抓取结果并在写回时合并进 `date_info`。
-- 净化正文：`algorithm/research_collector/html_boilerplate_filter.py` 在 DOM 级删除导航/页脚等 chrome 块（链接密度 ≥0.5 且命中中英 chrome 特征词，或链接密度 ≥0.85 且链接数 ≥3 的纯链接汤；占全页文本过半的布局容器永不删除），再按 harness 候选选择器思路提取主文本。特征词表与阈值是该模块的模块级常量，参数依据实验推荐方案。
-
-正文取舍：默认仍使用 harness 直连结果；仅当 `detect_boilerplate` 判定 harness 正文命中 chrome 特征词、且净化输出达到 `MIN_FETCHED_CONTENT_LENGTH`（200 字符）时，才把抓取正文替换为净化输出，并记录 `boilerplate_replaced` 日志事件。完整 HTML 抓取失败、日期解析异常或净化异常全部静默降级，保留 harness 原文，不丢文档；Jina fallback 路径不触发完整 HTML 抓取与净化替换。
+正文取舍：默认仍使用 harness 直连结果；仅当 `detect_boilerplate` 判定 harness 正文命中页面框架特征词、且净化输出达到 `MIN_FETCHED_CONTENT_LENGTH`（200 字符）时，才把抓取正文替换为净化输出，并记录 `boilerplate_replaced` 日志事件。完整 HTML 抓取失败或净化异常全部静默降级，保留 harness 原文，不丢文档；Jina fallback 路径不触发完整 HTML 抓取与净化替换。
 
 增强成功后会刷新：
 

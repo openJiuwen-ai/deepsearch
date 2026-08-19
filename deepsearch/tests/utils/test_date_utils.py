@@ -8,7 +8,6 @@ import pytest
 
 from openjiuwen_deepsearch.utils.common_utils.date_utils import (
     DocDate,
-    extract_url_date,
     is_plausible,
     merge_doc_dates,
     parse_date_string,
@@ -128,33 +127,6 @@ def test_temporal_status(doc, start, end, expected):
 )
 def test_timeliness_score(status, confidence, expected):
     assert timeliness_score(status, confidence) == expected
-
-
-# ---------------------------------------------------------------------------
-# URL 日期提取
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    ("url", "expected_day", "expected_granularity"),
-    [
-        ("https://example.com/2024/03/15/some-article", date(2024, 3, 15), "day"),
-        ("https://example.com/2024-03-15-news.html", date(2024, 3, 15), "day"),
-        ("https://example.com/20240315/article", date(2024, 3, 15), "day"),
-        ("https://example.com/2024/03/article", date(2024, 3, 1), "month"),
-        ("https://example.com/news/article-12345", None, None),  # 无日期
-        ("https://example.com/best-laptops-2024", None, None),   # 主题年份,不匹配路径段模式
-        ("https://example.com/2099/01/01/future", None, None),   # 未来日期被拒绝
-    ],
-)
-def test_extract_url_date(url, expected_day, expected_granularity):
-    result = extract_url_date(url, reference_date=REF)
-    if expected_day is None:
-        assert result is None
-    else:
-        assert result is not None
-        assert result.day == expected_day
-        assert result.granularity == expected_granularity
-        assert result.confidence == "medium"
 
 
 # ---------------------------------------------------------------------------

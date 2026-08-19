@@ -628,68 +628,6 @@ class TestSearchResultProcessing:
             "confidence": "high",
         }
 
-    def test_normalize_falls_back_to_url_date_when_engine_date_missing(self):
-        """引擎未给发表日期时应从 URL 路径提取日期兜底,置信度 medium。"""
-        day_item = _normalize_web_search_item({
-            "title": "URL dated",
-            "url": "https://example.com/news/2024/03/15/story",
-            "content": "body",
-        }, include_date_metadata=True)
-        assert day_item["date_metadata"] == {
-            "field": "url_date",
-            "type": "url",
-            "value": "2024-03-15",
-            "parsed_date": "2024-03-15",
-            "granularity": "day",
-            "confidence": "medium",
-        }
-
-        month_item = _normalize_web_search_item({
-            "title": "Month dated",
-            "url": "https://example.com/archive/2024/03/",
-            "content": "body",
-        }, include_date_metadata=True)
-        assert month_item["date_metadata"] == {
-            "field": "url_date",
-            "type": "url",
-            "value": "2024-03-01",
-            "parsed_date": "",
-            "granularity": "month",
-            "confidence": "medium",
-        }
-
-        no_date_item = _normalize_web_search_item({
-            "title": "No date",
-            "url": "https://example.com/about",
-            "content": "body",
-        }, include_date_metadata=True)
-        assert "date_metadata" not in no_date_item
-
-    def test_normalize_engine_date_takes_precedence_over_url_date(self):
-        """引擎自带发表日期优先于 URL 兜底日期。"""
-        normalized = _normalize_web_search_item({
-            "title": "Both",
-            "url": "https://example.com/2019/05/01/story",
-            "content": "body",
-            "source_date": "2020-01-02",
-            "source_date_type": "published",
-        }, include_date_metadata=True)
-
-        assert normalized["date_metadata"]["type"] == "published"
-        assert normalized["date_metadata"]["parsed_date"] == "2020-01-02"
-        assert normalized["date_metadata"]["confidence"] == "high"
-
-    def test_normalize_local_dataset_url_never_matches_url_date(self):
-        """localdataset:// 记录天然不命中 URL 日期正则,且不应报错。"""
-        normalized = _normalize_web_search_item({
-            "title": "Local",
-            "url": "localdataset://result//kb_2024//file_001",
-            "content": "local body",
-        }, include_date_metadata=True)
-
-        assert normalized is not None
-        assert "date_metadata" not in normalized
-
     def test_normalize_full_text_contract_without_source_specific_logic(self):
         normalized = _normalize_web_search_item({
             "title": "Open study",

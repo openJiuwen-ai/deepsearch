@@ -205,45 +205,6 @@ def timeliness_score(status: TemporalStatus, confidence: Confidence) -> float:
 
 
 # ---------------------------------------------------------------------------
-# URL 日期提取(零成本档)
-# ---------------------------------------------------------------------------
-
-_URL_DATE_PATTERNS: tuple[tuple[re.Pattern, Granularity], ...] = (
-    (re.compile(r"/((?:19|20)\d{2})-(\d{2})-(\d{2})[/._-]"), "day"),      # /2024-03-15/
-    (re.compile(r"/((?:19|20)\d{2})/(\d{1,2})/(\d{1,2})/"), "day"),       # /2024/03/15/
-    (re.compile(r"/((?:19|20)\d{2})(\d{2})(\d{2})[/._-]"), "day"),        # /20240315/
-    (re.compile(r"/((?:19|20)\d{2})/(\d{1,2})/"), "month"),               # /2024/03/
-)
-
-
-def extract_url_date(url: str, reference_date: Optional[date] = None) -> Optional[DocDate]:
-    """从 URL 路径提取日期模式。
-
-    只匹配路径段形态的日期(带分隔符),降低误伤;置信度 medium。
-    年主题词(如 /best-laptops-2024)不匹配这些模式,天然排除。
-    """
-    path = re.sub(r"^https?://[^/]+", "", str(url or ""))
-    for pattern, granularity in _URL_DATE_PATTERNS:
-        m = pattern.search(path)
-        if not m:
-            continue
-        try:
-            year, month = int(m.group(1)), int(m.group(2))
-            day = int(m.group(3)) if granularity == "day" else 1
-            candidate = DocDate(
-                day=date(year, month, day),
-                granularity=granularity,
-                confidence="medium",
-                source="url",
-            )
-        except ValueError:
-            continue
-        if is_plausible(candidate, reference_date):
-            return candidate
-    return None
-
-
-# ---------------------------------------------------------------------------
 # 多来源合并
 # ---------------------------------------------------------------------------
 

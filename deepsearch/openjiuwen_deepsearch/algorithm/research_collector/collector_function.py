@@ -17,7 +17,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Temp
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload
 from openjiuwen_deepsearch.utils.common_utils.date_utils import (
     DocDate,
-    extract_url_date,
     parse_date_string,
     temporal_status,
 )
@@ -380,8 +379,7 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
 
     Args:
         item: 搜索引擎返回的单条结果。
-        include_date_metadata: 是否附加日期元数据（引擎已归一化的发表日期，
-            缺失时以 URL 路径日期兜底）。
+        include_date_metadata: 是否附加日期元数据（引擎已归一化的发表日期）。
 
     Returns:
         归一化文档；缺少 URL 或输入非法时返回 None。
@@ -430,26 +428,13 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
                 "granularity": "day",
                 "confidence": "high",
             }
-        else:
-            # 引擎未给发表日期时,用 URL 路径日期兜底(零成本档,medium 置信)。
-            url_date = extract_url_date(url)
-            if url_date is not None:
-                normalized["date_metadata"] = {
-                    "field": "url_date",
-                    "type": "url",
-                    "value": url_date.day.isoformat(),
-                    "parsed_date": url_date.day.isoformat() if url_date.granularity == "day" else "",
-                    "granularity": url_date.granularity,
-                    "confidence": "medium",
-                }
     return normalized
 
 
 def _doc_date_from_record_metadata(metadata: Any) -> DocDate | None:
     """从归一化记录的 date_metadata 构造 DocDate 四元组。
 
-    引擎原生 published 元数据 → day 粒度/high 置信；URL 日期 → 按 metadata 自带的
-    granularity/medium 置信。无法解析出日期时返回 None（归入 unknown）。
+    引擎原生 published 元数据 → day 粒度/high 置信。无法解析出日期时返回 None（归入 unknown）。
     """
     if not isinstance(metadata, dict):
         return None
@@ -459,11 +444,6 @@ def _doc_date_from_record_metadata(metadata: Any) -> DocDate | None:
     meta_type = str(metadata.get("type") or "").strip()
     if meta_type == "published":
         return DocDate(day=parsed, granularity="day", confidence="high", source="engine_metadata")
-    if meta_type == "url":
-        granularity = str(metadata.get("granularity") or "day")
-        if granularity not in ("year", "month", "day"):
-            granularity = "day"
-        return DocDate(day=parsed, granularity=granularity, confidence="medium", source="url")
     return None
 
 

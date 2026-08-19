@@ -165,13 +165,6 @@ def test_compute_status_publish_time_high_confidence_violation():
     assert _compute_doc_temporal_status(doc, SCOPE_2024) == ("violation", -1.0)
 
 
-def test_compute_status_url_fallback_medium_confidence():
-    """publish_time 占位文本不可用时,URL 日期模式兜底(medium)。"""
-    doc = _doc(0, url="https://example.com/news/2024/03/15/story",
-               publish_time="未提供时间信息")
-    assert _compute_doc_temporal_status(doc, SCOPE_2024) == ("compliant", 0.5)
-
-
 def test_compute_status_date_info_used_with_stored_confidence():
     """date_info 直接使用,置信度以存储值为准(low → compliant +0.5)。"""
     doc = _doc(
@@ -246,10 +239,10 @@ def test_compute_status_content_date_violation_is_neutral():
     assert _compute_doc_temporal_status(doc, SCOPE_2024, "content_date") == ("violation", 0.0)
 
 
-def test_compute_status_content_date_violation_medium_confidence_is_neutral():
-    """content_date:中置信(URL 兜底)violation 同样中性化。"""
-    doc = _doc(0, url="https://example.com/news/2023/06/01/story",
-               publish_time="未提供时间信息")
+def test_compute_status_content_date_violation_is_neutral():
+    """content_date:violation 强制 0 分(发布时间新不代表内容越界),不罚。"""
+    doc = _doc(0, date_info={"date": "2023-06-01", "granularity": "day",
+                             "confidence": "low", "source": "llm_inferred"})
     assert _compute_doc_temporal_status(doc, SCOPE_2024, "content_date") == ("violation", 0.0)
 
 
