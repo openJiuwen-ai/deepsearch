@@ -863,6 +863,9 @@ class InfoRetrievalNode(BaseNode):
             current_publish_time = doc_infos[index].get("publish_time")
             if llm_time_text and (not current_publish_time or current_publish_time == "未提供时间信息"):
                 doc_infos[index]["publish_time"] = llm_time_text
+                # 标记该 publish_time 只是低置信 LLM 日期的展示拷贝,
+                # report 层时效判定据此跳过,避免按 high 解析造成置信度膨胀。
+                doc_infos[index]["publish_time_source"] = "llm_backfill"
             normalize_doc_info_scores_and_time(doc_infos[index])
             seen_indexes.add(index)
 

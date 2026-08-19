@@ -137,6 +137,19 @@ def test_resolve_temporal_embed_in_query_signal_matrix():
     assert resolve_temporal_embed_in_query("", "source_date") is True
 
 
+def test_resolve_temporal_embed_in_query_secondary_engine():
+    """副引擎会跑同一批 query 且不支持原生时间过滤时,即使主引擎是
+    tavily 也必须嵌入时间词,否则副引擎结果完全失去时间约束信号。"""
+    # 副引擎无原生过滤能力 → 嵌入时间词兜底
+    assert resolve_temporal_embed_in_query("tavily", "source_date", "google") is True
+    # 副引擎同为 tavily / 未配置( None 或空) → 保持消双重约束
+    assert resolve_temporal_embed_in_query("tavily", "source_date", "tavily") is False
+    assert resolve_temporal_embed_in_query("tavily", "source_date", None) is False
+    assert resolve_temporal_embed_in_query("tavily", "source_date", "") is False
+    # 副引擎参数不影响 content_date(始终带时间)
+    assert resolve_temporal_embed_in_query("tavily", "content_date", "tavily") is True
+
+
 def _gen_query_context():
     return {
         "plan_title": "AI benchmark",

@@ -660,6 +660,10 @@ def merge_fetched_doc_date(doc_info: dict[str, Any], fetched: dict[str, Any]) ->
     publish_time = str(updated.get("publish_time") or "").strip()
     if not publish_time or publish_time == UNKNOWN_PUBLISH_TIME:
         updated["publish_time"] = merged.day.isoformat()
+        if merged.confidence == "low":
+            # 合并结果仅来自低置信(LLM 推断)来源时,publish_time 只是展示
+            # 拷贝,标记来源供 report 层跳过,避免按 high 解析造成置信度膨胀。
+            updated["publish_time_source"] = "llm_backfill"
     return updated
 
 

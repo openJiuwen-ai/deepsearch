@@ -198,6 +198,38 @@ def test_compute_status_same_rank_conflict_degrades_to_unknown():
     assert _compute_doc_temporal_status(doc, SCOPE_2024) == ("unknown", 0.0)
 
 
+def test_compute_status_real_engine_publish_time_kept_with_low_date_info():
+    """低置信 date_info(LLM 内容时间)与真实引擎 publish_time 并存时,
+    publish_time 不得被误跳过:它是 high 候选,合并后压过低置信 date_info。"""
+    doc = _doc(
+        0,
+        publish_time="2023-06-01",  # 真实引擎发布日期(high),violation
+        date_info={"date": "2024-05-01", "granularity": "month",
+                   "confidence": "low", "source": "llm_inferred"},
+    )
+    assert _compute_doc_temporal_status(doc, SCOPE_2024, "source_date") == ("violation", -1.0)
+
+
+def test_compute_status_llm_backfill_publish_time_skipped():
+    """带 llm_backfill 标记的 publish_time 只是低置信日期的展示拷贝,
+    不参与合并(避免置信度膨胀)。"""
+    doc = _doc(0, publish_time="2024-03-15")
+    doc["publish_time_source"] = "llm_backfill"
+    assert _compute_doc_temporal_status(doc, SCOPE_2024) == ("unknown", 0.0)
+
+
+def test_compute_status_llm_backfill_publish_time_skipped_uses_date_info():
+    """回填 publish_time 被跳过时,以 date_info 的存储置信度为准。"""
+    doc = _doc(
+        0,
+        publish_time="2023-06-01",  # LLM 回填的展示值,跳过
+        date_info={"date": "2024-05-01", "granularity": "month",
+                   "confidence": "low", "source": "llm_inferred"},
+    )
+    doc["publish_time_source"] = "llm_backfill"
+    assert _compute_doc_temporal_status(doc, SCOPE_2024) == ("compliant", 0.5)
+
+
 def test_compute_status_coarse_granularity_overlap_is_unknown():
     """粒度不足导致区间跨边界(content_date 常见形态)→ unknown 0 分,中性。"""
     doc = _doc(0, publish_time="2024")  # 年粒度:[2024-01-01, 2024-12-31]
@@ -280,7 +312,42 @@ def test_temporal_term_is_bounded_by_coverage_gain():
 
 
 def test_unique_coverage_exemption_keeps_sole_source():
-    """唯一覆盖来源即使边际价值(含时效惩罚)<= 0 也必须保留。"""
+    """唯一覆盖来源被时效惩罚压过停止线时必须保留(豁免仅此时触发)。"""
+    reporter = _make_reporter()
+    docs = [
+        {"title": "main-a", "url": "https://example.com/a",
+         "original_content": "出口总额同比增长", "key_passages": ["p"]},
+        {"title": "main-b", "url": "https://example.com/b",
+         "original_content": "目的国结构分析", "key_passages": ["p"]},
+        {"title": "sole-r2-source", "url": "https://example.com/c",
+         "original_content": "关税壁垒案例", "key_passages": ["p"]},
+    ]
+    rationales = [_rationale("r1", "a"), _rationale("r2", "b")]
+    matrix = {
+        "doc_0": {"r1": 0.9},
+        "doc_1": {"r1": 0.9},
+        "doc_2": {"r2": 0.3},  # r2 的唯一有效覆盖(>= 0.3)
+    }
+    coverage = _coverage_result(
+        docs, matrix,
+        reliability={"doc_0": 1.0, "doc_1": 1.0, "doc_2": 0.0},
+    )
+    # doc_2 去时效边际价值 = 0.3 - 0.2*1.0 = 0.1 > 0(本身值得选);
+    # 含时效惩罚 = 0.1 + 0.15*(-1.0) = -0.05 <= 0 → 停止是时效惩罚造成的,
+    # 豁免强制保留
+    selected, values = reporter._optimize_document_set(
+        docs, rationales, coverage, top_k=5,
+        temporal_scores=[0.0, 0.0, -1.0],
+    )
+
+    selected_titles = [d["title"] for d in selected]
+    assert "sole-r2-source" in selected_titles
+    # 记录真实边际价值(负值,不粉饰为正值)
+    assert values[selected_titles.index("sole-r2-source")] < 0.0
+
+
+def test_unique_coverage_exemption_not_triggered_by_non_temporal_stop():
+    """停止由 noise/可信度等非时效因素造成时,豁免不触发(与旧路径一致)。"""
     reporter = _make_reporter()
     docs = [
         {"title": "main-a", "url": "https://example.com/a",
@@ -301,17 +368,14 @@ def test_unique_coverage_exemption_keeps_sole_source():
         reliability={"doc_0": 1.0, "doc_1": 1.0, "doc_2": 0.0},
         noise={"doc_2": 1.0},
     )
-    # doc_2 无时效边际价值 = 0.5 - 0.3*1.0 - 0.2*1.0 = 0.0(不 > 0 → 停止);
-    # 含时效惩罚 = 0.0 + 0.15*(-1.0) - 冗余 < 0,但豁免强制保留
-    selected, values = reporter._optimize_document_set(
+    # doc_2 去时效边际价值 = 0.5 - 0.3*1.0 - 0.2*1.0 = 0.0(本身就不值得选),
+    # 时效分为 0,豁免不得触发
+    selected, _ = reporter._optimize_document_set(
         docs, rationales, coverage, top_k=5,
-        temporal_scores=[0.0, 0.0, -1.0],
+        temporal_scores=[0.0, 0.0, 0.0],
     )
 
-    selected_titles = [d["title"] for d in selected]
-    assert "sole-r2-source" in selected_titles
-    # 记录真实边际价值(负值,含 n-gram 冗余,不粉饰为正值)
-    assert values[selected_titles.index("sole-r2-source")] < 0.0
+    assert "sole-r2-source" not in [d["title"] for d in selected]
 
 
 def test_unique_coverage_exemption_not_applied_without_temporal():

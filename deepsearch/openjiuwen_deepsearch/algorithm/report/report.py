@@ -144,11 +144,7 @@ FENCED_BLOCK_PATTERN = re.compile(
 )
 
 
-# ---------------------------------------------------------------------------
-# 时效软着陆排序(时间约束强化 v2 ③,设计文档:
-# docs/superpowers/specs/2026-08-17-temporal-constraint-v2-design.md)。
-# temporal_scope 为 None 时整条路径短路,行为与引入前完全一致。
-# ---------------------------------------------------------------------------
+# 时效软着陆排序:temporal_scope 为 None 时整条路径短路,与引入前行为一致。
 
 _NO_TIME_INFO_TEXT = "未提供时间信息"
 
@@ -156,17 +152,10 @@ _NO_TIME_INFO_TEXT = "未提供时间信息"
 def _resolve_temporal_scope(
     current_inputs: dict,
 ) -> tuple[date | None, date | None, str | None] | None:
-    """从 current_inputs["research_intent"] 提取时间约束边界与约束对象。
+    """从 research_intent 提取时间约束三元组 (start_date, end_date, constraint_type)。
 
-    research_intent 由 ResearchIntent.model_dump() 序列化为 dict 后
-    经 session 流入(SubReporterNode._pre_handle 已透传),其中
-    start_date/end_date 通常是 date 对象,也可能经 JSON 往返后是
-    ISO 字符串,这里统一归一化为 date。无时间约束或边界全空时返回
-    None,下游完全走旧路径。
-
-    返回 (start_date, end_date, constraint_type) 三元组;
-    constraint_type ∈ {"source_date", "content_date", None},取值非法时
-    归一为 None(按 source_date 语义处理,见 _compute_doc_temporal_status)。
+    start_date/end_date 可能是 date 或 ISO 字符串,统一归一化为 date;无约束或边界全空返回 None(下游走旧路径)。
+    constraint_type 非法时归一为 None(按 source_date 语义,见 _compute_doc_temporal_status)。
     """
     research_intent = current_inputs.get("research_intent") or {}
     if isinstance(research_intent, dict):
@@ -234,9 +223,10 @@ def _compute_doc_temporal_status(
 
     日期来源按置信度合并(merge_doc_dates 语义:取最高置信档,
     同档冲突降级 unknown):① date_info(置信度以存储值为准);
-    ② publish_time 字面解析(high;仅当 date_info 缺失或非低置信时
-    启用——低置信 date_info 场景下 publish_time 只是 LLM 日期的
-    回填展示值,再按 high 解析会置信度膨胀);
+    ② publish_time 字面解析(high;仅当它不是 LLM 回填的展示拷贝时
+    启用——回填值来自低置信 LLM 日期,再按 high 解析会置信度膨胀;
+    是否回填以 publish_time_source 标记为准,而不是看 date_info 的
+    置信度,否则真实引擎发布日期会被误跳过);
     ③ URL 日期模式兜底(medium)。
     temporal_scope 为 None 时短路返回 ("unknown", 0.0),零开销;
     无可用日期同样归 unknown(0 分),绝不猜。
@@ -244,8 +234,7 @@ def _compute_doc_temporal_status(
     constraint_type 为 "content_date" 时,violation 的排序分强制为
     0.0(中性,"只奖不罚"):候选日期来自发布/写作时间(②③ 来源本质上
     都是发布时间),而发布时间不是"事实时间"的有效证据——发布时间新的
-    文档完全可能内容合规,惩罚它是语义错误(见设计文档③:
-    docs/superpowers/specs/2026-08-17-temporal-constraint-v2-design.md)。
+    文档完全可能内容合规,惩罚它是语义错误。
     compliant 的奖励保留不变;source_date 场景(含 constraint_type 为
     None 的兜底)沿用原有 -0.5/-1.0 惩罚,逻辑完全不变。
     状态字符串不受此规则影响(仍如实返回 "violation"),观测日志的
@@ -257,12 +246,13 @@ def _compute_doc_temporal_status(
 
     candidates: list[DocDate | None] = [_doc_date_from_date_info(doc_info.get("date_info"))]
     publish_time = str(doc_info.get("publish_time") or "").strip()
-    # publish_time 可能是 doc_evaluation 用 LLM 推断日期(low)回填的展示值,
-    # 此时再按 high 解析会造成置信度膨胀 → date_info 为低置信(LLM 推断)时
-    # 跳过 publish_time,以其存储置信度为准。date_info 缺失或本身为高置信
-    # 来源时,publish_time 仍作为独立 high 候选参与合并:
-    # 与 date_info 同档冲突会按 merge_doc_dates 语义降级 unknown(不猜)。
-    skip_publish_time = candidates[0] is not None and candidates[0].confidence == "low"
+    # publish_time 可能来自 LLM 日期的回填(info_collector / merge_fetched_doc_date
+    # 在低置信合并结果上补齐展示字段时写入 publish_time_source="llm_backfill"),
+    # 此时再按 high 解析会造成置信度膨胀 → 按来源标记跳过。
+    # 无标记的 publish_time 是真实引擎发布日期,即使与低置信 date_info 并存也
+    # 作为独立 high 候选参与合并(对 source_date 语义这才是正确证据):
+    # 与 date_info 冲突时按 merge_doc_dates 语义处理(不猜)。
+    skip_publish_time = doc_info.get("publish_time_source") == "llm_backfill"
     if not skip_publish_time and publish_time and publish_time != _NO_TIME_INFO_TEXT:
         parsed = parse_partial_date(publish_time)
         if parsed is not None:
@@ -274,8 +264,7 @@ def _compute_doc_temporal_status(
     candidates.append(extract_url_date(doc_info.get("url", "")))
 
     doc_date = merge_doc_dates(candidates)
-    # 合理性兜底:LLM 推断等低置信来源未过 is_plausible 校验,
-    # 未来日期/过老日期在此统一拦截,降级 unknown 不猜。
+    # 合理性兜底:未来/过老日期在此拦截,降级 unknown。
     if doc_date is None or not is_plausible(doc_date):
         return "unknown", 0.0
     status = temporal_status(doc_date, start_date, end_date)
@@ -1349,9 +1338,7 @@ class Reporter:
                 "require_methodology_and_risk", rtp.get("require_methodology_and_risk", False)
             )
         doc_infos = current_inputs.get("doc_infos", [])
-        # 时间约束(v2 ③):从 research_intent 提取 temporal_scope 三元组
-        # (start_date, end_date, constraint_type);
-        # None 表示无时间约束,选材路径与引入前完全一致。
+        # 时间约束:None 表示无约束,选材走旧路径。
         temporal_scope = _resolve_temporal_scope(current_inputs)
         background_contents = self._get_background_knowledge_contents(
             current_inputs.get("sub_report_background_knowledge", [])
@@ -1418,8 +1405,7 @@ class Reporter:
                 selected_marginal_values = [0.0] * len(selected_docs)
                 verify_result = None
             else:
-                # 时效软着陆排序:为每个候选文档(与 filtered_docs 下标对齐)
-                # 计算时效状态与排序分;temporal_scope 为 None 时整条路径短路。
+                # 时效软着陆排序;temporal_scope 为 None 时短路。
                 temporal_statuses = None
                 temporal_scores = None
                 if temporal_scope is not None:
@@ -2487,17 +2473,14 @@ class Reporter:
         Inspired by TREC submodular selection + PureCover noise penalty.
         Each round selects the document with the highest marginal value:
             marginal_value = coverage_gain - β×redundancy - γ×noise - δ×untrustworthy
-        时效排序激活时(见 temporal_scores)额外加有界时效项:
-            marginal_value += TEMPORAL_TIMELINESS_WEIGHT × timeliness_score
+        时效排序激活时(temporal_scores 非空)额外加有界时效项。
 
         Args:
             doc_infos: candidate document list (already n-gram filtered).
             rationales: rationale list.
             coverage_result: coverage matrix evaluation result.
             top_k: maximum number of documents to select.
-            temporal_scores: 与 coverage_result["filtered_docs"] 按下标对齐的
-                时效排序分(timeliness_score ∈ [-1.0, 1.0]);为 None 时
-                (无 temporal_scope)完全走旧路径,行为与引入前逐字节一致。
+            temporal_scores: 与 filtered_docs 按下标对齐的时效分;为 None 时走旧路径。
 
         Returns:
             (selected_docs, marginal_values) tuple.
@@ -2540,6 +2523,7 @@ class Reporter:
             best_value = 0.0
             best_protected_idx = -1
             best_protected_value = 0.0
+            best_protected_base_value = 0.0
 
             for idx in range(len(filtered_docs)):
                 if idx in selected_indices:
@@ -2569,7 +2553,8 @@ class Reporter:
                 reliability = reliability_scores.get(doc_key, 0.5)
                 untrustworthy = 1.0 - reliability
 
-                marginal_value = gain - beta * redundancy - gamma * noise - delta * untrustworthy
+                base_marginal_value = gain - beta * redundancy - gamma * noise - delta * untrustworthy
+                marginal_value = base_marginal_value
                 if temporal_scores is not None:
                     # 有界时效项:w_t 远小于单条 rationale 的 coverage_gain,
                     # 只做同分决胜,不能盖过真实覆盖差异。
@@ -2581,12 +2566,16 @@ class Reporter:
                 if temporal_scores is not None and idx in protected_indices:
                     if best_protected_idx < 0 or marginal_value > best_protected_value:
                         best_protected_value = marginal_value
+                        best_protected_base_value = base_marginal_value
                         best_protected_idx = idx
 
             if best_idx < 0 or best_value <= 0:
-                # 唯一覆盖豁免:受保护文档即使边际价值 <= 0 也强制保留,
-                # 并记录其真实边际价值(供观测,不粉饰为正值)。
-                if temporal_scores is not None and best_protected_idx >= 0:
+                # 唯一覆盖豁免:仅当"去掉时效项后边际价值仍为正"——即停止
+                # 确实是时效惩罚造成的——才强制保留受保护文档;noise/可信度等
+                # 非时效因素导致的停止不触发豁免(避免豁免面超出设计口径,
+                # 把旧路径本会丢弃的低质文档强行选入)。
+                if (temporal_scores is not None and best_protected_idx >= 0
+                        and best_protected_base_value > 0):
                     best_idx = best_protected_idx
                     best_value = best_protected_value
                 else:

@@ -354,7 +354,8 @@ class GenerateQueryNode(BaseNode):
             "report_type": report_type,
         }
         agent_input.update(build_temporal_scope_prompt_context(
-            state.get("research_intent"), engine_name=_collector_web_search_engine_name(session)))
+            state.get("research_intent"), engine_name=_collector_web_search_engine_name(session),
+            secondary_engine_name=state.get("secondary_web_search_engine_name")))
         formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
 
         result: SearchQueryList = await self._invoke_llm_with_retry(
@@ -529,7 +530,8 @@ class SupervisorNode(BaseNode):
             "report_type": report_type,
         }
         agent_input.update(build_temporal_scope_prompt_context(
-            state.get("research_intent"), engine_name=_collector_web_search_engine_name(session)))
+            state.get("research_intent"), engine_name=_collector_web_search_engine_name(session),
+            secondary_engine_name=state.get("secondary_web_search_engine_name")))
         formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
 
         result: Reflection = await self._invoke_llm_with_retry(
