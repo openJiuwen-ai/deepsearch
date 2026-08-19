@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """DOM 级网页正文噪声过滤器及其富化路径集成的测试。
 
-规则与参数依据实验推荐方案(baseline + 规则过滤器,88 篇语料实测零误杀)。
+规则与参数依据实验推荐方案(baseline + 规则过滤器,88 篇语料实测零误删)。
 """
 
 from unittest.mock import patch
@@ -70,7 +70,7 @@ _CAMET_STYLE_HTML = """
 </body></html>
 """
 
-# 数据表格型正文:短、数字多、无链接、无特征词,规则过滤器必须零误杀。
+# 数据表格型正文:短、数字多、无链接、无特征词,规则过滤器必须零误删。
 _DATA_TABLE_HTML = """
 <html><body>
 <div class="content">
@@ -107,7 +107,7 @@ def test_rule_filter_removes_nav_menu_and_beian_footer():
 
 
 def test_extract_clean_main_text_outputs_thin_content_only():
-    """完整提取管线的输出只含正文,不泄漏导航/页脚 chrome。"""
+    """完整提取管线的输出只含正文,不泄漏导航/页脚等页面框架内容。"""
     text = extract_clean_main_text(_CAMET_STYLE_HTML)
 
     assert "采编时间：2025年4月10日" in text
@@ -117,7 +117,7 @@ def test_extract_clean_main_text_outputs_thin_content_only():
 
 
 def test_rule_filter_keeps_data_table_rows():
-    """数据表格行("无锡 5084.2 34.6 97"类)无链接无特征词,必须零误杀。"""
+    """数据表格行("无锡 5084.2 34.6 97"类)无链接无特征词,必须零误删。"""
     soup = BeautifulSoup(_DATA_TABLE_HTML, "html.parser")
 
     removed = filter_boilerplate_blocks(soup)
@@ -129,10 +129,10 @@ def test_rule_filter_keeps_data_table_rows():
 
 
 def test_layout_container_over_half_page_text_is_never_removed():
-    """占全页文本 >50% 的布局容器即使命中双条件也永不删除(宁可漏杀)。"""
+    """占全页文本 >50% 的布局容器即使命中双条件也永不删除(宁可漏删)。"""
     paragraph = "正文段落" * 60  # 240 字正文
     # 链接文本总量(12 x ~22 字)超过容器文本一半,容器同时命中"相关阅读",
-    # 若无保险丝将满足"链接密度 >= 0.5 且命中特征词"的删除条件。
+    # 若无防误删保护,将满足"链接密度 >= 0.5 且命中特征词"的删除条件。
     links = "\n".join(
         f'<a href="/{i}">相关阅读：城市轨道交通行业发展专题报道之{i}</a>' for i in range(12)
     )
@@ -148,7 +148,7 @@ def test_layout_container_over_half_page_text_is_never_removed():
 
     removed = filter_boilerplate_blocks(soup)
 
-    # 外层容器占全页文本过半,保险丝要求永不删除;链接块随容器整体保留(漏杀可接受)。
+    # 外层容器占全页文本过半,防误删保护要求永不删除;链接块随容器整体保留(漏删可接受)。
     assert removed == 0
     remaining = soup.get_text(" ", strip=True)
     assert paragraph in remaining
@@ -220,7 +220,7 @@ def test_chrome_word_with_low_link_density_is_kept():
 
 
 def test_single_link_download_row_is_kept():
-    """单链接下载行("…报告.pdf")即使链接密度为 1 也是正文而非链接汤。"""
+    """单链接下载行("…报告.pdf")即使链接密度为 1 也是正文,不是"几乎全是链接"的块。"""
     html = """
     <html><body>
     <p><a href="/files/report.pdf">城市轨道交通2024年度统计和分析报告.pdf</a></p>
@@ -236,7 +236,7 @@ def test_single_link_download_row_is_kept():
 
 
 def test_pure_link_soup_without_chrome_word_is_removed():
-    """无特征词但链接密度 >= 0.85 且链接数 >= 3 的纯链接汤应删除。"""
+    """无特征词但链接密度 >= 0.85 且链接数 >= 3 的"几乎全是链接"的块应删除。"""
     paragraph = "采编时间：2025年4月10日 来源：某某协会办公室,本期统计报告现已正式发布。"
     html = f"""
     <html><body>
@@ -265,7 +265,7 @@ def test_extract_clean_main_text_handles_empty_input():
 
 
 def test_detect_boilerplate_flags_chrome_words():
-    """含中英 chrome 特征词的文本判定为污染。"""
+    """含中英页面框架特征词的文本判定为污染。"""
     assert detect_boilerplate("正文内容\n京ICP备19038936号-1\n其他内容") is True
     assert detect_boilerplate("Some article body\nAll rights reserved.") is True
     assert detect_boilerplate("") is False
@@ -349,7 +349,7 @@ async def test_clean_harness_content_is_not_replaced():
 
 @pytest.mark.asyncio
 async def test_full_html_fetch_failure_degrades_silently():
-    """完整 HTML 抓取失败时静默降级,保留 harness 原文(即使其含 chrome)。"""
+    """完整 HTML 抓取失败时静默降级,保留 harness 原文(即使其含页面框架内容)。"""
     node = ExposedWebPageEnrichmentNode()
     url = "https://a.com/slow"
     direct_result = {"url": url, "status_code": 200, "content": _POLLUTED_HARNESS_CONTENT}
