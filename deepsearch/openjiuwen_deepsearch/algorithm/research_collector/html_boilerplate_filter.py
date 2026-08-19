@@ -1,19 +1,10 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
-"""DOM 级网页正文噪声过滤器(导航/页脚/chrome 块剔除)。
+"""DOM 级网页正文噪声过滤器:剔除导航/页脚等 chrome 块,避免污染下游日期判断。
 
-背景:harness 直连抓取(`WebFetchWebpageAdapter.fetch_webpage_sync`)返回的
-已提取正文可能混入导航菜单、页脚备案号等 chrome 内容(例如协会官网菜单里的
-"纲要 2026—2035年"),污染下游 LLM 对文档时间的判断。
-
-本模块移植自实验验证的最优方案(`.worktrees/temporal-v2/experiments/
-content_extraction/REPORT.md` §1 方法 4 / §7 最终推荐):"类 harness 选择器
-提取 + DOM 级规则前置过滤"。在 88 篇对照语料上实测关键标记串 36/36 零误杀,
-chrome 残留行占比 p90 从 0.81% 降至 0.19%。
-
-设计原则:宁可漏杀不可错杀。所有删除规则都要求"链接密度 AND 特征词"双条件
-或"极高链接密度 AND 多链接"的纯链接汤,且占全页文本过半的布局容器永不删除。
+只删高链接密度且命中 chrome 特征词的块,或纯链接汤;占全页文本过半的布局
+容器永不删除(宁可漏删不可误删正文)。
 """
 
 from __future__ import annotations
@@ -22,9 +13,7 @@ import re
 
 from bs4 import BeautifulSoup
 
-#: chrome 特征词表(中英双语)。命中任一词且链接密度达标时判定为噪声块。
-#: 词表依据 experiments/content_extraction/REPORT.md §1 推荐参数,
-#: 随 badcase 积累可扩充(报告 §7 补充建议)。
+#: chrome 特征词(中英)。命中且链接密度达标时判为噪声块;随 badcase 扩充。
 CHROME_FEATURE_WORDS = [
     # zh
     "版权所有", "相关阅读", "相关推荐", "上一篇", "下一篇", "网站导航", "ICP备",
@@ -37,21 +26,20 @@ CHROME_FEATURE_WORDS = [
     "Follow us", "Share this", "Copyright ©", "Copyright (c)",
 ]
 
-#: 参与规则评估的块级标签。与实验实现保持一致;`tr` 在内以便清理链接汤式表格行,
-#: 数据行(短、数字多、无链接、无特征词)因双条件约束不会被误删。
+#: 候选块标签;含 tr 以清理链接汤式表格行(数据行因双条件约束不会被误删)。
 BOILERPLATE_CANDIDATE_TAGS = [
     "div", "ul", "li", "p", "section", "aside", "footer", "nav", "tr",
 ]
 
-#: 规则一:链接密度达到该值且命中 chrome 特征词时删除(REPORT.md §1)。
+#: 规则一阈值:链接密度 ≥ 此值且命中 chrome 特征词时删除。
 CHROME_LINK_DENSITY_THRESHOLD = 0.5
-#: 规则二:链接密度达到该值且链接数达标时按纯链接汤删除(REPORT.md §1)。
+#: 规则二阈值:链接密度 ≥ 此值且链接数达标时按纯链接汤删除。
 LINK_SOUP_DENSITY_THRESHOLD = 0.85
-#: 规则二的最低链接数;单链接短行(如"…报告.pdf"下载行)是正文而非链接汤。
+#: 规则二最低链接数;单链接短行(如下载行)是正文,不按链接汤删。
 LINK_SOUP_MIN_LINKS = 3
-#: 保险丝:文本量占全页文本超过该比例的布局容器永不删除,只评估其内部子块。
+#: 保险丝:占全页文本超过此比例的布局容器永不删除(只评估其子块)。
 LAYOUT_CONTAINER_MAX_TEXT_SHARE = 0.5
-#: 过短/过长的块不参与规则评估(过短无判定意义,过长多为正文容器)。
+#: 过短/过长的块跳过规则评估。
 BLOCK_MIN_TEXT_LENGTH = 4
 BLOCK_MAX_TEXT_LENGTH = 5000
 
@@ -64,18 +52,9 @@ _MAIN_CANDIDATE_SELECTORS = [
 
 
 def filter_boilerplate_blocks(soup: BeautifulSoup) -> int:
-    """在 DOM 上删除满足噪声规则的块(原地修改)。
+    """删除满足噪声规则的块,原地修改 soup,返回删除数量。
 
-    删除规则(任一命中即删):
-        1. 链接密度 >= ``CHROME_LINK_DENSITY_THRESHOLD`` 且命中 chrome 特征词;
-        2. 链接密度 >= ``LINK_SOUP_DENSITY_THRESHOLD`` 且链接数
-           >= ``LINK_SOUP_MIN_LINKS``(纯链接汤)。
-
-    Args:
-        soup: 待过滤的 BeautifulSoup 文档树,会被原地修改。
-
-    Returns:
-        被删除的块数量。
+    规则(任一命中即删):链接密度达标且命中 chrome 特征词,或纯链接汤。
     """
     removed = 0
     removed_ids: set[int] = set()
@@ -95,7 +74,7 @@ def filter_boilerplate_blocks(soup: BeautifulSoup) -> int:
         text = el.get_text(" ", strip=True)
         if len(text) < BLOCK_MIN_TEXT_LENGTH or len(text) > BLOCK_MAX_TEXT_LENGTH:
             continue
-        # 保险丝:占全页文本过半的布局容器永不删除,宁可漏杀不可错杀。
+        # 保险丝:占全页文本过半的布局容器永不删除。
         if len(text) > LAYOUT_CONTAINER_MAX_TEXT_SHARE * total_len:
             continue
         links = el.find_all("a")
@@ -112,14 +91,7 @@ def filter_boilerplate_blocks(soup: BeautifulSoup) -> int:
 
 
 def _extract_main_text(soup: BeautifulSoup) -> str:
-    """按 harness 候选选择器思路从(已过滤的)DOM 提取主文本。
-
-    Args:
-        soup: 已完成噪声过滤的 BeautifulSoup 文档树。
-
-    Returns:
-        提取出的主文本;无候选容器时退化为 p/li/h 块拼接,再退化为 body 全文。
-    """
+    """从已过滤 DOM 提取主文本;无候选容器时退化为 p/li/h 拼接,再退化为 body 全文。"""
     for selector in ("script", "style", "noscript", "svg", "canvas", "iframe"):
         for node in soup.select(selector):
             node.decompose()
@@ -152,17 +124,7 @@ def _extract_main_text(soup: BeautifulSoup) -> str:
 
 
 def extract_clean_main_text(html: str) -> str:
-    """从原始 HTML 提取经 DOM 规则过滤后的干净正文。
-
-    流程:DOM 规则过滤(链接密度 + chrome 特征词)-> 语义化标签剔除 ->
-    候选选择器取最长主文本。不依赖 harness 包内部函数。
-
-    Args:
-        html: 原始网页 HTML 字符串。
-
-    Returns:
-        净化后的正文文本;输入无法解析时返回空串。
-    """
+    """从原始 HTML 提取净化后的正文(先 DOM 规则过滤,再取主文本);无法解析返回空串。"""
     if not html or not html.strip():
         return ""
     soup = BeautifulSoup(html, "html.parser")
@@ -171,17 +133,10 @@ def extract_clean_main_text(html: str) -> str:
 
 
 def detect_boilerplate(text: str) -> bool:
-    """判断已提取的纯文本是否仍含 chrome 污染(命中特征词)。
+    """判断已提取纯文本是否仍含 chrome 污染(命中特征词即判污染)。
 
-    用于对 harness 直连结果做取舍:仅当判定污染时才考虑用净化输出替换。
-    与实验的 chrome 残留行指标同口径(特征词命中),已知边界:不含特征词的
-    导航菜单行(如"党建工作/会员之家")检测不到,见 REPORT.md §2 读表注意。
-
-    Args:
-        text: 已提取的网页正文纯文本。
-
-    Returns:
-        任一 chrome 特征词出现在文本中时返回 True。
+    供 harness 直连结果取舍:仅判定污染时才考虑用净化输出替换。已知边界:
+    不含特征词的导航菜单行(如"党建工作/会员之家")检测不到。
     """
     if not text:
         return False

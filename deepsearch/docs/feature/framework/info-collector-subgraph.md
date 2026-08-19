@@ -81,7 +81,7 @@
 直连抓取成功且正文过充分性门槛后，节点会对同一 URL 顺带做一次流式完整 HTML 抓取（上限约 2MB，独立超时上限 10 秒，仍受单 URL 整体 deadline 约束），同一份 HTML 派生两类附加信号：
 
 - 白名单发布日期：`extract_html_head_date` 解析 `<head>` meta/JSON-LD，结果以 `doc_date` 挂到抓取结果并在写回时合并进 `date_info`。
-- 净化正文：`algorithm/research_collector/html_boilerplate_filter.py` 在 DOM 级删除导航/页脚等 chrome 块（链接密度 ≥0.5 且命中中英 chrome 特征词，或链接密度 ≥0.85 且链接数 ≥3 的纯链接汤；占全页文本过半的布局容器永不删除），再按 harness 候选选择器思路提取主文本。特征词表与阈值是该模块的模块级常量，参数依据 `.worktrees/temporal-v2/experiments/content_extraction/REPORT.md` 的推荐方案。
+- 净化正文：`algorithm/research_collector/html_boilerplate_filter.py` 在 DOM 级删除导航/页脚等 chrome 块（链接密度 ≥0.5 且命中中英 chrome 特征词，或链接密度 ≥0.85 且链接数 ≥3 的纯链接汤；占全页文本过半的布局容器永不删除），再按 harness 候选选择器思路提取主文本。特征词表与阈值是该模块的模块级常量，参数依据实验推荐方案。
 
 正文取舍：默认仍使用 harness 直连结果；仅当 `detect_boilerplate` 判定 harness 正文命中 chrome 特征词、且净化输出达到 `MIN_FETCHED_CONTENT_LENGTH`（200 字符）时，才把抓取正文替换为净化输出，并记录 `boilerplate_replaced` 日志事件。完整 HTML 抓取失败、日期解析异常或净化异常全部静默降级，保留 harness 原文，不丢文档；Jina fallback 路径不触发完整 HTML 抓取与净化替换。
 

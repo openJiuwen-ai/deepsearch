@@ -1,17 +1,10 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-"""网页文档日期的统一提取与时效判定工具。
+"""网页文档日期的提取与时效判定。
 
-设计文档:docs/superpowers/specs/2026-08-17-temporal-constraint-v2-design.md
-
-核心概念:
-- DocDate 四元组 {value, granularity, confidence, source},粒度支持 year/month/day;
-- 日期与约束都归一化为闭区间,用区间包含关系判定 compliant/violation/unknown,
-  粒度不足时自然落入 unknown,绝不猜;
-- 提取遵循"宁缺毋滥":只做白名单解析,不做全文日期扫描;
-  未来日期/过老日期/同档冲突一律拒绝或降级。
-
-本模块不依赖 framework 层,只接受纯日期参数,保持 utils 层的单向依赖。
+日期与约束都归一化为闭区间,用区间包含关系判定 compliant/violation/unknown;
+粒度不足(只有年/月)时归 unknown 不猜。提取只走白名单(标准 meta/JSON-LD/URL
+模式),不做全文扫描。纯日期工具,不依赖 framework 层。
 """
 
 import calendar
@@ -26,7 +19,6 @@ Granularity = Literal["year", "month", "day"]
 Confidence = Literal["high", "medium", "low"]
 TemporalStatus = Literal["compliant", "violation", "unknown"]
 
-# 合理性校验常量
 MIN_PLAUSIBLE_DATE = date(1990, 1, 1)
 FUTURE_TOLERANCE_DAYS = 2
 
@@ -46,7 +38,6 @@ _EXTRA_DATE_FORMATS = (
     "%Y年%m月%d日",  # 2024年1月1日
 )
 
-# 月粒度/年粒度的字面格式。
 _MONTH_FORMATS = (
     "%Y-%m",        # 2024-03
     "%Y/%m",        # 2024/03
@@ -165,8 +156,8 @@ class DocDate:
 def is_plausible(doc_date: DocDate, reference_date: Optional[date] = None) -> bool:
     """合理性校验:拒绝过老或显著未来的日期。
 
-    未来容忍 FUTURE_TOLERANCE_DAYS 天,吸收时区/时钟偏差;
-    超过容忍的未来日期(典型来源:页面上的"今天"控件、动态时间戳)一律拒绝。
+    未来容忍 FUTURE_TOLERANCE_DAYS 天以吸收时区/时钟偏差;超出的(典型如页面
+    "今天"控件、动态时间戳)拒绝。
     """
     ref = reference_date or datetime.now(tz=timezone.utc).date()
     lo, hi = doc_date.interval()
@@ -205,11 +196,8 @@ def temporal_status(
 
 
 def timeliness_score(status: TemporalStatus, confidence: Confidence) -> float:
-    """时效状态 + 置信度映射为排序分。
-
-    unknown 永远中性(0),召回池不受罚;
-    violation 只在非 high 置信时出现在这里(high 置信 violation 应已被硬删),
-    给有界惩罚;compliant 给有界奖励。
+    """时效状态 + 置信度 → 排序分。unknown 中性(0);compliant 有界奖励;
+    violation 有界惩罚(仅非 high 置信会走到这里,high 置信 violation 已被硬删)。
     """
     if status == "unknown":
         return 0.0
@@ -268,9 +256,7 @@ _JSONLD_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# 白名单:正式发布时间语义(优先级高)。
-# 依据 Open Graph 协议(article:*)与 schema.org/Dublin Core 标准,
-# 以及实测语料中出现的学术出版字段(prism/eprints/citation_*)。
+# 白名单:发布时间语义(OG / schema.org / Dublin Core / 学术 prism·eprints·citation_*)。
 _WHITELIST_PUBLISHED = (
     "article:published_time",
     "og:published_time",
@@ -284,7 +270,7 @@ _WHITELIST_PUBLISHED = (
     "prism.coverdate",
     "eprints.date",
 )
-# 白名单:修改/更新时间语义(优先级次之,可能与发布时间冲突时让位)。
+# 白名单:修改/更新时间语义(优先级次之,与发布时间冲突时让位)。
 _WHITELIST_MODIFIED = (
     "article:modified_time",
     "og:updated_time",
@@ -331,12 +317,10 @@ def extract_html_head_date(
         html: str,
         reference_date: Optional[date] = None,
 ) -> Optional[DocDate]:
-    """从 HTML(通常只传 <head> 部分)提取发布日期,白名单 + 冲突处理。
+    """从 HTML(通常只传 <head>)提取发布日期,白名单 + 冲突处理。
 
-    优先级:发布语义标签 > JSON-LD 主实体 datePublished >
-    修改语义标签 > JSON-LD dateModified。
-    同优先级候选解析出不同日期 → 返回 None(降级 unknown,不猜)。
-    所有候选都要过 is_plausible 合理性校验。
+    优先级:发布语义标签 > JSON-LD datePublished > 修改语义标签 > JSON-LD dateModified。
+    同优先级候选解析出不同日期 → None(不猜)。所有候选过 is_plausible 校验。
     """
     if not html:
         return None
@@ -389,10 +373,7 @@ _CONFIDENCE_RANK: dict[Confidence, int] = {"high": 0, "medium": 1, "low": 2}
 
 
 def merge_doc_dates(candidates: list[Optional[DocDate]]) -> Optional[DocDate]:
-    """多来源合并:取最高置信档;同档日期互相矛盾 → None(unknown)。
-
-    同年/同月不同日不算矛盾(粒度内的差异);跨粒度时以最粗粒度比较。
-    """
+    """多来源合并:取最高置信档;同档日期互相矛盾(跨粒度按最粗粒度比较)→ None。"""
     valid = [c for c in candidates if c is not None]
     if not valid:
         return None

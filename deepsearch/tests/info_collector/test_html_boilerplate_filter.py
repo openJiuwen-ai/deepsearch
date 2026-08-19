@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """DOM 级网页正文噪声过滤器及其富化路径集成的测试。
 
-规则与参数依据 `.worktrees/temporal-v2/experiments/content_extraction/REPORT.md`
-推荐方案(baseline + 规则过滤器,88 篇语料实测零误杀)。
+规则与参数依据实验推荐方案(baseline + 规则过滤器,88 篇语料实测零误杀)。
 """
 
 from unittest.mock import patch
