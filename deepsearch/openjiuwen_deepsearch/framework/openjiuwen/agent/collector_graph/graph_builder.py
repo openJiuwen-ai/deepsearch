@@ -218,6 +218,8 @@ def normalize_search_query_item(
     else:
         query = str(item)
         secondary_engine = route_secondary_search_engine_for_query(query)
+    if not enable_scholarly_search:
+        return SearchQueryItem(query=query, search_engine_name="")
     pmid = normalize_pmid(query)
     if pmid and "pubmed.ncbi.nlm.nih.gov" in query.casefold():
         return SearchQueryItem(query=pmid, search_engine_name="pubmed")
@@ -419,8 +421,14 @@ class GenerateQueryNode(BaseNode):
     def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, session: Session, context: ModelContext):
         current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
         research_intent = session.get_global_state("collector_context.research_intent") or {}
-        locator_items = build_target_paper_locator_items(research_intent, current_ledger)
         scholarly_search_enabled = _scholarly_search_is_available()
+        locator_items = [
+            normalize_search_query_item(
+                item,
+                enable_scholarly_search=scholarly_search_enabled,
+            )
+            for item in build_target_paper_locator_items(research_intent, current_ledger)
+        ]
         generated_items = [
             normalize_search_query_item(
                 query,

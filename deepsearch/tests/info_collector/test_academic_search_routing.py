@@ -88,6 +88,22 @@ def test_disabled_scholarly_search_removes_query_level_vertical_route():
     ).search_engine_name == ""
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+        "https://arxiv.org/abs/1706.03762v7",
+    ],
+)
+def test_disabled_scholarly_search_preserves_academic_url_for_default_web_search(query):
+    item = normalize_search_query_item(
+        SearchQueryItem(query=query, search_engine_name=""),
+        enable_scholarly_search=False,
+    )
+
+    assert item == SearchQueryItem(query=query, search_engine_name="")
+
+
 @pytest.mark.parametrize("configured", [False, "false", " FALSE "])
 def test_scholarly_search_switch_is_disabled_by_default_or_false(configured):
     config = AgentConfig(web_search_engine_config={
@@ -222,6 +238,32 @@ def test_confirmed_target_paper_drops_llm_generated_exact_locator():
     )
 
     assert state["collector_context.search_queries"] == []
+
+
+def test_disabled_scholarly_search_routes_target_paper_locator_to_default_web():
+    state = {
+        "collector_context.evidence_ledger": EvidenceLedger().model_dump(),
+        "collector_context.research_intent": {"target_papers": [{"pmid": "38132429"}]},
+        "collector_context.max_search_query_count": 5,
+        "collector_context.section_idx": 1,
+    }
+    session = Mock()
+    session.get_global_state.side_effect = state.get
+    session.update_global_state.side_effect = lambda values: state.update(values)
+    token = web_search_context.set({"jina": Mock()})
+    try:
+        GenerateQueryNode()._post_handle(
+            {},
+            SearchQueryList(queries=[]),
+            session,
+            Mock(),
+        )
+    finally:
+        web_search_context.reset(token)
+
+    assert state["collector_context.search_queries"] == [
+        RetrievalQuery(query="38132429", search_engine_name="")
+    ]
 
 
 def test_fallback_secondary_engine_routing():

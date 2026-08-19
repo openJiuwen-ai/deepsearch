@@ -284,7 +284,7 @@ class TestGenerateQueryNode:
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
                 search_queries = [
-                    RetrievalQuery(query="38202877", search_engine_name="pubmed"),
+                    RetrievalQuery(query="38202877"),
                     *[RetrievalQuery(query=query) for query in queries],
                 ]
                 mock_session.update_global_state.assert_any_call({
@@ -328,7 +328,7 @@ class TestGenerateQueryNode:
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
                 fallback_queries = [
-                    RetrievalQuery(query="38202877", search_engine_name="pubmed"),
+                    RetrievalQuery(query="38202877"),
                     *[RetrievalQuery(query=f"缺口{i}") for i in range(1, 5)],
                 ]
                 mock_session.update_global_state.assert_any_call({
@@ -361,7 +361,7 @@ class TestGenerateQueryNode:
 
                 # 验证使用了默认查询
                 search_queries = [
-                    RetrievalQuery(query="38202877", search_engine_name="pubmed"),
+                    RetrievalQuery(query="38202877"),
                     *[RetrievalQuery(query=query) for query in queries],
                 ]
                 mock_session.update_global_state.assert_any_call({
