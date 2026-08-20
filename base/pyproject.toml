@@ -67,6 +67,7 @@ ci = [
     "python-dotenv",
     "pytest-asyncio",
     "pytest-mock",
+    "openjiuwen-search-base[codegraph,ladybug]",
 ]
 
 # Formatting
