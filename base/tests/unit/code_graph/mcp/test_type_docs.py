@@ -18,9 +18,9 @@ def test_types_index_lists_all_node_and_edge_uris() -> None:
     assert "## Common edge fields" in body
     assert "- source: string" in body
     for nt in NodeType:
-        assert f"jiuwen-code-parser://types/nodes/{nt.value}" in body
+        assert f"jiuwen-code-graph://types/nodes/{nt.value}" in body
     for et in EdgeType:
-        assert f"jiuwen-code-parser://types/edges/{et.value}" in body
+        assert f"jiuwen-code-graph://types/edges/{et.value}" in body
 
 
 def test_node_type_resource_known() -> None:

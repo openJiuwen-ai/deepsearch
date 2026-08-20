@@ -36,17 +36,17 @@ async def test_type_resources_are_static_and_readable() -> None:
     resources = await list_resouces_fn()
     uris = {str(r.uri) for r in resources}
 
-    assert "jiuwen-code-parser://types" in uris
+    assert "jiuwen-code-graph://types" in uris
     for nt in NodeType:
-        assert f"jiuwen-code-parser://types/nodes/{nt.value}" in uris
+        assert f"jiuwen-code-graph://types/nodes/{nt.value}" in uris
     for et in EdgeType:
-        assert f"jiuwen-code-parser://types/edges/{et.value}" in uris
+        assert f"jiuwen-code-graph://types/edges/{et.value}" in uris
     assert len(uris) == 1 + len(NODE_TYPE_DOCS) + len(EDGE_TYPE_DOCS)
 
     async with Client(mcp) as client:
-        node_body = await client.read_resource("jiuwen-code-parser://types/nodes/function")
+        node_body = await client.read_resource("jiuwen-code-graph://types/nodes/function")
         assert "node_type: function" in node_body[0].text
-        edge_body = await client.read_resource("jiuwen-code-parser://types/edges/CALLS")
+        edge_body = await client.read_resource("jiuwen-code-graph://types/edges/CALLS")
         assert "edge_type: CALLS" in edge_body[0].text
 
 

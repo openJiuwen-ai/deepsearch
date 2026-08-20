@@ -288,7 +288,7 @@ def _format_fields(fields: tuple[FieldDoc, ...], *, heading: str) -> list[str]:
 def types_index_body() -> str:
     """Return markdown listing all node and edge type resource URIs.
 
-    :returns: Index body for ``jiuwen-code-parser://types``.
+    :returns: Index body for ``jiuwen-code-graph://types``.
     """
     lines = [
         "# Jiuwen Code Parser — type resources",
@@ -308,10 +308,10 @@ def types_index_body() -> str:
         lines.append(f"- {field.name}: {field.type_name}{opt} — {field.description}")
     lines.extend(["", "## Node types", ""])
     for key in _NODE_TYPE_KEYS:
-        lines.append(f"- jiuwen-code-parser://types/nodes/{key}")
+        lines.append(f"- jiuwen-code-graph://types/nodes/{key}")
     lines.extend(["", "## Edge types", ""])
     for key in _EDGE_TYPE_KEYS:
-        lines.append(f"- jiuwen-code-parser://types/edges/{key}")
+        lines.append(f"- jiuwen-code-graph://types/edges/{key}")
     lines.append("")
     return "\n".join(lines)
 
@@ -321,7 +321,7 @@ def node_type_resource_body(node_type: str) -> str:
     """Return plain-text documentation for one node type.
 
     :param node_type: Node type key (e.g. ``function``).
-    :returns: Body for ``jiuwen-code-parser://types/nodes/{node_type}``.
+    :returns: Body for ``jiuwen-code-graph://types/nodes/{node_type}``.
     """
     doc = NODE_TYPE_DOCS.get(node_type)
     if doc is None:
@@ -349,7 +349,7 @@ def edge_type_resource_body(edge_type: str) -> str:
     """Return plain-text documentation for one edge relation.
 
     :param edge_type: Edge relation key (e.g. ``CALLS``).
-    :returns: Body for ``jiuwen-code-parser://types/edges/{edge_type}``.
+    :returns: Body for ``jiuwen-code-graph://types/edges/{edge_type}``.
     """
     doc = EDGE_TYPE_DOCS.get(edge_type)
     if doc is None:

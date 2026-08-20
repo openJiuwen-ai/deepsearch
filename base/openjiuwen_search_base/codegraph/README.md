@@ -1,6 +1,6 @@
-# JiuwenCodeParser
+# Jiuwen Code Graph
 
-Async Python library that parses source files into typed node trees, exports them as a graph (JSONL, `.jcp` or LadybugDB), and provides an interactive browser-based viewer.
+A tool that parses source files into typed node trees, exports them as a graph (JSONL, `.jcp` or LadybugDB), and provides an interactive browser-based viewer.
 
 ## Features
 
@@ -12,8 +12,6 @@ Async Python library that parses source files into typed node trees, exports the
 - **LadybugDB export** — optional LadybugDB backend with per-type node/edge tables, configurable batch sizes, and built-in query helpers
 - **Viewer** — React + TypeScript SPA with force-directed graph and tree views
 
-![Screenshot](./resources/assets/img/screenshot-v2.png)
-
 ## Quick Start
 
 ```bash
@@ -21,15 +19,15 @@ Async Python library that parses source files into typed node trees, exports the
 make export
 
 # Open the viewer
-make viewer-dev
+make viewer
 # Drop .jiuwen_graph/graph.jcp into the browser
 ```
 
-Ladybug export is optional:
+LadybugDB is also supported:
 
 ```bash
 # Install the optional Ladybug bindings
-uv sync --group ladybug
+uv sync --extra codegraph --extra ladybug
 
 # Export only a Ladybug database
 uv run python -m openjiuwen_search_base.codegraph.export . --backend ladybug
@@ -37,23 +35,16 @@ uv run python -m openjiuwen_search_base.codegraph.export . --backend ladybug
 # Export both the browser bundle and a Ladybug database
 uv run python -m openjiuwen_search_base.codegraph.export . --backend both
 
-# Or use the Makefile shortcut
-make export-ladybug
-
 # Tune batch sizes for large projects
 uv run python -m openjiuwen_search_base.codegraph.export . --backend ladybug \
     --node-batch-size 2000 --edge-batch-size 10000
-
-# Browse the exported database with Ladybug Explorer
-./ladybug.sh
 ```
 
 ## MCP Server
 
-Optional [FastMCP](https://gofastmcp.com/) server for indexing a project and searching the code graph with the same viewer query syntax.
+We also provide a [FastMCP](https://gofastmcp.com/) server for indexing a project and searching the code graph with the same viewer query syntax.
 
 ```bash
-uv sync --extra mcp
 uv run python -m openjiuwen_search_base.codegraph.mcp
 ```
 
@@ -70,9 +61,9 @@ uv run python -m openjiuwen_search_base.codegraph.mcp
 
 | URI | Description |
 |---|---|
-| `jiuwen-code-parser://types` | Index of all node/edge type doc URIs |
-| `jiuwen-code-parser://types/nodes/<node_type>` | Docs for one node type (e.g. `…/nodes/function`) |
-| `jiuwen-code-parser://types/edges/<edge_type>` | Docs for one edge relation (e.g. `…/edges/CALLS`) |
+| `jiuwen-code-graph://types` | Index of all node/edge type doc URIs |
+| `jiuwen-code-graph://types/nodes/<node_type>` | Docs for one node type (e.g. `…/nodes/function`) |
+| `jiuwen-code-graph://types/edges/<edge_type>` | Docs for one edge relation (e.g. `…/edges/CALLS`) |
 
 Cursor / MCP client (stdio) example:
 
@@ -94,7 +85,7 @@ Cursor / MCP client (stdio) example:
 }
 ```
 
-The MCP package is isolated: core parse/search/export do not require FastMCP. Install `openjiuwen_search_base.codegraph[mcp]` (or sync with `--extra mcp`) only when running the server.
+The MCP package is isolated: core parse/search/export do not require FastMCP.
 
 ## Programmatic Usage
 
@@ -117,8 +108,6 @@ async def main():
 asyncio.run(main())
 ```
 
-See also the [chunker demo](./resources/chunker_demo) (`show.py`).
-
 Ladybug read/query helpers are available separately:
 
 ```python
@@ -138,15 +127,11 @@ Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
 ```bash
 make sync                # install Python dependencies
 make viewer-install      # install viewer dependencies
+make viewer              # start viewer dev server
 make test                # run unit tests
 make cov                 # tests with coverage report
-make check               # format + docstring + type check
+make format              # format the code
 make export              # export this project's graph (JSONL + .jcp)
-make export-ladybug      # export to LadybugDB (.lbug)
-uv sync --group ladybug  # install optional Ladybug bindings
-uv sync --extra mcp      # install optional FastMCP server dependency
-make viewer-dev          # start viewer dev server
-make viewer-build        # production build → viewer/dist/
 ```
 
 </details>
@@ -255,7 +240,7 @@ for e in calls.matches:
 ## Architecture
 
 ```
-openjiuwen_search_base.codegraph/
+openjiuwen_search_base/codegraph/
   parser/
     constants.py        # NodeType enum, FILENAME_PATTERN, detect_language()
     custom_types.py     # SourceSpan, SignatureProvider protocol
@@ -274,10 +259,5 @@ openjiuwen_search_base.codegraph/
   export.py             # CLI: python -m openjiuwen_search_base.codegraph.export
   mcp/                  # optional FastMCP server (index + search tools, type resources)
 
-viewer/                 # React + Vite + Tailwind SPA
-ladybug.sh              # launch Ladybug Explorer against .jiuwen_graph/graph.lbug
+codegraph-viewer/       # React + Vite + Tailwind SPA
 ```
-
-## License
-
-[MIT](./LICENSE)

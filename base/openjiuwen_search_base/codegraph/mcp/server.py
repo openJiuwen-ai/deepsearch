@@ -23,7 +23,7 @@ Workflow:
 1. Call index(path) once on a project directory to parse source and build the code graph.
 2. Call search_nodes(query) / search_edges(query) using viewer search syntax,
    or search_regex(pattern, target) for Python regex over node/edge fields.
-3. Read jiuwen-code-parser://types (and nested URIs) for node and edge type docs.
+3. Read jiuwen-code-graph://types (and nested URIs) for node and edge type docs.
 
 Viewer search syntax:
 - Free text matches node name/signature or edge relation/ids (case-insensitive substring).
@@ -120,7 +120,7 @@ def register_mcp_tools(mcp: FastMCP, session: GraphSession) -> None:
         """Search indexed graph nodes with viewer search syntax.
 
         Free text matches ``name`` / ``signature``. Use ``{type:function}`` (or other
-        fields) as glob predicates. See resources under jiuwen-code-parser://types/nodes/.
+        fields) as glob predicates. See resources under jiuwen-code-graph://types/nodes/.
 
         Returns ``{matches, total, tag_counts, tag_combo_counts}``. ``total`` is
         always the full hit count before ``limit``; ``limit`` only truncates
@@ -146,7 +146,7 @@ def register_mcp_tools(mcp: FastMCP, session: GraphSession) -> None:
 
         Free text matches ``relation`` / ``resolved_by`` / ``source`` / ``target``.
         Use ``{relation:CALLS}`` (or other edge fields) as glob predicates.
-        See resources under jiuwen-code-parser://types/edges/.
+        See resources under jiuwen-code-graph://types/edges/.
 
         Returns ``{matches, total, tag_counts, tag_combo_counts}``. ``total`` is
         always the full hit count before ``limit`` (use ``limit=-1`` for all
@@ -209,15 +209,15 @@ def register_mcp_type_resources(mcp: FastMCP) -> None:
     Registers concrete URIs (not templates) so clients that poorly handle
     custom-scheme resource templates can still list and read every type page:
 
-    * ``jiuwen-code-parser://types`` — markdown index of type URIs.
-    * ``jiuwen-code-parser://types/nodes/<node_type>`` — one node type each.
-    * ``jiuwen-code-parser://types/edges/<edge_type>`` — one edge relation each.
+    * ``jiuwen-code-graph://types`` — markdown index of type URIs.
+    * ``jiuwen-code-graph://types/nodes/<node_type>`` — one node type each.
+    * ``jiuwen-code-graph://types/edges/<edge_type>`` — one edge relation each.
 
     :param mcp: FastMCP server instance.
     """
 
     @mcp.resource(
-        "jiuwen-code-parser://types",
+        "jiuwen-code-graph://types",
         name="jiuwen_types_index",
         description="Markdown index of node and edge type documentation URIs.",
         mime_type="text/markdown",
@@ -229,7 +229,7 @@ def register_mcp_type_resources(mcp: FastMCP) -> None:
             return _error_message(exc)
 
     for node_type in NODE_TYPE_DOCS:
-        uri = f"jiuwen-code-parser://types/nodes/{node_type}"
+        uri = f"jiuwen-code-graph://types/nodes/{node_type}"
         mcp.resource(
             uri,
             name=f"jiuwen_node_{node_type}",
@@ -238,7 +238,7 @@ def register_mcp_type_resources(mcp: FastMCP) -> None:
         )(_make_node_type_resource(node_type))
 
     for edge_type in EDGE_TYPE_DOCS:
-        uri = f"jiuwen-code-parser://types/edges/{edge_type}"
+        uri = f"jiuwen-code-graph://types/edges/{edge_type}"
         mcp.resource(
             uri,
             name=f"jiuwen_edge_{edge_type}",

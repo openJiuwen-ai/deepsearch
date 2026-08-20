@@ -54,6 +54,8 @@ codegraph = [
     # MCP
     "fastmcp",
 ]
+# CodeGraph optionally also support exporting to LadybugDB
+ladybug = ["real_ladybug"]
 
 # CI 依赖组（PEP 735）：供流水线 `uv sync --group ci`。
 [dependency-groups]
