@@ -24,17 +24,26 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
 from openjiuwen_deepsearch.config.config import ServiceConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode, init_router
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_context import CollectorContext
-from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
+    InfoRetrievalNode,
+    filter_confirmed_target_locators,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment import WebPageEnrichmentNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
     EvidenceLedger,
     build_ledger_brief,
     ensure_ledger,
     merge_ledger_update,
+    target_papers_still_searchable,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     RetrievalQuery,
+    build_target_papers_prompt_context,
     build_temporal_scope_prompt_context,
+)
+from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
+    normalize_arxiv_id,
+    normalize_pmid,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
@@ -206,12 +215,21 @@ def normalize_search_query_item(
             secondary_engine = item.search_engine_name
         else:
             secondary_engine = route_secondary_search_engine_for_query(query)
-        return SearchQueryItem(query=query, search_engine_name=secondary_engine)
-    query = str(item)
+    else:
+        query = str(item)
+        secondary_engine = route_secondary_search_engine_for_query(query)
+    if not enable_scholarly_search:
+        return SearchQueryItem(query=query, search_engine_name="")
+    pmid = normalize_pmid(query)
+    if pmid and "pubmed.ncbi.nlm.nih.gov" in query.casefold():
+        return SearchQueryItem(query=pmid, search_engine_name="pubmed")
+    arxiv_id = normalize_arxiv_id(query)
+    if arxiv_id and "arxiv.org" in query.casefold():
+        return SearchQueryItem(query=arxiv_id, search_engine_name="arxiv")
     return SearchQueryItem(
         query=query,
         search_engine_name=(
-            route_secondary_search_engine_for_query(query)
+            secondary_engine
             if enable_scholarly_search
             else ""
         ),
@@ -224,6 +242,32 @@ def _scholarly_search_is_available() -> bool:
     except LookupError:
         return False
     return "pubmed" in engines or "arxiv" in engines
+
+
+def build_target_paper_locator_items(
+    research_intent: dict | None,
+    evidence_ledger: EvidenceLedger | dict | None,
+) -> list[SearchQueryItem]:
+    """Build deterministic locator queries for unresolved target papers."""
+    target_papers = (
+        research_intent.get("target_papers", [])
+        if isinstance(research_intent, dict)
+        else []
+    )
+    items: list[SearchQueryItem] = []
+    for target in target_papers_still_searchable(target_papers, evidence_ledger):
+        pmid = normalize_pmid(target.get("pmid") or target.get("url"))
+        if pmid:
+            items.append(SearchQueryItem(query=pmid, search_engine_name="pubmed"))
+            continue
+        arxiv_id = normalize_arxiv_id(target.get("arxiv_id") or target.get("url"))
+        if arxiv_id:
+            items.append(SearchQueryItem(query=arxiv_id, search_engine_name="arxiv"))
+            continue
+        title = str(target.get("title") or "").strip()
+        if title:
+            items.append(SearchQueryItem(query=title, search_engine_name=""))
+    return items
 
 
 def _fallback_search_query_list(
@@ -259,6 +303,13 @@ class StartNode(Start):
     async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """Invoke method of StartNode."""
         # 初始化 collector_context
+        input_ledger = ensure_ledger(inputs.get("evidence_ledger"))
+        target_tracking_ledger = {
+            "target_paper_attempts": input_ledger.target_paper_attempts,
+            "confirmed_target_papers": input_ledger.confirmed_target_papers,
+        }
+        if not any(target_tracking_ledger.values()):
+            target_tracking_ledger = {}
         collector_context = CollectorContext(
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
@@ -273,7 +324,7 @@ class StartNode(Start):
             max_search_query_count=inputs.get("max_search_query_count", 5),
             max_research_loops=inputs.get("max_research_loops", 2),
             max_tool_call_turns_per_query=inputs.get("max_tool_call_turns_per_query", 2),
-            evidence_ledger={},
+            evidence_ledger=target_tracking_ledger,
             report_type=inputs.get("report_type", "professional"),
             research_intent=inputs.get("research_intent") or {},
         )
@@ -341,6 +392,9 @@ class GenerateQueryNode(BaseNode):
             "language": language,
             "report_type": report_type,
         }
+        agent_input.update(build_target_papers_prompt_context(
+            state.get("research_intent"), state.get("evidence_ledger")
+        ))
         agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
         formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
 
@@ -365,19 +419,49 @@ class GenerateQueryNode(BaseNode):
         return node_output
 
     def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, session: Session, context: ModelContext):
+        current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
+        research_intent = session.get_global_state("collector_context.research_intent") or {}
         scholarly_search_enabled = _scholarly_search_is_available()
-        query_items = [
+        locator_items = [
+            normalize_search_query_item(
+                item,
+                enable_scholarly_search=scholarly_search_enabled,
+            )
+            for item in build_target_paper_locator_items(research_intent, current_ledger)
+        ]
+        generated_items = [
             normalize_search_query_item(
                 query,
                 enable_scholarly_search=scholarly_search_enabled,
             )
             for query in algorithm_output.queries
         ]
+        query_items: list[SearchQueryItem] = []
+        seen_queries: set[tuple[str, str]] = set()
+        for item in locator_items + generated_items:
+            key = (item.search_engine_name, item.query.strip().casefold())
+            if not item.query.strip() or key in seen_queries:
+                continue
+            seen_queries.add(key)
+            query_items.append(item)
+        max_search_query_count = int(
+            session.get_global_state("collector_context.max_search_query_count") or 5
+        )
+        query_items = query_items[:max_search_query_count]
         search_queries = [RetrievalQuery(
             query=item.query,
             search_engine_name=item.search_engine_name,
         ) for item in query_items]
-        current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
+        target_papers = (
+            research_intent.get("target_papers", [])
+            if isinstance(research_intent, dict)
+            else []
+        )
+        search_queries = filter_confirmed_target_locators(
+            search_queries,
+            target_papers,
+            current_ledger,
+        )
         ledger_update = EvidenceLedger(missing_evidence=algorithm_output.missing_evidence)
         updated_ledger = merge_ledger_update(current_ledger, ledger_update)
 
@@ -871,6 +955,7 @@ def build_info_collector_sub_graph() -> Workflow:
             "max_tool_call_turns_per_query": "${max_tool_call_turns_per_query}",
             "report_type": "${report_type}",
             "research_intent": "${research_intent}",
+            "evidence_ledger": "${evidence_ledger}",
         }
     )
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_QUERY_GEN.value, GenerateQueryNode())

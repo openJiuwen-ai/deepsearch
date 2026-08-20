@@ -31,6 +31,33 @@ def test_collector_gen_query_prompt_allows_source_language_queries():
     assert "Do not produce more than 3 queries" in rendered_prompt
 
 
+def test_collector_gen_query_prompt_defines_target_paper_locator_contract():
+    rendered_prompt = _render_prompt(
+        "collector_gen_query",
+        {
+            "plan_title": "Orthodontic users",
+            "plan_thought": "Find evidence from the target study.",
+            "step_title": "Study evidence",
+            "step_description": "Locate the study and extract demographic findings.",
+            "max_search_query_count": 3,
+            "language": "zh-CN",
+            "report_type": "professional",
+            "has_target_papers": True,
+            "target_papers_text": '[{"dataset":"MEPS","data_year":"2019","topic":"orthodontics"}]',
+        },
+    )
+
+    assert "Target papers" in rendered_prompt
+    assert "PMID > DOI > arXiv ID > full title > implicit fingerprint" in rendered_prompt
+    assert "at most one locator query" in rendered_prompt
+    assert 'search_engine_name` to `"pubmed"`' in rendered_prompt
+    assert 'search_engine_name` to `"arxiv"`' in rendered_prompt
+    assert "English academic terminology" in rendered_prompt
+    assert "Keep the locator query separate" in rendered_prompt
+    assert "dataset observation year is not a publication-date boundary" in rendered_prompt
+    assert "isolated collector step" in rendered_prompt
+
+
 def test_collector_supervisor_prompt_allows_source_language_follow_up_queries():
     rendered_prompt = _render_prompt(
         "collector_supervisor",
@@ -56,6 +83,30 @@ def test_collector_supervisor_prompt_allows_source_language_follow_up_queries():
     assert "Choose English, Chinese, another local language, or mixed-language wording" in rendered_prompt
     assert "Do not force all follow-up queries into `zh-CN`" in rendered_prompt
     assert "Do not produce more than 2 next_queries" in rendered_prompt
+
+
+def test_collector_supervisor_prompt_keeps_target_paper_failure_non_blocking():
+    rendered_prompt = _render_prompt(
+        "collector_supervisor",
+        {
+            "plan_title": "Target study",
+            "plan_thought": "Use the specified study when available.",
+            "step_title": "Evidence",
+            "step_description": "Find evidence.",
+            "ledger_brief": "Missing evidence: target paper not located",
+            "evidence_table": "[]",
+            "max_search_query_count": 2,
+            "language": "en-US",
+            "report_type": "professional",
+        },
+    )
+
+    assert "target paper" in rendered_prompt
+    assert "evidence limitation, not a workflow error" in rendered_prompt
+    assert "at most one broader follow-up" in rendered_prompt
+    assert "must not abort report generation" in rendered_prompt
+    assert "Never substitute another paper" in rendered_prompt
+    assert "implicit fingerprint" in rendered_prompt
 
 
 def test_collector_gen_query_prompt_requires_natural_language_temporal_scope():

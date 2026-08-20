@@ -1,9 +1,12 @@
+import logging
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_execution_service import (
+    CollectorExecutionService,
     CollectorExecutionResult,
+    CollectorRunPlanConfig,
     run_info_collector_sub_graph,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, \
@@ -19,11 +22,259 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     StepType,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import EvidenceLedger
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
+    MAX_TARGET_PAPER_ATTEMPTS,
+    target_paper_key,
+    target_papers_still_searchable,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
+    filter_confirmed_target_locators,
+)
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
 
 module_prefix = "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector"
+
+
+@pytest.mark.asyncio
+async def test_collector_execution_reuses_target_ledger_across_plans_in_section():
+    target = {"arxiv_id": "1706.03762v7"}
+    confirmed_key = target_paper_key(target)
+    state = {
+        "section_context.report_type_policy": {},
+        "section_context.research_intent": {"target_papers": [target]},
+        "section_context.target_paper_ledger": {},
+    }
+    session = MagicMock()
+    session.get_global_state.side_effect = state.get
+    session.update_global_state.side_effect = lambda values: state.update(values)
+    received_inputs = []
+
+    async def run_subgraph(inputs, _session, _context):
+        received_inputs.append(inputs)
+        return {
+            "evidence_ledger": {
+                "confirmed_target_papers": [confirmed_key],
+                "target_paper_attempts": {confirmed_key: 1},
+            },
+            "history_queries": [],
+            "doc_infos": [],
+            "source_store": {},
+        }
+
+    config = CollectorRunPlanConfig(
+        language="zh-CN",
+        section_idx=1,
+        max_search_query_count=5,
+        max_research_loops=2,
+        max_tool_call_turns_per_query=2,
+    )
+
+    def plan(plan_id):
+        return Plan(
+            id=plan_id,
+            title="target",
+            thought="target",
+            is_research_completed=False,
+            steps=[Step(type=StepType.INFO_COLLECTING, title="locate", description="locate")],
+        )
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph."
+        "collector_execution_service.run_info_collector_sub_graph",
+        side_effect=run_subgraph,
+    ):
+        service = CollectorExecutionService()
+        await service.run_plan(plan("1"), config, session, MagicMock())
+        await service.run_plan(plan("2"), config, session, MagicMock())
+
+    assert received_inputs[1]["evidence_ledger"]["confirmed_target_papers"] == [confirmed_key]
+
+
+def _post_handle_target_paper(target_papers, task_doc_infos, existing_ledger=None, query="38202877"):
+    state = {
+        "collector_context.section_idx": 0,
+        "collector_context.plan_idx": "1",
+        "collector_context.step_idx": "1",
+        "collector_context.step_title": "Target study",
+        "collector_context.research_loop_count": 0,
+        "collector_context.max_research_loops": 2,
+        "collector_context.doc_infos": [],
+        "collector_context.search_queries": [RetrievalQuery(query=query, search_engine_name="pubmed")],
+        "collector_context.history_queries": [],
+        "collector_context.evidence_ledger": existing_ledger or {},
+        "collector_context.source_store": {},
+        "collector_context.research_intent": {"target_papers": target_papers},
+    }
+    session = Mock()
+    session.get_global_state.side_effect = state.get
+
+    def update(values):
+        state.update(values)
+
+    session.update_global_state.side_effect = update
+    InfoRetrievalNode()._post_handle(
+        {},
+        [{"doc_infos": task_doc_infos, "source_store": {}, "search_query": query}],
+        session,
+        Mock(),
+    )
+    return state
+
+
+def test_post_handle_records_exact_target_paper_fact():
+    state = _post_handle_target_paper(
+        [{"pmid": "38202877", "title": "A Full Paper Title"}],
+        [{
+            "source_id": "evidence-hash",
+            "title": "A Full Paper Title",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/",
+            "academic_source": "pubmed",
+            "academic_source_id": "38202877",
+        }],
+    )
+
+    ledger = state["collector_context.evidence_ledger"]
+    assert ledger["known_facts"] == [
+        "Target paper located: PMID 38202877, A Full Paper Title."
+    ]
+    assert ledger["attempted_queries"] == ["38202877"]
+    assert ledger["target_paper_attempts"] == {target_paper_key({"pmid": "38202877", "title": "A Full Paper Title"}): 1}
+    assert ledger["confirmed_target_papers"] == [
+        target_paper_key({"pmid": "38202877", "title": "A Full Paper Title"})
+    ]
+
+
+def test_target_paper_state_stops_searching_after_confirmation_or_three_attempts():
+    found = {"pmid": "38202877"}
+    unresolved = {"title": "Unresolved Paper"}
+    ledger = EvidenceLedger(
+        confirmed_target_papers=[target_paper_key(found)],
+        target_paper_attempts={target_paper_key(unresolved): MAX_TARGET_PAPER_ATTEMPTS},
+    )
+
+    assert target_papers_still_searchable([found, unresolved], ledger) == []
+
+
+def test_confirmed_target_locator_is_filtered_before_execution():
+    target = {"arxiv_id": "1706.03762v7", "title": "Attention Is All You Need"}
+    ledger = EvidenceLedger(confirmed_target_papers=[target_paper_key(target)])
+    queries = [
+        RetrievalQuery(query="1706.03762", search_engine_name="arxiv"),
+        RetrievalQuery(
+            query="Attention Is All You Need Table 3 ablation",
+            search_engine_name="arxiv",
+        ),
+        RetrievalQuery(query="Transformer influence on vision", search_engine_name="arxiv"),
+    ]
+
+    assert filter_confirmed_target_locators(queries, [target], ledger) == queries[1:]
+
+
+def test_post_handle_does_not_consume_target_attempt_for_unrelated_query():
+    state = _post_handle_target_paper(
+        [{"pmid": "38202877"}],
+        [],
+        query="orthodontic demographics evidence",
+    )
+    assert state["collector_context.evidence_ledger"]["target_paper_attempts"] == {}
+
+
+def test_post_handle_counts_a_canonical_target_url_locator_attempt():
+    state = _post_handle_target_paper(
+        [{"url": "https://journal.example.org/article/42/?utm_source=test"}],
+        [],
+        query="https://journal.example.org/article/42",
+    )
+
+    assert state["collector_context.evidence_ledger"]["target_paper_attempts"] == {
+        target_paper_key({"url": "https://journal.example.org/article/42/?utm_source=test"}): 1
+    }
+
+
+def test_post_handle_does_not_confirm_mismatched_or_implicit_target():
+    mismatched = _post_handle_target_paper(
+        [{"pmid": "111", "title": "Same Title"}],
+        [{"source_id": "one", "title": "Same Title", "academic_source": "pubmed", "academic_source_id": "222"}],
+    )
+    implicit = _post_handle_target_paper(
+        [{"dataset": "MEPS", "data_year": "2019", "topic": "orthodontics"}],
+        [{"source_id": "two", "title": "MEPS 2019 Orthodontics"}],
+    )
+
+    assert mismatched["collector_context.evidence_ledger"]["known_facts"] == []
+    assert implicit["collector_context.evidence_ledger"]["known_facts"] == []
+
+
+def test_post_handle_empty_results_remain_non_blocking_and_deduplicate_facts():
+    empty = _post_handle_target_paper([{"pmid": "38202877"}], [])
+    existing = _post_handle_target_paper(
+        [{"pmid": "38202877"}],
+        [{"source_id": "one", "title": "Paper", "academic_source": "pubmed", "academic_source_id": "38202877"}],
+        existing_ledger={
+            "known_facts": ["Target paper located: PMID 38202877, Paper."],
+            "attempted_queries": [],
+            "missing_evidence": [],
+        },
+    )
+
+    assert empty["collector_context.evidence_ledger"]["attempted_queries"] == ["38202877"]
+    assert existing["collector_context.evidence_ledger"]["known_facts"] == [
+        "Target paper located: PMID 38202877, Paper."
+    ]
+
+
+def test_post_handle_logs_target_paper_metadata_match_and_persisted_ledger(caplog):
+    caplog.set_level(logging.INFO, logger=module_prefix)
+    with patch(f"{module_prefix}.LogManager.is_sensitive", return_value=False):
+        _post_handle_target_paper(
+            [{"pmid": "38202877"}],
+            [{
+                "source_id": "evidence-hash",
+                "title": "A Full Paper Title",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/",
+                "academic_source": "pubmed",
+                "academic_source_id": "38202877",
+                "doi": "10.1000/example",
+            }],
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "[TARGET_PAPER_METADATA]" in messages
+    assert '"academic_source": "pubmed"' in messages
+    assert '"academic_source_id": "38202877"' in messages
+    assert '"doi": "10.1000/example"' in messages
+    assert "[TARGET_PAPER_MATCH] matched=true match_count=1" in messages
+    assert "Target paper located: PMID 38202877, A Full Paper Title." in messages
+    assert "[TARGET_PAPER_LEDGER] matched_fact_count=1" in messages
+    assert "known_fact_count_before=0 known_fact_count_after=1 merged=true persisted=true" in messages
+
+
+def test_post_handle_target_paper_logs_are_redacted_in_sensitive_mode(caplog):
+    caplog.set_level(logging.INFO, logger=module_prefix)
+    with patch(f"{module_prefix}.LogManager.is_sensitive", return_value=True):
+        _post_handle_target_paper(
+            [{"pmid": "38202877"}],
+            [{
+                "source_id": "evidence-hash",
+                "title": "Secret Paper Title",
+                "academic_source": "pubmed",
+                "academic_source_id": "38202877",
+                "doi": "10.1000/secret",
+            }],
+        )
+
+    tagged_messages = "\n".join(
+        record.getMessage() for record in caplog.records
+        if "[TARGET_PAPER_" in record.getMessage()
+    )
+    assert "[TARGET_PAPER_METADATA] academic_doc_count=1" in tagged_messages
+    assert "[TARGET_PAPER_MATCH] matched=true match_count=1" in tagged_messages
+    assert "[TARGET_PAPER_LEDGER] matched_fact_count=1" in tagged_messages
+    assert "38202877" not in tagged_messages
+    assert "10.1000/secret" not in tagged_messages
+    assert "Secret Paper Title" not in tagged_messages
 
 
 class ExposedInfoRetrievalNode(InfoRetrievalNode):
@@ -153,6 +404,7 @@ class TestInfoCollectorNode:
             "local_search_engine_name": LocalSearch.OPENAPI.value,
             "api_tools_config": {},
             "research_intent": {},
+            "evidence_ledger": {},
         }
         assert result == expected_state
 

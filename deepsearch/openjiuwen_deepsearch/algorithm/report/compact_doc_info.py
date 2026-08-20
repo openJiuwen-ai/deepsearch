@@ -64,10 +64,15 @@ def build_structured_evidence_guide(
             "Cannot build structured evidence guide: selected passages and stable keys are misaligned"
         )
         return ""
-    if any(not isinstance(passage_key, str) or passage_key not in coverage_matrix
-           for passage_key in selected_passage_keys):
+    if any(not isinstance(passage_key, str) for passage_key in selected_passage_keys):
         logger.warning(
-            "Cannot build structured evidence guide: selected stable key is missing from coverage matrix"
+            "Cannot build structured evidence guide: selected stable key is invalid"
+        )
+        return ""
+    if any(passage_key not in coverage_matrix for passage_key in selected_passage_keys):
+        logger.warning(
+            "Cannot build structured evidence guide: selected stable key is missing "
+            "from coverage matrix"
         )
         return ""
 

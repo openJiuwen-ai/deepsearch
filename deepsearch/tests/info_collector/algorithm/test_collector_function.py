@@ -14,6 +14,23 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.collector_function"
 
 
+def test_common_search_preserves_academic_identifiers():
+    agent_input = {"web_page_search_record": [], "research_intent": {}}
+
+    _, updated = process_common_search_result(agent_input, [{
+        "title": "Paper",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/",
+        "content": "Abstract",
+        "source": "pubmed",
+        "source_id": "38202877",
+        "doi": "10.1000/ABC",
+    }])
+
+    record = updated["web_page_search_record"][0]
+    assert record["academic_source"] == "pubmed"
+    assert record["academic_source_id"] == "38202877"
+    assert record["doi"] == "10.1000/ABC"
+
 class TestProcessToolCall:
     """测试 process_tool_call 函数"""
 

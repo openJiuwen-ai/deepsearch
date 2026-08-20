@@ -12,8 +12,89 @@ from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     select_top_urls_by_frequency,
     split_passages_by_url,
     build_classified_content,
+    enrich_fulltext_for_section,
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import FullTextEvidence
+
+
+def test_enrich_fulltext_for_section_keeps_required_target_without_coverage_score():
+    required = {
+        "url": "https://example.com/required",
+        "title": "Required paper",
+        "original_content": "Required full text",
+    }
+
+    result = enrich_fulltext_for_section(
+        passages={"selected": [], "raw": [required]},
+        context={
+            "rationales": [],
+            "coverage_result": {},
+            "required_documents": [required],
+        },
+        section_idx=1,
+    )
+
+    assert result["required_target_citation_indexes"] == [1]
+    assert result["classified_content"][0]["index"] == 1
+    assert result["classified_content"][0]["title"] == "Required paper"
+    assert result["structured_evidence_guide"] == ""
+
+
+@pytest.mark.parametrize(
+    "key_passages",
+    [
+        ["First requested-paper passage.", "Second requested-paper passage."],
+        "First requested-paper passage.\nSecond requested-paper passage.",
+    ],
+)
+def test_enrich_fulltext_uses_normalized_required_target_key_passages(key_passages):
+    required = {
+        "url": "https://example.com/required-key-passages",
+        "title": "Required paper",
+        "key_passages": key_passages,
+    }
+
+    result = enrich_fulltext_for_section(
+        passages={"selected": [], "raw": [required]},
+        context={
+            "rationales": [],
+            "coverage_result": {},
+            "required_documents": [required],
+        },
+        section_idx=1,
+    )
+
+    assert result["fulltext_evidences"][0].original_content == (
+        "First requested-paper passage.\nSecond requested-paper passage."
+    )
+
+
+def test_enrich_fulltext_guide_reuses_promoted_fulltext_citation_index():
+    passage = {
+        "doc_url": "https://example.com/paper",
+        "doc_title": "Promoted paper",
+        "passage_text": "Evidence supporting the analysis dimension.",
+        "original_content": "Complete paper text.",
+    }
+    coverage_result = {
+        "filtered_passages": [passage],
+        "coverage_matrix": {"passage_0": {"R1": 0.9}},
+    }
+
+    result = enrich_fulltext_for_section(
+        passages={"selected": [passage], "raw": [passage]},
+        context={
+            "rationales": [{"id": "R1", "description": "Analysis dimension"}],
+            "coverage_result": coverage_result,
+        },
+        section_idx=1,
+    )
+
+    assert result["fulltext_count"] == 1
+    assert "[citation:1] Promoted paper (coverage: 0.90)" in result[
+        "structured_evidence_guide"
+    ]
+    assert "[citation:]" not in result["structured_evidence_guide"]
 
 
 # ---------- Fixtures ----------

@@ -15,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, ConfigDict, SecretStr
 
+from openjiuwen_deepsearch.algorithm.research_collector.target_paper import normalize_arxiv_id
 from openjiuwen_deepsearch.common.common_constants import (
     MAX_COLLECTOR_DOC_CONTENT_LENGTH,
     MAX_SEARCH_CONTENT_LENGTH,
@@ -172,6 +173,12 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
         return str(url).startswith(self._resolved_search_url())
 
     def _build_url(self, query: str) -> str:
+        exact_id = normalize_arxiv_id(query)
+        if exact_id:
+            return (
+                f"{self._resolved_search_url()}?id_list={quote_plus(exact_id)}"
+                f"&start=0&max_results={self.max_web_search_results}"
+            )
         return (
             f"{self._resolved_search_url()}?search_query=all:{quote_plus(query)}"
             f"&start=0&max_results={self.max_web_search_results}"

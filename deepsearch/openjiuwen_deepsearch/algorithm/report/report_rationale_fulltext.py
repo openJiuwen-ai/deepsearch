@@ -19,10 +19,21 @@ from urllib.parse import urlparse
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_structured_evidence_guide,
     format_key_passage_block,
+    normalize_key_passages,
 )
 
 
 logger = logging.getLogger(__name__)
+
+
+def get_required_document_content(document: dict) -> str:
+    """Return the best available content for a required report document."""
+    key_passages = normalize_key_passages(document.get("key_passages"))
+    return str(
+        document.get("original_content", "")
+        or document.get("content", "")
+        or "\n".join(key_passages)
+    ).strip()
 
 
 @dataclass
@@ -599,6 +610,7 @@ def enrich_fulltext_for_section(
     raw_passages = passages.get("raw") or []
     rationales = context.get("rationales") or []
     coverage_result = context.get("coverage_result")
+    required_documents = context.get("required_documents") or []
 
     # Layer 1: coverage filter — drop passages with max coverage < 0.15.
     filtered_passages = filter_passages_by_coverage(
@@ -643,9 +655,29 @@ def enrich_fulltext_for_section(
 
     # Build FullTextEvidence directly from existing content (no fetch/compress).
     fulltext_evidences: list[FullTextEvidence] = []
+    required_urls: set[str] = set()
+    for doc in required_documents:
+        if not isinstance(doc, dict):
+            continue
+        url = str(doc.get("url", "") or doc.get("doc_url", "") or "").strip()
+        content = get_required_document_content(doc)
+        if not url or not content or url in required_urls:
+            continue
+        required_urls.add(url)
+        fulltext_evidences.append(FullTextEvidence(
+            url=url,
+            doc_title=str(doc.get("title", "") or doc.get("doc_title", "") or ""),
+            doc_time=str(doc.get("time", "") or doc.get("doc_time", "") or ""),
+            original_content=content,
+            citation_index=len(fulltext_evidences) + 1,
+            fetch_success=True,
+        ))
+    required_target_citation_indexes = [
+        evidence.citation_index for evidence in fulltext_evidences
+    ]
     for url_info in top_urls:
         url = str(url_info.get("url", "") or "")
-        if not url:
+        if not url or url in required_urls:
             continue
         content = existing_content_by_url.get(url, "")
         if not content:
@@ -665,6 +697,18 @@ def enrich_fulltext_for_section(
     removed_passages, remaining_passages = split_passages_by_url(
         filtered_passages, fetched_urls_set
     )
+
+    fulltext_index_by_url = {
+        evidence.url: evidence.citation_index for evidence in fulltext_evidences
+    }
+    indexed_removed_passages = []
+    for passage in removed_passages:
+        indexed_passage = dict(passage)
+        indexed_passage["index"] = fulltext_index_by_url.get(
+            str(passage.get("doc_url") or "").strip(), ""
+        )
+        indexed_removed_passages.append(indexed_passage)
+    removed_passages = indexed_removed_passages
 
     # Index remaining passages and drop the internal ``query`` field.
     fulltext_count = len(fulltext_evidences)
@@ -724,4 +768,5 @@ def enrich_fulltext_for_section(
         "fulltext_evidences": fulltext_evidences,
         "remaining_passages": remaining_passages,
         "remaining_passage_keys": remaining_passage_keys,
+        "required_target_citation_indexes": required_target_citation_indexes,
     }

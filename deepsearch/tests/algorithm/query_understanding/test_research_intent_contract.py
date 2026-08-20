@@ -8,11 +8,49 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ResearchIntent,
+    TargetPaper,
     TemporalScope,
     build_research_intent_prompt_context,
     build_section_local_contract_prompt_context,
+    build_target_papers_prompt_context,
     build_temporal_scope_prompt_context,
 )
+
+
+def test_target_paper_accepts_explicit_and_implicit_clues():
+    explicit = TargetPaper(pmid="38202877", title="A Full Paper Title")
+    implicit = TargetPaper(
+        dataset="Medical Expenditure Panel Survey (MEPS)",
+        data_year="2019",
+        topic="US orthodontic treatment users braces retainers",
+    )
+
+    assert explicit.pmid == "38202877"
+    assert implicit.dataset.startswith("Medical Expenditure")
+
+
+def test_target_paper_rejects_empty_item():
+    with pytest.raises(ValueError, match="at least one clue"):
+        TargetPaper()
+
+
+def test_legacy_research_intent_defaults_target_papers_to_empty():
+    intent = ResearchIntent.model_validate({"task_type": "evaluation"})
+
+    assert intent.target_papers == []
+
+
+def test_target_papers_prompt_context_is_serializable_and_flagged():
+    context = build_target_papers_prompt_context(
+        ResearchIntent(target_papers=[TargetPaper(doi="10.1000/ABC")])
+    )
+
+    assert context["has_target_papers"] is True
+    assert context["target_papers"] == [{
+        "title": "", "pmid": "", "doi": "10.1000/ABC", "arxiv_id": "",
+        "url": "", "dataset": "", "data_year": "", "topic": "",
+    }]
+    assert '"doi": "10.1000/ABC"' in context["target_papers_text"]
 
 
 def test_normalize_research_intent_preserves_task_contract_fields():

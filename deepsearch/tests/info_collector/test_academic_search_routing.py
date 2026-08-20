@@ -6,17 +6,23 @@ from pydantic import ValidationError
 
 from openjiuwen_deepsearch.config.config import AgentConfig, WebSearchEngineConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import (
+    GenerateQueryNode,
     SearchQueryItem,
     SearchQueryList,
+    build_target_paper_locator_items,
     normalize_search_query_item,
     route_secondary_search_engine_for_query,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, DirectSearchRequest
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
     EvidenceLedger,
     build_ledger_brief,
     ensure_ledger,
     merge_ledger_update,
+    target_paper_key,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
+    DirectSearchRequest,
+    InfoRetrievalNode,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import (
@@ -85,6 +91,22 @@ def test_disabled_scholarly_search_removes_query_level_vertical_route():
     ).search_engine_name == ""
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+        "https://arxiv.org/abs/1706.03762v7",
+    ],
+)
+def test_disabled_scholarly_search_preserves_academic_url_for_default_web_search(query):
+    item = normalize_search_query_item(
+        SearchQueryItem(query=query, search_engine_name=""),
+        enable_scholarly_search=False,
+    )
+
+    assert item == SearchQueryItem(query=query, search_engine_name="")
+
+
 @pytest.mark.parametrize("configured", [False, "false", " FALSE "])
 def test_scholarly_search_switch_is_disabled_by_default_or_false(configured):
     config = AgentConfig(web_search_engine_config={
@@ -139,6 +161,112 @@ def test_legacy_string_query_uses_heuristic_routing():
     item = normalize_search_query_item("glioblastoma clinical trial")
 
     assert item.search_engine_name == "pubmed"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_query", "expected_engine"),
+    [
+        ("https://pubmed.ncbi.nlm.nih.gov/38132429/", "38132429", "pubmed"),
+        ("https://arxiv.org/abs/1706.03762v7", "1706.03762", "arxiv"),
+    ],
+)
+def test_academic_paper_url_is_deterministically_routed_by_identifier(
+    query, expected_query, expected_engine
+):
+    item = normalize_search_query_item(SearchQueryItem(query=query, search_engine_name=""))
+
+    assert item.query == expected_query
+    assert item.search_engine_name == expected_engine
+
+
+@pytest.mark.parametrize(
+    ("target_paper", "expected_query", "expected_engine"),
+    [
+        ({"pmid": "38132429"}, "38132429", "pubmed"),
+        ({"arxiv_id": "1706.03762v7"}, "1706.03762", "arxiv"),
+        (
+            {"url": "https://arxiv.org/abs/1706.03762v7"},
+            "1706.03762",
+            "arxiv",
+        ),
+        ({"title": "Attention Is All You Need"}, "Attention Is All You Need", ""),
+    ],
+)
+def test_target_paper_constraint_injects_exact_locator(
+    target_paper, expected_query, expected_engine
+):
+    items = build_target_paper_locator_items(
+        {"target_papers": [target_paper]},
+        EvidenceLedger(),
+    )
+
+    assert items == [
+        SearchQueryItem(query=expected_query, search_engine_name=expected_engine)
+    ]
+
+
+def test_confirmed_target_paper_does_not_inject_locator():
+    target = {"arxiv_id": "1706.03762v7"}
+    ledger = EvidenceLedger(confirmed_target_papers=[target_paper_key(target)])
+
+    assert build_target_paper_locator_items(
+        {"target_papers": [target]},
+        ledger,
+    ) == []
+
+
+def test_confirmed_target_paper_drops_llm_generated_exact_locator():
+    target = {
+        "title": "Attention Is All You Need",
+        "arxiv_id": "1706.03762",
+        "url": "https://arxiv.org/abs/1706.03762v7",
+    }
+    state = {
+        "collector_context.evidence_ledger": EvidenceLedger(
+            confirmed_target_papers=[target_paper_key(target)]
+        ).model_dump(),
+        "collector_context.research_intent": {"target_papers": [target]},
+        "collector_context.max_search_query_count": 5,
+        "collector_context.section_idx": 1,
+    }
+    session = Mock()
+    session.get_global_state.side_effect = state.get
+    session.update_global_state.side_effect = lambda values: state.update(values)
+
+    GenerateQueryNode()._post_handle(
+        {},
+        SearchQueryList(queries=[SearchQueryItem(query="1706.03762", search_engine_name="arxiv")]),
+        session,
+        Mock(),
+    )
+
+    assert state["collector_context.search_queries"] == []
+
+
+def test_disabled_scholarly_search_routes_target_paper_locator_to_default_web():
+    state = {
+        "collector_context.evidence_ledger": EvidenceLedger().model_dump(),
+        "collector_context.research_intent": {"target_papers": [{"pmid": "38132429"}]},
+        "collector_context.max_search_query_count": 5,
+        "collector_context.section_idx": 1,
+    }
+    session = Mock()
+    session.get_global_state.side_effect = state.get
+    session.update_global_state.side_effect = lambda values: state.update(values)
+    token = web_search_context.set({"jina": Mock()})
+    try:
+        GenerateQueryNode()._post_handle(
+            {},
+            SearchQueryList(queries=[]),
+            session,
+            Mock(),
+        )
+    finally:
+        web_search_context.reset(token)
+
+    assert state["collector_context.search_queries"] == [
+        RetrievalQuery(query="38132429", search_engine_name="")
+    ]
 
 
 def test_fallback_secondary_engine_routing():

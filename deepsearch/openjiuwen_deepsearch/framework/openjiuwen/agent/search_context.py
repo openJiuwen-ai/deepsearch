@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 from enum import Enum
 from datetime import date
+import json
 from typing import List, Optional, Dict, Union, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -233,6 +234,29 @@ class TemporalScope(BaseModel):
         return self
 
 
+class TargetPaper(BaseModel):
+    """User-supplied exact identifiers or implicit clues for one paper."""
+
+    title: str = ""
+    pmid: str = ""
+    doi: str = ""
+    arxiv_id: str = ""
+    url: str = ""
+    dataset: str = ""
+    data_year: str = ""
+    topic: str = ""
+
+    @model_validator(mode="after")
+    def require_one_clue(self) -> "TargetPaper":
+        """Strip clue values and reject an item that carries no usable clue."""
+        field_names = ("title", "pmid", "doi", "arxiv_id", "url", "dataset", "data_year", "topic")
+        for field_name in field_names:
+            setattr(self, field_name, str(getattr(self, field_name) or "").strip())
+        if not any(getattr(self, field_name) for field_name in field_names):
+            raise ValueError("target paper requires at least one clue")
+        return self
+
+
 class ResearchIntent(BaseModel):
     """报告生成意图：从用户 query 中解析出的结构化约束。"""
     task_type: Optional[str] = Field(default=None, description="任务类型，如 comparison/classification/trend_judgement")
@@ -248,6 +272,32 @@ class ResearchIntent(BaseModel):
     include_domains: List[str] = Field(default_factory=list, description="用户指定的站点域名")
     exclude_domains: List[str] = Field(default_factory=list, description="用户排除的站点域名")
     temporal_scope: Optional[TemporalScope] = Field(default=None, description="用户明确指定的研究时间范围")
+    target_papers: List[TargetPaper] = Field(
+        default_factory=list,
+        description="Papers explicitly identified or implicitly described by the user.",
+    )
+
+
+def build_target_papers_prompt_context(
+    intent: ResearchIntent | dict | None,
+    evidence_ledger: dict | None = None,
+) -> dict:
+    """Serialize target-paper constraints for collector prompts."""
+    if intent is None:
+        papers = []
+    else:
+        model = intent if isinstance(intent, ResearchIntent) else ResearchIntent.model_validate(intent)
+        papers = [paper.model_dump() for paper in model.target_papers]
+    if evidence_ledger is not None:
+        from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
+            target_papers_still_searchable,
+        )
+        papers = target_papers_still_searchable(papers, evidence_ledger)
+    return {
+        "has_target_papers": bool(papers),
+        "target_papers": papers,
+        "target_papers_text": json.dumps(papers, ensure_ascii=False),
+    }
 
 
 class SectionLocalContract(BaseModel):

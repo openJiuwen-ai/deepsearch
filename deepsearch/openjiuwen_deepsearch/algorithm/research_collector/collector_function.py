@@ -540,6 +540,15 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
         normalized["full_text_truncated"] = item.get("full_text_truncated") is True
     if item.get("skip_webpage_enrichment") is True:
         normalized["skip_webpage_enrichment"] = True
+    academic_source = str(item.get("source") or "").strip().lower()
+    if academic_source in {"pubmed", "arxiv"}:
+        normalized["academic_source"] = academic_source
+        academic_source_id = str(item.get("source_id") or "").strip()
+        if academic_source_id:
+            normalized["academic_source_id"] = academic_source_id
+    doi = str(item.get("doi") or "").strip()
+    if doi:
+        normalized["doi"] = doi
     if include_date_metadata:
         raw_date = item.get("source_date")
         source_date_type = str(item.get("source_date_type") or "").strip()

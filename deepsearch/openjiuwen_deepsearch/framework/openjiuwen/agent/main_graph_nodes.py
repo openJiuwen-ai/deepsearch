@@ -520,6 +520,24 @@ class FeedbackHandlerNode(BaseNode):
             current_intent.exclude_domains, incoming_intent.exclude_domains
         )
 
+        target_papers = []
+        seen_target_papers = set()
+        for paper in [*current_intent.target_papers, *incoming_intent.target_papers]:
+            identity = next((
+                f"{field}:{str(getattr(paper, field, '')).strip().casefold()}"
+                for field in ("pmid", "doi", "arxiv_id", "url", "title", "dataset", "data_year", "topic")
+                if str(getattr(paper, field, "")).strip()
+            ), None)
+            if identity is None or identity in seen_target_papers:
+                continue
+            seen_target_papers.add(identity)
+            target_papers.append(paper)
+        merged_intent.target_papers = target_papers
+        merged_intent.include_url = self._merge_unique_items(
+            merged_intent.include_url,
+            [paper.url for paper in target_papers if paper.url],
+        )
+
         if incoming_intent.report_type is not None:
             merged_intent.report_type = incoming_intent.report_type
         if incoming_intent.temporal_scope is not None:
