@@ -52,7 +52,7 @@ codegraph = [
     # Progress Bar
     "tqdm",
     # MCP
-    "fastmcp",
+    "fastmcp>=2.14.2",
     "rich>=13.9.4",
 ]
 # CodeGraph optionally also support exporting to LadybugDB

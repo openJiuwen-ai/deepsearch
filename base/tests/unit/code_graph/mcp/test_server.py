@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock
 import pytest
 from mcp.types import Resource
 
-pytest.importorskip("fastmcp")
+pytest.importorskip(
+    "rich", minversion="13.9.4", reason="Impossible CI env resolution: rich<13.9.4, contradicting fastmcp requirement!"
+)
+pytest.importorskip("fastmcp", minversion="2")
 
 from fastmcp import Client  # noqa: E402
 
