@@ -31,16 +31,47 @@ def _module_id(rel_path: str) -> str:
     return f"module::{rel_path}" if rel_path else "module::."
 
 
+def _relative_to_root(file_path: str | Path, root: str | Path) -> Path:
+    """Return *file_path* relative to *root*, never as an absolute path.
+
+    ``Path.relative_to`` is lexical, so a resolved root (as in
+    ``export_graph_to_backends``) can fail against an unresolved file path
+    even when they are the same directory after following symlinks — macOS
+    ``/var`` vs ``/private/var`` is the usual case.  A basename fallback
+    keeps folder synthesis under the synthetic project root.
+    """
+    path = Path(file_path)
+    root_path = Path(root)
+    for child, base in ((path, root_path), (path.resolve(), root_path.resolve())):
+        try:
+            rel = child.relative_to(base)
+        except ValueError:
+            continue
+        if not rel.is_absolute():
+            return rel
+    return Path(path.name)
+
+
+def _ancestor_folder_rels(folder_rel: str) -> tuple[str, ...]:
+    """Parent folder keys from the nearest ancestor up to ``""``.
+
+    *folder_rel* is a root-relative key.  Absolute paths are not walked; only
+    the synthetic root is returned so we never climb to the filesystem root.
+    """
+    if not folder_rel:
+        return ()
+    path = Path(folder_rel)
+    if path.is_absolute():
+        return ("",)
+    parts = path.parts
+    ancestors = [str(Path(*parts[:i])) for i in range(len(parts) - 1, 0, -1)]
+    ancestors.append("")
+    return tuple(ancestors)
+
+
 def _code_block_name(file_path: str, line_start: int, root: str | None) -> str:
     """Build a stable path-and-line display name for a code block."""
-    path = Path(file_path)
-    if root:
-        try:
-            path = path.relative_to(root)
-        except ValueError:
-            path = Path(path.name)
-    else:
-        path = Path(path.name)
+    path = _relative_to_root(file_path, root) if root else Path(Path(file_path).name)
     return f"{path.as_posix()}@L{line_start}"
 
 
@@ -70,13 +101,9 @@ def _build_tags(node_type: str, file_path: str, root: str | None, node: BaseNode
             tags.append(f"lang:{detected}")
 
     if root and file_path:
-        try:
-            rel = Path(file_path).relative_to(root)
-            dir_parts = rel.parts[:-1]
-            if dir_parts:
-                tags.append(f"dir:{'/'.join(dir_parts)}")
-        except ValueError:
-            pass
+        dir_parts = _relative_to_root(file_path, root).parts[:-1]
+        if dir_parts:
+            tags.append(f"dir:{'/'.join(dir_parts)}")
 
     if isinstance(node, FunctionNode) and node.func_type == "method-guessed":
         tags.append("guessed")
@@ -158,20 +185,26 @@ def _synthesise_folders(
         except ValueError:
             root = ""
 
-    root_path = Path(root)
+    root_path = Path(root).resolve() if root else Path(root)
 
-    seen_folders: dict[str, dict] = {}
+    seen_folders: dict[str, dict] = {
+        "": {
+            "id": _folder_id(""),
+            "type": "FolderNode",
+            "name": root_path.name or ".",
+            "node_type": NodeType.FOLDER.value,
+            "path": str(root_path),
+            "span": [0, 0, 0, 0],
+            "tags": ["cat:structural", "type:folder"],
+        }
+    }
     edges: list[dict] = []
     file_parent_map: dict[str, str] = {}
 
     folder_files: dict[str, list[FileNode]] = {}
 
     for file_node in file_nodes:
-        try:
-            rel = Path(file_node.path).relative_to(root_path)
-        except ValueError:
-            rel = Path(file_node.path)
-
+        rel = _relative_to_root(file_node.path, root_path)
         parts = list(rel.parts[:-1])
 
         for depth, part in enumerate(parts):
@@ -191,34 +224,14 @@ def _synthesise_folders(
                 "span": [0, 0, 0, 0],
                 "tags": folder_tags,
             }
-            if depth > 0:
-                parent_rel = str(Path(*parts[:depth]))
-                edges.append(
-                    {
-                        "source": _folder_id(parent_rel),
-                        "target": fid,
-                        "relation": EdgeType.CONTAINS.value,
-                    }
-                )
-            else:
-                root_id = _folder_id("")
-                if "" not in seen_folders:
-                    seen_folders[""] = {
-                        "id": root_id,
-                        "type": "FolderNode",
-                        "name": root_path.name or ".",
-                        "node_type": NodeType.FOLDER.value,
-                        "path": str(root_path),
-                        "span": [0, 0, 0, 0],
-                        "tags": ["cat:structural", "type:folder"],
-                    }
-                edges.append(
-                    {
-                        "source": root_id,
-                        "target": fid,
-                        "relation": EdgeType.CONTAINS.value,
-                    }
-                )
+            parent_rel = str(Path(*parts[:depth])) if depth > 0 else ""
+            edges.append(
+                {
+                    "source": _folder_id(parent_rel),
+                    "target": fid,
+                    "relation": EdgeType.CONTAINS.value,
+                }
+            )
 
         folder_key = str(Path(*parts)) if parts else ""
         folder_files.setdefault(folder_key, []).append(file_node)
@@ -235,14 +248,10 @@ def _synthesise_folders(
 
     # Propagate child languages up to ancestor folders
     for folder_rel in list(folder_langs):
-        parent = Path(folder_rel)
-        while True:
-            parent = parent.parent
-            parent_rel = str(parent) if str(parent) != "." else ""
-            if parent_rel in seen_folders or parent_rel == "":
-                folder_langs.setdefault(parent_rel, set()).update(folder_langs[folder_rel])
-            if parent_rel == "":
-                break
+        langs = folder_langs[folder_rel]
+        for parent_rel in _ancestor_folder_rels(folder_rel):
+            if parent_rel in seen_folders:
+                folder_langs.setdefault(parent_rel, set()).update(langs)
 
     for folder_rel, folder_dict in seen_folders.items():
         langs = folder_langs.get(folder_rel, set())
@@ -290,10 +299,7 @@ def _synthesise_folders(
 
     # --- Connect child modules to nearest ancestor module ---
     for folder_rel, child_mod_id in module_folders.items():
-        parent_path = Path(folder_rel)
-        while True:
-            parent_path = parent_path.parent
-            parent_rel = str(parent_path) if str(parent_path) != "." else ""
+        for parent_rel in _ancestor_folder_rels(folder_rel):
             if parent_rel in module_folders:
                 edges.append(
                     {
@@ -302,8 +308,6 @@ def _synthesise_folders(
                         "relation": EdgeType.CONTAINS.value,
                     }
                 )
-                break
-            if parent_rel == "":
                 break
 
     # --- Assign files to their parent (module if available, else folder) ---

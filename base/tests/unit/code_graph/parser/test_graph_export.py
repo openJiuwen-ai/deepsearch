@@ -7,7 +7,10 @@ import tempfile
 from pathlib import Path
 
 from openjiuwen_search_base.codegraph import parse_file
+from openjiuwen_search_base.codegraph.parser.constants import NodeType
+from openjiuwen_search_base.codegraph.parser.custom_types import SourceSpan
 from openjiuwen_search_base.codegraph.parser.graph_export import export_graph, export_graph_from_file_nodes
+from openjiuwen_search_base.codegraph.parser.models.structural import FileNode
 
 
 def _parse_and_export(source: str) -> tuple[list[dict], list[dict]]:
@@ -164,3 +167,73 @@ class TestExportGraphWritesFiles:
                 assert json.loads(markers[0]) == {"marker": "break"}
                 assert json.loads(markers[1]) == {"marker": "break"}
         src_path.unlink()
+
+
+def _file_node(path: str) -> FileNode:
+    return FileNode(
+        node_type=NodeType.FILE,
+        name=Path(path).name,
+        span=SourceSpan(1, 1, 0, 0),
+        path=path,
+        language="python",
+    )
+
+
+class TestFolderSynthesis:
+    @staticmethod
+    def test_resolved_root_does_not_walk_filesystem_root():
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as file_obj:
+            file_obj.write("def hello():\n    pass\n")
+            src_path = Path(file_obj.name)
+        try:
+            file_node = asyncio.run(parse_file(src_path))
+            nodes, edges = export_graph_from_file_nodes(
+                [file_node],
+                root=str(src_path.parent.resolve()),
+                run_resolver=False,
+                show_progress=False,
+            )
+        finally:
+            src_path.unlink()
+
+        folder_nodes = [node for node in nodes if node["type"] == "FolderNode"]
+        assert len(folder_nodes) == 1
+        assert folder_nodes[0]["id"] == "folder::."
+        file_nodes = [node for node in nodes if node["type"] == "FileNode"]
+        assert len(file_nodes) == 1
+        assert any(edge["source"] == "folder::." and edge["target"] == file_nodes[0]["id"] for edge in edges)
+
+    @staticmethod
+    def test_path_outside_root_does_not_create_filesystem_folders():
+        nodes, edges = export_graph_from_file_nodes(
+            [_file_node("/unrelated/outside.py")],
+            root="/project",
+            run_resolver=False,
+            show_progress=False,
+        )
+        folder_nodes = [node for node in nodes if node["type"] == "FolderNode"]
+        assert [node["id"] for node in folder_nodes] == ["folder::."]
+        assert all(node["path"] != "/" for node in nodes)
+        file_nodes = [node for node in nodes if node["type"] == "FileNode"]
+        assert any(edge["source"] == "folder::." and edge["target"] == file_nodes[0]["id"] for edge in edges)
+
+    @staticmethod
+    def test_nested_folder_language_tags_stay_relative(tmp_path: Path):
+        source = tmp_path / "pkg" / "mod" / "app.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("x = 1\n")
+        file_node = asyncio.run(parse_file(source))
+        nodes, _ = export_graph_from_file_nodes(
+            [file_node],
+            root=str(tmp_path.resolve()),
+            run_resolver=False,
+            show_progress=False,
+        )
+        folders = {node["name"]: node for node in nodes if node["type"] == "FolderNode"}
+        root_folder = next(node for node in nodes if node["id"] == "folder::.")
+        assert "pkg" in folders
+        assert "mod" in folders
+        assert "lang:python" in folders["pkg"]["tags"]
+        assert "lang:python" in folders["mod"]["tags"]
+        assert "lang:python" in root_folder["tags"]
+        assert all(not Path(node["id"].removeprefix("folder::")).is_absolute() for node in folders.values())
