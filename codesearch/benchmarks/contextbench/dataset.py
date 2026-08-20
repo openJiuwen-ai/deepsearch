@@ -55,6 +55,14 @@ def _worktree_root() -> str:
     tmp_root = os.environ.get("CONTEXTBENCH_TMP_ROOT") or tempfile.gettempdir()
     return os.path.join(tmp_root, "contextbench_worktrees")
 
+def clear_repo_cache(repo_url: str, cache_dir: str = "./repos") -> None:
+    """清理远程仓库 clone 到本地的 bare cache 目录。"""
+    ensure_contextbench_importable()
+    from contextbench.core.repo import _normalize_url
+    normalized_url = _normalize_url(repo_url)
+    repo_cache_path = os.path.join(cache_dir, normalized_url)
+    logger.info("Cleaning up base repo cache for %s before starting run...", repo_url)
+    shutil.rmtree(repo_cache_path, ignore_errors=True)
 
 def clean_worktrees() -> None:
     """清理 contextbench 临时 worktree（残留坏 worktree 会使同 commit checkout 失败）。"""
@@ -66,13 +74,14 @@ def checkout_instance(repo_url: str, commit: str, cache_dir: str = "./repos") ->
     from contextbench.core import checkout
     from contextbench.core.repo import _normalize_url
 
+    normalized_url = _normalize_url(repo_url)
+    repo_cache_path = os.path.join(cache_dir, normalized_url)
+    worktree_path = os.path.join(_worktree_root(), normalized_url, commit)
+
+    logger.info("Cleaning up worktree for %s to ensure a fresh clone...", repo_url)
+    shutil.rmtree(worktree_path, ignore_errors=True)
+
     repo_dir = checkout(repo_url, commit, cache_dir=cache_dir, verbose=False)
-    if not repo_dir:
-        # 疑似残留坏 worktree：清掉该 commit 的目录后重试一次
-        stale = os.path.join(_worktree_root(), _normalize_url(repo_url), commit)
-        logger.warning("Checkout failed; removing stale worktree %s and retrying...", stale)
-        shutil.rmtree(stale, ignore_errors=True)
-        repo_dir = checkout(repo_url, commit, cache_dir=cache_dir, verbose=False)
     if not repo_dir or not os.path.exists(repo_dir):
         raise RuntimeError(f"Checkout failed for {repo_url}@{commit}")
     return repo_dir

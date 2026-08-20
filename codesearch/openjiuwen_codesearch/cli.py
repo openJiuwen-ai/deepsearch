@@ -71,6 +71,15 @@ async def _run(args: argparse.Namespace) -> int:
             logger.error("Provide --query or --query-file")
             return 2
 
+        import subprocess
+        try:
+            diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=args.repo_dir, capture_output=True)
+            if diff_check.returncode != 0:
+                logger.warning("Found staged changes in repo-dir '%s'. Unstaging them before starting coder...", args.repo_dir)
+                subprocess.run(["git", "reset"], cwd=args.repo_dir, capture_output=True, check=False)
+        except Exception as e:
+            logger.warning("Could not check or unstage changes in '%s': %s", args.repo_dir, e)
+
         from openjiuwen_codesearch.api.coder import CodeResolver
         resolver = CodeResolver(
             retriever=retriever,
@@ -78,7 +87,6 @@ async def _run(args: argparse.Namespace) -> int:
             config=config,
         )
         patch = await resolver.resolve(query, commit=args.revision, max_turns=args.max_turns)
-        print("\n--- GENERATED PATCH ---\n")
         print(patch)
         return 0
 
@@ -144,7 +152,7 @@ def main() -> None:
     p_coder.add_argument("--query-file", default="")
     p_coder.add_argument("--collection", default="local_repo")
     p_coder.add_argument("--revision", default="local")
-    p_coder.add_argument("--repo-dir", default=".", help="Local path to the repository directory")
+    p_coder.add_argument("--repo-dir", required=True, help="Local path to the repository directory")
     p_coder.add_argument("--max-turns", type=int, default=40)
 
     args = parser.parse_args()

@@ -214,7 +214,9 @@ def finalize(ctx: CodeSearchRunContext, termination: Termination) -> CodeSearchR
         ctx.total_output_tokens,
     )
     if ctx.result is None:
-        ctx.result = CodeSearchResult(hits=[], termination=termination)
+        ctx.result = CodeSearchResult(hits=hits, termination=termination)
+    else:
+        ctx.result.hits = hits
     ctx.result.turns = ctx.turn
     ctx.result.total_input_tokens = ctx.total_input_tokens
     ctx.result.total_output_tokens = ctx.total_output_tokens
@@ -410,6 +412,9 @@ def finalize_resolve(ctx: CodeResolveRunContext, termination: Termination) -> Co
             check=True,
         )
         final_diff = result.stdout
+        
+        # Unstage everything we just staged so we don't pollute the user's git index
+        subprocess.run(["git", "reset"], cwd=ctx.repo_dir, capture_output=True, check=False)
     except Exception as e:
         git_logger.error(f"Failed to get diff: {e}")
 

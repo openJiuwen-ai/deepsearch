@@ -151,6 +151,7 @@ def build_run_context(
     revision: str,
     top_k: int,
     issue_text: Optional[str] = None,
+    memory: Optional[SnippetMemory] = None,
     **clients,
 ) -> CodeSearchRunContext:
     retriever = clients["retriever"]
@@ -160,17 +161,22 @@ def build_run_context(
     if config.agent.trace_dir:
         safe_rev = revision.replace("/", "_")[:64]
         trace_path = os.path.join(config.agent.trace_dir, f"{safe_rev}_retriever.jsonl")
-    return CodeSearchRunContext(
-        config=config.model_copy(deep=True),
-        query=query,
-        issue_text=issue_text,
-        revision=revision,
-        top_k=top_k,
-        retriever=retriever,
-        main_llm=main_llm,
-        filter_llm=filter_llm,
-        trace_path=trace_path,
-    )
+    
+    kwargs = {
+        "config": config.model_copy(deep=True),
+        "query": query,
+        "issue_text": issue_text,
+        "revision": revision,
+        "top_k": top_k,
+        "retriever": retriever,
+        "main_llm": main_llm,
+        "filter_llm": filter_llm,
+        "trace_path": trace_path,
+    }
+    if memory is not None:
+        kwargs["memory"] = memory
+        
+    return CodeSearchRunContext(**kwargs)
 
 _RESOLVE_RUN_REGISTRY: RunRegistry[CodeResolveRunContext] = RunRegistry()
 

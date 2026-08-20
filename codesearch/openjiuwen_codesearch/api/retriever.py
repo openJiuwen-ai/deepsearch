@@ -19,6 +19,7 @@ from openjiuwen_codesearch.framework.openjiuwen.agent import (
     RetropusCodeSearchAgent,
 )
 from openjiuwen_codesearch.framework.openjiuwen.runtime_context import build_run_context
+from openjiuwen_codesearch.domain.memory import SnippetMemory
 from openjiuwen_codesearch.llm.factory import LLMClient
 from openjiuwen_codesearch.retrieval.base import CodeRetriever
 
@@ -51,6 +52,7 @@ class CodeSearchRetriever:
         self._retropus_repo_dir: Optional[Path] = None
         self._retropus_kg: Any = None
         self._retropus_retriever: Any = None
+        self.memory = SnippetMemory()
 
     def _is_retropus(self) -> bool:
         return self.config.agent.engine == "retropus"
@@ -308,8 +310,13 @@ class CodeSearchRetriever:
             retriever=store,
             main_llm=main_llm,
             filter_llm=filter_llm,
+            memory=self.memory,
         )
         return await self._create_agent().run(ctx)
+
+    def get_persistent_hits(self) -> list["FinalHit"]:
+        from openjiuwen_codesearch.framework.openjiuwen.steps import construct_final_hits
+        return construct_final_hits(list(self.memory.saved.keys()), self.memory)
 
     async def _search_retropus(self, query: str, top_k: int) -> CodeSearchResult:
         from openjiuwen_codesearch.framework.openjiuwen.retropus_context import (  # noqa: PLC0415

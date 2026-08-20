@@ -25,12 +25,12 @@ def append_prediction(partial_path: str, pred: dict) -> None:
 
 
 def write_predictions(
-    preds: list[dict], results_dir: str, mode: str, topk: int, num_instances: int
+    preds: list[dict], results_dir: str, test_mode: str, topk: int, num_instances: int
 ) -> str:
     os.makedirs(results_dir, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d__%H%M%S")
     output_path = os.path.join(
-        results_dir, f"[{num_instances}]{timestamp}__{mode}_topk={topk}.jsonl"
+        results_dir, f"[{num_instances}]{timestamp}__{test_mode}_topk={topk}.jsonl"
     )
     with open(output_path, "w", encoding="utf-8") as f:
         for p in preds:
@@ -105,18 +105,25 @@ def run_eval(
 ) -> int:
     metrics_path = f"{pred_file}_metrics.jsonl"
     cmd = [
-        sys.executable, "-m", "contextbench.evaluate",
-        "--gold", gold_path,
-        "--pred", pred_file,
-        "--out", metrics_path,
+        sys.executable,
+        "-m",
+        "contextbench.evaluate",
+        "--gold",
+        gold_path,
+        "--pred",
+        pred_file,
+        "--out",
+        metrics_path,
     ]
     env = os.environ.copy()
     env["PYTHONPATH"] = contextbench_dir + os.pathsep + env.get("PYTHONPATH", "")
     logger.info("Starting eval for %s", pred_file)
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    # EVALUATION summary is on evaluate's stdout; surface it via logger.
+    # EVALUATION summary might be on stdout or stderr.
     if result.stdout:
         logger.info("%s", result.stdout.rstrip("\n"))
+    if result.stderr:
+        logger.info("%s", result.stderr.rstrip("\n"))
     if os.path.isfile(metrics_path):
         summary_path = write_eval_summary(metrics_path, contextbench_dir=contextbench_dir)
         if summary_path:

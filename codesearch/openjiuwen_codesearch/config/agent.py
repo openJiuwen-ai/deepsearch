@@ -60,7 +60,7 @@ class SearchAgentConfig(BaseModel):
     retrieve_topk: int = 20           # 最终返回的 snippet 数上限
     search_topk: int = 10             # 每次 search_codebase 检索条数
     filter_concurrency: int = 8       # 过滤 agent 并发上限（semaphore）
-    stagnation_rounds: int = 3        # 连续 N 个含检索的轮次无新增 → STAGNATED
+    stagnation_rounds: int = 5        # 连续 N 个含检索的轮次无新增 → STAGNATED
     strict_trigram: bool = True       # trigram 检索后按真实子串包含过滤
     trace_dir: str = "agent_logs"     # 轨迹 jsonl 目录；空串关闭轨迹
 
