@@ -287,6 +287,7 @@ class CppParser(CBaseParser):
     """Parser for C++ source files, extending CBaseParser with OOP constructs."""
 
     def __init__(self) -> None:
+        super().__init__()  # Just to satisfy Code Check
         self._parser = Parser(_CPP_LANG)
 
     async def parse(self, path: Path, source: bytes) -> FileNode:
