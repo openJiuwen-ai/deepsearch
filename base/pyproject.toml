@@ -21,6 +21,40 @@ workflow = ["openjiuwen", "certifi"]  # certifi 为 SSL 默认 CA 包
 milvus = ["pymilvus>=2.4,<3"]  # 已验证组合：客户端 2.6.x + 服务端 v2.6.18；≥2.5 才有 BM25 Function
 embed = ["aiohttp>=3.9"]
 
+# CodeGraph
+codegraph = [
+    # Core dependencies
+    "aiofiles",
+    "tree-sitter>=0.21.0,<0.26.0",
+    # Parsing .jiuwenignore files
+    "gitignore-parser",
+    # Python
+    "tree-sitter-python>=0.21.0,<0.26.0",
+    "tree-sitter-rst",
+    # JS / TS / TSX
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    # HTML / CSS
+    "tree-sitter-html",
+    "tree-sitter-css",
+    # Makefile
+    "tree-sitter-make",
+    # Java
+    "tree-sitter-java",
+    "tree-sitter-javadoc",
+    # C / C++
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    # Rust
+    "tree-sitter-rust",
+    # Go
+    "tree-sitter-go",
+    # Progress Bar
+    "tqdm",
+    # MCP
+    "fastmcp",
+]
+
 # CI 依赖组（PEP 735）：供流水线 `uv sync --group ci`。
 [dependency-groups]
 ci = [
@@ -29,6 +63,16 @@ ci = [
     "pytest-html>=4",
     "coverage>=7",
     "python-dotenv",
+    "pytest-asyncio",
+    "pytest-mock",
+]
+
+# Formatting
+format = [
+    "ruff",
+    "mypy",
+    "types-aiofiles",
+    "types-pyyaml",
 ]
 
 [tool.coverage.run]
@@ -50,3 +94,18 @@ addopts = ["-ra", "-q"]
 markers = [
     "system: requires the workflow extra (openjiuwen) and/or live services",
 ]
+
+# Formatting
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.pylint.MAIN]
+ignore-paths = ["^(examples|tests|docs|scripts)/.*"]
+py-version = "3.11"
+
+[tool.pylint.FORMAT]
+max-line-length = 120
