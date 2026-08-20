@@ -4,7 +4,7 @@
 
 PubMed 和 arXiv 搜索结果在 `content` 中保留摘要或书目信息回退。每个 query 默认最多返回一条结果，搜索 wrapper 会尝试从官方开放来源获取该论文的全文。
 
-学术垂直搜索默认关闭。只有在 `web_search_engine_config.extension` 中显式设置 `scholarly_search_enabled=true` 后，Collector 才会注册 PubMed 和 arXiv，并允许 query 级路由选择对应引擎。
+学术垂直搜索默认关闭。只有在服务端请求的 `web_search_config` 中显式设置 `scholarly_search_enabled=true` 后，Collector 才会注册 PubMed 和 arXiv，并允许 query 级路由选择对应引擎。旧位置 `web_search_engine_config.extension.scholarly_search_enabled` 不再生效。
 
 ## 行为与数据契约
 
@@ -24,9 +24,12 @@ PubMed 和 arXiv 搜索结果在 `content` 中保留摘要或书目信息回退�
 
 ## 配置
 
-`web_search_engine_config.extension` 支持以下配置：
+`web_search_config` 支持以下配置：
 
 - `scholarly_search_enabled`：是否启用 PubMed 和 arXiv 垂直搜索，默认 `false`；
+
+`web_search_engine_config.extension` 继续支持以下学术搜索结果获取配置：
+
 - `scholarly_fetch_full_text`：是否获取全文，默认 `true`；
 - `scholarly_max_full_text_results`：每次最多获取全文的结果数，默认 `1`；
 - `scholarly_full_text_timeout_seconds`：全文请求超时时间，默认 `30` 秒；

@@ -66,8 +66,9 @@ contextvar，避免节点直接持有全局工具对象。
 
 ### 学术垂直搜索引擎契约
 
-- PubMed 和 arXiv 默认不注册。仅当 `web_search_engine_config.extension.scholarly_search_enabled` 显式为 `true` 时，
-  research workflow 才注册这两个引擎并允许 collector 进行 query 级垂直路由。
+- PubMed 和 arXiv 默认不注册。仅当服务端请求的 `web_search_config.scholarly_search_enabled` 显式为 `true` 时，
+  research workflow 才注册这两个引擎并允许 collector 进行 query 级垂直路由。旧位置
+  `web_search_engine_config.extension.scholarly_search_enabled` 会被忽略，因此切换主搜索引擎不会改变学术搜索开关。
 - 内置 web engine 包含 `pubmed` 和 `arxiv`。它们通过统一 `web_search_tool` 暴露，通常由 collector query item 的
   `search_engine_name` 作为 secondary vertical engine 触发。
 - PubMed wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/pubmed.py`，

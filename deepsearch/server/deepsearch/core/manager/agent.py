@@ -308,6 +308,9 @@ class DeepSearchAgentManager:
             "source_tracer_infer_switch": request.source_tracer_infer_switch,
             "info_collector_search_method": request.info_collector_search_method,
             "info_collector_webpage_enrich_enable": request.info_collector_webpage_enrich_enable,
+            "scholarly_search_enabled": request.web_search_config.scholarly_search_enabled
+            if request.web_search_config
+            else False,
             "llm_config": dict(general=llm_config) if "model_name" in llm_config else llm_config,
             "has_template": has_template,
             # 大纲交互配置

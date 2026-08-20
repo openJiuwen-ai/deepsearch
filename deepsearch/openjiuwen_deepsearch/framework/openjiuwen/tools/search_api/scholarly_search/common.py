@@ -201,14 +201,6 @@ def parse_boolean_extension(ext: dict, key: str, *, default: bool) -> bool:
     raise ValueError(f"{key} must be a boolean or 'true'/'false' string")
 
 
-def is_scholarly_search_enabled(extension: dict | None) -> bool:
-    return parse_boolean_extension(
-        extension or {},
-        "scholarly_search_enabled",
-        default=False,
-    )
-
-
 def apply_full_text_extension_config(wrapper: Any, extension: dict | None) -> None:
     ext = extension or {}
     wrapper.fetch_full_text = parse_boolean_extension(

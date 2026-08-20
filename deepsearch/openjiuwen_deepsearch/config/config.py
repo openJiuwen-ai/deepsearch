@@ -333,6 +333,10 @@ class AgentConfig(BaseModel):
         description="是否启用 DeepResearch 信息收集阶段的网页正文增强节点",
     )
     web_search_engine_config: WebSearchEngineConfig = Field(default_factory=WebSearchEngineConfig)
+    scholarly_search_enabled: bool = Field(
+        default=False,
+        description="Whether to enable PubMed and arXiv scholarly search engines.",
+    )
     web_fetch_provider_config: WebFetchProviderConfig = Field(default_factory=WebFetchProviderConfig)
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
     custom_web_search_config: CustomWebSearchConfig = Field(default_factory=CustomWebSearchConfig)
