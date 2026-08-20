@@ -56,11 +56,13 @@ def test_vertical_search_engines_are_registered_but_not_primary_configurable():
 
 
 def test_web_search_context_registers_academic_engines_for_research_only():
-    config = AgentConfig(web_search_engine_config={
-        "search_engine_name": "jina",
-        "max_web_search_results": 3,
-        "extension": {"scholarly_search_enabled": True},
-    })
+    config = AgentConfig(
+        scholarly_search_enabled=True,
+        web_search_engine_config={
+            "search_engine_name": "jina",
+            "max_web_search_results": 3,
+        },
+    )
 
     research_token = _initialize_web_search_context_from_agent_config(config)
     try:
@@ -107,28 +109,19 @@ def test_disabled_scholarly_search_preserves_academic_url_for_default_web_search
     assert item == SearchQueryItem(query=query, search_engine_name="")
 
 
-@pytest.mark.parametrize("configured", [False, "false", " FALSE "])
-def test_scholarly_search_switch_is_disabled_by_default_or_false(configured):
-    config = AgentConfig(web_search_engine_config={
-        "search_engine_name": "jina",
-        "extension": {"scholarly_search_enabled": configured},
-    })
+def test_legacy_engine_extension_cannot_enable_scholarly_search():
+    config = AgentConfig(
+        web_search_engine_config={
+            "search_engine_name": "jina",
+            "extension": {"scholarly_search_enabled": True},
+        }
+    )
 
     token = _initialize_web_search_context_from_agent_config(config)
     try:
         assert set(web_search_context.get()) == {"jina"}
     finally:
         web_search_context.reset(token)
-
-
-def test_scholarly_search_switch_rejects_invalid_string():
-    config = AgentConfig(web_search_engine_config={
-        "search_engine_name": "jina",
-        "extension": {"scholarly_search_enabled": "yes"},
-    })
-
-    with pytest.raises(ValueError, match="scholarly_search_enabled"):
-        _initialize_web_search_context_from_agent_config(config)
 
 
 def test_query_object_and_retrieval_query_carry_secondary_engine():

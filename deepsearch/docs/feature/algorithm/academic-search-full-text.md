@@ -4,7 +4,7 @@
 
 PubMed 和 arXiv 搜索结果在 `content` 中保留摘要或书目信息回退。每个 query 默认最多返回一条结果，搜索 wrapper 会尝试从官方开放来源获取该论文的全文。
 
-学术垂直搜索默认关闭。只有在 `web_search_engine_config.extension` 中显式设置 `scholarly_search_enabled=true` 后，Collector 才会注册 PubMed 和 arXiv，并允许 query 级路由选择对应引擎。
+学术垂直搜索默认关闭。只有在服务端请求的 `web_search_config` 中显式设置 `scholarly_search_enabled=true` 后，Collector 才会注册 PubMed 和 arXiv，并允许 query 级路由选择对应引擎。
 
 ## 行为与数据契约
 
@@ -24,18 +24,13 @@ PubMed 和 arXiv 搜索结果在 `content` 中保留摘要或书目信息回退�
 
 ## 配置
 
-`web_search_engine_config.extension` 支持以下配置：
+`web_search_config` 支持以下配置：
 
 - `scholarly_search_enabled`：是否启用 PubMed 和 arXiv 垂直搜索，默认 `false`；
-- `scholarly_fetch_full_text`：是否获取全文，默认 `true`；
-- `scholarly_max_full_text_results`：每次最多获取全文的结果数，默认 `1`；
-- `scholarly_full_text_timeout_seconds`：全文请求超时时间，默认 `30` 秒；
-- `scholarly_max_full_text_length`：全文最大字符数，默认使用 Collector 文档内容上限；
-- `pubmed_requests_per_second`：PubMed 请求速率，默认 `1/3`，作用于 ESearch、PubMed EFetch 和 PMC EFetch；
-- `arxiv_requests_per_second`：arXiv Atom API 请求速率，默认 `1/3`。
+
+学术引擎使用以下固定运行参数：获取全文；每次最多获取 `1` 条结果的全文；全文请求超时为 `30` 秒；全文最大字符数使用 Collector 文档内容上限；PubMed ESearch、PubMed EFetch、PMC EFetch 以及 arXiv Atom API 的请求速率均为每 `3` 秒 `1` 次。
 
 学术搜索结果数默认也是 `1`。调用方构造 wrapper 时仍可通过 `max_web_search_results` 显式覆盖。
-布尔配置只接受布尔值或大小写不敏感的字符串 `"true"`、`"false"`，其他值会在初始化时明确报错。
 
 ## 关键代码与测试
 

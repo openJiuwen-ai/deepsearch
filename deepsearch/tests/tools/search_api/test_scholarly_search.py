@@ -6,6 +6,7 @@ import httpx
 import pytest
 import requests
 
+from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.arxiv import (
     ArxivSearchAPIWrapper,
 )
@@ -101,39 +102,21 @@ async def test_rate_waiters_remain_spaced_after_shared_cooldown():
 
 
 @pytest.mark.parametrize("wrapper_class", [PubMedSearchAPIWrapper, ArxivSearchAPIWrapper])
-def test_scholarly_full_text_config_can_be_overridden_through_extension(wrapper_class):
+def test_scholarly_operational_extension_keys_are_ignored(wrapper_class):
     wrapper = wrapper_class(extension={
         "scholarly_fetch_full_text": False,
         "scholarly_max_full_text_results": 2,
         "scholarly_full_text_timeout_seconds": 12,
         "scholarly_max_full_text_length": 4321,
+        "pubmed_requests_per_second": 20,
+        "arxiv_requests_per_second": 20,
     })
 
-    assert wrapper.fetch_full_text is False
-    assert wrapper.max_full_text_results == 2
-    assert wrapper.full_text_timeout_seconds == 12
-    assert wrapper.max_full_text_length == 4321
-
-
-@pytest.mark.parametrize(("configured", "expected"), [
-    (False, False),
-    (True, True),
-    ("false", False),
-    (" FALSE ", False),
-    ("true", True),
-    (" TRUE ", True),
-])
-@pytest.mark.parametrize("wrapper_class", [PubMedSearchAPIWrapper, ArxivSearchAPIWrapper])
-def test_scholarly_fetch_full_text_parses_boolean_extension(wrapper_class, configured, expected):
-    wrapper = wrapper_class(extension={"scholarly_fetch_full_text": configured})
-
-    assert wrapper.fetch_full_text is expected
-
-
-@pytest.mark.parametrize("wrapper_class", [PubMedSearchAPIWrapper, ArxivSearchAPIWrapper])
-def test_scholarly_fetch_full_text_rejects_invalid_boolean_extension(wrapper_class):
-    with pytest.raises(ValueError, match="scholarly_fetch_full_text"):
-        wrapper_class(extension={"scholarly_fetch_full_text": "no"})
+    assert wrapper.fetch_full_text is True
+    assert wrapper.max_full_text_results == 1
+    assert wrapper.full_text_timeout_seconds == 30
+    assert wrapper.max_full_text_length == MAX_COLLECTOR_DOC_CONTENT_LENGTH
+    assert wrapper.requests_per_second == pytest.approx(1 / 3)
 
 
 @pytest.mark.parametrize("wrapper_class", [PubMedSearchAPIWrapper, ArxivSearchAPIWrapper])

@@ -121,9 +121,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools import (
     update_local_search_mapping,
     update_web_search_mapping,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common import (
-    is_scholarly_search_enabled,
-)
 from openjiuwen_deepsearch.llm.llm_request_adapter import resolve_llm_thinking_enabled
 from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
@@ -217,17 +214,13 @@ def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
 
 def _initialize_web_search_context_from_agent_config(
     agent_config: AgentConfig,
-    *,
-    include_academic_engines: bool | None = None,
 ):
     """Instantiate the active engine and optional research-only academic engines for a run."""
     custom_web = agent_config.custom_web_search_config
     web_search_config = agent_config.web_search_engine_config
     web_engine_name, web_mapping = DeepresearchAgent.register_web_search_tool(custom_web, web_search_config)
     web_engine_configs = {web_engine_name: web_search_config.model_dump()}
-    if include_academic_engines is None:
-        include_academic_engines = is_scholarly_search_enabled(web_search_config.extension)
-    if include_academic_engines:
+    if agent_config.scholarly_search_enabled:
         for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
             if engine_name not in web_mapping or engine_name in web_engine_configs:
                 continue
