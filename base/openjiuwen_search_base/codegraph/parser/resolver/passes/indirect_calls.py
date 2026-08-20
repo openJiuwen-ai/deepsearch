@@ -221,7 +221,7 @@ def _lookup_type_annotation(
                         and member.type_annotation
                     ):
                         return member.type_annotation
-        return None
+    return None
 
 
 def _lookup_type_cross_file(
