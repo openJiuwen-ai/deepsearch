@@ -73,6 +73,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [资料采集](./algorithm/research-collector.md)
 - [DeepSearch 搜索智能体](./algorithm/search-agent.md)
 - [报告生成](./algorithm/report-generation.md)
+- [Brief 精简版报告工作流](./algorithm/brief-report.md)
 - [报告模板生成](./algorithm/report-template.md)
 - [全局溯源](./algorithm/source-trace.md)
 - [推理链溯源](./algorithm/source-tracer-infer.md)

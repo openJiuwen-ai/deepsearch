@@ -2,7 +2,7 @@
 
 ## 维护范围
 
-本文档覆盖 `openjiuwen_deepsearch/algorithm/query_understanding/` 下的查询理解能力，包括意图识别、报告类型策略、初始搜索、大纲生成和章节研究计划生成。
+本文档覆盖 `openjiuwen_deepsearch/algorithm/query_understanding/` 下的查询理解能力，包括意图识别、报告类型策略、初始搜索，以及专业版的大纲生成和章节研究计划生成。
 
 本文档不覆盖后续资料采集、DeepSearch action 执行、报告正文生成和服务端 API 编排。
 
@@ -16,6 +16,7 @@
 - 意图识别会提取用户指定的来源排除约束：文章级排除进入 `exclude_url`（链接）与 `exclude_titles`（标题，逐字提取，用于识别同文献镜像变体），站点级排除才进入 `exclude_domains`；禁引的 URL 即使同属一个域名也不得归纳为整域排除。提取结果非空时输出 `[EXCLUDE_INTENT]` 观测日志（敏感模式下只记字段计数）。
 - 入口预搜索（web 模式）结果在写入 `search_context.entry_search_results` 前会按 `exclude_url`/`exclude_titles` 过滤（与本地知识库检索无关），过滤后的结果供大纲与问题生成消费；纯本地模式无入口预搜索，不受影响。
 - 报告类型只接受明确的 `professional` 或 `brief`；未知值保持为空，由下游澄清或默认策略处理。
+- `brief` 只在意图识别后改变主图路由：它使用独立的 Brief 大纲和报告级证据工作流，不生成专业版 `Outline` 或章节 `Plan`。入口预搜索仍按当前搜索方式执行，但其结果不直接并入 Brief 证据集合。
 - 大纲生成要求章节标题不带编号，并在代码侧修复章节 ID、依赖关系和 parent/relationship 一致性。
 - 用户显式指定顶层结构时，大纲生成按用户给出的主要章节数量、标题和顺序组织，不为了默认章节数、brief 摘要或维度覆盖规则额外新增顶层章节。
 - 计划生成按章节生成信息采集步骤，依赖驱动模式会保留 step id、parent ids 和关系描述。
@@ -63,9 +64,9 @@
 2. 代码侧归一化 report type、task type、URL、域名、列表字段和 LLM 输出的时间对象；时间提取不使用正则 fallback。
 3. 如果需要入口搜索，查询理解阶段可以执行初始网络搜索并把结果放入 intent 结果。入口 `research_query`、搜索请求和结果
    不应用时间范围；入口搜索完成后才为后续 collector 配置可安全下推的原生搜索开始日期参数。
-4. 大纲生成根据研究主题、报告约束和目标章节数生成 `Outline`。
-5. 大纲校验修复章节 ID、parent ids、relationships 和反向依赖。
-6. 计划生成按章节产出 `Plan`，作为后续资料采集步骤输入。
+4. `professional` 进入本模块的大纲生成，根据研究主题、报告约束和目标章节数生成 `Outline`；`brief` 转入 Brief 独立大纲节点。
+5. 专业版大纲校验修复章节 ID、parent ids、relationships 和反向依赖。
+6. 专业版计划生成按章节产出 `Plan`，作为后续资料采集步骤输入；Brief 的研究步骤位于其独立大纲中。
 
 ## 数据契约与依赖
 
@@ -79,6 +80,7 @@
 - 历史 `Outline` / `Section` 缺少新章节契约字段时仍按模型默认值加载；必填约束仅作用于新生成的
   普通或依赖驱动 tool call。
 - `Plan` / `Step`：章节研究步骤，依赖驱动模式下包含 step id 与依赖关系。
+- Brief 的章节、研究步骤和证据契约见 [Brief 精简版报告工作流](./brief-report.md)，不属于本模块的 `Outline` / `Plan` 契约。
 
 外部依赖：
 
@@ -116,3 +118,4 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 - [资料采集](./research-collector.md)
 - [DeepSearch 搜索智能体](./search-agent.md)
 - [报告生成](./report-generation.md)
+- [Brief 精简版报告工作流](./brief-report.md)

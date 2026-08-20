@@ -265,7 +265,7 @@ def test_sub_section_outline_prompt_allows_flat_outline_when_section_is_focused(
 
 @pytest.mark.parametrize(
     "prompt_name",
-    ["sub_report_markdown", "sub_report_brief_markdown"],
+    ["sub_report_markdown"],
 )
 def test_sub_report_prompts_render_flat_outline_writing_rule(prompt_name):
     context = {
@@ -288,7 +288,7 @@ def test_sub_report_prompts_render_flat_outline_writing_rule(prompt_name):
 
 @pytest.mark.parametrize(
     "prompt_name",
-    ["sub_report_markdown", "sub_report_brief_markdown"],
+    ["sub_report_markdown"],
 )
 def test_sub_report_prompts_always_forbid_body_mermaid(prompt_name):
     context = {
@@ -404,7 +404,6 @@ def test_planner_prompt_renders_section_local_contract_context():
         "planner",
         "dep_driving_planner",
         "sub_report_markdown",
-        "sub_report_brief_markdown",
         "report_abstract_markdown",
         "report_conclusion_markdown",
         "report_implications_and_recommendations_markdown",

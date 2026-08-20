@@ -1166,16 +1166,8 @@ class Reporter:
     async def generate_conclusion(self, sub_reports_content: str) -> str:
         """Generate conclusion for report"""
         logger.info(f"Start to generate conclusion with llm...")
-        report_type = "professional"
-        if isinstance(self.gen_report_context, dict):
-            report_type = self.gen_report_context.get("report_type", "professional")
-        if report_type == "brief":
-            # Brief reports should output a pure conclusion section
-            # without the implications/recommendations chapter.
-            prompt = "report_conclusion_markdown"
-        else:
-            report_format = ReportFormat.MARKDOWN
-            prompt = f"report_implications_and_recommendations_{report_format.get_name()}"
+        report_format = ReportFormat.MARKDOWN
+        prompt = f"report_implications_and_recommendations_{report_format.get_name()}"
         conclusion = await self._generate_with_llm(
             "conclusion", prompt, sub_reports_content
         )
@@ -3259,6 +3251,10 @@ class Reporter:
             section_idx,
         )
 
+    async def generate_content_for_visualization(self, current_inputs: dict) -> dict:
+        """公开的可视化内容生成接口。"""
+        return await self._generate_content_for_visualization(current_inputs)
+
     async def _generate_content_for_visualization(self, current_inputs: dict) -> dict:
         """Generate content for visualization with concurrent LLM calls"""
         section_idx = current_inputs.get("section_idx", 1)
@@ -3713,22 +3709,13 @@ class Reporter:
             f"{retry_feedback_prompt}"
         )
         try:
-            report_type = current_inputs.get("report_type", "professional")
-            sub_report_prompt = (
-                "sub_report_brief_markdown"
-                if report_type == "brief"
-                else "sub_report_markdown"
-            )
+            sub_report_prompt = "sub_report_markdown"
             llm_input = apply_system_prompt(
                 sub_report_prompt,
                 dict(
                     messages=[dict(role="user", content=sub_content_message)],
                     language=current_inputs.get("language"),
                     section_iscore=current_inputs.get("section_iscore", False),
-                    report_type=report_type,
-                    paragraph_style=current_inputs.get("paragraph_style", "detailed"),
-                    require_summary_first=current_inputs.get("require_summary_first", False),
-                    require_methodology_and_risk=current_inputs.get("require_methodology_and_risk", False),
                     audience_role=current_inputs.get("audience_role", ""),
                     tone=current_inputs.get("tone", ""),
                     current_section=section_task,
@@ -4129,6 +4116,10 @@ class Reporter:
             for index in missing_indices
         )
         return completed
+
+    async def insert_visualization(self, current_inputs: Dict) -> dict:
+        """公开的可视化内容插入接口。"""
+        return await self._insert_visualization(current_inputs)
 
     async def _insert_visualization(self, current_inputs: Dict) -> dict:
         """

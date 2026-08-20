@@ -30,7 +30,7 @@ Confidence Scoring Scale (0-1):
 Note: The score should reflect both textual similarity and factual accuracy. Higher scores require both semantic consistency and data verification when numerical information is present.
 
 ## Output Format
-You should return the **json list format** containing `source`, `mark_citation_content` and `score` according to Input, for example:
+You should return the **json list format** containing `source`, `marked_citation_content` and `score` according to Input, for example:
 
 - Input
 [
@@ -45,7 +45,7 @@ You should return the **json list format** containing `source`, `mark_citation_c
 [
     {
         "source": "知乎",
-        "marked_citation_content": ["明确居民区智能有序慢充为主，公共充电网络快充为主的模式，鼓励开展换电模式应用。","在市区新增或改建不低于总停车位10%比例的新能源汽车停车位。"], // if `score` > 0.85 else []
+        "marked_citation_content": ["明确居民区智能有序慢充为主，公共充电网络快充为主的模式，鼓励开展换电模式应用。","在市区新增或改建不低于总停车位10%比例的新能源汽车停车位。"],
         "score": 0.91
     }
 ]
@@ -56,7 +56,7 @@ Below are the list `datas` containing dictionaries consisting of `domain`, `cita
 </datas>
 
 # Note
-1. The `mark_citation_content` you output is the original segments extracted from `citation_content`, and do not make any changes.
+1. The `marked_citation_content` you output is the original segments extracted from `citation_content`, and do not make any changes.
 2. Begin the assessment now. Output only the **JSON list**, without any conversational text or explanations.
 3. The number of elements in the input and output must be strictly equal.
 4. For every analysis object, `marked_citation_content` remains an empty list unless the `score` is above **0.85**.

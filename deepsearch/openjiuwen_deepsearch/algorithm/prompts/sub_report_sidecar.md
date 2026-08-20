@@ -30,9 +30,6 @@ Return only one JSON object with exactly these fields:
 # Size Guidance
 - For Chinese, normally keep `chapter_summary` around 180-300 characters. For English, keep it around 90-180 words.
 - `chapter_summary` must cover the chapter's main analytical thread and major dimensions without repeating the detailed facts listed in `key_findings`.
-{% if report_type | default("professional") == "brief" %}
-- For a brief report, keep `chapter_summary` shorter than the normal target while preserving critical facts.
-{% endif %}
 - Return at most 5 `key_findings` and 3 `risk_points`.
 - Keep each list item concise.
 
