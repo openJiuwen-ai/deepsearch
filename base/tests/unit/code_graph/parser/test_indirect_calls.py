@@ -166,7 +166,7 @@ class TestPythonUnwrap:
         assert result is None
 
     @staticmethod
-    def test_typing_List(hooks):
+    def test_typing_list(hooks):
         result = hooks.unwrap_receiver_type("List[Widget]", 1)
         assert result == "Widget"
 

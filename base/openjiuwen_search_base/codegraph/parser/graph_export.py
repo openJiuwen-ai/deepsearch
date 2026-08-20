@@ -123,6 +123,7 @@ def _walk_edges(
     file_path: str,
     nodes_out: list[dict],
     edges_out: list[dict],
+    *,
     root: str | None = None,
 ) -> None:
     """Recursively walk children, emitting nodes and CONTAINS edges.
@@ -135,7 +136,7 @@ def _walk_edges(
         child_id = _node_id(file_path, child)
         nodes_out.append(_node_to_dict(child, file_path, root))
         edges_out.append({"source": parent_id, "target": child_id, "relation": EdgeType.CONTAINS.value})
-        _walk_edges(child_id, child, file_path, nodes_out, edges_out, root)
+        _walk_edges(child_id, child, file_path, nodes_out, edges_out, root=root)
 
 
 def _synthesise_folders(
@@ -370,7 +371,7 @@ def export_graph_from_file_nodes(
             child_id = _node_id(file_path, child)
             all_nodes.append(_node_to_dict(child, file_path, root))
             all_edges.append({"source": file_id, "target": child_id, "relation": EdgeType.CONTAINS.value})
-            _walk_edges(child_id, child, file_path, all_nodes, all_edges, root)
+            _walk_edges(child_id, child, file_path, all_nodes, all_edges, root=root)
 
     if run_resolver:
         resolved, synth_nodes, synth_edges = resolve_graph(

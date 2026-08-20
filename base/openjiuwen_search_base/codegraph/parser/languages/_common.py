@@ -46,7 +46,7 @@ def has_child_type(node: Node, type_name: str) -> bool:
 
 def complexity(node: Node) -> int:
     """Compute a simple cyclomatic-complexity proxy for a function body."""
-    _BRANCH = frozenset(
+    _branch = frozenset(
         {
             "if_statement",
             "for_statement",
@@ -63,7 +63,7 @@ def complexity(node: Node) -> int:
         nonlocal count
         if depth > MAX_AST_DEPTH:
             return
-        if n.type in _BRANCH:
+        if n.type in _branch:
             count += 1
         for child in n.children:
             _walk(child, depth + 1)

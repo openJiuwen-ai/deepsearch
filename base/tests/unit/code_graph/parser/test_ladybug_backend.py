@@ -33,9 +33,9 @@ def _require_ladybug_integration() -> None:
 class TestLadybugExport:
     @staticmethod
     def test_table_names_are_type_specific():
-        assert ladybug_backend._node_table_name("FunctionNode") == "JiuwenNode_FunctionNode"
+        assert getattr(ladybug_backend, "_node_table_name")("FunctionNode") == "JiuwenNode_FunctionNode"
         assert (
-            ladybug_backend._edge_table_name("CALLS", "FunctionNode", "FunctionNode")
+            getattr(ladybug_backend, "_edge_table_name")("CALLS", "FunctionNode", "FunctionNode")
             == "JiuwenEdge_CALLS__FunctionNode__FunctionNode"
         )
 

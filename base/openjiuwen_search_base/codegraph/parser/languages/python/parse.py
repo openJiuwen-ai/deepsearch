@@ -127,7 +127,7 @@ def _decorators(node: Node) -> tuple[str, ...]:
 
 
 def _complexity(node: Node) -> int:
-    _BRANCH = frozenset(
+    _branch = frozenset(
         {
             "if_statement",
             "for_statement",
@@ -146,7 +146,7 @@ def _complexity(node: Node) -> int:
         nonlocal count
         if depth > MAX_AST_DEPTH:
             return
-        if n.type in _BRANCH:
+        if n.type in _branch:
             count += 1
         for child in n.children:
             _walk(child, depth + 1)
