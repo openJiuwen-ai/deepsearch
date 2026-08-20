@@ -71,9 +71,10 @@ def build_structured_evidence_guide(
         return ""
     if any(passage_key not in coverage_matrix for passage_key in selected_passage_keys):
         logger.warning(
-            "Building structured evidence guide with unscored documents: "
-            "selected stable key is missing from coverage matrix"
+            "Cannot build structured evidence guide: selected stable key is missing "
+            "from coverage matrix"
         )
+        return ""
 
     lines = ["Structured evidence guidance:"]
     for rationale in rationales:

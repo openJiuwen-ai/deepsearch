@@ -13,10 +13,7 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
 from openjiuwen_deepsearch.algorithm.report.report import (
     Reporter,
     VisualizationInsertPlanContext,
-    _final_classification_limit,
-    _forced_document_coverage_keys,
     ensure_exact_target_documents,
-    required_target_citation_indexes,
 )
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
@@ -44,7 +41,7 @@ def _report_doc(idx: int, *, url: str | None = None, content: str | None = None)
     }
 
 
-def test_exact_target_paper_bypasses_subreport_document_selection():
+def test_exact_target_paper_is_collected_as_required_fulltext_evidence():
     selected = [_report_doc(1)]
     target = {
         "title": "Requested Paper",
@@ -59,70 +56,88 @@ def test_exact_target_paper_bypasses_subreport_document_selection():
     )
 
     assert result == [target, *selected]
-    assert _final_classification_limit(top_k=1, selected_docs=result) == 2
 
 
-def test_forced_target_reuses_coverage_key_when_it_was_scored():
-    other = _report_doc(1)
-    scored_target = _report_doc(2)
-    unscored_target = _report_doc(3)
-
-    assert _forced_document_coverage_keys(
-        [scored_target, unscored_target],
-        {"filtered_docs": [other, scored_target]},
-    ) == ["doc_1", "required_target_1"]
-
-
-def test_exact_target_paper_is_marked_as_a_required_subreport_citation():
-    docs = [{
-        "index": 2,
+@pytest.mark.parametrize(
+    "target_content",
+    [
+        {"original_content": "Complete requested-paper evidence."},
+        {"key_passages": ["Requested-paper key evidence."]},
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_sub_report_uses_required_target_when_scoring_selects_nothing(
+    target_content,
+):
+    mock_session = MagicMock()
+    mock_session.write_custom_stream = AsyncMock()
+    token = session_context.set(mock_session)
+    llm_token = llm_context.set({"mock_model": object()})
+    target = {
         "title": "Requested Paper",
         "url": "https://journal.example.org/requested",
-    }]
+        **target_content,
+    }
+    fulltext_result = {
+        "sub_section_core_content": ["Document 1 key passages:\n- requested evidence"],
+        "sub_section_references": ["[1] Requested Paper"],
+        "classified_content": [{**target, "index": 1, "is_fulltext": True}],
+        "structured_evidence_guide": "",
+        "fulltext_count": 1,
+        "remaining_count": 0,
+        "fulltext_evidences": [],
+        "remaining_passages": [],
+        "remaining_passage_keys": [],
+        "required_target_citation_indexes": [1],
+    }
 
-    assert required_target_citation_indexes(
-        docs, [{"url": "https://journal.example.org/requested/"}]
-    ) == [2]
+    try:
+        reporter = Reporter("mock_model")
+        reporter._generate_section_rationales = AsyncMock(return_value=([
+            {"id": "R1", "description": "Requested-paper analysis"}
+        ], ""))
+        reporter._extract_and_score_documents = AsyncMock(return_value=({
+            "filtered_passages": [{
+                "doc_url": target["url"],
+                "doc_title": target["title"],
+                "passage_text": "Low-scoring passage",
+            }],
+            "coverage_matrix": {"passage_0": {"R1": 0.1}},
+        }, ""))
+        reporter._select_by_rationale_coverage = MagicMock(return_value=([], []))
+        reporter._write_doc_selection_debug = MagicMock()
+        reporter._generate_sub_section_outline = AsyncMock(return_value={
+            "rs_success": True,
+            "sub_section_outline": "# 1 Requested Paper",
+        })
+        reporter.check_chapter_format = MagicMock(return_value=(True, ""))
+        reporter._write_subsection_reports = AsyncMock(return_value={
+            "success": True,
+            "result": "# 1 Requested Paper\n\nReport body [citation:1]",
+        })
 
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.report.enrich_fulltext_for_section",
+            return_value=fulltext_result,
+        ) as mock_enrich:
+            success, _, _, classified_content = await reporter.generate_sub_report({
+                "language": ENGLISH,
+                "section_idx": 1,
+                "section_task": "Requested Paper",
+                "report_task": "Analyze the requested paper",
+                "section_iscore": True,
+                "passages": [target],
+                "research_intent": {"target_papers": [{"url": f'{target["url"]}/'}]},
+                "visualization_enable": False,
+                "max_generate_retry_num": 1,
+            })
 
-def test_required_target_citations_deduplicate_equivalent_paper_records():
-    docs = [
-        {
-            "index": 2,
-            "url": "https://arxiv.org/abs/1706.03762v7",
-            "academic_source": "arxiv",
-            "academic_source_id": "1706.03762v7",
-        },
-        {
-            "index": 6,
-            "url": "https://arxiv.org/pdf/1706.03762",
-            "academic_source": "arxiv",
-            "academic_source_id": "1706.03762",
-        },
-        {
-            "index": 8,
-            "url": "https://arxiv.org/html/1706.03762v7",
-            "academic_source": "arxiv",
-            "academic_source_id": "1706.03762v7",
-        },
-    ]
-
-    assert required_target_citation_indexes(
-        docs, [{"arxiv_id": "1706.03762v7"}]
-    ) == [2]
-
-
-def test_required_target_citations_keep_distinct_requested_papers():
-    docs = [
-        {"index": 2, "url": "https://arxiv.org/abs/1706.03762"},
-        {"index": 4, "url": "https://arxiv.org/abs/1810.04805"},
-    ]
-    targets = [
-        {"url": "https://arxiv.org/abs/1706.03762"},
-        {"url": "https://arxiv.org/abs/1810.04805"},
-    ]
-
-    assert required_target_citation_indexes(docs, targets) == [2, 4]
+        assert success is True
+        assert classified_content[0]["url"] == target["url"]
+        assert mock_enrich.call_args.kwargs["context"]["required_documents"] == [target]
+    finally:
+        llm_context.reset(llm_token)
+        session_context.reset(token)
 
 
 @pytest.mark.parametrize(

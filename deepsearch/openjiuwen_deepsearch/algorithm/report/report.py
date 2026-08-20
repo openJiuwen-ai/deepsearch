@@ -26,6 +26,7 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     enrich_fulltext_for_section,
+    get_required_document_content,
 )
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
@@ -81,43 +82,6 @@ def ensure_exact_target_documents(
             required_docs.append(candidate)
             selected_keys.add(key)
     return required_docs + result
-
-
-def _forced_document_coverage_keys(
-    forced_docs: list[dict], coverage_result: dict,
-) -> list[str]:
-    """Reuse matrix keys for scored forced docs and mark only unscored docs as required."""
-    filtered_docs = coverage_result.get("filtered_docs", [])
-    coverage_keys_by_identity = {
-        id(doc): f"doc_{index}" for index, doc in enumerate(filtered_docs)
-    }
-    return [
-        coverage_keys_by_identity.get(id(doc), f"required_target_{index}")
-        for index, doc in enumerate(forced_docs)
-    ]
-
-
-def _final_classification_limit(top_k: int, selected_docs: list[dict]) -> int:
-    """Do not re-trim documents that were force-added after matrix selection."""
-    return max(top_k, len(selected_docs))
-
-
-def required_target_citation_indexes(
-    classified_docs: list[dict], target_papers: list[dict] | None,
-) -> list[int]:
-    """Return citation indexes for confirmed target papers present in a subsection."""
-    result = []
-    for target_paper in target_papers or []:
-        for doc in classified_docs:
-            index = int(doc.get("index", 0))
-            if (
-                index > 0
-                and index not in result
-                and find_exact_target_paper_facts([target_paper], [doc])
-            ):
-                result.append(index)
-                break
-    return result
 
 
 def _format_report_error(detail: str | BaseException) -> str:
@@ -1389,6 +1353,11 @@ class Reporter:
             required_target_documents = ensure_exact_target_documents(
                 [], raw_passages, target_papers
             )
+            has_usable_required_target = any(
+                str(doc.get("url") or doc.get("doc_url") or "").strip()
+                and get_required_document_content(doc)
+                for doc in required_target_documents
+            )
 
             self._write_doc_selection_debug(
                 current_inputs,
@@ -1400,7 +1369,7 @@ class Reporter:
                 ),
             )
 
-            if not selected_passages:
+            if not selected_passages and not has_usable_required_target:
                 logger.error(
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                     f"no passages selected after optimization"
@@ -1410,7 +1379,7 @@ class Reporter:
             selected_urls = list(dict.fromkeys(
                 passage.get("doc_url", "") for passage in selected_passages if passage.get("doc_url")
             ))
-            if not selected_urls:
+            if not selected_urls and not has_usable_required_target:
                 logger.error(
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                     f"no valid URLs in selected passages"

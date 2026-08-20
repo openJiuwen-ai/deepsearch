@@ -19,10 +19,21 @@ from urllib.parse import urlparse
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_structured_evidence_guide,
     format_key_passage_block,
+    normalize_key_passages,
 )
 
 
 logger = logging.getLogger(__name__)
+
+
+def get_required_document_content(document: dict) -> str:
+    """Return the best available content for a required report document."""
+    key_passages = normalize_key_passages(document.get("key_passages"))
+    return str(
+        document.get("original_content", "")
+        or document.get("content", "")
+        or "\n".join(key_passages)
+    ).strip()
 
 
 @dataclass
@@ -649,11 +660,7 @@ def enrich_fulltext_for_section(
         if not isinstance(doc, dict):
             continue
         url = str(doc.get("url", "") or doc.get("doc_url", "") or "").strip()
-        content = str(
-            doc.get("original_content", "")
-            or doc.get("content", "")
-            or "\n".join(doc.get("key_passages") or [])
-        ).strip()
+        content = get_required_document_content(doc)
         if not url or not content or url in required_urls:
             continue
         required_urls.add(url)
@@ -690,6 +697,18 @@ def enrich_fulltext_for_section(
     removed_passages, remaining_passages = split_passages_by_url(
         filtered_passages, fetched_urls_set
     )
+
+    fulltext_index_by_url = {
+        evidence.url: evidence.citation_index for evidence in fulltext_evidences
+    }
+    indexed_removed_passages = []
+    for passage in removed_passages:
+        indexed_passage = dict(passage)
+        indexed_passage["index"] = fulltext_index_by_url.get(
+            str(passage.get("doc_url") or "").strip(), ""
+        )
+        indexed_removed_passages.append(indexed_passage)
+    removed_passages = indexed_removed_passages
 
     # Index remaining passages and drop the internal ``query`` field.
     fulltext_count = len(fulltext_evidences)
