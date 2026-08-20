@@ -4,19 +4,13 @@ from typing import Any, Coroutine
 from unittest.mock import AsyncMock
 
 import pytest
+from fastmcp import Client
 from mcp.types import Resource
 
-pytest.importorskip(
-    "rich", minversion="13.9.4", reason="Impossible CI env resolution: rich<13.9.4, contradicting fastmcp requirement!"
-)
-pytest.importorskip("fastmcp", minversion="2")
-
-from fastmcp import Client  # noqa: E402
-
-from openjiuwen_search_base.codegraph.mcp import GraphSession, create_mcp_server  # noqa: E402
-from openjiuwen_search_base.codegraph.mcp.server import JiuwenMCP  # noqa: E402
-from openjiuwen_search_base.codegraph.mcp.type_docs import EDGE_TYPE_DOCS, NODE_TYPE_DOCS  # noqa: E402
-from openjiuwen_search_base.codegraph.parser.constants import EdgeType, NodeType  # noqa: E402
+from openjiuwen_search_base.codegraph.mcp import GraphSession, create_mcp_server
+from openjiuwen_search_base.codegraph.mcp.server import JiuwenMCP
+from openjiuwen_search_base.codegraph.mcp.type_docs import EDGE_TYPE_DOCS, NODE_TYPE_DOCS
+from openjiuwen_search_base.codegraph.parser.constants import EdgeType, NodeType
 
 
 def test_create_mcp_server() -> None:
