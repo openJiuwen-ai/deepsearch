@@ -15,9 +15,7 @@ def _require_llm_env() -> None:
     if os.getenv("RUN_LLM_TESTS", "").strip() != "1":
         pytest.skip("Set RUN_LLM_TESTS=1 to run live LLM system tests")
     missing = [
-        key
-        for key in ("BASE_LLM_API_KEY", "BASE_LLM_BASE_URL", "BASE_LLM_MODEL")
-        if not os.getenv(key, "").strip()
+        key for key in ("BASE_LLM_API_KEY", "BASE_LLM_BASE_URL", "BASE_LLM_MODEL") if not os.getenv(key, "").strip()
     ]
     if missing:
         pytest.skip("Missing LLM env: " + ", ".join(missing))
@@ -42,9 +40,7 @@ def test_invoke_plain_text(openjiuwen_pkg):
     from openjiuwen_search_base.llm import ChatMessage, create_llm_client
 
     client = create_llm_client(_llm_config(), client_id="base_system_text")
-    response = run(
-        client.invoke([ChatMessage(role="user", content="Reply with the single word pong.")])
-    )
+    response = run(client.invoke([ChatMessage(role="user", content="Reply with the single word pong.")]))
     assert response.content
     assert response.input_tokens >= 0
     assert response.output_tokens >= 0

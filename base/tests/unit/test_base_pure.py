@@ -89,9 +89,7 @@ class TestPromptCacheKeyFallback:
     @staticmethod
     def test_provider_message_strips_key():
         kwargs = {"prompt_cache_key": "retropus:abc"}
-        out = strip_unsupported_prompt_cache_key(
-            RuntimeError("Unknown field: prompt_cache_key"), kwargs
-        )
+        out = strip_unsupported_prompt_cache_key(RuntimeError("Unknown field: prompt_cache_key"), kwargs)
         assert out == {}
 
     @staticmethod
@@ -114,9 +112,7 @@ class TestNormalizeToolCalls:
             self.function, self.id = fn, call_id
 
     def test_openai_function_style(self):
-        calls = normalize_tool_calls(
-            [self._Call(self._Fn("search", '{"q": 1}'))]
-        )
+        calls = normalize_tool_calls([self._Call(self._Fn("search", '{"q": 1}'))])
         assert calls[0].name == "search" and calls[0].arguments == {"q": 1}
 
     def test_bad_json_arguments_become_empty(self):

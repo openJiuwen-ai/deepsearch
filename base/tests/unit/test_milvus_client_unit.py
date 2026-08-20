@@ -7,7 +7,6 @@ import pytest
 pytest.importorskip("pymilvus", reason="store 模块 import pymilvus（extras: milvus）")
 
 from openjiuwen_search_base.milvus.store import MilvusCollectionClient
-
 from tests.unit.conftest_helpers import run
 
 
@@ -23,9 +22,7 @@ class _Schema:
 
 class FakeCollection:
     def __init__(self):
-        self.schema = _Schema(
-            [_Field("id"), _Field("auto", auto_id=True), _Field("sparse_vec"), _Field("text")]
-        )
+        self.schema = _Schema([_Field("id"), _Field("auto", auto_id=True), _Field("sparse_vec"), _Field("text")])
         self.inserted_batches: list[list[list]] = []
         self.query_calls: list[dict] = []
 
@@ -41,8 +38,13 @@ class FakeCollection:
 
 def _client(fake):
     return MilvusCollectionClient(
-        host="", port="", collection_name="c", schema_factory=lambda: None,
-        indexes=[], sparse_generated_fields=("sparse_vec",), collection=fake,
+        host="",
+        port="",
+        collection_name="c",
+        schema_factory=lambda: None,
+        indexes=[],
+        sparse_generated_fields=("sparse_vec",),
+        collection=fake,
     )
 
 
@@ -69,8 +71,10 @@ def test_query_ids_then_fields_two_phase_batching():
     client = _client(fake)
     records = run(
         client.query_ids_then_fields(
-            expr="e", output_fields=["id", "text"],
-            ids_filter_builder=lambda ids: f"id in {ids}", heavy_batch_size=2,
+            expr="e",
+            output_fields=["id", "text"],
+            ids_filter_builder=lambda ids: f"id in {ids}",
+            heavy_batch_size=2,
         )
     )
     # 第一段取 5 个 id，第二段按批 2 → 3 次重字段查询
