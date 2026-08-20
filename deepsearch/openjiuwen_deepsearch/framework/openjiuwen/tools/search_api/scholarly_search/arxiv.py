@@ -27,7 +27,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     ARXIV_REQUEST_CONTROL,
     DEFAULT_ARXIV_SEARCH_URL,
     ScholarlySearchResponseError,
-    apply_full_text_extension_config,
     async_request_once,
     http_status_code,
     is_transient_connection_error,
@@ -38,6 +37,12 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
+
+SCHOLARLY_FETCH_FULL_TEXT = True
+SCHOLARLY_MAX_FULL_TEXT_RESULTS = 1
+SCHOLARLY_FULL_TEXT_TIMEOUT_SECONDS = 30
+SCHOLARLY_MAX_FULL_TEXT_LENGTH = MAX_COLLECTOR_DOC_CONTENT_LENGTH
+ARXIV_REQUESTS_PER_SECOND = 1 / 3
 
 
 def _full_text_fields() -> dict[str, Any]:
@@ -58,12 +63,12 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
     search_api_key: bytearray | bytes | str | None = None
     search_url: SecretStr | str | None = None
     max_web_search_results: int = 1
-    fetch_full_text: bool = True
-    max_full_text_results: int = 1
-    full_text_timeout_seconds: int = 30
-    max_full_text_length: int = MAX_COLLECTOR_DOC_CONTENT_LENGTH
+    fetch_full_text: bool = SCHOLARLY_FETCH_FULL_TEXT
+    max_full_text_results: int = SCHOLARLY_MAX_FULL_TEXT_RESULTS
+    full_text_timeout_seconds: int = SCHOLARLY_FULL_TEXT_TIMEOUT_SECONDS
+    max_full_text_length: int = SCHOLARLY_MAX_FULL_TEXT_LENGTH
     min_full_text_length: int = 200
-    requests_per_second: float = 1 / 3
+    requests_per_second: float = ARXIV_REQUESTS_PER_SECOND
     extension: Optional[dict] = None
 
     sort_by: str = "relevance"
@@ -77,12 +82,6 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
             self.sort_by = ext["arxiv_sort_by"]
         if "arxiv_sort_order" in ext:
             self.sort_order = ext["arxiv_sort_order"]
-        if "arxiv_requests_per_second" in ext:
-            try:
-                self.requests_per_second = max(0.1, float(ext["arxiv_requests_per_second"]))
-            except (TypeError, ValueError):
-                pass
-        apply_full_text_extension_config(self, ext)
 
     def results(self, query: str) -> list[dict[str, Any]]:
         if not (query or "").strip():
