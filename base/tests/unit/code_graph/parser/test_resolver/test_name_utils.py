@@ -6,7 +6,8 @@ from openjiuwen_search_base.codegraph.parser.resolver.passes._utils import conta
 class TestMatchName:
     """Tests for match_name()."""
 
-    def setup_method(self):
+    @staticmethod
+    def setup_method():
         match_name.cache_clear()
 
     @staticmethod

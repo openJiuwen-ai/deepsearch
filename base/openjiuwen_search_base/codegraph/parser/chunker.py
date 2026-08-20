@@ -104,7 +104,8 @@ def chunks_from_file_nodes(
 
             collapsed: list[str] = []
             span = child.span
-            _collect_collapse(child, collapsed, spans := [child.span])
+            spans = [child.span]
+            _collect_collapse(child, collapsed, spans)
             for s in spans[1:]:
                 span = _union_span(span, s)
 
