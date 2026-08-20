@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from .backends.base import ExportArtifacts
+from .huawei_print import print_hw
 from .parser.constants import detect_language
 from .parser.graph_export import export_graph_to_backends
 from .parser.resolver.passes._utils import match_name
@@ -149,7 +150,7 @@ def main() -> None:
 
     root: Path = args.directory.resolve()
     try:
-        print(f"Parsing files from {root} ...")
+        print_hw(f"Parsing files from {root} ...")
         artifacts, nodes, edges, files = asyncio.run(
             index_directory(
                 root,
@@ -164,18 +165,18 @@ def main() -> None:
             )
         )
     except (NotADirectoryError, FileNotFoundError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        print_hw(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Parsed {len(files)} files from {root}")
+    print_hw(f"Parsed {len(files)} files from {root}")
     if artifacts.nodes_path is not None:
-        print(f"Wrote {artifacts.nodes_path}")
+        print_hw(f"Wrote {artifacts.nodes_path}")
     if artifacts.edges_path is not None:
-        print(f"Wrote {artifacts.edges_path}")
+        print_hw(f"Wrote {artifacts.edges_path}")
     if artifacts.jcp_path is not None:
-        print(f"Wrote {artifacts.jcp_path}")
+        print_hw(f"Wrote {artifacts.jcp_path}")
     if artifacts.ladybug_path is not None:
-        print(f"Wrote {artifacts.ladybug_path}")
+        print_hw(f"Wrote {artifacts.ladybug_path}")
 
     _print_stats(nodes, edges)
 
@@ -191,13 +192,13 @@ def _load_jiuwenignore(root: Path, *, quiet: bool = False) -> Callable[[str], bo
     ignore_file = root / ".jiuwenignore"
     if not ignore_file.is_file():
         if not quiet:
-            print(f"No .jiuwenignore file found at {root}")
+            print_hw(f"No .jiuwenignore file found at {root}")
         return None
     from gitignore_parser import parse_gitignore_str
 
     content = ignore_file.read_text(encoding="utf-8", errors="replace")
     if not quiet:
-        print(f"Loaded .jiuwenignore file at {root}")
+        print_hw(f"Loaded .jiuwenignore file at {root}")
     return parse_gitignore_str(content, base_dir=str(root))
 
 
@@ -279,18 +280,18 @@ def _print_stats(nodes: list[dict], edges: list[dict]) -> None:
     node_counts = Counter(n["type"] for n in nodes)
     edge_counts = Counter(e["relation"] for e in edges)
 
-    print(f"\n{'─' * 38}")
-    print(f"  {'Nodes':30s} {len(nodes):>5}")
-    print(f"{'─' * 38}")
+    print_hw(f"\n{'─' * 38}")
+    print_hw(f"  {'Nodes':30s} {len(nodes):>5}")
+    print_hw(f"{'─' * 38}")
     for ntype, count in node_counts.most_common():
-        print(f"    {ntype:28s} {count:>5}")
+        print_hw(f"    {ntype:28s} {count:>5}")
 
-    print(f"\n{'─' * 38}")
-    print(f"  {'Edges':30s} {len(edges):>5}")
-    print(f"{'─' * 38}")
+    print_hw(f"\n{'─' * 38}")
+    print_hw(f"  {'Edges':30s} {len(edges):>5}")
+    print_hw(f"{'─' * 38}")
     for rel, count in edge_counts.most_common():
-        print(f"    {rel:28s} {count:>5}")
-    print()
+        print_hw(f"    {rel:28s} {count:>5}")
+    print_hw("")
 
 
 if __name__ == "__main__":

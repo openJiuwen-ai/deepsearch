@@ -61,7 +61,8 @@ def _resolve(file_nodes: list[FileNode]):
 
 
 class TestExpectsEdges:
-    def test_function_with_duck_type_refs_emits_expects(self):
+    @staticmethod
+    def test_function_with_duck_type_refs_emits_expects():
         dt = _make_dt(["embed"], line=1)
         fn = FunctionNode(
             node_type=NodeType.FUNCTION,
@@ -84,7 +85,8 @@ class TestExpectsEdges:
 
 
 class TestImplementsEdges:
-    def test_class_in_same_file_implements_duck_type(self):
+    @staticmethod
+    def test_class_in_same_file_implements_duck_type():
         dt = _make_dt(["embed", "search"], line=1)
         cls = _make_class("MyService", ["embed", "search", "extra"], line=5)
         fnode = FileNode(
@@ -99,7 +101,8 @@ class TestImplementsEdges:
         assert len(impl) == 1
         assert impl[0].resolved_by == "structural_match"
 
-    def test_class_missing_method_does_not_implement(self):
+    @staticmethod
+    def test_class_missing_method_does_not_implement():
         dt = _make_dt(["embed", "search"], line=1)
         cls = _make_class("Partial", ["embed"], line=5)
         fnode = FileNode(
@@ -113,7 +116,8 @@ class TestImplementsEdges:
         impl = [e for e in edges if e.relation == EdgeType.IMPLEMENTS]
         assert len(impl) == 0
 
-    def test_class_in_imported_file_implements(self):
+    @staticmethod
+    def test_class_in_imported_file_implements():
         """Class in an imported file should get IMPLEMENTS edge."""
         cls = _make_class("Embedder", ["embed"], line=1)
         cls_file = FileNode(
@@ -149,7 +153,8 @@ class TestImplementsEdges:
         assert len(impl) == 1
         assert impl[0].source_id == _nid("embedder.py", cls)
 
-    def test_class_in_unreachable_file_not_matched(self):
+    @staticmethod
+    def test_class_in_unreachable_file_not_matched():
         """Class in a file NOT reachable via imports should NOT get IMPLEMENTS."""
         cls = _make_class("Embedder", ["embed"], line=1)
         remote_file = FileNode(
@@ -171,7 +176,8 @@ class TestImplementsEdges:
         impl = [e for e in edges if e.relation == EdgeType.IMPLEMENTS]
         assert len(impl) == 0
 
-    def test_superset_dedup_skips_subset_implements(self):
+    @staticmethod
+    def test_superset_dedup_skips_subset_implements():
         """If a class matches both DT{a,b} and DT{a}, only DT{a,b} gets IMPLEMENTS."""
         dt_small = _make_dt(["embed"], line=1)
         dt_big = _make_dt(["embed", "search"], line=2)
@@ -188,7 +194,8 @@ class TestImplementsEdges:
         assert len(impl) == 1
         assert impl[0].target_id == _nid("test.py", dt_big)
 
-    def test_multi_hop_import_reaches_class(self):
+    @staticmethod
+    def test_multi_hop_import_reaches_class():
         """Class reachable via multi-hop imports should get IMPLEMENTS."""
         cls = _make_class("Deep", ["embed"], line=1)
         deep_file = FileNode(
@@ -250,7 +257,8 @@ class TestImplementsEdges:
 
 
 class TestSubsetEdges:
-    def test_strict_subset_produces_edge(self):
+    @staticmethod
+    def test_strict_subset_produces_edge():
         dt_small = _make_dt(["embed"], line=1)
         dt_big = _make_dt(["embed", "search"], line=2)
         fnode = FileNode(
@@ -268,7 +276,8 @@ class TestSubsetEdges:
 
 
 class TestSynthesizeIntermediates:
-    def test_intersection_creates_new_duck_type(self):
+    @staticmethod
+    def test_intersection_creates_new_duck_type():
         dt_a = _make_dt(["embed", "search"], line=1)
         dt_b = _make_dt(["embed", "transform"], line=2)
         fnode = FileNode(
@@ -281,7 +290,8 @@ class TestSynthesizeIntermediates:
         edges, synth_nodes, _ = _resolve([fnode])
         assert len(synth_nodes) == 0
 
-    def test_intersection_with_two_methods_is_synthesized(self):
+    @staticmethod
+    def test_intersection_with_two_methods_is_synthesized():
         dt_a = _make_dt(["embed", "search", "foo"], line=1)
         dt_b = _make_dt(["embed", "search", "bar"], line=2)
         fnode = FileNode(

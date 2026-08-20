@@ -27,7 +27,8 @@ def _parse(parser, code: str):
 
 
 class TestCFunctions:
-    def test_basic_function(self, parser):
+    @staticmethod
+    def test_basic_function(parser):
         result = _parse(parser, "int add(int a, int b) { return a + b; }")
         funcs = [c for c in result.children if isinstance(c, FunctionNode)]
         assert len(funcs) == 1
@@ -39,26 +40,30 @@ class TestCFunctions:
         assert fn.parameters[0].type_annotation == "int"
         assert fn.parameters[1].name == "b"
 
-    def test_void_function(self, parser):
+    @staticmethod
+    def test_void_function(parser):
         result = _parse(parser, "void process(void) { }")
         funcs = [c for c in result.children if isinstance(c, FunctionNode)]
         assert len(funcs) == 1
         assert funcs[0].return_type == "void"
 
-    def test_pointer_param(self, parser):
+    @staticmethod
+    def test_pointer_param(parser):
         result = _parse(parser, "void init(int* ptr, char** argv) { }")
         funcs = [c for c in result.children if isinstance(c, FunctionNode)]
         fn = funcs[0]
         assert fn.parameters[0].name == "ptr"
         assert "int" in (fn.parameters[0].type_annotation or "")
 
-    def test_static_function(self, parser):
+    @staticmethod
+    def test_static_function(parser):
         result = _parse(parser, "static inline int helper(void) { return 0; }")
         funcs = [c for c in result.children if isinstance(c, FunctionNode)]
         assert "@static" in funcs[0].decorators
         assert "@inline" in funcs[0].decorators
 
-    def test_cyclomatic_complexity(self, parser):
+    @staticmethod
+    def test_cyclomatic_complexity(parser):
         code = """
         int complex(int x) {
             if (x > 0) {
@@ -73,14 +78,16 @@ class TestCFunctions:
         funcs = [c for c in result.children if isinstance(c, FunctionNode)]
         assert funcs[0].cyclomatic_complexity >= 4
 
-    def test_variadic_function(self, parser):
+    @staticmethod
+    def test_variadic_function(parser):
         result = _parse(parser, "int format(const char* fmt, ...) { return 0; }")
         funcs = [c for c in result.children if isinstance(c, FunctionNode)]
         assert funcs[0].parameters[-1].name == "..."
 
 
 class TestCStructs:
-    def test_basic_struct(self, parser):
+    @staticmethod
+    def test_basic_struct(parser):
         code = "struct Point { int x; int y; };"
         result = _parse(parser, code)
         structs = [c for c in result.children if isinstance(c, StructNode)]
@@ -90,14 +97,16 @@ class TestCStructs:
         assert structs[0].fields[0].name == "x"
         assert structs[0].fields[1].name == "y"
 
-    def test_typedef_struct(self, parser):
+    @staticmethod
+    def test_typedef_struct(parser):
         code = "typedef struct { int x; int y; } Point;"
         result = _parse(parser, code)
         structs = [c for c in result.children if isinstance(c, StructNode)]
         assert len(structs) == 1
         assert structs[0].name == "Point"
 
-    def test_forward_declaration_skipped(self, parser):
+    @staticmethod
+    def test_forward_declaration_skipped(parser):
         code = "struct Foo;"
         result = _parse(parser, code)
         structs = [c for c in result.children if isinstance(c, StructNode)]
@@ -105,7 +114,8 @@ class TestCStructs:
 
 
 class TestCUnions:
-    def test_basic_union(self, parser):
+    @staticmethod
+    def test_basic_union(parser):
         code = "union Data { int i; float f; char c; };"
         result = _parse(parser, code)
         unions = [c for c in result.children if isinstance(c, UnionNode)]
@@ -115,7 +125,8 @@ class TestCUnions:
         assert "f" in unions[0].variants
         assert "c" in unions[0].variants
 
-    def test_typedef_union(self, parser):
+    @staticmethod
+    def test_typedef_union(parser):
         code = "typedef union { int i; double d; } Value;"
         result = _parse(parser, code)
         unions = [c for c in result.children if isinstance(c, UnionNode)]
@@ -124,7 +135,8 @@ class TestCUnions:
 
 
 class TestCEnums:
-    def test_basic_enum(self, parser):
+    @staticmethod
+    def test_basic_enum(parser):
         code = "enum Color { RED, GREEN, BLUE };"
         result = _parse(parser, code)
         enums = [c for c in result.children if isinstance(c, EnumNode)]
@@ -132,7 +144,8 @@ class TestCEnums:
         assert enums[0].name == "Color"
         assert enums[0].members == ("RED", "GREEN", "BLUE")
 
-    def test_typedef_enum(self, parser):
+    @staticmethod
+    def test_typedef_enum(parser):
         code = "typedef enum { LOW, MED, HIGH } Priority;"
         result = _parse(parser, code)
         enums = [c for c in result.children if isinstance(c, EnumNode)]
@@ -142,7 +155,8 @@ class TestCEnums:
 
 
 class TestCMacros:
-    def test_object_macro(self, parser):
+    @staticmethod
+    def test_object_macro(parser):
         code = "#define MAX_SIZE 100"
         result = _parse(parser, code)
         macros = [c for c in result.children if isinstance(c, MacroNode)]
@@ -151,7 +165,8 @@ class TestCMacros:
         assert macros[0].expansion == "100"
         assert macros[0].parameters == ()
 
-    def test_function_macro(self, parser):
+    @staticmethod
+    def test_function_macro(parser):
         code = "#define MAX(a, b) ((a) > (b) ? (a) : (b))"
         result = _parse(parser, code)
         macros = [c for c in result.children if isinstance(c, MacroNode)]
@@ -160,7 +175,8 @@ class TestCMacros:
         assert macros[0].parameters == ("a", "b")
         assert "?" in macros[0].expansion
 
-    def test_macro_signature(self, parser):
+    @staticmethod
+    def test_macro_signature(parser):
         code = "#define SQUARE(x) ((x)*(x))"
         result = _parse(parser, code)
         macros = [c for c in result.children if isinstance(c, MacroNode)]
@@ -168,14 +184,16 @@ class TestCMacros:
 
 
 class TestCIncludes:
-    def test_system_include(self, parser):
+    @staticmethod
+    def test_system_include(parser):
         code = "#include <stdio.h>"
         result = _parse(parser, code)
         imports = [c for c in result.children if isinstance(c, ImportNode)]
         assert len(imports) == 1
         assert imports[0].module == "stdio.h"
 
-    def test_local_include(self, parser):
+    @staticmethod
+    def test_local_include(parser):
         code = '#include "myheader.h"'
         result = _parse(parser, code)
         imports = [c for c in result.children if isinstance(c, ImportNode)]
@@ -184,7 +202,8 @@ class TestCIncludes:
 
 
 class TestCVariables:
-    def test_global_variable(self, parser):
+    @staticmethod
+    def test_global_variable(parser):
         code = "int count = 0;"
         result = _parse(parser, code)
         props = [c for c in result.children if isinstance(c, PropertyNode)]
@@ -195,7 +214,8 @@ class TestCVariables:
 
 
 class TestCCalls:
-    def test_calls_extracted(self, parser):
+    @staticmethod
+    def test_calls_extracted(parser):
         code = """
         void process() {
             int x = add(1, 2);
@@ -208,7 +228,8 @@ class TestCCalls:
         assert "add" in callees
         assert "printf" in callees
 
-    def test_call_context(self, parser):
+    @staticmethod
+    def test_call_context(parser):
         code = """
         void outer() {
             inner();
@@ -220,14 +241,16 @@ class TestCCalls:
 
 
 class TestCTypedefs:
-    def test_plain_typedef(self, parser):
+    @staticmethod
+    def test_plain_typedef(parser):
         code = "typedef unsigned long size_t;"
         result = _parse(parser, code)
         aliases = [c for c in result.children if isinstance(c, TypeAliasNode)]
         assert len(aliases) == 1
         assert aliases[0].name == "size_t"
 
-    def test_function_pointer_typedef(self, parser):
+    @staticmethod
+    def test_function_pointer_typedef(parser):
         code = "typedef int (*Comparator)(const void*, const void*);"
         result = _parse(parser, code)
         aliases = [c for c in result.children if isinstance(c, TypeAliasNode)]
@@ -235,7 +258,8 @@ class TestCTypedefs:
 
 
 class TestCFileNode:
-    def test_language(self, parser):
+    @staticmethod
+    def test_language(parser):
         result = _parse(parser, "int x;")
         assert result.language == "c"
         assert result.node_type == NodeType.FILE

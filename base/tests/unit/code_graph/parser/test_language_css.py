@@ -29,30 +29,35 @@ def _children_by_type(file_node: FileNode, node_type: NodeType) -> list:
 
 
 class TestRuleSets:
-    def test_basic_rule(self):
+    @staticmethod
+    def test_basic_rule():
         r = _parse("body { margin: 0; padding: 0; }")
         cls = _children_by_type(r, NodeType.CLASS)
         assert len(cls) == 1
         assert cls[0].name == "body"
 
-    def test_class_selector(self):
+    @staticmethod
+    def test_class_selector():
         r = _parse(".container { max-width: 1200px; }")
         cls = _children_by_type(r, NodeType.CLASS)
         assert len(cls) == 1
         assert cls[0].name == ".container"
 
-    def test_id_selector(self):
+    @staticmethod
+    def test_id_selector():
         r = _parse("#header { height: 60px; }")
         cls = _children_by_type(r, NodeType.CLASS)
         assert cls[0].name == "#header"
 
-    def test_compound_selector(self):
+    @staticmethod
+    def test_compound_selector():
         r = _parse("h1, h2, h3 { font-weight: bold; }")
         cls = _children_by_type(r, NodeType.CLASS)
         assert len(cls) == 1
         assert "h1" in cls[0].name
 
-    def test_declarations_as_properties(self):
+    @staticmethod
+    def test_declarations_as_properties():
         r = _parse("body { margin: 0; padding: 10px; color: red; }")
         cls = _children_by_type(r, NodeType.CLASS)[0]
         props = [c for c in cls.children if c.node_type == NodeType.PROPERTY]
@@ -60,7 +65,8 @@ class TestRuleSets:
         names = {p.name for p in props}
         assert names == {"margin", "padding", "color"}
 
-    def test_declaration_values(self):
+    @staticmethod
+    def test_declaration_values():
         r = _parse(".box { border: 1px solid black; }")
         cls = _children_by_type(r, NodeType.CLASS)[0]
         props = [c for c in cls.children if c.node_type == NodeType.PROPERTY]
@@ -68,7 +74,8 @@ class TestRuleSets:
         assert border.default_value is not None
         assert "1px" in border.default_value
 
-    def test_declaration_owner(self):
+    @staticmethod
+    def test_declaration_owner():
         r = _parse(".card { color: blue; }")
         cls = _children_by_type(r, NodeType.CLASS)[0]
         prop = cls.children[0]
@@ -81,13 +88,15 @@ class TestRuleSets:
 
 
 class TestMediaQueries:
-    def test_media_query_container(self):
+    @staticmethod
+    def test_media_query_container():
         r = _parse("@media (max-width: 768px) { .mobile { padding: 8px; } }")
         modules = _children_by_type(r, NodeType.MODULE)
         assert len(modules) == 1
         assert "@media" in modules[0].name
 
-    def test_nested_rules_in_media(self):
+    @staticmethod
+    def test_nested_rules_in_media():
         r = _parse("""
 @media (max-width: 768px) {
   .container { padding: 16px; }
@@ -108,7 +117,8 @@ class TestMediaQueries:
 
 
 class TestKeyframes:
-    def test_keyframes(self):
+    @staticmethod
+    def test_keyframes():
         r = _parse("@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }")
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
         assert len(blocks) == 1
@@ -121,7 +131,8 @@ class TestKeyframes:
 
 
 class TestCustomProperties:
-    def test_root_custom_properties(self):
+    @staticmethod
+    def test_root_custom_properties():
         r = _parse(":root { --primary: #007bff; --spacing: 16px; }")
         cls = _children_by_type(r, NodeType.CLASS)
         assert len(cls) == 1
@@ -138,13 +149,15 @@ class TestCustomProperties:
 
 
 class TestSupports:
-    def test_supports_statement(self):
+    @staticmethod
+    def test_supports_statement():
         r = _parse("@supports (display: grid) { .grid { display: grid; } }")
         modules = _children_by_type(r, NodeType.MODULE)
         assert len(modules) == 1
         assert "@supports" in modules[0].name
 
-    def test_supports_nested_rules(self):
+    @staticmethod
+    def test_supports_nested_rules():
         r = _parse("""
 @supports (display: flex) {
   .flex { display: flex; }
@@ -157,16 +170,19 @@ class TestSupports:
 
 
 class TestEdgeCases:
-    def test_empty_css(self):
+    @staticmethod
+    def test_empty_css():
         r = _parse("")
         assert len(r.children) == 0
 
-    def test_import_skipped(self):
+    @staticmethod
+    def test_import_skipped():
         r = _parse("@import url('reset.css');")
         assert len(_children_by_type(r, NodeType.CLASS)) == 0
         assert len(_children_by_type(r, NodeType.CODE_BLOCK)) == 0
 
-    def test_multiple_rules(self):
+    @staticmethod
+    def test_multiple_rules():
         r = _parse("""
 body { margin: 0; }
 .header { height: 60px; }
@@ -182,6 +198,7 @@ body { margin: 0; }
 
 
 class TestFileMeta:
-    def test_language_is_css(self):
+    @staticmethod
+    def test_language_is_css():
         r = _parse("body { color: red; }")
         assert r.language == "css"

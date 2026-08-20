@@ -31,14 +31,16 @@ def _require_ladybug_integration() -> None:
 
 
 class TestLadybugExport:
-    def test_table_names_are_type_specific(self):
+    @staticmethod
+    def test_table_names_are_type_specific():
         assert ladybug_backend._node_table_name("FunctionNode") == "JiuwenNode_FunctionNode"
         assert (
             ladybug_backend._edge_table_name("CALLS", "FunctionNode", "FunctionNode")
             == "JiuwenEdge_CALLS__FunctionNode__FunctionNode"
         )
 
-    def test_round_trip_with_small_batches(self):
+    @staticmethod
+    def test_round_trip_with_small_batches():
         _require_ladybug_integration()
         pytest.importorskip("real_ladybug", reason="real_ladybug not installed")
         src_path = _write_source_file("def hello():\n    pass\n")
@@ -82,7 +84,8 @@ class TestLadybugExport:
         finally:
             src_path.unlink()
 
-    def test_missing_bindings_raise_clear_error(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    @staticmethod
+    def test_missing_bindings_raise_clear_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         real_import = builtins.__import__
 
         def fake_import(name: str, _globals=None, _locals=None, fromlist=(), level: int = 0):

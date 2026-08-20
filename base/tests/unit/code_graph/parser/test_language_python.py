@@ -32,7 +32,8 @@ def _children_by_type(file_node: FileNode, node_type: NodeType) -> list:
 
 
 class TestFunctions:
-    def test_simple_function(self):
+    @staticmethod
+    def test_simple_function():
         r = _parse("def hello(name):\n    return name\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert len(fns) == 1
@@ -41,24 +42,28 @@ class TestFunctions:
         assert fns[0].func_type == "function"
         assert fns[0].owner is None
 
-    def test_async_function(self):
+    @staticmethod
+    def test_async_function():
         r = _parse("async def fetch(url):\n    pass\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert len(fns) == 1
         assert fns[0].is_async is True
 
-    def test_decorated_function(self):
+    @staticmethod
+    def test_decorated_function():
         r = _parse("@app.route('/')\ndef index():\n    pass\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert len(fns) == 1
         assert any("app.route" in d for d in fns[0].decorators)
 
-    def test_return_type(self):
+    @staticmethod
+    def test_return_type():
         r = _parse("def add(a, b) -> int:\n    return a + b\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert fns[0].return_type == "int"
 
-    def test_multiple_params(self):
+    @staticmethod
+    def test_multiple_params():
         r = _parse("def f(a, b, c=1, *args, **kwargs):\n    pass\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert fns[0].parameters == (
@@ -76,7 +81,8 @@ class TestFunctions:
 
 
 class TestNestedFunctions:
-    def test_nested_detected(self):
+    @staticmethod
+    def test_nested_detected():
         r = _parse("def outer():\n    def inner():\n        pass\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert len(fns) == 1
@@ -87,7 +93,8 @@ class TestNestedFunctions:
         assert nested[0].func_type == "nested"
         assert nested[0].owner == "outer"
 
-    def test_deep_nesting(self):
+    @staticmethod
+    def test_deep_nesting():
         src = "def a():\n    def b():\n        def c():\n            pass\n"
         r = _parse(src)
         fns = _children_by_type(r, NodeType.FUNCTION)
@@ -98,7 +105,8 @@ class TestNestedFunctions:
         assert c.name == "a.b.c"
         assert c.owner == "a.b"
 
-    def test_no_duplicate_at_top(self):
+    @staticmethod
+    def test_no_duplicate_at_top():
         r = _parse("def outer():\n    def inner():\n        pass\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         names = [f.name for f in fns]
@@ -112,25 +120,29 @@ class TestNestedFunctions:
 
 
 class TestClasses:
-    def test_simple_class(self):
+    @staticmethod
+    def test_simple_class():
         r = _parse("class Foo:\n    pass\n")
         classes = _children_by_type(r, NodeType.CLASS)
         assert len(classes) == 1
         assert classes[0].name == "Foo"
         assert classes[0].bases == ()
 
-    def test_inheritance(self):
+    @staticmethod
+    def test_inheritance():
         r = _parse("class Bar(Foo, Mixin):\n    pass\n")
         classes = _children_by_type(r, NodeType.CLASS)
         assert classes[0].bases == ("Foo", "Mixin")
 
-    def test_metaclass(self):
+    @staticmethod
+    def test_metaclass():
         r = _parse("class Meta(type):\n    pass\n\nclass Foo(metaclass=Meta):\n    pass\n")
         classes = _children_by_type(r, NodeType.CLASS)
         foo = [c for c in classes if c.name == "Foo"][0]
         assert foo.metaclass == "Meta"
 
-    def test_methods_are_children(self):
+    @staticmethod
+    def test_methods_are_children():
         src = "class Foo:\n    def bar(self):\n        pass\n    def baz(self):\n        pass\n"
         r = _parse(src)
         classes = _children_by_type(r, NodeType.CLASS)
@@ -140,7 +152,8 @@ class TestClasses:
         assert methods[0].func_type == "method"
         assert methods[0].owner == "Foo"
 
-    def test_class_properties(self):
+    @staticmethod
+    def test_class_properties():
         src = "class Cfg:\n    x = 10\n    y: str = 'hi'\n"
         r = _parse(src)
         classes = _children_by_type(r, NodeType.CLASS)
@@ -148,7 +161,8 @@ class TestClasses:
         assert len(props) == 2
         assert props[0].owner == "Cfg"
 
-    def test_method_with_nested(self):
+    @staticmethod
+    def test_method_with_nested():
         src = "class A:\n    def m(self):\n        def helper():\n            pass\n"
         r = _parse(src)
         cls = _children_by_type(r, NodeType.CLASS)[0]
@@ -166,7 +180,8 @@ class TestClasses:
 
 
 class TestInterfaces:
-    def test_protocol_detected(self):
+    @staticmethod
+    def test_protocol_detected():
         src = (
             "from typing import Protocol\n\nclass Embeddable(Protocol):\n    def embed(self, text: str) -> list: ...\n"
         )
@@ -183,7 +198,8 @@ class TestInterfaces:
 
 
 class TestEnums:
-    def test_enum_detected(self):
+    @staticmethod
+    def test_enum_detected():
         src = "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n    GREEN = 2\n    BLUE = 3\n"
         r = _parse(src)
         enums = _children_by_type(r, NodeType.ENUM)
@@ -198,7 +214,8 @@ class TestEnums:
 
 
 class TestProperties:
-    def test_module_level_assignment(self):
+    @staticmethod
+    def test_module_level_assignment():
         r = _parse("X = 42\nY: str = 'hello'\n")
         props = _children_by_type(r, NodeType.PROPERTY)
         assert len(props) == 2
@@ -215,7 +232,8 @@ class TestProperties:
 
 
 class TestTypeAliases:
-    def test_type_statement(self):
+    @staticmethod
+    def test_type_statement():
         r = _parse("type Vector = list[float]\n")
         aliases = _children_by_type(r, NodeType.TYPE_ALIAS)
         assert len(aliases) == 1
@@ -229,45 +247,52 @@ class TestTypeAliases:
 
 
 class TestDuckTypes:
-    def test_single_method(self):
+    @staticmethod
+    def test_single_method():
         src = "def run(obj):\n    return obj.embed('x')\n"
         r = _parse(src)
         dts = _children_by_type(r, NodeType.DUCK_TYPE)
         assert len(dts) == 1
         assert dts[0].methods == frozenset({"embed"})
 
-    def test_multiple_methods(self):
+    @staticmethod
+    def test_multiple_methods():
         src = "def run(obj):\n    obj.foo()\n    obj.bar()\n"
         r = _parse(src)
         dts = _children_by_type(r, NodeType.DUCK_TYPE)
         assert len(dts) == 1
         assert dts[0].methods == frozenset({"foo", "bar"})
 
-    def test_deduplication(self):
+    @staticmethod
+    def test_deduplication():
         src = "def f1(a):\n    a.x()\n\ndef f2(b):\n    b.x()\n"
         r = _parse(src)
         dts = _children_by_type(r, NodeType.DUCK_TYPE)
         assert len(dts) == 1
 
-    def test_typed_param_ignored(self):
+    @staticmethod
+    def test_typed_param_ignored():
         src = "def f(obj: Foo):\n    obj.bar()\n"
         r = _parse(src)
         dts = _children_by_type(r, NodeType.DUCK_TYPE)
         assert len(dts) == 0
 
-    def test_self_cls_ignored(self):
+    @staticmethod
+    def test_self_cls_ignored():
         src = "class X:\n    def m(self):\n        self.foo()\n"
         r = _parse(src)
         dts = _children_by_type(r, NodeType.DUCK_TYPE)
         assert len(dts) == 0
 
-    def test_duck_type_refs_on_function(self):
+    @staticmethod
+    def test_duck_type_refs_on_function():
         src = "def run(obj):\n    return obj.embed('x')\n"
         r = _parse(src)
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert fns[0].duck_type_refs == ("DuckType{embed}",)
 
-    def test_distinct_duck_types(self):
+    @staticmethod
+    def test_distinct_duck_types():
         src = "def f1(a):\n    a.x()\n\ndef f2(b):\n    b.x()\n    b.y()\n"
         r = _parse(src)
         dts = _children_by_type(r, NodeType.DUCK_TYPE)
@@ -283,13 +308,15 @@ class TestDuckTypes:
 
 
 class TestDocstrings:
-    def test_function_docstring(self):
+    @staticmethod
+    def test_function_docstring():
         src = 'def foo():\n    """Does stuff."""\n    pass\n'
         r = _parse(src)
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert fns[0].docstring == "Does stuff."
 
-    def test_class_docstring(self):
+    @staticmethod
+    def test_class_docstring():
         src = 'class Foo:\n    """A foo."""\n    pass\n'
         r = _parse(src)
         classes = _children_by_type(r, NodeType.CLASS)
@@ -302,12 +329,14 @@ class TestDocstrings:
 
 
 class TestComplexity:
-    def test_simple_function_complexity_1(self):
+    @staticmethod
+    def test_simple_function_complexity_1():
         r = _parse("def f():\n    return 1\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert fns[0].cyclomatic_complexity == 1
 
-    def test_if_adds_complexity(self):
+    @staticmethod
+    def test_if_adds_complexity():
         src = "def f(x):\n    if x > 0:\n        return x\n    return -x\n"
         r = _parse(src)
         fns = _children_by_type(r, NodeType.FUNCTION)
@@ -320,7 +349,8 @@ class TestComplexity:
 
 
 class TestDecoratedMethods:
-    def test_decorated_method(self):
+    @staticmethod
+    def test_decorated_method():
         src = "class Foo:\n    @staticmethod\n    def bar():\n        pass\n"
         r = _parse(src)
         cls = _children_by_type(r, NodeType.CLASS)[0]
@@ -329,7 +359,8 @@ class TestDecoratedMethods:
         assert methods[0].name == "Foo.bar"
         assert any("staticmethod" in d for d in methods[0].decorators)
 
-    def test_decorated_nested_function(self):
+    @staticmethod
+    def test_decorated_nested_function():
         src = "def outer():\n    @wraps(outer)\n    def inner():\n        pass\n"
         r = _parse(src)
         fns = _children_by_type(r, NodeType.FUNCTION)
@@ -345,7 +376,8 @@ class TestDecoratedMethods:
 
 
 class TestTypeAliasAnnotation:
-    def test_typing_type_alias(self):
+    @staticmethod
+    def test_typing_type_alias():
         src = "from typing import TypeAlias\n\nVector: TypeAlias = list[float]\n"
         r = _parse(src)
         aliases = _children_by_type(r, NodeType.TYPE_ALIAS)
@@ -360,30 +392,35 @@ class TestTypeAliasAnnotation:
 
 
 class TestEdgeCases:
-    def test_tuple_assignment_not_property(self):
+    @staticmethod
+    def test_tuple_assignment_not_property():
         src = "a, b = 1, 2\n"
         r = _parse(src)
         props = _children_by_type(r, NodeType.PROPERTY)
         assert len(props) == 0
 
-    def test_no_params_function(self):
+    @staticmethod
+    def test_no_params_function():
         r = _parse("def f():\n    pass\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert fns[0].parameters == ()
 
-    def test_function_no_return_type(self):
+    @staticmethod
+    def test_function_no_return_type():
         r = _parse("def f():\n    pass\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert fns[0].return_type is None
 
-    def test_class_with_no_body_methods(self):
+    @staticmethod
+    def test_class_with_no_body_methods():
         r = _parse("class Empty:\n    pass\n")
         cls = _children_by_type(r, NodeType.CLASS)[0]
         assert cls.children == ()
 
 
 class TestCodeBlocks:
-    def test_if_guard_captured(self):
+    @staticmethod
+    def test_if_guard_captured():
         src = 'if __name__ == "__main__":\n    main()\n'
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
@@ -391,7 +428,8 @@ class TestCodeBlocks:
         assert blocks[0].name.endswith("@L1")
         assert blocks[0].signature == 'if __name__ == "__main__":'
 
-    def test_bare_loop(self):
+    @staticmethod
+    def test_bare_loop():
         src = "for x in items:\n    process(x)\n"
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
@@ -399,7 +437,8 @@ class TestCodeBlocks:
         assert blocks[0].name.endswith("@L1")
         assert blocks[0].signature == "for x in items:"
 
-    def test_imports_captured_as_code_block(self):
+    @staticmethod
+    def test_imports_captured_as_code_block():
         src = "import os\nfrom sys import argv\n"
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
@@ -407,7 +446,8 @@ class TestCodeBlocks:
         assert "import os" in blocks[0].source
         assert "from sys import argv" in blocks[0].source
 
-    def test_imports_still_produce_import_nodes(self):
+    @staticmethod
+    def test_imports_still_produce_import_nodes():
         src = "import os\nfrom sys import argv\n"
         r = _parse(src)
         imports = _children_by_type(r, NodeType.IMPORT)
@@ -415,7 +455,8 @@ class TestCodeBlocks:
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
         assert len(blocks) == 1
 
-    def test_imports_split_by_definition(self):
+    @staticmethod
+    def test_imports_split_by_definition():
         src = "import os\n\ndef f():\n    pass\n\nfrom sys import path\n"
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
@@ -423,7 +464,8 @@ class TestCodeBlocks:
         assert "import os" in blocks[0].source
         assert "from sys import path" in blocks[1].source
 
-    def test_comments_attach_to_import_block(self):
+    @staticmethod
+    def test_comments_attach_to_import_block():
         src = "# setup\nimport os\n"
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
@@ -431,13 +473,15 @@ class TestCodeBlocks:
         assert "# setup" in blocks[0].source
         assert "import os" in blocks[0].source
 
-    def test_assignments_not_captured(self):
+    @staticmethod
+    def test_assignments_not_captured():
         src = "x = 1\ny: int = 2\n"
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
         assert len(blocks) == 0
 
-    def test_assignments_expand_adjacent_code_block(self):
+    @staticmethod
+    def test_assignments_expand_adjacent_code_block():
         src = (
             "# bootstrap\n"
             "from widget import Widget\n"
@@ -456,7 +500,8 @@ class TestCodeBlocks:
         assert blocks[0].span.line_end == 9
         assert blocks[0].source == src.rstrip()
 
-    def test_consecutive_grouped(self):
+    @staticmethod
+    def test_consecutive_grouped():
         src = "print('a')\nprint('b')\n"
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
@@ -464,13 +509,15 @@ class TestCodeBlocks:
         assert "print('a')" in blocks[0].source
         assert "print('b')" in blocks[0].source
 
-    def test_split_by_definitions(self):
+    @staticmethod
+    def test_split_by_definitions():
         src = "print('before')\n\ndef f():\n    pass\n\nprint('after')\n"
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
         assert len(blocks) == 2
 
-    def test_code_block_source_complete(self):
+    @staticmethod
+    def test_code_block_source_complete():
         src = "if True:\n    x = 1\n    y = 2\n"
         r = _parse(src)
         blocks = _children_by_type(r, NodeType.CODE_BLOCK)
@@ -484,7 +531,8 @@ class TestCodeBlocks:
 
 
 class TestNestedClasses:
-    def test_nested_class_is_child_of_outer(self):
+    @staticmethod
+    def test_nested_class_is_child_of_outer():
         r = _parse(
             "class Outer:\n"
             "    class Inner:\n"
@@ -500,13 +548,15 @@ class TestNestedClasses:
         assert len(inner) == 1
         assert inner[0].name == "Inner"
 
-    def test_nested_class_not_at_top_level(self):
+    @staticmethod
+    def test_nested_class_not_at_top_level():
         r = _parse("class Outer:\n    class Inner:\n        pass\n")
         top_classes = _children_by_type(r, NodeType.CLASS)
         names = [c.name for c in top_classes]
         assert "Inner" not in names
 
-    def test_nested_class_methods(self):
+    @staticmethod
+    def test_nested_class_methods():
         r = _parse("class Outer:\n    class Inner:\n        def do_stuff(self):\n            pass\n")
         outer = _children_by_type(r, NodeType.CLASS)[0]
         inner = [c for c in outer.children if c.node_type == NodeType.CLASS][0]
@@ -514,12 +564,14 @@ class TestNestedClasses:
         assert len(methods) == 1
         assert methods[0].name == "Inner.do_stuff"
 
-    def test_class_inside_function_not_top_level(self):
+    @staticmethod
+    def test_class_inside_function_not_top_level():
         r = _parse("def factory():\n    class Product:\n        pass\n    return Product\n")
         top_classes = _children_by_type(r, NodeType.CLASS)
         assert len(top_classes) == 0
 
-    def test_decorated_nested_class(self):
+    @staticmethod
+    def test_decorated_nested_class():
         r = _parse("class Outer:\n    @some_decorator\n    class Inner:\n        pass\n")
         outer = _children_by_type(r, NodeType.CLASS)[0]
         inner = [c for c in outer.children if c.node_type == NodeType.CLASS]
@@ -533,7 +585,8 @@ class TestNestedClasses:
 
 
 class TestPropertyDecorators:
-    def test_setter_has_unique_name(self):
+    @staticmethod
+    def test_setter_has_unique_name():
         r = _parse(
             "class Foo:\n"
             "    @property\n"
@@ -550,7 +603,8 @@ class TestPropertyDecorators:
         assert "Foo.bar" in names
         assert "Foo.bar.setter" in names
 
-    def test_deleter_has_unique_name(self):
+    @staticmethod
+    def test_deleter_has_unique_name():
         r = _parse(
             "class Foo:\n"
             "    @property\n"
@@ -572,7 +626,8 @@ class TestPropertyDecorators:
 
 
 class TestOverloads:
-    def test_overloaded_functions_have_unique_names(self):
+    @staticmethod
+    def test_overloaded_functions_have_unique_names():
         r = _parse(
             "from typing import overload\n"
             "@overload\n"
@@ -588,7 +643,8 @@ class TestOverloads:
         assert "process" in names
         assert any("[" in n for n in names)
 
-    def test_overloaded_name_contains_types(self):
+    @staticmethod
+    def test_overloaded_name_contains_types():
         r = _parse(
             "from typing import overload\n@overload\ndef process(x: int) -> int: ...\ndef process(x):\n    return x\n"
         )
@@ -604,7 +660,8 @@ class TestOverloads:
 
 
 class TestLocalAnnotations:
-    def test_bare_annotation_inside_function(self):
+    @staticmethod
+    def test_bare_annotation_inside_function():
         r = _parse("def func(obj):\n    obj: Foo\n    return obj\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         assert len(fns) == 1
@@ -613,7 +670,8 @@ class TestLocalAnnotations:
         assert props[0].name == "obj"
         assert props[0].type_annotation == "Foo"
 
-    def test_annotated_assignment_inside_function(self):
+    @staticmethod
+    def test_annotated_assignment_inside_function():
         r = _parse("def func():\n    x: int = 5\n    return x\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         props = [c for c in fns[0].children if c.node_type == NodeType.LOCAL_VAR]
@@ -622,19 +680,22 @@ class TestLocalAnnotations:
         assert props[0].type_annotation == "int"
         assert props[0].default_value == "5"
 
-    def test_unannotated_assignment_not_extracted(self):
+    @staticmethod
+    def test_unannotated_assignment_not_extracted():
         r = _parse("def func():\n    x = 5\n    return x\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         props = [c for c in fns[0].children if c.node_type == NodeType.LOCAL_VAR]
         assert len(props) == 0
 
-    def test_local_annotation_owner_is_function(self):
+    @staticmethod
+    def test_local_annotation_owner_is_function():
         r = _parse("def my_func(obj):\n    obj: Bar\n    pass\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         props = [c for c in fns[0].children if c.node_type == NodeType.LOCAL_VAR]
         assert props[0].name == "obj"
 
-    def test_call_arguments_and_assign_target(self):
+    @staticmethod
+    def test_call_arguments_and_assign_target():
         r = _parse("from functools import partial\ndef func():\n    make = partial(Foo)\n    obj = make()\n")
         from openjiuwen_search_base.codegraph.parser.models.core import CallNode
 
@@ -653,7 +714,8 @@ class TestLocalAnnotations:
 
 
 class TestLambdas:
-    def test_module_level_assigned(self):
+    @staticmethod
+    def test_module_level_assigned():
         r = _parse("f = lambda x: x\n")
         lambdas = [c for c in r.children if c.node_type == NodeType.FUNCTION and c.func_type == "lambda"]
         assert len(lambdas) == 1
@@ -661,7 +723,8 @@ class TestLambdas:
         assert lambdas[0].owner is None
         assert lambdas[0].parameters == (Parameter(name="x"),)
 
-    def test_nested_under_function(self):
+    @staticmethod
+    def test_nested_under_function():
         r = _parse("def outer():\n    h = lambda a, b: a + b\n")
         fns = _children_by_type(r, NodeType.FUNCTION)
         outer = next(f for f in fns if f.name == "outer")
@@ -670,34 +733,39 @@ class TestLambdas:
         assert lambdas[0].name.startswith("lambda(a, b)@L2@C")
         assert lambdas[0].owner == "outer"
 
-    def test_inline_no_assignment(self):
+    @staticmethod
+    def test_inline_no_assignment():
         r = _parse("(lambda a, b: a + b)(1, 2)\n")
         lambdas = [c for c in r.children if c.node_type == NodeType.FUNCTION and c.func_type == "lambda"]
         assert len(lambdas) == 1
         assert lambdas[0].name.startswith("lambda(a, b)@L1@C")
         assert lambdas[0].func_type == "lambda"
 
-    def test_same_line_column_differs(self):
+    @staticmethod
+    def test_same_line_column_differs():
         r = _parse("map(lambda x: x, filter(lambda y: y, xs))\n")
         lambdas = [c for c in r.children if c.node_type == NodeType.FUNCTION and c.func_type == "lambda"]
         assert len(lambdas) == 2
         names = {ln.name for ln in lambdas}
         assert names == {"lambda(x)@L1@C5", "lambda(y)@L1@C25"}
 
-    def test_star_and_kwargs_in_name(self):
+    @staticmethod
+    def test_star_and_kwargs_in_name():
         r = _parse("f = lambda x, y=1, *args, **kwargs: x\n")
         lambdas = [c for c in r.children if c.node_type == NodeType.FUNCTION and c.func_type == "lambda"]
         assert len(lambdas) == 1
         assert lambdas[0].name == "lambda(x, y, *args, **kwargs)@L1@C5"
         assert [p.name for p in lambdas[0].parameters] == ["x", "y", "*args", "**kwargs"]
 
-    def test_empty_params(self):
+    @staticmethod
+    def test_empty_params():
         r = _parse("f = lambda: None\n")
         lambdas = [c for c in r.children if c.node_type == NodeType.FUNCTION and c.func_type == "lambda"]
         assert len(lambdas) == 1
         assert lambdas[0].name == "lambda()@L1@C5"
 
-    def test_call_inside_lambda_context(self):
+    @staticmethod
+    def test_call_inside_lambda_context():
         r = _parse("def outer():\n    return lambda: foo()\n")
         from openjiuwen_search_base.codegraph.parser.models.core import CallNode
 
@@ -707,7 +775,8 @@ class TestLambdas:
         assert foo_calls[0].context is not None
         assert foo_calls[0].context.startswith("lambda()@L2@C")
 
-    def test_method_body_lambda(self):
+    @staticmethod
+    def test_method_body_lambda():
         r = _parse("class Foo:\n    def bar(self):\n        return lambda x: x\n")
         classes = _children_by_type(r, NodeType.CLASS)
         methods = [c for c in classes[0].children if c.node_type == NodeType.FUNCTION]

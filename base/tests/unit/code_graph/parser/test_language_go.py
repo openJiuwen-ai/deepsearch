@@ -32,17 +32,20 @@ def _parse(parser, code: str):
 
 
 class TestGoDetect:
-    def test_go_extension(self):
+    @staticmethod
+    def test_go_extension():
         assert detect_language("main.go") == "go"
 
-    def test_registry(self):
+    @staticmethod
+    def test_registry():
         reg = get_default_registry()
         assert reg.get("go") is not None
         assert isinstance(reg.get_hooks("go"), GoHooks)
 
 
 class TestGoPackageAndImports:
-    def test_package_and_import_variants(self, parser):
+    @staticmethod
+    def test_package_and_import_variants(parser):
         code = """
         package demo
         import (
@@ -62,7 +65,8 @@ class TestGoPackageAndImports:
 
 
 class TestGoTypes:
-    def test_struct_methods_embedding(self, parser):
+    @staticmethod
+    def test_struct_methods_embedding(parser):
         code = """
         package demo
         type Embedded struct { N int }
@@ -79,7 +83,8 @@ class TestGoTypes:
         methods = [c for c in fnode.children if isinstance(c, FunctionNode) and c.owner == "Point"]
         assert any(m.name == "Point.Area" for m in methods)
 
-    def test_interface_and_aliases(self, parser):
+    @staticmethod
+    def test_interface_and_aliases(parser):
         code = """
         package demo
         type Drawable interface {
@@ -100,7 +105,8 @@ class TestGoTypes:
 
 
 class TestGoFuncsCallsLocals:
-    def test_free_fn_calls_and_typed_var(self, parser):
+    @staticmethod
+    def test_free_fn_calls_and_typed_var(parser):
         code = """
         package demo
         import "fmt"
@@ -122,7 +128,8 @@ class TestGoFuncsCallsLocals:
         assert any(c.callee == "Area" and c.receiver == "p" for c in calls)
         assert any(c.callee == "Println" and c.receiver == "fmt" for c in calls)
 
-    def test_const_var(self, parser):
+    @staticmethod
+    def test_const_var(parser):
         code = """
         package demo
         const Max = 10
@@ -135,7 +142,8 @@ class TestGoFuncsCallsLocals:
 
 
 class TestGoHooks:
-    def test_extract_unwrap_modules(self):
+    @staticmethod
+    def test_extract_unwrap_modules():
         hooks = GoHooks()
         assert "Point" in hooks.extract_type_names("*Point")
         assert "Foo" in hooks.extract_type_names("[]pkg.Foo")
@@ -146,7 +154,8 @@ class TestGoHooks:
 
 
 class TestGoResolverSmoke:
-    def test_embedding_implements_and_calls(self, parser):
+    @staticmethod
+    def test_embedding_implements_and_calls(parser):
         code = """
         package demo
         type Reader interface {

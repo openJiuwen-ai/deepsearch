@@ -18,25 +18,32 @@ from openjiuwen_search_base.codegraph.parser.resolver.passes._utils import _stri
 
 
 class TestMatchNameScopeStripping:
-    def test_plain_match(self):
+    @staticmethod
+    def test_plain_match():
         assert match_name("cam@L15@D0", "cam")
 
-    def test_no_match(self):
+    @staticmethod
+    def test_no_match():
         assert not match_name("cam@L15@D0", "other")
 
-    def test_qualified_match(self):
+    @staticmethod
+    def test_qualified_match():
         assert match_name("MyClass.method@L10@D1", "method", "MyClass.method")
 
-    def test_overload_suffix_with_scope(self):
+    @staticmethod
+    def test_overload_suffix_with_scope():
         assert match_name("Foo.bar(int)@L5@D0", "bar", "Foo.bar")
 
-    def test_strip_scope_basic(self):
+    @staticmethod
+    def test_strip_scope_basic():
         assert _strip_scope("cam@L15@D0") == "cam"
 
-    def test_strip_scope_no_suffix(self):
+    @staticmethod
+    def test_strip_scope_no_suffix():
         assert _strip_scope("cam") == "cam"
 
-    def test_strip_scope_preserves_qualified(self):
+    @staticmethod
+    def test_strip_scope_preserves_qualified():
         assert _strip_scope("MyClass.method@L10@D1") == "MyClass.method"
 
 
@@ -47,12 +54,14 @@ class TestMatchNameScopeStripping:
 
 class TestCppLocalVars:
     @pytest.fixture
-    def parser(self):
+    @staticmethod
+    def parser():
         from openjiuwen_search_base.codegraph.parser.languages.c.cpp_parse import CppParser
 
         return CppParser()
 
-    def _parse(self, parser, code: bytes):
+    @staticmethod
+    def _parse(parser, code: bytes):
         return asyncio.run(parser.parse(Path("test.cpp"), code))
 
     def test_basic_local_extraction(self, parser):
@@ -136,12 +145,14 @@ void foo() {
 
 class TestJavaLocalVars:
     @pytest.fixture
-    def parser(self):
+    @staticmethod
+    def parser():
         from openjiuwen_search_base.codegraph.parser.languages.java.parse import JavaParser
 
         return JavaParser()
 
-    def _parse(self, parser, code: bytes):
+    @staticmethod
+    def _parse(parser, code: bytes):
         return asyncio.run(parser.parse(Path("Test.java"), code))
 
     def test_basic_extraction(self, parser):
@@ -207,12 +218,14 @@ public class Game {
 
 class TestPythonLocalVars:
     @pytest.fixture
-    def parser(self):
+    @staticmethod
+    def parser():
         from openjiuwen_search_base.codegraph.parser.languages.python.parse import PythonParser
 
         return PythonParser()
 
-    def _parse(self, parser, code: bytes):
+    @staticmethod
+    def _parse(parser, code: bytes):
         return asyncio.run(parser.parse(Path("test.py"), code))
 
     def test_nested_block_extraction(self, parser):
@@ -251,12 +264,14 @@ class TestPythonLocalVars:
 
 class TestTypeScriptLocalVars:
     @pytest.fixture
-    def parser(self):
+    @staticmethod
+    def parser():
         from openjiuwen_search_base.codegraph.parser.languages.typescript.parse import TypeScriptParser
 
         return TypeScriptParser()
 
-    def _parse(self, parser, code: bytes):
+    @staticmethod
+    def _parse(parser, code: bytes):
         return asyncio.run(parser.parse(Path("test.ts"), code))
 
     def test_nested_blocks(self, parser):
@@ -296,7 +311,8 @@ function process() {
 class TestIndirectResolutionWithLocalVars:
     """Verify that cam[i].renderFrame() resolves via LocalVarNode type info."""
 
-    def test_vector_local_resolves(self):
+    @staticmethod
+    def test_vector_local_resolves():
         from openjiuwen_search_base.codegraph.parser.languages.c.cpp_parse import CppParser
         from openjiuwen_search_base.codegraph.parser.languages.c.hooks import CppHooks
         from openjiuwen_search_base.codegraph.parser.resolver.indexes import ClassMethodIndex, ImportIndex, SymbolIndex

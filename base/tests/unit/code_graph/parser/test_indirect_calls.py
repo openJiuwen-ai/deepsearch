@@ -22,37 +22,43 @@ def _node_id(fp: str, node: BaseNode) -> str:
 
 
 class TestStripReceiver:
-    def test_simple_subscript(self):
+    @staticmethod
+    def test_simple_subscript():
         base, depth, deref = _strip_receiver("objects[i]")
         assert base == "objects"
         assert depth == 1
         assert deref is False
 
-    def test_double_subscript(self):
+    @staticmethod
+    def test_double_subscript():
         base, depth, deref = _strip_receiver("objects[f][objIndex]")
         assert base == "objects"
         assert depth == 2
         assert deref is False
 
-    def test_self_dot_subscript(self):
+    @staticmethod
+    def test_self_dot_subscript():
         base, depth, deref = _strip_receiver("self.particles[0]")
         assert base == "self.particles"
         assert depth == 1
         assert deref is False
 
-    def test_this_arrow_subscript(self):
+    @staticmethod
+    def test_this_arrow_subscript():
         base, depth, deref = _strip_receiver("this->objects[i]")
         assert base == "this->objects"
         assert depth == 1
         assert deref is False
 
-    def test_deref_prefix(self):
+    @staticmethod
+    def test_deref_prefix():
         base, depth, deref = _strip_receiver("*ptr")
         assert base == "ptr"
         assert depth == 0
         assert deref is True
 
-    def test_no_subscript_no_deref(self):
+    @staticmethod
+    def test_no_subscript_no_deref():
         base, depth, deref = _strip_receiver("obj")
         assert base == "obj"
         assert depth == 0
@@ -61,86 +67,106 @@ class TestStripReceiver:
 
 class TestCppUnwrap:
     @pytest.fixture
-    def hooks(self):
+    @staticmethod
+    def hooks():
         return CppHooks()
 
-    def test_vector_shared_ptr(self, hooks):
+    @staticmethod
+    def test_vector_shared_ptr(hooks):
         result = hooks.unwrap_receiver_type("std::vector<std::shared_ptr<SceneObject>>", 1)
         assert result == "SceneObject"
 
-    def test_nested_vector(self, hooks):
+    @staticmethod
+    def test_nested_vector(hooks):
         result = hooks.unwrap_receiver_type("std::vector<std::vector<std::shared_ptr<SceneObject>>>", 2)
         assert result == "SceneObject"
 
-    def test_raw_pointer(self, hooks):
+    @staticmethod
+    def test_raw_pointer(hooks):
         result = hooks.unwrap_receiver_type("SceneObject*", 0)
         assert result == "SceneObject"
 
-    def test_map_subscript(self, hooks):
+    @staticmethod
+    def test_map_subscript(hooks):
         result = hooks.unwrap_receiver_type("std::map<std::string, Material>", 1)
         assert result == "Material"
 
-    def test_primitive_returns_none(self, hooks):
+    @staticmethod
+    def test_primitive_returns_none(hooks):
         result = hooks.unwrap_receiver_type("int*", 0)
         assert result is None
 
-    def test_unique_ptr(self, hooks):
+    @staticmethod
+    def test_unique_ptr(hooks):
         result = hooks.unwrap_receiver_type("std::unique_ptr<Widget>", 0)
         assert result == "Widget"
 
-    def test_const_vector(self, hooks):
+    @staticmethod
+    def test_const_vector(hooks):
         result = hooks.unwrap_receiver_type("const std::vector<Enemy>", 1)
         assert result == "Enemy"
 
 
 class TestJavaUnwrap:
     @pytest.fixture
-    def hooks(self):
+    @staticmethod
+    def hooks():
         return JavaHooks()
 
-    def test_array_subscript(self, hooks):
+    @staticmethod
+    def test_array_subscript(hooks):
         result = hooks.unwrap_receiver_type("Enemy[]", 1)
         assert result == "Enemy"
 
-    def test_2d_array(self, hooks):
+    @staticmethod
+    def test_2d_array(hooks):
         result = hooks.unwrap_receiver_type("SceneObject[][]", 2)
         assert result == "SceneObject"
 
-    def test_primitive_array_returns_none(self, hooks):
+    @staticmethod
+    def test_primitive_array_returns_none(hooks):
         result = hooks.unwrap_receiver_type("int[]", 1)
         assert result is None
 
-    def test_non_array_returns_none(self, hooks):
+    @staticmethod
+    def test_non_array_returns_none(hooks):
         result = hooks.unwrap_receiver_type("Enemy", 1)
         assert result is None
 
 
 class TestPythonUnwrap:
     @pytest.fixture
-    def hooks(self):
+    @staticmethod
+    def hooks():
         return PythonHooks()
 
-    def test_list_subscript(self, hooks):
+    @staticmethod
+    def test_list_subscript(hooks):
         result = hooks.unwrap_receiver_type("list[Particle]", 1)
         assert result == "Particle"
 
-    def test_dict_subscript(self, hooks):
+    @staticmethod
+    def test_dict_subscript(hooks):
         result = hooks.unwrap_receiver_type("dict[str, Enemy]", 1)
         assert result == "Enemy"
 
-    def test_tuple_subscript(self, hooks):
+    @staticmethod
+    def test_tuple_subscript(hooks):
         result = hooks.unwrap_receiver_type("tuple[Node, ...]", 1)
         assert result == "Node"
 
-    def test_nested_list(self, hooks):
+    @staticmethod
+    def test_nested_list(hooks):
         result = hooks.unwrap_receiver_type("list[list[Foo]]", 2)
         assert result == "Foo"
 
-    def test_no_generic_returns_none(self, hooks):
+    @staticmethod
+    def test_no_generic_returns_none(hooks):
         result = hooks.unwrap_receiver_type("int", 1)
         assert result is None
 
-    def test_typing_List(self, hooks):
+    @staticmethod
+    def test_typing_List(hooks):
         result = hooks.unwrap_receiver_type("List[Widget]", 1)
         assert result == "Widget"
 
@@ -148,7 +174,8 @@ class TestPythonUnwrap:
 class TestIndirectCallsResolution:
     """End-to-end test using a real C++ parser."""
 
-    def test_resolve_subscripted_method_call(self):
+    @staticmethod
+    def test_resolve_subscripted_method_call():
         cpp_parser = CppParser()
         code = b"""
 class SceneObject {

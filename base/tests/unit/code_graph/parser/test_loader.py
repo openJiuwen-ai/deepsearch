@@ -12,7 +12,8 @@ from openjiuwen_search_base.codegraph.parser.languages import LanguageRegistry, 
 
 
 class TestParseFile:
-    def test_unknown_extension_raises(self):
+    @staticmethod
+    def test_unknown_extension_raises():
         with tempfile.NamedTemporaryFile(suffix=".xyz", mode="w", delete=False) as f:
             f.write("hello")
             path = Path(f.name)
@@ -22,7 +23,8 @@ class TestParseFile:
         finally:
             path.unlink()
 
-    def test_explicit_language_override(self):
+    @staticmethod
+    def test_explicit_language_override():
         with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
             f.write("# Heading\ntext\n")
             path = Path(f.name)
@@ -33,7 +35,8 @@ class TestParseFile:
         finally:
             path.unlink()
 
-    def test_unregistered_language_raises(self):
+    @staticmethod
+    def test_unregistered_language_raises():
         with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
             f.write("x")
             path = Path(f.name)
@@ -45,7 +48,8 @@ class TestParseFile:
 
 
 class TestParseFiles:
-    def test_multiple_files(self):
+    @staticmethod
+    def test_multiple_files():
         paths = []
         for i in range(3):
             f = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
@@ -61,7 +65,8 @@ class TestParseFiles:
             for p in paths:
                 p.unlink()
 
-    def test_preserves_order(self):
+    @staticmethod
+    def test_preserves_order():
         paths = []
         for name in ["aaa", "zzz", "mmm"]:
             f = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False, prefix=name)
@@ -78,18 +83,21 @@ class TestParseFiles:
 
 
 class TestLanguageRegistry:
-    def test_supports_python(self):
+    @staticmethod
+    def test_supports_python():
         register_builtins()
         registry = get_default_registry()
         assert registry.supports("foo.py")
         assert registry.supports("README.md")
 
-    def test_not_supports_unknown(self):
+    @staticmethod
+    def test_not_supports_unknown():
         register_builtins()
         registry = get_default_registry()
         assert not registry.supports("file.xyz")
 
-    def test_language_for_file(self):
+    @staticmethod
+    def test_language_for_file():
         register_builtins()
         registry = get_default_registry()
         assert registry.language_for_file("foo.py") == "python"
@@ -97,11 +105,13 @@ class TestLanguageRegistry:
         assert registry.language_for_file("Makefile") == "makefile"
         assert registry.language_for_file("unknown.xyz") is None
 
-    def test_get_unregistered_returns_none(self):
+    @staticmethod
+    def test_get_unregistered_returns_none():
         registry = LanguageRegistry()
         assert registry.get("nonexistent") is None
 
-    def test_get_caches_instance(self):
+    @staticmethod
+    def test_get_caches_instance():
         register_builtins()
         registry = get_default_registry()
         p1 = registry.get("python")

@@ -39,12 +39,14 @@ def _functions(file_node: FileNode):
 
 
 class TestPythonParameters:
-    def test_untyped(self):
+    @staticmethod
+    def test_untyped():
         r = _parse_py("def f(a, b):\n    pass\n")
         fn = _functions(r)[0]
         assert fn.parameters == (Parameter(name="a"), Parameter(name="b"))
 
-    def test_typed(self):
+    @staticmethod
+    def test_typed():
         r = _parse_py("def f(x: int, y: str):\n    pass\n")
         fn = _functions(r)[0]
         assert fn.parameters == (
@@ -52,22 +54,26 @@ class TestPythonParameters:
             Parameter(name="y", type_annotation="str"),
         )
 
-    def test_default_value(self):
+    @staticmethod
+    def test_default_value():
         r = _parse_py("def f(x: int = 5):\n    pass\n")
         fn = _functions(r)[0]
         assert fn.parameters == (Parameter(name="x", type_annotation="int", default="5"),)
 
-    def test_untyped_default(self):
+    @staticmethod
+    def test_untyped_default():
         r = _parse_py("def f(x=10):\n    pass\n")
         fn = _functions(r)[0]
         assert fn.parameters == (Parameter(name="x", default="10"),)
 
-    def test_complex_annotation(self):
+    @staticmethod
+    def test_complex_annotation():
         r = _parse_py("def f(items: list[str]):\n    pass\n")
         fn = _functions(r)[0]
         assert fn.parameters[0].type_annotation == "list[str]"
 
-    def test_splat_params(self):
+    @staticmethod
+    def test_splat_params():
         r = _parse_py("def f(*args, **kwargs):\n    pass\n")
         fn = _functions(r)[0]
         assert fn.parameters == (
@@ -75,7 +81,8 @@ class TestPythonParameters:
             Parameter(name="**kwargs"),
         )
 
-    def test_signature_includes_types(self):
+    @staticmethod
+    def test_signature_includes_types():
         r = _parse_py("def f(x: int, y: str = 'hi'):\n    pass\n")
         fn = _functions(r)[0]
         sig = fn.signature
@@ -89,7 +96,8 @@ class TestPythonParameters:
 
 
 class TestTypeScriptParameters:
-    def test_typed_params(self):
+    @staticmethod
+    def test_typed_params():
         r = _parse_ts("function f(x: number, y: string) { }")
         fn = _functions(r)[0]
         assert fn.parameters[0].name == "x"
@@ -97,14 +105,16 @@ class TestTypeScriptParameters:
         assert fn.parameters[1].name == "y"
         assert fn.parameters[1].type_annotation == "string"
 
-    def test_default_value(self):
+    @staticmethod
+    def test_default_value():
         r = _parse_ts("function f(x: number = 5) { }")
         fn = _functions(r)[0]
         assert fn.parameters[0].name == "x"
         assert fn.parameters[0].type_annotation == "number"
         assert fn.parameters[0].default == "5"
 
-    def test_untyped(self):
+    @staticmethod
+    def test_untyped():
         r = _parse_ts("function f(a, b) { }")
         fn = _functions(r)[0]
         assert fn.parameters[0].name == "a"

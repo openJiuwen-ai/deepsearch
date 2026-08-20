@@ -36,4 +36,5 @@ class SignatureProvider(Protocol):
     """Nodes that can produce a one-line signature for chunking/embedding."""
 
     @property
-    def signature(self) -> str: ...
+    def signature(self) -> str:
+        ...

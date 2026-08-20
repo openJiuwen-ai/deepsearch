@@ -170,7 +170,8 @@ def _extract_classes(root: Node) -> tuple[list[ClassNode], list[InterfaceNode], 
 
     for name_node in name_nodes:
         class_node = name_node.parent
-        assert class_node is not None
+        if class_node is None:
+            raise RuntimeError("Assertion error: class_node should not be None")
         if _is_inside_class(class_node) or _is_inside_function(class_node):
             continue
         name = _text(name_node)
@@ -362,7 +363,8 @@ def _extract_functions(root: Node) -> list[FunctionNode]:
     functions: list[FunctionNode] = []
     for name_node in _captures("functions", root).get("name", []):
         func_node = name_node.parent
-        assert func_node is not None
+        if func_node is None:
+            raise RuntimeError("Assertion error: func_node should not be None")
         if _is_inside_class(func_node) or _is_inside_function(func_node):
             continue
         functions.append(_build_function(func_node))
@@ -396,7 +398,8 @@ def _build_function(
     enclosing_func: str | None = None,
 ) -> FunctionNode:
     name_node = func_node.child_by_field_name("name")
-    assert name_node is not None
+    if name_node is None:
+        raise RuntimeError("Assertion error: name_node should not be None")
     params_node = func_node.child_by_field_name("parameters")
     body_node = func_node.child_by_field_name("body")
     return_type_node = func_node.child_by_field_name("return_type")

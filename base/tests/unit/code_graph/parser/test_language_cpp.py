@@ -31,7 +31,8 @@ def _parse(parser, code: str):
 
 
 class TestCppClasses:
-    def test_basic_class(self, parser):
+    @staticmethod
+    def test_basic_class(parser):
         code = """
         class Widget {
         public:
@@ -45,7 +46,8 @@ class TestCppClasses:
         assert len(classes) == 1
         assert classes[0].name == "Widget"
 
-    def test_inheritance(self, parser):
+    @staticmethod
+    def test_inheritance(parser):
         code = """
         class Base {};
         class Derived : public Base {
@@ -57,7 +59,8 @@ class TestCppClasses:
         derived = next(c for c in classes if c.name == "Derived")
         assert "Base" in derived.bases
 
-    def test_multiple_inheritance(self, parser):
+    @staticmethod
+    def test_multiple_inheritance(parser):
         code = """
         class A {};
         class B {};
@@ -71,7 +74,8 @@ class TestCppClasses:
         assert "A" in c_cls.bases
         assert "B" in c_cls.bases
 
-    def test_class_members(self, parser):
+    @staticmethod
+    def test_class_members(parser):
         code = """
         class Foo {
         public:
@@ -88,7 +92,8 @@ class TestCppClasses:
         assert methods[0].owner == "Foo"
         assert len(fields) == 1
 
-    def test_access_specifiers(self, parser):
+    @staticmethod
+    def test_access_specifiers(parser):
         code = """
         class Foo {
         public:
@@ -107,7 +112,8 @@ class TestCppClasses:
 
 
 class TestCppConstructors:
-    def test_constructor(self, parser):
+    @staticmethod
+    def test_constructor(parser):
         code = """
         class Foo {
         public:
@@ -120,7 +126,8 @@ class TestCppConstructors:
         assert len(ctors) == 1
         assert ctors[0].name == "Foo.<init>"
 
-    def test_overloaded_constructors(self, parser):
+    @staticmethod
+    def test_overloaded_constructors(parser):
         code = """
         class Foo {
         public:
@@ -136,7 +143,8 @@ class TestCppConstructors:
         names = {c.name for c in ctors}
         assert len(names) == 3
 
-    def test_destructor(self, parser):
+    @staticmethod
+    def test_destructor(parser):
         code = """
         class Foo {
         public:
@@ -151,7 +159,8 @@ class TestCppConstructors:
 
 
 class TestCppNamespaces:
-    def test_basic_namespace(self, parser):
+    @staticmethod
+    def test_basic_namespace(parser):
         code = """
         namespace mylib {
             void helper() {}
@@ -164,7 +173,8 @@ class TestCppNamespaces:
         funcs = [c for c in modules[0].children if isinstance(c, FunctionNode)]
         assert len(funcs) == 1
 
-    def test_nested_namespace(self, parser):
+    @staticmethod
+    def test_nested_namespace(parser):
         code = """
         namespace outer {
             namespace inner {
@@ -181,7 +191,8 @@ class TestCppNamespaces:
 
 
 class TestCppTemplates:
-    def test_template_class(self, parser):
+    @staticmethod
+    def test_template_class(parser):
         code = """
         template<typename T>
         class Container {
@@ -194,7 +205,8 @@ class TestCppTemplates:
         assert len(classes) == 1
         assert classes[0].name == "Container"
 
-    def test_template_function(self, parser):
+    @staticmethod
+    def test_template_function(parser):
         code = """
         template<typename T>
         T identity(T x) { return x; }
@@ -206,7 +218,8 @@ class TestCppTemplates:
 
 
 class TestCppLambdas:
-    def test_lambda_assignment(self, parser):
+    @staticmethod
+    def test_lambda_assignment(parser):
         code = "auto helper = [](int x) -> int { return x * 2; };"
         result = _parse(parser, code)
         funcs = [c for c in result.children if isinstance(c, FunctionNode)]
@@ -216,7 +229,8 @@ class TestCppLambdas:
 
 
 class TestCppCalls:
-    def test_member_call(self, parser):
+    @staticmethod
+    def test_member_call(parser):
         code = """
         class Foo {
         public:
@@ -231,7 +245,8 @@ class TestCppCalls:
         assert calls[0].callee == "doSomething"
         assert calls[0].receiver == "obj"
 
-    def test_scoped_call(self, parser):
+    @staticmethod
+    def test_scoped_call(parser):
         code = """
         void func() {
             std::sort(v.begin(), v.end());
@@ -245,7 +260,8 @@ class TestCppCalls:
 
 
 class TestCppUsingAlias:
-    def test_using_alias(self, parser):
+    @staticmethod
+    def test_using_alias(parser):
         code = "using Vec3 = std::array<double, 3>;"
         result = _parse(parser, code)
         aliases = [c for c in result.children if isinstance(c, TypeAliasNode)]
@@ -254,7 +270,8 @@ class TestCppUsingAlias:
 
 
 class TestCppEnumClass:
-    def test_enum_class(self, parser):
+    @staticmethod
+    def test_enum_class(parser):
         code = "enum class Direction { North, South, East, West };"
         result = _parse(parser, code)
         enums = [c for c in result.children if isinstance(c, EnumNode)]
@@ -264,12 +281,14 @@ class TestCppEnumClass:
 
 
 class TestCppFileNode:
-    def test_language(self, parser):
+    @staticmethod
+    def test_language(parser):
         result = _parse(parser, "int x;")
         assert result.language == "cpp"
         assert result.node_type == NodeType.FILE
 
-    def test_struct_in_cpp(self, parser):
+    @staticmethod
+    def test_struct_in_cpp(parser):
         code = """
         struct Point {
             double x;
@@ -283,7 +302,8 @@ class TestCppFileNode:
 
 
 class TestCppVirtualOverride:
-    def test_virtual_method(self, parser):
+    @staticmethod
+    def test_virtual_method(parser):
         code = """
         class Base {
         public:
@@ -297,7 +317,8 @@ class TestCppVirtualOverride:
 
 
 class TestCppOutOfClass:
-    def test_out_of_class_method(self, parser):
+    @staticmethod
+    def test_out_of_class_method(parser):
         code = """
         class MyCamera {
         public:
@@ -320,7 +341,8 @@ class TestCppOutOfClass:
         assert render.owner == "MyCamera"
         assert render.func_type == "method"
 
-    def test_out_of_class_call_context(self, parser):
+    @staticmethod
+    def test_out_of_class_call_context(parser):
         code = """
         class Foo {
         public:
@@ -337,7 +359,8 @@ class TestCppOutOfClass:
         assert len(helper_calls) == 1
         assert helper_calls[0].context == "bar"
 
-    def test_out_of_class_destructor(self, parser):
+    @staticmethod
+    def test_out_of_class_destructor(parser):
         code = """
         class Foo {
         public:

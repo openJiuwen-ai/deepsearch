@@ -36,30 +36,35 @@ def _child_by_name(file_node: FileNode, name: str):
 
 
 class TestClasses:
-    def test_basic_class(self):
+    @staticmethod
+    def test_basic_class():
         r = _parse("public class Foo { }")
         cls = _children_by_type(r, NodeType.CLASS)
         assert len(cls) == 1
         assert cls[0].name == "Foo"
 
-    def test_class_extends(self):
+    @staticmethod
+    def test_class_extends():
         r = _parse("class Dog extends Animal { }")
         cls = _children_by_type(r, NodeType.CLASS)[0]
         assert "Animal" in cls.bases
 
-    def test_class_implements(self):
+    @staticmethod
+    def test_class_implements():
         r = _parse("class Service extends Base implements IService, Runnable { }")
         cls = _children_by_type(r, NodeType.CLASS)[0]
         assert "Base" in cls.bases
         assert "IService" in cls.bases
         assert "Runnable" in cls.bases
 
-    def test_generic_implements(self):
+    @staticmethod
+    def test_generic_implements():
         r = _parse("class Box implements Comparable<Box> { }")
         cls = _children_by_type(r, NodeType.CLASS)[0]
         assert any("Comparable" in b for b in cls.bases)
 
-    def test_class_methods(self):
+    @staticmethod
+    def test_class_methods():
         r = _parse("""
 public class Greeter {
     public String greet(String name) { return name; }
@@ -73,7 +78,8 @@ public class Greeter {
         assert methods[0].func_type == "method"
         assert methods[0].owner == "Greeter"
 
-    def test_class_fields(self):
+    @staticmethod
+    def test_class_fields():
         r = _parse("""
 public class Config {
     private String name;
@@ -89,7 +95,8 @@ public class Config {
         assert props[1].name == "count"
         assert props[1].default_value == "0"
 
-    def test_constructor(self):
+    @staticmethod
+    def test_constructor():
         r = _parse("""
 public class Foo {
     public Foo(int x, String y) { }
@@ -104,7 +111,8 @@ public class Foo {
         assert methods[0].parameters[0].name == "x"
         assert methods[0].parameters[0].type_annotation == "int"
 
-    def test_annotations(self):
+    @staticmethod
+    def test_annotations():
         r = _parse("""
 public class Foo {
     @Override
@@ -115,7 +123,8 @@ public class Foo {
         methods = [c for c in cls.children if c.node_type == NodeType.FUNCTION]
         assert "@Override" in methods[0].decorators
 
-    def test_inner_class(self):
+    @staticmethod
+    def test_inner_class():
         r = _parse("""
 public class Outer {
     public class Inner {
@@ -128,7 +137,8 @@ public class Outer {
         assert len(inner_classes) == 1
         assert inner_classes[0].name == "Inner"
 
-    def test_static_initializer(self):
+    @staticmethod
+    def test_static_initializer():
         r = _parse("""
 public class Foo {
     static { System.out.println("init"); }
@@ -139,7 +149,8 @@ public class Foo {
         assert len(blocks) == 1
         assert blocks[0].name == "Foo.<clinit>"
 
-    def test_instance_initializer(self):
+    @staticmethod
+    def test_instance_initializer():
         r = _parse("""
 public class Foo {
     { System.out.println("instance init"); }
@@ -150,13 +161,15 @@ public class Foo {
         assert len(blocks) == 1
         assert blocks[0].name == "Foo.<init-block>"
 
-    def test_abstract_class(self):
+    @staticmethod
+    def test_abstract_class():
         r = _parse("public abstract class Base { abstract void doWork(); }")
         cls = _children_by_type(r, NodeType.CLASS)
         assert len(cls) == 1
         assert cls[0].name == "Base"
 
-    def test_multiple_variable_declarators(self):
+    @staticmethod
+    def test_multiple_variable_declarators():
         r = _parse("""
 public class Foo {
     int x = 1, y = 2;
@@ -175,13 +188,15 @@ public class Foo {
 
 
 class TestInterfaces:
-    def test_basic_interface(self):
+    @staticmethod
+    def test_basic_interface():
         r = _parse("interface Foo { void bar(); }")
         ifaces = _children_by_type(r, NodeType.INTERFACE)
         assert len(ifaces) == 1
         assert ifaces[0].name == "Foo"
 
-    def test_interface_methods(self):
+    @staticmethod
+    def test_interface_methods():
         r = _parse("""
 interface Reader {
     int read(byte[] buf);
@@ -194,12 +209,14 @@ interface Reader {
         assert methods[0].name == "Reader.read"
         assert methods[0].func_type == "method"
 
-    def test_interface_extends(self):
+    @staticmethod
+    def test_interface_extends():
         r = _parse("interface B extends A { }")
         iface = _children_by_type(r, NodeType.INTERFACE)[0]
         assert "A" in iface.bases
 
-    def test_interface_constants(self):
+    @staticmethod
+    def test_interface_constants():
         r = _parse("""
 interface Constants {
     int MAX = 100;
@@ -212,7 +229,8 @@ interface Constants {
         assert props[0].name == "MAX"
         assert props[0].type_annotation == "int"
 
-    def test_interface_default_method(self):
+    @staticmethod
+    def test_interface_default_method():
         r = _parse("""
 interface Greeter {
     default String greet(String name) { return "Hello " + name; }
@@ -230,14 +248,16 @@ interface Greeter {
 
 
 class TestEnums:
-    def test_basic_enum(self):
+    @staticmethod
+    def test_basic_enum():
         r = _parse("enum Color { RED, GREEN, BLUE }")
         enums = _children_by_type(r, NodeType.ENUM)
         assert len(enums) == 1
         assert enums[0].name == "Color"
         assert set(enums[0].members) == {"RED", "GREEN", "BLUE"}
 
-    def test_enum_with_methods(self):
+    @staticmethod
+    def test_enum_with_methods():
         r = _parse("""
 enum Status {
     ACTIVE, INACTIVE;
@@ -257,7 +277,8 @@ enum Status {
 
 
 class TestRecords:
-    def test_basic_record(self):
+    @staticmethod
+    def test_basic_record():
         r = _parse("record Point(int x, int y) { }")
         structs = _children_by_type(r, NodeType.STRUCT)
         assert len(structs) == 1
@@ -266,7 +287,8 @@ class TestRecords:
         assert structs[0].fields[0].name == "x"
         assert structs[0].fields[0].type_annotation == "int"
 
-    def test_record_with_methods(self):
+    @staticmethod
+    def test_record_with_methods():
         r = _parse("""
 record Vec(double x, double y) {
     public double length() { return Math.sqrt(x*x + y*y); }
@@ -283,7 +305,8 @@ record Vec(double x, double y) {
 
 
 class TestAnnotationTypes:
-    def test_annotation_type(self):
+    @staticmethod
+    def test_annotation_type():
         r = _parse("""
 @interface MyAnnotation {
     String value();
@@ -306,28 +329,32 @@ class TestAnnotationTypes:
 
 
 class TestImports:
-    def test_basic_import(self):
+    @staticmethod
+    def test_basic_import():
         r = _parse("import java.util.List;")
         imports = _children_by_type(r, NodeType.IMPORT)
         assert len(imports) == 1
         assert imports[0].module == "java.util"
         assert imports[0].names == ("List",)
 
-    def test_wildcard_import(self):
+    @staticmethod
+    def test_wildcard_import():
         r = _parse("import java.util.*;")
         imports = _children_by_type(r, NodeType.IMPORT)
         assert len(imports) == 1
         assert imports[0].is_wildcard
         assert imports[0].module == "java.util"
 
-    def test_static_import(self):
+    @staticmethod
+    def test_static_import():
         r = _parse("import static java.lang.Math.PI;")
         imports = _children_by_type(r, NodeType.IMPORT)
         assert len(imports) == 1
         assert "static" in imports[0].name
         assert imports[0].names == ("PI",)
 
-    def test_static_wildcard_import(self):
+    @staticmethod
+    def test_static_wildcard_import():
         r = _parse("import static java.util.Collections.*;")
         imports = _children_by_type(r, NodeType.IMPORT)
         assert len(imports) == 1
@@ -341,7 +368,8 @@ class TestImports:
 
 
 class TestJavadoc:
-    def test_class_javadoc(self):
+    @staticmethod
+    def test_class_javadoc():
         r = _parse("""
 /**
  * A sample class.
@@ -353,7 +381,8 @@ public class Foo { }
         assert cls.docstring is not None
         assert "A sample class." in cls.docstring
 
-    def test_method_javadoc(self):
+    @staticmethod
+    def test_method_javadoc():
         r = _parse("""
 public class Foo {
     /**
@@ -370,7 +399,8 @@ public class Foo {
         assert "Does something." in methods[0].docstring
         assert "@param x" in methods[0].docstring
 
-    def test_field_javadoc(self):
+    @staticmethod
+    def test_field_javadoc():
         r = _parse("""
 public class Foo {
     /** The name. */
@@ -382,7 +412,8 @@ public class Foo {
         assert props[0].docstring is not None
         assert "The name." in props[0].docstring
 
-    def test_no_javadoc(self):
+    @staticmethod
+    def test_no_javadoc():
         r = _parse("""
 public class Foo {
     // regular comment
@@ -393,7 +424,8 @@ public class Foo {
         props = [c for c in cls.children if c.node_type == NodeType.PROPERTY]
         assert props[0].docstring is None
 
-    def test_block_comment_not_javadoc(self):
+    @staticmethod
+    def test_block_comment_not_javadoc():
         r = _parse("""
 public class Foo {
     /* regular block comment */
@@ -411,7 +443,8 @@ public class Foo {
 
 
 class TestCalls:
-    def test_method_invocation(self):
+    @staticmethod
+    def test_method_invocation():
         r = _parse("""
 public class Foo {
     void bar() { System.out.println("hello"); }
@@ -420,7 +453,8 @@ public class Foo {
         calls = _children_by_type(r, NodeType.CALL)
         assert any(c.callee == "println" for c in calls)
 
-    def test_constructor_call(self):
+    @staticmethod
+    def test_constructor_call():
         r = _parse("""
 public class Foo {
     void bar() { Foo f = new Foo(); }
@@ -429,7 +463,8 @@ public class Foo {
         calls = _children_by_type(r, NodeType.CALL)
         assert any(c.callee == "Foo" for c in calls)
 
-    def test_method_reference(self):
+    @staticmethod
+    def test_method_reference():
         r = _parse("""
 public class Foo {
     void bar() { list.stream().map(String::valueOf); }
@@ -445,7 +480,8 @@ public class Foo {
 
 
 class TestParameters:
-    def test_basic_params(self):
+    @staticmethod
+    def test_basic_params():
         r = _parse("""
 public class Foo {
     public void method(int x, String y) { }
@@ -459,7 +495,8 @@ public class Foo {
         assert m.parameters[1].name == "y"
         assert m.parameters[1].type_annotation == "String"
 
-    def test_varargs(self):
+    @staticmethod
+    def test_varargs():
         r = _parse("""
 public class Foo {
     public void method(String... args) { }
@@ -470,7 +507,8 @@ public class Foo {
         assert len(m.parameters) == 1
         assert "args" in m.parameters[0].name
 
-    def test_generic_param(self):
+    @staticmethod
+    def test_generic_param():
         r = _parse("""
 public class Foo {
     public <T> void method(List<T> items) { }
@@ -488,7 +526,8 @@ public class Foo {
 
 
 class TestReturnTypes:
-    def test_void_return(self):
+    @staticmethod
+    def test_void_return():
         r = _parse("""
 public class Foo {
     public void method() { }
@@ -498,7 +537,8 @@ public class Foo {
         m = [c for c in cls.children if c.node_type == NodeType.FUNCTION][0]
         assert m.return_type == "void"
 
-    def test_generic_return(self):
+    @staticmethod
+    def test_generic_return():
         r = _parse("""
 public class Foo {
     public List<String> getItems() { return null; }
@@ -516,6 +556,7 @@ public class Foo {
 
 
 class TestFileMeta:
-    def test_language_is_java(self):
+    @staticmethod
+    def test_language_is_java():
         r = _parse("class X { }")
         assert r.language == "java"

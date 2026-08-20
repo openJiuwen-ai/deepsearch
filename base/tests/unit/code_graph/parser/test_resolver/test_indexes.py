@@ -16,7 +16,8 @@ from .conftest import (
 class TestSymbolIndex:
     """Tests for SymbolIndex."""
 
-    def test_find_class_by_name(self):
+    @staticmethod
+    def test_find_class_by_name():
         cls = make_class_node("MyClass", line=5)
         fnode = make_file_node(children=(cls,))
         idx = SymbolIndex([fnode], make_node_id)
@@ -25,7 +26,8 @@ class TestSymbolIndex:
         assert len(results) >= 1
         assert results[0][1] is cls
 
-    def test_find_function_by_name(self):
+    @staticmethod
+    def test_find_function_by_name():
         func = make_function_node("helper", line=3)
         fnode = make_file_node(children=(func,))
         idx = SymbolIndex([fnode], make_node_id)
@@ -34,7 +36,8 @@ class TestSymbolIndex:
         assert len(results) >= 1
         assert results[0][1] is func
 
-    def test_find_interface_by_name(self):
+    @staticmethod
+    def test_find_interface_by_name():
         iface = make_interface_node("Drawable", line=7)
         fnode = make_file_node(children=(iface,))
         idx = SymbolIndex([fnode], make_node_id)
@@ -43,7 +46,8 @@ class TestSymbolIndex:
         assert len(results) >= 1
         assert results[0][1] is iface
 
-    def test_find_enum_by_name(self):
+    @staticmethod
+    def test_find_enum_by_name():
         enum = make_enum_node("Color", line=2, members=("RED", "GREEN"))
         fnode = make_file_node(children=(enum,))
         idx = SymbolIndex([fnode], make_node_id)
@@ -52,14 +56,16 @@ class TestSymbolIndex:
         assert len(results) >= 1
         assert results[0][1] is enum
 
-    def test_unknown_name_returns_empty(self):
+    @staticmethod
+    def test_unknown_name_returns_empty():
         cls = make_class_node("Foo", line=1)
         fnode = make_file_node(children=(cls,))
         idx = SymbolIndex([fnode], make_node_id)
 
         assert idx.lookup("NonExistent") == []
 
-    def test_methods_not_indexed_at_top_level(self):
+    @staticmethod
+    def test_methods_not_indexed_at_top_level():
         method = make_function_node("do_stuff", line=5, owner="MyClass", func_type="method")
         cls = make_class_node("MyClass", line=1, children=(method,))
         fnode = make_file_node(children=(cls,))
@@ -68,7 +74,8 @@ class TestSymbolIndex:
         assert idx.lookup("do_stuff") == []
         assert len(idx.lookup("MyClass")) >= 1
 
-    def test_get_by_id(self):
+    @staticmethod
+    def test_get_by_id():
         cls = make_class_node("Widget", line=10)
         fnode = make_file_node(path="src/widget.py", children=(cls,))
         idx = SymbolIndex([fnode], make_node_id)
@@ -76,7 +83,8 @@ class TestSymbolIndex:
         nid = make_node_id("src/widget.py", cls)
         assert idx.get_by_id(nid) is cls
 
-    def test_get_by_id_unknown(self):
+    @staticmethod
+    def test_get_by_id_unknown():
         fnode = make_file_node(children=())
         idx = SymbolIndex([fnode], make_node_id)
 
@@ -86,7 +94,8 @@ class TestSymbolIndex:
 class TestImportIndex:
     """Tests for ImportIndex."""
 
-    def test_maps_imported_name(self):
+    @staticmethod
+    def test_maps_imported_name():
         imp = make_import_node("os.path", names=("join",), line=1)
         fnode = make_file_node(path="app.py", children=(imp,))
         idx = ImportIndex([fnode], make_node_id)
@@ -97,7 +106,8 @@ class TestImportIndex:
         assert module == "os.path"
         assert original == "join"
 
-    def test_aliased_import(self):
+    @staticmethod
+    def test_aliased_import():
         imp = make_import_node("numpy", names=("array",), alias="np_array", line=1)
         fnode = make_file_node(path="calc.py", children=(imp,))
         idx = ImportIndex([fnode], make_node_id)
@@ -108,7 +118,8 @@ class TestImportIndex:
         assert module == "numpy"
         assert original == "array"
 
-    def test_module_import(self):
+    @staticmethod
+    def test_module_import():
         imp = make_import_node("json", line=1)
         fnode = make_file_node(path="util.py", children=(imp,))
         idx = ImportIndex([fnode], make_node_id)
@@ -117,20 +128,23 @@ class TestImportIndex:
         assert result is not None
         assert result[0] == "json"
 
-    def test_wildcard_skipped(self):
+    @staticmethod
+    def test_wildcard_skipped():
         imp = make_import_node("foo", is_wildcard=True, line=1)
         fnode = make_file_node(path="bar.py", children=(imp,))
         idx = ImportIndex([fnode], make_node_id)
 
         assert idx.resolve_name("bar.py", "foo") is None
 
-    def test_unknown_file(self):
+    @staticmethod
+    def test_unknown_file():
         fnode = make_file_node(path="x.py", children=())
         idx = ImportIndex([fnode], make_node_id)
 
         assert idx.resolve_name("other.py", "anything") is None
 
-    def test_get_file_imports(self):
+    @staticmethod
+    def test_get_file_imports():
         imp1 = make_import_node("os", names=("getcwd",), line=1)
         imp2 = make_import_node("sys", names=("argv",), line=2)
         fnode = make_file_node(path="main.py", children=(imp1, imp2))
@@ -144,7 +158,8 @@ class TestImportIndex:
 class TestClassMethodIndex:
     """Tests for ClassMethodIndex."""
 
-    def test_finds_methods(self):
+    @staticmethod
+    def test_finds_methods():
         m1 = make_function_node("run", line=3, owner="Engine", func_type="method")
         m2 = make_function_node("stop", line=5, owner="Engine", func_type="method")
         cls = make_class_node("Engine", line=1, children=(m1, m2))
@@ -155,13 +170,15 @@ class TestClassMethodIndex:
         assert "run" in methods
         assert "stop" in methods
 
-    def test_unknown_class_returns_empty(self):
+    @staticmethod
+    def test_unknown_class_returns_empty():
         fnode = make_file_node(children=())
         idx = ClassMethodIndex([fnode], make_node_id)
 
         assert idx.get_methods("Missing") == set()
 
-    def test_get_class_ids(self):
+    @staticmethod
+    def test_get_class_ids():
         cls = make_class_node("Handler", line=1)
         fnode = make_file_node(path="srv.py", children=(cls,))
         idx = ClassMethodIndex([fnode], make_node_id)

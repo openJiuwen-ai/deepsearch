@@ -39,21 +39,24 @@ def _imports(file_node: FileNode) -> list[ImportNode]:
 
 
 class TestPythonImports:
-    def test_import_simple(self):
+    @staticmethod
+    def test_import_simple():
         r = _parse_py("import os\n")
         imps = _imports(r)
         assert len(imps) == 1
         assert imps[0].module == "os"
         assert imps[0].names == ("os",)
 
-    def test_import_aliased(self):
+    @staticmethod
+    def test_import_aliased():
         r = _parse_py("import numpy as np\n")
         imps = _imports(r)
         assert len(imps) == 1
         assert imps[0].module == "numpy"
         assert imps[0].alias == "np"
 
-    def test_from_import(self):
+    @staticmethod
+    def test_from_import():
         r = _parse_py("from os.path import join, exists\n")
         imps = _imports(r)
         assert len(imps) == 1
@@ -61,14 +64,16 @@ class TestPythonImports:
         assert "join" in imps[0].names
         assert "exists" in imps[0].names
 
-    def test_from_import_relative(self):
+    @staticmethod
+    def test_from_import_relative():
         r = _parse_py("from . import sibling\n")
         imps = _imports(r)
         assert len(imps) == 1
         assert "." in imps[0].module
         assert "sibling" in imps[0].names
 
-    def test_wildcard_import(self):
+    @staticmethod
+    def test_wildcard_import():
         r = _parse_py("from typing import *\n")
         imps = _imports(r)
         assert len(imps) == 1
@@ -76,7 +81,8 @@ class TestPythonImports:
         assert imps[0].is_wildcard is True
         assert imps[0].names == ()
 
-    def test_multiple_imports(self):
+    @staticmethod
+    def test_multiple_imports():
         src = "import os\nimport sys\nfrom pathlib import Path\n"
         r = _parse_py(src)
         imps = _imports(r)
@@ -89,7 +95,8 @@ class TestPythonImports:
 
 
 class TestTypeScriptImports:
-    def test_named_import(self):
+    @staticmethod
+    def test_named_import():
         r = _parse_ts("import { Foo, Bar } from './foo';")
         imps = _imports(r)
         assert len(imps) == 1
@@ -97,14 +104,16 @@ class TestTypeScriptImports:
         assert "Foo" in imps[0].names
         assert "Bar" in imps[0].names
 
-    def test_default_import(self):
+    @staticmethod
+    def test_default_import():
         r = _parse_ts("import React from 'react';")
         imps = _imports(r)
         assert len(imps) == 1
         assert imps[0].module == "react"
         assert "React" in imps[0].names
 
-    def test_namespace_import(self):
+    @staticmethod
+    def test_namespace_import():
         r = _parse_ts("import * as utils from '../utils';")
         imps = _imports(r)
         assert len(imps) == 1
@@ -112,7 +121,8 @@ class TestTypeScriptImports:
         assert imps[0].is_wildcard is True
         assert "utils" in imps[0].names
 
-    def test_reexport(self):
+    @staticmethod
+    def test_reexport():
         r = _parse_ts("export { Bar } from './bar';")
         imps = _imports(r)
         assert len(imps) == 1
@@ -120,13 +130,15 @@ class TestTypeScriptImports:
         assert imps[0].module == "./bar"
         assert "Bar" in imps[0].names
 
-    def test_type_only_import(self):
+    @staticmethod
+    def test_type_only_import():
         r = _parse_ts("import type { X } from './types';")
         imps = _imports(r)
         assert len(imps) == 1
         assert imps[0].module == "./types"
 
-    def test_side_effect_import(self):
+    @staticmethod
+    def test_side_effect_import():
         r = _parse_ts("import './polyfill';")
         imps = _imports(r)
         assert len(imps) == 1

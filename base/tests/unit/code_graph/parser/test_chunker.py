@@ -21,7 +21,8 @@ def _parse(source: str, *, run_resolver: bool = False) -> tuple[list[Chunk], lis
 
 
 class TestTopLevelOnly:
-    def test_class_with_method_collapses(self):
+    @staticmethod
+    def test_class_with_method_collapses():
         src = "class Foo:\n    def bar(self, x):\n        pass\n"
         chunks, _ = _parse(src)
         fn_chunks = [c for c in chunks if c.node_type == NodeType.FUNCTION]
@@ -32,7 +33,8 @@ class TestTopLevelOnly:
         assert cls_chunks[0].span.line_start <= 1
         assert cls_chunks[0].span.line_end >= 3
 
-    def test_nested_function_collapses(self):
+    @staticmethod
+    def test_nested_function_collapses():
         src = "def outer():\n    def inner(x):\n        return x\n"
         chunks, _ = _parse(src)
         fn_chunks = [c for c in chunks if c.node_type == NodeType.FUNCTION]
@@ -40,7 +42,8 @@ class TestTopLevelOnly:
         assert fn_chunks[0].name == "outer"
         assert "outer.inner" in fn_chunks[0].collapsed_names
 
-    def test_class_property_collapses(self):
+    @staticmethod
+    def test_class_property_collapses():
         src = "class Cfg:\n    debug: bool = False\n"
         chunks, _ = _parse(src)
         prop_chunks = [c for c in chunks if c.node_type == NodeType.PROPERTY]
@@ -49,35 +52,41 @@ class TestTopLevelOnly:
         assert len(cls_chunks) == 1
         assert any("debug" in n for n in cls_chunks[0].collapsed_names)
 
-    def test_file_chunk_always_present(self):
+    @staticmethod
+    def test_file_chunk_always_present():
         chunks, _ = _parse("def top():\n    pass\n")
         file_chunks = [c for c in chunks if c.node_type == NodeType.FILE]
         assert len(file_chunks) == 1
 
-    def test_no_chunks_for_imports(self):
+    @staticmethod
+    def test_no_chunks_for_imports():
         src = "from typing import List\n\ndef f(x: List) -> None:\n    pass\n"
         chunks, _ = _parse(src)
         assert all(c.node_type != NodeType.IMPORT for c in chunks)
 
 
 class TestFunctionSignatures:
-    def test_simple_function(self):
+    @staticmethod
+    def test_simple_function():
         chunks, _ = _parse("def hello(name):\n    return name\n")
         fn_chunks = [c for c in chunks if c.node_type == NodeType.FUNCTION]
         assert len(fn_chunks) == 1
         assert fn_chunks[0].signature == "def hello(name)"
 
-    def test_async_function(self):
+    @staticmethod
+    def test_async_function():
         chunks, _ = _parse("async def fetch(url):\n    pass\n")
         fn_chunks = [c for c in chunks if c.node_type == NodeType.FUNCTION]
         assert fn_chunks[0].signature == "async def fetch(url)"
 
-    def test_return_type_in_signature(self):
+    @staticmethod
+    def test_return_type_in_signature():
         chunks, _ = _parse("def add(a, b) -> int:\n    return a + b\n")
         fn_chunks = [c for c in chunks if c.node_type == NodeType.FUNCTION]
         assert fn_chunks[0].signature == "def add(a, b) -> int"
 
-    def test_method_folded_into_class_signature(self):
+    @staticmethod
+    def test_method_folded_into_class_signature():
         src = "class Foo:\n    def bar(self, x):\n        pass\n"
         chunks, _ = _parse(src)
         cls_chunks = [c for c in chunks if c.node_type == NodeType.CLASS]
@@ -86,27 +95,31 @@ class TestFunctionSignatures:
 
 
 class TestPropertySignatures:
-    def test_typed_property(self):
+    @staticmethod
+    def test_typed_property():
         chunks, _ = _parse("X: int = 42\n")
         prop_chunks = [c for c in chunks if c.node_type == NodeType.PROPERTY]
         assert len(prop_chunks) == 1
         assert prop_chunks[0].signature == "X: int = 42"
 
-    def test_untyped_property(self):
+    @staticmethod
+    def test_untyped_property():
         chunks, _ = _parse("Y = 'hello'\n")
         prop_chunks = [c for c in chunks if c.node_type == NodeType.PROPERTY]
         assert prop_chunks[0].signature == "Y = 'hello'"
 
 
 class TestContext:
-    def test_top_level_has_no_context(self):
+    @staticmethod
+    def test_top_level_has_no_context():
         chunks, _ = _parse("def top():\n    pass\n")
         fn_chunks = [c for c in chunks if c.node_type == NodeType.FUNCTION]
         assert fn_chunks[0].context == ()
 
 
 class TestChunkText:
-    def test_signature_prepended_to_source(self):
+    @staticmethod
+    def test_signature_prepended_to_source():
         chunks, _ = _parse("def f(x) -> int:\n    return x\n")
         fn_chunks = [c for c in chunks if c.node_type == NodeType.FUNCTION]
         # Source already starts with the signature line; do not duplicate it.
@@ -114,14 +127,16 @@ class TestChunkText:
         assert fn_chunks[0].text.startswith("def f(x) -> int")
         assert not fn_chunks[0].text.startswith("def f(x) -> int\ndef f(x) -> int")
 
-    def test_signature_not_duplicated_for_class(self):
+    @staticmethod
+    def test_signature_not_duplicated_for_class():
         chunks, _ = _parse("class Canvas:\n    pass\n")
         cls = next(c for c in chunks if c.node_type == NodeType.CLASS)
         assert cls.signature == "class Canvas"
         assert cls.text.startswith("class Canvas:")
         assert not cls.text.startswith("class Canvas\nclass Canvas")
 
-    def test_no_signature_when_disabled(self):
+    @staticmethod
+    def test_no_signature_when_disabled():
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write("def f():\n    pass\n")
             path = Path(f.name)
@@ -133,7 +148,8 @@ class TestChunkText:
         finally:
             path.unlink()
 
-    def test_docstring_fallback(self):
+    @staticmethod
+    def test_docstring_fallback():
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write('def f():\n    """Doc."""\n    pass\n')
             path = Path(f.name)
@@ -145,7 +161,8 @@ class TestChunkText:
         finally:
             path.unlink()
 
-    def test_min_chars_filter(self):
+    @staticmethod
+    def test_min_chars_filter():
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write("x = 1\n")
             path = Path(f.name)
@@ -159,24 +176,28 @@ class TestChunkText:
 
 
 class TestClassChunks:
-    def test_class_has_signature(self):
+    @staticmethod
+    def test_class_has_signature():
         chunks, _ = _parse("class Foo:\n    pass\n")
         cls_chunks = [c for c in chunks if c.node_type == NodeType.CLASS]
         assert cls_chunks[0].signature == "class Foo"
 
-    def test_class_with_bases(self):
+    @staticmethod
+    def test_class_with_bases():
         chunks, _ = _parse("class Bar(Base, Mixin):\n    pass\n")
         cls_chunks = [c for c in chunks if c.node_type == NodeType.CLASS]
         assert cls_chunks[0].signature == "class Bar(Base, Mixin)"
 
-    def test_interface_signature(self):
+    @staticmethod
+    def test_interface_signature():
         src = "from typing import Protocol\n\nclass Readable(Protocol):\n    def read(self) -> str: ...\n"
         chunks, _ = _parse(src)
         iface_chunks = [c for c in chunks if c.node_type == NodeType.INTERFACE]
         assert len(iface_chunks) == 1
         assert iface_chunks[0].signature == "interface Readable(Protocol)"
 
-    def test_enum_signature(self):
+    @staticmethod
+    def test_enum_signature():
         src = "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n"
         chunks, _ = _parse(src)
         enum_chunks = [c for c in chunks if c.node_type == NodeType.ENUM]
@@ -185,27 +206,31 @@ class TestClassChunks:
 
 
 class TestCodeBlockChunks:
-    def test_if_name_main(self):
+    @staticmethod
+    def test_if_name_main():
         src = 'if __name__ == "__main__":\n    print("hello")\n'
         chunks, _ = _parse(src)
         cb_chunks = [c for c in chunks if c.node_type == NodeType.CODE_BLOCK]
         assert len(cb_chunks) == 1
         assert cb_chunks[0].signature == 'if __name__ == "__main__":'
 
-    def test_consecutive_code_grouped(self):
+    @staticmethod
+    def test_consecutive_code_grouped():
         src = "for i in range(10):\n    print(i)\nprint('done')\n"
         chunks, _ = _parse(src)
         cb_chunks = [c for c in chunks if c.node_type == NodeType.CODE_BLOCK]
         assert len(cb_chunks) == 1
         assert "for i in range(10):" in cb_chunks[0].signature
 
-    def test_code_between_definitions_separate(self):
+    @staticmethod
+    def test_code_between_definitions_separate():
         src = "print('start')\n\ndef f():\n    pass\n\nprint('end')\n"
         chunks, _ = _parse(src)
         cb_chunks = [c for c in chunks if c.node_type == NodeType.CODE_BLOCK]
         assert len(cb_chunks) == 2
 
-    def test_assignment_expands_adjacent_code_block(self):
+    @staticmethod
+    def test_assignment_expands_adjacent_code_block():
         src = "x = 42\nif True:\n    pass\n"
         chunks, _ = _parse(src)
         cb_chunks = [c for c in chunks if c.node_type == NodeType.CODE_BLOCK]
@@ -215,7 +240,8 @@ class TestCodeBlockChunks:
 
 
 class TestStructuralEdges:
-    def test_file_contains_top_level(self):
+    @staticmethod
+    def test_file_contains_top_level():
         chunks, edges = _parse("def f():\n    pass\n", run_resolver=False)
         contains = [e for e in edges if e.relation is EdgeType.CONTAINS]
         assert len(contains) >= 1
@@ -223,7 +249,8 @@ class TestStructuralEdges:
         fn_id = next(c.id for c in chunks if c.node_type == NodeType.FUNCTION)
         assert any(e.source_chunk_id == file_id and e.target_chunk_id == fn_id for e in contains)
 
-    def test_relations_attached_to_chunks(self):
+    @staticmethod
+    def test_relations_attached_to_chunks():
         chunks, edges = _parse("def f():\n    pass\n", run_resolver=False)
         file_chunk = next(c for c in chunks if c.node_type == NodeType.FILE)
         assert len(file_chunk.relations) > 0
@@ -231,7 +258,8 @@ class TestStructuralEdges:
 
 
 class TestResolverEdges:
-    def test_calls_remapped_with_original_endpoints(self):
+    @staticmethod
+    def test_calls_remapped_with_original_endpoints():
         # Nested method CALLS folds into the class chunk; originals keep method ids.
         src = "class Foo:\n    def bar(self):\n        helper()\n\ndef helper():\n    pass\n"
         chunks, edges = _parse(src, run_resolver=True)
@@ -246,12 +274,14 @@ class TestResolverEdges:
             for e in calls
         )
 
-    def test_run_resolver_false_skips_semantic_edges(self):
+    @staticmethod
+    def test_run_resolver_false_skips_semantic_edges():
         src = "class Foo:\n    def bar(self):\n        self.baz()\n    def baz(self):\n        pass\n"
         _, edges = _parse(src, run_resolver=False)
         assert all(e.relation is EdgeType.CONTAINS for e in edges)
 
-    def test_multi_file_imports(self):
+    @staticmethod
+    def test_multi_file_imports():
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             lib = root / "lib.py"

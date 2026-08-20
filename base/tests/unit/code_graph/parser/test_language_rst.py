@@ -21,10 +21,12 @@ def _write_rst(tmp_path, content: str, name: str = "doc.rst"):
 
 
 class TestDetectLanguage:
-    def test_rst_extension(self):
+    @staticmethod
+    def test_rst_extension():
         assert detect_language("index.rst") == "rst"
 
-    def test_rst_case_insensitive(self):
+    @staticmethod
+    def test_rst_case_insensitive():
         assert detect_language("README.RST") == "rst"
 
 

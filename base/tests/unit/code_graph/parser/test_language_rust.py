@@ -37,17 +37,20 @@ def _parse(parser, code: str):
 
 
 class TestRustDetect:
-    def test_rs_extension(self):
+    @staticmethod
+    def test_rs_extension():
         assert detect_language("main.rs") == "rust"
 
-    def test_registry(self):
+    @staticmethod
+    def test_registry():
         reg = get_default_registry()
         assert reg.get("rust") is not None
         assert isinstance(reg.get_hooks("rust"), RustHooks)
 
 
 class TestRustImports:
-    def test_simple_and_glob_and_group(self, parser):
+    @staticmethod
+    def test_simple_and_glob_and_group(parser):
         code = """
         use std::collections::HashMap;
         use crate::foo::{Bar, Baz as Qux};
@@ -62,7 +65,8 @@ class TestRustImports:
 
 
 class TestRustTypes:
-    def test_struct_fields(self, parser):
+    @staticmethod
+    def test_struct_fields(parser):
         code = """
         #[derive(Debug)]
         pub struct Point {
@@ -76,7 +80,8 @@ class TestRustTypes:
         assert structs[0].name == "Point"
         assert {f.name for f in structs[0].fields} == {"x", "y"}
 
-    def test_enum_variants(self, parser):
+    @staticmethod
+    def test_enum_variants(parser):
         code = """
         pub enum Color {
             Red,
@@ -89,7 +94,8 @@ class TestRustTypes:
         assert len(enums) == 1
         assert enums[0].members == ("Red", "Green", "Blue")
 
-    def test_trait_and_impl(self, parser):
+    @staticmethod
+    def test_trait_and_impl(parser):
         code = """
         pub trait Drawable: Clone {
             fn draw(&self);
@@ -117,7 +123,8 @@ class TestRustTypes:
         point = next(c for c in fnode.children if isinstance(c, StructNode) and c.name == "Point")
         assert "Drawable" in point.bases
 
-    def test_mod_type_const(self, parser):
+    @staticmethod
+    def test_mod_type_const(parser):
         code = """
         mod inner {
             pub fn helper() {}
@@ -134,7 +141,8 @@ class TestRustTypes:
 
 
 class TestRustFunctionsAndCalls:
-    def test_free_fn_locals_and_calls(self, parser):
+    @staticmethod
+    def test_free_fn_locals_and_calls(parser):
         code = """
         pub struct Point { x: i32 }
         impl Point {
@@ -159,7 +167,8 @@ class TestRustFunctionsAndCalls:
 
 
 class TestRustHooks:
-    def test_extract_and_unwrap(self):
+    @staticmethod
+    def test_extract_and_unwrap():
         hooks = RustHooks()
         assert "Point" in hooks.extract_type_names("&'a mut Point")
         assert hooks.unwrap_receiver_type("Vec<Point>", 1) == "Point"
@@ -169,7 +178,8 @@ class TestRustHooks:
 
 
 class TestRustResolverSmoke:
-    def test_implements_overrides_calls(self, parser):
+    @staticmethod
+    def test_implements_overrides_calls(parser):
         code = """
         pub trait Drawable {
             fn draw(&self);

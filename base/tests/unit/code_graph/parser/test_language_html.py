@@ -36,13 +36,15 @@ def _find_by_name(children, name: str):
 
 
 class TestElements:
-    def test_top_level_element(self):
+    @staticmethod
+    def test_top_level_element():
         r = _parse("<html><body></body></html>")
         modules = _children_by_type(r, NodeType.MODULE)
         assert len(modules) == 1
         assert modules[0].name == "html"
 
-    def test_nested_elements(self):
+    @staticmethod
+    def test_nested_elements():
         r = _parse("<html><head><title>Hi</title></head><body><div><p>Text</p></div></body></html>")
         html_node = _children_by_type(r, NodeType.MODULE)[0]
         assert html_node.name == "html"
@@ -57,13 +59,15 @@ class TestElements:
         p = _find_by_name(div_.children, "p")
         assert p is not None
 
-    def test_sibling_elements(self):
+    @staticmethod
+    def test_sibling_elements():
         r = _parse("<div><span>A</span><span>B</span></div>")
         div_ = _children_by_type(r, NodeType.MODULE)[0]
         spans = [c for c in div_.children if c.name == "span"]
         assert len(spans) == 2
 
-    def test_self_closing_element(self):
+    @staticmethod
+    def test_self_closing_element():
         r = _parse("<div><img /><br /></div>")
         div_ = _children_by_type(r, NodeType.MODULE)[0]
         assert div_.name == "div"
@@ -75,7 +79,8 @@ class TestElements:
 
 
 class TestScriptStyle:
-    def test_script_block(self):
+    @staticmethod
+    def test_script_block():
         r = _parse("<html><body><script>alert('hello');</script></body></html>")
         html_node = _children_by_type(r, NodeType.MODULE)[0]
         body = _find_by_name(html_node.children, "body")
@@ -84,7 +89,8 @@ class TestScriptStyle:
         assert len(scripts) == 1
         assert "alert" in scripts[0].source
 
-    def test_style_block(self):
+    @staticmethod
+    def test_style_block():
         r = _parse("<html><head><style>body { margin: 0; }</style></head></html>")
         html_node = _children_by_type(r, NodeType.MODULE)[0]
         head = _find_by_name(html_node.children, "head")
@@ -93,7 +99,8 @@ class TestScriptStyle:
         assert len(styles) == 1
         assert "margin" in styles[0].source
 
-    def test_multiple_scripts(self):
+    @staticmethod
+    def test_multiple_scripts():
         r = _parse("<body><script>var a=1;</script><script>var b=2;</script></body>")
         body = _children_by_type(r, NodeType.MODULE)[0]
         scripts = [c for c in body.children if c.name == "<script>"]
@@ -106,17 +113,20 @@ class TestScriptStyle:
 
 
 class TestEdgeCases:
-    def test_empty_html(self):
+    @staticmethod
+    def test_empty_html():
         r = _parse("")
         assert len(r.children) == 0
 
-    def test_doctype_skipped(self):
+    @staticmethod
+    def test_doctype_skipped():
         r = _parse("<!DOCTYPE html><html></html>")
         modules = _children_by_type(r, NodeType.MODULE)
         assert len(modules) == 1
         assert modules[0].name == "html"
 
-    def test_text_nodes_skipped(self):
+    @staticmethod
+    def test_text_nodes_skipped():
         r = _parse("<div>Some plain text</div>")
         div_ = _children_by_type(r, NodeType.MODULE)[0]
         assert len(div_.children) == 0
@@ -128,6 +138,7 @@ class TestEdgeCases:
 
 
 class TestFileMeta:
-    def test_language_is_html(self):
+    @staticmethod
+    def test_language_is_html():
         r = _parse("<div></div>")
         assert r.language == "html"

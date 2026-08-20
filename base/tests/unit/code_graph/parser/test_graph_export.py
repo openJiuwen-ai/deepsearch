@@ -22,14 +22,16 @@ def _parse_and_export(source: str) -> tuple[list[dict], list[dict]]:
 
 
 class TestNodeSerialization:
-    def test_file_node_present(self):
+    @staticmethod
+    def test_file_node_present():
         nodes, _ = _parse_and_export("x = 1\n")
         file_nodes = [n for n in nodes if n["type"] == "FileNode"]
         assert len(file_nodes) == 1
         assert "id" in file_nodes[0]
         assert file_nodes[0]["node_type"] == "file"
 
-    def test_node_has_required_fields(self):
+    @staticmethod
+    def test_node_has_required_fields():
         nodes, _ = _parse_and_export("def hello():\n    pass\n")
         fn_nodes = [n for n in nodes if n["type"] == "FunctionNode"]
         assert len(fn_nodes) == 1
@@ -41,25 +43,29 @@ class TestNodeSerialization:
         assert "path" in fn
         assert "span" in fn
 
-    def test_signature_included(self):
+    @staticmethod
+    def test_signature_included():
         nodes, _ = _parse_and_export("class Foo(Bar):\n    pass\n")
         cls_nodes = [n for n in nodes if n["type"] == "ClassNode"]
         assert cls_nodes[0]["signature"] == "class Foo(Bar)"
 
-    def test_ids_unique(self):
+    @staticmethod
+    def test_ids_unique():
         src = "def a():\n    pass\n\ndef b():\n    pass\n\nclass C:\n    pass\n"
         nodes, _ = _parse_and_export(src)
         ids = [n["id"] for n in nodes]
         assert len(ids) == len(set(ids))
 
-    def test_code_block_id_uses_line(self):
+    @staticmethod
+    def test_code_block_id_uses_line():
         nodes, _ = _parse_and_export("if True:\n    pass\n")
         cb_nodes = [n for n in nodes if n["type"] == "CodeBlockNode"]
         assert len(cb_nodes) == 1
         assert "__code_block_L" in cb_nodes[0]["id"]
         assert cb_nodes[0]["name"].endswith(".py@L1")
 
-    def test_code_block_name_uses_relative_path_and_line(self, tmp_path):
+    @staticmethod
+    def test_code_block_name_uses_relative_path_and_line(tmp_path):
         source = tmp_path / "pkg" / "app.py"
         source.parent.mkdir()
         source.write_text("print('hello')\n")
@@ -68,7 +74,8 @@ class TestNodeSerialization:
         code_blocks = [node for node in nodes if node["type"] == "CodeBlockNode"]
         assert code_blocks[0]["name"] == "pkg/app.py@L1"
 
-    def test_lambda_id_uses_name_without_extra_line(self):
+    @staticmethod
+    def test_lambda_id_uses_name_without_extra_line():
         nodes, _ = _parse_and_export("f = lambda x: x\n")
         lambdas = [n for n in nodes if n.get("func_type") == "lambda"]
         assert len(lambdas) == 1
@@ -79,12 +86,14 @@ class TestNodeSerialization:
 
 
 class TestContainsEdges:
-    def test_file_contains_children(self):
+    @staticmethod
+    def test_file_contains_children():
         _, edges = _parse_and_export("def f():\n    pass\n\nx = 1\n")
         contains = [e for e in edges if e["relation"] == "CONTAINS"]
         assert len(contains) >= 2
 
-    def test_class_contains_methods(self):
+    @staticmethod
+    def test_class_contains_methods():
         src = "class Foo:\n    def bar(self):\n        pass\n"
         _, edges = _parse_and_export(src)
         contains = [e for e in edges if e["relation"] == "CONTAINS"]
@@ -93,7 +102,8 @@ class TestContainsEdges:
 
 
 class TestExpectsEdges:
-    def test_function_expects_duck_type(self):
+    @staticmethod
+    def test_function_expects_duck_type():
         src = "def f(obj):\n    return obj.method()\n"
         nodes, edges = _parse_and_export(src)
         expects = [e for e in edges if e["relation"] == "EXPECTS"]
@@ -103,7 +113,8 @@ class TestExpectsEdges:
 
 
 class TestIsSubsetOfEdges:
-    def test_subset_edge_produced(self):
+    @staticmethod
+    def test_subset_edge_produced():
         src = "def f1(obj):\n    return obj.embed('x')\n\ndef f2(obj):\n    return obj.embed('x') + obj.search('y')\n"
         nodes, edges = _parse_and_export(src)
         subset_edges = [e for e in edges if e["relation"] == "IS_SUBSET_OF"]
@@ -112,7 +123,8 @@ class TestIsSubsetOfEdges:
         assert "embed" in subset_edges[0]["target"]
         assert "search" in subset_edges[0]["target"]
 
-    def test_no_subset_for_equal_sets(self):
+    @staticmethod
+    def test_no_subset_for_equal_sets():
         src = "def f1(obj):\n    return obj.method()\n\ndef f2(obj):\n    return obj.method()\n"
         _, edges = _parse_and_export(src)
         subset_edges = [e for e in edges if e["relation"] == "IS_SUBSET_OF"]
@@ -120,7 +132,8 @@ class TestIsSubsetOfEdges:
 
 
 class TestExportGraphWritesFiles:
-    def test_writes_jsonl_files(self):
+    @staticmethod
+    def test_writes_jsonl_files():
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write("def hello():\n    pass\n")
             src_path = Path(f.name)

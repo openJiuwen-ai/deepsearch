@@ -53,9 +53,9 @@ async def test_type_resources_are_static_and_readable() -> None:
 @pytest.mark.asyncio
 async def test_tools_return_error_strings_instead_of_raising() -> None:
     session = GraphSession()
-    session.index = AsyncMock(side_effect=RuntimeError("boom index"))  # type: ignore[method-assign]
-    session.search_nodes = lambda *a, **k: (_ for _ in ()).throw(ValueError("boom nodes"))  # type: ignore[method-assign]
-    session.search_edges = lambda *a, **k: (_ for _ in ()).throw(TypeError("boom edges"))  # type: ignore[method-assign]
+    session.index = AsyncMock(side_effect=RuntimeError("boom index"))
+    session.search_nodes = lambda *a, **k: (_ for _ in ()).throw(ValueError("boom nodes"))
+    session.search_edges = lambda *a, **k: (_ for _ in ()).throw(TypeError("boom edges"))
 
     mcp = create_mcp_server(session=session)
     async with Client(mcp) as client:
