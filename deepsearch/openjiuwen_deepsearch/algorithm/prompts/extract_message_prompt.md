@@ -30,7 +30,7 @@ Confidence Scoring Scale (0-1):
 Note: The score should reflect both textual similarity and factual accuracy. Higher scores require both semantic consistency and data verification when numerical information is present.
 
 ## Output Format
-You should return the **json list format** containing `source`, `marked_citation_content` and `score` according to Input, for example:
+You should return the **json list format** containing `source`, `marked_citation_content` and `score` according to Input. The `score` field MUST be a numeric float (e.g. `0.91`), not a string. For example:
 
 - Input
 [

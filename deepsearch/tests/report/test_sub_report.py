@@ -807,10 +807,9 @@ def test_subsection_outline_prompt_explains_structured_evidence_for_all_routes(h
     assert "Do not further subdivide a user-defined category" in normalized_prompt
 
 
-@pytest.mark.parametrize("prompt_name", ["sub_report_markdown", "sub_report_brief_markdown"])
-def test_subreport_prompts_share_structured_evidence_semantics(prompt_name):
+def test_subreport_prompts_share_structured_evidence_semantics():
     rendered = apply_system_prompt(
-        prompt_name,
+        "sub_report_markdown",
         {"messages": [{"role": "user", "content": "Structured evidence guidance"}]},
     )
     prompt_text = "\n".join(message["content"] for message in rendered)

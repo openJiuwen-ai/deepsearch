@@ -55,7 +55,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_section_local_contract_prompt_context,
 )
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
-from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output, safe_float
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
@@ -2258,42 +2258,47 @@ class Reporter:
                     # per-rationale {"r1": {"coverage": 0.9}}.
                     # coverage_matrix stores coverage directly (used for top-k ranking);
                     # dimension_scores stores {coverage, reliability, data_density} per rationale.
-                    passage_reliability = (
-                        float(passage.get("reliability", 0.0))
-                        if isinstance(passage.get("reliability"), (int, float)) else 0.0
+                    passage_reliability = safe_float(
+                        passage.get("reliability", 0.0)
                     )
-                    passage_data_density = (
-                        float(passage.get("data_density", 0.0))
-                        if isinstance(passage.get("data_density"), (int, float)) else 0.0
+                    passage_data_density = safe_float(
+                        passage.get("data_density", 0.0)
                     )
                     cleaned = {}
                     dim_cleaned = {}
                     if isinstance(scores, dict):
                         for rid, dim_scores in scores.items():
                             if isinstance(dim_scores, dict):
-                                c = (
-                                    float(dim_scores.get("coverage", 0.0))
-                                    if isinstance(dim_scores.get("coverage"), (int, float)) else 0.0
+                                c = safe_float(
+                                    dim_scores.get("coverage", 0.0)
                                 )
-                                r = (
-                                    float(dim_scores.get("reliability", passage_reliability))
-                                    if isinstance(dim_scores.get("reliability"), (int, float))
-                                    else passage_reliability
+                                r = safe_float(
+                                    dim_scores.get("reliability"),
+                                    passage_reliability,
                                 )
-                                d = (
-                                    float(dim_scores.get("data_density", passage_data_density))
-                                    if isinstance(dim_scores.get("data_density"), (int, float))
-                                    else passage_data_density
+                                d = safe_float(
+                                    dim_scores.get("data_density"),
+                                    passage_data_density,
                                 )
                                 cleaned[str(rid)] = c
                                 dim_cleaned[str(rid)] = {
                                     "coverage": c, "reliability": r,
                                     "data_density": d,
                                 }
-                            elif isinstance(dim_scores, (int, float)):
-                                # Fallback: old format with single score
-                                cleaned[str(rid)] = float(dim_scores)
-                                dim_cleaned[str(rid)] = {"coverage": float(dim_scores)}
+                            else:
+                                # bool 是 int 子类但非合法分数，需显式排除
+                                if isinstance(dim_scores, bool) or not isinstance(dim_scores, (int, float, str)):
+                                    logger.warning(
+                                        "Unexpected score type for rationale %s: %s, value=%s. Treating as 0.0.",
+                                        rid,
+                                        type(dim_scores).__name__,
+                                        repr(dim_scores)[:200],
+                                    )
+                                    c = 0.0
+                                else:
+                                    c = safe_float(dim_scores)
+                                cleaned[str(rid)] = c
+                                dim_cleaned[str(rid)] = {"coverage": c}
                     coverage_matrix[passage_key] = cleaned
                     dimension_scores[passage_key] = dim_cleaned
                     # Document-level dimensions are assessed once per passage,
@@ -3993,14 +3998,11 @@ class Reporter:
         for item in classified_content_for_visualization:
             if not isinstance(item, dict):
                 continue
-            dd = item.get("data_density")
-            if dd is None:
-                continue
-            if isinstance(dd, (int, float)):
-                if dd >= 0.9:
-                    selected_visualizations.append(item)
-                elif dd >= 0.8:
-                    fallback_visualizations.append(item)
+            dd = safe_float(item.get("data_density"), default=-1.0)
+            if dd >= 0.9:
+                selected_visualizations.append(item)
+            elif dd >= 0.8:
+                fallback_visualizations.append(item)
         return selected_visualizations or fallback_visualizations
 
     async def _request_visualization_insert_plan(

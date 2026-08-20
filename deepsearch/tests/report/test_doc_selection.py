@@ -270,6 +270,38 @@ async def test_extract_and_score_skips_malformed_scores():
 
 
 @pytest.mark.asyncio
+async def test_extract_and_score_string_number_scores():
+    """String-type numeric scores from LLM are correctly converted to float.
+
+    LLM JSON may return numbers as strings (e.g. "0.9" instead of 0.9).
+    safe_float() should convert them, not silently drop to 0.0.
+    """
+    reporter = _make_reporter()
+    raw_docs = [_raw_doc(0, content="test content")]
+
+    # All scores are string-type numbers
+    mock_llm_result = MagicMock()
+    mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "test", "rationale_ids": ["r1"], "reliability": "0.8", "data_density": "0.7", "scores": {"r1": {"coverage": "0.9", "reliability": "0.8", "data_density": "0.7"}}}]}]}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    assert error == ""
+    assert "passage_0" in result["coverage_matrix"]
+    # String "0.9" should be converted to 0.9, not dropped to 0.0
+    assert abs(result["coverage_matrix"]["passage_0"]["r1"] - 0.9) < 0.001
+    dim = result["dimension_scores"]["passage_0"]["r1"]
+    assert abs(dim["coverage"] - 0.9) < 0.001
+    assert abs(dim["reliability"] - 0.8) < 0.001
+    assert abs(dim["data_density"] - 0.7) < 0.001
+
+
+@pytest.mark.asyncio
 async def test_extract_and_score_preserves_parent_doc_metadata():
     """Each extracted passage inherits doc_url/doc_title/source from its parent document."""
     reporter = _make_reporter()
