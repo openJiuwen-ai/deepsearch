@@ -341,9 +341,7 @@ def test_sub_report_prompts_always_forbid_body_mermaid(prompt_name):
     prompts = apply_system_prompt(prompt_name, context)
     system_prompt = prompts[0]["content"]
 
-    # Both versions forbid chart output (though wording differs)
     # sub_report_markdown uses "Visualization Boundary" section
-    # sub_report_brief_markdown uses "Hard output contract" line
     assert (
         "Visualization Boundary" in system_prompt
         or "Do NOT output Mermaid" in system_prompt

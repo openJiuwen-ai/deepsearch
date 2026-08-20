@@ -21,6 +21,7 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     format_key_passage_block,
     normalize_key_passages,
 )
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import safe_float
 
 
 logger = logging.getLogger(__name__)
@@ -292,8 +293,7 @@ def dedup_passages_by_rationale(
             if not isinstance(cov, dict):
                 return 0.0
             return sum(
-                float(v) for v in cov.values()
-                if isinstance(v, (int, float))
+                safe_float(v) for v in cov.values()
             )
 
         global_kept: list[dict] = []
@@ -438,16 +438,8 @@ def build_classified_content(
         if not isinstance(passage, dict):
             continue
         passage_scores = passage.get("scores", {})
-        passage_reliability = (
-            passage.get("reliability")
-            if isinstance(passage.get("reliability"), (int, float))
-            else 0.0
-        )
-        passage_data_density = (
-            passage.get("data_density")
-            if isinstance(passage.get("data_density"), (int, float))
-            else 0.0
-        )
+        passage_reliability = safe_float(passage.get("reliability"))
+        passage_data_density = safe_float(passage.get("data_density"))
         classified.append(
             {
                 "index": fulltext_count + pos + 1,
@@ -646,12 +638,12 @@ def enrich_fulltext_for_section(
         url = str(passage.get("doc_url") or "").strip()
         if not url:
             continue
-        dd = passage.get("data_density")
-        if isinstance(dd, (int, float)):
-            url_data_density[url] = max(url_data_density.get(url, 0.0), float(dd))
-        rel = passage.get("reliability")
-        if isinstance(rel, (int, float)):
-            url_reliability[url] = max(url_reliability.get(url, 0.0), float(rel))
+        dd = safe_float(passage.get("data_density"))
+        if dd >= 0:
+            url_data_density[url] = max(url_data_density.get(url, 0.0), dd)
+        rel = safe_float(passage.get("reliability"))
+        if rel >= 0:
+            url_reliability[url] = max(url_reliability.get(url, 0.0), rel)
 
     # Build FullTextEvidence directly from existing content (no fetch/compress).
     fulltext_evidences: list[FullTextEvidence] = []

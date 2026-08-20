@@ -51,7 +51,7 @@ source reliability and data density are properties of the whole passage):
 
 ### Output Format
 
-Output ONLY a raw JSON object (no markdown fences, no explanation text). Example:
+Output ONLY a raw JSON object (no markdown fences, no explanation text). All score fields (`reliability`, `data_density`, and `coverage` inside `scores`) MUST be numeric floats, not strings. Example:
 
 {
   "documents": [
