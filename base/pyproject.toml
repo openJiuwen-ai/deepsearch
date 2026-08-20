@@ -53,6 +53,7 @@ codegraph = [
     "tqdm",
     # MCP
     "fastmcp",
+    "rich>=13.9.4",
 ]
 # CodeGraph optionally also support exporting to LadybugDB
 ladybug = ["real_ladybug"]
