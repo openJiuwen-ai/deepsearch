@@ -765,6 +765,13 @@ class TestLambdas:
         assert lambdas[0].name == "lambda()@L1@C5"
 
     @staticmethod
+    def test_signature_does_not_wrap_synthetic_name():
+        r = _parse("f = lambda t: t\n")
+        lambdas = [c for c in r.children if c.node_type == NodeType.FUNCTION and c.func_type == "lambda"]
+        assert lambdas[0].name == "lambda(t)@L1@C5"
+        assert lambdas[0].signature == "lambda(t) [lambda]"
+
+    @staticmethod
     def test_call_inside_lambda_context():
         r = _parse("def outer():\n    return lambda: foo()\n")
         from openjiuwen_search_base.codegraph.parser.models.core import CallNode

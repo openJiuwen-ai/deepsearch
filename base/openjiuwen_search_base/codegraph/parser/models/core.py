@@ -94,13 +94,12 @@ class FunctionNode(BaseNode):
 
     @property
     def signature(self) -> str:
-        """Produce e.g. ``async def MyClass.method(self, x: int) -> str [method]``."""
-        parts: list[str] = []
-        if self.is_async:
-            parts.append("async ")
-        parts.append("def ")
-        parts.append(self.name)
-        parts.append("(")
+        """Produce e.g. ``async def MyClass.method(self, x: int) -> str [method]``.
+
+        Python lambdas use a synthetic name like ``lambda(t)@L302@C36``. Emitting
+        ``def {name}(params)`` would duplicate the parameter list, so lambdas are
+        formatted as ``lambda(t) [lambda]`` instead.
+        """
         param_strs: list[str] = []
         for p in self.parameters:
             s = p.name
@@ -109,7 +108,25 @@ class FunctionNode(BaseNode):
             if p.default:
                 s += f" = {p.default}"
             param_strs.append(s)
-        parts.append(", ".join(param_strs))
+        params = ", ".join(param_strs)
+
+        if self.func_type == "lambda":
+            parts: list[str] = []
+            if self.is_async:
+                parts.append("async ")
+            parts.append(f"lambda({params})")
+            if self.return_type:
+                parts.append(f" -> {self.return_type}")
+            parts.append(" [lambda]")
+            return "".join(parts)
+
+        parts = []
+        if self.is_async:
+            parts.append("async ")
+        parts.append("def ")
+        parts.append(self.name)
+        parts.append("(")
+        parts.append(params)
         parts.append(")")
         if self.return_type:
             parts.append(f" -> {self.return_type}")
