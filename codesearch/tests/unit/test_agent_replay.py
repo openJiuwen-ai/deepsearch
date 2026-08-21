@@ -73,7 +73,7 @@ def test_happy_path_submit():
     # 第二轮的首条消息应重写注入记忆（含已保存行），且包含 repo map 工具结果历史
     second_turn_messages = main_llm.calls[1][0]
     head = second_turn_messages[0].content
-    assert "CURRENT SAVED SNIPPETS" in head and "11: second line" in head
+    assert "WORKING MEMORY (Current Search)" in head and "11: second line" in head
     roles = [m.role for m in second_turn_messages]
     assert roles.count("tool") == 2  # repo_map + search 的工具结果都在历史中
 

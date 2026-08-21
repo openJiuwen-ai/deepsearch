@@ -161,7 +161,7 @@ def test_retropus_registry_reuses_delete_snippets_executor():
             return 2
 
     class Env:
-        memory = Memory()
+        working_memory = Memory()
         turn = 1
         config = SimpleNamespace(agent=SimpleNamespace(max_turns=12))
 
