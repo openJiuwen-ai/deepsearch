@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
 
 from openjiuwen_codesearch.algorithm.search_tools.registry import registry_schemas
 from openjiuwen_codesearch.domain.result import CodeSearchResult, FinalHit, Termination
-from openjiuwen_codesearch.framework.openjiuwen.runtime_context import CodeSearchRunContext, CodeResolveRunContext, run_resolve_session
+from openjiuwen_codesearch.framework.openjiuwen.runtime_context import (
+    CodeSearchRunContext,
+    CodeResolveRunContext,
+    run_resolve_session,
+)
 from openjiuwen_codesearch.framework.openjiuwen.steps import finalize, reasoning_step, tool_step
 from openjiuwen_codesearch.llm.factory import ChatMessage
 
@@ -35,15 +39,13 @@ def _read_span_text(repo_dir: Path, file_path: str, start: int, end: int) -> str
         full = repo_dir / file_path
         lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
         # retropus spans are 1-indexed inclusive
-        chunk = lines[max(0, start - 1):end]
+        chunk = lines[max(0, start - 1): end]
         return "\n".join(chunk)
     except OSError:
         return ""
 
 
-def spans_to_hits(
-    spans: list[dict], repo_dir: Path, top_k: int
-) -> list[FinalHit]:
+def spans_to_hits(spans: list[dict], repo_dir: Path, top_k: int) -> list[FinalHit]:
     hits: list[FinalHit] = []
     for i, span in enumerate(spans[:top_k]):
         file_path = str(span["file"])
@@ -131,14 +133,10 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             expand_imports=cfg.feat_expand_imports,
         )
         tool_schemas = registry_schemas(build_retropus_registry(ctx.tools))
-        ctx.prompt_cache_key = stable_prompt_cache_key(
-            ctx.system_prompt, tool_schemas
-        )
+        ctx.prompt_cache_key = stable_prompt_cache_key(ctx.system_prompt, tool_schemas)
         ctx.history = [
             ChatMessage(role="system", content=ctx.system_prompt),
-            ChatMessage(
-                role="user", content=build_issue_user_message(ctx.issue_text)
-            ),
+            ChatMessage(role="user", content=build_issue_user_message(ctx.issue_text)),
         ]
         logger.info(
             "Retropus start: max_rounds=%d max_tool_calls=%d prompt_cache_key=%s",
@@ -147,9 +145,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             ctx.prompt_cache_key,
         )
 
-    async def reasoning_step(
-        self, ctx: "RetropusRunContext"
-    ) -> Optional[Termination]:
+    async def reasoning_step(self, ctx: "RetropusRunContext") -> Optional[Termination]:
         """Invoke the LLM for the next tool calls; nudge once if no spans yet."""
         from openjiuwen_codesearch.algorithm.search_tools.retropus_registry import (  # noqa: PLC0415
             build_retropus_registry,
@@ -172,9 +168,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
         if ctx.prompt_cache_key:
             invoke_kwargs["prompt_cache_key"] = ctx.prompt_cache_key
         try:
-            response = await ctx.main_llm.invoke(
-                ctx.history, tools=tool_schemas, **invoke_kwargs
-            )
+            response = await ctx.main_llm.invoke(ctx.history, tools=tool_schemas, **invoke_kwargs)
         except Exception as e:  # noqa: BLE001
             logger.error("Retropus LLM call failed: %s", e)
             ctx.error = str(e)
@@ -202,9 +196,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
         if not response.tool_calls:
             if not ctx.tools.has_spans() and ctx.nudges < 2:
                 ctx.nudges += 1
-                ctx.history.append(
-                    ChatMessage(role="user", content=NUDGE_NO_SPANS_PROMPT)
-                )
+                ctx.history.append(ChatMessage(role="user", content=NUDGE_NO_SPANS_PROMPT))
                 ctx.pending_calls = []
                 return None
             return Termination.NO_TOOL_CALL
@@ -231,23 +223,17 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             call_id = call.call_id or f"call_{ctx.tool_calls_made}"
             if spec is None:
                 msg = f"Error: unknown tool '{call.name}'."
-                ctx.history.append(
-                    ChatMessage(role="tool", tool_call_id=call_id, content=msg)
-                )
+                ctx.history.append(ChatMessage(role="tool", tool_call_id=call_id, content=msg))
                 continue
             try:
                 outcome = await spec.executor(ctx, call.arguments)
             except Exception as e:  # noqa: BLE001
                 msg = f"Error executing {call.name}: {e}"
-                ctx.history.append(
-                    ChatMessage(role="tool", tool_call_id=call_id, content=msg)
-                )
+                ctx.history.append(ChatMessage(role="tool", tool_call_id=call_id, content=msg))
                 continue
             ctx.tool_calls_made += 1
             ctx.history.append(
-                ChatMessage(
-                    role="tool", tool_call_id=call_id, content=outcome.message
-                )
+                ChatMessage(role="tool", tool_call_id=call_id, content=outcome.message)
             )
 
         ctx.tools.drain_new_spans()
@@ -258,9 +244,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             return Termination.MAX_TURNS
         return None
 
-    def pad_spans_from_retriever(
-        self, ctx: "RetropusRunContext", target_count: int
-    ) -> None:
+    def pad_spans_from_retriever(self, ctx: "RetropusRunContext", target_count: int) -> None:
         """Add top-ranked definition spans until ``target_count`` spans are recorded.
 
         Skips duplicates and candidates rejected by ``add_context`` (e.g. test
@@ -288,9 +272,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
         candidates.sort(key=lambda item: item[0], reverse=True)
 
         reason = (
-            "mandatory_fallback"
-            if ctx.retropus_config.min_mandatory_return_spans
-            else "fallback"
+            "mandatory_fallback" if ctx.retropus_config.min_mandatory_return_spans else "fallback"
         )
         added = 0
         for _score, rel, def_node in candidates:
@@ -313,9 +295,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
             target_count,
         )
 
-    def finalize(
-        self, ctx: "RetropusRunContext", termination: Termination
-    ) -> CodeSearchResult:
+    def finalize(self, ctx: "RetropusRunContext", termination: Termination) -> CodeSearchResult:
         """Pad spans if needed, map them to hits, and build the final result."""
         if termination not in (Termination.LLM_ERROR, Termination.INDEX_NOT_READY):
             cfg = ctx.retropus_config
@@ -358,6 +338,7 @@ class RetropusCodeSearchAgent(AbstractReactEngine["RetropusRunContext"]):
         ctx.result = result
         return result
 
+
 class GraphCodeResolveAgent:
     """Agentic Code Resolver executing via openjiuwen Workflow graph."""
 
@@ -371,13 +352,13 @@ class GraphCodeResolveAgent:
             RESOLVE_WORKFLOW_VERSION,
             GraphCodeSearchAgent,
         )
-        from openjiuwen_codesearch.domain.result import Termination
+
         from openjiuwen.core.runner.runner import Runner
         from openjiuwen.core.session import workflow_session_vars
         from openjiuwen.core.session.constants import WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY
 
         # Ensure workflows are registered in the global LegacyWorkflowAgent
-        GraphCodeSearchAgent._get_shared_agent()
+        GraphCodeSearchAgent.get_shared_agent()
 
         with run_resolve_session(ctx) as run_id:
             session_vars = dict(workflow_session_vars.get() or {})
@@ -385,7 +366,7 @@ class GraphCodeResolveAgent:
                 ctx.config.agent.time_limit_seconds
             )
             session_token = workflow_session_vars.set(session_vars)
-            
+
             try:
                 await Runner.run_workflow(
                     workflow=f"{RESOLVE_WORKFLOW_ID}_{RESOLVE_WORKFLOW_VERSION}",
@@ -393,13 +374,17 @@ class GraphCodeResolveAgent:
                 )
                 if ctx.result is None:
                     from openjiuwen_codesearch.framework.openjiuwen.steps import finalize_resolve
-                    logger.warning("Resolve Workflow ended without EndNode result; finalizing from context.")
+
+                    logger.warning(
+                        "Resolve Workflow ended without EndNode result; finalizing from context."
+                    )
                     finalize_resolve(ctx, ctx.pending_termination or Termination.LLM_ERROR)
             except Exception as e:
                 logger.error("Resolve workflow graph execution failed or timed out: %s", e)
                 ctx.pending_termination = Termination.LLM_ERROR
                 ctx.error = f"Workflow Error: {e}"
                 from openjiuwen_codesearch.framework.openjiuwen.steps import finalize_resolve
+
                 finalize_resolve(ctx, ctx.pending_termination)
             finally:
                 workflow_session_vars.reset(session_token)

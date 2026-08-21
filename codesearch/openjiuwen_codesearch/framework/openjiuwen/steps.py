@@ -18,6 +18,7 @@ from openjiuwen_codesearch.algorithm.reasoning import (
     TURN_LIMIT_WARNING,
     build_base_prompt,
     run_reasoning_turn,
+    build_turn_messages,
 )
 from openjiuwen_codesearch.algorithm.search_tools.registry import (
     ToolSpec,
@@ -91,15 +92,14 @@ async def reasoning_step(ctx: CodeSearchRunContext) -> Optional[Termination]:
         return Termination.LLM_ERROR
 
     ctx.add_tokens("main_llm", response.input_tokens, response.output_tokens)
+    messages = build_turn_messages(ctx.base_prompt, memory_text, ctx.history)
     ctx.write_trace(
         {
             "turn": ctx.turn,
             "query": ctx.query,
             "memory": memory_text,
-            "completion": {
-                "content": response.content,
-                "tool_calls": [c.model_dump() for c in response.tool_calls],
-            },
+            "prompt": [{"role": m.role, "content": m.content} for m in messages],
+            "completion": response.raw,
         }
     )
     ctx.history.append(
@@ -230,9 +230,11 @@ _RESOLVE_REGISTRY: Optional[dict[str, "ResolveToolSpec"]] = None
 def get_resolve_registry() -> dict[str, "ResolveToolSpec"]:
     global _RESOLVE_REGISTRY
     if _RESOLVE_REGISTRY is None:
-        from openjiuwen_codesearch.algorithm.coder_tools.registry import build_default_registry
+        from openjiuwen_codesearch.algorithm.coder_tools.registry import (
+            build_default_registry as build_coder_registry,
+        )
 
-        _RESOLVE_REGISTRY = build_default_registry()
+        _RESOLVE_REGISTRY = build_coder_registry()
     return _RESOLVE_REGISTRY
 
 
@@ -282,14 +284,16 @@ async def resolver_reasoning_step(ctx: CodeResolveRunContext) -> Optional[Termin
         ctx.base_prompt = system_prompt + "\n\nIssue:\n" + ctx.query + "\n\n" + context_str
 
     try:
-        from openjiuwen_codesearch.algorithm.coder_tools.registry import registry_schemas
+        from openjiuwen_codesearch.algorithm.coder_tools.registry import (
+            registry_schemas as coder_registry_schemas,
+        )
 
         response = await run_reasoning_turn(
             ctx.main_llm,
             ctx.base_prompt,
             "",
             ctx.history,
-            registry_schemas(get_resolve_registry()),
+            coder_registry_schemas(get_resolve_registry()),
         )
     except Exception as e:
         logger.error("Resolver LLM API call failed: %s. Breaking loop.", e)
@@ -297,14 +301,13 @@ async def resolver_reasoning_step(ctx: CodeResolveRunContext) -> Optional[Termin
         return Termination.LLM_ERROR
 
     ctx.add_tokens("main_llm", response.input_tokens, response.output_tokens)
+    messages = build_turn_messages(ctx.base_prompt, "", ctx.history)
     ctx.write_trace(
         {
             "turn": ctx.turn,
             "prompt_length": len(ctx.base_prompt) + sum(len(m.content) for m in ctx.history),
-            "completion": {
-                "content": response.content,
-                "tool_calls": [c.model_dump() for c in response.tool_calls],
-            },
+            "prompt": [{"role": m.role, "content": m.content} for m in messages],
+            "completion": response.raw,
         }
     )
     ctx.history.append(
@@ -316,7 +319,10 @@ async def resolver_reasoning_step(ctx: CodeResolveRunContext) -> Optional[Termin
         ctx.history.append(
             ChatMessage(
                 role="user",
-                content="You did not call any tools. If you are finished, you MUST call `submit_patch`. Otherwise, call a tool to continue.",
+                content=(
+                    "You did not call any tools. If you are finished, you MUST call "
+                    "`submit_patch`. Otherwise, call a tool to continue."
+                ),
             )
         )
         return None
@@ -363,14 +369,16 @@ async def resolver_tool_step(ctx: CodeResolveRunContext) -> Optional[Termination
             log_result = result[:200] + "..." if len(result) > 200 else result
             logger.info("✅ [RESOLVER TOOL] %s returned: %s", function_name, log_result)
             ctx.history.append(ChatMessage(role="tool", content=result, tool_call_id=call_id))
-            ctx.write_trace({
-                "turn": ctx.turn,
-                "tool_execution": {
-                    "name": function_name,
-                    "arguments": args_str,
-                    "result": result
+            ctx.write_trace(
+                {
+                    "turn": ctx.turn,
+                    "tool_execution": {
+                        "name": function_name,
+                        "arguments": args_str,
+                        "result": result,
+                    },
                 }
-            })
+            )
         except Exception as e:
             logger.error("Tool execution failed: %s", e)
             ctx.history.append(
@@ -397,7 +405,6 @@ async def resolver_tool_step(ctx: CodeResolveRunContext) -> Optional[Termination
 
 def finalize_resolve(ctx: CodeResolveRunContext, termination: Termination) -> CodeResolveResult:
     import subprocess
-    import logging
 
     git_logger = logging.getLogger(__name__)
 
@@ -412,7 +419,7 @@ def finalize_resolve(ctx: CodeResolveRunContext, termination: Termination) -> Co
             check=True,
         )
         final_diff = result.stdout
-        
+
         # Unstage everything we just staged so we don't pollute the user's git index
         subprocess.run(["git", "reset"], cwd=ctx.repo_dir, capture_output=True, check=False)
     except Exception as e:

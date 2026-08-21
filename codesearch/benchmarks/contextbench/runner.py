@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 
 from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
 from openjiuwen_codesearch.config.agent import DEFAULT_ENGINE
@@ -342,9 +343,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from datetime import datetime
-
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S")
     args.results_dir = f"{args.results_dir}__{stamp}"
 
     logging.basicConfig(level=logging.INFO)

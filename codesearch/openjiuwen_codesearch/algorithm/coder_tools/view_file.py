@@ -1,11 +1,12 @@
 import os
 from .registry import ToolSpec, ToolOutcome
 
+
 async def execute(ctx, args: dict) -> ToolOutcome:
     file_path = args.get("file_path")
     start_line = args.get("start_line")
     end_line = args.get("end_line")
-    
+
     if not file_path:
         return ToolOutcome(error="Error: file_path is required.")
 
@@ -26,6 +27,7 @@ async def execute(ctx, args: dict) -> ToolOutcome:
         return ToolOutcome(message=output)
     except Exception as e:
         return ToolOutcome(error=f"Error reading file: {e}")
+
 
 SCHEMA = {
     "type": "function",

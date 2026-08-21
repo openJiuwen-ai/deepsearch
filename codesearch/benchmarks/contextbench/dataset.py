@@ -55,14 +55,17 @@ def _worktree_root() -> str:
     tmp_root = os.environ.get("CONTEXTBENCH_TMP_ROOT") or tempfile.gettempdir()
     return os.path.join(tmp_root, "contextbench_worktrees")
 
+
 def clear_repo_cache(repo_url: str, cache_dir: str = "./repos") -> None:
     """清理远程仓库 clone 到本地的 bare cache 目录。"""
     ensure_contextbench_importable()
     from contextbench.core.repo import _normalize_url
+
     normalized_url = _normalize_url(repo_url)
     repo_cache_path = os.path.join(cache_dir, normalized_url)
     logger.info("Cleaning up base repo cache for %s before starting run...", repo_url)
     shutil.rmtree(repo_cache_path, ignore_errors=True)
+
 
 def clean_worktrees() -> None:
     """清理 contextbench 临时 worktree（残留坏 worktree 会使同 commit checkout 失败）。"""

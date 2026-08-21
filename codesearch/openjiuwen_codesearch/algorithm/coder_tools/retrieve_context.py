@@ -1,5 +1,6 @@
 from .registry import ToolSpec, ToolOutcome
 
+
 async def execute(ctx, args: dict) -> ToolOutcome:
     query = args.get("query")
     max_turns = args.get("max_turns", 10)
@@ -43,17 +44,28 @@ SCHEMA = {
     "type": "function",
     "function": {
         "name": "retrieve_context",
-        "description": "Uses the Retrieval Subagent to deeply search the codebase and return relevant code snippets. WARNING: This launches a full multi-turn search agent and is expensive/slow. Formulate comprehensive queries and avoid calling it repeatedly for minor lookups.",
+        "description": (
+            "Uses the Retrieval Subagent to deeply search the codebase and return relevant code "
+            "snippets. WARNING: This launches a full multi-turn search agent and is expensive/slow. "
+            "Formulate comprehensive queries and avoid calling it repeatedly for minor lookups."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query to pass to the retriever (e.g. 'How does the user authentication work?').",
+                    "description": (
+                        "The search query to pass to the retriever (e.g. "
+                        "'How does the user authentication work?')."
+                    ),
                 },
                 "max_turns": {
                     "type": "integer",
-                    "description": "The maximum number of agentic search turns the retriever is allowed to use. Adjust this depending on the difficulty of the query (e.g. 5 for simple lookups, 20 for complex tracing).",
+                    "description": (
+                        "The maximum number of agentic search turns the retriever is allowed to use. "
+                        "Adjust this depending on the difficulty of the query (e.g. 5 for simple "
+                        "lookups, 20 for complex tracing)."
+                    ),
                     "default": 10,
                 },
             },

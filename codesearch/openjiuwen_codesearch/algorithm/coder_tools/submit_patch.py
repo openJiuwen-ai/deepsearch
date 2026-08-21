@@ -1,8 +1,10 @@
 from .registry import ToolSpec, ToolOutcome
 
+
 async def execute(ctx, args: dict) -> ToolOutcome:
     summary = args.get("summary", "")
     return ToolOutcome(message=f"Patch submitted. Summary: {summary}", patch_submitted=True)
+
 
 SCHEMA = {
     "type": "function",

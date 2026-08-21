@@ -18,7 +18,10 @@ from openjiuwen_codesearch.framework.openjiuwen.agent import (
     CodeSearchAgent,
     RetropusCodeSearchAgent,
 )
-from openjiuwen_codesearch.framework.openjiuwen.runtime_context import build_run_context
+from openjiuwen_codesearch.framework.openjiuwen.runtime_context import (
+    CodeSearchRequest,
+    build_run_context,
+)
 from openjiuwen_codesearch.domain.memory import SnippetMemory
 from openjiuwen_codesearch.llm.factory import LLMClient
 from openjiuwen_codesearch.retrieval.base import CodeRetriever
@@ -303,14 +306,16 @@ class CodeSearchRetriever:
             store = await asyncio.to_thread(self._ensure_store)
         main_llm, filter_llm = self._ensure_llms()
         ctx = build_run_context(
-            config=self.config,
-            query=query,
-            revision=revision,
-            top_k=top_k,
+            req=CodeSearchRequest(
+                config=self.config,
+                query=query,
+                revision=revision,
+                top_k=top_k,
+                memory=self.memory,
+            ),
             retriever=store,
             main_llm=main_llm,
             filter_llm=filter_llm,
-            memory=self.memory,
         )
         return await self._create_agent().run(ctx)
 

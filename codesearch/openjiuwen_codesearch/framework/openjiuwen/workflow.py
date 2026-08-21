@@ -78,8 +78,11 @@ def build_code_search_workflow() -> Workflow:
     )
     return flow
 
+
 def build_code_resolve_workflow() -> Workflow:
-    card = WorkflowCard(id=RESOLVE_WORKFLOW_ID, version=RESOLVE_WORKFLOW_VERSION, name=RESOLVE_WORKFLOW_ID)
+    card = WorkflowCard(
+        id=RESOLVE_WORKFLOW_ID, version=RESOLVE_WORKFLOW_VERSION, name=RESOLVE_WORKFLOW_ID
+    )
     flow = Workflow(card=card)
     flow.set_start_comp(
         start_comp_id=NODE_START,
@@ -107,7 +110,7 @@ class GraphCodeSearchAgent:
     _lock: ClassVar[threading.Lock] = threading.Lock()
 
     @classmethod
-    def _get_shared_agent(cls) -> LegacyWorkflowAgent:
+    def get_shared_agent(cls) -> LegacyWorkflowAgent:
         if cls._workflow_agent is None:
             with cls._lock:
                 if cls._workflow_agent is None:
@@ -129,7 +132,7 @@ class GraphCodeSearchAgent:
                                     name=RESOLVE_WORKFLOW_ID,
                                     description=RESOLVE_WORKFLOW_ID,
                                     input_params=_INPUT_SCHEMA,
-                                )
+                                ),
                             ],
                         )
                     )
@@ -150,14 +153,14 @@ class GraphCodeSearchAgent:
                                 workflow_name=RESOLVE_WORKFLOW_ID,
                                 workflow_description=RESOLVE_WORKFLOW_ID,
                                 input_schema=_INPUT_SCHEMA,
-                            )
+                            ),
                         ]
                     )
                     cls._workflow_agent = agent
         return cls._workflow_agent
 
     async def run(self, ctx: CodeSearchRunContext) -> CodeSearchResult:
-        self._get_shared_agent()
+        self.get_shared_agent()
         logger.info("Starting multi-turn agentic retrieval loop (graph engine)...")
         # 结构化注册：with 退出自动注销（防长驻服务下的注册表泄漏）
         with run_session(ctx) as run_id:

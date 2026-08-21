@@ -1,12 +1,13 @@
 import os
 from .registry import ToolSpec, ToolOutcome
 
+
 async def execute(ctx, args: dict) -> ToolOutcome:
     file_path = args.get("file_path")
     old_string = args.get("old_string")
     new_string = args.get("new_string")
     replace_all = args.get("replace_all", False)
-    
+
     if not all([file_path, old_string, new_string is not None]):
         return ToolOutcome(error="Error: file_path, old_string, and new_string are required.")
 
@@ -19,9 +20,15 @@ async def execute(ctx, args: dict) -> ToolOutcome:
 
     occurrences = content.count(old_string)
     if occurrences == 0:
-        return ToolOutcome(error="Error: old_string not found in file. Ensure exact matching including whitespace and indentation.")
+        return ToolOutcome(
+            error="Error: old_string not found in file. Ensure exact "
+            "matching including whitespace and indentation."
+        )
     if occurrences > 1 and not replace_all:
-        return ToolOutcome(error=f"Error: Found {occurrences} occurrences of old_string. Provide a larger unique snippet or set replace_all=true.")
+        return ToolOutcome(
+            error=f"Error: Found {occurrences} occurrences of old_string. "
+            "Provide a larger unique snippet or set replace_all=true."
+        )
 
     if replace_all:
         new_content = content.replace(old_string, new_string)
@@ -33,11 +40,15 @@ async def execute(ctx, args: dict) -> ToolOutcome:
 
     return ToolOutcome(message=f"Successfully edited {file_path}.")
 
+
 SCHEMA = {
     "type": "function",
     "function": {
         "name": "edit_file",
-        "description": "Performs exact string replacements in files. The old_string must uniquely match exactly one block of text in the file. Preserve exact indentation and spacing.",
+        "description": (
+            "Performs exact string replacements in files. The old_string must uniquely match exactly "
+            "one block of text in the file. Preserve exact indentation and spacing."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
