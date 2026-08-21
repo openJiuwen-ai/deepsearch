@@ -222,8 +222,11 @@ async def release_retriever(retriever: CodeSearchRetriever, collection_name: str
     """
     store = retriever.get_store()
     if store is not None and hasattr(store, "release"):
-        await store.release()
-        logger.info(f"Released collection {collection_name} from memory.")
+        # NOTE: Milvus hangs on load() if a collection with BM25 functions is released and reloaded.
+        # await store.release()
+        # logger.info(f"Released collection {collection_name} from memory.")
+        pass
+
     await retriever.close()
 
 
