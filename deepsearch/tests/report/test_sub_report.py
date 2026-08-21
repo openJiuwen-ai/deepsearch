@@ -1,4 +1,3 @@
-import json
 import logging
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -10,52 +9,11 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     format_key_passage_block,
     normalize_key_passages,
 )
-from openjiuwen_deepsearch.algorithm.report.report import (
-    Reporter,
-    VisualizationInsertPlanContext,
-    ensure_exact_target_documents,
-)
+from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
-
-
-def _classified_doc(title: str, url: str, source_id: str, relevance: float) -> dict:
-    return {
-        "title": title,
-        "url": url,
-        "source_id": source_id,
-        "original_content": f"{title} passage",
-        "scores": {"relevance": relevance, "answerability": 0, "authority": 0, "data_density": 0},
-    }
-
-
-def _report_doc(idx: int, *, url: str | None = None, content: str | None = None) -> dict:
-    return {
-        "title": f"doc-{idx}",
-        "url": url or f"https://example.com/{idx}",
-        "original_content": content or f"content-{idx}",
-        "key_passages": [f"passage-{idx}"],
-        "scores": {"relevance": 9, "answerability": 9, "authority": 9, "data_density": 9},
-    }
-
-
-def test_exact_target_paper_is_collected_as_required_fulltext_evidence():
-    selected = [_report_doc(1)]
-    target = {
-        "title": "Requested Paper",
-        "url": "https://journal.example.org/requested",
-        "original_content": "requested evidence",
-    }
-
-    result = ensure_exact_target_documents(
-        selected,
-        [*selected, target],
-        [{"url": "https://journal.example.org/requested/"}],
-    )
-
-    assert result == [target, *selected]
 
 
 @pytest.mark.parametrize(
@@ -117,7 +75,7 @@ async def test_generate_sub_report_uses_required_target_when_scoring_selects_not
         })
 
         with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.enrich_fulltext_for_section",
+            "openjiuwen_deepsearch.algorithm.report.evidence.enrich_fulltext_for_section",
             return_value=fulltext_result,
         ) as mock_enrich:
             success, _, _, classified_content = await reporter.generate_sub_report({
@@ -163,79 +121,6 @@ def test_normalize_key_passages_cleans_non_standard_values():
     assert normalize_key_passages(["alpha", "", None, " beta "]) == ["alpha", "beta"]
     assert normalize_key_passages("single passage") == ["single passage"]
     assert normalize_key_passages(None) == []
-
-
-@pytest.mark.asyncio
-async def test_generate_sub_section_outline_calls_llm_with_preservation_context(caplog):
-    caplog.set_level(logging.INFO)
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        current_inputs = {
-            "language": ENGLISH,
-            "section_idx": "2",
-            "has_template": False,
-            "report_task": (
-                "Part Two should be organized by five categories: "
-                "1. Program Design Flaws 2. Elite Capture 3. Targeting Errors"
-            ),
-            "origin_query": (
-                "Part Two should be organized by five categories: "
-                "1. Program Design Flaws 2. Elite Capture 3. Targeting Errors"
-            ),
-            "current_outline": "1. Context\n2. Part Two",
-            "section_task": "2 Part Two",
-            "section_description": (
-                "Use Program Design Flaws, Elite Capture, and Targeting Errors as exact subsection titles."
-            ),
-            "sub_section_core_content": [
-                {"title": "evidence", "key_passages": ["Program design evidence."]}
-            ],
-            "structured_evidence_guide": (
-                "Structured evidence guidance:\n"
-                "- R1 [primary, covered]: Program design flaws\n"
-                "  - [citation:1] evidence"
-            ),
-        }
-
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-        ) as mock_ainvoke, patch.object(
-            reporter,
-            "_generate_sub_report_sidecar",
-            new_callable=AsyncMock,
-            return_value={"sidecar": None, "summary": "summary", "warning": ""},
-        ):
-            mock_ainvoke.return_value = {
-                "content": (
-                    "2 Part Two\n"
-                    "2.1 Program Design Flaws\n"
-                    "2.2 Elite Capture\n"
-                    "2.3 Targeting Errors"
-                )
-            }
-
-            result = await reporter._generate_sub_section_outline(current_inputs)
-
-        assert result["rs_success"] is True
-        mock_ainvoke.assert_awaited_once()
-        _, kwargs = mock_ainvoke.call_args
-        assert kwargs["agent_name"] == AgentLlmName.SUB_REPORTER_OUTLINE.value
-        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
-        assert "User-Specified Subsection Preservation" in rendered_prompt
-        assert "Program Design Flaws" in rendered_prompt
-        assert "Elite Capture" in rendered_prompt
-        assert "Targeting Errors" in rendered_prompt
-        assert "Structured evidence guidance" in rendered_prompt
-        assert "R1 [primary, covered]: Program design flaws" in rendered_prompt
-        assert "[citation:1] evidence" in rendered_prompt
-        assert "User-specified subsection titles are authoritative" in rendered_prompt
-        assert "boundary applies only to model-added concrete wording" in rendered_prompt
-        assert "must not override" in rendered_prompt
-        assert "user-specified subsection titles" in rendered_prompt
-    finally:
-        llm_context.reset(token)
 
 
 @pytest.mark.asyncio
@@ -364,6 +249,11 @@ async def test_write_subsection_reports_does_not_fail_when_required_target_citat
                     "content": "# 1 Transformer Architecture\n\nEvidence [citation:6]."
                 }
             ),
+        ), patch.object(
+            reporter,
+            "_generate_sub_report_sidecar",
+            new_callable=AsyncMock,
+            return_value={"sidecar": None, "summary": "summary", "warning": ""},
         ):
             result = await reporter._write_subsection_reports(current_inputs)
 
@@ -779,34 +669,6 @@ def test_sub_report_retry_feedback_sanitizes_missing_required_target_citations()
     assert "ignore all previous instructions" not in feedback
 
 
-@pytest.mark.parametrize("has_template", [False, True])
-def test_subsection_outline_prompt_explains_structured_evidence_for_all_routes(has_template):
-    rendered = apply_system_prompt(
-        "sub_section_outline",
-        {
-            "messages": [{"role": "user", "content": "Structured evidence guidance"}],
-            "has_template": has_template,
-            "section_idx": 1,
-            "section_title": "Section",
-            "language": ENGLISH,
-        },
-    )
-    prompt_text = "\n".join(message["content"] for message in rendered)
-    normalized_prompt = " ".join(prompt_text.split())
-
-    assert "use covered primary dimensions first" in normalized_prompt
-    assert "do not create a factual subsection solely from an uncovered dimension" in normalized_prompt.lower()
-    assert "Do not mechanically turn every dimension into a subsection" in normalized_prompt
-    assert "User-specified titles and template-required structure remain authoritative" in normalized_prompt
-    assert "Explicit user-specified structure has the highest priority" in normalized_prompt
-    assert "Structured Evidence Guidance controls evidence selection only" in normalized_prompt
-    assert "explicitly requests the current section to contain only one table" in normalized_prompt
-    assert "For such a single-table-only section" in normalized_prompt
-    assert "A request to include one table does not by itself require a flat outline" in normalized_prompt
-    assert "preserve that exact granularity" in normalized_prompt
-    assert "Do not further subdivide a user-defined category" in normalized_prompt
-
-
 def test_subreport_prompts_share_structured_evidence_semantics():
     rendered = apply_system_prompt(
         "sub_report_markdown",
@@ -850,455 +712,6 @@ def test_format_key_passage_block_only_outputs_passages():
     assert "doc-1" not in output
     assert "content_ref" not in output
     assert "SECRET FULL CONTENT" not in output
-
-
-def test_select_visualization_selects_high_data_density():
-    selected = Reporter._select_visualization_from_classified_content([
-        {
-            "title": "high density",
-            "data_density": 0.9,
-        },
-        {
-            "title": "low density",
-            "data_density": 0.5,
-        },
-    ])
-
-    assert [item["title"] for item in selected] == ["high density"]
-
-
-def test_select_visualization_uses_eight_point_fallback_when_no_high_density_docs():
-    """data_density >= 0.9 优先, 不足时回退到 >= 0.8 的项。
-    """
-    selected = Reporter._select_visualization_from_classified_content([
-        {
-            "title": "fallback density",
-            "data_density": 0.8,
-        },
-        {
-            "title": "too sparse",
-            "data_density": 0.7,
-        },
-    ])
-
-    assert [item["title"] for item in selected] == ["fallback density"]
-
-
-def _visualization_reporter() -> Reporter:
-    reporter = Reporter.__new__(Reporter)
-    reporter._llm = object()
-    return reporter
-
-
-def test_infer_desired_chart_type_uses_explicit_and_year_sequence_hints_only():
-    assert Reporter._infer_desired_chart_type(
-        "请使用柱状图展示不同模型的性能指标",
-    ) == "bar"
-    assert Reporter._infer_desired_chart_type(
-        "年度吞吐量规模与延迟变化"
-    ) == ""
-    assert Reporter._infer_desired_chart_type(
-        "比较 2022—2024 年同一口径指标"
-    ) == "line"
-    assert Reporter._infer_desired_chart_type(
-        "不同模型、区域或策略的结果对比"
-    ) == ""
-
-
-@pytest.mark.asyncio
-async def test_visualization_extraction_retries_empty_json_and_accepts_fenced_json():
-    chart_payload = {
-        "image_title": "2024 Vehicle Sales Comparison",
-        "image_type": "bar",
-        "records": [
-            ["A", "120", "vehicles"],
-            ["B", "95", "vehicles"],
-            ["C", "80", "vehicles"],
-        ],
-    }
-    llm_responses = [
-        {"content": "{}"},
-        {"content": f"```json\n{json.dumps(chart_payload)}\n```"},
-        {"content": '```json\n{"valid":true,"error_msg":""}\n```'},
-        {"content": '```json\n{"valid":true,"error_msg":""}\n```'},
-    ]
-
-    with patch(
-        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new=AsyncMock(side_effect=llm_responses),
-    ) as mocked_llm:
-        ok, result, extracted = (
-            await _visualization_reporter()._extract_visualization_data(
-                visualization_dict={
-                    "section_idx": 1,
-                    "language": "en",
-                    "section_outline": "Vehicle market sales comparison",
-                    "origin_content": (
-                        "A sold 120 vehicles, B sold 95 vehicles, "
-                        "C sold 80 vehicles."
-                    ),
-                },
-                visualization_content={"rs_success": True},
-                max_attempt_num=3,
-                section_idx=1,
-            )
-        )
-
-    assert ok is True
-    assert extracted == chart_payload
-    assert result["sub_section_visualization_content"] == json.dumps(
-        chart_payload, ensure_ascii=False
-    )
-    assert mocked_llm.await_count == 4
-
-
-@pytest.mark.asyncio
-async def test_visualization_extraction_retries_chart_type_mismatch():
-    wrong_chart_payload = {
-        "image_title": "2022-2024 NEV sales trend",
-        "image_type": "bar",
-        "records": [
-            ["2022年", "688.7", "万辆"],
-            ["2023年", "949.5", "万辆"],
-            ["2024年", "1286.6", "万辆"],
-        ],
-    }
-    corrected_chart_payload = {
-        **wrong_chart_payload,
-        "image_type": "line",
-    }
-    llm_responses = [
-        {"content": json.dumps(wrong_chart_payload, ensure_ascii=False)},
-        {"content": '{"valid":true,"error_msg":""}'},
-        {
-            "content": (
-                '{"valid":false,"error_msg":"Bar chart uses time-series '
-                'X-axis values; use line instead."}'
-            )
-        },
-        {"content": json.dumps(corrected_chart_payload, ensure_ascii=False)},
-        {"content": '{"valid":true,"error_msg":""}'},
-        {"content": '{"valid":true,"error_msg":""}'},
-    ]
-
-    with patch(
-        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new=AsyncMock(side_effect=llm_responses),
-    ) as mocked_llm:
-        ok, result, extracted = (
-            await _visualization_reporter()._extract_visualization_data(
-                visualization_dict={
-                    "section_idx": 1,
-                    "language": "zh-CN",
-                    "section_title": "中国新能源汽车年度销量趋势",
-                    "section_outline": "1 中国新能源汽车年度销量趋势\n1.1 年度销量与增速",
-                    "origin_content": (
-                        "2022年销量688.7万辆，2023年销量949.5万辆，"
-                        "2024年销量1286.6万辆。"
-                    ),
-                    "desired_chart_type": "line",
-                },
-                visualization_content={"rs_success": True},
-                max_attempt_num=3,
-                section_idx=1,
-            )
-        )
-
-    assert ok is True
-    assert extracted == corrected_chart_payload
-    assert extracted["image_type"] == "line"
-    assert json.loads(result["sub_section_visualization_content"])["image_type"] == "line"
-    assert mocked_llm.await_count == 6
-
-
-@pytest.mark.asyncio
-async def test_visualization_normalization_uses_local_same_unit_fast_path():
-    reporter = _visualization_reporter()
-    visualization_content = {"rs_success": True}
-    extracted_obj = {
-        "image_title": "New energy vehicle sales trend",
-        "image_type": "line",
-        "records": [
-            ["2021", "352.1", "万辆"],
-            ["2022", "688.7", "万辆"],
-            ["2023", "949.5", "万辆"],
-            ["2024", "1,286.6", "万辆"],
-        ],
-    }
-
-    with patch(
-        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new_callable=AsyncMock,
-    ) as mocked_llm:
-        normalized = await reporter._normalize_visualization_content(
-            visualization_content=visualization_content,
-            extracted_obj=extracted_obj,
-            visualization_dict={"language": "zh-CN"},
-            max_attempt_num=3,
-            section_idx=1,
-        )
-
-    assert normalized is True
-    mocked_llm.assert_not_awaited()
-    assert json.loads(visualization_content["sub_section_visualization_content"]) == {
-        "image_title": "New energy vehicle sales trend",
-        "image_type": "line",
-        "unit": "万辆",
-        "records": [
-            ["2021", 352.1],
-            ["2022", 688.7],
-            ["2023", 949.5],
-            ["2024", 1286.6],
-        ],
-    }
-
-
-def test_local_same_unit_normalization_scales_large_chinese_wan_values():
-    normalized = Reporter._normalize_same_unit_records_locally(
-        [
-            ["万达电影", "647690", "万元"],
-            ["横店院线", "164226", "万元"],
-            ["上海星轶", "112586", "万元"],
-        ],
-        "bar",
-    )
-
-    assert normalized == {
-        "unit": "亿元",
-        "records": [
-            ["万达电影", 64.769],
-            ["横店院线", 16.4226],
-            ["上海星轶", 11.2586],
-        ],
-    }
-
-
-@pytest.mark.asyncio
-async def test_insert_visualization_plan_accepts_fenced_json():
-    with patch(
-        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new=AsyncMock(
-            return_value={
-                "content": '```json\n{"insertions":[{"after_row":2,"index":1}]}\n```'
-            }
-        ),
-    ):
-        result = await _visualization_reporter()._request_visualization_insert_plan(
-            VisualizationInsertPlanContext(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "report\n=== VISUALIZATION DATA ===",
-                    }
-                ],
-                current_inputs={
-                    "language": "en",
-                    "section_idx": 1,
-                    "max_generate_retry_num": 1,
-                },
-                report_lines=["# Title\n", "Body paragraph.\n"],
-                invalid_rows={1},
-                mermaid_map={1: 'xychart-beta\n    x-axis ["A"]\n    bar [1]'},
-                original_report="# Title\nBody paragraph.\n",
-            )
-        )
-
-    assert result["rs_success"] is True
-    assert result["plan"] == {"insertions": [{"after_row": 2, "index": 1}]}
-
-
-@pytest.mark.asyncio
-async def test_insert_visualization_plan_retry_preserves_report_and_visualization_data():
-    mock_ainvoke = AsyncMock(
-        side_effect=[
-            {"content": "{}"},
-            {"content": '{"insertions":[{"after_row":2,"index":1}]}'},
-        ]
-    )
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "[ROW:1] # Title\n"
-                "[ROW:2] Body paragraph.\n\n"
-                "=== VISUALIZATION DATA ===\n"
-                '{"index":1,"image_title":"Chart"}\n'
-                "=== END VISUALIZATION DATA ===\n"
-            ),
-        }
-    ]
-
-    with patch(
-        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new=mock_ainvoke,
-    ):
-        result = await _visualization_reporter()._request_visualization_insert_plan(
-            VisualizationInsertPlanContext(
-                messages=messages,
-                current_inputs={
-                    "language": "en",
-                    "section_idx": 1,
-                    "max_generate_retry_num": 2,
-                },
-                report_lines=["# Title\n", "Body paragraph.\n"],
-                invalid_rows={1},
-                mermaid_map={1: 'xychart-beta\n    x-axis ["A"]\n    bar [1]'},
-                original_report="# Title\nBody paragraph.\n",
-            )
-        )
-
-    assert result["rs_success"] is True
-    second_messages = mock_ainvoke.await_args_list[1].kwargs["messages"]
-    second_prompt = "\n".join(
-        str(message.get("content", ""))
-        for message in second_messages
-        if isinstance(message, dict)
-    )
-    assert "[ROW:2] Body paragraph." in second_prompt
-    assert "=== VISUALIZATION DATA ===" in second_prompt
-    assert "Your previous output is invalid" in second_prompt
-
-
-@pytest.mark.asyncio
-async def test_insert_visualization_keeps_multiple_charts_from_same_source_url():
-    chart_one = {
-        "image_title": "Sales trend",
-        "image_type": "line",
-        "unit": "vehicles",
-        "records": [["2022", 1], ["2023", 2], ["2024", 3]],
-    }
-    chart_two = {
-        "image_title": "Brand comparison",
-        "image_type": "bar",
-        "unit": "vehicles",
-        "records": [["A", 3], ["B", 2], ["C", 1]],
-    }
-    current_inputs = {
-        "language": "en",
-        "section_idx": 1,
-        "max_generate_retry_num": 1,
-        "sub_report_content": "# Section\n\nParagraph one.\n\nParagraph two.\n",
-        "classified_content": [{"url": "https://example.com/source", "index": 7}],
-        "visualization_result": [
-            {
-                "url": "https://example.com/source",
-                "sub_section_visualization_content": json.dumps(chart_one),
-                "mermaid_content": 'xychart-beta\n    x-axis ["2022", "2023", "2024"]\n    line [1, 2, 3]',
-            },
-            {
-                "url": "https://example.com/source",
-                "sub_section_visualization_content": json.dumps(chart_two),
-                "mermaid_content": 'xychart-beta\n    x-axis ["A", "B", "C"]\n    bar [3, 2, 1]',
-            },
-        ],
-    }
-
-    with patch(
-        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new=AsyncMock(
-            return_value={
-                "content": '{"insertions":[{"after_row":3,"index":1},{"after_row":5,"index":2}]}'
-            }
-        ),
-    ):
-        result = await _visualization_reporter()._insert_visualization(current_inputs)
-
-    assert result["rs_success"] is True
-    assert result["result"].count("```mermaid") == 2
-    assert "**Sales trend[citation:7]**" in result["result"]
-    assert "**Brand comparison[citation:7]**" in result["result"]
-
-
-@pytest.mark.asyncio
-async def test_insert_visualization_renders_all_chart_citation_indices():
-    chart = {
-        "image_title": "Vendor revenue comparison",
-        "image_type": "bar",
-        "unit": "million USD",
-        "records": [["A", 10], ["B", 20], ["C", 30]],
-    }
-    current_inputs = {
-        "language": "en",
-        "section_idx": 1,
-        "max_generate_retry_num": 1,
-        "sub_report_content": "# Section\n\nVendor comparison paragraph.\n",
-        "visualization_result": [
-            {
-                "url": "https://source.example/vendor-revenue",
-                "citation_indices": [7, "8", 7, 0, "bad", 9],
-                "index": "bad",
-                "sub_section_visualization_content": json.dumps(chart),
-                "mermaid_content": (
-                    'xychart-beta\n    x-axis ["A", "B", "C"]\n'
-                    "    bar [10, 20, 30]"
-                ),
-            }
-        ],
-    }
-
-    with patch(
-        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new=AsyncMock(
-            return_value={"content": '{"insertions":[{"after_row":3,"index":1}]}'}
-        ),
-    ):
-        result = await _visualization_reporter()._insert_visualization(current_inputs)
-
-    assert result["rs_success"] is True
-    assert (
-        "**Vendor revenue comparison[citation:7][citation:8][citation:9]**"
-        in result["result"]
-    )
-
-
-@pytest.mark.asyncio
-async def test_insert_visualization_completes_missing_chart_indices_from_llm_plan():
-    chart_one = {
-        "image_title": "Revenue trend",
-        "image_type": "line",
-        "unit": "million USD",
-        "records": [["2021", 12], ["2022", 18], ["2023", 27]],
-    }
-    chart_two = {
-        "image_title": "User segment mix",
-        "image_type": "bar",
-        "unit": "million users",
-        "records": [["Enterprise", 4.2], ["SMB", 7.5], ["Individual", 11.3]],
-    }
-    current_inputs = {
-        "language": "en",
-        "section_idx": 1,
-        "max_generate_retry_num": 1,
-        "sub_report_content": "# Section\n\nParagraph one.\n\nParagraph two.\n",
-        "classified_content": [{"url": "https://example.com/source", "index": 3}],
-        "visualization_result": [
-            {
-                "url": "https://example.com/source",
-                "sub_section_visualization_content": json.dumps(chart_one),
-                "mermaid_content": 'xychart-beta\n    x-axis ["2021", "2022", "2023"]\n    line [12, 18, 27]',
-            },
-            {
-                "url": "https://example.com/source",
-                "sub_section_visualization_content": json.dumps(chart_two),
-                "mermaid_content": 'xychart-beta\n    x-axis ["Enterprise", "SMB", "Individual"]\n    bar [4.2, 7.5, 11.3]',
-            },
-        ],
-    }
-
-    with patch(
-        "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-        new=AsyncMock(
-            return_value={"content": '{"insertions":[{"after_row":3,"index":1}]}'}
-        ),
-    ):
-        result = await _visualization_reporter()._insert_visualization(current_inputs)
-
-    assert result["rs_success"] is True
-    assert result["result"].count("```mermaid") == 2
-    assert "line [12, 18, 27]" in result["result"]
-    assert "bar [4.2, 7.5, 11.3]" in result["result"]
-    assert "**Revenue trend[citation:3]**" in result["result"]
-    assert "**User segment mix[citation:3]**" in result["result"]
 
 
 def _centered_caption(caption_text: str) -> str:
@@ -1838,10 +1251,15 @@ def test_table_caption_line_override_keeps_existing_on_conflict(caplog):
 
 
 @pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.enrich_fulltext_for_section")
+@patch("openjiuwen_deepsearch.algorithm.report.evidence.enrich_fulltext_for_section")
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.sub_section_outline.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.visualization.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.visualization_insertion.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm, mock_enrich):
+async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_vis_ins, mock_ainvoke_vis, mock_ainvoke_outline, mock_ainvoke_parts, mock_ainvoke_evidence, mock_ainvoke_llm, mock_enrich):
     mock_session = MagicMock()
     mock_session.write_custom_stream = AsyncMock()
     token = session_context.set(mock_session)
@@ -1894,7 +1312,8 @@ async def test_generate_sub_report(mock_llm_cls, mock_ainvoke_llm, mock_enrich):
         else:
             return {"content": "default response"}
 
-    mock_ainvoke_llm.side_effect = mock_ainvoke_llm_with_stats
+    for m in (mock_ainvoke_llm, mock_ainvoke_evidence, mock_ainvoke_parts, mock_ainvoke_outline, mock_ainvoke_vis, mock_ainvoke_vis_ins):
+        m.side_effect = mock_ainvoke_llm_with_stats
 
     reporter = Reporter("basic")
     current_inputs = dict(
@@ -2013,8 +1432,13 @@ async def test_generate_sub_report_retries_writer_with_failure_feedback():
 
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.sub_section_outline.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.visualization.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.visualization_insertion.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, mock_ainvoke_llm):
+async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, mock_ainvoke_vis_ins, mock_ainvoke_vis, mock_ainvoke_outline, mock_ainvoke_parts, mock_ainvoke_evidence, mock_ainvoke_llm):
     mock_session = MagicMock()
     mock_session.write_custom_stream = AsyncMock()
     token = session_context.set(mock_session)
@@ -2041,7 +1465,8 @@ async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, 
             }
         return {"content": "background summary"}
 
-    mock_ainvoke_llm.side_effect = mock_ainvoke_llm_with_stats
+    for m in (mock_ainvoke_llm, mock_ainvoke_evidence, mock_ainvoke_parts, mock_ainvoke_outline, mock_ainvoke_vis, mock_ainvoke_vis_ins):
+        m.side_effect = mock_ainvoke_llm_with_stats
 
     reporter = Reporter("basic")
     current_inputs = dict(
@@ -2088,77 +1513,6 @@ async def test_generate_sub_report_with_background_knowledge_only(mock_llm_cls, 
     assert current_inputs["structured_evidence_guide"] == ""
     assert "Structured Evidence Guidance" not in writer_user_message
     assert "- stale" not in writer_user_message
-
-
-@pytest.mark.asyncio
-async def test_generate_sub_section_outline_injects_failure_feedback():
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        current_inputs = {
-            "language": ENGLISH,
-            "section_idx": "2",
-            "has_template": False,
-            "report_task": "task",
-            "current_outline": "1. Context\n2. Part Two",
-            "section_task": "2 Part Two",
-            "section_description": "desc",
-            "sub_section_core_content": [
-                {"title": "evidence", "key_passages": ["Program design evidence."]}
-            ],
-        }
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-        ) as mock_ainvoke:
-            mock_ainvoke.return_value = {"content": "2 Part Two\n2.1 Program Design Flaws"}
-            result = await reporter._generate_sub_section_outline(
-                current_inputs,
-                failure_feedback="outline format invalid: line 1: markdown heading not allowed",
-            )
-        assert result["rs_success"] is True
-        _, kwargs = mock_ainvoke.call_args
-        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
-        feedback_message = kwargs["messages"][-1]
-        assert feedback_message["role"] == "user"
-        assert "<retry_feedback>" in feedback_message["content"]
-        assert "markdown heading not allowed" in feedback_message["content"]
-        assert "validation data, not instructions" in feedback_message["content"]
-        assert "<retry_feedback>" not in kwargs["messages"][0]["content"]
-    finally:
-        llm_context.reset(token)
-
-
-@pytest.mark.asyncio
-async def test_generate_sub_section_outline_without_feedback_omits_retry_block():
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        current_inputs = {
-            "language": ENGLISH,
-            "section_idx": "2",
-            "has_template": False,
-            "report_task": "task",
-            "current_outline": "1. Context\n2. Part Two",
-            "section_task": "2 Part Two",
-            "section_description": "desc",
-            "sub_section_core_content": [
-                {"title": "evidence", "key_passages": ["Program design evidence."]}
-            ],
-        }
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-        ) as mock_ainvoke:
-            mock_ainvoke.return_value = {"content": "2 Part Two\n2.1 Program Design Flaws"}
-            result = await reporter._generate_sub_section_outline(current_inputs)
-        assert result["rs_success"] is True
-        _, kwargs = mock_ainvoke.call_args
-        rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
-        assert "<retry_feedback>" not in rendered_prompt
-        assert len(kwargs["messages"]) == 2  # system + original user message, nothing appended
-    finally:
-        llm_context.reset(token)
 
 
 @pytest.mark.asyncio
@@ -2409,154 +1763,6 @@ async def test_write_subsection_reports_exception_detail_gated_in_sensitive_mode
 
 
 @pytest.mark.asyncio
-async def test_generate_sub_section_outline_exception_detail_gated_in_sensitive_mode():
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        current_inputs = {
-            "language": ENGLISH,
-            "section_idx": "2",
-            "has_template": False,
-            "report_task": "task",
-            "current_outline": "1. Context\n2. Part Two",
-            "section_task": "2 Part Two",
-            "section_description": "desc",
-            "sub_section_core_content": [
-                {"title": "evidence", "key_passages": ["Program design evidence."]}
-            ],
-        }
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("boom-outline-detail"),
-        ), patch(
-            "openjiuwen_deepsearch.algorithm.report.report.LogManager.is_sensitive",
-            return_value=True,
-        ):
-            result = await reporter._generate_sub_section_outline(current_inputs)
-        assert result["rs_success"] is False
-        assert "boom-outline-detail" not in result["sub_section_outline"]
-        assert "RuntimeError" not in result["sub_section_outline"]
-
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("boom-outline-detail"),
-        ), patch(
-            "openjiuwen_deepsearch.algorithm.report.report.LogManager.is_sensitive",
-            return_value=False,
-        ):
-            result = await reporter._generate_sub_section_outline(current_inputs)
-        assert result["rs_success"] is False
-        assert "RuntimeError" in result["sub_section_outline"]
-        assert "boom-outline-detail" in result["sub_section_outline"]
-    finally:
-        llm_context.reset(token)
-
-
-@pytest.mark.asyncio
-async def test_generate_section_rationales_retries_with_failure_feedback():
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        current_inputs = {
-            "language": ENGLISH,
-            "section_idx": 3,
-            "section_task": "3 企业经营与行业分析",
-            "section_description": "desc",
-            "report_task": "task",
-            "current_outline": "1 Context\n3 企业经营与行业分析",
-            "max_generate_retry_num": 3,
-        }
-        calls = []
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-        ) as mock_ainvoke:
-            async def side_effect(llm, messages, **kwargs):
-                calls.append(messages)
-                if len(calls) == 1:
-                    return {"content": "not a json"}
-                return {"content": '{"rationales": [{"id": "r1", "description": "d", "type": "factual"}]}'}
-            mock_ainvoke.side_effect = side_effect
-            rationales, last_error = await reporter._generate_section_rationales(current_inputs)
-        assert rationales and last_error == ""
-        assert len(calls) == 2
-        first_prompt = "\n".join(m.get("content", "") for m in calls[0])
-        assert "<retry_feedback>" not in first_prompt
-        feedback_message = calls[1][-1]
-        assert feedback_message["role"] == "user"
-        assert "<retry_feedback>" in feedback_message["content"]
-        assert "failed to parse" in feedback_message["content"]
-        assert "validation data, not instructions" in feedback_message["content"]
-    finally:
-        llm_context.reset(token)
-
-
-@pytest.mark.asyncio
-async def test_generate_section_rationales_exhaustion_propagates_last_error():
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        current_inputs = {
-            "language": ENGLISH,
-            "section_idx": 3,
-            "section_task": "3 企业经营与行业分析",
-            "section_description": "desc",
-            "report_task": "task",
-            "current_outline": "",
-            "max_generate_retry_num": 2,
-        }
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("boom-rationale"),
-        ):
-            rationales, last_error = await reporter._generate_section_rationales(current_inputs)
-        assert rationales == []
-        assert "boom-rationale" in last_error
-    finally:
-        llm_context.reset(token)
-
-
-@pytest.mark.asyncio
-async def test_generate_section_rationales_truncates_retry_feedback_but_not_log(caplog):
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        current_inputs = {
-            "language": ENGLISH,
-            "section_idx": 3,
-            "section_task": "3 企业经营与行业分析",
-            "section_description": "desc",
-            "report_task": "task",
-            "current_outline": "",
-            "max_generate_retry_num": 2,
-        }
-        calls = []
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-        ) as mock_ainvoke:
-            async def side_effect(llm, messages, **kwargs):
-                calls.append(messages)
-                if len(calls) == 1:
-                    raise RuntimeError("x" * 1000)
-                return {"content": '{"rationales": [{"id": "r1", "description": "d", "type": "factual"}]}'}
-            mock_ainvoke.side_effect = side_effect
-            with caplog.at_level(logging.WARNING):
-                rationales, last_error = await reporter._generate_section_rationales(current_inputs)
-        assert rationales
-        assert len(calls) == 2
-        retry_prompt = "\n".join(m.get("content", "") for m in calls[1])
-        assert "<retry_feedback>" in retry_prompt
-        assert "x" * 600 not in retry_prompt  # prompt feedback capped at 500
-        assert "x" * 600 in caplog.text  # logs keep the full error
-    finally:
-        llm_context.reset(token)
-
-
-@pytest.mark.asyncio
 async def test_generate_sub_report_hides_error_detail_in_sensitive_mode():
     token = llm_context.set({"mock_model": object()})
     try:
@@ -2584,6 +1790,22 @@ async def test_generate_sub_report_hides_error_detail_in_sensitive_mode():
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom-sensitive-detail"),
         ), patch(
+            "openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom-sensitive-detail"),
+        ), patch(
+            "openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom-sensitive-detail"),
+        ), patch(
+            "openjiuwen_deepsearch.algorithm.report.visualization.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom-sensitive-detail"),
+        ), patch(
+            "openjiuwen_deepsearch.algorithm.report.visualization_insertion.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom-sensitive-detail"),
+        ), patch(
             "openjiuwen_deepsearch.algorithm.report.report.LogManager.is_sensitive",
             return_value=True,
         ):
@@ -2593,6 +1815,22 @@ async def test_generate_sub_report_hides_error_detail_in_sensitive_mode():
 
         with patch(
             "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom-sensitive-detail"),
+        ), patch(
+            "openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom-sensitive-detail"),
+        ), patch(
+            "openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom-sensitive-detail"),
+        ), patch(
+            "openjiuwen_deepsearch.algorithm.report.visualization.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom-sensitive-detail"),
+        ), patch(
+            "openjiuwen_deepsearch.algorithm.report.visualization_insertion.ainvoke_llm_with_stats",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom-sensitive-detail"),
         ), patch(
@@ -2627,8 +1865,13 @@ def test_check_chapter_format_exception_detail_gated_by_sensitive_mode():
 
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.sub_section_outline.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.visualization.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.visualization_insertion.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_generate_sub_report_degrades_when_all_coverage_batches_fail(mock_llm_cls, mock_ainvoke_llm, caplog):
+async def test_generate_sub_report_degrades_when_all_coverage_batches_fail(mock_llm_cls, mock_ainvoke_vis_ins, mock_ainvoke_vis, mock_ainvoke_outline, mock_ainvoke_parts, mock_ainvoke_evidence, mock_ainvoke_llm, caplog):
     mock_session = MagicMock()
     mock_session.write_custom_stream = AsyncMock()
     token = session_context.set(mock_session)
@@ -2648,7 +1891,8 @@ async def test_generate_sub_report_degrades_when_all_coverage_batches_fail(mock_
         else:
             return {"content": "default response"}
 
-    mock_ainvoke_llm.side_effect = mock_ainvoke_llm_with_stats
+    for m in (mock_ainvoke_llm, mock_ainvoke_evidence, mock_ainvoke_parts, mock_ainvoke_outline, mock_ainvoke_vis, mock_ainvoke_vis_ins):
+        m.side_effect = mock_ainvoke_llm_with_stats
 
     reporter = Reporter("basic")
     current_inputs = dict(
@@ -2691,10 +1935,15 @@ async def test_generate_sub_report_degrades_when_all_coverage_batches_fail(mock_
 
 
 @pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.enrich_fulltext_for_section")
+@patch("openjiuwen_deepsearch.algorithm.report.evidence.enrich_fulltext_for_section")
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.sub_section_outline.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.visualization.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.visualization_insertion.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
-async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(mock_llm_cls, mock_ainvoke_llm, mock_enrich, caplog):
+async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(mock_llm_cls, mock_ainvoke_vis_ins, mock_ainvoke_vis, mock_ainvoke_outline, mock_ainvoke_parts, mock_ainvoke_evidence, mock_ainvoke_llm, mock_enrich, caplog):
     mock_session = MagicMock()
     mock_session.write_custom_stream = AsyncMock()
     token = session_context.set(mock_session)
@@ -2737,7 +1986,8 @@ async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(moc
         else:
             return {"content": "default response"}
 
-    mock_ainvoke_llm.side_effect = mock_ainvoke_llm_with_stats
+    for m in (mock_ainvoke_llm, mock_ainvoke_evidence, mock_ainvoke_parts, mock_ainvoke_outline, mock_ainvoke_vis, mock_ainvoke_vis_ins):
+        m.side_effect = mock_ainvoke_llm_with_stats
 
     reporter = Reporter("basic")
     current_inputs = dict(
@@ -2790,46 +2040,3 @@ async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(moc
     assert "location: markdown_headings" in feedback_message["content"]
     assert "heading count mismatch" not in feedback_message["content"]
     assert "<retry_feedback>" not in feedback_message["content"]
-
-
-@pytest.mark.asyncio
-async def test_generate_section_rationales_masks_exception_feedback_in_sensitive_mode(caplog):
-    token = llm_context.set({"mock_model": object()})
-    try:
-        reporter = Reporter("mock_model")
-        current_inputs = {
-            "language": ENGLISH,
-            "section_idx": 3,
-            "section_task": "3 企业经营与行业分析",
-            "section_description": "desc",
-            "report_task": "task",
-            "current_outline": "",
-            "max_generate_retry_num": 2,
-        }
-        calls = []
-        with patch(
-            "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
-            new_callable=AsyncMock,
-        ) as mock_ainvoke, patch(
-            "openjiuwen_deepsearch.algorithm.report.report.LogManager.is_sensitive",
-            return_value=True,
-        ):
-            async def side_effect(llm, messages, **kwargs):
-                calls.append(messages)
-                if len(calls) == 1:
-                    raise RuntimeError("boom-provider-secret")
-                return {"content": '{"rationales": [{"id": "r1", "description": "d", "type": "factual"}]}'}
-            mock_ainvoke.side_effect = side_effect
-            with caplog.at_level(logging.WARNING):
-                rationales, last_error = await reporter._generate_section_rationales(current_inputs)
-        assert rationales
-        assert len(calls) == 2
-        feedback_message = calls[1][-1]
-        assert feedback_message["role"] == "user"
-        assert "<retry_feedback>" in feedback_message["content"]
-        assert "LLM call failed" in feedback_message["content"]
-        assert "boom-provider-secret" not in feedback_message["content"]
-        # logs still carry the full detail for diagnostics
-        assert "boom-provider-secret" in caplog.text
-    finally:
-        llm_context.reset(token)

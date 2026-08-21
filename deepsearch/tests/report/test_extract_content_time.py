@@ -169,3 +169,49 @@ async def test_content_time_none_without_temporal_scope(monkeypatch):
     assert len(passages) == 1
     assert passages[0]["content_time"] is None
     assert captured_ctx and captured_ctx[0].get("extract_content_time") is False
+
+
+@pytest.mark.asyncio
+async def test_extract_batch_propagates_extract_content_time_to_prompt(monkeypatch):
+    """_extract_batch must pass extract_content_time in tmp_context to
+    apply_system_prompt('passages_extractor', ...). Regression guard for
+    the flag being accidentally moved to _generate_section_rationales."""
+    import json
+
+    from openjiuwen_deepsearch.algorithm.report import evidence as evidence_mod
+
+    reporter = Reporter.__new__(Reporter)
+    reporter._llm = object()
+
+    captured_tmp_context: list = []
+
+    def _fake_apply_system_prompt(name, ctx):
+        if name == "passages_extractor":
+            captured_tmp_context.append(dict(ctx))
+        return ctx.get("messages", [])
+
+    async def _fake_ainvoke(*args, **kwargs):
+        return {"content": json.dumps(_llm_doc_result())}
+
+    monkeypatch.setattr(evidence_mod, "apply_system_prompt", _fake_apply_system_prompt)
+    monkeypatch.setattr(evidence_mod, "ainvoke_llm_with_stats", _fake_ainvoke)
+
+    section_ctx_true = {
+        "section_task": "1 Background",
+        "section_description": "desc",
+        "section_idx": 1,
+        "max_retries": 1,
+        "extract_content_time": True,
+    }
+    await reporter._extract_batch(
+        _raw_passages(), 0, "r1: core facts", section_ctx_true
+    )
+    assert captured_tmp_context, "passages_extractor prompt was never called"
+    assert captured_tmp_context[0].get("extract_content_time") is True
+
+    captured_tmp_context.clear()
+    section_ctx_false = {**section_ctx_true, "extract_content_time": False}
+    await reporter._extract_batch(
+        _raw_passages(), 0, "r1: core facts", section_ctx_false
+    )
+    assert captured_tmp_context[0].get("extract_content_time") is False

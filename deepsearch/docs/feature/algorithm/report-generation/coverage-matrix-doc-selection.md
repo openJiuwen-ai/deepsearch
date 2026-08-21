@@ -33,6 +33,8 @@
 ## 关键代码路径
 
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
+- 证据生成/抽取/评分/top-k 选择：`openjiuwen_deepsearch/algorithm/report/evidence.py`（rationale 生成、段落抽取打分、按维度 top-k 选择）
+- 常量与正则：`openjiuwen_deepsearch/algorithm/report/report_common.py`（`EXTRACT_BATCH_SIZE`、`MAX_CONCURRENT_BATCHES` 等）
 - 全文抽取管线：`openjiuwen_deepsearch/algorithm/report/report_rationale_fulltext.py`（L1/L2 过滤、URL 频次选择、分类内容构建）
 - 结构化证据指南：`openjiuwen_deepsearch/algorithm/report/compact_doc_info.py`（`build_structured_evidence_guide`）
 
@@ -43,12 +45,14 @@
 
 常量定义：
 
+- `openjiuwen_deepsearch/algorithm/report/report_common.py`（`EXTRACT_BATCH_SIZE`、`MAX_CONCURRENT_BATCHES`）
 - `openjiuwen_deepsearch/utils/constants_utils/node_constants.py`（`SUB_REPORTER_RATIONALE_GENERATOR`、`SUB_REPORTER_PASSAGES_EXTRACTOR`）
 
 主要测试：
 
 - `tests/report/test_doc_selection.py`
 - `tests/report/test_report_rationale_fulltext.py`
+- `tests/report/test_evidence.py`
 
 ## 核心流程
 

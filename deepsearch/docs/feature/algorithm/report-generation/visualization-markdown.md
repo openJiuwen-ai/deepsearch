@@ -37,6 +37,8 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 
 - 报告工具：`openjiuwen_deepsearch/algorithm/report/report_utils.py`
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
+- 可视化生成：`openjiuwen_deepsearch/algorithm/report/visualization.py`（图表数据抽取与 Mermaid 生成 mixin）
+- 可视化插入：`openjiuwen_deepsearch/algorithm/report/visualization_insertion.py`（图表插入 mixin）
 
 相关 Prompt：
 
@@ -51,6 +53,8 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 - `tests/report/test_general_report.py`
 - `tests/report/test_tools_in_report.py`
 - `tests/report/test_sub_report.py`
+- `tests/report/test_visualization.py`
+- `tests/report/test_visualization_insertion.py`
 - `tests/algorithm/report_export/test_mermaid_renderer.py`
 
 ## 核心流程
@@ -102,6 +106,8 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 uv run pytest tests/report/test_general_report.py
 uv run pytest tests/report/test_tools_in_report.py
 uv run pytest tests/report/test_sub_report.py
+uv run pytest tests/report/test_visualization.py
+uv run pytest tests/report/test_visualization_insertion.py
 uv run pytest tests/algorithm/report_export/test_mermaid_renderer.py
 ```
 

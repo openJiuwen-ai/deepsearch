@@ -1,12 +1,68 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import json
+import logging
 import math
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Tuple
 
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline
+
+logger = logging.getLogger(__name__)
+
+
+def export_outline_without_plans(outline: Outline | dict):
+    """导出不包含执行计划信息的大纲结构。"""
+    if not outline or not isinstance(outline, (Outline, dict)):
+        logger.warning(
+            "export_outline_without_plans: unsupported outline type or empty outline."
+        )
+        return outline
+
+    is_dict = isinstance(outline, dict)
+    obj = Outline.model_validate(outline) if is_dict else outline
+
+    data = obj.model_dump(exclude={"sections": {"__all__": {"plans", "doc_selection_debug"}}})
+
+    return data if is_dict else Outline.model_validate(data)
+
+
+def _section_sort_key(section_id) -> tuple[int, int | str]:
+    """Keep report sections ordered numerically when section ids are strings."""
+    text = str(section_id).strip()
+    if text.isdigit():
+        return 0, int(text)
+    return 1, text
+
+
+def resolve_current_subsection(current_inputs: dict) -> str:
+    """Resolve the ``current_subsection`` prompt parameter from the chapter outline.
+
+    If ``current_inputs`` already carries an explicit ``current_subsection``,
+    return it. Otherwise derive a default from the chapter outline: when the
+    outline has more than one non-blank line, instruct the LLM to follow each
+    Level 2 heading; otherwise keep the Level 1-only outline.
+    """
+    current_chapter_outline = current_inputs.get("sub_section_outline", "")
+    outline_lines = [
+        line.strip()
+        for line in current_chapter_outline.splitlines()
+        if line.strip()
+    ]
+    default_current_subsection = (
+        "Full current chapter; follow each Level 2 heading in the current chapter outline."
+        if len(outline_lines) > 1
+        else (
+            "Full current chapter; keep the Level 1-only outline. "
+            "Do not add Level 2 or deeper headings."
+        )
+    )
+    return current_inputs.get(
+        "current_subsection",
+        default_current_subsection,
+    )
 
 
 def _strip_chart_markup(text: str) -> str:
