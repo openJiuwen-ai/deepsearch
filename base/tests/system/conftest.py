@@ -5,8 +5,8 @@
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
 import pytest
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 PKG_ROOT = Path(__file__).resolve().parents[2]

@@ -73,9 +73,7 @@ def test_mini_workflow_invokes_base_node(openjiuwen_pkg):
         flow.add_workflow_comp(NODE_ECHO, EchoNode())
         flow.set_end_comp(NODE_END, End())
         flow.add_connection(NODE_START, NODE_ECHO)
-        flow.add_conditional_connection(
-            NODE_ECHO, router=init_router(NODE_ECHO, [NODE_END, "never"])
-        )
+        flow.add_conditional_connection(NODE_ECHO, router=init_router(NODE_ECHO, [NODE_END, "never"]))
         session = create_workflow_session()
         return await flow.invoke({"payload": "hello"}, session, skip_inputs_validate=True)
 
