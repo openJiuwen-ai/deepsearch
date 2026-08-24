@@ -32,6 +32,11 @@ from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
     build_doc_variant_key,
 )
+from openjiuwen_deepsearch.algorithm.report.date_utils import (
+    classify_temporal,
+    parse_content_window,
+    timeliness_score,
+)
 from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
     find_exact_target_paper_facts,
 )
@@ -2655,9 +2660,6 @@ class Reporter:
         known_ratio = 0.0
         effective_weight = 0.0
         if use_temporal:
-            from openjiuwen_deepsearch.algorithm.report.date_utils import (
-                classify_temporal, timeliness_score, parse_content_window,
-            )
             for idx, p in enumerate(filtered_passages):
                 status = classify_temporal(
                     parse_content_window(p.get("content_time")), temporal_scope

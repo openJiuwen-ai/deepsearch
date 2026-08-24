@@ -7,6 +7,10 @@ from typing import List, Optional, Dict, Union, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import (
+    TEMPORAL_SCOPE_SEARCH_ENGINES,
+)
+
 
 class Message(BaseModel):
     """
@@ -342,10 +346,6 @@ def resolve_temporal_embed_in_query(
     约束时间词；其余引擎（或副引擎启用时）需把约束时间词写进搜索词。content_date 约束
     表达的是事实发生时间，任何引擎都无法原生过滤，始终需要写进搜索词。
     """
-    from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
-        TEMPORAL_SCOPE_SEARCH_ENGINES,
-    )
-
     if constraint_type is None:
         return False
     if constraint_type == "content_date":
