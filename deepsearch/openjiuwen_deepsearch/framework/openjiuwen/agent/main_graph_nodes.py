@@ -393,7 +393,11 @@ class IntentRecognitionNode(BaseNode):
         ))
 
         human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
-        next_node = NodeId.GENERATE_QUESTIONS.value if human_in_the_loop else NodeId.OUTLINE.value
+        next_node = (
+            NodeId.GENERATE_QUESTIONS.value
+            if human_in_the_loop
+            else (NodeId.BRIEF_OUTLINE.value if report_policy.report_type == "brief" else NodeId.OUTLINE.value)
+        )
 
         logger.info("[IntentRecognitionNode] End IntentRecognitionNode, next_node=%s", next_node)
         return dict(language=lang, human_in_the_loop=human_in_the_loop, next_node=next_node)
@@ -516,6 +520,24 @@ class FeedbackHandlerNode(BaseNode):
             current_intent.exclude_domains, incoming_intent.exclude_domains
         )
 
+        target_papers = []
+        seen_target_papers = set()
+        for paper in [*current_intent.target_papers, *incoming_intent.target_papers]:
+            identity = next((
+                f"{field}:{str(getattr(paper, field, '')).strip().casefold()}"
+                for field in ("pmid", "doi", "arxiv_id", "url", "title", "dataset", "data_year", "topic")
+                if str(getattr(paper, field, "")).strip()
+            ), None)
+            if identity is None or identity in seen_target_papers:
+                continue
+            seen_target_papers.add(identity)
+            target_papers.append(paper)
+        merged_intent.target_papers = target_papers
+        merged_intent.include_url = self._merge_unique_items(
+            merged_intent.include_url,
+            [paper.url for paper in target_papers if paper.url],
+        )
+
         if incoming_intent.report_type is not None:
             merged_intent.report_type = incoming_intent.report_type
         if incoming_intent.temporal_scope is not None:
@@ -626,7 +648,10 @@ class FeedbackHandlerNode(BaseNode):
             session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0, NodeType.MAIN.value, output_content=user_feedback)
         )
         logger.info(f"[FeedbackHandlerNode] End FeedbackHandlerNode.")
-        return dict(next_node=NodeId.OUTLINE.value)
+        policy = session.get_global_state("search_context.report_type_policy") or {}
+        return dict(
+            next_node=NodeId.BRIEF_OUTLINE.value if policy.get("report_type") == "brief" else NodeId.OUTLINE.value
+        )
 
 
 class ReporterNode(BaseNode):
@@ -757,6 +782,7 @@ class EndNode(End):
                 response_content = f"{response_content}\n\n---\n\n{ai_generated_notice}"
                 final_result["response_content"] = response_content
                 session.update_global_state({"search_context.final_result.response_content": response_content})
+
         stats_info_llm = bool(session.get_global_state("config.stats_info_llm"))
         if stats_info_llm:
             session_id = session.get_global_state("config.thread_id")
@@ -838,6 +864,7 @@ class GenerateQuestionsNode(BaseNode):
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
+
         current_inputs = self._pre_handle(inputs, session, context)
         current_executed_num = 0
         max_gen_question_retry_num = current_inputs.get("max_gen_question_retry_num", 5)
@@ -1054,6 +1081,7 @@ class OutlineNode(BaseNode):
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
+
         prompt_name, with_dep_driving, selected_method = self._select_prompt_and_dep_driving(current_inputs)
         self._sync_outline_execution_method(current_inputs, session, selected_method)
         outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=prompt_name)
@@ -1203,8 +1231,12 @@ class DependencyOutlineNode(OutlineNode):
 
 
 class SourceTracerNode(BaseNode):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        next_node: str = NodeId.SOURCE_TRACER_INFER.value,
+    ) -> None:
         super().__init__()
+        self.next_node = next_node
 
     @staticmethod
     async def build_citation_checker_result(citation_checker_info, datas, llm_model):
@@ -1357,7 +1389,7 @@ class SourceTracerNode(BaseNode):
             f"[SourceTracerNode] source_tracer_result: " f"{'*' if LogManager.is_sensitive() else source_tracer_result}"
         )
 
-        return dict(next_node=NodeId.SOURCE_TRACER_INFER.value)
+        return dict(next_node=self.next_node)
 
 
 class OutlineInteractionNode(BaseNode):

@@ -8,6 +8,71 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTrac
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
     GraphInfo,
 )
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info import (
+    ResearchInferPreprocess,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("toc_title", "abstract_title", "conclusion_title", "references_title"),
+    [
+        (None, "Abstract", "Conclusion", "References"),
+        ("Table of Contents", "Abstract", "Conclusion", "References"),
+        ("目录", "摘要", "结论", "参考文章"),
+    ],
+)
+async def test_research_infer_sections_ignore_non_body_h1_without_index_shift(
+    toc_title,
+    abstract_title,
+    conclusion_title,
+    references_title,
+):
+    """TOC insertion must not shift chapter-to-search-record indexes."""
+    toc = (
+        f"# {toc_title}\n\n"
+        "[1. First Chapter](#chapter-1)\n\n"
+        "[2. Second Chapter](#chapter-2)\n\n"
+        if toc_title
+        else ""
+    )
+    response = (
+        "# Report Title\n\n"
+        f"{toc}"
+        f"# {abstract_title}\n\nSummary.\n\n"
+        "# 1. First Chapter\n\nFirst conclusion.\n\n"
+        "# 2. Second Chapter\n\nSecond conclusion.\n\n"
+        f"# {conclusion_title}\n\nOverall conclusion.\n\n"
+        f"# {references_title}\n\nReference entry.\n"
+    )
+    preprocess = ResearchInferPreprocess({"source_tracer_response": response})
+    conclusions = [
+        ["First conclusion."],
+        ["Second conclusion."],
+        ["Overall conclusion."],
+    ]
+
+    with patch.object(
+        preprocess,
+        "_extract_conclusions_for_sections",
+        new=AsyncMock(return_value=conclusions),
+    ) as mock_extract:
+        results = await preprocess._find_sentences_with_positions()
+
+    sections = mock_extract.await_args.args[0]
+    assert [section["title"] for section in sections] == [
+        "1. First Chapter",
+        "2. Second Chapter",
+        conclusion_title,
+    ]
+    assert [
+        results[conclusion]["sentence_section_index"]
+        for conclusion in (
+            "First conclusion.",
+            "Second conclusion.",
+            "Overall conclusion.",
+        )
+    ] == [0, 1, 2]
 
 
 class TestSourceTracerInfer:

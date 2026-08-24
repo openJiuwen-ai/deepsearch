@@ -19,7 +19,7 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output, safe_float
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
@@ -582,7 +582,7 @@ class CitationVerifyResearch:
                 if marked_content:
                     content = self.datas[idx].get("content", "")
                     self.datas[idx]["content"] = self.fuzzy_find_and_tag(content, marked_content)
-                score = ordered_result.get("score", 0)
+                score = safe_float(ordered_result.get("score", 0))
                 self.datas[idx]["score"] = max(score, 0.85)
                 if LogManager.is_sensitive():
                     logger.info(f"[VIZ_CITATION] Chart data processed and updated, index: {idx}")
@@ -604,10 +604,12 @@ class CitationVerifyResearch:
                 self.datas[idx]["source"] = handle_datas[idx]["domain"]
             if self.datas[idx].get("is_vlm_chart", False):
                 # vlm迭代生成图的图表溯源分数使用vlm模型的图表打分，如果没有经历vlm迭代优化，则使用溯源模块的打分
-                self.datas[idx]["score"] = max(self.datas[idx]["score"], 
-                                               ordered_result.get("score", 0))
+                self.datas[idx]["score"] = max(
+                    safe_float(self.datas[idx].get("score"), 0.0),
+                    safe_float(ordered_result.get("score", 0)),
+                )
             else:
-                self.datas[idx]["score"] = ordered_result.get("score", 0)
+                self.datas[idx]["score"] = safe_float(ordered_result.get("score", 0))
             if self.datas[idx]["score"] < 0.85:
                 self.datas[idx]["valid"] = False
                 self.datas[idx]["invalid_reason"] = "score lower than threshold"

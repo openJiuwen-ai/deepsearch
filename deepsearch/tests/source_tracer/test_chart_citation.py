@@ -165,6 +165,71 @@ class TestChartScoreMinimum:
         # score 高于 0.85 时保留原值
         assert self.verifier.datas[0]["score"] == 0.95
 
+    def test_chart_score_string_number(self):
+        """update_citation_data: LLM 返回字符串数字 score，safe_float 正确转换。
+
+        LLM JSON 可能返回 "0.3" 而非 0.3，safe_float 应正确转换，
+        不应 TypeError 崩溃。
+        """
+        self.verifier.datas = [
+            {"content": "图表内容描述", "valid": True, "score": 0.0},
+        ]
+        handle_index = [0]
+
+        handle_datas = [
+            {
+                "domain": "chart.com",
+                "citation_content": "图表内容",
+                "fact": "图表事实",
+                "is_chart": True,
+                "registered_domain": "chart.com",
+            }
+        ]
+
+        # LLM 返回字符串数字
+        ordered_results = [
+            {
+                "source": "Chart Source",
+                "marked_citation_content": [],
+                "score": "0.3",  # 字符串数字，低于 0.85
+            }
+        ]
+
+        self.verifier.update_citation_data(handle_index, ordered_results, handle_datas)
+
+        # safe_float("0.3") = 0.3, max(0.3, 0.85) = 0.85
+        assert self.verifier.datas[0]["score"] == 0.85
+
+    def test_chart_score_string_number_above_threshold(self):
+        """update_citation_data: 字符串数字 score 高于 0.85 时正确保留。"""
+        self.verifier.datas = [
+            {"content": "图表描述", "valid": True, "score": 0.0},
+        ]
+        handle_index = [0]
+
+        handle_datas = [
+            {
+                "domain": "chart.com",
+                "citation_content": "图表内容",
+                "fact": "图表事实",
+                "is_chart": True,
+                "registered_domain": "chart.com",
+            }
+        ]
+
+        ordered_results = [
+            {
+                "source": "Chart Source",
+                "marked_citation_content": [],
+                "score": "0.95",  # 字符串数字，高于 0.85
+            }
+        ]
+
+        self.verifier.update_citation_data(handle_index, ordered_results, handle_datas)
+
+        # safe_float("0.95") = 0.95, max(0.95, 0.85) = 0.95
+        assert self.verifier.datas[0]["score"] == 0.95
+
 
 class TestVlmChartNoMarkedContent:
     """VLM 图表 algo_marked_citation_content 为空测试"""

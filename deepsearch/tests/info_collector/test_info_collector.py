@@ -1,9 +1,12 @@
+import logging
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_execution_service import (
+    CollectorExecutionService,
     CollectorExecutionResult,
+    CollectorRunPlanConfig,
     run_info_collector_sub_graph,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, \
@@ -19,11 +22,259 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     StepType,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import EvidenceLedger
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
+    MAX_TARGET_PAPER_ATTEMPTS,
+    target_paper_key,
+    target_papers_still_searchable,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
+    filter_confirmed_target_locators,
+)
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
 
 module_prefix = "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector"
+
+
+@pytest.mark.asyncio
+async def test_collector_execution_reuses_target_ledger_across_plans_in_section():
+    target = {"arxiv_id": "1706.03762v7"}
+    confirmed_key = target_paper_key(target)
+    state = {
+        "section_context.report_type_policy": {},
+        "section_context.research_intent": {"target_papers": [target]},
+        "section_context.target_paper_ledger": {},
+    }
+    session = MagicMock()
+    session.get_global_state.side_effect = state.get
+    session.update_global_state.side_effect = lambda values: state.update(values)
+    received_inputs = []
+
+    async def run_subgraph(inputs, _session, _context):
+        received_inputs.append(inputs)
+        return {
+            "evidence_ledger": {
+                "confirmed_target_papers": [confirmed_key],
+                "target_paper_attempts": {confirmed_key: 1},
+            },
+            "history_queries": [],
+            "doc_infos": [],
+            "source_store": {},
+        }
+
+    config = CollectorRunPlanConfig(
+        language="zh-CN",
+        section_idx=1,
+        max_search_query_count=5,
+        max_research_loops=2,
+        max_tool_call_turns_per_query=2,
+    )
+
+    def plan(plan_id):
+        return Plan(
+            id=plan_id,
+            title="target",
+            thought="target",
+            is_research_completed=False,
+            steps=[Step(type=StepType.INFO_COLLECTING, title="locate", description="locate")],
+        )
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph."
+        "collector_execution_service.run_info_collector_sub_graph",
+        side_effect=run_subgraph,
+    ):
+        service = CollectorExecutionService()
+        await service.run_plan(plan("1"), config, session, MagicMock())
+        await service.run_plan(plan("2"), config, session, MagicMock())
+
+    assert received_inputs[1]["evidence_ledger"]["confirmed_target_papers"] == [confirmed_key]
+
+
+def _post_handle_target_paper(target_papers, task_doc_infos, existing_ledger=None, query="38202877"):
+    state = {
+        "collector_context.section_idx": 0,
+        "collector_context.plan_idx": "1",
+        "collector_context.step_idx": "1",
+        "collector_context.step_title": "Target study",
+        "collector_context.research_loop_count": 0,
+        "collector_context.max_research_loops": 2,
+        "collector_context.doc_infos": [],
+        "collector_context.search_queries": [RetrievalQuery(query=query, search_engine_name="pubmed")],
+        "collector_context.history_queries": [],
+        "collector_context.evidence_ledger": existing_ledger or {},
+        "collector_context.source_store": {},
+        "collector_context.research_intent": {"target_papers": target_papers},
+    }
+    session = Mock()
+    session.get_global_state.side_effect = state.get
+
+    def update(values):
+        state.update(values)
+
+    session.update_global_state.side_effect = update
+    InfoRetrievalNode()._post_handle(
+        {},
+        [{"doc_infos": task_doc_infos, "source_store": {}, "search_query": query}],
+        session,
+        Mock(),
+    )
+    return state
+
+
+def test_post_handle_records_exact_target_paper_fact():
+    state = _post_handle_target_paper(
+        [{"pmid": "38202877", "title": "A Full Paper Title"}],
+        [{
+            "source_id": "evidence-hash",
+            "title": "A Full Paper Title",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/",
+            "academic_source": "pubmed",
+            "academic_source_id": "38202877",
+        }],
+    )
+
+    ledger = state["collector_context.evidence_ledger"]
+    assert ledger["known_facts"] == [
+        "Target paper located: PMID 38202877, A Full Paper Title."
+    ]
+    assert ledger["attempted_queries"] == ["38202877"]
+    assert ledger["target_paper_attempts"] == {target_paper_key({"pmid": "38202877", "title": "A Full Paper Title"}): 1}
+    assert ledger["confirmed_target_papers"] == [
+        target_paper_key({"pmid": "38202877", "title": "A Full Paper Title"})
+    ]
+
+
+def test_target_paper_state_stops_searching_after_confirmation_or_three_attempts():
+    found = {"pmid": "38202877"}
+    unresolved = {"title": "Unresolved Paper"}
+    ledger = EvidenceLedger(
+        confirmed_target_papers=[target_paper_key(found)],
+        target_paper_attempts={target_paper_key(unresolved): MAX_TARGET_PAPER_ATTEMPTS},
+    )
+
+    assert target_papers_still_searchable([found, unresolved], ledger) == []
+
+
+def test_confirmed_target_locator_is_filtered_before_execution():
+    target = {"arxiv_id": "1706.03762v7", "title": "Attention Is All You Need"}
+    ledger = EvidenceLedger(confirmed_target_papers=[target_paper_key(target)])
+    queries = [
+        RetrievalQuery(query="1706.03762", search_engine_name="arxiv"),
+        RetrievalQuery(
+            query="Attention Is All You Need Table 3 ablation",
+            search_engine_name="arxiv",
+        ),
+        RetrievalQuery(query="Transformer influence on vision", search_engine_name="arxiv"),
+    ]
+
+    assert filter_confirmed_target_locators(queries, [target], ledger) == queries[1:]
+
+
+def test_post_handle_does_not_consume_target_attempt_for_unrelated_query():
+    state = _post_handle_target_paper(
+        [{"pmid": "38202877"}],
+        [],
+        query="orthodontic demographics evidence",
+    )
+    assert state["collector_context.evidence_ledger"]["target_paper_attempts"] == {}
+
+
+def test_post_handle_counts_a_canonical_target_url_locator_attempt():
+    state = _post_handle_target_paper(
+        [{"url": "https://journal.example.org/article/42/?utm_source=test"}],
+        [],
+        query="https://journal.example.org/article/42",
+    )
+
+    assert state["collector_context.evidence_ledger"]["target_paper_attempts"] == {
+        target_paper_key({"url": "https://journal.example.org/article/42/?utm_source=test"}): 1
+    }
+
+
+def test_post_handle_does_not_confirm_mismatched_or_implicit_target():
+    mismatched = _post_handle_target_paper(
+        [{"pmid": "111", "title": "Same Title"}],
+        [{"source_id": "one", "title": "Same Title", "academic_source": "pubmed", "academic_source_id": "222"}],
+    )
+    implicit = _post_handle_target_paper(
+        [{"dataset": "MEPS", "data_year": "2019", "topic": "orthodontics"}],
+        [{"source_id": "two", "title": "MEPS 2019 Orthodontics"}],
+    )
+
+    assert mismatched["collector_context.evidence_ledger"]["known_facts"] == []
+    assert implicit["collector_context.evidence_ledger"]["known_facts"] == []
+
+
+def test_post_handle_empty_results_remain_non_blocking_and_deduplicate_facts():
+    empty = _post_handle_target_paper([{"pmid": "38202877"}], [])
+    existing = _post_handle_target_paper(
+        [{"pmid": "38202877"}],
+        [{"source_id": "one", "title": "Paper", "academic_source": "pubmed", "academic_source_id": "38202877"}],
+        existing_ledger={
+            "known_facts": ["Target paper located: PMID 38202877, Paper."],
+            "attempted_queries": [],
+            "missing_evidence": [],
+        },
+    )
+
+    assert empty["collector_context.evidence_ledger"]["attempted_queries"] == ["38202877"]
+    assert existing["collector_context.evidence_ledger"]["known_facts"] == [
+        "Target paper located: PMID 38202877, Paper."
+    ]
+
+
+def test_post_handle_logs_target_paper_metadata_match_and_persisted_ledger(caplog):
+    caplog.set_level(logging.INFO, logger=module_prefix)
+    with patch(f"{module_prefix}.LogManager.is_sensitive", return_value=False):
+        _post_handle_target_paper(
+            [{"pmid": "38202877"}],
+            [{
+                "source_id": "evidence-hash",
+                "title": "A Full Paper Title",
+                "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/",
+                "academic_source": "pubmed",
+                "academic_source_id": "38202877",
+                "doi": "10.1000/example",
+            }],
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "[TARGET_PAPER_METADATA]" in messages
+    assert '"academic_source": "pubmed"' in messages
+    assert '"academic_source_id": "38202877"' in messages
+    assert '"doi": "10.1000/example"' in messages
+    assert "[TARGET_PAPER_MATCH] matched=true match_count=1" in messages
+    assert "Target paper located: PMID 38202877, A Full Paper Title." in messages
+    assert "[TARGET_PAPER_LEDGER] matched_fact_count=1" in messages
+    assert "known_fact_count_before=0 known_fact_count_after=1 merged=true persisted=true" in messages
+
+
+def test_post_handle_target_paper_logs_are_redacted_in_sensitive_mode(caplog):
+    caplog.set_level(logging.INFO, logger=module_prefix)
+    with patch(f"{module_prefix}.LogManager.is_sensitive", return_value=True):
+        _post_handle_target_paper(
+            [{"pmid": "38202877"}],
+            [{
+                "source_id": "evidence-hash",
+                "title": "Secret Paper Title",
+                "academic_source": "pubmed",
+                "academic_source_id": "38202877",
+                "doi": "10.1000/secret",
+            }],
+        )
+
+    tagged_messages = "\n".join(
+        record.getMessage() for record in caplog.records
+        if "[TARGET_PAPER_" in record.getMessage()
+    )
+    assert "[TARGET_PAPER_METADATA] academic_doc_count=1" in tagged_messages
+    assert "[TARGET_PAPER_MATCH] matched=true match_count=1" in tagged_messages
+    assert "[TARGET_PAPER_LEDGER] matched_fact_count=1" in tagged_messages
+    assert "38202877" not in tagged_messages
+    assert "10.1000/secret" not in tagged_messages
+    assert "Secret Paper Title" not in tagged_messages
 
 
 class ExposedInfoRetrievalNode(InfoRetrievalNode):
@@ -46,9 +297,6 @@ class ExposedInfoRetrievalNode(InfoRetrievalNode):
 
     async def structure_result(self, *args, **kwargs):
         return await self._structure_result(*args, **kwargs)
-
-    def process_post_process_result(self, *args, **kwargs):
-        return self._process_post_process_result(*args, **kwargs)
 
     def prepare_collector_tool(self, *args, **kwargs):
         return self._prepare_collector_tool(*args, **kwargs)
@@ -156,6 +404,7 @@ class TestInfoCollectorNode:
             "local_search_engine_name": LocalSearch.OPENAPI.value,
             "api_tools_config": {},
             "research_intent": {},
+            "evidence_ledger": {},
         }
         assert result == expected_state
 
@@ -417,8 +666,7 @@ class TestInfoCollectorNode:
         }
 
         with patch.object(info_collector_node, '_collector_llm') as mock_collector_llm, \
-                patch.object(info_collector_node, '_structure_result') as mock_structure, \
-                patch.object(info_collector_node, '_process_post_process_result') as mock_process:
+                patch.object(info_collector_node, '_structure_result') as mock_structure:
             # Mock LLM 收集过程
             mock_collector_llm.return_value = (
                 state,
@@ -432,12 +680,8 @@ class TestInfoCollectorNode:
             # Mock 结构化结果
             mock_structure.return_value = (
                 [{"url": "http://example.com/1", "title": "标题1"}],  # doc_infos
-                [{"document_index": "0", "scores": {"relevance": 0.9}}],
                 {"web_1": "正文"},
             )
-
-            # Mock 后处理
-            mock_process.return_value = [{"url": "http://example.com/1", "title": "标题1", "source_authority": "0.8"}]
 
             result = await info_collector_node.collector_main(state)
 
@@ -452,7 +696,6 @@ class TestInfoCollectorNode:
             # 验证调用了相关方法
             mock_collector_llm.assert_called_once()
             mock_structure.assert_called_once()
-            mock_process.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_collector_main_filters_source_dates_before_document_evaluator(self, info_collector_node):
@@ -502,12 +745,8 @@ class TestInfoCollectorNode:
         ), patch.object(
             info_collector_node,
             '_structure_result',
-            new=AsyncMock(return_value=([], [], {})),
-        ) as mock_structure, patch.object(
-            info_collector_node,
-            '_process_post_process_result',
-            return_value=[],
-        ):
+            new=AsyncMock(return_value=([], {})),
+        ) as mock_structure:
             result = await info_collector_node.collector_main(state)
 
         web_records = mock_structure.call_args.args[0]
@@ -591,205 +830,19 @@ class TestInfoCollectorNode:
             await info_collector_node.collector_llm(state, agent_input, [], {})
 
     @pytest.mark.asyncio
-    async def test_structure_result_with_records(self, info_collector_node, sample_web_record):
-        """测试 _structure_result 方法有记录的情况"""
-        web_record = sample_web_record
-        local_record = []
-        query = "测试查询"
-
-        with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
-            # Mock 文档评估结果
-            mock_eval.return_value = [
-                {
-                    "document_index": "0",
-                    "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
-                    "doc_time": "2024-01-01"
-                },
-                {
-                    "document_index": "1",
-                    "scores": {"authority": 0.7, "relevance": 0.8, "answerability": 0.6},
-                    "doc_time": "2024-01-02"
-                }
-            ]
-
-            doc_infos, scored_result, source_store = await info_collector_node.structure_result(
-                web_record, local_record, query
-            )
-
-            # 验证返回结果
-            assert len(doc_infos) == 2
-            assert len(scored_result) == 2
-            assert "doc_id" in doc_infos[0]
-            assert "source_id" in doc_infos[0]
-            assert "content_ref" in doc_infos[0]
-            assert "snippet" not in doc_infos[0]
-            assert "summary" not in doc_infos[0]
-            assert "key_passages" in doc_infos[0]
-            assert "original_content" in doc_infos[0]
-            assert doc_infos[0]["source_id"] in source_store
-            assert "original_content" not in str(mock_eval.call_args.kwargs["documents"])
-
-            # 验证文档信息结构
-            for doc_info in doc_infos:
-                assert "url" in doc_info
-                assert "title" in doc_info
-                assert "query" in doc_info
-                assert doc_info["query"] == query
-
-            # 验证调用了文档评估
-            mock_eval.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_structure_result_empty_records(self, info_collector_node):
         """测试 _structure_result 方法空记录的情况"""
         web_record = []
         local_record = []
         query = "测试查询"
 
-        doc_infos, scored_result, source_store = await info_collector_node.structure_result(
+        doc_infos, source_store = await info_collector_node.structure_result(
             web_record, local_record, query
         )
 
         # 验证返回空结果
         assert doc_infos == []
-        assert scored_result == []
         assert source_store == {}
-
-    @pytest.mark.asyncio
-    async def test_structure_result_truncates_original_content(self, info_collector_node):
-        """_structure_result should keep collector LLM input under the shared content limit."""
-        web_record = [
-            {
-                "url": "http://example.com/large",
-                "title": "Large page",
-                "content": "A" * (MAX_COLLECTOR_DOC_CONTENT_LENGTH + 1),
-            }
-        ]
-
-        with patch(f'{self.MODULE_PATH}.run_doc_evaluation') as mock_eval:
-            mock_eval.return_value = []
-
-            doc_infos, _, source_store = await info_collector_node.structure_result(
-                web_record, [], "large query"
-            )
-
-        assert len(doc_infos) == 1
-        assert len(doc_infos[0]["original_content"]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
-        assert len(source_store[doc_infos[0]["source_id"]]) == MAX_COLLECTOR_DOC_CONTENT_LENGTH
-        mock_eval.assert_called_once()
-        assert "documents" in mock_eval.call_args.kwargs
-        assert "contents" not in mock_eval.call_args.kwargs
-        assert len(str(mock_eval.call_args.kwargs["documents"])) < MAX_COLLECTOR_DOC_CONTENT_LENGTH
-
-    def test_process_post_process_result_success(self, info_collector_node):
-        """测试 _process_post_process_result 方法成功执行"""
-        scored_result = [
-            {
-                "document_index": "0",
-                "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
-                "doc_time": "2024-01-01",
-            },
-            {
-                "document_index": "1",
-                "scores": {"authority": 0.7, "relevance": 0.8, "answerability": 0.6},
-                "doc_time": "2024-01-02"
-            }
-        ]
-
-        doc_infos = [
-            {"url": "http://example.com/1", "title": "标题1"},
-            {"url": "http://example.com/2", "title": "标题2"}
-        ]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        # 验证文档信息被正确更新
-        assert len(result) == 2
-        assert result[0]["scores"]["authority"] == 0.8
-        assert result[0]["scores"]["relevance"] == 0.9
-        assert result[0]["scores"]["answerability"] == 0.7
-        assert "source_authority" not in result[0]
-        assert "_legacy_compatibility_fields" not in result[0]
-        assert "task_relevance" not in result[0]
-        assert "information_richness" not in result[0]
-        assert "data_density" not in result[0]
-        assert "doc_time" in result[0]
-
-        # 验证分数被正确格式化
-
-    def test_process_post_process_result_prefers_publish_time(self, info_collector_node):
-        """evaluator 同时返回 publish_time 和 doc_time 时应优先使用规范字段。"""
-        scored_result = [{
-            "document_index": "0",
-            "scores": {"relevance": 0.9},
-            "publish_time": "2024-02",
-            "doc_time": "2024-01",
-        }]
-        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        assert result[0]["publish_time"] == "2024-02"
-        assert result[0]["doc_time"] == "2024-02"
-
-    def test_process_post_process_result_invalid_index(self, info_collector_node):
-        """测试 _process_post_process_result 方法索引无效的情况"""
-        scored_result = [
-            {
-                "document_index": "invalid",  # 无效的索引
-                "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7}
-            }
-        ]
-
-        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        # 验证即使索引无效也不会崩溃
-        assert len(result) == 1
-        assert "scores" not in result[0]
-
-    def test_process_post_process_result_logs_non_dict_item_type(self, info_collector_node, caplog):
-        """非 dict 评分项日志应准确指出类型问题。"""
-        result = info_collector_node.process_post_process_result(
-            ["invalid"],
-            [{"url": "http://example.com/1", "title": "标题1"}],
-            section_idx=0,
-        )
-
-        assert "scores" not in result[0]
-        assert "Score result is not a dict (type=str)" in caplog.text
-
-    def test_process_post_process_result_continues_after_invalid_items(self, info_collector_node):
-        """无效评分项不应导致后续有效 document_index 被截断丢弃。"""
-        scored_result = [
-            {"document_index": "invalid", "scores": {"relevance": 1}},
-            {"document_index": "0", "scores": {"relevance": 8}},
-            {"document_index": "1", "scores": {"relevance": 9}},
-        ]
-        doc_infos = [
-            {"url": "http://example.com/1", "title": "标题1"},
-            {"url": "http://example.com/2", "title": "标题2"},
-        ]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        assert result[0]["scores"]["relevance"] == 8.0
-        assert result[1]["scores"]["relevance"] == 9.0
-
-    def test_process_post_process_result_rejects_legacy_content_index(self, info_collector_node):
-        """拒绝 evaluator 返回旧 content 索引字段。"""
-        scored_result = [{
-            "content": "0",
-            "scores": {"authority": 0.8, "relevance": 0.9, "answerability": 0.7},
-            "doc_time": "2024-01-01",
-        }]
-        doc_infos = [{"url": "http://example.com/1", "title": "标题1"}]
-
-        result = info_collector_node.process_post_process_result(scored_result, doc_infos, section_idx=0)
-
-        assert "scores" not in result[0]
-        assert "doc_time" not in result[0]
 
     def test_prepare_collector_tool_web(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - 联网增强 搜索"""

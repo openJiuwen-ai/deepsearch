@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -17,6 +18,8 @@ from openjiuwen_deepsearch.common.common_constants import (
 )
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TAVILY_SEARCH_URL = "https://api.tavily.com"
 

@@ -82,8 +82,25 @@ class ResearchInferPreprocess():
         sections = self._split_markdown_with_detailed_positions()
         results = {}
 
-        # 排除不提取结论的章节 # 0: 标题, 1: 摘要 -1: 参考文献章节索引
-        sections = sections[2:-1]
+        # 排除报告标题及不参与溯源推理的非正文章节。目录会在标题和摘要之间
+        # 增加额外 H1，不能依赖固定位置切片，否则正文与搜索记录索引会错位。
+        excluded_titles = {
+            "目录",
+            "table of contents",
+            "contents",
+            "摘要",
+            "abstract",
+            "参考文章",
+            "参考文献",
+            "reference articles",
+            "references",
+        }
+        inference_sections = []
+        for section in sections[1:]:
+            normalized_title = re.sub(r"\s+", " ", section["title"]).strip().casefold()
+            if normalized_title not in excluded_titles:
+                inference_sections.append(section)
+        sections = inference_sections
 
         # 从每个段落提取1个结论
         conclusions = await self._extract_conclusions_for_sections(sections)
@@ -120,6 +137,7 @@ class ResearchInferPreprocess():
             content = self.response[content_start:content_end]
 
             sections.append({
+                'title': match.group(1).strip(),
                 'content': content,
                 'global_start': content_start,
                 'global_end': content_end,
@@ -169,7 +187,7 @@ class ResearchInferPreprocess():
             global_end = global_start + len(sentence)
 
             return {
-                "sentence_section_index": index,  # 返回章节索引，考虑前两个标题为非正文内容(标题和摘要)
+                "sentence_section_index": index,
                 'start_pos': global_start,
                 'end_pos': global_end,
                 'content_without_citation': self._clean_citation(content),

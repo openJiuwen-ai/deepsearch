@@ -17,17 +17,26 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
     process_tool_result, remove_duplicate_items
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     CollectorSourceStore,
-    build_evaluation_documents,
     build_evidence_atom,
-    normalize_doc_info_scores_and_time,
-    normalize_scores,
+    canonicalize_url,
 )
-from openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
+from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
+    find_exact_target_paper_facts,
+    normalize_arxiv_id,
+    normalize_doi,
+    normalize_pmid,
+    normalize_title,
+)
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
+    EvidenceLedger,
     append_attempted_queries,
     ensure_ledger,
+    merge_ledger_update,
+    target_paper_key,
+    target_papers_still_searchable,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.framework.openjiuwen.tools import create_web_search_tool, create_local_search_tool, \
@@ -41,6 +50,49 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 max_retries = Config().service_config.info_collector_max_retry_num
 logger = logging.getLogger(__name__)
+
+
+def _is_target_locator_query(query: str, target: dict) -> bool:
+    """Count an attempt only when this round actually issued a target locator query."""
+    text = str(query or "").strip()
+    normalized_query = text.casefold()
+    for value, normalize in (
+        (target.get("pmid"), normalize_pmid),
+        (target.get("doi"), normalize_doi),
+        (target.get("arxiv_id"), normalize_arxiv_id),
+    ):
+        identifier = normalize(value)
+        if identifier and identifier in normalized_query:
+            return True
+    title = normalize_title(target.get("title"))
+    if title and normalize_title(text) == title:
+        return True
+    target_url = canonicalize_url(str(target.get("url") or ""))
+    return bool(target_url and target_url == canonicalize_url(text))
+
+
+def filter_confirmed_target_locators(
+    retrieval_queries: list[RetrievalQuery],
+    target_papers: list[dict],
+    evidence_ledger: EvidenceLedger | dict | None,
+) -> list[RetrievalQuery]:
+    """Skip exact locator queries for target papers already confirmed."""
+    ledger = ensure_ledger(evidence_ledger)
+    confirmed = set(ledger.confirmed_target_papers)
+    filtered_queries = []
+    for retrieval_query in retrieval_queries:
+        is_confirmed_locator = False
+        for target in target_papers:
+            if not isinstance(target, dict):
+                continue
+            if target_paper_key(target) not in confirmed:
+                continue
+            if _is_target_locator_query(retrieval_query.query, target):
+                is_confirmed_locator = True
+                break
+        if not is_confirmed_locator:
+            filtered_queries.append(retrieval_query)
+    return filtered_queries
 
 
 @dataclass(frozen=True)
@@ -140,6 +192,7 @@ class InfoRetrievalNode(BaseNode):
             local_search_engine_name=local_search_engine_name,
             api_tools_config=session.get_global_state("config.api_tools_config") or {},
             research_intent=session.get_global_state("collector_context.research_intent") or {},
+            evidence_ledger=session.get_global_state("collector_context.evidence_ledger") or {},
         )
         return state
 
@@ -147,8 +200,20 @@ class InfoRetrievalNode(BaseNode):
         state = self._pre_handle(inputs, session, context)
         session_context.set(session)
 
+        research_intent = state.get("research_intent") or {}
+        target_papers = (
+            research_intent.get("target_papers", [])
+            if isinstance(research_intent, dict)
+            else getattr(research_intent, "target_papers", [])
+        )
+        search_queries = filter_confirmed_target_locators(
+            state.get("search_queries", []),
+            target_papers,
+            state.get("evidence_ledger"),
+        )
+        session.update_global_state({"collector_context.search_queries": search_queries})
         tasks = []
-        for retrieval_query in state.get("search_queries", []):
+        for retrieval_query in search_queries:
             sub_state = {
                 "search_query": retrieval_query.query,
                 "section_idx": state.get("section_idx", 0),
@@ -237,12 +302,120 @@ class InfoRetrievalNode(BaseNode):
 
         doc_infos = remove_duplicate_items(doc_infos)
         updated_ledger = append_attempted_queries(current_ledger, attempted_queries)
+        research_intent = session.get_global_state("collector_context.research_intent") or {}
+        if isinstance(research_intent, dict):
+            target_papers = research_intent.get("target_papers", [])
+        else:
+            target_papers = getattr(research_intent, "target_papers", [])
+        academic_documents = []
+        for document in new_doc_infos:
+            if not isinstance(document, dict):
+                continue
+            has_academic_metadata = (
+                bool(document.get("academic_source"))
+                or bool(document.get("academic_source_id"))
+                or bool(document.get("doi"))
+            )
+            if has_academic_metadata:
+                academic_documents.append(document)
+        if target_papers:
+            if LogManager.is_sensitive():
+                logger.info(
+                    "section_idx: %s | [TARGET_PAPER_METADATA] academic_doc_count=%s "
+                    "has_academic_source_id_count=%s has_doi_count=%s",
+                    section_idx,
+                    len(academic_documents),
+                    sum(bool(document.get("academic_source_id")) for document in academic_documents),
+                    sum(bool(document.get("doi")) for document in academic_documents),
+                )
+            else:
+                metadata_records = [
+                    {
+                        key: str(document.get(key) or "").strip()
+                        for key in ("academic_source", "academic_source_id", "doi", "title")
+                    }
+                    for document in academic_documents
+                ]
+                logger.info(
+                    "section_idx: %s | [TARGET_PAPER_METADATA] academic_doc_count=%s records=%s",
+                    section_idx,
+                    len(academic_documents),
+                    json.dumps(metadata_records, ensure_ascii=False),
+                )
+        target_paper_facts = find_exact_target_paper_facts(target_papers, new_doc_infos)
+        searchable_targets = target_papers_still_searchable(target_papers, current_ledger)
+        issued_target_queries = {
+            target_paper_key(target)
+            for target in searchable_targets
+            if any(_is_target_locator_query(query, target) for query in attempted_queries)
+        }
+        matched_target_keys = [
+            target_paper_key(target)
+            for target in searchable_targets
+            if find_exact_target_paper_facts([target], new_doc_infos)
+        ]
+        if issued_target_queries:
+            updated_ledger = merge_ledger_update(
+                updated_ledger,
+                EvidenceLedger(target_paper_attempts={
+                    target_paper_key(target): current_ledger.target_paper_attempts.get(
+                        target_paper_key(target), 0
+                    ) + 1
+                    for target in searchable_targets
+                    if target_paper_key(target) in issued_target_queries
+                }),
+            )
+        if matched_target_keys:
+            updated_ledger = merge_ledger_update(
+                updated_ledger,
+                EvidenceLedger(confirmed_target_papers=matched_target_keys),
+            )
+        if target_papers:
+            matched = str(bool(target_paper_facts)).lower()
+            if LogManager.is_sensitive():
+                logger.info(
+                    "section_idx: %s | [TARGET_PAPER_MATCH] matched=%s match_count=%s",
+                    section_idx,
+                    matched,
+                    len(target_paper_facts),
+                )
+            else:
+                logger.info(
+                    "section_idx: %s | [TARGET_PAPER_MATCH] matched=%s match_count=%s facts=%s",
+                    section_idx,
+                    matched,
+                    len(target_paper_facts),
+                    json.dumps(target_paper_facts, ensure_ascii=False),
+                )
+        if target_paper_facts:
+            updated_ledger = merge_ledger_update(
+                updated_ledger,
+                EvidenceLedger(known_facts=target_paper_facts),
+            )
 
         session.update_global_state({"collector_context.history_queries": history_queries})
         session.update_global_state({"collector_context.new_doc_infos_current_loop": new_doc_infos})
         session.update_global_state({"collector_context.doc_infos": doc_infos})
         session.update_global_state({"collector_context.evidence_ledger": updated_ledger.model_dump()})
         session.update_global_state({"collector_context.source_store": source_store})
+        if target_papers:
+            persisted_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
+            merged = bool(target_paper_facts) and all(
+                fact in updated_ledger.known_facts for fact in target_paper_facts
+            )
+            persisted = bool(target_paper_facts) and all(
+                fact in persisted_ledger.known_facts for fact in target_paper_facts
+            )
+            logger.info(
+                "section_idx: %s | [TARGET_PAPER_LEDGER] matched_fact_count=%s "
+                "known_fact_count_before=%s known_fact_count_after=%s merged=%s persisted=%s",
+                section_idx,
+                len(target_paper_facts),
+                len(current_ledger.known_facts),
+                len(updated_ledger.known_facts),
+                str(merged).lower(),
+                str(persisted).lower(),
+            )
         if LogManager.is_sensitive():
             logger.info("section_idx: %s | [InfoRetrievalNode] End InfoRetrievalNode.", section_idx)
             logger.info(
@@ -328,7 +501,7 @@ class InfoRetrievalNode(BaseNode):
                                 query=query,
                                 search_engine_name=engine_name,
                                 fallback_to_default=fallback_to_default,
-                                retry_on_error=engine_name == default_search_engine_name,
+                                retry_on_error=True,
                             ),
                             state,
                         )
@@ -393,18 +566,15 @@ class InfoRetrievalNode(BaseNode):
         if len(agent_input["local_text_search_record"]) > 0:
             local_record = remove_duplicate_items(agent_input["local_text_search_record"])
 
-        doc_infos, scored_result, source_store = await self._structure_result(web_record, local_record, query)
+        doc_infos, source_store = await self._structure_result(web_record, local_record, query)
 
         if LogManager.is_sensitive():
             logger.info(f"section_idx: {section_idx} | "
-                        f"[InfoRetrievalNode] Gathered {len(doc_infos)} items of information. | "
-                        f"Starting to Update doc_infos after post process.")
+                        f"[InfoRetrievalNode] Gathered {len(doc_infos)} items of information.")
         else:
             logger.info(f"section_idx: {section_idx} | step title {step_title} | "
                         f"[InfoRetrievalNode] Collecting info for query: {query} | "
-                        f"Gathered {len(doc_infos)} items of information. | "
-                        f"Starting to Updating doc_infos after post process.")
-        doc_infos = self._process_post_process_result(scored_result, doc_infos, section_idx)
+                        f"Gathered {len(doc_infos)} items of information.")
 
         return {
             "messages": agent_input["messages"],
@@ -458,7 +628,12 @@ class InfoRetrievalNode(BaseNode):
         ).strip()
         retry_direct_search = object()
 
-        async def handle_search_failure(error: Any, reason: str, current_try: int):
+        async def handle_search_failure(
+                error: Any,
+                reason: str,
+                current_try: int,
+                retryable: bool = True,
+        ):
             should_fallback_to_default = self._should_fallback_to_default_search(
                 request.search_engine_name,
                 default_search_engine_name,
@@ -519,14 +694,14 @@ class InfoRetrievalNode(BaseNode):
 
             record_llm_retry_log(
                 current_try=current_try,
-                max_retries=max_retries if request.retry_on_error else current_try,
+                max_retries=max_retries if request.retry_on_error and retryable else current_try,
                 section_idx=section_idx,
                 step_title=step_title,
                 operation=operation,
                 error=error,
                 extra_info=f"{request.search_engine_name}: {request.query}",
             )
-            if request.retry_on_error and current_try < max_retries:
+            if request.retry_on_error and retryable and current_try < max_retries:
                 return retry_direct_search
             return None
 
@@ -539,7 +714,12 @@ class InfoRetrievalNode(BaseNode):
                 })
                 if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
                     error_msg = tool_result_raw.get("error", "")
-                    failure_result = await handle_search_failure(error_msg, "returned_error", current_try)
+                    failure_result = await handle_search_failure(
+                        error_msg,
+                        "returned_error",
+                        current_try,
+                        retryable=tool_result_raw.get("retryable", True) is not False,
+                    )
                     if failure_result is retry_direct_search:
                         continue
                     return failure_result
@@ -660,7 +840,7 @@ class InfoRetrievalNode(BaseNode):
                 query=query,
                 search_engine_name=secondary_engine,
                 fallback_to_default=fallback_to_default,
-                retry_on_error=False,
+                retry_on_error=True,
             ),
             state,
         )
@@ -752,7 +932,7 @@ class InfoRetrievalNode(BaseNode):
         return state, agent_input
 
     async def _structure_result(self, web_record: list, local_record: list, query: str):
-        """把工具记录转换为 doc_infos、评分结果和 source store。
+        """把工具记录转换为 doc_infos 和 source store。
 
         Args:
             web_record: Web 搜索记录列表。
@@ -760,7 +940,7 @@ class InfoRetrievalNode(BaseNode):
             query: 当前检索 query。
 
         Returns:
-            `(doc_infos, scored_result, source_store)` 三元组。
+            `(doc_infos, source_store)` 二元组。
         """
         source_store = CollectorSourceStore()
         doc_infos = []
@@ -769,65 +949,7 @@ class InfoRetrievalNode(BaseNode):
             _, doc_info = build_evidence_atom(record=record, query=query, source_store=source_store)
             doc_infos.append(doc_info)
 
-        if len(doc_infos) != 0:
-            scored_result = await run_doc_evaluation(
-                query=query,
-                documents=build_evaluation_documents(doc_infos),
-                llm=self.llm
-            )
-        else:
-            scored_result = []
-
-        return doc_infos, scored_result, source_store.to_dict()
-
-    def _process_post_process_result(self, scored_result: list[dict], doc_infos: list, section_idx: int):
-        """把 evaluator 结果合并回 doc_infos。
-
-        Args:
-            scored_result: evaluator 输出的评分结果。
-            doc_infos: 当前 query 生成的兼容 doc_infos。
-            section_idx: 当前章节索引，用于日志。
-
-        Returns:
-            已补齐结构化 scores 和兼容期字段的 doc_infos。
-        """
-        seen_indexes = set()
-        for idx, scored in enumerate(scored_result):
-            if not isinstance(scored, dict):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result is not a dict (type={type(scored).__name__}), skipping index:{idx}")
-                continue
-            if "content" in scored:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result contains deprecated content index, skipping index:{idx}")
-                continue
-            if "document_index" not in scored:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result missing document_index, skipping index:{idx}")
-                continue
-            try:
-                index = int(scored.get("document_index"))
-            except (TypeError, ValueError):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Invalid score result document_index, skipping index:{idx}")
-                continue
-            if index < 0 or index >= len(doc_infos):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result document_index:{index} is out of range, skipping")
-                continue
-            if index in seen_indexes:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Duplicate score result document_index:{index}, skipping")
-                continue
-
-            scores = normalize_scores(scored.get("scores"))
-            publish_time = scored.get("publish_time") or scored.get("doc_time") or "未提供时间信息"
-            doc_infos[index]["scores"] = scores
-            doc_infos[index]["publish_time"] = publish_time
-            normalize_doc_info_scores_and_time(doc_infos[index])
-            seen_indexes.add(index)
-
-        return doc_infos
+        return doc_infos, source_store.to_dict()
 
     def _prepare_collector_tool(self, state: dict):
         """准备信息收集器工具."""

@@ -7,7 +7,6 @@ from openjiuwen_deepsearch.algorithm.report.report import (
     VisualizationInsertRenderContext,
     _deduplicate_and_renumber_ref,
     _replace_citations_and_classified_index,
-    _get_classified_infos,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section, Plan, Step, StepType
 from openjiuwen_deepsearch.algorithm.report.report_utils import (
@@ -410,86 +409,6 @@ def test_deduplicate_and_renumber_with_ignore_lines_without_reference():
 def test_replace_citations_and_classified_index(paragraphs, classified_contents, ref_map, expected):
     result = _replace_citations_and_classified_index(paragraphs, classified_contents, ref_map)
     assert result == expected
-
-
-# 测试 _get_classified_infos 函数
-@pytest.mark.parametrize(
-    "selected_docs, marginal_values, expected_infos, expected_docs",
-    [
-        # selected_docs is empty
-        ([], [], {}, []),
-
-        # single match
-        (
-                [{"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]}],
-                [0.5],
-                {"references": ["[A](http://a.com)"], "core_content_list": ["Document 1 key passages:\n- passageA"]},
-                [{"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]}],
-        ),
-
-        # two selected variants (from different URLs)
-        (
-                [
-                    {"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]},
-                    {"url": "http://b.com", "title": "B", "original_content": "contentB", "key_passages": ["passageB"]},
-                ],
-                [0.5, 0.4],
-                {
-                    "references": [
-                        "[A](http://a.com)",
-                        "[B](http://b.com)"
-                    ],
-                    "core_content_list": [
-                        "Document 1 key passages:\n- passageA",
-                        "Document 2 key passages:\n- passageB",
-                    ]
-                },
-                [
-                    {"url": "http://a.com", "title": "A", "original_content": "contentA", "key_passages": ["passageA"]},
-                    {"url": "http://b.com", "title": "B", "original_content": "contentB", "key_passages": ["passageB"]},
-                ],
-        ),
-        (
-                [
-                    {
-                        "url": "https://example.test/",
-                        "title": "x](javascript:alert(1)) [safe",
-                        "original_content": "contentA",
-                        "key_passages": [],
-                    }
-                ],
-                [0.5],
-                {
-                    "references": [
-                        "[x\\]\\(javascript:alert\\(1\\)\\) \\[safe](https://example.test/)"
-                    ],
-                    "core_content_list": ["Document 1 key passages:\n[]"],
-                },
-                [
-                    {
-                        "url": "https://example.test/",
-                        "title": "x](javascript:alert(1)) [safe",
-                        "original_content": "contentA",
-                        "key_passages": [],
-                    }
-                ],
-        ),
-        (
-                [{"url": "javascript:alert(2)", "title": "benign", "original_content": "contentB", "key_passages": ["passageB"]}],
-                [0.5],
-                {
-                    "references": ["benign (javascript:alert\\(2\\))"],
-                    "core_content_list": ["Document 1 key passages:\n- passageB"],
-                },
-                [{"url": "javascript:alert(2)", "title": "benign", "original_content": "contentB", "key_passages": ["passageB"]}],
-        ),
-    ],
-)
-def test_get_classified_infos(selected_docs, marginal_values, expected_infos, expected_docs):
-    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
-
-    assert classified_infos == expected_infos
-    assert classified_doc_infos == expected_docs
 
 
 # ---------------------------------------------------------------------------

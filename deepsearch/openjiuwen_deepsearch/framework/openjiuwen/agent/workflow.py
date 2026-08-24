@@ -100,6 +100,14 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     ValidateNewStateNode,
     VLMChartGeneratorNode,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.brief_nodes import (
+    BriefEvidenceReviewNode,
+    BriefInfoCollectorNode,
+    BriefMermaidGeneratorNode,
+    BriefOutlineNode,
+    BriefReporterNode,
+    BriefSubReporterNode,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Action,
     Result,
@@ -135,6 +143,33 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     tool_context,
     web_search_context,
 )
+
+
+def _add_brief_branch(flow: Workflow) -> None:
+    """向任意研究主图注册相同且独立的 Brief 支路。"""
+    flow.add_workflow_comp(NodeId.BRIEF_OUTLINE.value, BriefOutlineNode())
+    flow.add_workflow_comp(NodeId.BRIEF_INFO_COLLECTOR.value, BriefInfoCollectorNode())
+    flow.add_workflow_comp(NodeId.BRIEF_EVIDENCE_REVIEWER.value, BriefEvidenceReviewNode())
+    flow.add_workflow_comp(NodeId.BRIEF_SUB_REPORTER.value, BriefSubReporterNode())
+    flow.add_workflow_comp(NodeId.BRIEF_REPORTER.value, BriefReporterNode())
+    flow.add_workflow_comp(NodeId.BRIEF_MERMAID_GENERATOR.value, BriefMermaidGeneratorNode())
+    flow.add_workflow_comp(NodeId.BRIEF_SOURCE_TRACER.value, SourceTracerNode(NodeId.END.value))
+    for source, targets in (
+        (NodeId.BRIEF_OUTLINE.value, [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.END.value]),
+        (
+            NodeId.BRIEF_INFO_COLLECTOR.value,
+            [NodeId.BRIEF_EVIDENCE_REVIEWER.value, NodeId.BRIEF_SUB_REPORTER.value, NodeId.END.value],
+        ),
+        (
+            NodeId.BRIEF_EVIDENCE_REVIEWER.value,
+            [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.BRIEF_SUB_REPORTER.value, NodeId.END.value],
+        ),
+        (NodeId.BRIEF_SUB_REPORTER.value, [NodeId.BRIEF_REPORTER.value, NodeId.END.value]),
+        (NodeId.BRIEF_REPORTER.value, [NodeId.BRIEF_MERMAID_GENERATOR.value, NodeId.END.value]),
+        (NodeId.BRIEF_MERMAID_GENERATOR.value, [NodeId.BRIEF_SOURCE_TRACER.value]),
+        (NodeId.BRIEF_SOURCE_TRACER.value, [NodeId.END.value]),
+    ):
+        flow.add_conditional_connection(source, router=init_router(source, targets))
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from openjiuwen_deepsearch.utils.log_utils.log_interface import record_interface_log
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -179,15 +214,13 @@ def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
 
 def _initialize_web_search_context_from_agent_config(
     agent_config: AgentConfig,
-    *,
-    include_academic_engines: bool = False,
 ):
     """Instantiate the active engine and optional research-only academic engines for a run."""
     custom_web = agent_config.custom_web_search_config
     web_search_config = agent_config.web_search_engine_config
     web_engine_name, web_mapping = DeepresearchAgent.register_web_search_tool(custom_web, web_search_config)
     web_engine_configs = {web_engine_name: web_search_config.model_dump()}
-    if include_academic_engines:
+    if agent_config.scholarly_search_enabled:
         for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
             if engine_name not in web_mapping or engine_name in web_engine_configs:
                 continue
@@ -195,6 +228,9 @@ def _initialize_web_search_context_from_agent_config(
             academic_config["search_engine_name"] = engine_name
             academic_config["search_url"] = ""
             academic_config["search_api_key"] = bytearray()
+            # Do not inherit the primary engine's broader result count: scholarly
+            # results may trigger comparatively expensive official full-text fetches.
+            academic_config["max_web_search_results"] = 1
             web_engine_configs[engine_name] = academic_config
     web_search_token = web_search_context.set(
         {
@@ -790,6 +826,7 @@ class DeepresearchAgent(BaseAgent):
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
@@ -798,7 +835,7 @@ class DeepresearchAgent(BaseAgent):
         # 添加条件边
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -810,7 +847,9 @@ class DeepresearchAgent(BaseAgent):
             NodeId.OUTLINE_INTERACTION.value, [NodeId.OUTLINE.value, NodeId.EDITOR_TEAM.value, NodeId.END.value]
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
         user_feedback_processor_router = init_router(
             NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
@@ -874,7 +913,6 @@ class DeepresearchAgent(BaseAgent):
         local_engine_name, local_mapping = self._register_local_search_tool(custom_local, local_search_config)
         web_search_token = _initialize_web_search_context_from_agent_config(
             agent_config,
-            include_academic_engines=True,
         )
         local_search_token = local_search_context.set(
             {local_engine_name: local_mapping[local_engine_name](**local_search_config.model_dump())}
@@ -945,6 +983,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边 add_connection
@@ -953,7 +992,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         # 添加条件边
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -967,7 +1006,9 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
             [NodeId.OUTLINE.value, NodeId.DEPENDENCY_EDITOR_TEAM.value, NodeId.END.value],
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         dependency_editor_router = init_router(
             NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]
         )
@@ -1025,8 +1066,10 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         """
         构建 hybrid research workflow。
 
-        该 workflow 复用普通 OutlineNode 和 OutlineInteractionNode，同时注册普通写作团队与依赖驱动写作团队。
-        大纲模式由 IntentRecognitionNode 写入 session，后续节点按该结果选择 prompt、tool schema 和写作分支。
+        该 workflow 复用普通 OutlineNode 和 OutlineInteractionNode，同时注册普通写作团队与依赖驱动
+        写作团队。
+        大纲模式由 IntentRecognitionNode 写入 session，后续节点按该结果选择 prompt、tool schema
+        和写作分支。
         """
         _id = self.research_name
         name = self.research_name
@@ -1053,13 +1096,14 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
 
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -1083,7 +1127,9 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
             ],
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
         dependency_editor_router = init_router(
             NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]

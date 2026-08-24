@@ -72,13 +72,6 @@ If an explicit structure exists, it is authoritative:
   additional top-level sections for early conclusions, summaries, risks, methodology limits, or extra analytical
   dimensions unless the user named them as major sections.
 
-{% if report_type == "brief" %}
-## Report type: Brief
-- Prefer **fewer, higher-signal sections**; avoid encyclopedic or purely taxonomic structure.
-{% if require_summary_first %}- If the user has not specified an explicit top-level structure, place **early section(s)** for: headline conclusions (overview only). If the user has specified an explicit top-level structure, include headline conclusions only within the most appropriate user-specified section; do not add a new top-level section. {% endif %}
-{% if require_methodology_and_risk %}- If the user has not specified an explicit top-level structure, include explicit room for **evidence/method limits** and **material risks or uncertainties**. If the user has specified an explicit top-level structure, keep these concerns inside the relevant user-specified section descriptions or focus dimensions; do not add new top-level sections.{% endif %}
-{% endif %}
-
 {% if audience_role %}
 - Target audience role: {{ audience_role }}. Section framing must prioritize this role's decision concerns.
 {% endif %}
@@ -121,7 +114,7 @@ Use these 8 dimensions as a **thinking checklist** to ensure comprehensive cover
 - When the user has specified an explicit top-level structure, do not add top-level sections to reach 4 dimensions. Instead,
   distribute relevant dimensions across the user-specified sections through `description`, `section_focus`, and
   `focus_dimensions`.
-- If fewer than 4 dimensions are genuinely relevant to the topic, do not fabricate irrelevant sections. Brief reports are exempt.
+- If fewer than 4 dimensions are genuinely relevant to the topic, do not fabricate irrelevant sections.
 
 ## Section Focus Assignment
 For each section in the outline, you MUST assign:
