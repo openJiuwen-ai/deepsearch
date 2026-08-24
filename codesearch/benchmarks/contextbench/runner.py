@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 
 from openjiuwen_codesearch import CodeSearchConfig, CodeSearchRetriever
 from openjiuwen_codesearch.config.agent import DEFAULT_ENGINE
@@ -20,6 +21,7 @@ from openjiuwen_codesearch.config.llm import LLMConfig, LLMSuite
 from benchmarks.contextbench.dataset import (
     checkout_instance,
     clean_worktrees,
+    clear_repo_cache,
     collection_id_for,
     load_context_bench_data,
 )
@@ -93,6 +95,7 @@ async def _run_milvus_benchmark(
     rows: list,
     results_dir: str,
     reset_indices: bool,
+    test_mode: str = "retriever",
 ) -> tuple[list, list[tuple[str, str]]]:
     groups: dict[str, list] = {}
     for row in rows:
@@ -103,6 +106,11 @@ async def _run_milvus_benchmark(
     failures: list[tuple[str, str]] = []
     done = 0
     partial_path = os.path.join(results_dir, "partial_predictions.jsonl")
+    patch_dir = os.path.join(results_dir, "coder_patches")
+    if test_mode == "coder":
+        os.makedirs(patch_dir, exist_ok=True)
+        partial_path = os.path.join(patch_dir, "predictions.jsonl")
+
     for collection, group_rows in groups.items():
         retriever = CodeSearchRetriever(config=config, collection_name=collection)
         logger.info("=" * 50)
@@ -119,40 +127,107 @@ async def _run_milvus_benchmark(
                     instance_id=row["instance_id"],
                     reset=(reset_indices and row is group_rows[0]),
                 )
-                indexed_rows.append(row)
+                indexed_rows.append((row, repo_dir))
             except Exception as e:  # 单实例失败不终止长跑
                 logger.error("Index failed for %s: %s", row["instance_id"], e)
                 failures.append((row["instance_id"], f"index: {e}"))
 
-        for row in indexed_rows:
+        for row, repo_dir in indexed_rows:
             try:
-                result = await retriever.search(
-                    row["problem_statement"],
-                    revision=row["base_commit"],
-                    top_k=config.agent.retrieve_topk,
-                )
-            except Exception as e:
-                logger.error("Search failed for %s: %s", row["instance_id"], e)
-                failures.append((row["instance_id"], f"search: {e}"))
-                continue
-            pred = _result_to_pred(row["instance_id"], result)
-            preds.append(pred)
-            append_prediction(partial_path, pred)
-            done += 1
-            logger.info(
-                "[%d/%d] %s: %d hits, termination=%s, tokens=%din/%dout",
-                done, len(rows), row["instance_id"], len(result.hits),
-                result.termination.value,
-                result.total_input_tokens, result.total_output_tokens,
-            )
+                # Instantiate a fresh retriever per issue so its persistent memory starts clean
+                instance_retriever = CodeSearchRetriever(config=config, collection_name=collection)
+                try:
+                    if test_mode == "coder":
+                        from openjiuwen_codesearch.api.coder import CodeResolver
 
-        store = retriever.get_store()
-        if store is not None and hasattr(store, "release"):
-            await store.release()
-            logger.info("Released collection '%s' from memory.", collection)
-        await retriever.close()
+                        resolver = CodeResolver(
+                            retriever=instance_retriever, repo_dir=repo_dir, config=config
+                        )
+                        final_diff = await resolver.resolve(
+                            row["problem_statement"], commit=row["base_commit"]
+                        )
+
+                        instance_id = row["instance_id"]
+                        patch_path = os.path.join(patch_dir, f"{instance_id}.patch")
+                        with open(patch_path, "w", encoding="utf-8") as f:
+                            f.write(final_diff)
+
+                        # Save coder patch prediction directly to partial path
+                        coder_pred = {
+                            "instance_id": row.get("original_inst_id", instance_id),
+                            "model_patch": final_diff,
+                            "model_name_or_path": "openjiuwen_coder",
+                        }
+                        import json
+
+                        with open(partial_path, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(coder_pred, ensure_ascii=False) + "\n")
+
+                        # Extract persistent hits from retriever and append as retrieval prediction for run_eval
+                        retriever_hits = instance_retriever.get_persistent_hits()
+
+                        class DummyResult:
+                            def __init__(self, hits):
+                                self.hits = hits
+
+                        retriever_pred = _result_to_pred(instance_id, DummyResult(retriever_hits))
+                        preds.append(retriever_pred)
+
+                        done += 1
+                        logger.info(
+                            "[%d/%d] %s: Patch generated and %d hits extracted",
+                            done,
+                            len(rows),
+                            instance_id,
+                            len(retriever_hits),
+                        )
+                    else:
+                        result = await instance_retriever.search(
+                            row["problem_statement"],
+                            revision=row["base_commit"],
+                            top_k=config.agent.retrieve_topk,
+                        )
+                        pred = _result_to_pred(row["instance_id"], result)
+                        preds.append(pred)
+                        append_prediction(partial_path, pred)
+                        done += 1
+                        logger.info(
+                            "[%d/%d] %s: %d hits, termination=%s, tokens=%din/%dout",
+                            done,
+                            len(rows),
+                            row["instance_id"],
+                            len(result.hits),
+                            result.termination.value,
+                            result.total_input_tokens,
+                            result.total_output_tokens,
+                        )
+                finally:
+                    await instance_retriever.close()
+
+            except Exception as e:
+                logger.error("Eval failed for %s: %s", row["instance_id"], e)
+                failures.append((row["instance_id"], f"eval: {e}"))
+                continue
+
+        # Release the outer retriever's resources and the collection after all issues in this group are processed
+        await release_retriever(retriever=retriever, collection_name=collection)
 
     return preds, failures
+
+
+async def release_retriever(retriever: CodeSearchRetriever, collection_name: str) -> None:
+    """
+    Release the retriever's resources, including closing the store and the retriever itself.
+
+    """
+    store = retriever.get_store()
+    if store is not None and hasattr(store, "release"):
+        # NOTE: Milvus hangs on load() if a collection with BM25 functions is released and reloaded.
+        # await store.release()
+        # logger.info(f"Released collection {collection_name} from memory.")
+        pass
+
+    await retriever.close()
 
 
 async def run_benchmark(
@@ -160,6 +235,7 @@ async def run_benchmark(
     num_instances: int = 4,
     results_dir: str = "./results",
     reset_indices: bool = False,
+    test_mode: str = "retriever",
 ) -> str:
     # worktree 根默认收敛到本工作目录：系统 /tmp 是共享命名空间，
     # 同机他人跑 contextbench 时会发生同 commit worktree 冲突（且 sticky bit
@@ -169,21 +245,37 @@ async def run_benchmark(
     df = load_context_bench_data()
     rows = [df.iloc[i] for i in range(min(num_instances, len(df)))]
 
+    # Before processing anything, wipe the bare repositories for all unique repos in this run
+    # to guarantee a fully fresh clone from GitHub
+    unique_repos = set(row["repo"] for row in rows)
+    for repo_url in unique_repos:
+        # Reconstruct repo url since df["repo"] might just be "astropy/astropy"
+        full_url = (
+            f"https://github.com/{repo_url}.git" if not repo_url.startswith("http") else repo_url
+        )
+        clear_repo_cache(full_url)
+
     if config.agent.engine == "retropus":
         preds, failures = await _run_retropus_benchmark(config, rows, results_dir)
     else:
         preds, failures = await _run_milvus_benchmark(
-            config, rows, results_dir, reset_indices
+            config, rows, results_dir, reset_indices, test_mode
         )
 
     if failures:
         logger.warning("%d instances failed: %s", len(failures), failures)
 
+    if test_mode == "coder":
+        partial_path = os.path.join(results_dir, "coder_patches", "predictions.jsonl")
+        logger.info("Coder patches and predictions saved at %s", partial_path)
+        # We don't return early here, so it falls through to write_predictions and run_eval
+        # using the retrieval `preds` we accumulated!
+
     # 3) 写预测（单文件）并调官方评测
     pred_file = write_predictions(
         preds,
         results_dir,
-        mode="agent",
+        test_mode=test_mode,
         topk=config.agent.retrieve_topk,
         num_instances=len(rows),
     )
@@ -246,16 +338,27 @@ def main() -> None:
         default="",
         help="Override main/filter LLM model_name (e.g. openai/gpt-5-mini)",
     )
+    parser.add_argument(
+        "--test-mode",
+        default="retriever",
+        choices=["retriever", "coder"],
+        help="Whether to run retrieval evaluation or generate coder patches.",
+    )
     args = parser.parse_args()
+
+    stamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S")
+    args.results_dir = f"{args.results_dir}__{stamp}"
 
     logging.basicConfig(level=logging.INFO)
     config = _config_from_args(args)
+    config.agent.trace_dir = os.path.join(args.results_dir, "agent_logs")
     asyncio.run(
         run_benchmark(
             config,
             num_instances=args.num_instances,
             results_dir=args.results_dir,
             reset_indices=args.reset_indices,
+            test_mode=args.test_mode,
         )
     )
 

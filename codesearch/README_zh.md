@@ -122,6 +122,12 @@ cp .env.example .env
 codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
 ```
 
+如需通过 CLI 针对特定集合直接运行 coder：
+
+```sh
+codesearch coder --collection my_repo --query-file /path/to/issue_1.txt
+```
+
 配置优先级与变量表见 [安装指导 · 环境变量](docs/zh/2.安装指导/README.md#环境变量)。检索使用两个模型：**main**（多轮决策）默认 `openai/gpt-5`，**filter**（逐行提取）默认 `openai/gpt-5-mini`。换端点时请把模型名改成该服务实际支持的名字。Python API 与完整说明见 [快速开始](docs/zh/3.快速上手/3.快速上手.md)。
 
 # ⚙️ 引擎
@@ -178,6 +184,16 @@ python -m benchmarks.contextbench.runner --num-instances 32
 预测与自动评分结果在 `./results/`。依赖以产品 `[bench]` 为准（含 pandas/
 pyarrow 与 tree-sitter*），不必再装上游 `requirements.txt`。完整说明见
 [快速上手](docs/zh/3.快速上手/3.快速上手.md#评测)。
+
+## Coder 模式
+
+您可以使用 benchmark 脚本运行全新的 coder 测试模式，并通过 `--reset-indices` 强制重置索引：
+
+```sh
+python -m benchmarks.contextbench.runner --num-instances 32 --test-mode coder --reset-indices
+```
+
+智能体日志与补丁预测结果将分别保存在 `./results/results__<timestamp>/agent_logs` 和 `./results/results__<timestamp>/coder_patches` 目录下。
 
 # 💻 开发指南
 

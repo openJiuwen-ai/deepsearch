@@ -72,7 +72,7 @@ def test_graph_happy_path_submit():
     assert result.total_output_tokens == 35   # 20 + 10 + 5
     # 第二轮首条消息重写注入记忆（与 react 形态同一行为契约）
     head = main_llm.calls[1][0][0].content
-    assert "CURRENT SAVED SNIPPETS" in head and "11: second line" in head
+    assert "WORKING MEMORY (Current Search)" in head and "11: second line" in head
 
 
 def test_graph_stagnation():
