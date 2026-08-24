@@ -11,7 +11,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode, \
     llm_context
-from openjiuwen_deepsearch.algorithm.research_collector.content_cleaner import default_content_cleaning_config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import (
     InfoCollectorNode,
 )
@@ -406,7 +405,6 @@ class TestInfoCollectorNode:
             "api_tools_config": {},
             "research_intent": {},
             "evidence_ledger": {},
-            "content_cleaning_config": default_content_cleaning_config(),
         }
         assert result == expected_state
 

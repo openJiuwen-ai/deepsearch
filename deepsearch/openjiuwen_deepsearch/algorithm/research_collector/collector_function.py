@@ -35,11 +35,6 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
     MAX_SEARCH_CONTENT_LENGTH,
 )
-from openjiuwen_deepsearch.algorithm.research_collector.content_cleaner import (
-    ContentCleaningConfig,
-    clean_web_content,
-    coerce_content_cleaning_config,
-)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
 from openjiuwen_deepsearch.algorithm.report.date_utils import parse_published_date
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload 
@@ -56,15 +51,6 @@ def _get_exclude_domains(agent_input: dict) -> list[str]:
     if isinstance(research_intent, dict):
         return normalize_domains(research_intent.get("exclude_domains"))
     return normalize_domains(getattr(research_intent, "exclude_domains", []))
-
-
-def _get_content_cleaning_config(agent_input: dict) -> ContentCleaningConfig:
-    """从 agent_input 获取搜索内容清洗配置（照 _get_exclude_domains 先例）。
-
-    framework 节点在 agent_input 的 ``content_cleaning_config`` 键注入配置
-    （ContentCleaningConfig 或 dict）；未注入时按默认值构造。
-    """
-    return coerce_content_cleaning_config(agent_input.get("content_cleaning_config"))
 
 
 def _get_exclude_urls(agent_input: dict) -> list[str]:
@@ -517,7 +503,6 @@ def _parse_absolute_date(value: Any) -> date | None:
 def _normalize_web_search_item(
         item: Any,
         include_date_metadata: bool = False,
-        cleaning_config: ContentCleaningConfig | None = None,
 ) -> dict | None:
     """归一化 web 结果，并按需附加发表日期。
 
@@ -528,8 +513,6 @@ def _normalize_web_search_item(
             取原生 ``published``/``published_at``/``published_date``（容错
             解析，覆盖 arxiv ISO 8601 与 PubMed ``YYYY Mon DD``）；解析不出
             不附加。
-        cleaning_config: 搜索内容噪声清洗配置；None 时按默认值构造。
-            仅清洗 ``content`` 字段，``full_text``/``title``/``url`` 等不动。
 
     Returns:
         归一化文档；缺少 URL 或输入非法时返回 None。
@@ -546,12 +529,6 @@ def _normalize_web_search_item(
         item,
         ("content", "raw_content", "snippet", "summary", "answer"),
     )
-    # 内容噪声清洗挂点：content 落定之后、写入 normalized["content"] 之前；
-    # 必须在下游第一个有效截断点（collector 10000 字符）之前完成清洗。
-    if cleaning_config is None:
-        cleaning_config = coerce_content_cleaning_config(None)
-    if cleaning_config.enabled and len(content) >= cleaning_config.min_chars:
-        content, _ = clean_web_content(content, cleaning_config)
     normalized = {
         "type": "page",
         "title": title[:MAX_SEARCH_CONTENT_LENGTH],
@@ -713,11 +690,9 @@ def process_tavily_search_result(agent_input: dict, tool_content: Any) -> (list,
         raw_results = filter_search_results_by_exclude_domains(raw_results, _get_exclude_domains(agent_input))
         raw_results = filter_search_results_by_exclude_urls(
             raw_results, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
-        cleaning_config = _get_content_cleaning_config(agent_input)
         added_records = []
         for item in raw_results:
-            new_item = _normalize_web_search_item(item, include_date_metadata=True,
-                                                  cleaning_config=cleaning_config)
+            new_item = _normalize_web_search_item(item, include_date_metadata=True)
             if new_item is not None:
                 added_records.append(new_item)
         added_records = _apply_temporal_filter(agent_input, added_records)
@@ -745,11 +720,9 @@ def process_google_search_result(agent_input: dict, tool_content: Any) -> (list,
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
         tool_result = filter_search_results_by_exclude_urls(
             tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
-        cleaning_config = _get_content_cleaning_config(agent_input)
         added_records = []
         for item in tool_result:
-            new_item = _normalize_web_search_item(item, include_date_metadata=True,
-                                                  cleaning_config=cleaning_config)
+            new_item = _normalize_web_search_item(item, include_date_metadata=True)
             if new_item is None:
                 continue
             added_records.append(new_item)
@@ -776,11 +749,9 @@ def process_common_search_result(agent_input: dict, tool_content: Any) -> (list,
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
         tool_result = filter_search_results_by_exclude_urls(
             tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
-        cleaning_config = _get_content_cleaning_config(agent_input)
         added_records = []
         for item in tool_result:
-            new_item = _normalize_web_search_item(item, include_date_metadata=True,
-                                                  cleaning_config=cleaning_config)
+            new_item = _normalize_web_search_item(item, include_date_metadata=True)
             if new_item is not None:
                 added_records.append(new_item)
         combined_records = original_records + added_records

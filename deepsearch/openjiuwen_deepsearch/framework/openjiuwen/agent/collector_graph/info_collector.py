@@ -15,9 +15,6 @@ from openjiuwen.core.session.node import Session
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_call, \
     process_tool_result, remove_duplicate_items
-from openjiuwen_deepsearch.algorithm.research_collector.content_cleaner import (
-    default_content_cleaning_config,
-)
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     CollectorSourceStore,
     build_evidence_atom,
@@ -196,7 +193,6 @@ class InfoRetrievalNode(BaseNode):
             api_tools_config=session.get_global_state("config.api_tools_config") or {},
             research_intent=session.get_global_state("collector_context.research_intent") or {},
             evidence_ledger=session.get_global_state("collector_context.evidence_ledger") or {},
-            content_cleaning_config=default_content_cleaning_config(),
         )
         return state
 
@@ -471,7 +467,6 @@ class InfoRetrievalNode(BaseNode):
             "local_text_search_record": [],
             "other_tool_record": [],
             "research_intent": state.get("research_intent", {}),
-            "content_cleaning_config": state.get("content_cleaning_config"),
         }
 
         tool_list, tool_dict = self._prepare_collector_tool(state)

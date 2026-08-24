@@ -470,8 +470,6 @@ class TestSearchResultProcessing:
 
     def test_process_tavily_search_result_normalizes_records(self):
         """Tavily records stored for later LLM prompts should use the search content limit."""
-        # 内容超过清洗门控长度，关闭清洗以保持本用例聚焦截断行为（设计文档第十节第 3 条）
-        self.agent_input["content_cleaning_config"] = {"enabled": False}
         tool_content = [
             {
                 "title": "Tavily title",
