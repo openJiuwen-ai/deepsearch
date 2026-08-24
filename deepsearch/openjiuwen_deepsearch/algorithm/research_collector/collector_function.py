@@ -35,7 +35,13 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
     MAX_SEARCH_CONTENT_LENGTH,
 )
+from openjiuwen_deepsearch.algorithm.research_collector.content_cleaner import (
+    ContentCleaningConfig,
+    clean_web_content,
+    coerce_content_cleaning_config,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
+from openjiuwen_deepsearch.algorithm.report.date_utils import parse_published_date
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload 
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, is_url_blocked, \
     normalize_domains
@@ -50,6 +56,15 @@ def _get_exclude_domains(agent_input: dict) -> list[str]:
     if isinstance(research_intent, dict):
         return normalize_domains(research_intent.get("exclude_domains"))
     return normalize_domains(getattr(research_intent, "exclude_domains", []))
+
+
+def _get_content_cleaning_config(agent_input: dict) -> ContentCleaningConfig:
+    """从 agent_input 获取搜索内容清洗配置（照 _get_exclude_domains 先例）。
+
+    framework 节点在 agent_input 的 ``content_cleaning_config`` 键注入配置
+    （ContentCleaningConfig 或 dict）；未注入时按默认值构造。
+    """
+    return coerce_content_cleaning_config(agent_input.get("content_cleaning_config"))
 
 
 def _get_exclude_urls(agent_input: dict) -> list[str]:
@@ -499,12 +514,22 @@ def _parse_absolute_date(value: Any) -> date | None:
         return None
 
 
-def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -> dict | None:
-    """归一化 web 结果，并按需附加 Tavily 的发表日期。
+def _normalize_web_search_item(
+        item: Any,
+        include_date_metadata: bool = False,
+        cleaning_config: ContentCleaningConfig | None = None,
+) -> dict | None:
+    """归一化 web 结果，并按需附加发表日期。
 
     Args:
         item: 搜索引擎返回的单条结果。
-        include_date_metadata: 是否读取 Tavily 已归一化的发表日期。
+        include_date_metadata: 是否附加发表日期。Tavily 走已归一化的
+            ``source_date``+``source_date_type`` 契约（严格 ISO）；无则按序
+            取原生 ``published``/``published_at``/``published_date``（容错
+            解析，覆盖 arxiv ISO 8601 与 PubMed ``YYYY Mon DD``）；解析不出
+            不附加。
+        cleaning_config: 搜索内容噪声清洗配置；None 时按默认值构造。
+            仅清洗 ``content`` 字段，``full_text``/``title``/``url`` 等不动。
 
     Returns:
         归一化文档；缺少 URL 或输入非法时返回 None。
@@ -521,6 +546,12 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
         item,
         ("content", "raw_content", "snippet", "summary", "answer"),
     )
+    # 内容噪声清洗挂点：content 落定之后、写入 normalized["content"] 之前；
+    # 必须在下游第一个有效截断点（collector 10000 字符）之前完成清洗。
+    if cleaning_config is None:
+        cleaning_config = coerce_content_cleaning_config(None)
+    if cleaning_config.enabled and len(content) >= cleaning_config.min_chars:
+        content, _ = clean_web_content(content, cleaning_config)
     normalized = {
         "type": "page",
         "title": title[:MAX_SEARCH_CONTENT_LENGTH],
@@ -550,16 +581,32 @@ def _normalize_web_search_item(item: Any, include_date_metadata: bool = False) -
     if doi:
         normalized["doi"] = doi
     if include_date_metadata:
-        raw_date = item.get("source_date")
         source_date_type = str(item.get("source_date_type") or "").strip()
-        if raw_date is not None and str(raw_date).strip() and source_date_type == "published":
-            parsed_date = _parse_absolute_date(raw_date)
-            normalized["date_metadata"] = {
-                "field": "source_date",
-                "type": "published",
-                "value": str(raw_date)[:MAX_SEARCH_CONTENT_LENGTH],
-                "parsed_date": parsed_date.isoformat() if parsed_date else "",
-            }
+        raw_date = item.get("source_date")
+        field_name = "source_date"
+        if not (raw_date is not None and str(raw_date).strip()
+                and source_date_type == "published"):
+            # 退到原生 published* 字段（pubmed/arxiv 等）；字段名本身声明发表语义
+            raw_date = None
+            for cand in ("published", "published_at", "published_date"):
+                v = item.get(cand)
+                if v is not None and str(v).strip():
+                    raw_date = v
+                    field_name = cand
+                    break
+        if raw_date is not None and str(raw_date).strip():
+            parsed_date = (
+                _parse_absolute_date(raw_date)
+                if field_name == "source_date"
+                else parse_published_date(raw_date)
+            )
+            if parsed_date:
+                normalized["date_metadata"] = {
+                    "field": field_name,
+                    "type": "published",
+                    "value": str(raw_date)[:MAX_SEARCH_CONTENT_LENGTH],
+                    "parsed_date": parsed_date.isoformat(),
+                }
     # Preserve relevance score from search APIs (Tavily, etc.)
     raw_score = item.get("score")
     if isinstance(raw_score, (int, float)):
@@ -666,9 +713,11 @@ def process_tavily_search_result(agent_input: dict, tool_content: Any) -> (list,
         raw_results = filter_search_results_by_exclude_domains(raw_results, _get_exclude_domains(agent_input))
         raw_results = filter_search_results_by_exclude_urls(
             raw_results, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
+        cleaning_config = _get_content_cleaning_config(agent_input)
         added_records = []
         for item in raw_results:
-            new_item = _normalize_web_search_item(item, include_date_metadata=True)
+            new_item = _normalize_web_search_item(item, include_date_metadata=True,
+                                                  cleaning_config=cleaning_config)
             if new_item is not None:
                 added_records.append(new_item)
         added_records = _apply_temporal_filter(agent_input, added_records)
@@ -696,9 +745,11 @@ def process_google_search_result(agent_input: dict, tool_content: Any) -> (list,
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
         tool_result = filter_search_results_by_exclude_urls(
             tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
+        cleaning_config = _get_content_cleaning_config(agent_input)
         added_records = []
         for item in tool_result:
-            new_item = _normalize_web_search_item(item)
+            new_item = _normalize_web_search_item(item, include_date_metadata=True,
+                                                  cleaning_config=cleaning_config)
             if new_item is None:
                 continue
             added_records.append(new_item)
@@ -725,9 +776,11 @@ def process_common_search_result(agent_input: dict, tool_content: Any) -> (list,
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
         tool_result = filter_search_results_by_exclude_urls(
             tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
+        cleaning_config = _get_content_cleaning_config(agent_input)
         added_records = []
         for item in tool_result:
-            new_item = _normalize_web_search_item(item)
+            new_item = _normalize_web_search_item(item, include_date_metadata=True,
+                                                  cleaning_config=cleaning_config)
             if new_item is not None:
                 added_records.append(new_item)
         combined_records = original_records + added_records

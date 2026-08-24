@@ -27,6 +27,10 @@ You MUST call `emit_report_intent` exactly once for every request. Do not reply 
 - Extract **temporal_scope** only for an explicit research boundary:
   - `source_date` limits when sources were published or available, including "information available as of" snapshots.
   - `content_date` limits facts, events, studies summarized, or data periods while allowing later retrospective sources.
+  - Deciding principle — does the time word modify the **carrier** or the **subject**?
+    - Modifies the carrier (the source's publication/availability: "use sources published in 2016", "papers published 2014-2017", "literature available as of 2017") → `source_date`.
+    - Modifies the subject (the period of the facts/events/research/data: "review research results before 2017", "trends observed during 2014-2016", "industry status through end of 2016") → `content_date`, even when the sentence contains words like research/results/papers/literature: the best retrospective survey of older work may be published later, and filtering by publication time would wrongly exclude it.
+  - The "information available as of" snapshot sense maps to `source_date` ONLY when the user explicitly requires the corpus itself to be truncated by availability/publication time. When the content is bounded but newer retrospective sources remain acceptable, use `content_date`.
   - Emit inclusive ISO `start_date` / `end_date` values. Map early year to March 31, mid-year to June 30, year-end to December 31, `before YEAR` to December 31 of the previous year, `through YEAR` to that December 31, and `before MONTH YEAR` to the final day of the previous month.
   - Do not infer a temporal scope from incidental dates that do not constrain the research.
 

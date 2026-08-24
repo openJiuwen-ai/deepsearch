@@ -27,7 +27,7 @@
 - 并发上限 5 批（MAX_CONCURRENT_BATCHES），每批独立 LLM 调用。
 - rationale 生成和抽取+打分的 LLM 调用均按 `max_generate_retry_num`（默认 3）重试，覆盖 LLM 异常、空输出、JSON 解析失败三类瞬时失败；重试时上一轮失败原因以带数据边界的 `<retry_feedback>` user 消息追加到下一次调用的消息列表末尾。
 - Prompt 安全：rationale 生成和抽取+打分的 system prompt 只含指令和抗注入约束，不可信数据（文档内容、step summaries）通过 user message 传入，防止恶意网页注入指令操纵评分。
-- 按维度 top-k 选择：每个 rationale 独立按覆盖分降序选 top_k 个段落（覆盖分为 0 的段落不参与选择），跨 rationale 按对象身份去重（同一段落被多个维度选中时只保留首次出现）。
+- 按维度 top-k 选择：每个 rationale 独立选 top_k 个段落，排序键为覆盖分加 content_date 约束下的时效分（source_date 或无约束时退化为纯按覆盖分降序），覆盖分为 0 的段落不参与选择，跨 rationale 按对象身份去重（同一段落被多个维度选中时只保留首次出现）。
 - 结构化证据指南：`build_structured_evidence_guide` 为每个 rationale 标注覆盖状态（covered/weak/uncovered），按 0.6/0.3 阈值分类，并列出 top-3 段落供写作参考。
 
 ## 关键代码路径
@@ -54,7 +54,7 @@
 
 1. **rationale 生成**：LLM 根据章节任务、章节描述、章节焦点和 step summaries 生成 3-8 个信息维度。LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败；重试时上一轮失败原因以 `<retry_feedback>` user 消息注入下一次调用，重试耗尽后 `last_error` 随返回值传播到上游错误消息。
 2. **段落抽取+打分**：`_extract_and_score_documents` 将原始文档分批（EXTRACT_BATCH_SIZE=5），并发上限 5 批，每批并行送 LLM 抽取相关段落并评分。`coverage` 按 passage×rationale 评估；`reliability`、`data_density` 按 passage 整体评估一次（LLM 在 passage 顶层输出）。`coverage_matrix` 直接存 coverage 供 top-k 排序使用。维度分存储在 `dimension_scores`（结构为 `{passage_key: {rationale_id: {coverage, reliability, data_density}}}`，其中 reliability/data_density 为 passage 级整体值镜像到每个 rationale 条目），passage dict 顶层通过 `scores` 键携带每个 rationale 的 coverage/reliability/data_density，同时携带 passage 级 `reliability`/`data_density` 供图表可视化选择直接读取。每批 LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败；部分批次失败时跳过失败批次继续合并，失败批次及原因记入 warning 日志，不影响其他批次。
-3. **按维度 top-k 选择**：`_select_by_rationale_coverage` 对每个 rationale 独立按覆盖分降序选 top_k 个段落，仅选择覆盖分 > 0 的段落（0 分段落不参与选择），跨 rationale 按对象身份去重。
+3. **按维度 top-k 选择**：`_select_by_rationale_coverage` 对每个 rationale 独立选 top_k 个段落，排序键 = 覆盖分 + `effective_weight` × 时效分，其中 `effective_weight = CONTENT_DATE_TIMELINESS_WEIGHT × known_ratio`（`known_ratio` = 候选池中四档非 unknown 的段落占比，有日期信号越多权重越接近上限）。content_date 约束下，按段落的 `content_time` 与约束区间判四档 compliant/partial/violation/unknown，对应 +1.0/-0.3/-1.0/0.0（部分重叠少扣、完全不符多扣、信息不足不奖不罚）；`known_ratio` 低（候选池普遍无日期）时 `effective_weight` 自动趋零、退化为纯覆盖分排序，避免在噪声上排序并挤压覆盖度；source_date 或无约束时 `timeliness_weight` 为 0，退化为纯覆盖分降序。仅选择覆盖分 > 0 的段落，且 0 分门槛用纯覆盖分判定（时效惩罚不会变相硬删合规段落），跨 rationale 按对象身份去重。**并集补回（union-restore）**：content_date 加权生效时，每个 rationale 另回放一份纯覆盖分 top-k 基线（独立去重轨迹），被时间加权挤掉的成员中**仅 unknown 档**（判不出日期、时效分 0）补回池子（同样过 0 分门槛与跨 rationale 去重）——护住"没日期不罚"的无辜高覆盖段落，避免挤占导致普通维度失分；violation/partial 档不补回，扣分保留（观测日志 `restored=` 记录补回数）。
 4. **L1/L2 过滤**：`filter_passages_by_coverage` 移除最大覆盖度低于阈值（默认 0.15）的段落，当全部段落低于阈值时降级保留按最大覆盖度排序的 top-5 作为兜底；`dedup_passages_by_rationale` 对高度相似的段落去重（n-gram Jaccard > 0.70，中文按字符 unigram、拉丁文按词级 bigram+trigram 计算集合），每个 rationale 保留 top-15；per-rationale 去重后再执行一次全局近重复扫描，跨 rationale 移除重复段落，保留总覆盖度更高者。
 5. **全文抽取**：`enrich_fulltext_for_section`（同步调用，非 async）按 URL 在 rationale 中被引用的频次选取 top-N URL，直接使用 info_collector 阶段已有的 `original_content` 作为全文证据（不做 Tavily/Jina 抓取、不做 LLM 压缩、不做覆盖度评估，全文条目无 coverage 评分，但聚合了 reliability（取 max）和 data_density），从段落集合中移除已被全文替代的段落，剩余段落保留 passage 级 `reliability`/`data_density`，构建统一的 `classified_content`（段落项含 `passage_text` 切片和 `original_content` 全文；写作 LLM 用 `passage_text`（段落）或 `original_content`（全文），溯源统一用 `original_content`，图表选择读顶层字段）、`sub_section_core_content`（全文用 `original_content`，段落用 `passage_text`）、`references`（与 classified_content 逐项对应，不做 URL 去重）和段落版 `structured_evidence_guide`（每个 rationale 取 top-3 覆盖度段落；被提升为全文的段落也纳入 evidence guide，避免 rationale 显示为 uncovered）；`build_core_content_list` 将全文截断为 500 字供 outline prompt 使用。
 6. **结构化证据指南**：`build_structured_evidence_guide` 为每个 rationale 标注覆盖状态（covered: max_coverage >= 0.6 / weak: >= 0.3 / uncovered: < 0.3），并列出该 rationale 下 top-3 段落（coverage >= 0.3）供写作参考。覆盖状态仅写入 evidence guide 字符串，不单独输出局限性说明。
@@ -81,6 +81,7 @@ Prompt 输入变量：
 关键配置：
 
 - `classify_doc_infos_res_top_k_num`：每个 rationale 最大选择段落数（默认 15）。L2 去重后每个 rationale 保留 `top_k_per_rationale=15`。
+- `CONTENT_DATE_TIMELINESS_WEIGHT`（`report.py` 模块常量，非配置项）：content_date 约束下时效分在排序键中的权重上限（0.2）。实际排序权重 `effective_weight = CONTENT_DATE_TIMELINESS_WEIGHT × known_ratio`，`known_ratio` 为候选池中有日期段落的占比（unknown 越多权重越自动趋零，低信号场景自动退出，不再挤压覆盖度）；source_date 或无约束时不生效。
 - `max_generate_retry_num`：rationale 生成和抽取+打分的 LLM 调用重试次数（默认 3）。
 - `EXTRACT_BATCH_SIZE`：每批文档数量（默认 5）。
 - `MAX_CONCURRENT_BATCHES`：LLM 并发上限（默认 5）。
@@ -114,6 +115,7 @@ uv run pytest tests/report/test_doc_selection.py
 - passage_text 保留原文精确数字，不被改写。
 - 引用与 classified_content 逐项对应，不做 URL 去重。
 - 结构化证据指南为每个 rationale 标注 covered/weak/uncovered 状态。
+- content_date 约束下排序键含时效分：compliant 段落优先、violation 段落被降权但不硬删（覆盖分 > 0 仍可选）；倒置的 `content_time` 区间视为无效、判 unknown 不奖不罚；`known_ratio=0`（全部 unknown）时 `effective_weight=0`、排序退化为纯覆盖度，`known_ratio=1` 时等价于固定权重（回归）。
 
 ## 相关文档
 

@@ -47,6 +47,10 @@ From the user's **original_query** (below), extract:
    - **temporal_scope**: emit only when the user explicitly limits source availability/publication time or the facts/data period.
      - Use `source_date` when the user limits when sources were published or available, including historical "information available as of" snapshots.
      - Use `content_date` when later retrospective sources remain acceptable but the facts, events, studies summarized, or data period are bounded.
+     - Deciding principle — does the time word modify the **carrier** or the **subject**?
+       - Modifies the carrier (the source's publication/availability: "use sources published in 2016", "papers published 2014-2017", "literature available as of 2017") → `source_date`.
+       - Modifies the subject (the period of the facts/events/research/data: "review research results before 2017", "trends observed during 2014-2016", "industry status through end of 2016") → `content_date`, even when the sentence contains words like research/results/papers/literature: the best retrospective survey of older work may be published later, and filtering by publication time would wrongly exclude it.
+     - The "information available as of" snapshot sense maps to `source_date` ONLY when the user explicitly requires the corpus itself to be truncated by availability/publication time. When the content is bounded but newer retrospective sources remain acceptable, use `content_date`.
      - `start_date` and `end_date` are inclusive ISO dates (`YYYY-MM-DD`); omit a boundary the user did not provide.
      - Normalize `early YEAR` / `YEAR年初` to March 31, `mid-YEAR` / `YEAR年中` to June 30, and `end of YEAR` / `YEAR年底` to December 31.
      - Normalize `before YEAR` / `YEAR年之前` to December 31 of the previous year; normalize `through YEAR` / `截至YEAR年` to December 31 of that year.

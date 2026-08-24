@@ -331,14 +331,47 @@ def build_research_intent_prompt_context(intent: ResearchIntent | dict | None) -
     }
 
 
-def build_temporal_scope_prompt_context(intent: ResearchIntent | dict | None) -> dict:
+def resolve_temporal_embed_in_query(
+    engine_name: str | None,
+    constraint_type: str | None,
+    scholarly_enabled: bool = False,
+) -> bool:
+    """按 引擎×约束类型 决定搜索词是否带约束时间词。副引擎启用时强制带。
+
+    Tavily 等原生支持时间过滤的引擎对 source_date 约束可由引擎原生过滤，搜索词无需再带
+    约束时间词；其余引擎（或副引擎启用时）需把约束时间词写进搜索词。content_date 约束
+    表达的是事实发生时间，任何引擎都无法原生过滤，始终需要写进搜索词。
+    """
+    from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
+        TEMPORAL_SCOPE_SEARCH_ENGINES,
+    )
+
+    if constraint_type is None:
+        return False
+    if constraint_type == "content_date":
+        return True
+    if scholarly_enabled:
+        return True
+    engine_supports_native = (engine_name or "") in TEMPORAL_SCOPE_SEARCH_ENGINES
+    return not engine_supports_native
+
+
+def build_temporal_scope_prompt_context(
+    intent: ResearchIntent | dict | None,
+    *,
+    engine_name: str | None = None,
+    scholarly_enabled: bool = False,
+) -> dict:
     """将时间约束转换为研究阶段 prompt 可直接消费的上下文。
 
     Args:
         intent: 结构化研究意图或兼容字典。
+        engine_name: 主 web 搜索引擎名，用于判断引擎是否原生支持时间过滤。
+        scholarly_enabled: 副引擎（学术搜索）是否启用，启用时强制在搜索词中带约束时间词。
 
     Returns:
-        包含时间约束类型、边界和自然语言指令的 prompt 上下文；无约束时返回空字段。
+        包含时间约束类型、边界、是否在搜索词中带约束时间词及对应指令的 prompt 上下文；
+        无约束时返回空字段。
     """
     if intent is None:
         scope = None
@@ -351,6 +384,8 @@ def build_temporal_scope_prompt_context(intent: ResearchIntent | dict | None) ->
         return {
             "has_temporal_scope": False,
             "temporal_scope_instruction": "",
+            "temporal_embed_in_query": False,
+            "temporal_query_instruction": "",
         }
 
     start_date = scope.start_date.isoformat() if scope.start_date else ""
@@ -367,9 +402,33 @@ def build_temporal_scope_prompt_context(intent: ResearchIntent | dict | None) ->
     else:
         instruction = f"Keep the facts and data {boundary}, using inclusive boundary dates."
 
+    embed = resolve_temporal_embed_in_query(
+        engine_name, scope.constraint_type, scholarly_enabled
+    )
+    if embed:
+        if scope.constraint_type == "content_date":
+            query_instruction = (
+                "Express this boundary naturally in every query as a constraint time phrase "
+                "tied to when the facts/events occurred (e.g. 'events in 2018', '2018 research'), "
+                "not the publication date. Keep topical years that are part of the research "
+                "subject (e.g. '2018-2023 developments') — do NOT drop them."
+            )
+        else:
+            query_instruction = (
+                "Express this boundary naturally in every query as a constraint time phrase "
+                "tied to the publication date (e.g. 'published in 2024'). Keep topical years that "
+                "are part of the research subject (e.g. '2018-2023 developments') — do NOT drop them."
+            )
+    else:
+        query_instruction = (
+            "Do NOT add any constraint time phrase (the engine filters by date natively). "
+            "Topical years that are part of the research subject are still allowed."
+        )
     return {
         "has_temporal_scope": True,
         "temporal_scope_instruction": instruction,
+        "temporal_embed_in_query": embed,
+        "temporal_query_instruction": query_instruction,
     }
 
 

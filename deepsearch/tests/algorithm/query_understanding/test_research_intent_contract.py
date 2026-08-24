@@ -155,6 +155,8 @@ def test_build_temporal_scope_prompt_context_handles_missing_scope():
     assert context == {
         "has_temporal_scope": False,
         "temporal_scope_instruction": "",
+        "temporal_embed_in_query": False,
+        "temporal_query_instruction": "",
     }
 
 
@@ -439,14 +441,13 @@ def test_planner_prompt_renders_section_local_contract_context():
         "outliner_user_revised",
         "planner",
         "dep_driving_planner",
-        "sub_report_markdown",
         "report_abstract_markdown",
         "report_conclusion_markdown",
         "report_implications_and_recommendations_markdown",
     ],
 )
 def test_non_collector_prompts_do_not_consume_temporal_scope(prompt_name):
-    """时间约束只能进入 collector query 与补搜 Prompt。"""
+    """时间约束不进入下列非 collector Prompt（sub_report_markdown 为有意消费者，已排除）。"""
     prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / f"{prompt_name}.md").read_text(
         encoding="utf-8"
     )

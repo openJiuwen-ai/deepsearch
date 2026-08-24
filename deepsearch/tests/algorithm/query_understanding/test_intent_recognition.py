@@ -207,6 +207,23 @@ def test_intent_prompt_defines_temporal_normalization_rules(prompt_name):
     assert "inclusive" in prompt
 
 
+@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
+def test_intent_prompt_defines_carrier_vs_subject_rule(prompt_name):
+    """两个意图 Prompt 必须包含「载体 vs 主题」判定原则。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+    assert "carrier" in prompt.lower()
+    assert "subject" in prompt.lower()
+    assert "retrospective" in prompt.lower()
+
+
+@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
+def test_intent_prompt_scopes_as_of_snapshot(prompt_name):
+    """as-of 快照语义只在用户要求语料按可得性截断时归 source_date。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+    assert "as of" in prompt.lower() or "available as of" in prompt.lower()
+    assert "truncat" in prompt.lower()
+
+
 @pytest.mark.asyncio
 async def test_recognize_report_intent_no_tool_calls_fallback():
     with patch(

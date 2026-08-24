@@ -411,10 +411,12 @@ def build_classified_content(
     Returns:
         Unified list of dicts with ``index``, ``doc_time``, ``title``,
         ``passage_text`` (passage items only), ``original_content``,
-        ``is_fulltext`` and ``url``. Top-level
+        ``is_fulltext``, ``url`` and ``content_time``. Top-level
         ``data_density``/``reliability`` are document-level values assessed
         once per document/passage, not per rationale, so visualization
-        selection reads them directly.
+        selection reads them directly. ``content_time`` is the passage's
+        fact-level time window (``{start, end}``) under a ``content_date``
+        temporal scope and ``None`` otherwise (including full-text items).
     """
     classified: list[dict] = []
     fulltext_count = len(fulltext_evidences or [])
@@ -432,6 +434,9 @@ def build_classified_content(
                 "data_density": evidence.data_density,
                 "is_fulltext": True,
                 "url": evidence.url,
+                # Full-text items describe an entire document; there is no
+                # single fact-level content_time, so leave it unset (None).
+                "content_time": None,
             }
         )
     for pos, passage in enumerate(remaining_passages or []):
@@ -452,6 +457,9 @@ def build_classified_content(
                 "data_density": float(passage_data_density),
                 "is_fulltext": False,
                 "url": str(passage.get("doc_url", "") or ""),
+                # Propagate the passage's fact-level time (content_date scope);
+                # None for source_date scope / full-text fallback.
+                "content_time": passage.get("content_time"),
             }
         )
     return classified
