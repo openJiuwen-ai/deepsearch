@@ -22,13 +22,13 @@
 
 - 意图识别：`openjiuwen_deepsearch/algorithm/query_understanding/intent_recognition.py`；Prompt `algorithm/prompts/intent_recognition.md`、`intent_recognition_entry.md`
 - 日期归一化：`openjiuwen_deepsearch/algorithm/research_collector/collector_function.py`（`_normalize_web_search_item`）；证据挂接 `algorithm/research_collector/collector_evidence.py`
-- 日期基础设施：`openjiuwen_deepsearch/algorithm/report/date_utils.py`（`parse_date_window`/`parse_content_window`/`classify_temporal`/`timeliness_score`/`parse_published_date`）
+- 日期基础设施：`openjiuwen_deepsearch/utils/common_utils/date_utils.py`（`parse_date_window`/`parse_content_window`/`classify_temporal`/`timeliness_score`/`parse_published_date`）
 - 选材加权：`openjiuwen_deepsearch/algorithm/report/report.py`（`_select_by_rationale_coverage`）
 - 约束模型：`framework/openjiuwen/agent/search_context.py`（`TemporalScope`）
 
 主要测试：
 
-- `tests/report/test_date_utils.py`
+- `tests/utils/test_date_utils.py`
 - `tests/info_collector/algorithm/test_collector_function.py`
 - `tests/report/test_select_by_rationale_coverage_temporal.py`
 - `tests/algorithm/query_understanding/test_intent_recognition.py`
@@ -57,7 +57,7 @@
 ## 测试与验证
 
 ```bash
-uv run pytest tests/report/test_date_utils.py tests/info_collector/algorithm/test_collector_function.py tests/report/test_select_by_rationale_coverage_temporal.py tests/algorithm/query_understanding/test_intent_recognition.py
+uv run pytest tests/utils/test_date_utils.py tests/info_collector/algorithm/test_collector_function.py tests/report/test_select_by_rationale_coverage_temporal.py tests/algorithm/query_understanding/test_intent_recognition.py
 # LLM 分类回归（opt-in，需 general LLM 凭证）：
 RUN_LLM_TESTS=1 uv run pytest tests/algorithm/query_understanding/test_intent_temporal_llm.py
 ```
