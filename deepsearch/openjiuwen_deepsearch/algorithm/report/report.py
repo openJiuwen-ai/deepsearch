@@ -319,6 +319,19 @@ class TemporalSelectionOptions:
 #: 数值即时间分能反超的覆盖度差距上限。
 CONTENT_DATE_TIMELINESS_WEIGHT = 0.2
 
+#: 选材保留门的覆盖度下限：须与 report_rationale_fulltext.filter_passages_by_coverage
+#: 的 threshold（0.15）保持一致。对齐后本函数选出的段落必然通过下游 Layer 1 过滤，
+#: 时间加权的提升结果不会被下游纯覆盖度过滤撤销。
+SELECTION_COVERAGE_FLOOR = 0.15
+
+#: 下游 Layer 2（dedup_passages_by_rationale）每个 rationale 的截断上限，须与
+#: report_rationale_fulltext.enrich_fulltext_for_section 的 top_k_per_rationale（15）
+#: 保持一致。并集补回按"每 rationale 交付不超过该值"封顶，使 Layer 2 的
+#: 纯覆盖度重排截断对单 rationale 新增交付不触发（以 top_k ≤ 该值为前提；
+#: top_k 更大时主循环自身即可能超 15 条，截断重新生效；跨 rationale 共享段落
+#: 导致的超 15 属已接受的二阶边缘场景）。
+FULLTEXT_TOP_K_PER_RATIONALE = 15
+
 
 def _convert_bold_formula_to_inline_math(content: str) -> str:
     """把 LLM 误用加粗(**..**)包裹的数学公式转为内联 ``$..$`` 格式。
@@ -2594,17 +2607,33 @@ class Reporter:
         For each rationale, sort passages by coverage score and take top-k.
         Deduplicate across rationales by passage identity (keep first occurrence).
 
+        The keep-gate requires a passage's max raw coverage across rationales
+        to reach SELECTION_COVERAGE_FLOOR (aligned with the downstream Layer-1
+        filter in enrich_fulltext_for_section), so selected passages always
+        survive the downstream coverage filter: temporal promotion can never
+        be undone there, and a doomed sub-floor promotion cannot evict a
+        floor-passing passage from top-k. Fallback: when the whole pool is
+        below the floor, the legacy ``score > 0`` gate applies (mirrors
+        Layer-1's own fallback).
+
         When ``temporal.temporal_scope`` is a ``content_date`` constraint and
         ``temporal.timeliness_weight > 0``, the *sort* key becomes
         ``coverage + timeliness_weight * temporal_score`` so time-compliant
         passages can outrank slightly-higher-coverage non-compliant ones. The
-        ``score > 0`` keep-gate, however, is applied to the *raw* coverage only
-        so temporal penalties never silently hard-delete a covered passage.
+        keep-gate, however, is applied to the *raw* coverage only so temporal
+        penalties never silently hard-delete a covered passage.
         Additionally, per rationale the pure-coverage top-k members that
         temporal promotion evicted are restored into the pool (union-restore),
         but only unknown-tier ones (timeliness 0, no date evidence): the
         innocent are protected, while violation/partial passages keep the
-        demotion they earned.
+        demotion they earned. Restores are capped so each rationale receives
+        at most FULLTEXT_TOP_K_PER_RATIONALE new passages in total, so for
+        top_k <= that bound Layer-2's raw-coverage top-15 truncation cannot
+        fire on per-rationale new deliveries (with the default top_k == 15,
+        a saturated rationale gets no restores at all — restores beyond the
+        bound would be delivered-then-truncated by Layer 2 anyway).
+        Cross-rationale shared passages can still push a Layer-2 rationale
+        list past the bound in extreme cases (accepted second-order edge).
         ``source_date`` scopes (or ``temporal is None``) keep pure-coverage
         behavior.
 
@@ -2629,6 +2658,23 @@ class Reporter:
         coverage_matrix = coverage_result.get("coverage_matrix", {})
 
         rationale_ids = list(dict.fromkeys(r.get("id", "") for r in rationales))
+
+        # Max raw coverage across rationales per passage, for the floor-aligned
+        # keep-gate (see docstring). Computed once; the per-rationale loops reuse it.
+        max_cov_by_idx: dict[int, float] = {}
+        for idx in range(len(filtered_passages)):
+            passage_cov = coverage_matrix.get(f"passage_{idx}", {})
+            if not isinstance(passage_cov, dict):
+                passage_cov = {}
+            max_cov_by_idx[idx] = max(
+                (float(passage_cov.get(rid, 0.0) or 0.0) for rid in rationale_ids),
+                default=0.0,
+            )
+        any_above_floor = any(v >= SELECTION_COVERAGE_FLOOR for v in max_cov_by_idx.values())
+
+        def _gate_ok(idx: int) -> bool:
+            # 全池低于门槛时退回老门（score > 0），避免整章无证据。
+            return not any_above_floor or max_cov_by_idx.get(idx, 0.0) >= SELECTION_COVERAGE_FLOOR
 
         temporal_scope = temporal.temporal_scope if temporal else None
         timeliness_weight = temporal.timeliness_weight if temporal else 0.0
@@ -2705,7 +2751,7 @@ class Reporter:
             for score, idx in scored:
                 if count >= top_k:
                     break
-                if score > 0:  # skip 0-score passages (consistent with dedup_passages_by_rationale)
+                if score > 0 and _gate_ok(idx):  # 0 分门同 Layer 2；_gate_ok 对齐 Layer 1 的 0.15 门槛
                     passage = filtered_passages[idx]
                     if id(passage) not in seen_ids:
                         seen_ids.add(id(passage))
@@ -2724,26 +2770,35 @@ class Reporter:
             if use_temporal:
                 # Replay the pure-coverage baseline with its own dedup trajectory
                 # (baseline_seen_ids): per rationale, take top_k additions in
-                # coverage order exactly like the main loop would without temporal.
-                # Baseline picks missing from the real pool were evicted by
-                # weighting — restore the unknown-tier ones. Tie-break by idx
-                # matches the baseline's stable sort on idx-ordered `scored`.
+                # coverage order exactly like the main loop would without temporal
+                # (same floor gate included). Baseline picks missing from the real
+                # pool were evicted by weighting — restore the unknown-tier ones.
+                # Tie-break by idx matches the baseline's stable sort on
+                # idx-ordered `scored`. Restores are capped so this rationale's
+                # total deliveries stay <= FULLTEXT_TOP_K_PER_RATIONALE, keeping
+                # Layer-2's raw-coverage top-15 truncation a no-op; iteration is
+                # coverage-descending, so the cap drops the weakest restores.
+                restore_cap = max(0, FULLTEXT_TOP_K_PER_RATIONALE - count)
+                restored_for_rid = 0
                 cov_sorted = sorted(scored, key=lambda item: (-item[0], item[1]))
                 cov_count = 0
                 for score, idx in cov_sorted:
                     if cov_count >= top_k:
                         break
-                    if score > 0:
+                    if score > 0 and _gate_ok(idx):
                         passage = filtered_passages[idx]
                         if id(passage) in baseline_seen_ids:
                             continue
                         baseline_seen_ids.add(id(passage))
                         cov_count += 1
-                        if id(passage) not in seen_ids and temporal_scores.get(idx, 0.0) == 0.0:
+                        if (restored_for_rid < restore_cap
+                                and id(passage) not in seen_ids
+                                and temporal_scores.get(idx, 0.0) == 0.0):
                             seen_ids.add(id(passage))
                             selected_passages.append(passage)
                             selected_indices.append(idx)
                             restored_count += 1
+                            restored_for_rid += 1
 
         logger.info(
             "%s [select_by_rationale] selected %s passages from %s candidates "

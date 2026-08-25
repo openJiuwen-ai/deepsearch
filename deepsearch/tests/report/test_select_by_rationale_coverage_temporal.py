@@ -356,3 +356,91 @@ def test_source_date_with_weight_no_restore():
     )
     assert len(selected) == 1
     assert selected[0]["_idx"] == 0
+
+
+def test_floor_gate_blocks_doomed_temporal_promotion():
+    # 0.10 覆盖的合规段（加权 0.10+0.2=0.30）本可在 top_k=1 时挤掉 0.25 覆盖的
+    # 违规段（加权 0.05），但它过不了下游 0.15 门槛、终将被 Layer 1 杀掉——
+    # 地板门直接不让它参选，违规段保住席位（避免净损失一条有效证据）。
+    passages = [
+        _passage(0, 0.25, {"start": "2010-01-01", "end": "2010-12-31"}),  # violation
+        _passage(1, 0.10, {"start": "2019-01-01", "end": "2019-12-31"}),  # compliant 但低于门槛
+    ]
+    coverage_result = {
+        "coverage_matrix": {"passage_0": {"r1": 0.25}, "passage_1": {"r1": 0.10}},
+        "filtered_passages": passages,
+    }
+    scope = TemporalScope(
+        constraint_type="content_date",
+        start_date=date(2018, 1, 1),
+        end_date=date(2023, 12, 31),
+    )
+    selected, _ = Reporter._select_by_rationale_coverage(
+        passages, [{"id": "r1"}], coverage_result,
+        top_k=1, temporal=TemporalSelectionOptions(scope, 0.2),
+    )
+    assert [p["_idx"] for p in selected] == [0]
+
+
+def test_union_restore_gate_blocks_subfloor_baseline_member():
+    # 低于门槛的 unknown 段是被时间加权挤掉的纯覆盖基线成员时，不再被补回
+    # （补回了也会在下游 Layer 1 被杀）。构造要点：p0 靠 p1 的 r2 覆盖度让
+    # 全池过地板门（any_above_floor），其自身最大覆盖度 0.14 < 0.15；r1 上
+    # p1 加权 0.13+0.1=0.23 > p0 的 0.14，p0 成为被挤掉的纯覆盖基线 top-1。
+    # 含同一地板门的基线重放不再把 p0 算作基线成员 → 不补回（门关闭的对照
+    # 下结果为 [1, 0]）。
+    def _p(idx, cov1, cov2, ct):
+        return _passage(idx, cov1, ct) | {"_cov2": cov2}
+
+    passages = [
+        _p(0, 0.14, 0.0, None),  # unknown，最大覆盖度 0.14 < 0.15
+        _p(1, 0.13, 0.20, {"start": "2019-01-01", "end": "2019-12-31"}),  # compliant
+    ]
+    coverage_result = {
+        "coverage_matrix": {
+            f"passage_{i}": {"r1": p["_cov"], "r2": p["_cov2"]}
+            for i, p in enumerate(passages)
+        },
+        "filtered_passages": passages,
+    }
+    scope = TemporalScope(
+        constraint_type="content_date",
+        start_date=date(2018, 1, 1),
+        end_date=date(2023, 12, 31),
+    )
+    selected, _ = Reporter._select_by_rationale_coverage(
+        passages, [{"id": "r1"}, {"id": "r2"}], coverage_result,
+        top_k=1, temporal=TemporalSelectionOptions(scope, 0.2),
+    )
+    assert [p["_idx"] for p in selected] == [1]
+
+
+def test_union_restore_cap_limits_total_per_rationale():
+    # top_k=10 → 补回封顶 15-10=5：10 个合规段（加权 0.30+0.1176=0.4176）把
+    # 7 个更高覆盖的 unknown 段（0.31~0.37）全部挤出 top-10，补回只捞覆盖度
+    # 最高的 5 个，每 rationale 交付总数不超过 15，下游 top-15 截断不触发。
+    compliant_ct = {"start": "2019-01-01", "end": "2019-12-31"}
+    passages = (
+        [_passage(i, 0.30, compliant_ct) for i in range(10)]
+        + [_passage(10 + j, 0.31 + j * 0.01, None) for j in range(7)]
+    )
+    coverage_result = {
+        "coverage_matrix": {
+            f"passage_{i}": {"r1": p["_cov"]} for i, p in enumerate(passages)
+        },
+        "filtered_passages": passages,
+    }
+    scope = TemporalScope(
+        constraint_type="content_date",
+        start_date=date(2018, 1, 1),
+        end_date=date(2023, 12, 31),
+    )
+    selected, _ = Reporter._select_by_rationale_coverage(
+        passages, [{"id": "r1"}], coverage_result,
+        top_k=10, temporal=TemporalSelectionOptions(scope, 0.2),
+    )
+    picked = {p["_idx"] for p in selected}
+    assert len(selected) == 15
+    assert set(range(10)) <= picked  # 10 个合规段全部在池
+    assert {12, 13, 14, 15, 16} <= picked  # 覆盖度最高的 5 个 unknown 被补回
+    assert 10 not in picked and 11 not in picked  # 最低的 2 个被封顶丢弃
