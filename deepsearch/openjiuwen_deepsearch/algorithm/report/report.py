@@ -32,7 +32,7 @@ from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
     build_doc_variant_key,
 )
-from openjiuwen_deepsearch.algorithm.report.date_utils import (
+from openjiuwen_deepsearch.utils.common_utils.date_utils import (
     classify_temporal,
     parse_content_window,
     timeliness_score,

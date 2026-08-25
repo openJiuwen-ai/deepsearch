@@ -1,6 +1,6 @@
 from datetime import date
 
-from openjiuwen_deepsearch.algorithm.report.date_utils import (
+from openjiuwen_deepsearch.utils.common_utils.date_utils import (
     parse_date_window,
     parse_content_window,
     classify_temporal,

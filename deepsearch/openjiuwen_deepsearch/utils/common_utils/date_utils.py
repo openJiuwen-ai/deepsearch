@@ -1,9 +1,11 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-"""日期区间工具：时间约束软过滤的基础设施。
+"""日期区间工具：时间约束软过滤的公共基础设施。
 
-提供日期窗口严格解析、文档区间相对约束区间的四档判定，以及对应的时效分。
-本模块为纯函数基础设施，后续选材加权逻辑会 import 它。
+提供日期窗口严格解析、文档区间相对约束区间的四档判定，以及对应的时效分，
+以及来源发表日期的容错解析。采集（research_collector）与报告（report）两侧
+都依赖这些纯函数，故置于公共 utils 层，避免下层 collector 反向 import 上层
+report。
 """
 
 from __future__ import annotations
