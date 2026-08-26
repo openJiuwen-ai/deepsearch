@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
     IntentRecognitionResult,
     MAX_RESEARCH_QUERY_LENGTH,
@@ -904,3 +905,74 @@ async def test_exclude_intent_log_redacted_in_sensitive_mode(caplog):
     assert any("redacted" in m for m in messages)
     assert not any("mdpi.com" in m or "Sensitive Paper" in m or "不要引用某文" in m
                    for m in messages)
+
+
+def test_emit_intent_tool_schema_hides_report_type_when_provided():
+    """API 已指定 report_type 时，tool schema 移除该字段（硬约束）。"""
+    tool = _create_emit_intent_tool(provided_report_type="brief")
+    assert "report_type" not in tool.card.input_params["properties"]
+
+    tool_default = _create_emit_intent_tool()
+    assert "report_type" in tool_default.card.input_params["properties"]
+
+    tool_none = _create_emit_intent_tool(provided_report_type=None)
+    assert "report_type" in tool_none.card.input_params["properties"]
+
+
+def test_intent_prompts_suppress_report_type_when_provided():
+    """两个意图识别 prompt：provided 时完全不渲染 report_type 相关内容；缺省保持现状。"""
+    base_ctx = {"original_query": "AI Agent 趋势", "messages": []}
+    for prompt_name in ("intent_recognition_entry", "intent_recognition"):
+        provided = apply_system_prompt(prompt_name, {**base_ctx, "provided_report_type": "brief"})
+        content = provided[0]["content"]
+        assert "report_type" not in content
+
+        default = apply_system_prompt(prompt_name, dict(base_ctx))
+        default_content = default[0]["content"]
+        assert "emit `report_type` accordingly" in default_content
+
+
+@pytest.mark.asyncio
+async def test_classify_and_recognize_intent_passes_provided_report_type(sample_tool_response):
+    """入口函数从 current_inputs 读取 provided_report_type 并注入 prompt 与 tool。"""
+    mock_llm = Mock()
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": mock_llm},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=sample_tool_response,
+    ) as mock_invoke:
+        await classify_and_recognize_intent({
+            "original_query": "AI Agent 趋势",
+            "llm_model_name": "basic",
+            "messages": [],
+            "provided_report_type": "brief",
+        })
+
+    prompts = mock_invoke.call_args.args[1]
+    assert "report_type" not in prompts[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_recognize_report_intent_passes_provided_report_type(sample_tool_response):
+    """反馈重解析入口同样透传 provided_report_type。"""
+    mock_llm = Mock()
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": mock_llm},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=sample_tool_response,
+    ) as mock_invoke:
+        await recognize_report_intent({
+            "original_query": "AI Agent 趋势",
+            "llm_model_name": "basic",
+            "messages": [],
+            "provided_report_type": "professional",
+        })
+
+    prompts = mock_invoke.call_args.args[1]
+    assert "report_type" not in prompts[0]["content"]

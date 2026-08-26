@@ -406,7 +406,7 @@ def _log_exclude_intent(result: IntentRecognitionResult, original_query: str) ->
     )
 
 
-def _create_emit_intent_tool() -> LocalFunction:
+def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFunction:
     card = ToolCard(
         id=EMIT_INTENT_TOOL,
         name=EMIT_INTENT_TOOL,
@@ -573,6 +573,10 @@ def _create_emit_intent_tool() -> LocalFunction:
         },
     )
 
+    if provided_report_type:
+        # API 已指定报告类型：从 schema 移除 report_type，禁止 LLM 输出
+        card.input_params["properties"].pop("report_type", None)
+
     return LocalFunction(card=card, func=_emit_report_intent)
 
 
@@ -581,16 +585,18 @@ async def _invoke_llm_for_intent(
     original_query: str,
     messages: list,
     llm_model_name: str,
+    provided_report_type: str | None = None,
 ) -> tuple[IntentRecognitionResult | None, dict]:
     """公共 LLM 调用逻辑：构建提示词、调用 LLM、解析 tool_call 结果
     """
     prompt_ctx = {
         "original_query": original_query,
         "messages": messages,
+        "provided_report_type": provided_report_type,
     }
     prompts = apply_system_prompt(prompt_name, prompt_ctx)
 
-    tool = _create_emit_intent_tool()
+    tool = _create_emit_intent_tool(provided_report_type)
     llm = llm_context.get().get(llm_model_name)
     response = await llm_utils.ainvoke_llm_with_stats(
         llm,
@@ -651,6 +657,7 @@ async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResu
             "intent_recognition", original_query,
             current_inputs.get("messages") or [],
             current_inputs.get("llm_model_name"),
+            current_inputs.get("provided_report_type"),
         )
         if result is None:
             logger.warning("[recognize_report_intent] No tool_calls in LLM response, using fallback.")
@@ -697,6 +704,7 @@ async def classify_and_recognize_intent(current_inputs: dict) -> IntentRecogniti
             "intent_recognition_entry", original_query,
             current_inputs.get("messages") or [],
             current_inputs.get("llm_model_name"),
+            current_inputs.get("provided_report_type"),
         )
         if result is None:
             logger.warning("[classify_and_recognize_intent] No tool_calls in LLM response, using fallback.")

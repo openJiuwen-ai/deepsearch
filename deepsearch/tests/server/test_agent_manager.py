@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openjiuwen_deepsearch.config.config import AgentConfig
 from server.deepsearch.core.manager.agent import DeepSearchAgentManager
 from server.schemas.deepsearch_run import DeepSearchRequest
 
@@ -214,3 +215,39 @@ def test_build_agent_config_disables_agent_llm_timeouts_without_default(monkeypa
     config = manager.build_agent_config(request, object())
 
     assert config["agent_llm_timeouts"] == {"sub_reporter": 120}
+
+
+def test_compute_agent_cache_key_ignores_report_type():
+    """report_type 是运行期策略，不参与 Agent 缓存键。"""
+    request_a = _build_request("conversation-1")
+    request_b = _build_request("conversation-1")
+    request_b.report_type = "brief"
+
+    key_a = DeepSearchAgentManager._compute_agent_cache_key(request_a)
+    key_b = DeepSearchAgentManager._compute_agent_cache_key(request_b)
+
+    assert key_a == key_b
+
+
+def test_build_agent_config_passes_report_type(monkeypatch):
+    """build_agent_config 应透传 report_type。"""
+    factory = _FakeAgentFactory()
+    manager = DeepSearchAgentManager(agent_factory=factory)
+    request = _build_request("conversation-1")
+    request.report_type = "brief"
+
+    monkeypatch.setattr(
+        manager,
+        "_load_web_search_config",
+        lambda space_id, web_search_config, db: {"search_engine_name": "mock"},
+    )
+
+    config = manager.build_agent_config(request, object())
+
+    assert config["report_type"] == "brief"
+
+
+def test_agent_config_accepts_report_type():
+    """AgentConfig 支持 report_type，缺省 None。"""
+    assert AgentConfig().report_type is None
+    assert AgentConfig(report_type="brief").report_type == "brief"

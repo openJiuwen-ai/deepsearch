@@ -763,3 +763,20 @@ async def run(
     except Exception as e:
         logger.error("Error during DeepSearch run: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+brief_run_router = APIRouter()
+
+
+@brief_run_router.post("/")
+async def run_brief(
+        request: DeepSearchRequest,
+        db: Session = Depends(get_db)
+):
+    """薄封装：等价于 /run 且 report_type 固定为 brief。
+
+    - 调用方传入的 report_type 一律忽略，强制为 brief；
+    - 其余逻辑（取消、流式、异常映射）完整复用 run()。
+    """
+    request.report_type = "brief"
+    return await run(request, db)
