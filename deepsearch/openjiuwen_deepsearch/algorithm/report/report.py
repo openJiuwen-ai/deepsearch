@@ -124,7 +124,7 @@ def build_citation_infos(classified_content: list) -> str:
     """Build the ``infos`` citation string consumed by the sub-report writer.
 
     Each classified item is rendered as a single citation block:
-    ``[citation:X begin]time: ...|||content_time: start~end|||source: ...
+    ``[citation:X begin]publish_time: ...|||content_time: start~end|||source: ...
     |||scores: ...|||content: ...[citation:X end]``.
 
     ``content_time`` (the fact-level time window) is only rendered when the
@@ -147,7 +147,7 @@ def build_citation_infos(classified_content: list) -> str:
                 f"~{content_time.get('end', '')}"
             )
         infos += (
-            f"\n[citation:{item.get('index', 1)} begin]time: "
+            f"\n[citation:{item.get('index', 1)} begin]publish_time: "
             f"{item.get('doc_time', '')}{content_time_str}|||"
             f"source: {item.get('title', '')}{scores_str}|||"
             f"content: {content}[citation:{item.get('index', 1)} end]"

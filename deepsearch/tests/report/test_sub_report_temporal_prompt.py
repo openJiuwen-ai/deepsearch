@@ -133,7 +133,7 @@ def test_build_citation_infos_includes_content_time_for_content_date():
     # content_date scenario: the citation block surfaces content_time (fact time).
     assert "content_time: 2019-01-01~2019-12-31" in infos
     # content_time must sit right after the publication time, before source.
-    assert "time: 2024-05-01|||content_time: 2019-01-01~2019-12-31|||source:" in infos
+    assert "publish_time: 2024-05-01|||content_time: 2019-01-01~2019-12-31|||source:" in infos
 
 
 def test_build_citation_infos_excludes_content_time_for_source_date():
@@ -144,7 +144,7 @@ def test_build_citation_infos_excludes_content_time_for_source_date():
     infos = build_citation_infos([item])
     assert "content_time:" not in infos
     # publication time is still present.
-    assert "time: 2024-05-01|||source:" in infos
+    assert "publish_time: 2024-05-01|||source:" in infos
 
 
 def test_build_citation_infos_omits_content_time_without_start():

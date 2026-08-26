@@ -22,7 +22,7 @@ authoritative source for every factual claim.
 
 1. **Collected Information**:
    - Evidence from multiple sources, each in the format of
-     `[citation:X begin]time: ...|||content_time: start~end|||source: ...|||scores: ...|||content: ...[citation:X end]`.
+     `[citation:X begin]publish_time: ...|||content_time: start~end|||source: ...|||scores: ...|||content: ...[citation:X end]`.
      (`content_time` is only present for `content_date` constraints; it is the time of the facts described, not the publication time. It is omitted for `source_date` and for full-text documents.)
    - **Full-text documents** (longer `content`): These are primary evidence sources. They do NOT have `scores` fields, but should be prioritized for comprehensive analysis and background context.
    - **Passage-level evidence** (shorter `content`): These have **`scores`** fields containing per-rationale coverage scores. Use these scores to prioritize among passages: higher coverage scores indicate stronger relevance to the section's rationales.
@@ -74,9 +74,9 @@ format_requirements: {{ current_section_format_requirements }}
 - **Temporal Filtering**:
 {% if has_temporal_scope %}
   - Research time boundary: {{ temporal_scope_instruction }}
-  - For `source_date`: only cite evidence whose `time:` field falls within the boundary above.
+  - For `source_date`: only cite evidence whose `publish_time:` field falls within the boundary above.
   - For `content_date`: judge by the content's facts time, not the publication time — a retrospective published later is compliant if its facts fall within the boundary.
-  - Prefer evidence with a known `time:`. If `time:` is empty, you may still use the evidence but lower the assertion strength (e.g. "有资料提及" instead of "据...显示"); do not drop it.
+  - Prefer evidence with a known `publish_time:`. If `publish_time:` is empty, you may still use the evidence but lower the assertion strength (e.g. "有资料提及" instead of "据...显示"); do not drop it.
 {% else %}
   - No explicit time boundary. Prefer the most current evidence; the current time is {{ CURRENT_TIME }}.
 {% endif %}
