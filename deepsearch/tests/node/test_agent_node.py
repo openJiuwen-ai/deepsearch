@@ -966,6 +966,43 @@ def test_feedback_handler_keeps_existing_temporal_scope_when_reparse_has_no_scop
     }
 
 
+def test_feedback_handler_merges_target_papers_from_clarification():
+    session = Mock()
+    session.get_global_state.return_value = {
+        "target_papers": [{"pmid": "38132429"}],
+        "include_url": ["https://pubmed.ncbi.nlm.nih.gov/38132429/"],
+    }
+    node = FeedbackHandlerNode()
+
+    merged = node._merge_reparsed_intent(session, {
+        "research_intent": {
+            "target_papers": [{
+                "url": "https://arxiv.org/abs/1706.03762v7",
+                "arxiv_id": "1706.03762",
+            }],
+        },
+    })
+
+    assert {paper["pmid"] for paper in merged["target_papers"] if paper["pmid"]} == {"38132429"}
+    assert {paper["arxiv_id"] for paper in merged["target_papers"] if paper["arxiv_id"]} == {"1706.03762"}
+    assert "https://arxiv.org/abs/1706.03762v7" in merged["include_url"]
+
+
+def test_feedback_handler_preserves_implicit_target_papers():
+    session = Mock()
+    session.get_global_state.return_value = {"target_papers": [{"dataset": "ImageNet"}]}
+    node = FeedbackHandlerNode()
+
+    merged = node._merge_reparsed_intent(session, {
+        "research_intent": {"target_papers": [{"topic": "scaling laws", "data_year": "2020"}]},
+    })
+
+    assert [(paper["dataset"], paper["topic"], paper["data_year"]) for paper in merged["target_papers"]] == [
+        ("ImageNet", "", ""),
+        ("", "scaling laws", "2020"),
+    ]
+
+
 def test_outline_accept_reapplies_search_constraints_after_hitl_resume():
     """大纲恢复轮次创建新 wrapper 后，接受大纲必须从 session 重灌搜索约束。"""
     session = Mock(spec=Session)

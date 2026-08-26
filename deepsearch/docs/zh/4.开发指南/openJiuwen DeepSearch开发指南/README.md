@@ -88,7 +88,7 @@ openJiuwen-DeepSearch 当前支持以下内置联网增强引擎，均通过 `we
 搜索结果进入 Collector 链路前，系统还会执行统一的内容裁剪与归一化：
 
 - `bocha`、`perplexity` 在预抓取网页正文后，会先按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 裁剪，避免超长正文直接进入后续提示词。
-- Collector 在 `_structure_result` 阶段会再次按同一上限裁剪传给 `run_doc_evaluation` 的内容。
+- Collector 在 `_structure_result` 阶段会再次按同一上限裁剪内容。
 - `web_page_search_record` 会统一保留标准化字段 `title`、`url`、`content`、`type`，兼容不同引擎返回的 `link`、`source_url`、`snippet`、`summary`、`answer` 等别名字段。
 
 > 说明：用户需要自行前往相应联网增强引擎的官网注册账号，以便获取 `search_api_key`。对于 Jina 等公共搜索接口，`search_url` 可以留空使用系统默认地址；国内网络环境建议为 Jina 显式配置 `search_url="https://s.jinaai.cn"`。如需私有化部署、代理转发或 vendor 提供自定义地址，也可显式传入 `search_url`。

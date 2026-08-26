@@ -15,6 +15,7 @@
 - `AgentFactory.create_agent` 会先校验 `agent_config` 必填字段，再用 `AgentConfig.model_validate` 做类型、枚举和范围校验。
 - `search_mode` 决定运行研究报告、DeepSearch 搜索图或简单 ReAct 搜索；`search_mode=research` 时再由 `execution_method` 决定并行、依赖驱动或混合大纲路由研究工作流。
 - `llm_config` 按模型槽位传入，运行时至少需要 `general` 槽位；部分节点可使用 `plan_understanding`、`info_collecting`、`writing_checking` 或 `vlm_chart_generating`。
+- Brief 不新增模型或 Token 配置：大纲复用 `plan_understanding`，Query/评估/证据审阅复用 `info_collecting`，章节和摘要复用 `writing_checking`；缺少专用槽位时仍回退 `general`。
 - `StartNode` 只把本次运行需要的 `agent_config` 字段合并进 session，再叠加默认 `ServiceConfig`，形成节点读取的 `config` 全局状态。
 - `ServiceConfig` 提供 SDK 内部默认参数，包括 workflow 超时、重试次数、采集循环、报告生成、溯源并发、LLM 默认超时、thinking 模式、节点调试和中间结果导出。
 - `ServiceConfig.info_collector_max_search_query_count` 控制单轮 query 生成硬上限；
@@ -64,6 +65,7 @@
 - `vlm_chart_generator_max_iterations` 范围为 1 到 3。
 - `ServiceConfig.info_collector_webpage_enrich_max_urls` 默认 3，限制单轮最多增强的 URL 数量。
 - `ServiceConfig.info_collector_webpage_enrich_fetch_timeout_seconds` 默认 45，限制单个 URL 抓取超时时间。
+- Brief 使用已有 `info_collector_search_method` 选择 web、local 或 all 搜索适配器，使用 `visualization_enable` 控制受控 Mermaid 阶段，使用 `source_tracer_research_trace_source_switch` 控制最终引用校验；不使用专业版网页正文增强、章节采集循环或 VLM 图表配置。
 
 ## 边界与错误处理
 
@@ -90,4 +92,5 @@
 - [Agent 工厂与运行模式](../framework/agent-factory.md)
 - [报告研究主工作流](../framework/research-workflow.md)
 - [LLM 运行时封装](../llm/llm-runtime.md)
+- [Brief 精简版报告工作流](../algorithm/brief-report.md)
 - [参数校验、安全目录与 URL 处理](../utils/validation-security-url.md)

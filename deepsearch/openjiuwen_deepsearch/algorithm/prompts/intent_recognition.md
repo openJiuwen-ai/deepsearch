@@ -29,8 +29,16 @@ From the user's **original_query** (below), extract:
    - **exclude_titles**: verbatim titles of article(s)/paper(s) the user explicitly asks to avoid, ignore, or not quote. Extract alongside `exclude_url` whenever the user's rule names an article — the same article may appear on mirror sites or open-access platforms under different URLs, and the title is how we recognize it.
    - **include_domains**: domain names only (no `http://`), lowercase hostnames the user explicitly wants to prefer or restrict to (e.g. "只用维基百科" → `wikipedia.org`). Fill ONLY when the user explicitly expresses a site-level preference.
    - **exclude_domains**: domain names only (no `http://`), lowercase hostnames the user explicitly asks to exclude site-wide (e.g. "不要用CSDN的文章" → `csdn.net`). Fill ONLY when the user explicitly expresses site-level exclusion. Banning N articles on the same domain is NOT site-level exclusion — do NOT put that domain here.
+   - **target_papers**: papers explicitly or implicitly identified by the user.
+     - Preserve a supplied full title, academic paper URL, PMID, DOI, or arXiv ID verbatim.
+     - When the user supplies a paper URL, put it in both `include_url` and `target_papers` as `{"url":"..."}`.
+     - For an implicit paper, extract only stated dataset, data year, and discriminative topic clues.
+     - Do not invent identifiers, titles, translations, or `search_terms`.
+     - A dataset observation year is not temporal_scope unless the user separately limits source or fact time.
+     - Example: "Use PMID 38202877" → `[{"pmid":"38202877"}]`.
+     - Example: "根据 MEPS 2019 数据调研美国正畸治疗使用者画像" → `[{"dataset":"MEPS","data_year":"2019","topic":"美国正畸治疗使用者画像"}]`.
    - Examples:
-     - "重点参考 https://www.nature.com/articles/s41586-001 这篇" → `include_url=["https://www.nature.com/articles/s41586-001"]`
+     - "重点参考 https://www.nature.com/articles/s41586-001 这篇" → `include_url=["https://www.nature.com/articles/s41586-001"]`, `target_papers=[{"url":"https://www.nature.com/articles/s41586-001"}]`
      - "只用维基百科的内容" → `include_domains=["wikipedia.org"]`
      - "不要引用 https://www.mdpi.com/2073-445X/11/9/1529 这篇文章" → `exclude_url=["https://www.mdpi.com/2073-445X/11/9/1529"]`, `exclude_domains=[]`
      - "不要引用 mdpi.com 上的内容" → `exclude_url=[]`, `exclude_domains=["mdpi.com"]`

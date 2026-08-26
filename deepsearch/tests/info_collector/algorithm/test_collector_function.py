@@ -13,6 +13,24 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.collector_function"
 
+
+def test_common_search_preserves_academic_identifiers():
+    agent_input = {"web_page_search_record": [], "research_intent": {}}
+
+    _, updated = process_common_search_result(agent_input, [{
+        "title": "Paper",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/",
+        "content": "Abstract",
+        "source": "pubmed",
+        "source_id": "38202877",
+        "doi": "10.1000/ABC",
+    }])
+
+    record = updated["web_page_search_record"][0]
+    assert record["academic_source"] == "pubmed"
+    assert record["academic_source_id"] == "38202877"
+    assert record["doi"] == "10.1000/ABC"
+
 class TestProcessToolCall:
     """测试 process_tool_call 函数"""
 
@@ -473,6 +491,7 @@ class TestSearchResultProcessing:
             "title": "Tavily title",
             "url": "http://tavily.com",
             "content": "C" * MAX_SEARCH_CONTENT_LENGTH,
+            "score": 0.8,
         }
 
     def test_process_google_search_result(self):
@@ -615,6 +634,44 @@ class TestSearchResultProcessing:
             "value": "2020-01-02",
             "parsed_date": "2020-01-02",
         }
+
+    def test_normalize_full_text_contract_without_source_specific_logic(self):
+        normalized = _normalize_web_search_item({
+            "title": "Open study",
+            "url": "https://scholar.example.org/papers/1",
+            "content": "Abstract remains the normal content.",
+            "source": "future_scholar",
+            "full_text": "Complete official article text.",
+            "content_type": "full_text",
+            "full_text_url": "https://scholar.example.org/papers/1/full-text",
+            "full_text_format": "html",
+            "full_text_status": "available",
+            "full_text_truncated": False,
+            "skip_webpage_enrichment": True,
+        })
+
+        assert normalized["content"] == "Abstract remains the normal content."
+        assert normalized["full_text"] == "Complete official article text."
+        assert normalized["content_type"] == "full_text"
+        assert normalized["full_text_url"].startswith("https://scholar.example.org/")
+        assert normalized["full_text_format"] == "html"
+        assert normalized["full_text_status"] == "available"
+        assert normalized["full_text_truncated"] is False
+        assert normalized["skip_webpage_enrichment"] is True
+
+    def test_normalize_full_text_contract_does_not_coerce_string_booleans(self):
+        normalized = _normalize_web_search_item({
+            "title": "Open study",
+            "url": "https://scholar.example.org/papers/1",
+            "content": "Abstract.",
+            "full_text_status": "available",
+            "full_text": "Full text.",
+            "full_text_truncated": "false",
+            "skip_webpage_enrichment": "true",
+        })
+
+        assert normalized["full_text_truncated"] is False
+        assert "skip_webpage_enrichment" not in normalized
 
     def test_source_date_filter_keeps_boundaries_and_unknown_but_drops_out_of_range(self):
         """来源时间过滤应包含边界、保留未知日期并整篇删除越界文档。"""
@@ -1236,13 +1293,30 @@ class TestIsTitleBlocked:
             ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory (Review)"])
 
     def test_suffix_mirror_hit(self):
-        """镜像站后缀（| MDPI / - ProQuest 形态）剥后缀后精确命中"""
+        """镜像站后缀（| MDPI / - ProQuest / | IDEALS 形态）剥后缀后精确命中"""
         assert is_title_blocked(
             "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | MDPI",
             self.BLOCKED)
         assert is_title_blocked(
             "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory - ProQuest",
             self.BLOCKED)
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | IDEALS",
+            self.BLOCKED)
+
+    def test_ideals_suffix_hit(self):
+        """IDEALS 机构知识库后缀剥离后命中"""
+        blocked = ["A Survey of the Story Elements of Isekai Manga"]
+        assert is_title_blocked(
+            "A survey of the story elements of Isekai manga | IDEALS",
+            blocked)
+
+    def test_metadata_wrapping_hit(self):
+        """被禁标题在目标标题中间位置（同一论文加元数据）应命中"""
+        blocked = ["A Survey of the Story Elements of Isekai Manga"]
+        assert is_title_blocked(
+            "[PDF] A Survey of the Story Elements of Isekai Manga Dr. Paul S. Price",
+            blocked)
 
     def test_same_prefix_different_paper_no_hit(self):
         """同前缀但不同论文不误伤（被禁标题是候选标题的前缀）"""

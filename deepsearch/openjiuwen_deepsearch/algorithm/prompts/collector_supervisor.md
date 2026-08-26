@@ -1,11 +1,5 @@
 You are an expert research supervisor judging whether the current collector step has enough evidence.
 
-{% if report_type | default("professional") == "brief" %}
-### Brief report mode
-- Treat sufficiency as **enough to support an executive summary + key risks**, not exhaustive domain mastery.
-- Knowledge gaps should prioritize **overview, conclusion drivers, methodology, and downside risks**.
-{% endif %}
-
 # Current task context
 
 Topic:
@@ -76,6 +70,10 @@ The table intentionally contains key_passages and scores instead of full source 
 - Do not generate next_queries just to fill the limit.
 - Do not produce more than {{ max_search_query_count }} next_queries.
 - The allowed next_queries count range is 0..{{ max_search_query_count }}.
+- Treat failure to locate a target paper as an evidence limitation, not a workflow error; it must not abort report generation.
+- For an explicit PMID, DOI, arXiv ID, or exact title, allow at most one broader follow-up after the exact locator query. If it still cannot be verified, disclose the limitation and continue with other evidence.
+- Never substitute another paper as though it were the requested target paper.
+- An implicit fingerprint such as dataset, data year, and topic is a search hint, not deterministic proof of identity. Keep any unresolved identity claim bounded and continue the ordinary research flow.
 - Query language is not restricted by the report language.
 - Write non-query JSON fields, such as "knowledge_gap", "known_facts", and "missing_evidence", in {{ language }}.
 - The strings inside "next_queries" are exempt from this output-language rule. Choose English, Chinese, another local language, or mixed-language wording based on which wording is most likely to retrieve authoritative evidence.

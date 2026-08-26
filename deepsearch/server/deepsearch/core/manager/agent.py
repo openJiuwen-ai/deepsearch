@@ -327,6 +327,7 @@ class DeepSearchAgentManager:
             res["web_search_engine_config"] = self._load_web_search_config(
                 space_id, request.web_search_config, db
             )
+            res["scholarly_search_enabled"] = request.web_search_config.scholarly_search_enabled
         if request.local_search_config:
             res["local_search_engine_config"] = self._load_local_search_config(
                 space_id, request.local_search_config, db

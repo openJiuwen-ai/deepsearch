@@ -139,7 +139,7 @@ class LocalDatasetAPIWrapper(BaseModel, Generic[T]):
                 connect=DEFAULT_CONNECT_TIMEOUT_SECONDS,
                 sock_read=DEFAULT_REQUEST_TIMEOUT_SECONDS,
             )
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True) as session:
                 async with session.post(
                         url=self.search_url.get_secret_value(),
                         headers=search_headers,

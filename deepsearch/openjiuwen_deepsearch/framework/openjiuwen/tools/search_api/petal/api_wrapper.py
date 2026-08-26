@@ -141,7 +141,7 @@ class PetalSearchAPIWrapper(BaseModel, Generic[T]):
                 connect=DEFAULT_CONNECT_TIMEOUT_SECONDS,
                 sock_read=DEFAULT_REQUEST_TIMEOUT_SECONDS,
             )
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True) as session:
                 async with session.post(
                         url=search_url,
                         headers=search_headers,

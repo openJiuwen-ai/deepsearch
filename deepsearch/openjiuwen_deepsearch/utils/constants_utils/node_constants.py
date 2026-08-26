@@ -23,6 +23,13 @@ class NodeId(enum.Enum):
     USER_FEEDBACK_PROCESSOR = "user_feedback_processor"
     DEPENDENCY_EDITOR_TEAM = "dependency_editor_team"
     VLM_CHART_GENERATOR = "vlm_chart_generator"
+    BRIEF_OUTLINE = "brief_outline"
+    BRIEF_INFO_COLLECTOR = "brief_info_collector"
+    BRIEF_EVIDENCE_REVIEWER = "brief_evidence_reviewer"
+    BRIEF_SUB_REPORTER = "brief_sub_reporter"
+    BRIEF_REPORTER = "brief_reporter"
+    BRIEF_MERMAID_GENERATOR = "brief_mermaid_generator"
+    BRIEF_SOURCE_TRACER = "brief_source_tracer"
 
     # 子图
     INFO_COLLECTOR = "info_collector"
@@ -51,7 +58,6 @@ class NodeId(enum.Enum):
     COLLECTOR_SUMMARY = "collector_summary"
     COLLECTOR_PROGRAMMER = "collector_programmer"
     COLLECTOR_END = "collector_end"
-    DOC_EVALUATOR = "doc_evaluator"
     INFO_EVALUATOR = "info_evaluator"
     INFO_ORAGNIZER = "info_organizer"
 
@@ -81,7 +87,13 @@ class AgentLlmName(enum.Enum):
     GENERATE_QUESTIONS = NodeId.GENERATE_QUESTIONS.value
     OUTLINE = NodeId.OUTLINE.value
     PLAN_REASONING = NodeId.PLAN_REASONING.value
-    DOC_EVALUATOR = NodeId.DOC_EVALUATOR.value
+
+    BRIEF_OUTLINE = NodeId.BRIEF_OUTLINE.value
+    BRIEF_COLLECTOR_QUERY_GENERATION = "brief_collector_query_generation"
+    BRIEF_DOC_EVALUATOR = "brief_doc_evaluator"
+    BRIEF_EVIDENCE_REVIEWER = NodeId.BRIEF_EVIDENCE_REVIEWER.value
+    BRIEF_SUB_REPORTER = NodeId.BRIEF_SUB_REPORTER.value
+    BRIEF_REPORTER = NodeId.BRIEF_REPORTER.value
 
     REPORTER_ABSTRACT = "reporter_abstract"
     REPORTER_CONCLUSION = "reporter_conclusion"
@@ -89,7 +101,7 @@ class AgentLlmName(enum.Enum):
 
     SUB_REPORTER = NodeId.SUB_REPORTER.value
     SUB_REPORTER_RATIONALE_GENERATOR = "sub_reporter_rationale_generator"
-    SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR = "sub_reporter_coverage_matrix_evaluator"
+    SUB_REPORTER_PASSAGES_EXTRACTOR = "sub_reporter_passages_extractor"
     SUB_REPORTER_OUTLINE = "sub_reporter_outline"
     SUB_REPORTER_VISUALIZATION_CONTENT = "sub_reporter_visualization_content"
     SUB_REPORTER_CHART_COMPLIANCE = "sub_reporter_chart_compliance"

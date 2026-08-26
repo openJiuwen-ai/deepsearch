@@ -18,6 +18,10 @@ _CONVERSATION_ID_SCHEMA_ERR = (
 class WebSearchConfig(BaseModel):
     web_search_config_id: int = Field(description="联网增强引擎ID")
     max_web_search_results: int = Field(default=5, ge=1, le=10, description="一次网页搜索的最大返回结果数量")
+    scholarly_search_enabled: bool = Field(
+        default=False,
+        description="Whether to enable PubMed and arXiv scholarly search engines.",
+    )
 
 
 class LocalSearchConfig(BaseModel):

@@ -34,6 +34,24 @@ def _build_request() -> DeepSearchRequest:
     )
 
 
+def test_web_search_config_owns_scholarly_search_switch():
+    request = _build_request()
+
+    assert request.web_search_config.scholarly_search_enabled is False
+
+    enabled_request = DeepSearchRequest.model_validate(
+        {
+            **request.model_dump(exclude_none=True),
+            "web_search_config": {
+                **request.web_search_config.model_dump(),
+                "scholarly_search_enabled": True,
+            },
+        }
+    )
+
+    assert enabled_request.web_search_config.scholarly_search_enabled is True
+
+
 def test_deep_search_request_accepts_agent_llm_timeouts():
     """验证请求模型允许传入按 agent 配置的 LLM 总超时。
 

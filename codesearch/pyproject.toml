@@ -1,0 +1,93 @@
+[project]
+name = "openjiuwen-codesearch"
+# 版本号与同系列产品保持同步发布
+version = "0.2.0"
+description = "Agentic code retrieval built on the openJiuwen agent-core framework."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "pydantic>=2.5",
+    "python-dotenv>=1.0",
+    # search 场景公共能力包（同仓 base/；源码安装时先 `pip install -e ../base`）
+    "openjiuwen-search-base[workflow,milvus,embed]==0.2.*",
+]
+
+# 使用 path 源而非 workspace：各产品独立解析依赖，避免共享 lock 强制统一框架版本。
+[tool.uv]
+# openjiuwen 传递依赖含预发布版本（a2a-sdk），uv 解析需放行
+prerelease = "allow"
+
+[tool.uv.sources]
+openjiuwen-search-base = { path = "../base", editable = true }
+
+[project.optional-dependencies]
+# Heavy integrations are opt-in so the core SDK stays installable and unit-testable anywhere.
+milvus = ["pymilvus>=2.4,<3"]  # 已验证组合：客户端 2.6.x + 服务端 v2.6.18；≥2.5 才有 BM25 Function
+embed = ["aiohttp>=3.9"]
+# 已验证该版本同时提供 foundation.llm 与 workflow/Runner 两组 API
+llm = ["openjiuwen==0.1.10.post3"]
+bench = [
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "tree-sitter==0.25.2",
+    "tree-sitter-language-pack==1.12.5",
+]
+# Retropus 引擎：进程内 KG（tree-sitter）+ BM25，无 Milvus。
+# tree-sitter 两个 pin 必须与 bench 一致，否则 `[bench,retropus]` 无法共存。
+retropus = [
+    "tree-sitter==0.25.2",
+    "tree-sitter-language-pack==1.12.5",
+    "igittigitt>=2.1.5",
+    "bm25s>=0.2.0",
+]
+dev = ["pytest>=8"]
+# 服务形态依赖（随包分发 openjiuwen_codesearch/server/；装 [server] 后可用 codesearch-server）
+server = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic-settings>=2.5"]
+
+[project.scripts]
+codesearch = "openjiuwen_codesearch.cli:main"
+# 服务入口：whl 安装后可直接 `codesearch-server` 起服务，不依赖源码树
+codesearch-server = "openjiuwen_codesearch.server.main:main"
+
+# CI 依赖组（PEP 735）：供流水线 `uv sync --group ci` 一次装齐测试所需。
+# 与 optional-dependencies 并存——extras 面向包的使用者（会写进 wheel 元数据），
+# groups 面向本仓开发与 CI（不进 wheel）。
+[dependency-groups]
+ci = [
+    "pytest>=8",
+    "pytest-cov>=6",
+    "pytest-html>=4",
+    "coverage>=7",
+    # 服务层与图引擎的集成测试需要
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic-settings>=2.5",
+    "httpx>=0.27",
+    "openjiuwen-search-base[codegraph,ladybug]",
+]
+
+[build-system]
+requires = ["setuptools>=62.3"]  # package-data 的 ** 递归 glob 需要 62.3+
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openjiuwen_codesearch*"]
+
+[tool.setuptools.package-data]
+# 递归收录，防止 prompts 增设子目录后被 wheel 漏掉
+openjiuwen_codesearch = ["algorithm/prompts/**/*.md"]
+
+[tool.coverage.run]
+source = ["openjiuwen_codesearch"]
+omit = ["*/tests/*", "*/benchmarks/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = ["-ra", "-q"]
+markers = [
+    "e2e: requires a running Milvus instance / external services",
+    "integration: requires optional heavy dependencies (openjiuwen, pymilvus)",
+]
