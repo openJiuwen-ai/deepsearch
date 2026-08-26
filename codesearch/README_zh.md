@@ -167,12 +167,14 @@ graph/react 工作流：[codesearch-workflow.md](docs/feature/framework/codesear
 # 📊 评测
 
 可在 [ContextBench](docs/zh/3.快速上手/3.快速上手.md) 上评估检索质量——该数据集
-由真实仓库 issue 与标注好的上下文答案组成。数据集以 git submodule 引入
-（登记在仓库根 `.gitmodules`，路径 `codesearch/third_party/contextbench`）：
+由真实仓库 issue 与标注好的上下文答案组成。ContextBench **可选**（不是 git
+submodule，clone / CI 不会拉取）。需要跑评测时再本地获取，见
+[`third_party/README.md`](third_party/README.md)：
 
 ```sh
-# 在 monorepo 根目录执行
-git submodule update --init --recursive
+# 在 codesearch/ 目录
+bash scripts/fetch_contextbench.sh
+# 或：git clone https://github.com/EuniAI/ContextBench third_party/contextbench
 ```
 
 ```sh

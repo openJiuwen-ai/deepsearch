@@ -106,6 +106,12 @@ export CODESEARCH_INDEX_ROOTS="/data/repos"
 `codesearch --engine retropus search --collection …` 会加载该落盘缓存。
 `--reset` 或改动指纹相关配置（如 `CHUNK_SIZE`）会触发重建。
 
+**跑 ContextBench 报找不到目录 / clone 很慢？**  
+ContextBench **不是** git submodule，产品构建、单测和流水线都不需要它。
+评测时再获取：`bash scripts/fetch_contextbench.sh`，或把已有拷贝指到
+`CONTEXTBENCH_DIR`（国内可把 `CONTEXTBENCH_URL` 换成可访问的镜像）。
+说明见 [`third_party/README.md`](../../../third_party/README.md)。
+
 ## 运行
 
 **服务有鉴权吗？生产怎么部署？**  
