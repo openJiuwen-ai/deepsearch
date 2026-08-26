@@ -1102,6 +1102,38 @@ async def test_start_node_merges_agent_llm_timeouts_into_session_config():
 
 
 @pytest.mark.asyncio
+async def test_start_node_preserves_scholarly_search_config_for_collector_graph():
+    node = StartNode()
+    session = Mock()
+    session.update_global_state = Mock()
+    scholarly_config = {
+        "fetch_full_text": False,
+        "max_full_text_results_per_query": 2,
+        "max_full_text_length": 4096,
+    }
+
+    await node.invoke(
+        {
+            "query": "hello",
+            "thread_id": "thread-1",
+            "agent_config": {
+                "web_search_engine_config": {"search_engine_name": "tavily"},
+                "local_search_engine_config": {"search_engine_name": "openapi"},
+                "scholarly_search_enabled": True,
+                "scholarly_search_config": scholarly_config,
+            },
+        },
+        session,
+        Context(),
+    )
+
+    merged_config = session.update_global_state.call_args_list[-1][0][0]["config"]
+    assert merged_config["scholarly_search_enabled"] is True
+    assert merged_config["scholarly_search_config"] == scholarly_config
+    assert merged_config["scholarly_search_config"] is not scholarly_config
+
+
+@pytest.mark.asyncio
 async def test_end_node_appends_ai_generated_notice_to_successful_report():
     """验证成功的研究报告会在正文末尾标注 AI 生成。"""
     session = AsyncMock(spec=Session)

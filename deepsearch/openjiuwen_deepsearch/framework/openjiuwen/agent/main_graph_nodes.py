@@ -216,6 +216,12 @@ class StartNode(Start):
             agent_config["info_collector_webpage_enrich_enable"] = origin_agent_config.get(
                 "info_collector_webpage_enrich_enable", False
             )
+            agent_config["scholarly_search_enabled"] = origin_agent_config.get(
+                "scholarly_search_enabled", False
+            )
+            agent_config["scholarly_search_config"] = copy.deepcopy(
+                origin_agent_config.get("scholarly_search_config", {})
+            )
             agent_config["web_search_engine_config"] = WebSearchEngineConfig(
                 search_engine_name=origin_agent_config.get("web_search_engine_config", {}).get("search_engine_name", "")
             )
@@ -2240,7 +2246,7 @@ class SearchStartNode(Start):
         logger.info(
             "[SearchStartNode] resolved workflow_name=%s, agent_config=%s",
             workflow_name,
-            "***" if LogManager.is_sensitive() else origin_agent_config,
+            "***" if LogManager.is_sensitive() else anonymize_config_for_logging(origin_agent_config),
         )
         llm_config = origin_agent_config.get("llm_config", {}).get("general", {})
         retrieval_settings = origin_agent_config.get("retrieval_settings", {})

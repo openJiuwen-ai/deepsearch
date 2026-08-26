@@ -360,6 +360,82 @@ def test_build_evidence_atom_preserves_canonical_publication_date():
     assert evaluation_docs[0]["publish_time"] == "2024-06-01"
 
 
+def test_build_evidence_atom_preserves_partial_publication_date_without_inventing_day():
+    store = CollectorSourceStore()
+    record = {
+        "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+        "title": "Year-only paper",
+        "content": "abstract",
+        "type": "page",
+        "date_metadata": {
+            "field": "published",
+            "type": "published",
+            "value": "2024",
+            "parsed_date": "",
+            "earliest_date": "2024-01-01",
+            "latest_date": "2024-12-31",
+            "precision": "year",
+        },
+    }
+
+    atom, doc_info = build_evidence_atom(record=record, query="paper", source_store=store)
+
+    assert atom["publish_time"] == "2024"
+    assert doc_info["publish_time"] == "2024"
+
+
+def test_build_evaluation_documents_preserves_academic_provenance():
+    doc_info = {
+        "doc_id": "web_1",
+        "source_id": "web_1_source",
+        "title": "Academic paper",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+        "source": "pubmed.ncbi.nlm.nih.gov",
+        "academic_source": "pubmed",
+        "academic_source_id": "38132429",
+        "pmcid": "PMC10740908",
+        "evidence_content_type": "full_text",
+        "evidence_content_chars": 321,
+    }
+
+    compact = build_evaluation_documents([doc_info])[0]
+
+    assert compact["academic_source"] == "pubmed"
+    assert compact["academic_source_id"] == "38132429"
+    assert compact["pmcid"] == "PMC10740908"
+    assert compact["evidence_content_type"] == "full_text"
+    assert compact["evidence_content_chars"] == 321
+
+
+def test_build_evidence_views_preserve_multi_source_identifiers():
+    store = CollectorSourceStore()
+    record = {
+        "url": "https://doi.org/10.1000/example",
+        "title": "Merged paper",
+        "content": "abstract",
+        "academic_source": "semantic_scholar",
+        "academic_source_id": "W1",
+        "matched_sources": ["semantic_scholar", "pubmed", "arxiv"],
+        "source_ids": {"semantic_scholar": "S1"},
+        "doi": "10.1000/example",
+        "pmid": "123",
+        "pmcid": "PMC123",
+        "arxiv_id": "2401.00001",
+        "type": "page",
+    }
+
+    atom, doc = build_evidence_atom(record=record, query="merged", source_store=store)
+    compact = build_evaluation_documents([doc])[0]
+
+    for view in (atom, doc, compact):
+        assert view["matched_sources"] == record["matched_sources"]
+        assert view["source_ids"] == record["source_ids"]
+        assert view["doi"] == "10.1000/example"
+        assert view["pmid"] == "123"
+        assert view["pmcid"] == "PMC123"
+        assert view["arxiv_id"] == "2401.00001"
+
+
 def test_build_prompt_views_never_include_original_content():
     doc_infos = [
         {

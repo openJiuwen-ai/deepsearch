@@ -31,6 +31,38 @@ def test_common_search_preserves_academic_identifiers():
     assert record["academic_source_id"] == "38202877"
     assert record["doi"] == "10.1000/ABC"
 
+
+def test_common_search_keeps_distinct_spa_fragment_routes_separate():
+    agent_input = {"web_page_search_record": [], "research_intent": {}}
+
+    _, updated = process_common_search_result(agent_input, [
+        {
+            "title": "Route A",
+            "url": "https://example.com/app#route-a",
+            "content": "Content from route A",
+        },
+        {
+            "title": "Route B",
+            "url": "https://example.com/app#route-b",
+            "content": "A longer body from route B",
+        },
+    ])
+
+    assert updated["web_page_search_record"] == [
+        {
+            "type": "page",
+            "title": "Route A",
+            "url": "https://example.com/app#route-a",
+            "content": "Content from route A",
+        },
+        {
+            "type": "page",
+            "title": "Route B",
+            "url": "https://example.com/app#route-b",
+            "content": "A longer body from route B",
+        },
+    ]
+
 class TestProcessToolCall:
     """测试 process_tool_call 函数"""
 
@@ -724,6 +756,29 @@ class TestSearchResultProcessing:
             "source_date": "2020-01-01", "source_date_type": "updated",
         }, include_date_metadata=True)
         assert "date_metadata" not in normalized
+
+    def test_normalize_scholarly_result_preserves_year_without_date_metadata(self):
+        normalized = _normalize_web_search_item({
+            "title": "Semantic Scholar paper",
+            "url": "https://www.semanticscholar.org/paper/S1",
+            "content": "abstract",
+            "source": "semantic_scholar",
+            "source_id": "W1",
+            "published": "2021",
+        }, include_date_metadata=True)
+
+        assert normalized["published"] == "2021"
+        assert "date_metadata" not in normalized
+
+    def test_normalize_web_result_preserves_retrieval_source_for_cross_engine_fusion(self):
+        normalized = _normalize_web_search_item({
+            "title": "Primary result",
+            "url": "https://example.org/paper",
+            "content": "summary",
+            "retrieval_source": "tavily",
+        })
+
+        assert normalized["retrieval_source"] == "tavily"
 
     def test_normalize_full_text_contract_without_source_specific_logic(self):
         normalized = _normalize_web_search_item({

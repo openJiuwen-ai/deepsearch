@@ -5,6 +5,12 @@ from typing import Literal, List
 
 from pydantic import BaseModel, Field, field_validator
 
+from openjiuwen_deepsearch.config.config import (
+    ArxivScholarlyConfig,
+    PubMedScholarlyConfig,
+    ScholarlySearchConfig,
+    SemanticScholarConfig,
+)
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import (
     SAFE_CONVERSATION_ID_PATTERN,
 )
@@ -15,12 +21,34 @@ _CONVERSATION_ID_SCHEMA_ERR = (
 )
 
 
+class PubMedScholarlyRequestConfig(PubMedScholarlyConfig):
+    search_api_key: str = ""
+
+
+class ArxivScholarlyRequestConfig(ArxivScholarlyConfig):
+    search_api_key: str = ""
+
+
+class SemanticScholarRequestConfig(SemanticScholarConfig):
+    search_api_key: str = ""
+
+
+class ScholarlySearchRequestConfig(ScholarlySearchConfig):
+    pubmed: PubMedScholarlyRequestConfig = Field(default_factory=PubMedScholarlyRequestConfig)
+    arxiv: ArxivScholarlyRequestConfig = Field(default_factory=ArxivScholarlyRequestConfig)
+    semantic_scholar: SemanticScholarRequestConfig = Field(default_factory=SemanticScholarRequestConfig)
+
+
 class WebSearchConfig(BaseModel):
     web_search_config_id: int = Field(description="联网增强引擎ID")
     max_web_search_results: int = Field(default=5, ge=1, le=10, description="一次网页搜索的最大返回结果数量")
     scholarly_search_enabled: bool = Field(
         default=False,
-        description="Whether to enable PubMed and arXiv scholarly search engines.",
+        description="Whether to enable the three built-in scholarly search providers.",
+    )
+    scholarly_search_config: ScholarlySearchRequestConfig = Field(
+        default_factory=ScholarlySearchRequestConfig,
+        description="Independent shared and per-provider scholarly search settings.",
     )
 
 

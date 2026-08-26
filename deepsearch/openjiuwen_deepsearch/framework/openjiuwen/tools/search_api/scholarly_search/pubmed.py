@@ -19,7 +19,6 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common import (
-    DEFAULT_PUBMED_SEARCH_URL,
     NCBI_REQUEST_CONTROL,
     ScholarlySearchResponseError,
     async_request_once,
@@ -27,10 +26,14 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     sync_request_once,
     truncate,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
+    should_fetch_full_text,
+)
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
+DEFAULT_PUBMED_SEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 SCHOLARLY_FETCH_FULL_TEXT = True
 SCHOLARLY_MAX_FULL_TEXT_RESULTS = 1
 SCHOLARLY_FULL_TEXT_TIMEOUT_SECONDS = 30
@@ -140,11 +143,16 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return response.text
 
     async def _aget_response(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
-        return await async_request_once(
-            lambda: client.get(url, params=params),
-            self._wait_for_async_rate_limit,
-            control=NCBI_REQUEST_CONTROL,
-        )
+        request_error = None
+        try:
+            return await async_request_once(
+                lambda: client.post(url, data=params),
+                self._wait_for_async_rate_limit,
+                control=NCBI_REQUEST_CONTROL,
+            )
+        except httpx.HTTPError as exc:
+            request_error = self._sanitized_request_error(exc)
+        raise request_error
 
     async def _wait_for_async_rate_limit(self) -> None:
         await NCBI_REQUEST_CONTROL.wait_async(self.requests_per_second)
@@ -163,25 +171,47 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return response.text
 
     def _get_response(self, url: str, params: dict[str, Any], verify: Union[str, bool]) -> Any:
-        return sync_request_once(
-            lambda: requests.get(
-                url,
-                params=params,
-                verify=verify,
-                timeout=self.full_text_timeout_seconds,
-            ),
-            self._wait_for_sync_rate_limit,
-            control=NCBI_REQUEST_CONTROL,
-        )
+        request_error = None
+        try:
+            return sync_request_once(
+                lambda: requests.post(
+                    url,
+                    data=params,
+                    verify=verify,
+                    timeout=self.full_text_timeout_seconds,
+                ),
+                self._wait_for_sync_rate_limit,
+                control=NCBI_REQUEST_CONTROL,
+            )
+        except requests.RequestException as exc:
+            request_error = self._sanitized_request_error(exc)
+        raise request_error
+
+    @staticmethod
+    def _sanitized_request_error(error: BaseException) -> ScholarlySearchResponseError:
+        response = getattr(error, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return ScholarlySearchResponseError(
+                f"PubMed request failed (HTTP {status})"
+            )
+        return ScholarlySearchResponseError("PubMed request failed (transport error)")
 
     def _raise_for_search_error_payload(self, raw: Any) -> None:
-        message = self._search_error_message(raw)
+        message = self._sanitize_payload_message(self._search_error_message(raw))
         if message:
             raise ScholarlySearchResponseError(f"PubMed ESearch returned error: {message}")
         esearch = raw.get("esearchresult") if isinstance(raw, dict) else None
         warning = self._joined_payload_text(esearch.get("errorlist")) if isinstance(esearch, dict) else ""
         if warning:
-            logger.info("PubMed ESearch returned nonfatal query warning: %s", warning)
+            logger.info(
+                "PubMed ESearch returned nonfatal query warning: %s",
+                self._sanitize_payload_message(warning),
+            )
+
+    def _sanitize_payload_message(self, message: str) -> str:
+        api_key = self._api_key_to_str()
+        return message.replace(api_key, "***") if api_key else message
 
     @classmethod
     def _search_error_message(cls, raw: Any) -> str:
@@ -241,7 +271,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         return params
 
     def _enrich_rows_sync(self, rows: list[dict[str, Any]], verify: Union[str, bool]) -> list[dict[str, Any]]:
-        if not self.fetch_full_text:
+        if not should_fetch_full_text(self):
             return rows
         limit = max(0, int(self.max_full_text_results))
         for row in rows[:limit]:
@@ -267,7 +297,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         rows: list[dict[str, Any]],
         client: httpx.AsyncClient,
     ) -> list[dict[str, Any]]:
-        if not self.fetch_full_text:
+        if not should_fetch_full_text(self):
             return rows
         limit = max(0, int(self.max_full_text_results))
         await asyncio.gather(*(self._enrich_one_async(row, client) for row in rows[:limit]))
@@ -367,6 +397,12 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         pmcid = self._article_id(article, "pmc")
         if pmcid:
             row["pmcid"] = pmcid
+            row["full_text_candidates"] = [{
+                "url": f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pmc&id={pmcid}&retmode=xml",
+                "format": "xml",
+                "kind": "pmc_jats",
+                "source": "pubmed",
+            }]
         if doi:
             row["doi"] = doi
         if abstract:

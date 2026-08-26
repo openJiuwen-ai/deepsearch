@@ -25,7 +25,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     ATOM_NAMESPACE,
     ARXIV_DOWNLOAD_LIMITER,
     ARXIV_REQUEST_CONTROL,
-    DEFAULT_ARXIV_SEARCH_URL,
     ScholarlySearchResponseError,
     async_request_once,
     http_status_code,
@@ -34,10 +33,14 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     sync_request_once,
     truncate,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
+    should_fetch_full_text,
+)
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
+DEFAULT_ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
 SCHOLARLY_FETCH_FULL_TEXT = True
 SCHOLARLY_MAX_FULL_TEXT_RESULTS = 1
 SCHOLARLY_FULL_TEXT_TIMEOUT_SECONDS = 30
@@ -222,6 +225,21 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
                     "published": published,
                     "authors": authors,
                     "categories": categories,
+                    "arxiv_id": self._source_id(arxiv_id),
+                    "full_text_candidates": [
+                        {
+                            "url": f"https://arxiv.org/html/{self._source_id(arxiv_id)}",
+                            "format": "html",
+                            "kind": "arxiv_html",
+                            "source": "arxiv",
+                        },
+                        {
+                            "url": f"https://arxiv.org/pdf/{self._source_id(arxiv_id)}",
+                            "format": "pdf",
+                            "kind": "arxiv_pdf",
+                            "source": "arxiv",
+                        },
+                    ],
                     **_full_text_fields(),
                 }
             )
@@ -265,7 +283,7 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
         return "\n\n".join(parts), False
 
     def _enrich_rows_sync(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not self.fetch_full_text:
+        if not should_fetch_full_text(self):
             return rows
         limit = max(0, int(self.max_full_text_results))
         for row in rows[:limit]:
@@ -307,7 +325,7 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
         rows: list[dict[str, Any]],
         client: httpx.AsyncClient,
     ) -> list[dict[str, Any]]:
-        if not self.fetch_full_text:
+        if not should_fetch_full_text(self):
             return rows
         limit = max(0, int(self.max_full_text_results))
         await asyncio.gather(*(self._enrich_one_async(row, client) for row in rows[:limit]))

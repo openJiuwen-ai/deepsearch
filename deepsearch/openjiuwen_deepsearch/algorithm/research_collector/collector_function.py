@@ -40,7 +40,11 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     _resolve_source_date_scope,
 )
 from openjiuwen_deepsearch.utils.common_utils.date_utils import parse_published_date
-from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload 
+from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload
+from openjiuwen_deepsearch.algorithm.research_collector.scholarly_fusion import (
+    SCHOLARLY_SOURCES,
+    fuse_scholarly_records,
+)
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, is_url_blocked, \
     normalize_domains
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -467,8 +471,24 @@ def web_search_jiuwen(agent_input: dict, tool_content: Any) -> (list, dict):
         tool_result, agent_input = process_google_search_result(agent_input, results)
     elif engine == "tavily":
         tool_result, agent_input = process_tavily_search_result(agent_input, results)
+    elif engine in SCHOLARLY_SOURCES:
+        tool_result, agent_input = process_common_search_result(agent_input, results)
     else:
         tool_result, agent_input = process_common_search_result(agent_input, results)
+
+    web_records = agent_input.get("web_page_search_record")
+    if engine and isinstance(web_records, list):
+        raw_identities = {
+            str(item.get("url") or item.get("link") or item.get("title") or "").strip()
+            for item in results if isinstance(item, dict)
+        }
+        for record in web_records:
+            identity = str(record.get("url") or record.get("title") or "").strip()
+            if identity and identity in raw_identities and not record.get("retrieval_source"):
+                record["retrieval_source"] = engine
+        agent_input["web_page_search_record"] = fuse_scholarly_records(
+            web_records
+        )
 
     return tool_result, agent_input
 
@@ -538,6 +558,23 @@ def _normalize_web_search_item(
         "url": url[:MAX_URL_LENGTH],
         "content": content[:MAX_SEARCH_CONTENT_LENGTH],
     }
+    retrieval_source = str(item.get("retrieval_source") or "").strip().casefold()
+    if retrieval_source:
+        normalized["retrieval_source"] = retrieval_source
+    academic_source = str(item.get("source") or "").strip().casefold()
+    if academic_source in SCHOLARLY_SOURCES:
+        normalized["academic_source"] = academic_source
+        academic_source_id = str(item.get("source_id") or "").strip()
+        if academic_source_id:
+            normalized["academic_source_id"] = academic_source_id
+        for key in ("doi", "pmid", "pmcid", "arxiv_id", "journal", "published"):
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                normalized[key] = value
+        for key in ("authors", "full_text_candidates"):
+            value = item.get(key)
+            if isinstance(value, list) and value:
+                normalized[key] = value
     full_text_status = str(item.get("full_text_status") or "").strip().casefold()
     if full_text_status in {"available", "unavailable", "failed"}:
         full_text = str(item.get("full_text") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
@@ -696,7 +733,9 @@ def process_tavily_search_result(agent_input: dict, tool_content: Any) -> (list,
         added_records = _apply_temporal_filter(agent_input, added_records)
         tool_result = added_records
         combined_records = original_records + added_records
-        agent_input["web_page_search_record"] = remove_duplicate_items(combined_records)
+        agent_input["web_page_search_record"] = fuse_scholarly_records(
+            remove_duplicate_items(combined_records)
+        )
     except Exception as e:
         agent_input["web_page_search_record"] = original_records
         if LogManager.is_sensitive():
@@ -736,7 +775,10 @@ def process_google_search_result(agent_input: dict, tool_content: Any) -> (list,
     return tool_result, agent_input
 
 
-def process_common_search_result(agent_input: dict, tool_content: Any) -> (list, dict):
+def process_common_search_result(
+        agent_input: dict,
+        tool_content: Any,
+) -> (list, dict):
     """标准搜索工具结果处理方法"""
     original_records = agent_input.get("web_page_search_record", [])
     if not isinstance(original_records, list):
@@ -753,7 +795,9 @@ def process_common_search_result(agent_input: dict, tool_content: Any) -> (list,
             if new_item is not None:
                 added_records.append(new_item)
         combined_records = original_records + added_records
-        agent_input["web_page_search_record"] = remove_duplicate_items(combined_records)
+        agent_input["web_page_search_record"] = fuse_scholarly_records(
+            remove_duplicate_items(combined_records)
+        )
     except Exception as e:
         agent_input["web_page_search_record"] = original_records
         if LogManager.is_sensitive():

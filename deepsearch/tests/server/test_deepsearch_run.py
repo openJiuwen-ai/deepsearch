@@ -52,6 +52,30 @@ def test_web_search_config_owns_scholarly_search_switch():
     assert enabled_request.web_search_config.scholarly_search_enabled is True
 
 
+def test_web_search_config_accepts_independent_scholarly_config():
+    request = DeepSearchRequest.model_validate(
+        {
+            **_build_request().model_dump(exclude_none=True),
+            "web_search_config": {
+                "web_search_config_id": 1,
+                "scholarly_search_enabled": True,
+                "scholarly_search_config": {
+                    "max_full_text_results_per_query": 2,
+                    "semantic_scholar": {
+                        "search_api_key": "semantic-secret",
+                        "max_search_results": 3,
+                    },
+                },
+            },
+        }
+    )
+
+    assert request.web_search_config.scholarly_search_enabled is True
+    assert request.web_search_config.scholarly_search_config.max_full_text_results_per_query == 2
+    assert request.web_search_config.scholarly_search_config.semantic_scholar.max_search_results == 3
+    assert request.web_search_config.scholarly_search_config.semantic_scholar.search_api_key == "semantic-secret"
+
+
 def test_deep_search_request_accepts_agent_llm_timeouts():
     """验证请求模型允许传入按 agent 配置的 LLM 总超时。
 
