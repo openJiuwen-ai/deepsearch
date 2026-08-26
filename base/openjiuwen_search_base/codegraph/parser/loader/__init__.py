@@ -1,6 +1,7 @@
 """Orchestration layer: public ``parse_file`` / ``parse_files`` API."""
 
 import asyncio
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -44,6 +45,7 @@ async def parse_file(
     best_match = charset_normalizer.from_bytes(source).best()
     if best_match is None:
         source = source.decode(encoding="utf-8", errors="replace").encode(encoding="utf-8")
+        warnings.warn(f"Cannot determine text encoding of file: {path=}", EncodingWarning)
     elif best_match.encoding not in ("utf_8", "ascii"):
         source = str(best_match).encode(encoding="utf-8")
 
