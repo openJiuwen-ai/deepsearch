@@ -1159,6 +1159,57 @@ async def test_end_node_appends_ai_generated_notice_to_successful_report():
 
 
 @pytest.mark.asyncio
+async def test_end_node_skips_ai_notice_for_html_report():
+    """HTML 产物跳过 markdown 声明追加，避免破坏 HTML 结构。"""
+    session = AsyncMock(spec=Session)
+    final_result = {
+        "response_content": "<!DOCTYPE html><html><head></head><body></body></html>",
+        "response_content_type": "text/html",
+        "exception_info": "",
+    }
+
+    def _get_global_state(key):
+        if key == "search_context.final_result":
+            return final_result
+        if key == "config.stats_info_llm":
+            return False
+        return None
+
+    session.get_global_state.side_effect = _get_global_state
+    session.write_custom_stream = AsyncMock()
+    session.update_global_state = Mock()
+
+    output = await EndNode().invoke({}, session, Context())
+
+    result_data = json.loads(output["final_result"])
+    assert result_data["response_content"].endswith("</html>")
+    assert "本研究报告由 AI 生成。" not in result_data["response_content"]
+
+
+@pytest.mark.asyncio
+async def test_end_node_still_appends_notice_to_markdown_ending_with_html_tag():
+    """恰好以 </html> 结尾的 markdown 产物仍追加声明（不做后缀猜测）。"""
+    session = AsyncMock(spec=Session)
+    final_result = {"response_content": "# 报告\n\n引用了 </html> 字样", "exception_info": ""}
+
+    def _get_global_state(key):
+        if key == "search_context.final_result":
+            return final_result
+        if key == "config.stats_info_llm":
+            return False
+        return None
+
+    session.get_global_state.side_effect = _get_global_state
+    session.write_custom_stream = AsyncMock()
+    session.update_global_state = Mock()
+
+    output = await EndNode().invoke({}, session, Context())
+
+    result_data = json.loads(output["final_result"])
+    assert result_data["response_content"].endswith("本研究报告由 AI 生成。")
+
+
+@pytest.mark.asyncio
 async def test_end_node_appends_english_ai_generated_notice_to_english_report():
     """验证英语研究报告会在正文末尾标注英文 AI 生成说明。"""
     session = AsyncMock(spec=Session)

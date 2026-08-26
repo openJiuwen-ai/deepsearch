@@ -1,5 +1,8 @@
 # Markdown 可视化
 
+> 注：Brief 报告不再复用本 Mermaid 图表链路；brief 的图表由 BRIEF_HTML_REPORTER 生成的自包含
+> HTML（内嵌 ECharts）承载，本链路仅适用于 professional 报告。
+
 ## 维护范围
 
 本文档覆盖报告生成中的 Markdown Mermaid 可视化能力，包括从检索后的章节资料中选择可视化候选、抽取图表数据、校验抽取 schema、单位归一化、生成 Mermaid 片段，以及把 Mermaid 图表插入到子报告正文中。

@@ -2,7 +2,7 @@
 
 ## 维护范围
 
-本文档覆盖 `report_type=brief` 在研究主图中的独立分支：精简大纲、报告级搜索与证据评估、证据审阅、一次补搜、并行章节写作、核心摘要、受控 Mermaid 插图和最终引用校验。
+本文档覆盖 `report_type=brief` 在研究主图中的独立分支：精简大纲、报告级搜索与证据评估、证据审阅、一次补搜、并行章节写作、核心摘要、报告拼装、最终引用校验和自包含 HTML 报告生成。
 
 本文档不覆盖专业版的章节计划、EditorTeam、依赖驱动编辑团队、VLM 图表生成、推理链溯源和报告后用户反馈；这些能力不进入 Brief 分支。
 
@@ -21,8 +21,9 @@ Brief 面向需要快速获得有引用、可决策结论的场景。它以报�
 - 每个章节独立、并行评估候选证据和研究步骤覆盖状态。评估失败只降级对应章节，不会中断其他章节。
 - 首轮评估后，证据审阅节点只生成内部写作策略和分章写作指引；它不修改大纲、章节 ID、研究步骤或证据。只有审阅确认的阻断缺口才会触发补搜，且整份 Brief 最多补搜一次；补搜后直接写作，不再二次审阅。
 - 各章节并行写作；正文正常只发起一次生成调用，但既有重试和上下文缩减会在空响应、格式错误或上下文超限时重试。核心摘要是一个独立生成阶段，不生成专业版的章节过渡或独立结论。
-- 正文写作不输出 Mermaid。`visualization_enable=True` 时，后续受控 Mermaid 阶段复用专业版的图表提取、合规校验和插入能力；图表失败只保留原章节。Brief 不进入 `VLMChartGeneratorNode`。
-- 最终使用共享 `SourceTracerNode` 做引用校验和前端 citation 数据整理，但该节点的下一跳是 `End`，不会进入 `SourceTracerInferNode` 或报告后用户反馈链。
+- 正文写作不输出 Mermaid；Brief 不进入 `VLMChartGeneratorNode`。`visualization_enable` 对 Brief 不生效，仅控制专业版报告的既有图表流程。
+- 最终使用共享 `SourceTracerNode` 做引用校验和前端 citation 数据整理，但该节点的下一跳是 `BriefHtmlReporter`，不会进入 `SourceTracerInferNode` 或报告后用户反馈链。
+- `BriefHtmlReporter` 把溯源校验后的报告 md 转写为单文件自包含 HTML 报告（内嵌 ECharts，零 script 安全架构）；此时产物 `final_result.response_content` 为 HTML，`response_content_type` 为 `text/html`。
 
 ## 关键代码路径
 
@@ -40,6 +41,9 @@ Brief 面向需要快速获得有引用、可决策结论的场景。它以报�
 - `brief_evidence_review.md`
 - `brief_sub_reporter.md`
 - `brief_reporter.md`
+- `brief_html_reporter.md`
+- `brief_html_common.md`
+- `brief_html_section.md`
 
 主要测试：`tests/brief_report/`、`tests/source_tracer/test_extract_message_prompt.py`。
 
@@ -54,10 +58,32 @@ IntentRecognition / 可选澄清
       └─ 有阻断缺口 → BriefInfoCollector（唯一一次补搜）
                            → BriefSubReporter
   → BriefReporter（核心摘要）
-  → BriefMermaidGenerator（可选）
+  → BriefReportAssembler（纯拼装，不调 LLM）
   → BriefSourceTracer
+  → BriefHtmlReporter（md → 自包含 HTML）
   → End
 ```
+
+brief 主链节点序列：`BRIEF_OUTLINE → BRIEF_INFO_COLLECTOR → BRIEF_EVIDENCE_REVIEWER →
+BRIEF_SUB_REPORTER → BRIEF_REPORTER → BRIEF_REPORT_ASSEMBLER → BRIEF_SOURCE_TRACER →
+BRIEF_HTML_REPORTER → END`。
+
+`BRIEF_REPORT_ASSEMBLER` 为纯确定性拼装节点（标题+核心摘要+各章+参考文章+引用白名单过滤+
+`add_source_to_report` 引用整理），不调用 LLM、不生成图表；`visualization_enable` 对 Brief 不生效，
+仅控制专业版报告的既有图表流程。
+
+`BRIEF_HTML_REPORTER` 把溯源校验后的 md（校验跳过/异常时回退为拼装形态）转写为单文件自包含
+HTML：预处理把行内 `[checked_citation:<id>][[n]](URL)`、回退形态 `[source_tracer_result][标题](URL)`
+与图片引用统一清洗为 `[[n]](URL)`；LLM 只保留原始引用标记，不负责引用转 HTML，Python 在 shell
+与章节拼装后确定性生成上标外链和参考文献；LLM 按零 script 契约输出（图表占位元素 +
+`template#chart-configs` 配置 JSON）；Python sanitizer（allowlist，清理后重新序列化）→ 校验（结构/零 script/CSS 外链/
+图表配置与 option 递归安全/分类轴与序列数据对齐/缺失比例序列降级/章节完整性/引用完整性/图表数据数值保真提醒）→ 失败带具体错误重试（复用
+`report_max_generate_retry_num`，截断附加精简指令）→ 重试耗尽后节点保留 SourceTracer 已写入的 Markdown、写入 `warning_info` 并正常结束；通过后确定性生成图表初始化脚本，并且仅在存在有效 ECharts 配置时内嵌
+`echarts.min.js`（版本固定 + SHA-256 校验），无 ECharts 图表时不加载运行时；最后插入 AI 声明。
+图表语义兜底在拼装前执行：分类轴不等长序列被移除，普通折线显式关闭 `connectNulls`，含缺失类别的占比/比例/百分比序列被移除，并同步清理无用图例与 Y 轴；图表数据值未在 Markdown 正文出现时只记录 warning，不触发重试。产物契约：`final_result.response_content = HTML`、
+`final_result.response_content_type = "text/html"`（默认 `text/markdown`，professional 不受影响）、
+`Report.report_html` 保留 HTML 中间态；`citation_messages` 保留返回。溯源校验异常时保持既有语义
+（`exception_info` → run ERROR，HTML 节点照常执行）。
 
 1. 意图识别生成 `ResearchIntent`、语言和报告类型策略；web/all 搜索方式仍执行共享入口预搜索。
 2. `BriefOutlineNode` 根据用户请求、意图、时间范围、模板、受众和语气生成精简大纲。
@@ -66,7 +92,7 @@ IntentRecognition / 可选澄清
 5. `BriefEvidenceReviewer` 校验 LLM 审阅结果，只保留现有章节/步骤上的有效阻断缺口。审阅调用失败时，从首轮评估结果确定性提取阻断缺口。
 6. 如需补搜，使用首轮已执行 Query 去重，只重评受补搜 Query 影响的章节；补搜 Query 为空时保留首轮证据并直接写作。
 7. 章节写作从最终证据中按覆盖状态和评估排名组装上下文；摘要仅消费实际保留的章节文本及其可见引用。
-8. 最终装配报告后，引用校验将内部 `[citation:N]` 处理为对外报告和 citation messages。
+8. 报告装配节点确定性拼装标题、核心摘要、各章正文与参考文章；随后引用校验将内部 `[citation:N]` 处理为对外报告和 citation messages，最终由 HTML 节点把校验后的报告转写为自包含 HTML。
 
 ## 数据契约与依赖
 
@@ -85,7 +111,8 @@ IntentRecognition / 可选澄清
 - Brief 不读取或预估模型上下文窗口。各阶段先发送完整当前输入；仅在模型实际返回上下文超限时，评估递归拆分候选、章节缩减证据、摘要逐级压缩。
 - 章节写作在既有重试耗尽后会记录该章失败并排除其正文；其他并行章节继续完成。摘要无法继续压缩时使用既有章节首段降级，而不伪造失败章节正文。
 - 搜索 Query、大纲和审阅结果均在代码侧校验；模型生成未知章节、步骤、来源或重复 Query 时会被删除，而不会进入搜索或写作上下文。
-- `source_tracer_research_trace_source_switch=False` 时最终溯源直接跳过并保留装配后的报告；图表生成或插入失败时不会中断 Brief。
+- `source_tracer_research_trace_source_switch=False` 时最终溯源直接跳过并保留装配后的报告；溯源校验异常时保持既有语义（`exception_info` → run ERROR，HTML 节点照常执行）。
+- HTML 生成复用 `report_max_generate_retry_num` 重试；重试耗尽时保留 SourceTracer 已写入的 Markdown 产物，写入 `warning_info` 并正常结束，不覆盖已有 `exception_info`。
 
 ## 测试与验证
 
@@ -94,7 +121,7 @@ uv run pytest tests/brief_report
 uv run pytest tests/source_tracer/test_extract_message_prompt.py
 ```
 
-修改 Brief 与专业版共享的 Mermaid 或引用校验逻辑时，还应运行对应的 `tests/report/` 或 `tests/source_tracer/` 测试。
+修改 Brief 与专业版共享的引用校验逻辑时，还应运行对应的 `tests/source_tracer/` 测试。
 
 ## 相关文档
 

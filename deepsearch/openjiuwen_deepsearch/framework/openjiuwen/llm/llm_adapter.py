@@ -36,6 +36,7 @@ NODE_LLM_MAPPING = {
     NodeId.BRIEF_EVIDENCE_REVIEWER.value: LlmConfigCategory.INFO_COLLECTING.value,
     NodeId.BRIEF_SUB_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
     NodeId.BRIEF_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
+    NodeId.BRIEF_HTML_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
 }
 
 

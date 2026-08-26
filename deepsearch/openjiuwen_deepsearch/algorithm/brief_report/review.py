@@ -98,6 +98,29 @@ def _validate_review_output(request: BriefReviewRequest, payload: object) -> Bri
     )
 
 
+def _slim_citation_registry(request: BriefReviewRequest) -> list[dict]:
+    """引用注册表瘦身：只保留来源索引字段，剥离全文正文。
+
+    审阅只需判断覆盖缺口与写作指引，注册表的 ``original_content``
+    全文（单次可达约 20 万 tokens 的主因）对任务无用。
+
+    Args:
+        request: 审阅请求。
+
+    Returns:
+        仅含 source_id/index/title/url/source/publish_time 的字典列表。
+    """
+    return [
+        {
+            "source_id": record.source_id,
+            "index": record.index,
+            "title": record.title,
+            "url": record.url,
+        }
+        for record in request.collection.citation_registry
+    ]
+
+
 async def review_brief_evidence(request: BriefReviewRequest) -> BriefEvidenceReview:
     """审阅首轮证据，生成编辑指引，并决定是否需要执行唯一一次补搜。"""
     prompt_input = {
@@ -106,7 +129,7 @@ async def review_brief_evidence(request: BriefReviewRequest) -> BriefEvidenceRev
             section_id: evidence.model_dump()
             for section_id, evidence in request.collection.section_evidence.items()
         },
-        "citation_registry": [record.model_dump() for record in request.collection.citation_registry],
+        "citation_registry": _slim_citation_registry(request),
         "audience_role": request.audience_role,
         "tone": request.tone,
         "user_format": request.user_format,

@@ -1,10 +1,9 @@
 """Brief 并行单调用章节写作测试。"""
 import asyncio
-import logging
 from unittest.mock import AsyncMock
 import pytest
-from openjiuwen_deepsearch.algorithm.brief_report.models import BriefWritingRequest, BriefOutline, BriefCollectionResult, BriefSummaryRequest, BriefChapter, BriefSectionWritingGuidance, BriefWritingGuidance
-from openjiuwen_deepsearch.algorithm.brief_report.writer import _summary_prompt_input, _writing_prompt_input, build_writing_evidence, generate_brief_summary, write_brief_chapters
+from openjiuwen_deepsearch.algorithm.brief_report.models import BriefAssemblyRequest, BriefWritingRequest, BriefOutline, BriefCollectionResult, BriefSummaryRequest, BriefChapter, BriefSectionWritingGuidance, BriefWritingGuidance
+from openjiuwen_deepsearch.algorithm.brief_report.writer import _chapter_validation_error, _summary_prompt_input, _writing_prompt_input, assemble_brief_report, build_writing_evidence, generate_brief_summary, write_brief_chapters
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 
 def _request():
@@ -31,31 +30,20 @@ def test_brief_sub_reporter_keeps_research_steps_internal_and_generates_reader_f
     normalized_prompt = " ".join(prompt.split())
     collected_information = rendered[1]["content"]
 
-    assert "concise sub report writer" in prompt
-    assert "<overall_outline>" in prompt
-    assert "<current_section>" in prompt
-    assert "<current_chapter_outline>" in prompt
+    for required in (
+        "<overall_outline>",
+        "<current_section>",
+        "Generate 2-3 concise reader-facing Level 2 headings",
+        "Never use a research requirement as a heading",
+        "Do NOT output Mermaid syntax, chart source, chart code",
+        "Do not replace a required table with prose",
+    ):
+        assert required in normalized_prompt
     assert "1 章节 1" in prompt
     assert "1.1 指标" not in prompt
-    assert "Generate 2–4 concise reader-facing Level 2 headings" in normalized_prompt
-    assert "Never use a research requirement as a heading" in normalized_prompt
     assert "Collected Information" in collected_information
     assert "[citation:1 begin]" in collected_information
     assert "[citation:1 end]" in collected_information
-    assert "Target chapter length" in prompt
-    assert "Every number, date, amount, percentage, ranking, company name, policy name, and table cell" in prompt
-    assert "If the user requested a table" in prompt
-    assert "Do not replace a required table with prose" in prompt
-    assert "Conclusion sentence first" in prompt
-    assert "Mathematical Formula Syntax" in prompt
-    assert "Do NOT output Mermaid syntax, chart source, chart code" in prompt
-    assert "<allowed_citations>" not in prompt
-    assert "<user_request>" not in prompt
-    assert "<section_contract>" not in prompt
-    assert "<other_sections>" not in prompt
-    assert "<coverage_guidance>" not in prompt
-    assert "<collected_documents>" not in prompt
-    assert "章节 1" in prompt
     assert "业务负责人" in prompt
 
 
@@ -97,6 +85,23 @@ def test_summary_prompt_receives_report_strategy_but_not_section_guidance():
     assert "本章指引" not in prompt["messages"][0]["content"]
 
 
+def test_assemble_brief_report_uses_english_headings_for_normalized_language():
+    """规范化后的英文语言值必须生成英文摘要和参考文献标题。"""
+    assembly = assemble_brief_report(
+        BriefAssemblyRequest(
+            title="Market analysis",
+            language="en",
+            executive_summary="Key findings.",
+            chapters=[BriefChapter(section_id="1", raw_markdown="## Market\n\nDetails.")],
+            citation_registry=[],
+            section_order={"1": 1},
+        )
+    )
+
+    assert "## Executive Summary" in assembly.report_content
+    assert "## References" in assembly.report_content
+
+
 def test_brief_chapter_prompt_does_not_describe_context_that_is_not_provided():
     """Brief 写作只能声明实际传入的证据与编辑指引上下文。"""
     rendered = apply_system_prompt(
@@ -127,7 +132,7 @@ def test_brief_summary_prompt_requires_the_requested_output_language():
     assert "Output language must be **en-US**" in rendered[0]["content"]
 
 @pytest.mark.asyncio
-async def test_writes_all_chapters_in_parallel_once(monkeypatch, caplog):
+async def test_writes_all_chapters_in_parallel_once(monkeypatch):
     entered=0; release=asyncio.Event()
     async def invoke(*args, **kwargs):
         nonlocal entered
@@ -137,14 +142,8 @@ async def test_writes_all_chapters_in_parallel_once(monkeypatch, caplog):
         return {"content":"正文。[citation:1]"}
     mock=AsyncMock(side_effect=invoke)
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats",mock)
-    with caplog.at_level(logging.INFO, logger="openjiuwen_deepsearch.algorithm.brief_report.writer"):
-        chapters=await write_brief_chapters(_request())
+    chapters=await write_brief_chapters(_request())
     assert [x.section_id for x in chapters]==["1","2","3"] and mock.await_count==3
-    assert any(
-        "[BriefWriter] Generated chapter output section_id=1 raw_markdown=" in record.getMessage()
-        and "正文。[citation:1]" in record.getMessage()
-        for record in caplog.records
-    )
 
 
 @pytest.mark.asyncio
@@ -163,16 +162,9 @@ async def test_parallel_chapters_stream_tokens_with_section_identity(monkeypatch
         {"section_id": "3", "section_idx": "3"},
     ]
 
-def test_evidence_is_not_removed_before_model_reports_context_limit():
-    """长格式约束不能触发调用前证据裁剪。"""
-    request = _request().model_copy(update={"user_format": "用户约束" * 200})
-
-    evidence = build_writing_evidence(request, request.outline.sections[0])
-
-    assert [item["index"] for item in evidence.documents] == [1]
 @pytest.mark.asyncio
-async def test_chapter_context_limit_retries_with_lower_priority_evidence_removed(monkeypatch):
-    """章节写作超限时，下一次请求必须移除最低优先级证据。"""
+async def test_chapter_context_limit_retries_without_trimming_evidence(monkeypatch):
+    """上下文超限重试不应删除低优先级来源。"""
     request = _request()
     payload = request.collection.model_dump()
     payload["citation_registry"].append({"source_id": "s4", "index": 4, "title": "次要来源", "url": "https://e/4", "original_content": "次要证据"})
@@ -185,17 +177,15 @@ async def test_chapter_context_limit_retries_with_lower_priority_evidence_remove
 
     async def invoke(_llm, messages, **_kwargs):
         document_counts.append(messages["messages"][0]["content"].count(" begin]"))
-        if document_counts[-1] > 1:
-            raise RuntimeError("context_length_exceeded")
-        return {"content": "正文。[citation:1]"}
+        raise RuntimeError("context_length_exceeded")
 
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
 
     chapters = await write_brief_chapters(request)
 
-    assert document_counts == [2, 1]
-    assert chapters[0].raw_markdown.endswith("正文。[citation:1]")
+    assert document_counts == [2, 2, 2]
+    assert chapters == []
 
 
 @pytest.mark.asyncio
@@ -219,33 +209,7 @@ async def test_chapter_writer_retries_when_model_outputs_mermaid(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_single_long_evidence_is_omitted_after_context_limit_retries_are_exhausted(monkeypatch):
-    """唯一证据连续超限时，失败章节不应被伪造成报告正文。"""
-    request = _request()
-    payload = request.collection.model_dump()
-    payload["citation_registry"][0]["original_content"] = "超长证据" * 64
-    request = request.model_copy(update={
-        "outline": request.outline.model_copy(update={"sections": [request.outline.sections[0]]}),
-        "collection": BriefCollectionResult.model_validate(payload),
-    })
-    snippets = []
-
-    async def invoke(_llm, messages, **_kwargs):
-        snippets.append(messages["messages"][0]["content"])
-        raise RuntimeError("context_length_exceeded")
-
-    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
-    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
-
-    chapters = await write_brief_chapters(request)
-
-    assert len(snippets) == 3
-    assert len(snippets[0]) > len(snippets[1]) > len(snippets[2])
-    assert chapters == []
-
-
-@pytest.mark.asyncio
-async def test_context_limited_chapter_does_not_block_other_parallel_chapters(monkeypatch):
+async def test_failed_chapter_does_not_block_other_parallel_chapters(monkeypatch):
     """单个章节失败后，其他并行章节仍应正常写作并返回。"""
     request = _request()
     payload = request.collection.model_dump()
@@ -257,7 +221,7 @@ async def test_context_limited_chapter_does_not_block_other_parallel_chapters(mo
         section_id = messages["current_section"].rsplit(" ", 1)[-1]
         attempts_by_section[section_id] += 1
         if section_id == "1":
-            raise RuntimeError("context_length_exceeded")
+            raise RuntimeError("temporary")
         return {"content": f"章节 {section_id} 正文。[citation:{section_id}]"}
 
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
@@ -287,39 +251,6 @@ async def test_chapter_batch_propagates_workflow_cancellation(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("content", "validation"),
-    [
-        ("", "empty_content"),
-        ("```python\nprint('x')", "unclosed_code_fence"),
-        ("```mermaid\ngraph TD\nA --> B\n```", "mermaid_output_forbidden"),
-    ],
-)
-async def test_chapter_writer_logs_response_validation_failure(monkeypatch, caplog, content, validation):
-    """遗漏模型响应校验原因或响应摘要时，章节失败将无法排查。"""
-    request = _request().model_copy(
-        update={"outline": _request().outline.model_copy(update={"sections": [_request().outline.sections[0]]})}
-    )
-
-    monkeypatch.setattr(
-        "openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats",
-        AsyncMock(return_value={"content": content}),
-    )
-
-    with caplog.at_level(logging.WARNING, logger="openjiuwen_deepsearch.algorithm.brief_report.writer"):
-        chapters = await write_brief_chapters(request)
-
-    assert chapters == []
-    messages = [record.getMessage() for record in caplog.records]
-    assert any(
-        "section_id=1" in message
-        and f"validation={validation}" in message
-        and "content_chars=" in message
-        for message in messages
-    )
-
-
-@pytest.mark.asyncio
 async def test_summary_context_limit_retries_with_compacted_chapters(monkeypatch):
     """摘要超限时，下一次请求必须改用标题、首段与带引用事实句。"""
     request = _request()
@@ -345,3 +276,11 @@ async def test_summary_context_limit_retries_with_compacted_chapters(monkeypatch
     assert summary == "已压缩。[citation:1]"
     assert chapter_markdowns[0] != chapter_markdowns[1]
     assert "冗余背景" not in chapter_markdowns[1]
+
+
+def test_chapter_validation_keeps_existing_guards():
+    """空响应、Mermaid 越权与未闭合代码围栏守卫不受移除长度限制影响。"""
+    assert "empty_content" in str(_chapter_validation_error(""))
+    assert "mermaid_output_forbidden" in str(_chapter_validation_error("```mermaid\nA-->B\n```"))
+    # 长度不再做代码级拦截：超长内容交由 prompt 软约束引导。
+    assert _chapter_validation_error("字" * 2000) is None

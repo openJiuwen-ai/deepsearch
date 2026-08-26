@@ -17,6 +17,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
 from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import _is_context_limit_error as _matches_context_limit
+from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -37,7 +38,17 @@ def _response_preview(content: str) -> str:
 
 
 def _chapter_validation_error(content: str) -> ValueError | None:
-    """拒绝正文代理越权生成图表，并区分空响应与未闭合代码围栏。"""
+    """校验章节正文，返回需要重试的校验错误。
+
+    拒绝正文代理越权生成图表（Mermaid），并区分空响应与未闭合代码围栏。
+    章节长度仅由 prompt 的目标长度软约束引导，不做代码级上限校验。
+
+    Args:
+        content: 模型输出的章节 Markdown 正文。
+
+    Returns:
+        校验失败时返回携带失败原因的 ValueError；通过时返回 None。
+    """
     if not content:
         return ValueError("brief chapter validation failed: empty_content")
     if _MERMAID_FENCE_PATTERN.search(content):
@@ -107,8 +118,6 @@ def _writing_prompt_input(
         "current_section_description": section.goal,
         "current_section_format_requirements": "\n".join(format_requirements),
         "current_chapter_outline": _numbered_chapter_outline(section),
-        "current_subsection": "",
-        "section_iscore": False,
         "messages": messages,
     }
 
@@ -165,19 +174,6 @@ def build_writing_evidence(request: BriefWritingRequest, section: BriefSection) 
         }
         rows.append(row)
     return BriefWritingEvidence(documents=rows, coverage=evidence.coverage)
-
-
-def _shrink_writing_documents(documents: list[dict]) -> list[dict] | None:
-    """按既有优先级从末尾删除证据，最后才裁剪唯一剩余的摘要。"""
-    if len(documents) > 1:
-        return documents[:-1]
-    if not documents:
-        return None
-    snippet = str(documents[0].get("snippet") or "")
-    shortened = snippet[: len(snippet) // 2].rstrip()
-    if not shortened or shortened == snippet:
-        return None
-    return [{**documents[0], "snippet": shortened}]
 
 
 async def _write_one(
@@ -246,21 +242,6 @@ async def _write_one(
                 section.id, attempt_num + 1, max_attempts, len(documents), validation or "none",
                 len(raw), raw.count("```"), _response_preview(raw), detail,
             )
-            if _matches_context_limit(str(exc), exc):
-                reduced = _shrink_writing_documents(documents)
-                if reduced is None:
-                    logger.warning(
-                        "[BriefWriter] Context limit cannot be reduced further; "
-                        "section_id=%s attempt=%d/%d. Mark chapter failed.",
-                        section.id, attempt_num + 1, max_attempts,
-                    )
-                    break
-                logger.warning(
-                    "[BriefWriter] Context limit returned by model; section_id=%s "
-                    "attempt=%d/%d documents=%d -> %d.",
-                    section.id, attempt_num + 1, max_attempts, len(documents), len(reduced),
-                )
-                documents = reduced
     logger.error(
         "[BriefWriter] Chapter generation exhausted retries; section_id=%s max_attempts=%d error=%s.",
         section.id, max_attempts, "<detail masked>" if LogManager.is_sensitive() else last_error,
@@ -503,8 +484,8 @@ async def generate_brief_summary(request: BriefSummaryRequest) -> str:
 def assemble_brief_report(request: BriefAssemblyRequest) -> BriefReportAssembly:
     """拼装完整报告后一次性整理已有引用。"""
     chapters = sorted(request.chapters, key=lambda item: request.section_order[item.section_id])
-    heading = "## Executive Summary" if request.language == "en-US" else "## 核心摘要"
-    refs = "## References" if request.language == "en-US" else "## 参考文章"
+    heading = "## Executive Summary" if request.language == ENGLISH else "## 核心摘要"
+    refs = "## References" if request.language == ENGLISH else "## 参考文章"
     report = "\n\n".join(
         [
             f"# {request.title}",

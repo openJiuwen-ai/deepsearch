@@ -22,8 +22,8 @@
 - 报告生成后按配置执行 VLM 图表、全局溯源、推理链溯源和用户反馈处理。
 - `dependency_driving` 模式使用依赖驱动大纲和依赖驱动编辑团队。
 - `hybrid` 模式在意图识别节点中调用 LLM 判断本次 query 应走普通大纲还是依赖驱动大纲，并把结果写入 `search_context.outline_execution_method`。
-- `report_type=brief` 时进入自包含的 Brief 支路：报告级采集、证据审阅、至多一次补搜、并行章节写作、核心摘要、可选 Mermaid 和最终引用校验；不会进入专业版 EditorTeam、VLM、推理链溯源或报告后反馈。
-- `final_result.response_content` 非空时，`EndNode` 会依据 `search_context.language` 在正文末尾追加中文或英文的 AI 生成标注；部分失败报告仍保留错误事件与 `exception_info`。
+- `report_type=brief` 时进入自包含的 Brief 支路：报告级采集、证据审阅、至多一次补搜、并行章节写作、核心摘要、报告拼装、最终引用校验和自包含 HTML 报告生成；不会进入专业版 EditorTeam、VLM、推理链溯源或报告后反馈。
+- `final_result.response_content` 非空时，`EndNode` 会依据 `search_context.language` 在正文末尾追加中文或英文的 AI 生成标注；`final_result.response_content_type == "text/html"` 时跳过 markdown AI 声明追加（HTML 声明已由 BRIEF_HTML_REPORTER 插入），不使用 `</html>` 后缀等启发式猜测，professional md 路径行为完全不变。部分失败报告仍保留错误事件与 `exception_info`。
 - 错误会以 `StreamEvent.ERROR` 输出，随后输出 `ALL END`。
 
 ## 关键代码路径
@@ -48,10 +48,10 @@
 5. hybrid router 的结果写入 `search_context.outline_execution_method`，取值为 `parallel` 或 `dependency_driving`；非 hybrid 模式写入对应的固定执行结果。
 6. HITL 开启时进入 `GenerateQuestionsNode` 和 `FeedbackHandlerNode`；否则按报告类型直接进入 `BriefOutlineNode` 或专业版 `OutlineNode`。
 7. Brief 进入 `BriefOutline → BriefInfoCollector → BriefEvidenceReviewer`；无阻断缺口直接并行写作，有阻断缺口仅返回采集节点补搜一次，随后直接写作。
-8. Brief 的章节、摘要和可选 Mermaid 完成后，经 `SourceTracerNode(NodeId.END)` 校验引用并结束。
+8. Brief 的章节、摘要和拼装完成后，经 `SourceTracerNode(NodeId.BRIEF_HTML_REPORTER)` 校验引用，再由 `BriefHtmlReporterNode` 把报告转写为自包含 HTML 后结束；节点序列为 `BRIEF_REPORTER → BRIEF_REPORT_ASSEMBLER → BRIEF_SOURCE_TRACER(next=BRIEF_HTML_REPORTER) → BRIEF_HTML_REPORTER → END`。
 9. 专业版 `OutlineNode` 按 `search_context.outline_execution_method` 选择普通或依赖驱动大纲 prompt/tool schema，并可经 `OutlineInteractionNode` 修订。
 10. 专业版的 `parallel` 进入 `EditorTeamNode`，`dependency_driving` 进入 `DependencyEditorTeamNode`；随后由 `ReporterNode`、VLM、全局溯源、推理链溯源和用户反馈处理完成。
-11. `EndNode` 为非空报告正文追加 AI 生成标注后，输出 `final_result` 和 `ALL END`。
+11. `EndNode` 为非空报告正文追加 AI 生成标注后，输出 `final_result` 和 `ALL END`；HTML 产物（`response_content_type == "text/html"`）跳过该追加。
 
 ## 数据契约与依赖
 
