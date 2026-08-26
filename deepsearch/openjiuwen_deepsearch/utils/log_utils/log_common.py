@@ -1,8 +1,11 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import contextvars
+import datetime
 import logging
 import logging.handlers
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +13,10 @@ from openjiuwen_deepsearch.utils.log_utils.log_handlers import SafeRotatingFileH
 
 # ContextVar for per-request session_id
 session_id_ctx = contextvars.ContextVar("session_id", default="-")
+
+# ContextVar for per-run isolation (per-call logger)
+# 每个 run_jiuwen_workflow 调用设置唯一 run_id, asyncio task-local 自动隔离
+run_id_ctx = contextvars.ContextVar("run_id", default="")
 
 DEFAULT_MAX_LOG_MESSAGE_LENGTH = 4096
 DEFAULT_LOG_HEAD_LENGTH = 1600
@@ -19,6 +26,20 @@ PROJECT_LOGGER_WHITELIST = (
     "server",
     "__main__",
 )
+
+
+@dataclass
+class RotationConfig:
+    """日志文件轮转配置,封装 max_bytes 和 backup_count。"""
+    max_bytes: int = 100 * 1024 * 1024  # 100 MB
+    backup_count: int = 20
+
+
+@dataclass
+class RunPrefix:
+    """运行标识前缀,封装 date_str 和 run_prefix。"""
+    date_str: str = ""
+    run_prefix: str = ""
 
 
 class SessionFilter(logging.Filter):
@@ -44,6 +65,21 @@ class ProjectLoggerFilter(logging.Filter):
             if logger_name == allowed_name or logger_name.startswith(f"{allowed_name}."):
                 return True
         return record.levelno >= logging.WARNING
+
+
+class RunIdFilter(logging.Filter):
+    """只放行 run_id_ctx 匹配当前 handler 的日志记录。
+
+    用于 per-run handler:每个 handler 持有一个 run_id,
+    只捕获属于本次运行的日志,实现并发隔离。
+    """
+
+    def __init__(self, run_id: str):
+        super().__init__()
+        self.run_id = run_id
+
+    def filter(self, record):
+        return run_id_ctx.get() == self.run_id
 
 
 class TruncatingFormatter(logging.Formatter):
@@ -116,17 +152,112 @@ class TruncatingFormatter(logging.Formatter):
         return truncated_message[:self.max_message_length]
 
 
+def _generate_run_prefix(run_hash: Optional[str] = None) -> RunPrefix:
+    """生成本次运行的唯一标识。
+
+    Args:
+        run_hash: 可选的文件名 hash。per-run handler 应传入 run_id[:8],
+            使文件名 hash 与 run_id 关联,排障时可由 run_id 反查日志文件;
+            None 时使用独立的 uuid4 hash (init 文件使用)。
+
+    Returns:
+        RunPrefix: date_str (YYYYMMDD) + run_prefix (YYYYMMDD_HHMMSS_hash)
+    """
+    # 使用本地时间,与日志内容 %(asctime)s (logging 默认 localtime) 保持一致
+    now = datetime.datetime.now(tz=datetime.timezone.utc).astimezone()
+    date_str = now.strftime("%Y%m%d")
+    time_str = now.strftime("%H%M%S")
+    if run_hash is None:
+        run_hash = uuid.uuid4().hex[:8]
+    return RunPrefix(date_str=date_str, run_prefix=f"{date_str}_{time_str}_{run_hash}")
+
+
+_COMMON_FORMATTER_FMT = (
+    "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - "
+    "session_id=%(session_id)s - %(message)s"
+)
+
+
+def _create_common_file_handlers(
+        log_dir_path: Path,
+        run_prefix: RunPrefix,
+        rotation: RotationConfig,
+        level: int = logging.INFO,
+        run_id: Optional[str] = None,
+) -> tuple[logging.Handler, logging.Handler]:
+    """创建 common + warning 文件 handler (公共逻辑)。
+
+    init (run_id=None) 和 per-run (run_id 非空) 共用此函数,
+    per-run 时额外添加 RunIdFilter 实现隔离。
+
+    Args:
+        log_dir_path: 日志根目录
+        run_prefix: 运行标识前缀 (date_str + run_prefix)
+        rotation: 文件轮转配置
+        level: 日志级别 (int), warning handler 取 max(level, WARNING)
+        run_id: 非空时添加 RunIdFilter (per-run), None 时不添加 (init)
+
+    Returns:
+        (common_handler, warning_handler)
+    """
+    formatter = TruncatingFormatter(_COMMON_FORMATTER_FMT)
+
+    common_log_dir = log_dir_path / "common" / run_prefix.date_str
+    common_log_path = common_log_dir / f"common_{run_prefix.run_prefix}.log"
+    common_handler = SafeRotatingFileHandler(
+        filename=str(common_log_path),
+        mode='a',
+        maxBytes=rotation.max_bytes,
+        backupCount=rotation.backup_count,
+        encoding="utf-8",
+        delay=True,
+    )
+    common_handler.setFormatter(formatter)
+    if run_id is not None:
+        common_handler.addFilter(RunIdFilter(run_id))
+    common_handler.addFilter(SessionFilter())
+    common_handler.addFilter(ProjectLoggerFilter())
+
+    warning_log_path = common_log_dir / f"common_warning_{run_prefix.run_prefix}.log"
+    warning_handler = SafeRotatingFileHandler(
+        filename=str(warning_log_path),
+        mode='a',
+        maxBytes=rotation.max_bytes,
+        backupCount=rotation.backup_count,
+        encoding="utf-8",
+        delay=True,
+    )
+    warning_handler.setLevel(max(level, logging.WARNING))
+    warning_handler.setFormatter(formatter)
+    if run_id is not None:
+        warning_handler.addFilter(RunIdFilter(run_id))
+    warning_handler.addFilter(SessionFilter())
+    warning_handler.addFilter(ProjectLoggerFilter())
+
+    return common_handler, warning_handler
+
+
 def setup_common_logger(
         level: str = "INFO",
         log_dir: Optional[str] = None,
-        max_bytes: int = 100 * 1024 * 1024,  # 100 MB
-        backup_count: int = 20,
-        is_sensitive_local: bool = True
+        rotation: RotationConfig = RotationConfig(),
+        is_sensitive_local: bool = True,
+        run_prefix: RunPrefix = RunPrefix(),
 ) -> logging.Logger:
-    """Setup logging."""
+    """Setup logging.
+
+    Args:
+        level: 日志级别
+        log_dir: 日志目录, None 输出到控制台
+        rotation: 文件轮转配置
+        is_sensitive_local: 是否有敏感信息
+        run_prefix: 运行标识前缀 (date_str + run_prefix)
+    """
     level = getattr(logging, level.upper(), logging.INFO)
     root_logger = logging.getLogger()
-    if root_logger.handlers:  # prevent double setup
+
+    # init 首次调用: 清空所有 handler
+    if root_logger.handlers:
         for handler in list(root_logger.handlers):
             try:
                 handler.flush()
@@ -140,47 +271,56 @@ def setup_common_logger(
 
     root_logger.setLevel(level)
 
-    formatter = TruncatingFormatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - "
-        "session_id=%(session_id)s - %(message)s"
-    )
-
     if log_dir is None:
         handler = logging.StreamHandler()
     else:
         log_dir_path = Path(log_dir)
-        # 通用日志
-        common_log_dir = log_dir_path / "common"
-        common_log_path = common_log_dir / "common.log"
-        handler = SafeRotatingFileHandler(
-            filename=str(common_log_path),
-            mode='a',
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8",
-            delay=True,
+        common_handler, warning_handler = _create_common_file_handlers(
+            log_dir_path=log_dir_path,
+            run_prefix=run_prefix,
+            rotation=rotation,
+            level=level,
         )
-
-        # warning日志，总是启用，但只记录用户设置级别及以上
-        warning_log_path = common_log_dir / "common_warning.log"
-        warning_handler = SafeRotatingFileHandler(
-            filename=str(warning_log_path),
-            mode='a',
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8",
-            delay=True,
-        )
-        warning_level = max(level, logging.WARNING)
-        warning_handler.setLevel(warning_level)
-        warning_handler.setFormatter(formatter)
-        warning_handler.addFilter(SessionFilter())
-        warning_handler.addFilter(ProjectLoggerFilter())
         root_logger.addHandler(warning_handler)
+        handler = common_handler
 
-    handler.setFormatter(formatter)
+    handler.setFormatter(TruncatingFormatter(_COMMON_FORMATTER_FMT))
     handler.addFilter(SessionFilter())
     handler.addFilter(ProjectLoggerFilter())
     root_logger.addHandler(handler)
 
     return root_logger
+
+
+def create_per_run_handler(
+        log_dir: str,
+        run_id: str,
+        level: int = logging.INFO,
+        rotation: RotationConfig = RotationConfig(),
+        run_prefix: RunPrefix = RunPrefix(),
+) -> list[logging.Handler]:
+    """创建 per-run handler (common + warning),通过 RunIdFilter 隔离。
+
+    返回 handler 列表,由调用方 (LogManager.new_run) 添加到 root logger。
+    每个 handler 只捕获 run_id_ctx 匹配的日志记录。
+    调用方需在结束时调用 LogManager.end_run(run_id) 清理。
+
+    Args:
+        log_dir: 日志根目录
+        run_id: 本次运行的唯一标识
+        level: 日志级别
+        rotation: 文件轮转配置
+        run_prefix: 运行标识前缀 (与 metrics 共享)
+
+    Returns:
+        handlers: 创建的 handler 列表 (common + warning)
+    """
+    log_dir_path = Path(log_dir)
+    common_handler, warning_handler = _create_common_file_handlers(
+        log_dir_path=log_dir_path,
+        run_prefix=run_prefix,
+        rotation=rotation,
+        level=level,
+        run_id=run_id,
+    )
+    return [common_handler, warning_handler]

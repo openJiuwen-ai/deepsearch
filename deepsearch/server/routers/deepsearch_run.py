@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import cancel_context
+from openjiuwen_deepsearch.utils.log_utils.log_common import run_id_ctx
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from server.core.cancel_bus import publish_remote_cancel, register_cancel_handler
 from server.core.database import get_db
 from server.deepsearch.common.exception.exceptions import (
@@ -184,6 +186,9 @@ async def _wrapped_agent_run(agent, run_kwargs, space_id: str, conversation_id: 
     - 在 INPUT_REQUIRED 场景下，不会在此处触发 checkpointer 清理，以支持后续恢复。
     """
     token = cancel_context.set(cancel_event)
+    # per-run 日志生命周期: 创建独立日志文件,通过 RunIdFilter 实现并发隔离
+    run_id = LogManager.new_run()
+    run_token = run_id_ctx.set(run_id) if run_id else None
     agent_gen = agent.run(**run_kwargs)
     try:
         async for chunk in agent_gen:
@@ -226,6 +231,10 @@ async def _wrapped_agent_run(agent, run_kwargs, space_id: str, conversation_id: 
                 str(cleanup_err),
             )
     finally:
+        if run_token is not None:
+            run_id_ctx.reset(run_token)
+        if run_id:
+            LogManager.end_run(run_id)
         try:
             await agent_gen.aclose()
         except asyncio.CancelledError:
