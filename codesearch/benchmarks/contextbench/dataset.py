@@ -2,9 +2,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """ContextBench 数据集与 checkout 适配。
 
-contextbench 不是 pip 包（git submodule），其 import 路径注入收敛在本模块的
-`ensure_contextbench_importable`——benchmark 层唯一允许的 path 注入点；
-核心 SDK（openjiuwen_codesearch）不依赖本模块。
+contextbench 不是 pip 包，也不是 git submodule。按需 clone 到
+``third_party/contextbench``（或设 ``CONTEXTBENCH_DIR``）后，其 import 路径
+注入收敛在本模块的 ``ensure_contextbench_importable``——benchmark 层唯一允许
+的 path 注入点；核心 SDK（openjiuwen_codesearch）不依赖本模块。
 """
 
 import logging
@@ -15,33 +16,74 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONTEXTBENCH_DIR = os.path.join(
+_BUILTIN_CONTEXTBENCH_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "third_party",
     "contextbench",
 )
+
+DEFAULT_CONTEXTBENCH_DIR = _BUILTIN_CONTEXTBENCH_DIR
 DEFAULT_PARQUET = os.path.join(DEFAULT_CONTEXTBENCH_DIR, "data", "contextbench_verified.parquet")
 
+_MISSING_HINT = (
+    "ContextBench is optional and is not fetched by clone/CI. "
+    "From codesearch/: bash scripts/fetch_contextbench.sh "
+    "(or git clone <url> third_party/contextbench), "
+    "or set CONTEXTBENCH_DIR to an existing checkout. "
+    "See third_party/README.md."
+)
 
-def ensure_contextbench_importable(contextbench_dir: str = DEFAULT_CONTEXTBENCH_DIR) -> None:
-    if not os.path.isdir(contextbench_dir):
+
+def resolve_contextbench_dir(explicit: str | None = None) -> str:
+    """Resolve the ContextBench checkout: explicit path, then CONTEXTBENCH_DIR, then builtin."""
+    if explicit:
+        return os.path.abspath(os.path.expanduser(explicit))
+    env = os.environ.get("CONTEXTBENCH_DIR", "").strip()
+    if env:
+        return os.path.abspath(os.path.expanduser(env))
+    return _BUILTIN_CONTEXTBENCH_DIR
+
+
+def resolve_parquet_path(
+    explicit: str | None = None,
+    contextbench_dir: str | None = None,
+) -> str:
+    """Resolve the gold parquet: explicit path, then CONTEXTBENCH_PARQUET, then ``<dir>/data/…``."""
+    if explicit:
+        return os.path.abspath(os.path.expanduser(explicit))
+    env = os.environ.get("CONTEXTBENCH_PARQUET", "").strip()
+    if env:
+        return os.path.abspath(os.path.expanduser(env))
+    return os.path.join(
+        resolve_contextbench_dir(contextbench_dir),
+        "data",
+        "contextbench_verified.parquet",
+    )
+
+
+def ensure_contextbench_importable(contextbench_dir: str | None = None) -> str:
+    path = resolve_contextbench_dir(contextbench_dir)
+    marker = os.path.join(path, "contextbench", "__init__.py")
+    if not os.path.isfile(marker):
         raise FileNotFoundError(
-            f"ContextBench directory not found: {contextbench_dir}. "
-            "Run `git submodule update --init --recursive` first."
+            f"ContextBench directory not found: {path}. {_MISSING_HINT}"
         )
-    if contextbench_dir not in sys.path:
-        sys.path.append(contextbench_dir)
+    if path not in sys.path:
+        sys.path.append(path)
+    return path
 
 
-def load_context_bench_data(path: str = DEFAULT_PARQUET):
+def load_context_bench_data(path: str | None = None):
     import pandas as pd
 
-    if not os.path.exists(path):
+    resolved = resolve_parquet_path(path)
+    if not os.path.exists(resolved):
         raise FileNotFoundError(
-            f"Parquet file not found: {path}. Download the dataset into "
-            "third_party/contextbench/data/ first."
+            f"Parquet file not found: {resolved}. "
+            "Place the dataset under <contextbench>/data/ or set CONTEXTBENCH_PARQUET. "
+            f"{_MISSING_HINT}"
         )
-    df = pd.read_parquet(path)
+    df = pd.read_parquet(resolved)
     logger.info("Loaded %d ContextBench instances. Columns: %s", len(df), df.columns.tolist())
     return df
 

@@ -12,7 +12,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from benchmarks.contextbench.dataset import DEFAULT_CONTEXTBENCH_DIR, DEFAULT_PARQUET
+from benchmarks.contextbench.dataset import resolve_contextbench_dir, resolve_parquet_path
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def _load_metrics_rows(metrics_path: str) -> list[dict]:
 def write_eval_summary(
     metrics_path: str,
     summary_path: str | None = None,
-    contextbench_dir: str = DEFAULT_CONTEXTBENCH_DIR,
+    contextbench_dir: str | None = None,
 ) -> str | None:
     """Persist the aggregate EVALUATION summary next to the per-instance metrics JSONL."""
     rows = _load_metrics_rows(metrics_path)
@@ -67,6 +67,7 @@ def write_eval_summary(
         return None
 
     # Reuse official micro-average aggregation so the JSON matches the printed banner.
+    contextbench_dir = resolve_contextbench_dir(contextbench_dir)
     if contextbench_dir not in sys.path:
         sys.path.append(contextbench_dir)
     from contextbench.evaluate import aggregate_results
@@ -100,9 +101,11 @@ def write_eval_summary(
 
 def run_eval(
     pred_file: str,
-    gold_path: str = DEFAULT_PARQUET,
-    contextbench_dir: str = DEFAULT_CONTEXTBENCH_DIR,
+    gold_path: str | None = None,
+    contextbench_dir: str | None = None,
 ) -> int:
+    contextbench_dir = resolve_contextbench_dir(contextbench_dir)
+    gold_path = resolve_parquet_path(gold_path, contextbench_dir=contextbench_dir)
     metrics_path = f"{pred_file}_metrics.jsonl"
     cmd = [
         sys.executable, "-m", "contextbench.evaluate",
