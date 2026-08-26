@@ -16,6 +16,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.collector import (
     generate_brief_queries,
     supplement_brief_evidence,
 )
+from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import generate_brief_html_report
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefAssemblyRequest, BriefChapter, BriefCollectionResult, BriefCollectorRequest,
     BriefEvidenceReview, BriefOutline, BriefOutlineRequest, BriefReviewRequest,
@@ -25,7 +26,6 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
 from openjiuwen_deepsearch.algorithm.brief_report.outline import generate_brief_outline
 from openjiuwen_deepsearch.algorithm.brief_report.review import review_brief_evidence
 from openjiuwen_deepsearch.algorithm.brief_report.search import normalize_brief_search_results
-from openjiuwen_deepsearch.algorithm.brief_report.visualization import generate_brief_mermaid_visualizations
 from openjiuwen_deepsearch.algorithm.brief_report.writer import (
     assemble_brief_report,
     generate_brief_summary,
@@ -588,7 +588,7 @@ class BriefSubReporterNode(BaseNode):
 
 
 class BriefReporterNode(BaseNode):
-    """生成一次摘要，并交由图表阶段统一拼装最终报告。"""
+    """生成一次摘要，并交由拼装节点统一组装最终报告。"""
 
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
         logger.info("[BriefReporterNode] Start BriefReporterNode.")
@@ -616,7 +616,7 @@ class BriefReporterNode(BaseNode):
         }
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        """保存摘要，避免图表插入前提前执行引用整理。"""
+        """保存摘要，避免拼装前提前执行引用整理。"""
         try:
             pre_output = self._pre_handle(inputs, session, context)
             if pre_output.get("skip"):
@@ -645,7 +645,7 @@ class BriefReporterNode(BaseNode):
         state, summary = algorithm_output["state"], algorithm_output["summary"]
         state.executive_summary = summary
         session.update_global_state({"search_context.brief_state": state.model_dump()})
-        next_node = NodeId.BRIEF_MERMAID_GENERATOR.value
+        next_node = NodeId.BRIEF_REPORT_ASSEMBLER.value
         logger.info(
             "[BriefReporterNode] Generated executive summary chapters=%d citations=%d.",
             len(state.chapters), len(state.collection.citation_registry),
@@ -655,30 +655,22 @@ class BriefReporterNode(BaseNode):
         return {"next_node": next_node}
 
 
-class BriefMermaidGeneratorNode(BaseNode):
-    """在 Brief 正文完成后，调用专业版受控 Mermaid 图表代理。"""
+class BriefReportAssemblerNode(BaseNode):
+    """拼装最终 Brief 报告并整理引用；纯确定性节点，不调用 LLM、不生成图表。"""
 
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
-        logger.info("[BriefMermaidGeneratorNode] Start BriefMermaidGeneratorNode.")
+        logger.info("[BriefReportAssemblerNode] Start BriefReportAssemblerNode.")
         state = _state(session)
         if state.outline is None or state.collection is None or not state.chapters:
-            logger.warning("[BriefMermaidGeneratorNode] Missing Brief state, skip Mermaid generation.")
+            logger.warning("[BriefReportAssemblerNode] Missing Brief state, skip report assembly.")
             return {"skip": True}
-        visualization_enabled = bool(session.get_global_state("config.visualization_enable"))
-        if not visualization_enabled:
-            logger.info("[BriefMermaidGeneratorNode] visualization_enable is False, skip Mermaid generation.")
         _log_node_detail(
-            "BriefMermaidGeneratorNode", "current_inputs",
+            "BriefReportAssemblerNode", "current_inputs",
             {"outline": state.outline.model_dump(), "chapters": [chapter.model_dump() for chapter in state.chapters]},
         )
         return {
             "state": state,
-            "visualization_enabled": visualization_enabled,
             "language": session.get_global_state("search_context.language") or "zh-CN",
-            "llm_model_name": (
-                adapt_llm_model_name(session, NodeId.BRIEF_SUB_REPORTER.value)
-                if visualization_enabled else ""
-            ),
             "report_task": session.get_global_state("search_context.original_query") or "",
         }
 
@@ -688,20 +680,6 @@ class BriefMermaidGeneratorNode(BaseNode):
             if pre_output.get("skip"):
                 return self._post_handle(inputs, pre_output, session, context)
             state = pre_output["state"]
-            if pre_output["visualization_enabled"]:
-                try:
-                    state.chapters = await generate_brief_mermaid_visualizations(
-                        llm_model_name=pre_output["llm_model_name"],
-                        outline=state.outline,
-                        collection=state.collection,
-                        chapters=state.chapters,
-                        language=pre_output["language"],
-                    )
-                except Exception as exc:
-                    _log_node_failure("BriefMermaidGeneratorNode", "Mermaid generation", exc)
-                    warning_info = format_exception_info(StatusCode.CHART_GENERATION_ERROR, exc)
-                    session.update_global_state({"search_context.final_result.warning_info": warning_info})
-                    logger.warning("[BriefMermaidGeneratorNode] Mermaid generation degraded: %s", warning_info)
             assembly = assemble_brief_report(
                 BriefAssemblyRequest(
                     title=state.outline.title,
@@ -716,23 +694,21 @@ class BriefMermaidGeneratorNode(BaseNode):
             return _finish_brief_node_failure(
                 session,
                 BriefNodeFailureContext(
-                    node_id=NodeId.BRIEF_MERMAID_GENERATOR,
-                    node_name="BriefMermaidGeneratorNode",
+                    node_id=NodeId.BRIEF_REPORT_ASSEMBLER,
+                    node_name="BriefReportAssemblerNode",
                     stage="Final report assembly",
                     status_code=StatusCode.REPORT_GENERATE_ERROR,
                 ),
                 exc,
             )
         return self._post_handle(
-            inputs,
-            {**pre_output, "state": state, "assembly": assembly},
-            session, context,
+            inputs, {**pre_output, "state": state, "assembly": assembly}, session, context,
         )
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> Output:
         next_node = NodeId.BRIEF_SOURCE_TRACER.value
         if algorithm_output.get("skip"):
-            logger.info("[BriefMermaidGeneratorNode] End BriefMermaidGeneratorNode, next_node=%s", next_node)
+            logger.info("[BriefReportAssemblerNode] End BriefReportAssemblerNode, next_node=%s", next_node)
             return {"next_node": next_node}
         state, assembly = algorithm_output["state"], algorithm_output["assembly"]
         current_report = Report(
@@ -748,9 +724,84 @@ class BriefMermaidGeneratorNode(BaseNode):
             }
         )
         logger.info(
-            "[BriefMermaidGeneratorNode] Assembled final report chapters=%d citations=%d visualization_enabled=%s.",
-            len(state.chapters), len(state.collection.citation_registry), algorithm_output["visualization_enabled"],
+            "[BriefReportAssemblerNode] Assembled final report chapters=%d citations=%d.",
+            len(state.chapters), len(state.collection.citation_registry),
         )
-        _log_node_detail("BriefMermaidGeneratorNode", "Assembled final report", assembly.model_dump())
-        logger.info("[BriefMermaidGeneratorNode] End BriefMermaidGeneratorNode, next_node=%s", next_node)
+        _log_node_detail("BriefReportAssemblerNode", "Assembled final report", assembly.model_dump())
+        logger.info("[BriefReportAssemblerNode] End BriefReportAssemblerNode, next_node=%s", next_node)
+        return {"next_node": next_node}
+
+
+class BriefHtmlReporterNode(BaseNode):
+    """把溯源校验后的 Brief 报告 md 转写为自包含 HTML 并写回最终产物。"""
+
+    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
+        logger.info("[BriefHtmlReporterNode] Start BriefHtmlReporterNode.")
+        current_report = session.get_global_state("search_context.current_report")
+        markdown = getattr(current_report, "checked_trace_source_report_content", "") or ""
+        if not markdown:
+            markdown = getattr(current_report, "report_content", "") or ""
+        language = session.get_global_state("search_context.language") or "zh-CN"
+        _log_node_detail(
+            "BriefHtmlReporterNode", "current_inputs",
+            {"markdown_chars": len(markdown), "language": language},
+        )
+        return {
+            "llm": _llm(session, NodeId.BRIEF_HTML_REPORTER),
+            "markdown": markdown,
+            "language": language,
+            "current_report": current_report,
+        }
+
+    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        pre_output = self._pre_handle(inputs, session, context)
+        try:
+            html = await generate_brief_html_report(
+                llm=pre_output["llm"],
+                markdown=pre_output["markdown"],
+                language=pre_output["language"],
+            )
+        except Exception as exc:
+            return self._fallback_to_markdown(session, exc)
+        return self._post_handle(inputs, {**pre_output, "html": html}, session, context)
+
+    def _fallback_to_markdown(self, session: Session, exc: Exception) -> Output:
+        """HTML 转写重试耗尽后降级保留 markdown 产物，不让报告整体失败。
+
+        HTML 是增值产物：markdown 报告已由 SourceTracer 写入 final_result
+        （response_content_type=text/markdown）。降级与专业版 VLM 图表生成
+        失败的处理一致——写 warning_info、正常流转 END，不抛
+        REPORT_GENERATE_ERROR。
+        """
+        detail = "Html report generation fallback." if LogManager.is_sensitive() else str(exc)
+        logger.warning(
+            "[BriefHtmlReporterNode] Html generation failed after retries, fallback to markdown report; error=%s.",
+            detail,
+        )
+        session.update_global_state(
+            {
+                "search_context.final_result.warning_info": (
+                    f"brief html report generation failed, fallback to markdown: {detail}"
+                )
+            }
+        )
+        next_node = NodeId.END.value
+        logger.info("[BriefHtmlReporterNode] End BriefHtmlReporterNode, next_node=%s", next_node)
+        return {"next_node": next_node}
+
+    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> Output:
+        html = algorithm_output["html"]
+        current_report = algorithm_output["current_report"]
+        if current_report is not None:
+            current_report.report_html = html
+        session.update_global_state(
+            {
+                "search_context.final_result.response_content": html,
+                "search_context.final_result.response_content_type": "text/html",
+                "search_context.current_report": current_report,
+            }
+        )
+        next_node = NodeId.END.value
+        _log_node_detail("BriefHtmlReporterNode", "Generated html report", {"chars": len(html)})
+        logger.info("[BriefHtmlReporterNode] End BriefHtmlReporterNode, next_node=%s", next_node)
         return {"next_node": next_node}

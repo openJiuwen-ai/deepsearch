@@ -37,7 +37,17 @@ def _response_preview(content: str) -> str:
 
 
 def _chapter_validation_error(content: str) -> ValueError | None:
-    """拒绝正文代理越权生成图表，并区分空响应与未闭合代码围栏。"""
+    """校验章节正文，返回需要重试的校验错误。
+
+    拒绝正文代理越权生成图表（Mermaid），并区分空响应与未闭合代码围栏。
+    章节长度仅由 prompt 的目标长度软约束引导，不做代码级上限校验。
+
+    Args:
+        content: 模型输出的章节 Markdown 正文。
+
+    Returns:
+        校验失败时返回携带失败原因的 ValueError；通过时返回 None。
+    """
     if not content:
         return ValueError("brief chapter validation failed: empty_content")
     if _MERMAID_FENCE_PATTERN.search(content):
@@ -107,8 +117,6 @@ def _writing_prompt_input(
         "current_section_description": section.goal,
         "current_section_format_requirements": "\n".join(format_requirements),
         "current_chapter_outline": _numbered_chapter_outline(section),
-        "current_subsection": "",
-        "section_iscore": False,
         "messages": messages,
     }
 

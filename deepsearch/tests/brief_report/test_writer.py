@@ -4,7 +4,7 @@ import logging
 from unittest.mock import AsyncMock
 import pytest
 from openjiuwen_deepsearch.algorithm.brief_report.models import BriefWritingRequest, BriefOutline, BriefCollectionResult, BriefSummaryRequest, BriefChapter, BriefSectionWritingGuidance, BriefWritingGuidance
-from openjiuwen_deepsearch.algorithm.brief_report.writer import _summary_prompt_input, _writing_prompt_input, build_writing_evidence, generate_brief_summary, write_brief_chapters
+from openjiuwen_deepsearch.algorithm.brief_report.writer import _chapter_validation_error, _summary_prompt_input, _writing_prompt_input, build_writing_evidence, generate_brief_summary, write_brief_chapters
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 
 def _request():
@@ -31,19 +31,22 @@ def test_brief_sub_reporter_keeps_research_steps_internal_and_generates_reader_f
     normalized_prompt = " ".join(prompt.split())
     collected_information = rendered[1]["content"]
 
-    assert "concise sub report writer" in prompt
+    assert "decision-brief chapter writer" in prompt
     assert "<overall_outline>" in prompt
     assert "<current_section>" in prompt
     assert "<current_chapter_outline>" in prompt
     assert "1 章节 1" in prompt
     assert "1.1 指标" not in prompt
-    assert "Generate 2–4 concise reader-facing Level 2 headings" in normalized_prompt
+    assert "Generate 2-3 concise reader-facing Level 2 headings" in normalized_prompt
     assert "Never use a research requirement as a heading" in normalized_prompt
     assert "Collected Information" in collected_information
     assert "[citation:1 begin]" in collected_information
     assert "[citation:1 end]" in collected_information
     assert "Target chapter length" in prompt
-    assert "Every number, date, amount, percentage, ranking, company name, policy name, and table cell" in prompt
+    assert "Every number, date, amount, percentage, ranking, company name, and policy name" in prompt
+    assert "short Markdown table or list" in prompt
+    assert "300-600 Chinese characters" in prompt
+    assert "never buried inside a long paragraph" in normalized_prompt
     assert "If the user requested a table" in prompt
     assert "Do not replace a required table with prose" in prompt
     assert "Conclusion sentence first" in prompt
@@ -57,6 +60,10 @@ def test_brief_sub_reporter_keeps_research_steps_internal_and_generates_reader_f
     assert "<collected_documents>" not in prompt
     assert "章节 1" in prompt
     assert "业务负责人" in prompt
+    assert "current_subsection" not in prompt
+    assert "section_iscore" not in prompt
+    # 表格卫生：全 N/A 列应整列删除，防止一列占位符的视觉垃圾
+    assert "never output a column of pure placeholders" in normalized_prompt
 
 
 def test_chapter_prompt_receives_report_and_matching_section_guidance():
@@ -345,3 +352,11 @@ async def test_summary_context_limit_retries_with_compacted_chapters(monkeypatch
     assert summary == "已压缩。[citation:1]"
     assert chapter_markdowns[0] != chapter_markdowns[1]
     assert "冗余背景" not in chapter_markdowns[1]
+
+
+def test_chapter_validation_keeps_existing_guards():
+    """空响应、Mermaid 越权与未闭合代码围栏守卫不受移除长度限制影响。"""
+    assert "empty_content" in str(_chapter_validation_error(""))
+    assert "mermaid_output_forbidden" in str(_chapter_validation_error("```mermaid\nA-->B\n```"))
+    # 长度不再做代码级拦截：超长内容交由 prompt 软约束引导。
+    assert _chapter_validation_error("字" * 2000) is None

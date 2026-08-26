@@ -98,6 +98,22 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
                 "evidence gaps",
             ],
         ),
+        (
+            "brief_html_reporter",
+            {
+                "language": "zh-CN",
+                "messages": [{"role": "user", "content": "Report Markdown:\n# 报告"}],
+            },
+            [
+                "data-visualization editor",
+                "single-file",
+                "self-contained",
+                "Zero-Script Contract",
+                "chart-configs",
+                "renderMode",
+                "never renumber",
+            ],
+        ),
     ],
 )
 def test_brief_workflow_prompts_preserve_migrated_quality_contract(template_name, context, required_rules):
