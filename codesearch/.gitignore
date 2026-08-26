@@ -14,8 +14,6 @@ _emb_*.db
 .DS_Store
 
 # 按需 clone 的 ContextBench（scripts/fetch_contextbench.sh 默认落这里），不入库
-third_party/contextbench/
-third_party/contextbench/**
 third_party/*
 !third_party/README.md
 
