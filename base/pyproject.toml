@@ -54,6 +54,8 @@ codegraph = [
     # MCP
     "fastmcp>=2.14.2",
     "rich>=13.9.4",
+    # Parse non-unicode files
+    "charset-normalizer",
 ]
 # CodeGraph optionally also support exporting to LadybugDB
 ladybug = ["real_ladybug"]

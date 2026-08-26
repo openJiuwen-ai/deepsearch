@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import aiofiles
+import charset_normalizer
 
 from ..constants import detect_language
 from ..languages import BaseLanguageParser, get_default_registry, register_builtins
@@ -38,6 +39,13 @@ async def parse_file(
 
     async with aiofiles.open(path, "rb") as f:
         source = await f.read()
+
+    # Handle files of different encoding
+    best_match = charset_normalizer.from_bytes(source).best()
+    if best_match is None:
+        source = source.decode(encoding="utf-8", errors="replace").encode(encoding="utf-8")
+    elif best_match.encoding not in ("utf_8", "ascii"):
+        source = str(best_match).encode(encoding="utf-8")
 
     return await parser.parse(path, source)
 
