@@ -156,6 +156,18 @@ def test_build_citation_infos_omits_content_time_without_start():
     assert "content_time:" not in infos
 
 
+def test_build_citation_infos_renders_empty_publish_time_when_doc_time_none():
+    from openjiuwen_deepsearch.algorithm.report.report import build_citation_infos
+
+    # doc_time present but None must render an empty publish_time field,
+    # never the sentinel string "None".
+    item = _passage_item(None)
+    item["doc_time"] = None
+    infos = build_citation_infos([item])
+    assert "publish_time: |||source:" in infos
+    assert "None" not in infos
+
+
 def test_build_classified_content_propagates_content_time():
     from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
         FullTextEvidence,

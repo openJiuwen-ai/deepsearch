@@ -148,7 +148,7 @@ def build_citation_infos(classified_content: list) -> str:
             )
         infos += (
             f"\n[citation:{item.get('index', 1)} begin]publish_time: "
-            f"{item.get('doc_time', '')}{content_time_str}|||"
+            f"{item.get('doc_time') or ''}{content_time_str}|||"
             f"source: {item.get('title', '')}{scores_str}|||"
             f"content: {content}[citation:{item.get('index', 1)} end]"
         )
