@@ -1,3 +1,0 @@
-[submodule "codesearch/third_party/contextbench"]
-	path = codesearch/third_party/contextbench
-	url = https://github.com/EuniAI/ContextBench
