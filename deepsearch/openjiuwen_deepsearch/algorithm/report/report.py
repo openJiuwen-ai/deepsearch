@@ -57,6 +57,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ChapterSidecar,
     Outline,
     TemporalScope,
+    _resolve_content_date_scope,
     build_research_intent_prompt_context,
     build_section_local_contract_prompt_context,
     build_temporal_scope_prompt_context,
@@ -153,34 +154,6 @@ def build_citation_infos(classified_content: list) -> str:
             f"content: {content}[citation:{item.get('index', 1)} end]"
         )
     return infos
-
-
-def _resolve_temporal_scope(research_intent):
-    """从 research_intent 取 temporal_scope（dict/model），无则 None。
-
-    兼容序列化 dict（state 形态）与 ``ResearchIntent`` model，供需要
-    temporal_scope 对象本身（如选材加权）和只需 constraint_type 字符串
-    的调用方共用，避免 dict/model 双处理逻辑在各处重复。
-    """
-    if research_intent is None:
-        return None
-    if isinstance(research_intent, dict):
-        return research_intent.get("temporal_scope")
-    return getattr(research_intent, "temporal_scope", None)
-
-
-def _resolve_temporal_constraint_type(research_intent) -> str | None:
-    """Return ``temporal_scope.constraint_type`` from a research_intent.
-
-    Accepts a serialized dict (state form) or a ``ResearchIntent`` model and
-    returns ``None`` when no temporal scope is set.
-    """
-    temporal_scope = _resolve_temporal_scope(research_intent)
-    if temporal_scope is None:
-        return None
-    if isinstance(temporal_scope, dict):
-        return temporal_scope.get("constraint_type")
-    return getattr(temporal_scope, "constraint_type", None)
 
 
 EFFECT_SUB_REPORT_TAG = "### sub_report_tag ###"
@@ -306,9 +279,11 @@ class TemporalSelectionOptions:
     """Optional temporal weighting inputs for rationale-coverage selection.
 
     ``temporal_scope`` accepts a ``TemporalScope`` model or a serialized dict
-    (invalid values degrade to no weighting); weighting only applies to
-    ``content_date`` constraints. ``timeliness_weight`` of ``0.0`` keeps
-    pure-coverage behavior.
+    (invalid values degrade to no weighting). The selection entry point only
+    passes the intent's ``content_date_scope``, so the constraint type is
+    guaranteed by the caller; this dataclass does not re-check it — a
+    ``source_date`` scope passed directly would be weighted the same way.
+    ``timeliness_weight`` of ``0.0`` keeps pure-coverage behavior.
     """
     temporal_scope: TemporalScope | dict | None = None
     timeliness_weight: float = 0.0
@@ -1435,7 +1410,7 @@ class Reporter:
             else:
                 # content_date scopes weight the sort by temporal compliance;
                 # source_date / None scopes fall back to pure-coverage selection.
-                _tscope = _resolve_temporal_scope(current_inputs.get("research_intent"))
+                _tscope = _resolve_content_date_scope(current_inputs.get("research_intent"))
                 selected_passages, _ = self._select_by_rationale_coverage(
                     passages, rationales, coverage_result,
                     top_k=classify_doc_infos_res_top_k_num,
@@ -2299,9 +2274,9 @@ class Reporter:
             "section_idx": section_idx,
             "max_retries": current_inputs.get("max_generate_retry_num", 3),
             "extract_content_time": (
-                _resolve_temporal_constraint_type(
+                _resolve_content_date_scope(
                     current_inputs.get("research_intent")
-                ) == "content_date"
+                ) is not None
             ),
         }
 
@@ -2616,7 +2591,7 @@ class Reporter:
         below the floor, the legacy ``score > 0`` gate applies (mirrors
         Layer-1's own fallback).
 
-        When ``temporal.temporal_scope`` is a ``content_date`` constraint and
+        When ``temporal.temporal_scope`` is set and
         ``temporal.timeliness_weight > 0``, the *sort* key becomes
         ``coverage + timeliness_weight * temporal_score`` so time-compliant
         passages can outrank slightly-higher-coverage non-compliant ones. The
@@ -2634,8 +2609,11 @@ class Reporter:
         bound would be delivered-then-truncated by Layer 2 anyway).
         Cross-rationale shared passages can still push a Layer-2 rationale
         list past the bound in extreme cases (accepted second-order edge).
-        ``source_date`` scopes (or ``temporal is None``) keep pure-coverage
-        behavior.
+        ``temporal is None`` keeps pure-coverage behavior. Constraint-type
+        gating lives at the entry point, which resolves only the intent's
+        ``content_date_scope`` into ``TemporalSelectionOptions``; this
+        function does not check ``constraint_type`` itself, so any other
+        scope type passed directly is weighted too.
 
         Args:
             passages: candidate passage list (already n-gram filtered).
@@ -2643,9 +2621,10 @@ class Reporter:
             coverage_result: coverage matrix evaluation result.
             top_k: maximum passages per rationale.
             temporal: optional ``TemporalSelectionOptions`` bundling the
-                temporal scope (model or serialized dict; weighting only
-                applies to ``content_date`` constraints) and the timeliness
-                weight. ``None`` (default) keeps pure-coverage behavior.
+                temporal scope (model or serialized dict; the entry point
+                only passes ``content_date`` scopes, but any scope passed
+                directly is weighted) and the timeliness weight.
+                ``None`` (default) keeps pure-coverage behavior.
 
         Returns:
             (selected_passages, selected_passage_keys) tuple.
@@ -2689,12 +2668,12 @@ class Reporter:
 
         use_temporal = (
             temporal_scope is not None
-            and getattr(temporal_scope, "constraint_type", None) == "content_date"
             and timeliness_weight > 0
         )
 
-        # Pre-compute per-passage temporal score once (content_date only). The
-        # sort key adds the weighted temporal score; the keep-gate below stays on
+        # Pre-compute per-passage temporal score once (the entry point only
+        # passes content_date scopes; constraint_type is not re-checked here).
+        # The sort key adds the weighted temporal score; the keep-gate below stays on
         # raw coverage so a compliant-but-low passage can still be dropped and a
         # covered-but-non-compliant passage is never hard-deleted by time alone.
         # Four-tier counts are computed here so the sort key and the observability

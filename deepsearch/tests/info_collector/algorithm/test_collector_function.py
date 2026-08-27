@@ -837,7 +837,7 @@ class TestSearchResultProcessing:
             "web_page_search_record": [],
             "search_query": "policy query",
             "research_intent": {
-                "temporal_scope": {
+                "source_date_scope": {
                     "constraint_type": "source_date",
                     "end_date": "2020-12-31",
                 }
@@ -869,7 +869,7 @@ class TestSearchResultProcessing:
             "web_page_search_record": [],
             "search_query": "old records",
             "research_intent": {
-                "temporal_scope": {
+                "source_date_scope": {
                     "constraint_type": "source_date",
                     "start_date": "2020-01-01",
                 }

@@ -333,7 +333,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
             tone="formal",
             include_domains=["example.com"],
             exclude_domains=["bad.com"],
-            temporal_scope=TemporalScope(
+            source_date_scope=TemporalScope(
                 constraint_type="source_date",
                 end_date="2023-12-31",
             ),
@@ -411,7 +411,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
     )
     mock_apply_temporal_scope.assert_called_once_with(
         search_engine_name="tavily",
-        temporal_scope=intent_result.research_intent.temporal_scope,
+        temporal_scope=intent_result.research_intent.source_date_scope,
     )
     assert call_order == ["entry_search", "temporal_scope"]
 
@@ -524,7 +524,7 @@ def test_outline_pre_handle_exposes_task_contract_without_temporal_context():
         "task_type": "comparison",
         "required_dimensions": ["growth", "dividend"],
         "comparison_targets": ["AIA", "Ping An"],
-        "temporal_scope": {
+        "source_date_scope": {
             "constraint_type": "source_date",
             "start_date": "2018-01-01",
             "end_date": "2020-12-31",
@@ -934,17 +934,20 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
     assert merged_payload["search_context.research_intent"]["report_type"] == "brief"
     assert "gov.cn" in merged_payload["search_context.research_intent"]["include_domains"]
     assert merged_payload["search_context.report_type_policy"]["report_type"] == "brief"
-    assert merged_payload["search_context.research_intent"]["temporal_scope"] == {
+    # 合并改读新字段 source_date_scope；current 无范围、incoming 有 source_date →
+    # merged.source_date_scope 被 populate，temporal_scope 保持 current 的 None。
+    assert merged_payload["search_context.research_intent"]["source_date_scope"] == {
         "constraint_type": "source_date",
         "start_date": None,
         "end_date": date(2020, 12, 31),
     }
+    assert merged_payload["search_context.research_intent"]["temporal_scope"] is None
     mock_apply_temporal.assert_called_once()
     mock_apply_domains.assert_called_once()
 
 
-def test_feedback_handler_keeps_existing_temporal_scope_when_reparse_has_no_scope():
-    """反馈重解析未得到时间范围时，应保留已有时间约束。"""
+def test_feedback_handler_keeps_existing_source_date_scope_when_reparse_has_no_scope():
+    """反馈重解析未得到时间范围时，应保留已有时间约束（新字段 source_date_scope）。"""
     session = Mock()
     session.get_global_state.return_value = {
         "temporal_scope": {
@@ -959,7 +962,9 @@ def test_feedback_handler_keeps_existing_temporal_scope_when_reparse_has_no_scop
         {"research_intent": {"temporal_scope": None}},
     )
 
-    assert merged["temporal_scope"] == {
+    # current 经 before-validator 将 dict 形 temporal_scope(source_date) 路由到
+    # source_date_scope；incoming 无 scope → 合并保留 current 的 source_date_scope。
+    assert merged["source_date_scope"] == {
         "constraint_type": "source_date",
         "start_date": None,
         "end_date": date(2020, 12, 31),
@@ -1040,12 +1045,15 @@ def test_outline_accept_reapplies_search_constraints_after_hitl_resume():
         include_domains=["example.com"],
         exclude_domains=["bad.example"],
     )
+    # resume 调用点改用 _resolve_source_date_scope(research_intent)；research_intent
+    # 是 dict 形旧持久化 state（仅 temporal_scope 旧键），resolver 旧键回退经 _coerce_scope
+    # 返回 TemporalScope 实例（constraint_type=source_date 匹配）。
     apply_temporal.assert_called_once_with(
         search_engine_name="tavily",
-        temporal_scope={
-            "constraint_type": "source_date",
-            "start_date": "2020-01-01",
-        },
+        temporal_scope=TemporalScope(
+            constraint_type="source_date",
+            start_date="2020-01-01",
+        ),
     )
 
 

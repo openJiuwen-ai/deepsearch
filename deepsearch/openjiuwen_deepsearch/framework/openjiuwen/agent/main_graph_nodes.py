@@ -100,6 +100,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     SearchContext,
     State,
     ValidationResult,
+    _resolve_source_date_scope,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name, 
                                                                         adapt_vlm_model_name)
@@ -342,7 +343,7 @@ class IntentRecognitionNode(BaseNode):
             intent_result.entry_search_results = web_search_output.get("search_results", [])
             apply_web_search_temporal_scope(
                 search_engine_name=web_search_engine_name,
-                temporal_scope=intent_result.research_intent.temporal_scope,
+                temporal_scope=_resolve_source_date_scope(intent_result.research_intent),
             )
         else:
             # 纯本地模式：跳过网络搜索，使用空结果
@@ -540,8 +541,10 @@ class FeedbackHandlerNode(BaseNode):
 
         if incoming_intent.report_type is not None:
             merged_intent.report_type = incoming_intent.report_type
-        if incoming_intent.temporal_scope is not None:
-            merged_intent.temporal_scope = incoming_intent.temporal_scope
+        if incoming_intent.source_date_scope is not None:
+            merged_intent.source_date_scope = incoming_intent.source_date_scope
+        if incoming_intent.content_date_scope is not None:
+            merged_intent.content_date_scope = incoming_intent.content_date_scope
 
         return merged_intent.model_dump()
 
@@ -641,7 +644,7 @@ class FeedbackHandlerNode(BaseNode):
             )
             apply_web_search_temporal_scope(
                 search_engine_name=web_search_engine_name,
-                temporal_scope=merged_intent_dict.get("temporal_scope"),
+                temporal_scope=_resolve_source_date_scope(merged_intent_dict),
             )
 
         add_debug_log_wrapper(
@@ -1444,7 +1447,7 @@ class OutlineInteractionNode(BaseNode):
         )
         apply_web_search_temporal_scope(
             search_engine_name=engine_name,
-            temporal_scope=research_intent.get("temporal_scope"),
+            temporal_scope=_resolve_source_date_scope(research_intent),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:

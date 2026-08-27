@@ -709,7 +709,7 @@ class TestInfoCollectorNode:
             "web_search_engine_name": "tavily",
             "api_tools_config": {},
             "research_intent": {
-                "temporal_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
+                "source_date_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
             },
         }
         tool = AsyncMock()

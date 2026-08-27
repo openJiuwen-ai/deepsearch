@@ -245,7 +245,7 @@ class TestGenerateQueryNode:
             "collector_context.step_description": "步骤描述",
             "collector_context.evidence_ledger": {},
             "collector_context.research_intent": {
-                "temporal_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"},
+                "content_date_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"},
                 "target_papers": [{"pmid": "38202877", "title": "A Full Paper Title"}],
             },
         }
@@ -429,7 +429,7 @@ class TestSupervisorNode:
                 "attempted_queries": ["已查 query"],
             },
             "collector_context.research_intent": {
-                "temporal_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
+                "source_date_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
             },
         }
         return state_map.get(key)

@@ -35,7 +35,10 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
     MAX_SEARCH_CONTENT_LENGTH,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    TemporalScope,
+    _resolve_source_date_scope,
+)
 from openjiuwen_deepsearch.utils.common_utils.date_utils import parse_published_date
 from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_search_payload 
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, is_url_blocked, \
@@ -660,14 +663,9 @@ def _apply_temporal_filter(agent_input: dict, records: list[dict]) -> list[dict]
         通过时间过滤的正式 web 记录。
     """
     research_intent = agent_input.get("research_intent") or {}
-    temporal_scope = (
-        research_intent.get("temporal_scope")
-        if isinstance(research_intent, dict)
-        else getattr(research_intent, "temporal_scope", None)
-    )
     return filter_web_records_by_temporal_scope(
         records,
-        temporal_scope,
+        _resolve_source_date_scope(research_intent),
     )
 
 

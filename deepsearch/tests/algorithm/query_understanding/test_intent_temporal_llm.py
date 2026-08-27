@@ -83,10 +83,12 @@ async def test_intent_temporal_classification(query, expected_type, expected_sta
     finally:
         llm_context.reset(token)
 
-    scope = result.research_intent.temporal_scope
     if expected_type is None:
-        assert scope is None, f"expected no temporal_scope for: {query}"
+        assert result.research_intent.source_date_scope is None, f"expected no temporal_scope for: {query}"
+        assert result.research_intent.content_date_scope is None, f"expected no temporal_scope for: {query}"
         return
+    field = "source_date_scope" if expected_type == "source_date" else "content_date_scope"
+    scope = getattr(result.research_intent, field)
     assert scope is not None, f"expected temporal_scope for: {query}"
     assert scope.constraint_type == expected_type, (
         f"{query!r}: constraint_type {scope.constraint_type} != {expected_type}"

@@ -67,8 +67,8 @@ def test_normalize_research_intent_preserves_task_contract_fields():
     assert intent.comparison_targets == ["AIA", "Ping An"]
 
 
-def test_normalize_research_intent_preserves_valid_temporal_scope():
-    """合法时间约束应被归一化为可序列化的结构化意图。"""
+def test_normalize_research_intent_preserves_valid_source_date_scope():
+    """合法时间约束应被归一化为可序列化的结构化意图（旧 temporal_scope input 路由到新字段）。"""
     intent = _normalize_research_intent(
         {
             "temporal_scope": {
@@ -79,12 +79,15 @@ def test_normalize_research_intent_preserves_valid_temporal_scope():
         }
     )
 
-    assert intent.temporal_scope == TemporalScope(
+    # legacy temporal_scope input routes to the new field
+    # and the deprecated temporal_scope field stays None (popped by the before-validator).
+    assert intent.source_date_scope == TemporalScope(
         constraint_type="source_date",
         start_date="2018-01-01",
         end_date="2023-12-31",
     )
-    assert intent.model_dump(mode="json")["temporal_scope"] == {
+    assert intent.temporal_scope is None
+    assert intent.model_dump(mode="json")["source_date_scope"] == {
         "constraint_type": "source_date",
         "start_date": "2018-01-01",
         "end_date": "2023-12-31",
@@ -105,6 +108,7 @@ def test_normalize_research_intent_drops_only_invalid_temporal_scope():
     )
 
     assert intent.task_type == "comparison"
+    assert intent.source_date_scope is None
     assert intent.temporal_scope is None
 
 
@@ -154,6 +158,8 @@ def test_build_temporal_scope_prompt_context_handles_missing_scope():
 
     assert context == {
         "has_temporal_scope": False,
+        "source_date_instruction": "",
+        "content_date_instruction": "",
         "temporal_scope_instruction": "",
         "temporal_embed_in_query": False,
         "temporal_query_instruction": "",

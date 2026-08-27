@@ -1,5 +1,9 @@
+from datetime import date
+
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    ResearchIntent,
+    TemporalScope,
     build_temporal_scope_prompt_context,
 )
 
@@ -123,7 +127,7 @@ def test_collector_gen_query_prompt_requires_natural_language_temporal_scope():
     context.update(
         build_temporal_scope_prompt_context(
             {
-                "temporal_scope": {
+                "content_date_scope": {
                     "constraint_type": "content_date",
                     "start_date": "2020-01-01",
                     "end_date": "2022-12-31",
@@ -156,7 +160,7 @@ def test_collector_supervisor_prompt_requires_temporal_follow_up_queries():
     context.update(
         build_temporal_scope_prompt_context(
             {
-                "temporal_scope": {
+                "source_date_scope": {
                     "constraint_type": "source_date",
                     "end_date": "2021-12-31",
                 }
@@ -187,7 +191,7 @@ def test_collector_gen_query_prompt_tavily_source_date_omits_constraint_time_phr
     context.update(
         build_temporal_scope_prompt_context(
             {
-                "temporal_scope": {
+                "source_date_scope": {
                     "constraint_type": "source_date",
                     "end_date": "2023-12-31",
                 }
@@ -251,7 +255,7 @@ def test_collector_supervisor_prompt_renders_current_time_with_scope():
     context.update(
         build_temporal_scope_prompt_context(
             {
-                "temporal_scope": {
+                "source_date_scope": {
                     "constraint_type": "source_date",
                     "end_date": "2024-12-31",
                 }
@@ -267,3 +271,65 @@ def test_collector_supervisor_prompt_renders_current_time_with_scope():
     # 有约束分支：出现时间边界，不出现"most current information"兜底句
     assert "Research Time Boundary" in rendered_prompt
     assert "most current information is gathered" not in rendered_prompt
+
+
+def test_collector_gen_query_prompt_renders_dual_constraint_merged_embed_guidance():
+    """双约束(Tavily)下 collector_gen_query 渲染合并 embed 指引——content_date 事实时段词
+    在 temporal_query_instruction 中,source_date 发表时间词不在(Tavily 原生过滤不 embed source_date)。"""
+    ctx = build_temporal_scope_prompt_context(
+        ResearchIntent(
+            source_date_scope=TemporalScope(
+                constraint_type="source_date", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31)
+            ),
+            content_date_scope=TemporalScope(
+                constraint_type="content_date", start_date=date(2020, 1, 1), end_date=date(2022, 12, 31)
+            ),
+        ),
+        engine_name="tavily",
+    )
+    rendered = _render_prompt(
+        "collector_gen_query",
+        {
+            "plan_title": "x",
+            "plan_thought": "x",
+            "step_title": "x",
+            "step_description": "x",
+            "max_search_query_count": 3,
+            "language": "zh-CN",
+            "report_type": "professional",
+            **ctx,
+        },
+    )
+    assert "facts/events occurred" in rendered
+    assert "tied to the publication date" not in rendered
+
+
+def test_brief_collector_query_generation_prompt_renders_dual_constraint_concat_boundaries():
+    """双约束下 brief_collector_query_generation 渲染拼接兼容字段 temporal_scope_instruction——
+    source 边界(2026)与 content 边界(2020)同现。"""
+    ctx = build_temporal_scope_prompt_context(
+        ResearchIntent(
+            source_date_scope=TemporalScope(
+                constraint_type="source_date", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31)
+            ),
+            content_date_scope=TemporalScope(
+                constraint_type="content_date", start_date=date(2020, 1, 1), end_date=date(2022, 12, 31)
+            ),
+        ),
+        engine_name="tavily",
+    )
+    rendered = _render_prompt(
+        "brief_collector_query_generation",
+        {
+            "outline": [],
+            "task_type": "",
+            "required_dimensions": [],
+            "comparison_targets": [],
+            "executed_queries": [],
+            "blocking_gaps": [],
+            "user_query": "review retrospective reports",
+            **ctx,
+        },
+    )
+    assert "2026" in rendered
+    assert "2020" in rendered

@@ -10,7 +10,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 
 def _content_date_intent() -> ResearchIntent:
     return ResearchIntent(
-        temporal_scope=TemporalScope(
+        content_date_scope=TemporalScope(
             constraint_type="content_date",
             start_date=datetime.date(2018, 1, 1),
             end_date=datetime.date(2023, 12, 31),
@@ -38,9 +38,9 @@ def test_no_temporal_scope_yields_empty():
 # --- temporal_query_instruction 按 constraint_type 分流（content_date 指事实时间，source_date 指发表时间）---
 
 def _scope_intent(constraint_type, **scope_kwargs):
-    return ResearchIntent(
-        temporal_scope=TemporalScope(constraint_type=constraint_type, **scope_kwargs)
-    )
+    scope = TemporalScope(constraint_type=constraint_type, **scope_kwargs)
+    field = "source_date_scope" if constraint_type == "source_date" else "content_date_scope"
+    return ResearchIntent(**{field: scope})
 
 
 def test_query_instruction_content_date_points_to_event_time():
@@ -111,7 +111,7 @@ def test_sub_report_prompt_renders_no_scope_fallback():
     assert "fixed now" in rendered
 
 
-# --- content_time surfaced in writing citation blocks (Task 6) ---
+# --- content_time surfaced in writing citation blocks ---
 
 def _passage_item(content_time):
     """Build a passage-level classified_content item for infos rendering tests."""

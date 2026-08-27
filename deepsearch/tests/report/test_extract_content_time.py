@@ -19,7 +19,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 
 def _content_date_intent() -> dict:
     return ResearchIntent(
-        temporal_scope=TemporalScope(
+        content_date_scope=TemporalScope(
             constraint_type="content_date",
             start_date=datetime.date(2018, 1, 1),
             end_date=datetime.date(2023, 12, 31),
@@ -29,7 +29,7 @@ def _content_date_intent() -> dict:
 
 def _source_date_intent() -> dict:
     return ResearchIntent(
-        temporal_scope=TemporalScope(
+        source_date_scope=TemporalScope(
             constraint_type="source_date",
             start_date=datetime.date(2024, 1, 1),
             end_date=datetime.date(2024, 12, 31),

@@ -3,6 +3,7 @@
 from enum import Enum
 from datetime import date
 import json
+import logging
 from typing import List, Optional, Dict, Union, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -10,6 +11,8 @@ from pydantic import BaseModel, Field, model_validator
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import (
     TEMPORAL_SCOPE_SEARCH_ENGINES,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Message(BaseModel):
@@ -275,11 +278,54 @@ class ResearchIntent(BaseModel):
     exclude_titles: List[str] = Field(default_factory=list, description="用户指定排除的文章标题")
     include_domains: List[str] = Field(default_factory=list, description="用户指定的站点域名")
     exclude_domains: List[str] = Field(default_factory=list, description="用户排除的站点域名")
-    temporal_scope: Optional[TemporalScope] = Field(default=None, description="用户明确指定的研究时间范围")
+    temporal_scope: Optional[TemporalScope] = Field(
+        default=None,
+        description="[deprecated] 旧单值字段,仅兼容旧序列化 state 的 model_validate 输入路由;读改用 source_date_scope/content_date_scope. 始终 None(post-construction).",
+    )
+    source_date_scope: Optional[TemporalScope] = Field(
+        default=None, description="来源发表/可得时间约束（硬门）"
+    )
+    content_date_scope: Optional[TemporalScope] = Field(
+        default=None, description="事实/事件/研究/数据时段约束（软分）"
+    )
     target_papers: List[TargetPaper] = Field(
         default_factory=list,
         description="Papers explicitly identified or implicitly described by the user.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _route_legacy_temporal_scope(cls, data):
+        if isinstance(data, BaseModel):
+            data = data.model_dump()
+        if not isinstance(data, dict):
+            return data
+        has_new = data.get("source_date_scope") is not None or data.get("content_date_scope") is not None
+        legacy = data.get("temporal_scope")
+        if legacy is not None and not has_new:
+            # Route dict-form AND TemporalScope-instance-form legacy by constraint_type before pop,
+            # else instance-form ResearchIntent(temporal_scope=<TemporalScope>) would lose the
+            # constraint (source_date_scope stays None, temporal_scope popped).
+            ct = legacy.get("constraint_type") if isinstance(legacy, dict) else getattr(legacy, "constraint_type", None)
+            if ct == "source_date":
+                data["source_date_scope"] = legacy
+            elif ct == "content_date":
+                data["content_date_scope"] = legacy
+        if legacy is not None:
+            # Pop the legacy key — all readers use source_date_scope/content_date_scope.
+            # The deprecated temporal_scope field def stays only to absorb old serialized state.
+            data.pop("temporal_scope", None)
+        return data
+
+    @model_validator(mode="after")
+    def _check_scope_type_consistency(self) -> "ResearchIntent":
+        if self.source_date_scope and self.source_date_scope.constraint_type != "source_date":
+            logger.warning("source_date_scope.constraint_type=%s mismatch, dropping", self.source_date_scope.constraint_type)
+            self.source_date_scope = None
+        if self.content_date_scope and self.content_date_scope.constraint_type != "content_date":
+            logger.warning("content_date_scope.constraint_type=%s mismatch, dropping", self.content_date_scope.constraint_type)
+            self.content_date_scope = None
+        return self
 
 
 def build_target_papers_prompt_context(
@@ -337,23 +383,23 @@ def build_research_intent_prompt_context(intent: ResearchIntent | dict | None) -
 
 def resolve_temporal_embed_in_query(
     engine_name: str | None,
-    constraint_type: str | None,
+    source_date_scope: "TemporalScope | None",
+    content_date_scope: "TemporalScope | None",
     scholarly_enabled: bool = False,
 ) -> bool:
-    """按 引擎×约束类型 决定搜索词是否带约束时间词。副引擎启用时强制带。
+    """按 引擎×双 scope 决定搜索词是否带约束时间词。副引擎启用时强制带。
 
-    Tavily 等原生支持时间过滤的引擎对 source_date 约束可由引擎原生过滤，搜索词无需再带
-    约束时间词；其余引擎（或副引擎启用时）需把约束时间词写进搜索词。content_date 约束
-    表达的是事实发生时间，任何引擎都无法原生过滤，始终需要写进搜索词。
+    content_date 约束表达的是事实发生时间，任何引擎都无法原生过滤，始终需要写进
+    搜索词；source_date 约束在 Tavily 等原生支持时间过滤的引擎上可由引擎原生过滤，
+    搜索词无需再带约束时间词，其余引擎（或副引擎启用时）需把约束时间词写进搜索词。
     """
-    if constraint_type is None:
-        return False
-    if constraint_type == "content_date":
+    if content_date_scope is not None:
         return True
-    if scholarly_enabled:
-        return True
-    engine_supports_native = (engine_name or "") in TEMPORAL_SCOPE_SEARCH_ENGINES
-    return not engine_supports_native
+    if source_date_scope is not None:
+        if scholarly_enabled:
+            return True
+        return (engine_name or "") not in TEMPORAL_SCOPE_SEARCH_ENGINES
+    return False
 
 
 def build_temporal_scope_prompt_context(
@@ -362,74 +408,143 @@ def build_temporal_scope_prompt_context(
     engine_name: str | None = None,
     scholarly_enabled: bool = False,
 ) -> dict:
-    """将时间约束转换为研究阶段 prompt 可直接消费的上下文。
+    """将时间约束转换为研究阶段 prompt 可直接消费的上下文（双指令 + 拼接兼容）。
 
     Args:
-        intent: 结构化研究意图或兼容字典。
+        intent: 结构化研究意图或兼容字典。支持新形（``source_date_scope``/
+            ``content_date_scope``）、旧形实例（``temporal_scope=<TemporalScope>``）与
+            旧形字典（``{"temporal_scope": {...}}``）三类构造，经 resolver 统一取值。
         engine_name: 主 web 搜索引擎名，用于判断引擎是否原生支持时间过滤。
         scholarly_enabled: 副引擎（学术搜索）是否启用，启用时强制在搜索词中带约束时间词。
 
     Returns:
-        包含时间约束类型、边界、是否在搜索词中带约束时间词及对应指令的 prompt 上下文；
+        source/content 两条独立指令（``source_date_instruction``/
+        ``content_date_instruction``）、拼接兼容字段 ``temporal_scope_instruction``（供
+        旧 Prompt 直接消费）、embed 决策与合并后的 ``temporal_query_instruction``；
         无约束时返回空字段。
     """
-    if intent is None:
-        scope = None
-    elif isinstance(intent, ResearchIntent):
-        scope = intent.temporal_scope
-    else:
-        scope = ResearchIntent.model_validate(intent).temporal_scope
+    # 用 resolver 取双 scope：统一覆盖新形、实例旧形、字典旧形三类构造,
+    # 避免 bare field 读漏取（实例旧形经 before-validator 已路由到新键并 pop）。
+    sds = _resolve_source_date_scope(intent)
+    cds = _resolve_content_date_scope(intent)
 
-    if scope is None:
+    if sds is None and cds is None:
+        # 与有约束分支保持同形 6 键，消费方可无条件按键读取。
         return {
             "has_temporal_scope": False,
+            "source_date_instruction": "",
+            "content_date_instruction": "",
             "temporal_scope_instruction": "",
             "temporal_embed_in_query": False,
             "temporal_query_instruction": "",
         }
 
-    start_date = scope.start_date.isoformat() if scope.start_date else ""
-    end_date = scope.end_date.isoformat() if scope.end_date else ""
-    if start_date and end_date:
-        boundary = f"from {start_date} through {end_date}"
-    elif start_date:
-        boundary = f"on or after {start_date}"
-    else:
-        boundary = f"on or before {end_date}"
+    def _boundary(scope: "TemporalScope") -> str:
+        start_date = scope.start_date.isoformat() if scope.start_date else ""
+        end_date = scope.end_date.isoformat() if scope.end_date else ""
+        if start_date and end_date:
+            return f"from {start_date} through {end_date}"
+        if start_date:
+            return f"on or after {start_date}"
+        return f"on or before {end_date}"
 
-    if scope.constraint_type == "source_date":
-        instruction = f"Use sources published {boundary}, using inclusive boundary dates."
-    else:
-        instruction = f"Keep the facts and data {boundary}, using inclusive boundary dates."
+    parts = []
+    src_instr = ""
+    cds_instr = ""
+    if sds is not None:
+        src_instr = (
+            f"Use sources published {_boundary(sds)}, using inclusive boundary dates."
+        )
+        parts.append(src_instr)
+    if cds is not None:
+        cds_instr = (
+            f"Keep the facts and data {_boundary(cds)}, using inclusive boundary dates."
+        )
+        parts.append(cds_instr)
 
     embed = resolve_temporal_embed_in_query(
-        engine_name, scope.constraint_type, scholarly_enabled
+        engine_name, sds, cds, scholarly_enabled
     )
+    qis = []
     if embed:
-        if scope.constraint_type == "content_date":
-            query_instruction = (
+        if cds is not None:
+            qis.append(
                 "Express this boundary naturally in every query as a constraint time phrase "
                 "tied to when the facts/events occurred (e.g. 'events in 2018', '2018 research'), "
                 "not the publication date. Keep topical years that are part of the research "
-                "subject (e.g. '2018-2023 developments') — do NOT drop them."
+                "subject — do NOT drop them."
             )
-        else:
-            query_instruction = (
+        if sds is not None and (
+            (engine_name or "") not in TEMPORAL_SCOPE_SEARCH_ENGINES or scholarly_enabled
+        ):
+            qis.append(
                 "Express this boundary naturally in every query as a constraint time phrase "
                 "tied to the publication date (e.g. 'published in 2024'). Keep topical years that "
-                "are part of the research subject (e.g. '2018-2023 developments') — do NOT drop them."
+                "are part of the research subject — do NOT drop them."
             )
     else:
-        query_instruction = (
+        qis.append(
             "Do NOT add any constraint time phrase (the engine filters by date natively). "
             "Topical years that are part of the research subject are still allowed."
         )
+    query_instruction = " ".join(qis)
+
     return {
-        "has_temporal_scope": True,
-        "temporal_scope_instruction": instruction,
+        "has_temporal_scope": sds is not None or cds is not None,
+        "source_date_instruction": src_instr,
+        "content_date_instruction": cds_instr,
+        "temporal_scope_instruction": " ".join(parts),  # 兼容旧 Prompt 拼接字段
         "temporal_embed_in_query": embed,
         "temporal_query_instruction": query_instruction,
     }
+
+
+def _coerce_scope(raw: dict | TemporalScope | None, kind: str) -> TemporalScope | None:
+    """构造 TemporalScope 并强制 constraint_type=kind；非法返回 None（静默丢弃先例）。
+
+    用 model_validate 兼顾 date 对象（model_dump python 模式）与 ISO 字符串（JSON state）。
+    """
+    if isinstance(raw, TemporalScope):
+        raw = {"constraint_type": raw.constraint_type, "start_date": raw.start_date, "end_date": raw.end_date}
+    if not isinstance(raw, dict):
+        return None
+    payload = {**raw, "constraint_type": kind}
+    try:
+        return TemporalScope.model_validate(payload)
+    except Exception:
+        return None
+
+
+def _resolve_source_date_scope(research_intent: ResearchIntent | dict | None) -> TemporalScope | None:
+    """取 source_date 约束；实例直接读新键（before-validator 已路由实例形旧键），dict 新键优先、旧 temporal_scope 兜底（兼容升级前持久化 state）。"""
+    if research_intent is None:
+        return None
+    if isinstance(research_intent, ResearchIntent):
+        return research_intent.source_date_scope
+    if isinstance(research_intent, dict):
+        sds = research_intent.get("source_date_scope")
+        if sds is not None:
+            return _coerce_scope(sds, "source_date")
+        legacy = research_intent.get("temporal_scope")
+        if isinstance(legacy, dict) and legacy.get("constraint_type") == "source_date":
+            return _coerce_scope(legacy, "source_date")
+    return None
+
+
+def _resolve_content_date_scope(research_intent: ResearchIntent | dict | None) -> TemporalScope | None:
+    """取 content_date 约束；实例直接读新键（before-validator 已路由实例形旧键），dict 新键优先、旧 temporal_scope 兜底（兼容升级前持久化 state）。"""
+    if research_intent is None:
+        return None
+    if isinstance(research_intent, ResearchIntent):
+        return research_intent.content_date_scope
+    if isinstance(research_intent, dict):
+        cds = research_intent.get("content_date_scope")
+        if cds is not None:
+            return _coerce_scope(cds, "content_date")
+        legacy = research_intent.get("temporal_scope")
+        if isinstance(legacy, dict) and legacy.get("constraint_type") == "content_date":
+            return _coerce_scope(legacy, "content_date")
+    return None
 
 
 def build_section_local_contract_prompt_context(contract: SectionLocalContract | dict | None) -> dict:

@@ -335,8 +335,15 @@ def test_union_restore_cross_rationale_overlap_drilldown():
     assert len(selected) == 3
 
 
-def test_source_date_with_weight_no_restore():
-    # source_date + weight>0：use_temporal 不成立，不补回，池子严格 top_k
+def test_internal_gate_type_agnostic_source_date_scope_weights():
+    # 内部门控不再读 constraint_type：use_temporal 仅由
+    # (temporal_scope is not None and timeliness_weight > 0) 决定。类型判定职责
+    # 上移到入口 :1438（_resolve_content_date_scope 只回 content_date 或 None），
+    # 故生产路径行为不变；但直接喂 source_date scope + weight>0 给
+    # _select_by_rationale_coverage 时，门控不再拦截——content_date 加权照常生效。
+    # 此处 source_date scope(2018-2023) + weight 0.2：p0(2010, violation, -1)
+    # 加权 0.9-0.2=0.7，p1(2019, compliant, +1) 加权 0.85+0.2=1.05 → p1 反超；
+    # top_k=1 取 p1，p0 是 violation(timeliness<0) 不补回，池子仍 1 条。
     passages = [
         _passage(0, 0.9, {"start": "2010-01-01", "end": "2010-12-31"}),
         _passage(1, 0.85, {"start": "2019-01-01", "end": "2019-12-31"}),
@@ -354,8 +361,8 @@ def test_source_date_with_weight_no_restore():
         passages, [{"id": "r1"}], coverage_result,
         top_k=1, temporal=TemporalSelectionOptions(scope, 0.2),
     )
-    assert len(selected) == 1
-    assert selected[0]["_idx"] == 0
+    assert len(selected) == 1  # violation 不补回
+    assert selected[0]["_idx"] == 1  # compliant 反超（门控不再按 constraint_type 拦截）
 
 
 def test_floor_gate_blocks_doomed_temporal_promotion():
