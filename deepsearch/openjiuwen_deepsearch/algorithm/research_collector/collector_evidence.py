@@ -656,12 +656,12 @@ class CoveragePassage:
 
 # 数字特征：复用共享的富版事实模式（数字+单位/货币前缀/学术统计），并补裸数字
 # 兜底（含千分位与拉丁边界，避免 "5Very" 误判）。与日期重叠的数字由日期特征排除。
-_COVERAGE_NUMBER_PATTERN = re.compile(
-    r"\d+(?:\.\d+)?\s*(?:" + _SUFFIX_UNIT_PATTERN + r")|"
-    + _PREFIX_CURRENCY_SYMBOLS + r"\s*\d+(?:\.\d+)?|"
-    + "|".join(_ACADEMIC_STAT_PATTERNS)
-    + r"|(?<![A-Za-z0-9])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![A-Za-z])"
-)
+_COVERAGE_NUMBER_PATTERN = re.compile("".join([
+    r"\d+(?:\.\d+)?\s*(?:" + _SUFFIX_UNIT_PATTERN + r")|",
+    _PREFIX_CURRENCY_SYMBOLS + r"\s*\d+(?:\.\d+)?|",
+    "|".join(_ACADEMIC_STAT_PATTERNS),
+    r"|(?<![A-Za-z0-9])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![A-Za-z])",
+]))
 # 日期特征：2025年 / 2025年3月 / 2025年3月15日 / 2025-03-17 / 2025/03/17，
 # 以及季度/半年等绝对时间段锚点（Q3、第三季度、上半年）。
 _COVERAGE_DATE_PATTERN = re.compile(
@@ -751,6 +751,30 @@ _COVERAGE_SCORE_MODE = "density"
 _COVERAGE_DENSITY_MIN_LEN = 40
 #: 合并跨度上限：相邻高分段连续并入一个证据块的最多段数，防止雪崩式吞并。
 _COVERAGE_MAX_MERGE_SPAN = 5
+
+
+@dataclass(frozen=True)
+class CoverageOptions:
+    """覆盖抽取的高级调参（公共默认值之外的精调旋钮）。
+
+    把 ``max_merge_span`` / ``expansion_density_threshold`` / ``score_mode``
+    三个相关参数封装为具名对象，使 ``extract_coverage_passages`` 的形参
+    个数控制在编码规范上限（5）以内； frozen 使其可作为 ``lru_cache`` 的
+    可哈希键。
+
+    Attributes:
+        max_merge_span: 相邻段落合并进同一证据块的最多段数，防雪崩吞并。
+        expansion_density_threshold: 邻域扩张的事实密度门控；0 表示不门控。
+        score_mode: 计分口径，"absolute" 或 "density"。
+    """
+
+    max_merge_span: int = _COVERAGE_MAX_MERGE_SPAN
+    expansion_density_threshold: float = _COVERAGE_EXPANSION_DENSITY_THRESHOLD
+    score_mode: str = _COVERAGE_SCORE_MODE
+
+
+#: 模块级默认选项，供未显式传参的调用方复用。
+_COVERAGE_DEFAULT_OPTIONS = CoverageOptions()
 
 
 def _coverage_split_passages(content: str) -> list[str]:
@@ -1015,15 +1039,19 @@ def _extract_coverage_passages_cached(
     max_passages: int,
     neighbor_window: int,
     max_chars: int,
-    max_merge_span: int,
-    expansion_density_threshold: float,
-    score_mode: str,
+    options: CoverageOptions,
 ) -> tuple[CoveragePassage, ...]:
     """进程内有界缓存的核心抽取实现（键=全部参数）。
+
+    Args:
+        options: 高级调参（合并跨度上限、邻域密度门控、计分口径）。
 
     Returns:
         按原文顺序排列的覆盖证据块元组；返回对象只读，调用方不应就地修改。
     """
+    max_merge_span = options.max_merge_span
+    expansion_density_threshold = options.expansion_density_threshold
+    score_mode = options.score_mode
     paragraphs = _coverage_split_passages(_normalize_coverage_content(content))
     candidates: list[tuple[int, str, dict[str, float], float]] = []
     for index, paragraph in enumerate(paragraphs):
@@ -1125,9 +1153,7 @@ def extract_coverage_passages(
     max_passages: int = 5,
     neighbor_window: int = 1,
     max_chars: int = 6000,
-    max_merge_span: int = _COVERAGE_MAX_MERGE_SPAN,
-    expansion_density_threshold: float = _COVERAGE_EXPANSION_DENSITY_THRESHOLD,
-    score_mode: str = _COVERAGE_SCORE_MODE,
+    options: CoverageOptions | None = None,
 ) -> list[CoveragePassage]:
     """规则抽取覆盖证据段落，不增加额外 LLM 调用，不依赖 query 关键词。
 
@@ -1141,18 +1167,16 @@ def extract_coverage_passages(
         max_passages: 进入 Top-K 的段落数上限（影响最终证据块数量）。
         neighbor_window: Top-K 段落的相邻扩展窗口。
         max_chars: 最终证据块的累计字符数预算。
-        max_merge_span: 相邻段落合并进同一证据块的最多段数，防雪崩吞并。
-        expansion_density_threshold: 邻域扩张的事实密度门控（方案3 精细化）。
-            0 表示不门控；段落计数特征和/段长达到该值时不再拉取邻居。
-        score_mode: 计分口径，"absolute"（默认）或 "density"（方案1 的 A/B 开关）。
+        options: 高级调参（合并跨度上限、邻域密度门控、计分口径）。
+            ``None`` 时用模块级默认 ``_COVERAGE_DEFAULT_OPTIONS``。
 
     Returns:
         按原文顺序排列的覆盖证据块列表（每次调用返回新建对象，调用方可自由
         就地修改而不影响缓存或其他调用方）；无有效事实或预算非正时返回空表。
     """
+    resolved_options = options if options is not None else _COVERAGE_DEFAULT_OPTIONS
     cached = _extract_coverage_passages_cached(
-        content, max_passages, neighbor_window, max_chars, max_merge_span,
-        expansion_density_threshold, score_mode,
+        content, max_passages, neighbor_window, max_chars, resolved_options,
     )
     return [
         CoveragePassage(

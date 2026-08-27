@@ -1,5 +1,6 @@
 # -*- coding: UTF-8 -*-
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
+    CoverageOptions,
     CoveragePassage,
     _coverage_features,
     _coverage_score,
@@ -408,7 +409,8 @@ def test_max_merge_span_caps_block_size():
         for index in range(7)
     )
     result = extract_coverage_passages(
-        content, max_passages=5, neighbor_window=1, max_merge_span=5
+        content, max_passages=5, neighbor_window=1,
+        options=CoverageOptions(max_merge_span=5),
     )
 
     assert result
@@ -462,10 +464,12 @@ def test_expansion_density_gate_reduces_neighbor_pull_at_small_k():
         ]
     )
     no_gate = extract_coverage_passages(
-        content, max_passages=1, neighbor_window=1, expansion_density_threshold=0.0
+        content, max_passages=1, neighbor_window=1,
+        options=CoverageOptions(expansion_density_threshold=0.0),
     )
     gated = extract_coverage_passages(
-        content, max_passages=1, neighbor_window=1, expansion_density_threshold=0.01
+        content, max_passages=1, neighbor_window=1,
+        options=CoverageOptions(expansion_density_threshold=0.01),
     )
     assert no_gate[0].source_indices == [0, 1]
     assert gated[0].source_indices == [0]

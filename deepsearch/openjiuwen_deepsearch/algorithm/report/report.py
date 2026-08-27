@@ -1457,18 +1457,17 @@ class Reporter:
                     current_inputs.get("sub_section_core_content", []),
                     fulltext_result.get("fulltext_evidences", []),
                 )
+                coverage_block_count = 0
+                for block in core_content_list:
+                    if isinstance(block, str) and block.startswith("===== COVERAGE PASSAGES"):
+                        coverage_block_count += 1
                 logger.warning(
                     "[rule_coverage] section_idx=%s fulltext_docs=%s coverage_docs=%s "
                     "outline_coverage_blocks=%s",
                     section_idx,
                     len(fulltext_result.get("fulltext_evidences", [])),
                     len(rule_passage_texts),
-                    sum(
-                        1
-                        for block in core_content_list
-                        if isinstance(block, str)
-                        and block.startswith("===== COVERAGE PASSAGES")
-                    ),
+                    coverage_block_count,
                 )
             else:
                 core_content_list = list(current_inputs.get("sub_section_core_content", []))
