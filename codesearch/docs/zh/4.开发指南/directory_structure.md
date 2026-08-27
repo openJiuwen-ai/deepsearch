@@ -29,11 +29,12 @@ codesearch/
 ├── start_backend.py                 # 源码部署的薄入口（等价于 codesearch-server 命令）
 ├── docker/Dockerfile                # 容器镜像（默认服务形态，含 HEALTHCHECK）
 ├── scripts/release_check.py         # 发布前校验（版本一致 / 依赖形态 / base pin）
+├── scripts/fetch_contextbench.sh    # 按需 clone ContextBench（CI 不调用）
 ├── benchmarks/contextbench/         # 数据集加载 / runner / 预测导出与官方评分
 ├── tests/
 │   ├── unit/                        # 零外部依赖（fixture 回放）
 │   ├── integration/                 # graph 引擎（需 openjiuwen）
 │   └── e2e/                         # 真实 Milvus
-├── third_party/contextbench/        # ContextBench（git submodule，不随仓库携带）
+├── third_party/README.md            # 按需 clone ContextBench（非 submodule，CI 不拉）
 └── docs/                            # 本文档树（zh / en / feature）
 ```

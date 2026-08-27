@@ -5,6 +5,7 @@ __pycache__/
 uv.lock
 logs/
 .cursor/
-
+results*/
 testdata/
 .jiuwen_graph/
+

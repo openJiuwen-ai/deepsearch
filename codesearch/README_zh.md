@@ -122,6 +122,12 @@ cp .env.example .env
 codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
 ```
 
+如需通过 CLI 针对特定集合直接运行 coder：
+
+```sh
+codesearch coder --collection my_repo --query-file /path/to/issue_1.txt
+```
+
 配置优先级与变量表见 [安装指导 · 环境变量](docs/zh/2.安装指导/README.md#环境变量)。检索使用两个模型：**main**（多轮决策）默认 `openai/gpt-5`，**filter**（逐行提取）默认 `openai/gpt-5-mini`。换端点时请把模型名改成该服务实际支持的名字。Python API 与完整说明见 [快速开始](docs/zh/3.快速上手/3.快速上手.md)。
 
 # ⚙️ 引擎
@@ -161,12 +167,14 @@ graph/react 工作流：[codesearch-workflow.md](docs/feature/framework/codesear
 # 📊 评测
 
 可在 [ContextBench](docs/zh/3.快速上手/3.快速上手.md) 上评估检索质量——该数据集
-由真实仓库 issue 与标注好的上下文答案组成。数据集以 git submodule 引入
-（登记在仓库根 `.gitmodules`，路径 `codesearch/third_party/contextbench`）：
+由真实仓库 issue 与标注好的上下文答案组成。ContextBench **可选**（不是 git
+submodule，clone / CI 不会拉取）。需要跑评测时再本地获取，见
+[`third_party/README.md`](third_party/README.md)：
 
 ```sh
-# 在 monorepo 根目录执行
-git submodule update --init --recursive
+# 在 codesearch/ 目录
+bash scripts/fetch_contextbench.sh
+# 或：git clone https://github.com/EuniAI/ContextBench third_party/contextbench
 ```
 
 ```sh
@@ -178,6 +186,16 @@ python -m benchmarks.contextbench.runner --num-instances 32
 预测与自动评分结果在 `./results/`。依赖以产品 `[bench]` 为准（含 pandas/
 pyarrow 与 tree-sitter*），不必再装上游 `requirements.txt`。完整说明见
 [快速上手](docs/zh/3.快速上手/3.快速上手.md#评测)。
+
+## Coder 模式
+
+您可以使用 benchmark 脚本运行全新的 coder 测试模式，并通过 `--reset-indices` 强制重置索引：
+
+```sh
+python -m benchmarks.contextbench.runner --num-instances 32 --test-mode coder --reset-indices
+```
+
+智能体日志与补丁预测结果将分别保存在 `./results/results__<timestamp>/agent_logs` 和 `./results/results__<timestamp>/coder_patches` 目录下。
 
 # 💻 开发指南
 

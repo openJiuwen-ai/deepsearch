@@ -51,7 +51,7 @@ def test_search_adds_filtered_snippets_to_memory():
     outcome = run(search_codebase.execute(ctx, {"search_query": "alpha beta", "use_trigram": False}))
     assert outcome.added_snippets == 1 and outcome.searched
     assert "1 new snippets" in outcome.message
-    assert ctx.memory.saved[1] == [(10, 10)]
+    assert ctx.working_memory.saved[1] == [(10, 10)]
 
 
 def test_search_all_processed_message():
@@ -88,7 +88,7 @@ def test_expand_context_clips_to_chunk_bounds():
         expand_context.execute(ctx, {"target_file": "a.py", "start_line": 1, "end_line": 100})
     )
     # 修复 notes #15：区间裁剪到 chunk 自身边界，不再越界
-    assert ctx.memory.saved[5] == [(10, 20)]
+    assert ctx.working_memory.saved[5] == [(10, 20)]
     assert outcome.added_snippets == 1
 
 
@@ -103,7 +103,7 @@ def test_expand_context_no_match():
 def test_delete_and_submit():
     s = make_snippet(1, "a.py", 1, ["x"])
     ctx = _ctx([s])
-    ctx.memory.add_ranges(s, [(1, 1)])
+    ctx.working_memory.add_ranges(s, [(1, 1)])
     outcome = run(memory_tools.execute_delete(ctx, {"snippet_ids": [1, 9], "reasoning": "noise"}))
     assert "deleted 1 snippets" in outcome.message and "noise" in outcome.message
 
