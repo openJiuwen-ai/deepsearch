@@ -178,12 +178,14 @@ Graph/react workflow: [codesearch-workflow.md](docs/feature/framework/codesearch
 
 Retrieval quality can be measured on [ContextBench](docs/en/3.Quick%20Start/3.Quick%20Start.md),
 a benchmark of real repository issues with annotated ground-truth context.
-The dataset is pulled in as a git submodule (see repo-root `.gitmodules`,
-path `codesearch/third_party/contextbench`):
+ContextBench is **optional** (not a git submodule; clone/CI will not fetch it).
+When you want to run the benchmark, clone it locally — see
+[`third_party/README.md`](third_party/README.md):
 
 ```sh
-# from the monorepo root
-git submodule update --init --recursive
+# from codesearch/
+bash scripts/fetch_contextbench.sh
+# or: git clone https://github.com/EuniAI/ContextBench third_party/contextbench
 ```
 
 ```sh
