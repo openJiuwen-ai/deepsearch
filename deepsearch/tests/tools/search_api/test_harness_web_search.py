@@ -7,8 +7,8 @@ from unittest.mock import ANY, AsyncMock, patch
 import pytest
 
 
-def test_harness_web_search_wrapper_fetches_urls_from_web_tools():
-    """Paid wrapper should call web_tools search and fetch page content for URL-only results."""
+def test_harness_web_search_wrapper_uses_answer_without_fetching_webpages():
+    """Paid wrapper should use the API answer directly without fetching webpages."""
     from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
         BochaSearchAPIWrapper,
     )
@@ -31,29 +31,23 @@ def test_harness_web_search_wrapper_fetches_urls_from_web_tools():
     ) as mock_search, patch(
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper."
         "WebFetchWebpageAdapter.fetch_webpage_sync",
-        return_value={
-            "url": "https://example.com/news",
-            "status_code": 200,
-            "title": "Fetched title",
-            "content": "Fetched body",
-        },
     ) as mock_fetch:
         result = wrapper.results("test query")
 
     assert result == [
         {
-            "title": "Fetched title",
+            "title": "https://example.com/news",
             "url": "https://example.com/news",
-            "content": "Fetched body",
+            "content": "fallback answer",
             "source": "bocha",
         }
     ]
     mock_search.assert_called_once_with(ANY, query="test query", max_results=2, timeout_seconds=60)
-    mock_fetch.assert_called_once_with("https://example.com/news", 60)
+    mock_fetch.assert_not_called()
 
 
-def test_harness_web_search_wrapper_truncates_prefetched_content():
-    """Paid wrapper should keep long fetched content bounded before returning results."""
+def test_harness_web_search_wrapper_truncates_long_answer():
+    """Paid wrapper should keep long answer content bounded before returning results."""
     from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
         BochaSearchAPIWrapper,
     )
@@ -65,24 +59,15 @@ def test_harness_web_search_wrapper_truncates_prefetched_content():
         max_web_search_results=1,
     )
 
-    long_content = "A" * (MAX_COLLECTOR_DOC_CONTENT_LENGTH + 200)
+    long_answer = "A" * (MAX_COLLECTOR_DOC_CONTENT_LENGTH + 200)
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper."
         "WebPaidSearchTool._bocha_search",
         new_callable=AsyncMock,
         return_value={
             "provider": "bocha",
-            "answer": "fallback answer",
+            "answer": long_answer,
             "urls": ["https://example.com/long"],
-        },
-    ), patch(
-        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper."
-        "WebFetchWebpageAdapter.fetch_webpage_sync",
-        return_value={
-            "url": "https://example.com/long",
-            "status_code": 200,
-            "title": "Long title",
-            "content": long_content,
         },
     ):
         result = wrapper.results("test query")

@@ -82,13 +82,13 @@ Supported engines (set `web_search_engine_config.search_engine_name`):
 Integration notes:
 
 - `jina` uses the built-in direct HTTP wrapper. When `search_url=""`, the runtime falls back to `https://s.jina.ai`. In China network environments where the default endpoint is unreachable, explicitly set `search_url` to `https://s.jinaai.cn`. Provider-specific query options such as `gl`, `hl`, `location`, and `page` are carried through `extension`.
-- `bocha` and `perplexity` use the harness `web_tools` adapter layer. They support `extension.timeout_seconds` and `extension.fetch_webpage`. `search_url` is only honored when the underlying provider supports URL override in `web_tools`. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
+- `bocha` and `perplexity` use the harness `web_tools` adapter layer. By default they do not fetch webpage content and use the search API summary answer directly. To enable webpage fetching, set `extension.fetch_webpage=True`. They also support `extension.timeout_seconds`. `search_url` is only honored when the underlying provider supports URL override in `web_tools`. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
 - `serper` is exposed as a dedicated engine name so server-side configuration can use `serper`, while research-mode `web_search_tool` still reuses the Google/Serper wrapper internally.
 - Public engines may keep `search_url` empty and rely on built-in defaults or provider defaults.
 
 Search results are also bounded before they reach the collector LLM path:
 
-- Prefetched webpage bodies from the harness-based adapters are truncated to `MAX_COLLECTOR_DOC_CONTENT_LENGTH`.
+- `bocha` and `perplexity` use the search API summary answer directly by default; when webpage fetching is enabled via `extension.fetch_webpage=True`, the fetched content is truncated to `MAX_COLLECTOR_DOC_CONTENT_LENGTH`.
 - `InfoRetrievalNode._structure_result` applies the same bound again before passing `contents` into downstream processing.
 - Collector-side normalization stores web results in a stable `title` / `url` / `content` / `type` shape and accepts aliases such as `link`, `source_url`, `snippet`, `summary`, and `answer`.
 
