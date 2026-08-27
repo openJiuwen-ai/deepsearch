@@ -280,7 +280,8 @@ class ResearchIntent(BaseModel):
     exclude_domains: List[str] = Field(default_factory=list, description="用户排除的站点域名")
     temporal_scope: Optional[TemporalScope] = Field(
         default=None,
-        description="[deprecated] 旧单值字段,仅兼容旧序列化 state 的 model_validate 输入路由;读改用 source_date_scope/content_date_scope. 始终 None(post-construction).",
+        description="[deprecated] 旧单值字段,仅兼容旧序列化 state 的 model_validate 输入路由;"
+                    "读改用 source_date_scope/content_date_scope. 始终 None(post-construction).",
     )
     source_date_scope: Optional[TemporalScope] = Field(
         default=None, description="来源发表/可得时间约束（硬门）"
@@ -320,10 +321,16 @@ class ResearchIntent(BaseModel):
     @model_validator(mode="after")
     def _check_scope_type_consistency(self) -> "ResearchIntent":
         if self.source_date_scope and self.source_date_scope.constraint_type != "source_date":
-            logger.warning("source_date_scope.constraint_type=%s mismatch, dropping", self.source_date_scope.constraint_type)
+            logger.warning(
+                "source_date_scope.constraint_type=%s mismatch, dropping",
+                self.source_date_scope.constraint_type,
+            )
             self.source_date_scope = None
         if self.content_date_scope and self.content_date_scope.constraint_type != "content_date":
-            logger.warning("content_date_scope.constraint_type=%s mismatch, dropping", self.content_date_scope.constraint_type)
+            logger.warning(
+                "content_date_scope.constraint_type=%s mismatch, dropping",
+                self.content_date_scope.constraint_type,
+            )
             self.content_date_scope = None
         return self
 
