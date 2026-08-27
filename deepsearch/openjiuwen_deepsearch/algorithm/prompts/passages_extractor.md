@@ -10,6 +10,8 @@ For each document in the input:
 1. **Extract** key passages relevant to any rationale
 2. **Score** each passage on three dimensions
 
+Each document input includes: Title, URL, Content, and `publish_time` (publication date YYYY-MM-DD or empty).
+
 ### Extraction Rules (CRITICAL — violations make output useless)
 
 - ONLY extract **verbatim original text** from the document. DO NOT rewrite, paraphrase, or summarize in your own words.
@@ -49,6 +51,18 @@ source reliability and data density are properties of the whole passage):
    - 0.3 = Weakly related, touches the rationale tangentially
    - 0.0 = Does not address the rationale at all
 
+{% if extract_content_time %}
+### Content Time Extraction
+
+For each passage, judge when the **facts/events** it describes occurred (not the publication date), and output `content_time`:
+- If the passage states the time explicitly → extract it.
+- If not stated but the document context locates it → infer from context.
+- If still unclear → output `null`.
+- Use the document's `publish_time` only to resolve relative terms like "last year"/"recent". If `publish_time` is empty, do NOT resolve relative terms using the current time — output `null`.
+- NEVER use your own world knowledge to fill a time (e.g. do not assign a year to a passage merely because you recognize the event or product it discusses). Find evidence in the document or output `null`.
+- Format: `{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}` (year-only → Jan 1 / Dec 31 of that year; cross-year e.g. 2019-2021 → 2019-01-01 / 2021-12-31).
+{% endif %}
+
 ### Output Format
 
 Output ONLY a raw JSON object (no markdown fences, no explanation text). All score fields (`reliability`, `data_density`, and `coverage` inside `scores`) MUST be numeric floats, not strings. Example:
@@ -62,6 +76,9 @@ Output ONLY a raw JSON object (no markdown fences, no explanation text). All sco
           "text": "verbatim original text passage",
           "reliability": 0.8,
           "data_density": 0.9,
+{% if extract_content_time %}
+          "content_time": {"start": "2019-01-01", "end": "2019-12-31"},
+{% endif %}
           "scores": {
             "r1": {"coverage": 0.9}
           }

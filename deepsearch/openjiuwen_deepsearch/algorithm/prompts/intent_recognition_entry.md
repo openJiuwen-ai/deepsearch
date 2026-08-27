@@ -24,11 +24,14 @@ You MUST call `emit_report_intent` exactly once for every request. Do not reply 
   - A dataset observation year is not temporal_scope unless the user separately limits source or fact time.
   - Example: "Use PMID 38202877" → `[{"pmid":"38202877"}]`.
   - Example: "根据 MEPS 2019 数据调研美国正畸治疗使用者画像" → `[{"dataset":"MEPS","data_year":"2019","topic":"美国正畸治疗使用者画像"}]`.
-- Extract **temporal_scope** only for an explicit research boundary:
-  - `source_date` limits when sources were published or available, including "information available as of" snapshots.
-  - `content_date` limits facts, events, studies summarized, or data periods while allowing later retrospective sources.
-  - Emit inclusive ISO `start_date` / `end_date` values. Map early year to March 31, mid-year to June 30, year-end to December 31, `before YEAR` to December 31 of the previous year, `through YEAR` to that December 31, and `before MONTH YEAR` to the final day of the previous month.
-  - Do not infer a temporal scope from incidental dates that do not constrain the research.
+- Extract **temporal_scope**（两类可并存，分别识别）：
+  - `source_date_scope`：时间词修饰**载体**（来源发表/可得时间："use sources published in 2016"、"papers published 2014-2017"、"information available as of 2017"）→ 填 `source_date_scope`（含 `start_date`/`end_date`）。
+    - Use `source_date_scope` (not `content_date_scope`) for "information available as of {YEAR}" ONLY when the user explicitly requires the corpus itself to be truncated by availability/publication time; when the content is bounded but newer retrospective sources remain acceptable, use `content_date_scope`.
+  - `content_date_scope`：时间词修饰**主体**（事实/事件/研究/数据时段："review research results before 2017"、"trends during 2014-2016"）→ 填 `content_date_scope`，即使句含 research/results/papers/literature——晚于该时段发表的回顾性来源可接受。
+  - 同一 query 可同时含两类时间词：分别识别，各自填对应字段，互不替代。
+  - 例："调研 2026 年发表的关于 2020~2022 年疫情的回顾报道" → `source_date_scope={start:2026-01-01,end:2026-12-31}` + `content_date_scope={start:2020-01-01,end:2022-12-31}`。
+  - `start_date`/`end_date` 为包含边界 ISO 日期（`YYYY-MM-DD`），用户未给的边界省略；日期归一：`early YEAR`/`YEAR年初` → 3/31、`mid-YEAR`/`YEAR年中` → 6/30、`end of YEAR`/`YEAR年底` → 12/31，`before YEAR`/`YEAR年之前` → 上年 12/31、`through YEAR`/`截至YEAR年` → 当年 12/31、`before MONTH YEAR`/`YEAR年MONTH月之前` → 上月末；含年的范围用 1/1 与 12/31。
+  - 不从与研究无关的偶然日期推断时间约束。
 
 ## Additional Context
 

@@ -44,14 +44,17 @@ From the user's **original_query** (below), extract:
      - "不要引用 mdpi.com 上的内容" → `exclude_url=[]`, `exclude_domains=["mdpi.com"]`
      - "以下三篇不要引用: https://www.mdpi.com/a/1, https://www.mdpi.com/a/2, https://www.mdpi.com/a/3" → `exclude_url=["https://www.mdpi.com/a/1", "https://www.mdpi.com/a/2", "https://www.mdpi.com/a/3"]`, `exclude_domains=[]`
      - "不允许查看文章 'Stock Assessment of Chub Mackerel in the Northwest Pacific' 及其 urls: ['https://www.mdpi.com/2410-3888/8/2/80', 'https://www.researchgate.net/publication/367552057']" → `exclude_url=["https://www.mdpi.com/2410-3888/8/2/80", "https://www.researchgate.net/publication/367552057"]`, `exclude_titles=["Stock Assessment of Chub Mackerel in the Northwest Pacific"]`, `exclude_domains=[]`
-   - **temporal_scope**: emit only when the user explicitly limits source availability/publication time or the facts/data period.
-     - Use `source_date` when the user limits when sources were published or available, including historical "information available as of" snapshots.
-     - Use `content_date` when later retrospective sources remain acceptable but the facts, events, studies summarized, or data period are bounded.
-     - `start_date` and `end_date` are inclusive ISO dates (`YYYY-MM-DD`); omit a boundary the user did not provide.
-     - Normalize `early YEAR` / `YEAR年初` to March 31, `mid-YEAR` / `YEAR年中` to June 30, and `end of YEAR` / `YEAR年底` to December 31.
-     - Normalize `before YEAR` / `YEAR年之前` to December 31 of the previous year; normalize `through YEAR` / `截至YEAR年` to December 31 of that year.
-     - Normalize `before MONTH YEAR` / `YEAR年MONTH月之前` to the final day of the previous month. For an inclusive year range, use January 1 and December 31.
-     - Do not infer a temporal scope from incidental dates that do not constrain the requested research.
+   - **temporal_scope**（两类可并存，分别识别）：
+     - `source_date_scope`：时间词修饰**载体**（来源发表/可得时间："use sources published in 2016"、"papers published 2014-2017"、"information available as of 2017"）→ 填 `source_date_scope`（含 `start_date`/`end_date`）。
+       - Use `source_date_scope` (not `content_date_scope`) for "information available as of {YEAR}" ONLY when the user explicitly requires the corpus itself to be truncated by availability/publication time; when the content is bounded but newer retrospective sources remain acceptable, use `content_date_scope`.
+     - `content_date_scope`：时间词修饰**主体**（事实/事件/研究/数据时段："review research results before 2017"、"trends during 2014-2016"）→ 填 `content_date_scope`，即使句含 research/results/papers/literature——晚于该时段发表的回顾性来源可接受。
+     - 同一 query 可同时含两类时间词：分别识别，各自填对应字段，互不替代。
+     - 例："调研 2026 年发表的关于 2020~2022 年疫情的回顾报道" → `source_date_scope={start:2026-01-01,end:2026-12-31}` + `content_date_scope={start:2020-01-01,end:2022-12-31}`。
+     - `start_date`/`end_date` 为包含边界 ISO 日期（`YYYY-MM-DD`）；用户未给的边界省略。
+     - 日期归一：`early YEAR`/`YEAR年初` → 3/31；`mid-YEAR`/`YEAR年中` → 6/30；`end of YEAR`/`YEAR年底` → 12/31。
+     - `before YEAR`/`YEAR年之前` → 上年 12/31；`through YEAR`/`截至YEAR年` → 当年 12/31。
+     - `before MONTH YEAR`/`YEAR年MONTH月之前` → 上月末。含年的范围用 1/1 与 12/31。
+     - 不从与研究无关的偶然日期推断时间约束。
 
 Do **not** invent URLs. Extract URLs exactly as in the text when present.
 Do **not** leave task contract fields empty when the user explicitly asks for comparisons, categories, rankings, recommendations, timelines, or final judgments.

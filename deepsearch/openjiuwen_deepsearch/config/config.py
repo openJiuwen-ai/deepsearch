@@ -439,7 +439,9 @@ class ServiceConfig(BaseModel):
     sub_report_classify_doc_infos_res_top_k_num: int = Field(
         default=15,
         description="子报告中按覆盖度评分在每个 rationale 下选择的"
-                    " top-k 段落数量（_select_by_rationale_coverage 使用）",
+                    " top-k 段落数量（_select_by_rationale_coverage 使用）；"
+                    "建议 ≤15：超过 15 时下游 dedup_passages_by_rationale 的"
+                    " top-15 纯覆盖度截断会重新生效，可能撤销时间加权的提升",
     )
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=True, description="报告插入图表开关")

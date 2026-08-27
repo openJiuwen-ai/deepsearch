@@ -395,7 +395,12 @@ class GenerateQueryNode(BaseNode):
         agent_input.update(build_target_papers_prompt_context(
             state.get("research_intent"), state.get("evidence_ledger")
         ))
-        agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
+        _web_config = session.get_global_state("config.web_search_engine_config")
+        agent_input.update(build_temporal_scope_prompt_context(
+            state.get("research_intent"),
+            engine_name=getattr(_web_config, "search_engine_name", "") or "",
+            scholarly_enabled=_scholarly_search_is_available(),
+        ))
         formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
 
         result: SearchQueryList = await self._invoke_llm_with_retry(
@@ -599,7 +604,12 @@ class SupervisorNode(BaseNode):
             "language": state.get("language", "zh-CN"),
             "report_type": report_type,
         }
-        agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
+        _web_config = session.get_global_state("config.web_search_engine_config")
+        agent_input.update(build_temporal_scope_prompt_context(
+            state.get("research_intent"),
+            engine_name=getattr(_web_config, "search_engine_name", "") or "",
+            scholarly_enabled=_scholarly_search_is_available(),
+        ))
         formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
 
         result: Reflection = await self._invoke_llm_with_retry(

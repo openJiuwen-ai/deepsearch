@@ -35,7 +35,8 @@ Task description:
 ## Research Time Boundary
 {{ temporal_scope_instruction }}
 - Interpret "latest" as the latest information available within this boundary.
-- You must express this boundary naturally in every generated query; do not use provider-specific filter syntax.
+- {{ temporal_query_instruction }}
+- Do not use provider-specific filter syntax (e.g. engine date parameters); only natural-language time phrases are allowed.
 - A query may contain at most five topical keywords; the time phrase does not count toward the five topical keywords.
 {% endif %}
 

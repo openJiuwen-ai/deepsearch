@@ -532,6 +532,37 @@ class TestSearchResultProcessing:
         assert result == tool_content
         assert "web_page_search_record" in modified_input
 
+    def test_process_common_search_result_attaches_date_metadata_for_published(self):
+        """common 路径开 include_date_metadata 后，带 published 的结果进记录时带 date_metadata。"""
+        agent_input = {"web_page_search_record": [], "search_query": "q"}
+        tool_content = [{
+            "title": "arxiv paper", "url": "https://arxiv.org/abs/1",
+            "content": "abs", "published": "2023-01-15T12:00:00Z",
+        }]
+        _, modified_input = process_common_search_result(agent_input, tool_content)
+        record = modified_input["web_page_search_record"][0]
+        assert record["date_metadata"]["parsed_date"] == "2023-01-15"
+        assert record["date_metadata"]["field"] == "published"
+
+    def test_process_google_search_result_attaches_date_metadata_for_source_date(self):
+        """google 路径开 include_date_metadata 后，source_date 契约结果带 date_metadata。"""
+        agent_input = {"web_page_search_record": [], "search_query": "q"}
+        tool_content = [{
+            "title": "g", "link": "https://g.com", "snippet": "s",
+            "source_date": "2020-01-01", "source_date_type": "published",
+        }]
+        _, modified_input = process_google_search_result(agent_input, tool_content)
+        record = modified_input["web_page_search_record"][0]
+        assert record["date_metadata"]["parsed_date"] == "2020-01-01"
+        assert record["date_metadata"]["field"] == "source_date"
+
+    def test_process_common_search_result_no_date_field_keeps_record_without_date_metadata(self):
+        """无日期字段的 common 结果仍不带 date_metadata（行为不变）。"""
+        agent_input = {"web_page_search_record": [], "search_query": "q"}
+        tool_content = [{"title": "x", "url": "https://x.com", "content": "c"}]
+        _, modified_input = process_common_search_result(agent_input, tool_content)
+        assert "date_metadata" not in modified_input["web_page_search_record"][0]
+
     def test_filter_search_results_by_exclude_domains(self):
         """测试按排除域名过滤搜索结果"""
         items = [
@@ -634,6 +665,65 @@ class TestSearchResultProcessing:
             "value": "2020-01-02",
             "parsed_date": "2020-01-02",
         }
+
+    def test_normalize_published_iso8601_attaches_date_metadata(self):
+        """原生 published 字段（ISO 8601 带时分秒，arxiv 风格）应解析并附加 date_metadata。"""
+        normalized = _normalize_web_search_item({
+            "title": "paper", "url": "https://arxiv.org/abs/1234",
+            "content": "abstract", "published": "2023-01-15T12:00:00Z",
+        }, include_date_metadata=True)
+        assert normalized["date_metadata"] == {
+            "field": "published", "type": "published",
+            "value": "2023-01-15T12:00:00Z", "parsed_date": "2023-01-15",
+        }
+
+    def test_normalize_published_pubmed_style_attaches_date_metadata(self):
+        """PubMed 风格 'YYYY Mon DD' 应解析为日期。"""
+        normalized = _normalize_web_search_item({
+            "title": "pm", "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+            "content": "abs", "published": "2023 Jan 15",
+        }, include_date_metadata=True)
+        assert normalized["date_metadata"]["parsed_date"] == "2023-01-15"
+        assert normalized["date_metadata"]["field"] == "published"
+
+    def test_normalize_published_date_aliases_priority(self):
+        """published > published_at > published_date 顺序取第一个非空。"""
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+            "published_at": "2022-06-30", "published_date": "2020-01-01",
+        }, include_date_metadata=True)
+        assert normalized["date_metadata"]["field"] == "published_at"
+        assert normalized["date_metadata"]["parsed_date"] == "2022-06-30"
+
+    def test_normalize_no_date_field_no_date_metadata(self):
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+        }, include_date_metadata=True)
+        assert "date_metadata" not in normalized
+
+    def test_normalize_bare_date_key_not_read(self):
+        """语义含糊的裸 date 键不被读取。"""
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+            "date": "2021-02-03",
+        }, include_date_metadata=True)
+        assert "date_metadata" not in normalized
+
+    def test_normalize_source_date_unparseable_no_date_metadata(self):
+        """source_date 存在但解析不出（乱码）时不附加 date_metadata（行为收窄）。"""
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+            "source_date": "not-a-date", "source_date_type": "published",
+        }, include_date_metadata=True)
+        assert "date_metadata" not in normalized
+
+    def test_normalize_source_date_type_not_published_not_read(self):
+        """source_date_type 非 published 时不走 source_date 路径；无 published* 则不附加。"""
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+            "source_date": "2020-01-01", "source_date_type": "updated",
+        }, include_date_metadata=True)
+        assert "date_metadata" not in normalized
 
     def test_normalize_full_text_contract_without_source_specific_logic(self):
         normalized = _normalize_web_search_item({
@@ -747,7 +837,7 @@ class TestSearchResultProcessing:
             "web_page_search_record": [],
             "search_query": "policy query",
             "research_intent": {
-                "temporal_scope": {
+                "source_date_scope": {
                     "constraint_type": "source_date",
                     "end_date": "2020-12-31",
                 }
@@ -779,7 +869,7 @@ class TestSearchResultProcessing:
             "web_page_search_record": [],
             "search_query": "old records",
             "research_intent": {
-                "temporal_scope": {
+                "source_date_scope": {
                     "constraint_type": "source_date",
                     "start_date": "2020-01-01",
                 }

@@ -370,6 +370,48 @@ def test_select_by_rationale_count_per_rationale_not_blocked_by_seen():
     assert len(selected) == 4
 
 
+def test_select_by_rationale_floor_gate_excludes_subfloor_docs():
+    """最大覆盖度低于 0.15 门槛的段落不被选中（与下游 Layer 1 过滤对齐）。"""
+    reporter = _make_reporter()
+    docs = [_doc(0), _doc(1)]
+    rationales = [_rationale("r1", "test")]
+    matrix = {"passage_0": {"r1": 0.9}, "passage_1": {"r1": 0.10}}
+    coverage = _coverage_result(docs, matrix)
+
+    selected, keys = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=5)
+
+    assert [d["doc_title"] for d in selected] == ["doc-0"]
+    assert keys == ["passage_0"]
+
+
+def test_select_by_rationale_floor_gate_fallback_when_all_below():
+    """全池低于 0.15 门槛时退回 score>0 老门，避免整章无证据。"""
+    reporter = _make_reporter()
+    docs = [_doc(0), _doc(1)]
+    rationales = [_rationale("r1", "test")]
+    matrix = {"passage_0": {"r1": 0.10}, "passage_1": {"r1": 0.05}}
+    coverage = _coverage_result(docs, matrix)
+
+    selected, _ = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=5)
+
+    assert len(selected) == 2
+
+
+def test_selection_floor_matches_downstream_layer1_default():
+    """防漂移：SELECTION_COVERAGE_FLOOR 必须等于下游 L1 过滤的默认 threshold。"""
+    import inspect
+
+    from openjiuwen_deepsearch.algorithm.report.report import SELECTION_COVERAGE_FLOOR
+    from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
+        filter_passages_by_coverage,
+    )
+
+    default_threshold = (
+        inspect.signature(filter_passages_by_coverage).parameters["threshold"].default
+    )
+    assert SELECTION_COVERAGE_FLOOR == default_threshold
+
+
 # ---------- _extract_and_score_documents: content truncation ----------
 
 @pytest.mark.asyncio

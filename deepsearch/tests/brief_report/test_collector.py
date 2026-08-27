@@ -227,7 +227,7 @@ async def test_query_generation_accepts_temporal_scope_with_date_objects(monkeyp
             outline=_collector_outline(),
             user_query="测试时间边界",
             research_intent={
-                "temporal_scope": {
+                "content_date_scope": {
                     "constraint_type": "content_date",
                     "end_date": date(2024, 12, 31),
                 }

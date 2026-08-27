@@ -19,3 +19,9 @@ class SearchEngine(enum.Enum):
 class LocalSearch(enum.Enum):
     OPENAPI = "openapi"
     NATIVE = "native"
+
+
+#: 原生支持按发表日期过滤的搜索引擎（source_date 约束可由引擎原生过滤）。
+TEMPORAL_SCOPE_SEARCH_ENGINES = {
+    SearchEngine.TAVILY.value,
+}
