@@ -109,3 +109,91 @@ def build_structured_evidence_guide(
             )
 
     return "\n".join(lines)
+
+
+def build_classify_scores(doc_info: dict[str, Any]) -> dict[str, Any]:
+    """Build compact scores from structured scores."""
+    scores = doc_info.get("scores")
+    if isinstance(scores, dict) and scores:
+        return dict(scores)
+
+    return {}
+
+
+def format_scores_inline(doc_info: dict[str, Any]) -> str:
+    """Format structured scores as a stable inline text block."""
+    scores = build_classify_scores(doc_info)
+    if not scores:
+        return "[]"
+    return ", ".join(f"{key}: {value}" for key, value in scores.items())
+
+
+def get_numeric_score(doc_info: dict[str, Any], score_name: str) -> float | None:
+    """Read a numeric score from structured scores."""
+    scores = doc_info.get("scores")
+    if not isinstance(scores, dict):
+        return None
+    value = scores.get(score_name)
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_scores(scores: dict[str, Any]) -> list[str]:
+    if not scores:
+        return ["[]"]
+    return [f"  {key}: {value}" for key, value in scores.items()]
+
+
+def build_compact_classify_doc_infos_text(
+    doc_infos: list[dict[str, Any]], *, start: int = 1,
+) -> str:
+    """Build compact document information for classification LLM input.
+
+    Args:
+        doc_infos: List of doc_info dicts.
+        start: Starting index for document numbering (1-based by default,
+               use 0 for coverage-matrix flow where output keys are doc_0-based).
+    """
+    blocks = []
+    for index, doc_info in enumerate(doc_infos, start=start):
+        scores = build_classify_scores(doc_info)
+        passages = normalize_key_passages(doc_info.get("key_passages"))
+        block_lines = [
+            f"Document {index}:",
+            f"url: {doc_info.get('url', '')}",
+            f"title: {doc_info.get('title', '')}",
+            f"doc_time: {doc_info.get('doc_time', '')}",
+            f"publish_time: {doc_info.get('publish_time', '')}",
+            "scores:",
+            *_format_scores(scores),
+            "key passages:",
+            *_format_key_passages(passages),
+        ]
+        blocks.append("\n".join(block_lines))
+    return "\n\n".join(blocks)
+
+
+def build_coverage_passage_block(coverage_sections: list[tuple[int, list[str]]]) -> str:
+    """Format the aggregated coverage-passages block appended after key blocks.
+
+    Args:
+        coverage_sections: ``(document index, coverage passage text list)`` pairs.
+            The document index must align with the ``Document N key passages``
+            block numbering so the two channels stay source-traceable.
+
+    Returns:
+        The aggregated coverage block; empty string when there is no content.
+    """
+    if not coverage_sections or not any(passages for _, passages in coverage_sections):
+        return ""
+    lines = ["===== COVERAGE PASSAGES ====="]
+    for index, passages in coverage_sections:
+        if not passages:
+            continue
+        lines.append(f"Document {index} coverage passages:")
+        lines.extend(f"- {passage}" for passage in passages)
+    return "\n".join(lines)

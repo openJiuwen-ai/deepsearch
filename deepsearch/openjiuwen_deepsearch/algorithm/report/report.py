@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import asyncio
 import html
+import os
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from copy import deepcopy
@@ -9,6 +10,7 @@ import json
 import logging
 import re
 import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Tuple, List, Dict
 
@@ -22,7 +24,20 @@ from tenacity import (
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
+    build_coverage_passage_block,
+    build_compact_classify_doc_infos_text,
+    build_structured_evidence_guide,
+    format_scores_inline,
     format_key_passage_block,
+    get_numeric_score,
+    normalize_key_passages,
+)
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
+    _COVERAGE_MAX_CHARS_PER_DOC,
+    _COVERAGE_MAX_TOTAL_CHARS,
+    _COVERAGE_TOP_K_CAP,
+    exclude_passages,
+    extract_coverage_passages,
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     enrich_fulltext_for_section,
@@ -1434,6 +1449,37 @@ class Reporter:
             }
 
             classified_content = fulltext_result["classified_content"]
+
+            # Part A：规则版覆盖证据（默认开，"key + coverage"双通道）。
+            # 独立开关 DS_COVERAGE_RULE_BLOCK=0 可单独关闭/回滚。
+            if os.environ.get("DS_COVERAGE_RULE_BLOCK", "1").strip() == "1":
+                core_content_list, rule_passage_texts = _append_rule_coverage_to_core(
+                    current_inputs.get("sub_section_core_content", []),
+                    fulltext_result.get("fulltext_evidences", []),
+                )
+                logger.warning(
+                    "[rule_coverage] section_idx=%s fulltext_docs=%s coverage_docs=%s "
+                    "outline_coverage_blocks=%s",
+                    section_idx,
+                    len(fulltext_result.get("fulltext_evidences", [])),
+                    len(rule_passage_texts),
+                    sum(
+                        1
+                        for block in core_content_list
+                        if isinstance(block, str)
+                        and block.startswith("===== COVERAGE PASSAGES")
+                    ),
+                )
+            else:
+                core_content_list = list(current_inputs.get("sub_section_core_content", []))
+                rule_passage_texts = {}
+                logger.info(
+                    "[generate_sub_report] section_idx=%s rule coverage block disabled "
+                    "(DS_COVERAGE_RULE_BLOCK=0)",
+                    section_idx,
+                )
+
+            current_inputs["sub_section_core_content"] = core_content_list
             if LogManager.is_sensitive():
                 logger.info(
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
@@ -2592,6 +2638,125 @@ class Reporter:
             "passage_info_map": doc_info_map,
             "selected_passages": selected_summary,
         }
+
+    @staticmethod
+    def _log_structured_evidence_build(
+        section_idx,
+        rationales: list,
+        coverage_result: dict,
+        classified_doc_infos: list,
+        structured_evidence_guide: str,
+    ) -> None:
+        """Log the structured-evidence build boundary for end-to-end diagnostics."""
+        statuses = re.findall(
+            r"\[[^,\]]+,\s*(covered|weak|uncovered)\]",
+            structured_evidence_guide,
+        )
+        guide_hash = (
+            hashlib.sha256(structured_evidence_guide.encode("utf-8")).hexdigest()[:12]
+            if structured_evidence_guide
+            else ""
+        )
+        logger.info(
+            "[structured_evidence][build] section_idx=%s built=%s "
+            "rationales=%s covered=%s weak=%s uncovered=%s "
+            "classified_docs=%s guide_chars=%s guide_hash=%s",
+            section_idx,
+            str(bool(structured_evidence_guide)).lower(),
+            len(rationales),
+            statuses.count("covered"),
+            statuses.count("weak"),
+            statuses.count("uncovered"),
+            len(classified_doc_infos),
+            len(structured_evidence_guide),
+            guide_hash,
+        )
+        if LogManager.is_sensitive():
+            return
+        compact_docs = [
+            {
+                "index": doc.get("index"),
+                "title": doc.get("title", ""),
+                "url": doc.get("url", ""),
+                "key_passages": doc.get("key_passages", []),
+            }
+            for doc in classified_doc_infos
+        ]
+        compact_coverage = {
+            "coverage_matrix": coverage_result.get("coverage_matrix", {}),
+            "reliability_scores": coverage_result.get("reliability_scores", {}),
+            "noise_scores": coverage_result.get("noise_scores", {}),
+        }
+        logger.debug(
+            "[structured_evidence][build] section_idx=%s\n"
+            "rationales=%s\ncoverage_result=%s\nclassified_doc_infos=%s\n"
+            "structured_evidence_guide=\n%s",
+            section_idx,
+            rationales,
+            compact_coverage,
+            compact_docs,
+            structured_evidence_guide,
+        )
+
+    @staticmethod
+    def _log_structured_evidence_target(
+        section_idx,
+        target: str,
+        llm_input: list,
+        structured_evidence_guide: str,
+        expected_citation_blocks: int | None = None,
+    ) -> None:
+        """Log whether structured evidence reached a downstream LLM input."""
+        rendered_input = "\n".join(
+            str(message.get("content", ""))
+            for message in llm_input
+            if isinstance(message, dict)
+        )
+        guide_present = bool(structured_evidence_guide)
+        exact_guide_in_input = guide_present and structured_evidence_guide in rendered_input
+        guide_hash = (
+            hashlib.sha256(structured_evidence_guide.encode("utf-8")).hexdigest()[:12]
+            if guide_present
+            else ""
+        )
+        if target == "sub_outline":
+            markers = (
+                "contains_structured_evidence_guidance="
+                f"{str(exact_guide_in_input).lower()}"
+            )
+        else:
+            contains_heading = "# Structured Evidence Guidance" in rendered_input
+            contains_collected = "# Collected Evidence" in rendered_input
+            citation_begin_count = len(re.findall(r"\[citation:\d+ begin\]", rendered_input))
+            citation_end_count = len(re.findall(r"\[citation:\d+ end\]", rendered_input))
+            if expected_citation_blocks is None:
+                balanced_citation_blocks = (
+                    citation_begin_count > 0
+                    and citation_begin_count == citation_end_count
+                )
+            else:
+                balanced_citation_blocks = (
+                    citation_begin_count
+                    == citation_end_count
+                    == expected_citation_blocks
+                )
+            markers = (
+                f"contains_structured_evidence_heading={str(contains_heading).lower()} "
+                f"contains_collected_evidence_heading={str(contains_collected).lower()} "
+                f"citation_blocks={citation_begin_count} "
+                f"balanced_citation_blocks={str(balanced_citation_blocks).lower()}"
+            )
+        logger.info(
+            "[structured_evidence][%s] section_idx=%s guide_present=%s "
+            "exact_guide_in_input=%s guide_chars=%s guide_hash=%s %s",
+            target,
+            section_idx,
+            str(guide_present).lower(),
+            str(exact_guide_in_input).lower(),
+            len(structured_evidence_guide),
+            guide_hash,
+            markers,
+        )
 
     async def _generate_sub_section_outline(
         self, current_inputs: dict, failure_feedback: str = ""
@@ -4429,3 +4594,257 @@ def _replace_citations_and_classified_index(
         updated_classified_contents.append(updated_sub_classified_content)
 
     return updated_paragraphs, updated_classified_contents
+
+
+# 方案 B 覆盖证据集成预算由 collector_evidence 统一提供（见 _COVERAGE_TOP_K_CAP /
+# _COVERAGE_MAX_CHARS_PER_DOC / _COVERAGE_MAX_TOTAL_CHARS）。选段不预设硬 Top-K，
+# 由单文档/章节字符预算兜底（方案2：预算即终止条件）。
+def _extract_doc_coverage_passages(item: dict) -> list[str]:
+    """抽取单个选中文档的覆盖证据，并与同一文档的 key passages 去重。"""
+    original_content = str(item.get("original_content") or "")
+    if not original_content:
+        return []
+    passages = extract_coverage_passages(
+        content=original_content,
+        max_passages=_COVERAGE_TOP_K_CAP,
+        max_chars=_COVERAGE_MAX_CHARS_PER_DOC,
+    )
+    key_passages = normalize_key_passages(item.get("key_passages"))
+    passages = exclude_passages(passages, key_passages)
+    return [passage.text for passage in passages]
+
+
+def _fit_coverage_to_budget(texts: list[str], budget: int) -> list[str]:
+    """把单文档覆盖证据裁入剩余预算：整块尽量保留，放不下更高分证据时丢弃；
+    仅当当前块就是唯一候选时截断，确保每个文档至少能贡献一个证据块。"""
+    kept: list[str] = []
+    remaining = max(0, int(budget))
+    for text in texts:
+        if remaining <= 0:
+            break
+        if len(text) > remaining:
+            if not kept:
+                kept.append(text[:remaining])
+            remaining = 0
+            break
+        kept.append(text)
+        remaining -= len(text)
+    return kept
+
+
+def _append_rule_coverage_to_core(
+    core_content_list: list[str],
+    fulltext_evidences: list,
+) -> tuple[list[str], dict[int, list[str]]]:
+    """Part A：把规则版覆盖证据（默认开）组装进大纲证据，回到"key + coverage"双通道。
+
+    运行时大网 evidence 由 `enrich_fulltext_for_section` 只拼 key 块；这里对每个
+    全文证据（按 `build_core_content_list` 相同的 1..N 文档编号）抽取规则覆盖段落、
+    裁入章节共享预算，`build_coverage_passage_block` 聚合后追加到大网证据末尾。
+
+    Returns:
+        (组装后的大网核心内容, 每文档规则覆盖段落文本) —— 后者仅供运行时日志
+        统计覆盖文档数与大纲覆盖块数。
+    """
+    coverage_sections: list[tuple[int, list[str]]] = []
+    coverage_passage_texts: dict[int, list[str]] = {}
+    budget = _COVERAGE_MAX_TOTAL_CHARS
+    for doc_index, evidence in enumerate(fulltext_evidences or [], start=1):
+        kept_coverage = _fit_coverage_to_budget(
+            _extract_doc_coverage_passages(
+                {
+                    "original_content": str(getattr(evidence, "original_content", "") or ""),
+                    "key_passages": list(getattr(evidence, "key_passages", None) or []),
+                }
+            ),
+            budget,
+        )
+        if not kept_coverage:
+            continue
+        coverage_sections.append((doc_index, kept_coverage))
+        coverage_passage_texts[doc_index] = kept_coverage
+        budget -= sum(len(text) for text in kept_coverage)
+    if not coverage_sections:
+        return list(core_content_list), coverage_passage_texts
+    return (
+        list(core_content_list) + [build_coverage_passage_block(coverage_sections)],
+        coverage_passage_texts,
+    )
+
+
+def _get_classified_infos(
+    selected_docs: list[dict],
+    marginal_values: list[float],
+    max_source_id_count: int | None = 10,
+    *,
+    selected_doc_keys: list[str] | None = None,
+    return_doc_keys: bool = False,
+):
+    """Extract downstream writing inputs from matrix-selected doc variants.
+
+    Args:
+        selected_docs: concrete doc variants selected by the matrix pipeline.
+            Reverse-looked-up by object identity without expanding to other
+            variants under the same URL, so matrix-rejected variants cannot
+            re-enter writing and citation.
+        marginal_values: marginal value list from greedy matrix selection,
+            index-aligned with selected_docs. Replaces the original doc composite
+            score when picking representatives within the same source_key group,
+            better matching the coverage semantics of the matrix.
+        max_source_id_count: max number of content variants to keep.
+        selected_doc_keys: stable coverage-matrix keys aligned with selected_docs.
+        return_doc_keys: return the stable keys aligned with the final deduplicated
+            classified_doc_infos list.
+
+    Returns:
+        Tuple of (classified_infos, classified_doc_infos), or the same tuple plus
+        classified_doc_keys when return_doc_keys is true.
+    """
+    def escape_markdown_text(value: object) -> str:
+        text = str(value or "")
+        text = re.sub(r"[\r\n\t]+", " ", text)
+        return re.sub(r"([\\`*_{}\[\]()#+\-.!|<>])", r"\\\1", text)
+
+    def format_reference_link(title_value: object, url_value: object) -> str:
+        title = escape_markdown_text(title_value)
+        url = str(url_value or "").strip()
+        if not url or any(ord(ch) < 32 or ord(ch) == 127 for ch in url):
+            escaped_url = escape_markdown_text(url)
+            return f"{title} ({escaped_url})" if title and escaped_url else title or escaped_url
+
+        parsed_url = urlparse(url)
+        scheme = parsed_url.scheme.lower()
+        is_allowed_url = scheme in {"http", "https", "localdataset"} and (
+            bool(parsed_url.netloc) if scheme in {"http", "https"} else bool(parsed_url.netloc or parsed_url.path)
+        )
+        if not is_allowed_url:
+            escaped_url = escape_markdown_text(url)
+            return f"{title} ({escaped_url})" if title and escaped_url else title or escaped_url
+
+        escaped_url = url.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        return f"[{title}]({escaped_url})"
+
+    if not selected_docs:
+        logger.error(
+            f"{EFFECT_SUB_REPORT_TAG} No selected docs found. can not get classified infos."
+        )
+        return ({}, [], []) if return_doc_keys else ({}, [])
+
+    # Use only matrix-selected concrete variants; do not expand to other
+    # variants under the same URL, otherwise matrix-rejected low-coverage /
+    # high-noise variants may re-enter writing and citation.
+    effective_urls = [str(d.get("url") or "") for d in selected_docs if d.get("url")]
+    if not effective_urls:
+        logger.error(
+            f"{EFFECT_SUB_REPORT_TAG} No urls found. can not get classified infos."
+        )
+        return ({}, [], []) if return_doc_keys else ({}, [])
+    classified_infos = {"references": [], "core_content_list": []}
+    classified_doc_infos = []
+
+    if return_doc_keys and len(selected_doc_keys or []) != len(selected_docs):
+        raise ValueError("selected docs and stable keys must be aligned")
+
+    matched_items: list[tuple[dict, int, float, str]] = []
+    matched_by_url: dict[str, list[tuple[dict, int, float, str]]] = {}
+    aligned_keys = selected_doc_keys or [""] * len(selected_docs)
+    for order, (item, marginal_value, doc_key) in enumerate(
+        zip(selected_docs, marginal_values, aligned_keys, strict=True)
+    ):
+        url = str(item.get("url") or "")
+        if not url:
+            continue
+        record = (item, order, marginal_value, doc_key)
+        matched_items.append(record)
+        matched_by_url.setdefault(url, []).append(record)
+
+    def source_key_for(record: tuple[dict, int, float, str]) -> str:
+        # Writing stage looks up original doc_infos, so reuse the pre-filter
+        # content variant key here; otherwise same-content duplicates without
+        # source_id may bypass pre-filter dedup and re-enter writing inputs.
+        return build_doc_variant_key(record[0])
+
+    def item_rank_key(record: tuple[dict, int, float, str]) -> tuple[float, int, int]:
+        item, order, marginal_value, _ = record
+        return (
+            marginal_value,
+            len(str(item.get("original_content") or "")),
+            -order,
+        )
+
+    def best_representatives(
+        records: list[tuple[dict, int, float, str]],
+    ) -> list[tuple[dict, int, float, str]]:
+        source_representatives: dict[str, tuple[dict, int, float, str]] = {}
+        for record in records:
+            source_key = source_key_for(record)
+            current = source_representatives.get(source_key)
+            if current is None or item_rank_key(record) > item_rank_key(current):
+                source_representatives[source_key] = record
+        return sorted(source_representatives.values(), key=item_rank_key, reverse=True)
+
+    selected_records: list[tuple[dict, int, float, str]] = []
+    selected_source_keys: set[str] = set()
+    max_count = None if max_source_id_count is None else max(0, int(max_source_id_count))
+
+    if max_count is not None:
+        for url in effective_urls:
+            if len(selected_records) >= max_count:
+                break
+            representatives = best_representatives(matched_by_url.get(url, []))
+            if not representatives:
+                continue
+            top_record = representatives[0]
+            source_key = source_key_for(top_record)
+            if source_key in selected_source_keys:
+                continue
+            selected_records.append(top_record)
+            selected_source_keys.add(source_key)
+
+    remaining_representatives = best_representatives(matched_items)
+    if max_count is None:
+        selected_records = remaining_representatives
+    else:
+        for record in remaining_representatives:
+            if len(selected_records) >= max_count:
+                break
+            source_key = source_key_for(record)
+            if source_key in selected_source_keys:
+                continue
+            selected_records.append(record)
+            selected_source_keys.add(source_key)
+
+    if max_count is not None:
+        selected_records = selected_records[:max_count]
+
+    seen_reference_urls: set[str] = set()
+    classified_doc_keys: list[str] = []
+    coverage_sections: list[tuple[int, list[str]]] = []
+    coverage_budget = _COVERAGE_MAX_TOTAL_CHARS
+    for item, _, _, doc_key in selected_records:
+        item_url = str(item.get("url") or "")
+        if item_url not in seen_reference_urls:
+            classified_infos["references"].append(
+                format_reference_link(item.get("title", ""), item_url)
+            )
+            seen_reference_urls.add(item_url)
+        doc_index = len(classified_doc_infos) + 1
+        classified_infos["core_content_list"].append(
+            format_key_passage_block(item, doc_index)
+        )
+        if coverage_budget > 0:
+            kept_coverage = _fit_coverage_to_budget(
+                _extract_doc_coverage_passages(item), coverage_budget
+            )
+            if kept_coverage:
+                coverage_sections.append((doc_index, kept_coverage))
+                coverage_budget -= sum(len(text) for text in kept_coverage)
+        classified_doc_infos.append(item)
+        classified_doc_keys.append(doc_key)
+    if coverage_sections:
+        classified_infos["core_content_list"].append(
+            build_coverage_passage_block(coverage_sections)
+        )
+    if return_doc_keys:
+        return classified_infos, classified_doc_infos, classified_doc_keys
+    return classified_infos, classified_doc_infos

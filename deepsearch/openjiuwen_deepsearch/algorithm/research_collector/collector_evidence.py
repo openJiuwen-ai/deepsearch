@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import re
@@ -10,6 +11,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 
@@ -28,6 +30,69 @@ def _join_sentences(sentences: list[str]) -> str:
     if all(_CJK_RE.search(s) for s in sentences):
         return "".join(sentences)
     return " ".join(sentences)
+
+
+# ---------------------------------------------------------------------------
+# 数字事实模式（key_passages 与 Coverage 共用）：单位分类 + 前置货币符号 +
+# 学术统计。从 extract_key_passages 内部提为模块级共享常量，避免两处各自维护。
+# ---------------------------------------------------------------------------
+_CURRENCY_UNITS = [
+    "美元", "人民币", "元", "欧元", "日元", "英镑", "港元", "港币",
+    "韩元", "新台币", "澳元", "加元", "卢比", "卢布", "比索", "泰铢",
+    "新加坡元", "瑞士法郎", "USD", "RMB", "CNY", "JPY", "EUR", "GBP",
+    "yuan", "yen", "rupee",
+]
+_LARGE_NUMBER_UNITS = ["亿", "万", "千万", "百万", "十万", "兆", "万亿"]
+_PERCENT_UNITS = ["%", "％", "‰", "个百分点", "pp", "bp", "bps", "个基点"]
+_TIME_UNITS = ["年", "月", "日", "季度", "周", "天", "小时", "分钟", "秒", "时"]
+_COUNT_UNITS = [
+    "个", "件", "人", "次", "台", "家", "只", "条", "座", "栋", "架",
+    "辆", "艘", "起", "宗", "例", "份", "批", "轮", "届", "场", "间", "户", "名",
+]
+_LENGTH_UNITS = [
+    "公里", "千米", "米", "厘米", "毫米", "微米", "纳米", "英里", "英尺", "英寸",
+    "km", "cm", "mm", "μm", "nm",
+]
+_WEIGHT_UNITS = ["吨", "千克", "公斤", "克", "毫克", "磅", "盎司", "kg", "mg", "lb"]
+_VOLUME_UNITS = ["升", "毫升", "立方米", "立方厘米", "加仑", "桶", "mL", "ml", "L"]
+_TECH_UNITS = [
+    "TB", "GB", "MB", "KB", "PB", "bps", "Mbps", "Gbps", "Hz", "MHz", "GHz",
+    "核", "线程", "FLOPS", "TFLOPS", "PFLOPS", "QPS", "ms",
+]
+_ELECTRICAL_UNITS = [
+    "W", "kW", "MW", "GW", "度", "kWh", "V", "kV", "A", "mA", "Ω", "瓦", "千瓦",
+]
+_MEDICAL_UNITS = [
+    "mg", "ml", "mmHg", "mol", "mmol", "IU", "℃", "mg/L", "mg/dL", "mIU/mL", "μg", "ng",
+]
+_ACADEMIC_UNITS = ["篇", "卷", "期", "页", "章", "节", "组"]
+
+_ALL_SUFFIX_UNITS = (
+    _CURRENCY_UNITS + _LARGE_NUMBER_UNITS + _PERCENT_UNITS + _TIME_UNITS
+    + _COUNT_UNITS + _LENGTH_UNITS + _WEIGHT_UNITS + _VOLUME_UNITS
+    + _TECH_UNITS + _ELECTRICAL_UNITS + _MEDICAL_UNITS + _ACADEMIC_UNITS
+)
+_SUFFIX_UNIT_PATTERN = "|".join(re.escape(unit) for unit in dict.fromkeys(_ALL_SUFFIX_UNITS))
+
+# 前置货币符号：数字前出现 $/¥/€/£/₩/₹/₽ 这类符号（如 "$100 million"、"¥5000"）。
+_PREFIX_CURRENCY_SYMBOLS = r"[$¥€£₩₹₽]"
+
+# 学术/统计类表达：不是"数字+单位"结构，需要单独写模式。
+_ACADEMIC_STAT_PATTERNS = [
+    r"[pP]\s*[<>=]\s*0?\.\d+",  # p<0.05, P=0.01
+    r"[nN]\s*=\s*\d+",  # n=1000, N=50（样本量）
+    r"[rR]\s*=\s*-?0?\.\d+",  # r=0.85（相关系数）
+    r"R\s*[²2]\s*=\s*0?\.\d+",  # R²=0.76, R2=0.76
+    r"95\s*%?\s*CI",  # 95% CI（置信区间）
+    r"±\s*\d+(?:\.\d+)?",  # ±1.5（标准差/误差范围）
+    r"[αα]\s*=\s*0?\.\d+",  # α=0.05（显著性水平）
+]
+
+_NUMERIC_FACT_PATTERN = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:" + _SUFFIX_UNIT_PATTERN + r")|"
+    + _PREFIX_CURRENCY_SYMBOLS + r"\s*\d+(?:\.\d+)?|"
+    + "|".join(_ACADEMIC_STAT_PATTERNS)
+)
 
 
 @dataclass
@@ -487,13 +552,12 @@ def extract_keywords(query: str, title: str = "") -> list[str]:
     return output[:30]
 
 
-def _passage_score(passage: str, keywords: list[str], max_length: int = MAX_PASSAGE_LENGTH) -> float:
+def _passage_score(passage: str, keywords: list[str]) -> float:
     """计算段落作为 key passage 的规则分数。
 
     Args:
         passage: 候选段落。
         keywords: query 和标题提取出的关键词。
-        max_length: 单个片段最大长度，用于评分阈值判断。
 
     Returns:
         规则分数，值越高表示越适合作为 key passage。
@@ -503,11 +567,11 @@ def _passage_score(passage: str, keywords: list[str], max_length: int = MAX_PASS
     for keyword in keywords:
         if keyword.lower() in lower_passage:
             score += 2.0
-    if re.search(r"\d+(?:\.\d+)?\s*(?:%|％|亿|万|年|月|日|美元|元)", passage):
+    if _NUMERIC_FACT_PATTERN.search(passage):
         score += 1.5
-    if 40 <= len(passage) <= max_length:
+    if 40 <= len(passage) <= MAX_PASSAGE_LENGTH:
         score += 0.5
-    if len(passage) > max_length * 2:
+    if len(passage) > MAX_PASSAGE_LENGTH * 2:
         score -= 1.0
     return score
 
@@ -551,7 +615,7 @@ def extract_key_passages(
     keywords = extract_keywords(query, title)
     scored = [
         (
-            _passage_score(passage, keywords, max_length),
+            _passage_score(passage, keywords),
             index,
             passage[:max_length],
             _passage_has_keyword(passage, keywords),
@@ -567,6 +631,598 @@ def extract_key_passages(
         ]
     selected = sorted(selected, key=lambda item: item[1])
     return [item[2] for item in selected]
+
+
+# ============================================================================
+# Coverage Evidence
+#
+# Coverage 通道与 key_passages 并行但职责不同：key_passages 以 query/title
+# 关键词命中为中心（相关性检索），Coverage 以客观信息密度为中心（事实覆盖）。
+# 它不依赖关键词，专用于兜住“原文中确实存在、但未被关键词命中的事实段落”。
+# ============================================================================
+
+
+@dataclass
+class CoveragePassage:
+    """一个由相邻段落合并而成的覆盖证据块。
+
+    Attributes:
+        text: 合并后的证据文本，内部保留段落换行。
+        score: 块内成员段落的最高 Coverage Score。
+        source_indices: 命中的段落序号（按原始正文切分后的序号，升序）。
+        features: 块内各特征在原段落上的聚合计数。
+    """
+
+    text: str
+    score: float
+    source_indices: list[int]
+    features: dict[str, float]
+
+
+# 数字特征：复用共享的富版事实模式（数字+单位/货币前缀/学术统计），并补裸数字
+# 兜底（含千分位与拉丁边界，避免 "5Very" 误判）。与日期重叠的数字由日期特征排除。
+_COVERAGE_NUMBER_PATTERN = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:" + _SUFFIX_UNIT_PATTERN + r")|"
+    + _PREFIX_CURRENCY_SYMBOLS + r"\s*\d+(?:\.\d+)?|"
+    + "|".join(_ACADEMIC_STAT_PATTERNS)
+    + r"|(?<![A-Za-z0-9])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![A-Za-z])"
+)
+# 日期特征：2025年 / 2025年3月 / 2025年3月15日 / 2025-03-17 / 2025/03/17，
+# 以及季度/半年等绝对时间段锚点（Q3、第三季度、上半年）。
+_COVERAGE_DATE_PATTERN = re.compile(
+    r"(?<!\d)\d{4}\s*年(?:\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?)?"
+    r"|(?<!\d)\d{4}[-/]\d{1,2}[-/]\d{1,2}"
+    r"|第[一二三四]季度|[上下]半年|Q[1-4]"
+)
+# 时间特征：相对时间表达。季度/半年属于可靠时间段锚点（见日期特征）；
+# "目前/当前/近期"是话语连接词，不作为时间特征。
+_COVERAGE_TIME_PATTERN = re.compile(
+    r"(?:去年|今年|明年|本年度|本季度|上一季度|上季度)"
+)
+# 实体特征：中文机构后缀 + 英文专有名词候选（轻量规则，不引入 NER）。
+# 英文侧使用拉丁字符边界（而非 \b），因为紧跟 CJK 字符时 \b 会失效。
+_COVERAGE_ENTITY_SUFFIXES = (
+    "公司", "集团", "大学", "研究院", "研究所", "科学院", "委员会", "基金会",
+    "银行", "医院", "总局", "基地", "产业园", "论坛", "峰会", "实验室", "中心", "协会",
+)
+_COVERAGE_CJK_ENTITY_PATTERN = re.compile(
+    r"[一-鿿]{2,20}?(?:" + "|".join(_COVERAGE_ENTITY_SUFFIXES) + r")"
+)
+_COVERAGE_EN_ENTITY_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9&.\-']{1,}(?![A-Za-z0-9_])"
+)
+_COVERAGE_ENGLISH_STOPWORDS = frozenset({
+    "A", "An", "The", "This", "That", "These", "Those", "And", "Or", "Nor",
+    "But", "With", "Without", "In", "On", "At", "By", "To", "From", "Of",
+    "For", "Is", "Are", "Was", "Were", "Be", "Been", "It", "Its", "He", "She",
+    "They", "We", "You", "I", "As", "If", "Then", "Than", "So", "Not", "No",
+    "Yes", "Also", "Due", "Since", "Our", "Their", "His", "Her", "His", "Most",
+    "More", "Other", "Each", "Every", "Into", "During", "After", "Before",
+})
+# 引用/来源特征：[1] / (Reuters, 2025) / 来源：xxx / https://...
+_COVERAGE_CITATION_PATTERN = re.compile(
+    r"\[\s*\d+\s*\]"
+    r"|\([^)\n]{0,80}(?:19|20)\d{2}[^)\n]{0,80}\)"
+    r"|(?:来源|参考|引自)[:：]\s*\S+"
+    r"|https?://[^\s，,。；;）)]+"
+)
+# 噪声过滤：过短段落、标题行、导航文本。
+_COVERAGE_MIN_PARAGRAPH_CHARS = 10
+_COVERAGE_NOISE_HEADING_PATTERN = re.compile(r"^#{1,6}\s+\S+")
+_COVERAGE_NAV_TOKENS = frozenset({
+    "首页", "上一页", "下一页", "目录", "更多", "返回", "免责声明", "关于我们", "联系我们",
+})
+# 纯引用/链接列表：剥掉引用标记与网址后几乎无实质内容，避免被引用特征打高分误选。
+_COVERAGE_CITATION_LIST_PATTERN = re.compile(r"\[\s*\d+\s*\]|https?://[^\s，,。；;）)]+")
+_COVERAGE_HTML_TAG_PATTERN = re.compile(
+    r"</?(?:script|style|div|span|p|br|li|ul|ol|a|img|td|tr|th|table|thead|tbody|"
+    r"h[1-6]|section|header|footer|nav|strong|em|b|i|u|blockquote|pre|code)("
+    r"\s[^<>]*)?>",
+    re.IGNORECASE,
+)
+_COVERAGE_CONTROL_CHAR_PATTERN = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f​‌‍﻿]"
+)
+# Coverage Score 权重与特征上限（§12：1.0*N + 2.0*D + 1.5*T + 1.5*E + 1.0*C）。
+_COVERAGE_NUMBER_WEIGHT = 1.0
+_COVERAGE_DATE_WEIGHT = 2.0
+_COVERAGE_TIME_WEIGHT = 1.5
+_COVERAGE_ENTITY_WEIGHT = 1.5
+_COVERAGE_CITATION_WEIGHT = 1.0
+_COVERAGE_NUMBER_CAP = 5
+_COVERAGE_FEATURE_CAP = 3
+_COVERAGE_NEAR_DEDUP_RATIO = 0.6
+#: 信息结构特征：长度落在合理区间给满分，过长线性衰减。
+_COVERAGE_STRUCTURE_WEIGHT = 1.0
+_COVERAGE_STRUCTURE_MIN_CHARS = 40
+_COVERAGE_STRUCTURE_MAX_CHARS = 800
+#: 进程内缓存上限：同参数内容在重试/重生成时不重复计算，且内存有界。
+_COVERAGE_CACHE_MAXSIZE = 512
+
+# ---------------------------------------------------------------------------
+# 集成预算（方案 B Phase3 + 方案2 迭代）：覆盖证据进入大纲证据时的成本闸门。
+# 选段不预设硬 Top-K，由单文档/章节的字符预算兜底（方案2：预算即终止条件）。
+# report.py 与 tools/evaluate_coverage.py 从本处导入，避免两侧口径漂移。
+# ---------------------------------------------------------------------------
+_COVERAGE_TOP_K_CAP = 128
+_COVERAGE_MAX_CHARS_PER_DOC = 1200
+_COVERAGE_MAX_TOTAL_CHARS = 6000
+#: 规则收尾（方案4/3/1）默认参数。方案4 锚点级去重已内置；方案1 密度计分经
+#: 真实数据 A/B 后选定为默认；方案3 邻域密度门控在预算兜底（K≈候选全集）下
+#: 为空操作，默认关闭（保留参数以便在有限 K 场景评估）。
+_COVERAGE_ANCHOR_DEDUP_RATIO = 0.7
+_COVERAGE_EXPANSION_DENSITY_THRESHOLD = 0.0
+_COVERAGE_SCORE_MODE = "density"
+_COVERAGE_DENSITY_MIN_LEN = 40
+#: 合并跨度上限：相邻高分段连续并入一个证据块的最多段数，防止雪崩式吞并。
+_COVERAGE_MAX_MERGE_SPAN = 5
+
+
+def _coverage_split_passages(content: str) -> list[str]:
+    """把正文切分为覆盖评分用的段落。
+
+    注意：上游 `split_passages` 是句子级滑动窗口（整块 ≤500 字符时合并为一段），
+    会破坏 coverage 依赖的"句/段粒度"候选与邻域窗口语义，因此 coverage 侧固定
+    采用句末与换行级别的切分，避免跟随上游策略漂移。
+
+    Args:
+        content: 原始正文。
+
+    Returns:
+        已去空白的段落列表。
+    """
+    raw_parts = re.split(r"(?:\n\s*\n|\n|(?<=[。！？!?])|(?<=\.)(?=\s|$))", content or "")
+    return [part.strip() for part in raw_parts if part and part.strip()]
+
+
+def _normalize_coverage_content(content: str) -> str:
+    """覆盖抽取前的文本标准化（不破坏段落边界与事实表达）。
+
+    Args:
+        content: 原始正文。
+
+    Returns:
+        标准化后的文本：统一换行/空白、剥离常见 HTML 标签与控制字符。
+    """
+    text = str(content or "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _COVERAGE_HTML_TAG_PATTERN.sub("", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _COVERAGE_CONTROL_CHAR_PATTERN.sub("", text)
+    return text.strip()
+
+
+def _is_coverage_noise(paragraph: str) -> bool:
+    """判断段落是否属于明显噪声（过短、标题、导航等）。
+
+    Args:
+        paragraph: 候选段落。
+
+    Returns:
+        True 表示应被过滤。
+    """
+    text = paragraph.strip()
+    if len(text) < _COVERAGE_MIN_PARAGRAPH_CHARS:
+        return True
+    if _COVERAGE_NOISE_HEADING_PATTERN.match(text):
+        return True
+    if text in _COVERAGE_NAV_TOKENS:
+        return True
+    if text.count("|") >= 2 and len(text) - text.count("|") <= 80 and not re.search(r"\d", text):
+        return True
+    stripped_citations = _COVERAGE_CITATION_LIST_PATTERN.sub("", paragraph)
+    if stripped_citations != paragraph and len(stripped_citations.strip()) < 6:
+        return True
+    return False
+
+
+def _count_numbers_outside_date_spans(paragraph: str) -> int:
+    """统计段落中的普通数字数量，排除落入日期区间的数字。
+
+    Args:
+        paragraph: 候选段落。
+
+    Returns:
+        普通数字个数；日期内部的年/月/日不计入。
+    """
+    date_spans = [(match.start(), match.end()) for match in _COVERAGE_DATE_PATTERN.finditer(paragraph)]
+    count = 0
+    for match in _COVERAGE_NUMBER_PATTERN.finditer(paragraph):
+        if not any(start <= match.start() and match.end() <= end for start, end in date_spans):
+            count += 1
+    return count
+
+
+def _count_entities(paragraph: str) -> int:
+    """统计段落中的实体特征命中数（中文机构后缀 + 英文专有名词候选）。
+
+    中文机构名由"前缀+后缀词"构成，一个后缀词命中后紧邻的通用法定/附属
+    尾词（如"股份有限公司""附属医院"）会再次命中同一个后缀模式。这类紧邻
+    复用是同一机构名的残留切片，应去重以免把单个机构算成多个实体。
+    """
+    cjk_hits: list[str] = []
+    previous_end: int | None = None
+    for match in _COVERAGE_CJK_ENTITY_PATTERN.finditer(paragraph):
+        if previous_end is not None and match.start() == previous_end:
+            continue
+        cjk_hits.append(match.group())
+        previous_end = match.end()
+    en_hits = [
+        token
+        for token in _COVERAGE_EN_ENTITY_PATTERN.findall(paragraph)
+        if token not in _COVERAGE_ENGLISH_STOPWORDS
+    ]
+    return len(cjk_hits) + len(en_hits)
+
+
+def _coverage_structure_score(paragraph_len: int) -> float:
+    """信息结构特征：长度落在合理区间给满分，过长线性衰减，避免超长表格霸榜。"""
+    if paragraph_len < _COVERAGE_STRUCTURE_MIN_CHARS:
+        return 0.0
+    if paragraph_len <= _COVERAGE_STRUCTURE_MAX_CHARS:
+        return 1.0
+    decay = (paragraph_len - _COVERAGE_STRUCTURE_MAX_CHARS) / (
+        _COVERAGE_STRUCTURE_MAX_CHARS * 2
+    )
+    return max(0.0, 1.0 - decay)
+
+
+def _coverage_features(paragraph: str) -> dict[str, float]:
+    """提取段落的事实特征计数（原始值，不做封顶）。
+
+    Args:
+        paragraph: 候选段落。
+
+    Returns:
+        特征名到原始计数的映射；``structure`` 项为长度结构分，且仅对至少含
+        一个事实特征的段落生效，避免纯叙述段只靠长度入选。
+    """
+    counts = {
+        "number": float(_count_numbers_outside_date_spans(paragraph)),
+        "date": float(len(_COVERAGE_DATE_PATTERN.findall(paragraph))),
+        "time": float(len(_COVERAGE_TIME_PATTERN.findall(paragraph))),
+        "entity": float(_count_entities(paragraph)),
+        "citation": float(len(_COVERAGE_CITATION_PATTERN.findall(paragraph))),
+    }
+    counts["structure"] = (
+        _coverage_structure_score(len(paragraph))
+        if any(value > 0 for value in counts.values())
+        else 0.0
+    )
+    return counts
+
+
+def _coverage_score(
+    features: dict[str, float],
+    paragraph_len: int | None = None,
+    score_mode: str = "absolute",
+) -> float:
+    """把特征计数加权为 Coverage Score（数字封顶 5，其余计数特征封顶 3）。
+
+    score_mode="density" 时按段落长度归一化（方案1 的 A/B 开关，分母下限
+    `_COVERAGE_DENSITY_MIN_LEN`）；默认 "absolute" 保持原始加权口径。
+    抽取流水线显式传入由 `_COVERAGE_SCORE_MODE` 决定的当前模式。
+    """
+    base = (
+        _COVERAGE_NUMBER_WEIGHT * min(features.get("number", 0.0), _COVERAGE_NUMBER_CAP)
+        + _COVERAGE_DATE_WEIGHT * min(features.get("date", 0.0), _COVERAGE_FEATURE_CAP)
+        + _COVERAGE_TIME_WEIGHT * min(features.get("time", 0.0), _COVERAGE_FEATURE_CAP)
+        + _COVERAGE_ENTITY_WEIGHT * min(features.get("entity", 0.0), _COVERAGE_FEATURE_CAP)
+        + _COVERAGE_CITATION_WEIGHT * min(features.get("citation", 0.0), _COVERAGE_FEATURE_CAP)
+    )
+    if score_mode == "density":
+        length = paragraph_len if paragraph_len is not None else _COVERAGE_DENSITY_MIN_LEN
+        return base / max(length, _COVERAGE_DENSITY_MIN_LEN)
+    structure = min(features.get("structure", 0.0), 1.0)
+    return base + _COVERAGE_STRUCTURE_WEIGHT * structure
+
+
+def _date_spans(text: str) -> list[tuple[int, int]]:
+    """文本中日期正则的命中区间，用于排除日期内部的普通数字。"""
+    return [
+        (match.start(), match.end()) for match in _COVERAGE_DATE_PATTERN.finditer(text or "")
+    ]
+
+
+def extract_fact_anchors(text: str) -> set[str]:
+    """从文本中提取事实锚点（数字/日期/时间/实体/引用）去重集合。
+
+    供覆盖证据的锚点级去重与离线评估基线共用；CJK 机构邻接尾词与
+    `_count_entities` 同口径去重，避免一个机构被数成两个。
+    """
+    if not text:
+        return set()
+    spans = _date_spans(text)
+    anchors: set[str] = set()
+
+    def _collect(pattern, exclude_in_date_spans: bool = False) -> None:
+        for match in pattern.finditer(text):
+            if exclude_in_date_spans and any(
+                start <= match.start() and match.end() <= end for start, end in spans
+            ):
+                continue
+            anchors.add(match.group(0))
+
+    _collect(_COVERAGE_DATE_PATTERN)
+    _collect(_COVERAGE_TIME_PATTERN)
+    _collect(_COVERAGE_CITATION_PATTERN)
+    _collect(_COVERAGE_NUMBER_PATTERN, True)
+    previous_end: int | None = None
+    for match in _COVERAGE_CJK_ENTITY_PATTERN.finditer(text):
+        if previous_end is not None and match.start() == previous_end:
+            continue
+        anchors.add(match.group(0))
+        previous_end = match.end()
+    for match in _COVERAGE_EN_ENTITY_PATTERN.finditer(text):
+        if match.group(0) not in _COVERAGE_ENGLISH_STOPWORDS:
+            anchors.add(match.group(0))
+    return anchors
+
+
+def _coverage_char_bigrams(text: str) -> set[str]:
+    """字符二元组集合，作为零依赖的词级近似（对语序重排鲁棒）。"""
+    return {text[index:index + 2] for index in range(len(text) - 1)}
+
+
+def _coverage_jaccard_similarity(first: str, second: str) -> float:
+    """两段归一化文本的字符二元组 Jaccard 相似度。"""
+    first_bigrams = _coverage_char_bigrams(first)
+    second_bigrams = _coverage_char_bigrams(second)
+    if not first_bigrams or not second_bigrams:
+        return 0.0
+    union = len(first_bigrams | second_bigrams)
+    return len(first_bigrams & second_bigrams) / union if union else 0.0
+
+
+def _anchor_dedup_key(anchor: str) -> tuple[str, str]:
+    """把锚点规约为去重键：数值型锚点只保留数字核心（"20%" 与 "20 个百分点" 同键），
+    其余（实体等）保留原文。单位措辞差异不影响"同一事实"判定。"""
+    digits = re.sub(r"[^\d]", "", anchor.replace(",", "").replace("，", ""))
+    return ("num", digits) if digits else ("txt", anchor)
+
+
+def _coverage_fact_anchor_keys(text: str) -> set[tuple[str, str]]:
+    """文本事实锚点的去重键集合。"""
+    return {_anchor_dedup_key(anchor) for anchor in extract_fact_anchors(text)}
+
+
+def _coverage_near_duplicate(text: str, kept_texts: list[str]) -> bool:
+    """近似去重（方案4：锚点级）：与已保留块共享大量事实锚点才判重复。
+
+    结构相似但锚点不同的块（如两条版本列表）应保留；锚点相同但措辞不同的
+    块才去除。共享锚点去重键的重合率 >= `_COVERAGE_ANCHOR_DEDUP_RATIO` 视为
+    重复。
+
+    Args:
+        text: 待检查的证据块文本。
+        kept_texts: 已保留证据块的归一化文本。
+
+    Returns:
+        True 表示与某个已保留块的事实锚点高度重合。
+    """
+    keys = _coverage_fact_anchor_keys(text)
+    if not keys:
+        return False
+    for kept in kept_texts:
+        kept_keys = _coverage_fact_anchor_keys(kept)
+        if not kept_keys:
+            continue
+        union = len(keys | kept_keys)
+        if union and len(keys & kept_keys) / union >= _COVERAGE_ANCHOR_DEDUP_RATIO:
+            return True
+    return False
+
+
+@functools.lru_cache(maxsize=_COVERAGE_CACHE_MAXSIZE)
+def _extract_coverage_passages_cached(
+    content: str,
+    max_passages: int,
+    neighbor_window: int,
+    max_chars: int,
+    max_merge_span: int,
+    expansion_density_threshold: float,
+    score_mode: str,
+) -> tuple[CoveragePassage, ...]:
+    """进程内有界缓存的核心抽取实现（键=全部参数）。
+
+    Returns:
+        按原文顺序排列的覆盖证据块元组；返回对象只读，调用方不应就地修改。
+    """
+    paragraphs = _coverage_split_passages(_normalize_coverage_content(content))
+    candidates: list[tuple[int, str, dict[str, float], float]] = []
+    for index, paragraph in enumerate(paragraphs):
+        if _is_coverage_noise(paragraph):
+            continue
+        features = _coverage_features(paragraph)
+        score = _coverage_score(features, len(paragraph), score_mode)
+        if score <= 0:
+            continue
+        candidates.append((index, paragraph, features, score))
+    if not candidates:
+        return []
+
+    candidate_indices = {candidate[0] for candidate in candidates}
+    ordered = sorted(candidates, key=lambda item: (-item[3], item[0]))
+    top_k = ordered[:max_passages] if max_passages > 0 else []
+    if not top_k:
+        return []
+
+    # 邻域扩张（方案3 精细化）：事实密度（计数特征和 / 段长）达到阈值的段落
+    # 不再拉取邻居（本身信息完整，省下预算给新段落）；未达向的段落保留 ±window
+    # 上下文，兜住跨句表达的事实。
+    included: set[int] = set()
+    window = max(0, neighbor_window)
+    for index, paragraph, features, _ in top_k:
+        eff_window = window
+        if expansion_density_threshold and paragraph:
+            density = sum(value for key, value in features.items() if key != "structure")
+            if density / max(len(paragraph), 1) >= expansion_density_threshold:
+                eff_window = 0
+        for neighbor_index in range(index - eff_window, index + eff_window + 1):
+            if neighbor_index in candidate_indices:
+                included.add(neighbor_index)
+
+    by_index = {candidate[0]: candidate for candidate in candidates}
+    runs: list[list[tuple[int, str, dict[str, float], float]]] = []
+    for index in sorted(included):
+        if runs and index == runs[-1][-1][0] + 1:
+            span = index - runs[-1][0][0] + 1
+            if span <= max_merge_span:
+                runs[-1].append(by_index[index])
+            else:
+                runs.append([by_index[index]])
+        else:
+            runs.append([by_index[index]])
+
+    blocks: list[CoveragePassage] = []
+    for run in runs:
+        text = "\n".join(member[1] for member in run)
+        max_score = max(member[3] for member in run)
+        indices = [member[0] for member in run]
+        features = {
+            name: float(sum(member[2][name] for member in run))
+            for name in run[0][2]
+        }
+        blocks.append(CoveragePassage(text=text, score=max_score, source_indices=indices, features=features))
+
+    # 两级去重：Level 1 精确（归一化文本相同），Level 2 近似（相似度阈值）。
+    unique_blocks: list[CoveragePassage] = []
+    kept_normalized: list[str] = []
+    for block in blocks:
+        normalized = normalize_content_for_dedup(block.text)
+        if normalized in kept_normalized:
+            continue
+        if _coverage_near_duplicate(block.text, kept_normalized):
+            continue
+        kept_normalized.append(normalized)
+        unique_blocks.append(block)
+
+    # 字符数限制：预算非正不产出证据；否则按分数降序贪心。能整块放下的完整
+    # 保留；放不下且已有更高考分的块时整块丢弃（保持证据块语义完整）；仅当
+    # 分数最高的块自身都超出预算时才截断它，确保能尽量保留证据。
+    if max_chars <= 0:
+        return []
+    budget_blocks: list[CoveragePassage] = []
+    remaining = max(0, int(max_chars))
+    for block in sorted(unique_blocks, key=lambda item: (-item.score, min(item.source_indices))):
+        if remaining <= 0:
+            break
+        if len(block.text) > remaining and budget_blocks:
+            continue
+        truncated_block = block
+        if len(block.text) > remaining:
+            truncated_block = CoveragePassage(
+                text=block.text[:remaining],
+                score=block.score,
+                source_indices=block.source_indices,
+                features=dict(block.features),
+            )
+        budget_blocks.append(truncated_block)
+        remaining -= len(truncated_block.text)
+
+    budget_blocks.sort(key=lambda item: min(item.source_indices))
+    return tuple(budget_blocks)
+
+
+def extract_coverage_passages(
+    content: str,
+    max_passages: int = 5,
+    neighbor_window: int = 1,
+    max_chars: int = 6000,
+    max_merge_span: int = _COVERAGE_MAX_MERGE_SPAN,
+    expansion_density_threshold: float = _COVERAGE_EXPANSION_DENSITY_THRESHOLD,
+    score_mode: str = _COVERAGE_SCORE_MODE,
+) -> list[CoveragePassage]:
+    """规则抽取覆盖证据段落，不增加额外 LLM 调用，不依赖 query 关键词。
+
+    内部流程按阶段执行：标准化 → 段落切分 → 噪声过滤 → 事实特征提取 →
+    Coverage Score → Top-K → Neighbor Expansion → 相邻段落合并（含跨度上限，
+    达到上限另起新块）→ 去重 → 字符数限制。结果带进程内有界缓存
+    （键=content+全部参数），同章节重试或重新生成时不重复计算。
+
+    Args:
+        content: 原始正文。
+        max_passages: 进入 Top-K 的段落数上限（影响最终证据块数量）。
+        neighbor_window: Top-K 段落的相邻扩展窗口。
+        max_chars: 最终证据块的累计字符数预算。
+        max_merge_span: 相邻段落合并进同一证据块的最多段数，防雪崩吞并。
+        expansion_density_threshold: 邻域扩张的事实密度门控（方案3 精细化）。
+            0 表示不门控；段落计数特征和/段长达到该值时不再拉取邻居。
+        score_mode: 计分口径，"absolute"（默认）或 "density"（方案1 的 A/B 开关）。
+
+    Returns:
+        按原文顺序排列的覆盖证据块列表（每次调用返回新建对象，调用方可自由
+        就地修改而不影响缓存或其他调用方）；无有效事实或预算非正时返回空表。
+    """
+    cached = _extract_coverage_passages_cached(
+        content, max_passages, neighbor_window, max_chars, max_merge_span,
+        expansion_density_threshold, score_mode,
+    )
+    return [
+        CoveragePassage(
+            text=item.text,
+            score=item.score,
+            source_indices=list(item.source_indices),
+            features=dict(item.features),
+        )
+        for item in cached
+    ]
+
+
+def _is_duplicate_text(text: str, reference: str, threshold: float) -> bool:
+    """判断归一化后的两段文本是否构成实质重复。
+
+    Args:
+        text: 归一化后的待判断文本。
+        reference: 归一化后的参照文本。
+        threshold: 近似重复的字符二元组 Jaccard 相似度阈值。
+
+    Returns:
+        True 表示两段文本相同、高度相似，或其中一段是另一段的高占比子串。
+    """
+    if text == reference:
+        return True
+    if _coverage_jaccard_similarity(text, reference) >= threshold:
+        return True
+    shorter, longer = (text, reference) if len(text) <= len(reference) else (reference, text)
+    if shorter and shorter in longer and len(shorter) >= 0.6 * len(longer):
+        return True
+    return False
+
+
+def exclude_passages(
+    coverage_passages: list[CoveragePassage],
+    key_passages: list[str],
+    similarity_threshold: float = _COVERAGE_NEAR_DEDUP_RATIO,
+) -> list[CoveragePassage]:
+    """剔除覆盖证据中与同文档 key passages 高度重复的段落。
+
+    覆盖证据与关键片段高度重叠时同时进入 prompt 只会增加 token 而信息冗余。
+    覆盖证据块常把一条 key passage 连同相邻上下文合并进来，因此除相同/高相似
+    外，还把"高占比子串"视为重复。
+
+    Args:
+        coverage_passages: Coverage 抽取结果（保持原顺序）。
+        key_passages: 同一文档的关键片段列表。
+        similarity_threshold: 判定近似重复的归一化相似度阈值。
+
+    Returns:
+        与 key passages 不重复的覆盖证据（保持原顺序）。
+    """
+    if not coverage_passages or not key_passages:
+        return list(coverage_passages)
+    normalized_keys = [normalize_content_for_dedup(key) for key in key_passages]
+    kept: list[CoveragePassage] = []
+    for passage in coverage_passages:
+        normalized = normalize_content_for_dedup(passage.text)
+        if any(
+            _is_duplicate_text(normalized, key, similarity_threshold)
+            for key in normalized_keys
+        ):
+            continue
+        kept.append(passage)
+    return kept
 
 
 def build_evidence_atom(
