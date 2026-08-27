@@ -88,12 +88,6 @@ _ACADEMIC_STAT_PATTERNS = [
     r"[αα]\s*=\s*0?\.\d+",  # α=0.05（显著性水平）
 ]
 
-_NUMERIC_FACT_PATTERN = re.compile(
-    r"\d+(?:\.\d+)?\s*(?:" + _SUFFIX_UNIT_PATTERN + r")|"
-    + _PREFIX_CURRENCY_SYMBOLS + r"\s*\d+(?:\.\d+)?|"
-    + "|".join(_ACADEMIC_STAT_PATTERNS)
-)
-
 
 @dataclass
 class CollectorSourceStore:
@@ -552,12 +546,13 @@ def extract_keywords(query: str, title: str = "") -> list[str]:
     return output[:30]
 
 
-def _passage_score(passage: str, keywords: list[str]) -> float:
+def _passage_score(passage: str, keywords: list[str], max_length: int = MAX_PASSAGE_LENGTH) -> float:
     """计算段落作为 key passage 的规则分数。
 
     Args:
         passage: 候选段落。
         keywords: query 和标题提取出的关键词。
+        max_length: 单个片段最大长度，用于评分阈值判断。
 
     Returns:
         规则分数，值越高表示越适合作为 key passage。
@@ -567,11 +562,11 @@ def _passage_score(passage: str, keywords: list[str]) -> float:
     for keyword in keywords:
         if keyword.lower() in lower_passage:
             score += 2.0
-    if _NUMERIC_FACT_PATTERN.search(passage):
+    if re.search(r"\d+(?:\.\d+)?\s*(?:%|％|亿|万|年|月|日|美元|元)", passage):
         score += 1.5
-    if 40 <= len(passage) <= MAX_PASSAGE_LENGTH:
+    if 40 <= len(passage) <= max_length:
         score += 0.5
-    if len(passage) > MAX_PASSAGE_LENGTH * 2:
+    if len(passage) > max_length * 2:
         score -= 1.0
     return score
 
@@ -615,7 +610,7 @@ def extract_key_passages(
     keywords = extract_keywords(query, title)
     scored = [
         (
-            _passage_score(passage, keywords),
+            _passage_score(passage, keywords, max_length),
             index,
             passage[:max_length],
             _passage_has_keyword(passage, keywords),
