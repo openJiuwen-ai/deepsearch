@@ -49,7 +49,7 @@ class TestSnippetMemory:
         assert memory.add_ranges(s, [(11, 12)]) is True
 
         rendered = memory.render()
-        assert "--- CURRENT SAVED SNIPPETS (Maintained by Filter Agent) ---" in rendered
+        assert "--- CURRENT SAVED SNIPPETS ---" in rendered
         assert "\nFile: pkg/mod.py\n" in rendered
         assert "ID: 7" in rendered
         assert "Name: f" in rendered

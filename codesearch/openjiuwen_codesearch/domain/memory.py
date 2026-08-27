@@ -106,10 +106,10 @@ class SnippetMemory(BaseModel):
 
         return sorted(self.saved.keys(), key=key)
 
-    def render(self) -> str:
-        """渲染为注入提示词的记忆文本（与旧 `_format_memory` 输出一致）。"""
+    def render(self, title: str = "CURRENT SAVED SNIPPETS") -> str:
+        """渲染为注入提示词的记忆文本。"""
         if not self.saved:
-            return EMPTY_MEMORY_TEXT
+            return f"--- {title} ---\nNo snippets saved yet.\n"
 
         files_map: dict[str, list[tuple[int, list[tuple[int, int]], Snippet]]] = {}
         for sid, ranges in self.saved.items():
@@ -118,7 +118,7 @@ class SnippetMemory(BaseModel):
             snippet = self.cache[sid]
             files_map.setdefault(snippet.file_path, []).append((sid, ranges, snippet))
 
-        memory_str = MEMORY_HEADER
+        memory_str = f"--- {title} ---\n"
         for fp, items in files_map.items():
             memory_str += f"\nFile: {fp}\n"
             items.sort(key=lambda x: x[2].start_line)

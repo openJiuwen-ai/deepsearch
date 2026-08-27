@@ -70,9 +70,9 @@ async def execute(env, args: dict) -> ToolOutcome:
         if clipped[0] > clipped[1]:
             continue
         # 智能体显式点名要的上下文：按最高优先级计入相关性证据
-        env.memory.record_hit(chunk, rank=0)
-        env.memory.mark_processed(chunk)
-        if env.memory.add_ranges(chunk, [clipped]):
+        env.working_memory.record_hit(chunk, rank=0)
+        env.working_memory.mark_processed(chunk)
+        if env.working_memory.add_ranges(chunk, [clipped]):
             added += 1
 
     message = (

@@ -13,6 +13,9 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 from openjiuwen_search_base.runtime import RunRegistry
 
@@ -24,7 +27,45 @@ from openjiuwen_codesearch.llm.factory import ChatMessage, LLMClient
 from openjiuwen_codesearch.retrieval.base import CodeRetriever
 
 if TYPE_CHECKING:
-    from openjiuwen_codesearch.domain.result import CodeSearchResult
+    from openjiuwen_codesearch.domain.result import CodeSearchResult, CodeResolveResult
+
+
+@dataclass
+class CodeResolveRunContext:
+    config: CodeSearchConfig
+    query: str
+    commit: str
+    repo_dir: str
+    retriever: Any
+    main_llm: LLMClient
+    trace_path: Optional[str] = None
+
+    turn: int = 0
+    base_prompt: str = ""
+    history: list[ChatMessage] = field(default_factory=list)
+    pending_calls: list[ToolCall] = field(default_factory=list)
+    pending_termination: Optional[Termination] = None
+    result: Optional["CodeResolveResult"] = None
+
+    total_cost: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    error: str = ""
+    patch: str = ""
+
+    def add_tokens(self, stage: str, in_t: int, out_t: int) -> None:
+        self.input_tokens += in_t
+        self.output_tokens += out_t
+
+    def write_trace(self, record: dict[str, Any]) -> None:
+        if not self.trace_path:
+            return
+        os.makedirs(os.path.dirname(self.trace_path), exist_ok=True)
+        try:
+            with open(self.trace_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning("Failed to write trace: %s", e)
 
 
 @dataclass
@@ -37,6 +78,9 @@ class CodeSearchRunContext:
     main_llm: LLMClient
     filter_llm: LLMClient
     memory: SnippetMemory = field(default_factory=SnippetMemory)
+    working_memory: SnippetMemory = field(default_factory=SnippetMemory)
+    past_queries: list[str] = field(default_factory=list)
+    issue_text: Optional[str] = None
     trace_path: Optional[str] = None
 
     # 运行态
@@ -105,28 +149,78 @@ def unregister_run_context(run_id: str) -> None:
     _RUN_REGISTRY.unregister(run_id)
 
 
+@dataclass
+class CodeSearchRequest:
+    config: CodeSearchConfig
+    query: str
+    revision: str
+    top_k: int
+    issue_text: Optional[str] = None
+    memory: Optional[SnippetMemory] = None
+
+
 def build_run_context(
-    config: CodeSearchConfig,
-    query: str,
-    revision: str,
-    top_k: int,
+    req: CodeSearchRequest,
     **clients,
 ) -> CodeSearchRunContext:
     retriever = clients["retriever"]
     main_llm = clients["main_llm"]
     filter_llm = clients["filter_llm"]
     trace_path = None
+    if req.config.agent.trace_dir:
+        safe_rev = req.revision.replace("/", "_")[:64]
+        trace_path = os.path.join(req.config.agent.trace_dir, f"{safe_rev}_retriever.jsonl")
+
+    kwargs = {
+        "config": req.config.model_copy(deep=True),
+        "query": req.query,
+        "issue_text": req.issue_text,
+        "revision": req.revision,
+        "top_k": req.top_k,
+        "retriever": retriever,
+        "main_llm": main_llm,
+        "filter_llm": filter_llm,
+        "trace_path": trace_path,
+    }
+    if req.memory is not None:
+        kwargs["memory"] = req.memory
+
+    return CodeSearchRunContext(**kwargs)
+
+
+_RESOLVE_RUN_REGISTRY: RunRegistry[CodeResolveRunContext] = RunRegistry()
+
+
+def register_resolve_run_context(ctx: CodeResolveRunContext) -> str:
+    return _RESOLVE_RUN_REGISTRY.register(ctx)
+
+
+def run_resolve_session(ctx: CodeResolveRunContext):
+    return _RESOLVE_RUN_REGISTRY.session(ctx)
+
+
+def get_resolve_run_context(run_id: str) -> CodeResolveRunContext:
+    return _RESOLVE_RUN_REGISTRY.get(run_id)
+
+
+def build_resolve_run_context(
+    config: CodeSearchConfig,
+    query: str,
+    commit: str,
+    repo_dir: str,
+    **clients,
+) -> CodeResolveRunContext:
+    retriever = clients["retriever"]
+    main_llm = clients["main_llm"]
+    trace_path = None
     if config.agent.trace_dir:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d__%H%M%S_%f")
-        safe_rev = revision.replace("/", "_")[:64]
-        trace_path = os.path.join(config.agent.trace_dir, stamp, f"{safe_rev}.jsonl")
-    return CodeSearchRunContext(
+        trace_path = os.path.join(config.agent.trace_dir, f"{commit}_resolver.jsonl")
+    return CodeResolveRunContext(
         config=config.model_copy(deep=True),
         query=query,
-        revision=revision,
-        top_k=top_k,
+        commit=commit,
+        repo_dir=repo_dir,
         retriever=retriever,
         main_llm=main_llm,
-        filter_llm=filter_llm,
         trace_path=trace_path,
     )
