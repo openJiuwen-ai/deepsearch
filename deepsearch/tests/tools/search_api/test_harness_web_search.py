@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 
@@ -21,7 +21,8 @@ def test_harness_web_search_wrapper_fetches_urls_from_web_tools():
 
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper."
-        "WebPaidSearchTool._bocha_search_sync",
+        "WebPaidSearchTool._bocha_search",
+        new_callable=AsyncMock,
         return_value={
             "provider": "bocha",
             "answer": "fallback answer",
@@ -47,7 +48,7 @@ def test_harness_web_search_wrapper_fetches_urls_from_web_tools():
             "source": "bocha",
         }
     ]
-    mock_search.assert_called_once_with(query="test query", max_results=2, timeout_seconds=60)
+    mock_search.assert_called_once_with(ANY, query="test query", max_results=2, timeout_seconds=60)
     mock_fetch.assert_called_once_with("https://example.com/news", 60)
 
 
@@ -67,7 +68,8 @@ def test_harness_web_search_wrapper_truncates_prefetched_content():
     long_content = "A" * (MAX_COLLECTOR_DOC_CONTENT_LENGTH + 200)
     with patch(
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper."
-        "WebPaidSearchTool._bocha_search_sync",
+        "WebPaidSearchTool._bocha_search",
+        new_callable=AsyncMock,
         return_value={
             "provider": "bocha",
             "answer": "fallback answer",
@@ -152,7 +154,8 @@ def test_harness_web_search_omits_url_env_when_search_url_empty():
         side_effect=lambda values: capture_env(values),
     ), patch(
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper."
-        "WebPaidSearchTool._bocha_search_sync",
+        "WebPaidSearchTool._bocha_search",
+        new_callable=AsyncMock,
         return_value={"provider": "bocha", "answer": "", "urls": []},
     ):
         wrapper.results("query")
@@ -185,7 +188,8 @@ def test_harness_web_search_injects_custom_url_only_when_web_tools_can_override(
         side_effect=lambda values: capture_env(values),
     ), patch(
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper."
-        "WebPaidSearchTool._bocha_search_sync",
+        "WebPaidSearchTool._bocha_search",
+        new_callable=AsyncMock,
         return_value={"provider": "bocha", "answer": "", "urls": []},
     ):
         wrapper.results("query")
