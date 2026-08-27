@@ -36,6 +36,43 @@ class TestParseFile:
         try:
             with pytest.raises(ValueError, match="Cannot determine language"):
                 asyncio.run(parse_file(path))
+            with pytest.raises(ValueError, match="Cannot determine language"):
+                asyncio.run(parse_file(path, errors="strict"))
+        finally:
+            path.unlink()
+
+    @staticmethod
+    def test_unknown_extension_ignore_returns_none():
+        with tempfile.NamedTemporaryFile(suffix=".xyz", mode="w", delete=False) as f:
+            f.write("hello")
+            path = Path(f.name)
+        try:
+            assert asyncio.run(parse_file(path, errors="ignore")) is None
+        finally:
+            path.unlink()
+
+    @staticmethod
+    def test_unknown_extension_as_txt():
+        with tempfile.NamedTemporaryFile(suffix=".xyz", mode="w", delete=False) as f:
+            f.write("hello custom\n")
+            path = Path(f.name)
+        try:
+            r = asyncio.run(parse_file(path, errors="as_txt"))
+            assert r is not None
+            assert r.language == "txt"
+            assert r.source == "hello custom\n"
+            assert r.children == ()
+        finally:
+            path.unlink()
+
+    @staticmethod
+    def test_invalid_errors_mode_raises():
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+            f.write("x = 1\n")
+            path = Path(f.name)
+        try:
+            with pytest.raises(ValueError, match="Invalid errors mode"):
+                asyncio.run(parse_file(path, errors="skip"))  # type: ignore[arg-type]
         finally:
             path.unlink()
 
@@ -134,6 +171,45 @@ class TestParseFiles:
             for p in paths:
                 p.unlink()
 
+    @staticmethod
+    def test_ignore_skips_unknown_extensions():
+        known = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
+        known.write("x = 1\n")
+        known.close()
+        unknown = tempfile.NamedTemporaryFile(suffix=".xyz", mode="w", delete=False)
+        unknown.write("nope\n")
+        unknown.close()
+        known_b = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
+        known_b.write("y = 2\n")
+        known_b.close()
+        paths = [Path(known.name), Path(unknown.name), Path(known_b.name)]
+        try:
+            results = asyncio.run(parse_files(paths, errors="ignore"))
+            assert len(results) == 2
+            assert [r.path for r in results] == [str(paths[0]), str(paths[2])]
+        finally:
+            for p in paths:
+                p.unlink()
+
+    @staticmethod
+    def test_as_txt_parses_unknown_extensions():
+        known = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
+        known.write("x = 1\n")
+        known.close()
+        unknown = tempfile.NamedTemporaryFile(suffix=".xyz", mode="w", delete=False)
+        unknown.write("plain\n")
+        unknown.close()
+        paths = [Path(known.name), Path(unknown.name)]
+        try:
+            results = asyncio.run(parse_files(paths, errors="as_txt"))
+            assert len(results) == 2
+            assert results[0].language == "python"
+            assert results[1].language == "txt"
+            assert results[1].source == "plain\n"
+        finally:
+            for p in paths:
+                p.unlink()
+
 
 class TestLanguageRegistry:
     @staticmethod
@@ -156,6 +232,7 @@ class TestLanguageRegistry:
         assert registry.language_for_file("foo.py") == "python"
         assert registry.language_for_file("README.md") == "markdown"
         assert registry.language_for_file("Makefile") == "makefile"
+        assert registry.language_for_file("foo.txt") == "txt"
         assert registry.language_for_file("unknown.xyz") is None
 
     @staticmethod
