@@ -623,7 +623,7 @@ class FeedbackHandlerNode(BaseNode):
         if reparsed_intent:
             merged_intent_dict = self._merge_reparsed_intent(session, reparsed_intent)
             if not merged_intent_dict.get("report_type"):
-                merged_intent_dict["report_type"] = "professional"
+                merged_intent_dict["report_type"] = "brief"
             merged_policy = resolve_report_type_policy(merged_intent_dict.get("report_type"))
             session.update_global_state(
                 {

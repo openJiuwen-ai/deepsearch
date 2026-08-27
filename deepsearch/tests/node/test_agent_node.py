@@ -331,6 +331,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
             section_count=5,
             audience_role="研发负责人",
             tone="formal",
+            report_type="professional",
             include_domains=["example.com"],
             exclude_domains=["bad.com"],
             temporal_scope=TemporalScope(
@@ -414,6 +415,61 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         temporal_scope=intent_result.research_intent.temporal_scope,
     )
     assert call_order == ["entry_search", "temporal_scope"]
+
+
+@pytest.mark.asyncio
+async def test_intent_recognition_node_routes_to_brief_when_report_type_unspecified():
+    """用户原始 Query 未明示 report_type 且未触发澄清时，默认路由到精简版大纲节点。"""
+    session = AsyncMock(spec=Session)
+    original_query = "请介绍 AI Agent 行业现状"
+    messages = [{"role": "user", "content": original_query}]
+    intent_result = IntentRecognitionResult(
+        original_query=original_query,
+        research_query="AI Agent 行业现状",
+        research_intent=ResearchIntent(),
+        lang="zh-CN",
+    )
+    web_search_engine_config = Mock()
+    web_search_engine_config.search_engine_name = "tavily"
+
+    def _get_global_state(key):
+        return {
+            "search_context.original_query": original_query,
+            "search_context.messages": messages,
+            "config.web_search_engine_config": web_search_engine_config,
+            "config.workflow_human_in_the_loop": False,
+            "config.outliner_max_section_num": 10,
+        }.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    session.update_global_state = Mock()
+    node = IntentRecognitionNode()
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="basic",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.classify_and_recognize_intent",
+        new_callable=AsyncMock,
+        return_value=intent_result,
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.web_search_for_query",
+        new_callable=AsyncMock,
+        return_value={"search_results": [{"title": "test"}], "error_msg": ""},
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope",
+    ):
+        output = await node.invoke({}, session, Context())
+
+    assert output["next_node"] == NodeId.BRIEF_OUTLINE.value
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    intent_update = next(
+        payload for payload in update_payloads
+        if "search_context.original_query" in payload and "search_context.research_intent" in payload
+    )
+    assert intent_update["search_context.report_type_policy"]["report_type"] == "brief"
 
 
 @pytest.mark.asyncio
@@ -941,6 +997,60 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
     }
     mock_apply_temporal.assert_called_once()
     mock_apply_domains.assert_called_once()
+
+
+def test_feedback_handler_defaults_to_brief_when_reparsed_intent_missing_report_type():
+    """反馈重解析未携带 report_type 且现有意图也未指定时，FeedbackHandler 默认填 brief。"""
+    session = Mock(spec=Session)
+    session.update_global_state = Mock()
+
+    def _get_global_state(key):
+        return {
+            "search_context.original_query": "低空经济发展趋势",
+            "search_context.research_intent": {
+                # 现有意图不带 report_type，确保合并后仍缺失，触发默认 fallback
+                "include_url": [],
+                "exclude_url": [],
+                "include_domains": ["example.com"],
+                "exclude_domains": [],
+            },
+            "config.web_search_engine_config": Mock(search_engine_name="tavily"),
+            "search_context.messages": [{"role": "user", "content": "低空经济发展趋势"}],
+        }.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    node = FeedbackHandlerNode()
+    reparsed_intent = {
+        "research_intent": {
+            # 重解析也不带 report_type
+            "include_url": [],
+            "exclude_url": [],
+            "include_domains": ["gov.cn"],
+            "exclude_domains": [],
+        },
+    }
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.add_debug_log_wrapper"
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints"
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope"
+    ):
+        node._post_handle(
+            {},
+            {"user_feedback": "重新研究", "reparsed_intent": reparsed_intent},
+            session,
+            Context(),
+        )
+
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    merged_payload = next(
+        payload for payload in update_payloads if "search_context.research_intent" in payload
+    )
+    # 默认 fallback 应为 brief
+    assert merged_payload["search_context.research_intent"]["report_type"] == "brief"
+    assert merged_payload["search_context.report_type_policy"]["report_type"] == "brief"
 
 
 def test_feedback_handler_keeps_existing_temporal_scope_when_reparse_has_no_scope():

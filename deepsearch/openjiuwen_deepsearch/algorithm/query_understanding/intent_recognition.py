@@ -60,7 +60,7 @@ def normalize_report_type(raw: str | None) -> str | None:
     NOTE:
     Keeping None is intentional. Downstream `generate_questions` uses this signal
     to force a clarification question asking user to choose professional vs brief,
-    while policy resolution still defaults to professional when needed.
+    while policy resolution defaults to brief when the user never specifies.
     """
     if raw is None:
         return None
@@ -73,19 +73,20 @@ def normalize_report_type(raw: str | None) -> str | None:
 def resolve_report_type_policy(
         normalized_report_type: str | None,
 ) -> ReportTypePolicy:
-    """按报告类型解析策略。"""
-    if normalized_report_type == "brief":
+    """按报告类型解析策略。未明示时默认 brief（精简模式）。"""
+    if normalized_report_type == "professional":
         return ReportTypePolicy(
-            report_type="brief",
-            paragraph_style="concise",
-            require_summary_first=True,
-            require_methodology_and_risk=True,
+            report_type="professional",
+            paragraph_style="detailed",
+            require_summary_first=False,
+            require_methodology_and_risk=False,
         )
+    # None / "brief" / 未知值均回退为 brief
     return ReportTypePolicy(
-        report_type="professional",
-        paragraph_style="detailed",
-        require_summary_first=False,
-        require_methodology_and_risk=False,
+        report_type="brief",
+        paragraph_style="concise",
+        require_summary_first=True,
+        require_methodology_and_risk=True,
     )
 
 
