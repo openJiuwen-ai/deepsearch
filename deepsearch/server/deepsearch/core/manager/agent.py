@@ -12,6 +12,9 @@ from openjiuwen.core.session.checkpointer import CheckpointerFactory
 from sqlalchemy.orm import Session
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
+    SCHOLARLY_PROVIDER_NAMES,
+)
 from server.core.database import get_db
 from server.core.manager.model_manager.utils import SecurityUtils
 from server.deepsearch.common.exception.exceptions import (
@@ -328,6 +331,17 @@ class DeepSearchAgentManager:
                 space_id, request.web_search_config, db
             )
             res["scholarly_search_enabled"] = request.web_search_config.scholarly_search_enabled
+            scholarly_search_config = (
+                request.web_search_config.scholarly_search_config.model_dump()
+            )
+            for provider_name in SCHOLARLY_PROVIDER_NAMES:
+                provider_config = scholarly_search_config.get(provider_name)
+                if not isinstance(provider_config, dict):
+                    continue
+                search_api_key = provider_config.get("search_api_key")
+                if isinstance(search_api_key, str):
+                    provider_config["search_api_key"] = bytearray(search_api_key, encoding="utf-8")
+            res["scholarly_search_config"] = scholarly_search_config
         if request.local_search_config:
             res["local_search_engine_config"] = self._load_local_search_config(
                 space_id, request.local_search_config, db

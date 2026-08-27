@@ -36,7 +36,20 @@ class RetrievalQuery(BaseModel):
     检索query模型：步骤任务的检索query
     """
     query: str = Field(..., description="直接用于检索的query")
-    search_engine_name: str = Field(default="", description="Secondary web search engine for this query.")
+    primary_engine: str = Field(default="", description="Primary web search engine for this query.")
+    secondary_engines: List[str] = Field(
+        default_factory=list,
+        description="Ordered scholarly search engines for this query.",
+    )
+    max_full_text_results: int = Field(
+        default=1,
+        ge=0,
+        description="Maximum documents resolved to full text in stable order after query-level fusion.",
+    )
+    scholarly_full_text_config: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Shared query-wide full-text policy used after scholarly fusion.",
+    )
     description: str = Field(default="", description="简要说明query为何与搜索任务相关，为何要生成当前query")
     doc_infos: Optional[List[Dict]] = Field(default_factory=list, description="query检索的文档信息")
 

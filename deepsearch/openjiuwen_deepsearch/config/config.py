@@ -1,11 +1,10 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-from typing import Any, List, Literal, Dict, Optional
+from typing import Any, ClassVar, List, Literal, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from openjiuwen_deepsearch.config.runtime_api_models import ApiToolsConfig
-
 OUTLINER_SECTION_NUM_MAX = 15
 
 
@@ -55,6 +54,61 @@ class WebFetchProviderConfig(BaseModel):
     extension: dict = Field(default_factory=dict, description="网页抓取 provider 扩展配置项")
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class ScholarlyProviderConfig(BaseModel):
+    official_search_url: ClassVar[str] = ""
+
+    search_api_key: bytearray = Field(default_factory=bytearray)
+    search_url: str = ""
+    max_search_results: int = Field(default=1, ge=1, le=10)
+    requests_per_second: float = Field(gt=0, le=10)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    @field_validator("search_url")
+    @classmethod
+    def _validate_http_endpoint(cls, value: str) -> str:
+        endpoint = value.strip().rstrip("/")
+        if not endpoint:
+            return ""
+        if endpoint != cls.official_search_url:
+            raise ValueError(
+                f"search_url must use the official endpoint: {cls.official_search_url}"
+            )
+        return endpoint
+
+
+class PubMedScholarlyConfig(ScholarlyProviderConfig):
+    official_search_url: ClassVar[str] = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+
+    requests_per_second: float = Field(default=1 / 3, gt=0, le=10)
+    email: str = ""
+    tool: str = "openjiuwen-deepsearch"
+
+
+class ArxivScholarlyConfig(ScholarlyProviderConfig):
+    official_search_url: ClassVar[str] = "https://export.arxiv.org/api/query"
+
+    requests_per_second: float = Field(default=1 / 3, gt=0, le=10)
+
+
+class SemanticScholarConfig(ScholarlyProviderConfig):
+    official_search_url: ClassVar[str] = (
+        "https://api.semanticscholar.org/graph/v1/paper/search"
+    )
+
+    requests_per_second: float = Field(default=0.5, gt=0, le=10)
+
+
+class ScholarlySearchConfig(BaseModel):
+    fetch_full_text: bool = True
+    max_full_text_results_per_query: int = Field(default=1, ge=0, le=10)
+    pubmed: PubMedScholarlyConfig = Field(default_factory=PubMedScholarlyConfig)
+    arxiv: ArxivScholarlyConfig = Field(default_factory=ArxivScholarlyConfig)
+    semantic_scholar: SemanticScholarConfig = Field(default_factory=SemanticScholarConfig)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
 
 class EmbedModelConfig(BaseModel):
@@ -335,8 +389,9 @@ class AgentConfig(BaseModel):
     web_search_engine_config: WebSearchEngineConfig = Field(default_factory=WebSearchEngineConfig)
     scholarly_search_enabled: bool = Field(
         default=False,
-        description="Whether to enable PubMed and arXiv scholarly search engines.",
+        description="Whether to enable the built-in scholarly search engines.",
     )
+    scholarly_search_config: ScholarlySearchConfig = Field(default_factory=ScholarlySearchConfig)
     web_fetch_provider_config: WebFetchProviderConfig = Field(default_factory=WebFetchProviderConfig)
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
     custom_web_search_config: CustomWebSearchConfig = Field(default_factory=CustomWebSearchConfig)
@@ -374,6 +429,11 @@ class AgentConfig(BaseModel):
     @classmethod
     def _reject_retired_search_fetch_keys(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if "scholarly_search_engine_configs" in data:
+                raise ValueError(
+                    "Unsupported config field: scholarly_search_engine_configs. "
+                    "Use scholarly_search_config instead."
+                )
             retired = {"jina_api_key", "serper_api_key"}.intersection(data)
             if retired:
                 raise ValueError(

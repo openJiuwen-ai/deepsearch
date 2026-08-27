@@ -161,7 +161,59 @@ def deduplicate_doc_infos(doc_infos: list[dict[str, Any]]) -> list[dict[str, Any
             grouped[key] = (index, doc)
             order.append(key)
             continue
+        current_index, current_doc = current
         if _representative_sort_key((index, doc)) > _representative_sort_key(current):
-            grouped[key] = (index, doc)
+            representative, discarded = doc, current_doc
+            representative_index = index
+        else:
+            representative, discarded = current_doc, doc
+            representative_index = current_index
+        discarded_has_full_text = discarded.get("evidence_content_type") == "full_text"
+        representative_has_full_text = representative.get("evidence_content_type") == "full_text"
+        if discarded_has_full_text and not representative_has_full_text:
+            for full_text_key in (
+                "evidence_content_type",
+                "evidence_content_chars",
+                "full_text_format",
+                "full_text_url",
+                "full_text_truncated",
+            ):
+                if full_text_key in discarded:
+                    representative[full_text_key] = discarded[full_text_key]
+        elif discarded_has_full_text and representative_has_full_text:
+            for full_text_key in (
+                "evidence_content_chars",
+                "full_text_format",
+                "full_text_url",
+                "full_text_truncated",
+            ):
+                if (
+                    representative.get(full_text_key) in (None, "")
+                    and discarded.get(full_text_key) not in (None, "")
+                ):
+                    representative[full_text_key] = discarded[full_text_key]
+        matched_sources = list(dict.fromkeys([
+            *(representative.get("matched_sources") or []),
+            *(discarded.get("matched_sources") or []),
+        ]))
+        if matched_sources:
+            representative["matched_sources"] = matched_sources
+        source_ids = {
+            **(discarded.get("source_ids") or {}),
+            **(representative.get("source_ids") or {}),
+        }
+        if source_ids:
+            representative["source_ids"] = source_ids
+        for provenance_key in (
+            "academic_source",
+            "academic_source_id",
+            "doi",
+            "pmid",
+            "pmcid",
+            "arxiv_id",
+        ):
+            if not representative.get(provenance_key) and discarded.get(provenance_key) not in (None, ""):
+                representative[provenance_key] = discarded[provenance_key]
+        grouped[key] = (representative_index, representative)
 
     return [grouped[key][1] for key in order]

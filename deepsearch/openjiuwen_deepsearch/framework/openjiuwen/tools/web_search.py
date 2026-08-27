@@ -16,6 +16,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
     TavilySearchAPIWrapper,
     PubMedSearchAPIWrapper,
     ArxivSearchAPIWrapper,
+    SemanticScholarSearchAPIWrapper,
     GoogleSearchAPIWrapper,
     PetalSearchAPIWrapper,
     BochaSearchAPIWrapper,
@@ -29,6 +30,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     is_transient_connection_error,
 )
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import web_search_context
+from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import SCHOLARLY_PROVIDER_NAMES
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import (
     SearchEngine,
     TEMPORAL_SCOPE_SEARCH_ENGINES,
@@ -43,6 +45,7 @@ search_engine_mapping = {
     SearchEngine.TAVILY.value: TavilySearchAPIWrapper,
     SearchEngine.PUBMED.value: PubMedSearchAPIWrapper,
     SearchEngine.ARXIV.value: ArxivSearchAPIWrapper,
+    SearchEngine.SEMANTIC_SCHOLAR.value: SemanticScholarSearchAPIWrapper,
     SearchEngine.GOOGLE.value: GoogleSearchAPIWrapper,
     SearchEngine.XUNFEI.value: XunfeiSearchAPIWrapper,
     SearchEngine.PETAL.value: PetalSearchAPIWrapper,
@@ -206,7 +209,7 @@ async def run_web_search(query: str, search_engine_name: str):
             logger.error(f"Error when run web search {resolved_name}")
         else:
             logger.exception(f"Error when run web search {resolved_name}: {e}")
-        retryable = (
+        retryable = resolved_name not in SCHOLARLY_PROVIDER_NAMES and (
             is_transient_connection_error(e)
             or http_status_code(e) in RETRYABLE_HTTP_STATUSES
         )

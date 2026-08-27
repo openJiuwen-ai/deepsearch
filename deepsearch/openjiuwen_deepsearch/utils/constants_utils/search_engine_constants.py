@@ -7,6 +7,7 @@ class SearchEngine(enum.Enum):
     TAVILY = "tavily"
     PUBMED = "pubmed"
     ARXIV = "arxiv"
+    SEMANTIC_SCHOLAR = "semantic_scholar"
     GOOGLE = "google"
     XUNFEI = "xunfei"
     PETAL = "petal"

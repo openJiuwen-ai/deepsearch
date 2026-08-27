@@ -54,12 +54,36 @@ def test_collector_gen_query_prompt_defines_target_paper_locator_contract():
     assert "Target papers" in rendered_prompt
     assert "PMID > DOI > arXiv ID > full title > implicit fingerprint" in rendered_prompt
     assert "at most one locator query" in rendered_prompt
-    assert 'search_engine_name` to `"pubmed"`' in rendered_prompt
-    assert 'search_engine_name` to `"arxiv"`' in rendered_prompt
+    assert 'search_engine_names` to `["pubmed"]`' in rendered_prompt
+    assert 'search_engine_names` to `["arxiv"]`' in rendered_prompt
     assert "English academic terminology" in rendered_prompt
     assert "Keep the locator query separate" in rendered_prompt
     assert "dataset observation year is not a publication-date boundary" in rendered_prompt
     assert "isolated collector step" in rendered_prompt
+
+
+def test_collector_gen_query_prompt_uses_plural_scholarly_engine_contract():
+    rendered_prompt = _render_prompt(
+        "collector_gen_query",
+        {
+            "plan_title": "Cross-domain research",
+            "plan_thought": "Collect scholarly evidence.",
+            "step_title": "Clinical AI evidence",
+            "step_description": "Find medical and technical papers.",
+            "max_search_query_count": 3,
+            "language": "en-US",
+            "report_type": "professional",
+        },
+    )
+
+    assert '"search_engine_names"' in rendered_prompt
+    assert '"search_engine_name":' not in rendered_prompt
+    assert "`search_engine_name`" not in rendered_prompt
+    assert '"semantic_scholar"' in rendered_prompt
+    assert '"openalex"' not in rendered_prompt
+    assert '"semantic_scholar"' in rendered_prompt
+    assert "ordinary academic" in rendered_prompt
+    assert "cross-domain" in rendered_prompt
 
 
 def test_collector_supervisor_prompt_allows_source_language_follow_up_queries():

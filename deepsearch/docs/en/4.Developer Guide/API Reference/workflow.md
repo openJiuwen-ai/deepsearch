@@ -44,7 +44,7 @@ Streams JSON chunks (`AsyncGenerator[str]`) for normal execution, HITL resume, o
 Behavior highlights: initializes LLM + search tools; `native` local search requires non-empty `knowledge_base_configs`; wraps interactive interrupts; `ALL END` completes and clears context; cancel works in-process and with Redis checkpointer; when `user_feedback_processor_enable=True`, flow enters `UserFeedbackProcessorNode` after `SourceTracerInferNode` for post-report local editing.
 
 ### `register_web_search_tool` / `_register_local_search_tool`
-Static helpers to register custom/web or local tools; native local requires `knowledge_base_configs`. Research also registers the built-in PubMed and arXiv secondary engines, while DeepSearch registers only its configured active web engine.
+Static helpers register custom/web or local tools; native local requires `knowledge_base_configs`. When scholarly search is enabled, Research also registers the built-in PubMed, arXiv, and Semantic Scholar secondary engines, while DeepSearch registers only its configured active web engine. Scholarly provider requests are attempted once, and failures are not retried by the collector.
 
 ---
 
