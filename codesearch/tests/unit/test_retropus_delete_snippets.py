@@ -40,7 +40,7 @@ def test_delete_snippets_removes_span_by_id(tmp_path):
 
     env = SimpleNamespace(
         tools=tools,
-        memory=tools.memory,
+        working_memory=tools.memory,
         turn=1,
         config=SimpleNamespace(agent=SimpleNamespace(max_turns=12)),
     )
