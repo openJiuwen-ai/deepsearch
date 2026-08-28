@@ -64,13 +64,15 @@ uv sync --allow-insecure-host github.com --allow-insecure-host pypi.org --allow-
 
 ## 二、日志定位
 ### 1. 日志路径
-openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/logs/common** 下，系统实现了日志分流，包含两类日志：
-- warning级别以上（方便快速定位错误日志）：**common_warning.log**
-- 项目运行日志：**common.log**
+openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/logs** 下，按日期文件夹（YYYYMMDD）组织，每次运行生成独立的日志文件：
+- 项目运行日志：**output/logs/common/YYYYMMDD/common_YYYYMMDD_HHMMSS_hash.log**
+- warning级别以上（方便快速定位错误日志）：**output/logs/common/YYYYMMDD/common_warning_YYYYMMDD_HHMMSS_hash.log**
+- 性能打点日志：**output/logs/metrics/YYYYMMDD/metrics_YYYYMMDD_HHMMSS_hash.log**
 
 补充说明：
-- `common.log` 主要记录 DeepSearch 项目自身日志；第三方组件日志默认仅保留 `warning/error` 级别，`debug/info` 不会写入。
+- `common_*.log` 主要记录 DeepSearch 项目自身日志；第三方组件日志默认仅保留 `warning/error` 级别，`debug/info` 不会写入。
 - 超长日志会自动截断，仅保留头尾关键片段；少数关键结果日志会显式跳过截断，便于排查引用、报告等完整输出。
+- 日志自动清理：`common/` 和 `metrics/` 下超过 `log_retention_days`（默认 30 天）的日期文件夹会在 `LogManager.init` / `new_run` 时自动删除，可通过 `LogManager.init(log_retention_days=...)` 参数调整，设为 0 则不清理。
 
 ### 2. 如何判断报告是否成功生成并定位异常
 
@@ -97,11 +99,11 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 - 随后通常还有框架层的 **`ALL END`** 结束标记。
 - `response_content` 有实质内容（Markdown 报告正文）。
 
-**② 看日志（先查 `common_warning.log`）**
+**② 看日志（先查 `common_warning_*.log`）**
 
 1. 用当次任务的 **`conversation_id`**（即配置中的 `thread_id`）检索日志，缩小范围。
-2. `common_warning.log` 中**没有**阻断主流程的 `ERROR`（少量 `WARN` 如模型重试、单条搜索无结果，通常不影响最终成稿）。若日志中出现 `ERROR`，最终仍以 `final_result.exception_info` 判定是否失败，再用日志辅助定位原因。
-3. `common.log` 中出现 **`[EndNode] Start EndNode`** 且 **`Get final result`** 中 `exception_info` 为空。
+2. `common_warning_*.log` 中**没有**阻断主流程的 `ERROR`（少量 `WARN` 如模型重试、单条搜索无结果，通常不影响最终成稿）。若日志中出现 `ERROR`，最终仍以 `final_result.exception_info` 判定是否失败，再用日志辅助定位原因。
+3. `common_*.log` 中出现 **`[EndNode] Start EndNode`** 且 **`Get final result`** 中 `exception_info` 为空。
 ![img.png](../images/FAQ/日志最终报告.png)
 4. 主路径关键节点按顺序应有完成类日志，例如：`EntryNode` → `OutlineNode` / `OutlineInteractionNode` → `EditorTeamNode` 或 `DependencyEditorTeamNode` → `ReporterNode` → `SourceTracerNode` → `EndNode`（若开启溯源推理 / 用户反馈，中间还会经过对应节点）。
 
@@ -116,7 +118,7 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 
 **⑤ 快速查找报告**
 
-- 直接在 **`common.log`** 中按 `conversation_id` / `thread_id` 过滤后搜索 **`Get final result`**。
+- 直接在 **`common_*.log`** 中按 `conversation_id` / `thread_id` 过滤后搜索 **`Get final result`**。
 - 找到对应日志后，查看其中的 `final_result.response_content` 即为最终报告正文；同时确认 `exception_info` 为空，避免误把失败结果中的部分内容当作完整报告。
 
 ---
@@ -127,7 +129,7 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 
 **日志侧：看最终结果**
 
-- 在 **`common.log`** 中搜索 **`Get final result`**，查看其中的 `final_result.exception_info`。
+- 在 **`common_*.log`** 中搜索 **`Get final result`**，查看其中的 `final_result.exception_info`。
 - `exception_info` 非空即表示工作流以异常结束；即使 `response_content` 有内容，也不应视为完整成功。
 - 仅 `warning_info` 非空时，多为降级完成，需人工评估报告是否可用。
 
@@ -156,9 +158,9 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 
 **③ 按 `conversation_id` / `thread_id` 查日志**
 
-1. 打开 **`common_warning.log`**，用 `conversation_id` / `thread_id` 过滤。
+1. 打开 **`common_warning_*.log`**，用 `conversation_id` / `thread_id` 过滤。
 2. 搜索 **`ERROR`**，并关注报错行附近的 **节点名**（如 `[OutlineNode]`、`[ReporterNode]`、`[EditorTeamNode]`、`plan_reasoning`、`sub_reporter`）。
-3. 若 `exception_info` 中有具体异常文本，在 **`common.log`** 中继续搜索同一关键词，查看完整堆栈与上下文。
+3. 若 `exception_info` 中有具体异常文本，在 **`common_*.log`** 中继续搜索同一关键词，查看完整堆栈与上下文。
 4. 结合本文 **三、模型相关错误 / 3. 节点异常影响范围** 判断是局部章节问题还是整报告失败。
 
 **④ 沿子图 / 主图继续下钻**
@@ -169,8 +171,8 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 **⑤ 推荐排查顺序**
 
 ```
-final_result.exception_info  →  错误码查表  →  common_warning.log 按 thread_id 过滤
-→  定位节点名  →  common.log 查异常详情  →  （可选）node_debug_log 看中间结果
+final_result.exception_info  →  错误码查表  →  common_warning_*.log 按 thread_id 过滤
+→  定位节点名  →  common_*.log 查异常详情  →  （可选）node_debug_log 看中间结果
 ```
 
 ## 三、模型相关错误
