@@ -361,6 +361,10 @@ class AgentConfig(BaseModel):
             "hybrid：混合大纲路由模式，由意图识别节点调用LLM选择普通大纲或依赖驱动大纲。"
         ),
     )
+    report_type: Literal["brief", "professional"] | None = Field(
+        default=None,
+        description="报告类型；None 时由意图识别与澄清机制决定",
+    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=5,

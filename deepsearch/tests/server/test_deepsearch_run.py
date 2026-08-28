@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from pydantic import ValidationError
 
+from server.routers import deepsearch_run
 from server.schemas.deepsearch_run import DeepSearchRequest
 
 
@@ -225,8 +227,6 @@ def test_prepare_stream_context_builds_agent_config_once(monkeypatch):
     Returns:
         None.
     """
-    from server.routers import deepsearch_run
-
     fake_agent = SimpleNamespace(research_name="demo")
     fake_config = {
         "search_mode": "research",
@@ -264,3 +264,47 @@ def test_prepare_stream_context_builds_agent_config_once(monkeypatch):
     assert agent is fake_agent
     assert run_kwargs["agent_config"] == fake_config
     assert build_call_count == 1
+
+
+def test_deep_search_request_report_type_defaults_to_none():
+    """report_type 缺省为 None；显式 brief/professional 合法；非法值 422。"""
+    request = _build_request()
+    assert request.report_type is None
+
+    base_kwargs = request.model_dump(exclude_none=True)
+
+    brief_request = DeepSearchRequest(**base_kwargs, report_type="brief")
+    assert brief_request.report_type == "brief"
+
+    professional_request = DeepSearchRequest(**base_kwargs, report_type="professional")
+    assert professional_request.report_type == "professional"
+
+    with pytest.raises(ValidationError):
+        DeepSearchRequest(**base_kwargs, report_type="invalid")
+
+
+@pytest.mark.asyncio
+async def test_run_brief_overrides_report_type_and_calls_run():
+    """run_brief 强制 report_type=brief 并复用 run() 全部逻辑。"""
+    request = _build_request()
+    request.report_type = "professional"  # 调用方传入值应被覆盖
+
+    with patch.object(deepsearch_run, "run", new_callable=AsyncMock) as mock_run:
+        await deepsearch_run.run_brief(request, db=Mock())
+
+    assert request.report_type == "brief"
+    mock_run.assert_awaited_once()
+    assert mock_run.call_args.args[0] is request
+
+
+@pytest.mark.asyncio
+async def test_run_brief_allows_non_research_mode():
+    """薄封装不限制 search_mode：search/react 下 report_type 仍被覆盖，由下游自然忽略。"""
+    request = _build_request()
+    request.search_mode = "search"
+
+    with patch.object(deepsearch_run, "run", new_callable=AsyncMock) as mock_run:
+        await deepsearch_run.run_brief(request, db=Mock())
+
+    assert request.report_type == "brief"
+    mock_run.assert_awaited_once()

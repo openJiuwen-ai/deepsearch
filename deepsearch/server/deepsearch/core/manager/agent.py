@@ -106,11 +106,12 @@ class DeepSearchAgentManager:
     @staticmethod
     def _compute_agent_cache_key(request: DeepSearchRequest) -> str:
         """
-        生成 Agent 缓存键。排除仅影响单次对话内容的字段（message、conversation_id），
-        保留与 build_agent_config 相关的全部字段（含 space_id、local_search_config_ids、
-        web_search_config_id、LLM 与各开关），保证换知识库/引擎后不会误复用旧 Agent。
+        生成 Agent 缓存键。排除仅影响单次对话内容的字段（message、interrupt_feedback），
+        以及运行期策略字段（report_type，不参与 Agent 构建），保留与 build_agent_config
+        相关的全部字段（含 space_id、local_search_config_ids、web_search_config_id、
+        LLM 与各开关），保证换知识库/引擎后不会误复用旧 Agent。
         """
-        payload = request.model_dump(exclude={"message", "interrupt_feedback"})
+        payload = request.model_dump(exclude={"message", "interrupt_feedback", "report_type"})
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
@@ -304,6 +305,7 @@ class DeepSearchAgentManager:
             "search_mode": request.search_mode,
             "execute_mode": "commercial",
             "execution_method": request.execution_method,
+            "report_type": request.report_type,
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,
             "outliner_max_section_num": request.outliner_max_section_num,
             "source_tracer_research_trace_source_switch": request.source_tracer_research_trace_source_switch,

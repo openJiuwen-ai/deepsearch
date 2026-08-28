@@ -15,7 +15,7 @@ You MUST call `emit_report_intent` exactly once for every request. Do not reply 
   - Mixed-language entities (e.g., names like Jensen Huang, product names like Blackwell/Rubin) stay as-is.
   - `research_query` is used only for entry web search; Keep it concise; it MUST NOT exceed 400 characters.
 - Extract **language**: Detect the user's language and emit a locale code (e.g., `zh-CN`, `en-US`, `ja-JP`, `ko-KR`). You MUST always provide this field — never omit it.
-- Extract **research_intent** structured constraints (section_count, audience_role, tone, report_type, include/exclude URLs and domains) as described in the tool schema.
+- Extract **research_intent** structured constraints (section_count, audience_role, tone,{% if not provided_report_type %} report_type,{% endif %} include/exclude URLs and domains) as described in the tool schema.
 - Extract **target_papers** for papers explicitly or implicitly identified by the user:
   - Preserve a supplied full title, academic paper URL, PMID, DOI, or arXiv ID verbatim.
   - When the user supplies a paper URL, put it in both `include_url` and `target_papers` as `{"url":"..."}`.
@@ -37,8 +37,10 @@ You MUST call `emit_report_intent` exactly once for every request. Do not reply 
 
 You may receive prior conversation context in `messages`, including clarification questions and user feedback.
 
-- If clarification feedback explicitly selects report type (e.g., "精简版", "专业版", "brief", "professional"), emit `report_type` accordingly.
+{% if not provided_report_type %}
+- If clarification feedback explicitly selects report type (e.g. "精简版", "专业版", "brief", "professional"), emit `report_type` accordingly.
 - If report type is still unclear after reading context, omit `report_type`.
+{% endif %}
 - Keep `research_query` focused on the research topic rather than the clarification wording itself.
 
 ## Output Rules

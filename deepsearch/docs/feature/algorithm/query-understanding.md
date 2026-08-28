@@ -16,6 +16,7 @@
 - 意图识别会提取用户指定的来源排除约束：文章级排除进入 `exclude_url`（链接）与 `exclude_titles`（标题，逐字提取，用于识别同文献镜像变体），站点级排除才进入 `exclude_domains`；禁引的 URL 即使同属一个域名也不得归纳为整域排除。提取结果非空时输出 `[EXCLUDE_INTENT]` 观测日志（敏感模式下只记字段计数）。
 - 入口预搜索（web 模式）结果在写入 `search_context.entry_search_results` 前会按 `exclude_url`/`exclude_titles` 过滤（与本地知识库检索无关），过滤后的结果供大纲与问题生成消费；纯本地模式无入口预搜索，不受影响。
 - 报告类型只接受明确的 `professional` 或 `brief`；未知值保持为空，由下游澄清或默认策略处理。
+- API 已指定 `report_type`（`config.report_type` 非 `None`）时三层抑制：意图识别工具 schema 移除 `report_type` 字段、意图 Prompt 完全不渲染相关指令、意图识别节点用 API 值覆盖 LLM 意外输出；反馈轮重解析同样被抑制，锁定值不可被用户反馈覆盖。
 - `brief` 只在意图识别后改变主图路由：它使用独立的 Brief 大纲和报告级证据工作流，不生成专业版 `Outline` 或章节 `Plan`。入口预搜索仍按当前搜索方式执行，但其结果不直接并入 Brief 证据集合。
 - 大纲生成要求章节标题不带编号，并在代码侧修复章节 ID、依赖关系和 parent/relationship 一致性。
 - 用户显式指定顶层结构时，大纲生成按用户给出的主要章节数量、标题和顺序组织，不为了默认章节数、brief 摘要或维度覆盖规则额外新增顶层章节。
