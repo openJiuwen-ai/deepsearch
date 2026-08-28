@@ -126,7 +126,7 @@ def _passage_item(content_time):
 
 
 def test_build_citation_infos_includes_content_time_for_content_date():
-    from openjiuwen_deepsearch.algorithm.report.report import build_citation_infos
+    from openjiuwen_deepsearch.algorithm.report.report_common import build_citation_infos
 
     item = _passage_item({"start": "2019-01-01", "end": "2019-12-31"})
     infos = build_citation_infos([item])
@@ -137,7 +137,7 @@ def test_build_citation_infos_includes_content_time_for_content_date():
 
 
 def test_build_citation_infos_excludes_content_time_for_source_date():
-    from openjiuwen_deepsearch.algorithm.report.report import build_citation_infos
+    from openjiuwen_deepsearch.algorithm.report.report_common import build_citation_infos
 
     # source_date scenario: content_time is None — no content_time field rendered.
     item = _passage_item(None)
@@ -148,7 +148,7 @@ def test_build_citation_infos_excludes_content_time_for_source_date():
 
 
 def test_build_citation_infos_omits_content_time_without_start():
-    from openjiuwen_deepsearch.algorithm.report.report import build_citation_infos
+    from openjiuwen_deepsearch.algorithm.report.report_common import build_citation_infos
 
     # Malformed content_time (missing start) must not render a partial field.
     item = _passage_item({"start": "", "end": "2019-12-31"})
@@ -157,7 +157,7 @@ def test_build_citation_infos_omits_content_time_without_start():
 
 
 def test_build_citation_infos_renders_empty_publish_time_when_doc_time_none():
-    from openjiuwen_deepsearch.algorithm.report.report import build_citation_infos
+    from openjiuwen_deepsearch.algorithm.report.report_common import build_citation_infos
 
     # doc_time present but None must render an empty publish_time field,
     # never the sentinel string "None".

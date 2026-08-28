@@ -372,7 +372,7 @@ def test_extract_level_one_headings_ignores_fenced_headings():
 
 
 @pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     # 设置 mock 返回值

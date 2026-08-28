@@ -54,9 +54,23 @@ openjiuwen_deepsearch/
   - `planner.py` - 生成章节计划
   - `router.py` - 判断是否进入深度搜索
 - **report/** - 报告生成
-  - `report.py` - 报告生成主逻辑
-  - `report_utils.py` - 报告工具函数
-  - `config.py` - 报告样式与格式
+  - `background_knowledge.py` - 背景知识抽取 mixin
+  - `compact_doc_info.py` - 文档信息压缩
+  - `config.py` - 报告格式配置
+  - `doc_prefilter.py` - 文档预筛选
+  - `evidence.py` - 证据抽取与评分 mixin（含证据管线编排 `_prepare_evidence`）
+  - `markdown_utils.py` - Markdown 处理 mixin
+  - `reference_utils.py` - 参考文献管理 mixin
+  - `report.py` - 核心 Reporter 类（编排调度）
+  - `report_common.py` - 常量、正则模式、错误格式化
+  - `report_parts.py` - 报告部件 mixin（子报告 Prompt 构建 `_build_subsection_prompt`、后处理 `_post_process_subsection`、摘要、结论、sidecar）
+  - `report_rationale_fulltext.py` - 全文证据增强
+  - `report_utils.py` - 报告工具类
+  - `retry_feedback.py` - 重试反馈 mixin
+  - `sub_section_outline.py` - 子大纲生成 mixin（`_generate_sub_section_outline` / `_generate_outline_with_retry`）
+  - `table_caption_utils.py` - 表格标题工具
+  - `visualization.py` - 可视化生成 mixin
+  - `visualization_insertion.py` - 可视化插入 mixin
 - **report_template/** - 模板生成与解析
   - `template_generator.py`
   - `template_utils.py`

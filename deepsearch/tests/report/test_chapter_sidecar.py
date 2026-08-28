@@ -28,7 +28,7 @@ def test_chapter_sidecar_defaults_and_sub_report_serialization():
 
 @pytest.mark.asyncio
 @patch(
-    "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+    "openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats",
     new_callable=AsyncMock,
 )
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
@@ -68,7 +68,7 @@ async def test_generate_sub_report_sidecar_repairs_json_and_normalizes_soft_fiel
 
 @pytest.mark.asyncio
 @patch(
-    "openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats",
+    "openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats",
     new_callable=AsyncMock,
 )
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
@@ -100,7 +100,7 @@ async def test_generate_sub_report_sidecar_falls_back_to_full_body_after_retries
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 @patch(
-    "openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt",
+    "openjiuwen_deepsearch.algorithm.report.report_parts.apply_system_prompt",
     side_effect=ValueError("prompt render failed"),
 )
 async def test_generate_sub_report_sidecar_falls_back_when_prompt_render_fails(
