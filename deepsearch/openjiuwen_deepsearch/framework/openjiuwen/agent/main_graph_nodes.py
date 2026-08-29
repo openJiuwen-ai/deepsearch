@@ -407,14 +407,24 @@ class IntentRecognitionNode(BaseNode):
         ))
 
         human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
+        if human_in_the_loop:
+            needs_clarification = algorithm_output.needs_clarification
+        else:
+            needs_clarification = False
         next_node = (
             NodeId.GENERATE_QUESTIONS.value
-            if human_in_the_loop
+            if needs_clarification
             else (NodeId.BRIEF_OUTLINE.value if report_policy.report_type == "brief" else NodeId.OUTLINE.value)
         )
 
+        logger.info(
+            "[IntentRecognitionNode] clarification_triggered=%s human_in_the_loop=%s "
+            "llm_needs_clarification=%s report_type=%s next_node=%s",
+            needs_clarification, human_in_the_loop,
+            algorithm_output.needs_clarification, report_type, next_node,
+        )
         logger.info("[IntentRecognitionNode] End IntentRecognitionNode, next_node=%s", next_node)
-        return dict(language=lang, human_in_the_loop=human_in_the_loop, next_node=next_node)
+        return dict(language=lang, next_node=next_node)
 
 
 class FeedbackHandlerNode(BaseNode):
@@ -446,18 +456,16 @@ class FeedbackHandlerNode(BaseNode):
         else:
             standardized_feedback = truncate_string(user_feedback, max_length=MAX_QUERY_LENGTH)
             if not standardized_feedback:
-                logger.error("[FeedbackHandlerNode] Invalid feedback, length or type is invalid")
-                error_detail = user_feedback or "empty"
-                standardized_feedback = "Invalid feedback, length is 0 or type is invalid"
+                logger.info("[FeedbackHandlerNode] Empty feedback, skipping reparse and proceeding to outline.")
+                standardized_feedback = ""
 
         algorithm_output = dict(user_feedback=standardized_feedback)
         if error_detail:
             algorithm_output["error_detail"] = error_detail
         if standardized_feedback not in {
             "Invalid feedback_mode",
-            "Invalid feedback, length is 0 or type is invalid",
             FINISH_TASK_FEEDBACK,
-        }:
+        } and standardized_feedback:
             intent_inputs = self._build_intent_reparse_inputs(current_inputs, standardized_feedback)
             reparsed_intent = await recognize_report_intent(intent_inputs)
             algorithm_output["reparsed_intent"] = reparsed_intent.model_dump()
@@ -517,6 +525,12 @@ class FeedbackHandlerNode(BaseNode):
         incoming_intent = ResearchIntent.model_validate(reparsed_intent.get("research_intent") or {})
 
         merged_intent = current_intent.model_copy(deep=True)
+        if incoming_intent.task_type:
+            merged_intent.task_type = incoming_intent.task_type
+        if incoming_intent.required_dimensions:
+            merged_intent.required_dimensions = incoming_intent.required_dimensions
+        if incoming_intent.comparison_targets:
+            merged_intent.comparison_targets = incoming_intent.comparison_targets
         if incoming_intent.section_count is not None:
             merged_intent.section_count = incoming_intent.section_count
         if incoming_intent.audience_role:
@@ -601,23 +615,6 @@ class FeedbackHandlerNode(BaseNode):
         if user_feedback == "Invalid feedback_mode":
             exception_info = format_exception_info(
                 StatusCode.FEEDBACK_HANDLER_INVALID_MODE_ERROR,
-                algorithm_output.get("error_detail", ""),
-            )
-            session.update_global_state({"search_context.final_result.exception_info": exception_info})
-            # 添加FeedbackHandlerNode debug日志
-            add_debug_log_wrapper(
-                session,
-                NodeDebugData(
-                    NodeId.FEEDBACK_HANDLER.value,
-                    0,
-                    NodeType.MAIN.value,
-                    output_content=str(exception_info).replace("\\n", "\n"),
-                ),
-            )
-            return dict(next_node=NodeId.END.value)
-        if user_feedback == "Invalid feedback, length is 0 or type is invalid":
-            exception_info = format_exception_info(
-                StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR,
                 algorithm_output.get("error_detail", ""),
             )
             session.update_global_state({"search_context.final_result.exception_info": exception_info})
@@ -876,6 +873,10 @@ class GenerateQuestionsNode(BaseNode):
         report_type = research_intent.get("report_type")
         max_gen_question_retry_num = session.get_global_state("config.workflow_max_gen_question_retry_num")
         llm_model_name = adapt_llm_model_name(session, NodeId.GENERATE_QUESTIONS.value)
+        logger.info(
+            "[GenerateQuestionsNode] input: language=%s query=%s report_type=%s entry_search_results_count=%d",
+            language, "**" if LogManager.is_sensitive() else query, report_type, len(entry_search_results),
+        )
         return dict(language=language, query=query, entry_search_results=entry_search_results,
                     max_gen_question_retry_num=max_gen_question_retry_num,
                     llm_model_name=llm_model_name,
@@ -939,6 +940,10 @@ class GenerateQuestionsNode(BaseNode):
 
         questions_text = algorithm_output.get("result")
         session.update_global_state({"search_context.questions": questions_text})
+        logger.info(
+            "[GenerateQuestionsNode] output questions: %s",
+            "**" if LogManager.is_sensitive() else questions_text,
+        )
         add_debug_log_wrapper(
             session,
             NodeDebugData(

@@ -12,7 +12,7 @@
 
 ## 可见行为
 
-- 意图识别会输出 `IntentRecognitionResult`，其中包含 `original_query`、`research_query`、`research_intent`、`lang` 和可选入口搜索结果。
+- 意图识别会输出 `IntentRecognitionResult`，其中包含 `original_query`、`research_query`、`research_intent`、`lang`、`needs_clarification` 和可选入口搜索结果。`needs_clarification` 由 LLM 判断用户输入是否充足：当 `workflow_human_in_the_loop=True` 时，仅 `needs_clarification=True` 才进入问题澄清流程；`workflow_human_in_the_loop=False` 时忽略该字段，一律不澄清。LLM 未输出该字段或意图识别调用失败时，`needs_clarification` 默认为 `False`（不澄清）。
 - 意图识别会提取用户指定的来源排除约束：文章级排除进入 `exclude_url`（链接）与 `exclude_titles`（标题，逐字提取，用于识别同文献镜像变体），站点级排除才进入 `exclude_domains`；禁引的 URL 即使同属一个域名也不得归纳为整域排除。提取结果非空时输出 `[EXCLUDE_INTENT]` 观测日志（敏感模式下只记字段计数）。
 - 入口预搜索（web 模式）结果在写入 `search_context.entry_search_results` 前会按 `exclude_url`/`exclude_titles` 过滤（与本地知识库检索无关），过滤后的结果供大纲与问题生成消费；纯本地模式无入口预搜索，不受影响。
 - 报告类型只接受明确的 `professional` 或 `brief`；未知值保持为空，由下游澄清或默认策略处理。
@@ -42,7 +42,6 @@
 相关 Prompt：
 
 - `openjiuwen_deepsearch/algorithm/prompts/intent_recognition.md`
-- `openjiuwen_deepsearch/algorithm/prompts/intent_recognition_entry.md`
 - `openjiuwen_deepsearch/algorithm/prompts/query_rewrite.md`
 - `openjiuwen_deepsearch/algorithm/prompts/outliner.md`
 - `openjiuwen_deepsearch/algorithm/prompts/outliner_interaction.md`

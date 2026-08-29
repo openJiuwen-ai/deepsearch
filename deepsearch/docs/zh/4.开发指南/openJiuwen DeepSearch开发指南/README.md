@@ -367,7 +367,7 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 ## 用户查询意图交互（Clarification Interaction）
 
-在规划预备阶段，系统会根据用户的原始查询生成 `research_query`，再依据 `research_query` 自动生成若干延伸问题，引导用户提供更多背景信息，以便系统更准确地理解研究目标。
+在规划预备阶段，意图识别 LLM 会根据用户原始查询判断输入是否充足（`needs_clarification`）。当判定不充足时，系统依据 `research_query` 自动生成若干延伸问题，引导用户提供更多背景信息，以便系统更准确地理解研究目标。当判定充足时，系统跳过澄清直接进入大纲生成。
 
 当配置参数：
 
@@ -375,17 +375,19 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 agent_config["workflow_human_in_the_loop"] = True
 ```
 
-系统将执行用户查询意图交互流程，该功能 **默认开启**。
+系统将启用用户查询意图交互流程，该功能 **默认开启**。关闭该参数时一律跳过澄清。
 
 ---
 
 ### 工作流程
 
 1. 用户提交原始查询
-2. 系统根据用户原始查询，意图识别后生成 `research_query` 与 `research_intent`
-3. 系统基于 `research_query` 提出补充问题，并保留 `research_intent` 供后续节点消费
+2. 系统根据用户原始查询，意图识别后生成 `research_query`、`research_intent` 与 `needs_clarification`
+3. 若 `needs_clarification=True`（输入不充足），系统基于 `research_query` 提出补充问题，并保留 `research_intent` 供后续节点消费
 4. 系统中断流程等待用户回答
 5. 用户反馈后系统恢复流程并继续执行 DeepResearch
+
+> 若 `needs_clarification=False`（输入充足），跳过步骤 3-5，直接进入大纲生成。意图识别 LLM 调用失败时默认 `needs_clarification=False`，不进行澄清。
 
 ---
 

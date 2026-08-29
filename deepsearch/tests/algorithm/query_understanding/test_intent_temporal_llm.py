@@ -8,7 +8,7 @@ recurring temporal-constraint patterns, covering content_date / source_date /
 none, single/double boundaries, as-of snapshots, and "research-results-before"
 traps. Two cases keep boundaries from the original calibration set as
 regression anchors; the rest use neutral years. Prompt examples in
-intent_recognition*.md intentionally use different years (2014/2016/2017) so
+intent_recognition.md intentionally use different years (2014/2016/2017) so
 example and regression inputs stay disjoint.
 """
 from __future__ import annotations

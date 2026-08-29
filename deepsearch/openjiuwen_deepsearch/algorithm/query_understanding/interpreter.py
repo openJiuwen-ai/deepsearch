@@ -24,15 +24,22 @@ async def query_interpreter(current_inputs: dict) -> dict:
             str: generated questions
     """
     logger.info(f"Begin query interpretation operation.")
+    logger.info(
+        "[query_interpreter] input: query=%s language=%s report_type=%s entry_search_results_count=%d",
+        "**" if LogManager.is_sensitive() else current_inputs.get("query"),
+        current_inputs.get("language"),
+        current_inputs.get("report_type"),
+        len(current_inputs.get("entry_search_results") or []),
+    )
     prompt = apply_system_prompt("generate_questions", current_inputs)
     try:
         llm = llm_context.get().get(current_inputs.get("llm_model_name"))
         response = await ainvoke_llm_with_stats(llm, prompt, llm_type="basic",
                                                 agent_name=AgentLlmName.GENERATE_QUESTIONS.value, need_stream_out=True)
         if not LogManager.is_sensitive():
-            logger.debug("[query_interpreter] algorithm output: %s.", response.get("content"))
+            logger.info("[query_interpreter] output: %s", response.get("content"))
         else:
-            logger.debug("[query_interpreter] get algorithm output.")
+            logger.info("[query_interpreter] got output (redacted).")
         return dict(result=response.get("content"))
     except Exception as e:
         err_msg = format_exception_info(StatusCode.INTERPRETATION_GENERATE_ERROR, e)

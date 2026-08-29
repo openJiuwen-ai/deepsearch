@@ -143,7 +143,6 @@ class StatusCode(Enum):
 
     INTERPRETATION_GENERATE_ERROR = (211700, "Query interpretation failed with error")
     FEEDBACK_HANDLER_INVALID_MODE_ERROR = (211701, "Invalid feedback_mode, should be cmd or web")
-    FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR = (211702, "Invalid feedback, length is 0 or type is invalid")
 
     OUTLINER_GENERATE_ERROR = (211800, "Error when Outliner generate an outline")
     PLANNER_GENERATE_ERROR = (211801, "Error when Planner generate a plan, error: {e}")

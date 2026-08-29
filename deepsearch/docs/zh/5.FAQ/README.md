@@ -148,7 +148,7 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 | 错误码段 | 典型节点 / 环节 |
 |----------|-----------------|
 | 211600 | `EntryNode` 语言路由 / 意图识别 |
-| 211700–211702 | `GenerateQuestionsNode` / `FeedbackHandlerNode` 人机交互 |
+| 211700–211701 | `GenerateQuestionsNode` / `FeedbackHandlerNode` 人机交互 |
 | 211800 | `OutlineNode` 大纲生成 |
 | 211801 | 子图 `PlanReasoningNode` 任务规划 |
 | 211901 | 章节信息收集为空 |
