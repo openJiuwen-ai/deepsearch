@@ -41,6 +41,7 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
     XYChartMermaidGenerator,
     PieChartMermaidGenerator,
     TimelineChartMermaidGenerator,
+    sanitize_citation_markers,
     validate_visualization_extraction_schema,
     validate_visualization_normalization_schema,
 )
@@ -1640,7 +1641,7 @@ class Reporter:
             return ArticlePart.get_not_found_prompt("abstract", language)
 
         header = ArticlePart.get_title("abstract", language)
-        content = re.sub(r"\[?citation:\d+\]?", "", content)
+        content = sanitize_citation_markers(content)
         content = _convert_bold_formula_to_inline_math(content)
 
         if language == CHINESE:
@@ -1665,7 +1666,7 @@ class Reporter:
         if content is None or content == "":
             return ArticlePart.get_not_found_prompt("conclusion", language)
         header = ArticlePart.get_title("conclusion", language)
-        content = re.sub(r"\[?citation:\d+\]?", "", content)
+        content = sanitize_citation_markers(content)
         if content.startswith(header):
             return content
         return header + content

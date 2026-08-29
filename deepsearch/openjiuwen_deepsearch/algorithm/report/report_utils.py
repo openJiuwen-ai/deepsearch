@@ -12,10 +12,28 @@ from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 def _strip_chart_markup(text: str) -> str:
     """Remove report citation/link markup that is unreadable inside Mermaid labels."""
     cleaned = re.sub(r"\[checked_citation:\d+\]\[\[\d+\]\]\([^)]+\)", "", str(text))
-    cleaned = re.sub(r"\[citation:\d+\]", "", cleaned)
+    cleaned = sanitize_citation_markers(cleaned)
     cleaned = re.sub(r"\[\[\d+\]\]\([^)]+\)", "", cleaned)
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+_CITATION_MARKER_SANITIZE_RE = re.compile(
+    r"[<\[\]()>]?\s*(?<!checked_)citation:\s*\d+\s*[<\[\]()>]?"
+)
+
+
+def sanitize_citation_markers(text: str) -> str:
+    """Strip citation anchors including malformed delimiters.
+
+    Tolerates delimiter errors where the model emits ``<``/``>``/``(``/``)``
+    instead of matching ``[...]`` brackets, so malformed anchors such as
+    ``<citation:3]`` do not survive as visible text. Preserves
+    ``checked_citation`` markers, which are handled by dedicated strippers.
+
+    Use at citation-stripping points (abstract, conclusion, chart labels).
+    """
+    return _CITATION_MARKER_SANITIZE_RE.sub("", str(text))
 
 
 def _has_cjk(text: str) -> bool:
