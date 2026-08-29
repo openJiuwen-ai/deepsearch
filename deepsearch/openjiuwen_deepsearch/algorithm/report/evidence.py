@@ -3,9 +3,14 @@
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
+    build_coverage_passage_block,
+    normalize_key_passages,
+)
 from openjiuwen_deepsearch.algorithm.report.report_common import (
     CONTENT_DATE_TIMELINESS_WEIGHT,
     EFFECT_SUB_REPORT_TAG,
@@ -15,6 +20,13 @@ from openjiuwen_deepsearch.algorithm.report.report_common import (
     MAX_EXTRACT_DOC_CHARS,
     MAX_RATIONALE_DESC_LEN,
     SELECTION_COVERAGE_FLOOR,
+)
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
+    _COVERAGE_MAX_CHARS_PER_DOC,
+    _COVERAGE_MAX_TOTAL_CHARS,
+    _COVERAGE_TOP_K_CAP,
+    exclude_passages,
+    extract_coverage_passages,
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     enrich_fulltext_for_section,
@@ -1112,9 +1124,138 @@ class EvidenceMixin:
         }
 
         classified_content = fulltext_result["classified_content"]
+
+        # Part A：规则版覆盖证据（默认开，"key + coverage"双通道）。
+        # 独立开关 DS_COVERAGE_RULE_BLOCK 可单独关闭/回滚。
+        if _rule_coverage_block_enabled():
+            # 纯 CPU 的正则抽取流水线（最坏 ~百 ms/章节），放线程池避免
+            # 阻塞事件循环；GIL 下无真并行，收益是循环恢复可调度。
+            core_content_list, rule_passage_texts = await asyncio.to_thread(
+                _append_rule_coverage_to_core,
+                current_inputs.get("sub_section_core_content", []),
+                fulltext_result.get("fulltext_evidences", []),
+            )
+            coverage_block_count = 1 if rule_passage_texts else 0
+            logger.info(
+                "[rule_coverage] section_idx=%s fulltext_docs=%s coverage_docs=%s "
+                "outline_coverage_blocks=%s",
+                section_idx,
+                len(fulltext_result.get("fulltext_evidences", [])),
+                len(rule_passage_texts),
+                coverage_block_count,
+            )
+        else:
+            core_content_list = list(current_inputs.get("sub_section_core_content", []))
+            rule_passage_texts = {}
+            logger.info(
+                "[generate_sub_report] section_idx=%s rule coverage block disabled "
+                "(DS_COVERAGE_RULE_BLOCK=%s)",
+                section_idx,
+                os.environ.get("DS_COVERAGE_RULE_BLOCK", "1").strip(),
+            )
+        current_inputs["sub_section_core_content"] = core_content_list
+
         if LogManager.is_sensitive():
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}], "
                 f"selected_content len: {len(classified_content)}"
             )
         return True, "", classified_content
+
+
+# 方案 B 覆盖证据集成预算由 collector_evidence 统一提供（见 _COVERAGE_TOP_K_CAP /
+# _COVERAGE_MAX_CHARS_PER_DOC / _COVERAGE_MAX_TOTAL_CHARS）。选段不预设硬 Top-K，
+# 由单文档/章节字符预算兜底（方案2：预算即终止条件）。
+def _rule_coverage_block_enabled() -> bool:
+    """解析独立开关 DS_COVERAGE_RULE_BLOCK（默认开）。
+
+    标准布尔口径：`1`/`true`/`yes`/`on`（大小写与首尾空白不敏感）开启，
+    其余值（如 `0`/`false`/`off`/空串）关闭，避免用户写 `true` 被静默关闭。
+    """
+    return os.environ.get("DS_COVERAGE_RULE_BLOCK", "1").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _extract_doc_coverage_passages(item: dict) -> list[str]:
+    """抽取单个选中文档的覆盖证据，并与同一文档的 key passages 去重。"""
+    original_content = str(item.get("original_content") or "")
+    if not original_content:
+        return []
+    passages = extract_coverage_passages(
+        content=original_content,
+        max_passages=_COVERAGE_TOP_K_CAP,
+        max_chars=_COVERAGE_MAX_CHARS_PER_DOC,
+    )
+    key_passages = normalize_key_passages(item.get("key_passages"))
+    passages = exclude_passages(passages, key_passages)
+    return [passage.text for passage in passages]
+
+
+def _fit_coverage_to_budget(texts: list[str], budget: int) -> list[str]:
+    """把单文档覆盖证据裁入剩余预算：整块尽量保留，放不下的块跳过、继续尝试
+    后面更小的块（与 `collector_evidence._extract_coverage_passages_cached` 的
+    预算循环同语义）；仅当第一个块就超出预算时截断它，确保每个文档至少能
+    贡献一个证据块。"""
+    kept: list[str] = []
+    remaining = max(0, int(budget))
+    for text in texts:
+        if remaining <= 0:
+            break
+        if len(text) > remaining:
+            if not kept:
+                kept.append(text[:remaining])
+                remaining = 0
+                break
+            continue
+        kept.append(text)
+        remaining -= len(text)
+    return kept
+
+
+def _append_rule_coverage_to_core(
+    core_content_list: list[str],
+    fulltext_evidences: list,
+) -> tuple[list[str], dict[int, list[str]]]:
+    """Part A：把规则版覆盖证据（默认开）组装进大纲证据，回到"key + coverage"双通道。
+
+    运行时大网 evidence 由 `enrich_fulltext_for_section` 只拼 key 块；这里对每个
+    全文证据（按 `build_core_content_list` 相同的 1..N 文档编号）抽取规则覆盖段落、
+    裁入章节共享预算，`build_coverage_passage_block` 聚合后追加到大网证据末尾。
+    章节共享预算耗尽后跳过剩余文档的抽取（结果恒为空，无谓开销）。
+
+    性能预算（生产口径 top_n=10 × 10000 字符、高事实密度最坏用例，含缓存未
+    命中的冷调用）：约 150 ms 纯 CPU（锚点去重键集合已按块缓存复用；2026-08
+    测量口径，优化前同用例约 1.5 s）。本函数被 `_prepare_evidence` 经
+    `asyncio.to_thread` 调用，不阻塞事件循环。
+
+    Returns:
+        (组装后的大网核心内容, 每文档规则覆盖段落文本) —— 后者仅供运行时日志
+        统计覆盖文档数与大纲覆盖块数。
+    """
+    coverage_sections: list[tuple[int, list[str]]] = []
+    coverage_passage_texts: dict[int, list[str]] = {}
+    budget = _COVERAGE_MAX_TOTAL_CHARS
+    for doc_index, evidence in enumerate(fulltext_evidences or [], start=1):
+        if budget <= 0:
+            break  # 章节共享预算已耗尽，后续文档无需再抽取
+        kept_coverage = _fit_coverage_to_budget(
+            _extract_doc_coverage_passages(
+                {
+                    "original_content": str(getattr(evidence, "original_content", "") or ""),
+                    "key_passages": list(getattr(evidence, "key_passages", None) or []),
+                }
+            ),
+            budget,
+        )
+        if not kept_coverage:
+            continue
+        coverage_sections.append((doc_index, kept_coverage))
+        coverage_passage_texts[doc_index] = kept_coverage
+        budget -= sum(len(text) for text in kept_coverage)
+    if not coverage_sections:
+        return list(core_content_list), coverage_passage_texts
+    return (
+        list(core_content_list) + [build_coverage_passage_block(coverage_sections)],
+        coverage_passage_texts,
+    )
