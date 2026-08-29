@@ -96,8 +96,8 @@
 - 扁平子大纲必须恰好包含一个合法一级标题；层级化子大纲必须先出现一级标题，再出现带非空标题文本的 `n.x` 二级标题。
 - 三级编号检查按行首匹配（如 `2.1.1 标题`）；标题行内出现的点分数字（日期区间 `2010.3.12–2021.2.26`、版本号等）不视为三级编号。
 - 子大纲中的额外说明、Markdown 代码围栏、正文或错序标题不能被静默接受。
-- 正文标题必须与已批准子大纲的数量、层级、顺序和文本一致，不能破坏整体报告层级。
-- 重试反馈只允许包含白名单化错误码，例如 `HEADING_COUNT_MISMATCH`、`HEADING_LEVEL_MISMATCH`、`HEADING_TITLE_MISMATCH`、`MERMAID_OUTPUT_FORBIDDEN`、`SUB_REPORT_GENERATION_EXCEPTION`，以及安全的数字位置/计数字段；不把原始失败文本作为下一轮 LLM 指令。
+- 正文标题必须与已批准子大纲的层级、顺序和文本一致；层级化子大纲允许生成超出大纲的额外 H2 标题，但扁平子大纲（单行）不允许额外 Markdown 标题；大纲标题不得缺失或错序。
+- 重试反馈只允许包含白名单化错误码，例如 `HEADING_COUNT_MISMATCH`、`HEADING_TITLE_MISMATCH`、`OUTLINE_HEADING_MISSING`、`DUPLICATE_SUBSECTION_HEADINGS`、`MERMAID_OUTPUT_FORBIDDEN`、`SUB_REPORT_GENERATION_EXCEPTION`，以及安全的数字位置/计数字段；不把原始失败文本作为下一轮 LLM 指令。
 - 敏感日志模式下不输出完整资料和子报告正文。
 
 ## 测试与验证

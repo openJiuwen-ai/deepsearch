@@ -134,8 +134,8 @@ format_requirements: {{ current_section_format_requirements }}
 ## 5. Core Section Requirements (High Importance)
 This is a core part of the report. You must:
 1. **Expand Depth**: Go beyond summary; perform a deep-dive examination.
-2. **Multidimensional Analysis**: Analyze from at least **4 perspectives** (e.g., Technical, Economic, Social, Regulatory).
-   - Dedicate 2-3 sentences of specific analysis per perspective.
+2. **Multidimensional Analysis**: Cover relevant perspectives supported by the collected evidence (e.g., Technical, Economic, Social, Regulatory).
+   - Provide sufficient depth for each perspective based on evidence availability.
    - Integrate this analysis naturally into the paragraphs (avoid excessive bullet points for this part).
 3. **Evidence-Based**: Support every analytic claim with data points, case studies, or qualitative evidence.
 4. **Differentiation**: Clearly distinguish between objective facts (from search results) and your interpretive analysis (logical deductions).
@@ -152,8 +152,8 @@ This is a core part of the report. You must:
 - **Title Preservation**:
     - You must STRICTLY follow the **text content** of the `current_chapter_outline`.
     - Copy the Title **words** EXACTLY. Do Not add/remove titles or change the wording.
-    - If any heading's count, level, or wording does not exactly match the outline, the entire chapter will fail validation and be discarded.
-- Each line of `Current Chapter Outline` must appear in your output as **exactly one** Markdown heading — no more, no fewer. Do NOT output any `#`/`##` heading that is not in the outline.
+    - Every outline heading must appear in your output with matching level and title text. For hierarchical outlines (more than one line), extra H2 headings beyond the outline are allowed; omitting an outline heading will fail validation and be discarded. For flat outlines (single line), no extra Markdown headings are permitted — see the flat outline rule above.
+- Each line of `Current Chapter Outline` must appear in your output as a Markdown heading with matching level and title text. For hierarchical outlines, extra H2 headings are allowed, but every outline heading must be present. For flat outlines, no extra headings are permitted.
 - Do NOT generate H3 (`###`) or deeper headings. If the content logically requires a sub-section, use **unordered list with Bold font** (e.g., `- **header**`) instead of a heading.
 - Avoid Chinese numbering in headings.
 
@@ -179,7 +179,7 @@ This is a core part of the report. You must:
 - If a heading requests a diagram or flow, keep the heading but express the stages, relationships, and decisions as prose, lists, or a table. Never reproduce a visual as source code; the controlled chart pipeline handles chart selection, rendering, captions, and insertion after this draft.
 
 # Content Standards
-- **Density**: Each section should contain approximately **10000 words** to ensure comprehensive coverage.
+- **Density**: Write as comprehensively as the collected evidence supports, typically **7000-10000 words**. Do not pad with repetition or unsupported generalizations when evidence is limited.
 - **Data Presentation**:
     - Try to present comparative data in the form of **Markdown Tables** as much as possible.
     - **Specifics**: When mentioning data, cite the source authority (e.g., "According to data from China Education Online...").

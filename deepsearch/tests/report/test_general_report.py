@@ -254,6 +254,96 @@ def test_validate_sub_report_headings_match_outline_rejects_duplicated_h2_block(
     assert "duplicate" in reason.lower() or "expected" in reason.lower()
 
 
+def test_validate_sub_report_headings_match_outline_accepts_extra_headings():
+    """Extra H2 headings beyond the outline are allowed as long as all
+    outline headings are present."""
+    outline = """2 市场细分结构
+2.1 车型级别与价格带分布
+2.2 消费场景演变"""
+    content = """# 2 市场细分结构
+
+## 2.1 车型级别与价格带分布
+正文一
+
+## 2.2 消费场景演变
+正文二
+
+## 2.3 新能源趋势
+额外正文
+
+## 2.4 政策影响
+额外正文
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is True
+    assert reason == ""
+
+
+def test_validate_sub_report_headings_match_outline_accepts_interspersed_extra_headings():
+    """Extra H2 headings interspersed between outline headings are allowed."""
+    outline = """2 市场细分结构
+2.1 车型级别与价格带分布
+2.2 消费场景演变"""
+    content = """# 2 市场细分结构
+
+## 2.1 车型级别与价格带分布
+正文一
+
+## 2.1.1 额外视角
+额外正文
+
+## 2.2 消费场景演变
+正文二
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is True
+    assert reason == ""
+
+
+def test_validate_sub_report_headings_match_outline_rejects_missing_heading():
+    """Missing an outline heading should fail even when extra headings exist."""
+    outline = """2 市场细分结构
+2.1 车型级别与价格带分布
+2.2 消费场景演变"""
+    content = """# 2 市场细分结构
+
+## 2.1 车型级别与价格带分布
+正文一
+
+## 2.3 新能源趋势
+额外正文
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is False
+    assert "not present" in reason.lower()
+
+
+def test_validate_sub_report_headings_match_outline_rejects_out_of_order():
+    """Out-of-order outline headings must fail even when all headings exist."""
+    outline = """2 市场细分结构
+2.1 车型级别与价格带分布
+2.2 消费场景演变"""
+    content = """# 2 市场细分结构
+
+## 2.2 消费场景演变
+正文一
+
+## 2.1 车型级别与价格带分布
+正文二
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is False
+    assert "not present" in reason.lower()
+
+
 def test_clean_markdown_headers_preserves_year_prefixed_titles():
     content = """# 2025年中美欧AI PC市场规模与增长动能对比基准
 

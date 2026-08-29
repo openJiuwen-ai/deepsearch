@@ -99,6 +99,7 @@ class SubSectionOutlineMixin:
             )
             tmp_context["report_type"] = current_inputs.get("report_type", "professional")
             tmp_context["paragraph_style"] = current_inputs.get("paragraph_style", "detailed")
+            tmp_context["section_iscore"] = current_inputs.get("section_iscore", False)
             tmp_context.update(
                 build_section_local_contract_prompt_context(
                     current_inputs.get("section_local_contract")
