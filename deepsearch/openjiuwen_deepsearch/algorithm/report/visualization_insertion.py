@@ -198,7 +198,7 @@ class VisualizationInsertionMixin:
                 ]
                 continue
 
-            raw = (llm_output.get("content") or "").strip()
+            raw = str(llm_output.get("content") or "").strip()
             try:
                 plan = json.loads(normalize_json_output(raw))
             except Exception:
@@ -254,7 +254,7 @@ class VisualizationInsertionMixin:
                 f"```{context.newline}",
             ]
             title_meta = context.title_meta_map.get(index, {})
-            image_title = (title_meta.get("image_title") or "").strip()
+            image_title = str(title_meta.get("image_title") or "").strip()
             citation_indices = cls._normalize_citation_indices(
                 title_meta.get("citation_indices")
             )
@@ -390,9 +390,11 @@ class VisualizationInsertionMixin:
             # Prompt contract in `insert_visualization.md` uses 1-based indices.
             placeholder_index = 1
             for item in visualization_list:
+                if not isinstance(item, dict):
+                    continue
                 has_url = "url" in item
-                if isinstance(item, dict) and has_url and item.get("mermaid_content"):
-                    viz_payload = (
+                if has_url and item.get("mermaid_content"):
+                    viz_payload = str(
                         item.get("sub_section_visualization_content") or ""
                     ).strip()
                     try:
@@ -413,7 +415,7 @@ class VisualizationInsertionMixin:
                         citation_indices = self._normalize_citation_indices(
                             [citation_index]
                         )
-                    mermaid_map[placeholder_index] = item.get("mermaid_content", "")
+                    mermaid_map[placeholder_index] = str(item.get("mermaid_content", ""))
                     title_meta_map[placeholder_index] = {
                         "image_title": viz_obj.get("image_title", ""),
                         "citation_index": citation_indices[0] if citation_indices else 0,

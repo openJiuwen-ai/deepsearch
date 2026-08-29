@@ -9,6 +9,7 @@ from typing import Tuple
 
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -431,16 +432,16 @@ class XYChartMermaidGenerator:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") not in ("bar", "line"):
+        if not isinstance(data, dict) or data.get("image_type") not in ("bar", "line"):
             raise ValueError("input must be a bar/line chart visualization JSON")
 
         chart_type = data.get("image_type")  # "bar" or "line"
-        raw_unit = (data.get("unit") or "").strip()
+        raw_unit = str(data.get("unit") or "").strip()
         if cls._detect_mixed_unit(raw_unit):
             raise ValueError("mixed units are not allowed for a single chart")
 
         records = data.get("records", [])
-        if not records or len(records) < 2:
+        if not isinstance(records, list) or len(records) < 2:
             raise ValueError("records are required")
 
         x_values: list[str] = []
@@ -548,8 +549,11 @@ class XYChartMermaidGenerator:
     ) -> tuple[float, float]:
         if not values:
             return 0.0, 1.0
-        vmin = min(values)
-        vmax = max(values)
+        # Defensive: LLM-returned chart values may be strings or other non-numeric
+        # types. Convert via safe_float to prevent TypeError in min/max/subtraction.
+        cleaned = [safe_float(x) for x in values]
+        vmin = min(cleaned)
+        vmax = max(cleaned)
         if vmax == 0 and vmin == 0:
             return 0.0, 1.0
 
@@ -677,10 +681,10 @@ class PieChartMermaidGenerator:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") != "pie":
+        if not isinstance(data, dict) or data.get("image_type") != "pie":
             raise ValueError("input must be a pie chart visualization JSON")
 
-        unit = (data.get("unit") or "").strip()
+        unit = str(data.get("unit") or "").strip()
         percent_mode = bool(unit and ("%" in unit or "百分比" in unit))
         records = data.get("records", [])
         if not isinstance(records, list) or len(records) < 2:
@@ -768,7 +772,7 @@ class TimelineChartMermaidGenerator:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") != "timeline":
+        if not isinstance(data, dict) or data.get("image_type") != "timeline":
             raise ValueError("input must be a timeline visualization JSON")
 
         records = data.get("records", [])

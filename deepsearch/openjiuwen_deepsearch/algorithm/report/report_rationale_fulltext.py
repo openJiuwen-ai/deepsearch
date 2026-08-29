@@ -110,7 +110,12 @@ def filter_passages_by_coverage(
     if not coverage_result or not rationales:
         return selected_passages
 
+    if not isinstance(coverage_result, dict):
+        return selected_passages
+
     coverage_matrix: dict = coverage_result.get("coverage_matrix", {}) or {}
+    if not isinstance(coverage_matrix, dict):
+        coverage_matrix = {}
     if not coverage_matrix:
         return selected_passages
 
@@ -148,7 +153,7 @@ def filter_passages_by_coverage(
             passage_cov = {}
         max_score = 0.0
         for rid in rationale_ids:
-            score = float(passage_cov.get(rid, 0.0) or 0.0)
+            score = safe_float(passage_cov.get(rid, 0.0))
             if score > max_score:
                 max_score = score
         scored_passages.append((max_score, passage))
@@ -208,6 +213,8 @@ def dedup_passages_by_rationale(
     coverage_matrix: dict = {}
     if isinstance(coverage_result, dict):
         coverage_matrix = coverage_result.get("coverage_matrix", {}) or {}
+    if not isinstance(coverage_matrix, dict):
+        coverage_matrix = {}
     filtered_passages: list = (
         coverage_result.get("filtered_passages", []) if isinstance(coverage_result, dict) else []
     ) or []
@@ -228,10 +235,7 @@ def dedup_passages_by_rationale(
         cov = coverage_matrix.get(pkey, {})
         if not isinstance(cov, dict):
             return 0.0
-        try:
-            return float(cov.get(rid, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
+        return safe_float(cov.get(rid, 0.0))
 
     def _get_text(passage: dict) -> str:
         return str(

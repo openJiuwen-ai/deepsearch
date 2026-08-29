@@ -115,11 +115,17 @@ def _normalize_rationales(
     if not rationales:
         return []
 
+    # Filter out non-dict elements so downstream callers can safely use .get()
+    rationales = [r for r in rationales if isinstance(r, dict)]
+    if not rationales:
+        return []
+
     # Truncate overlong descriptions
     for r in rationales:
         desc = r.get("description", "")
-        if len(desc) > MAX_RATIONALE_DESC_LEN:
-            r["description"] = desc[:MAX_RATIONALE_DESC_LEN]
+        if not isinstance(desc, str):
+            desc = str(desc) if desc is not None else ""
+        r["description"] = desc[:MAX_RATIONALE_DESC_LEN] if len(desc) > MAX_RATIONALE_DESC_LEN else desc
 
     # Enforce quantity limit: keep all primary, truncate supplementary
     if len(rationales) > max_rationales:
@@ -245,7 +251,11 @@ class EvidenceMixin:
 
             try:
                 data = json.loads(normalize_json_output(llm_output.get("content", "")))
+                if not isinstance(data, dict):
+                    raise ValueError(f"LLM output is not a JSON object, got {type(data).__name__}")
                 rationales = data.get("rationales", [])
+                if not isinstance(rationales, list):
+                    raise ValueError(f"'rationales' is not a list, got {type(rationales).__name__}")
                 # Post-process: truncate overlong descriptions and enforce quantity limits
                 rationales = _normalize_rationales(rationales, max_rationales=15)
                 primary_count = sum(1 for r in rationales if r.get("priority") == "primary")
@@ -396,7 +406,16 @@ class EvidenceMixin:
                 continue
 
             documents = data.get("documents", [])
+            if not isinstance(documents, list):
+                documents = []
             for doc_result in documents:
+                if not isinstance(doc_result, dict):
+                    logger.warning(
+                        "%s [extract_score] section_idx: [%s] batch %s doc_result is not a dict (type=%s), skipping",
+                        EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+                        type(doc_result).__name__,
+                    )
+                    continue
                 passage_index = doc_result.get("doc_index", doc_result.get("passage_index"))
                 if not isinstance(passage_index, int):
                     logger.warning(
@@ -416,6 +435,15 @@ class EvidenceMixin:
                 parent_doc = batch_docs[passage_index]
 
                 passages = doc_result.get("passages", [])
+                if not isinstance(passages, list):
+                    logger.warning(
+                        "%s [extract_score] section_idx: [%s] batch %s "
+                        "doc_index=%s passages is not a list "
+                        "(type=%s), skipping",
+                        EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+                        passage_index, type(passages).__name__,
+                    )
+                    continue
                 for passage in passages:
                     if not isinstance(passage, dict):
                         continue
@@ -475,10 +503,11 @@ class EvidenceMixin:
                                 # bool 是 int 子类但非合法分数，需显式排除
                                 if isinstance(dim_scores, bool) or not isinstance(dim_scores, (int, float, str)):
                                     logger.warning(
-                                        "Unexpected score type for rationale %s: %s, value=%s. Treating as 0.0.",
-                                        rid,
-                                        type(dim_scores).__name__,
-                                        repr(dim_scores)[:200],
+                                        "%s [extract_score] section_idx: [%s] "
+                                        "Unexpected score type for rationale "
+                                        "%s: %s. Treating as 0.0.",
+                                        EFFECT_SUB_REPORT_TAG, section_idx,
+                                        rid, type(dim_scores).__name__,
                                     )
                                     c = 0.0
                                 else:
@@ -631,10 +660,15 @@ class EvidenceMixin:
 
             try:
                 data = json.loads(normalize_json_output(llm_output.get("content", "")))
-                n_docs = len(data.get("documents", []))
+                if not isinstance(data, dict):
+                    raise ValueError(f"LLM output is not a JSON object, got {type(data).__name__}")
+                documents = data.get("documents", [])
+                if not isinstance(documents, list):
+                    documents = []
+                n_docs = len(documents)
                 n_passages = sum(
-                    len(d.get("passages", [])) for d in data.get("documents", [])
-                    if isinstance(d, dict)
+                    len(d.get("passages") or []) for d in documents
+                    if isinstance(d, dict) and isinstance(d.get("passages"), list)
                 )
                 logger.info(
                     "%s [extract_score] section_idx: [%s] batch %s: parsed %s docs, %s passages (attempt %s/%s)",
@@ -727,7 +761,9 @@ class EvidenceMixin:
         filtered_passages = coverage_result.get("filtered_passages", passages)
         coverage_matrix = coverage_result.get("coverage_matrix", {})
 
-        rationale_ids = list(dict.fromkeys(r.get("id", "") for r in rationales))
+        rationale_ids = list(dict.fromkeys(
+            r.get("id", "") for r in rationales if isinstance(r, dict)
+        ))
 
         # Max raw coverage across rationales per passage, for the floor-aligned
         # keep-gate (see docstring). Computed once; the per-rationale loops reuse it.
@@ -737,7 +773,7 @@ class EvidenceMixin:
             if not isinstance(passage_cov, dict):
                 passage_cov = {}
             max_cov_by_idx[idx] = max(
-                (float(passage_cov.get(rid, 0.0) or 0.0) for rid in rationale_ids),
+                (safe_float(passage_cov.get(rid, 0.0)) for rid in rationale_ids),
                 default=0.0,
             )
         any_above_floor = any(v >= SELECTION_COVERAGE_FLOOR for v in max_cov_by_idx.values())
@@ -808,7 +844,7 @@ class EvidenceMixin:
                 passage_cov = coverage_matrix.get(passage_key, {})
                 if not isinstance(passage_cov, dict):
                     passage_cov = {}
-                score = passage_cov.get(rid, 0.0)
+                score = safe_float(passage_cov.get(rid, 0.0))
                 scored.append((score, idx))
 
             # Sort by weighted score descending (raw coverage when not temporal).
@@ -884,9 +920,7 @@ class EvidenceMixin:
                 if not isinstance(pv, dict):
                     continue
                 for rid in rationale_ids:
-                    v = pv.get(rid)
-                    if isinstance(v, (int, float)):
-                        cov_values.append(float(v))
+                    cov_values.append(safe_float(pv.get(rid, 0.0)))
             if cov_values:
                 cov_min = min(cov_values)
                 cov_max = max(cov_values)
@@ -1015,14 +1049,25 @@ class EvidenceMixin:
             # content_date scopes weight the sort by temporal compliance;
             # source_date / None scopes fall back to pure-coverage selection.
             _tscope = _resolve_content_date_scope(current_inputs.get("research_intent"))
-            selected_passages, _ = self._select_by_rationale_coverage(
-                passages, rationales, coverage_result,
-                top_k=classify_doc_infos_res_top_k_num,
-                temporal=TemporalSelectionOptions(
-                    temporal_scope=_tscope,
-                    timeliness_weight=CONTENT_DATE_TIMELINESS_WEIGHT,
-                ),
-            )
+            try:
+                selected_passages, _ = self._select_by_rationale_coverage(
+                    passages, rationales, coverage_result,
+                    top_k=classify_doc_infos_res_top_k_num,
+                    temporal=TemporalSelectionOptions(
+                        temporal_scope=_tscope,
+                        timeliness_weight=CONTENT_DATE_TIMELINESS_WEIGHT,
+                    ),
+                )
+            except (TypeError, ValueError, AttributeError, KeyError) as e:
+                # Defensive: LLM-returned coverage scores may have unexpected
+                # types that slip through safe_float. Fall back to truncation
+                # so the chapter is not lost entirely.
+                logger.warning(
+                    "%s [extract_score] section_idx: [%s] _select_by_rationale_coverage "
+                    "failed (%s: %s), degrading to truncation",
+                    EFFECT_SUB_REPORT_TAG, section_idx, type(e).__name__, e,
+                )
+                selected_passages = passages[:classify_doc_infos_res_top_k_num]
 
         # Write doc-selection debug info back to Section for ResultExporter
         # Placed before early returns so debug data is captured on all exit paths

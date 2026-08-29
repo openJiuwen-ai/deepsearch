@@ -55,6 +55,7 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 - `tests/report/test_sub_report.py`
 - `tests/report/test_visualization.py`
 - `tests/report/test_visualization_insertion.py`
+- `tests/report/test_type_safety.py`
 - `tests/algorithm/report_export/test_mermaid_renderer.py`
 
 ## 核心流程

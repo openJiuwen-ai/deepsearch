@@ -207,7 +207,7 @@ class ReportPartsMixin:
                 else:
                     content = current_inputs.get("content", "")
                     old = current_inputs.get("title_next", "")
-                    new = old + "\n" + llm_output.get("content")
+                    new = old + "\n" + str(llm_output.get("content") or "")
                     msg = content.replace(old, new, 1)
                     return msg
         except Exception as e:
@@ -230,7 +230,11 @@ class ReportPartsMixin:
     def _build_reporter_compact_context(self, target: str) -> str:
         """Build compact chapter context for abstract or conclusion generation."""
         current_report = self.gen_report_context.get("current_report")
-        if not current_report or not current_report.sub_reports:
+        if (
+            not current_report
+            or not hasattr(current_report, "sub_reports")
+            or not current_report.sub_reports
+        ):
             return ""
 
         report_task = (

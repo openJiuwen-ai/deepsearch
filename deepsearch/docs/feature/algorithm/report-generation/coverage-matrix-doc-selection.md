@@ -53,6 +53,7 @@
 - `tests/report/test_doc_selection.py`
 - `tests/report/test_report_rationale_fulltext.py`
 - `tests/report/test_evidence.py`
+- `tests/report/test_type_safety.py`
 
 ## 核心流程
 

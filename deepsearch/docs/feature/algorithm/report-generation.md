@@ -68,6 +68,7 @@
 - `tests/report/test_sub_section_outline.py`
 - `tests/report/test_visualization.py`
 - `tests/report/test_visualization_insertion.py`
+- `tests/report/test_type_safety.py`
 
 ## 核心流程
 
