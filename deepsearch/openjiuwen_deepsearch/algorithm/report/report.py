@@ -19,7 +19,6 @@ generation flow, and small utility static methods.
 """
 
 import asyncio
-import os
 import logging
 import re
 import uuid
