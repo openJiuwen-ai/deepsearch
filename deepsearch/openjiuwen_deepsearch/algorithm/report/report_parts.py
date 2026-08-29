@@ -2,7 +2,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 import json
 import logging
-import re
 from datetime import datetime, timezone
 
 from tenacity import (
@@ -22,6 +21,7 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
     _section_sort_key,
     export_outline_without_plans,
     resolve_current_subsection,
+    sanitize_citation_markers,
 )
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.common.exception import CustomValueException
@@ -111,7 +111,7 @@ class ReportPartsMixin:
             return ArticlePart.get_not_found_prompt("abstract", language)
 
         header = ArticlePart.get_title("abstract", language)
-        content = re.sub(r"\[?citation:\d+\]?", "", content)
+        content = sanitize_citation_markers(content)
         content = _convert_bold_formula_to_inline_math(content)
 
         if language == CHINESE:
@@ -136,7 +136,7 @@ class ReportPartsMixin:
         if content is None or content == "":
             return ArticlePart.get_not_found_prompt("conclusion", language)
         header = ArticlePart.get_title("conclusion", language)
-        content = re.sub(r"\[?citation:\d+\]?", "", content)
+        content = sanitize_citation_markers(content)
         if content.startswith(header):
             return content
         return header + content
