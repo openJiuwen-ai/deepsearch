@@ -203,19 +203,21 @@ def _normalize_task_type(raw: str | None) -> str | None:
     return aliases.get(value, value)
 
 
-def _normalize_temporal_scope(raw: object) -> TemporalScope | None:
-    """校验 LLM 输出的时间范围，非法时仅关闭时间约束。
+def _normalize_date_scope(raw: object, kind: str) -> TemporalScope | None:
+    """校验 {start,end} 子对象并强制 constraint_type=kind；非法静默丢弃返回 None。
 
     Args:
-        raw: 意图识别工具返回的 temporal_scope 原始值。
+        raw: 意图识别工具返回的 source_date_scope / content_date_scope 原始值。
+        kind: ``"source_date"`` 或 ``"content_date"``，注入为 constraint_type。
 
     Returns:
         合法的时间范围；缺失或非法时返回 None。
     """
     if not isinstance(raw, dict):
         return None
+    payload = {**raw, "constraint_type": kind}
     try:
-        return TemporalScope.model_validate(raw)
+        return TemporalScope.model_validate(payload)
     except (ValidationError, TypeError, ValueError):
         return None
 
@@ -329,6 +331,18 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         if paper.url and paper.url not in include_url:
             include_url.append(paper.url)
 
+    source_date_scope = _normalize_date_scope(data.get("source_date_scope"), "source_date")
+    content_date_scope = _normalize_date_scope(data.get("content_date_scope"), "content_date")
+    # 兼容旧序列化 state：旧 temporal_scope 单对象按 constraint_type 路由到 source_date_scope/
+    # content_date_scope。ResearchIntent 的 temporal_scope 字段仅供旧 state 输入路由（before 校验器
+    # 会 pop），构造后始终为 None。
+    if source_date_scope is None and content_date_scope is None:
+        legacy = data.get("temporal_scope")
+        if isinstance(legacy, dict) and legacy.get("constraint_type") == "source_date":
+            source_date_scope = _normalize_date_scope(legacy, "source_date")
+        elif isinstance(legacy, dict) and legacy.get("constraint_type") == "content_date":
+            content_date_scope = _normalize_date_scope(legacy, "content_date")
+
     return ResearchIntent(
         task_type=_normalize_task_type(data.get("task_type")),
         required_dimensions=_dedupe_preserve_order(_to_str_list(data.get("required_dimensions"))),
@@ -342,7 +356,8 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         exclude_titles=exclude_titles,
         include_domains=include_domains,
         exclude_domains=exclude_domains,
-        temporal_scope=_normalize_temporal_scope(data.get("temporal_scope")),
+        source_date_scope=source_date_scope,
+        content_date_scope=content_date_scope,
         target_papers=target_papers,
     )
 
@@ -406,7 +421,7 @@ def _log_exclude_intent(result: IntentRecognitionResult, original_query: str) ->
     )
 
 
-def _create_emit_intent_tool() -> LocalFunction:
+def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFunction:
     card = ToolCard(
         id=EMIT_INTENT_TOOL,
         name=EMIT_INTENT_TOOL,
@@ -541,20 +556,14 @@ def _create_emit_intent_tool() -> LocalFunction:
                         },
                     },
                 },
-                "temporal_scope": {
+                "source_date_scope": {
                     "type": "object",
                     "description": (
-                        "Explicit research time constraint. Omit when the user does not specify a time boundary."
+                        "Source publication/availability time constraint (hard gate on when sources "
+                        "were published or became available). Omit when the user does not bound "
+                        "publication time."
                     ),
                     "properties": {
-                        "constraint_type": {
-                            "type": "string",
-                            "enum": ["source_date", "content_date"],
-                            "description": (
-                                "Use source_date when source publication/availability is bounded; "
-                                "use content_date when only facts or data are bounded."
-                            ),
-                        },
                         "start_date": {
                             "type": "string",
                             "format": "date",
@@ -566,12 +575,35 @@ def _create_emit_intent_tool() -> LocalFunction:
                             "description": "Inclusive upper boundary in YYYY-MM-DD format; omit when absent.",
                         },
                     },
-                    "required": ["constraint_type"],
+                },
+                "content_date_scope": {
+                    "type": "object",
+                    "description": (
+                        "Facts/events/research/data time-window constraint (soft score on when the "
+                        "facts or data occurred; retrospective sources published later are allowed). "
+                        "Omit when the user does not bound the content time window."
+                    ),
+                    "properties": {
+                        "start_date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "Inclusive lower boundary in YYYY-MM-DD format; omit when absent.",
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "Inclusive upper boundary in YYYY-MM-DD format; omit when absent.",
+                        },
+                    },
                 },
             },
             "required": ["research_query", "language"],
         },
     )
+
+    if provided_report_type:
+        # API 已指定报告类型：从 schema 移除 report_type，禁止 LLM 输出
+        card.input_params["properties"].pop("report_type", None)
 
     return LocalFunction(card=card, func=_emit_report_intent)
 
@@ -581,16 +613,18 @@ async def _invoke_llm_for_intent(
     original_query: str,
     messages: list,
     llm_model_name: str,
+    provided_report_type: str | None = None,
 ) -> tuple[IntentRecognitionResult | None, dict]:
     """公共 LLM 调用逻辑：构建提示词、调用 LLM、解析 tool_call 结果
     """
     prompt_ctx = {
         "original_query": original_query,
         "messages": messages,
+        "provided_report_type": provided_report_type,
     }
     prompts = apply_system_prompt(prompt_name, prompt_ctx)
 
-    tool = _create_emit_intent_tool()
+    tool = _create_emit_intent_tool(provided_report_type)
     llm = llm_context.get().get(llm_model_name)
     response = await llm_utils.ainvoke_llm_with_stats(
         llm,
@@ -651,6 +685,7 @@ async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResu
             "intent_recognition", original_query,
             current_inputs.get("messages") or [],
             current_inputs.get("llm_model_name"),
+            current_inputs.get("provided_report_type"),
         )
         if result is None:
             logger.warning("[recognize_report_intent] No tool_calls in LLM response, using fallback.")
@@ -697,6 +732,7 @@ async def classify_and_recognize_intent(current_inputs: dict) -> IntentRecogniti
             "intent_recognition_entry", original_query,
             current_inputs.get("messages") or [],
             current_inputs.get("llm_model_name"),
+            current_inputs.get("provided_report_type"),
         )
         if result is None:
             logger.warning("[classify_and_recognize_intent] No tool_calls in LLM response, using fallback.")

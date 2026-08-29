@@ -333,7 +333,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
             tone="formal",
             include_domains=["example.com"],
             exclude_domains=["bad.com"],
-            temporal_scope=TemporalScope(
+            source_date_scope=TemporalScope(
                 constraint_type="source_date",
                 end_date="2023-12-31",
             ),
@@ -389,6 +389,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         "human_in_the_loop": False,
         "web_search_engine_config": web_search_engine_config,
         "info_collector_search_method": "web",
+        "provided_report_type": None,
     })
     mock_web_search.assert_awaited_once_with({
         "query": "AI Agent 趋势",
@@ -411,7 +412,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
     )
     mock_apply_temporal_scope.assert_called_once_with(
         search_engine_name="tavily",
-        temporal_scope=intent_result.research_intent.temporal_scope,
+        temporal_scope=intent_result.research_intent.source_date_scope,
     )
     assert call_order == ["entry_search", "temporal_scope"]
 
@@ -524,7 +525,7 @@ def test_outline_pre_handle_exposes_task_contract_without_temporal_context():
         "task_type": "comparison",
         "required_dimensions": ["growth", "dividend"],
         "comparison_targets": ["AIA", "Ping An"],
-        "temporal_scope": {
+        "source_date_scope": {
             "constraint_type": "source_date",
             "start_date": "2018-01-01",
             "end_date": "2020-12-31",
@@ -934,17 +935,20 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
     assert merged_payload["search_context.research_intent"]["report_type"] == "brief"
     assert "gov.cn" in merged_payload["search_context.research_intent"]["include_domains"]
     assert merged_payload["search_context.report_type_policy"]["report_type"] == "brief"
-    assert merged_payload["search_context.research_intent"]["temporal_scope"] == {
+    # 合并改读新字段 source_date_scope；current 无范围、incoming 有 source_date →
+    # merged.source_date_scope 被 populate，temporal_scope 保持 current 的 None。
+    assert merged_payload["search_context.research_intent"]["source_date_scope"] == {
         "constraint_type": "source_date",
         "start_date": None,
         "end_date": date(2020, 12, 31),
     }
+    assert merged_payload["search_context.research_intent"]["temporal_scope"] is None
     mock_apply_temporal.assert_called_once()
     mock_apply_domains.assert_called_once()
 
 
-def test_feedback_handler_keeps_existing_temporal_scope_when_reparse_has_no_scope():
-    """反馈重解析未得到时间范围时，应保留已有时间约束。"""
+def test_feedback_handler_keeps_existing_source_date_scope_when_reparse_has_no_scope():
+    """反馈重解析未得到时间范围时，应保留已有时间约束（新字段 source_date_scope）。"""
     session = Mock()
     session.get_global_state.return_value = {
         "temporal_scope": {
@@ -959,7 +963,9 @@ def test_feedback_handler_keeps_existing_temporal_scope_when_reparse_has_no_scop
         {"research_intent": {"temporal_scope": None}},
     )
 
-    assert merged["temporal_scope"] == {
+    # current 经 before-validator 将 dict 形 temporal_scope(source_date) 路由到
+    # source_date_scope；incoming 无 scope → 合并保留 current 的 source_date_scope。
+    assert merged["source_date_scope"] == {
         "constraint_type": "source_date",
         "start_date": None,
         "end_date": date(2020, 12, 31),
@@ -1040,12 +1046,15 @@ def test_outline_accept_reapplies_search_constraints_after_hitl_resume():
         include_domains=["example.com"],
         exclude_domains=["bad.example"],
     )
+    # resume 调用点改用 _resolve_source_date_scope(research_intent)；research_intent
+    # 是 dict 形旧持久化 state（仅 temporal_scope 旧键），resolver 旧键回退经 _coerce_scope
+    # 返回 TemporalScope 实例（constraint_type=source_date 匹配）。
     apply_temporal.assert_called_once_with(
         search_engine_name="tavily",
-        temporal_scope={
-            "constraint_type": "source_date",
-            "start_date": "2020-01-01",
-        },
+        temporal_scope=TemporalScope(
+            constraint_type="source_date",
+            start_date="2020-01-01",
+        ),
     )
 
 
@@ -1091,6 +1100,38 @@ async def test_start_node_merges_agent_llm_timeouts_into_session_config():
 
     merged_config = session.update_global_state.call_args_list[-1][0][0]["config"]
     assert merged_config["agent_llm_timeouts"] == {"default": 300, "sub_reporter": 120}
+
+
+@pytest.mark.asyncio
+async def test_start_node_preserves_scholarly_search_config_for_collector_graph():
+    node = StartNode()
+    session = Mock()
+    session.update_global_state = Mock()
+    scholarly_config = {
+        "fetch_full_text": False,
+        "max_full_text_results_per_query": 2,
+        "max_full_text_length": 4096,
+    }
+
+    await node.invoke(
+        {
+            "query": "hello",
+            "thread_id": "thread-1",
+            "agent_config": {
+                "web_search_engine_config": {"search_engine_name": "tavily"},
+                "local_search_engine_config": {"search_engine_name": "openapi"},
+                "scholarly_search_enabled": True,
+                "scholarly_search_config": scholarly_config,
+            },
+        },
+        session,
+        Context(),
+    )
+
+    merged_config = session.update_global_state.call_args_list[-1][0][0]["config"]
+    assert merged_config["scholarly_search_enabled"] is True
+    assert merged_config["scholarly_search_config"] == scholarly_config
+    assert merged_config["scholarly_search_config"] is not scholarly_config
 
 
 @pytest.mark.asyncio
@@ -1388,3 +1429,181 @@ class MockAgent(DeepresearchAgent):
         flow.add_connection(NodeId.START.value, NodeId.EDITOR_TEAM.value)
         flow.add_connection(NodeId.EDITOR_TEAM.value, NodeId.END.value)
         return flow
+
+
+@pytest.mark.asyncio
+async def test_start_node_passes_report_type_to_config():
+    """StartNode 白名单复制必须包含 report_type，否则后续抑制逻辑全部失效。"""
+    session = AsyncMock(spec=Session)
+    node = StartNode()
+    inputs = {
+        "query": "AI Agent 趋势",
+        "thread_id": "thread-1",
+        "agent_config": {
+            "report_type": "brief",
+            "llm_config": {},
+            "web_search_engine_config": {"search_engine_name": "petal"},
+            "local_search_engine_config": {"search_engine_name": "native"},
+        },
+    }
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.Config"
+    ) as mock_config:
+        mock_config.return_value.service_config.model_dump.return_value = {}
+        await node.invoke(inputs, session, Context())
+
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    config_payload = next(payload["config"] for payload in update_payloads if "config" in payload)
+    assert config_payload["report_type"] == "brief"
+
+
+@pytest.mark.asyncio
+async def test_intent_recognition_node_overrides_report_type_from_config():
+    """config.report_type 非 None：传入算法层抑制 + 双保险覆盖 LLM 输出。"""
+    session = AsyncMock(spec=Session)
+    intent_result = IntentRecognitionResult(
+        original_query="AI Agent 趋势",
+        research_query="AI Agent 趋势",
+        research_intent=ResearchIntent(report_type="professional"),  # 模拟 LLM 意外输出
+        lang="zh-CN",
+    )
+
+    def _get_global_state(key):
+        return {
+            "search_context.original_query": "AI Agent 趋势",
+            "search_context.messages": [],
+            "config.report_type": "brief",
+            "config.workflow_human_in_the_loop": False,
+            "config.outliner_max_section_num": 10,
+        }.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    session.update_global_state = Mock()
+    node = IntentRecognitionNode()
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="basic",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.classify_and_recognize_intent",
+        new_callable=AsyncMock,
+        return_value=intent_result,
+    ) as mock_classify, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.web_search_for_query",
+        new_callable=AsyncMock,
+        return_value={"search_results": [], "error_msg": ""},
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope",
+    ):
+        output = await node.invoke({}, session, Context())
+
+    # 抑制参数传入算法层
+    assert mock_classify.call_args.args[0]["provided_report_type"] == "brief"
+    # 双保险覆盖：research_intent.report_type 以 API 入参为准
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    intent_update = next(p for p in update_payloads if "search_context.research_intent" in p)
+    assert intent_update["search_context.research_intent"]["report_type"] == "brief"
+    # 路由到简报大纲
+    assert output["next_node"] == NodeId.BRIEF_OUTLINE.value
+
+
+@pytest.mark.asyncio
+async def test_feedback_handler_keeps_api_locked_report_type():
+    """API 锁定（config.report_type 非 None）时：重解析被抑制、反馈不覆盖、路由到 BRIEF_OUTLINE。"""
+    session = AsyncMock(spec=Session)
+    reparsed = IntentRecognitionResult(
+        original_query="AI Agent 趋势",
+        research_query="AI Agent 趋势",
+        research_intent=ResearchIntent(report_type="professional"),  # 用户反馈想改专业版
+    )
+
+    def _get_global_state(key):
+        return {
+            "config.report_type": "brief",  # API 锁定 brief
+            "config.workflow_feedback_mode": "web",
+            "config.llm_config": {},
+            "search_context.original_query": "AI Agent 趋势",
+            "search_context.messages": [],
+            "search_context.questions": "",
+            "search_context.research_intent": ResearchIntent(report_type="brief").model_dump(),
+            "search_context.report_type_policy": {"report_type": "brief"},
+        }.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    session.update_global_state = Mock()
+    node = FeedbackHandlerNode()
+
+    with patch.object(
+        FeedbackHandlerNode, "_get_user_feedback", AsyncMock(return_value="改成专业版")
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.recognize_report_intent",
+        new_callable=AsyncMock,
+        return_value=reparsed,
+    ) as mock_recognize, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope",
+    ):
+        output = await node.invoke({}, session, Context())
+
+    # 重解析收到抑制参数
+    assert mock_recognize.call_args.args[0]["provided_report_type"] == "brief"
+    # 合并保护：API 锁定值不被反馈覆盖
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    intent_update = next(p for p in update_payloads if "search_context.research_intent" in p)
+    assert intent_update["search_context.research_intent"]["report_type"] == "brief"
+    # 路由保持 BRIEF_OUTLINE
+    assert output["next_node"] == NodeId.BRIEF_OUTLINE.value
+
+
+@pytest.mark.asyncio
+async def test_feedback_handler_allows_report_type_update_without_api_lock():
+    """无 API 锁定（config.report_type=None）时保持现状：反馈可更新 report_type。"""
+    session = AsyncMock(spec=Session)
+    reparsed = IntentRecognitionResult(
+        original_query="AI Agent 趋势",
+        research_query="AI Agent 趋势",
+        research_intent=ResearchIntent(report_type="brief"),
+    )
+
+    state = {
+        "config.report_type": None,
+        "config.workflow_feedback_mode": "web",
+        "config.llm_config": {},
+        "search_context.original_query": "AI Agent 趋势",
+        "search_context.messages": [],
+        "search_context.questions": "",
+        "search_context.research_intent": ResearchIntent().model_dump(),
+        "search_context.report_type_policy": {"report_type": "professional"},
+    }
+
+    def _get_global_state(key):
+        return state.get(key)
+
+    def _update_state(payload):
+        state.update(payload)
+
+    session.get_global_state.side_effect = _get_global_state
+    session.update_global_state = Mock(side_effect=_update_state)
+    node = FeedbackHandlerNode()
+
+    with patch.object(
+        FeedbackHandlerNode, "_get_user_feedback", AsyncMock(return_value="要精简版")
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.recognize_report_intent",
+        new_callable=AsyncMock,
+        return_value=reparsed,
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope",
+    ):
+        output = await node.invoke({}, session, Context())
+
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    intent_update = next(p for p in update_payloads if "search_context.research_intent" in p)
+    assert intent_update["search_context.research_intent"]["report_type"] == "brief"
+    assert output["next_node"] == NodeId.BRIEF_OUTLINE.value

@@ -245,7 +245,7 @@ class TestGenerateQueryNode:
             "collector_context.step_description": "步骤描述",
             "collector_context.evidence_ledger": {},
             "collector_context.research_intent": {
-                "temporal_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"},
+                "content_date_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"},
                 "target_papers": [{"pmid": "38202877", "title": "A Full Paper Title"}],
             },
         }
@@ -284,8 +284,8 @@ class TestGenerateQueryNode:
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
                 search_queries = [
-                    RetrievalQuery(query="38202877"),
-                    *[RetrievalQuery(query=query) for query in queries],
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=query, primary_engine="petal") for query in queries],
                 ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries
@@ -328,8 +328,8 @@ class TestGenerateQueryNode:
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
                 fallback_queries = [
-                    RetrievalQuery(query="38202877"),
-                    *[RetrievalQuery(query=f"缺口{i}") for i in range(1, 5)],
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=f"缺口{i}", primary_engine="petal") for i in range(1, 5)],
                 ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": fallback_queries
@@ -361,8 +361,8 @@ class TestGenerateQueryNode:
 
                 # 验证使用了默认查询
                 search_queries = [
-                    RetrievalQuery(query="38202877"),
-                    *[RetrievalQuery(query=query) for query in queries],
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=query, primary_engine="petal") for query in queries],
                 ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries
@@ -429,7 +429,7 @@ class TestSupervisorNode:
                 "attempted_queries": ["已查 query"],
             },
             "collector_context.research_intent": {
-                "temporal_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
+                "source_date_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
             },
         }
         return state_map.get(key)
@@ -511,7 +511,7 @@ class TestSupervisorNode:
                 assert result["next_node"] == "collector_info_retrieval"
 
                 # 验证查询被更新
-                search_queries = [RetrievalQuery(query=query) for query in next_queries]
+                search_queries = [RetrievalQuery(query=query, primary_engine="petal") for query in next_queries]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries,
                 })
@@ -555,7 +555,9 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query=query) for query in next_queries],
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query=query, primary_engine="petal") for query in next_queries
+                    ],
                 })
                 agent_input = mock_apply_prompt.call_args.args[1]
                 assert agent_input["max_search_query_count"] == 5
@@ -674,7 +676,9 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query="需要官方口径")]
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query="需要官方口径", primary_engine="petal")
+                    ]
                 })
         finally:
             llm_context.reset(token)
@@ -703,7 +707,9 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query="需要更多市场数据")]
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query="需要更多市场数据", primary_engine="petal")
+                    ]
                 })
         finally:
             llm_context.reset(token)
@@ -807,7 +813,8 @@ def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
     assert "Return `queries: []` only when the current step explicitly does not require external retrieval." in prompt
     assert "Separate display language from retrieval language" in prompt
     assert "Keep `missing_evidence` in `{{ language }}`" in prompt
-    assert 'search_engine_name` set to `"pubmed"` or `"arxiv"`' in prompt
+    assert '`search_engine_names`' in prompt
+    assert '`["pubmed", "arxiv", "semantic_scholar"]`' in prompt
     assert "write `query` in English using academic terms" in prompt
     assert "{{ max_search_query_count }}" in prompt
     assert "{{ number_queries }}" not in prompt

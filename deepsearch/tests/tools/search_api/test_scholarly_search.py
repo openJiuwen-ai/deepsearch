@@ -421,16 +421,122 @@ def test_pubmed_parse_fetch_xml_allows_valid_empty_article_set():
     assert wrapper._parse_fetch_xml("<PubmedArticleSet></PubmedArticleSet>", ["1"]) == []
 
 
+def _assert_pubmed_failure_is_sanitized(error):
+    assert "PubMed" in str(error)
+    assert "TOPSECRET" not in str(error)
+    assert "TOPSECRET" not in repr(error)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+def test_pubmed_sync_http_failure_does_not_retain_api_key():
+    request = requests.Request(
+        "POST",
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        data={"api_key": "TOPSECRET", "term": "paper"},
+    ).prepare()
+    response = requests.Response()
+    response.status_code = 429
+    response.request = request
+    response.url = request.url
+
+    with patch(f"{PUBMED_MODULE}.requests.post", return_value=response):
+        with pytest.raises(ScholarlySearchResponseError) as captured:
+            PubMedSearchAPIWrapper(search_api_key="TOPSECRET").results("paper")
+
+    _assert_pubmed_failure_is_sanitized(captured.value)
+
+
+def test_pubmed_sync_sends_api_key_in_post_body(mock_scholarly_ssl_verify):
+    response = DummyResponse(text="<PubmedArticleSet />")
+    with patch(f"{PUBMED_MODULE}.requests.post", return_value=response) as post, \
+            patch(f"{PUBMED_MODULE}.requests.get", side_effect=AssertionError("GET must not be used")):
+        PubMedSearchAPIWrapper(search_api_key="TOPSECRET")._get_text(
+            "https://example.com/efetch.fcgi",
+            {"api_key": "TOPSECRET", "db": "pubmed"},
+            verify=False,
+        )
+
+    assert post.call_args.kwargs["data"]["api_key"] == "TOPSECRET"
+    assert "params" not in post.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_pubmed_async_http_failure_does_not_retain_api_key():
+    request = httpx.Request(
+        "POST",
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        data={"api_key": "TOPSECRET", "term": "paper"},
+    )
+    response = httpx.Response(429, request=request)
+    client = AsyncMock()
+    client.post.return_value = response
+    manager = AsyncMock()
+    manager.__aenter__.return_value = client
+
+    with patch(f"{PUBMED_MODULE}.httpx.AsyncClient", return_value=manager):
+        with pytest.raises(ScholarlySearchResponseError) as captured:
+            await PubMedSearchAPIWrapper(search_api_key="TOPSECRET").aresults("paper")
+
+    _assert_pubmed_failure_is_sanitized(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_pubmed_async_sends_api_key_in_post_body():
+    wrapper = PubMedSearchAPIWrapper(search_api_key="TOPSECRET")
+    client = Mock()
+    client.post = AsyncMock(return_value=DummyResponse(text="ok"))
+    client.get = AsyncMock(side_effect=AssertionError("GET must not be used"))
+
+    await wrapper._aget_text(
+        client,
+        "https://example.com/efetch.fcgi",
+        {"api_key": "TOPSECRET", "db": "pubmed"},
+    )
+
+    assert client.post.await_args.kwargs["data"]["api_key"] == "TOPSECRET"
+    assert "params" not in client.post.await_args.kwargs
+
+
+def test_pubmed_error_payload_redacts_api_key():
+    wrapper = PubMedSearchAPIWrapper(search_api_key="TOPSECRET")
+
+    with pytest.raises(ScholarlySearchResponseError) as captured:
+        wrapper._raise_for_search_error_payload(
+            {"error": "invalid api_key TOPSECRET"}
+        )
+
+    assert "TOPSECRET" not in str(captured.value)
+    assert "***" in str(captured.value)
+
+
+def test_pubmed_warning_payload_redacts_api_key(caplog):
+    wrapper = PubMedSearchAPIWrapper(search_api_key="TOPSECRET")
+    payload = {
+        "esearchresult": {
+            "idlist": [],
+            "errorlist": {"phrasesnotfound": ["invalid api_key TOPSECRET"]},
+        }
+    }
+
+    with caplog.at_level("INFO"):
+        wrapper._raise_for_search_error_payload(payload)
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "TOPSECRET" not in messages
+    assert "invalid api_key ***" in messages
+
+
 @pytest.mark.asyncio
 async def test_pubmed_async_request_rejects_esearch_error_payload():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(return_value=DummyResponse(json_data={"error": "Invalid term"}))
+    client.post = AsyncMock(return_value=DummyResponse(json_data={"error": "Invalid term"}))
 
     with pytest.raises(ScholarlySearchResponseError, match="ESearch returned error"):
         await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
 
-    assert client.get.await_count == 1
+    assert client.post.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -443,12 +549,12 @@ async def test_pubmed_async_request_treats_esearch_errorlist_as_nonfatal_warning
             "errorlist": {"phrasesnotfound": ["bad syntax"]},
         }
     }
-    client.get = AsyncMock(return_value=DummyResponse(json_data=payload))
+    client.post = AsyncMock(return_value=DummyResponse(json_data=payload))
 
     raw = await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
 
     assert raw == payload
-    assert client.get.await_count == 1
+    assert client.post.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -461,7 +567,7 @@ async def test_pubmed_async_request_keeps_ids_when_esearch_also_has_warning():
         }
     }
     client = Mock()
-    client.get = AsyncMock(return_value=DummyResponse(json_data=payload))
+    client.post = AsyncMock(return_value=DummyResponse(json_data=payload))
 
     raw = await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
 
@@ -472,7 +578,7 @@ async def test_pubmed_async_request_keeps_ids_when_esearch_also_has_warning():
 async def test_pubmed_async_request_does_not_retry_429_and_records_retry_after():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(return_value=DummyResponse(
+    client.post = AsyncMock(return_value=DummyResponse(
         status_code=429,
         headers={"Retry-After": "7"},
     ))
@@ -485,7 +591,7 @@ async def test_pubmed_async_request_does_not_retry_429_and_records_retry_after()
         with pytest.raises(RuntimeError, match="status 429"):
             await wrapper._aget_json(client, "https://example.com/esearch.fcgi", {})
 
-    assert client.get.await_count == 1
+    assert client.post.await_count == 1
     assert rate_limit.await_count == 1
     defer.assert_called_once_with(7.0)
 
@@ -494,20 +600,20 @@ async def test_pubmed_async_request_does_not_retry_429_and_records_retry_after()
 async def test_pubmed_async_request_does_not_retry_503_response():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(return_value=DummyResponse(status_code=503))
+    client.post = AsyncMock(return_value=DummyResponse(status_code=503))
 
     with patch.object(wrapper, "_wait_for_async_rate_limit", AsyncMock()), \
             pytest.raises(RuntimeError, match="status 503"):
         await wrapper._aget_text(client, "https://example.com/efetch.fcgi", {})
 
-    assert client.get.await_count == 1
+    assert client.post.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_pubmed_terminal_429_still_updates_shared_cooldown():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(return_value=DummyResponse(
+    client.post = AsyncMock(return_value=DummyResponse(
         status_code=429,
         headers={"Retry-After": "7"},
     ))
@@ -518,7 +624,7 @@ async def test_pubmed_terminal_429_still_updates_shared_cooldown():
     ) as defer, pytest.raises(RuntimeError, match="status 429"):
         await wrapper._aget_text(client, "https://example.com/efetch.fcgi", {})
 
-    assert client.get.await_count == 1
+    assert client.post.await_count == 1
     defer.assert_called_once_with(7.0)
 
 
@@ -555,7 +661,7 @@ async def test_pubmed_rate_limit_is_shared_between_async_and_sync_requests():
 async def test_pubmed_rate_limits_efetch_requests_too():
     wrapper = PubMedSearchAPIWrapper()
     client = Mock()
-    client.get = AsyncMock(return_value=DummyResponse(text="ok"))
+    client.post = AsyncMock(return_value=DummyResponse(text="ok"))
 
     with patch.object(wrapper, "_wait_for_async_rate_limit", AsyncMock()) as rate_limit:
         await wrapper._aget_text(client, "https://example.com/efetch.fcgi", {})
@@ -563,18 +669,20 @@ async def test_pubmed_rate_limits_efetch_requests_too():
     rate_limit.assert_awaited_once()
 
 
-def test_pubmed_sync_request_does_not_retry_temporary_connection_error():
+def test_pubmed_sync_request_sanitizes_temporary_connection_error_without_retry():
     wrapper = PubMedSearchAPIWrapper()
 
     with patch(
-        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed.requests.get",
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.pubmed.requests.post",
         side_effect=requests.ConnectionError("temporary"),
-    ) as get:
+    ) as post:
         with patch.object(wrapper, "_wait_for_sync_rate_limit"), \
-                pytest.raises(requests.ConnectionError, match="temporary"):
+                pytest.raises(ScholarlySearchResponseError, match="transport error") as captured:
             wrapper._get_text("https://example.com/efetch.fcgi", {}, False)
 
-    assert get.call_count == 1
+    assert post.call_count == 1
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
 
 
 def test_pubmed_parse_ids_allows_valid_empty_result_without_error_payload():

@@ -27,6 +27,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
     normalize_pmid,
     normalize_title,
 )
+from openjiuwen_deepsearch.algorithm.research_collector.scholarly_fusion import fuse_scholarly_records
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
@@ -41,6 +42,11 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_l
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.framework.openjiuwen.tools import create_web_search_tool, create_local_search_tool, \
     build_runtime_api_tools
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
+    FullTextConfig,
+    defer_scholarly_full_text,
+    resolve_scholarly_full_text,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
@@ -101,18 +107,7 @@ class DirectSearchRequest:
     tool_name: str
     query: str
     search_engine_name: str
-    fallback_to_default: bool = True
     retry_on_error: bool = True
-
-
-@dataclass(frozen=True)
-class VerticalSearchFallbackLog:
-    section_idx: int
-    step_title: str
-    search_engine_name: str
-    default_search_engine_name: str
-    query: str
-    reason: str
 
 
 @dataclass(frozen=True)
@@ -222,18 +217,75 @@ class InfoRetrievalNode(BaseNode):
                 "step_title": state.get("step_title", ""),
                 "max_tool_call_turns_per_query": state.get("max_tool_call_turns_per_query", 2),
                 "search_method": state.get("search_method", "web"),
-                "web_search_engine_name": state.get("web_search_engine_name", None),
-                "secondary_web_search_engine_name": getattr(retrieval_query, "search_engine_name", ""),
+                "web_search_engine_name": retrieval_query.primary_engine or state.get("web_search_engine_name", None),
+                "retrieval_query": retrieval_query,
                 "local_search_engine_name": state.get("local_search_engine_name", None),
                 "api_tools_config": state.get("api_tools_config", {}),
                 "research_intent": state.get("research_intent", {}),
             }
-            sub_task = self._collector_main(sub_state)
+            sub_task = self._run_retrieval_query(sub_state, retrieval_query)
             tasks.append(sub_task)
         tasks_results = await asyncio.gather(*tasks)
 
         node_output = self._post_handle(inputs, tasks_results, session, context)
         return node_output
+
+    async def _run_retrieval_query(self, sub_state: dict, query: RetrievalQuery) -> dict:
+        with defer_scholarly_full_text(bool(query.secondary_engines)):
+            result = await self._collector_main(sub_state)
+        if query.secondary_engines:
+            result["doc_infos"] = fuse_scholarly_records(result.get("doc_infos", []))
+            await self._resolve_query_full_text(query, result)
+            self._rebuild_full_text_evidence(query, result)
+        return result
+
+    @staticmethod
+    async def _resolve_query_full_text(query: RetrievalQuery, result: dict) -> None:
+        if not query.scholarly_full_text_config:
+            return
+        config = FullTextConfig(**query.scholarly_full_text_config)
+        if not config.enabled:
+            return
+        max_results = query.max_full_text_results
+        if max_results <= 0:
+            return
+        eligible_documents = [
+            document for document in result.get("doc_infos", [])
+            if document.get("full_text_candidates")
+        ]
+        for document in eligible_documents[:max_results]:
+            if document.get("full_text_status") != "available":
+                await resolve_scholarly_full_text(
+                    document, config=config
+                )
+
+    @staticmethod
+    def _rebuild_full_text_evidence(query: RetrievalQuery, result: dict) -> None:
+        source_store = CollectorSourceStore.from_dict(result.get("source_store"))
+        refreshed_documents = []
+        for document in result.get("doc_infos", []):
+            if document.get("full_text_status") != "available" or not str(document.get("full_text") or "").strip():
+                refreshed_documents.append(document)
+                continue
+            previous_scores = document.get("scores")
+            previous_publish_time = document.get("publish_time")
+            record = {
+                **document,
+                "content": document.get("content") or document.get("original_content") or "",
+            }
+            _, rebuilt = build_evidence_atom(
+                record=record,
+                query=query.query,
+                source_store=source_store,
+            )
+            refreshed = {**document, **rebuilt}
+            refreshed["scores"] = previous_scores if isinstance(previous_scores, dict) else {}
+            if previous_publish_time:
+                refreshed["publish_time"] = previous_publish_time
+                refreshed["doc_time"] = previous_publish_time
+            refreshed_documents.append(refreshed)
+        result["doc_infos"] = refreshed_documents
+        result["source_store"] = source_store.to_dict()
 
     def _post_handle(self, inputs: Input, algorithm_output: list, session: Session, context: ModelContext):
         """合并子查询采集结果并更新 collector session 状态。
@@ -488,11 +540,8 @@ class InfoRetrievalNode(BaseNode):
             else:
                 processed_results = []
                 if search_method == "web":
-                    engine_names = self._web_search_engines_for_query(state)
-                    default_search_engine_name = str(
-                        state.get("web_search_engine_name") or SearchEngine.PETAL.value
-                    ).strip()
-                    fallback_to_default = default_search_engine_name not in engine_names
+                    max_tool_calls = max(0, int(state.get("max_tool_call_turns_per_query", 2)))
+                    engine_names = self._engine_names_for_state(state)[:max_tool_calls]
                     raw_results = await asyncio.gather(*[
                         self._direct_search_with_retry(
                             DirectSearchRequest(
@@ -500,7 +549,6 @@ class InfoRetrievalNode(BaseNode):
                                 tool_name=tool_name,
                                 query=query,
                                 search_engine_name=engine_name,
-                                fallback_to_default=fallback_to_default,
                                 retry_on_error=True,
                             ),
                             state,
@@ -586,17 +634,24 @@ class InfoRetrievalNode(BaseNode):
         }
 
     @staticmethod
-    def _web_search_engines_for_query(state: dict) -> list[str]:
-        engines = [
-            state.get("web_search_engine_name") or SearchEngine.PETAL.value,
-            state.get("secondary_web_search_engine_name") or "",
-        ]
+    def _engine_names_for_query(retrieval_query: RetrievalQuery) -> list[str]:
+        engines = [retrieval_query.primary_engine, *retrieval_query.secondary_engines]
         result = []
         for engine in engines:
             engine = str(engine or "").strip()
             if engine and engine not in result:
                 result.append(engine)
         return result
+
+    @classmethod
+    def _engine_names_for_state(cls, state: dict) -> list[str]:
+        retrieval_query = state.get("retrieval_query")
+        if retrieval_query is None:
+            retrieval_query = RetrievalQuery(
+                query=state.get("search_query", ""),
+                primary_engine=state.get("web_search_engine_name") or SearchEngine.PETAL.value,
+            )
+        return cls._engine_names_for_query(retrieval_query)
 
     @staticmethod
     def _agent_called_tool(agent_input: dict, tool_name: str) -> bool:
@@ -623,9 +678,6 @@ class InfoRetrievalNode(BaseNode):
     ):
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")
-        default_search_engine_name = str(
-            state.get("web_search_engine_name") or SearchEngine.PETAL.value
-        ).strip()
         retry_direct_search = object()
 
         async def handle_search_failure(
@@ -634,55 +686,11 @@ class InfoRetrievalNode(BaseNode):
                 current_try: int,
                 retryable: bool = True,
         ):
-            should_fallback_to_default = self._should_fallback_to_default_search(
-                request.search_engine_name,
-                default_search_engine_name,
-            )
             operation = f"direct call search tool '{request.tool_name}'"
             if reason == "returned_error":
                 operation = f"{operation} returned error"
 
-            if request.fallback_to_default and should_fallback_to_default:
-                self._log_vertical_search_fallback(
-                    VerticalSearchFallbackLog(
-                        section_idx=section_idx,
-                        step_title=step_title,
-                        search_engine_name=request.search_engine_name,
-                        default_search_engine_name=default_search_engine_name,
-                        query=request.query,
-                        reason=reason,
-                    )
-                )
-                fallback_operation = (
-                    f"{operation}, fallback to default search engine "
-                    f"'{default_search_engine_name}'"
-                )
-                if reason == "exception":
-                    fallback_operation = (
-                        f"{operation} failed, fallback to default search engine "
-                        f"'{default_search_engine_name}'"
-                    )
-                self._log_vertical_search_failure_detail(
-                    VerticalSearchFailureDetailLog(
-                        section_idx=section_idx,
-                        step_title=step_title,
-                        operation=fallback_operation,
-                        error=error,
-                        extra_info=f"{request.search_engine_name}: {request.query}",
-                        level=logging.WARNING,
-                    )
-                )
-                return await self._direct_search_with_retry(
-                    DirectSearchRequest(
-                        tool=request.tool,
-                        tool_name=request.tool_name,
-                        query=request.query,
-                        search_engine_name=default_search_engine_name,
-                    ),
-                    state,
-                )
-
-            if not request.retry_on_error and should_fallback_to_default:
+            if not request.retry_on_error:
                 self._log_vertical_search_failed_fast(
                     section_idx,
                     step_title,
@@ -729,16 +737,6 @@ class InfoRetrievalNode(BaseNode):
                 if failure_result is retry_direct_search:
                     continue
                 return failure_result
-
-    @staticmethod
-    def _should_fallback_to_default_search(search_engine_name: str, default_search_engine_name: str) -> bool:
-        search_engine_name = str(search_engine_name or "").strip()
-        default_search_engine_name = str(default_search_engine_name or "").strip()
-        return bool(
-            search_engine_name
-            and default_search_engine_name
-            and search_engine_name != default_search_engine_name
-        )
 
     @staticmethod
     def _log_vertical_search_failed_fast(
@@ -791,76 +789,73 @@ class InfoRetrievalNode(BaseNode):
                 exc_info=isinstance(failure_log.error, BaseException),
             )
 
-    @staticmethod
-    def _log_vertical_search_fallback(
-            fallback_log: VerticalSearchFallbackLog,
-    ) -> None:
-        if LogManager.is_sensitive():
-            logger.info(
-                "section_idx: %s | [InfoRetrievalNode] Vertical search fallback to default. "
-                "engine=%s default_engine=%s reason=%s",
-                fallback_log.section_idx,
-                fallback_log.search_engine_name,
-                fallback_log.default_search_engine_name,
-                fallback_log.reason,
-            )
-        else:
-            logger.info(
-                "section_idx: %s | step title: %s | [InfoRetrievalNode] Vertical search fallback to default. "
-                "engine=%s default_engine=%s query=%s reason=%s",
-                fallback_log.section_idx,
-                fallback_log.step_title,
-                fallback_log.search_engine_name,
-                fallback_log.default_search_engine_name,
-                fallback_log.query,
-                fallback_log.reason,
-            )
-
     async def _run_secondary_web_search_if_needed(
             self,
             state: dict,
             agent_input: dict,
             tool_dict: dict,
     ) -> dict:
-        secondary_engine = str(state.get("secondary_web_search_engine_name") or "").strip()
+        retrieval_query = state.get("retrieval_query")
+        secondary_engines = list(getattr(retrieval_query, "secondary_engines", []) or [])
         primary_engine = str(state.get("web_search_engine_name") or SearchEngine.PETAL.value).strip()
-        if not secondary_engine or secondary_engine == primary_engine:
-            return agent_input
-
+        secondary_engines = [
+            engine for engine in dict.fromkeys(secondary_engines)
+            if engine and engine != primary_engine
+        ]
         tool_name = "web_search_tool"
         if tool_name not in tool_dict:
             return agent_input
 
-        query = state.get("search_query", state.get("step_title", ""))
-        fallback_to_default = not self._agent_called_tool(agent_input, tool_name)
-        tool_result_raw = await self._direct_search_with_retry(
-            DirectSearchRequest(
-                tool=tool_dict[tool_name],
-                tool_name=tool_name,
-                query=query,
-                search_engine_name=secondary_engine,
-                fallback_to_default=fallback_to_default,
-                retry_on_error=True,
-            ),
-            state,
-        )
-        if not tool_result_raw:
+        max_tool_calls = max(0, int(state.get("max_tool_call_turns_per_query", 2)))
+        used_tool_calls = max(0, int(agent_input.get("tool_calls_used", 0)))
+        remaining_tool_calls = max(0, max_tool_calls - used_tool_calls)
+        if remaining_tool_calls <= 0:
             return agent_input
 
-        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
-        process_tool_result(tool_name, tool_result_json, agent_input)
+        web_already_called = self._agent_called_tool(agent_input, tool_name)
+        engine_names = secondary_engines if web_already_called else [primary_engine, *secondary_engines]
+        engine_names = list(dict.fromkeys(engine_names))[:remaining_tool_calls]
+        if not engine_names:
+            return agent_input
+
+        query = state.get("search_query", state.get("step_title", ""))
+        raw_results = await asyncio.gather(*[
+            self._direct_search_with_retry(
+                DirectSearchRequest(
+                    tool=tool_dict[tool_name],
+                    tool_name=tool_name,
+                    query=query,
+                    search_engine_name=secondary_engine,
+                    retry_on_error=True,
+                ),
+                state,
+            )
+            for secondary_engine in engine_names
+        ])
+        agent_input["tool_calls_used"] = used_tool_calls + len(engine_names)
+        usable_results = []
+        for result in raw_results:
+            if not isinstance(result, dict) or result.get("error"):
+                continue
+            search_results = result.get("search_results")
+            if not isinstance(search_results, list) or not search_results:
+                continue
+            usable_results.append(result)
+        for tool_result_raw in usable_results:
+            tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+            process_tool_result(tool_name, tool_result_json, agent_input)
         if LogManager.is_sensitive():
             logger.info(
-                "section_idx: %s | [InfoRetrievalNode] Secondary web search completed.",
+                "section_idx: %s | [InfoRetrievalNode] Budgeted web search completed.",
                 state.get("section_idx", 0),
             )
         else:
             logger.info(
-                "section_idx: %s | step title: %s | [InfoRetrievalNode] Secondary web search completed. "
+                "section_idx: %s | step title: %s | [InfoRetrievalNode] Budgeted web search completed. "
                 "engine=%s",
                 state.get("section_idx", 0),
                 state.get("step_title", ""),
-                secondary_engine,
+                engine_names,
             )
         return agent_input
 
@@ -915,9 +910,16 @@ class InfoRetrievalNode(BaseNode):
             tool_prompt = apply_system_prompt("collector", agent_input)
 
             response = await self._invoke_llm_with_retry(tool_prompt, tool_list, state)
+            tool_calls = response.get("tool_calls", []) if response else []
+            executed_tool_call = tool_calls[-1] if tool_calls else None
             agent_input = await self._process_llm_response(response, agent_input, tool_dict, state)
-            if response is None or not response.get("tool_calls", []):
+            if not tool_calls:
                 break
+            if (
+                    executed_tool_call.get("name") == "web_search_tool"
+                    and "web_search_tool" in tool_dict
+            ):
+                agent_input["tool_calls_used"] = agent_input.get("tool_calls_used", 0) + 1
             if i + 1 == max_tool_call_turns_per_query:
                 if LogManager.is_sensitive():
                     logger.info(f"section_idx: {section_idx} | "

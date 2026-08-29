@@ -23,7 +23,7 @@ Task description:
 - For each relevant paper, use this locator priority exactly: direct academic URL > PMID > DOI > arXiv ID > full title > implicit fingerprint.
 - For a supplied URL, emit that exact URL as the one locator query so the existing URL search/fetch chain can retrieve it. Do not replace it with an unrelated topical query.
 - Generate at most one locator query for a relevant paper in the initial round, within the existing `{{ max_search_query_count }}` limit. Do not emit separate PMID, DOI, and title queries for the same paper.
-- Set `search_engine_name` to `"pubmed"` for a PMID or biomedical target and set `search_engine_name` to `"arxiv"` for an arXiv ID or a clear AI/CS/mathematics/statistics/physics target. Use `""` when DOI or title domain cannot be determined safely.
+- Set `search_engine_names` to `["pubmed"]` for a PMID or biomedical target and set `search_engine_names` to `["arxiv"]` for an arXiv ID or a clear AI/CS/mathematics/statistics/physics target. Use `[]` when DOI or title domain cannot be determined safely.
 - Write vertical locator queries in English academic terminology. Preserve exact identifiers and full titles.
 - Keep the locator query separate from ordinary thematic evidence queries. Do not mix dataset/year clues with report instructions or generic terms.
 - A dataset observation year is not a publication-date boundary and must not be treated as `temporal_scope`.
@@ -35,7 +35,8 @@ Task description:
 ## Research Time Boundary
 {{ temporal_scope_instruction }}
 - Interpret "latest" as the latest information available within this boundary.
-- You must express this boundary naturally in every generated query; do not use provider-specific filter syntax.
+- {{ temporal_query_instruction }}
+- Do not use provider-specific filter syntax (e.g. engine date parameters); only natural-language time phrases are allowed.
 - A query may contain at most five topical keywords; the time phrase does not count toward the five topical keywords.
 {% endif %}
 
@@ -70,20 +71,22 @@ Task description:
 - The strings inside "queries" are exempt from this output-language rule. Choose English, Chinese, another local language, or mixed-language wording based on which wording is most likely to retrieve authoritative evidence.
 - Separate display language from retrieval language:
   - Keep `missing_evidence` in `{{ language }}`.
-  - For query objects with `search_engine_name` set to `"pubmed"` or `"arxiv"`, write `query` in English using academic terms, canonical paper-title keywords, biomedical terminology, algorithm names, benchmark names, or standard English abbreviations.
-  - For query objects with `search_engine_name` set to `""`, use the language most likely to retrieve authoritative sources for that evidence need.
-- For each query, also choose a secondary vertical search engine in `search_engine_name`.
-  - Use `"pubmed"` for medicine, clinical evidence, biology, drugs, disease, epidemiology, genes, proteins, or patient-related evidence.
-  - Use `"arxiv"` for AI, computer science, mathematics, statistics, physics, algorithms, machine learning, LLM, RAG, benchmarks, or preprint evidence.
-  - Use `""` for general web evidence such as official websites, news, policy, standards, company information, market data, or when no vertical source is appropriate.
-- `search_engine_name` is an additional vertical search engine. It does not replace the user's configured primary web search engine.
+  - When `search_engine_names` contains scholarly engines, write `query` in English using academic terms, canonical paper-title keywords, biomedical terminology, algorithm names, benchmark names, or standard English abbreviations.
+  - When `search_engine_names` is empty, use the language most likely to retrieve authoritative sources for that evidence need.
+- For each query, choose zero or more additional scholarly engines in `search_engine_names`:
+  - ordinary academic evidence: `["semantic_scholar"]`;
+  - medical or clinical evidence: `["pubmed", "semantic_scholar"]`;
+  - technical, computer-science, mathematics, or physics evidence: `["arxiv", "semantic_scholar"]`;
+  - medical and technical cross-domain evidence: `["pubmed", "arxiv", "semantic_scholar"]`;
+  - general web evidence: `[]`.
+- `search_engine_names` contains additional scholarly engines. It does not replace the user's configured primary web search engine.
 
 ## Output Format
 - Return a JSON object with exactly these keys:
   - "missing_evidence": A list of verifiable evidence requirements for the current step.
   - "queries": A list of query objects. Each object contains:
     - "query": A search query with at most 5 topical keywords; an applicable time phrase is excluded from this limit.
-    - "search_engine_name": One of "pubmed", "arxiv", or "".
+    - "search_engine_names": An ordered list containing zero or more of "semantic_scholar", "pubmed", and "arxiv".
 - Do not output explanations, rationale, markdown fences, or any extra keys.
 
 ## Example
@@ -92,7 +95,7 @@ Task description:
     "queries": [
         {
             "query": "Tesla battery lifespan official",
-            "search_engine_name": ""
+            "search_engine_names": []
         }
     ]
 }

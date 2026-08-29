@@ -1426,6 +1426,8 @@ def build_evidence_atom(
     canonical_publish_time = ""
     if date_metadata.get("type") == "published":
         canonical_publish_time = str(date_metadata.get("parsed_date") or "")
+        if not canonical_publish_time and date_metadata.get("precision") in {"year", "month"}:
+            canonical_publish_time = str(date_metadata.get("value") or "")
     # Search APIs report a relevance score (0-1) on their normalized records;
     # expose it as scores.relevance so downstream consumers (e.g. enrichment
     # candidate ranking) can sort without degrading to insertion order.
@@ -1456,13 +1458,29 @@ def build_evidence_atom(
         "key_passages": key_passages,
         "content_ref": content_ref,
         "scores": evidence_scores,
+        "evidence_content_type": "full_text" if use_full_text else "abstract",
+        "evidence_content_chars": len(content),
     }
     if record.get("skip_webpage_enrichment") is True:
         base["skip_webpage_enrichment"] = True
-    for metadata_key in ("academic_source", "academic_source_id", "doi"):
-        metadata_value = str(record.get(metadata_key) or "").strip()
-        if metadata_value:
-            base[metadata_key] = metadata_value
+    for key in (
+        "academic_source",
+        "academic_source_id",
+        "doi",
+        "pmid",
+        "pmcid",
+        "arxiv_id",
+        "matched_sources",
+        "source_ids",
+        "full_text_candidates",
+        "full_text_status",
+        "content_type",
+        "full_text_format",
+        "full_text_url",
+        "full_text_truncated",
+    ):
+        if key in record:
+            base[key] = record[key]
     doc_info = {**base, "original_content": content}
     return base, doc_info
 
@@ -1503,6 +1521,23 @@ def _compact_doc(doc: dict[str, Any]) -> dict[str, Any]:
     }
     if doc.get("scores"):
         result["scores"] = doc["scores"]
+    for key in (
+        "academic_source",
+        "academic_source_id",
+        "doi",
+        "pmid",
+        "pmcid",
+        "arxiv_id",
+        "matched_sources",
+        "source_ids",
+        "evidence_content_type",
+        "evidence_content_chars",
+        "full_text_format",
+        "full_text_url",
+        "full_text_truncated",
+    ):
+        if key in doc:
+            result[key] = doc[key]
     return result
 
 

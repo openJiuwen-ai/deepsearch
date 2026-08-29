@@ -66,6 +66,71 @@ def test_deduplicate_doc_infos_keeps_first_seen_for_same_url_and_same_content():
     assert result[0]["title"] == "doc-1"
 
 
+def test_deduplicate_doc_infos_does_not_add_empty_provenance_to_ordinary_docs():
+    first = {"title": "Document", "url": "https://example.com/a"}
+    duplicate = {"title": "Document", "url": "https://example.com/a", "extra": "later"}
+
+    result = deduplicate_doc_infos([first, duplicate])
+
+    assert result == [first]
+    assert "matched_sources" not in result[0]
+    assert "source_ids" not in result[0]
+
+
+def test_deduplicate_doc_infos_preserves_academic_provenance_from_discarded_duplicate():
+    academic = _doc(1, url="https://example.com/paper", content="same content", relevance=1)
+    academic.update({
+        "academic_source": "pubmed",
+        "academic_source_id": "38132429",
+        "pmcid": "PMC10740908",
+        "evidence_content_type": "full_text",
+    })
+    tavily = _doc(2, url="https://example.com/paper", content="same content", relevance=9)
+    tavily["evidence_content_type"] = "abstract"
+
+    result = deduplicate_doc_infos([academic, tavily])
+
+    assert len(result) == 1
+    assert result[0]["title"] == "doc-1"
+    assert result[0]["academic_source"] == "pubmed"
+    assert result[0]["academic_source_id"] == "38132429"
+    assert result[0]["pmcid"] == "PMC10740908"
+    assert result[0]["evidence_content_type"] == "full_text"
+
+
+def test_deduplicate_doc_infos_unions_multi_source_provenance():
+    first = _doc(1, url="https://doi.org/10.1000/example", content="same", relevance=9)
+    first.update({
+        "academic_source": "semantic_scholar",
+        "academic_source_id": "S1",
+        "matched_sources": ["semantic_scholar"],
+        "source_ids": {"semantic_scholar": "S1"},
+        "doi": "10.1000/example",
+    })
+    second = _doc(2, url=first["url"], content="same", relevance=1)
+    second.update({
+        "academic_source": "pubmed",
+        "academic_source_id": "123",
+        "matched_sources": ["pubmed", "arxiv"],
+        "source_ids": {"pubmed": "123", "arxiv": "2401.00001"},
+        "pmid": "123",
+        "pmcid": "PMC123",
+        "arxiv_id": "2401.00001",
+    })
+
+    result = deduplicate_doc_infos([first, second])
+
+    assert result[0]["matched_sources"] == [
+        "semantic_scholar", "pubmed", "arxiv"
+    ]
+    assert result[0]["source_ids"] == {
+        "semantic_scholar": "S1", "pubmed": "123", "arxiv": "2401.00001"
+    }
+    assert result[0]["pmid"] == "123"
+    assert result[0]["pmcid"] == "PMC123"
+    assert result[0]["arxiv_id"] == "2401.00001"
+
+
 def test_deduplicate_doc_infos_keeps_same_url_with_different_content():
     first = _doc(1, url="https://example.com/a", content="正文 A")
     second = _doc(2, url="https://www.example.com/a#frag", content="正文 B")

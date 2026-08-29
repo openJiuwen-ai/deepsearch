@@ -66,6 +66,7 @@ FILENAME_PATTERN: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\.(?:cpp|cc|cxx|c\+\+|hpp|hh|hxx|h)$", re.IGNORECASE), "cpp"),
     (re.compile(r"\.rs$", re.IGNORECASE), "rust"),
     (re.compile(r"\.go$", re.IGNORECASE), "go"),
+    (re.compile(r"\.txt$", re.IGNORECASE), "txt"),
 ]
 
 

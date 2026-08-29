@@ -200,8 +200,8 @@ async def test_extract_and_score_produces_passages():
     mock_llm_result = MagicMock()
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "持有56-73只股票的建议来自TWSD模型。", "rationale_ids": ["r1"], "reliability": 0.8, "data_density": 0.7, "scores": {"r1": {"coverage": 1.0}}}]}]}'
 
-    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -229,8 +229,8 @@ async def test_extract_and_score_degrades_on_total_failure():
     reporter = _make_reporter()
     raw_docs = [_raw_doc(0, content="A" * 1000)]
 
-    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", side_effect=Exception("LLM down")):
-        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", side_effect=Exception("LLM down")):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -255,8 +255,8 @@ async def test_extract_and_score_skips_malformed_scores():
     mock_llm_result = MagicMock()
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "test", "rationale_ids": ["r1"], "reliability": null, "data_density": 0.5, "scores": {"r1": {"coverage": "bad"}}}]}]}'
 
-    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -283,8 +283,8 @@ async def test_extract_and_score_string_number_scores():
     mock_llm_result = MagicMock()
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "test", "rationale_ids": ["r1"], "reliability": "0.8", "data_density": "0.7", "scores": {"r1": {"coverage": "0.9", "reliability": "0.8", "data_density": "0.7"}}}]}]}'
 
-    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -311,8 +311,8 @@ async def test_extract_and_score_preserves_parent_doc_metadata():
     mock_llm_result = MagicMock()
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "Diversification requires 30-50 stocks.", "rationale_ids": ["r1"], "reliability": 0.8, "data_density": 0.7, "scores": {"r1": {"coverage": 0.9}}}]}]}'
 
-    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -370,12 +370,54 @@ def test_select_by_rationale_count_per_rationale_not_blocked_by_seen():
     assert len(selected) == 4
 
 
+def test_select_by_rationale_floor_gate_excludes_subfloor_docs():
+    """最大覆盖度低于 0.15 门槛的段落不被选中（与下游 Layer 1 过滤对齐）。"""
+    reporter = _make_reporter()
+    docs = [_doc(0), _doc(1)]
+    rationales = [_rationale("r1", "test")]
+    matrix = {"passage_0": {"r1": 0.9}, "passage_1": {"r1": 0.10}}
+    coverage = _coverage_result(docs, matrix)
+
+    selected, keys = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=5)
+
+    assert [d["doc_title"] for d in selected] == ["doc-0"]
+    assert keys == ["passage_0"]
+
+
+def test_select_by_rationale_floor_gate_fallback_when_all_below():
+    """全池低于 0.15 门槛时退回 score>0 老门，避免整章无证据。"""
+    reporter = _make_reporter()
+    docs = [_doc(0), _doc(1)]
+    rationales = [_rationale("r1", "test")]
+    matrix = {"passage_0": {"r1": 0.10}, "passage_1": {"r1": 0.05}}
+    coverage = _coverage_result(docs, matrix)
+
+    selected, _ = reporter._select_by_rationale_coverage(docs, rationales, coverage, top_k=5)
+
+    assert len(selected) == 2
+
+
+def test_selection_floor_matches_downstream_layer1_default():
+    """防漂移：SELECTION_COVERAGE_FLOOR 必须等于下游 L1 过滤的默认 threshold。"""
+    import inspect
+
+    from openjiuwen_deepsearch.algorithm.report.report_common import SELECTION_COVERAGE_FLOOR
+    from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
+        filter_passages_by_coverage,
+    )
+
+    default_threshold = (
+        inspect.signature(filter_passages_by_coverage).parameters["threshold"].default
+    )
+    assert SELECTION_COVERAGE_FLOOR == default_threshold
+
+
 # ---------- _extract_and_score_documents: content truncation ----------
 
 @pytest.mark.asyncio
 async def test_extract_and_score_truncates_long_content():
     """_extract_batch 和 degraded path 应将超过 15000 字符的内容截断。"""
-    from openjiuwen_deepsearch.algorithm.report.report import MAX_EXTRACT_DOC_CHARS
+    from openjiuwen_deepsearch.algorithm.report.report_common import MAX_EXTRACT_DOC_CHARS
 
     reporter = _make_reporter()
     long_content = "X" * 20000  # > 15000 chars
@@ -393,8 +435,8 @@ async def test_extract_and_score_truncates_long_content():
             captured_content["text"] = messages[0].get("content", "")
         return [{"role": "user", "content": "test"}]
 
-    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=capture_apply_system_prompt):
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=capture_apply_system_prompt):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -419,14 +461,14 @@ async def test_extract_and_score_truncates_long_content():
 @pytest.mark.asyncio
 async def test_extract_and_score_degraded_truncates_long_content():
     """Degraded path 也应将超过 15000 字符的内容截断到 MAX_EXTRACT_DOC_CHARS。"""
-    from openjiuwen_deepsearch.algorithm.report.report import MAX_EXTRACT_DOC_CHARS
+    from openjiuwen_deepsearch.algorithm.report.report_common import MAX_EXTRACT_DOC_CHARS
 
     reporter = _make_reporter()
     long_content = "Y" * 20000  # > 15000 chars
     raw_docs = [_raw_doc(0, "降级长文档", content=long_content)]
 
-    with patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", side_effect=Exception("LLM down")):
-        with patch("openjiuwen_deepsearch.algorithm.report.report.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", side_effect=Exception("LLM down")):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},

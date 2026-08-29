@@ -120,12 +120,12 @@ async def test_generate_outline_accepts_temporal_scope_with_date_objects(monkeyp
         object(),
         BriefOutlineRequest(
             query="测试时间边界",
-            research_intent={
-                "temporal_scope": {
-                    "constraint_type": "content_date",
-                    "end_date": date(2024, 12, 31),
-                }
-            },
+        research_intent={
+            "content_date_scope": {
+                "constraint_type": "content_date",
+                "end_date": date(2024, 12, 31),
+            }
+        },
         ),
     )
 

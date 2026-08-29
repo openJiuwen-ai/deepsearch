@@ -135,7 +135,9 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
     get_current_time,
 )
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
-from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
+from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
+    SCHOLARLY_PROVIDER_NAMES,
+)
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
@@ -207,6 +209,44 @@ def _build_retrieve_tool(milvus_cfg: MilvusConfig) -> RetrieveTool:
 logger = logging.getLogger(__name__)
 
 
+def _zero_scholarly_search_secrets(config: AgentConfig | dict | None) -> None:
+    """Zero mutable scholarly provider keys held by a config model or dump."""
+    if config is None:
+        return
+    scholarly = (
+        config.get("scholarly_search_config")
+        if isinstance(config, dict)
+        else getattr(config, "scholarly_search_config", None)
+    )
+    if scholarly is None:
+        return
+    for provider_name in SCHOLARLY_PROVIDER_NAMES:
+        provider = (
+            scholarly.get(provider_name)
+            if isinstance(scholarly, dict)
+            else getattr(scholarly, provider_name, None)
+        )
+        secret = (
+            provider.get("search_api_key")
+            if isinstance(provider, dict)
+            else getattr(provider, "search_api_key", None)
+        )
+        if isinstance(secret, bytearray) and secret:
+            zero_secret(secret)
+
+
+def _zero_active_scholarly_wrapper_secrets() -> None:
+    """Zero provider-key copies owned by wrappers before resetting their context."""
+    try:
+        engines = web_search_context.get() or {}
+    except LookupError:
+        return
+    for provider_name in SCHOLARLY_PROVIDER_NAMES:
+        secret = getattr(engines.get(provider_name), "search_api_key", None)
+        if isinstance(secret, bytearray) and secret:
+            zero_secret(secret)
+
+
 def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
     """Build a redacted copy of agent_config for workflow logging boundaries."""
     return anonymize_config_for_logging(copy.deepcopy(to_dict_safe(agent_config)))
@@ -221,16 +261,23 @@ def _initialize_web_search_context_from_agent_config(
     web_engine_name, web_mapping = DeepresearchAgent.register_web_search_tool(custom_web, web_search_config)
     web_engine_configs = {web_engine_name: web_search_config.model_dump()}
     if agent_config.scholarly_search_enabled:
-        for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
+        scholarly_config = agent_config.scholarly_search_config
+        for engine_name in SCHOLARLY_PROVIDER_NAMES:
             if engine_name not in web_mapping or engine_name in web_engine_configs:
                 continue
-            academic_config = web_search_config.model_dump()
-            academic_config["search_engine_name"] = engine_name
-            academic_config["search_url"] = ""
-            academic_config["search_api_key"] = bytearray()
-            # Do not inherit the primary engine's broader result count: scholarly
-            # results may trigger comparatively expensive official full-text fetches.
-            academic_config["max_web_search_results"] = 1
+            provider_config = getattr(scholarly_config, engine_name)
+            academic_config = {
+                "search_engine_name": engine_name,
+                "search_url": provider_config.search_url,
+                "search_api_key": provider_config.search_api_key,
+                "max_web_search_results": provider_config.max_search_results,
+                "requests_per_second": provider_config.requests_per_second,
+            }
+            if engine_name == "pubmed":
+                academic_config.update(
+                    email=provider_config.email,
+                    tool=provider_config.tool,
+                )
             web_engine_configs[engine_name] = academic_config
     web_search_token = web_search_context.set(
         {
@@ -549,6 +596,7 @@ class DeepresearchAgent(BaseAgent):
         if llm_token is not None:
             llm_context.reset(llm_token)
         if web_search_token is not None:
+            _zero_active_scholarly_wrapper_secrets()
             web_search_context.reset(web_search_token)
         if local_search_token is not None:
             local_search_context.reset(local_search_token)
@@ -609,6 +657,11 @@ class DeepresearchAgent(BaseAgent):
         filter_dup_flag = False
         stream_query, is_report_feedback = self._prepare_stream_query(message, interrupt_feedback)
         workflow_agent_config = _redact_agent_config_for_workflow_inputs(session_agent_config)
+        scholarly_config = workflow_agent_config.get("scholarly_search_config", {})
+        for provider_name in SCHOLARLY_PROVIDER_NAMES:
+            provider_config = scholarly_config.get(provider_name)
+            if isinstance(provider_config, dict):
+                provider_config["search_api_key"] = bytearray()
 
         async for chunk in Runner.run_agent_streaming(
             agent=self.agent,
@@ -670,6 +723,7 @@ class DeepresearchAgent(BaseAgent):
         llm_token = None
         web_search_token = None
         local_search_token = None
+        session_agent_config = None
 
         try:
             session_agent_config = AgentConfig.model_validate(agent_config)
@@ -691,9 +745,11 @@ class DeepresearchAgent(BaseAgent):
             await self._aopen_local_search_engines()
         except CustomValueException:
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             raise
         except ValidationError as e:
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             if LogManager.is_sensitive():
                 raise CustomValueException(
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR_NO_PRINT.code,
@@ -703,6 +759,10 @@ class DeepresearchAgent(BaseAgent):
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(e)),
             ) from e
+        except Exception:
+            self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
+            raise
 
         token = session_id_ctx.set(conversation_id)
         stats_info_llm_enabled = bool(session_agent_config.stats_info_llm)
@@ -781,6 +841,8 @@ class DeepresearchAgent(BaseAgent):
                     logger.warning(f"Failed to close local search engines.")
             finally:
                 self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+
+            _zero_scholarly_search_secrets(session_agent_config)
 
             if is_all_end:
                 zero_secret(
@@ -1851,7 +1913,10 @@ class DeepSearchAgent(BaseAgent):
         run_context: DeepSearchRunContext | None = None
         try:
             session_agent_config = AgentConfig.model_validate(agent_config_for_model).model_copy(deep=True)
-            logger.info(f"[DeepSearchAgent] agent_config: {session_agent_config}")
+            logger.info(
+                "[DeepSearchAgent] agent_config: %s",
+                _redact_agent_config_for_workflow_inputs(session_agent_config),
+            )
 
             try:
                 search_config = SearchWorkflowConfig.model_validate(
@@ -1963,6 +2028,7 @@ class DeepSearchAgent(BaseAgent):
             if llm_token is not None:
                 llm_context.reset(llm_token)
             if web_search_token is not None:
+                _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
@@ -1972,6 +2038,7 @@ class DeepSearchAgent(BaseAgent):
                 run_context.agent_config if run_context is not None else None,
             ):
                 if cleanup_agent_config is not None:
+                    _zero_scholarly_search_secrets(cleanup_agent_config)
                     zero_secret(cleanup_agent_config.web_fetch_provider_config.api_key)
                     zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
 
@@ -2240,7 +2307,9 @@ class SimpleReactSearchAgent(BaseAgent):
         finally:
             llm_context.reset(llm_token)
             if web_search_token is not None:
+                _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             zero_secret(session_agent_config.web_fetch_provider_config.api_key)
             zero_secret(session_agent_config.web_search_engine_config.search_api_key)
 

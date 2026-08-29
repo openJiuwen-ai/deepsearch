@@ -5,6 +5,12 @@ from typing import Literal, List
 
 from pydantic import BaseModel, Field, field_validator
 
+from openjiuwen_deepsearch.config.config import (
+    ArxivScholarlyConfig,
+    PubMedScholarlyConfig,
+    ScholarlySearchConfig,
+    SemanticScholarConfig,
+)
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import (
     SAFE_CONVERSATION_ID_PATTERN,
 )
@@ -15,12 +21,34 @@ _CONVERSATION_ID_SCHEMA_ERR = (
 )
 
 
+class PubMedScholarlyRequestConfig(PubMedScholarlyConfig):
+    search_api_key: str = ""
+
+
+class ArxivScholarlyRequestConfig(ArxivScholarlyConfig):
+    search_api_key: str = ""
+
+
+class SemanticScholarRequestConfig(SemanticScholarConfig):
+    search_api_key: str = ""
+
+
+class ScholarlySearchRequestConfig(ScholarlySearchConfig):
+    pubmed: PubMedScholarlyRequestConfig = Field(default_factory=PubMedScholarlyRequestConfig)
+    arxiv: ArxivScholarlyRequestConfig = Field(default_factory=ArxivScholarlyRequestConfig)
+    semantic_scholar: SemanticScholarRequestConfig = Field(default_factory=SemanticScholarRequestConfig)
+
+
 class WebSearchConfig(BaseModel):
     web_search_config_id: int = Field(description="联网增强引擎ID")
     max_web_search_results: int = Field(default=5, ge=1, le=10, description="一次网页搜索的最大返回结果数量")
     scholarly_search_enabled: bool = Field(
         default=False,
-        description="Whether to enable PubMed and arXiv scholarly search engines.",
+        description="Whether to enable the three built-in scholarly search providers.",
+    )
+    scholarly_search_config: ScholarlySearchRequestConfig = Field(
+        default_factory=ScholarlySearchRequestConfig,
+        description="Independent shared and per-provider scholarly search settings.",
     )
 
 
@@ -107,6 +135,13 @@ class DeepSearchRequest(BaseModel):
             "parallel：并行工作流执行；"
             "dependency_driving：依赖驱动工作流执行；"
             "hybrid：混合大纲路由模式，由意图识别节点调用LLM选择普通大纲或依赖驱动大纲。"
+        ),
+    )
+    report_type: Literal["brief", "professional"] | None = Field(
+        default=None,
+        description=(
+            "报告类型：brief（精简版）或 professional（专业版）；"
+            "None 时由意图识别与澄清机制决定。仅 research 模式生效，任务首轮指定后不可变更。"
         ),
     )
     web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
