@@ -42,7 +42,9 @@ _CURRENCY_UNITS = [
     "新加坡元", "瑞士法郎", "USD", "RMB", "CNY", "JPY", "EUR", "GBP",
     "yuan", "yen", "rupee",
 ]
-_LARGE_NUMBER_UNITS = ["亿", "万", "千万", "百万", "十万", "兆", "万亿"]
+# 长词在前：该表拼进 `_SUFFIX_UNIT_PATTERN` 的正则交替分支，按位置短路匹配，
+# "万亿" 若排在 "万" 之后永远不可达（"万" 抢先命中，量级被截断成 10^4）。
+_LARGE_NUMBER_UNITS = ["万亿", "千万", "百万", "十万", "兆", "亿", "万"]
 _PERCENT_UNITS = ["%", "％", "‰", "个百分点", "pp", "bp", "bps", "个基点"]
 _TIME_UNITS = ["年", "月", "日", "季度", "周", "天", "小时", "分钟", "秒", "时"]
 _COUNT_UNITS = [
@@ -675,7 +677,11 @@ _COVERAGE_TIME_PATTERN = re.compile(
     r"(?:去年|今年|明年|本年度|本季度|上一季度|上季度)"
 )
 # 实体特征：中文机构后缀 + 英文专有名词候选（轻量规则，不引入 NER）。
-# 英文侧使用拉丁字符边界（而非 \b），因为紧跟 CJK 字符时 \b 会失效。
+# 中文侧以"前缀+机构后缀"结构信号判定；英文侧同样只认正字法结构信号——
+# 词内第二处大写字母（OpenAI/NASA/iPhone/GDP/U.S）与非句首的 Title 词
+# （"at Microsoft" 的 Microsoft、"Goldman Sachs" 的 Sachs）。句首首字母
+# 大写是英文书写规范而非专名信号（任何词都可能出现在句首，停用词表无法
+# 穷举），不作为判定依据（PR !380 评审意见：Revenue/However 误判）。
 _COVERAGE_ENTITY_SUFFIXES = (
     "公司", "集团", "大学", "研究院", "研究所", "科学院", "委员会", "基金会",
     "银行", "医院", "总局", "基地", "产业园", "论坛", "峰会", "实验室", "中心", "协会",
@@ -683,17 +689,33 @@ _COVERAGE_ENTITY_SUFFIXES = (
 _COVERAGE_CJK_ENTITY_PATTERN = re.compile(
     r"[一-鿿]{2,20}?(?:" + "|".join(_COVERAGE_ENTITY_SUFFIXES) + r")"
 )
-_COVERAGE_EN_ENTITY_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9&.\-']{1,}(?![A-Za-z0-9_])"
+#: 英文 token：拉丁字母开头，词内允许字母/数字/&/'/-/.（覆盖 R&D、U.S.、
+#: O'Brien、McDonald's 等专名内部标点）；词尾连接标点在提取时剥除。
+_COVERAGE_EN_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9&.'-]*")
+#: 粘连字符：token 起点紧贴这些字符说明它不是独立词——"5Very"、"foo_Bar"
+#: 的后半段（字母/数字/下划线粘连）或 URL 路径段 "example.com/Products" 的
+#: "Products"（斜杠粘连，网页采集常见）。CJK 字符不属于此集合（"发布了
+#: OpenAI" 中 OpenAI 是独立 token）。
+_COVERAGE_EN_GLUE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/"
 )
-_COVERAGE_ENGLISH_STOPWORDS = frozenset({
-    "A", "An", "The", "This", "That", "These", "Those", "And", "Or", "Nor",
-    "But", "With", "Without", "In", "On", "At", "By", "To", "From", "Of",
-    "For", "Is", "Are", "Was", "Were", "Be", "Been", "It", "Its", "He", "She",
-    "They", "We", "You", "I", "As", "If", "Then", "Than", "So", "Not", "No",
-    "Yes", "Also", "Due", "Since", "Our", "Their", "His", "Her", "His", "Most",
-    "More", "Other", "Each", "Every", "Into", "During", "After", "Before",
-})
+#: 句首判定：token 前跳过空白后遇到句末标点/换行/冒号/引号括号、列表
+#: 引导符（- * •）或表格竖线（或文本起点）即视为句首。冒号计入（新闻
+#: 标题 "Bloomberg: Markets Fall" 的 Title 词是排版风格而非专名）；逗号/
+#: 分号不计入——正字法要求普通词在逗号分号后保持小写，其后保持大写的
+#: 词是专名信号。\r 是行终止符，与 \n 同归断句集（"Markets\rRose" 的
+#: Rose 是新行句首；若放进空白跳过集，回扫会落在前词尾字母上，修不掉）。
+_COVERAGE_EN_SENTENCE_BREAK_CHARS = frozenset(
+    ".!?…。！？\n\r:：|-*•·\"'“”‘’()（）[]【】《》«»{}"
+)
+#: 水平空白（空格/Tab/全角空格/NBSP）：句首判定的回扫跳过集与 Title 序列
+#: 的间隔连续集共用。换行类（\n、\r）不属于水平空白。
+_COVERAGE_EN_HORIZONTAL_WHITESPACE = frozenset(" \t　\xa0")
+#: 缺空格句界：小写词尾 + 句点 + 大写（"grew.The"）几乎总是丢空格的句界
+#: 而非词内大写缩写。token 字符类含句点（为 U.S. 类缩写），会把下一句的
+#: 句首词吞进 token 造成"词内大写"误报；先补回空格，让句首词回到句首
+#: 位置参与判定（"grew.The market" 不产实体、"U.S. market" 不受影响）。
+_COVERAGE_EN_DOT_BOUNDARY_PATTERN = re.compile(r"(?<=[a-z])\.(?=[A-Z])")
 # 引用/来源特征：[1] / (Reuters, 2025) / 来源：xxx / https://...
 _COVERAGE_CITATION_PATTERN = re.compile(
     r"\[\s*\d+\s*\]"
@@ -715,6 +737,16 @@ _COVERAGE_HTML_TAG_PATTERN = re.compile(
     r"\s[^<>]*)?>",
     re.IGNORECASE,
 )
+#: 隐藏内容块：<script>/<style> 连同载荷整体删除（渲染页面上不可见，不构成
+#: "从网页可见内容提取事实"的证据来源）。先于普通标签剥离执行，防止载荷在
+#: 剥壳后以纯文本残留、被 Coverage Score 选中注入下游 Prompt。未闭合的块
+#: 仅删标签本身（载荷按普通文本处理，避免误删正常正文）。
+_COVERAGE_HTML_HIDDEN_BLOCK_PATTERN = re.compile(
+    r"<(script|style)\b[^<>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+#: HTML 注释在渲染页面上同样不可见，整体删除。
+_COVERAGE_HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
 _COVERAGE_CONTROL_CHAR_PATTERN = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f​‌‍﻿]"
 )
@@ -745,7 +777,12 @@ _COVERAGE_MAX_TOTAL_CHARS = 6000
 #: 规则收尾（方案4/3/1）默认参数。方案4 锚点级去重已内置；方案1 密度计分经
 #: 真实数据 A/B 后选定为默认；方案3 邻域密度门控在预算兜底（K≈候选全集）下
 #: 为空操作，默认关闭（保留参数以便在有限 K 场景评估）。
-_COVERAGE_ANCHOR_DEDUP_RATIO = 0.7
+#: 锚点级近似去重阈值：两块锚点键重合率 ≥ 该值判为"同一事实的换措辞"。
+#: 0.85 = 仅容忍措辞级差异（键几乎全同）；数字相同但方向/单位/量级任一
+#: 维度不同的键（如 `+20%` vs `-20%`、`100公里` vs `100万台`）都会把重合
+#: 率压到阈值之下，从而保留。宁可漏删（代价=token 冗余）不可误删（代价=
+#: 事实丢失，与 Coverage 通道目标直接冲突）。
+_COVERAGE_ANCHOR_DEDUP_RATIO = 0.85
 _COVERAGE_EXPANSION_DENSITY_THRESHOLD = 0.0
 _COVERAGE_SCORE_MODE = "density"
 _COVERAGE_DENSITY_MIN_LEN = 40
@@ -802,9 +839,13 @@ def _normalize_coverage_content(content: str) -> str:
 
     Returns:
         标准化后的文本：统一换行/空白、剥离常见 HTML 标签与控制字符。
+        渲染页面上不可见的隐藏内容（script/style 载荷、HTML 注释）在剥标签前
+        整体删除。
     """
     text = str(content or "")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _COVERAGE_HTML_HIDDEN_BLOCK_PATTERN.sub("", text)
+    text = _COVERAGE_HTML_COMMENT_PATTERN.sub("", text)
     text = _COVERAGE_HTML_TAG_PATTERN.sub("", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -853,6 +894,99 @@ def _count_numbers_outside_date_spans(paragraph: str) -> int:
     return count
 
 
+def _is_english_sentence_start(text: str, start: int) -> bool:
+    """判断 token 起点是否处于句首位置（文本起点或断句字符之后）。
+
+    从 token 前一个字符向前跳过水平空白（空格/Tab/全角空格/NBSP）；
+    走到文本起点或遇到 `_COVERAGE_EN_SENTENCE_BREAK_CHARS` 中的字符即为
+    句首，否则非句首。
+    """
+    index = start - 1
+    while index >= 0 and text[index] in _COVERAGE_EN_HORIZONTAL_WHITESPACE:
+        index -= 1
+    if index < 0:
+        return True
+    return text[index] in _COVERAGE_EN_SENTENCE_BREAK_CHARS
+
+
+def _is_sequence_gap_blank(gap: str) -> bool:
+    """Title 序列的 token 间间隔是否为纯水平空白。
+
+    间隔含逗号/顿号/数字/换行/任何非空白字符（如 "Apple, Microsoft"、
+    "Goldman 500 Sachs"）都不算序列连续——列举不是专名短语，序列应重置。
+    """
+    return all(char in _COVERAGE_EN_HORIZONTAL_WHITESPACE for char in gap)
+
+
+def _iter_english_entities(text: str) -> list[str]:
+    """按正字法结构信号提取英文专有名词候选，计数与锚点提取共用同一口径。
+
+    只认两条结构信号（判定依据见 `_COVERAGE_EN_TOKEN_PATTERN` 处注释）：
+    词内第二处大写字母（OpenAI/NASA/iPhone/U.S，与位置无关），或非句首的
+    首字母大写词（"at Microsoft" 的 Microsoft、"Goldman Sachs" 的 Sachs）。
+    句首 Title 词无法与句首普通词区分（"Revenue increased..." 与 "Microsoft
+    announced..." 同形），判定从缺——宁可漏检（由 key 通道关键词兜底）不可
+    误报（整段叙述文本涌入 coverage）。
+
+    连续 Title 词序列（"Goldman Sachs"、"Markets Fall Again"）整体只计 1
+    个实体：序列内除首词外的词保持首字母大写是专名短语与标题排版的共同
+    形态，压缩计数对齐中文侧行为——中文纯文字标题（无机构后缀）得 0
+    实体分，英文纯文字标题压缩后同样只贡献单个实体分，不再高于典型
+    事实段。
+
+    Returns:
+        实体候选 token 列表，按出现顺序；已剥除尾部连接标点（``& ' . -``），
+        长度不足 2 的 token 不产出。
+    """
+    if not text:
+        return []
+    # 缺空格句界（"grew.The"）把句点替换为换行：1:1 等长替换保持偏移一致，
+    # 防止下一句的句首词被 token 字符类中的句点吞并成"词内大写"误报
+    # （"grew.The market" 不产实体、"U.S. market" 不受影响）。
+    prepared = _COVERAGE_EN_DOT_BOUNDARY_PATTERN.sub("\n", text)
+    entities: list[str] = []
+    # Title 序列状态：sequence_counted=当前连续 Title 序列是否已计过实体。
+    # 词内大写 token 与小写词打断序列；句首 Title 词开启新序列并重置计数。
+    # 序列连续性按 token 间**间隔文本**判定：只有纯水平空白延续序列——
+    # "Goldman Sachs"（空格）、"Markets Fall Again"（空格）是序列；
+    # "Apple, Microsoft, Google"（逗号列举）与 "Goldman 500 Sachs"（数字
+    # 分隔）间隔含非空白字符，序列重置、各词独立参与信号判定。
+    sequence_counted = False
+    prev_end = -1
+    for match in _COVERAGE_EN_TOKEN_PATTERN.finditer(prepared):
+        gap = prepared[prev_end:match.start()] if prev_end >= 0 else ""
+        if gap and not _is_sequence_gap_blank(gap):
+            sequence_counted = False
+        prev_end = match.end()
+        token = match.group()
+        while token and token[-1] in "&.'-":
+            token = token[:-1]
+        if len(token) < 2:
+            # 单字母 token（"A"/"I"）透明跳过，不产出也不打断序列。
+            continue
+        start = match.start()
+        # 粘连串切片（词首或词尾紧贴字母/数字/下划线/斜杠，如 "5Very"、
+        # "foo_Bar"、"example.com/Products" 的后半段）不是独立词，透明跳过。
+        # CJK 字符不算粘连（"发布了OpenAI" 中 OpenAI 独立）。
+        if start > 0 and prepared[start - 1] in _COVERAGE_EN_GLUE_CHARS:
+            continue
+        if match.end() < len(prepared) and prepared[match.end()] in _COVERAGE_EN_GLUE_CHARS:
+            continue
+        if any(char.isupper() for char in token[1:]):
+            entities.append(token)
+            sequence_counted = False
+            continue
+        if token[0].isupper():
+            if _is_english_sentence_start(prepared, start):
+                sequence_counted = False
+            elif not sequence_counted:
+                entities.append(token)
+                sequence_counted = True
+            continue
+        sequence_counted = False
+    return entities
+
+
 def _count_entities(paragraph: str) -> int:
     """统计段落中的实体特征命中数（中文机构后缀 + 英文专有名词候选）。
 
@@ -867,12 +1001,7 @@ def _count_entities(paragraph: str) -> int:
             continue
         cjk_hits.append(match.group())
         previous_end = match.end()
-    en_hits = [
-        token
-        for token in _COVERAGE_EN_ENTITY_PATTERN.findall(paragraph)
-        if token not in _COVERAGE_ENGLISH_STOPWORDS
-    ]
-    return len(cjk_hits) + len(en_hits)
+    return len(cjk_hits) + len(_iter_english_entities(paragraph))
 
 
 def _coverage_structure_score(paragraph_len: int) -> float:
@@ -920,8 +1049,9 @@ def _coverage_score(
     """把特征计数加权为 Coverage Score（数字封顶 5，其余计数特征封顶 3）。
 
     score_mode="density" 时按段落长度归一化（方案1 的 A/B 开关，分母下限
-    `_COVERAGE_DENSITY_MIN_LEN`）；默认 "absolute" 保持原始加权口径。
-    抽取流水线显式传入由 `_COVERAGE_SCORE_MODE` 决定的当前模式。
+    `_COVERAGE_DENSITY_MIN_LEN`）。本函数签名的默认值为 "absolute"（权重表
+    单测直接调用的口径）；抽取流水线显式传入 `_COVERAGE_SCORE_MODE` 决定的
+    当前模式（默认 "density"，经真实数据 A/B 后选定）。
     """
     base = (
         _COVERAGE_NUMBER_WEIGHT * min(features.get("number", 0.0), _COVERAGE_NUMBER_CAP)
@@ -948,7 +1078,8 @@ def extract_fact_anchors(text: str) -> set[str]:
     """从文本中提取事实锚点（数字/日期/时间/实体/引用）去重集合。
 
     供覆盖证据的锚点级去重与离线评估基线共用；CJK 机构邻接尾词与
-    `_count_entities` 同口径去重，避免一个机构被数成两个。
+    `_count_entities` 同口径去重，英文实体同样复用 `_iter_english_entities`
+    的正字法结构信号口径，避免两处判定漂移。
     """
     if not text:
         return set()
@@ -973,9 +1104,7 @@ def extract_fact_anchors(text: str) -> set[str]:
             continue
         anchors.add(match.group(0))
         previous_end = match.end()
-    for match in _COVERAGE_EN_ENTITY_PATTERN.finditer(text):
-        if match.group(0) not in _COVERAGE_ENGLISH_STOPWORDS:
-            anchors.add(match.group(0))
+    anchors.update(_iter_english_entities(text))
     return anchors
 
 
@@ -995,42 +1124,30 @@ def _coverage_jaccard_similarity(first: str, second: str) -> float:
 
 
 def _anchor_dedup_key(anchor: str) -> tuple[str, str]:
-    """把锚点规约为去重键：数值型锚点只保留数字核心（"20%" 与 "20 个百分点" 同键），
-    其余（实体等）保留原文。单位措辞差异不影响"同一事实"判定。"""
-    digits = re.sub(r"[^\d]", "", anchor.replace(",", "").replace("，", ""))
-    return ("num", digits) if digits else ("txt", anchor)
+    """把锚点规约为去重键：数值锚点保留原文（数字/小数点/正负号/单位/量级词
+    一律保留），仅做三类字符级规整；其余（实体等）保留原文。
+
+    规整项（不做单位等价折叠——单位枚举不完且与识别层的
+    ``_SUFFIX_UNIT_PATTERN`` 形成两处真源；排版等价由字符规整覆盖）：
+    千分位逗号（``1,000`` 与 ``1000`` 同键）、全半角百分号、数字与后续
+    单位之间的排版空白（``3 万`` 与 ``3万`` 同键）。
+
+    因此 ``20%`` 与 ``20个百分点`` 不同键（换措辞去重由多锚点重合率承担，
+    不再依赖单位折叠）；``20bp`` 与 ``20%`` 不同键；``1.5亿元`` 与 ``15%``
+    不同键——数字相同但单位/量级/写法不同的锚点不再被折叠为同一键，
+    避免锚点级去重误删"数字核心相同、语义维度不同"的真实事实。
+    """
+    folded = anchor.replace(",", "").replace("，", "")
+    folded = folded.replace("％", "%")
+    folded = re.sub(r"(?<=\d)\s+", "", folded)
+    if not any(char.isdigit() for char in folded):
+        return ("txt", anchor)
+    return ("num", folded)
 
 
 def _coverage_fact_anchor_keys(text: str) -> set[tuple[str, str]]:
     """文本事实锚点的去重键集合。"""
     return {_anchor_dedup_key(anchor) for anchor in extract_fact_anchors(text)}
-
-
-def _coverage_near_duplicate(text: str, kept_texts: list[str]) -> bool:
-    """近似去重（方案4：锚点级）：与已保留块共享大量事实锚点才判重复。
-
-    结构相似但锚点不同的块（如两条版本列表）应保留；锚点相同但措辞不同的
-    块才去除。共享锚点去重键的重合率 >= `_COVERAGE_ANCHOR_DEDUP_RATIO` 视为
-    重复。
-
-    Args:
-        text: 待检查的证据块文本。
-        kept_texts: 已保留证据块的归一化文本。
-
-    Returns:
-        True 表示与某个已保留块的事实锚点高度重合。
-    """
-    keys = _coverage_fact_anchor_keys(text)
-    if not keys:
-        return False
-    for kept in kept_texts:
-        kept_keys = _coverage_fact_anchor_keys(kept)
-        if not kept_keys:
-            continue
-        union = len(keys | kept_keys)
-        if union and len(keys & kept_keys) / union >= _COVERAGE_ANCHOR_DEDUP_RATIO:
-            return True
-    return False
 
 
 @functools.lru_cache(maxsize=_COVERAGE_CACHE_MAXSIZE)
@@ -1110,15 +1227,31 @@ def _extract_coverage_passages_cached(
         blocks.append(CoveragePassage(text=text, score=max_score, source_indices=indices, features=features))
 
     # 两级去重：Level 1 精确（归一化文本相同），Level 2 近似（相似度阈值）。
+    # 锚点键是文本的纯函数：候选块按原文、已保留块按归一化文本各算一次键集
+    # 合后复用，避免对同一块在每次新候选到来时重复计算（O(n²) 次键计算 →
+    # O(n) 次）。单锚点块跳过近似去重：一个共享数字不足以证明"同一事实的
+    # 换措辞"（如"收入增长20%"与"成本下降20%"），误删代价大于漏删。
     unique_blocks: list[CoveragePassage] = []
     kept_normalized: list[str] = []
+    kept_key_sets: list[set[tuple[str, str]]] = []
     for block in blocks:
         normalized = normalize_content_for_dedup(block.text)
         if normalized in kept_normalized:
             continue
-        if _coverage_near_duplicate(block.text, kept_normalized):
-            continue
+        keys = _coverage_fact_anchor_keys(block.text)
+        if len(keys) >= 2:
+            near_duplicate = False
+            for kept_keys in kept_key_sets:
+                if not kept_keys:
+                    continue
+                shared = keys & kept_keys
+                if shared and len(shared) / len(keys | kept_keys) >= _COVERAGE_ANCHOR_DEDUP_RATIO:
+                    near_duplicate = True
+                    break
+            if near_duplicate:
+                continue
         kept_normalized.append(normalized)
+        kept_key_sets.append(_coverage_fact_anchor_keys(normalized))
         unique_blocks.append(block)
 
     # 字符数限制：预算非正不产出证据；否则按分数降序贪心。能整块放下的完整
@@ -1152,7 +1285,7 @@ def extract_coverage_passages(
     content: str,
     max_passages: int = 5,
     neighbor_window: int = 1,
-    max_chars: int = 6000,
+    max_chars: int = _COVERAGE_MAX_CHARS_PER_DOC,
     options: CoverageOptions | None = None,
 ) -> list[CoveragePassage]:
     """规则抽取覆盖证据段落，不增加额外 LLM 调用，不依赖 query 关键词。
@@ -1162,11 +1295,18 @@ def extract_coverage_passages(
     达到上限另起新块）→ 去重 → 字符数限制。结果带进程内有界缓存
     （键=content+全部参数），同章节重试或重新生成时不重复计算。
 
+    预算分两层：本函数的 ``max_chars`` 是**单文档**预算（默认
+    ``_COVERAGE_MAX_CHARS_PER_DOC=1200``，生产路径即用此值）；章节级共享
+    总预算 ``_COVERAGE_MAX_TOTAL_CHARS=6000`` 由 report.py 集成层
+    （``_fit_coverage_to_budget``）二次裁剪，不经本参数表达。
+
     Args:
         content: 原始正文。
         max_passages: 进入 Top-K 的段落数上限（影响最终证据块数量）。
+            独立调用的保守默认 5；生产路径按 ``_COVERAGE_TOP_K_CAP=128``
+            传入（选段不预设硬 Top-K，由字符预算兜底）。
         neighbor_window: Top-K 段落的相邻扩展窗口。
-        max_chars: 最终证据块的累计字符数预算。
+        max_chars: 最终证据块的累计字符数预算（单文档口径）。
         options: 高级调参（合并跨度上限、邻域密度门控、计分口径）。
             ``None`` 时用模块级默认 ``_COVERAGE_DEFAULT_OPTIONS``。
 

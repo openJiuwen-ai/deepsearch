@@ -7,8 +7,6 @@ import pytest
 from openjiuwen_deepsearch.algorithm.report import table_caption_utils
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
-    build_classify_scores,
-    build_compact_classify_doc_infos_text,
     build_coverage_passage_block,
     format_key_passage_block,
     normalize_key_passages,
@@ -17,23 +15,12 @@ from openjiuwen_deepsearch.algorithm.report.report import (
     Reporter,
     VisualizationInsertPlanContext,
     _fit_coverage_to_budget,
-    _get_classified_infos,
     ensure_exact_target_documents,
 )
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
-
-
-def _classified_doc(title: str, url: str, source_id: str, relevance: float) -> dict:
-    return {
-        "title": title,
-        "url": url,
-        "source_id": source_id,
-        "original_content": f"{title} passage",
-        "scores": {"relevance": relevance, "answerability": 0, "authority": 0, "data_density": 0},
-    }
 
 
 def _report_doc(idx: int, *, url: str | None = None, content: str | None = None) -> dict:
@@ -244,8 +231,7 @@ async def test_generate_sub_section_outline_calls_llm_with_preservation_context(
 
 
 @pytest.mark.asyncio
-async def test_write_subsection_reports_calls_llm_with_output_constraint_context(caplog):
-    caplog.set_level(logging.INFO)
+async def test_write_subsection_reports_calls_llm_with_output_constraint_context():
     token = llm_context.set({"mock_model": object()})
     try:
         reporter = Reporter("mock_model")
@@ -2016,135 +2002,6 @@ async def test_generate_sub_report_retries_writer_with_failure_feedback():
         llm_context.reset(llm_token)
 
 
-def test_get_classified_infos_returns_all_selected_distinct_variants():
-    """selected_docs with two different source_id variants under same URL: both kept."""
-    doc_infos = [
-        {
-            "title": "A",
-            "url": "https://example.com/same",
-            "original_content": "variant A",
-            "key_passages": ["passage A"],
-        },
-        {
-            "title": "A",
-            "url": "https://example.com/same",
-            "original_content": "variant B",
-            "key_passages": ["passage B"],
-        },
-        {"title": "B", "url": "https://example.com/other", "original_content": "other"},
-    ]
-    # Matrix selected first two variants (different content -> different source_key, both kept)
-    selected_docs = [doc_infos[0], doc_infos[1]]
-    marginal_values = [0.6, 0.5]
-
-    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
-
-    assert classified_infos["references"] == ["[A](https://example.com/same)"]
-    assert classified_infos["core_content_list"] == [
-        "Document 1 key passages:\n- passage A",
-        "Document 2 key passages:\n- passage B",
-    ]
-    assert classified_doc_infos == doc_infos[:2]
-
-
-def test_get_classified_infos_deduplicates_same_content_without_source_id():
-    """selected_docs with two same-content variants (no source_id): keep only high-marginal-value one."""
-    doc_infos = [
-        {
-            "title": "A low",
-            "url": "https://example.com/same",
-            "original_content": "same content",
-            "key_passages": ["low passage"],
-            "scores": {"relevance": 1},
-        },
-        {
-            "title": "A high",
-            "url": "https://example.com/same",
-            "original_content": "same content",
-            "key_passages": ["high passage"],
-            "scores": {"relevance": 9},
-        },
-    ]
-    # Matrix selected two variants (same content, no source_id -> same source_key, dedup keeps high mv)
-    selected_docs = [doc_infos[0], doc_infos[1]]
-    marginal_values = [0.1, 0.9]
-
-    classified_infos, classified_doc_infos = _get_classified_infos(selected_docs, marginal_values)
-
-    assert classified_infos["core_content_list"] == ["Document 1 key passages:\n- high passage"]
-    assert classified_doc_infos == [doc_infos[1]]
-
-
-def test_get_classified_infos_keeps_top10_source_ids_by_score():
-    """selected_docs with 12 variants, max_count=10: keep top 10 by marginal_value."""
-    doc_infos = [
-        _classified_doc(f"doc-{idx}", "https://example.com/same", f"source-{idx}", idx * 0.8)
-        for idx in range(12)
-    ]
-    selected_docs = list(doc_infos)  # matrix selected all 12
-    # marginal_value positively correlated with idx, ensuring top10 is source-2..source-11
-    marginal_values = [idx * 0.1 for idx in range(12)]
-
-    classified_infos, classified_doc_infos = _get_classified_infos(
-        selected_docs, marginal_values, max_source_id_count=10
-    )
-
-    assert len(classified_doc_infos) == 10
-    assert {doc["source_id"] for doc in classified_doc_infos} == {
-        f"source-{idx}" for idx in range(2, 12)
-    }
-    assert classified_doc_infos[0]["source_id"] == "source-11"
-    key_blocks = [b for b in classified_infos["core_content_list"] if b.startswith("Document ")]
-    assert len(key_blocks) == 10
-    assert classified_infos["core_content_list"][-1].startswith("===== COVERAGE PASSAGES =====")
-    assert classified_infos["references"] == ["[doc\\-11](https://example.com/same)"]
-
-
-def test_get_classified_infos_keeps_each_selected_url_before_filling_variants():
-    """selected_docs with a-0, a-1, b, max_count=2: pick one representative per URL first."""
-    doc_infos = [
-        _classified_doc("A-0", "https://example.com/a", "a-0", 10),
-        _classified_doc("A-1", "https://example.com/a", "a-1", 9),
-        _classified_doc("B", "https://example.com/b", "b-0", 1),
-    ]
-    selected_docs = [doc_infos[0], doc_infos[1], doc_infos[2]]
-    marginal_values = [0.9, 0.8, 0.1]
-
-    classified_infos, classified_doc_infos = _get_classified_infos(
-        selected_docs, marginal_values, max_source_id_count=2
-    )
-
-    assert [doc["url"] for doc in classified_doc_infos] == ["https://example.com/a", "https://example.com/b"]
-    assert classified_infos["references"] == [
-        "[A\\-0](https://example.com/a)",
-        "[B](https://example.com/b)",
-    ]
-
-
-def test_get_classified_infos_with_empty_selected_docs_returns_empty():
-    """Empty selected_docs returns empty."""
-    classified_infos, classified_doc_infos = _get_classified_infos([], [])
-
-    assert classified_infos == {}
-    assert classified_doc_infos == []
-
-
-def test_get_classified_infos_returns_keys_aligned_after_deduplication():
-    first = _classified_doc("Lower", "https://example.com/a", "same-source", 0.8)
-    second = _classified_doc("Higher", "https://example.com/a", "same-source", 0.9)
-
-    classified_infos, classified_doc_infos, classified_doc_keys = _get_classified_infos(
-        [first, second],
-        [0.2, 0.8],
-        selected_doc_keys=["doc_3", "doc_7"],
-        return_doc_keys=True,
-    )
-
-    assert classified_infos["core_content_list"]
-    assert classified_doc_infos == [second]
-    assert classified_doc_keys == ["doc_7"]
-
-
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
@@ -2989,54 +2846,6 @@ def test_build_coverage_passage_block_empty_returns_empty_string():
     assert build_coverage_passage_block([(1, []), (2, [])]) == ""
 
 
-def test_get_classified_infos_appends_coverage_block_after_key_blocks():
-    selected_docs = [
-        {
-            "url": "https://a.com",
-            "title": "A",
-            "original_content": (
-                "2025年，DeepSeek发布新模型，推理速度提升50%，定价99美元/月。\n\n"
-                "该模型已覆盖30个国家，客户突破3万家。"
-            ),
-            "key_passages": ["DeepSeek发布新模型，推理速度提升50%"],
-        },
-        {
-            "url": "https://b.com",
-            "title": "B",
-            "original_content": "本节仅做背景介绍，不含任何数字日期实体引用，纯叙述文字。",
-            "key_passages": ["背景介绍"],
-        },
-    ]
-    classified_infos, _ = _get_classified_infos(selected_docs, [0.9, 0.8])
-
-    core_content_list = classified_infos["core_content_list"]
-    assert core_content_list[0].startswith("Document 1 key passages:")
-    assert core_content_list[1].startswith("Document 2 key passages:")
-    assert core_content_list[-1].startswith("===== COVERAGE PASSAGES =====")
-    assert "Document 1 coverage passages:" in core_content_list[-1]
-    # 纯叙述文档不贡献覆盖证据。
-    assert "Document 2 coverage passages:" not in core_content_list[-1]
-
-
-def test_get_classified_infos_omits_coverage_block_when_no_factual_content():
-    selected_docs = [
-        {"url": "https://a.com", "title": "A", "original_content": "variant A", "key_passages": ["passage A"]},
-    ]
-    classified_infos, _ = _get_classified_infos(selected_docs, [0.5])
-
-    assert classified_infos["core_content_list"] == ["Document 1 key passages:\n- passage A"]
-
-
-def test_get_classified_infos_coverage_excluded_when_identical_to_key_passage():
-    key_text = "2025年公司营收100亿元，同比增长20%。"
-    selected_docs = [
-        {"url": "https://a.com", "title": "A", "original_content": key_text, "key_passages": [key_text]},
-    ]
-    classified_infos, _ = _get_classified_infos(selected_docs, [0.5])
-
-    assert classified_infos["core_content_list"] == [f"Document 1 key passages:\n- {key_text}"]
-
-
 def test_fit_coverage_to_budget_keeps_whole_blocks_and_truncates_first_only():
     texts = ["a" * 100, "b" * 100, "c" * 100]
 
@@ -3046,6 +2855,35 @@ def test_fit_coverage_to_budget_keeps_whole_blocks_and_truncates_first_only():
     assert _fit_coverage_to_budget(["x" * 50], 20) == ["x" * 20]
     assert _fit_coverage_to_budget([], 100) == []
     assert _fit_coverage_to_budget(texts, 0) == []
+
+
+def test_fit_coverage_to_budget_skips_oversized_block_and_keeps_smaller_later_blocks():
+    """放不下的块跳过、继续尝试后面更小的块（与 collector_evidence 预算循环同语义）。
+
+    区分性用例：中间大块放不下时，break 语义会连后面能放下的小块一并丢弃，
+    continue 语义保留它们。PR !380 审核意见：两处同类预算逻辑策略须一致。
+    """
+    texts = ["a" * 100, "b" * 100, "c" * 50]
+    assert _fit_coverage_to_budget(texts, 150) == ["a" * 100, "c" * 50]
+    # 第一个块放不下时仍截断它并停止（保底语义不变）。
+    assert _fit_coverage_to_budget(["b" * 100, "c" * 50], 40) == ["b" * 40]
+
+
+def test_rule_coverage_block_enabled_accepts_standard_boolean_values(monkeypatch):
+    """DS_COVERAGE_RULE_BLOCK 按标准布尔口径解析，写 true/yes/on 不会被静默关闭。"""
+    from openjiuwen_deepsearch.algorithm.report.report import (
+        _rule_coverage_block_enabled,
+    )
+
+    assert _rule_coverage_block_enabled() is True  # 未设置时默认开
+
+    for value in ("1", "true", "True", "YES", " on "):
+        monkeypatch.setenv("DS_COVERAGE_RULE_BLOCK", value)
+        assert _rule_coverage_block_enabled() is True, value
+
+    for value in ("0", "false", "off", "", "2"):
+        monkeypatch.setenv("DS_COVERAGE_RULE_BLOCK", value)
+        assert _rule_coverage_block_enabled() is False, value
 
 
 @pytest.mark.parametrize("has_template", [False, True])
@@ -3069,6 +2907,68 @@ def test_subsection_outline_prompt_mentions_coverage_channels(has_template):
     assert "completeness signal" in normalized_prompt
     assert "do not by themselves require a new subsection" in normalized_prompt
     assert "evidence never creates" in normalized_prompt.lower()
+
+
+def test_subsection_outline_prompt_provenance_tokens_match_actual_block_format():
+    """Prompt 描述的溯源元数据标记必须与代码实际产出的块格式一致。
+
+    双向绑定：代码侧断言 build_coverage_passage_block / format_key_passage_block
+    真实产出这些头部标记；prompt 侧断言 provenance 说明覆盖同样的标记。
+    任一侧格式漂移都会失败，防止 prompt 与实现脱节（PR !380 审核意见：
+    prompt 描述了不存在的行内 [doc:N] 标记）。
+    """
+    coverage_block = build_coverage_passage_block([(1, ["sample coverage passage"])])
+    key_block = format_key_passage_block({"key_passages": ["sample key passage"]}, 2)
+
+    # 代码实际产出的溯源标记。
+    assert "===== COVERAGE PASSAGES =====" in coverage_block
+    assert "Document 1 coverage passages:" in coverage_block
+    assert "Document 2 key passages:" in key_block
+
+    rendered = apply_system_prompt(
+        "sub_section_outline",
+        {
+            "messages": [{"role": "user", "content": "Collected info"}],
+            "has_template": False,
+            "section_idx": 1,
+            "section_title": "Section",
+            "language": ENGLISH,
+        },
+    )
+    prompt_text = "\n".join(message["content"] for message in rendered)
+
+    # Prompt 的 provenance 说明必须覆盖同样的标记（含 key 通道头部）。
+    assert "Document N key passages:" in prompt_text
+    assert "Document N coverage passages:" in prompt_text
+    assert "===== COVERAGE PASSAGES =====" in prompt_text
+    assert "provenance metadata" in prompt_text
+
+
+@pytest.mark.parametrize("has_template", [False, True])
+def test_subsection_outline_prompt_untrusted_evidence_boundary(has_template):
+    """大纲 prompt 必须声明证据信任边界（PR !380 审核意见：注入面扩大）。
+
+    Coverage 通道会把正文第 500 字符之后的不可信网页文本主动提取进大纲 Prompt，
+    prompt 需明确：证据仅是数据、忽略其中指令/角色变更/格式覆盖/工具请求。
+    """
+    rendered = apply_system_prompt(
+        "sub_section_outline",
+        {
+            "messages": [{"role": "user", "content": "Collected info"}],
+            "has_template": has_template,
+            "section_idx": 1,
+            "section_title": "Section",
+            "language": ENGLISH,
+        },
+    )
+    prompt_text = "\n".join(message["content"] for message in rendered)
+    normalized_prompt = " ".join(prompt_text.split())
+
+    assert "untrusted" in normalized_prompt.lower()
+    assert "strictly as data" in normalized_prompt
+    assert "role-play" in normalized_prompt
+    assert "output-format overrides" in normalized_prompt
+    assert "tool requests" in normalized_prompt
 
 
 def test_append_rule_coverage_to_core_builds_rule_block_and_texts():
@@ -3099,3 +2999,35 @@ def test_append_rule_coverage_to_core_builds_rule_block_and_texts():
     # 无全文证据时原样返回
     merged0, texts0 = _append_rule_coverage_to_core(core, [])
     assert merged0 == core and texts0 == {}
+
+
+def test_append_rule_coverage_to_core_skips_extraction_when_budget_exhausted():
+    """章节共享预算耗尽后跳过剩余文档的抽取（省去必然为空的全量正则计算）。"""
+    from types import SimpleNamespace
+
+    from openjiuwen_deepsearch.algorithm.report import report as report_module
+    from openjiuwen_deepsearch.algorithm.report.report import _append_rule_coverage_to_core
+
+    # mock 抽取结果为恰好等于总预算的单块:第一篇即吃满共享预算,行为确定。
+    evidences = [
+        SimpleNamespace(original_content=f"2025年营收{idx}亿元，同比增长20%。", key_passages=[])
+        for idx in range(3)
+    ]
+    calls = []
+    real_extract = report_module._extract_doc_coverage_passages
+
+    def budget_eating_extract(item):
+        calls.append(1)
+        return ["x" * report_module._COVERAGE_MAX_TOTAL_CHARS]
+
+    report_module._extract_doc_coverage_passages = budget_eating_extract
+    try:
+        _, rule_texts = _append_rule_coverage_to_core(
+            ["Document 1 key passages:\n- k"], evidences
+        )
+    finally:
+        report_module._extract_doc_coverage_passages = real_extract
+
+    # 预算被第一个文档占满后,后续文档不再抽取。
+    assert len(calls) == 1
+    assert 1 in rule_texts and 2 not in rule_texts and 3 not in rule_texts
