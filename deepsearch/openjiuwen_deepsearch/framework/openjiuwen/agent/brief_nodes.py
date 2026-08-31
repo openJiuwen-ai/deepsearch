@@ -588,7 +588,7 @@ class BriefSubReporterNode(BaseNode):
 
 
 class BriefReporterNode(BaseNode):
-    """生成一次摘要，并交由拼装节点统一组装最终报告。"""
+    """生成一次摘要并组装最终 Brief 报告。"""
 
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
         logger.info("[BriefReporterNode] Start BriefReporterNode.")
@@ -604,6 +604,7 @@ class BriefReporterNode(BaseNode):
         intent = session.get_global_state("search_context.research_intent") or {}
         return {
             "state": state,
+            "report_task": session.get_global_state("search_context.original_query") or "",
             "request": BriefSummaryRequest(
                 llm=_llm(session, NodeId.BRIEF_REPORTER), title=state.outline.title,
                 language=session.get_global_state("search_context.language") or "zh-CN",
@@ -616,75 +617,19 @@ class BriefReporterNode(BaseNode):
         }
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        """保存摘要，避免拼装前提前执行引用整理。"""
+        """生成摘要后确定性拼装 Markdown 报告。"""
         try:
             pre_output = self._pre_handle(inputs, session, context)
             if pre_output.get("skip"):
                 return self._post_handle(inputs, pre_output, session, context)
             summary = await generate_brief_summary(pre_output["request"])
-        except Exception as exc:
-            return _finish_brief_node_failure(
-                session,
-                BriefNodeFailureContext(
-                    node_id=NodeId.BRIEF_REPORTER,
-                    node_name="BriefReporterNode",
-                    stage="Summary generation",
-                    status_code=StatusCode.REPORT_GENERATE_ERROR,
-                ),
-                exc,
-            )
-        return self._post_handle(
-            inputs, {"state": pre_output["state"], "summary": summary}, session, context,
-        )
-
-    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> Output:
-        if algorithm_output.get("skip"):
-            next_node = NodeId.END.value
-            logger.info("[BriefReporterNode] End BriefReporterNode, next_node=%s", next_node)
-            return {"next_node": next_node}
-        state, summary = algorithm_output["state"], algorithm_output["summary"]
-        state.executive_summary = summary
-        session.update_global_state({"search_context.brief_state": state.model_dump()})
-        next_node = NodeId.BRIEF_REPORT_ASSEMBLER.value
-        logger.info(
-            "[BriefReporterNode] Generated executive summary chapters=%d citations=%d.",
-            len(state.chapters), len(state.collection.citation_registry),
-        )
-        _log_node_detail("BriefReporterNode", "Generated executive summary", {"executive_summary": summary})
-        logger.info("[BriefReporterNode] End BriefReporterNode, next_node=%s", next_node)
-        return {"next_node": next_node}
-
-
-class BriefReportAssemblerNode(BaseNode):
-    """拼装最终 Brief 报告并整理引用；纯确定性节点，不调用 LLM、不生成图表。"""
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
-        logger.info("[BriefReportAssemblerNode] Start BriefReportAssemblerNode.")
-        state = _state(session)
-        if state.outline is None or state.collection is None or not state.chapters:
-            logger.warning("[BriefReportAssemblerNode] Missing Brief state, skip report assembly.")
-            return {"skip": True}
-        _log_node_detail(
-            "BriefReportAssemblerNode", "current_inputs",
-            {"outline": state.outline.model_dump(), "chapters": [chapter.model_dump() for chapter in state.chapters]},
-        )
-        return {
-            "state": state,
-            "language": session.get_global_state("search_context.language") or "zh-CN",
-            "report_task": session.get_global_state("search_context.original_query") or "",
-        }
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        try:
-            pre_output = self._pre_handle(inputs, session, context)
-            if pre_output.get("skip"):
-                return self._post_handle(inputs, pre_output, session, context)
             state = pre_output["state"]
+            state.executive_summary = summary
             assembly = assemble_brief_report(
                 BriefAssemblyRequest(
                     title=state.outline.title,
-                    language=pre_output["language"],
-                    executive_summary=state.executive_summary,
+                    language=pre_output["request"].language,
+                    executive_summary=summary,
                     chapters=state.chapters,
                     citation_registry=state.collection.citation_registry,
                     section_order={section.id: index for index, section in enumerate(state.outline.sections)},
@@ -694,23 +639,25 @@ class BriefReportAssemblerNode(BaseNode):
             return _finish_brief_node_failure(
                 session,
                 BriefNodeFailureContext(
-                    node_id=NodeId.BRIEF_REPORT_ASSEMBLER,
-                    node_name="BriefReportAssemblerNode",
-                    stage="Final report assembly",
+                    node_id=NodeId.BRIEF_REPORTER,
+                    node_name="BriefReporterNode",
+                    stage="Report generation",
                     status_code=StatusCode.REPORT_GENERATE_ERROR,
                 ),
                 exc,
             )
         return self._post_handle(
-            inputs, {**pre_output, "state": state, "assembly": assembly}, session, context,
+            inputs, {**pre_output, "state": state, "summary": summary, "assembly": assembly}, session, context,
         )
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> Output:
-        next_node = NodeId.BRIEF_SOURCE_TRACER.value
         if algorithm_output.get("skip"):
-            logger.info("[BriefReportAssemblerNode] End BriefReportAssemblerNode, next_node=%s", next_node)
+            next_node = NodeId.END.value
+            logger.info("[BriefReporterNode] End BriefReporterNode, next_node=%s", next_node)
             return {"next_node": next_node}
-        state, assembly = algorithm_output["state"], algorithm_output["assembly"]
+        state = algorithm_output["state"]
+        summary = algorithm_output["summary"]
+        assembly = algorithm_output["assembly"]
         current_report = Report(
             report_task=algorithm_output["report_task"],
             report_content=assembly.report_content,
@@ -723,12 +670,17 @@ class BriefReportAssemblerNode(BaseNode):
                 "search_context.current_report": current_report,
             }
         )
+        next_node = NodeId.BRIEF_SOURCE_TRACER.value
         logger.info(
-            "[BriefReportAssemblerNode] Assembled final report chapters=%d citations=%d.",
+            "[BriefReporterNode] Generated and assembled report chapters=%d citations=%d.",
             len(state.chapters), len(state.collection.citation_registry),
         )
-        _log_node_detail("BriefReportAssemblerNode", "Assembled final report", assembly.model_dump())
-        logger.info("[BriefReportAssemblerNode] End BriefReportAssemblerNode, next_node=%s", next_node)
+        _log_node_detail(
+            "BriefReporterNode",
+            "Generated and assembled report",
+            {"executive_summary": summary, **assembly.model_dump()},
+        )
+        logger.info("[BriefReporterNode] End BriefReporterNode, next_node=%s", next_node)
         return {"next_node": next_node}
 
 

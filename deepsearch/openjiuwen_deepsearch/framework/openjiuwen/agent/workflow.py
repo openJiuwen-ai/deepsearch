@@ -105,7 +105,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.brief_nodes import (
     BriefHtmlReporterNode,
     BriefInfoCollectorNode,
     BriefOutlineNode,
-    BriefReportAssemblerNode,
     BriefReporterNode,
     BriefSubReporterNode,
 )
@@ -155,7 +154,6 @@ def _add_brief_branch(flow: Workflow) -> None:
     flow.add_workflow_comp(NodeId.BRIEF_EVIDENCE_REVIEWER.value, BriefEvidenceReviewNode())
     flow.add_workflow_comp(NodeId.BRIEF_SUB_REPORTER.value, BriefSubReporterNode())
     flow.add_workflow_comp(NodeId.BRIEF_REPORTER.value, BriefReporterNode())
-    flow.add_workflow_comp(NodeId.BRIEF_REPORT_ASSEMBLER.value, BriefReportAssemblerNode())
     flow.add_workflow_comp(NodeId.BRIEF_SOURCE_TRACER.value, SourceTracerNode(NodeId.BRIEF_HTML_REPORTER.value))
     flow.add_workflow_comp(NodeId.BRIEF_HTML_REPORTER.value, BriefHtmlReporterNode())
     for source, targets in (
@@ -169,8 +167,7 @@ def _add_brief_branch(flow: Workflow) -> None:
             [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.BRIEF_SUB_REPORTER.value, NodeId.END.value],
         ),
         (NodeId.BRIEF_SUB_REPORTER.value, [NodeId.BRIEF_REPORTER.value, NodeId.END.value]),
-        (NodeId.BRIEF_REPORTER.value, [NodeId.BRIEF_REPORT_ASSEMBLER.value, NodeId.END.value]),
-        (NodeId.BRIEF_REPORT_ASSEMBLER.value, [NodeId.BRIEF_SOURCE_TRACER.value]),
+        (NodeId.BRIEF_REPORTER.value, [NodeId.BRIEF_SOURCE_TRACER.value, NodeId.END.value]),
         (NodeId.BRIEF_SOURCE_TRACER.value, [NodeId.BRIEF_HTML_REPORTER.value]),
         (NodeId.BRIEF_HTML_REPORTER.value, [NodeId.END.value]),
     ):

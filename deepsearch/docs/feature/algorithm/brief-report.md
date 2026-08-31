@@ -57,20 +57,19 @@ IntentRecognition / 可选澄清
       ├─ 无阻断缺口 → BriefSubReporter（并行章节写作）
       └─ 有阻断缺口 → BriefInfoCollector（唯一一次补搜）
                            → BriefSubReporter
-  → BriefReporter（核心摘要）
-  → BriefReportAssembler（纯拼装，不调 LLM）
+  → BriefReporter（核心摘要 + 确定性拼装）
   → BriefSourceTracer
   → BriefHtmlReporter（md → 自包含 HTML）
   → End
 ```
 
 brief 主链节点序列：`BRIEF_OUTLINE → BRIEF_INFO_COLLECTOR → BRIEF_EVIDENCE_REVIEWER →
-BRIEF_SUB_REPORTER → BRIEF_REPORTER → BRIEF_REPORT_ASSEMBLER → BRIEF_SOURCE_TRACER →
+BRIEF_SUB_REPORTER → BRIEF_REPORTER → BRIEF_SOURCE_TRACER →
 BRIEF_HTML_REPORTER → END`。
 
-`BRIEF_REPORT_ASSEMBLER` 为纯确定性拼装节点（标题+核心摘要+各章+参考文章+引用白名单过滤+
-`add_source_to_report` 引用整理），不调用 LLM、不生成图表；`visualization_enable` 对 Brief 不生效，
-仅控制专业版报告的既有图表流程。
+`BRIEF_REPORTER` 调用 LLM 生成核心摘要后，在同一节点内确定性完成标题、核心摘要、各章和参考
+文章的拼装，以及引用白名单过滤与 `add_source_to_report` 引用整理。`visualization_enable` 对 Brief
+不生效，仅控制专业版报告的既有图表流程。
 
 `BRIEF_HTML_REPORTER` 把溯源校验后的 md（校验跳过/异常时回退为拼装形态）转写为单文件自包含
 HTML：预处理把行内 `[checked_citation:<id>][[n]](URL)`、回退形态 `[source_tracer_result][标题](URL)`
@@ -92,7 +91,7 @@ HTML：预处理把行内 `[checked_citation:<id>][[n]](URL)`、回退形态 `[s
 5. `BriefEvidenceReviewer` 校验 LLM 审阅结果，只保留现有章节/步骤上的有效阻断缺口。审阅调用失败时，从首轮评估结果确定性提取阻断缺口。
 6. 如需补搜，使用首轮已执行 Query 去重，只重评受补搜 Query 影响的章节；补搜 Query 为空时保留首轮证据并直接写作。
 7. 章节写作从最终证据中按覆盖状态和评估排名组装上下文；摘要仅消费实际保留的章节文本及其可见引用。
-8. 报告装配节点确定性拼装标题、核心摘要、各章正文与参考文章；随后引用校验将内部 `[citation:N]` 处理为对外报告和 citation messages，最终由 HTML 节点把校验后的报告转写为自包含 HTML。
+8. `BriefReporterNode` 生成核心摘要后，确定性拼装标题、摘要、各章正文与参考文章；随后引用校验将内部 `[citation:N]` 处理为对外报告和 citation messages，最终由 HTML 节点把校验后的报告转写为自包含 HTML。
 
 ## 数据契约与依赖
 

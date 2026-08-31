@@ -28,7 +28,6 @@ class NodeId(enum.Enum):
     BRIEF_EVIDENCE_REVIEWER = "brief_evidence_reviewer"
     BRIEF_SUB_REPORTER = "brief_sub_reporter"
     BRIEF_REPORTER = "brief_reporter"
-    BRIEF_REPORT_ASSEMBLER = "brief_report_assembler"
     BRIEF_SOURCE_TRACER = "brief_source_tracer"
     BRIEF_HTML_REPORTER = "brief_html_reporter"
 

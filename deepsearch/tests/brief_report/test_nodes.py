@@ -12,7 +12,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.brief_nodes import (
     BriefHtmlReporterNode,
     BriefInfoCollectorNode,
     BriefOutlineNode,
-    BriefReportAssemblerNode,
     BriefReporterNode,
     BriefSubReporterNode,
 )
@@ -23,7 +22,6 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefEvidenceReview,
     BriefOutline,
     BriefQuery,
-    BriefReportAssembly,
     BriefWorkflowState,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ResearchIntent
@@ -255,26 +253,16 @@ async def test_brief_review_routes_blocking_gaps_to_one_supplement(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_brief_organizes_citations_once_in_assembler_and_converts_to_html(monkeypatch):
-    """拼装只在 Assembler 执行一次；HTML 节点消费溯源结果并写回 HTML 产物。"""
+async def test_brief_reporter_assembles_report_before_source_tracing_and_converts_to_html(monkeypatch):
+    """Reporter 生成摘要后应完成拼装，HTML 节点再消费溯源结果。"""
     outline = _brief_outline()
     collection = BriefCollectionResult(section_evidence={}, citation_registry=[])
     session = _BriefSession()
     session.values["search_context.brief_state"] = BriefWorkflowState(
         outline=outline,
         collection=collection,
-        executive_summary="- 结论",
         chapters=[BriefChapter(section_id="1", raw_markdown="## 范围\n\n正文")],
     ).model_dump()
-    assembled_requests = []
-
-    def assemble(request):
-        assembled_requests.append(request)
-        return BriefReportAssembly(
-            report_content="# 测试 Brief\n\n## 核心摘要\n\n- 结论\n\n## 范围\n\n正文\n\n## 参考文章",
-            merged_trace_source_datas=[],
-        )
-
     html_calls = []
 
     async def generate_html(*, llm, markdown, language):
@@ -283,16 +271,14 @@ async def test_brief_organizes_citations_once_in_assembler_and_converts_to_html(
 
     monkeypatch.setattr(brief_nodes, "_llm", lambda *_: object())
     monkeypatch.setattr(brief_nodes, "generate_brief_summary", AsyncMock(return_value="- 结论"))
-    monkeypatch.setattr(brief_nodes, "assemble_brief_report", assemble)
     monkeypatch.setattr(brief_nodes, "generate_brief_html_report", generate_html)
 
-    assert (await BriefReporterNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_REPORT_ASSEMBLER.value
-    assert assembled_requests == []
-
-    assert (await BriefReportAssemblerNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_SOURCE_TRACER.value
-    assert len(assembled_requests) == 1
+    assert (await BriefReporterNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_SOURCE_TRACER.value
     current_report = session.get_global_state("search_context.current_report")
-    assert current_report.report_content.startswith("# 测试 Brief")
+    assert current_report.report_content == (
+        "# 测试 Brief\n\n## 核心摘要\n\n- 结论\n\n## 范围\n\n正文\n\n## 参考文章"
+    )
+    assert session.get_global_state("search_context.brief_state")["executive_summary"] == "- 结论"
 
     current_report.checked_trace_source_report_content = "# 测试 Brief\n\n正文"
     session.update_global_state({"search_context.current_report": current_report})
@@ -482,18 +468,3 @@ async def test_brief_sub_reporter_ends_with_structured_error_when_all_chapters_f
         f"[{StatusCode.SUB_REPORT_GENERATE_ERROR.code}]"
         "Error when generate sub report, error: No Brief chapters were generated."
     )
-
-
-def test_brief_branch_workflow_order_is_rewritten():
-    """brief 分支编排：Reporter→Assembler→SourceTracer→HtmlReporter→END，无 Mermaid。"""
-    import inspect
-
-    from openjiuwen_deepsearch.framework.openjiuwen.agent import workflow as workflow_module
-
-    source = inspect.getsource(workflow_module._add_brief_branch)
-    assert "BRIEF_REPORT_ASSEMBLER" in source
-    assert "BRIEF_HTML_REPORTER" in source
-    assert "BRIEF_MERMAID_GENERATOR" not in source
-    assert "BriefReportAssemblerNode" in source
-    assert "BriefHtmlReporterNode" in source
-    assert "BriefMermaidGeneratorNode" not in source
