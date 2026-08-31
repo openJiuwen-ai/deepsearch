@@ -109,3 +109,25 @@ def build_structured_evidence_guide(
             )
 
     return "\n".join(lines)
+
+
+def build_coverage_passage_block(coverage_sections: list[tuple[int, list[str]]]) -> str:
+    """Format the aggregated coverage-passages block appended after key blocks.
+
+    Args:
+        coverage_sections: ``(document index, coverage passage text list)`` pairs.
+            The document index must align with the ``Document N key passages``
+            block numbering so the two channels stay source-traceable.
+
+    Returns:
+        The aggregated coverage block; empty string when there is no content.
+    """
+    if not coverage_sections or not any(passages for _, passages in coverage_sections):
+        return ""
+    lines = ["===== COVERAGE PASSAGES ====="]
+    for index, passages in coverage_sections:
+        if not passages:
+            continue
+        lines.append(f"Document {index} coverage passages:")
+        lines.extend(f"- {passage}" for passage in passages)
+    return "\n".join(lines)
