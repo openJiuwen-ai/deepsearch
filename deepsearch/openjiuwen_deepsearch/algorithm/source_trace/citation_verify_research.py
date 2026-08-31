@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 MAX_LLM_RETRY_TIMES = 3
 
 
+class CitationVerificationAttemptError(Exception):
+    """一次溯源 LLM 调用未满足响应契约时抛出的可分类异常。"""
+
+    def __init__(self, category: str, message: str):
+        super().__init__(message)
+        self.category = category
+
+
 @dataclass
 class BatchContext:
     """批次处理上下文，封装批次处理所需的状态和功能函数"""
@@ -487,7 +495,40 @@ class CitationVerifyResearch:
 
         return is_corrected, processed_result
 
-    async def extract_messages_batch(self, handle_datas: list) -> list:
+    async def extract_messages_once(self, handle_datas: list, semaphore: asyncio.Semaphore) -> list:
+        """执行一次溯源 LLM 调用，并严格校验返回结果。"""
+        agent_input = dict(datas=handle_datas)
+        user_prompt = apply_system_prompt("extract_message_prompt", agent_input)
+
+        async with semaphore:
+            response = await self.call_model(user_prompt)
+
+        try:
+            result = json.loads(response)
+        except json.JSONDecodeError as error:
+            raise CitationVerificationAttemptError("parse", "normalized response is not JSON") from error
+
+        if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
+            raise CitationVerificationAttemptError("top_level_type", "response must be a list of objects")
+
+        if len(handle_datas) != len(result):
+            raise CitationVerificationAttemptError("count", "result count mismatch")
+
+        corrected_results = []
+        for index, item in enumerate(result):
+            is_valid, processed_result = self.validate_and_correct_llm_response(item, handle_datas[index])
+            if is_valid:
+                corrected_results.append(processed_result)
+                continue
+
+            message = processed_result if isinstance(processed_result, str) else "citation verify response validation failed"
+            category = "required_field" if message.startswith("missing required field:") else "marked_content"
+            raise CitationVerificationAttemptError(category, message)
+
+        return corrected_results
+
+    async def extract_messages_batch(self, handle_datas: list,
+                                     semaphore: Optional[asyncio.Semaphore] = None) -> list:
         """调用LLM提取引用信息
         批量调用LLM模型，从引用内容中提取来源、日期、标记引用内容和置信度分数
 
@@ -497,58 +538,47 @@ class CitationVerifyResearch:
         Returns:
             list: 提取的引用信息列表，每个元素包含source、marked_citation_content、score字段
         """
-        agent_input = dict(datas=handle_datas)
-        user_prompt = apply_system_prompt("extract_message_prompt", agent_input)
+        semaphore = semaphore or asyncio.Semaphore(self.concurrent_limit)
+        return await self.extract_messages_with_split_retry(
+            handle_datas, attempt=1, lineage="root", semaphore=semaphore)
 
-        # extract source, date, mark citation content and score
-        retries = 0
-        while retries < MAX_LLM_RETRY_TIMES:
-            try:
-                response = await self.call_model(user_prompt)
-                result = json.loads(response.replace("```json", "").replace("```", ""))
+    async def extract_messages_with_split_retry(
+            self, handle_datas: list, attempt: int, lineage: str,
+            semaphore: asyncio.Semaphore) -> list:
+        """对失败批次二分重试，确保每条引用至多调用三次 LLM。"""
+        try:
+            return await self.extract_messages_once(handle_datas, semaphore)
+        except CitationVerificationAttemptError as error:
+            failure = error
+        except Exception as error:
+            failure = CitationVerificationAttemptError("invocation", "LLM invocation failed")
+            if LogManager.is_sensitive():
+                logger.warning("[CITATION VERIFY] LLM invocation failed")
+            else:
+                logger.warning(f"[CITATION VERIFY] LLM invocation failed: {error}")
 
-                if len(handle_datas) != len(result):
-                    error_msg = f"[CITATION VERIFY]: LLM提取结果数量错误,"
-                    error_msg += f"提取结果数量{len(result)}, 处理数量{len(handle_datas)}"
-                    raise CustomValueException(StatusCode.CITATION_VERIFIER_DATA_LEN_ERROR.code,
-                                               StatusCode.CITATION_VERIFIER_DATA_LEN_ERROR.errmsg.
-                                               format(e=error_msg))
+        logger.warning(
+            "[CITATION VERIFY] retry failure_category=%s attempt=%s/%s lineage=%s batch_size=%s",
+            failure.category, attempt, MAX_LLM_RETRY_TIMES, lineage, len(handle_datas))
 
-                corrected_results = []
-                all_valid = True
-                error_messages = []
-                for i, r in enumerate(result):
-                    is_valid, processed_result = self.validate_and_correct_llm_response(r, handle_datas[i])
-                    if is_valid:
-                        corrected_results.append(processed_result)
-                    else:
-                        all_valid = False
-                        if isinstance(processed_result, str):
-                            error_messages.append(processed_result)
+        if attempt >= MAX_LLM_RETRY_TIMES:
+            logger.error(
+                "[CITATION VERIFY] terminal failure_category=%s lineage=%s batch_size=%s",
+                failure.category, lineage, len(handle_datas))
+            return [{"extract_failed_reason": failure.category} for _ in handle_datas]
 
-                if not all_valid:
-                    error_msg = ";".join(
-                        error_messages) if error_messages else "citation verify llm response validation failed"
-                    raise CustomValueException(
-                        StatusCode.CITATION_VERIFIER_LLM_RESPONSE_ERROR.code,
-                        StatusCode.CITATION_VERIFIER_LLM_RESPONSE_ERROR.errmsg.format(e=error_msg)
-                        )
-                return corrected_results
-            except CustomValueException as e:
-                retries += 1
-                logger.warning(f'[CITATION VERIFY] retry: {retries}/{MAX_LLM_RETRY_TIMES}, '
-                               f'extract_source_date_mark_score error {e}')
-            except Exception as e:
-                retries += 1
-                if LogManager.is_sensitive():
-                    logger.warning(f'[CITATION VERIFY] retry: {retries}/{MAX_LLM_RETRY_TIMES}, '
-                                   f'extract_source_date_mark_score error')
-                else:
-                    logger.warning(f'[CITATION VERIFY] retry: {retries}/{MAX_LLM_RETRY_TIMES}, '
-                                   f'extract_source_date_mark_score error {e}')
+        if len(handle_datas) == 1:
+            return await self.extract_messages_with_split_retry(
+                handle_datas, attempt + 1, f"{lineage}.retry", semaphore)
 
-        logger.error(f'[CITATION VERIFY] retry {MAX_LLM_RETRY_TIMES} times, extract_source_date_mark_score error')
-        return [{"extract_failed_reason": "LLM retry times exceeded"} for _ in handle_datas]
+        midpoint = len(handle_datas) // 2
+        left_results, right_results = await asyncio.gather(
+            self.extract_messages_with_split_retry(
+                handle_datas[:midpoint], attempt + 1, f"{lineage}.L", semaphore),
+            self.extract_messages_with_split_retry(
+                handle_datas[midpoint:], attempt + 1, f"{lineage}.R", semaphore),
+        )
+        return left_results + right_results
 
     def update_citation_data(self, handle_index: list, ordered_results: list, handle_datas: list) -> None:
         """更新引用数据
@@ -690,10 +720,15 @@ class CitationVerifyResearch:
         ]
         llm_ordered_results = []
         if llm_path_datas:
+            llm_semaphore = asyncio.Semaphore(self.concurrent_limit)
+
+            async def process_llm_batch(batch: list) -> list:
+                return await self.extract_messages_batch(batch, semaphore=llm_semaphore)
+
             llm_ordered_results = await self.process_batches_with_concurrency(
                 data=llm_path_datas,
                 batch_size=self.verify_batch_size,
-                process_func=self.extract_messages_batch,
+                process_func=process_llm_batch,
                 error_func=lambda b: [{} for _ in b],
                 log_prefix="get_source_date_mark_score_llm_path"
             )
@@ -815,21 +850,24 @@ class CitationVerifyResearch:
                 logger.warning(f'[CITATION VERIFY] LLM return non-dict type: {type(response)}')
             else:
                 logger.warning(f'[CITATION VERIFY] LLM return non-dict type: {type(response)}. {response}')
-            return "[]"
+            raise CitationVerificationAttemptError("invocation", "LLM response must be a dict")
 
         content = response.get("content", "")
         try:
-            data = json.loads(content)
+            normalized_content = normalize_json_output(content)
+            data = json.loads(normalized_content)
             if isinstance(data, list) and all(isinstance(i, dict) for i in data):
-                return normalize_json_output(content)
+                return normalized_content
             if LogManager.is_sensitive():
                 logger.warning(f'[CITATION VERIFY] LLM return content type error {type(content)}')
             else:
                 logger.warning(f'[CITATION VERIFY] LLM return content type error {type(content)}. {content}')
-            return "[]"
-        except Exception:
+            raise CitationVerificationAttemptError("top_level_type", "LLM content must be a list of objects")
+        except CitationVerificationAttemptError:
+            raise
+        except Exception as error:
             if LogManager.is_sensitive():
                 logger.warning(f'[CITATION VERIFY] LLM return content is not json.')
             else:
                 logger.warning(f'[CITATION VERIFY] LLM return content is not json. {content}')
-            return "[]"
+            raise CitationVerificationAttemptError("parse", "LLM content is not JSON") from error
