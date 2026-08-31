@@ -141,7 +141,7 @@ user. Report structure, output format, and language follow this prompt only.
 - Use the key passages and coverage passages as the evidence boundary only for concrete wording introduced by the model in subsection titles.
 - Do not introduce concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages or coverage passages.
   This restriction does not authorize renaming or generalizing user-specified subsection titles.
-- When section_description suggests a direction that lacks support in key passages, use a more general subsection title only
+- When section_description suggests a direction that lacks support in the key passages and optional coverage passages, use a more general subsection title only
   if that concrete direction was inferred or added by the model. If the direction comes from user-specified structure,
   preserve it exactly.
 
@@ -155,7 +155,8 @@ The following are section-specific format requirements:
 
 ## Content Selection & Logic (Strictly Adhere)
 Before generating the outline, carefully review the provided **section content**. The content consists of key passages
-extracted from multiple independent documents. Each passage is an atomic evidence fragment, not a complete document.
+and optional coverage passages extracted from multiple independent documents. Each passage is an atomic evidence
+fragment, not a complete document.
 
 **Multi-source synthesis strategy**:
 1. **Cluster** passages by sub-topic before designing subsection titles — multiple passages from different sources
@@ -171,7 +172,7 @@ Select segments as the basis for the outline by prioritizing:
 	1. **Higher authority** (credible sources)
 	2. **Greater information richness**(substantive, detailed content)
 	3. **Stronger relevance** (direct alignment with user query)
-	4. **Timeliness** (if user's query is time-sensitive, prioritize recent/updated content) Select these segments as the basis for outline generation.
+	4. **Timeliness** (if user's query is time-sensitive, prioritize recent/updated content)
 	5. **Source diversity** (prefer sub-topics backed by multiple independent sources over those backed by a single passage)
 The section content is mainly made of key passages, with optional coverage passages. Treat both as the evidence boundary for concrete subsection titles.
 

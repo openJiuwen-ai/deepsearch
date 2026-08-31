@@ -410,6 +410,73 @@ def test_pipe_nav_breadcrumb_without_digits_filtered():
     assert extract_coverage_passages(content) == []
 
 
+def test_markdown_table_with_numeric_header_stays_one_block():
+    """表头含数字（年份列）的表格应整体成块，表头与数据不分属两个证据块。
+
+    逐行切分时表头/分隔行/数据行各自成段：分隔行被噪声规则丢弃造成下标断档、
+    打断 run 合并，表头与数据被迫分块（PR 评审 liuxiaowei 复现 1）。
+    """
+    content = "\n".join(
+        [
+            "| 指标 | 2024年 | 2025年 |",
+            "| --- | --- | --- |",
+            "| 营收（亿元） | 800 | 950 |",
+            "| 净利润（亿元） | 60 | 85 |",
+        ]
+    )
+    result = extract_coverage_passages(content)
+
+    assert result
+    assert any(
+        "| 指标 | 2024年" in block.text and "营收（亿元）" in block.text
+        for block in result
+    ), "表头应与数据行同块保留列归属"
+
+
+def test_markdown_table_header_without_digits_kept_with_data_rows():
+    """表头无数字（指标/数值/同比列名）时不应被双重丢弃，数据行的列语义可恢复。
+
+    逐行切分时表头行被噪声规则与零特征得分双重保证丢弃（PR 评审 liuxiaowei
+    复现 2），数据行进入 prompt 后数字失去列归属。
+    """
+    content = "\n".join(
+        [
+            "| 营收（亿元） | 净利润（亿元） | 同比 |",
+            "| --- | --- | --- |",
+            "| 800 | 85 | 20% |",
+        ]
+    )
+    result = extract_coverage_passages(content)
+
+    assert result
+    assert any(
+        "营收（亿元）" in block.text and "800" in block.text
+        for block in result
+    ), "无数字表头应随数据行进入证据块"
+
+
+def test_markdown_table_surrounded_by_paragraphs_keeps_boundaries():
+    """表格与前后普通段落混排时，表格作为独立候选段落参与切分与合并。
+
+    前后段落无任何事实特征（零分、不进候选），表格块独立成块，文本不被
+    段落句号切分打散。
+    """
+    content = "\n".join(
+        [
+            _FILLER,
+            "| 指标 | 数值 |",
+            "| --- | --- |",
+            "| 营收 | 100亿元 |",
+            _FILLER,
+        ]
+    )
+    result = extract_coverage_passages(content)
+
+    assert result
+    table_block = next(block for block in result if "| 指标 | 数值 |" in block.text)
+    assert "本报告基于公开资料整理" not in table_block.text
+
+
 def test_neighbor_window_expands_beyond_adjacent():
     content = "\n\n".join(
         [

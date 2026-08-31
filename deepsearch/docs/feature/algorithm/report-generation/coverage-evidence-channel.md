@@ -6,7 +6,7 @@
 规则抽取的、与关键词检索无关的事实段落，作为大纲生成的补充证据输入。与已有的
 `key_passages`（相关性检索）并行，属于"方案 B"的工程实现。
 
-路径：`openjiuwen_deepsearch/algorithm/report/report.py::_append_rule_coverage_to_core`、
+路径：`openjiuwen_deepsearch/algorithm/report/evidence.py::_append_rule_coverage_to_core`、
 `openjiuwen_deepsearch/algorithm/research_collector/collector_evidence.py`、
 `openjiuwen_deepsearch/algorithm/report/compact_doc_info.py::build_coverage_passage_block`、
 Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
@@ -61,7 +61,7 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
 
 - 抽取函数：`collector_evidence.py::extract_coverage_passages`（进程内有界缓存接口）、
   `collector_evidence.py::exclude_passages`、`CoveragePassage`
-- 组装：`report.py::_append_rule_coverage_to_core`、`compact_doc_info.py::build_coverage_passage_block`
+- 组装：`report/evidence.py::_append_rule_coverage_to_core`、`compact_doc_info.py::build_coverage_passage_block`
 - Prompt：`algorithm/prompts/sub_section_outline.md`
 - 测试：`tests/info_collector/algorithm/test_coverage_evidence.py`、
   `tests/report/test_sub_report.py`
@@ -117,11 +117,11 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
   "归一化相同 / 字符二元组 Jaccard ≥0.6 / 一方是另一方 ≥60% 占比子串"。
 - 邻域扩展：`expansion_density_threshold`（方案3 密度门控，默认 0 关闭）。预算兜底
   （K≈候选全集）下邻居扩展为空操作，故默认关闭；参数保留供有限 K 场景评估。
-- 集成常量（`collector_evidence.py` 唯一真源，`report.py` 与评估工具共用）：
+- 集成常量（`collector_evidence.py` 唯一真源，`report/evidence.py` 集成层引用）：
   `_COVERAGE_TOP_K_CAP = 128`（选段数量上界，实际由预算兜底）、
   `_COVERAGE_MAX_CHARS_PER_DOC = 1200`（单文档预算，`extract_coverage_passages`
   的 `max_chars` 默认值即引用此常量）、`_COVERAGE_MAX_TOTAL_CHARS = 6000`
-  （章节级总预算，由 report.py `_fit_coverage_to_budget` 二次裁剪）、
+  （章节级总预算，由 `report/evidence.py` `_fit_coverage_to_budget` 二次裁剪）、
   `_COVERAGE_SCORE_MODE`、`_COVERAGE_DENSITY_MIN_LEN`。
 - coverage 块格式：`===== COVERAGE PASSAGES =====` / `Document N coverage passages:`
   + `- passage`，`N` 与 key 块编号对齐。
@@ -138,6 +138,10 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
 
 - 空内容、纯噪声（过短、标题、导航、无数字分隔行、**纯引用/链接列表**）、无任何事实
   特征 → 不产覆盖证据。
+- Markdown 表格原子性：`_coverage_split_passages` 把连续以 `|` 起始的行识别为原子
+  单元（表格识别复用 key 通道 `_is_markdown_table`，超长表格经 `_split_long_table`
+  按行切分并逐片段保留表头；单行 `|` 片段保持独立成段），表头与数据行不会因分隔行
+  被噪声过滤丢弃而下标断档分块，列语义随表头进入证据块。
 - 每个文档的覆盖证据经 `_fit_coverage_to_budget` 裁入剩余章节预算；放不下的块
   整块跳过、继续尝试后面更小的块（与 `extract_coverage_passages` 内部预算循环
   同语义），仅当第一个块即超出预算时截断该块，保证非空。
@@ -150,7 +154,8 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
 - 组装与 prompt：`uv run pytest tests/report/test_sub_report.py tests/report/test_tools_in_report.py`
 - 必须覆盖：事实密度优先于位置、噪声过滤、特征计数与封顶、Neighbor Expansion 与相邻合并、
   两级去重、字符预算、`exclude_passages` 去重、`_append_rule_coverage_to_core` 追加 coverage 块、
-  outline prompt 渲染两路证据语义、缓存键隔离与返回隔离。
+  outline prompt 渲染两路证据语义、缓存键隔离与返回隔离、markdown 表格原子性（表头与数据
+  同块、无数字表头不丢、表格与段落边界）。
 
 ## 相关文档
 

@@ -769,7 +769,7 @@ _COVERAGE_CACHE_MAXSIZE = 512
 # ---------------------------------------------------------------------------
 # 集成预算（方案 B Phase3 + 方案2 迭代）：覆盖证据进入大纲证据时的成本闸门。
 # 选段不预设硬 Top-K，由单文档/章节的字符预算兜底（方案2：预算即终止条件）。
-# report.py 与 tools/evaluate_coverage.py 从本处导入，避免两侧口径漂移。
+# report/evidence.py 集成层从本处导入，避免口径复制漂移。
 # ---------------------------------------------------------------------------
 _COVERAGE_TOP_K_CAP = 128
 _COVERAGE_MAX_CHARS_PER_DOC = 1200
@@ -821,14 +821,54 @@ def _coverage_split_passages(content: str) -> list[str]:
     会破坏 coverage 依赖的"句/段粒度"候选与邻域窗口语义，因此 coverage 侧固定
     采用句末与换行级别的切分，避免跟随上游策略漂移。
 
+    Markdown 表格例外：连续以 ``|`` 起始的行合并为原子单元再参与切分（表格识别
+    复用本文件 key 通道的 `_is_markdown_table`）。逐行切分会让表头与数据行失联：
+    分隔行被噪声规则丢弃造成下标断档、打断 run 合并，表头含数字时与数据分属两块
+    （关联脆弱，任一块独立被裁即失去列归属），不含数字时被噪声与零特征双重丢弃
+    （列语义不可恢复）。超长有效表格经 `_split_long_table` 按行切分并逐片段保留
+    表头；单行 ``|`` 片段（事实行/面包屑）保持独立成段的既有行为。
+
     Args:
         content: 原始正文。
 
     Returns:
         已去空白的段落列表。
     """
-    raw_parts = re.split(r"(?:\n\s*\n|\n|(?<=[。！？!?])|(?<=\.)(?=\s|$))", content or "")
-    return [part.strip() for part in raw_parts if part and part.strip()]
+    paragraphs: list[str] = []
+    plain_lines: list[str] = []
+    table_lines: list[str] = []
+
+    def _flush_plain() -> None:
+        if not plain_lines:
+            return
+        segment = "\n".join(plain_lines)
+        plain_lines.clear()
+        raw_parts = re.split(r"(?:\n\s*\n|\n|(?<=[。！？!?])|(?<=\.)(?=\s|$))", segment)
+        paragraphs.extend(part.strip() for part in raw_parts if part and part.strip())
+
+    def _flush_table() -> None:
+        if not table_lines:
+            return
+        block = "\n".join(table_lines)
+        single_line = len(table_lines) == 1
+        table_lines.clear()
+        if single_line:
+            paragraphs.append(block)
+        elif _is_markdown_table(block):
+            paragraphs.extend(_split_long_table(block))
+        else:
+            paragraphs.append(block)
+
+    for line in (content or "").split("\n"):
+        if line.strip().startswith("|"):
+            _flush_plain()
+            table_lines.append(line.strip())
+        else:
+            _flush_table()
+            plain_lines.append(line)
+    _flush_plain()
+    _flush_table()
+    return paragraphs
 
 
 def _normalize_coverage_content(content: str) -> str:
@@ -1297,7 +1337,7 @@ def extract_coverage_passages(
 
     预算分两层：本函数的 ``max_chars`` 是**单文档**预算（默认
     ``_COVERAGE_MAX_CHARS_PER_DOC=1200``，生产路径即用此值）；章节级共享
-    总预算 ``_COVERAGE_MAX_TOTAL_CHARS=6000`` 由 report.py 集成层
+    总预算 ``_COVERAGE_MAX_TOTAL_CHARS=6000`` 由 report/evidence.py 集成层
     （``_fit_coverage_to_budget``）二次裁剪，不经本参数表达。
 
     Args:

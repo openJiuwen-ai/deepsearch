@@ -175,7 +175,7 @@ class EvidenceMixin:
             current_inputs.get("current_outline", {})
         )
         # Expand section_local_contract (nested dict) into top-level fields via the shared helper,
-        # consistent with other prompt sites (report.py:2148, 3097).
+        # consistent with other prompt sites (report.py, sub_section_outline.py).
         contract_ctx = build_section_local_contract_prompt_context(
             current_inputs.get("section_local_contract")
         )
