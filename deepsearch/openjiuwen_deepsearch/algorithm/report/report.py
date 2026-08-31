@@ -2215,6 +2215,15 @@ class Reporter:
 
             documents = data.get("documents", [])
             for doc_result in documents:
+                if not isinstance(doc_result, dict):
+                    logger.warning(
+                        "%s [extract_score] section_idx: [%s] batch %s doc is not a dict "
+                        "(type=%s), skipping: %s",
+                        EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
+                        type(doc_result).__name__,
+                        repr(doc_result)[:200],
+                    )
+                    continue
                 passage_index = doc_result.get("doc_index", doc_result.get("passage_index"))
                 if not isinstance(passage_index, int):
                     logger.warning(
