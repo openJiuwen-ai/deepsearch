@@ -42,8 +42,11 @@ def test_resolve_professional_policy():
 
 
 def test_resolve_default_policy_when_none():
+    # 用户未明示 report_type 时，默认回退为 brief（精简模式）
     p = resolve_report_type_policy(None)
-    assert p.report_type == "professional"
-    assert p.paragraph_style == "detailed"
+    assert p.report_type == "brief"
+    assert p.paragraph_style == "concise"
+    assert p.require_summary_first is True
+    assert p.require_methodology_and_risk is True
 
 
