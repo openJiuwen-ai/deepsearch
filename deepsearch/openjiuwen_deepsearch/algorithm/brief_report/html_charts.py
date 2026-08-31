@@ -29,7 +29,9 @@ _ECHARTS_LIB_END = "<!--/openjiuwen:echarts-lib-->"
 _CHART_SCRIPT_MARKER = "<!--openjiuwen:chart-init-->"
 _CHART_SCRIPT_END = "<!--/openjiuwen:chart-init-->"
 _TEMPLATE_BLOCK_RE = re.compile(
-    r'''(?is)<template\b(?=[^>]*\bid\s*=\s*(?:"chart-configs"|'chart-configs'|chart-configs\b))[^>]*>(.*?)</template\s*>'''
+    r'''(?is)<template\b(?=[^>]*\bid\s*=\s*'''
+    r'''(?:"chart-configs"|'chart-configs'|chart-configs\b))[^>]*>'''
+    r'''(.*?)</template\s*>'''
 )
 _CHART_PLACEHOLDER_RE = re.compile(
     r'(?is)<div\b[^>]*class="[^"]*echarts-chart[^"]*"[^>]*>.*?</div>'
@@ -60,8 +62,9 @@ def _validate_option_node(node: object, path: str) -> str | None:
         return None
     if isinstance(node, dict):
         for key, value in node.items():
-            if key == "formatter" and isinstance(value, str) and ("<" in value or ">" in value):
-                return f"{path}.{key} formatter must not contain HTML tags"
+            if key == "formatter" and isinstance(value, str):
+                if "<" in value or ">" in value:
+                    return f"{path}.{key} formatter must not contain HTML tags"
             error = _validate_option_node(value, f"{path}.{key}")
             if error:
                 return error

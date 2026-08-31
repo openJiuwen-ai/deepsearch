@@ -521,7 +521,11 @@ class CitationVerifyResearch:
                 corrected_results.append(processed_result)
                 continue
 
-            message = processed_result if isinstance(processed_result, str) else "citation verify response validation failed"
+            message = (
+                processed_result
+                if isinstance(processed_result, str)
+                else "citation verify response validation failed"
+            )
             category = "required_field" if message.startswith("missing required field:") else "marked_content"
             raise CitationVerificationAttemptError(category, message)
 
