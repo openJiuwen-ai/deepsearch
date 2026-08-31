@@ -43,7 +43,6 @@ class RetryFeedbackMixin:
         """Build controlled retry feedback without echoing model/provider text."""
         allowed_codes = {
             "HEADING_COUNT_MISMATCH",
-            "HEADING_LEVEL_MISMATCH",
             "HEADING_TITLE_MISMATCH",
             "HEADING_MISSING",
             "OUTLINE_HEADING_MISSING",
@@ -58,11 +57,9 @@ class RetryFeedbackMixin:
         error_code = error_code if error_code in allowed_codes else "SUB_REPORT_RETRY_REQUIRED"
         lines = [f"error_code: {error_code}", f"location: {location}"]
         for key in (
-            "position",
             "expected_heading_count",
             "actual_heading_count",
             "expected_heading_level",
-            "actual_heading_level",
         ):
             value = (fields or {}).get(key)
             if value is None:
@@ -93,8 +90,9 @@ class RetryFeedbackMixin:
             "DUPLICATE_SUBSECTION_HEADINGS",
         }:
             action = (
-                "Regenerate markdown headings from Current Chapter Outline; "
-                "keep H1/H2 count, level, order, and title text exact."
+                "Include every Current Chapter Outline heading with matching level and title text, "
+                "in the same order as the outline; extra H2 headings beyond the outline are allowed "
+                "but outline headings must not be omitted or reordered."
             )
         elif error_code == "MISSING_SECTION_CONTEXT":
             action = "Retry only after required section title, outline, and evidence context are available."
@@ -130,11 +128,9 @@ class RetryFeedbackMixin:
         if code_match:
             fields = {}
             for key in (
-                "position",
                 "expected_heading_count",
                 "actual_heading_count",
                 "expected_heading_level",
-                "actual_heading_level",
             ):
                 field_match = re.search(rf"(?m)^\s*{key}:\s*(H?\d+)\s*$", reason)
                 if field_match:
@@ -159,19 +155,14 @@ class RetryFeedbackMixin:
 
         heading_patterns = [
             (
-                r"heading count mismatch:\s*expected\s*(\d+),\s*got\s*(\d+)",
+                r"heading count insufficient:\s*expected at least\s*(\d+),\s*got\s*(\d+)",
                 "HEADING_COUNT_MISMATCH",
                 ("expected_heading_count", "actual_heading_count"),
             ),
             (
-                r"heading level mismatch at position\s*(\d+):\s*expected\s*H?(\d+),\s*got\s*H?(\d+)",
-                "HEADING_LEVEL_MISMATCH",
-                ("position", "expected_heading_level", "actual_heading_level"),
-            ),
-            (
-                r"heading title mismatch at position\s*(\d+)",
+                r"outline heading not found:\s*expected\s*H?(\d+)\s+'[^']*'",
                 "HEADING_TITLE_MISMATCH",
-                ("position",),
+                ("expected_heading_level",),
             ),
         ]
         for pattern, error_code, field_names in heading_patterns:
@@ -194,7 +185,7 @@ class RetryFeedbackMixin:
                 "OUTLINE_HEADING_MISSING",
                 "markdown_headings",
             )
-        if "duplicate subsection headings" in reason_lower:
+        if "duplicate headings" in reason_lower:
             return cls._build_sub_report_retry_feedback(
                 "DUPLICATE_SUBSECTION_HEADINGS",
                 "markdown_headings",

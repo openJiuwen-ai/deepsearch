@@ -251,7 +251,11 @@ class MarkdownProcessorMixin:
         content: str,
         sub_section_outline: str,
     ) -> tuple[bool, str]:
-        """Ensure generated markdown headings strictly follow the approved subsection outline."""
+        """Ensure every outline heading appears in the generated report in order.
+
+        Extra headings beyond the outline are allowed; missing, mismatched,
+        or out-of-order outline headings cause failure.
+        """
         expected_pairs = cls._extract_outline_heading_pairs(sub_section_outline)
         actual_pairs = cls._extract_markdown_heading_pairs(content)
 
@@ -260,29 +264,27 @@ class MarkdownProcessorMixin:
         if not actual_pairs:
             return False, "generated report headings are empty"
 
-        if len(actual_pairs) != len(expected_pairs):
+        if len(actual_pairs) < len(expected_pairs):
             return (
                 False,
-                f"heading count mismatch: expected {len(expected_pairs)}, got {len(actual_pairs)}",
+                f"heading count insufficient: expected at least {len(expected_pairs)}, got {len(actual_pairs)}",
             )
 
-        for index, (expected, actual) in enumerate(
-            zip(expected_pairs, actual_pairs),
-            start=1,
-        ):
-            if expected[0] != actual[0]:
+        search_from = 0
+        for expected_level, expected_title in expected_pairs:
+            target = (expected_level, expected_title)
+            try:
+                pos = actual_pairs.index(target, search_from)
+            except ValueError:
                 return (
                     False,
-                    f"heading level mismatch at position {index}: expected H{expected[0]}, got H{actual[0]}",
+                    f"outline heading not found: expected H{expected_level} "
+                    f"'{expected_title}' not present in generated report",
                 )
-            if expected[1] != actual[1]:
-                return (
-                    False,
-                    f"heading title mismatch at position {index}: expected '{expected[1]}', got '{actual[1]}'",
-                )
+            search_from = pos + 1
 
-        if len({pair for pair in actual_pairs[1:]}) != len(actual_pairs[1:]):
-            return False, "duplicate subsection headings detected in generated report"
+        if len(set(actual_pairs)) != len(actual_pairs):
+            return False, "duplicate headings detected in generated report"
 
         return True, ""
 
