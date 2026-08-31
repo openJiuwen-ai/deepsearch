@@ -132,6 +132,12 @@ cp .env.example .env
 codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
 ```
 
+To run the coder via the CLI directly against a specific collection:
+
+```sh
+codesearch coder --collection my_repo --query-file /path/to/issue_1.txt
+```
+
 Priority and the full variable table: [Installation · Environment variables](docs/en/2.Installation%20Guide/README.md#environment-variables). Search uses two models: **main** (multi-turn decisions) defaults to `openai/gpt-5`, **filter** (line extraction) defaults to `openai/gpt-5-mini`. When pointing at another endpoint, set model names your provider actually supports. Python API and full options: [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md).
 
 # ⚙️ Engines
@@ -172,12 +178,14 @@ Graph/react workflow: [codesearch-workflow.md](docs/feature/framework/codesearch
 
 Retrieval quality can be measured on [ContextBench](docs/en/3.Quick%20Start/3.Quick%20Start.md),
 a benchmark of real repository issues with annotated ground-truth context.
-The dataset is pulled in as a git submodule (see repo-root `.gitmodules`,
-path `codesearch/third_party/contextbench`):
+ContextBench is **optional** (not a git submodule; clone/CI will not fetch it).
+When you want to run the benchmark, clone it locally — see
+[`third_party/README.md`](third_party/README.md):
 
 ```sh
-# from the monorepo root
-git submodule update --init --recursive
+# from codesearch/
+bash scripts/fetch_contextbench.sh
+# or: git clone https://github.com/EuniAI/ContextBench third_party/contextbench
 ```
 
 ```sh
@@ -190,6 +198,16 @@ Predictions and auto-scored metrics go to `./results/`. Use the product
 `[bench]` extra (pandas/pyarrow + tree-sitter*); do not substitute upstream
 `requirements.txt`. Details:
 [Quick Start](docs/en/3.Quick%20Start/3.Quick%20Start.md#benchmarking).
+
+## Coder Mode
+
+You can evaluate the new coder test-mode and force indices to reset using the benchmark runner:
+
+```sh
+python -m benchmarks.contextbench.runner --num-instances 32 --test-mode coder --reset-indices
+```
+
+Agent logs and patch predictions will be saved in the `./results/results__<timestamp>/agent_logs` and `./results/results__<timestamp>/coder_patches` directories respectively.
 
 # 💻 Developer guide
 

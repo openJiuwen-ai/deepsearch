@@ -2,8 +2,11 @@
 """Unit tests for ContextBench prediction export / eval summary helpers."""
 
 import json
+import os
 import sys
 import types
+
+import pytest
 
 from benchmarks.contextbench.exporter import write_eval_summary
 
@@ -55,3 +58,37 @@ def test_write_eval_summary_writes_json(tmp_path, monkeypatch):
     assert payload["num_total"] == 2
     assert payload["final_file"]["f1"] == 0.666
     assert payload["errors"] == {"missing_gold": 1}
+
+
+def test_resolve_contextbench_dir_honors_env(tmp_path, monkeypatch):
+    from benchmarks.contextbench.dataset import (
+        DEFAULT_CONTEXTBENCH_DIR,
+        ensure_contextbench_importable,
+        resolve_contextbench_dir,
+        resolve_parquet_path,
+    )
+
+    monkeypatch.delenv("CONTEXTBENCH_DIR", raising=False)
+    monkeypatch.delenv("CONTEXTBENCH_PARQUET", raising=False)
+    assert resolve_contextbench_dir() == DEFAULT_CONTEXTBENCH_DIR
+
+    monkeypatch.setenv("CONTEXTBENCH_DIR", str(tmp_path))
+    assert resolve_contextbench_dir() == os.path.abspath(str(tmp_path))
+    assert resolve_contextbench_dir("/explicit") == os.path.abspath("/explicit")
+
+    parquet = tmp_path / "gold.parquet"
+    monkeypatch.setenv("CONTEXTBENCH_PARQUET", str(parquet))
+    assert resolve_parquet_path() == os.path.abspath(str(parquet))
+
+    marker = tmp_path / "contextbench" / "__init__.py"
+    marker.parent.mkdir()
+    marker.write_text("", encoding="utf-8")
+    assert ensure_contextbench_importable() == os.path.abspath(str(tmp_path))
+
+
+def test_ensure_contextbench_importable_missing(tmp_path, monkeypatch):
+    from benchmarks.contextbench.dataset import ensure_contextbench_importable
+
+    monkeypatch.setenv("CONTEXTBENCH_DIR", str(tmp_path / "absent"))
+    with pytest.raises(FileNotFoundError, match="fetch_contextbench"):
+        ensure_contextbench_importable()

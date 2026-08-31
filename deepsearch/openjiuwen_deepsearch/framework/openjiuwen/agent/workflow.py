@@ -1397,7 +1397,7 @@ class DeepSearchAgent(BaseAgent):
         return agent
 
     @classmethod
-    def _get_shared_agent(cls):
+    def get_shared_agent(cls):
         if cls._workflow_agent is None:
             with cls._workflow_agent_lock:
                 if cls._workflow_agent is None:
@@ -1405,7 +1405,7 @@ class DeepSearchAgent(BaseAgent):
         return cls._workflow_agent
 
     def _build_agent(self):
-        self.agent = self._get_shared_agent()
+        self.agent = self.get_shared_agent()
         return self.agent
 
     async def _cancel_running_tasks(
