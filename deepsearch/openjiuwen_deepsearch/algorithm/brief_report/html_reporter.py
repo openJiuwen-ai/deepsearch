@@ -5,6 +5,7 @@ import html
 import json
 import logging
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 
 from openjiuwen_deepsearch.algorithm.brief_report.html_charts import (
@@ -42,6 +43,17 @@ from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmN
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _ShellGenerationContext:
+    """shell 生成所需的报告上下文。"""
+
+    title: str
+    summary_md: str
+    sections: list[BriefHtmlSectionChunk]
+    language: str
+    errors: list[str]
 
 
 def validate_html_report(html_text: str) -> tuple[list[str], list[str]]:
@@ -216,18 +228,20 @@ def _section_messages(
 
 async def _generate_shell(
     llm,
-    title: str,
-    summary_md: str,
-    sections: list[BriefHtmlSectionChunk],
-    language: str,
-    errors: list[str],
+    context: _ShellGenerationContext,
 ) -> str | None:
     """生成报告 shell（设计系统、摘要、目录与挂载点）。"""
     response = await ainvoke_llm_with_stats(
         llm,
         apply_system_prompt(
             "brief_html_reporter",
-            _shell_messages(title, summary_md, sections, language, errors),
+            _shell_messages(
+                context.title,
+                context.summary_md,
+                context.sections,
+                context.language,
+                context.errors,
+            ),
         ),
         agent_name=AgentLlmName.BRIEF_HTML_REPORTER.value,
     )
@@ -444,7 +458,14 @@ async def generate_brief_html_report(*, llm, markdown: str, language: str) -> st
         if not reuse_shell:
             section_cache.clear()
             shell = await _generate_shell(
-                llm, title, summary_md, sections, language, errors
+                llm,
+                _ShellGenerationContext(
+                    title=title,
+                    summary_md=summary_md,
+                    sections=sections,
+                    language=language,
+                    errors=errors,
+                ),
             )
             if shell is None:
                 errors = [

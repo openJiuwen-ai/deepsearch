@@ -1,5 +1,6 @@
 """Brief HTML 报告并行生成与装配测试。"""
 
+import inspect
 import json
 
 import pytest
@@ -10,6 +11,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_content import (
     preprocess_markdown,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
+    _generate_shell,
     generate_brief_html_report,
     inject_ai_notice,
     validate_html_report,
@@ -17,6 +19,11 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
 
 
 _NOTICE_BASE = "<!DOCTYPE html><html><head></head><body><h1>报告</h1></body></html>"
+
+
+def test_generate_shell_groups_related_context_arguments():
+    """shell 生成 helper 的相关上下文参数应通过具名对象传递。"""
+    assert len(inspect.signature(_generate_shell).parameters) <= 5
 
 
 def test_assemble_html_report_applies_chart_semantic_fallback():

@@ -74,7 +74,8 @@ def _escape_chart_config_template_payloads(html_text: str) -> str:
     """把 chart-configs 的原始 JSON 载荷转义为 HTML 文本节点。"""
     parts: list[str] = []
     cursor = 0
-    while match := _CHART_CONFIGS_OPEN_TAG_RE.search(html_text, cursor):
+    match = _CHART_CONFIGS_OPEN_TAG_RE.search(html_text, cursor)
+    while match is not None:
         parts.append(html_text[cursor:match.end()])
         payload_start = match.end()
         closing = None
@@ -93,6 +94,7 @@ def _escape_chart_config_template_payloads(html_text: str) -> str:
         parts.append(html.escape(payload, quote=False))
         parts.append(closing.group(0))
         cursor = closing.end()
+        match = _CHART_CONFIGS_OPEN_TAG_RE.search(html_text, cursor)
     parts.append(html_text[cursor:])
     return "".join(parts)
 

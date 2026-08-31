@@ -101,7 +101,10 @@ def preprocess_markdown(markdown: str) -> BriefHtmlPreprocessResult:
 
     return BriefHtmlPreprocessResult(
         cleaned_markdown=cleaned,
-        reference_entries=[(n, merged[n][0], merged[n][1]) for n in sorted(merged)],
+        reference_entries=[
+            (number, title, url)
+            for number, (title, url) in sorted(merged.items())
+        ],
     )
 
 
