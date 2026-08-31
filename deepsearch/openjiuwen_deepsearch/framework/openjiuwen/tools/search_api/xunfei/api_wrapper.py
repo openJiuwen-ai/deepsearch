@@ -12,6 +12,7 @@ import requests
 from pydantic import BaseModel, ConfigDict, SecretStr
 from openjiuwen.core.common.security.ssl_utils import SslUtils
 from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class XunfeiSearchAPIWrapper(BaseModel, Generic[T]):
             "Content-Type": "application/json",
         }
         search_url = self.search_url.get_secret_value()
+        validate_search_service_url(search_url)
         search_data = {
             "chatId": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"),
             "dialogueId": str(uuid.uuid4()),

@@ -16,6 +16,7 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
     MAX_SEARCH_CONTENT_LENGTH,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 
@@ -233,4 +234,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         else:
             configured = str(self.search_url)
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_TAVILY_SEARCH_URL
+        if not configured:
+            return DEFAULT_TAVILY_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured

@@ -484,3 +484,21 @@ def validate_embedding_service_url(url: str) -> None:
         relaxed=_http_service_allow_unsafe_url("EMBEDDING_SERVICE_ALLOW_UNSAFE_URL"),
         service_label="embedding service url",
     )
+
+
+def validate_search_service_url(url: str) -> None:
+    """
+    Validate user-configured web search service URL to reduce SSRF risk.
+
+    Search engine ``search_url`` is user-controlled (persisted via the web
+    search engine config API) and reaches ``requests``/``httpx`` calls in
+    provider wrappers, so it must be checked before use. Local debugging or
+    self-hosted intranet search endpoints can bypass with
+    ``SEARCH_SERVICE_ALLOW_UNSAFE_URL=1`` (same accepted values as
+    ``RUNTIME_API_ALLOW_UNSAFE_URL``).
+    """
+    _validate_http_url_for_ssrf(
+        url,
+        relaxed=_http_service_allow_unsafe_url("SEARCH_SERVICE_ALLOW_UNSAFE_URL"),
+        service_label="search service url",
+    )

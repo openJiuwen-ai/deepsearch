@@ -17,6 +17,7 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
 )
 from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 logger = logging.getLogger(__name__)
 
@@ -213,8 +214,11 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
         return str(value or "")
 
     def _configured_search_url(self) -> str:
-        """Return project-level configured search_url, if any."""
-        return self._secret_to_str(self.search_url).strip().rstrip("/")
+        """Return project-level configured search_url, if any, after SSRF validation."""
+        configured = self._secret_to_str(self.search_url).strip().rstrip("/")
+        if configured:
+            validate_search_service_url(configured)
+        return configured
 
     def _resolved_timeout_seconds(self, *, provider: str, minimum: int) -> int:
         """Return configured timeout for harness web_tools providers."""

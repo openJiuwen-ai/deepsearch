@@ -1,3 +1,7 @@
+import os
+
+os.environ["SEARCH_SERVICE_ALLOW_UNSAFE_URL"] = "1"
+
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest

@@ -2,6 +2,7 @@ import os
 
 os.environ["LLM_SSL_VERIFY"] = "false"
 os.environ["TOOL_SSL_VERIFY"] = "false"
+os.environ["SEARCH_SERVICE_ALLOW_UNSAFE_URL"] = "1"
 
 from unittest.mock import Mock, patch, AsyncMock
 

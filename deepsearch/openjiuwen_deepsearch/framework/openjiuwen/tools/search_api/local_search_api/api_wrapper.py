@@ -8,6 +8,7 @@ import requests
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 from openjiuwen.core.common.security.ssl_utils import SslUtils
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,12 @@ class LocalDatasetAPIWrapper(BaseModel, Generic[T]):
         }
         return search_headers
 
+    def _resolved_search_url(self) -> str:
+        """Return the configured local search service URL after SSRF validation."""
+        url = self.search_url.get_secret_value()
+        validate_search_service_url(url)
+        return url
+
     def build_request_params(self, search_term: str):
         """Build request params for the search request."""
         body_params = {
@@ -90,7 +97,7 @@ class LocalDatasetAPIWrapper(BaseModel, Generic[T]):
 
         try:
             response = requests.post(
-                url=self.search_url.get_secret_value(),
+                url=self._resolved_search_url(),
                 headers=search_headers,
                 params=query_params,
                 json=body_params,
@@ -141,7 +148,7 @@ class LocalDatasetAPIWrapper(BaseModel, Generic[T]):
             )
             async with aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True) as session:
                 async with session.post(
-                        url=self.search_url.get_secret_value(),
+                        url=self._resolved_search_url(),
                         headers=search_headers,
                         params=query_params,
                         json=body_params,

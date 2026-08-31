@@ -9,6 +9,7 @@ from openjiuwen.core.common.security.ssl_utils import SslUtils
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH, MAX_URL_LENGTH
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 
@@ -121,7 +122,10 @@ class JinaSearchAPIWrapper(BaseModel, Generic[T]):
         else:
             configured = str(self.search_url)
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_JINA_SEARCH_URL
+        if not configured:
+            return DEFAULT_JINA_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured
 
     def _api_key_to_str(self) -> str:
         """Decode configured API key."""

@@ -58,6 +58,7 @@
 - 搜索引擎不存在、未注册或 API key 解密失败会返回对应业务异常。
 - 搜索引擎 wrapper 返回非 list 时试运行结果按空列表处理。
 - 外部搜索引擎执行异常会包装为执行异常，避免泄露未分类异常类型。
+- 用户配置的 `search_url` 在创建、更新及试运行前会做 SSRF 校验：仅允许 http/https scheme，拒绝 localhost、私网、回环、链路本地等非公网地址，并对域名做 DNS 解析后地址范围校验。空 `search_url` 放行（各 wrapper 回落到官方默认 URL）。内网自托管搜索端点可用环境变量 `SEARCH_SERVICE_ALLOW_UNSAFE_URL=1` 旁路。
 
 ## 测试与验证
 
