@@ -215,7 +215,7 @@ def test_service_config_uses_max_search_query_count_only():
     """ServiceConfig 应只暴露单轮 query 硬上限配置。"""
     service_config = Config().service_config
 
-    assert service_config.info_collector_max_search_query_count == 5
+    assert service_config.info_collector_max_search_query_count == 2
     assert not hasattr(service_config, "info_collector_initial_search_query_count")
 
 
