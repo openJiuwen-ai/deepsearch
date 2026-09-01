@@ -2,16 +2,19 @@
 
 import inspect
 import json
+import logging
 
 import pytest
 
 from openjiuwen_deepsearch.algorithm.brief_report.html_content import (
     BriefHtmlPreprocessResult,
+    BriefHtmlSectionChunk,
     _render_references_html,
     preprocess_markdown,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
     _generate_shell,
+    _generate_section_fragments,
     generate_brief_html_report,
     inject_ai_notice,
     validate_html_report,
@@ -171,6 +174,7 @@ _LLM_SHELL = (
     "<html_report><!DOCTYPE html><html><head><title>t</title>"
     f"{_SHELL_CSS}</head><body>"
     "<h1>报告</h1>"
+    '<nav class="card toc"><a href="#section-1">1 范围</a></nav>'
     '<div id="brief-sections"></div>'
     '<div id="brief-references"></div>'
     "</body></html></html_report>"
@@ -207,6 +211,64 @@ def _dispatch_fake(monkeypatch, shell_content, section_content, calls):
 
 
 @pytest.mark.asyncio
+async def test_generate_brief_html_report_uses_distinct_shell_and_section_agent_names(monkeypatch):
+    """shell 与章节调用必须使用可区分的 agent_name。"""
+    agent_names: list[str] = []
+
+    async def fake_invoke(llm, messages, **kwargs):
+        agent_names.append(kwargs["agent_name"])
+        if "<html_section>" in messages[0]["content"]:
+            return {"content": _LLM_SECTION}
+        return {"content": _LLM_SHELL}
+
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    monkeypatch.setattr(module, "ainvoke_llm_with_stats", fake_invoke)
+
+    await generate_brief_html_report(
+        llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+    )
+
+    assert agent_names == [
+        "brief_html_reporter_shell",
+        "brief_html_reporter_section",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_logs_structured_lifecycle_events(monkeypatch, caplog):
+    """HTML 生成日志应覆盖主要阶段并带有稳定的结构化事件名。"""
+    calls: list = []
+    module = _dispatch_fake(monkeypatch, lambda: _LLM_SHELL, lambda: _LLM_SECTION, calls)
+
+    with caplog.at_level(logging.INFO, logger=module.__name__):
+        await generate_brief_html_report(
+            llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    for event in (
+        "event=html_start",
+        "event=attempt_start",
+        "event=shell_start",
+        "event=shell_done",
+        "event=section_batch_start",
+        "event=section_start",
+        "event=section_done",
+        "event=assembly_done",
+        "event=validation_done",
+        "event=html_done status=success",
+    ):
+        assert any(event in message for message in messages), event
+    assert any(
+        "event=section_done" in message
+        and "section_id=1" in message
+        and "duration_ms=" in message
+        for message in messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_generate_brief_html_report_success_returns_injected_html(monkeypatch):
     """成功路径：shell + 并行章节 → 确定性拼装 → 校验 → 注入全链路。"""
     calls: list = []
@@ -227,6 +289,7 @@ async def test_generate_brief_html_report_success_returns_injected_html(monkeypa
     # （sup 上标 [n] 直达原网站，新窗口打开）
     assert '<div id="brief-sections"' not in html
     assert "<h2>1 范围</h2>" in html
+    assert '<section class="section" id="section-1">' in html
     assert (
         '<sup class="cite-ref"><a href="https://example.com/a" '
         'target="_blank" rel="noopener noreferrer">[1]</a></sup>' in html
@@ -341,6 +404,51 @@ async def test_generate_brief_html_report_retries_only_failed_sections(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_generate_brief_html_report_regenerates_all_sections_after_shell_validation_error(monkeypatch):
+    """整体验证失败时重建 shell，并重新生成全部章节。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    markdown = (
+        "# 报告\n\n## 1 甲\n\n甲内容。\n\n"
+        "## 2 乙\n\n乙内容。\n"
+    )
+    bad_shell = _LLM_SHELL.replace("<!DOCTYPE html>", "")
+    shell_calls = 0
+    section_calls = {"1": 0, "2": 0}
+
+    class _FakeConfig:
+        def __init__(self):
+            self.service_config = type("S", (), {"report_max_generate_retry_num": 2})()
+
+    async def fake_invoke(llm, messages, **kwargs):
+        nonlocal shell_calls
+        if "<html_section>" not in messages[0]["content"]:
+            shell_calls += 1
+            return {"content": bad_shell if shell_calls == 1 else _LLM_SHELL}
+        prompt = messages[-1]["content"]
+        section_id = "1" if "## 1 甲" in prompt else "2"
+        section_calls[section_id] += 1
+        title = "甲" if section_id == "1" else "乙"
+        return {
+            "content": (
+                f'<html_section><section class="section"><h2>{section_id} {title}</h2>'
+                f"<p>{title}内容。</p></section></html_section>"
+            )
+        }
+
+    monkeypatch.setattr(module, "Config", _FakeConfig)
+    monkeypatch.setattr(module, "ainvoke_llm_with_stats", fake_invoke)
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=markdown, language="zh-CN"
+    )
+
+    assert html.lower().startswith("<!doctype html>")
+    assert shell_calls == 2
+    assert section_calls == {"1": 2, "2": 2}
+
+
+@pytest.mark.asyncio
 async def test_generate_brief_html_report_attributes_css_errors_to_failed_section(monkeypatch):
     """章节外链 CSS 应在片段阶段报错，避免重建 shell 和其他成功章节。"""
     from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
@@ -391,46 +499,50 @@ async def test_generate_brief_html_report_attributes_css_errors_to_failed_sectio
 
 
 @pytest.mark.asyncio
-async def test_generate_brief_html_report_retries_section_without_regenerating_shell(monkeypatch, caplog):
-    """章节硬错误（template JSON 非法）触发重试且复用已成功的 shell。"""
-    import logging
-
+async def test_generate_brief_html_report_drops_invalid_chart_and_keeps_html(monkeypatch):
+    """非法图表只删除图表，不触发章节重试或报告降级。"""
     bad_section = (
         "<html_section><h2>1 范围</h2>"
-        '<p>结论<sup class="cite-ref"><a href="https://example.com/a" '
-        'target="_blank" rel="noopener noreferrer">[1]</a></sup>。</p>'
+        '<p>结论。</p>'
+        '<div class="echarts-chart" data-chart-id="c1"></div>'
         '<template id="chart-configs">[{"id":"c1","option":{...broken}}]</template>'
         "</html_section>"
     )
-    section_outputs = [bad_section, _LLM_SECTION]
     calls: list = []
-    shell_calls: list = []
+    module = _dispatch_fake(monkeypatch, lambda: _LLM_SHELL, lambda: bad_section, calls)
 
-    def shell_content():
-        shell_calls.append(1)
-        return _LLM_SHELL
-
-    def section_content():
-        return section_outputs[min(len(calls) - len(shell_calls) - 1, len(section_outputs) - 1)]
-
-    module = _dispatch_fake(monkeypatch, shell_content, section_content, calls)
-
-    with caplog.at_level(logging.WARNING, logger=module.__name__):
-        html = await generate_brief_html_report(
-            llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
-        )
+    html = await generate_brief_html_report(
+        llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+    )
 
     assert html.lower().startswith("<!doctype html>")
-    assert len(calls) == 3  # shell + 坏章节 + 重试章节
-    assert len(shell_calls) == 1  # shell 未重复生成
-    retry_content = calls[-1][-1]["content"]
-    assert "chart_config:" in retry_content  # 章节错误反馈给对应章节
-    assert "Fix: ECharts placeholders" in retry_content
-    warning_messages = [record.getMessage() for record in caplog.records]
-    assert any(
-        "Section generation failed" in message and "chart_config:" in message
-        for message in warning_messages
-    )
+    assert "结论。" in html
+    assert "data-chart-id" not in html
+    assert "chart-configs" not in html
+    assert "<!--openjiuwen:echarts-lib-->" not in html
+    assert len(calls) == 2  # shell + 坏图表章节，各一次
+
+
+@pytest.mark.asyncio
+async def test_generate_section_fragments_propagates_keyboard_interrupt(monkeypatch):
+    """并行收集不能把 KeyboardInterrupt 当成普通章节失败。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    async def fake_gather(*coroutines, **kwargs):
+        for coroutine in coroutines:
+            coroutine.close()
+        return [KeyboardInterrupt()]
+
+    monkeypatch.setattr(module.asyncio, "gather", fake_gather)
+
+    with pytest.raises(KeyboardInterrupt):
+        await _generate_section_fragments(
+            object(),
+            "<!DOCTYPE html><html><head></head><body></body></html>",
+            [BriefHtmlSectionChunk("1", "范围", "## 1 范围\n")],
+            "zh-CN",
+            [],
+        )
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 """Brief HTML 报告的 Markdown、引用与章节内容处理。"""
 
 import html
+import logging
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -9,9 +10,17 @@ from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.utils.common_utils.markdown_url_utils import extract_markdown_url
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class BriefHtmlPreprocessResult:
-    """预处理清洗后的 markdown 与引用元数据。"""
+    """预处理清洗后的 markdown 与引用元数据。
+
+    Attributes:
+        cleaned_markdown: 将行内引用规范化后的 Markdown 文本。
+        reference_entries: 按编号排列的 ``(编号, 标题, URL)`` 引用条目。
+    """
 
     cleaned_markdown: str
     reference_entries: list[tuple[int, str, str]] = field(default_factory=list)
@@ -19,7 +28,13 @@ class BriefHtmlPreprocessResult:
 
 @dataclass
 class BriefHtmlSectionChunk:
-    """报告 markdown 按 ``## `` 拆分出的单个章节块。"""
+    """报告 markdown 按 ``## `` 拆分出的单个章节块。
+
+    Attributes:
+        section_id: 章节唯一标识。
+        title: 章节标题。
+        markdown: 章节对应的完整 Markdown 块。
+    """
 
     section_id: str
     title: str
@@ -41,7 +56,14 @@ _REFERENCES_HEADINGS = frozenset({"参考文章", "References"})
 
 
 def _reference_spans(markdown: str) -> list[tuple[int, re.Match, int | None, str]]:
-    """按出现位置产出 checked 与 source_tracer 行内引用标记。"""
+    """按出现位置产出行内引用标记。
+
+    Args:
+        markdown: 待扫描的 Markdown 文本。
+
+    Returns:
+        按起始位置排序的引用匹配列表；元组依次为位置、匹配对象、固定编号和标题。
+    """
     spans: list[tuple[int, re.Match, int | None, str]] = []
     for match in _CHECKED_CITATION_RE.finditer(markdown):
         spans.append((match.start(), match, int(match.group("num")), ""))
@@ -52,9 +74,17 @@ def _reference_spans(markdown: str) -> list[tuple[int, re.Match, int | None, str
 
 
 def preprocess_markdown(markdown: str) -> BriefHtmlPreprocessResult:
-    """把行内引用标记清洗为 ``[[n]](URL)``，并规范化文末参考文献条目。"""
+    """把行内引用标记清洗为 ``[[n]](URL)``，并规范化文末参考文献条目。
+
+    Args:
+        markdown: 溯源校验后的 Brief Markdown 报告。
+
+    Returns:
+        清理后的 Markdown 及按编号整理的引用注册表。
+    """
     entries: dict[int, tuple[str, str]] = {}
     url_to_number: dict[str, int] = {}
+    # 先登记报告已有的参考文献，再给正文中新增的 URL 分配连续编号。
     for line_match in _ENTRY_LINE_RE.finditer(markdown):
         parsed = extract_markdown_url(markdown, line_match.end() - 1)
         if parsed is None:
@@ -109,7 +139,14 @@ def preprocess_markdown(markdown: str) -> BriefHtmlPreprocessResult:
 
 
 def _citation_urls(pre: BriefHtmlPreprocessResult) -> dict[int, str]:
-    """提取可确定映射的引用目标，供拼装层转写。"""
+    """提取可确定映射的引用目标，供拼装层转写。
+
+    Args:
+        pre: Markdown 预处理结果。
+
+    Returns:
+        从引用编号到 URL 的映射。
+    """
     return {
         number: url
         for number, _title, url in pre.reference_entries
@@ -118,7 +155,15 @@ def _citation_urls(pre: BriefHtmlPreprocessResult) -> dict[int, str]:
 
 
 def _render_inline_citation_text(text: str, citation_urls: dict[int, str]) -> str:
-    """把文本节点中的合法 Markdown 引用标记转成安全的上标引用。"""
+    """把文本节点中的合法 Markdown 引用转成上标，丢弃失配引用。
+
+    Args:
+        text: HTML 文本节点内容。
+        citation_urls: 引用编号到 URL 的确定性映射。
+
+    Returns:
+        对合法引用完成 HTML 转写并对普通文本进行转义后的字符串。
+    """
     output: list[str] = []
     cursor = 0
     search_from = 0
@@ -130,13 +175,19 @@ def _render_inline_citation_text(text: str, citation_urls: dict[int, str]) -> st
         number = int(match.group("number"))
         parsed = extract_markdown_url(text, match.end() - 1)
         if parsed is None:
+            # 当前标记缺少合法 URL 时保留后续文本，避免整个文本节点被截断。
             search_from = match.end()
             continue
         url, end = parsed
+        output.append(html.escape(text[cursor:match.start()], quote=False))
         if citation_urls.get(number) != url:
+            logger.warning(
+                "[BriefHtmlReporter] Dropped inline citation with mismatched URL; number=%d.",
+                number,
+            )
+            cursor = end
             search_from = match.end()
             continue
-        output.append(html.escape(text[cursor:match.start()], quote=False))
         if url.lower().startswith(("http://", "https://")):
             escaped_url = html.escape(url, quote=True)
             output.append(
@@ -151,9 +202,18 @@ def _render_inline_citation_text(text: str, citation_urls: dict[int, str]) -> st
 
 
 class _InlineCitationConverter(HTMLParser):
-    """仅转换 HTML 文本节点中的引用，跳过 CSS、图表配置和已有链接。"""
+    """仅转换 HTML 文本节点中的引用，跳过 CSS、图表配置和已有链接。
+
+    Attributes:
+        out: 转换后重新序列化的 HTML 片段。
+    """
 
     def __init__(self, citation_urls: dict[int, str]) -> None:
+        """初始化引用转换器。
+
+        Args:
+            citation_urls: 引用编号到 URL 的确定性映射。
+        """
         super().__init__(convert_charrefs=True)
         self._citation_urls = citation_urls
         self._opaque_depth = 0
@@ -161,20 +221,43 @@ class _InlineCitationConverter(HTMLParser):
         self.out: list[str] = []
 
     def handle_decl(self, decl: str) -> None:
+        """保留 HTML 声明。
+
+        Args:
+            decl: 声明正文，例如 ``DOCTYPE html``。
+        """
         self.out.append(f"<!{decl}>")
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
+        """保留开始标签并更新不可转换区域的嵌套深度。
+
+        Args:
+            tag: 开始标签名称。
+            attrs: 开始标签属性列表。
+        """
         self.out.append(self.get_starttag_text() or f"<{tag}>")
         lowered = tag.lower()
         if lowered in _CITATION_OPAQUE_TAGS:
+            # a、style、template 内的文本可能是 URL、CSS 或 JSON，不能按正文引用解析。
             self._opaque_depth += 1
         if lowered == "style":
             self._style_depth += 1
 
     def handle_startendtag(self, tag: str, attrs: list) -> None:
+        """保留自闭合标签。
+
+        Args:
+            tag: 自闭合标签名称。
+            attrs: 自闭合标签属性列表。
+        """
         self.out.append(self.get_starttag_text() or f"<{tag}/>")
 
     def handle_endtag(self, tag: str) -> None:
+        """保留结束标签并退出对应的不可转换区域。
+
+        Args:
+            tag: 结束标签名称。
+        """
         self.out.append(f"</{tag}>")
         lowered = tag.lower()
         if lowered in _CITATION_OPAQUE_TAGS and self._opaque_depth:
@@ -183,6 +266,11 @@ class _InlineCitationConverter(HTMLParser):
             self._style_depth -= 1
 
     def handle_data(self, data: str) -> None:
+        """转换正文文本节点中的引用，并原样保留受保护区域内容。
+
+        Args:
+            data: HTMLParser 提取的文本内容。
+        """
         if self._style_depth:
             self.out.append(data)
         elif self._opaque_depth:
@@ -192,12 +280,18 @@ class _InlineCitationConverter(HTMLParser):
 
 
 def convert_inline_citations(html_text: str, pre: BriefHtmlPreprocessResult) -> str:
-    """在 shell 与章节片段拼装后统一完成引用转写。"""
+    """在 shell 与章节片段拼装后统一完成引用转写。
+
+    Args:
+        html_text: 已拼装的 HTML 文本。
+        pre: Markdown 预处理结果及引用注册表。
+
+    Returns:
+        正文引用转为上标后的 HTML 文本。
+    """
     if not _INLINE_CITATION_PREFIX_RE.search(html_text):
         return html_text
     citation_urls = _citation_urls(pre)
-    if not citation_urls:
-        return html_text
     converter = _InlineCitationConverter(citation_urls)
     converter.feed(html_text)
     converter.close()
@@ -205,17 +299,32 @@ def convert_inline_citations(html_text: str, pre: BriefHtmlPreprocessResult) -> 
 
 
 def _strip_reference_entry_lines(text: str) -> str:
-    """移除文末参考文献条目行（由 Python 从引用注册表确定性渲染）。"""
+    """移除文末参考文献条目行（由 Python 从引用注册表确定性渲染）。
+
+    Args:
+        text: 报告 Markdown 文本。
+
+    Returns:
+        移除参考文献条目行后的 Markdown 文本。
+    """
     return "\n".join(line for line in text.splitlines() if not _ENTRY_LINE_RE.match(line))
 
 
 def _split_h2_blocks(text: str) -> list[str]:
-    """按二级标题拆分 Markdown，忽略 fenced code block 内的 ``## `` 行。"""
+    """按二级标题拆分 Markdown，忽略 fenced code block 内的 ``## `` 行。
+
+    Args:
+        text: 待拆分的 Markdown 文本。
+
+    Returns:
+        按顶层二级标题切分出的 Markdown 块列表。
+    """
     blocks: list[str] = []
     current: list[str] = []
     fence_char: str | None = None
     fence_length = 0
     for line in text.splitlines(keepends=True):
+        # 只有不在围栏内的 ## 行才是章节标题；围栏长度至少与开启围栏一致才关闭。
         if fence_char is None and line.startswith("## "):
             if current:
                 blocks.append("".join(current))
@@ -237,7 +346,14 @@ def _split_h2_blocks(text: str) -> list[str]:
 
 
 def _split_report_markdown(cleaned: str) -> tuple[str, str, list[BriefHtmlSectionChunk]]:
-    """把清洗后的报告 markdown 拆为标题、摘要与章节块。"""
+    """把清洗后的报告 markdown 拆为标题、摘要与章节块。
+
+    Args:
+        cleaned: 已完成引用清理的 Markdown 文本。
+
+    Returns:
+        三元组，依次为报告标题、摘要 Markdown 和章节块列表。
+    """
     text = _strip_reference_entry_lines(cleaned)
     title_match = _H1_TITLE_RE.search(text)
     title = title_match.group(1) if title_match else ""
@@ -267,7 +383,15 @@ def _split_report_markdown(cleaned: str) -> tuple[str, str, list[BriefHtmlSectio
 
 
 def _render_references_html(pre: BriefHtmlPreprocessResult, language: str) -> str:
-    """从引用注册表确定性渲染参考文献区（不经过 LLM）。"""
+    """从引用注册表确定性渲染参考文献区（不经过 LLM）。
+
+    Args:
+        pre: Markdown 预处理结果及引用注册表。
+        language: 报告语言标识。
+
+    Returns:
+        参考文献 ``section`` 的 HTML；没有引用时返回空字符串。
+    """
     if not pre.reference_entries:
         return ""
     heading = "References" if language == ENGLISH else "参考文章"

@@ -20,7 +20,9 @@ design system CSS, hero, summary, table of contents — already exists; your fra
   `### ` subsections → `<h3>`, in order.
 - The ENTIRE fragment must be wrapped in one `<section class="section">` card (the shell defines it):
   `<h2>` sits inside the card, all content follows within the same card. Never leave `<h2>` floating on the
-  page background, and never scatter the section's content across multiple top-level cards.
+  page background, and never scatter the section's content across multiple top-level cards. Do not add the
+  `.card` class to `.section` and do not add a generic `.card` directly inside it. The system supplies the stable
+  TOC `id`; do not invent a different section anchor.
 
 ## 2) Visualization — prefer CSS-first, ECharts only when necessary
 Choose the simplest technique that presents the data well. CSS visualization is more reliable and renders
@@ -36,12 +38,13 @@ instantly; use it for the majority of visuals.
   </div>
   ```
   When entities fall into 2-5 groups (e.g. vendors, regions, categories), use the `.b1`–`.b5` tint classes
-  instead of one flat color. Use for score comparisons, market shares, rankings, and any small set of numbers.
-- **Chart-with-source + interpretation pairing**: wrap EVERY chart (CSS bars, timeline, diagram, or ECharts)
-  in one `<div class="chart-card">` (the shell defines it) containing, in order: `.chart-title` (bold title),
-  `.chart-source` (small muted line naming the data source as given in the markdown, e.g. `Data: xxx` or
-  `来源：xxx`), the chart itself, then `.takeaways` — 2-4 tight bullets, each starting with a bold lead-in
-  (a conclusion, not a description).
+  instead of semantic good/warn/risk colors. Use for score comparisons, market shares, rankings, and any small
+  set of numbers.
+- **Chart-with-source + interpretation pairing**: wrap ECharts and non-trivial visual comparisons in one
+  `<div class="chart-card">` containing, in order: `.chart-title` (bold title), `.chart-source` (small muted
+  line naming the data source as given in the markdown, e.g. `Data: xxx` or `来源：xxx`), the visual, then
+  `.takeaways` — 2-3 tight bullets, each starting with a bold lead-in (a conclusion, not a description).
+  Simple metric cards and short CSS bar groups may use a compact source line without a separate takeaways card.
 - **ECharts data chart (at most ONE per fragment)**: only for a rich interactive chart that CSS bars cannot
   express — line/area trends over many points, multi-series comparisons, radar, scatter, or pie/donut with many
   slices. Prefer CSS bars whenever they suffice. Chart data must be numbers that appear in the markdown.
@@ -61,11 +64,14 @@ instantly; use it for the majority of visuals.
   color class.
 - **Entity cards (for small structured comparisons)**: when the markdown compares 2-5 entities with the same
   fields (products, methods, vendors), render each entity as a card: entity name (bold, numbered ①②③) + a
-  label/value grid + a one-line note, instead of a wide table.
+  label/value grid + a one-line note, instead of a wide table. For more than 4 entities or more than 3 fields,
+  prefer one comparison table and do not duplicate it with entity cards or bars.
 - **Diagrams (HTML+CSS only)**: flows and relationships drawn with flex/grid layout, borders, and CSS arrows.
   Never use ECharts for flowcharts.
 - **Layout elements**: key-conclusion cards, big-number metric cards, highlighted quote blocks, comparison
-  columns, badges, and timelines that improve scannability.
+  columns, badges, and timelines that improve scannability. Use at most two primary visual blocks in this section
+  and at most one in any `###` subsection. If the same data can be expressed with prose or a table, do not add
+  another chart merely for decoration.
 
 ## 3) Use the Shell CSS
 - Reuse the classes defined in the provided Shell CSS, following the shared component vocabulary verbatim.
@@ -76,6 +82,8 @@ instantly; use it for the majority of visuals.
 - Preserve citation markers `[[n]](URL)` in the section content exactly as supplied. Do not convert, renumber,
   remove, or invent them; the Python assembly stage performs the deterministic HTML conversion.
 - Do NOT render a references section or reference entries — the system renders them from the report's registry.
+- If a citation number or any character of its URL is changed accidentally, the Python assembly stage removes the
+  complete marker from the body and continues; this does not make the section fail or trigger a retry.
 
 ## 5) Chart Styling
 - Specify chart colors and fonts explicitly in ECharts `option` or inline styles; do not rely on default themes.

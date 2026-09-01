@@ -74,12 +74,13 @@ BRIEF_HTML_REPORTER → END`。
 `BRIEF_HTML_REPORTER` 把溯源校验后的 md（校验跳过/异常时回退为拼装形态）转写为单文件自包含
 HTML：预处理把行内 `[checked_citation:<id>][[n]](URL)`、回退形态 `[source_tracer_result][标题](URL)`
 与图片引用统一清洗为 `[[n]](URL)`；LLM 只保留原始引用标记，不负责引用转 HTML，Python 在 shell
-与章节拼装后确定性生成上标外链和参考文献；LLM 按零 script 契约输出（图表占位元素 +
+与章节拼装后确定性生成上标外链和参考文献。引用编号或 URL 与注册表不完全匹配时，Python 删除正文中的完整引用标记并记录
+warning，不触发章节重试；文末参考文章仍由引用注册表确定性生成。LLM 按零 script 契约输出（图表占位元素 +
 `template#chart-configs` 配置 JSON）；Python sanitizer（allowlist，清理后重新序列化）→ 校验（结构/零 script/CSS 外链/
-图表配置与 option 递归安全/分类轴与序列数据对齐/缺失比例序列降级/章节完整性/引用完整性/图表数据数值保真提醒）→ 失败带具体错误重试（复用
+图表配置与 option 递归安全/分类轴与序列数据对齐/缺失比例序列降级/章节完整性/图表数据数值保真提醒）→ 失败带具体错误重试（复用
 `report_max_generate_retry_num`，截断附加精简指令）→ 重试耗尽后节点保留 SourceTracer 已写入的 Markdown、写入 `warning_info` 并正常结束；通过后确定性生成图表初始化脚本，并且仅在存在有效 ECharts 配置时内嵌
 `echarts.min.js`（版本固定 + SHA-256 校验），无 ECharts 图表时不加载运行时；最后插入 AI 声明。
-图表语义兜底在拼装前执行：分类轴不等长序列被移除，普通折线显式关闭 `connectNulls`，含缺失类别的占比/比例/百分比序列被移除，并同步清理无用图例与 Y 轴；图表数据值未在 Markdown 正文出现时只记录 warning，不触发重试。产物契约：`final_result.response_content = HTML`、
+图表语义兜底在拼装前执行：分类轴不等长序列被移除，普通折线显式关闭 `connectNulls`，含缺失类别的占比/比例/百分比序列被移除，并同步清理无用图例与 Y 轴；无法安全解析或校验的图表会被删除，周围章节正文仍保留；图表数据值未在 Markdown 正文出现时只记录 warning，不触发重试。产物契约：`final_result.response_content = HTML`、
 `final_result.response_content_type = "text/html"`（默认 `text/markdown`，professional 不受影响）、
 `Report.report_html` 保留 HTML 中间态；`citation_messages` 保留返回。溯源校验异常时保持既有语义
 （`exception_info` → run ERROR，HTML 节点照常执行）。

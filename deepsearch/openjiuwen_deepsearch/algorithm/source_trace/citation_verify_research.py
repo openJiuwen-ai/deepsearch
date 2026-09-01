@@ -28,9 +28,19 @@ MAX_LLM_RETRY_TIMES = 3
 
 
 class CitationVerificationAttemptError(Exception):
-    """一次溯源 LLM 调用未满足响应契约时抛出的可分类异常。"""
+    """一次溯源 LLM 调用未满足响应契约时抛出的可分类异常。
+
+    Attributes:
+        category: 失败分类，用于记录重试诊断和终止失败原因。
+    """
 
     def __init__(self, category: str, message: str):
+        """初始化可分类的溯源校验异常。
+
+        Args:
+            category: 响应契约或模型调用的失败分类。
+            message: 描述失败原因的异常消息。
+        """
         super().__init__(message)
         self.category = category
 
@@ -496,7 +506,19 @@ class CitationVerifyResearch:
         return is_corrected, processed_result
 
     async def extract_messages_once(self, handle_datas: list, semaphore: asyncio.Semaphore) -> list:
-        """执行一次溯源 LLM 调用，并严格校验返回结果。"""
+        """执行一次溯源 LLM 调用，并严格校验返回结果。
+
+        Args:
+            handle_datas: 当前批次的预处理引用数据，顺序与返回结果保持一致。
+            semaphore: 限制并发模型调用数的共享信号量。
+
+        Returns:
+            校验并修正后的引用提取结果列表。
+
+        Raises:
+            CitationVerificationAttemptError: 响应无法解析、顶层类型或数量不符、
+                必填字段缺失，或标记引用内容无法校正时抛出。
+        """
         agent_input = dict(datas=handle_datas)
         user_prompt = apply_system_prompt("extract_message_prompt", agent_input)
 
@@ -533,14 +555,16 @@ class CitationVerifyResearch:
 
     async def extract_messages_batch(self, handle_datas: list,
                                      semaphore: Optional[asyncio.Semaphore] = None) -> list:
-        """调用LLM提取引用信息
-        批量调用LLM模型，从引用内容中提取来源、日期、标记引用内容和置信度分数
+        """调用 LLM 批量提取引用信息。
+
+        从引用内容中提取来源、日期、标记引用内容和置信度分数；失败批次会由二分重试处理。
 
         Args:
-            handle_datas (list): 预处理后的数据列表，包含domain、citation_content、fact字段
+            handle_datas: 预处理后的数据列表，包含 domain、citation_content、fact 字段。
+            semaphore: 可选的共享并发信号量；未传入时按实例并发上限创建。
 
         Returns:
-            list: 提取的引用信息列表，每个元素包含source、marked_citation_content、score字段
+            提取的引用信息列表，每个元素包含 source、marked_citation_content、score 字段。
         """
         semaphore = semaphore or asyncio.Semaphore(self.concurrent_limit)
         return await self.extract_messages_with_split_retry(
@@ -549,7 +573,18 @@ class CitationVerifyResearch:
     async def extract_messages_with_split_retry(
             self, handle_datas: list, attempt: int, lineage: str,
             semaphore: asyncio.Semaphore) -> list:
-        """对失败批次二分重试，确保每条引用至多调用三次 LLM。"""
+        """对失败批次二分重试，确保每条引用至多调用三次 LLM。
+
+        Args:
+            handle_datas: 当前待提取的引用数据批次。
+            attempt: 当前调用轮次，初始值为 1，每次重试或二分后递增。
+            lineage: 当前批次的二分谱系标签，如 ``root``、``root.L`` 或 ``root.R``。
+            semaphore: 限制并发模型调用数的共享信号量。
+
+        Returns:
+            成功时返回与输入顺序一致的提取结果；达到重试上限时，为当前批次中每条
+            数据返回包含 ``extract_failed_reason`` 的失败占位结果。
+        """
         try:
             return await self.extract_messages_once(handle_datas, semaphore)
         except CitationVerificationAttemptError as error:

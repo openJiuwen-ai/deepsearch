@@ -95,6 +95,8 @@ class AgentLlmName(enum.Enum):
     BRIEF_SUB_REPORTER = NodeId.BRIEF_SUB_REPORTER.value
     BRIEF_REPORTER = NodeId.BRIEF_REPORTER.value
     BRIEF_HTML_REPORTER = NodeId.BRIEF_HTML_REPORTER.value
+    BRIEF_HTML_REPORTER_SHELL = "brief_html_reporter_shell"
+    BRIEF_HTML_REPORTER_SECTION = "brief_html_reporter_section"
 
     REPORTER_ABSTRACT = "reporter_abstract"
     REPORTER_CONCLUSION = "reporter_conclusion"

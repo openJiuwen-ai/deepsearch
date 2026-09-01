@@ -102,6 +102,41 @@ def test_convert_inline_citations_discards_checked_citation_instance_ids():
     assert cleaned.count('href="https://example.com/a"') == 2
 
 
+def test_convert_inline_citations_drops_changed_url_without_affecting_neighbors():
+    """引用 URL 变化时删除整个标记，但保留正文和相邻合法引用。"""
+    pre = BriefHtmlPreprocessResult(
+        cleaned_markdown="",
+        reference_entries=[
+            (1, "来源甲", "https://example.com/a_zaker.html"),
+            (2, "来源乙", "https://example.com/b"),
+        ],
+    )
+    rendered = convert_inline_citations(
+        "<p>前文 [[1]](https://example.com/a_zaker.html)，"
+        "失配 [[1]](https://example.com/a.html)，"
+        "后文 [[2]](https://example.com/b)。</p>",
+        pre,
+    )
+
+    assert "前文" in rendered and "失配" in rendered and "后文" in rendered
+    assert "https://example.com/a.html" not in rendered
+    assert "[[1]](https://example.com/a.html)" not in rendered
+    assert rendered.count('href="https://example.com/a_zaker.html"') == 1
+    assert rendered.count('href="https://example.com/b"') == 1
+
+
+def test_convert_inline_citations_drops_unknown_marker_without_registry():
+    """没有引用注册表时也不能把模型生成的未知 Markdown 引用带入 HTML。"""
+    pre = BriefHtmlPreprocessResult(cleaned_markdown="")
+
+    rendered = convert_inline_citations(
+        "<p>正文 [[99]](https://unknown.example/source)。</p>", pre
+    )
+
+    assert rendered == "<p>正文 。</p>"
+    assert "unknown.example" not in rendered
+
+
 def test_convert_inline_citations_renders_non_http_fallback_without_raw_markdown():
     """非 HTTP 回退来源没有可点击链接时，仍应显示上标编号而非原始 markdown。"""
     pre = preprocess_markdown("结论 [source_tracer_result][内部来源](内部来源)。\n")
