@@ -501,7 +501,11 @@ class Reporter(
                 current_inputs.get("classified_content", []),
             )
 
-        max_attempt_num = current_inputs.get("max_generate_retry_num", 3)
+        _raw_retry = current_inputs.get("max_generate_retry_num")
+        try:
+            max_attempt_num = max(int(_raw_retry) if _raw_retry is not None else 3, 1)
+        except (TypeError, ValueError):
+            max_attempt_num = 3
         outline_ok, outline_err = await self._generate_outline_with_retry(current_inputs, section_idx, max_attempt_num)
         if not outline_ok:
             return False, _format_sub_report_error(outline_err), "", classified_content

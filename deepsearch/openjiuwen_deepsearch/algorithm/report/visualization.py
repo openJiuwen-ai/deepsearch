@@ -43,6 +43,8 @@ class VisualizationMixin:
             payload = json.loads(
                 visualization_content.get("sub_section_visualization_content", "")
             )
+            if not isinstance(payload, dict):
+                return True
             chart_type = payload.get("image_type", "")
             if chart_type in ("bar", "line"):
                 records = payload.get("records", [])
@@ -113,10 +115,11 @@ class VisualizationMixin:
         mermaid_ok = False
         mermaid_type = None
         try:
-            mermaid_type = json.loads(
+            payload = json.loads(
                 visualization_content.get("sub_section_visualization_content", "")
-            ).get("image_type", "")
-        except json.JSONDecodeError:
+            )
+            mermaid_type = payload.get("image_type", "") if isinstance(payload, dict) else ""
+        except (json.JSONDecodeError, TypeError, AttributeError):
             mermaid_type = ""
 
         def _render_mermaid(chart_type: str, generator) -> bool:
@@ -124,6 +127,8 @@ class VisualizationMixin:
                 payload = json.loads(
                     visualization_content.get("sub_section_visualization_content", "")
                 )
+                if not isinstance(payload, dict):
+                    raise ValueError("visualization content is not a JSON object")
                 records = payload.get("records", [])
                 if not isinstance(records, list) or not (3 <= len(records) <= 12):
                     raise ValueError(f"{chart_type} records length out of range")
@@ -221,7 +226,7 @@ class VisualizationMixin:
                     error_code=StatusCode.LLM_RESPONSE_ERROR.code,
                     message=f"LLM generated empty visualization content for section {section_idx}",
                 )
-            payload = (llm_output.get("content") or "").strip()
+            payload = str(llm_output.get("content") or "").strip()
             return dict(rs_success=True, sub_section_visualization_content=payload)
         except Exception as e:
             if LogManager.is_sensitive():
@@ -269,7 +274,7 @@ class VisualizationMixin:
                         "LLM generated empty compliance content",
                     )
                     continue
-                raw = (llm_output.get("content") or "").strip()
+                raw = str(llm_output.get("content") or "").strip()
                 result = json.loads(normalize_json_output(raw))
                 if not isinstance(result, dict):
                     logger.warning(
@@ -344,7 +349,7 @@ class VisualizationMixin:
                         "LLM generated empty traceability content",
                     )
                     continue
-                raw = (llm_output.get("content") or "").strip()
+                raw = str(llm_output.get("content") or "").strip()
                 result = json.loads(normalize_json_output(raw))
                 if not isinstance(result, dict):
                     logger.warning(
@@ -402,7 +407,7 @@ class VisualizationMixin:
             if not LogManager.is_sensitive():
                 logger.debug("%s [process_visualization_task] Extract data: %s.", EFFECT_SUB_REPORT_TAG,
                              visualization_content)
-            raw_payload = (
+            raw_payload = str(
                 visualization_content.get("sub_section_visualization_content") or ""
             ).strip()
             if raw_payload:
@@ -699,7 +704,7 @@ class VisualizationMixin:
             if not normalize_output or not normalize_output.get("content"):
                 continue
             normalized_payload = normalize_json_output(
-                (normalize_output.get("content") or "").strip()
+                str(normalize_output.get("content") or "").strip()
             ).strip()
             if normalized_payload == "{}":
                 continue
