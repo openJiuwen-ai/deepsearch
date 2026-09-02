@@ -446,6 +446,66 @@ def test_build_table_of_contents_uses_english_title():
     assert table_of_contents == "# Table of Contents\n\n[1. Market Overview](#chapter-1)"
 
 
+def test_add_chapter_anchor_ids_inserts_anchor_line_after_each_h1():
+    content = "# 1. 第一章\n\n正文\n\n# 2. 第二章\n"
+    anchored = Reporter._add_chapter_anchor_ids(content)
+
+    assert '# 1. 第一章\n<a id="chapter-1"></a>' in anchored
+    assert '# 2. 第二章\n<a id="chapter-2"></a>' in anchored
+    assert anchored.count('<a id="chapter-') == 2
+    assert "# 1. 第一章" in anchored
+    # 标题行本身不包含锚点 HTML
+    assert '# 1. 第一章 <a id' not in anchored
+
+
+def test_add_chapter_anchor_ids_ignores_fenced_headings():
+    content = """```markdown
+# 不是章节
+```
+
+# 1. 第一章
+
+```python
+# 也不是章节
+```
+"""
+    anchored = Reporter._add_chapter_anchor_ids(content)
+
+    assert '# 1. 第一章\n<a id="chapter-1"></a>' in anchored
+    assert anchored.count('<a id="chapter-') == 1
+    assert "# 不是章节" in anchored
+
+
+def test_add_chapter_anchor_ids_preserves_crlf_and_handles_no_heading():
+    assert Reporter._add_chapter_anchor_ids("") == ""
+    assert Reporter._add_chapter_anchor_ids("plain text") == "plain text"
+    content = "# 1. First\r\n\r\nbody\r\n"
+    anchored = Reporter._add_chapter_anchor_ids(content)
+    assert anchored == '# 1. First\r\n<a id="chapter-1"></a>\r\n\r\nbody\r\n'
+
+
+def test_add_chapter_anchor_ids_is_idempotent():
+    content = "# 1. 第一章\n\n正文\n\n# 2. 第二章\n"
+    once = Reporter._add_chapter_anchor_ids(content)
+    twice = Reporter._add_chapter_anchor_ids(once)
+    assert once == twice
+    assert twice.count('<a id="chapter-1"') == 1
+    assert twice.count('<a id="chapter-2"') == 1
+
+
+def test_add_chapter_anchor_ids_handles_h1_without_trailing_newline():
+    """最后一个 H1 无尾随换行时，锚点仍应在独立行，不污染标题文本。"""
+    content = "# 1. 第一章\n\n正文\n\n# 2. 第二章"
+    anchored = Reporter._add_chapter_anchor_ids(content)
+
+    assert '# 2. 第二章\n<a id="chapter-2"></a>' in anchored
+    assert '# 2. 第二章 <a id' not in anchored
+    # 幂等
+    twice = Reporter._add_chapter_anchor_ids(anchored)
+    assert twice == anchored
+    assert twice.count('<a id="chapter-2"') == 1
+
+
 def test_extract_level_one_headings_ignores_fenced_headings():
     content = """# 1. 第一章
 
@@ -545,6 +605,8 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     assert toc_start < abstract_start < chapter_start
     assert "[1. 企业基本情况分析](#chapter-1)" in report_content[toc_start:abstract_start]
     assert "\n- [" not in report_content[toc_start:abstract_start]
-    assert '<a id="chapter-' not in report_content
+    assert '<a id="chapter-1"></a>' in report_content
+    assert report_content.index('<a id="chapter-1"></a>') > chapter_start
+    assert '# 1. 企业基本情况分析 <a id' not in report_content
     assert "# 1. 企业基本情况分析" in report_content
     assert "1.1 基础信息" not in report_content[toc_start:abstract_start]

@@ -232,11 +232,16 @@ class Reporter(
             sub_reports_content,
             gen_report_context["language"],
         )
+        # 给正文每个一级章节插入与目录链接对应的 #chapter-N 锚点，使原生 Markdown
+        # 报告的目录可点击跳转（导出层会把锚点替换为 {#chapter-N} 属性）
+        anchored_sub_reports_content = self._add_chapter_anchor_ids(
+            sub_reports_content
+        )
         report_content = (
             f"{'# ' + _outline_title}\n\n"  # Use outline title directly for report title
             f"{table_of_contents}\n\n"
             f"{self._post_process_abstract(abstract)}\n\n"
-            f"{sub_reports_content}\n\n"
+            f"{anchored_sub_reports_content}\n\n"
             f"{self._post_process_conclusion(conclusion)}\n\n"
             f"{ArticlePart.get_title('reference', gen_report_context['language'])}"
             f"{sub_report_res.get('sub_references')}\n\n"

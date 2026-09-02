@@ -14,6 +14,12 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
+# 匹配已插入的章节锚点行（含尾随换行），用于清理后重新插入，保证幂等
+_CHAPTER_ANCHOR_LINE_RE = re.compile(
+    r'<a\b(?=[^>]*\bid\s*=\s*["\']chapter-\d+["\'])[^>]*>\s*</a>\r?\n?',
+    flags=re.IGNORECASE,
+)
+
 
 def _convert_bold_formula_to_inline_math(content: str) -> str:
     """把 LLM 误用加粗(**..**)包裹的数学公式转为内联 ``$..$`` 格式。
@@ -340,6 +346,48 @@ class MarkdownProcessorMixin:
             for index, heading in enumerate(headings, start=1)
         )
         return f"{toc_title}\n\n{toc_entries}"
+
+    @classmethod
+    def _add_chapter_anchor_ids(cls, sub_reports_content: str) -> str:
+        """Insert ``<a id="chapter-N"></a>`` on a separate line after each H1.
+
+        The TOC links to ``#chapter-N``, so each body heading referenced by the
+        TOC must carry a matching HTML anchor for the link to be clickable in
+        the native Markdown report. Anchors are placed on their own line
+        immediately AFTER the H1 heading line, keeping the heading text clean so
+        downstream consumers (section_locator, truth_verification,
+        new_task_processor) that parse heading titles via
+        ``^(#{1,6})\\s+(.*\\S)`` are not polluted. When downstream H1 splitting
+        assigns content to the chapter starting at each H1, the anchor falls at
+        the start of its own chapter's content rather than leaking into the
+        previous chapter. Exporters strip these anchors when converting to
+        HTML/DOCX and rely on the ``{#chapter-N}`` attribute instead.
+        """
+        if not sub_reports_content:
+            return sub_reports_content
+        # 清理已有锚点，保证幂等：对已锚点内容再调不会叠加重复 ID
+        sub_reports_content = _CHAPTER_ANCHOR_LINE_RE.sub("", sub_reports_content)
+        headings = cls._extract_level_one_headings(sub_reports_content)
+        if not headings:
+            return sub_reports_content
+
+        newline = "\r\n" if "\r\n" in sub_reports_content else "\n"
+        # 从后往前插入，避免偏移量被先前的插入破坏
+        for index in range(len(headings), 0, -1):
+            offset = headings[index - 1]["offset"]
+            # 定位 H1 行末尾的换行符，在其后插入独立锚点行
+            line_end = sub_reports_content.find("\n", offset)
+            if line_end == -1:
+                # H1 是最后一行且无尾随换行，先补换行再插锚点，确保锚点在独立行
+                insert_pos = len(sub_reports_content)
+                anchor = f'{newline}<a id="chapter-{index}"></a>{newline}'
+            else:
+                insert_pos = line_end + 1
+                anchor = f'<a id="chapter-{index}"></a>{newline}'
+            sub_reports_content = (
+                sub_reports_content[:insert_pos] + anchor + sub_reports_content[insert_pos:]
+            )
+        return sub_reports_content
 
     @staticmethod
     def _contains_mermaid_source(content: str) -> bool:
