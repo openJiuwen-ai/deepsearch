@@ -1239,6 +1239,28 @@ def test_table_caption_markup_cleaning_keeps_prefix_removal_separate():
     assert table_caption_utils.clean_caption_text(text) == "核心指标"
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "[citation:3]",
+        "<citation:3]",
+        "<citation:3>",
+        "(citation:3)",
+        "(citation:3)",
+    ],
+)
+def test_table_caption_markup_cleaning_strips_malformed_citation_markers(marker):
+    text = f"甲公司营收对比{marker}单位亿元"
+
+    assert table_caption_utils.normalize_caption_markup(text) == "甲公司营收对比单位亿元"
+
+
+def test_table_caption_markup_cleaning_keeps_text_after_malformed_marker():
+    text = "甲公司营收对比<citation:3] 单位<b>亿元</b>"
+
+    assert table_caption_utils.normalize_caption_markup(text) == "甲公司营收对比 单位亿元"
+
+
 def test_table_caption_line_override_keeps_existing_on_conflict(caplog):
     overrides = {3: "first rewrite"}
 
