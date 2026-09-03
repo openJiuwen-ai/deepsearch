@@ -109,6 +109,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [DeepSearch 运行与 SSE 流](./server/deepsearch-run-streaming.md)
 - [DeepSearch Agent 配置组装](./server/deepsearch-agent-config.md)
 - [Server 报告转换](./server/report-conversion.md)
+- [LaTeX → OMML 转换](./latex_to_omml_conversion.md)
 - [知识库管理](./server/knowledge-base.md)
 - [模板与联网搜索引擎管理](./server/template-and-web-search-engine-management.md)
 - [Server 持久化与存储](./server/persistence-and-storage.md)

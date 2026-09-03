@@ -762,7 +762,9 @@ def _latex_to_omml(latex: str) -> str:
 
 def _normalize_latex_for_omml(latex: str) -> str:
     """Normalize valid LaTeX forms that mathml2omml cannot parse directly."""
-    previous = _merge_arg_min_max(_strip_latex_alignment_markers(latex))
+    previous = _strip_redundant_mathop(
+        _merge_arg_min_max(_strip_latex_alignment_markers(latex))
+    )
     for _ in range(8):
         current = _wrap_grouped_command_powers(previous)
         if current == previous:
@@ -772,6 +774,10 @@ def _normalize_latex_for_omml(latex: str) -> str:
 
 
 _ARG_MIN_MAX_RE = re.compile(r"\\arg\s*\\(min|max)(?![a-zA-Z])")
+
+_MATHOP_OPERATORNAME_RE = re.compile(
+    r"\\mathop\s*\{(\\operatorname\*?\{[^{}]*\})\}"
+)
 
 
 def _merge_arg_min_max(latex: str) -> str:
@@ -787,6 +793,16 @@ def _merge_arg_min_max(latex: str) -> str:
         lambda m: r"\operatorname{arg\," + m.group(1) + "}",
         latex,
     )
+
+
+def _strip_redundant_mathop(latex: str) -> str:
+    """Strip redundant ``\\mathop{...}`` wrapper around ``\\operatorname{...}``.
+
+    ``_merge_arg_min_max`` rewrites ``\\arg\\max`` as
+    ``\\mathop{\\operatorname{arg\\,max}}``; mathml2omml cannot parse a
+    ``\\mathop`` wrapping an ``\\operatorname``, so the outer layer is removed.
+    """
+    return _MATHOP_OPERATORNAME_RE.sub(r"\1", latex)
 
 
 def _strip_latex_alignment_markers(latex: str) -> str:
