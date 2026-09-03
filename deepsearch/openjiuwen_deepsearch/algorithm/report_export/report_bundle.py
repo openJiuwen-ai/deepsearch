@@ -144,6 +144,17 @@ def _validate_final_result(final_result: dict) -> tuple[str, list[dict], list[di
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
             "response_content is empty",
         )
+    response_content_type = final_result.get("response_content_type", "text/markdown")
+    if not isinstance(response_content_type, str):
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            "response_content_type must be a string",
+        )
+    if response_content_type != "text/markdown":
+        raise CustomValueException(
+            StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
+            "report export only supports response_content_type text/markdown",
+        )
 
     infer_messages = _validate_message_list(final_result, "infer_messages")
     chart_messages = _validate_message_list(final_result, "chart_messages")

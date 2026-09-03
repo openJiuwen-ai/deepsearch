@@ -163,8 +163,8 @@ async def test_parallel_chapters_stream_tokens_with_section_identity(monkeypatch
     ]
 
 @pytest.mark.asyncio
-async def test_chapter_context_limit_retries_without_trimming_evidence(monkeypatch):
-    """上下文超限重试不应删除低优先级来源。"""
+async def test_chapter_context_limit_retries_with_lower_priority_evidence_removed(monkeypatch):
+    """多条证据超限后，重试必须移除末尾的低优先级证据。"""
     request = _request()
     payload = request.collection.model_dump()
     payload["citation_registry"].append({"source_id": "s4", "index": 4, "title": "次要来源", "url": "https://e/4", "original_content": "次要证据"})
@@ -177,14 +177,73 @@ async def test_chapter_context_limit_retries_without_trimming_evidence(monkeypat
 
     async def invoke(_llm, messages, **_kwargs):
         document_counts.append(messages["messages"][0]["content"].count(" begin]"))
-        raise RuntimeError("context_length_exceeded")
+        if document_counts[-1] > 1:
+            raise RuntimeError("context_length_exceeded")
+        return {"content": "正文。[citation:1]"}
 
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
 
     chapters = await write_brief_chapters(request)
 
-    assert document_counts == [2, 2, 2]
+    assert document_counts == [2, 1]
+    assert chapters[0].raw_markdown.endswith("正文。[citation:1]")
+
+
+@pytest.mark.asyncio
+async def test_chapter_context_limit_retries_with_shortened_single_evidence(monkeypatch):
+    """唯一证据超限后，下一次写作调用必须使用更短的摘要。"""
+    request = _request()
+    payload = request.collection.model_dump()
+    payload["citation_registry"][0]["original_content"] = "唯一超长证据" * 20
+    request = request.model_copy(
+        update={
+            "outline": request.outline.model_copy(update={"sections": [request.outline.sections[0]]}),
+            "collection": BriefCollectionResult.model_validate(payload),
+        }
+    )
+    prompt_contents = []
+
+    async def invoke(_llm, messages, **_kwargs):
+        prompt_contents.append(messages["messages"][0]["content"])
+        if len(prompt_contents) == 1:
+            raise RuntimeError("context_length_exceeded")
+        return {"content": "压缩后正文。[citation:1]"}
+
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    chapters = await write_brief_chapters(request)
+
+    assert len(prompt_contents) == 2
+    assert len(prompt_contents[1]) < len(prompt_contents[0])
+    assert chapters[0].raw_markdown.endswith("压缩后正文。[citation:1]")
+
+
+@pytest.mark.asyncio
+async def test_chapter_context_limit_fails_when_single_evidence_cannot_shrink(monkeypatch):
+    """唯一证据已无法再缩短时，章节必须失败而非原样空转重试。"""
+    request = _request()
+    payload = request.collection.model_dump()
+    payload["citation_registry"][0]["original_content"] = "x"
+    request = request.model_copy(
+        update={
+            "outline": request.outline.model_copy(update={"sections": [request.outline.sections[0]]}),
+            "collection": BriefCollectionResult.model_validate(payload),
+        }
+    )
+    call_count = 0
+
+    async def invoke(_llm, _messages, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("context_length_exceeded")
+
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    chapters = await write_brief_chapters(request)
+
+    assert call_count == 1
     assert chapters == []
 
 

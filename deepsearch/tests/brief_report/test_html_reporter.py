@@ -9,7 +9,7 @@ import pytest
 from openjiuwen_deepsearch.algorithm.brief_report.html_content import (
     BriefHtmlPreprocessResult,
     BriefHtmlSectionChunk,
-    _render_references_html,
+    render_references_html,
     preprocess_markdown,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
@@ -22,6 +22,38 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
 
 
 _NOTICE_BASE = "<!DOCTYPE html><html><head></head><body><h1>报告</h1></body></html>"
+
+
+def test_html_reporter_sibling_module_interfaces_are_public():
+    """编排层跨模块复用的 HTML 辅助项必须使用显式公开名称。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import (
+        html_charts,
+        html_content,
+        html_safety,
+    )
+
+    required_interfaces = {
+        html_charts: (
+            "TEMPLATE_BLOCK_RE",
+            "extract_fragment_charts",
+            "normalize_chart_configs",
+            "validate_chart_configs",
+        ),
+        html_content: ("render_references_html", "split_report_markdown"),
+        html_safety: (
+            "HTML_VOID_TAGS",
+            "HtmlStructureScanner",
+            "JAVASCRIPT_URL_RE",
+            "SCRIPT_TAG_RE",
+            "contains_event_attribute",
+            "insert_before",
+            "validate_css_references",
+        ),
+    }
+
+    for module, names in required_interfaces.items():
+        for name in names:
+            assert hasattr(module, name), f"{module.__name__}.{name} must be public"
 
 
 def test_generate_shell_groups_related_context_arguments():

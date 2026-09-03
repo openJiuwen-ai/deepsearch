@@ -12,6 +12,7 @@ Supported `convert_type` values are `html` and `docx`. `convert_content` is a ba
 {
   "final_result": {
     "response_content": "# Report title",
+    "response_content_type": "text/markdown",
     "infer_messages": [],
     "chart_messages": [],
     "warning_info": "",
@@ -23,6 +24,7 @@ Supported `convert_type` values are `html` and `docx`. `convert_content` is a ba
 ```
 
 - `final_result.response_content`: required Markdown report body.
+- `final_result.response_content_type`: optional and supports only `text/markdown`; omitted values remain backward-compatible as `text/markdown`. Explicit `text/html` is not exportable and returns a validation error.
 - `final_result.infer_messages`: optional source-tracing assets with `id` and `html_base64`. Report links using `#inference:<id>` become relative links to standalone HTML files in the bundle.
 - `final_result.chart_messages`: optional VLM PNG assets with `chart_id`, `base64`, and optional `chart_title`. `(#insertChart:<chart_id>)` placeholders become image references.
 - `convert_type`: `html` or `docx`.
@@ -98,7 +100,7 @@ This feature has no external Mermaid command, Node, Chrome, or vector-rendering 
 
 ## Failures And Fallbacks
 
-- Empty `response_content`, a non-dictionary `final_result`, or invalid inference/VLM base64 data produce the existing validation errors.
+- Empty `response_content`, a `response_content_type` other than `text/markdown`, a non-dictionary `final_result`, or invalid inference/VLM base64 data produce validation errors.
 - Main-report or ZIP generation failures produce the existing execution errors.
 - Mermaid failures are local fallback only and do not create Mermaid CLI debug artifacts.
 - Existing request fields, format values, and the ZIP top-level layout remain unchanged; the response adds style status fields.

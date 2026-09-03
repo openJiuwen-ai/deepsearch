@@ -7,7 +7,7 @@ import pytest
 
 from openjiuwen_deepsearch.algorithm.brief_report.html_charts import (
     ECHARTS_SHA256,
-    _extract_fragment_charts,
+    extract_fragment_charts,
     inject_chart_scripts,
     inject_echarts_library,
     validate_chart_option,
@@ -294,7 +294,7 @@ def test_extract_fragment_charts_renames_ids_and_strips_unpaired_placeholders():
         '{"id":"cX","option":{"series":[{"type":"bar","data":[2]}]}}]'
         "</template>"
     )
-    cleaned, configs = _extract_fragment_charts(fragment, "1")
+    cleaned, configs = extract_fragment_charts(fragment, "1")
 
     assert 'data-chart-id="s1-c1"' in cleaned
     assert "c9" not in cleaned
@@ -312,7 +312,7 @@ def test_extract_fragment_charts_accepts_chart_template_with_id_after_other_attr
         "</template>"
     )
 
-    cleaned, configs = _extract_fragment_charts(fragment, "1")
+    cleaned, configs = extract_fragment_charts(fragment, "1")
 
     assert "<template" not in cleaned
     assert 'data-chart-id="s1-c1"' in cleaned
@@ -329,7 +329,7 @@ def test_extract_fragment_charts_strips_duplicate_placeholder_after_consuming_co
         "</template>"
     )
 
-    cleaned, configs = _extract_fragment_charts(fragment, "2")
+    cleaned, configs = extract_fragment_charts(fragment, "2")
 
     assert cleaned.count('data-chart-id="s2-c1"') == 1
     assert 'data-chart-id="c1"' not in cleaned

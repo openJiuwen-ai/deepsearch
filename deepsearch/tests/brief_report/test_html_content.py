@@ -2,8 +2,8 @@
 
 from openjiuwen_deepsearch.algorithm.brief_report.html_content import (
     BriefHtmlPreprocessResult,
-    _render_references_html,
-    _split_report_markdown,
+    render_references_html,
+    split_report_markdown,
     convert_inline_citations,
     preprocess_markdown,
 )
@@ -154,7 +154,7 @@ def test_render_references_uses_english_heading_for_normalized_language():
         reference_entries=[(1, "Source", "https://example.com/source")],
     )
 
-    references_html = _render_references_html(pre, "en")
+    references_html = render_references_html(pre, "en")
 
     assert '<section class="references"><h2>References</h2>' in references_html
 
@@ -165,7 +165,7 @@ def test_split_report_markdown_extracts_summary_sections_and_skips_references():
         "# 市场分析\n\n## 核心摘要\n\n摘要结论 [1]。\n\n## 1 规模\n\n规模 [1]。\n\n"
         "## 2 格局\n\n格局 [1]。\n\n## 参考文章\n\n[1]. [来源甲](https://example.com/a)\n"
     )
-    title, summary_md, sections = _split_report_markdown(cleaned)
+    title, summary_md, sections = split_report_markdown(cleaned)
 
     assert title == "市场分析"
     assert summary_md.startswith("## 核心摘要")
@@ -182,7 +182,7 @@ def test_split_report_markdown_does_not_split_h2_inside_fenced_code_block():
         "```bash\n## install instructions\necho ok\n```\n\n正文\n\n## 参考文章\n"
     )
 
-    _title, _summary, sections = _split_report_markdown(markdown)
+    _title, _summary, sections = split_report_markdown(markdown)
 
     assert [section.section_id for section in sections] == ["1"]
     assert "## install instructions" in sections[0].markdown

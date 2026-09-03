@@ -345,7 +345,7 @@ def _split_h2_blocks(text: str) -> list[str]:
     return blocks
 
 
-def _split_report_markdown(cleaned: str) -> tuple[str, str, list[BriefHtmlSectionChunk]]:
+def split_report_markdown(cleaned: str) -> tuple[str, str, list[BriefHtmlSectionChunk]]:
     """把清洗后的报告 markdown 拆为标题、摘要与章节块。
 
     Args:
@@ -382,7 +382,7 @@ def _split_report_markdown(cleaned: str) -> tuple[str, str, list[BriefHtmlSectio
     return title, summary_md, sections
 
 
-def _render_references_html(pre: BriefHtmlPreprocessResult, language: str) -> str:
+def render_references_html(pre: BriefHtmlPreprocessResult, language: str) -> str:
     """从引用注册表确定性渲染参考文献区（不经过 LLM）。
 
     Args:

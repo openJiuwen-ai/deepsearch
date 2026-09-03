@@ -10,29 +10,29 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 
 from openjiuwen_deepsearch.algorithm.brief_report.html_charts import (
-    _TEMPLATE_BLOCK_RE,
-    _extract_fragment_charts,
-    _normalize_chart_configs,
-    _validate_chart_configs,
+    TEMPLATE_BLOCK_RE,
+    extract_fragment_charts,
+    normalize_chart_configs,
+    validate_chart_configs,
     inject_chart_scripts,
     inject_echarts_library,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_content import (
     BriefHtmlPreprocessResult,
     BriefHtmlSectionChunk,
-    _render_references_html,
-    _split_report_markdown,
+    render_references_html,
+    split_report_markdown,
     convert_inline_citations,
     preprocess_markdown,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_safety import (
-    _HTML_VOID_TAGS,
-    _HtmlStructureScanner,
-    _JAVASCRIPT_URL_RE,
-    _SCRIPT_TAG_RE,
-    _contains_event_attribute,
-    _insert_before,
-    _validate_css_references,
+    HTML_VOID_TAGS,
+    HtmlStructureScanner,
+    JAVASCRIPT_URL_RE,
+    SCRIPT_TAG_RE,
+    contains_event_attribute,
+    insert_before,
+    validate_css_references,
     final_security_assert,
     sanitize_html,
 )
@@ -82,18 +82,18 @@ def validate_html_report(html_text: str) -> tuple[list[str], list[str]]:
     for tag in ("html", "head", "body"):
         if f"<{tag}" not in lowered or f"</{tag}>" not in lowered:
             errors.append(f"missing_or_unclosed_{tag}")
-    if _SCRIPT_TAG_RE.search(html_text):
+    if SCRIPT_TAG_RE.search(html_text):
         errors.append("script_tag_present")
-    if _JAVASCRIPT_URL_RE.search(html_text):
+    if JAVASCRIPT_URL_RE.search(html_text):
         errors.append("javascript_url_present")
 
-    scanner = _HtmlStructureScanner()
+    scanner = HtmlStructureScanner()
     scanner.feed(html_text)
     scanner.close()
-    if _contains_event_attribute(html_text):
+    if contains_event_attribute(html_text):
         errors.append("event_attribute_present")
-    errors.extend(_validate_css_references(scanner))
-    chart_errors, chart_warnings = _validate_chart_configs(scanner)
+    errors.extend(validate_css_references(scanner))
+    chart_errors, chart_warnings = validate_chart_configs(scanner)
     errors.extend(chart_errors)
     warnings.extend(chart_warnings)
     return errors, warnings
@@ -125,7 +125,7 @@ def inject_ai_notice(html_text: str, language: str) -> str:
         'line-height:1.5;">AI</span>'
         f"{text}</p></footer>"
     )
-    return _insert_before(html_text, "</body>", f"{notice}\n")
+    return insert_before(html_text, "</body>", f"{notice}\n")
 
 
 _HTML_REPORT_BLOCK_RE = re.compile(r"(?s)<html_report>\s*(.*?)\s*</html_report>")
@@ -426,7 +426,7 @@ async def _generate_section_fragments(
         attempt_num,
         len(sections),
     )
-    shell_scanner = _HtmlStructureScanner()
+    shell_scanner = HtmlStructureScanner()
     shell_scanner.feed(shell)
     shell_scanner.close()
     shell_css = "\n".join(shell_scanner.style_blocks)
@@ -468,13 +468,13 @@ async def _generate_section_fragments(
             sanitized = _sanitize_fragment(fragment)
             if not sanitized.strip():
                 raise ValueError(f"section {chunk.section_id}: empty fragment")
-            fragment_scanner = _HtmlStructureScanner()
+            fragment_scanner = HtmlStructureScanner()
             fragment_scanner.feed(sanitized)
             fragment_scanner.close()
-            css_errors = _validate_css_references(fragment_scanner)
+            css_errors = validate_css_references(fragment_scanner)
             if css_errors:
                 raise ValueError("; ".join(css_errors))
-            fragment, configs = _extract_fragment_charts(sanitized, chunk.section_id)
+            fragment, configs = extract_fragment_charts(sanitized, chunk.section_id)
             result = _ensure_section_anchor(fragment, chunk.section_id), configs
         except Exception as exc:
             logger.info(
@@ -570,12 +570,12 @@ class _BarFillTextNormalizer(HTMLParser):
         lowered = tag.lower()
         if self._bar_fill_depth:
             # bar-fill 只保留外层元素，内部文本和嵌套元素均视为装饰内容。
-            if lowered not in _HTML_VOID_TAGS:
+            if lowered not in HTML_VOID_TAGS:
                 self._bar_fill_depth += 1
             self._bar_fill_had_content = True
             return
         self.out.append(self.get_starttag_text() or f"<{tag}>")
-        if lowered not in _HTML_VOID_TAGS and self._is_bar_fill(attrs):
+        if lowered not in HTML_VOID_TAGS and self._is_bar_fill(attrs):
             self._bar_fill_depth = 1
             self._bar_fill_had_content = False
 
@@ -596,7 +596,7 @@ class _BarFillTextNormalizer(HTMLParser):
             tag: 结束标签名称。
         """
         if self._bar_fill_depth:
-            if tag.lower() not in _HTML_VOID_TAGS:
+            if tag.lower() not in HTML_VOID_TAGS:
                 self._bar_fill_depth -= 1
                 if self._bar_fill_depth == 0:
                     if self._bar_fill_had_content:
@@ -698,8 +698,8 @@ def _assemble_html_report(
     Returns:
         注入章节、引用和图表配置后的 HTML 文档。
     """
-    fragments, configs = _normalize_chart_configs(fragments, configs)
-    shell = _TEMPLATE_BLOCK_RE.sub("", shell)
+    fragments, configs = normalize_chart_configs(fragments, configs)
+    shell = TEMPLATE_BLOCK_RE.sub("", shell)
     sections_html = "\n".join(fragments)
     if _MOUNT_SECTIONS_RE.search(shell):
         html_doc = _MOUNT_SECTIONS_RE.sub(lambda _match: sections_html, shell, count=1)
@@ -707,17 +707,17 @@ def _assemble_html_report(
         logger.warning(
             "[BriefHtmlReporter] Shell missing #brief-sections mount; insert before </body>."
         )
-        html_doc = _insert_before(shell, "</body>", f"{sections_html}\n")
-    references_html = _render_references_html(pre, language)
+        html_doc = insert_before(shell, "</body>", f"{sections_html}\n")
+    references_html = render_references_html(pre, language)
     if _MOUNT_REFERENCES_RE.search(html_doc):
         html_doc = _MOUNT_REFERENCES_RE.sub(
             lambda _match: references_html, html_doc, count=1
         )
     elif references_html:
-        html_doc = _insert_before(html_doc, "</body>", f"{references_html}\n")
+        html_doc = insert_before(html_doc, "</body>", f"{references_html}\n")
     if configs:
         payload = html.escape(json.dumps(configs, ensure_ascii=True), quote=False)
-        html_doc = _insert_before(
+        html_doc = insert_before(
             html_doc,
             "</body>",
             f'\n<template id="chart-configs">{payload}</template>\n',
@@ -748,7 +748,7 @@ async def generate_brief_html_report(*, llm, markdown: str, language: str) -> st
     )
     preprocess_started = time.perf_counter()
     pre = preprocess_markdown(markdown)
-    title, summary_md, sections = _split_report_markdown(pre.cleaned_markdown)
+    title, summary_md, sections = split_report_markdown(pre.cleaned_markdown)
     max_attempts = max(1, Config().service_config.report_max_generate_retry_num)
     logger.info(
         "[BriefHtmlReporter] event=preprocess_done cleaned_chars=%d sections=%d references=%d "

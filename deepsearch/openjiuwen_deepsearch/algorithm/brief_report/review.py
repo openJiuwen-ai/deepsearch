@@ -108,7 +108,7 @@ def _slim_citation_registry(request: BriefReviewRequest) -> list[dict]:
         request: 审阅请求。
 
     Returns:
-        仅含 source_id/index/title/url/source/publish_time 的字典列表。
+        仅含 source_id、index、title、url 的字典列表。
     """
     return [
         {

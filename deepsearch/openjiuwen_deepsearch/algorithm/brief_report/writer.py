@@ -176,6 +176,28 @@ def build_writing_evidence(request: BriefWritingRequest, section: BriefSection) 
     return BriefWritingEvidence(documents=rows, coverage=evidence.coverage)
 
 
+def _shrink_writing_documents(documents: list[dict]) -> list[dict] | None:
+    """按证据优先级递进缩减章节写作上下文。
+
+    多条证据时移除末尾的低优先级条目；只剩一条时将其摘要缩短一半。
+
+    Args:
+        documents: 当前章节按优先级排序的写作证据。
+
+    Returns:
+        可用于下一轮重试的较小证据列表；无法再缩减时返回 None。
+    """
+    if len(documents) > 1:
+        return documents[:-1]
+    if not documents:
+        return None
+    snippet = str(documents[0].get("snippet") or "")
+    shortened = snippet[: len(snippet) // 2].rstrip()
+    if not shortened or shortened == snippet:
+        return None
+    return [{**documents[0], "snippet": shortened}]
+
+
 async def _write_one(
     request: BriefWritingRequest,
     section: BriefSection,
@@ -214,7 +236,6 @@ async def _write_one(
                 raw,
                 section,
                 allowed_citation_ids,
-                "\n".join(row["snippet"] for row in documents),
             )
             logger.info(
                 "[BriefWriter] Generated chapter section_id=%s attempt=%d/%d content_chars=%d cleaned_chars=%d.",
@@ -242,6 +263,21 @@ async def _write_one(
                 section.id, attempt_num + 1, max_attempts, len(documents), validation or "none",
                 len(raw), raw.count("```"), _response_preview(raw), detail,
             )
+            if _matches_context_limit(str(exc), exc):
+                reduced = _shrink_writing_documents(documents)
+                if reduced is None:
+                    logger.warning(
+                        "[BriefWriter] Context limit cannot be reduced further; "
+                        "section_id=%s attempt=%d/%d. Mark chapter failed.",
+                        section.id, attempt_num + 1, max_attempts,
+                    )
+                    break
+                logger.warning(
+                    "[BriefWriter] Context limit returned by model; section_id=%s "
+                    "attempt=%d/%d documents=%d -> %d.",
+                    section.id, attempt_num + 1, max_attempts, len(documents), len(reduced),
+                )
+                documents = reduced
     logger.error(
         "[BriefWriter] Chapter generation exhausted retries; section_id=%s max_attempts=%d error=%s.",
         section.id, max_attempts, "<detail masked>" if LogManager.is_sensitive() else last_error,

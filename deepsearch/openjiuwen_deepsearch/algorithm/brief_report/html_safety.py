@@ -14,7 +14,7 @@ _ALLOWED_TAGS = frozenset({
     "main", "article", "aside", "figure", "figcaption", "details", "summary",
 })
 _VOID_TAGS = frozenset({"br", "hr", "meta"})
-_HTML_VOID_TAGS = frozenset({
+HTML_VOID_TAGS = frozenset({
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "param", "source", "track", "wbr",
 })
@@ -32,8 +32,8 @@ _CHART_CONFIGS_FORBIDDEN_TAG_BLOCK_RE = re.compile(
     r"(?is)<(?:script|iframe|object|embed|style)\b[^>]*>.*?</(?:script|iframe|object|embed|style)\s*>"
 )
 _CHART_CONFIGS_INNER_CLOSE_TAG_RE = re.compile(r"(?is)</template\s*>")
-_SCRIPT_TAG_RE = re.compile(r"<script\b", re.IGNORECASE)
-_JAVASCRIPT_URL_RE = re.compile(r"javascript:", re.IGNORECASE)
+SCRIPT_TAG_RE = re.compile(r"<script\b", re.IGNORECASE)
+JAVASCRIPT_URL_RE = re.compile(r"javascript:", re.IGNORECASE)
 _CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _CSS_ESCAPE_RE = re.compile(r"\\([0-9A-Fa-f]{1,6})\s?")
 _MARKED_BLOCK_RE = re.compile(
@@ -158,11 +158,11 @@ class _Sanitizer(HTMLParser):
             return
         if self._chart_mode:
             # template 内只允许 JSON 文本；若 parser 将尖括号识别成标签，丢弃该标签及其内容。
-            if tag not in _HTML_VOID_TAGS:
+            if tag not in HTML_VOID_TAGS:
                 self._chart_drop_depth += 1
             return
         if tag not in _ALLOWED_TAGS:
-            if tag in _HTML_VOID_TAGS:
+            if tag in HTML_VOID_TAGS:
                 return
             self._skip_depth, self._skip_tag = 1, tag
             return
@@ -377,7 +377,7 @@ class _EventAttributeScanner(HTMLParser):
     handle_startendtag = handle_starttag
 
 
-def _contains_event_attribute(html_text: str) -> bool:
+def contains_event_attribute(html_text: str) -> bool:
     """判断 HTML 中是否存在实际元素事件属性。
 
     Args:
@@ -392,7 +392,7 @@ def _contains_event_attribute(html_text: str) -> bool:
     return scanner.has_event_attribute
 
 
-class _HtmlStructureScanner(HTMLParser):
+class HtmlStructureScanner(HTMLParser):
     """收集图表占位、配置与 CSS。
 
     Attributes:
@@ -494,7 +494,7 @@ def _css_has_external_reference(css: str) -> bool:
     return "url(" in normalized or "@import" in normalized
 
 
-def _validate_css_references(scanner: _HtmlStructureScanner) -> list[str]:
+def validate_css_references(scanner: HtmlStructureScanner) -> list[str]:
     """校验 style 块与内联 style 属性均不含外部引用。
 
     Args:
@@ -509,7 +509,7 @@ def _validate_css_references(scanner: _HtmlStructureScanner) -> list[str]:
     return []
 
 
-def _insert_before(html_text: str, closing_tag: str, payload: str) -> str:
+def insert_before(html_text: str, closing_tag: str, payload: str) -> str:
     """把 payload 插入到 closing_tag 最后一次出现处之前。
 
     Args:
@@ -537,11 +537,11 @@ def final_security_assert(html_text: str) -> None:
     """
     residual = _MARKED_BLOCK_RE.sub("", html_text)
     problems: list[str] = []
-    if _SCRIPT_TAG_RE.search(residual):
+    if SCRIPT_TAG_RE.search(residual):
         problems.append("unexpected script tag")
-    if _contains_event_attribute(residual):
+    if contains_event_attribute(residual):
         problems.append("event attribute")
-    if _JAVASCRIPT_URL_RE.search(residual):
+    if JAVASCRIPT_URL_RE.search(residual):
         problems.append("javascript url")
     for tag in ("img", "link", "iframe", "object", "embed"):
         if re.search(rf"<{tag}\b", residual, re.IGNORECASE):

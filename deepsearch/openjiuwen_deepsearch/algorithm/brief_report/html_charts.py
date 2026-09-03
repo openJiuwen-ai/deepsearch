@@ -8,8 +8,8 @@ import re
 from pathlib import Path
 
 from openjiuwen_deepsearch.algorithm.brief_report.html_safety import (
-    _HtmlStructureScanner,
-    _insert_before,
+    HtmlStructureScanner,
+    insert_before,
 )
 
 
@@ -28,7 +28,7 @@ _ECHARTS_LIB_MARKER = "<!--openjiuwen:echarts-lib-->"
 _ECHARTS_LIB_END = "<!--/openjiuwen:echarts-lib-->"
 _CHART_SCRIPT_MARKER = "<!--openjiuwen:chart-init-->"
 _CHART_SCRIPT_END = "<!--/openjiuwen:chart-init-->"
-_TEMPLATE_BLOCK_RE = re.compile(
+TEMPLATE_BLOCK_RE = re.compile(
     r'''(?is)<template\b(?=[^>]*\bid\s*=\s*'''
     r'''(?:"chart-configs"|'chart-configs'|chart-configs\b))[^>]*>'''
     r'''(.*?)</template\s*>'''
@@ -334,7 +334,7 @@ def normalize_chart_option(option: dict) -> tuple[dict, list[str]]:
     return option, warnings
 
 
-def _validate_chart_configs(scanner: _HtmlStructureScanner) -> tuple[list[str], list[str]]:
+def validate_chart_configs(scanner: HtmlStructureScanner) -> tuple[list[str], list[str]]:
     """校验图表配置 JSON、id 格式与占位元素一一对应。
 
     Args:
@@ -388,7 +388,7 @@ def _has_renderable_chart(html_text: str) -> bool:
     """
     if _CHART_SCRIPT_MARKER in html_text:
         return True
-    match = _TEMPLATE_BLOCK_RE.search(html_text)
+    match = TEMPLATE_BLOCK_RE.search(html_text)
     if match is None:
         return False
     try:
@@ -428,7 +428,7 @@ def inject_chart_scripts(html_text: str) -> str:
     Raises:
         json.JSONDecodeError: template 中的配置不是合法 JSON。
     """
-    match = _TEMPLATE_BLOCK_RE.search(html_text)
+    match = TEMPLATE_BLOCK_RE.search(html_text)
     if match is None:
         stripped = _CHART_PLACEHOLDER_RE.sub("", html_text)
         if stripped != html_text:
@@ -439,7 +439,7 @@ def inject_chart_scripts(html_text: str) -> str:
         return stripped
     configs = json.loads(html.unescape(match.group(1)))
     if not configs:
-        without_template = _TEMPLATE_BLOCK_RE.sub("", html_text)
+        without_template = TEMPLATE_BLOCK_RE.sub("", html_text)
         return _CHART_PLACEHOLDER_RE.sub("", without_template)
     for config in configs:
         option = config.get("option") or {}
@@ -469,8 +469,8 @@ def inject_chart_scripts(html_text: str) -> str:
         "})();\n"
         f"</script>{_CHART_SCRIPT_END}"
     )
-    without_template = _TEMPLATE_BLOCK_RE.sub("", html_text)
-    return _insert_before(without_template, "</body>", f"{script}\n")
+    without_template = TEMPLATE_BLOCK_RE.sub("", html_text)
+    return insert_before(without_template, "</body>", f"{script}\n")
 
 
 def inject_echarts_library(html_text: str) -> str:
@@ -491,8 +491,8 @@ def inject_echarts_library(html_text: str) -> str:
     source = _load_echarts_source()
     block = f"{_ECHARTS_LIB_MARKER}<script>{source}</script>{_ECHARTS_LIB_END}"
     if "</head>" in html_text:
-        return _insert_before(html_text, "</head>", f"{block}\n")
-    return _insert_before(html_text, "</body>", f"{block}\n")
+        return insert_before(html_text, "</head>", f"{block}\n")
+    return insert_before(html_text, "</body>", f"{block}\n")
 
 
 def _placeholder_re_for(chart_id: str) -> re.Pattern[str]:
@@ -520,7 +520,7 @@ def _drop_fragment_charts(fragment: str, section_id: str, reason: str) -> tuple[
     Returns:
         移除图表内容后的片段，以及空的配置列表。
     """
-    result = _TEMPLATE_BLOCK_RE.sub("", fragment)
+    result = TEMPLATE_BLOCK_RE.sub("", fragment)
     result = _CHART_PLACEHOLDER_RE.sub("", result)
     logger.warning(
         "[BriefHtmlReporter] Dropped invalid section charts; section=%s reason=%s.",
@@ -530,7 +530,7 @@ def _drop_fragment_charts(fragment: str, section_id: str, reason: str) -> tuple[
     return result, []
 
 
-def _extract_fragment_charts(fragment: str, section_id: str) -> tuple[str, list[dict]]:
+def extract_fragment_charts(fragment: str, section_id: str) -> tuple[str, list[dict]]:
     """提取章节图表配置，删除无法安全渲染的图表并重命名成对 id。
 
     Args:
@@ -540,7 +540,7 @@ def _extract_fragment_charts(fragment: str, section_id: str) -> tuple[str, list[
     Returns:
         移除 chart-configs template、完成 id 归一化后的片段，以及可用配置列表。
     """
-    scanner = _HtmlStructureScanner()
+    scanner = HtmlStructureScanner()
     scanner.feed(fragment)
     scanner.close()
     configs_by_id: dict[str, dict] = {}
@@ -596,11 +596,11 @@ def _extract_fragment_charts(fragment: str, section_id: str) -> tuple[str, list[
         )
         config["id"] = new_id
         kept_configs.append(config)
-    result = _TEMPLATE_BLOCK_RE.sub("", result)
+    result = TEMPLATE_BLOCK_RE.sub("", result)
     return result, kept_configs
 
 
-def _normalize_chart_configs(
+def normalize_chart_configs(
     fragments: list[str], configs: list[dict]
 ) -> tuple[list[str], list[dict]]:
     """应用图表语义修复并移除已无可渲染序列的占位。
