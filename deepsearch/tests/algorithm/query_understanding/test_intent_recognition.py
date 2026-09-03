@@ -40,6 +40,7 @@ def sample_tool_response():
                     "source_date_scope": {
                         "end_date": "2024-03-31",
                     },
+                    "needs_clarification": False,
                 },
                  "id": "tc1",
                 "type": "tool_call",
@@ -81,6 +82,7 @@ async def test_recognize_report_intent_success(sample_tool_response):
     # the deprecated temporal_scope field is never populated
     # by normalize; the constraint lives in source_date_scope (asserted above).
     assert result.research_intent.temporal_scope is None
+    assert result.needs_clarification is False
 
 
 def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
@@ -144,9 +146,8 @@ def test_normalize_target_papers_merges_canonical_arxiv_duplicates():
     }]
 
 
-@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
-def test_intent_prompts_require_paper_urls_in_both_intent_chains(prompt_name):
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+def test_intent_prompt_requires_paper_urls():
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
 
     assert "target_papers" in prompt
     assert "include_url" in prompt
@@ -188,9 +189,8 @@ def test_emit_intent_tool_declares_target_papers_without_search_terms():
     assert "search_terms" not in target_schema["items"]["properties"]
 
 
-@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
-def test_intent_prompt_defines_target_paper_contract(prompt_name):
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+def test_intent_prompt_defines_target_paper_contract():
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
 
     assert "target_papers" in prompt
     assert all(identifier in prompt for identifier in ("PMID", "DOI", "arXiv ID"))
@@ -200,10 +200,9 @@ def test_intent_prompt_defines_target_paper_contract(prompt_name):
     assert "not temporal_scope" in prompt
 
 
-@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
-def test_intent_prompt_defines_temporal_normalization_rules(prompt_name):
-    """两个意图 Prompt 必须使用一致的模糊日期与包含边界规则（中英 token 归一）。"""
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+def test_intent_prompt_defines_temporal_normalization_rules():
+    """意图 Prompt 必须使用一致的模糊日期与包含边界规则（中英 token 归一）。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
 
     # 模糊日期归一：early/mid/end of YEAR → 3/31、6/30、12/31
     assert "3/31" in prompt
@@ -220,10 +219,9 @@ def test_intent_prompt_defines_temporal_normalization_rules(prompt_name):
     assert "包含" in prompt
 
 
-@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
-def test_intent_prompt_defines_carrier_vs_subject_rule(prompt_name):
-    """两个意图 Prompt 必须区分载体修饰(→source_date_scope)与主体修饰(→content_date_scope)，且两类可并存、非二选一。"""
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+def test_intent_prompt_defines_carrier_vs_subject_rule():
+    """意图 Prompt 必须区分载体修饰(→source_date_scope)与主体修饰(→content_date_scope)，且两类可并存、非二选一。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
     # 载体(carrier)修饰 → source_date_scope
     assert "载体" in prompt
     assert "source_date_scope" in prompt
@@ -236,10 +234,9 @@ def test_intent_prompt_defines_carrier_vs_subject_rule(prompt_name):
     assert "互不替代" in prompt
 
 
-@pytest.mark.parametrize("prompt_name", ["intent_recognition.md", "intent_recognition_entry.md"])
-def test_intent_prompt_scopes_as_of_snapshot(prompt_name):
+def test_intent_prompt_scopes_as_of_snapshot():
     """as-of 快照语义只在用户要求语料按可得性截断时归 source_date。"""
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / prompt_name).read_text(encoding="utf-8")
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
     assert "as of" in prompt.lower() or "available as of" in prompt.lower()
     assert "truncat" in prompt.lower()
 
@@ -316,6 +313,7 @@ async def test_successful_intent_merges_explicit_target_paper_omitted_by_llm():
             "args": {
                 "research_query": "Transformer architecture",
                 "language": "zh-CN",
+                "needs_clarification": False,
                 "target_papers": [],
             },
         }],
@@ -390,6 +388,7 @@ async def test_normalize_invalid_report_type_defaults_none():
                 "args": {
                     "research_query": "topic",
                     "language": "zh-CN",
+                    "needs_clarification": False,
                     "report_type": "deep_research",
                 },
                 "id": "tc1",
@@ -421,6 +420,7 @@ async def test_normalize_invalid_section_count():
                 "args": {
                     "research_query": "topic",
                     "language": "zh-CN",
+                    "needs_clarification": False,
                     "section_count": -1,
                     "include_url": ["https://x.y/z"],
                 },
@@ -453,6 +453,7 @@ async def test_report_type_brief_is_preserved():
                     "args": {
                         "research_query": "topic",
                         "language": "zh-CN",
+                        "needs_clarification": False,
                         "report_type": "brief",
                     },
                 "id": "tc1",
@@ -485,6 +486,7 @@ async def test_report_type_remains_none_when_tool_omits_it():
                 "args": {
                     "research_query": "AI Agent 工程化落地趋势",
                     "language": "zh-CN",
+                    "needs_clarification": False,
                 },
                 "id": "tc1",
                 "type": "tool_call",
@@ -643,6 +645,7 @@ async def test_recognize_report_intent_truncates_long_research_query():
                 "args": {
                     "research_query": long_research_query,
                     "language": "zh-CN",
+                    "needs_clarification": False,
                 },
                 "id": "tc1",
                 "type": "tool_call",
@@ -817,6 +820,7 @@ async def test_recognize_report_intent_exclude_url_and_domains_kept_separate():
                 "args": {
                     "research_query": "topic",
                     "language": "zh-CN",
+                    "needs_clarification": False,
                     "exclude_url": [
                         "https://www.mdpi.com/2073-445X/11/9/1529",
                         "https://www.mdpi.com/2410-3888/8/2/80",
@@ -857,6 +861,7 @@ async def test_recognize_report_intent_emits_exclude_intent_log(caplog):
                 "args": {
                     "research_query": "topic",
                     "language": "zh-CN",
+                    "needs_clarification": False,
                     "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
                 },
                 "id": "tc1",
@@ -884,6 +889,7 @@ def _exclude_intent_tool_response(**extra_args):
     args = {
         "research_query": "topic",
         "language": "zh-CN",
+        "needs_clarification": False,
         "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
     }
     args.update(extra_args)
@@ -956,16 +962,15 @@ def test_emit_intent_tool_schema_hides_report_type_when_provided():
 
 
 def test_intent_prompts_suppress_report_type_when_provided():
-    """两个意图识别 prompt：provided 时完全不渲染 report_type 相关内容；缺省保持现状。"""
+    """意图识别 prompt：provided 时完全不渲染 report_type 相关内容；缺省保持现状。"""
     base_ctx = {"original_query": "AI Agent 趋势", "messages": []}
-    for prompt_name in ("intent_recognition_entry", "intent_recognition"):
-        provided = apply_system_prompt(prompt_name, {**base_ctx, "provided_report_type": "brief"})
-        content = provided[0]["content"]
-        assert "report_type" not in content
+    provided = apply_system_prompt("intent_recognition", {**base_ctx, "provided_report_type": "brief"})
+    content = provided[0]["content"]
+    assert "report_type" not in content
 
-        default = apply_system_prompt(prompt_name, dict(base_ctx))
-        default_content = default[0]["content"]
-        assert "emit `report_type` accordingly" in default_content
+    default = apply_system_prompt("intent_recognition", dict(base_ctx))
+    default_content = default[0]["content"]
+    assert "emit `report_type` accordingly" in default_content
 
 
 @pytest.mark.asyncio

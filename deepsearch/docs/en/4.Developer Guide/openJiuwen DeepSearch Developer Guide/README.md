@@ -305,7 +305,7 @@ Supported stages:
 
 ## Clarification
 
-Before planning, the system recognizes intent from the original user query, generates `research_query`, and then uses `research_query` to create follow-up questions that help collect more context and understand the research goal more accurately.
+Before planning, the intent-recognition LLM judges whether the user's input is sufficient (`needs_clarification`). When insufficient, the system generates follow-up questions based on `research_query` to collect more context and understand the research goal more accurately. When sufficient, the system skips clarification and proceeds directly to outline generation.
 
 Set:
 
@@ -313,9 +313,11 @@ Set:
 agent_config["workflow_human_in_the_loop"] = True
 ```
 
-(Default is on in many deployments.)
+(Default is on in many deployments.) When set to `False`, clarification is always skipped.
 
-Flow: user asks → system generates `research_query` and `research_intent` after intent recognition → system asks follow-ups based on `research_query` while preserving `research_intent` for downstream nodes → interrupt → user answers → resume.
+Flow: user asks → system generates `research_query`, `research_intent`, and `needs_clarification` after intent recognition → if `needs_clarification=True`, system asks follow-ups based on `research_query` while preserving `research_intent` for downstream nodes → interrupt → user answers → resume.
+
+> If `needs_clarification=False` (input sufficient), steps 3-5 are skipped and the system proceeds to outline generation. When the intent-recognition LLM call fails, `needs_clarification` defaults to `False` (no clarification).
 
 ### Feedback channels
 

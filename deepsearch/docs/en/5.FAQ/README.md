@@ -156,7 +156,7 @@ Common error code ranges:
 | Error code range | Typical node / phase |
 |------------------|----------------------|
 | 211600 | `EntryNode` language routing / intent detection |
-| 211700-211702 | `GenerateQuestionsNode` / `FeedbackHandlerNode` HITL interaction |
+| 211700-211701 | `GenerateQuestionsNode` / `FeedbackHandlerNode` HITL interaction |
 | 211800 | `OutlineNode` outline generation |
 | 211801 | Subgraph `PlanReasoningNode` task planning |
 | 211901 | Empty section information collection |

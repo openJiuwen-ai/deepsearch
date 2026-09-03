@@ -20,7 +20,7 @@
 
 ## 关键代码路径
 
-- 意图识别：`openjiuwen_deepsearch/algorithm/query_understanding/intent_recognition.py`；Prompt `algorithm/prompts/intent_recognition.md`、`intent_recognition_entry.md`
+- 意图识别：`openjiuwen_deepsearch/algorithm/query_understanding/intent_recognition.py`；Prompt `algorithm/prompts/intent_recognition.md`
 - 日期归一化：`openjiuwen_deepsearch/algorithm/research_collector/collector_function.py`（`_normalize_web_search_item`）；证据挂接 `algorithm/research_collector/collector_evidence.py`
 - 日期基础设施：`openjiuwen_deepsearch/utils/common_utils/date_utils.py`（`parse_date_window`/`parse_content_window`/`classify_temporal`/`timeliness_score`/`parse_published_date`）
 - 选材加权：`openjiuwen_deepsearch/algorithm/report/report.py`（`_select_by_rationale_coverage`）
@@ -36,7 +36,7 @@
 
 ## 核心流程
 
-1. **约束提取**：意图识别 LLM 按 `intent_recognition*.md` 规则分别提取 `source_date_scope` 与 `content_date_scope`（同一 query 两类可并存）。判定原则——时间词修饰载体（来源发表/可得性）→ `source_date_scope`；修饰主题（事实/研究/数据时段）→ `content_date_scope`，即使句中含"研究/成果/论文/文献"字样（旧研究的最佳综述可能是新发表的，按发表时间过滤会误杀）。as-of 快照语义仅在用户明确要求语料按可得性截断时归 `source_date_scope`。旧序列化 state 中的单值 `temporal_scope` 由 `ResearchIntent` 的 before 校验器按 `constraint_type` 路由到对应新字段后 pop（构造后旧字段恒为 None）；字段名与 `constraint_type` 不一致的输入置 None 并打 warning。
+1. **约束提取**：意图识别 LLM 按 `intent_recognition.md` 规则分别提取 `source_date_scope` 与 `content_date_scope`（同一 query 两类可并存）。判定原则——时间词修饰载体（来源发表/可得性）→ `source_date_scope`；修饰主题（事实/研究/数据时段）→ `content_date_scope`，即使句中含"研究/成果/论文/文献"字样（旧研究的最佳综述可能是新发表的，按发表时间过滤会误杀）。as-of 快照语义仅在用户明确要求语料按可得性截断时归 `source_date_scope`。旧序列化 state 中的单值 `temporal_scope` 由 `ResearchIntent` 的 before 校验器按 `constraint_type` 路由到对应新字段后 pop（构造后旧字段恒为 None）；字段名与 `constraint_type` 不一致的输入置 None 并打 warning。
 2. **日期归一化**：`_normalize_web_search_item` 在 `include_date_metadata=True` 时，Tavily 走已归一化的 `source_date`+`source_date_type=="published"`（严格 ISO 解析）；无则按序取原生 `published`/`published_at`/`published_date`（容错解析：严格 `YYYY-MM-DD`、ISO 8601 前缀如 `2023-01-15T12:00:00Z`、PubMed `YYYY Mon DD`）。不读语义含糊的裸 `date` 键；解析不出不附加（没日期不罚）。Google 与通用路径（pubmed/arxiv 走通用路径）均已开启该开关；Tavily 路径另在 source_date 场景做硬过滤。
 3. **选材加权**（`content_date` 场景）：`_select_by_rationale_coverage` 对每个 rationale 按 `覆盖分 + effective_weight × 时效分` 降序取 top-k。`effective_weight = CONTENT_DATE_TIMELINESS_WEIGHT × known_ratio`，`known_ratio` = 候选池四档中非 unknown 占比。四档 compliant/partial/violation/unknown 对应 +1.0/-0.3/-1.0/0.0。保留门要求段落最大覆盖度 ≥ 0.15（与下游 L1 过滤对齐，避免加权提升结果被 L1 撤销；门槛只看原始覆盖分，时效惩罚不硬删合规段落；全池低于门槛时退回 `score>0` 老门兜底）；**并集补回（union-restore）**：每个 rationale 再回放一遍纯覆盖度 top-k 基线（含同一地板门），被时间加权挤掉的成员里**仅 unknown 档（判不出日期）补回池子**——"没日期不罚"护无辜；violation/partial 档扣分是其实际证据挣来的，留在池底不补回（A/B 实测：纯加权零和，普通子集掉 5~15pp；unknown-only 补回后普通子集回稳且时间增益保留）；补回按"每 rationale 交付 ≤ 15 条"封顶（对齐下游 L2 的 top-15 截断，默认 top_k=15 时饱和 rationale 不触发补回）；`source_date`/无约束退化为纯覆盖度。
 
