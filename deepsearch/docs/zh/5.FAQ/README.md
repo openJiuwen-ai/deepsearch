@@ -64,13 +64,22 @@ uv sync --allow-insecure-host github.com --allow-insecure-host pypi.org --allow-
 
 ## 二、日志定位
 ### 1. 日志路径
-openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/logs** 下，按日期文件夹（YYYYMMDD）组织，每次运行生成独立的日志文件：
-- 项目运行日志：**output/logs/common/YYYYMMDD/common_YYYYMMDD_HHMMSS_hash.log**
+openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/logs** 下，按日期文件夹（YYYYMMDD）组织，分为系统级日志和报告级日志两类：
+
+**系统级日志（服务启动时创建，记录非报告运行期间的系统日志）：**
+- 系统级运行日志：**output/logs/common/YYYYMMDD/common_system_YYYYMMDD_HHMMSS_hash.log**
+- 系统级 warning 日志：**output/logs/common/YYYYMMDD/common_system_warning_YYYYMMDD_HHMMSS_hash.log**
+- 系统级性能打点：**output/logs/metrics/YYYYMMDD/metrics_system_YYYYMMDD_HHMMSS_hash.log**（通常不会创建：性能打点仅产生于报告运行期间，此时系统级 handler 已排除写入；仅当存在报告运行之外的系统级打点时才会落盘）
+
+**报告级日志（每次运行报告时创建，只记录本次报告运行的日志）：**
+- 报告运行日志：**output/logs/common/YYYYMMDD/common_YYYYMMDD_HHMMSS_hash.log**
 - warning级别以上（方便快速定位错误日志）：**output/logs/common/YYYYMMDD/common_warning_YYYYMMDD_HHMMSS_hash.log**
 - 性能打点日志：**output/logs/metrics/YYYYMMDD/metrics_YYYYMMDD_HHMMSS_hash.log**
 
 补充说明：
-- `common_*.log` 主要记录 DeepSearch 项目自身日志；第三方组件日志默认仅保留 `warning/error` 级别，`debug/info` 不会写入。
+- `common_system_*.log` 记录服务级系统日志（启动、关闭、请求路由等），报告运行期间自动排除报告日志，避免重复。
+- `common_*.log` 记录单次报告运行的日志；第三方组件日志默认仅保留 `warning/error` 级别，`debug/info` 不会写入。
+- 排障约定：查某次报告的日志 → 只看该次的 `common_*.log` / `common_warning_*.log`（不要去翻 `common_system_*.log` 找业务日志）；查启动、空闲期、请求路由等系统事件 → 看 `common_system_*.log`。`common_system_*.log` 中的 `per-run logging started: run_id=xxx, log_prefix=xxx` 行可用于由 run_id 反查对应的 per-run 日志文件。**不要假设打开一个日志文件就能 grep 到当天所有请求**——报告日志按 run 分散在各 per-run 文件中。
 - 超长日志会自动截断，仅保留头尾关键片段；少数关键结果日志会显式跳过截断，便于排查引用、报告等完整输出。
 - 日志自动清理：`common/` 和 `metrics/` 下超过 `log_retention_days`（默认 30 天）的日期文件夹会在 `LogManager.init` / `new_run` 时自动删除，可通过 `LogManager.init(log_retention_days=...)` 参数调整，设为 0 则不清理。
 
@@ -99,7 +108,9 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 - 随后通常还有框架层的 **`ALL END`** 结束标记。
 - `response_content` 有实质内容（Markdown 报告正文）。
 
-**② 看日志（先查 `common_warning_*.log`）**
+**② 看日志（先查 per-run 的 `common_warning_*.log`）**
+
+> 注意：以下排查使用的是 **报告级日志**（`common_*.log` / `common_warning_*.log`），即每次报告运行生成的 per-run 文件，而非系统级日志（`common_system_*.log`）。
 
 1. 用当次任务的 **`conversation_id`**（即配置中的 `thread_id`）检索日志，缩小范围。
 2. `common_warning_*.log` 中**没有**阻断主流程的 `ERROR`（少量 `WARN` 如模型重试、单条搜索无结果，通常不影响最终成稿）。若日志中出现 `ERROR`，最终仍以 `final_result.exception_info` 判定是否失败，再用日志辅助定位原因。

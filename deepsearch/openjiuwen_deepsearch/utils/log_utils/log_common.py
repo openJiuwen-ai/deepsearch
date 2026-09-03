@@ -82,6 +82,20 @@ class RunIdFilter(logging.Filter):
         return run_id_ctx.get() == self.run_id
 
 
+class ExcludeActiveRunFilter(logging.Filter):
+    """排除 per-run 活跃期间的日志记录，使 init-time handler 不重复写入 per-run 日志。
+
+    当 run_id_ctx 非空时（有活跃的 per-run），拒绝记录，由 per-run handler 负责捕获；
+    当 run_id_ctx 为空时（无 per-run），允许记录，用于捕获服务级系统日志。
+
+    注意: 依赖 run_id_ctx 的默认值为空值 (ContextVar(default=""))，
+    使用 not 判断以兼容未来默认值调整为 None 的场景。
+    """
+
+    def filter(self, record):
+        return not run_id_ctx.get()
+
+
 class TruncatingFormatter(logging.Formatter):
     """Format log records and truncate long messages unless explicitly disabled."""
 
@@ -202,8 +216,16 @@ def _create_common_file_handlers(
     """
     formatter = TruncatingFormatter(_COMMON_FORMATTER_FMT)
 
+    # init-time 用 common_system_ 前缀, per-run 用 common_ 前缀, 便于区分系统级日志和报告级日志
+    if run_id is None:
+        common_prefix = "common_system"
+        warning_prefix = "common_system_warning"
+    else:
+        common_prefix = "common"
+        warning_prefix = "common_warning"
+
     common_log_dir = log_dir_path / "common" / run_prefix.date_str
-    common_log_path = common_log_dir / f"common_{run_prefix.run_prefix}.log"
+    common_log_path = common_log_dir / f"{common_prefix}_{run_prefix.run_prefix}.log"
     common_handler = SafeRotatingFileHandler(
         filename=str(common_log_path),
         mode='a',
@@ -215,10 +237,13 @@ def _create_common_file_handlers(
     common_handler.setFormatter(formatter)
     if run_id is not None:
         common_handler.addFilter(RunIdFilter(run_id))
+    else:
+        # init-time handler: 排除 per-run 活跃期间的日志，避免与 per-run 文件重复
+        common_handler.addFilter(ExcludeActiveRunFilter())
     common_handler.addFilter(SessionFilter())
     common_handler.addFilter(ProjectLoggerFilter())
 
-    warning_log_path = common_log_dir / f"common_warning_{run_prefix.run_prefix}.log"
+    warning_log_path = common_log_dir / f"{warning_prefix}_{run_prefix.run_prefix}.log"
     warning_handler = SafeRotatingFileHandler(
         filename=str(warning_log_path),
         mode='a',
@@ -231,6 +256,9 @@ def _create_common_file_handlers(
     warning_handler.setFormatter(formatter)
     if run_id is not None:
         warning_handler.addFilter(RunIdFilter(run_id))
+    else:
+        # init-time handler: 排除 per-run 活跃期间的日志，避免与 per-run 文件重复
+        warning_handler.addFilter(ExcludeActiveRunFilter())
     warning_handler.addFilter(SessionFilter())
     warning_handler.addFilter(ProjectLoggerFilter())
 
@@ -273,6 +301,9 @@ def setup_common_logger(
 
     if log_dir is None:
         handler = logging.StreamHandler()
+        handler.setFormatter(TruncatingFormatter(_COMMON_FORMATTER_FMT))
+        handler.addFilter(SessionFilter())
+        handler.addFilter(ProjectLoggerFilter())
     else:
         log_dir_path = Path(log_dir)
         common_handler, warning_handler = _create_common_file_handlers(
@@ -284,9 +315,6 @@ def setup_common_logger(
         root_logger.addHandler(warning_handler)
         handler = common_handler
 
-    handler.setFormatter(TruncatingFormatter(_COMMON_FORMATTER_FMT))
-    handler.addFilter(SessionFilter())
-    handler.addFilter(ProjectLoggerFilter())
     root_logger.addHandler(handler)
 
     return root_logger

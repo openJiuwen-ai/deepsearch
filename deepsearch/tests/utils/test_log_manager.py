@@ -13,6 +13,7 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.log_utils.log_handlers import SafeRotatingFileHandler
 from openjiuwen_deepsearch.utils.log_utils.log_common import (
     DEFAULT_MAX_LOG_MESSAGE_LENGTH,
+    ExcludeActiveRunFilter,
     RotationConfig,
     run_id_ctx,
     session_id_ctx,
@@ -63,10 +64,10 @@ def _flush_root_handlers():
 
 
 def _list_common_logs(common_dir: Path):
-    """列出 common 日志文件 (排除 common_warning_*.log)"""
+    """列出 common 日志文件 (排除 warning 文件)"""
     return [
         p for p in common_dir.rglob("common_*.log")
-        if not p.name.startswith("common_warning_")
+        if "_warning_" not in p.name
     ]
 
 
@@ -383,6 +384,26 @@ def test_representative_key_log_can_bypass_truncation(clean_logs):
     assert full_result_text in common_log_text
 
 
+def test_exclude_active_run_filter():
+    """测试 ExcludeActiveRunFilter 在 run_id_ctx 空/非空时的返回值"""
+    f = ExcludeActiveRunFilter()
+    record = logging.LogRecord("test", logging.INFO, "test.py", 1, "msg", None, None)
+
+    # run_id_ctx 为空 (默认) → 允许记录
+    assert run_id_ctx.get() == ""
+    assert f.filter(record) is True
+
+    # run_id_ctx 非空 (per-run 活跃) → 拒绝记录
+    token = run_id_ctx.set("test-run-id")
+    try:
+        assert f.filter(record) is False
+    finally:
+        run_id_ctx.reset(token)
+
+    # 重置后再次允许
+    assert f.filter(record) is True
+
+
 def test_common_log_uses_date_folder_and_per_run_filename(clean_logs):
     """测试 common 日志文件路径包含日期文件夹和 per-run 文件名"""
     LogManager.init(log_dir=str(clean_logs), level="DEBUG", is_sensitive=False)
@@ -398,21 +419,21 @@ def test_common_log_uses_date_folder_and_per_run_filename(clean_logs):
     date_dirs = [d for d in common_dir.iterdir() if d.is_dir() and len(d.name) == 8 and d.name.isdigit()]
     assert len(date_dirs) == 1, f"Expected 1 date folder, got {date_dirs}"
 
-    # 查找 per-run 日志文件 (排除 common_warning_*.log)
+    # 查找 init-time 日志文件 (排除 warning 文件)
     log_files = _list_common_logs(date_dirs[0])
     assert len(log_files) == 1, f"Expected 1 common log file, got {log_files}"
     filename = log_files[0].name
-    # 验证文件名格式: common_YYYYMMDD_HHMMSS_hash.log
-    assert filename.startswith("common_")
+    # 验证文件名格式: common_system_YYYYMMDD_HHMMSS_hash.log (init-time, 无 per-run)
+    assert filename.startswith("common_system_")
     assert filename.endswith(".log")
-    parts = filename[len("common_"):-len(".log")].split("_")
+    parts = filename[len("common_system_"):-len(".log")].split("_")
     assert len(parts) == 3, f"Expected 3 parts (date_time_hash), got {parts}"
     assert len(parts[0]) == 8  # YYYYMMDD
     assert len(parts[1]) == 6  # HHMMSS
     assert len(parts[2]) == 8  # hash
 
-    # 验证 warning 日志文件也在同一日期文件夹
-    warning_files = list(date_dirs[0].glob("common_warning_*.log"))
+    # 验证 warning 日志文件也在同一日期文件夹 (init-time: common_system_warning_*.log)
+    warning_files = list(date_dirs[0].glob("common_*warning_*.log"))
     assert len(warning_files) == 1, f"Expected 1 warning log file, got {warning_files}"
 
 
@@ -446,7 +467,7 @@ def test_new_run_creates_new_log_file(clean_logs):
     # 找到包含各自消息的文件,验证隔离性
     first_files = [f for f in all_logs if "first run message" in f.read_text(encoding="utf-8")]
     second_files = [f for f in all_logs if "second run message" in f.read_text(encoding="utf-8")]
-    # init 文件包含两条 (它捕获所有日志),per-run 文件各含一条
+    # per-run 文件各含一条消息 (init 文件不再包含 per-run 日志)
     assert len(first_files) >= 1
     assert len(second_files) >= 1
 
@@ -542,9 +563,9 @@ def test_server_mode_sequential_creates_per_run_files(clean_logs):
     all_logs = _list_common_logs(clean_logs / "common")
     assert len(all_logs) == 3, f"Expected 3 log files (1 init + 2 per-run), got {len(all_logs)}"
 
-    # init 文件包含两条日志
+    # init 文件不包含 per-run 日志 (ExcludeActiveRunFilter 在 per-run 期间排除了报告日志)
     init_files = [f for f in all_logs if "request 1 log" in f.read_text(encoding="utf-8") and "request 2 log" in f.read_text(encoding="utf-8")]
-    assert len(init_files) == 1, "init file should contain both requests' logs"
+    assert len(init_files) == 0, "init file should not contain per-run logs"
 
     # per-run 文件各自隔离
     r1_only = [f for f in all_logs if "request 1 log" in f.read_text(encoding="utf-8") and "request 2 log" not in f.read_text(encoding="utf-8")]
@@ -607,13 +628,13 @@ def test_server_mode_concurrent_per_run_isolation(clean_logs):
     ]
     assert len(r2_isolated) == 1, "Should have exactly 1 file with only req2 logs"
 
-    # init 文件包含两个请求的日志
+    # init 文件不包含 per-run 日志 (ExcludeActiveRunFilter 在 per-run 期间排除了报告日志)
     init_file = [
         f for f in all_logs
         if "req1 start" in f.read_text(encoding="utf-8")
         and "req2 start" in f.read_text(encoding="utf-8")
     ]
-    assert len(init_file) == 1, "init file should contain both requests' logs"
+    assert len(init_file) == 0, "init file should not contain per-run logs"
 
     # per-run 文件应注入各自的 session_id (SessionFilter)
     r1_session = [
@@ -631,7 +652,7 @@ def test_server_mode_concurrent_per_run_isolation(clean_logs):
     assert len(r2_session) == 1, "Should have exactly 1 file with req2 session_id only"
 
     # per-run warning 文件同样按 run_id 隔离
-    warning_logs = list((clean_logs / "common").rglob("common_warning_*.log"))
+    warning_logs = list((clean_logs / "common").rglob("common_*warning_*.log"))
     w1_isolated = [
         f for f in warning_logs
         if "req1 warn" in f.read_text(encoding="utf-8")
@@ -651,12 +672,12 @@ def test_server_mode_concurrent_per_run_isolation(clean_logs):
         if "req1 warn" in f.read_text(encoding="utf-8")
         and "req2 warn" in f.read_text(encoding="utf-8")
     ]
-    assert len(w_init) == 1, "init warning file should contain both requests' warns"
+    assert len(w_init) == 0, "init warning file should not contain per-run warnings"
 
     # per-run metrics 文件同样按 run_id 隔离
     metrics_logs = list((clean_logs / "metrics").rglob("metrics_*.log"))
-    # 应有 3 个 metrics 文件: 1 init + 2 per-run
-    assert len(metrics_logs) == 3, f"Expected 3 metrics files, got {len(metrics_logs)}"
+    # 应有 2 个 metrics 文件: 2 per-run (init metrics 文件因 ExcludeActiveRunFilter 不包含 per-run 打点日志, 且 delay=True 不创建空文件)
+    assert len(metrics_logs) == 2, f"Expected 2 metrics files, got {len(metrics_logs)}"
     m1_isolated = [
         f for f in metrics_logs
         if "req1 metric" in f.read_text(encoding="utf-8")
@@ -674,7 +695,7 @@ def test_server_mode_concurrent_per_run_isolation(clean_logs):
         if "req1 metric" in f.read_text(encoding="utf-8")
         and "req2 metric" in f.read_text(encoding="utf-8")
     ]
-    assert len(m_init) == 1, "init metrics file should contain both requests' metrics"
+    assert len(m_init) == 0, "init metrics file should not contain per-run metrics"
 
 
 def test_sdk_concurrent_per_run_isolation(clean_logs):
@@ -731,13 +752,13 @@ def test_sdk_concurrent_per_run_isolation(clean_logs):
     ]
     assert len(b_isolated) == 1, "Should have exactly 1 file with only taskB logs"
 
-    # init 文件应包含两个任务的日志
+    # init 文件不包含 per-run 日志 (ExcludeActiveRunFilter 在 per-run 期间排除了报告日志)
     init_file = [
         f for f in all_logs
         if "taskA start" in f.read_text(encoding="utf-8")
         and "taskB start" in f.read_text(encoding="utf-8")
     ]
-    assert len(init_file) == 1, "init file should contain both tasks' logs"
+    assert len(init_file) == 0, "init file should not contain per-run logs"
 
     # per-run 文件应注入各自的 session_id (SessionFilter)
     a_session = [
@@ -755,7 +776,7 @@ def test_sdk_concurrent_per_run_isolation(clean_logs):
     assert len(b_session) == 1, "Should have exactly 1 file with taskB session_id only"
 
     # per-run warning 文件同样按 run_id 隔离
-    warning_logs = list((clean_logs / "common").rglob("common_warning_*.log"))
+    warning_logs = list((clean_logs / "common").rglob("common_*warning_*.log"))
     wa_isolated = [
         f for f in warning_logs
         if "taskA warn" in f.read_text(encoding="utf-8")
@@ -775,12 +796,12 @@ def test_sdk_concurrent_per_run_isolation(clean_logs):
         if "taskA warn" in f.read_text(encoding="utf-8")
         and "taskB warn" in f.read_text(encoding="utf-8")
     ]
-    assert len(w_init) == 1, "init warning file should contain both tasks' warns"
+    assert len(w_init) == 0, "init warning file should not contain per-run warnings"
 
     # per-run metrics 文件同样按 run_id 隔离
     metrics_logs = list((clean_logs / "metrics").rglob("metrics_*.log"))
-    # 应有 3 个 metrics 文件: 1 init + 2 per-run
-    assert len(metrics_logs) == 3, f"Expected 3 metrics files, got {len(metrics_logs)}"
+    # 应有 2 个 metrics 文件: 2 per-run (init metrics 文件因 ExcludeActiveRunFilter 不包含 per-run 打点日志, 且 delay=True 不创建空文件)
+    assert len(metrics_logs) == 2, f"Expected 2 metrics files, got {len(metrics_logs)}"
     ma_isolated = [
         f for f in metrics_logs
         if "taskA metric" in f.read_text(encoding="utf-8")
@@ -798,7 +819,7 @@ def test_sdk_concurrent_per_run_isolation(clean_logs):
         if "taskA metric" in f.read_text(encoding="utf-8")
         and "taskB metric" in f.read_text(encoding="utf-8")
     ]
-    assert len(m_init) == 1, "init metrics file should contain both tasks' metrics"
+    assert len(m_init) == 0, "init metrics file should not contain per-run metrics"
 
 
 def test_cleanup_old_logs_removes_expired_dirs(clean_logs):
