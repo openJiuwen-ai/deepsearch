@@ -17,6 +17,10 @@ MAX_CONCURRENT_BATCHES = 5
 EXTRACT_BATCH_SIZE = 5  # documents per batch for extractive summarization + scoring
 MAX_EXTRACT_DOC_CHARS = 15000  # max content chars per document sent to LLM
 
+# 可视化内容生成的最大并发LLM调用数。
+# 限制同时发起的数据提取/校验请求，避免触发模型API的TPM（Tokens Per Minute）限制。
+MAX_CONCURRENT_VISUALIZATION_TASKS = 5
+
 # ── Regex patterns ─────────────────────────────────────────────────────────
 
 LEADING_TITLE_NUMBER_PATTERN = re.compile(
