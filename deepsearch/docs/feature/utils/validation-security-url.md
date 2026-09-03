@@ -2,7 +2,7 @@
 
 ## 维护范围
 
-本文档覆盖字段校验、入口参数校验、secret 清零、安全目录创建、URL 规范化、域名提取、runtime API/embedding URL SSRF 防护。
+本文档覆盖字段校验、入口参数校验、secret 清零、安全目录创建、URL 规范化、域名提取、runtime API/embedding/搜索服务 URL SSRF 防护。
 
 不覆盖 server API schema 的 Pydantic 模型；该部分属于 `server/` 或 `config/` owner。
 
@@ -18,7 +18,7 @@
 - `interrupt_feedback` 只允许空值、`accepted`、`cancel`、`revise_outline`、`revise_comment`。
 - `zero_secret` 会原地清零 bytearray。
 - 安全目录必须位于指定 safe base 下，并设置 `0o750` 权限。
-- runtime API 和 embedding 服务 URL 默认禁止 localhost、私有地址、保留地址和非 http/https scheme。
+- runtime API、embedding 服务和用户配置的搜索服务 URL（`search_url`）默认禁止 localhost、私有地址、保留地址、非公网地址（含 CGNAT 段 100.64.0.0/10）和非 http/https scheme。
 
 ## 关键代码路径
 
@@ -47,6 +47,7 @@
 - `MAX_URL_LENGTH` 控制 URL 路径处理最大长度。
 - `RUNTIME_API_ALLOW_UNSAFE_URL=1|true|yes` 可放宽 runtime API URL 校验。
 - `EMBEDDING_SERVICE_ALLOW_UNSAFE_URL=1|true|yes` 可放宽 embedding 服务 URL 校验。
+- `SEARCH_SERVICE_ALLOW_UNSAFE_URL=1|true|yes` 可放宽用户配置搜索服务 URL（`search_url`）校验，供内网自托管搜索端点使用。
 - `EMBEDDING_SSL_VERIFY` 和 `EMBEDDING_SSL_CERT` 控制 embedding 请求证书校验参数。
 
 ## 边界与错误处理
@@ -54,6 +55,7 @@
 - 缺字段、空字段、类型错误、长度越界分别使用对应 `StatusCode`。
 - URL host 解析失败会按请求参数错误抛出。
 - DNS 返回任一非公网地址时，整个 URL 判定为不安全。
+- 已知限制：校验只覆盖首次请求目标；HTTP 客户端跟随 302 重定向或校验后 DNS 解析结果变化（DNS rebinding）可绕过地址校验，属既有共性缺口。
 - `normalize_url` 在解析失败时返回原始 URL，不把规范化失败升级为异常。
 - `ensure_safe_directory` 会创建目录并强制 chmod，避免 umask 改变权限。
 

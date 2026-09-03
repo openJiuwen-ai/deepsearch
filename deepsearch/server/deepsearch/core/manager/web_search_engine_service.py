@@ -3,6 +3,7 @@
 import logging
 import time
 
+from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import search_engine_mapping
 from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 from server.core.manager.model_manager.utils import SecurityUtils
@@ -41,9 +42,7 @@ class WebSearchEngineService:
             return
         try:
             validate_search_service_url(url)
-        except ValidationError:
-            raise
-        except Exception as exc:
+        except CustomValueException as exc:
             raise ValidationError(f"Invalid search_url: {exc}") from exc
 
     @staticmethod

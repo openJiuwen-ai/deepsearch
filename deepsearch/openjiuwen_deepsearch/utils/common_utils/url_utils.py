@@ -339,6 +339,22 @@ def _unsafe_http_service_url_exception_detail(
     return f"{service_label} is not allowed ({reason}): {url!r}"
 
 
+def _is_non_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True unless the address is globally routable.
+
+    ``is_global`` covers shared/CGNAT space (100.64.0.0/10, which hosts the
+    Alibaba Cloud metadata endpoint 100.100.100.200) that ``is_private`` and
+    ``is_reserved`` both miss.
+    """
+    return any((
+        not ip.is_global,
+        ip.is_loopback,
+        ip.is_link_local,
+        ip.is_multicast,
+        ip.is_unspecified,
+    ))
+
+
 def _validate_http_url_for_ssrf(
     url: str, *, relaxed: bool, service_label: str
 ) -> None:
@@ -414,14 +430,7 @@ def _validate_http_url_for_ssrf(
                     ),
                 ) from error
 
-            is_non_public_ip = any((
-                resolved_ip.is_private,
-                resolved_ip.is_loopback,
-                resolved_ip.is_link_local,
-                resolved_ip.is_multicast,
-                resolved_ip.is_reserved,
-                resolved_ip.is_unspecified,
-            ))
+            is_non_public_ip = _is_non_public_ip(resolved_ip)
             if is_non_public_ip:
                 raise CustomValueException(
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
@@ -433,14 +442,7 @@ def _validate_http_url_for_ssrf(
                 ) from host_parse_error
         return
 
-    is_non_public_ip = any((
-        ip.is_private,
-        ip.is_loopback,
-        ip.is_link_local,
-        ip.is_multicast,
-        ip.is_reserved,
-        ip.is_unspecified,
-    ))
+    is_non_public_ip = _is_non_public_ip(ip)
     if is_non_public_ip:
         raise CustomValueException(
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,

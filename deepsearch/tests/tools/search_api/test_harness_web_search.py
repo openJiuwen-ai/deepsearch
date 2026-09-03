@@ -1,10 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
-import os
-
-os.environ["SEARCH_SERVICE_ALLOW_UNSAFE_URL"] = "1"
-
 from contextlib import contextmanager
 from unittest.mock import ANY, AsyncMock, patch
 

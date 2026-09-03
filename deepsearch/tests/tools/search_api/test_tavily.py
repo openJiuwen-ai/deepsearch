@@ -1,7 +1,3 @@
-import os
-
-os.environ["SEARCH_SERVICE_ALLOW_UNSAFE_URL"] = "1"
-
 import json
 from unittest.mock import Mock, patch, AsyncMock
 
