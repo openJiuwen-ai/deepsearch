@@ -1,6 +1,6 @@
 """Brief HTML ECharts 配置与注入测试。"""
 
-import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -12,12 +12,9 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_charts import (
     inject_echarts_library,
     validate_chart_option,
 )
-from openjiuwen_deepsearch.algorithm.brief_report.html_content import preprocess_markdown
 from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
-    _assemble_html_report,
     validate_html_report,
 )
-from openjiuwen_deepsearch.algorithm.brief_report.html_safety import sanitize_html
 
 
 _VALID_HTML = (
@@ -268,6 +265,19 @@ def test_inject_echarts_library_inlines_verified_vendor_into_head():
     assert head.count("<script>") == 1
     assert len(head) > 100_000  # echarts.min.js 约 1MB
     assert "echarts" in head[:10_000].lower() or len(head) > 100_000
+
+
+def test_load_echarts_source_verifies_canonical_lf_bytes_on_windows_checkout(tmp_path, monkeypatch):
+    """Git 把 vendor 换成 CRLF 时仍应校验原始 LF 内容，而不是误报篡改。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import html_charts as module
+
+    canonical = b"first line\nsecond line\n"
+    asset = tmp_path / "echarts.min.js"
+    asset.write_bytes(canonical.replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(module, "_ECHARTS_ASSET_PATH", asset)
+    monkeypatch.setattr(module, "ECHARTS_SHA256", hashlib.sha256(canonical).hexdigest())
+
+    assert module._load_echarts_source() == canonical.decode("utf-8")
 
 
 def test_inject_echarts_library_rejects_missing_or_corrupted_vendor(monkeypatch):
