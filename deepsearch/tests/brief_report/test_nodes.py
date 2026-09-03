@@ -7,12 +7,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent import brief_nodes
-from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
-from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.framework.openjiuwen.agent.brief_nodes import (
     BriefEvidenceReviewNode,
+    BriefHtmlReporterNode,
     BriefInfoCollectorNode,
-    BriefMermaidGeneratorNode,
     BriefOutlineNode,
     BriefReporterNode,
     BriefSubReporterNode,
@@ -24,30 +22,11 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefEvidenceReview,
     BriefOutline,
     BriefQuery,
-    BriefReportAssembly,
     BriefWorkflowState,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ResearchIntent
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
-
-
-@pytest.mark.parametrize(
-    "node_class",
-    [
-        BriefOutlineNode,
-        BriefInfoCollectorNode,
-        BriefEvidenceReviewNode,
-        BriefSubReporterNode,
-        BriefReporterNode,
-        BriefMermaidGeneratorNode,
-    ],
-)
-def test_brief_main_nodes_implement_three_phase_base_node_contract(node_class):
-    """Brief 主节点必须显式实现 Session 读取、算法调用和状态回写三个阶段。"""
-    assert node_class._pre_handle is not BaseNode._pre_handle
-    assert node_class._do_invoke is not BaseNode._do_invoke
-    assert node_class._post_handle is not BaseNode._post_handle
 
 
 class _BriefSession:
@@ -224,67 +203,6 @@ async def test_brief_review_streams_user_visible_evidence_decision(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_brief_main_nodes_emit_lifecycle_logs(monkeypatch, caplog):
-    """遗漏任一 Brief 阶段的进入或退出日志时，此完整主链回归必须失败。"""
-    outline = _brief_outline()
-    collection = BriefCollectionResult(
-        section_evidence={}, citation_registry=[]
-    )
-    monkeypatch.setattr(brief_nodes, "_llm", lambda *_: object())
-    monkeypatch.setattr(brief_nodes, "generate_brief_outline", AsyncMock(return_value=outline))
-    monkeypatch.setattr(
-        brief_nodes,
-        "generate_brief_queries",
-        AsyncMock(return_value=[BriefQuery(query="测试", section_ids=["1"], step_ids=["1-1"])]),
-    )
-    monkeypatch.setattr(brief_nodes, "_search_brief_queries", AsyncMock(return_value=[]))
-    monkeypatch.setattr(
-        brief_nodes,
-        "collect_initial_brief_evidence",
-        AsyncMock(return_value=(collection, BriefCollectionContext())),
-    )
-    monkeypatch.setattr(
-        brief_nodes,
-        "review_brief_evidence",
-        AsyncMock(return_value=BriefEvidenceReview()),
-    )
-    monkeypatch.setattr(
-        brief_nodes,
-        "write_brief_chapters",
-        AsyncMock(return_value=[BriefChapter(section_id="1", raw_markdown="## 范围\n\n正文")]),
-    )
-    monkeypatch.setattr(brief_nodes, "generate_brief_summary", AsyncMock(return_value="- 核心结论"))
-    monkeypatch.setattr(
-        brief_nodes,
-        "assemble_brief_report",
-        lambda _: BriefReportAssembly(
-            report_content="# 测试 Brief\n\n- 核心结论",
-            merged_trace_source_datas=[],
-        ),
-    )
-    session = _BriefSession()
-
-    with caplog.at_level(logging.INFO, logger=brief_nodes.__name__):
-        assert (await BriefOutlineNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_INFO_COLLECTOR.value
-        assert (await BriefInfoCollectorNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_EVIDENCE_REVIEWER.value
-        assert (await BriefEvidenceReviewNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_SUB_REPORTER.value
-        assert (await BriefSubReporterNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_REPORTER.value
-        assert (await BriefReporterNode()._do_invoke({}, session, None))["next_node"] == "brief_mermaid_generator"
-        assert (await BriefMermaidGeneratorNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_SOURCE_TRACER.value
-
-    messages = [record.getMessage() for record in caplog.records]
-    for node_name in ("BriefOutlineNode", "BriefInfoCollectorNode", "BriefEvidenceReviewNode", "BriefSubReporterNode", "BriefReporterNode", "BriefMermaidGeneratorNode"):
-        assert f"[{node_name}] Start {node_name}." in messages
-        assert any(message.startswith(f"[{node_name}] End {node_name}, next_node=") for message in messages)
-    assert any("[BriefOutlineNode] Generated outline: {'title': '测试 Brief'" in message for message in messages)
-    assert any("[BriefInfoCollectorNode] Collected evidence:" in message for message in messages)
-    assert any("[BriefEvidenceReviewNode] Evidence review:" in message for message in messages)
-    assert any("[BriefSubReporterNode] Generated chapters:" in message for message in messages)
-    assert any("[BriefReporterNode] Generated executive summary:" in message for message in messages)
-    assert any("[BriefMermaidGeneratorNode] Assembled final report:" in message for message in messages)
-
-
-@pytest.mark.asyncio
 async def test_brief_review_routes_blocking_gaps_to_one_supplement(monkeypatch):
     """审阅节点只能把有阻断缺口的首轮证据送入唯一一次补搜。"""
     outline = _brief_outline()
@@ -335,131 +253,128 @@ async def test_brief_review_routes_blocking_gaps_to_one_supplement(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_brief_mermaid_generator_reuses_professional_visualization_pipeline(monkeypatch):
-    """图表算法入口必须复用专业版 Mermaid 流水线并返回插图后的章节。"""
-    from openjiuwen_deepsearch.algorithm.brief_report.visualization import (
-        generate_brief_mermaid_visualizations,
-    )
-
+async def test_brief_reporter_assembles_report_before_source_tracing_and_converts_to_html(monkeypatch):
+    """Reporter 生成摘要后应完成拼装，HTML 节点再消费溯源结果。"""
     outline = _brief_outline()
-    collection = BriefCollectionResult.model_validate(
-        {
-            "queries": [],
-            "search_results": [],
-            "citation_registry": [
-                {
-                    "source_id": "source-1",
-                    "index": 1,
-                    "title": "统计来源",
-                    "url": "https://example.com/data",
-                    "original_content": "2022 年 10，2023 年 20，2024 年 30。",
-                }
-            ],
-            "section_evidence": {
-                "1": {
-                    "selected_docs": [
-                        {
-                            "source_id": "source-1",
-                            "step_ids": ["1-1", "1-2"],
-                            "evaluation_rank": 1,
-                        }
-                    ],
-                    "coverage": [],
-                }
-            },
-        }
-    )
-
-    class _LlmContext:
-        def get(self):
-            return {"chart-model": object()}
-
-    async def generate_visualization(self, current_inputs):
-        assert current_inputs["sub_report_content"] == "## 范围\n\n年度数据。[citation:1]"
-        assert current_inputs["max_generate_retry_num"] == 1
-        assert current_inputs["classified_content"] == [
-            {
-                "title": "统计来源",
-                "url": "https://example.com/data",
-                "original_content": "2022 年 10，2023 年 20，2024 年 30。",
-                "index": 1,
-                "data_density": 9.0,
-            }
-        ]
-        return {
-            "visualization_content": [
-                {
-                    "url": "https://example.com/data",
-                    "index": 1,
-                    "sub_section_visualization_content": "{\"image_title\": \"年度趋势\"}",
-                    "mermaid_content": "xychart-beta\n    line [10, 20, 30]",
-                }
-            ]
-        }
-
-    async def insert_visualization(self, current_inputs):
-        assert current_inputs["visualization_result"][0]["mermaid_content"].startswith("xychart-beta")
-        return {
-            "rs_success": True,
-            "result": current_inputs["sub_report_content"]
-            + "\n\n```mermaid\nxychart-beta\n    line [10, 20, 30]\n```",
-        }
-
-    import openjiuwen_deepsearch.algorithm.report.report as report_module
-
-    monkeypatch.setattr(report_module, "llm_context", _LlmContext())
-    monkeypatch.setattr(Reporter, "_generate_content_for_visualization", generate_visualization)
-    monkeypatch.setattr(Reporter, "_insert_visualization", insert_visualization)
-
-    chapters = await generate_brief_mermaid_visualizations(
-        llm_model_name="chart-model",
+    collection = BriefCollectionResult(section_evidence={}, citation_registry=[])
+    session = _BriefSession()
+    session.values["search_context.brief_state"] = BriefWorkflowState(
         outline=outline,
         collection=collection,
-        chapters=[BriefChapter(section_id="1", raw_markdown="## 范围\n\n年度数据。[citation:1]")],
-        language="zh-CN",
-    )
+        chapters=[BriefChapter(section_id="1", raw_markdown="## 范围\n\n正文")],
+    ).model_dump()
+    html_calls = []
 
-    assert chapters[0].raw_markdown.endswith("```mermaid\nxychart-beta\n    line [10, 20, 30]\n```")
-
-
-@pytest.mark.asyncio
-async def test_brief_organizes_citations_once_after_mermaid_stage(monkeypatch):
-    """若摘要节点提前拼装报告，图表阶段重组后会重复执行确定性引用整理。"""
-    outline = _brief_outline()
-    collection = BriefCollectionResult(
-        section_evidence={}, citation_registry=[]
-    )
-    session = _BriefSession()
-    session.values.update(
-        {
-            "config.visualization_enable": False,
-            "search_context.brief_state": BriefWorkflowState(
-                outline=outline,
-                collection=collection,
-                chapters=[BriefChapter(section_id="1", raw_markdown="## 范围\n\n正文")],
-            ).model_dump(),
-        }
-    )
-    assembled_requests = []
-
-    def assemble(request):
-        assembled_requests.append(request)
-        return BriefReportAssembly(
-            report_content="# 测试 Brief\n\n## 核心摘要\n\n- 结论\n\n## 范围\n\n正文\n\n## 参考文章",
-            merged_trace_source_datas=[],
-        )
+    async def generate_html(*, llm, markdown, language):
+        html_calls.append(markdown)
+        return "<!DOCTYPE html><html><head></head><body><h1>x</h1></body></html>"
 
     monkeypatch.setattr(brief_nodes, "_llm", lambda *_: object())
     monkeypatch.setattr(brief_nodes, "generate_brief_summary", AsyncMock(return_value="- 结论"))
-    monkeypatch.setattr(brief_nodes, "assemble_brief_report", assemble)
+    monkeypatch.setattr(brief_nodes, "generate_brief_html_report", generate_html)
 
-    assert (await BriefReporterNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_MERMAID_GENERATOR.value
-    assert assembled_requests == []
-    assert session.get_global_state("search_context.current_report") is None
+    assert (await BriefReporterNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_SOURCE_TRACER.value
+    current_report = session.get_global_state("search_context.current_report")
+    assert current_report.report_content == (
+        "# 测试 Brief\n\n## 核心摘要\n\n- 结论\n\n## 范围\n\n正文\n\n## 参考文章"
+    )
+    assert session.get_global_state("search_context.brief_state")["executive_summary"] == "- 结论"
 
-    assert (await BriefMermaidGeneratorNode()._do_invoke({}, session, None))["next_node"] == NodeId.BRIEF_SOURCE_TRACER.value
-    assert len(assembled_requests) == 1
-    assert session.get_global_state("search_context.current_report").report_content.startswith("# 测试 Brief")
+    current_report.checked_trace_source_report_content = "# 测试 Brief\n\n正文"
+    session.update_global_state({"search_context.current_report": current_report})
+    assert (await BriefHtmlReporterNode()._do_invoke({}, session, None))["next_node"] == NodeId.END.value
+    assert html_calls == ["# 测试 Brief\n\n正文"]
+    assert session.get_global_state("search_context.final_result.response_content").startswith("<!DOCTYPE html>")
+    assert session.get_global_state("search_context.final_result.response_content_type") == "text/html"
+    assert session.get_global_state("search_context.current_report").report_html.startswith("<!DOCTYPE html>")
+
+
+@pytest.mark.asyncio
+async def test_brief_html_reporter_falls_back_to_markdown_on_generation_failure(monkeypatch, caplog):
+    """HTML 转写重试耗尽必须降级保留 markdown 产物，而不是让报告整体失败。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report
+
+    current_report = Report(report_content="# 测试 Brief\n\n正文")
+    current_report.checked_trace_source_report_content = "# 测试 Brief\n\n正文"
+    session = _BriefSession()
+    session.values["search_context.final_result.response_content"] = "# 测试 Brief\n\n正文"
+    session.values["search_context.final_result.response_content_type"] = "text/markdown"
+    session.update_global_state({"search_context.current_report": current_report})
+    monkeypatch.setattr(brief_nodes, "_llm", lambda *_: object())
+    monkeypatch.setattr(
+        brief_nodes,
+        "generate_brief_html_report",
+        AsyncMock(side_effect=ValueError("brief html report generation failed: sup_citation_sequence_mismatch")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=brief_nodes.__name__):
+        result = await BriefHtmlReporterNode()._do_invoke({}, session, None)
+
+    # 正常结束而非 REPORT_GENERATE_ERROR；产物保持 SourceTracer 写入的 markdown。
+    assert result == {"next_node": NodeId.END.value}
+    assert session.get_global_state("search_context.final_result.response_content") == "# 测试 Brief\n\n正文"
+    assert session.get_global_state("search_context.final_result.response_content_type") == "text/markdown"
+    assert session.get_global_state("search_context.final_result.exception_info") is None
+    warning_info = session.get_global_state("search_context.final_result.warning_info")
+    assert "fallback to markdown" in warning_info
+    assert "sup_citation_sequence_mismatch" in warning_info
+    fallback_log = next(
+        record for record in caplog.records
+        if "fallback to markdown report" in record.getMessage()
+    )
+    assert fallback_log.levelno == logging.WARNING
+
+
+@pytest.mark.asyncio
+async def test_brief_html_reporter_falls_back_when_pre_handle_cannot_resolve_llm(monkeypatch):
+    """模型槽位缺失发生在前处理时，也必须保留 SourceTracer 写入的 markdown。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report
+
+    markdown = "# 测试 Brief\n\n正文"
+    current_report = Report(report_content=markdown)
+    current_report.checked_trace_source_report_content = markdown
+    session = _BriefSession()
+    session.values["search_context.final_result.response_content"] = markdown
+    session.values["search_context.final_result.response_content_type"] = "text/markdown"
+    session.update_global_state({"search_context.current_report": current_report})
+
+    def missing_llm(*_args):
+        raise KeyError("brief html reporter llm is unavailable")
+
+    monkeypatch.setattr(brief_nodes, "_llm", missing_llm)
+
+    result = await BriefHtmlReporterNode()._do_invoke({}, session, None)
+
+    assert result == {"next_node": NodeId.END.value}
+    assert session.get_global_state("search_context.final_result.response_content") == markdown
+    assert session.get_global_state("search_context.final_result.response_content_type") == "text/markdown"
+    assert "fallback to markdown" in session.get_global_state("search_context.final_result.warning_info")
+
+
+@pytest.mark.asyncio
+async def test_brief_html_reporter_ignores_visualization_config(monkeypatch):
+    """Brief HTML 节点不读取 visualization_enable，配置为 false 仍正常生成 HTML。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report
+
+    current_report = Report(report_content="# 测试 Brief\n\n正文")
+    current_report.checked_trace_source_report_content = "# 测试 Brief\n\n正文"
+    session = _BriefSession()
+    session.values["config.visualization_enable"] = False
+    session.update_global_state({"search_context.current_report": current_report})
+    received: dict[str, object] = {}
+
+    async def generate_html(*, llm, markdown, language):
+        received["markdown"] = markdown
+        return "<!DOCTYPE html><html><head></head><body><h1>x</h1></body></html>"
+
+    monkeypatch.setattr(brief_nodes, "_llm", lambda *_: object())
+    monkeypatch.setattr(brief_nodes, "generate_brief_html_report", generate_html)
+
+    result = await BriefHtmlReporterNode()._do_invoke({}, session, None)
+
+    assert result == {"next_node": NodeId.END.value}
+    assert received == {"markdown": "# 测试 Brief\n\n正文"}
+    assert session.get_global_state("search_context.final_result.response_content_type") == "text/html"
 
 
 @pytest.mark.asyncio

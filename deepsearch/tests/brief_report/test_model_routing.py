@@ -11,3 +11,4 @@ def test_brief_nodes_reuse_existing_model_categories():
     assert NODE_LLM_MAPPING[NodeId.BRIEF_EVIDENCE_REVIEWER.value] == "info_collecting"
     assert NODE_LLM_MAPPING[NodeId.BRIEF_SUB_REPORTER.value] == "writing_checking"
     assert NODE_LLM_MAPPING[NodeId.BRIEF_REPORTER.value] == "writing_checking"
+    assert NODE_LLM_MAPPING[NodeId.BRIEF_HTML_REPORTER.value] == "writing_checking"

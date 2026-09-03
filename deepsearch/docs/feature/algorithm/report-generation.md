@@ -4,7 +4,7 @@
 
 本文档覆盖专业版使用的 `openjiuwen_deepsearch/algorithm/report/` 下的报告生成能力，包括子报告生成、信息维度矩阵段落选择、候选文档预筛、Markdown 标题清理、表格标题归一、可视化 Mermaid 片段生成和最终报告拼接。
 
-本文档不覆盖 Brief 的大纲、证据收集、章节/摘要写作；Brief 仅复用其中的受控 Mermaid 图表能力，完整流程见 [Brief 精简版报告工作流](./brief-report.md)。本文档也不覆盖报告模板上传解析、服务端报告格式转换、全局溯源后处理和 VLM 图表文件生成。子能力细节见：
+本文档不覆盖 Brief 的大纲、证据收集、章节/摘要写作；Brief 不再复用本模块的可视化能力（其图表由自包含 HTML 报告内嵌 ECharts 承载），完整流程见 [Brief 精简版报告工作流](./brief-report.md)。本文档也不覆盖报告模板上传解析、服务端报告格式转换、全局溯源后处理和 VLM 图表文件生成。子能力细节见：
 
 - [子报告生成](./report-generation/sub-report-generation.md)
 - [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)

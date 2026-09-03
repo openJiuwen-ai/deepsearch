@@ -179,12 +179,19 @@ class Report(BaseModel):
     checked_trace_source_report_content: str = Field(default="", description="溯源校验后生成的报告文章内容")
     checked_trace_source_datas: List[Dict] = Field(default_factory=list, description="最终溯源信息")
 
+    # HTML 生成节点的输出
+    report_html: str = Field(default="", description="Brief HTML 报告内容，md 中间态保留在 report_content")
+
 
 class FinalResult(BaseModel):
     """
     最终结果模型：Workflow结束时的状态
     """
     response_content: str = Field(default="", description="响应内容")
+    response_content_type: str = Field(
+        default="text/markdown",
+        description="响应内容类型：text/markdown | text/html",
+    )
     citation_messages: dict = Field(default={}, description="引用信息")
     infer_messages: List[Dict] = Field(default_factory=list, description="溯源推理信息")
     chart_messages: List[Dict] = Field(default_factory=list, description="vlm图表生成信息")

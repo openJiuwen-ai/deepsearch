@@ -786,7 +786,9 @@ class EndNode(End):
         logger.info(f"[EndNode] Start EndNode.")
         final_result = session.get_global_state("search_context.final_result") or {}
         response_content = final_result.get("response_content", "") or ""
-        if response_content:
+        content_type = final_result.get("response_content_type", "") or ""
+        # HTML 产物的 AI 声明已由 HTML 生成节点注入，追加 md 声明会破坏文档结构。
+        if response_content and content_type != "text/html":
             final_result = dict(final_result)
             language = session.get_global_state("search_context.language")
             ai_generated_notice = (

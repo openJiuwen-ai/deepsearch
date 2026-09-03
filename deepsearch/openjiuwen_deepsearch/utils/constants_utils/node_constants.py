@@ -28,8 +28,8 @@ class NodeId(enum.Enum):
     BRIEF_EVIDENCE_REVIEWER = "brief_evidence_reviewer"
     BRIEF_SUB_REPORTER = "brief_sub_reporter"
     BRIEF_REPORTER = "brief_reporter"
-    BRIEF_MERMAID_GENERATOR = "brief_mermaid_generator"
     BRIEF_SOURCE_TRACER = "brief_source_tracer"
+    BRIEF_HTML_REPORTER = "brief_html_reporter"
 
     # 子图
     INFO_COLLECTOR = "info_collector"
@@ -94,6 +94,9 @@ class AgentLlmName(enum.Enum):
     BRIEF_EVIDENCE_REVIEWER = NodeId.BRIEF_EVIDENCE_REVIEWER.value
     BRIEF_SUB_REPORTER = NodeId.BRIEF_SUB_REPORTER.value
     BRIEF_REPORTER = NodeId.BRIEF_REPORTER.value
+    BRIEF_HTML_REPORTER = NodeId.BRIEF_HTML_REPORTER.value
+    BRIEF_HTML_REPORTER_SHELL = "brief_html_reporter_shell"
+    BRIEF_HTML_REPORTER_SECTION = "brief_html_reporter_section"
 
     REPORTER_ABSTRACT = "reporter_abstract"
     REPORTER_CONCLUSION = "reporter_conclusion"

@@ -12,6 +12,7 @@
 {
   "final_result": {
     "response_content": "# 报告标题",
+    "response_content_type": "text/markdown",
     "infer_messages": [],
     "chart_messages": [],
     "warning_info": "",
@@ -23,6 +24,7 @@
 ```
 
 - `final_result.response_content`：必填，报告 Markdown 正文。
+- `final_result.response_content_type`：可选，仅支持 `text/markdown`；省略时为兼容既有请求按 `text/markdown` 处理。显式 `text/html` 不支持导出，接口返回参数校验错误。
 - `final_result.infer_messages`：可选推理图资源。每个可导出元素包含 `id` 和 `html_base64`；正文中 `#inference:<id>` 链接会改写为 ZIP 内独立 HTML 的相对链接。
 - `final_result.chart_messages`：可选 VLM PNG 资源。每个可导出元素包含 `chart_id`、`base64` 和可选 `chart_title`；正文中 `(#insertChart:<chart_id>)` 会改写为图像引用。
 - `convert_type`：`html` 或 `docx`。
@@ -121,7 +123,7 @@ report_bundle/
 
 ## 失败与降级行为
 
-- `response_content` 为空、`final_result` 不是字典，或推理图/VLM 图 base64 非法时，接口返回既有校验错误。
+- `response_content` 为空、`response_content_type` 不是 `text/markdown`、`final_result` 不是字典，或推理图/VLM 图 base64 非法时，接口返回既有校验错误。
 - 主报告或 ZIP 生成失败时返回既有执行错误。
 - Mermaid 单图失败是局部降级，不生成 Mermaid CLI 调试文件。
 - 既有请求字段、格式枚举和 ZIP 顶层结构保持不变；响应新增样式状态字段。
