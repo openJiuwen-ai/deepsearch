@@ -410,7 +410,7 @@ def _load_echarts_source() -> str:
     """
     if not _ECHARTS_ASSET_PATH.is_file():
         raise FileNotFoundError("echarts vendor asset is missing")
-    data = _ECHARTS_ASSET_PATH.read_bytes()
+    data = _ECHARTS_ASSET_PATH.read_bytes().replace(b"\r\n", b"\n")
     if hashlib.sha256(data).hexdigest() != ECHARTS_SHA256:
         raise ValueError("echarts vendor asset sha256 mismatch")
     return data.decode("utf-8")
