@@ -36,6 +36,10 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 
 当前实现不在正文写完后再次扫描草稿正文、生成候选、重跑图表抽取或执行重复数据去重预算控制。
 
+### 并发控制
+
+可视化数据提取阶段（步骤 2）中，每个候选资料最多触发 4 次 LLM 调用（数据抽取、可溯源校验、合规校验、可选归一化），每轮最多重试 3 次。为避免同一章节内大量并发 LLM 调用超出模型 API 的 TPM（Tokens Per Minute）限制，`_generate_content_for_visualization` 使用 `asyncio.Semaphore` 限制同一 section 内的最大并发 task 数为 `MAX_CONCURRENT_VISUALIZATION_TASKS`（默认 5）。该信号量是 section 内局部信号量，不跨 section 共享。
+
 ## 关键代码路径
 
 - 报告工具：`openjiuwen_deepsearch/algorithm/report/report_utils.py`

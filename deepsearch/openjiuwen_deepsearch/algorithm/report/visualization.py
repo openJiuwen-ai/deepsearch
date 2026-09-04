@@ -8,7 +8,10 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from openjiuwen_deepsearch.algorithm.report.report_common import EFFECT_SUB_REPORT_TAG
+from openjiuwen_deepsearch.algorithm.report.report_common import (
+    EFFECT_SUB_REPORT_TAG,
+    MAX_CONCURRENT_VISUALIZATION_TASKS,
+)
 from openjiuwen_deepsearch.algorithm.report.report_utils import (
     XYChartMermaidGenerator,
     PieChartMermaidGenerator,
@@ -842,8 +845,16 @@ class VisualizationMixin:
             task = self._process_visualization_task(visualization_dict)
             tasks.append(task)
 
-        # Execute all tasks concurrently
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Execute all tasks with concurrency limit to avoid TPM rate-limit errors.
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_VISUALIZATION_TASKS)
+
+        async def _run_with_sem(task):
+            async with semaphore:
+                return await task
+
+        results = await asyncio.gather(
+            *[_run_with_sem(t) for t in tasks], return_exceptions=True
+        )
 
         # Aggregate results
         for i, res in enumerate(results):
