@@ -34,3 +34,37 @@ docker build -f docker/Dockerfile -t <image-tag> .
 For local (non-Docker) installs, start the main backend and Telemetry in separate terminals; see the local install guides.
 
 See [DeepSearch REST API (Telemetry)](../../../4.Developer%20Guide/API%20Reference/deepsearch_rest_api.md).
+
+## Docker Compose one-click deployment
+
+Besides manual `docker build` / `docker run`, use Docker Compose to bring up the multi-service stack (backend + Redis + optional MySQL/Milvus) with one command. Run the following from the `deepsearch/docker/` directory.
+
+### Minimal (default)
+
+```bash
+cd deepsearch/docker
+
+# 1. Prepare configuration (fill in LLM / search credentials)
+cp ../.env.example ./.env   # then edit .env
+
+# 2. One-click startup: redis + deepsearch
+docker compose up -d
+```
+
+The minimal stack only includes `redis` + `deepsearch`, covering DeepResearch and DeepSearch with default `sqlite` + `in_memory` settings. It maps port **8000** (main backend) and **8089** (Telemetry).
+
+### Full stack (MySQL + Milvus vector knowledge base)
+
+```bash
+cd deepsearch/docker
+docker compose -f docker-compose.full.yml up -d
+```
+
+The full stack additionally starts:
+
+- **MySQL** (metadata / sessions) + **Redis** (session state)
+- **etcd + minio + Milvus** (vector knowledge base; Milvus standalone requires etcd and minio)
+
+Each dependency ships a `healthcheck`, and `deepsearch` uses `depends_on: condition: service_healthy` so it only starts after dependencies are ready. MySQL and Milvus data persist to named volumes (`mysql-data`, `milvus-data`, etc.).
+
+> The full stack has `docker-compose.full.yml` inject environment overrides for the local defaults in `.env`: `DB_TYPE=mysql`, `DB_HOST=mysql`, `DB_PORT=3306`, `CHECKPOINTER_TYPE=redis`, `REDIS_URL=redis://redis:6379`, `INDEX_MANAGER_TYPE=milvus`, `MILVUS_HOST=milvus`. `DB_PASSWORD` doubles as the MySQL root password (default `root`; change it in production).
