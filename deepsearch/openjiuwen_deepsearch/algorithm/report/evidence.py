@@ -1170,9 +1170,9 @@ class EvidenceMixin:
 
         classified_content = fulltext_result["classified_content"]
 
-        # Part A：规则版覆盖证据（默认开，"key + coverage"双通道）。
-        # 独立开关 DS_COVERAGE_RULE_BLOCK 可单独关闭/回滚。
-        if _rule_coverage_block_enabled():
+        # Part A：规则版覆盖证据（默认开，Config 开关 coverage_rule_block_enable 统一下发，
+        # 与 visualization_enable 等报告开关同风格）。
+        if current_inputs.get("coverage_rule_block_enable", True):
             # 纯 CPU 的正则抽取流水线（最坏 ~百 ms/章节），放线程池避免
             # 阻塞事件循环；GIL 下无真并行，收益是循环恢复可调度。
             core_content_list, rule_passage_texts = await asyncio.to_thread(
@@ -1194,9 +1194,8 @@ class EvidenceMixin:
             rule_passage_texts = {}
             logger.info(
                 "[generate_sub_report] section_idx=%s rule coverage block disabled "
-                "(DS_COVERAGE_RULE_BLOCK=%s)",
+                "(coverage_rule_block_enable=False)",
                 section_idx,
-                os.environ.get("DS_COVERAGE_RULE_BLOCK", "1").strip(),
             )
         current_inputs["sub_section_core_content"] = core_content_list
 
@@ -1206,17 +1205,6 @@ class EvidenceMixin:
                 f"selected_content len: {len(classified_content)}"
             )
         return True, "", classified_content
-
-
-def _rule_coverage_block_enabled() -> bool:
-    """解析独立开关 DS_COVERAGE_RULE_BLOCK（默认开）。
-
-    标准布尔口径：`1`/`true`/`yes`/`on`（大小写与首尾空白不敏感）开启，
-    其余值（如 `0`/`false`/`off`/空串）关闭，避免用户写 `true` 被静默关闭。
-    """
-    return os.environ.get("DS_COVERAGE_RULE_BLOCK", "1").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
 
 
 def _extract_doc_coverage_passages(item: dict) -> list[str]:

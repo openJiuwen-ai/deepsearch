@@ -48,6 +48,7 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
   `===== COVERAGE PASSAGES =====` 块，追加到 `core_content_list` 末尾（key 块在前、
   coverage 块在后、不交错）。
 - 纯叙述、无事实特征的文档不产生覆盖证据；所有文档都无有效事实时不追加该块。
+- 运行开关：`Config.agent_config.coverage_rule_block_enable`（默认 `True`，经请求配置统一下发，与 `visualization_enable` 等报告开关同风格）。置 `False` 时大纲证据仅含条目摘要块，可单独回滚。
 - 覆盖证据与该文档**大纲摘要块渲染文本**重复时被剔除（方案乙口径，见下"去重基准"），
   避免 token 冗余。
 - 大纲 prompt（`sub_section_outline.md`）新增 `## Evidence Channels` 说明两路证据语义；

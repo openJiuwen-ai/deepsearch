@@ -688,6 +688,7 @@ class ReporterNode(BaseNode):
         llm_model_name = adapt_llm_model_name(session, NodeId.REPORTER.value)
 
         visualization_enable = session.get_global_state("config.visualization_enable")
+        coverage_rule_block_enable = session.get_global_state("config.coverage_rule_block_enable")
         rtp = session.get_global_state("search_context.report_type_policy") or {}
         research_intent = session.get_global_state("search_context.research_intent") or {}
         audience_role = (research_intent.get("audience_role", "") or "").strip()
@@ -704,6 +705,7 @@ class ReporterNode(BaseNode):
             user_query=session.get_global_state("search_context.original_query"),
             llm_model_name=llm_model_name,
             visualization_enable=visualization_enable,
+            coverage_rule_block_enable=coverage_rule_block_enable,
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             report_type_policy=rtp,

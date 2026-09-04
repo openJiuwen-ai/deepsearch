@@ -432,6 +432,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中按覆盖度评分在每个 rationale 下选择的 top-k 段落数量。默认值：`15`。
 - **report_max_generate_retry_num**(int, 可选)：生成内容最大重试次数。默认值：`3`。
 - **visualization_enable**(bool, 可选)：专业版报告插图可视化开关。默认值：`True`。不影响 Brief 报告的图文生成。
+- **coverage_rule_block_enable**(bool, 可选)：子报告大纲阶段规则版覆盖证据（coverage passages）开关。默认值：`True`。关闭后大纲证据仅含条目摘要块。
 
 ### 溯源节点参数
 - **source_tracer_citation_verify_max_concurrency_num**(int, 可选)：溯源校验最大并发数量。默认值：`30`。

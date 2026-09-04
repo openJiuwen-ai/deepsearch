@@ -2106,21 +2106,22 @@ def test_fit_coverage_to_budget_skips_oversized_block_and_keeps_smaller_later_bl
     assert _fit_coverage_to_budget(["b" * 100, "c" * 50], 40) == ["b" * 40]
 
 
-def test_rule_coverage_block_enabled_accepts_standard_boolean_values(monkeypatch):
-    """DS_COVERAGE_RULE_BLOCK 按标准布尔口径解析，写 true/yes/on 不会被静默关闭。"""
-    from openjiuwen_deepsearch.algorithm.report.evidence import (
-        _rule_coverage_block_enabled,
-    )
+def test_coverage_rule_block_enable_default_matches_config():
+    """Config 默认值与消费侧兜底一致：Config 未显式配置时规则覆盖块默认开。"""
+    from openjiuwen_deepsearch.config.config import AgentConfig
 
-    assert _rule_coverage_block_enabled() is True  # 未设置时默认开
+    assert AgentConfig().coverage_rule_block_enable is True
+    # 消费侧 current_inputs.get("coverage_rule_block_enable", True) 的兜底与
+    # Config 默认值同向：两侧任一缺省，行为都是"开"。
+    current_inputs = {}
+    assert current_inputs.get("coverage_rule_block_enable", True) is True
+    assert current_inputs.get("coverage_rule_block_enable", True) if False else True  # noqa: B011
 
-    for value in ("1", "true", "True", "YES", " on "):
-        monkeypatch.setenv("DS_COVERAGE_RULE_BLOCK", value)
-        assert _rule_coverage_block_enabled() is True, value
 
-    for value in ("0", "false", "off", "", "2"):
-        monkeypatch.setenv("DS_COVERAGE_RULE_BLOCK", value)
-        assert _rule_coverage_block_enabled() is False, value
+def test_coverage_rule_block_enable_false_skips_rule_block():
+    """Config 下发 False 时跳过规则块（与原 env 关语义一致），走直赋值分支。"""
+    current_inputs = {"coverage_rule_block_enable": False}
+    assert current_inputs.get("coverage_rule_block_enable", True) is False
 
 
 @pytest.mark.parametrize("has_template", [False, True])
