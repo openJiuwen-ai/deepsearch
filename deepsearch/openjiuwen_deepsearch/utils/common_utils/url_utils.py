@@ -345,14 +345,26 @@ def _is_non_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool
     ``is_global`` covers shared/CGNAT space (100.64.0.0/10, which hosts the
     Alibaba Cloud metadata endpoint 100.100.100.200) that ``is_private`` and
     ``is_reserved`` both miss.
+
+    For IPv4-mapped IPv6 addresses (e.g. ``::ffff:100.100.100.200``), Python's
+    ``is_global`` returns True even when the underlying IPv4 is non-public, so
+    we explicitly extract and check the mapped IPv4 address.
     """
-    return any((
+    # Check the IPv6 address itself first
+    if any((
         not ip.is_global,
         ip.is_loopback,
         ip.is_link_local,
         ip.is_multicast,
         ip.is_unspecified,
-    ))
+    )):
+        return True
+
+    # For IPv4-mapped IPv6, also check the underlying IPv4 address
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        return _is_non_public_ip(ip.ipv4_mapped)
+
+    return False
 
 
 def _validate_http_url_for_ssrf(
