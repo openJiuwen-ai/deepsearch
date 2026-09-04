@@ -173,7 +173,7 @@ class LogManager:
 
         cls._active_run_handlers[run_id] = handlers + metrics_handlers
         # 记录 run_id 与文件名前缀的映射,便于排障时由 run_id 反查日志文件
-        # (此时 run_id_ctx 尚未设置,仅落入 init 全量文件,不会污染 per-run 文件)
+        # (此时 run_id_ctx 尚未设置,仅落入 init 系统级文件,不会污染 per-run 文件)
         # 使用项目 logger (openjiuwen_deepsearch.*) 以通过 ProjectLoggerFilter
         logging.getLogger("openjiuwen_deepsearch.log_manager").info(
             "per-run logging started: run_id=%s, log_prefix=%s", run_id, run_prefix.run_prefix

@@ -15,10 +15,15 @@
 
 - `LogManager.init` 只初始化一次。
 - `log_dir=None` 时输出到控制台；传入目录时输出到 `common/`、`metrics/`、`interface/` 等子目录。
-- 通用日志按运行分隔: 路径为 `common/YYYYMMDD/common_YYYYMMDD_HHMMSS_hash.log`，每次调用 `LogManager.new_run()` 创建新文件。
+- 系统级日志（init-time）: 服务启动时创建，路径为 `common/YYYYMMDD/common_system_YYYYMMDD_HHMMSS_hash.log`。仅记录 per-run 未活跃期间的系统级日志（启动、关闭、请求路由等），通过 `ExcludeActiveRunFilter` 在 per-run 活跃期间自动排除报告日志，避免与 per-run 文件重复。
+- 系统级 warning 日志: `common/YYYYMMDD/common_system_warning_YYYYMMDD_HHMMSS_hash.log`，与系统级 common 日志共享 hash。
+- 报告级日志（per-run）: 每次调用 `LogManager.new_run()` 创建新文件，路径为 `common/YYYYMMDD/common_YYYYMMDD_HHMMSS_hash.log`，通过 `RunIdFilter` 按 run_id 隔离，只记录本次运行的日志。
 - warning 日志同样按运行分隔: `common/YYYYMMDD/common_warning_YYYYMMDD_HHMMSS_hash.log`，与同次运行的 common 日志共享 hash。
-- metrics 日志同样按运行分隔: `metrics/YYYYMMDD/metrics_YYYYMMDD_HHMMSS_hash.log`，与同次运行的 common 日志共享 hash；init 时创建全量文件，每次 `new_run()` 创建 per-run 文件。
-- SDK (`main.py`) 和 Server (`deepsearch_run.py` / `telemetry_event_server.py`) 每次运行都创建 per-run 文件，通过 `RunIdFilter` + contextvar 实现并发隔离。
+- 系统级 metrics 日志: `metrics/YYYYMMDD/metrics_system_YYYYMMDD_HHMMSS_hash.log`，仅记录 per-run 未活跃期间的系统级打点日志。由于打点唯一来源 `async_time_logger` 仅在 per-run 期间执行，且 handler 使用 `delay=True`，该文件在典型运行中通常不会创建；仅当存在 per-run 之外的系统级打点时才会落盘。
+- 报告级 metrics 日志: `metrics/YYYYMMDD/metrics_YYYYMMDD_HHMMSS_hash.log`，与同次运行的 common 日志共享 hash，每次 `new_run()` 创建 per-run 文件。
+- **互斥规则**: `run_id_ctx` 非空（per-run 活跃）时，init-time 的 common/warning/metrics handler 整段不写入（由 `ExcludeActiveRunFilter` 拒绝）；`run_id_ctx` 为空时，per-run handler 不写入（由 `RunIdFilter` 拒绝）。两类文件在时间上互补，不重叠。
+- **排障约定**: 查某次报告日志 → 只看该次 per-run 的 `common_*.log` / `common_warning_*.log`；查启动/空闲期/路由等系统事件 → 看 `common_system_*.log`。`new_run()` 打出的 `per-run logging started: run_id=xxx, log_prefix=xxx` 映射行写入 init-time 系统级文件，可用于由 run_id 反查日志文件。不要假设一个 `common_system_*.log` 能 grep 到当天所有报告的日志。
+- SDK (`main.py`) 和 Server (`deepsearch_run.py` / `telemetry_event_server.py`) 每次运行都创建 per-run 文件，通过 `RunIdFilter` + contextvar 实现并发隔离；init-time handler 通过 `ExcludeActiveRunFilter` 在 per-run 活跃期间自动排除报告日志。
 - 日志目录必须位于安全基目录 `./output/logs` 下。
 - 活跃日志文件权限为 `0o640`，轮转文件权限为 `0o440`，目录权限为 `0o750`。
 - 常见第三方 logger 默认压到 warning 级别。
@@ -42,12 +47,12 @@
 
 1. 调用方调用 `LogManager.init` 并传入目录、级别、轮转配置（`RotationConfig`）、敏感模式和日志保留天数。
 2. `LogManager` 校验参数和日志目录安全性。
-3. 初始化 common、metrics、interface logger (common 和 metrics 均创建第一个 per-run 文件)。init 时共享同一 `date_str` / `run_prefix`，确保 common 与 metrics 文件前缀一致。
+3. 初始化 common、metrics、interface logger (common 和 metrics 均创建 init-time 系统级文件，前缀为 `common_system_` / `metrics_system_`)。init 时共享同一 `date_str` / `run_prefix`，确保 common 与 metrics 文件前缀一致。
 4. 如果 `node_debug_enable=True`，额外初始化节点 debug logger。
 5. 设置第三方 logger 级别，并记录当前敏感模式、日志目录和日志参数。
 6. SDK 和 Server 每次运行时创建 per-run handler: `_generate_run_prefix` 生成共享前缀后，common handler 追加到 root logger，metrics handler 追加到 metrics logger，均带 `RunIdFilter` 按 run_id 隔离，运行结束后 `end_run` 清理。映射日志通过 `openjiuwen_deepsearch.log_manager` logger 记录，确保通过 `ProjectLoggerFilter`。
 7. 业务入口通过 `session_id_ctx` 给通用日志添加 session 维度。
-8. init handler 和 per-run handler 的构建逻辑分别由 `_create_common_file_handlers` / `_create_metrics_file_handler` 统一封装，消除重复代码。
+8. init handler 和 per-run handler 的构建逻辑分别由 `_create_common_file_handlers` / `_create_metrics_file_handler` 统一封装，消除重复代码。init-time handler 额外添加 `ExcludeActiveRunFilter`，在 per-run 活跃期间（`run_id_ctx` 非空）自动排除报告日志，使 init-time 文件只记录系统级日志。
 
 ## 数据契约与依赖
 

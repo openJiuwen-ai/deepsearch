@@ -8,6 +8,7 @@ from typing import Optional
 
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.log_utils.log_common import (
+    ExcludeActiveRunFilter,
     RunIdFilter,
     RotationConfig,
     RunPrefix,
@@ -45,7 +46,9 @@ def _create_metrics_file_handler(
         metrics_handler
     """
     metrics_dir = log_dir_path / "metrics" / run_prefix.date_str
-    metrics_log_path = metrics_dir / f"metrics_{run_prefix.run_prefix}.log"
+    # init-time 用 metrics_system_ 前缀, per-run 用 metrics_ 前缀
+    metrics_prefix = "metrics_system" if run_id is None else "metrics"
+    metrics_log_path = metrics_dir / f"{metrics_prefix}_{run_prefix.run_prefix}.log"
     handler = SafeRotatingFileHandler(
         filename=str(metrics_log_path),
         mode='a',
@@ -58,6 +61,9 @@ def _create_metrics_file_handler(
     handler.setLevel(level)
     if run_id is not None:
         handler.addFilter(RunIdFilter(run_id))
+    else:
+        # init-time handler: 排除 per-run 活跃期间的日志，避免与 per-run 文件重复
+        handler.addFilter(ExcludeActiveRunFilter())
     return handler
 
 

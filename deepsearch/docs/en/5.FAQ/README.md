@@ -70,15 +70,23 @@ uv sync --allow-insecure-host github.com --allow-insecure-host pypi.org --allow-
 
 ### Log location
 
-openJiuwen-DeepSearch logs usually live under **`output/logs`** at the repo root, organized by date folders (YYYYMMDD). Each run generates its own log files:
+openJiuwen-DeepSearch logs usually live under **`output/logs`** at the repo root, organized by date folders (YYYYMMDD). Logs are split into two categories:
 
-- **output/logs/common/YYYYMMDD/common_YYYYMMDD_HHMMSS_hash.log** — general service logging.
-- **output/logs/common/YYYYMMDD/common_warning_YYYYMMDD_HHMMSS_hash.log** — warnings and above (quick error scanning).
-- **output/logs/metrics/YYYYMMDD/metrics_YYYYMMDD_HHMMSS_hash.log** — performance timing stats.
+**System-level logs (created at service startup, capture system logs outside report runs):**
+- **output/logs/common/YYYYMMDD/common_system_YYYYMMDD_HHMMSS_hash.log** — system-level general logging.
+- **output/logs/common/YYYYMMDD/common_system_warning_YYYYMMDD_HHMMSS_hash.log** — system-level warnings and above.
+- **output/logs/metrics/YYYYMMDD/metrics_system_YYYYMMDD_HHMMSS_hash.log** — system-level performance timing stats. (Usually never created: timing stats are only produced during report runs, when the system-level handler excludes writes; the file is only written if system-level stats exist outside report runs.)
+
+**Per-run logs (created per report run, capture only that run's logs):**
+- **output/logs/common/YYYYMMDD/common_YYYYMMDD_HHMMSS_hash.log** — per-run report logging.
+- **output/logs/common/YYYYMMDD/common_warning_YYYYMMDD_HHMMSS_hash.log** — per-run warnings and above (quick error scanning).
+- **output/logs/metrics/YYYYMMDD/metrics_YYYYMMDD_HHMMSS_hash.log** — per-run performance timing stats.
 
 Notes:
 
-- `common_*.log` is mostly DeepSearch; third-party libs typically log only `warning`/`error` to disk (not `debug`/`info`).
+- `common_system_*.log` captures system-level logs (startup, shutdown, request routing, etc.); report logs are automatically excluded during per-run to avoid duplication.
+- `common_*.log` captures a single report run's logs; third-party libs typically log only `warning`/`error` to disk (not `debug`/`info`).
+- Troubleshooting convention: to inspect a specific report run → only look at that run's `common_*.log` / `common_warning_*.log` (do not search `common_system_*.log` for business logs); to inspect system events such as startup, idle periods, or request routing → look at `common_system_*.log`. The `per-run logging started: run_id=xxx, log_prefix=xxx` line in `common_system_*.log` maps a run_id to its per-run log file. **Do not assume a single log file contains all requests of the day** — report logs are spread across per-run files.
 - Very long lines may be truncated except for a few high-value outputs (citations, full reports, etc.).
 - Automatic cleanup: date folders under `common/` and `metrics/` older than `log_retention_days` (default 30 days) are automatically deleted during `LogManager.init` / `new_run`. Configure via `LogManager.init(log_retention_days=...)`; set to 0 to disable.
 
@@ -107,7 +115,9 @@ Errors use this format: `[error_code]error description: detail`, where `detail` 
 - A framework-level **`ALL END`** marker usually follows.
 - `response_content` contains the Markdown report body.
 
-**② Check logs, starting with `common_warning_*.log`**
+**② Check logs, starting with per-run `common_warning_*.log`**
+
+> Note: The troubleshooting below uses **per-run logs** (`common_*.log` / `common_warning_*.log`), which are generated per report run, not system-level logs (`common_system_*.log`).
 
 1. Search by the task's **`conversation_id`** (the configured `thread_id`) to narrow the log range.
 2. `common_warning_*.log` should not contain an `ERROR` that blocks the main workflow. A few `WARN` entries, such as model retries or a single empty search result, usually do not prevent the final report. If an `ERROR` appears in logs, still use `final_result.exception_info` as the final failure signal, and use the log to locate the cause.
