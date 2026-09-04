@@ -538,6 +538,28 @@ def test_exclude_passages_with_empty_sides_returns_input():
     assert exclude_passages([], ["任何关键片段"]) == []
 
 
+def test_exclude_passages_drops_passage_inside_large_basis():
+    """方案乙：摘要基准（前 500 字符）远大于段落时，段落整体落在基准内 → 剔除。"""
+    basis = "背景叙述。" * 100  # 500 字符
+    passage = _coverage_item("背景叙述。")
+    assert exclude_passages([passage], [basis]) == []
+
+
+def test_exclude_passages_anchor_rescue_keeps_prefix_plus_new_fact():
+    """锚点救援：段落与基准（前缀叙述）高度重叠，但携带基准外锚点 → 保留。"""
+    basis = "背景叙述。" * 100
+    passage = _coverage_item("背景叙述。2026年公司计划投入5亿元扩建产能。")
+    kept = exclude_passages([passage], [basis])
+    assert kept == [passage]
+
+
+def test_exclude_passages_drops_rephrased_same_anchor_passage():
+    """换措辞但锚点相同（基准外无新锚点）→ 剔除。"""
+    basis = "2025年公司营收100亿元，同比增长20%。公司经营稳健。"
+    passage = _coverage_item("2025年公司营收100亿元，同比增长20%。经营情况稳定。")
+    assert exclude_passages([passage], [basis]) == []
+
+
 def test_extract_uses_bounded_cache_per_content_and_params():
     from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
         _extract_coverage_passages_cached,

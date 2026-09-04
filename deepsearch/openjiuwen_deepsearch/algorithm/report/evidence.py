@@ -4,12 +4,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_coverage_passage_block,
-    normalize_key_passages,
 )
 from openjiuwen_deepsearch.algorithm.report.report_common import (
     CONTENT_DATE_TIMELINESS_WEIGHT,
@@ -25,10 +27,15 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     _COVERAGE_MAX_CHARS_PER_DOC,
     _COVERAGE_MAX_TOTAL_CHARS,
     _COVERAGE_TOP_K_CAP,
+    _coverage_fact_anchor_keys,
     exclude_passages,
     extract_coverage_passages,
+    extract_key_passages,
+    normalize_content_for_dedup,
+    outline_summary_text,
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
+    _format_reference_link,
     enrich_fulltext_for_section,
     get_required_document_content,
 )
@@ -1208,9 +1215,6 @@ class EvidenceMixin:
         return True, "", classified_content
 
 
-# 方案 B 覆盖证据集成预算由 collector_evidence 统一提供（见 _COVERAGE_TOP_K_CAP /
-# _COVERAGE_MAX_CHARS_PER_DOC / _COVERAGE_MAX_TOTAL_CHARS）。选段不预设硬 Top-K，
-# 由单文档/章节字符预算兜底（方案2：预算即终止条件）。
 def _rule_coverage_block_enabled() -> bool:
     """解析独立开关 DS_COVERAGE_RULE_BLOCK（默认开）。
 
@@ -1223,7 +1227,12 @@ def _rule_coverage_block_enabled() -> bool:
 
 
 def _extract_doc_coverage_passages(item: dict) -> list[str]:
-    """抽取单个选中文档的覆盖证据，并与同一文档的 key passages 去重。"""
+    """抽取单个选中文档的覆盖证据，并与该文档的大纲摘要块文本去重。
+
+    去重基准是条目摘要块的实际渲染口径（方案乙）：fulltext 条目在大纲里渲染
+    原文前 500 字符，摘要块已有的段落不再经规则块重复供给。key_passages 通道
+    已退役（rationale 接管后不再进入大纲/写作 prompt），不再作为去重基准。
+    """
     original_content = str(item.get("original_content") or "")
     if not original_content:
         return []
@@ -1232,8 +1241,8 @@ def _extract_doc_coverage_passages(item: dict) -> list[str]:
         max_passages=_COVERAGE_TOP_K_CAP,
         max_chars=_COVERAGE_MAX_CHARS_PER_DOC,
     )
-    key_passages = normalize_key_passages(item.get("key_passages"))
-    passages = exclude_passages(passages, key_passages)
+    summary_basis = [outline_summary_text(original_content)]
+    passages = exclude_passages(passages, summary_basis)
     return [passage.text for passage in passages]
 
 
@@ -1288,7 +1297,7 @@ def _append_rule_coverage_to_core(
             _extract_doc_coverage_passages(
                 {
                     "original_content": str(getattr(evidence, "original_content", "") or ""),
-                    "key_passages": list(getattr(evidence, "key_passages", None) or []),
+
                 }
             ),
             budget,

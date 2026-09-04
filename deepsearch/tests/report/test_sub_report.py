@@ -2209,15 +2209,21 @@ def test_subsection_outline_prompt_untrusted_evidence_boundary(has_template):
 
 
 def test_append_rule_coverage_to_core_builds_rule_block_and_texts():
-    """Part A：规则版覆盖证据组装回大纲证据，并产出供增量差集的段落文本。"""
+    """Part A：规则版覆盖证据组装回大纲证据，并产出供增量差集的段落文本。
+
+    方案乙：去重基准 = 条目摘要块渲染文本（清洗后原文前 500 字符）；前导
+    填充段落入基准区被剔除，基准区外的事实段进规则块。
+    """
     from types import SimpleNamespace
 
     from openjiuwen_deepsearch.algorithm.report.evidence import _append_rule_coverage_to_core
 
+    lead = "背景介绍叙述内容。" * 60
     evidences = [
         SimpleNamespace(
             original_content=(
-                "2025年公司营收100亿元，同比增长20%。该产品定价99美元/月，覆盖30个国家。"
+                lead
+                + "2025年公司营收100亿元，同比增长20%。该产品定价99美元/月，覆盖30个国家。"
             ),
             key_passages=["2025年公司营收100亿元"],
         ),
@@ -2230,8 +2236,9 @@ def test_append_rule_coverage_to_core_builds_rule_block_and_texts():
     merged, rule_texts = _append_rule_coverage_to_core(core, evidences)
     # 规则覆盖块追加到大纲证据末尾
     assert any(block.startswith("===== COVERAGE PASSAGES =====") for block in merged)
-    # 文档编号与 key 块对齐（1..N），纯叙述文档无覆盖段落
+    # 文档编号与 key 块对齐（1..N）；摘要基准区外的事实段入选，基准区内叙述不重复供给
     assert 1 in rule_texts and rule_texts[1] and "99美元/月" in rule_texts[1][0]
+    assert all("背景介绍" not in text for text in rule_texts[1])
     assert 2 not in rule_texts
     # 无全文证据时原样返回
     merged0, texts0 = _append_rule_coverage_to_core(core, [])
@@ -2268,3 +2275,4 @@ def test_append_rule_coverage_to_core_skips_extraction_when_budget_exhausted():
     # 预算被第一个文档占满后,后续文档不再抽取。
     assert len(calls) == 1
     assert 1 in rule_texts and 2 not in rule_texts and 3 not in rule_texts
+
