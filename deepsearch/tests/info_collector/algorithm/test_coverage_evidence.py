@@ -502,12 +502,12 @@ def _coverage_item(text: str) -> CoveragePassage:
     )
 
 
-def test_exclude_passages_exact_duplicate_of_key_passage():
+def test_exclude_passages_exact_duplicate_of_basis_passage():
     passage = _coverage_item("2025年营收100亿元，同比增长20%。")
     assert exclude_passages([passage], ["2025年营收100亿元，同比增长20%。"]) == []
 
 
-def test_exclude_passages_high_similarity_duplicate_of_key_passage():
+def test_exclude_passages_high_similarity_duplicate_of_basis_passage():
     passage = _coverage_item("OpenAI于2025年发布产品X，推理性能提升50%，成为行业标杆。")
     assert exclude_passages(
         [passage], ["OpenAI于2025年发布产品X，推理性能提升50%。"]
@@ -530,6 +530,24 @@ def test_exclude_passages_keeps_block_with_substantial_extra_context():
     assert exclude_passages(
         [block], ["DeepSeek发布新模型，推理速度提升50%"]
     ) == [block]
+
+
+def test_extract_coverage_passages_empty_for_short_fulltext_doc():
+    """意见4 边界：清洗后长度 ≤ 500 字符的 fulltext 文档，正文已完整进入大纲
+    摘要块（方案乙去重基准），规则版 coverage 对该文档为空——这是可观察的
+    正确行为，不是缺陷。
+    """
+    from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
+        extract_coverage_passages,
+        outline_summary_text,
+    )
+
+    short_doc = "2025年营收100亿元，同比增长20%。"  # 远小于 500 字符
+    passages = extract_coverage_passages(content=short_doc, max_passages=128, max_chars=1200)
+    basis = outline_summary_text(short_doc)
+    # 摘要基准覆盖整篇 → 任何抽取结果都应被 exclude_passages 全部剔除
+    kept = exclude_passages(passages, [basis])
+    assert kept == []
 
 
 def test_exclude_passages_with_empty_sides_returns_input():

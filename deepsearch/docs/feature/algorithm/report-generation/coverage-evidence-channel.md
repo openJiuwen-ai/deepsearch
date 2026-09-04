@@ -20,6 +20,26 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
 不为它们安排结构，造成结构性事实遗漏。Coverage 通道在抽取逻辑上与关键词无关，按客观
 信息密度打分，兜住关键词检索漏掉的事实，降低大纲阶段的结构性事实遗漏。
 
+## 章节生成两阶段的证据输入来源
+
+子报告章节的生成分大纲与写作两个阶段，各阶段输入的 channel 构成如下：
+
+**大纲阶段**（`_generate_sub_section_outline`，prompt：`sub_section_outline.md`）：
+- 章节结构上下文：章节标题/描述/格式要求、全局大纲、section_local_contract、
+  research_intent、背景知识特例（`sub_section_core_content_from_background_knowledge`）；
+- `sub_section_core_content`（顺序拼接，不交错）：
+  1. 条目摘要块（`build_core_content_list`）：fulltext 条目渲染清洗后原文前 500 字符
+     （`outline_summary_text`），passage 条目渲染被选中的段落；
+  2. 规则版 coverage 聚合块（`===== COVERAGE PASSAGES =====`，本 PR 范畴）；
+- `structured_evidence_guide`（维度级覆盖状态表，rationale 链路产出）。
+
+**写作阶段**（`write_subsection_reports`，prompt：`sub_report_markdown.md`）：
+- `classified_content`（写作主证据）：fulltext 条目整篇原文 + passage 条目选中段，
+  经 `build_citation_infos` 渲染为 `[citation:X]` 块；
+- 本章提纲（大纲阶段产物，写作边界）、章节格式要求、背景知识等上下文。
+
+LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划，未在本 PR 落地。
+
 ## 可见行为
 
 与 `structured_evidence_guide`（维度级覆盖信号）并存，但定位为**段落级**补充。
@@ -126,11 +146,11 @@ prompt，仅保留 target-paper 兜底用途），不再作为去重基准——
 
 - fulltext 条目：清洗后原文前 500 字符（`collector_evidence.py::outline_summary_text`，
   `OUTLINE_SUMMARY_MAX_CHARS = 500` 单一真源）；
-- passage 条目（候选池侧）：被选中的 `passage_text`。
+- passage 条目：被选中的 `passage_text`（当前规则块只对 fulltext 条目运行，此条
+  供后续复用方沿用同一口径）。
 
-判定共享谓词 `collector_evidence.py::_supplied_by_basis`（规则块侧
-`exclude_passages` 与候选池侧 `coverage_compressor.py::_paragraph_overlaps_basis`
-同一口径，防漂移）：
+判定共享谓词 `collector_evidence.py::_supplied_by_basis`（`exclude_passages`
+的底层谓词；候选池等后续复用方在同一口径上实现，防漂移）：
 
 - 文本层重叠 = 完全相同 / 段落整体落在基准内部（基准远大于段落的包含情形）/
   高相似或高占比子串；
@@ -141,147 +161,9 @@ prompt，仅保留 target-paper 兜底用途），不再作为去重基准——
 边界：≤500 字符的 fulltext 文档整篇已进大纲摘要块，覆盖证据与候选池对该文档
 为空（正确行为，非缺陷）。
 
-## 候选池两级缺口驱动装配（LLM 压缩层）
-
-`coverage_compressor.py::build_candidate_pool` 在准入过滤（噪声 + 摘要基准剔除）
-之后，按两级预算装配候选池：
-
-- **保底层**：`floor_ratio`（默认 0.4，环境变量 `DS_COVERAGE_POOL_FLOOR_RATIO`
-  覆盖，0~1 钳制）份额的预算走原始跨文档轮询（无信息先验）。缺口检测是启发式，
-  系统性漏判某类文档时，纯优先级排队会让它长期排不上队；保底份额是对"优先级
-  排队≈软淘汰"灰色地带的低成本对冲。
-- **缺口层**：剩余预算按文档级"锚点缺口率"反向分配字符配额——该文档候选段锚点
-  中被（摘要基准 ∪ 规则块覆盖段）覆盖的比例越低，配额越大；无锚点的纯文本文档
-  按"完全未覆盖"计（配额最大，正是 4.c 富集文档）。配额内部含缺口锚点的段落
-  优先。无任何缺口信号时退化为均匀轮询。
-- **回收**：两层都放不下、池预算仍有余量时按 (文档顺序, 原文顺序) 补齐——任何
-  段落不因分组/配额而被净淘汰。
-- **同 URL 合并**：同一 URL 的多个 passage 条目合并为一个文档组，父文档只进池
-  一次（rationale 常从同一篇选中多个段落，逐条目进池会重复送父文档全文），组内
-  去重基准取该 URL 全部选中段落并集。
-- 池输入缺 `passage_text` 键的旧式 dict 按 fulltext 口径处理（兼容）。
-- `compress_for_coverage` 自动把规则块段落（`rule_passage_texts`）传入池装配作为
-  缺口层锚点基准之一。
-
-## 增量并集差集基准扩容（5.5）
-
-`coverage_compressor.py::filter_incremental_facts` 的差集基准从"规则块段落"
-扩为"规则块段落 **+ 写作端已渲染文本**"（`_main_evidence_texts` 构造，渲染规则
-与 `report_common.build_citation_infos` 一致：fulltext 条目整篇 / passage 条目
-`passage_text`，同 URL 合并到组长 index，与候选池分组同一实现
-`_group_classified_entries`）。
-
-- **判定口径**（设计定稿）：文本层（归一化子串或近似重复）与锚点层（锚点键
-  ⊆ 该文档基准锚点并集）**同时满足**才判已覆盖；纯文本事实文本层命中即判。
-- **测量一体**（评审焦点 4 决策）：C 臂与 C' 臂都带扩容口径跑，C−B 与 C'−C
-  同基线可比。
-- **归因统计**：`extras_dropped_vs_main`（与主证据判重条数）、
-  `dedup_vs_main_evidence`（vs_main ÷ extras_total，校验通过事实里与写作端
-  已见内容重复的占比）落盘 `compress_stats.jsonl`，五臂实验据此校验压缩层
-  净增益口径的重复水分。
-- 规则块关闭（`DS_COVERAGE_RULE_BLOCK=0`）时主证据单基准仍生效——rationale
-  选中事实的重复产出依然被拦。
-- 已知代价（定稿口径接受）：与主证据"换措辞不逐字"的转述不判重（文本层不
-  命中），`dedup_vs_main_evidence` 读数偏小；换来"数字相同但语义维度不同的
-  事实不被误删"。
-
-## 截断排序信号（5.6）
-
-`compress_for_coverage` 在 extras 字符预算截断前按"锚点密度 × 稀缺来源加成"
-降序排序（稳定排序，同分保持压缩输出顺序）：
-
-- 锚点密度 = `extract_fact_anchors(fact.text)` 记号数；
-- 稀缺来源加成 = 来源文档在池中仅一个段落支撑时 +1（跨文档独有信息）；
-- **排序不是过滤**：弱相关事实排后、预算耗尽时自然淘汰；明确不做相关性预筛
-  （rationale 的相关性信号绝不进淘汰——兜底机制的存在意义就是挑战其判断）；
-- `extras_truncated`（被截条数）落盘 compress_stats.jsonl；
-- 排序+截断一次完成，extras 块（大纲间接通道）与直达注入消费**同一份列表**，
-  两通道体量一致。
-
-## 直达注入与挽回收率（第 7 章主线，P4）
-
-`evidence.py::_maybe_inject_virtual_entries`（开关 `DS_COVERAGE_EXTRAS_INJECT`，
-默认关，独立回滚）：把 extras 中"写作端不可见"的事实以虚拟条目直接送进写作
-提示词——全系统唯一承诺"挽回"的机制。
-
-- **注入范围**：逐条判定"该事实所在文本是否已在写作提示词里"——来源 fulltext
-  文档的事实整篇已渲染（`writer_visible=True`，留大纲层）；passage 来源默认
-  不可见（注入对象）。
-- **虚拟条目**：content = 池段落**原文**（证据=原文、浓缩=发现机制；转述语义
-  保真检查仍在监控期不直接进写作端），同一池段落多事实合并一个条目；
-  `scores = {"tier": "supplementary"}`（渲染零改动，配合写作 prompt 补充证据
-  措辞：只许为已展开论点补细节，不得衍生新论点/新章节）；编号在
-  classified_content 末尾新编（N+1…），url/标题/时间复用来源文档；
-  classified_content 与 `sub_section_references` 镜像同步追加。
-- **注入点**：`_maybe_compress_coverage` 成功分支内、extras 追加大纲之后；
-  任何异常 → 不追加，退回"extras 只进大纲"的间接形态（降级矩阵），主链路
-  无感。
-- **挽回收率**（第一指标）= 成稿锚点命中数 ÷ 注入数。注入遥测双写：
-  `compress_stats.jsonl` typed 行（`type=injection`，含每章注入清单：事实文本/
-  池段落/引文编号，`label=section_N`）+ `doc_selection_debug.coverage_injection`
-  （ResultExporter 链路）。离线脚本读任一通道与成稿做锚点交集即可算回收率。
-
-## 大纲处置问责（8.2 仪表）
-
-`sub_section_outline.py::_record_coverage_disposal`（观测增强，非流程依赖）：
-注入开启时，大纲 prompt 附带编号覆盖事实索引（`coverage_fact_index`，仅含
-writer_visible=False 的事实——fulltext 来源写作端已可见，属边界性丢失不救），
-请求大纲 LLM 对每条事实输出处置标注：
-
-- `assigned | <子标题编号>`：事实安置到某子标题；
-- `discarded | <理由>`：显式丢弃并论证（等于认为上游判断有误，需要给理由）；
-- `inherited_discard`：复用 rationale 的低分判断，免论证。
-
-- **硬性顺序约束①（机制化）**：标注请求由 `DS_COVERAGE_EXTRAS_INJECT` 门控
-  ——仅注入开启时才请求标注，保证 assigned 事实写作端必有对应证据，杜绝
-  "有标题没材料"的编造风险。
-- **解析失败忽略**：无标注/格式非法时忽略标注、大纲照常（损耗率缺数，报告
-  正常）；防御性剥离（`strip_disposal_annotations`）保证标注行不混进提纲。
-- **遥测**：`type=disposal` 行落盘 compress_stats.jsonl（总数/各态计数/传导
-  损耗率/discarded 理由/已显式拒绝清单）；拒绝清单同时留存
-  `current_inputs.coverage_disposal` 供 8.3 补丁消费。
-
-## 草稿锚点补丁（8.3 短路收口）
-
-`evidence.py::compute_draft_anchor_gap` + `Reporter._maybe_patch_draft`
-（开关 `DS_COVERAGE_DRAFT_PATCH`，默认关，独立回滚）：
-
-- **差集计算（零 LLM）**：注入事实全集 − 大纲已显式丢弃（8.2 拒绝清单）−
-  成稿已写（事实锚点出现在归一化草稿文本）。已弃事实不再进入补丁判断
-  ——rationale 判过、仪表复用过、补丁不再重判。
-- **已知盲区（结构性）**：纯文本事实（无锚点）差集恒不含它，单独计数；纯
-  文本的传导靠第 7 章直达注入兜底。
-- **窄补丁调用**：差集非空才触发一次调用（只含差集事实）；prompt 显式允许
-  skip（硬塞不合上下文的事实比漏写更伤报告）；输出未新增任何锚点视为全
-  skip，保留原草稿。
-- **失败降级**：调用失败/空输出/全 skip 一律保留原草稿——损失是无增益，
-  不是负增益。
-- **遥测**：`type=draft_patch` 行落盘（差集事实、skip 清单）。
-- 邻域扩展：`expansion_density_threshold`（方案3 密度门控，默认 0 关闭）。预算兜底
-  （K≈候选全集）下邻居扩展为空操作，故默认关闭；参数保留供有限 K 场景评估。
-- 集成常量（`collector_evidence.py` 唯一真源，`report/evidence.py` 集成层引用）：
-  `_COVERAGE_TOP_K_CAP = 128`（选段数量上界，实际由预算兜底）、
-  `_COVERAGE_MAX_CHARS_PER_DOC = 1200`（单文档预算，`extract_coverage_passages`
-  的 `max_chars` 默认值即引用此常量）、`_COVERAGE_MAX_TOTAL_CHARS = 6000`
-  （章节级总预算，由 `report/evidence.py` `_fit_coverage_to_budget` 二次裁剪）、
-  `_COVERAGE_SCORE_MODE`、`_COVERAGE_DENSITY_MIN_LEN`。
-- coverage 块格式：`===== COVERAGE PASSAGES =====` / `Document N coverage passages:`
-  + `- passage`，`N` 与 key 块编号对齐。
-- 运行开关：环境变量 `DS_COVERAGE_RULE_BLOCK`（默认开）可单独关闭覆盖通道做回滚。
-  按标准布尔口径解析：`1`/`true`/`yes`/`on`（大小写与首尾空白不敏感）开启，
-  其余值（`0`/`false`/`off`/空串）关闭。
-- 直达注入开关：环境变量 `DS_COVERAGE_EXTRAS_INJECT`（默认关）。同标准布尔
-  口径；独立回滚，五臂 C' 臂使用。
-- 候选池保底比例：环境变量 `DS_COVERAGE_POOL_FLOOR_RATIO`（默认 0.4，0~1 钳制，
-  非法回退默认）。设 1 退化为纯均匀轮询（关闭缺口驱动），设 0 为纯缺口驱动。
-- 性能：正则抽取流水线为纯 CPU（生产口径 10 篇 × 10000 字符、高事实密度最坏
-  用例冷调用约 150 ms；锚点去重键集合按块缓存复用，lru_cache 命中时 <10 ms）。
-  `generate_sub_report` 经 `asyncio.to_thread` 调用组装函数，不阻塞事件循环；
-  章节共享预算耗尽后跳过剩余文档的抽取。
-- 不修改 `doc_info` / `classified_doc_infos`，写作阶段证据输入不受影响。
-
 ## 边界与错误处理
 
+- 清洗后长度 ≤ 500 字符的 fulltext 文档，其正文已完整进入大纲摘要块，覆盖证据对该文档为空（方案乙去重的必然结果，属正确行为而非缺陷）。
 - 空内容、纯噪声（过短、标题、导航、无数字分隔行、**纯引用/链接列表**）、无任何事实
   特征 → 不产覆盖证据。
 - Markdown 表格原子性：`_coverage_split_passages` 把连续以 `|` 起始的行识别为原子
@@ -298,7 +180,6 @@ writer_visible=False 的事实——fulltext 来源写作端已可见，属边�
 
 - 定向：`uv run pytest tests/info_collector/algorithm/test_coverage_evidence.py`
 - 组装与 prompt：`uv run pytest tests/report/test_sub_report.py tests/report/test_tools_in_report.py`
-- 候选池/压缩：`uv run pytest tests/report/test_coverage_compressor.py`
 - 必须覆盖：事实密度优先于位置、噪声过滤、特征计数与封顶、Neighbor Expansion 与相邻合并、
   两级去重、字符预算、摘要基准去重（含锚点救援与基准内包含判定）、候选池两级装配
   （保底份额/缺口配额/回收不净淘汰/同 URL 合并）、`_append_rule_coverage_to_core`

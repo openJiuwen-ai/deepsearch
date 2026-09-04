@@ -4,10 +4,7 @@ import asyncio
 import json
 import logging
 import os
-import re
 from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
@@ -27,15 +24,11 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     _COVERAGE_MAX_CHARS_PER_DOC,
     _COVERAGE_MAX_TOTAL_CHARS,
     _COVERAGE_TOP_K_CAP,
-    _coverage_fact_anchor_keys,
     exclude_passages,
     extract_coverage_passages,
-    extract_key_passages,
-    normalize_content_for_dedup,
     outline_summary_text,
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
-    _format_reference_link,
     enrich_fulltext_for_section,
     get_required_document_content,
 )

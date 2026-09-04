@@ -2225,11 +2225,9 @@ def test_append_rule_coverage_to_core_builds_rule_block_and_texts():
                 lead
                 + "2025年公司营收100亿元，同比增长20%。该产品定价99美元/月，覆盖30个国家。"
             ),
-            key_passages=["2025年公司营收100亿元"],
         ),
         SimpleNamespace(
             original_content="本节仅做背景叙述，不含任何数字日期实体引用。",
-            key_passages=[],
         ),
     ]
     core = ["Document 1 key passages:\n- k"]
@@ -2254,7 +2252,7 @@ def test_append_rule_coverage_to_core_skips_extraction_when_budget_exhausted():
 
     # mock 抽取结果为恰好等于总预算的单块:第一篇即吃满共享预算,行为确定。
     evidences = [
-        SimpleNamespace(original_content=f"2025年营收{idx}亿元，同比增长20%。", key_passages=[])
+        SimpleNamespace(original_content=f"2025年营收{idx}亿元，同比增长20%。")
         for idx in range(3)
     ]
     calls = []
