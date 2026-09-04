@@ -1,0 +1,211 @@
+# openJiuwen DeepSearch — Docker Compose 一键部署
+#
+# 用法：
+#   1) cp .env.example .env            # 编辑 API key / 模型 / 搜索源
+#   2) docker compose up -d            # 最小栈：仅后端（SQLite + 内存 checkpointer）
+#   3) docker compose --profile distributed up -d
+#                                      # 完整栈：后端 + MySQL + Redis + Milvus
+#
+# 端口：
+#   - 后端 API   host:8000  -> container:8000   （API 文档 /api/docs，健康检查 /api/health）
+#   - Telemetry  host:8089  -> container:8089   （DeepSearch 模式 search_mode=search 需要）
+#
+# 三档部署：
+#   minimal     默认                    后端 + SQLite + 内存 checkpointer（最轻，零外部依赖）
+#   mysql       --profile mysql         后端 + MySQL（持久化对话/报告元数据，仍单实例）
+#   distributed --profile distributed   后端 + MySQL + Redis + Milvus（多实例分布式 + 知识库检索）
+#
+# 选档原则：
+#   - 个人/试用              → minimal
+#   - 单实例但需持久化元数据   → mysql
+#   - 多实例 / 知识库检索      → distributed（CHECKPOINTER_TYPE=redis + DB_TYPE=mysql + INDEX_MANAGER_TYPE=milvus）
+#
+# 注意：distributed 模式下知识库文档必须写入 OBS，需在 .env 完整配置 OBS_*，否则服务无法启动。
+
+services:
+  # ============================================================================
+  # 应用层：openJiuwen DeepSearch 后端（FastAPI + Telemetry）
+  # ============================================================================
+  deepsearch:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: openjiuwen/deepsearch:latest
+    container_name: deepsearch-backend
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      # 在容器内固定绑定，端口映射由 ports 控制
+      HOST: "0.0.0.0"
+      BACKEND_PORT: "8000"
+      # 让容器内进程把对外的 telemetry 地址写进公开端点
+      TELEMETRY_PUBLIC_BASE: "http://127.0.0.1:8089"
+    ports:
+      - "${BACKEND_PUBLISH_PORT:-8000}:8000"   # 后端 API
+      - "${TELEMETRY_PUBLISH_PORT:-8089}:8089" # Telemetry 事件端点
+    volumes:
+      # 持久化 SQLite 数据、日志、报告输出（minimal / mysql 模式下均有用）
+      - deepsearch-data:/app/data
+      - deepsearch-logs:/app/output
+    depends_on:
+      # mysql / redis / milvus 由 profile 控制，未启用时 depends_on 条件不生效
+      mysql:
+        condition: service_healthy
+        required: false
+      redis:
+        condition: service_healthy
+        required: false
+      milvus:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health'); urllib.request.urlopen('http://localhost:8089')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    networks:
+      - deepsearch-net
+
+  # ============================================================================
+  # 数据层：MySQL（profile=mysql / distributed）
+  # 仅当 DB_TYPE=mysql 时后端会连接；minimal 模式下不起此服务
+  # ============================================================================
+  mysql:
+    image: mysql:8.0
+    container_name: deepsearch-mysql
+    restart: unless-stopped
+    profiles: ["mysql", "distributed"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+      MYSQL_DATABASE: ${DEEPSEARCH_DB_NAME:-openjiuwen_deepsearch}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "${MYSQL_PUBLISH_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - deepsearch-net
+
+  # ============================================================================
+  # 缓存/会话层：Redis（profile=distributed）
+  # 仅当 CHECKPOINTER_TYPE=redis 时后端会连接（分布式 checkpointer）
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: deepsearch-redis
+    restart: unless-stopped
+    profiles: ["distributed"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PUBLISH_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - deepsearch-net
+
+  # ============================================================================
+  # 向量检索层：Milvus（profile=distributed）
+  # 仅当 INDEX_MANAGER_TYPE=milvus 且 tool_map=retrieve 时需要
+  # Milvus 依赖 etcd + minio，一并编排
+  # ============================================================================
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.16
+    container_name: deepsearch-milvus-etcd
+    restart: unless-stopped
+    profiles: ["distributed"]
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd-data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - deepsearch-net
+
+  minio:
+    image: minio/minio:RELEASE.2024-09-13T20-26-02Z
+    container_name: deepsearch-milvus-minio
+    restart: unless-stopped
+    profiles: ["distributed"]
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - minio-data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "${MINIO_PUBLISH_PORT:-9001}:9001"
+    networks:
+      - deepsearch-net
+
+  milvus:
+    image: milvusdb/milvus:v2.4.17
+    container_name: deepsearch-milvus
+    restart: unless-stopped
+    profiles: ["distributed"]
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: minio
+    volumes:
+      - milvus-data:/var/lib/milvus
+    ports:
+      - "${MILVUS_PUBLISH_PORT:-19530}:19530"
+      - "9091:9091"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    networks:
+      - deepsearch-net
+
+networks:
+  deepsearch-net:
+    driver: bridge
+
+volumes:
+  deepsearch-data:
+  deepsearch-logs:
+  mysql-data:
+  redis-data:
+  etcd-data:
+  minio-data:
+  milvus-data:
