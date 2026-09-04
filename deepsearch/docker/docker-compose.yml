@@ -1,0 +1,45 @@
+# openJiuwen-DeepSearch 最小化一键部署
+#
+# 包含 redis + deepsearch（主后端 8000 / Telemetry 8089），满足
+# DeepResearch 与 DeepSearch 默认（sqlite + in_memory）运行需求。
+#
+# 用法（在本目录下执行）：
+#   cd deepsearch/docker
+#   cp ../.env.example ./.env   # 再编辑 .env 填入 LLM / 搜索密钥
+#   docker compose up -d
+#
+# 完整栈（MySQL + Milvus 向量知识库）参见 docker-compose.full.yml。
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  deepsearch:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+      - "8089:8089"
+    environment:
+      # 固定后端端口为 8000，与 docker/Dockerfile 的 EXPOSE/HEALTHCHECK 保持一致
+      # （.env.example 中 BACKEND_PORT=6000 面向本地源码运行，容器内以 8000 为准）
+      BACKEND_PORT: "8000"
+      HOST: "0.0.0.0"
+    env_file:
+      - ../.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../output:/app/output
+      - ../data:/app/data
+    restart: unless-stopped

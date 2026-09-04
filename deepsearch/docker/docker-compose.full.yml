@@ -1,0 +1,142 @@
+# openJiuwen-DeepSearch 完整栈一键部署
+#
+# 在最小化基础上增加 MySQL（元数据/会话）+ Milvus 向量知识库（含 etcd + minio）。
+# deepsearch 通过 depends_on(condition: service_healthy) 保证依赖服务就绪后才启动。
+#
+# 用法（在本目录下执行）：
+#   cd deepsearch/docker
+#   cp ../.env.example ./.env   # 再编辑 .env 填入 LLM / 搜索密钥；DB_PASSWORD 即 MySQL root 密码
+#   docker compose -f docker-compose.full.yml up -d
+#
+# 说明：Milvus standalone 依赖 etcd + minio，此处按官方标准编排提供三服务，
+# 不能使用单容器简化版（缺少这两个依赖时 milvus 无法启动）。
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+      MYSQL_DATABASE: ${DEEPSEARCH_DB_NAME:-openjiuwen_deepsearch}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - etcd-data:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+    command: minio server /minio_data --console-address ":9001"
+    volumes:
+      - minio-data:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  milvus:
+    image: milvusdb/milvus:v2.4.15
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - milvus-data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+
+  deepsearch:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+      - "8089:8089"
+    environment:
+      BACKEND_PORT: "8000"
+      HOST: "0.0.0.0"
+      # 完整栈：MySQL 元数据 + Redis 会话 + Milvus 向量知识库（服务名即容器内 DNS）
+      DB_TYPE: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD:-root}
+      DEEPSEARCH_DB_NAME: ${DEEPSEARCH_DB_NAME:-openjiuwen_deepsearch}
+      CHECKPOINTER_TYPE: redis
+      REDIS_URL: redis://redis:6379
+      INDEX_MANAGER_TYPE: milvus
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      MILVUS_TOKEN: ""
+    env_file:
+      - ../.env
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    volumes:
+      - ../output:/app/output
+      - ../data:/app/data
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  etcd-data:
+  minio-data:
+  milvus-data:

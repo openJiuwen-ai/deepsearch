@@ -71,6 +71,19 @@ openJiuwen Studio作为一站式AI Agent开发平台，提供了从开发到部�
 如果您需要进行二次开发、定制化部署或源码级调试，可以参考开发者安装方式。
 详细文档请参阅：[SDK安装指导](./docs/zh/2.安装指导/DeepSearch_SDK/README.md)。
 
+### Docker Compose 一键部署
+
+在 `deepsearch/docker/` 目录下，可用 Docker Compose 一键拉起多服务：
+
+```bash
+cd deepsearch/docker
+cp ../.env.example ./.env   # 编辑 .env 填入 LLM / 搜索密钥
+docker compose up -d                    # 最小化：redis + deepsearch
+docker compose -f docker-compose.full.yml up -d   # 完整栈：额外含 MySQL + Milvus
+```
+
+详见 [Docker 方式安装](./docs/zh/2.安装指导/DeepSearch_SDK/Docker方式安装/README.md)。
+
 # 🚀 快速上手
 以下视频帮助您快速了解 DeepSearch 的核心功能与使用流程。
 

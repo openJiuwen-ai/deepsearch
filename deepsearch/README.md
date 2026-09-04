@@ -78,6 +78,19 @@ For custom builds, integration, or source-level debugging, see the SDK-oriented 
 
 - [DeepSearch SDK installation](./docs/en/2.Installation%20Guide/DeepSearch_SDK/README.md)
 
+### Docker Compose one-click deployment
+
+From the `deepsearch/docker/` directory, use Docker Compose to bring up the multi-service stack:
+
+```bash
+cd deepsearch/docker
+cp ../.env.example ./.env                  # edit .env to fill in LLM / search credentials
+docker compose up -d                  # minimal: redis + deepsearch
+docker compose -f docker-compose.full.yml up -d   # full: adds MySQL + Milvus
+```
+
+See [Docker Installation](./docs/en/2.Installation%20Guide/DeepSearch_SDK/Docker%20Installation/README.md).
+
 More navigation: [Documentation hub](./docs/README.md).
 
 # 🚀 Quick start
