@@ -10,6 +10,7 @@ import requests
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 from openjiuwen.core.common.security.ssl_utils import SslUtils
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,10 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
         else:
             configured = str(self.search_url)
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_SERPER_SEARCH_URL
+        if not configured:
+            return DEFAULT_SERPER_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured
 
     def _execute_search_request(self, search_term: str, is_async: bool = False) -> Any:
         """Execute search request with optional async support."""

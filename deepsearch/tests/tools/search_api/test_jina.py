@@ -69,13 +69,14 @@ def test_jina_search_results_omits_authorization_when_key_empty():
     assert "Authorization" not in mock_post.call_args[1]["headers"]
 
 
-def test_jina_search_results_normalize_content_and_skip_invalid_rows():
+def test_jina_search_results_normalize_content_and_skip_invalid_rows(monkeypatch):
     """Jina response data should normalize content fields for research collectors."""
     from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH, MAX_URL_LENGTH
     from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.jina.api_wrapper import (
         JinaSearchAPIWrapper,
     )
 
+    monkeypatch.setenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", "1")
     wrapper = JinaSearchAPIWrapper(search_api_key=bytearray(b"k"), search_url="https://custom.jina.example")
     long_title = "T" * (MAX_SEARCH_CONTENT_LENGTH + 10)
     long_url = "https://example.com/" + ("u" * MAX_URL_LENGTH)
@@ -156,3 +157,47 @@ def test_web_search_mapping_uses_direct_jina_wrapper():
     from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import search_engine_mapping
 
     assert search_engine_mapping["jina"] is JinaSearchAPIWrapper
+
+
+def test_jina_search_rejects_ssrf_search_url(monkeypatch):
+    """User-configured search_url targeting private/non-public hosts must be rejected."""
+    from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.jina.api_wrapper import (
+        JinaSearchAPIWrapper,
+    )
+
+    monkeypatch.delenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", raising=False)
+    for malicious_url in (
+        "http://127.0.0.1/",
+        "http://localhost/",
+        "http://169.254.169.254/",
+        "http://10.0.0.5/",
+        "http://192.168.1.1/",
+        "ftp://example.com/",
+    ):
+        wrapper = JinaSearchAPIWrapper(
+            search_api_key=bytearray(b"k"),
+            search_url=malicious_url,
+        )
+        with pytest.raises(Exception):
+            wrapper._resolved_search_url()
+
+
+def test_jina_search_allows_empty_and_default_search_url():
+    """Empty or default search_url must not trigger SSRF validation."""
+    from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.jina.api_wrapper import (
+        JinaSearchAPIWrapper,
+    )
+
+    assert JinaSearchAPIWrapper(search_url="")._resolved_search_url() == "https://s.jina.ai"
+    assert JinaSearchAPIWrapper(search_url=None)._resolved_search_url() == "https://s.jina.ai"
+
+
+def test_jina_search_ssrf_bypass_via_env(monkeypatch):
+    """SEARCH_SERVICE_ALLOW_UNSAFE_URL bypasses the SSRF check for local debugging."""
+    from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.jina.api_wrapper import (
+        JinaSearchAPIWrapper,
+    )
+
+    monkeypatch.setenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", "1")
+    wrapper = JinaSearchAPIWrapper(search_api_key=bytearray(b"k"), search_url="http://127.0.0.1/")
+    assert wrapper._resolved_search_url() == "http://127.0.0.1"

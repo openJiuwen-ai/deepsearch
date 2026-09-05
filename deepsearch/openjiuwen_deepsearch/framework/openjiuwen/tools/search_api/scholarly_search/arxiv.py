@@ -36,6 +36,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
     should_fetch_full_text,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -408,4 +409,7 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
                 else str(self.search_url)
             )
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_ARXIV_SEARCH_URL
+        if not configured:
+            return DEFAULT_ARXIV_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured

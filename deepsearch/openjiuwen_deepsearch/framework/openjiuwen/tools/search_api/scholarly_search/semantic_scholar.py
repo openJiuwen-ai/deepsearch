@@ -26,6 +26,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     sync_request_once,
     truncate,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 
@@ -114,7 +115,10 @@ class SemanticScholarSearchAPIWrapper(BaseModel, Generic[T]):
         value = self.search_url
         if isinstance(value, SecretStr):
             value = value.get_secret_value()
-        return (str(value).strip() if value else DEFAULT_SEMANTIC_SCHOLAR_SEARCH_URL).rstrip("/")
+        resolved = (str(value).strip() if value else DEFAULT_SEMANTIC_SCHOLAR_SEARCH_URL).rstrip("/")
+        if resolved != DEFAULT_SEMANTIC_SCHOLAR_SEARCH_URL:
+            validate_search_service_url(resolved)
+        return resolved
 
     def _headers(self) -> dict[str, str]:
         key = self.search_api_key
