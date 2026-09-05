@@ -474,6 +474,8 @@ SDK 层通过 `agent_config` 接收这些参数。
 
 **运行时 API URL 安全校验开关**：默认会对 Runtime API URL 进行安全校验（例如拒绝私网/本机地址）。仅本地调试场景可通过环境变量 `RUNTIME_API_ALLOW_UNSAFE_URL=true`（等价真值 `1/true/yes`）放宽校验；未设置时保持安全校验开启。生产环境不建议开启该开关，否则会削弱 SSRF 防护。
 
+**搜索服务 URL 安全校验开关**：默认也会对用户配置的联网搜索 `search_url` 进行安全校验（拒绝私网/本机/非公网地址，含 CGNAT 段 `100.64.0.0/10`）。若使用自托管或内网搜索服务（如 `local_search_api`），必须在部署前设置 `SEARCH_SERVICE_ALLOW_UNSAFE_URL=true`，否则创建、更新与执行均会因校验失败返回 HTTP 400。该开关为进程级全局配置，会放宽所有搜索 URL 的校验，仅在可信内网环境中启用。
+
 ---
 
 ### Server 层请求示例
