@@ -2,7 +2,7 @@
 
 ## 维护范围
 
-本文档覆盖字段校验、入口参数校验、secret 清零、安全目录创建、URL 规范化、域名提取、runtime API/embedding/搜索服务 URL SSRF 防护。三类 URL 校验（runtime API、embedding 服务、搜索服务 `search_url`）共享底层 `_is_non_public_ip` 判定逻辑，统一拦截 CGNAT 段、私网、回环等非公网地址。
+本文档覆盖字段校验、入口参数校验、secret 清零、安全目录创建、URL 规范化、域名提取、runtime API/embedding/搜索服务/学术全文 URL SSRF 防护。四类 URL 校验（runtime API、embedding 服务、搜索服务 `search_url`、学术全文 `validate_scholarly_full_text_url`）共享底层 `_is_non_public_ip` 判定逻辑，统一拦截 CGNAT 段、私网、回环等非公网地址。
 
 不覆盖 server API schema 的 Pydantic 模型；该部分属于 `server/` 或 `config/` owner。
 
@@ -18,7 +18,7 @@
 - `interrupt_feedback` 只允许空值、`accepted`、`cancel`、`revise_outline`、`revise_comment`。
 - `zero_secret` 会原地清零 bytearray。
 - 安全目录必须位于指定 safe base 下，并设置 `0o750` 权限。
-- runtime API、embedding 服务和用户配置的搜索服务 URL（`search_url`）默认禁止 localhost、私有地址、保留地址、非公网地址（含 CGNAT 段 100.64.0.0/10，覆盖阿里云 ECS 元数据端点 100.100.100.200）和非 http/https scheme。对 IPv4-mapped IPv6 地址（如 `::ffff:100.100.100.200`），会提取底层 IPv4 地址后再次校验。
+- runtime API、embedding 服务、用户配置的搜索服务 URL（`search_url`）和学术全文下载 URL（`validate_scholarly_full_text_url`，无旁路开关）默认禁止 localhost、私有地址、保留地址、非公网地址（含 CGNAT 段 100.64.0.0/10，覆盖阿里云 ECS 元数据端点 100.100.100.200）和非 http/https scheme。对 IPv4-mapped IPv6 地址（如 `::ffff:100.100.100.200`），会提取底层 IPv4 地址后再次校验。
 
 ## 关键代码路径
 
