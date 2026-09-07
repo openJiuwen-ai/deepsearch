@@ -33,4 +33,4 @@ docker build -f docker/Dockerfile -t <image-tag> .
 
 For local (non-Docker) installs, start the main backend and Telemetry in separate terminals; see the local install guides.
 
-See [DeepSearch REST API (Telemetry)](../../../4.Developer%20Guide/API%20Reference/deepsearch_rest_api.md).
+See [DeepSearch REST API (Telemetry)](../../../3.Developer%20Guide/API%20Reference/deepsearch_rest_api.md).

@@ -49,32 +49,21 @@ DeepSearch includes a manager, query planning, knowledge retrieval, understandin
 - **Understanding and analysis**: Evaluate, refine, expand, and fuse retrieval results and other context.
 - **Result generation**: Answers, report generation, interactive editing, and provenance.
 
-**openJiuwen Studio** is an end-to-end AI Agent platform from build to deploy. **openJiuwen-DeepSearch** is a reference agent: manage models, tools, and knowledge in Studio, submit queries, and experience deep research and reports. **openJiuwen Ops** supports debugging, evaluation, observability, and tuning for agents including DeepSearch.
+**openJiuwen Ops** supports debugging, evaluation, observability, and tuning for agents including DeepSearch.
 
 **Abbreviations**
 
 - **agent-core**: openJiuwen agent-core  
-- **Studio**: openJiuwen Studio  
 - **DeepSearch**: openJiuwen-DeepSearch  
 - **Ops**: openJiuwen Ops  
 
 # 📦 Installation
 
-This section points to full installation guides so you can deploy on common platforms.
+This section points to the installation guide so you can deploy on common platforms.
 
-## Full edition (UI + backend)
+## Installation guides
 
-For users who want the **complete system** including the web UI:
-
-- [Windows](./docs/en/2.Installation%20Guide/DeepSearch%20Full%20Edition/Windows%20Installation.md)
-- [macOS](./docs/en/2.Installation%20Guide/DeepSearch%20Full%20Edition/macOS%20Installation.md)
-- [Linux](./docs/en/2.Installation%20Guide/DeepSearch%20Full%20Edition/Linux%20Installation.md)
-
-The default [Chinese README](./README_zh.md) links to the same topics under `docs/zh/`.
-
-## Other install paths
-
-For custom builds, integration, or source-level debugging, see the SDK-oriented guides:
+DeepSearch is installed via the SDK, covering quick deployment, custom builds, integration, and source-level debugging:
 
 - [DeepSearch SDK installation](./docs/en/2.Installation%20Guide/DeepSearch_SDK/README.md)
 
@@ -82,24 +71,19 @@ More navigation: [Documentation hub](./docs/README.md).
 
 # 🚀 Quick start
 
-The animation below gives a fast tour of core features and the main workflow.
-
-![DeepSearch quick start](./docs/zh/images/DeepSearch介绍.gif)
-
-👉 For a full demo video, download the [complete video](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/readme/9e6e857a424167500d4b4277485ea9b1_raw.mp4).  
-👉 Step-by-step UI guide: [Quick Start](./docs/en/3.Quick%20Start/3.Quick%20Start.md).
+👉 For a full demo video, download the [complete video](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/readme/9e6e857a424167500d4b4277485ea9b1_raw.mp4).
 
 **Note:** It is recommended to use a more powerful model (such as Qwen3-Max or GLM-5) to generate the report, so as to balance output quality and generation stability. If the model’s capability or concurrency handling is insufficient, it may affect the quality or completeness of the report.
 
 # 💻 Developer guide
 
-To work from source or extend DeepSearch, see the [Developer Guide](./docs/en/4.Developer%20Guide/README.md). Contributions are welcome.
+To work from source or extend DeepSearch, see the [Developer Guide](./docs/en/3.Developer%20Guide/README.md). Contributions are welcome.
 
 **Note:** Except when resuming the **same** task (e.g. HITL clarification, outline interaction, cancellation), each call to the DeepSearch SDK **`run`** API should use a **new** `conversation_id`. Do not reuse a `conversation_id` across unrelated runs.
 
 # ❓ FAQ
 
-[FAQ](./docs/en/5.FAQ/README.md).
+[FAQ](./docs/en/4.FAQ/README.md).
 
 # ⚖️ License
 

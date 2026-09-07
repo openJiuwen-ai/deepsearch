@@ -33,4 +33,4 @@ docker build -f docker/Dockerfile -t <镜像标签> .
 
 **本地源码安装**（非 Docker）须分别启动主后端与 Telemetry，见各平台 [本地安装](../本地安装/Linux系统安装.md) 文档。
 
-Telemetry API 说明见 [DeepSearch REST API（Telemetry）](../../../4.开发指南/API文档/deepsearch_rest_api.md)。
+Telemetry API 说明见 [DeepSearch REST API（Telemetry）](../../../3.开发指南/API文档/deepsearch_rest_api.md)。
