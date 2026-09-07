@@ -244,6 +244,7 @@ class StartNode(Start):
             )
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
+            agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -688,7 +689,6 @@ class ReporterNode(BaseNode):
         llm_model_name = adapt_llm_model_name(session, NodeId.REPORTER.value)
 
         visualization_enable = session.get_global_state("config.visualization_enable")
-        coverage_rule_block_enable = session.get_global_state("config.coverage_rule_block_enable")
         rtp = session.get_global_state("search_context.report_type_policy") or {}
         research_intent = session.get_global_state("search_context.research_intent") or {}
         audience_role = (research_intent.get("audience_role", "") or "").strip()
@@ -705,7 +705,6 @@ class ReporterNode(BaseNode):
             user_query=session.get_global_state("search_context.original_query"),
             llm_model_name=llm_model_name,
             visualization_enable=visualization_enable,
-            coverage_rule_block_enable=coverage_rule_block_enable,
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             report_type_policy=rtp,
