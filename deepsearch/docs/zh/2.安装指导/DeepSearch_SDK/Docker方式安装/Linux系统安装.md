@@ -1,4 +1,4 @@
-本指南介绍在 Linux 系统采用 Docker 方式安装 DeepSearch。
+﻿本指南介绍在 Linux 系统采用 Docker 方式安装 DeepSearch。
 
 ## 一、环境准备
 
@@ -24,7 +24,7 @@
 
     ```
     docker version
-    docker-compose version
+    docker compose version
     ```
 
 ### 安装 MySQL（可选组件）

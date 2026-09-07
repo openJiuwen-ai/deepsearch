@@ -1,4 +1,4 @@
-本指南介绍在 Linux 系统采用 Docker 一键拉起方式安装 Deepsearch 完整版服务。
+﻿本指南介绍在 Linux 系统采用 Docker 一键拉起方式安装 Deepsearch 完整版服务。
 
 ## 一、环境准备
 
@@ -30,7 +30,7 @@
 
     ```
     docker version
-    docker-compose version
+    docker compose version
     ```
 
 ## 二、DeepSearch 安装（以下以 Ubuntu 22.04 为例）

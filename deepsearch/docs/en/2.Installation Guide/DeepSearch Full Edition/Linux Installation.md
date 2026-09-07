@@ -1,4 +1,4 @@
-This guide describes installing the DeepSearch full stack on **Linux** using Docker (one-command bring-up).
+﻿This guide describes installing the DeepSearch full stack on **Linux** using Docker (one-command bring-up).
 
 ## 1. Environment preparation
 
@@ -30,7 +30,7 @@ Ensure the machine meets:
 
     ```
     docker version
-    docker-compose version
+    docker compose version
     ```
 
 ## 2. Install DeepSearch (example: Ubuntu 22.04)
