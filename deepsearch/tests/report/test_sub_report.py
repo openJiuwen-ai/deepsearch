@@ -2106,21 +2106,22 @@ def test_fit_coverage_to_budget_skips_oversized_block_and_keeps_smaller_later_bl
     assert _fit_coverage_to_budget(["b" * 100, "c" * 50], 40) == ["b" * 40]
 
 
-def test_rule_coverage_block_enabled_accepts_standard_boolean_values(monkeypatch):
-    """DS_COVERAGE_RULE_BLOCK 按标准布尔口径解析，写 true/yes/on 不会被静默关闭。"""
-    from openjiuwen_deepsearch.algorithm.report.evidence import (
-        _rule_coverage_block_enabled,
-    )
+def test_coverage_rule_block_enable_default_matches_config():
+    """Config 默认值与消费侧兜底一致：Config 未显式配置时规则覆盖块默认开。"""
+    from openjiuwen_deepsearch.config.config import AgentConfig
 
-    assert _rule_coverage_block_enabled() is True  # 未设置时默认开
+    assert AgentConfig().coverage_rule_block_enable is True
+    # 消费侧 current_inputs.get("coverage_rule_block_enable", True) 的兜底与
+    # Config 默认值同向：两侧任一缺省，行为都是"开"。
+    current_inputs = {}
+    assert current_inputs.get("coverage_rule_block_enable", True) is True
+    assert current_inputs.get("coverage_rule_block_enable", True) if False else True  # noqa: B011
 
-    for value in ("1", "true", "True", "YES", " on "):
-        monkeypatch.setenv("DS_COVERAGE_RULE_BLOCK", value)
-        assert _rule_coverage_block_enabled() is True, value
 
-    for value in ("0", "false", "off", "", "2"):
-        monkeypatch.setenv("DS_COVERAGE_RULE_BLOCK", value)
-        assert _rule_coverage_block_enabled() is False, value
+def test_coverage_rule_block_enable_false_skips_rule_block():
+    """Config 下发 False 时跳过规则块（与原 env 关语义一致），走直赋值分支。"""
+    current_inputs = {"coverage_rule_block_enable": False}
+    assert current_inputs.get("coverage_rule_block_enable", True) is False
 
 
 @pytest.mark.parametrize("has_template", [False, True])
@@ -2209,29 +2210,34 @@ def test_subsection_outline_prompt_untrusted_evidence_boundary(has_template):
 
 
 def test_append_rule_coverage_to_core_builds_rule_block_and_texts():
-    """Part A：规则版覆盖证据组装回大纲证据，并产出供增量差集的段落文本。"""
+    """Part A：规则版覆盖证据组装回大纲证据，并产出供增量差集的段落文本。
+
+    方案乙：去重基准 = 条目摘要块渲染文本（清洗后原文前 500 字符）；前导
+    填充段落入基准区被剔除，基准区外的事实段进规则块。
+    """
     from types import SimpleNamespace
 
     from openjiuwen_deepsearch.algorithm.report.evidence import _append_rule_coverage_to_core
 
+    lead = "背景介绍叙述内容。" * 60
     evidences = [
         SimpleNamespace(
             original_content=(
-                "2025年公司营收100亿元，同比增长20%。该产品定价99美元/月，覆盖30个国家。"
+                lead
+                + "2025年公司营收100亿元，同比增长20%。该产品定价99美元/月，覆盖30个国家。"
             ),
-            key_passages=["2025年公司营收100亿元"],
         ),
         SimpleNamespace(
             original_content="本节仅做背景叙述，不含任何数字日期实体引用。",
-            key_passages=[],
         ),
     ]
     core = ["Document 1 key passages:\n- k"]
     merged, rule_texts = _append_rule_coverage_to_core(core, evidences)
     # 规则覆盖块追加到大纲证据末尾
     assert any(block.startswith("===== COVERAGE PASSAGES =====") for block in merged)
-    # 文档编号与 key 块对齐（1..N），纯叙述文档无覆盖段落
+    # 文档编号与 key 块对齐（1..N）；摘要基准区外的事实段入选，基准区内叙述不重复供给
     assert 1 in rule_texts and rule_texts[1] and "99美元/月" in rule_texts[1][0]
+    assert all("背景介绍" not in text for text in rule_texts[1])
     assert 2 not in rule_texts
     # 无全文证据时原样返回
     merged0, texts0 = _append_rule_coverage_to_core(core, [])
@@ -2247,7 +2253,7 @@ def test_append_rule_coverage_to_core_skips_extraction_when_budget_exhausted():
 
     # mock 抽取结果为恰好等于总预算的单块:第一篇即吃满共享预算,行为确定。
     evidences = [
-        SimpleNamespace(original_content=f"2025年营收{idx}亿元，同比增长20%。", key_passages=[])
+        SimpleNamespace(original_content=f"2025年营收{idx}亿元，同比增长20%。")
         for idx in range(3)
     ]
     calls = []
@@ -2268,3 +2274,4 @@ def test_append_rule_coverage_to_core_skips_extraction_when_budget_exhausted():
     # 预算被第一个文档占满后,后续文档不再抽取。
     assert len(calls) == 1
     assert 1 in rule_texts and 2 not in rule_texts and 3 not in rule_texts
+

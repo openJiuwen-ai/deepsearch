@@ -365,6 +365,11 @@ class AgentConfig(BaseModel):
         default=None,
         description="报告类型；None 时由意图识别与澄清机制决定",
     )
+    coverage_rule_block_enable: bool = Field(
+        default=True,
+        description="子报告大纲阶段规则版覆盖证据（coverage passages）开关，"
+                    "关闭后大纲证据仅含条目摘要块",
+    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=5,

@@ -21,6 +21,9 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     format_key_passage_block,
     normalize_key_passages,
 )
+from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
+    outline_summary_text,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import safe_float
 
 
@@ -488,12 +491,11 @@ def build_core_content_list(
     for evidence in fulltext_evidences or []:
         if not isinstance(evidence, FullTextEvidence):
             continue
-        # Truncate full-text content for the outline prompt; the full
-        # content is available separately in classified_content for the
-        # writing prompt.  Outline only needs topic-level context.
-        outline_text = evidence.original_content
-        if len(outline_text) > 500:
-            outline_text = outline_text[:500] + "..."
+        # Truncate full-text content for the outline prompt via the shared
+        # helper (cleaned slice, single source of truth shared with the
+        # coverage dedup basis); the full content is available separately
+        # in classified_content for the writing prompt.
+        outline_text = outline_summary_text(evidence.original_content)
         blocks.append(
             format_key_passage_block(
                 {"key_passages": evidence.key_passages, "passage_text": outline_text},
