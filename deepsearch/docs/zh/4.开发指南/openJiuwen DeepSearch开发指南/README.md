@@ -81,13 +81,13 @@ openJiuwen-DeepSearch 当前支持以下内置联网增强引擎，均通过 `we
 不同引擎的接入方式与配置重点如下：
 
 - `jina` 使用项目内置的直接 HTTP API Wrapper；当 `search_url` 为空时，会自动回退到 `https://s.jina.ai`。国内网络环境如无法访问该默认地址，可显式将 `search_url` 配置为 `https://s.jinaai.cn`。可通过 `extension` 传入 `gl`、`hl`、`location`、`page` 等查询参数。
-- `bocha`、`perplexity` 使用 harness `web_tools` 适配层；支持通过 `extension.timeout_seconds` 控制调用超时，通过 `extension.fetch_webpage` 控制是否继续抓取网页正文。仅当底层 provider 支持 URL 覆盖时，`search_url` 才会生效。国内网络环境如无法访问 Perplexity 默认服务，需要配置可访问的代理或转发地址，并通过 `search_url` 显式覆盖。
+- `bocha`、`perplexity` 使用 harness `web_tools` 适配层；默认不抓取网页正文，直接使用搜索 API 返回的摘要答案作为 content。如需抓取网页正文，可通过 `extension.fetch_webpage=True` 开启。支持通过 `extension.timeout_seconds` 控制调用超时。仅当底层 provider 支持 URL 覆盖时，`search_url` 才会生效。国内网络环境如无法访问 Perplexity 默认服务，需要配置可访问的代理或转发地址，并通过 `search_url` 显式覆盖。
 - `serper` 在研究态 `web_search_tool` 中映射到 Google/Serper Wrapper，便于与服务端配置名称保持一致。
 - `tavily`、`google/serper`、`xunfei`、`petal` 保持原有接入方式，其中公共引擎允许 `search_url=""`，此时使用内置默认地址或 provider 默认行为。
 
 搜索结果进入 Collector 链路前，系统还会执行统一的内容裁剪与归一化：
 
-- `bocha`、`perplexity` 在预抓取网页正文后，会先按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 裁剪，避免超长正文直接进入后续提示词。
+- `bocha`、`perplexity` 默认直接使用搜索 API 返回的摘要答案，不抓取网页正文；当通过 `extension.fetch_webpage=True` 开启抓取后，抓取的正文会先按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 裁剪，避免超长正文直接进入后续提示词。
 - Collector 在 `_structure_result` 阶段会再次按同一上限裁剪内容。
 - `web_page_search_record` 会统一保留标准化字段 `title`、`url`、`content`、`type`，兼容不同引擎返回的 `link`、`source_url`、`snippet`、`summary`、`answer` 等别名字段。
 
@@ -367,7 +367,7 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 ## 用户查询意图交互（Clarification Interaction）
 
-在规划预备阶段，系统会根据用户的原始查询生成 `research_query`，再依据 `research_query` 自动生成若干延伸问题，引导用户提供更多背景信息，以便系统更准确地理解研究目标。
+在规划预备阶段，意图识别 LLM 会根据用户原始查询判断输入是否充足（`needs_clarification`）。当判定不充足时，系统依据 `research_query` 自动生成若干延伸问题，引导用户提供更多背景信息，以便系统更准确地理解研究目标。当判定充足时，系统跳过澄清直接进入大纲生成。
 
 当配置参数：
 
@@ -375,17 +375,19 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 agent_config["workflow_human_in_the_loop"] = True
 ```
 
-系统将执行用户查询意图交互流程，该功能 **默认开启**。
+系统将启用用户查询意图交互流程，该功能 **默认开启**。关闭该参数时一律跳过澄清。
 
 ---
 
 ### 工作流程
 
 1. 用户提交原始查询
-2. 系统根据用户原始查询，意图识别后生成 `research_query` 与 `research_intent`
-3. 系统基于 `research_query` 提出补充问题，并保留 `research_intent` 供后续节点消费
+2. 系统根据用户原始查询，意图识别后生成 `research_query`、`research_intent` 与 `needs_clarification`
+3. 若 `needs_clarification=True`（输入不充足），系统基于 `research_query` 提出补充问题，并保留 `research_intent` 供后续节点消费
 4. 系统中断流程等待用户回答
 5. 用户反馈后系统恢复流程并继续执行 DeepResearch
+
+> 若 `needs_clarification=False`（输入充足），跳过步骤 3-5，直接进入大纲生成。意图识别 LLM 调用失败时默认 `needs_clarification=False`，不进行澄清。
 
 ---
 

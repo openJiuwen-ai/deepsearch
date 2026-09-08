@@ -34,7 +34,7 @@ Agent 配置组装把前端/HTTP 请求转换为 `AgentFactory` 可校验的配�
 
 ## 核心流程
 
-1. `build_agent_config` 读取请求基础字段，写入 search mode、execution method、HITL、溯源、用户反馈、LLM 统计、图表开关和网页正文增强开关。
+1. `build_agent_config` 读取请求基础字段，写入 search mode、execution method、HITL、溯源、用户反馈、LLM 统计、图表开关、网页正文增强开关和报告类型（`report_type`）。
 2. 读取 web 搜索引擎记录，解密 API key，生成 `web_search_engine_config`。
 3. 读取 local 知识库记录，校验所有 `local_search_config_ids` 属于当前 `space_id`。
 4. 从知识库 config 中提取 embedding 配置，并为每个知识库生成 native local search 的 `knowledge_base_configs`。
@@ -51,6 +51,7 @@ Agent 配置组装把前端/HTTP 请求转换为 `AgentFactory` 可校验的配�
 - Milvus URI 由 `MILVUS_HOST` 和 `MILVUS_PORT` 组成，token 来自 `MILVUS_TOKEN`。
 - web search API key 从数据库读取后以 `bytearray` 传入 framework。
 - `DeepSearchRequest.info_collector_webpage_enrich_enable` 默认 `False`，透传为 `AgentConfig.info_collector_webpage_enrich_enable`。
+- `DeepSearchRequest.report_type` 默认 `None`，透传为 `AgentConfig.report_type`，由 StartNode 写入会话 `config.report_type` 供意图识别消费；它是运行期策略而非 Agent 构建参数，缓存键排除该字段（与 `message`、`interrupt_feedback` 同类）。
 
 ## 边界与错误处理
 

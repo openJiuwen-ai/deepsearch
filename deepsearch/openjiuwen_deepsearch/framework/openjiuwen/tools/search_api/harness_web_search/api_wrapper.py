@@ -251,9 +251,11 @@ class BochaSearchAPIWrapper(HarnessWebSearchAPIWrapper[T]):
     """Bocha harness web search adapter."""
 
     provider: str = "bocha"
+    fetch_webpage: bool = False
 
 
 class PerplexitySearchAPIWrapper(HarnessWebSearchAPIWrapper[T]):
     """Perplexity harness web search adapter."""
 
     provider: str = "perplexity"
+    fetch_webpage: bool = False

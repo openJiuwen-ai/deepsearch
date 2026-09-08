@@ -22,8 +22,8 @@
 ## 关键代码路径
 
 - 数据模型：`openjiuwen_deepsearch/framework/openjiuwen/agent/search_context.py`（`Section.doc_selection_debug`）
-- 采集写入：`openjiuwen_deepsearch/algorithm/report/report.py`（`_write_doc_selection_debug`）
-- LLM 输入排除：`openjiuwen_deepsearch/algorithm/report/report.py`（`export_outline_without_plans`，排除 `plans` + `doc_selection_debug`）
+- 采集写入：`openjiuwen_deepsearch/algorithm/report/evidence.py`（`_write_doc_selection_debug`）
+- LLM 输入排除：`openjiuwen_deepsearch/algorithm/report/report_utils.py`（`export_outline_without_plans`，排除 `plans` + `doc_selection_debug`）
 - Excel 导出：`openjiuwen_deepsearch/utils/debug_utils/outline_visualization.py`（`_extract_doc_selection_debug`、`create_dataframes`、`export_to_excel`）
 - 触发入口：`openjiuwen_deepsearch/framework/openjiuwen/agent/editor_team_manager_node.py`（`ResultExporter.export_outline`）
 
@@ -164,7 +164,7 @@
 |------|----------|------|
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/search_context.py` | 新增字段 | `Section` 新增 `doc_selection_debug: Optional[Dict]` |
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/section_context.py` | 新增字段 | `SectionContext` 新增 `doc_selection_debug: Dict`（保证 session dotted key 保留） |
-| `openjiuwen_deepsearch/algorithm/report/report.py` | 修改 + 新增方法 + 新增 dataclass | 新增 `PassageSelectionContext` dataclass 封装 4 个参数；新增 `_write_doc_selection_debug` 写入 `current_inputs["doc_selection_debug"]`；在 `generate_sub_report` 末尾调用 |
+| `openjiuwen_deepsearch/algorithm/report/evidence.py` | 修改 + 新增方法 + 新增 dataclass | 新增 `PassageSelectionContext` dataclass 封装 4 个参数；新增 `_write_doc_selection_debug` 写入 `current_inputs["doc_selection_debug"]`；由 `report.py` 的 `generate_sub_report` 调用 |
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/editor_team_nodes.py` | 修改 | `_do_invoke` 将 `doc_selection_debug` 纳入 `algorithm_output`；`_post_handle` 写入 session；`SectionEndNode.invoke` 从 session 读取并纳入 payload |
 | `openjiuwen_deepsearch/framework/openjiuwen/agent/editor_team_manager_node.py` | 修改 | `_parse_section_state` 提取 `doc_selection_debug`；`_update_state` 写入 `section.doc_selection_debug` |
 | `openjiuwen_deepsearch/utils/debug_utils/outline_visualization.py` | 新增方法 + sheet | 新增 `_extract_doc_selection_debug`；`create_dataframes` 新增 2 个 DataFrame；`export_to_excel` 新增 2 个 sheet 写入 |

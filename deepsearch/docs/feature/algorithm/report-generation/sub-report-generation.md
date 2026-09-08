@@ -40,6 +40,7 @@
 ## 关键代码路径
 
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
+  > `report.py` 已按职责拆分为 11 个模块。子报告生成逻辑分布在：`report.py`（核心编排：`generate_sub_report`、`_write_subsection_reports`、`_write_with_retry` 等）、`evidence.py`（证据生成/抽取/评分/`PassageSelectionContext`，含证据管线编排 `_prepare_evidence`）、`sub_section_outline.py`（子大纲生成/重试：`_generate_sub_section_outline` / `_generate_outline_with_retry`）、`report_parts.py`（子报告 Prompt 构建 `_build_subsection_prompt`、后处理 `_post_process_subsection`、摘要/结论/sidecar/过渡）、`visualization.py`（可视化数据提取/Mermaid 代码生成：`_generate_content_for_visualization`）、`visualization_insertion.py`（图表插入：`_insert_visualization`）。
 - 报告配置：`openjiuwen_deepsearch/algorithm/report/config.py`
 - compact doc info：`openjiuwen_deepsearch/algorithm/report/compact_doc_info.py`
 - 全文抽取管线：`openjiuwen_deepsearch/algorithm/report/report_rationale_fulltext.py`（URL 频次选择、分类内容构建）
@@ -56,12 +57,14 @@
 - `tests/report/test_sub_report.py`
 - `tests/report/test_general_report.py`
 - `tests/report/test_chapter_sidecar.py`
+- `tests/report/test_evidence.py`
+- `tests/report/test_sub_section_outline.py`
 
 ## 核心流程
 
 1. Reporter 读取 outline section、章节计划和 classified contents。
 2. 构建章节局部契约和资料摘要。
-3. LLM 生成当前章节的子大纲；`Reporter.check_chapter_format()` 逐行验证标题格式和顺序，非法输出进入重试。
+3. LLM 生成当前章节的子大纲；`Reporter.check_chapter_format()`（定义于 `markdown_utils.py`）逐行验证标题格式和顺序，非法输出进入重试。
 4. 信息维度矩阵文档选择：rationale 生成 → 抽取式总结+打分 → 按维度 top-k 段落选择（0 分段落不参与选择） → L1/L2 过滤 → 全文抽取（同步调用） → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。
 5. 使用专业版子报告 Prompt，并遵循已批准子大纲的扁平/层级标题契约；Brief 由独立 Brief 工作流处理，不经过本 Reporter 子报告流程。
 6. LLM 按已批准的子大纲生成章节 Markdown。
@@ -93,8 +96,8 @@
 - 扁平子大纲必须恰好包含一个合法一级标题；层级化子大纲必须先出现一级标题，再出现带非空标题文本的 `n.x` 二级标题。
 - 三级编号检查按行首匹配（如 `2.1.1 标题`）；标题行内出现的点分数字（日期区间 `2010.3.12–2021.2.26`、版本号等）不视为三级编号。
 - 子大纲中的额外说明、Markdown 代码围栏、正文或错序标题不能被静默接受。
-- 正文标题必须与已批准子大纲的数量、层级、顺序和文本一致，不能破坏整体报告层级。
-- 重试反馈只允许包含白名单化错误码，例如 `HEADING_COUNT_MISMATCH`、`HEADING_LEVEL_MISMATCH`、`HEADING_TITLE_MISMATCH`、`MERMAID_OUTPUT_FORBIDDEN`、`SUB_REPORT_GENERATION_EXCEPTION`，以及安全的数字位置/计数字段；不把原始失败文本作为下一轮 LLM 指令。
+- 正文标题必须与已批准子大纲的层级、顺序和文本一致；层级化子大纲允许生成超出大纲的额外 H2 标题，但扁平子大纲（单行）不允许额外 Markdown 标题；大纲标题不得缺失或错序。
+- 重试反馈只允许包含白名单化错误码，例如 `HEADING_COUNT_MISMATCH`、`HEADING_TITLE_MISMATCH`、`OUTLINE_HEADING_MISSING`、`DUPLICATE_SUBSECTION_HEADINGS`、`MERMAID_OUTPUT_FORBIDDEN`、`SUB_REPORT_GENERATION_EXCEPTION`，以及安全的数字位置/计数字段；不把原始失败文本作为下一轮 LLM 指令。
 - 敏感日志模式下不输出完整资料和子报告正文。
 
 ## 测试与验证
@@ -105,6 +108,8 @@
 uv run pytest tests/report/test_sub_report.py
 uv run pytest tests/report/test_chapter_sidecar.py
 uv run pytest tests/report/test_tools_in_report.py
+uv run pytest tests/report/test_evidence.py
+uv run pytest tests/report/test_sub_section_outline.py
 uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.py
 ```
 

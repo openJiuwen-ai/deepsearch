@@ -439,7 +439,22 @@ class SubReporterNode(BaseNode):
                     f"{'*' if LogManager.is_sensitive() else updating_state.get('current_outline')}")
 
         reporter = Reporter(updating_state.get('llm_model_name'))
-        success, msg, sub_report_content, classified_content = await reporter.generate_sub_report(updating_state)
+        try:
+            success, msg, sub_report_content, classified_content = await reporter.generate_sub_report(updating_state)
+        except (TypeError, ValueError, AttributeError, KeyError) as e:
+            # Last-resort guard: LLM-returned data may contain unexpected types
+            # that escape inner try/except blocks. Fail this section gracefully
+            # instead of crashing the entire session.
+            logger.error(
+                f"{self.log_prefix} generate_sub_report raised {type(e).__name__}: {e}. "
+                f"Section will be marked as failed.",
+                exc_info=True,
+            )
+            success, msg, sub_report_content, classified_content = (
+                False,
+                format_exception_info(StatusCode.SUB_REPORT_GENERATE_ERROR, e),
+                "", [],
+            )
 
         algorithm_output = dict(success=success, msg=msg,
                                 classified_content=classified_content,

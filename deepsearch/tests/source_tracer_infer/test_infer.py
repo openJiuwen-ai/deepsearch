@@ -75,6 +75,26 @@ async def test_research_infer_sections_ignore_non_body_h1_without_index_shift(
     ] == [0, 1, 2]
 
 
+def test_split_markdown_titles_clean_with_chapter_anchors():
+    """锚点行在 H1 之后，切章 title 不应含锚点 HTML。"""
+    report = (
+        "# Report Title\n\n"
+        "# Table of Contents\n\n[1. First](#chapter-1)\n\n"
+        "# Abstract\n\nSummary.\n\n"
+        '# 1. First Chapter\n<a id="chapter-1"></a>\n\nFirst conclusion.\n\n'
+        '# 2. Second Chapter\n<a id="chapter-2"></a>\n\nSecond conclusion.\n\n'
+        "# Conclusion\n\nOverall conclusion.\n\n"
+        "# References\n\nReference entry.\n"
+    )
+    preprocess = ResearchInferPreprocess({"source_tracer_response": report})
+    sections = preprocess._split_markdown_with_detailed_positions()
+
+    body_titles = [s["title"] for s in sections if s["title"].startswith(("1.", "2."))]
+    assert body_titles == ["1. First Chapter", "2. Second Chapter"]
+    for section in sections:
+        assert "<a id" not in section["title"]
+
+
 class TestSourceTracerInfer:
     """Test cases for SourceTracerInfer core functionality."""
 

@@ -35,3 +35,21 @@ def test_brief_workflow_state_serializes_collection_context_and_review():
 
     assert state.collection_context.executed_queries == ["新能源汽车 月度销量"]
     assert state.evidence_review.writing_guidance.section_guidance[0].section_id == "1"
+
+
+def test_final_result_defaults_to_markdown_content_type():
+    """FinalResult 未显式设置时保持 markdown 类型，向后兼容现有调用方。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import FinalResult
+
+    result = FinalResult()
+    assert result.response_content_type == "text/markdown"
+
+
+def test_final_result_accepts_html_content_type_and_report_keeps_html_field():
+    """HTML 产物可显式标记类型；Report 的 html 中间态字段默认为空。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import FinalResult, Report
+
+    result = FinalResult(response_content="<html></html>", response_content_type="text/html")
+    assert result.response_content_type == "text/html"
+    report = Report(report_content="# md", checked_trace_source_report_content="# md")
+    assert report.report_html == ""

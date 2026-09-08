@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import re
 
+from openjiuwen_deepsearch.algorithm.report.report_utils import sanitize_citation_markers
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 
 
@@ -35,7 +36,6 @@ _IMAGE_LINE_RE = re.compile(r"^!\[[^\]]*]\([^)]+\)\s*$")
 _CITATION_MARKER_RE = re.compile(r"\[(?:checked_)?citation:[^\]]+\]")
 _SENTENCE_END_RE = re.compile(r"[。.!！？；;：:]\s*$")
 _CHECKED_CITATION_RE = re.compile(r"\[checked_citation:[^\]]+\]")
-_LEGACY_CITATION_RE = re.compile(r"\[citation:\d+\]")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _MARKDOWN_MARK_RE = re.compile(r"[*_`>#]")
@@ -197,7 +197,7 @@ def _caption_parts_from_plain_caption_line(line: str) -> tuple[str, str] | None:
 def normalize_caption_markup(text: str) -> str:
     """Remove citation/link/HTML/Markdown markup while preserving caption words."""
     text = _CHECKED_CITATION_RE.sub("", text)
-    text = _LEGACY_CITATION_RE.sub("", text)
+    text = sanitize_citation_markers(text)
     text = _MARKDOWN_LINK_RE.sub(r"\1", text)
     text = _HTML_TAG_RE.sub("", text)
     text = _MARKDOWN_MARK_RE.sub("", text)

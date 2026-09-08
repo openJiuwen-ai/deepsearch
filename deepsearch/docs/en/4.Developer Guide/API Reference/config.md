@@ -101,9 +101,9 @@ tavily ["www.sz.gov.cn", "www.pku.edu.cn"]
 
 - For `tavily`, `extension.include_domains` and `extension.exclude_domains` are forwarded to the Tavily search API to **prefer or exclude** specified sites; this is not a hard allowlist on the framework side. When relevant results are insufficient, Tavily may still return pages whose domains are outside the `include_domains` list.
 - `jina` falls back to `https://s.jina.ai` when `search_url` is empty. In China network environments where that endpoint is unreachable, set `search_url="https://s.jinaai.cn"`; you can also set `search_url` for privately deployed or proxy-forwarded endpoints.
-- `bocha` and `perplexity` honor `search_url` only when the underlying harness provider supports URL override. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
+- `bocha` and `perplexity` use the harness `web_tools` adapter layer. By default they do not fetch webpage content and use the search API summary answer directly. To enable webpage fetching, set `extension.fetch_webpage=True`. `search_url` is only honored when the underlying provider supports URL override. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
 - Search results are normalized before collector-side storage so aliases like `link`, `source_url`, `snippet`, `summary`, and `answer` are mapped into the common `title` / `url` / `content` / `type` shape.
-- Prefetched webpage content and the later collector evaluation input are both bounded by `MAX_COLLECTOR_DOC_CONTENT_LENGTH` to prevent oversized search payloads from reaching downstream LLM evaluation unchanged.
+- The search API summary answer and (when fetching is enabled) prefetched webpage content are both bounded by `MAX_COLLECTOR_DOC_CONTENT_LENGTH` to prevent oversized search payloads from reaching downstream LLM evaluation unchanged.
 
 ## `EmbedModelConfig`
 ```python
@@ -319,7 +319,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 ### Reporting parameters
 - **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k passages selected per rationale by coverage score in a sub-report (_select_by_rationale_coverage). Default value: `15`.
 - **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
-- **visualization_enable** (bool, optional): Whether to enable visualization illustrations in reports. Default value: `False`.
+- **visualization_enable** (bool, optional): Whether to enable visualization illustrations in Professional reports. Default value: `True`. It does not affect Brief report text-and-visual generation.
 
 ### Provenance parameters
 - **source_tracer_citation_verify_max_concurrency_num** (int, optional): Maximum concurrency for citation verification. Default value: `30`.

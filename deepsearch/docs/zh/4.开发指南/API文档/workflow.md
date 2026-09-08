@@ -82,7 +82,7 @@ async run(message: Optional[str] = None, conversation_id: Optional[str] = None, 
 @staticmethod
 register_web_search_tool(custom_web: CustomWebSearchConfig, search_config: WebSearchEngineConfig)
 ```
-注册网络搜索工具并返回引擎名称与映射。研究工作流还会注册内置 PubMed 和 arXiv 作为 secondary 搜索引擎；DeepSearch 只注册当前配置的活动 web 引擎。
+注册网络搜索工具并返回引擎名称与映射。启用学术搜索时，研究工作流还会注册内置 PubMed、arXiv 和 Semantic Scholar 作为 secondary 搜索引擎；DeepSearch 只注册当前配置的活动 web 引擎。学术 provider 请求只尝试一次，失败后 collector 不再重试。
 
 ---
 

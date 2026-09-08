@@ -110,7 +110,12 @@ def filter_passages_by_coverage(
     if not coverage_result or not rationales:
         return selected_passages
 
+    if not isinstance(coverage_result, dict):
+        return selected_passages
+
     coverage_matrix: dict = coverage_result.get("coverage_matrix", {}) or {}
+    if not isinstance(coverage_matrix, dict):
+        coverage_matrix = {}
     if not coverage_matrix:
         return selected_passages
 
@@ -148,7 +153,7 @@ def filter_passages_by_coverage(
             passage_cov = {}
         max_score = 0.0
         for rid in rationale_ids:
-            score = float(passage_cov.get(rid, 0.0) or 0.0)
+            score = safe_float(passage_cov.get(rid, 0.0))
             if score > max_score:
                 max_score = score
         scored_passages.append((max_score, passage))
@@ -208,6 +213,8 @@ def dedup_passages_by_rationale(
     coverage_matrix: dict = {}
     if isinstance(coverage_result, dict):
         coverage_matrix = coverage_result.get("coverage_matrix", {}) or {}
+    if not isinstance(coverage_matrix, dict):
+        coverage_matrix = {}
     filtered_passages: list = (
         coverage_result.get("filtered_passages", []) if isinstance(coverage_result, dict) else []
     ) or []
@@ -228,10 +235,7 @@ def dedup_passages_by_rationale(
         cov = coverage_matrix.get(pkey, {})
         if not isinstance(cov, dict):
             return 0.0
-        try:
-            return float(cov.get(rid, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
+        return safe_float(cov.get(rid, 0.0))
 
     def _get_text(passage: dict) -> str:
         return str(
@@ -411,10 +415,12 @@ def build_classified_content(
     Returns:
         Unified list of dicts with ``index``, ``doc_time``, ``title``,
         ``passage_text`` (passage items only), ``original_content``,
-        ``is_fulltext`` and ``url``. Top-level
+        ``is_fulltext``, ``url`` and ``content_time``. Top-level
         ``data_density``/``reliability`` are document-level values assessed
         once per document/passage, not per rationale, so visualization
-        selection reads them directly.
+        selection reads them directly. ``content_time`` is the passage's
+        fact-level time window (``{start, end}``) under a ``content_date``
+        temporal scope and ``None`` otherwise (including full-text items).
     """
     classified: list[dict] = []
     fulltext_count = len(fulltext_evidences or [])
@@ -432,6 +438,9 @@ def build_classified_content(
                 "data_density": evidence.data_density,
                 "is_fulltext": True,
                 "url": evidence.url,
+                # Full-text items describe an entire document; there is no
+                # single fact-level content_time, so leave it unset (None).
+                "content_time": None,
             }
         )
     for pos, passage in enumerate(remaining_passages or []):
@@ -452,6 +461,9 @@ def build_classified_content(
                 "data_density": float(passage_data_density),
                 "is_fulltext": False,
                 "url": str(passage.get("doc_url", "") or ""),
+                # Propagate the passage's fact-level time (content_date scope);
+                # None for source_date scope / full-text fallback.
+                "content_time": passage.get("content_time"),
             }
         )
     return classified
