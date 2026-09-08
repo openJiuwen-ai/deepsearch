@@ -17,6 +17,10 @@ LLM 调用辅助为算法和 framework 节点提供统一调用入口，使调�
 - `ainvoke_llm_with_stats` 是主要异步调用入口，支持位置参数和关键字参数兼容。
 - `llm_astream` 会把流式 chunk 输出到 session custom stream，并聚合为最终响应。
 - 开启 `stats_info_llm` 时，会记录 workflow 级 token usage。
+- 单次 `[LLM CALL STATISTICS]` 日志同时输出 `cache_tokens`，表示缓存读取/命中的 token，
+  不包含缓存创建或写入量，也不会额外加到 input/total token 中。
+- workflow 总计和 `agent_name_token_usage` 按 agent 累计 `cache_tokens`，并随 session 快照保存、恢复。
+  汇总输出中的 `cache_tokens` 紧接在 `total_tokens` 后面。
 - `agent_llm_timeouts` 支持按 `agent_name` 精确匹配、节点级前缀匹配和 `default` 回退。
 - 工具调用响应会被归一化，并修复可重放的 function arguments。
 - LLM 返回 JSON 字符串时，提供提取、规范化和 Pydantic schema 修复能力。
@@ -52,6 +56,12 @@ LLM 调用辅助为算法和 framework 节点提供统一调用入口，使调�
 - session thinking fallback registry 使用 `llm_runtime.thinking_fallback_active_keys`。
 - `AgentLlmName` 是 agent_name 的集中事实源，供超时配置、统计和测试复用。
 - LLM token usage 字段归一化为 input/output/total 三类非负整数。
+- 缓存读取量兼容 SDK `cache_tokens`、DeepSeek `prompt_cache_hit_tokens`、
+  `prompt_tokens_details.cached_tokens`、`input_tokens_details.cached_tokens`、
+  `input_token_details.cache_read` 和 `cache_read_input_tokens`；也支持嵌套 `token_usage`。
+- usage 中缺失或无效的缓存字段在单次日志中显示 `None`，不参与缓存累计；旧快照不强行补零。
+  部分底层 SDK 会把未上报的缓存量默认设为 `0`，此时本层无法区分默认零与真实零命中。
+  对缺失统计或混合供应商的汇总，不应直接将缓存总量除以所有输入量解释为完整命中率。
 
 ## 边界与错误处理
 
@@ -64,6 +74,7 @@ LLM 调用辅助为算法和 framework 节点提供统一调用入口，使调�
 ## 测试与验证
 
 - `uv run pytest tests/utils/test_llm_utils.py`
+- `uv run pytest tests/utils/test_llm_cache_usage.py`
 - `uv run pytest tests/llm/test_llm_thinking.py`
 - 修改 workflow token 生命周期时，补充运行 `uv run pytest tests/workflow/test_workflow_llm_usage_lifecycle.py`。
 
