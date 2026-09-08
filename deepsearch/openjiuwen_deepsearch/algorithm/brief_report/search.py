@@ -19,7 +19,10 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
     filter_search_results_by_exclude_urls,
     filter_web_records_by_temporal_scope,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ResearchIntent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    ResearchIntent,
+    _resolve_source_date_scope,
+)
 
 
 def _raw_text(item: dict[str, Any]) -> str:
@@ -140,7 +143,7 @@ def normalize_brief_search_results(
             continue
         filtered = filter_search_results_by_exclude_domains(raw_batch, intent.exclude_domains)
         filtered = filter_search_results_by_exclude_urls(filtered, intent.exclude_url, intent.exclude_titles)
-        filtered = filter_web_records_by_temporal_scope(filtered, intent.temporal_scope)
+        filtered = filter_web_records_by_temporal_scope(filtered, _resolve_source_date_scope(intent))
         for rank, raw in enumerate(filtered, start=1):
             if not isinstance(raw, dict) or _is_explicit_low_quality_page(raw):
                 continue

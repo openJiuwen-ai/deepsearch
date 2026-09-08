@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openjiuwen_deepsearch.config.config import AgentConfig
 from server.deepsearch.core.manager.agent import DeepSearchAgentManager
 from server.schemas.deepsearch_run import DeepSearchRequest
 
@@ -185,6 +186,35 @@ def test_build_agent_config_propagates_scholarly_switch_outside_engine_config(mo
     }
 
 
+def test_build_agent_config_propagates_independent_scholarly_config(monkeypatch):
+    manager = DeepSearchAgentManager(agent_factory=_FakeAgentFactory())
+    request = _build_request("conversation-scholarly-config")
+    request.web_search_config.scholarly_search_enabled = True
+    request.web_search_config.scholarly_search_config.max_full_text_results_per_query = 2
+    request.web_search_config.scholarly_search_config.semantic_scholar.search_api_key = "semantic-secret"
+    request.web_search_config.scholarly_search_config.semantic_scholar.max_search_results = 3
+
+    monkeypatch.setattr(
+        manager,
+        "_load_web_search_config",
+        lambda space_id, web_search_config, db: {
+            "search_engine_name": "jina",
+            "search_api_key": bytearray(b"secret"),
+            "search_url": "https://example.com/search",
+            "max_web_search_results": 5,
+            "extension": {},
+        },
+    )
+
+    config = manager.build_agent_config(request, object())
+
+    assert config["scholarly_search_enabled"] is True
+    assert config["scholarly_search_config"]["max_full_text_results_per_query"] == 2
+    assert config["scholarly_search_config"]["semantic_scholar"]["search_api_key"] == bytearray(b"semantic-secret")
+    assert config["scholarly_search_config"]["semantic_scholar"]["max_search_results"] == 3
+    assert "scholarly_max_full_text_results" not in config["web_search_engine_config"]["extension"]
+
+
 def test_build_agent_config_disables_agent_llm_timeouts_without_default(monkeypatch):
     """验证构建配置时不会提前根据 default 缺失禁用 agent LLM timeout。
 
@@ -214,3 +244,39 @@ def test_build_agent_config_disables_agent_llm_timeouts_without_default(monkeypa
     config = manager.build_agent_config(request, object())
 
     assert config["agent_llm_timeouts"] == {"sub_reporter": 120}
+
+
+def test_compute_agent_cache_key_ignores_report_type():
+    """report_type 是运行期策略，不参与 Agent 缓存键。"""
+    request_a = _build_request("conversation-1")
+    request_b = _build_request("conversation-1")
+    request_b.report_type = "brief"
+
+    key_a = DeepSearchAgentManager._compute_agent_cache_key(request_a)
+    key_b = DeepSearchAgentManager._compute_agent_cache_key(request_b)
+
+    assert key_a == key_b
+
+
+def test_build_agent_config_passes_report_type(monkeypatch):
+    """build_agent_config 应透传 report_type。"""
+    factory = _FakeAgentFactory()
+    manager = DeepSearchAgentManager(agent_factory=factory)
+    request = _build_request("conversation-1")
+    request.report_type = "brief"
+
+    monkeypatch.setattr(
+        manager,
+        "_load_web_search_config",
+        lambda space_id, web_search_config, db: {"search_engine_name": "mock"},
+    )
+
+    config = manager.build_agent_config(request, object())
+
+    assert config["report_type"] == "brief"
+
+
+def test_agent_config_accepts_report_type():
+    """AgentConfig 支持 report_type，缺省 None。"""
+    assert AgentConfig().report_type is None
+    assert AgentConfig(report_type="brief").report_type == "brief"

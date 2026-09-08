@@ -100,6 +100,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     SearchContext,
     State,
     ValidationResult,
+    _resolve_source_date_scope,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name, 
                                                                         adapt_vlm_model_name)
@@ -215,6 +216,12 @@ class StartNode(Start):
             agent_config["info_collector_webpage_enrich_enable"] = origin_agent_config.get(
                 "info_collector_webpage_enrich_enable", False
             )
+            agent_config["scholarly_search_enabled"] = origin_agent_config.get(
+                "scholarly_search_enabled", False
+            )
+            agent_config["scholarly_search_config"] = copy.deepcopy(
+                origin_agent_config.get("scholarly_search_config", {})
+            )
             agent_config["web_search_engine_config"] = WebSearchEngineConfig(
                 search_engine_name=origin_agent_config.get("web_search_engine_config", {}).get("search_engine_name", "")
             )
@@ -236,6 +243,7 @@ class StartNode(Start):
                 "vlm_chart_generator_max_iterations", 1
             )
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
+            agent_config["report_type"] = origin_agent_config.get("report_type", None)
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -292,6 +300,7 @@ class IntentRecognitionNode(BaseNode):
             human_in_the_loop=session.get_global_state("config.workflow_human_in_the_loop"),
             web_search_engine_config=session.get_global_state("config.web_search_engine_config"),
             info_collector_search_method=session.get_global_state("config.info_collector_search_method") or "web",
+            provided_report_type=session.get_global_state("config.report_type"),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -342,7 +351,7 @@ class IntentRecognitionNode(BaseNode):
             intent_result.entry_search_results = web_search_output.get("search_results", [])
             apply_web_search_temporal_scope(
                 search_engine_name=web_search_engine_name,
-                temporal_scope=intent_result.research_intent.temporal_scope,
+                temporal_scope=_resolve_source_date_scope(intent_result.research_intent),
             )
         else:
             # 纯本地模式：跳过网络搜索，使用空结果
@@ -359,6 +368,11 @@ class IntentRecognitionNode(BaseNode):
             lang = CHINESE
         if "en" in lang or "english" in lang or "英文" in lang:
             lang = ENGLISH
+
+        provided_report_type = session.get_global_state("config.report_type")
+        if provided_report_type:
+            # 双保险：即使 LLM 意外输出 report_type，也以 API 入参为准
+            algorithm_output.research_intent.report_type = provided_report_type
 
         report_type = algorithm_output.research_intent.report_type
         report_policy = resolve_report_type_policy(report_type)
@@ -393,14 +407,24 @@ class IntentRecognitionNode(BaseNode):
         ))
 
         human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
+        if human_in_the_loop:
+            needs_clarification = algorithm_output.needs_clarification
+        else:
+            needs_clarification = False
         next_node = (
             NodeId.GENERATE_QUESTIONS.value
-            if human_in_the_loop
+            if needs_clarification
             else (NodeId.BRIEF_OUTLINE.value if report_policy.report_type == "brief" else NodeId.OUTLINE.value)
         )
 
+        logger.info(
+            "[IntentRecognitionNode] clarification_triggered=%s human_in_the_loop=%s "
+            "llm_needs_clarification=%s report_type=%s next_node=%s",
+            needs_clarification, human_in_the_loop,
+            algorithm_output.needs_clarification, report_type, next_node,
+        )
         logger.info("[IntentRecognitionNode] End IntentRecognitionNode, next_node=%s", next_node)
-        return dict(language=lang, human_in_the_loop=human_in_the_loop, next_node=next_node)
+        return dict(language=lang, next_node=next_node)
 
 
 class FeedbackHandlerNode(BaseNode):
@@ -417,6 +441,7 @@ class FeedbackHandlerNode(BaseNode):
             messages=session.get_global_state("search_context.messages") or [],
             questions=session.get_global_state("search_context.questions") or "",
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
+            provided_report_type=session.get_global_state("config.report_type"),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -431,18 +456,16 @@ class FeedbackHandlerNode(BaseNode):
         else:
             standardized_feedback = truncate_string(user_feedback, max_length=MAX_QUERY_LENGTH)
             if not standardized_feedback:
-                logger.error("[FeedbackHandlerNode] Invalid feedback, length or type is invalid")
-                error_detail = user_feedback or "empty"
-                standardized_feedback = "Invalid feedback, length is 0 or type is invalid"
+                logger.info("[FeedbackHandlerNode] Empty feedback, skipping reparse and proceeding to outline.")
+                standardized_feedback = ""
 
         algorithm_output = dict(user_feedback=standardized_feedback)
         if error_detail:
             algorithm_output["error_detail"] = error_detail
         if standardized_feedback not in {
             "Invalid feedback_mode",
-            "Invalid feedback, length is 0 or type is invalid",
             FINISH_TASK_FEEDBACK,
-        }:
+        } and standardized_feedback:
             intent_inputs = self._build_intent_reparse_inputs(current_inputs, standardized_feedback)
             reparsed_intent = await recognize_report_intent(intent_inputs)
             algorithm_output["reparsed_intent"] = reparsed_intent.model_dump()
@@ -494,6 +517,7 @@ class FeedbackHandlerNode(BaseNode):
             "original_query": current_inputs.get("original_query", ""),
             "messages": messages,
             "llm_model_name": current_inputs.get("llm_model_name"),
+            "provided_report_type": current_inputs.get("provided_report_type"),
         }
 
     def _merge_reparsed_intent(self, session: Session, reparsed_intent: dict) -> dict:
@@ -501,6 +525,12 @@ class FeedbackHandlerNode(BaseNode):
         incoming_intent = ResearchIntent.model_validate(reparsed_intent.get("research_intent") or {})
 
         merged_intent = current_intent.model_copy(deep=True)
+        if incoming_intent.task_type:
+            merged_intent.task_type = incoming_intent.task_type
+        if incoming_intent.required_dimensions:
+            merged_intent.required_dimensions = incoming_intent.required_dimensions
+        if incoming_intent.comparison_targets:
+            merged_intent.comparison_targets = incoming_intent.comparison_targets
         if incoming_intent.section_count is not None:
             merged_intent.section_count = incoming_intent.section_count
         if incoming_intent.audience_role:
@@ -538,10 +568,13 @@ class FeedbackHandlerNode(BaseNode):
             [paper.url for paper in target_papers if paper.url],
         )
 
-        if incoming_intent.report_type is not None:
+        if not session.get_global_state("config.report_type") and incoming_intent.report_type is not None:
+            # API 指定（config.report_type 非 None）时反馈不可覆盖；无锁定时保持现有合并行为
             merged_intent.report_type = incoming_intent.report_type
-        if incoming_intent.temporal_scope is not None:
-            merged_intent.temporal_scope = incoming_intent.temporal_scope
+        if incoming_intent.source_date_scope is not None:
+            merged_intent.source_date_scope = incoming_intent.source_date_scope
+        if incoming_intent.content_date_scope is not None:
+            merged_intent.content_date_scope = incoming_intent.content_date_scope
 
         return merged_intent.model_dump()
 
@@ -596,23 +629,6 @@ class FeedbackHandlerNode(BaseNode):
                 ),
             )
             return dict(next_node=NodeId.END.value)
-        if user_feedback == "Invalid feedback, length is 0 or type is invalid":
-            exception_info = format_exception_info(
-                StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR,
-                algorithm_output.get("error_detail", ""),
-            )
-            session.update_global_state({"search_context.final_result.exception_info": exception_info})
-            # 添加FeedbackHandlerNode debug日志
-            add_debug_log_wrapper(
-                session,
-                NodeDebugData(
-                    NodeId.FEEDBACK_HANDLER.value,
-                    0,
-                    NodeType.MAIN.value,
-                    output_content=str(exception_info).replace("\\n", "\n"),
-                ),
-            )
-            return dict(next_node=NodeId.END.value)
         if user_feedback == FINISH_TASK_FEEDBACK:
             logger.info(f"[FeedbackHandlerNode] user feedback is FINISH TASK, we will try to finish workflow.")
             # 这里是正常走到结束的，不需要填充exception_info
@@ -641,7 +657,7 @@ class FeedbackHandlerNode(BaseNode):
             )
             apply_web_search_temporal_scope(
                 search_engine_name=web_search_engine_name,
-                temporal_scope=merged_intent_dict.get("temporal_scope"),
+                temporal_scope=_resolve_source_date_scope(merged_intent_dict),
             )
 
         add_debug_log_wrapper(
@@ -770,7 +786,9 @@ class EndNode(End):
         logger.info(f"[EndNode] Start EndNode.")
         final_result = session.get_global_state("search_context.final_result") or {}
         response_content = final_result.get("response_content", "") or ""
-        if response_content:
+        content_type = final_result.get("response_content_type", "") or ""
+        # HTML 产物的 AI 声明已由 HTML 生成节点注入，追加 md 声明会破坏文档结构。
+        if response_content and content_type != "text/html":
             final_result = dict(final_result)
             language = session.get_global_state("search_context.language")
             ai_generated_notice = (
@@ -857,6 +875,10 @@ class GenerateQuestionsNode(BaseNode):
         report_type = research_intent.get("report_type")
         max_gen_question_retry_num = session.get_global_state("config.workflow_max_gen_question_retry_num")
         llm_model_name = adapt_llm_model_name(session, NodeId.GENERATE_QUESTIONS.value)
+        logger.info(
+            "[GenerateQuestionsNode] input: language=%s query=%s report_type=%s entry_search_results_count=%d",
+            language, "**" if LogManager.is_sensitive() else query, report_type, len(entry_search_results),
+        )
         return dict(language=language, query=query, entry_search_results=entry_search_results,
                     max_gen_question_retry_num=max_gen_question_retry_num,
                     llm_model_name=llm_model_name,
@@ -920,6 +942,10 @@ class GenerateQuestionsNode(BaseNode):
 
         questions_text = algorithm_output.get("result")
         session.update_global_state({"search_context.questions": questions_text})
+        logger.info(
+            "[GenerateQuestionsNode] output questions: %s",
+            "**" if LogManager.is_sensitive() else questions_text,
+        )
         add_debug_log_wrapper(
             session,
             NodeDebugData(
@@ -1444,7 +1470,7 @@ class OutlineInteractionNode(BaseNode):
         )
         apply_web_search_temporal_scope(
             search_engine_name=engine_name,
-            temporal_scope=research_intent.get("temporal_scope"),
+            temporal_scope=_resolve_source_date_scope(research_intent),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -2237,7 +2263,7 @@ class SearchStartNode(Start):
         logger.info(
             "[SearchStartNode] resolved workflow_name=%s, agent_config=%s",
             workflow_name,
-            "***" if LogManager.is_sensitive() else origin_agent_config,
+            "***" if LogManager.is_sensitive() else anonymize_config_for_logging(origin_agent_config),
         )
         llm_config = origin_agent_config.get("llm_config", {}).get("general", {})
         retrieval_settings = origin_agent_config.get("retrieval_settings", {})

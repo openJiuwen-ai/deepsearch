@@ -128,3 +128,24 @@ async def test_review_failure_falls_back_to_existing_blocking_gaps(monkeypatch, 
     messages = [record.getMessage() for record in caplog.records]
     assert any("Evidence review attempt failed; attempt=1/3" in message for message in messages)
     assert any("Evidence review retries exhausted; use deterministic fallback" in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_review_prompt_strips_citation_original_content(monkeypatch):
+    """审阅 prompt 的引用注册表必须剥离 original_content 全文（输入瘦身）。"""
+    captured = {}
+
+    async def invoke(llm, messages, **kwargs):
+        captured["messages"] = messages
+        return {"content": '{"writing_guidance": {}, "blocking_gaps": []}'}
+
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.algorithm.brief_report.review.ainvoke_llm_with_stats", invoke
+    )
+
+    await review_brief_evidence(_review_request())
+
+    rendered = str(captured["messages"])
+    assert "original_content" not in rendered  # 全文字段不得进入 prompt
+    assert "https://example.com/data" in rendered  # 来源索引字段保留
+    assert '"source_id": "s1"' in rendered

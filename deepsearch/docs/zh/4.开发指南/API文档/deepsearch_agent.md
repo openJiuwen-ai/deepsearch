@@ -200,6 +200,7 @@ import json
 import uuid
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.utils.log_utils.log_common import RotationConfig
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 
@@ -211,8 +212,7 @@ async def main():
     log_dir = "./output/logs/my_run_logs"
     LogManager.init(
         log_dir=log_dir,
-        max_bytes=100 * 1024 * 1024,
-        backup_count=20,
+        rotation=RotationConfig(max_bytes=100 * 1024 * 1024, backup_count=20),
         level="INFO",
         is_sensitive=False,
     )

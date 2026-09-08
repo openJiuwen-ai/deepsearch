@@ -135,6 +135,25 @@ class TestChartScoreMinimum:
         assert self.verifier.datas[0]["score"] == 0.85
         assert self.verifier.datas[0]["source"] == "Chart Source"
 
+    def test_chart_terminal_failure_keeps_existing_fallback(self):
+        """A chart extraction failure remains renderable with the 0.85 fallback."""
+        self.verifier.datas = [{"content": "图表内容", "valid": True, "score": 0.0}]
+
+        self.verifier.update_citation_data(
+            [0],
+            [{"extract_failed_reason": "parse"}],
+            [{
+                "domain": "chart.com",
+                "citation_content": "图表内容",
+                "fact": "图表事实",
+                "is_chart": True,
+            }],
+        )
+
+        assert self.verifier.datas[0]["valid"] is True
+        assert self.verifier.datas[0]["source"] == "chart.com"
+        assert self.verifier.datas[0]["score"] == 0.85
+
     def test_chart_score_above_threshold_preserved(self):
         """update_citation_data: is_chart=True, result_score > 0.85 → 保留原分数"""
         self.verifier.datas = [

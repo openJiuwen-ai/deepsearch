@@ -2,7 +2,6 @@
 
 import asyncio
 import builtins
-import os
 import tempfile
 from pathlib import Path
 
@@ -25,11 +24,6 @@ def _write_source_file(source: str) -> Path:
         return Path(file_obj.name)
 
 
-def _require_ladybug_integration() -> None:
-    if os.environ.get("JIUWEN_RUN_LADYBUG_TESTS") != "1":
-        pytest.skip("Set JIUWEN_RUN_LADYBUG_TESTS=1 to run real Ladybug integration tests.")
-
-
 class TestLadybugExport:
     @staticmethod
     def test_table_names_are_type_specific():
@@ -41,7 +35,6 @@ class TestLadybugExport:
 
     @staticmethod
     def test_round_trip_with_small_batches():
-        _require_ladybug_integration()
         pytest.importorskip("real_ladybug", reason="real_ladybug not installed")
         src_path = _write_source_file("def hello():\n    pass\n")
         try:

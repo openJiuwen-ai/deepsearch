@@ -7,7 +7,7 @@ A tool that parses source files into typed node trees, exports them as a graph (
 - **Tree-sitter parsers** — Python, Java, C/C++, Rust, Go, JavaScript, TypeScript/TSX, HTML, CSS, Makefile, and reStructuredText/Sphinx — extracting classes, functions (methods/nested/lambdas), properties, local variables, enums, structs, unions, macros, interfaces, duck types, type aliases, imports, calls, and root-level code blocks
 - **Markdown parser** — rule-based heading hierarchy
 - **RST parser** — Sphinx documentation with section hierarchy, directives, toctree, and include/literalinclude
-- **Chunker** — builds top-level embedding chunks from `list[FileNode]` (nested symbols collapse into their nearest file-distance-1 ancestor), runs the same resolution pipeline as graph export, and remaps edges onto `ChunkEdge`s with original node endpoints preserved ([visual demo](./resources/chunker_demo))
+- **Chunker** — builds top-level embedding chunks from `list[FileNode]` (nested symbols collapse into their nearest file-distance-1 ancestor), runs the same resolution pipeline as graph export, and remaps edges onto `ChunkEdge`s with original node endpoints preserved
 - **Graph export** — JSONL + compressed `.jcp` format with 12 semantic edge types (see tables below); intermediate resolution nodes (`import`, `call`, `local_var`) are collapsed and not emitted as graph vertices
 - **LadybugDB export** — optional LadybugDB backend with per-type node/edge tables, configurable batch sizes, and built-in query helpers
 - **Viewer** — React + TypeScript SPA with force-directed graph and tree views

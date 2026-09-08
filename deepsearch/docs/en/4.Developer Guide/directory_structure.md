@@ -54,9 +54,23 @@ openjiuwen_deepsearch/
   - `planner.py` - Generate section plans
   - `router.py` - Decide whether to enter deep search
 - **report/** - Report generation
-  - `report.py` - Main report generation logic
-  - `report_utils.py` - Report utility functions
-  - `config.py` - Report style and formatting
+  - `background_knowledge.py` - Background knowledge extraction mixin
+  - `compact_doc_info.py` - Document info compaction
+  - `config.py` - Report format configuration
+  - `doc_prefilter.py` - Document pre-filtering
+  - `evidence.py` - Evidence extraction and scoring mixin (evidence pipeline orchestration: `_prepare_evidence`)
+  - `markdown_utils.py` - Markdown processing mixin
+  - `reference_utils.py` - Reference management mixin
+  - `report.py` - Core Reporter class (orchestration)
+  - `report_common.py` - Constants, regex patterns, error formatting
+  - `report_parts.py` - Report parts mixin (sub-section prompt building `_build_subsection_prompt`, post-processing `_post_process_subsection`, abstract, conclusion, sidecar)
+  - `report_rationale_fulltext.py` - Full-text evidence enrichment
+  - `report_utils.py` - Report utility classes
+  - `retry_feedback.py` - Retry feedback mixin
+  - `sub_section_outline.py` - Sub-section outline generation mixin (`_generate_sub_section_outline`, `_generate_outline_with_retry`)
+  - `table_caption_utils.py` - Table caption utilities
+  - `visualization.py` - Visualization generation mixin
+  - `visualization_insertion.py` - Visualization insertion mixin
 - **report_template/** - Template generation and parsing
   - `template_generator.py`
   - `template_utils.py`

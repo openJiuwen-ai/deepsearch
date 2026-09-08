@@ -464,6 +464,15 @@ def validate_runtime_request_url(url: str) -> None:
     )
 
 
+def validate_scholarly_full_text_url(url: str) -> None:
+    """Require a public HTTP(S) destination for scholarly full-text downloads."""
+    _validate_http_url_for_ssrf(
+        url,
+        relaxed=False,
+        service_label="scholarly full-text url",
+    )
+
+
 def validate_embedding_service_url(url: str) -> None:
     """
     Validate embedding HTTP service base URL to reduce SSRF risk.

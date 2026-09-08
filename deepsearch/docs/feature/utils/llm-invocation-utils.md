@@ -20,6 +20,7 @@ LLM 调用辅助为算法和 framework 节点提供统一调用入口，使调�
 - `agent_llm_timeouts` 支持按 `agent_name` 精确匹配、节点级前缀匹配和 `default` 回退。
 - 工具调用响应会被归一化，并修复可重放的 function arguments。
 - LLM 返回 JSON 字符串时，提供提取、规范化和 Pydantic schema 修复能力。
+- `safe_float` 对 LLM 返回的非数值分数/字符串数字做安全转换（失败时降级为 0.0），避免下游 `float()` 崩溃；report 模块的 coverage_matrix 消费和图表数值处理均依赖此守卫。
 - thinking switch 被厂商拒绝时，调用层会切换到 fallback model 并在 session 中记住该状态。
 
 ## 关键代码路径
