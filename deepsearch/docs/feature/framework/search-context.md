@@ -17,8 +17,7 @@
 - 大纲交互会追加 `outline_interactions`。
 - hybrid 大纲路由会写入 `outline_execution_method`，用于固定本次大纲生成、交互接受和写作团队选择。
 - 用户反馈处理会更新 `feedback_interaction_count`、`feedback_snapshot_sent` 和 `rewrite_history`。
-- `ResearchIntent.temporal_scope` 保存用户明确的时间范围；collector 仅使用它生成时间化 query 和执行 Tavily
-  `source_date` 的来源日期筛选，不把该字段传入大纲、规划或报告 Prompt。
+- `ResearchIntent.source_date_scope` / `content_date_scope` 保存用户明确的双类时间范围（来源发表时间硬门 + 事实时段软分）；collector 用它们生成时间化 query、执行 Tavily `source_date` 的来源日期筛选，并通过 `build_temporal_scope_prompt_context` 传入 `sub_report_markdown` 写作 Prompt（让写作层据时间范围挑选证据）。旧单值 `temporal_scope` 字段 deprecated，仅供旧 state 输入路由（before 校验器路由后 pop，构造后恒为 None）。大纲、规划 Prompt 仍不消费这些字段。
 - DeepSearch 搜索流程使用 `State`、`Action`、`Result` 和 `SearchFinalResult` 表达搜索状态与结果。
 
 ## 关键代码路径
@@ -48,12 +47,11 @@
 - `FinalResult.workflow_llm_token_usage` 保存可选 token 统计。
 - `Report` 保存总报告文本、子报告、分类内容和溯源校验后的内容。
 - `Outline.sections[*].section_focus` 和 `focus_dimensions` 会生成章节局部合同。
-- `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL、禁引文章标题（`exclude_titles`）、域名约束和可空 `temporal_scope`。
+- `ResearchIntent` 记录任务类型、比较对象、维度、报告类型、include/exclude URL、禁引文章标题（`exclude_titles`）、域名约束和可空 `source_date_scope`/`content_date_scope` 双时间约束。
 - `TemporalScope` 的 `constraint_type` 为 `source_date` 或 `content_date`，并要求 `start_date` /
-  `end_date` 至少存在一个包含边界。`source_date` 可由 Tavily 原生日期参数和 Tavily 发表日期后置过滤共同执行；
+  `end_date` 至少存在一个包含边界；`source_date_scope`/`content_date_scope` 的 `constraint_type` 必须与字段名一致，不一致置 None 并打 warning。`source_date` 可由 Tavily 原生日期参数和 Tavily 发表日期后置过滤共同执行；
   `content_date` 只通过 collector query 表达事实或数据的时间范围，不按来源发布日期过滤。
-- `build_temporal_scope_prompt_context()` 只为 collector query 与补搜 Prompt 生成
-  `has_temporal_scope` 和 `temporal_scope_instruction`，不改变其他研究阶段的 Prompt 契约。
+- `build_temporal_scope_prompt_context(intent, engine_name=None, scholarly_enabled=False)` 为 collector query、补搜和 `sub_report_markdown` 写作 Prompt 生成六字段：`has_temporal_scope`、`source_date_instruction`、`content_date_instruction`、`temporal_scope_instruction`（两条指令的拼接兼容字段，供旧 Prompt 直接消费）、`temporal_embed_in_query`、`temporal_query_instruction`（合并 embed 指引）；无约束时返回同形六键空值。embed 决策由 `resolve_temporal_embed_in_query` 按 引擎×双 scope 决定搜索词带不带"约束时间词"（content_date 始终带；source_date 在 Tavily 等原生引擎不带、其余引擎带、副引擎启用强制带），主题年份始终放行。intent 支持模型实例与 dict 双形态，统一经 `_resolve_source_date_scope`/`_resolve_content_date_scope` 取值，dict 带旧 `temporal_scope` 键时按 constraint_type 回退路由。`engine_name`/`scholarly_enabled` 默认 None/False 向后兼容。
 - `outline_execution_method` 保存本次大纲实际执行方式，当前有效值为 `parallel` 或 `dependency_driving`；缺失或非法时按普通并行大纲处理。
 - `brief_state` 是可空的持久化字典，保存 `BriefWorkflowState`：精简大纲、最终证据、已执行 Query 和搜索结果、审阅写作指引、章节正文及核心摘要。它只供 Brief 分支节点读取，不作为专业版章节子图输入。
 

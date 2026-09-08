@@ -65,7 +65,7 @@
 - `vlm_chart_generator_max_iterations` 范围为 1 到 3。
 - `ServiceConfig.info_collector_webpage_enrich_max_urls` 默认 3，限制单轮最多增强的 URL 数量。
 - `ServiceConfig.info_collector_webpage_enrich_fetch_timeout_seconds` 默认 45，限制单个 URL 抓取超时时间。
-- Brief 使用已有 `info_collector_search_method` 选择 web、local 或 all 搜索适配器，使用 `visualization_enable` 控制受控 Mermaid 阶段，使用 `source_tracer_research_trace_source_switch` 控制最终引用校验；不使用专业版网页正文增强、章节采集循环或 VLM 图表配置。
+- Brief 使用已有 `info_collector_search_method` 选择 web、local 或 all 搜索适配器，使用 `source_tracer_research_trace_source_switch` 控制最终引用校验；不使用 `visualization_enable`、Mermaid、专业版网页正文增强、章节采集循环或 VLM 图表配置。
 
 ## 边界与错误处理
 

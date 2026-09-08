@@ -205,6 +205,7 @@ def register_builtins() -> None:
     from .rst.parse import RstParser
     from .rust.hooks import RustHooks
     from .rust.parse import RustParser
+    from .txt.parse import TxtParser
     from .typescript.hooks import TsHooks
     from .typescript.parse import TsxParser, TypeScriptParser
 
@@ -222,3 +223,4 @@ def register_builtins() -> None:
     _DEFAULT_REGISTRY.register("css", CssParser)
     _DEFAULT_REGISTRY.register("makefile", MakefileParser)
     _DEFAULT_REGISTRY.register("rst", RstParser)
+    _DEFAULT_REGISTRY.register("txt", TxtParser)

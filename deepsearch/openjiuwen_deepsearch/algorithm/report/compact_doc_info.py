@@ -4,6 +4,8 @@
 import logging
 from typing import Any
 
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import safe_float
+
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,8 @@ def build_structured_evidence_guide(
 ) -> str:
     """Build compact writing guidance from existing document-selection results."""
     coverage_matrix = coverage_result.get("coverage_matrix", {})
+    if not isinstance(coverage_matrix, dict):
+        coverage_matrix = {}
     if not selected_passages or not rationales or not coverage_matrix:
         return ""
     if len(selected_passages) != len(selected_passage_keys):
@@ -87,10 +91,7 @@ def build_structured_evidence_guide(
             cov_entry = coverage_matrix.get(passage_key, {})
             if not isinstance(cov_entry, dict):
                 continue
-            try:
-                score = float(cov_entry.get(rationale_id, 0.0) or 0.0)
-            except (TypeError, ValueError):
-                score = 0.0
+            score = safe_float(cov_entry.get(rationale_id, 0.0))
             max_coverage = max(max_coverage, score)
             if score >= 0.3:
                 evidence.append((score, passage, passage_key))
@@ -108,4 +109,26 @@ def build_structured_evidence_guide(
                 f"  - [citation:{citation_index}] {title} (coverage: {score:.2f})"
             )
 
+    return "\n".join(lines)
+
+
+def build_coverage_passage_block(coverage_sections: list[tuple[int, list[str]]]) -> str:
+    """Format the aggregated coverage-passages block appended after key blocks.
+
+    Args:
+        coverage_sections: ``(document index, coverage passage text list)`` pairs.
+            The document index must align with the ``Document N key passages``
+            block numbering so the two channels stay source-traceable.
+
+    Returns:
+        The aggregated coverage block; empty string when there is no content.
+    """
+    if not coverage_sections or not any(passages for _, passages in coverage_sections):
+        return ""
+    lines = ["===== COVERAGE PASSAGES ====="]
+    for index, passages in coverage_sections:
+        if not passages:
+            continue
+        lines.append(f"Document {index} coverage passages:")
+        lines.extend(f"- {passage}" for passage in passages)
     return "\n".join(lines)

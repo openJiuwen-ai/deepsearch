@@ -12,6 +12,9 @@ from openjiuwen.core.session.checkpointer import CheckpointerFactory
 from sqlalchemy.orm import Session
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
+    SCHOLARLY_PROVIDER_NAMES,
+)
 from server.core.database import get_db
 from server.core.manager.model_manager.utils import SecurityUtils
 from server.deepsearch.common.exception.exceptions import (
@@ -103,11 +106,12 @@ class DeepSearchAgentManager:
     @staticmethod
     def _compute_agent_cache_key(request: DeepSearchRequest) -> str:
         """
-        生成 Agent 缓存键。排除仅影响单次对话内容的字段（message、conversation_id），
-        保留与 build_agent_config 相关的全部字段（含 space_id、local_search_config_ids、
-        web_search_config_id、LLM 与各开关），保证换知识库/引擎后不会误复用旧 Agent。
+        生成 Agent 缓存键。排除仅影响单次对话内容的字段（message、interrupt_feedback），
+        以及运行期策略字段（report_type，不参与 Agent 构建），保留与 build_agent_config
+        相关的全部字段（含 space_id、local_search_config_ids、web_search_config_id、
+        LLM 与各开关），保证换知识库/引擎后不会误复用旧 Agent。
         """
-        payload = request.model_dump(exclude={"message", "interrupt_feedback"})
+        payload = request.model_dump(exclude={"message", "interrupt_feedback", "report_type"})
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
@@ -301,6 +305,7 @@ class DeepSearchAgentManager:
             "search_mode": request.search_mode,
             "execute_mode": "commercial",
             "execution_method": request.execution_method,
+            "report_type": request.report_type,
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,
             "outliner_max_section_num": request.outliner_max_section_num,
             "source_tracer_research_trace_source_switch": request.source_tracer_research_trace_source_switch,
@@ -328,6 +333,17 @@ class DeepSearchAgentManager:
                 space_id, request.web_search_config, db
             )
             res["scholarly_search_enabled"] = request.web_search_config.scholarly_search_enabled
+            scholarly_search_config = (
+                request.web_search_config.scholarly_search_config.model_dump()
+            )
+            for provider_name in SCHOLARLY_PROVIDER_NAMES:
+                provider_config = scholarly_search_config.get(provider_name)
+                if not isinstance(provider_config, dict):
+                    continue
+                search_api_key = provider_config.get("search_api_key")
+                if isinstance(search_api_key, str):
+                    provider_config["search_api_key"] = bytearray(search_api_key, encoding="utf-8")
+            res["scholarly_search_config"] = scholarly_search_config
         if request.local_search_config:
             res["local_search_engine_config"] = self._load_local_search_config(
                 space_id, request.local_search_config, db

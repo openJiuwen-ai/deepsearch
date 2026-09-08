@@ -4,7 +4,7 @@
 
 本文档覆盖专业版使用的 `openjiuwen_deepsearch/algorithm/report/` 下的报告生成能力，包括子报告生成、信息维度矩阵段落选择、候选文档预筛、Markdown 标题清理、表格标题归一、可视化 Mermaid 片段生成和最终报告拼接。
 
-本文档不覆盖 Brief 的大纲、证据收集、章节/摘要写作；Brief 仅复用其中的受控 Mermaid 图表能力，完整流程见 [Brief 精简版报告工作流](./brief-report.md)。本文档也不覆盖报告模板上传解析、服务端报告格式转换、全局溯源后处理和 VLM 图表文件生成。子能力细节见：
+本文档不覆盖 Brief 的大纲、证据收集、章节/摘要写作；Brief 不再复用本模块的可视化能力（其图表由自包含 HTML 报告内嵌 ECharts 承载），完整流程见 [Brief 精简版报告工作流](./brief-report.md)。本文档也不覆盖报告模板上传解析、服务端报告格式转换、全局溯源后处理和 VLM 图表文件生成。子能力细节见：
 
 - [子报告生成](./report-generation/sub-report-generation.md)
 - [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)
@@ -20,6 +20,7 @@
 
 - 报告正文以 Markdown 输出，并清理标题编号和过深标题。
 - 最终报告在标题与摘要之间生成一级目录；目录以无项目符号的独立链接行列出正文一级章节，不展开子标题，也不包含摘要、结论和参考文章。
+- 报告生成时在正文每个一级章节标题之后插入独立 `<a id="chapter-N"></a>` HTML 锚点行（编号与目录 `#chapter-N` 链接一一对应），保证原生 Markdown 报告的目录可点击跳转；锚点位于 H1 行之后的独立行，不污染标题文本；导出层转换时会清理这些锚点并改用 `{#chapter-N}` 属性。
 - 子报告根据章节计划和候选资料生成，失败时使用统一错误格式。
 - 候选资料会先去重、按 step 分桶和按评分均衡筛选，再进入 LLM 分类。
 - 表格 caption 会被标准化为稳定的“表 N”或英文对应格式，避免引用错位。
@@ -29,6 +30,8 @@
 ## 关键代码路径
 
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
+  > `report.py` 已按职责拆分为 11 个模块，`report.py` 保留核心 `Reporter` 类（编排调度），其余 mixin 模块包括：
+  > `report_common.py`（常量/正则/错误格式化）、`markdown_utils.py`（Markdown 处理）、`visualization.py`（图表数据抽取与 Mermaid 生成）、`visualization_insertion.py`（图表插入）、`evidence.py`（证据生成/抽取/评分，含证据管线编排 `_prepare_evidence`）、`report_parts.py`（子报告 Prompt 构建 `_build_subsection_prompt`、后处理 `_post_process_subsection`、摘要/结论/sidecar）、`sub_section_outline.py`（子大纲生成 mixin：`_generate_sub_section_outline` / `_generate_outline_with_retry`）、`reference_utils.py`（参考文献去重/重编号）、`retry_feedback.py`（重试反馈）、`background_knowledge.py`（背景知识抽取）。
 - 报告配置：`openjiuwen_deepsearch/algorithm/report/config.py`
 - 文档预筛：`openjiuwen_deepsearch/algorithm/report/doc_prefilter.py`
 - compact doc info：`openjiuwen_deepsearch/algorithm/report/compact_doc_info.py`
@@ -60,6 +63,13 @@
 - `tests/report/test_doc_prefilter.py`
 - `tests/report/test_chapter_sidecar.py`
 - `tests/report/test_tools_in_report.py`
+- `tests/report/test_evidence.py`
+- `tests/report/test_markdown_utils.py`
+- `tests/report/test_reference_utils.py`
+- `tests/report/test_sub_section_outline.py`
+- `tests/report/test_visualization.py`
+- `tests/report/test_visualization_insertion.py`
+- `tests/report/test_type_safety.py`
 
 ## 核心流程
 

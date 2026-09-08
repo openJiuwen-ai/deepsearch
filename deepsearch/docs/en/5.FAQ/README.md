@@ -70,15 +70,25 @@ uv sync --allow-insecure-host github.com --allow-insecure-host pypi.org --allow-
 
 ### Log location
 
-openJiuwen-DeepSearch logs usually live under **`output/logs/common`** at the repo root. Two streams:
+openJiuwen-DeepSearch logs usually live under **`output/logs`** at the repo root, organized by date folders (YYYYMMDD). Logs are split into two categories:
 
-- **common_warning.log** — warnings and above (quick error scanning).
-- **common.log** — general service logging.
+**System-level logs (created at service startup, capture system logs outside report runs):**
+- **output/logs/common/YYYYMMDD/common_system_YYYYMMDD_HHMMSS_hash.log** — system-level general logging.
+- **output/logs/common/YYYYMMDD/common_system_warning_YYYYMMDD_HHMMSS_hash.log** — system-level warnings and above.
+- **output/logs/metrics/YYYYMMDD/metrics_system_YYYYMMDD_HHMMSS_hash.log** — system-level performance timing stats. (Usually never created: timing stats are only produced during report runs, when the system-level handler excludes writes; the file is only written if system-level stats exist outside report runs.)
+
+**Per-run logs (created per report run, capture only that run's logs):**
+- **output/logs/common/YYYYMMDD/common_YYYYMMDD_HHMMSS_hash.log** — per-run report logging.
+- **output/logs/common/YYYYMMDD/common_warning_YYYYMMDD_HHMMSS_hash.log** — per-run warnings and above (quick error scanning).
+- **output/logs/metrics/YYYYMMDD/metrics_YYYYMMDD_HHMMSS_hash.log** — per-run performance timing stats.
 
 Notes:
 
-- `common.log` is mostly DeepSearch; third-party libs typically log only `warning`/`error` to disk (not `debug`/`info`).
+- `common_system_*.log` captures system-level logs (startup, shutdown, request routing, etc.); report logs are automatically excluded during per-run to avoid duplication.
+- `common_*.log` captures a single report run's logs; third-party libs typically log only `warning`/`error` to disk (not `debug`/`info`).
+- Troubleshooting convention: to inspect a specific report run → only look at that run's `common_*.log` / `common_warning_*.log` (do not search `common_system_*.log` for business logs); to inspect system events such as startup, idle periods, or request routing → look at `common_system_*.log`. The `per-run logging started: run_id=xxx, log_prefix=xxx` line in `common_system_*.log` maps a run_id to its per-run log file. **Do not assume a single log file contains all requests of the day** — report logs are spread across per-run files.
 - Very long lines may be truncated except for a few high-value outputs (citations, full reports, etc.).
+- Automatic cleanup: date folders under `common/` and `metrics/` older than `log_retention_days` (default 30 days) are automatically deleted during `LogManager.init` / `new_run`. Configure via `LogManager.init(log_retention_days=...)`; set to 0 to disable.
 
 ### How to tell whether report generation succeeded and locate failures
 
@@ -105,11 +115,13 @@ Errors use this format: `[error_code]error description: detail`, where `detail` 
 - A framework-level **`ALL END`** marker usually follows.
 - `response_content` contains the Markdown report body.
 
-**② Check logs, starting with `common_warning.log`**
+**② Check logs, starting with per-run `common_warning_*.log`**
+
+> Note: The troubleshooting below uses **per-run logs** (`common_*.log` / `common_warning_*.log`), which are generated per report run, not system-level logs (`common_system_*.log`).
 
 1. Search by the task's **`conversation_id`** (the configured `thread_id`) to narrow the log range.
-2. `common_warning.log` should not contain an `ERROR` that blocks the main workflow. A few `WARN` entries, such as model retries or a single empty search result, usually do not prevent the final report. If an `ERROR` appears in logs, still use `final_result.exception_info` as the final failure signal, and use the log to locate the cause.
-3. In `common.log`, look for **`[EndNode] Start EndNode`** and **`Get final result`** with an empty `exception_info`.
+2. `common_warning_*.log` should not contain an `ERROR` that blocks the main workflow. A few `WARN` entries, such as model retries or a single empty search result, usually do not prevent the final report. If an `ERROR` appears in logs, still use `final_result.exception_info` as the final failure signal, and use the log to locate the cause.
+3. In `common_*.log`, look for **`[EndNode] Start EndNode`** and **`Get final result`** with an empty `exception_info`.
 ![Get final result](../../zh/images/FAQ/日志最终报告.png)
 4. Main-path nodes should have completion logs in order, for example: `EntryNode` -> `OutlineNode` / `OutlineInteractionNode` -> `EditorTeamNode` or `DependencyEditorTeamNode` -> `ReporterNode` -> `SourceTracerNode` -> `EndNode`. If provenance reasoning or user feedback is enabled, extra nodes may appear in between.
 
@@ -124,7 +136,7 @@ Errors use this format: `[error_code]error description: detail`, where `detail` 
 
 **⑤ Quick report lookup**
 
-- In **`common.log`**, filter by `conversation_id` / `thread_id`, then search for **`Get final result`**.
+- In **`common_*.log`**, filter by `conversation_id` / `thread_id`, then search for **`Get final result`**.
 - In the matching log entry, `final_result.response_content` is the final report body. Also confirm that `exception_info` is empty so partial content from a failed run is not mistaken for a complete report.
 
 ---
@@ -135,7 +147,7 @@ Errors use this format: `[error_code]error description: detail`, where `detail` 
 
 **Log side: check the final result**
 
-- In **`common.log`**, search for **`Get final result`** and check `final_result.exception_info`.
+- In **`common_*.log`**, search for **`Get final result`** and check `final_result.exception_info`.
 - A non-empty `exception_info` means the workflow ended with an error. Even if `response_content` has content, do not treat it as a complete success.
 - If only `warning_info` is non-empty, the run usually completed with degradation and needs manual quality assessment.
 
@@ -154,7 +166,7 @@ Common error code ranges:
 | Error code range | Typical node / phase |
 |------------------|----------------------|
 | 211600 | `EntryNode` language routing / intent detection |
-| 211700-211702 | `GenerateQuestionsNode` / `FeedbackHandlerNode` HITL interaction |
+| 211700-211701 | `GenerateQuestionsNode` / `FeedbackHandlerNode` HITL interaction |
 | 211800 | `OutlineNode` outline generation |
 | 211801 | Subgraph `PlanReasoningNode` task planning |
 | 211901 | Empty section information collection |
@@ -164,9 +176,9 @@ Common error code ranges:
 
 **③ Search logs by `conversation_id` / `thread_id`**
 
-1. Open **`common_warning.log`** and filter by `conversation_id` / `thread_id`.
+1. Open **`common_warning_*.log`** and filter by `conversation_id` / `thread_id`.
 2. Search for **`ERROR`** and note the nearby node name, such as `[OutlineNode]`, `[ReporterNode]`, `[EditorTeamNode]`, `plan_reasoning`, or `sub_reporter`.
-3. If `exception_info` contains a concrete exception message, search the same keyword in **`common.log`** to find the full stack and surrounding context.
+3. If `exception_info` contains a concrete exception message, search the same keyword in **`common_*.log`** to find the full stack and surrounding context.
 4. Use **3.3 Which nodes matter** to decide whether the issue is local to one section or breaks the full report.
 
 **④ Drill down through subgraph / main graph**
@@ -177,8 +189,8 @@ Common error code ranges:
 **⑤ Recommended order**
 
 ```
-final_result.exception_info  ->  error code table  ->  common_warning.log filtered by thread_id
-->  node name  ->  common.log exception details  ->  optional node_debug_log intermediate outputs
+final_result.exception_info  ->  error code table  ->  common_warning_*.log filtered by thread_id
+->  node name  ->  common_*.log exception details  ->  optional node_debug_log intermediate outputs
 ```
 
 ## 3. Model errors

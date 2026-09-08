@@ -1,5 +1,8 @@
 # Markdown 可视化
 
+> 注：Brief 报告不再复用本 Mermaid 图表链路；brief 的图表由 BRIEF_HTML_REPORTER 生成的自包含
+> HTML（内嵌 ECharts）承载，本链路仅适用于 professional 报告。
+
 ## 维护范围
 
 本文档覆盖报告生成中的 Markdown Mermaid 可视化能力，包括从检索后的章节资料中选择可视化候选、抽取图表数据、校验抽取 schema、单位归一化、生成 Mermaid 片段，以及把 Mermaid 图表插入到子报告正文中。
@@ -33,10 +36,16 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 
 当前实现不在正文写完后再次扫描草稿正文、生成候选、重跑图表抽取或执行重复数据去重预算控制。
 
+### 并发控制
+
+可视化数据提取阶段（步骤 2）中，每个候选资料最多触发 4 次 LLM 调用（数据抽取、可溯源校验、合规校验、可选归一化），每轮最多重试 3 次。为避免同一章节内大量并发 LLM 调用超出模型 API 的 TPM（Tokens Per Minute）限制，`_generate_content_for_visualization` 使用 `asyncio.Semaphore` 限制同一 section 内的最大并发 task 数为 `MAX_CONCURRENT_VISUALIZATION_TASKS`（默认 5）。该信号量是 section 内局部信号量，不跨 section 共享。
+
 ## 关键代码路径
 
 - 报告工具：`openjiuwen_deepsearch/algorithm/report/report_utils.py`
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
+- 可视化生成：`openjiuwen_deepsearch/algorithm/report/visualization.py`（图表数据抽取与 Mermaid 生成 mixin）
+- 可视化插入：`openjiuwen_deepsearch/algorithm/report/visualization_insertion.py`（图表插入 mixin）
 
 相关 Prompt：
 
@@ -51,6 +60,9 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 - `tests/report/test_general_report.py`
 - `tests/report/test_tools_in_report.py`
 - `tests/report/test_sub_report.py`
+- `tests/report/test_visualization.py`
+- `tests/report/test_visualization_insertion.py`
+- `tests/report/test_type_safety.py`
 - `tests/algorithm/report_export/test_mermaid_renderer.py`
 
 ## 核心流程
@@ -102,6 +114,8 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 uv run pytest tests/report/test_general_report.py
 uv run pytest tests/report/test_tools_in_report.py
 uv run pytest tests/report/test_sub_report.py
+uv run pytest tests/report/test_visualization.py
+uv run pytest tests/report/test_visualization_insertion.py
 uv run pytest tests/algorithm/report_export/test_mermaid_renderer.py
 ```
 

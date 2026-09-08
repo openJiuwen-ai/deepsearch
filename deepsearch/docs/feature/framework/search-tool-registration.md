@@ -66,21 +66,23 @@ contextvar，避免节点直接持有全局工具对象。
 
 ### 学术垂直搜索引擎契约
 
-- PubMed 和 arXiv 默认不注册。仅当服务端请求的 `web_search_config.scholarly_search_enabled` 显式为 `true` 时，
-  research workflow 才注册这两个引擎并允许 collector 进行 query 级垂直路由。
-- 内置 web engine 包含 `pubmed` 和 `arxiv`。它们通过统一 `web_search_tool` 暴露，通常由 collector query item 的
-  `search_engine_name` 作为 secondary vertical engine 触发。
-- PubMed wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/pubmed.py`，
-  arXiv wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/arxiv.py`，
-  共享默认 URL、XML namespace 和响应辅助工具位于 `scholarly_search/common.py`。
+- PubMed、arXiv 和 Semantic Scholar 默认不注册。仅当
+  `AgentConfig.scholarly_search_enabled` 显式为 `true` 时，research workflow 才注册三个引擎；Web 搜索引擎 extension 中的旧同名开关不再生效。
+- 学术参数统一位于独立的 `AgentConfig.scholarly_search_config`：根级字段控制 query 级全文策略，`pubmed`、`arxiv` 和 `semantic_scholar` 子配置分别控制端点、密钥、单引擎结果数和请求速率。学术 wrapper 不继承主 Web 引擎配置。
+- 三个引擎通过统一 `web_search_tool` 暴露。Collector query item 使用复数字段 `search_engine_names`，生成的
+  `RetrievalQuery` 聚合一个 `primary_engine` 和零到三个 `secondary_engines`。
+- 普通学术、医学、技术和医学技术交叉查询分别路由到对应的学术引擎组合；开关关闭时辅助引擎列表为空。
+- 同一 query 的多引擎结果在 Collector 内统一融合、去重和排序，再按照
+  `RetrievalQuery.max_full_text_results` 的 query 级 Top-N 预算获取全文。
+- wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/`；共享请求控制、
+  响应辅助函数及全文策略位于 `common.py` 和 `full_text.py`。
 - PubMed wrapper 使用 `ESearch -> EFetch XML`。返回 item 的 `content` 优先使用 abstract 或 structured abstract；
   无 abstract 时才退回期刊、发布日期和作者等书目信息。
 - arXiv wrapper 使用 Atom API。返回 item 的 `content` 使用论文 summary，`url` 使用 arXiv entry id。
-- PubMed 的 ESearch、PubMed EFetch 和 PMC EFetch 在进程内跨 wrapper 实例共享请求间隔；arXiv Atom API 同样共享请求间隔，
+- Semantic Scholar wrapper 返回标准化论文元数据、provider ID 和可用的开放全文候选地址。
+- PubMed 的 ESearch、PubMed EFetch 和 PMC EFetch 在进程内跨 wrapper 实例共享请求间隔；arXiv Atom API 和 Semantic Scholar 同样共享各自的请求间隔，
   HTML/PDF 全文下载在进程内共享并发上限 2。429 冷却会同时约束对应 provider 的后续请求。
-- HTTP 429、500、502、503、504、连接错误和超时最多尝试 3 次；429 优先遵守最长 30 秒的 `Retry-After`，
-  其余临时错误按 1 秒、2 秒退避。其他 4xx、错误 payload 和内容解析错误不做网络重试，耗尽后交由 collector 的
-  primary/secondary 策略决定 fail-fast 或 fallback。统一 web 搜索工具的 `web_search_max_qps` 仍约束顶层工具调用频率。
+- 每个学术 provider HTTP 请求只尝试一次。发生 HTTP、连接、超时、payload 或内容解析错误时，统一 web 搜索工具返回空结果并标记 `retryable=false`，collector 不再调用该学术引擎。429 仍会更新对应 provider 的共享冷却时间。普通 Web 引擎的临时错误重试分类保持不变，`web_search_max_qps` 仍约束顶层工具调用频率。
 
 ## 边界与错误处理
 
@@ -97,6 +99,9 @@ contextvar，避免节点直接持有全局工具对象。
 - `uv run pytest tests/tools/test_web_search_rate_limit.py`
 - `uv run pytest tests/tools/test_runtime_api.py`
 - `uv run pytest tests/tools/search_api/test_scholarly_search.py`
+- `uv run pytest tests/tools/search_api/test_semantic_scholar.py`
+- `uv run pytest tests/tools/search_api/test_scholarly_full_text.py`
+- `uv run pytest tests/info_collector/test_academic_search_routing.py`
 - `uv run pytest tests/tools/search_api/test_external_import_tool.py`
 - 修改具体搜索引擎 wrapper 时，运行 `uv run pytest tests/tools/search_api/`。
 

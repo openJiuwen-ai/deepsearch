@@ -16,12 +16,22 @@ import requests
 
 from openjiuwen.core.common.security.ssl_utils import SslUtils
 
-DEFAULT_PUBMED_SEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-DEFAULT_ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
 ATOM_NAMESPACE = "http" + "://www.w3.org/2005/Atom"
 RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 MAX_RETRY_DELAY_SECONDS = 30.0
+DEFAULT_MAX_FULL_TEXT_DOWNLOAD_BYTES = 25 * 1024 * 1024
 R = TypeVar("R")
+
+
+def empty_full_text_fields() -> dict[str, Any]:
+    return {
+        "full_text": "",
+        "content_type": "abstract",
+        "full_text_url": "",
+        "full_text_format": "",
+        "full_text_status": "unavailable",
+        "full_text_truncated": False,
+    }
 
 
 class ScholarlySearchResponseError(RuntimeError):

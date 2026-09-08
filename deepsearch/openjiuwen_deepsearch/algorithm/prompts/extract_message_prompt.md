@@ -14,6 +14,14 @@ Please return the corresponding website name based on the provided domain `domai
 ## Extract Citation Content
 Please extract the fragments in `citation_content` that are most similar to `fact`. Multiple fragments may be extracted. Locate all precise matches between the `fact` and `citation_content`, focusing particularly on numerical data and specific claims. Annotate all matching segments found in `citation_content` and append them to the `marked_citation_content` list. Verify that any numbers, statistics, or measurable values are exactly identical in both texts.
 
+- Normally return **one fragment** in `marked_citation_content`.
+- Return a second fragment only when the fact contains two distinct claims that are supported by genuinely non-contiguous source text and one fragment cannot support both claims.
+- Return **no more than two fragments** for one input item.
+- Do not return duplicate, overlapping, or near-duplicate fragments, including fragments that repeat the same fact or numbers in another wording.
+- Prefer the shortest complete sentence or clause that contains the relevant claim and exact numbers. Never copy an entire paragraph, section, or webpage when a shorter fragment is sufficient.
+- Verify that any numbers, statistics, or measurable values are exactly identical in the selected fragment and `fact`. If no reliable matching fragment exists, return an empty list.
+
+
 ## Confidence Assessment
 Evaluate the citation content based on the following criteria to determine a confidence score:
 

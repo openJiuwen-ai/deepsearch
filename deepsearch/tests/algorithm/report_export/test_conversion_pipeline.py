@@ -152,6 +152,65 @@ def test_add_report_chapter_ids_supports_legacy_bulleted_toc() -> None:
     assert "# 1. First Chapter {#chapter-1}" in converted
 
 
+def test_add_report_chapter_ids_strips_anchor_line_after_h1() -> None:
+    """锚点行在 H1 之后（_add_chapter_anchor_ids 产物）应被清理并转为 {#chapter-N}。"""
+    from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
+        add_report_chapter_ids,
+    )
+
+    markdown_text = (
+        "# 报告\n\n"
+        "# 目录\n\n"
+        "[1. 第一章](#chapter-1)\n\n"
+        "[2. 第二章](#chapter-2)\n\n"
+        '# 1. 第一章\n<a id="chapter-1"></a>\n\n正文一\n\n'
+        '# 2. 第二章\n<a id="chapter-2"></a>\n\n正文二\n'
+    )
+
+    converted = add_report_chapter_ids(markdown_text)
+
+    # 锚点行被清理
+    assert '<a id="chapter-1"></a>' not in converted
+    assert '<a id="chapter-2"></a>' not in converted
+    # 标题行干净，{#chapter-N} 属性正确添加
+    assert "# 1. 第一章 {#chapter-1}" in converted
+    assert "# 2. 第二章 {#chapter-2}" in converted
+    # 幂等：再调一次结果不变
+    assert add_report_chapter_ids(converted) == converted
+
+
+def test_html_export_strips_anchor_line_and_produces_clean_h1_ids(tmp_path: Path) -> None:
+    """端到端：带锚点行的 markdown 转 HTML 后 h1 id 唯一且无残留锚点。"""
+    from openjiuwen_deepsearch.algorithm.report_export.html_export import (
+        ConvertOptions,
+        convert_md_to_html,
+    )
+
+    markdown_path = tmp_path / "report.md"
+    html_path = tmp_path / "report.html"
+    markdown_path.write_text(
+        "# 报告\n\n"
+        "# 目录\n\n"
+        "[1. 第一章](#chapter-1)\n\n"
+        "[2. 第二章](#chapter-2)\n\n"
+        '# 1. 第一章\n<a id="chapter-1"></a>\n\n正文一\n\n'
+        '# 2. 第二章\n<a id="chapter-2"></a>\n\n正文二\n',
+        encoding="utf-8",
+    )
+
+    convert_md_to_html(markdown_path, html_path, options=ConvertOptions())
+    html = html_path.read_text(encoding="utf-8")
+
+    # 每个章节只有一个 h1 id，无重复
+    assert html.count('id="chapter-1"') == 1
+    assert html.count('id="chapter-2"') == 1
+    # 无残留 <a id> 标签
+    assert '<a id="chapter-' not in html
+    # TOC 链接存在
+    assert 'href="#chapter-1"' in html
+    assert 'href="#chapter-2"' in html
+
+
 def test_docx_export_converts_report_toc_to_internal_links(tmp_path: Path) -> None:
     """DOCX 目录应链接到章节书签，而不是创建伪外部链接。"""
     from openjiuwen_deepsearch.algorithm.report_export.docx_export import convert_md_to_docx

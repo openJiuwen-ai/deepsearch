@@ -1663,6 +1663,74 @@ def test_iter_math_spans_yields_block_math_with_numeric_content():
     assert spans[0] == (8, 20)
 
 
+def test_strip_redundant_mathop_strips_operatorname_wrapper():
+    """_strip_redundant_mathop 应剥离 \\mathop{...} 外层，保留 \\operatorname。
+
+    回归测试：\\arg\\max 经 _merge_arg_min_max 重写为 \\mathop{\\operatorname{arg\\,max}}
+    后，mathml2omml 无法解析 \\mathop 包裹的 \\operatorname，需剥掉外层。
+    """
+    from openjiuwen_deepsearch.algorithm.report_export.word_utils import (
+        _strip_redundant_mathop,
+    )
+
+    result = _strip_redundant_mathop(r"\mathop{\operatorname{arg\,max}}_{\theta}")
+    assert result == r"\operatorname{arg\,max}_{\theta}"
+
+
+def test_strip_redundant_mathop_strips_starred_operatorname_wrapper():
+    """_strip_redundant_mathop 应剥离 \\mathop{...} 外层（含 \\operatorname* 星号变体）。
+
+    回归测试：\\operatorname* 同样会被 mathml2omml 拒绝，需一并剥离。
+    """
+    from openjiuwen_deepsearch.algorithm.report_export.word_utils import (
+        _strip_redundant_mathop,
+    )
+
+    result = _strip_redundant_mathop(r"\mathop{\operatorname*{arg\,max}}_{\theta}")
+    assert result == r"\operatorname*{arg\,max}_{\theta}"
+
+
+def test_strip_redundant_mathop_leaves_non_operatorname_unchanged():
+    """_strip_redundant_mathop 应保留非 \\operatorname 的 \\mathop{...} 包裹。
+
+    回归测试：\\mathop{\\mathrm{...}}（如 \\mathrm{diag}）不属于
+    需要剥离的 \\operatorname 形态，必须原样保留。
+    """
+    from openjiuwen_deepsearch.algorithm.report_export.word_utils import (
+        _strip_redundant_mathop,
+    )
+
+    assert _strip_redundant_mathop(r"\mathop{\mathrm{diag}}_{x}") == r"\mathop{\mathrm{diag}}_{x}"
+
+
+def test_strip_redundant_mathop_leaves_bare_identifier_unchanged():
+    """_strip_redundant_mathop 应保留包裸标识符的 \\mathop{...} 包裹。
+
+    回归测试：\\mathop{X} 中的 X 不是 \\operatorname 命令，剥离它
+    会误伤用户原始书写，必须原样保留。
+    """
+    from openjiuwen_deepsearch.algorithm.report_export.word_utils import (
+        _strip_redundant_mathop,
+    )
+
+    assert _strip_redundant_mathop(r"\mathop{X}_{\theta}") == r"\mathop{X}_{\theta}"
+
+
+def test_normalize_latex_for_omml_strips_mathop_after_merge_arg_min_max():
+    """_normalize_latex_for_omml 应先合并 \\arg\\min/\\arg\\max，再剥离冗余 \\mathop。
+
+    回归测试：\\mathop{\\arg\\max} 必须被重写为 \\operatorname{arg\\,max}
+    后才轮到 \\mathop 剥离；若调换顺序，链式处理结果中仍会残留 \\mathop。
+    """
+    from openjiuwen_deepsearch.algorithm.report_export.word_utils import (
+        _normalize_latex_for_omml,
+    )
+
+    result = _normalize_latex_for_omml(r"\mathop{\arg\max}_{\theta}")
+    assert r"\mathop{" not in result, f"expected \\mathop stripped, got: {result}"
+    assert r"\operatorname{arg\,max}" in result, f"expected \\operatorname form, got: {result}"
+
+
 def test_convert_md_to_docx_renders_block_math_with_numeric_content(tmp_path):
     """DOCX 应将 $$1$$、$$2026$$ 等纯数字块级公式转为 OMML。
 
@@ -1778,3 +1846,33 @@ def test_convert_md_to_html_keeps_nested_list_level_across_font_description(tmp_
         "技术维度：内容。",
         "经济维度：内容。",
     ]
+
+
+def test_convert_md_to_docx_renders_mathop_argmax_bug_formula(tmp_path):
+    """Regression for Issue #211: \\mathop{\\arg\\max}_{\\theta} must render as OMML, not literal $$ text."""
+    from openjiuwen_deepsearch.algorithm.report_export.docx_export import convert_md_to_docx
+    import zipfile
+    md_content = (
+        "$$\\hat{\\theta}_{\\text{MLE}} = \\mathop{\\arg\\max}_{\\theta} p(D|\\theta) = \\mathop{\\arg\\max}_{\\theta} [\\log p(D|\\theta)]$$\n\n"
+        "$$\\hat{\\theta}_{\\text{MAP}} = \\mathop{\\arg\\max}_{\\theta} p(\\theta|D) = \\mathop{\\arg\\max}_{\\theta} \\frac{p(D|\\theta)p(\\theta)}{p(D)}$$\n\n"
+        "$$\\hat{\\theta}_{\\text{MAP}} = \\mathop{\\arg\\max}_{\\theta} p(D|\\theta)p(\\theta) = \\mathop{\\arg\\max}_{\\theta} [\\log p(D|\\theta) + \\log p(\\theta)]$$\n"
+    )
+    md_path = tmp_path / "bug.md"
+    md_path.write_text(md_content, encoding="utf-8")
+    docx_path = tmp_path / "bug.docx"
+    convert_md_to_docx(md_path, docx_path)
+    with zipfile.ZipFile(docx_path) as z:
+        document_xml = z.read("word/document.xml").decode("utf-8")
+    # Exactly 3 OMML elements (one per bug formula block); use ">" to disambiguate from <m:oMathPara>
+    assert document_xml.count("<m:oMath>") == 3, f"expected 3 <m:oMath>, got {document_xml.count('<m:oMath>')}"
+    # No literal $$ delimiters leaked as text
+    import re
+    text_nodes = re.findall(r"<w:t[^>]*>([^<]*)</w:t>", document_xml)
+    leaked = [t for t in text_nodes if "$$" in t or "mathop" in t or "\\arg\\max" in t]
+    assert not leaked, f"unexpected LaTeX literal leaked into <w:t>: {leaked}"
+    # OMML namespace must be declared
+    assert 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"' in document_xml
+    # OMML must contain operator text (arg + max) somewhere; chars are split
+    # into individual <m:t> runs by mathml2omml, so join the runs before checking
+    omml_text = "".join(re.findall(r"<m:t[^>]*>(.*?)</m:t>", document_xml))
+    assert "arg" in omml_text and "max" in omml_text, f"OMML missing operator text: {omml_text}"
