@@ -789,9 +789,11 @@ _COVERAGE_DENSITY_MIN_LEN = 40
 #: 合并跨度上限：相邻高分段连续并入一个证据块的最多段数，防止雪崩式吞并。
 _COVERAGE_MAX_MERGE_SPAN = 5
 #: 条目摘要块截断长度（`report_rationale_fulltext.build_core_content_list`
-#: 对 fulltext 条目渲染原文前 500 字符）。coverage 侧去重基准沿用该渲染口径：
-#: 摘要块里已有的段落不重复供给（方案乙：基准 = 大纲实际渲染文本，取代与已
-#: 退役 key_passages 通道的去重）。
+#: 对 fulltext 条目渲染原文前 500 字符）。coverage 抽取只取该切片之后的尾部：
+#: 摘要块已供给的内容抽取阶段压根不碰，摘要块之外的内容全部供给、不做判重
+#: （宁多供不漏供，预算由单文档/章节共享上限兜底）。与渲染共用同一清洗与
+#: 切片线（方案乙：基准 = 大纲实际渲染文本），取代与已退役 key_passages
+#: 通道的去重。
 OUTLINE_SUMMARY_MAX_CHARS = 500
 
 
@@ -799,15 +801,25 @@ def outline_summary_text(content: str, max_chars: int = OUTLINE_SUMMARY_MAX_CHAR
     """按大纲条目摘要块的渲染口径返回文本（清洗后前 N 字符）。
 
     渲染层（`report_rationale_fulltext.build_core_content_list`）对 fulltext 条目
-    渲染原文前 500 字符 + ``"..."`` 截断标记。coverage 去重基准在此之上先做
-    `_normalize_coverage_content` 清洗（剥 HTML/控制符）——因为比对对象（候选
-    池段落、覆盖抽取段落）都是清洗后的产物，基准与被比文本必须同规，否则
-    HTML 残片会让子串/相似度判定假阴性（漏检方向）。
+    渲染原文前 500 字符 + ``"..."`` 截断标记。本函数与
+    `outline_summary_tail_text` 共用同一清洗与切片线，保证摘要块与其尾部
+    覆盖抽取区精确互补。
     """
     text = _normalize_coverage_content(str(content or ""))
     if len(text) > max_chars:
         return text[:max_chars]
     return text
+
+
+def outline_summary_tail_text(content: str, max_chars: int = OUTLINE_SUMMARY_MAX_CHARS) -> str:
+    """返回清洗后超出摘要块切片线的尾部（覆盖抽取的供给区）。
+
+    与 `outline_summary_text` 在同一归一化文本上取互补切片，因此尾部内容
+    必然不含摘要块已渲染的部分——覆盖证据直接从尾部抽取，无需再与摘要块
+    判重。短文档（清洗后 ≤ max_chars）尾部为空，返回空串。
+    """
+    text = _normalize_coverage_content(str(content or ""))
+    return text[max_chars:]
 
 
 @dataclass(frozen=True)
@@ -1408,84 +1420,6 @@ def _is_duplicate_text(text: str, reference: str, threshold: float) -> bool:
     if shorter and shorter in longer and len(shorter) >= 0.6 * len(longer):
         return True
     return False
-
-
-def exclude_passages(
-    coverage_passages: list[CoveragePassage],
-    basis_passages: list[str],
-    similarity_threshold: float = _COVERAGE_NEAR_DEDUP_RATIO,
-) -> list[CoveragePassage]:
-    """剔除覆盖证据中与去重基准段落高度重复的部分（方案乙口径）。
-
-    去重基准是条目摘要块的实际渲染文本（fulltext=清洗后原文前 500 字符 /
-    passage=选中段落）：基准里已供给的内容不再经覆盖通道重复供给。
-    覆盖证据块常把一条基准段落连同相邻上下文合并进来，因此除相同/高相似
-    外，还把"高占比子串"与"段落整体落在基准内部"（基准大、段落小，相似度
-    判定不命中的情形）都视为重复。
-
-    Args:
-        coverage_passages: Coverage 抽取结果（保持原顺序）。
-        basis_passages: 同一文档的去重基准段落列表。
-        similarity_threshold: 判定近似重复的归一化相似度阈值。
-
-    Returns:
-        与去重基准不重复的覆盖证据（保持原顺序）。
-    """
-    if not coverage_passages or not basis_passages:
-        return list(coverage_passages)
-    normalized_bases = [
-        normalize_content_for_dedup(basis) for basis in basis_passages
-    ]
-    basis_anchors: set[tuple[str, str]] = set()
-    for basis in basis_passages:
-        basis_anchors |= _coverage_fact_anchor_keys(basis)
-    kept: list[CoveragePassage] = []
-    for passage in coverage_passages:
-        if _supplied_by_basis(passage.text, normalized_bases, basis_anchors, similarity_threshold):
-            continue
-        kept.append(passage)
-    return kept
-
-
-def _overlaps_basis_text(
-    normalized: str, normalized_basis: str, ratio: float = _COVERAGE_NEAR_DEDUP_RATIO
-) -> bool:
-    """归一化段落与归一化基准的文本层重叠判定（`_supplied_by_basis` 的底层）。
-
-    三分支：完全相同、段落整体落在基准内部（基准远大于段落的包含情形，
-    相似度判定不命中但内容确已供给）、`_is_duplicate_text`（高相似 / 高占比
-    子串）。是否"重叠即剔除"由调用方结合锚点救援决定——重叠但携带基准外
-    锚点的段落含新事实，不应剔除。
-    """
-    if not normalized or not normalized_basis:
-        return False
-    if normalized == normalized_basis or normalized in normalized_basis:
-        return True
-    return _is_duplicate_text(normalized, normalized_basis, ratio)
-
-
-def _supplied_by_basis(
-    text: str,
-    normalized_bases: list[str],
-    basis_anchors: set[tuple[str, str]],
-    ratio: float = _COVERAGE_NEAR_DEDUP_RATIO,
-) -> bool:
-    """段落内容是否已由去重基准供给（方案乙共享谓词，规则块/候选池两处复用）。
-
-    文本层与基准重叠、且不携带任何基准外锚点 → 已供给（剔除）。重叠但带
-    基准外锚点的段落（"前 500 字符叙述 + 新事实句"的扩展块）保留——扩展
-    部分正是覆盖通道/候选池要供给的东西，不能因与前缀基准相似被整段判重；
-    锚点是"有无新事实"的廉价判据。宁可多供（token 冗余）不可误删（事实丢失）。
-    """
-    normalized = normalize_content_for_dedup(text)
-    if not normalized:
-        return True
-    if not any(
-        _overlaps_basis_text(normalized, basis, ratio)
-        for basis in normalized_bases
-    ):
-        return False
-    return not (_coverage_fact_anchor_keys(normalized) - basis_anchors)
 
 
 def build_evidence_atom(

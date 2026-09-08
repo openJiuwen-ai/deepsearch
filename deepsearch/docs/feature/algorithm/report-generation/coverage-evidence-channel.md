@@ -49,8 +49,8 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
   coverage 块在后、不交错）。
 - 纯叙述、无事实特征的文档不产生覆盖证据；所有文档都无有效事实时不追加该块。
 - 运行开关：`Config.agent_config.coverage_rule_block_enable`（默认 `True`，经请求配置统一下发，与 `visualization_enable` 等报告开关同风格）。置 `False` 时大纲证据仅含条目摘要块，可单独回滚。
-- 覆盖证据与该文档**大纲摘要块渲染文本**重复时被剔除（方案乙口径，见下"去重基准"），
-  避免 token 冗余。
+- 覆盖证据的供给区为该文档**大纲摘要块切片线之后的尾部**（方案乙口径，见下
+  "供给区切片"），摘要块已渲染的内容抽取阶段不碰，尾部内容全部供给。
 - 大纲 prompt（`sub_section_outline.md`）新增 `## Evidence Channels` 说明两路证据语义；
   证据边界从"仅 key passages"放宽为"key passages + coverage passages"；明确覆盖证据
   不强制开新标题，遵守"证据不改结构"规则；`Document N key passages:` /
@@ -91,12 +91,11 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
 ## 核心流程
 
 1. 大纲输入装载时（`generate_sub_report` → `enrich_fulltext_for_section` + `_append_rule_coverage_to_core`），对每个全文证据：
-   - `extract_coverage_passages(item.original_content, max_passages=_COVERAGE_TOP_K_CAP, max_chars=1200)`
-     抽取覆盖证据块（结果按 `(content, 全部参数)` 做进程内有界缓存，
+   - `extract_coverage_passages(outline_summary_tail_text(item.original_content),
+     max_passages=_COVERAGE_TOP_K_CAP, max_chars=1200)` 从摘要块切片线之后的
+     尾部抽取覆盖证据块（结果按 `(content, 全部参数)` 做进程内有界缓存，
      `functools.lru_cache(maxsize=512)`，同章节重试/重生成不重复计算）；
      选段不预设硬 Top-K，由单文档字符预算兜底（方案2：预算即终止条件）；
-   - `exclude_passages(coverage, [outline_summary_text(item.original_content)])`
-     与该文档的摘要块渲染文本去重（见下"去重基准"）；
    - 裁入章节级总预算 `_COVERAGE_MAX_TOTAL_CHARS = 6000`（`_fit_coverage_to_budget`）。
 2. 所有 key 块先进入 `core_content_list`；最终把一个聚合 coverage 块追加到末尾。
 3. `_generate_sub_section_outline` 把 `sub_section_core_content`（含两路证据）与
@@ -138,33 +137,37 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
   以判定"同一事实的换措辞"（如"收入增长20%"与"成本下降20%"）。结构相似但
   版本/年份/单位/量级不同的事实不会被误删。
 
-### 去重基准（方案乙：与大纲实际渲染文本去重）
+### 供给区切片（方案乙：摘要块之外的尾部全量供给）
 
 rationale 选材接管证据选择后，`key_passages` 通道已退役（不再进入大纲/写作
-prompt，仅保留 target-paper 兜底用途），不再作为去重基准——与一个已退场通道
-去重防不了真实的重复供给。去重基准改为**条目摘要块的实际渲染文本**（与
-`report_rationale_fulltext.build_core_content_list` 渲染口径一致）：
+prompt，仅保留 target-paper 兜底用途）。条目摘要块的实际渲染文本（与
+`report_rationale_fulltext.build_core_content_list` 渲染口径一致）为：
 
 - fulltext 条目：清洗后原文前 500 字符（`collector_evidence.py::outline_summary_text`，
   `OUTLINE_SUMMARY_MAX_CHARS = 500` 单一真源）；
 - passage 条目：被选中的 `passage_text`（当前规则块只对 fulltext 条目运行，此条
   供后续复用方沿用同一口径）。
 
-判定共享谓词 `collector_evidence.py::_supplied_by_basis`（`exclude_passages`
-的底层谓词；候选池等后续复用方在同一口径上实现，防漂移）：
+覆盖证据**不做与摘要块的判重**，而是直接从 `collector_evidence.py::
+outline_summary_tail_text` 返回的尾部抽取——该函数与 `outline_summary_text`
+在同一个 `_normalize_coverage_content` 清洗文本上取互补切片
+（`[OUTLINE_SUMMARY_MAX_CHARS:]`），因此摘要块已供给的内容在抽取阶段构造性地
+不被触碰，摘要块之外的内容全部供给。原则是**宁可多供（token 冗余）不可漏供
+（事实丢失）**，冗余由单文档/章节共享预算兜底。
 
-- 文本层重叠 = 完全相同 / 段落整体落在基准内部（基准远大于段落的包含情形）/
-  高相似或高占比子串；
-- **锚点救援**：文本层重叠、但段落携带基准之外锚点的段落保留——"前 500 字符
-  叙述 + 新事实句"的扩展块是覆盖通道要供给的形态，不因与前缀基准相似被整段
-  判重；锚点是"有无新事实"的廉价判据。宁可多供（token 冗余）不可误删（事实丢失）。
+> 演进说明：早期实现为"全文抽取后按文本重叠 + 锚点救援判重剔除"，但锚点是
+> 字面记号而非语义——不同事实可共用同一组锚点（如"收入增长20%"与"成本下降
+> 20%"），重叠块因"无新锚点"被整段误删（PR !406 评审复现）。切片方案把判重
+> 环节整个移除：供给区与摘要块构造性互补，该类丢失在机制上不可能再发生。
+> 代价是尾部与摘要块的换措辞复述也会被供给（预算兜底）；跨切片线的句子会在
+> 覆盖块中以残句形式出现（优于整句丢失）。
 
-边界：≤500 字符的 fulltext 文档整篇已进大纲摘要块，覆盖证据与候选池对该文档
-为空（正确行为，非缺陷）。
+边界：≤500 字符的 fulltext 文档整篇已进大纲摘要块，尾部供给区为空，覆盖证据
+对该文档为空（正确行为，非缺陷）。
 
 ## 边界与错误处理
 
-- 清洗后长度 ≤ 500 字符的 fulltext 文档，其正文已完整进入大纲摘要块，覆盖证据对该文档为空（方案乙去重的必然结果，属正确行为而非缺陷）。
+- 清洗后长度 ≤ 500 字符的 fulltext 文档，其正文已完整进入大纲摘要块，尾部供给区为空，覆盖证据对该文档为空（方案乙切片的必然结果，属正确行为而非缺陷）。
 - 空内容、纯噪声（过短、标题、导航、无数字分隔行、**纯引用/链接列表**）、无任何事实
   特征 → 不产覆盖证据。
 - Markdown 表格原子性：`_coverage_split_passages` 把连续以 `|` 起始的行识别为原子

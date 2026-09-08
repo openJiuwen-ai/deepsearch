@@ -24,9 +24,8 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     _COVERAGE_MAX_CHARS_PER_DOC,
     _COVERAGE_MAX_TOTAL_CHARS,
     _COVERAGE_TOP_K_CAP,
-    exclude_passages,
     extract_coverage_passages,
-    outline_summary_text,
+    outline_summary_tail_text,
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     enrich_fulltext_for_section,
@@ -1208,22 +1207,26 @@ class EvidenceMixin:
 
 
 def _extract_doc_coverage_passages(item: dict) -> list[str]:
-    """抽取单个选中文档的覆盖证据，并与该文档的大纲摘要块文本去重。
+    """抽取单个选中文档的覆盖证据，供给区为摘要块切片线之后的尾部。
 
-    去重基准是条目摘要块的实际渲染口径（方案乙）：fulltext 条目在大纲里渲染
-    原文前 500 字符，摘要块已有的段落不再经规则块重复供给。key_passages 通道
-    已退役（rationale 接管后不再进入大纲/写作 prompt），不再作为去重基准。
+    条目摘要块渲染清洗后原文前 500 字符（方案乙：基准 = 大纲实际渲染文本），
+    覆盖证据直接从 `outline_summary_tail_text` 的互补尾部抽取——摘要块已供给
+    的内容抽取阶段不碰，尾部内容全部供给、不做判重（宁多供不漏供；换措辞
+    复述、共用锚点的不同事实都不会再被误删，预算由单文档/章节共享上限兜底）。
+    key_passages 通道已退役（rationale 接管后不再进入大纲/写作 prompt）。
+    短文档（清洗后 ≤500 字符）整篇已进摘要块，尾部为空 → 无覆盖证据。
     """
     original_content = str(item.get("original_content") or "")
     if not original_content:
         return []
+    supply_zone = outline_summary_tail_text(original_content)
+    if not supply_zone:
+        return []
     passages = extract_coverage_passages(
-        content=original_content,
+        content=supply_zone,
         max_passages=_COVERAGE_TOP_K_CAP,
         max_chars=_COVERAGE_MAX_CHARS_PER_DOC,
     )
-    summary_basis = [outline_summary_text(original_content)]
-    passages = exclude_passages(passages, summary_basis)
     return [passage.text for passage in passages]
 
 
