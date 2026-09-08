@@ -57,6 +57,32 @@ DeepSearch主要由管理器、查询规划、信息收集、理解分析和内�
 
 DeepSearch 通过 SDK 方式安装，适用于快速部署体验、定制化部署及源码级调试等场景，详细步骤请参阅：[SDK安装指导](./docs/zh/2.安装指导/DeepSearch_SDK/README.md)。
 
+### Docker Compose 一键部署
+
+在 `deepsearch/docker/` 目录下，可用 Docker Compose 一键拉起多服务：
+
+**重要**：配置文件位置说明
+```
+📁 deepsearch/
+  ├── 📁 docker/
+  │   ├── .env            ← 必须在这里（从 ../.env.example 复制）
+  │   ├── docker-compose.yml
+  │   └── docker-compose.full.yml
+  └── .env.example        ← 模板文件
+```
+
+```bash
+cd deepsearch/docker
+cp ../.env.example .env   # 生成 deepsearch/docker/.env，编辑填入 LLM / 搜索密钥
+
+# 三种模式任选其一：
+docker compose up -d                                      # 最小栈：快速体验（sqlite + in_memory）
+docker compose -f docker-compose.full.yml up -d           # 完整栈：单机生产（MySQL + Milvus + persistence）
+docker compose -f docker-compose.distributed.yml up -d --scale deepsearch=3  # 分布式：多实例（Redis + OBS）
+```
+
+**注意**：Docker Compose 中 `BACKEND_PORT=8000` 是固定的（容器内端口），与 `.env.example` 中的 `BACKEND_PORT=6000`（本地源码运行端口）不同；`.env` 文件须放在 `deepsearch/docker/` 下（与 compose 文件同目录）。详见 [Docker 方式安装](./docs/zh/2.安装指导/DeepSearch_SDK/Docker方式安装/README.md)。
+
 # 🚀 快速上手
 
 👉 如需完整清晰的演示视频，可点击下载[完整视频](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/readme/9e6e857a424167500d4b4277485ea9b1_raw.mp4)。

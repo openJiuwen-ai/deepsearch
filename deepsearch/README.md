@@ -64,6 +64,32 @@ DeepSearch is installed via the SDK, covering quick deployment, custom builds, i
 
 - [DeepSearch SDK installation](./docs/en/2.Installation%20Guide/DeepSearch_SDK/README.md)
 
+### Docker Compose one-click deployment
+
+From the `deepsearch/docker/` directory, use Docker Compose to bring up the multi-service stack:
+
+**Important**: Configuration file location
+```
+📁 deepsearch/
+  ├── 📁 docker/
+  │   ├── .env            ← Must be here (copy from ../.env.example)
+  │   ├── docker-compose.yml
+  │   └── docker-compose.full.yml
+  └── .env.example        ← Template file
+```
+
+```bash
+cd deepsearch/docker
+cp ../.env.example .env                # create deepsearch/docker/.env; edit to fill in LLM / search credentials
+
+# Choose one of three modes:
+docker compose up -d                                      # minimal: quick eval (sqlite + in_memory)
+docker compose -f docker-compose.full.yml up -d           # full: single-node prod (MySQL + Milvus + persistence)
+docker compose -f docker-compose.distributed.yml up -d --scale deepsearch=3  # distributed: multi-instance (Redis + OBS)
+```
+
+**Note**: Docker Compose sets `BACKEND_PORT=8000` (fixed, container-side), different from `.env.example`'s `BACKEND_PORT=6000` (local source run). The `.env` file must live in `deepsearch/docker/` (same directory as the compose files). See [Docker Installation](./docs/en/2.Installation%20Guide/DeepSearch_SDK/Docker%20Installation/README.md).
+
 More navigation: [Documentation hub](./docs/README.md).
 
 # 🚀 Quick start

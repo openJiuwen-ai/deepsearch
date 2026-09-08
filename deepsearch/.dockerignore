@@ -1,0 +1,26 @@
+# 避免将本地开发产物与密钥打包进 Docker 镜像（构建上下文为 deepsearch/）
+
+# Python 构建产物
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 运行时产物与本地数据
+output/
+logs/
+data/
+gnosis/
+results*/
+
+# 本地环境与密钥
+.env
+.env.*
+!.env.example
+
+# 本地数据库与缓存
+*.db
+*.sqlite3
