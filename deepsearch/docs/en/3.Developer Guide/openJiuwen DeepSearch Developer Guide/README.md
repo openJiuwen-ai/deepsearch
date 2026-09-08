@@ -367,6 +367,8 @@ Server fields (`DeepSearchRequest`): `outline_interaction_enabled`, `outline_int
 
 **Runtime API URL safety toggle**: Runtime API URLs are validated by default (for example, private/local addresses are rejected). For local debugging only, you can relax this check with `RUNTIME_API_ALLOW_UNSAFE_URL=true` (truthy values: `1/true/yes`). If unset, safety validation stays enabled. Do not enable this in production, or SSRF protection will be weakened.
 
+**Web search service URL safety toggle**: user-configured web search `search_url` values are validated by default too (private/local/non-public addresses are rejected, including the CGNAT range `100.64.0.0/10`). If you use a self-hosted or intranet search service (for example `local_search_api`), set `SEARCH_SERVICE_ALLOW_UNSAFE_URL=true` before deployment — otherwise creation, update, and run will fail with HTTP 400. This toggle is process-wide and relaxes validation for every search URL, so enable it only in trusted intranet environments.
+
 ### `space_id` and local knowledge bases
 
 `space_id` scopes tenants: KB creation/upload APIs are tied to it. When calling `run` with local search, every id in `local_search_config.local_search_config_ids` must belong to that `space_id`; cross-space ids are rejected.

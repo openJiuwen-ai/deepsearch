@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 import json
+from functools import cached_property
 from typing import Any, Generic, TypeVar, List, Dict, Optional
 import logging
 import aiohttp
@@ -9,6 +10,7 @@ import requests
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 from openjiuwen.core.common.security.ssl_utils import SslUtils
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -39,12 +41,31 @@ class PetalSearchAPIWrapper(BaseModel, Generic[T]):
     def model_post_init(self, __context: Any) -> None:
         """Apply engine-specific options from ``extension``."""
         ext = self.extension
-        if not ext:
-            return
-        if "content" in ext:
-            self.include_raw_content = bool(ext["content"])
-        if "freshness" in ext:
-            self.freshness = ext["freshness"]
+        if ext:
+            if "content" in ext:
+                self.include_raw_content = bool(ext["content"])
+            if "freshness" in ext:
+                self.freshness = ext["freshness"]
+
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析；
+        # 空 URL 保持原有请求时报错时机
+        if self._search_url_to_str().strip():
+            _ = self._resolved_search_url
+
+    @cached_property
+    def _resolved_search_url(self) -> str:
+        """Return the configured search URL after SSRF validation."""
+        configured = self._search_url_to_str().strip().rstrip("/")
+        validate_search_service_url(configured)
+        return configured
+
+    def _search_url_to_str(self) -> str:
+        """Decode the configured search URL secret."""
+        if self.search_url is None:
+            return ""
+        if hasattr(self.search_url, "get_secret_value"):
+            return str(self.search_url.get_secret_value() or "")
+        return str(self.search_url or "")
 
     def results(self, query: str) -> List[Dict]:
         """Run query through Internal Search"""
@@ -82,7 +103,7 @@ class PetalSearchAPIWrapper(BaseModel, Generic[T]):
             authorization = search_api_key if search_api_key.startswith("Bearer") else f"Bearer {search_api_key}"
             search_headers['Authorization'] = authorization
 
-        search_url = self.search_url.get_secret_value()
+        search_url = self._resolved_search_url
         search_data = {
             "query": search_term,
             "content": self.include_raw_content,

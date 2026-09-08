@@ -236,6 +236,23 @@ citation verify：某条搜索结果的溯源效验
 - 如果只是某一段时间的search_results都为空，则可能该时间段的联网增强引擎服务不可用了
 - 如果只是某几条 search_results 空，则可能是对应query搜索不出结果，几乎没有什么影响
 
+### 3. 使用内网或自托管搜索引擎时创建、更新或运行失败（HTTP 400）
+
+**> 报错信息**：
+
+	search service url is not allowed (private or non-public IP): 'http://192.168.1.100:8080/search'
+
+**> 可能原因**：默认情况下，系统会对用户配置的 `search_url` 进行 SSRF 安全校验，拒绝私网、本机和非公网地址（包括 CGNAT 段 `100.64.0.0/10`）。使用 `local_search_api` 或其他内网/自托管搜索引擎时，校验会阻止创建、更新和执行。
+
+**> 解决方案**：在部署前设置环境变量 `SEARCH_SERVICE_ALLOW_UNSAFE_URL=true`（或 `1`、`yes`），该开关为进程级全局配置，会放宽所有搜索 URL 的校验，**仅在可信内网环境中启用**。
+
+```bash
+# .env 文件或环境变量
+SEARCH_SERVICE_ALLOW_UNSAFE_URL=true
+```
+
+**> 注意**：该开关影响所有搜索引擎 URL 校验，包括用户通过 API 配置的搜索服务。生产环境若需使用内网搜索，建议在网络层面（防火墙、网络策略）限制出站访问范围，降低 SSRF 风险。
+
 ## 五、知识库 / 本地搜索相关错误
 
 ### 1. 创建知识库失败或无法连接 Milvus

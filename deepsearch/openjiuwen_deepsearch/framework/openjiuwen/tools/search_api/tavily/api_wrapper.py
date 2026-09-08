@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from functools import cached_property
 from typing import Any, Generic, TypeVar, List, Dict, Union, Optional
 import httpx
 import requests
@@ -16,6 +17,7 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
     MAX_SEARCH_CONTENT_LENGTH,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 
@@ -65,6 +67,9 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         if "include_images" in ext:
             self.include_images = ext["include_images"]
 
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析
+        _ = self._resolved_search_url
+
     @staticmethod
     async def _execute_async_http_request(
         url: str, params: Dict, verify: Union[str, bool]
@@ -86,7 +91,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         """Run query through Tavily Search API and return raw result."""
 
         # Build API endpoint URL
-        api_url = f"{self._resolved_search_url()}/search"
+        api_url = f"{self._resolved_search_url}/search"
 
         params = self._build_search_params(query=query)
 
@@ -108,7 +113,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
     async def raw_search_results_async(self, query: str) -> Dict:
         """Run query through Tavily Search API asynchronously."""
 
-        request_url = f"{self._resolved_search_url()}/search"
+        request_url = f"{self._resolved_search_url}/search"
 
         request_params = self._build_search_params(query=query)
 
@@ -224,6 +229,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         )
         return ssl_cert if ssl_verify else False
 
+    @cached_property
     def _resolved_search_url(self) -> str:
         """Return configured URL or Tavily's public default URL."""
         if self.search_url is None:
@@ -233,4 +239,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         else:
             configured = str(self.search_url)
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_TAVILY_SEARCH_URL
+        if not configured:
+            return DEFAULT_TAVILY_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured

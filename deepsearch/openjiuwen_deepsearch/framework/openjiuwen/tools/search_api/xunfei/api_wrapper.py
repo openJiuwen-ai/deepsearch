@@ -3,6 +3,7 @@
 
 import json
 import uuid
+from functools import cached_property
 from typing import Dict, Optional, Generic, TypeVar, List
 from datetime import datetime, timezone
 import logging
@@ -12,6 +13,7 @@ import requests
 from pydantic import BaseModel, ConfigDict, SecretStr
 from openjiuwen.core.common.security.ssl_utils import SslUtils
 from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,26 @@ class XunfeiSearchAPIWrapper(BaseModel, Generic[T]):
         extra='allow'
     )
 
+    def model_post_init(self, __context) -> None:
+        """预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析；空 URL 保持原有请求时报错时机。"""
+        if self._search_url_to_str().strip():
+            _ = self._resolved_search_url
+
+    @cached_property
+    def _resolved_search_url(self) -> str:
+        """Return the configured search URL after SSRF validation."""
+        configured = self._search_url_to_str().strip().rstrip("/")
+        validate_search_service_url(configured)
+        return configured
+
+    def _search_url_to_str(self) -> str:
+        """Decode the configured search URL secret."""
+        if self.search_url is None:
+            return ""
+        if hasattr(self.search_url, "get_secret_value"):
+            return str(self.search_url.get_secret_value() or "")
+        return str(self.search_url or "")
+
     def results(self, query: str) -> List[Dict]:
         """Run query through InternalSearch."""
         return self._search_api_results(
@@ -64,7 +86,7 @@ class XunfeiSearchAPIWrapper(BaseModel, Generic[T]):
             "x-token": self.search_api_key.decode('utf-8') or "",
             "Content-Type": "application/json",
         }
-        search_url = self.search_url.get_secret_value()
+        search_url = self._resolved_search_url
         search_data = {
             "chatId": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"),
             "dialogueId": str(uuid.uuid4()),

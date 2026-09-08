@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from functools import cached_property
 from typing import Any, Generic, Optional, TypeVar
 from urllib.parse import urlsplit
 
@@ -26,6 +27,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     sync_request_once,
     truncate,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 
@@ -53,6 +55,24 @@ class SemanticScholarSearchAPIWrapper(BaseModel, Generic[T]):
     requests_per_second: float = Field(default=0.5, gt=0)
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+    def model_post_init(self, __context: Any) -> None:
+        """预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析。"""
+        _ = self._resolved_search_url
+
+    @cached_property
+    def _resolved_search_url(self) -> str:
+        """Return the configured URL or the public default, after SSRF validation."""
+        value = self.search_url
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        resolved = (str(value).strip() if value else DEFAULT_SEMANTIC_SCHOLAR_SEARCH_URL).rstrip("/")
+        if resolved != DEFAULT_SEMANTIC_SCHOLAR_SEARCH_URL:
+            validate_search_service_url(resolved)
+        return resolved
+
+    def _url(self) -> str:
+        return self._resolved_search_url
 
     def results(self, query: str) -> list[dict[str, Any]]:
         query = (query or "").strip()
@@ -109,12 +129,6 @@ class SemanticScholarSearchAPIWrapper(BaseModel, Generic[T]):
             return response.json()
         except ValueError as exc:
             raise ScholarlySearchResponseError("Semantic Scholar API returned invalid JSON") from exc
-
-    def _url(self) -> str:
-        value = self.search_url
-        if isinstance(value, SecretStr):
-            value = value.get_secret_value()
-        return (str(value).strip() if value else DEFAULT_SEMANTIC_SCHOLAR_SEARCH_URL).rstrip("/")
 
     def _headers(self) -> dict[str, str]:
         key = self.search_api_key

@@ -247,6 +247,23 @@ Search logs for **`TOOL END`**: check engine type and whether `search_results` i
 - Empty only sometimes → transient engine issues.
 - Sparse empty rows → likely no hits for that query (usually harmless).
 
+### 4.3 Using intranet or self-hosted search engines fails (HTTP 400)
+
+**Error message**:
+
+	search service url is not allowed (private or non-public IP): 'http://192.168.1.100:8080/search'
+
+**Cause**: By default, the system validates user-configured `search_url` to prevent SSRF attacks, rejecting private, loopback, and non-public addresses (including CGNAT range `100.64.0.0/10`). When using `local_search_api` or other intranet/self-hosted search engines, this validation blocks creation, updates, and execution.
+
+**Solution**: Set the environment variable `SEARCH_SERVICE_ALLOW_UNSAFE_URL=true` (or `1`, `yes`) before deployment. This is a process-wide global setting that relaxes all search URL validation—**enable only in trusted intranet environments**.
+
+```bash
+# .env file or environment variable
+SEARCH_SERVICE_ALLOW_UNSAFE_URL=true
+```
+
+**Note**: This toggle affects all search engine URL validation, including user-configured search services via API. For production environments requiring intranet search, consider restricting outbound access at the network layer (firewall, network policies) to reduce SSRF risk.
+
 ## 5. Knowledge base / local search
 
 ### 5.1 Cannot create KB / connect to Milvus

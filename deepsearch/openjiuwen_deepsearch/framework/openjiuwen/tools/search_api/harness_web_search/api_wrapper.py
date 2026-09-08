@@ -6,6 +6,7 @@ import logging
 import os
 import threading
 from contextlib import contextmanager
+from functools import cached_property
 from typing import Any, ClassVar, Generic, Optional, TypeVar
 
 from openjiuwen.harness.tools.web import WebFetchWebpageTool, WebPaidSearchTool, _http
@@ -17,6 +18,7 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
 )
 from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,9 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
         if "fetch_webpage" in ext:
             self.fetch_webpage = bool(ext["fetch_webpage"])
 
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析
+        _ = self._configured_search_url
+
     @property
     def resolved_provider(self) -> str:
         """Return provider name normalized for harness web_tools search."""
@@ -150,7 +155,7 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
         api_key = self._api_key_to_str().strip()
         if api_key:
             env_values[_PROVIDER_KEY_ENV[provider]] = api_key
-        configured_url = self._configured_search_url()
+        configured_url = self._configured_search_url
         if configured_url and provider not in _WEB_TOOLS_URL_OVERRIDE_ENV:
             logger.warning(
                 "Configured search_url for provider %s is ignored because web_tools does not expose a URL override.",
@@ -212,9 +217,13 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
             return value.decode("utf-8")
         return str(value or "")
 
+    @cached_property
     def _configured_search_url(self) -> str:
-        """Return project-level configured search_url, if any."""
-        return self._secret_to_str(self.search_url).strip().rstrip("/")
+        """Return project-level configured search_url, if any, after SSRF validation."""
+        configured = self._secret_to_str(self.search_url).strip().rstrip("/")
+        if configured:
+            validate_search_service_url(configured)
+        return configured
 
     def _resolved_timeout_seconds(self, *, provider: str, minimum: int) -> int:
         """Return configured timeout for harness web_tools providers."""

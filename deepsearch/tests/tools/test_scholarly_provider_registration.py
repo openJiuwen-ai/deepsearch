@@ -67,7 +67,10 @@ def test_empty_full_text_fields_returns_fresh_defaults():
     assert first is not second
 
 
-def test_semantic_scholar_exposes_standard_constructor_without_network_for_blank_query():
+def test_semantic_scholar_exposes_standard_constructor_without_network_for_blank_query(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", "1")
     wrapper = SemanticScholarSearchAPIWrapper(
         search_api_key="test-key",
         search_url="https://example.test/search",
