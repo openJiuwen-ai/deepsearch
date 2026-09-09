@@ -72,6 +72,21 @@ If an explicit structure exists, it is authoritative:
   additional top-level sections for early conclusions, summaries, risks, methodology limits, or extra analytical
   dimensions unless the user named them as major sections.
 
+{% if brief_outline %}
+# Authoritative Brief Outline
+
+<brief_outline>
+{{ brief_outline }}
+</brief_outline>
+
+The section structure above is authoritative: the top-level `sections` array must contain
+exactly the same sections, in the same order, with identical titles. Do not add, remove,
+merge, split, rename, or reorder sections — ignore `section_num` and the analysis framework
+when they conflict with this structure. Your task is to enrich each section with
+professional-level research planning (`description`, `plans` with steps and
+`retrieval_queries`, `section_focus`, `focus_dimensions`) based on its `goal` and
+`research_steps`.
+{% endif %}
 {% if audience_role %}
 - Target audience role: {{ audience_role }}. Section framing must prioritize this role's decision concerns.
 {% endif %}

@@ -214,3 +214,33 @@ def test_handle_report_template():
 
     wrong_report_template = []
     res = agent._handle_report_template(wrong_report_template)
+
+
+# 测试用例7: metadata 透传到 workflow inputs
+@pytest.mark.asyncio
+async def test_consume_stream_chunks_passes_metadata_into_runner_inputs(monkeypatch):
+    """metadata 参数应透传到 Runner.run_agent_streaming 的 inputs。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent import workflow as workflow_module
+
+    captured = {}
+
+    async def _fake_streaming(*, agent, inputs):
+        captured.update(inputs)
+        if False:  # pragma: no cover - 使函数成为 async generator
+            yield
+
+    monkeypatch.setattr(workflow_module.Runner, "run_agent_streaming", _fake_streaming)
+    agent = workflow_module.DeepresearchAgent()
+    metadata = {"brief_outline": {"title": "T", "sections": []}}
+
+    async for _ in agent._consume_stream_chunks(
+        conversation_id="conv-1",
+        message="升级",
+        decoded_template="",
+        interrupt_feedback="",
+        session_agent_config={},
+        metadata=metadata,
+    ):
+        pass
+
+    assert captured["metadata"] == metadata

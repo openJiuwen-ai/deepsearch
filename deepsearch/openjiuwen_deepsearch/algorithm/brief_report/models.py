@@ -1,9 +1,29 @@
 """Brief 独立工作流使用的强类型数据契约。"""
 
+import re
 from enum import Enum
-from typing import Any
+from typing import Any, Sequence
 
 from pydantic import BaseModel, Field, model_validator
+
+# 章节标题中的常见编号前缀（阿拉伯/全角数字、中文数字、第X章节等），
+# 用于升级场景标题一致性比对前的归一化，剥离 LLM 输出的编号噪声
+_TITLE_NOISE_RE = re.compile(
+    r"^\s*(?:[0-9０-９]+[.、)．）]\s*|[一二三四五六七八九十百]+[、.．]\s*"
+    r"|第[一二三四五六七八九十百0-9０-９]+[章节部分][：:\s]*)+"
+)
+
+
+def normalize_outline_title(title: str) -> str:
+    """归一化章节标题：去首尾空白与常见编号前缀，用于大纲一致性比对。
+
+    Args:
+        title: 原始章节标题。
+
+    Returns:
+        归一化后的标题文本。
+    """
+    return _TITLE_NOISE_RE.sub("", (title or "").strip()).strip()
 
 
 class EvidenceType(str, Enum):
@@ -59,6 +79,21 @@ class BriefOutline(BaseModel):
 
     title: str = Field(min_length=1, max_length=160)
     sections: list[BriefSection] = Field(min_length=2)
+
+    def matches_section_titles(self, section_titles: Sequence[str]) -> bool:
+        """判断给定标题序列与本大纲章节标题一致（数量、顺序与文本，归一化编号噪声后比较）。
+
+        用于 brief 大纲升级场景：LLM 扩写产出的大纲标题序列必须与注入的
+        brief 大纲保持结构一致。
+
+        Args:
+            section_titles: 待比对的标题序列（如扩写后大纲的章节标题列表）。
+
+        Returns:
+            True 表示标题序列一致。
+        """
+        normalized = [normalize_outline_title(t) for t in section_titles]
+        return normalized == [normalize_outline_title(s.title) for s in self.sections]
 
 
 class BriefOutlineRequest(BaseModel):

@@ -129,6 +129,7 @@ uv run pytest tests/source_tracer/test_extract_message_prompt.py
 - [报告研究主工作流](../framework/research-workflow.md)
 - [搜索上下文与数据契约](../framework/search-context.md)
 - [Agent 与服务运行配置](../config/agent-and-service-config.md)
+- [Brief 大纲升级专业版报告](../framework/brief-outline-upgrade.md)
 - [报告生成](./report-generation.md)
 - [全局溯源](./source-trace.md)
 - [图表生成](./chart-generation.md)

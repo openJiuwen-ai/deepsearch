@@ -436,6 +436,9 @@ class DeepresearchAgent(BaseAgent):
             "agent_config": {
                 "type": "object",
             },
+            "metadata": {
+                "type": "object",
+            },
         }
         self.startnode_input_schema = {
             "query": "${query}",
@@ -444,6 +447,7 @@ class DeepresearchAgent(BaseAgent):
             "report_template": "${report_template}",
             "interrupt_feedback": "${interrupt_feedback}",
             "agent_config": "${agent_config}",
+            "metadata": "${metadata}",
         }
 
         self.research_workflow = None
@@ -651,6 +655,7 @@ class DeepresearchAgent(BaseAgent):
         decoded_template: str,
         interrupt_feedback: str,
         session_agent_config: dict,
+        metadata: Optional[dict] = None,
     ):
         is_all_end = False
         final_result_info = {}
@@ -673,6 +678,7 @@ class DeepresearchAgent(BaseAgent):
                 "interrupt_feedback": interrupt_feedback,
                 "resume_interaction": is_report_feedback,
                 "agent_config": workflow_agent_config,
+                "metadata": metadata,
             },
         ):
             if getattr(chunk, "type", "") == "__interaction__":
@@ -700,6 +706,7 @@ class DeepresearchAgent(BaseAgent):
         agent_config: Optional[dict] = None,
         report_template: str = "",
         interrupt_feedback: str = "",
+        metadata: Optional[dict] = None,
     ):
         """执行一次 workflow 并以流式方式返回消息。
 
@@ -709,6 +716,7 @@ class DeepresearchAgent(BaseAgent):
             agent_config: 本次运行的 Agent 配置字典。
             report_template: 报告模板（支持 base64 或明文）。
             interrupt_feedback: 交互中断反馈标识。
+            metadata: 运行时元数据（如 brief 升级注入的 brief_outline/research_intent/language）。
 
         Yields:
             str: JSON 序列化后的流式事件消息。
@@ -780,6 +788,7 @@ class DeepresearchAgent(BaseAgent):
                 decoded_template=decoded_template,
                 interrupt_feedback=interrupt_feedback,
                 session_agent_config=session_agent_config,
+                metadata=metadata,
             ):
                 is_all_end = stream_end
                 final_result_info = stream_info
@@ -892,7 +901,10 @@ class DeepresearchAgent(BaseAgent):
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
-        flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
+        start_router = init_router(
+            NodeId.START.value, [NodeId.INTENT_RECOGNITION.value, NodeId.OUTLINE.value]
+        )
+        flow.add_conditional_connection(NodeId.START.value, router=start_router)
 
         # 添加条件边
         intent_recognition_router = init_router(
