@@ -320,6 +320,28 @@ class DeepSearchRunContext:
     total_output_tokens: int = 0
 
 
+@dataclass
+class StreamRunContext:
+    """一次流式运行的调用上下文。
+
+    Attributes:
+        conversation_id: 会话 ID，同时作为 workflow thread_id。
+        message: 用户输入消息或反馈内容。
+        decoded_template: 解码后的报告模板。
+        interrupt_feedback: 交互中断反馈标识。
+        session_agent_config: 本次运行的 Agent 配置字典。
+        metadata: 运行时元数据（如 brief 升级注入的 brief_outline /
+            research_intent / language）。
+    """
+
+    conversation_id: str
+    message: str
+    decoded_template: str
+    interrupt_feedback: str
+    session_agent_config: dict
+    metadata: Optional[dict] = None
+
+
 class BaseAgent:
     """
     base agent: agent基类
@@ -436,6 +458,9 @@ class DeepresearchAgent(BaseAgent):
             "agent_config": {
                 "type": "object",
             },
+            "metadata": {
+                "type": "object",
+            },
         }
         self.startnode_input_schema = {
             "query": "${query}",
@@ -444,6 +469,7 @@ class DeepresearchAgent(BaseAgent):
             "report_template": "${report_template}",
             "interrupt_feedback": "${interrupt_feedback}",
             "agent_config": "${agent_config}",
+            "metadata": "${metadata}",
         }
 
         self.research_workflow = None
@@ -644,19 +670,22 @@ class DeepresearchAgent(BaseAgent):
             return json.dumps({"interrupt_feedback": interrupt_feedback, "feedback": message}), is_report_feedback
         return message, is_report_feedback
 
-    async def _consume_stream_chunks(
-        self,
-        conversation_id: str,
-        message: str,
-        decoded_template: str,
-        interrupt_feedback: str,
-        session_agent_config: dict,
-    ):
+    async def _consume_stream_chunks(self, run_context: StreamRunContext):
+        """消费 Runner 流式输出并转发为本 agent 的流式消息。
+
+        Args:
+            run_context: 一次流式运行的调用上下文。
+
+        Yields:
+            tuple[str, bool, dict]: 序列化消息、是否全部结束、最终结果信息。
+        """
         is_all_end = False
         final_result_info = {}
         filter_dup_flag = False
-        stream_query, is_report_feedback = self._prepare_stream_query(message, interrupt_feedback)
-        workflow_agent_config = _redact_agent_config_for_workflow_inputs(session_agent_config)
+        stream_query, is_report_feedback = self._prepare_stream_query(
+            run_context.message, run_context.interrupt_feedback
+        )
+        workflow_agent_config = _redact_agent_config_for_workflow_inputs(run_context.session_agent_config)
         scholarly_config = workflow_agent_config.get("scholarly_search_config", {})
         for provider_name in SCHOLARLY_PROVIDER_NAMES:
             provider_config = scholarly_config.get(provider_name)
@@ -667,12 +696,13 @@ class DeepresearchAgent(BaseAgent):
             agent=self.agent,
             inputs={
                 "query": stream_query,
-                "thread_id": conversation_id,
-                "conversation_id": conversation_id,
-                "report_template": decoded_template,
-                "interrupt_feedback": interrupt_feedback,
+                "thread_id": run_context.conversation_id,
+                "conversation_id": run_context.conversation_id,
+                "report_template": run_context.decoded_template,
+                "interrupt_feedback": run_context.interrupt_feedback,
                 "resume_interaction": is_report_feedback,
                 "agent_config": workflow_agent_config,
+                "metadata": run_context.metadata,
             },
         ):
             if getattr(chunk, "type", "") == "__interaction__":
@@ -691,7 +721,11 @@ class DeepresearchAgent(BaseAgent):
                     final_result_info = endnode_info
                 if getattr(chunk, "content", "") == "ALL END":
                     is_all_end = True
-                yield self._build_output_message(conversation_id, chunk), is_all_end, final_result_info
+                yield (
+                    self._build_output_message(run_context.conversation_id, chunk),
+                    is_all_end,
+                    final_result_info,
+                )
 
     async def run(
         self,
@@ -700,6 +734,7 @@ class DeepresearchAgent(BaseAgent):
         agent_config: Optional[dict] = None,
         report_template: str = "",
         interrupt_feedback: str = "",
+        metadata: Optional[dict] = None,
     ):
         """执行一次 workflow 并以流式方式返回消息。
 
@@ -709,6 +744,7 @@ class DeepresearchAgent(BaseAgent):
             agent_config: 本次运行的 Agent 配置字典。
             report_template: 报告模板（支持 base64 或明文）。
             interrupt_feedback: 交互中断反馈标识。
+            metadata: 运行时元数据（如 brief 升级注入的 brief_outline/research_intent/language）。
 
         Yields:
             str: JSON 序列化后的流式事件消息。
@@ -775,11 +811,14 @@ class DeepresearchAgent(BaseAgent):
         try:
             session_agent_config = session_agent_config.model_dump()
             async for payload, stream_end, stream_info in self._consume_stream_chunks(
-                conversation_id=conversation_id,
-                message=message,
-                decoded_template=decoded_template,
-                interrupt_feedback=interrupt_feedback,
-                session_agent_config=session_agent_config,
+                StreamRunContext(
+                    conversation_id=conversation_id,
+                    message=message,
+                    decoded_template=decoded_template,
+                    interrupt_feedback=interrupt_feedback,
+                    session_agent_config=session_agent_config,
+                    metadata=metadata,
+                )
             ):
                 is_all_end = stream_end
                 final_result_info = stream_info
@@ -892,7 +931,10 @@ class DeepresearchAgent(BaseAgent):
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
-        flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
+        start_router = init_router(
+            NodeId.START.value, [NodeId.INTENT_RECOGNITION.value, NodeId.OUTLINE.value]
+        )
+        flow.add_conditional_connection(NodeId.START.value, router=start_router)
 
         # 添加条件边
         intent_recognition_router = init_router(

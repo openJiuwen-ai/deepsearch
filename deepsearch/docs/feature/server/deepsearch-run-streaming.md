@@ -45,6 +45,11 @@ DeepSearch 运行接口把前端请求转为可流式消费的研究任务。它
 
 - `DeepSearchRequest.conversation_id` 只能包含 ASCII 字母、数字、下划线和连字符，长度 1 到 128。
 - `DeepSearchRequest.report_type` 为 `Literal["brief", "professional"] | None`，缺省 `None`；非法值由 pydantic 校验拒绝（HTTP 422）。`report_type` 不参与 Agent 缓存键，同一会话切换类型不会新建 Agent 实例。
+- `DeepSearchRequest.metadata` 为可选的运行时元数据（`dict | None`，缺省 `None`），由客户端持有回传、服务端不持久化。当前支持 brief 报告 `final_result.metadata` 的原样回传，用于 brief 大纲升级专业版报告（见 [brief-outline-upgrade.md](../framework/brief-outline-upgrade.md)）。相关行为：
+  - 结构校验只看结构（由 SDK `metadata_injectors` 注册表维护），非法返回 HTTP 400，与 `report_type` 无关。
+  - 按匹配注入器声明的 `force_execution_method` 在 Agent 构建前覆盖 `execution_method`（升级运行强制 `parallel`）。
+  - 不参与 Agent 缓存键，同一会话升级运行复用既有 Agent 实例。
+  - 仅 `search_mode=research` 时透传到 `run_kwargs`，search/react 模式忽略该字段。
 - `interrupt_feedback` 支持空值、`accepted`、`cancel`、`revise_outline`、`revise_comment`。
 - 任务 key 为 `<space_id>:<conversation_id>`。
 - 本地运行状态存放在 `_running_tasks`、`_cancel_events`、`_cancel_event_timestamps`、`_running_agents` 和 `_resume_requested_events`。
@@ -55,7 +60,8 @@ DeepSearch 运行接口把前端请求转为可流式消费的研究任务。它
 
 - Web/local 搜索配置异常会分别映射为 HTTP 400。
 - 模板不存在映射为 HTTP 404。
-- 其他未分类异常映射为 HTTP 500。
+- metadata 结构非法映射为 HTTP 400（入口校验，优先于 Agent 构建）。
+- 其他未分类异常映射为 HTTP 500；内部已构造好的 `HTTPException` 状态码原样透传。
 - consumer 被取消时会取消 producer task，但不会把 HTTP 断连强行视为业务取消。
 - 取消路径会尝试停止 openJiuwen controller 的 task queue 和 processing handler。
 - HITL 等待时不清理 checkpointer，确保后续输入可恢复会话。

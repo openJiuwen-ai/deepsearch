@@ -54,6 +54,7 @@ Agent 配置组装把前端/HTTP 请求转换为 `AgentFactory` 可校验的配�
 - `DeepSearchRequest.info_collector_webpage_enrich_enable` 默认 `False`，透传为 `AgentConfig.info_collector_webpage_enrich_enable`。
 - `DeepSearchRequest.coverage_rule_block_enable` 默认 `True`，透传为 `AgentConfig.coverage_rule_block_enable`。
 - `DeepSearchRequest.report_type` 默认 `None`，透传为 `AgentConfig.report_type`，由 StartNode 写入会话 `config.report_type` 供意图识别消费；它是运行期策略而非 Agent 构建参数，缓存键排除该字段（与 `message`、`interrupt_feedback` 同类）。
+- `DeepSearchRequest.metadata` 为每次运行不同的注入数据（如 brief 大纲升级），不参与 Agent 构建，缓存键同样排除，同一会话升级运行复用既有 Agent 实例（见 [brief-outline-upgrade.md](../framework/brief-outline-upgrade.md)）。
 
 ## 边界与错误处理
 

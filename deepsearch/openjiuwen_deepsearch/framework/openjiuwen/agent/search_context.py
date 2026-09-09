@@ -201,6 +201,10 @@ class FinalResult(BaseModel):
     )
     warning_info: str = Field(default="", description="主图WorkFlow执行过程中的告警信息")
     exception_info: str = Field(default="", description="主图WorkFlow异常退出时的异常信息")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="附加元数据：如 brief 升级专业版所需的 brief_outline/research_intent/language",
+    )
 
 
 class OutlineInteraction(BaseModel):
@@ -608,7 +612,7 @@ class SearchContext(BaseModel):
     )
     brief_state: Dict[str, Any] | None = Field(
         default=None,
-        description="独立 Brief 工作流的序列化状态；专业版保持为空。",
+        description=("Brief 工作流的序列化状态"),
     )
     messages: List[Message] = Field(default_factory=list, description="对话消息列表")
     language: str = Field(default="zh-CN", description="语言")

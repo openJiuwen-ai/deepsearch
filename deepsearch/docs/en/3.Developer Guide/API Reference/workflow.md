@@ -33,13 +33,14 @@ Parallel research workflow.
 
 ### `run`
 ```python
-async run(message: Optional[str] = None, conversation_id: Optional[str] = None, agent_config: Optional[dict] = None, report_template: str = "", interrupt_feedback: str = "")
+async run(message: Optional[str] = None, conversation_id: Optional[str] = None, agent_config: Optional[dict] = None, report_template: str = "", interrupt_feedback: str = "", metadata: Optional[dict] = None)
 ```
 Streams JSON chunks (`AsyncGenerator[str]`) for normal execution, HITL resume, outline HITL, and post-report edits. Returns a **dict** when `interrupt_feedback="cancel"`.
 
 - **agent_config** validated with `AgentConfig.model_validate`.
 - **interrupt_feedback**: `""` (normal SSE stream), `"accepted"` (HITL continue), `"cancel"` (JSON cancel response), `"revise_comment"` / `"revise_outline"` (outline HITL).
 - **report_template**: if base64, decoded automatically; decode errors fall back to raw string.
+- **metadata**: optional runtime metadata (client-held, not persisted server-side), e.g. the passthrough of a brief run's `final_result.metadata` to upgrade it into a professional report with the brief outline as the structural baseline. Requires the parallel execution method; calling a dependency/hybrid agent directly raises `CustomValueException` (error code 200031).
 
 Behavior highlights: initializes LLM + search tools; `native` local search requires non-empty `knowledge_base_configs`; wraps interactive interrupts; `ALL END` completes and clears context; cancel works in-process and with Redis checkpointer; when `user_feedback_processor_enable=True`, flow enters `UserFeedbackProcessorNode` after `SourceTracerInferNode` for post-report local editing.
 

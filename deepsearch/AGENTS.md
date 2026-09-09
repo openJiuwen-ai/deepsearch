@@ -118,3 +118,26 @@ Prefer targeted tests for the touched area before considering broader runs.
 - Git workflow: `.claude/rules/git-workflow.md`
 - Deep operational guides: `.claude/skills/`
 - Claude permissions and env vars: `.claude/settings.json`
+
+编写与修改代码时的注释要求：
+- 新增或修改函数、方法、类时，必须编写 Google 风格 docstring：首行简短摘要；需要时用空行接详细说明。使用英文小节标题组织内容：`Args:`、`Returns:`、`Raises:`、`Yields:`（生成器）、`Attributes:`（类属性）等；各参数/返回值一行写清名称、类型（可用括号标注）与含义。说明文档正文使用中文或与项目现有风格一致的语言；类型信息优先与类型注解一致，避免 docstring 与注解矛盾。
+- 对非显而易见的逻辑（算法步骤、边界处理、与外部系统或配置的约定、临时 workaround 等）在关键代码处添加行内或块注释，便于后续维护与审查。
+- 避免无信息量的注释（重复代码字面意思）；注释使用中文或与项目现有风格一致的语言，并保持与实现同步更新。
+- 仅针对功能代码，UT代码不用编写详细docstring，如有必要，写简单的 docstring 描述测试场景。
+
+Google 风格 docstring 示例（小节标题保持英文，说明可用中文）：
+
+```python
+def fetch_user(user_id: str) -> dict:
+    """根据用户 ID 查询用户信息。
+
+    Args:
+        user_id: 用户唯一标识。
+
+    Returns:
+        用户信息字典；未找到时返回空字典。
+
+    Raises:
+        ConnectionError: 下游服务不可用时抛出。
+    """
+```

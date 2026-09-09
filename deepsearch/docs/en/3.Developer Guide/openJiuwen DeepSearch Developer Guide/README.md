@@ -375,7 +375,7 @@ Server fields (`DeepSearchRequest`): `outline_interaction_enabled`, `outline_int
 
 **KB + object storage**: only when `CHECKPOINTER_TYPE=redis` do uploads go to configured object storage for multi-instance consistency; `in_memory` / `persistence` keep files on local disk (OBS unused). Multi-instance deployments require shared MySQL; `redis` + `sqlite` is rejected.
 
-Agent cache keys hash stable JSON of all fields that affect agent construction (excluding `message`, `conversation_id`, `interrupt_feedback`), including `space_id`, `local_search_config`, web search settings, `llm_config`, and feature flags—so changing KB or engine config within a space invalidates stale agents.
+Agent cache keys hash stable JSON of all fields that affect agent construction (excluding per-run or non-construction fields such as `message`, `interrupt_feedback`, `report_type`, and `metadata`), including `space_id`, `local_search_config`, web search settings, `llm_config`, and feature flags—so changing KB or engine config within a space invalidates stale agents. `execution_method` is part of the key, so mixing execution methods in one conversation caches separate agent instances.
 
 > Do not trust raw `space_id` from clients on untrusted networks; bind it to auth at the gateway.
 
