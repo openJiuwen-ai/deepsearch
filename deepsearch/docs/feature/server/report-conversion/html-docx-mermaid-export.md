@@ -43,7 +43,7 @@
 1. Markdown 先经过正文预处理，保护数学公式、修正引用、表格、列表和标题边界。
 2. HTML 导出读取 Markdown，替换 Mermaid 代码块，转换为 HTML 并注入样式与 KaTeX 资源（CSS + JS + auto-render 脚本）。
 3. DOCX 导出读取 Markdown，替换 Mermaid 代码块为图片，再把 HTML/Markdown 结构写入 docx；行内文本和超链接文本通过 `word_utils._iter_math_spans` 切分公式与非公式段，公式段经 `_latex_to_omml` 转为 OMML 插入段落或超链接 run。
-4. Mermaid 渲染前会清理代码和解析 frontmatter。
+4. Mermaid 渲染前会清理代码和解析 frontmatter；横向图检测同时兼容官方 `xyChart.chartOrientation: horizontal` 与存量 `horizontal: true` 两种 frontmatter，生成器已统一切换为官方 schema。
 5. timeline/xychart 会做文本压缩、单位归一化和值标签补强。
 6. DOCX 生成后会规范化字体、表格居中和图片尺寸。
 7. 两种格式共用 Markdown-to-HTML fragment：保护数学公式，处理引用、表格和列表边界。

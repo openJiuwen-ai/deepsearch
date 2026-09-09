@@ -77,7 +77,7 @@ report_bundle/
 
 ### Mermaid
 
-Mermaid Markdown remains the report contract. Ordinary and styled HTML plus DOCX from `/reports/convert` share deterministic parsing and layout for the chart source produced by this project: vertical `xychart-beta` bar/line charts, horizontal bars marked by `xychart-beta horizontal` or `horizontal: true`, `pie`, and `timeline`.
+Mermaid Markdown remains the report contract. Ordinary and styled HTML plus DOCX from `/reports/convert` share deterministic parsing and layout for the chart source produced by this project: vertical `xychart-beta` bar/line charts, horizontal bars marked by the official `xyChart.chartOrientation: horizontal`, the legacy `horizontal: true`, or `xychart-beta horizontal`, `pie`, and `timeline`.
 
 - HTML emits supported charts as escaped inline SVG.
 - DOCX uses Pillow and the repository-bundled `chart_generation/fonts/kt_font.ttf` to produce in-memory PNG data inserted through `BytesIO`; no Mermaid image files are created.

@@ -100,7 +100,7 @@ report_bundle/
 
 ### Mermaid
 
-报告 Markdown 继续以 Mermaid 源码表达图表契约。`/reports/convert` 的普通和美化 HTML、DOCX 共用确定性解析和布局：仅处理项目图表生成器实际输出的纵向 `xychart-beta` 柱状图/折线图、以 `xychart-beta horizontal` 或 `horizontal: true` 标记的横向柱状图、`pie` 和 `timeline`。
+报告 Markdown 继续以 Mermaid 源码表达图表契约。`/reports/convert` 的普通和美化 HTML、DOCX 共用确定性解析和布局：仅处理项目图表生成器实际输出的纵向 `xychart-beta` 柱状图/折线图、以官方 `xyChart.chartOrientation: horizontal`、存量 `horizontal: true` 或 `xychart-beta horizontal` 标记的横向柱状图、`pie` 和 `timeline`。
 
 - HTML 将受支持图表输出为经过文本转义的内联 SVG。
 - DOCX 使用 Pillow 与仓库内置 `chart_generation/fonts/kt_font.ttf` 在内存中输出 PNG，再经 `BytesIO` 插入 Word，不创建 Mermaid 临时图片。
