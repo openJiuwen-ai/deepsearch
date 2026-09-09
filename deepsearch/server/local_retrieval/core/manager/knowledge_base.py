@@ -849,14 +849,15 @@ def _get_storage_path(space_id: str, kb_id: str) -> Path:
 
 def _validate_upload_document_id(doc_id: str) -> str:
     """Validate a client-provided document identifier used in a filename."""
-    if (
+    is_invalid_document_id = (
         not doc_id
         or doc_id in {".", ".."}
         or "/" in doc_id
         or "\\" in doc_id
         or "\x00" in doc_id
         or Path(doc_id).is_absolute()
-    ):
+    )
+    if is_invalid_document_id:
         raise ValueError("Invalid document identifier")
     return doc_id
 
