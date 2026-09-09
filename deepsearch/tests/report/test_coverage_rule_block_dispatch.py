@@ -17,7 +17,6 @@ from openjiuwen.core.session.node import Session
 
 from openjiuwen_deepsearch.algorithm.report import evidence as evidence_module
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
-from openjiuwen_deepsearch.config.config import AgentConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import StartNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import (
     SubReporterNode,

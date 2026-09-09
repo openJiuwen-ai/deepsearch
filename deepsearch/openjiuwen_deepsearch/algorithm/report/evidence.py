@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import os
 from dataclasses import dataclass
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt

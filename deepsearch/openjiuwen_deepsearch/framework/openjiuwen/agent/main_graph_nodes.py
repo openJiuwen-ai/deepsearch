@@ -1,6 +1,5 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-import asyncio
 import copy
 import json
 import logging
@@ -102,7 +101,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ValidationResult,
     _resolve_source_date_scope,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name, 
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name,
                                                                         adapt_vlm_model_name)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
     apply_web_search_domain_constraints,

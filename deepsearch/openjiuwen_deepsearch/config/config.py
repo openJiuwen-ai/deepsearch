@@ -293,7 +293,7 @@ class RetrievalSettingsConfig(BaseModel):
     top_k: int = Field(default=3, description="最大检索结果数量")
     top_k_multiply_factor: int = Field(default=5, description="最大检索结果数量乘数因子")
     add_instruction: bool = Field(default=True, description="是否添加指令")
-    mode: Literal["dense", "sparse", "hybrid"] = Field(default="hybrid", description="检索模式")    
+    mode: Literal["dense", "sparse", "hybrid"] = Field(default="hybrid", description="检索模式")
 
 
 class StateCreationAgentConfig(BaseModel):
