@@ -496,16 +496,18 @@ class XYChartMermaidGenerator:
         )
         # Keep the Mermaid directive itself standard so downstream validators can
         # infer the chart type from the `bar [...]`/`line [...]` series. The
-        # horizontal rendering hint is preserved in frontmatter for exporters.
+        # horizontal hint uses the official xyChart.chartOrientation key so both
+        # built-in exporters and external Mermaid renderers honor it.
         chart_orientation = "xychart-beta"
 
         lines = [
             "---",
             "config:",
-            f"    horizontal: {'true' if use_horizontal else 'false'}",
-            f"    width: {width}",
-            f"    height: {cls.HEIGHT}",
-            "    showDataLabel: true",
+            "    xyChart:",
+            *(["        chartOrientation: horizontal"] if use_horizontal else []),
+            f"        width: {width}",
+            f"        height: {cls.HEIGHT}",
+            "        showDataLabel: true",
             "    themeVariables:",
             "        xyChart:",
             "            plotColorPalette: '#7c3aed'",

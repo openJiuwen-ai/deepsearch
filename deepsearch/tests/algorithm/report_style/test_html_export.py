@@ -130,6 +130,10 @@ def test_convert_md_to_html_renders_xychart_mermaid_as_inline_svg(tmp_path):
     [
         ("", "xychart-beta horizontal"),
         ("---\nconfig:\n    horizontal: true\n---\n", "xychart-beta"),
+        (
+            "---\nconfig:\n    xyChart:\n        chartOrientation: horizontal\n---\n",
+            "xychart-beta",
+        ),
     ],
 )
 def test_convert_md_to_html_renders_horizontal_xychart_as_horizontal_bars(
