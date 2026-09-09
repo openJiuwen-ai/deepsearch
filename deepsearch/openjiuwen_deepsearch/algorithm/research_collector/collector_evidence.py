@@ -758,7 +758,6 @@ _COVERAGE_ENTITY_WEIGHT = 1.5
 _COVERAGE_CITATION_WEIGHT = 1.0
 _COVERAGE_NUMBER_CAP = 5
 _COVERAGE_FEATURE_CAP = 3
-_COVERAGE_NEAR_DEDUP_RATIO = 0.6
 #: 信息结构特征：长度落在合理区间给满分，过长线性衰减。
 _COVERAGE_STRUCTURE_WEIGHT = 1.0
 _COVERAGE_STRUCTURE_MIN_CHARS = 40
@@ -1180,21 +1179,6 @@ def extract_fact_anchors(text: str) -> set[str]:
     return anchors
 
 
-def _coverage_char_bigrams(text: str) -> set[str]:
-    """字符二元组集合，作为零依赖的词级近似（对语序重排鲁棒）。"""
-    return {text[index:index + 2] for index in range(len(text) - 1)}
-
-
-def _coverage_jaccard_similarity(first: str, second: str) -> float:
-    """两段归一化文本的字符二元组 Jaccard 相似度。"""
-    first_bigrams = _coverage_char_bigrams(first)
-    second_bigrams = _coverage_char_bigrams(second)
-    if not first_bigrams or not second_bigrams:
-        return 0.0
-    union = len(first_bigrams | second_bigrams)
-    return len(first_bigrams & second_bigrams) / union if union else 0.0
-
-
 def _anchor_dedup_key(anchor: str) -> tuple[str, str]:
     """把锚点规约为去重键：数值锚点保留原文（数字/小数点/正负号/单位/量级词
     一律保留），仅做三类字符级规整；其余（实体等）保留原文。
@@ -1399,27 +1383,6 @@ def extract_coverage_passages(
         )
         for item in cached
     ]
-
-
-def _is_duplicate_text(text: str, reference: str, threshold: float) -> bool:
-    """判断归一化后的两段文本是否构成实质重复。
-
-    Args:
-        text: 归一化后的待判断文本。
-        reference: 归一化后的参照文本。
-        threshold: 近似重复的字符二元组 Jaccard 相似度阈值。
-
-    Returns:
-        True 表示两段文本相同、高度相似，或其中一段是另一段的高占比子串。
-    """
-    if text == reference:
-        return True
-    if _coverage_jaccard_similarity(text, reference) >= threshold:
-        return True
-    shorter, longer = (text, reference) if len(text) <= len(reference) else (reference, text)
-    if shorter and shorter in longer and len(shorter) >= 0.6 * len(longer):
-        return True
-    return False
 
 
 def build_evidence_atom(
