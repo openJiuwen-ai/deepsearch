@@ -1,110 +1,210 @@
 **Read this in:** English | [简体中文](./README_zh.md)
 
-# 🔬 What is openJiuwen-DeepSearch?
+<h1 align="center">openJiuwen Search</h1>
 
-**openJiuwen-DeepSearch** is a knowledge-augmented, high-performance, high-precision deep retrieval and research engine. It combines structured knowledge and large language models with tools to deliver enterprise-grade Agentic AI search and research. Built on **openJiuwen agent-core**, it coordinates multiple agents for query planning, information gathering, understanding and reflection, and report generation—tackling complex reasoning and research workloads.
+<p align="center">
+  <strong>Comprehensive intelligent search solutions from deep research to code search</strong>
+</p>
 
-## Use cases
+<p align="center">
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-Apache--2.0-green.svg" alt="License" />
+  </a>
+  <img src="https://img.shields.io/badge/python-≥3.11-blue.svg" alt="Python Version" />
+  <img src="https://img.shields.io/badge/os-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="OS Support" />
+</p>
 
-openJiuwen-DeepSearch provides deep search and deep research for enterprises and end users. This release focuses on **deep research**: multi-step workflows, multi-source validation, rigorous reasoning, and structured output for professional or high-stakes decisions.
 
-- **Financial analysis reports**: Connect local investment and finance knowledge bases and web-augmented search to plan tasks, gather and analyze information (e.g. *“Impact of Fed rate cuts in 2025 on A-share tech stocks”*), and produce investment and finance reports.
-- **Academic and policy research**: Use local or web-augmented sources for policies and implementation details, then plan, collect, analyze, and generate reports (e.g. *“Impact of China’s ‘new quality productive forces’ policy on manufacturing SMEs”*).
+# Introduction
 
-## Core capabilities
+**openJiuwen Search** is a collection of search capabilities within the openJiuwen open-source project, providing comprehensive intelligent search solutions from deep research to code search. This repository brings together multiple search agents targeting different scenarios, aiming to deliver enterprise-grade Agentic AI search capabilities to enterprises and developers.
 
-- **Example-driven report generation**
-  - Start from a report template or extract structure from a sample report, then generate similar reports.
-  - Samples can be Markdown, HTML, Word, PDF, etc.; templates can be exported.
+---
 
-- **Knowledge-augmented hybrid retrieval**
-  - Local knowledge bases with keyword, vector, graph, and hybrid retrieval.
-  - Hybrid retrieval across local corpora and the open web.
-  - Online knowledge construction, evaluation, and refinement to improve fused search quality and reduce context cost.
+## Subprojects
 
-- **Collaborative and interactive**
-  - Natural-language feedback during planning.
-  - Collaborative revision based on user feedback.
+### DeepSearch - Deep Retrieval and Research Engine
 
-- **Segment-level provenance**
-  - Validated citations in outputs and reports; preview and open sources.
-  - Segment-level traceability and confidence.
-  - Provenance reasoning and visualization for key claims.
+**DeepSearch** is a knowledge-augmented, high-performance, high-precision deep retrieval and research engine. It leverages structured knowledge and large language models with various tools to deliver enterprise-grade Agentic AI search and research capabilities.
 
-- **Rich reports with visuals**
-  - Reports with figures and charts; content remains traceable.
-  - Markdown output and export to Word, HTML, and other formats.
+**Core capabilities:**
+- **Deep Research**: Multi-step, multi-source validated, rigorously reasoned structured research report generation
+- **Deep Search**: Intelligent Q&A based on state-space search with multi-step reasoning and tool calling
+- **Knowledge-augmented hybrid retrieval**: Fusion of local knowledge bases (keyword, vector, graph retrieval) with web-augmented engines
+- **Rich reports with visuals**: Report generation with embedded figures and charts, fully traceable content
+- **Segment-level provenance**: Outputs with validated citations, supporting segment-level traceability and confidence assessment
+- **Collaborative and interactive**: Natural-language feedback during the planning phase
+
+**Use cases:**
+- Financial analysis reports: Connect local investment and finance knowledge bases to generate investment and financial research reports
+- Academic and policy research: Gather policy information and implementation details, then generate research reports
+- Complex query search: Solve professional decision-making scenarios requiring multi-step, multi-source validation
+
+**Documentation:** [DeepSearch project docs](./deepsearch/README.md)
+
+---
+
+### CodeSearch - Code Search Agent
+
+**CodeSearch** is an intelligent retrieval engine for code repositories. Given a problem description (e.g. a GitHub Issue, bug report, or feature request), it outputs "which files and which lines to look at to resolve it," providing precise code context for bug localization, code Q&A, and automated repair pipelines.
+
+**Core capabilities:**
+- **Agentic multi-round retrieval**: The retrieval agent makes autonomous decisions (browsing repo structure, multi-strategy search, expanding context, filtering commits), with dual-model collaboration to control costs
+- **Code-oriented hybrid indexing**: Syntax-aware chunking (currently Python), dual-sparse BM25, incremental indexing with optional dense vector retrieval
+- **Dual-engine equivalent implementation**: Workflow graph engine (default) + pure-code loop engine, with tests locking byte-identical output
+- **Service-oriented engineering**: SDK, CLI, HTTP service, and container image form factors
+
+**Use cases:**
+- Bug localization: Turn an Issue into specific functions and code lines that need modification
+- Code Q&A context supply: Provide line-precise code evidence for questions like "where is this feature implemented"
+- Large repository navigation: Exchange natural language for relevant code slices in unfamiliar large codebases
+
+**Quick start:** [CodeSearch quick start guide](./codesearch/docs/en/2.Installation%20Guide/Quick%20Start.md)
+
+**Documentation:** [CodeSearch project docs](./codesearch/README.md)
+
+---
+
+### openjiuwen-search-base - Shared Search Foundation Library
+
+**openjiuwen-search-base** is the **shared foundation layer** for the openJiuwen search product family, providing reusable LLM integration, vector retrieval, workflow, and other base components for DeepSearch, CodeSearch, and other products. This package has no dependencies on any product package; its core depends only on pydantic, with heavier dependencies offered as optional groups using guarded imports that can be enabled on demand.
+
+**Core modules:**
+- **llm**: LLM client protocol, standardized models for messages and tool calls, openJiuwen model adapter (with SSL certificate handling), `LLMConfig`
+- **embedding**: OpenAI-compatible embedding client with local SQLite caching, limited retries with exponential backoff, persistent connection reuse
+- **milvus**: Safe query expression construction (unified escaping), collection naming conventions (product prefix + schema version), general-purpose storage client
+- **workflow**: Workflow node templates (three-phase) and branch routing construction
+- **logging_utils**: Log management and sensitive information masking
+- **runtime**: Run registry, passed via run_id through workflows; live objects never enter copyable workflow state
+
+**Design principles:**
+- **Dependency direction**: base depends on no product package; products depend on base
+- **Optional heavy dependencies**: Core import paths never touch openjiuwen / pymilvus / aiohttp; pure logic parts remain importable and testable without the optional groups installed
+- **Namespace isolation**: Collection names follow `{prefix}{name}__{schema_version}` format, allowing multiple products to safely share the same Milvus instance
+
+**Quick install:**
+```sh
+pip install -e .                            # core
+pip install -e '.[workflow,milvus,embed]'   # enable extras on demand
+```
+
+**Documentation:** [base project docs](./base/README.md)
+
+---
+
+## Quick Start
+
+### DeepSearch quick start
+
+#### SDK installation
+
+For secondary development, customized deployment, or source-level debugging:
+
+- [DeepSearch SDK installation guide](./deepsearch/docs/en/2.Installation%20Guide/DeepSearch_SDK/README.md)
+
+**Recommended model configuration:**
+- **Verified models**: Qwen3.7-Max (recommended), Qwen3.8-Flash, Qwen3.7-Plus, Qwen3-Max, GLM-5.3, GLM-5.3-Flash, GLM-5.2, GLM-5.1, GLM-5, DeepSeek V3.2, Kimi-K2.5
+- **Tip**: Use more capable models for report generation to balance output quality and call stability
+- **Note**: When using reasoning models, report generation time increases significantly; if speed matters, prefer non-reasoning models
+
+### CodeSearch quick start
+
+```
+# Index a local repository
+pip install -e ../base -e '.[dev,milvus,llm,server]'
+codesearch index --repo /path/to/your/repo --collection my_repo
+
+# Search with natural language (configure CODESEARCH_LLM_API_KEY etc. in .env)
+codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
+```
+
+Detailed usage guide: [CodeSearch quick start](./codesearch/docs/en/3.Quick%20Start/3.Quick%20Start.md)
+
+---
+
+## Documentation navigation
+
+### DeepSearch docs
+
+- [Product overview](./deepsearch/docs/en/1.Product%20Introduction/1.Product%20Introduction.md) - Product positioning and core features
+- [Installation guide](./deepsearch/docs/en/2.Installation%20Guide/Quick%20Guide.md) - Detailed installation and configuration
+- [Developer guide](./deepsearch/docs/en/3.Developer%20Guide/README.md) - Developer documentation
+- [FAQ](./deepsearch/docs/en/4.FAQ/README.md) - Frequently asked questions
+
+### CodeSearch docs
+
+- [Product overview](./codesearch/docs/en/1.Product%20Introduction/1.Product%20Introduction.md) - Product positioning and core features
+- [Installation guide](./codesearch/docs/en/2.Installation%20Guide/README.md) - Detailed installation and configuration
+- [Quick start](./codesearch/docs/en/3.Quick%20Start/3.Quick%20Start.md) - Get started quickly
+- [Developer guide](./codesearch/docs/en/4.Developer%20Guide/README.md) - Developer documentation
+- [FAQ](./codesearch/docs/en/5.FAQ/README.md) - Frequently asked questions
+
+### base docs
+
+- [openjiuwen-search-base](./base/README.md) - Module and design documentation for the shared foundation library
+
+---
 
 ## System architecture
 
-The diagram below outlines the architecture. openJiuwen-DeepSearch is built mainly on **openJiuwen agent-core** and can connect to different LLMs and tools.
+### DeepSearch architecture overview
 
-DeepSearch includes a manager, query planning, knowledge retrieval, understanding and analysis, and result generation:
+DeepSearch is built mainly on openJiuwen agent-core and can connect to different LLMs and tools. The system consists of the following components:
 
-![Architecture](./deepsearch/docs/zh/images/architecture.png)
+![DeepSearch architecture](./deepsearch/docs/en/images/architecture.png)
 
-- **Manager**: Agent creation, workflow orchestration, and configuration on the agent-core framework so agents coordinate efficiently.
-- **Query planning**: Intent-based routing, structural planning, task decomposition, query rewriting, and related understanding to capture user intent and schedule work.
-- **Knowledge retrieval**: Offline knowledge construction (parsing, chunking, index building) and online retrieval (keyword inverted index, vector search, knowledge-graph search, hybrid modes), plus pluggable web search.
-- **Understanding and analysis**: Evaluate, refine, expand, and fuse retrieval results and other context.
-- **Result generation**: Answers, report generation, interactive editing, and provenance.
+- **Manager**: Agent creation, workflow orchestration, and configuration management on the agent-core framework
+- **Query planning**: Intent-based routing, structural planning, task decomposition, query rewriting, and other query understanding capabilities
+- **Knowledge retrieval**: Offline knowledge construction and online retrieval, supporting multiple retrieval modes
+- **Understanding and analysis**: Understanding of retrieval results and other contextual information, including evaluation, refinement, expansion, and fusion
+- **Result generation**: Answers, report generation, interactive editing, and result provenance
 
-**openJiuwen Studio** is an end-to-end AI Agent platform from build to deploy. **openJiuwen-DeepSearch** is a reference agent: manage models, tools, and knowledge in Studio, submit queries, and experience deep research and reports. **openJiuwen Ops** supports debugging, evaluation, observability, and tuning for agents including DeepSearch.
+### CodeSearch architecture overview
 
-**Abbreviations**
+```
+┌──────────── Indexing (offline) ────────────────┐
+│  Code repo → Syntax-aware chunking → Milvus     │
+│  dual-sparse index · Incremental: file hash     │
+│  dedup, unchanged files shared across versions  │
+└─────────────────────────────────────────────────┘
+┌──────────── Retrieval (online) ─────────────────┐
+│  Problem description → Retrieval agent          │
+│  (decision model · filter model · segment       │
+│   memory · five tool types) → files + line      │
+│   ranges                                        │
+└─────────────────────────────────────────────────┘
+```
 
-- **agent-core**: openJiuwen agent-core  
-- **Studio**: openJiuwen Studio  
-- **DeepSearch**: openJiuwen-DeepSearch  
-- **Ops**: openJiuwen Ops  
+---
 
-# 📦 Installation
+## Contributing
 
-This section points to full installation guides so you can deploy on common platforms.
+Contributions of code, bug reports, and feature ideas are welcome!
 
-## Full edition (UI + backend)
+- Submit Issues and Pull Requests
+- See the [contribution guide](https://www.openjiuwen.com/en/contribute)
+- Join community discussions
 
-For users who want the **complete system** including the web UI:
+---
 
-- [Windows](./deepsearch/docs/en/2.Installation%20Guide/DeepSearch%20Full%20Edition/Windows%20Installation.md)
-- [macOS](./deepsearch/docs/en/2.Installation%20Guide/DeepSearch%20Full%20Edition/macOS%20Installation.md)
-- [Linux](./deepsearch/docs/en/2.Installation%20Guide/DeepSearch%20Full%20Edition/Linux%20Installation.md)
+## License
 
-The default [Chinese README](./README_zh.md) links to the same topics under `docs/zh/`.
+This project is licensed under **Apache 2.0**. See the [LICENSE](./LICENSE) file.
 
-## Other install paths
+---
 
-For custom builds, integration, or source-level debugging, see the SDK-oriented guides:
+## Contact
 
-- [DeepSearch SDK installation](./deepsearch/docs/en/2.Installation%20Guide/DeepSearch_SDK/README.md)
+- **Project homepage**: [https://github.com/openJiuwen-ai/deepsearch](https://github.com/openJiuwen-ai/deepsearch)
+- **Official website**: [https://www.openjiuwen.com/en/](https://www.openjiuwen.com/en/)
+- **Issue tracker**: [Issues](https://github.com/openJiuwen-ai/deepsearch/issues)
 
-More navigation: [Documentation hub](./deepsearch/docs/README.md).
+---
 
-# 🚀 Quick start
+## Disclaimer
 
-The animation below gives a fast tour of core features and the main workflow.
+This product serves as a workflow orchestration tool only and does not include AI model capabilities. Users are responsible for compliance with applicable regulations such as the EU AI Act when connecting AI models for specific business scenarios.
 
-![DeepSearch quick start](./deepsearch/docs/zh/images/DeepSearch介绍.gif)
+---
 
-👉 For a full demo video, download the [complete video](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/readme/9e6e857a424167500d4b4277485ea9b1_raw.mp4).  
-👉 Step-by-step UI guide: [Quick Start](./deepsearch/docs/en/3.Quick%20Start/3.Quick%20Start.md).
-
-**Note:** It is recommended to use a more powerful model (such as Qwen3-Max or GLM-5) to generate the report, so as to balance output quality and generation stability. If the model’s capability or concurrency handling is insufficient, it may affect the quality or completeness of the report.
-
-# 💻 Developer guide
-
-To work from source or extend DeepSearch, see the [Developer Guide](./deepsearch/docs/en/4.Developer%20Guide/README.md). Contributions are welcome.
-
-**Note:** Except when resuming the **same** task (e.g. HITL clarification, outline interaction, cancellation), each call to the DeepSearch SDK **`run`** API should use a **new** `conversation_id`. Do not reuse a `conversation_id` across unrelated runs.
-
-# ❓ FAQ
-
-[FAQ](./deepsearch/docs/en/5.FAQ/README.md).
-
-# ⚖️ License
-
-This project is licensed under **Apache 2.0**. See the [LICENSE](LICENSE) file.
-
-# 🤝 Contributing
-
-Issues and pull requests are welcome. See the [contribution guide](https://www.openjiuwen.com/en/contribute).
+**If this project is helpful to you, please give us a Star! Your support is our motivation for continuous improvement!**

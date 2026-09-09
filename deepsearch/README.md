@@ -49,13 +49,10 @@ DeepSearch includes a manager, query planning, knowledge retrieval, understandin
 - **Understanding and analysis**: Evaluate, refine, expand, and fuse retrieval results and other context.
 - **Result generation**: Answers, report generation, interactive editing, and provenance.
 
-**openJiuwen Ops** supports debugging, evaluation, observability, and tuning for agents including DeepSearch.
-
 **Abbreviations**
 
 - **agent-core**: openJiuwen agent-core  
 - **DeepSearch**: openJiuwen-DeepSearch  
-- **Ops**: openJiuwen Ops  
 
 # 📦 Installation
 
@@ -73,7 +70,11 @@ More navigation: [Documentation hub](./docs/README.md).
 
 👉 For a full demo video, download the [complete video](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/readme/9e6e857a424167500d4b4277485ea9b1_raw.mp4).
 
-**Note:** It is recommended to use a more powerful model (such as Qwen3-Max or GLM-5) to generate the report, so as to balance output quality and generation stability. If the model’s capability or concurrency handling is insufficient, it may affect the quality or completeness of the report.
+**_Note:_**
+
+* **_Verified models: Qwen3.7-Max (recommended), Qwen3.8-Flash, Qwen3.7-Plus, Qwen3-Max, GLM-5.3, GLM-5.3-Flash, GLM-5.2, GLM-5.1, GLM-5, DeepSeek V3.2, Kimi-K2.5._**
+* **_It is recommended to use a more powerful model to generate the report, so as to balance output quality and generation stability. If the model’s capability or concurrency handling is insufficient, it may affect the quality or completeness of the report._**
+* **_Thinking models involve more complex reasoning and analysis, so report generation takes significantly longer. If generation speed matters, prefer non-thinking models._**
 
 # 💻 Developer guide
 

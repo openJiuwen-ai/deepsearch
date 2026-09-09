@@ -45,12 +45,9 @@ DeepSearch主要由管理器、查询规划、信息收集、理解分析和内�
 - **理解分析**：提供对检索结果及其他上下文信息的理解能力。主要包含对搜索结果进行评估、精炼、扩展、融合等功能。 
 - **结果生成**：提供答案、报告生成、交互式编辑及结果溯源等主要功能。
 
-openJiuwen Ops作为AI Agent从调试、评测、到观测、调优等一站式平台，可辅助openJiuwen-DeepSearch等Agent进行调试调优。
-
 为方便叙述，后面将采用以下简称：
 - **agent-core**: openJiuwen agent-core
 - **DeepSearch**: openJiuwen-DeepSearch
-- **Ops**: openJiuwen Ops
 
 # 📦 安装指导
 
@@ -66,7 +63,7 @@ DeepSearch 通过 SDK 方式安装，适用于快速部署体验、定制化部�
 
 **_注意：_**
 
-* **_已验证模型：Qwen3-Max（推荐）、GLM-5、GLM-5.1、DeepSeek V3.2、Kimi-K2.5。_**
+* **_已验证模型：Qwen3.7-Max（推荐）、Qwen3.8-Flash、Qwen3.7-Plus、Qwen3-Max、GLM-5.3、GLM-5.3-Flash、GLM-5.2、GLM-5.1、GLM-5、DeepSeek V3.2、Kimi-K2.5。_**
 * **_建议使用性能较强的模型生成报告，以兼顾生成质量与调用稳定性。若模型能力或并发能力不足，可能影响报告效果或完整性。_**
 * **_使用思考类模型时，由于包含更复杂的推理与分析过程，报告生成耗时会显著增加。如对生成速度有要求，建议优先使用非思考模型。_**
 
