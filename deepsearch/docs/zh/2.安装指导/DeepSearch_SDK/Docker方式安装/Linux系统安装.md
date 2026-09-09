@@ -24,7 +24,7 @@
 
     ```
     docker version
-    docker-compose version
+    docker compose version
     ```
 
 ### 安装 MySQL（可选组件）

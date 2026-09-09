@@ -24,7 +24,7 @@ Ensure the machine meets:
 
     ```
     docker version
-    docker-compose version
+    docker compose version
     ```
 
 ### Install MySQL (optional)

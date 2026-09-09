@@ -30,7 +30,7 @@
 
     ```
     docker version
-    docker-compose version
+    docker compose version
     ```
 
 ## 二、DeepSearch 安装（以下以 Ubuntu 22.04 为例）
