@@ -1280,7 +1280,6 @@ def _append_rule_coverage_to_core(
             _extract_doc_coverage_passages(
                 {
                     "original_content": str(getattr(evidence, "original_content", "") or ""),
-
                 }
             ),
             budget,
