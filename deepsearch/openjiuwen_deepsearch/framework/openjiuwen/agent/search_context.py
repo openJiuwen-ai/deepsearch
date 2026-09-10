@@ -218,7 +218,7 @@ class ReportTypePolicy(BaseModel):
     """
 
     report_type: Literal["professional", "brief"] = Field(
-        default="professional", description="报告类型：professional（专业版）或 brief（精简版）"
+        default="brief", description="报告类型：professional（专业版）或 brief（精简版）"
     )
     paragraph_style: Literal["concise", "detailed"] = Field(
         default="detailed", description="段落风格"

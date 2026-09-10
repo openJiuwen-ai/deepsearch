@@ -399,7 +399,7 @@ class StartNode(Start):
             max_research_loops=inputs.get("max_research_loops", 2),
             max_tool_call_turns_per_query=inputs.get("max_tool_call_turns_per_query", 2),
             evidence_ledger=target_tracking_ledger,
-            report_type=inputs.get("report_type", "professional"),
+            report_type=inputs.get("report_type", "brief"),
             research_intent=inputs.get("research_intent") or {},
         )
         session.update_global_state({"collector_context": collector_context.model_dump()})
@@ -455,7 +455,7 @@ class GenerateQueryNode(BaseNode):
         max_search_query_count = state.get("max_search_query_count", 5)
         language = state.get("language", "zh-CN")
 
-        report_type = session.get_global_state("collector_context.report_type") or "professional"
+        report_type = session.get_global_state("collector_context.report_type") or "brief"
 
         agent_input = {
             "plan_title": plan_title,
@@ -659,7 +659,7 @@ class SupervisorNode(BaseNode):
                         f"{len(current_ledger.attempted_queries)} | ledger brief: {ledger_brief}")
 
         evidence_table = build_supervisor_evidence_table(new_doc_infos)
-        report_type = session.get_global_state("collector_context.report_type") or "professional"
+        report_type = session.get_global_state("collector_context.report_type") or "brief"
 
         agent_input = {
             "plan_title": plan_title,

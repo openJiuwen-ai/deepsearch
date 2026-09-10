@@ -60,7 +60,7 @@ def normalize_report_type(raw: str | None) -> str | None:
     NOTE:
     Keeping None is intentional. Downstream `generate_questions` uses this signal
     to force a clarification question asking user to choose professional vs brief,
-    while policy resolution still defaults to professional when needed.
+    while policy resolution still defaults to brief when needed.
     """
     if raw is None:
         return None
@@ -73,19 +73,19 @@ def normalize_report_type(raw: str | None) -> str | None:
 def resolve_report_type_policy(
         normalized_report_type: str | None,
 ) -> ReportTypePolicy:
-    """按报告类型解析策略。"""
-    if normalized_report_type == "brief":
+    """按报告类型解析策略。默认 brief：仅明确 professional 才走 professional。"""
+    if normalized_report_type == "professional":
         return ReportTypePolicy(
-            report_type="brief",
-            paragraph_style="concise",
-            require_summary_first=True,
-            require_methodology_and_risk=True,
+            report_type="professional",
+            paragraph_style="detailed",
+            require_summary_first=False,
+            require_methodology_and_risk=False,
         )
     return ReportTypePolicy(
-        report_type="professional",
-        paragraph_style="detailed",
-        require_summary_first=False,
-        require_methodology_and_risk=False,
+        report_type="brief",
+        paragraph_style="concise",
+        require_summary_first=True,
+        require_methodology_and_risk=True,
     )
 
 
@@ -494,9 +494,14 @@ def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFu
                     "enum": ["professional", "brief"],
                     "description": (
                         "Report type. MUST be exactly 'professional' or 'brief'. "
-                        "Use 'professional' for full deep-research reports (专业版, 深度研究); "
-                        "use 'brief' for concise reports (精简版, 简报, 概述). "
-                        "Omit if unclear after reading context."
+                        "Default to 'brief'. Only emit 'professional' when the user *explicitly* "
+                        "requests a professional/in-depth full report (专业版, professional, "
+                        "详细完整报告, 完整版). For ordinary research requests with "
+                        "no explicit format request, or when the user asks for 精简版/简报/概述/brief, "
+                        "emit 'brief'. Always emit one of the two values; do NOT omit. "
+                        "The bare phrase '深度研究' (the deep-research skill name / verb, "
+                        "incl. the '使用 deepresearch 技能' frame) is NOT a professional request — "
+                        "emit 'brief' for it; only the explicit version words above trigger 'professional'."
                     ),
                 },
                 "include_url": {

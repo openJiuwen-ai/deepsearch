@@ -225,7 +225,7 @@ class CollectorExecutionService:
         )
         build_config = run_config.to_input_build_config()
         rtp = session.get_global_state("section_context.report_type_policy") or {}
-        report_type = rtp.get("report_type", "professional") if isinstance(rtp, dict) else "professional"
+        report_type = rtp.get("report_type", "brief") if isinstance(rtp, dict) else "brief"
         research_intent = session.get_global_state("section_context.research_intent") or {}
         section_ledger = ensure_ledger(
             session.get_global_state("section_context.target_paper_ledger") or {}
@@ -348,6 +348,6 @@ class CollectorExecutionService:
             "max_search_query_count": build_config.max_search_query_count,
             "max_research_loops": build_config.max_research_loops,
             "max_tool_call_turns_per_query": build_config.max_tool_call_turns_per_query,
-            "report_type": params.report_type or "professional",
+            "report_type": params.report_type or "brief",
             "research_intent": params.research_intent or {},
         }

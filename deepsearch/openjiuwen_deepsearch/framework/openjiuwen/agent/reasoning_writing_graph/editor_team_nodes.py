@@ -185,7 +185,7 @@ class BasePlanReasoningNode(BaseNode):
             "agent_name": AgentLlmName.PLAN_REASONING.value,
             "llm_model_name": adapt_llm_model_name(session, NodeId.PLAN_REASONING.value),
             "api_tools_config": session.get_global_state("config.api_tools_config") or {},
-            "report_type": rtp.get("report_type", "professional"),
+            "report_type": rtp.get("report_type", "brief"),
             "require_summary_first": rtp.get("require_summary_first", False),
             "require_methodology_and_risk": rtp.get("require_methodology_and_risk", False),
             "audience_role": research_intent.get("audience_role", ""),
@@ -422,7 +422,7 @@ class SubReporterNode(BaseNode):
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],
             visualization_enable=session.get_global_state("config.visualization_enable"),
-            report_type=rtp.get("report_type", "professional"),
+            report_type=rtp.get("report_type", "brief"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             require_summary_first=rtp.get("require_summary_first", False),
             require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
