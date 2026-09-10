@@ -847,6 +847,33 @@ def _get_storage_path(space_id: str, kb_id: str) -> Path:
     return storage_path
 
 
+def _validate_upload_document_id(doc_id: str) -> str:
+    """Validate a client-provided document identifier used in a filename."""
+    is_invalid_document_id = (
+        not doc_id
+        or doc_id in {".", ".."}
+        or "/" in doc_id
+        or "\\" in doc_id
+        or "\x00" in doc_id
+        or Path(doc_id).is_absolute()
+    )
+    if is_invalid_document_id:
+        raise ValueError("Invalid document identifier")
+    return doc_id
+
+
+def _resolve_upload_file_path(storage_path: Path, doc_id: str, suffix: str) -> Path:
+    """Build a document path and ensure it remains inside its KB storage directory."""
+    validated_doc_id = _validate_upload_document_id(doc_id)
+    storage_root = storage_path.resolve()
+    file_path = (storage_root / f"{validated_doc_id}{suffix}").resolve()
+    try:
+        file_path.relative_to(storage_root)
+    except ValueError as exc:
+        raise ValueError("Invalid document identifier") from exc
+    return file_path
+
+
 def _get_file_type(filename: str) -> str:
     """根据文件名获取文件类型"""
     return Path(filename).suffix.lower().lstrip(".")
@@ -1858,15 +1885,20 @@ async def document_upload(
             data=None,
         )
 
-    # 2. 获取存储路径
-    storage_path = _get_storage_path(space_id, kb_id)
-
-    # 3. 解析 metadata 中的 doc_list，并获取当前知识库文档ID列表
+    # 2. 解析 metadata 中的 doc_list，并获取当前知识库文档ID列表
     metadata_doc_list: list[str] = []
     if isinstance(metadata, dict):
         raw_doc_list = metadata.get("doc_list")
         if isinstance(raw_doc_list, list):
             metadata_doc_list = [str(doc_id) for doc_id in raw_doc_list if doc_id]
+    try:
+        for doc_id in metadata_doc_list:
+            _validate_upload_document_id(doc_id)
+    except ValueError:
+        return ResponseModel(
+            code=status.HTTP_400_BAD_REQUEST,
+            message="Invalid document identifier",
+        )
 
     existing_doc_ids: set[str] = set()
     doc_id_list_result = knowledge_base_repository.document_id_list(space_id=space_id, kb_id=kb_id)
@@ -1906,13 +1938,16 @@ async def document_upload(
                     f"Error: {delete_result.message}"
                 )
 
-    # 5. 允许的文件类型
+    # 3. 获取存储路径。Do this only after client document IDs have been validated.
+    storage_path = _get_storage_path(space_id, kb_id)
+
+    # 4. 允许的文件类型
     allowed_file_extensions = {".pdf", ".doc", ".docx", ".txt", ".md"}
 
     # 文件大小限制：20MB
     max_file_size = 20 * 1024 * 1024  # 20MB in bytes
 
-    # 6. 处理每个文件
+    # 5. 处理每个文件
     uploaded_docs = []
     success_count = 0
     failed_count = 0
@@ -1950,10 +1985,11 @@ async def document_upload(
             file_type = _get_file_type(filename)
             mime_type = _get_mime_type(file_type)
 
-            # 4.3 保存文件到服务器
+            # 5.3 保存文件到服务器
             # 使用 doc_id 作为文件名，保留原始扩展名
-            safe_filename = f"{doc_id}{Path(filename).suffix}"
-            file_path = storage_path / safe_filename
+            file_path = _resolve_upload_file_path(
+                storage_path, doc_id, Path(filename).suffix
+            )
 
             # 读取文件内容并保存（异步读取）
             file_content = await file.read()
