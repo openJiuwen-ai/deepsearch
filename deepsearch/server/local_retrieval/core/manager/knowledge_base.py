@@ -2165,16 +2165,12 @@ def knowledge_base_search(req: KnowledgeBaseSearchRequest) -> ResponseModel:
         has_graph_enhancement = knowledge_base_repository.has_graph_enhancement_documents(
             space_id=req.space_id, kb_id=kb_id
         )
-        kb_config = kb.get("config") or {}
         knowledge_bases.append(
             KnowledgeBaseInfo(
                 id=kb_id,
                 space_id=kb.get("space_id", ""),
                 name=kb.get("name", ""),
                 description=kb.get("description"),
-                embed_model_config=kb_config.get("embed_model_config"),
-                llm_config=kb_config.get("llm_config"),
-                config=kb.get("config"),
                 create_time=kb.get("create_time"),
                 update_time=kb.get("update_time"),
                 has_graph_enhancement=has_graph_enhancement,
