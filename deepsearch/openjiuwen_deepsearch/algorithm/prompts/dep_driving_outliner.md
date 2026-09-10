@@ -36,12 +36,11 @@ For every section returned through the outline tool:
 - Use an empty array `[]` when no section-specific format requirement exists; never omit `format_requirements`.
 - Provide a non-empty `section_focus` and at least one item in `focus_dimensions` for every section.
 
-{% if report_type == "brief" %}
-## Report type: Brief
-- Fewer sections; each must earn its place for **decisions, conclusions, or risk framing**—not decorative completeness.
-{% if require_summary_first %}- Early sections should establish **problem boundary, headline conclusions, and non-goals**.{% endif %}
-{% if require_methodology_and_risk %}- Surface **how evidence was formed**, its **limits**, and **top risks / unknowns** before deep dives.{% endif %}
-{% endif %}
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline owns chart selection, image generation, captions, and insertion.
+- Keep chapter prose self-contained without chart-dependent wording.
+- Do not place Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图”
+  in the outline fields or chapter prose.
 
 {% if audience_role or tone %}
 ## Report Detail Constraints

@@ -1,0 +1,14 @@
+**/.venv*
+**/__pycache__
+**/*.egg-info
+**/.pytest_cache
+**/results
+**/agent_logs
+**/repos
+**/tmp
+**/output
+**/_emb_*.db
+**/*.log
+deepsearch/
+**/third_party
+.git

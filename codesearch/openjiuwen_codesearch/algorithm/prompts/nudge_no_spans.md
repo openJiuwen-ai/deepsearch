@@ -1,0 +1,1 @@
+You have not recorded any context yet. Do not keep calling search_code on the same symbols. Use read_file on the best candidate, then call add_context with a tight function/method span, check for sibling edit sites or a related second file if needed, and finish when done.

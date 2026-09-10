@@ -10,11 +10,6 @@ Your responsibility is to **incrementally refine the existing outline based on u
 
 Avoid regenerating a completely new outline unless the feedback explicitly requires major restructuring.
 
-{% if report_type == "brief" %}
-## Report type: Brief
-- When refining, **compress** non-essential branches; keep orientation toward **executive readability, key conclusions, and explicit risks/limits**.
-{% endif %}
-
 {% if audience_role or tone %}
 ## Report Detail Constraints
 {% if audience_role %}
@@ -51,6 +46,12 @@ understand the context and refine the outline more accurately:
 # Current User Feedback
 
 {{ user_feedback }}
+
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline owns chart selection, image generation, captions, and insertion.
+- Keep the outline and chapter prose self-contained without chart-dependent wording.
+- Do not place Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图”
+  in the outline fields or chapter prose.
 
 ---
 

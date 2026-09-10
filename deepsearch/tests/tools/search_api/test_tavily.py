@@ -154,6 +154,8 @@ class TestTavilySearchAPIWrapper:
                 "content": "C" * (MAX_SEARCH_CONTENT_LENGTH + 1),
                 "score": 0.8,
                 "raw_content": "Some raw content",
+                "published_date": "2020-01-02T03:04:05Z",
+                "updated_at": "2022-01-02T03:04:05Z",
             },
             {
                 "title": "Short title",
@@ -172,9 +174,27 @@ class TestTavilySearchAPIWrapper:
         assert len(cleaned[0]["content"]) == MAX_SEARCH_CONTENT_LENGTH
         assert cleaned[0]["score"] == 0.8
         assert cleaned[0]["raw_content"] == "Some raw content"
+        assert cleaned[0]["source_date"] == "2020-01-02"
+        assert cleaned[0]["source_date_type"] == "published"
+        assert "published_date" not in cleaned[0]
+        assert "updated_at" not in cleaned[0]
 
         assert cleaned[1]["title"] == "Short title"
         assert "raw_content" not in cleaned[1]
+
+    def test_clean_results_normalizes_official_rfc2822_publication_date(self, wrapper):
+        """Tavily 官方 news 日期格式应在 provider 边界归一化为 ISO 日期。"""
+        cleaned = wrapper.clean_results([
+            {
+                "title": "News",
+                "url": "https://example.com/news",
+                "content": "body",
+                "published_date": "Tue, 11 Mar 2025 17:00:00 GMT",
+            }
+        ])
+
+        assert cleaned[0]["source_date"] == "2025-03-11"
+        assert cleaned[0]["source_date_type"] == "published"
 
     @pytest.mark.asyncio
     @patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper.httpx.AsyncClient")
@@ -323,6 +343,22 @@ class TestTavilySearchAPIWrapper:
             extension={},
         )
         assert w2.search_depth == "advanced"
+
+    def test_build_search_params_includes_only_configured_absolute_dates(self, wrapper):
+        """Tavily 请求体仅应携带已设置的绝对日期边界。"""
+        params_without_dates = wrapper._build_search_params("baseline")
+        wrapper.start_date = "2019-12-31"
+        params_with_start = wrapper._build_search_params("bounded")
+        wrapper.end_date = "2024-01-01"
+        params_with_both = wrapper._build_search_params("bounded")
+
+        assert "start_date" not in params_without_dates
+        assert "end_date" not in params_without_dates
+        assert params_with_start["start_date"] == "2019-12-31"
+        assert "end_date" not in params_with_start
+        assert params_with_both["start_date"] == "2019-12-31"
+        assert params_with_both["end_date"] == "2024-01-01"
+        assert "time_range" not in params_with_both
 
     def test_clean_results_truncates_large_raw_content(self, wrapper):
         """测试 clean_results 对超大 raw_content 的截断"""

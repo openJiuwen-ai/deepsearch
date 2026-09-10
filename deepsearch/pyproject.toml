@@ -24,7 +24,7 @@ dependencies = [
     'python-docx==1.2.0',
     'tenacity==9.1.2',
     'pypdfium2==4.30.0',
-    'openjiuwen==0.1.10.post3',
+    'openjiuwen[observability]==0.1.17',
     'pyvis==0.3.2',
     'networkx==3.4.2',
     'aiolimiter==1.1.0',
@@ -36,6 +36,7 @@ dependencies = [
     'beautifulsoup4==4.14.3',
     "latex2mathml>=3.78.1",
     "mathml2omml-as==0.1.0",
+    "jieba>=0.42.1",
 ]
 
 # 1. 告诉 setuptools 把 openjiuwen_deepsearch 当成一个「命名空间包」
@@ -82,7 +83,7 @@ backend = [
     "uvicorn[standard]>=0.35",
     "pydantic==2.11.7",
     "python-dotenv>=1.2.1",
-    "sqlalchemy==2.0.41",
+    "sqlalchemy[asyncio]>=2.0.41,<2.1",
     "pydantic-settings==2.5.2",
     "requests==2.32.3",
     "pycryptodome==3.23.0",

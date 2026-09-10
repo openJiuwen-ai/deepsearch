@@ -8,6 +8,91 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTrac
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
     GraphInfo,
 )
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info import (
+    ResearchInferPreprocess,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("toc_title", "abstract_title", "conclusion_title", "references_title"),
+    [
+        (None, "Abstract", "Conclusion", "References"),
+        ("Table of Contents", "Abstract", "Conclusion", "References"),
+        ("目录", "摘要", "结论", "参考文章"),
+    ],
+)
+async def test_research_infer_sections_ignore_non_body_h1_without_index_shift(
+    toc_title,
+    abstract_title,
+    conclusion_title,
+    references_title,
+):
+    """TOC insertion must not shift chapter-to-search-record indexes."""
+    toc = (
+        f"# {toc_title}\n\n"
+        "[1. First Chapter](#chapter-1)\n\n"
+        "[2. Second Chapter](#chapter-2)\n\n"
+        if toc_title
+        else ""
+    )
+    response = (
+        "# Report Title\n\n"
+        f"{toc}"
+        f"# {abstract_title}\n\nSummary.\n\n"
+        "# 1. First Chapter\n\nFirst conclusion.\n\n"
+        "# 2. Second Chapter\n\nSecond conclusion.\n\n"
+        f"# {conclusion_title}\n\nOverall conclusion.\n\n"
+        f"# {references_title}\n\nReference entry.\n"
+    )
+    preprocess = ResearchInferPreprocess({"source_tracer_response": response})
+    conclusions = [
+        ["First conclusion."],
+        ["Second conclusion."],
+        ["Overall conclusion."],
+    ]
+
+    with patch.object(
+        preprocess,
+        "_extract_conclusions_for_sections",
+        new=AsyncMock(return_value=conclusions),
+    ) as mock_extract:
+        results = await preprocess._find_sentences_with_positions()
+
+    sections = mock_extract.await_args.args[0]
+    assert [section["title"] for section in sections] == [
+        "1. First Chapter",
+        "2. Second Chapter",
+        conclusion_title,
+    ]
+    assert [
+        results[conclusion]["sentence_section_index"]
+        for conclusion in (
+            "First conclusion.",
+            "Second conclusion.",
+            "Overall conclusion.",
+        )
+    ] == [0, 1, 2]
+
+
+def test_split_markdown_titles_clean_with_chapter_anchors():
+    """锚点行在 H1 之后，切章 title 不应含锚点 HTML。"""
+    report = (
+        "# Report Title\n\n"
+        "# Table of Contents\n\n[1. First](#chapter-1)\n\n"
+        "# Abstract\n\nSummary.\n\n"
+        '# 1. First Chapter\n<a id="chapter-1"></a>\n\nFirst conclusion.\n\n'
+        '# 2. Second Chapter\n<a id="chapter-2"></a>\n\nSecond conclusion.\n\n'
+        "# Conclusion\n\nOverall conclusion.\n\n"
+        "# References\n\nReference entry.\n"
+    )
+    preprocess = ResearchInferPreprocess({"source_tracer_response": report})
+    sections = preprocess._split_markdown_with_detailed_positions()
+
+    body_titles = [s["title"] for s in sections if s["title"].startswith(("1.", "2."))]
+    assert body_titles == ["1. First Chapter", "2. Second Chapter"]
+    for section in sections:
+        assert "<a id" not in section["title"]
 
 
 class TestSourceTracerInfer:

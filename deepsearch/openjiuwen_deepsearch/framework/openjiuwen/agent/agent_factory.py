@@ -2,6 +2,8 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import logging
 import os
+from pathlib import Path
+import tomllib
 
 from pydantic import ValidationError
 
@@ -29,6 +31,29 @@ class AgentFactory:
     """
     Agent factory class to create different types of agents based on the configuration.
     """
+
+    _version: str | None = None
+
+    @classmethod
+    def _get_version(cls) -> str:
+        if cls._version is not None:
+            return cls._version
+        # 优先使用 importlib.metadata（pip 安装后可用）
+        try:
+            from importlib.metadata import version
+            cls._version = version("openjiuwen-deepsearch")
+            return cls._version
+        except Exception as e:
+            logger.debug("importlib.metadata unavailable, falling back to pyproject.toml: %s", e)
+        # 回退：从源码目录的 pyproject.toml 读取（开发模式）
+        try:
+            _pyproject = Path(__file__).resolve().parent.parent.parent.parent.parent / "pyproject.toml"
+            with open(_pyproject, "rb") as f:
+                cls._version = tomllib.load(f)["project"]["version"]
+        except Exception as e:
+            logger.warning("Failed to read SDK version from importlib.metadata and pyproject.toml: %s", e)
+            cls._version = "unknown"
+        return cls._version
 
     def __init__(self):
         self.agent_map = {
@@ -102,7 +127,8 @@ class AgentFactory:
 
         agent = agent_class()
         logger.info(
-            "Created agent class=%s research_name=%s search_mode=%s execution_method=%s",
+            "DeepSearch SDK version: %s | agent class=%s, research_name=%s, search_mode=%s, execution_method=%s",
+            self._get_version(),
             agent.__class__.__name__,
             getattr(agent, "research_name", ""),
             search_mode,

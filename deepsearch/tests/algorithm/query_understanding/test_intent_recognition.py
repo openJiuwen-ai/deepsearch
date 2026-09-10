@@ -1,11 +1,16 @@
 # -*- coding: UTF-8 -*-
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
     IntentRecognitionResult,
     MAX_RESEARCH_QUERY_LENGTH,
+    _create_emit_intent_tool,
+    _default_fallback,
+    _normalize_research_intent,
     _to_str_list,
     classify_and_recognize_intent,
     normalize_research_query,
@@ -32,6 +37,10 @@ def sample_tool_response():
                     "exclude_url": [],
                     "include_domains": [],
                     "exclude_domains": [],
+                    "source_date_scope": {
+                        "end_date": "2024-03-31",
+                    },
+                    "needs_clarification": False,
                 },
                  "id": "tc1",
                 "type": "tool_call",
@@ -69,6 +78,167 @@ async def test_recognize_report_intent_success(sample_tool_response):
     assert result.research_intent.report_type == "professional"
     assert "https://example.com/a" in result.research_intent.include_url
     assert "example.com" in result.research_intent.include_domains
+    assert result.research_intent.source_date_scope.end_date.isoformat() == "2024-03-31"
+    # the deprecated temporal_scope field is never populated
+    # by normalize; the constraint lives in source_date_scope (asserted above).
+    assert result.research_intent.temporal_scope is None
+    assert result.needs_clarification is False
+
+
+def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
+    """意图识别工具的时间范围 schema 暴露并列的 source/content 子对象，仅基础关键字。"""
+    tool = _create_emit_intent_tool()
+    properties = tool.card.input_params["properties"]
+
+    # 旧的单 temporal_scope 对象不再使用；新 schema 用两个并列子对象。
+    assert "temporal_scope" not in properties
+    for field in ("source_date_scope", "content_date_scope"):
+        scope_schema = properties[field]
+        assert scope_schema["type"] == "object"
+        assert scope_schema["properties"]["start_date"]["format"] == "date"
+        assert scope_schema["properties"]["end_date"]["format"] == "date"
+        # constraint_type 由归一化层注入，不出现在 LLM schema 中
+        assert "constraint_type" not in scope_schema["properties"]
+        assert "required" not in scope_schema
+        assert "anyOf" not in scope_schema
+        assert "oneOf" not in scope_schema
+
+
+def test_target_paper_url_is_preserved_and_added_to_include_url():
+    intent = _normalize_research_intent({
+        "target_papers": [{"url": "https://journal.example.org/article/42"}],
+    })
+
+    assert intent.target_papers[0].url == "https://journal.example.org/article/42"
+    assert intent.include_url == ["https://journal.example.org/article/42"]
+
+
+def test_normalize_intent_identifies_arxiv_id_from_target_paper_url():
+    intent = _normalize_research_intent({
+        "target_papers": [{"url": "https://arxiv.org/abs/1706.03762v7"}],
+    })
+
+    assert intent.target_papers[0].url == "https://arxiv.org/abs/1706.03762v7"
+    assert intent.target_papers[0].arxiv_id == "1706.03762"
+
+    tool = _create_emit_intent_tool()
+    assert "url" in tool.card.input_params["properties"]["target_papers"]["items"]["properties"]
+
+
+def test_normalize_target_papers_merges_canonical_arxiv_duplicates():
+    intent = _normalize_research_intent({
+        "target_papers": [
+            {
+                "title": "Attention Is All You Need",
+                "arxiv_id": "1706.03762v7",
+            },
+            {
+                "arxiv_id": "1706.03762",
+                "url": "https://arxiv.org/abs/1706.03762v7",
+            },
+        ],
+    })
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in intent.target_papers] == [{
+        "title": "Attention Is All You Need",
+        "arxiv_id": "1706.03762",
+        "url": "https://arxiv.org/abs/1706.03762v7",
+    }]
+
+
+def test_intent_prompt_requires_paper_urls():
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+
+    assert "target_papers" in prompt
+    assert "include_url" in prompt
+    assert "paper URL" in prompt
+
+
+def test_normalize_target_papers_drops_empty_items_and_deduplicates():
+    intent = _normalize_research_intent({
+        "target_papers": [
+            {"pmid": " 38202877 ", "title": "Paper"},
+            {"pmid": "38202877", "title": "Paper"},
+            {},
+            "invalid",
+            {"dataset": "MEPS", "data_year": 2019, "topic": "orthodontic treatment"},
+            {"dataset": "MEPS", "data_year": "2019", "topic": "orthodontic treatment"},
+        ]
+    })
+
+    assert [paper.model_dump() for paper in intent.target_papers] == [
+        {
+                "title": "Paper", "pmid": "38202877", "doi": "", "arxiv_id": "", "url": "",
+            "dataset": "", "data_year": "", "topic": "",
+        },
+        {
+                "title": "", "pmid": "", "doi": "", "arxiv_id": "", "url": "",
+            "dataset": "MEPS", "data_year": "2019", "topic": "orthodontic treatment",
+        },
+    ]
+
+
+def test_emit_intent_tool_declares_target_papers_without_search_terms():
+    schema = _create_emit_intent_tool().card.input_params
+    target_schema = schema["properties"]["target_papers"]
+
+    assert target_schema["type"] == "array"
+    assert set(target_schema["items"]["properties"]) == {
+        "title", "pmid", "doi", "arxiv_id", "url", "dataset", "data_year", "topic",
+    }
+    assert "search_terms" not in target_schema["items"]["properties"]
+
+
+def test_intent_prompt_defines_target_paper_contract():
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+
+    assert "target_papers" in prompt
+    assert all(identifier in prompt for identifier in ("PMID", "DOI", "arXiv ID"))
+    assert all(clue in prompt for clue in ("dataset", "data year", "topic"))
+    assert "Do not invent" in prompt
+    assert "search_terms" in prompt
+    assert "not temporal_scope" in prompt
+
+
+def test_intent_prompt_defines_temporal_normalization_rules():
+    """意图 Prompt 必须使用一致的模糊日期与包含边界规则（中英 token 归一）。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+
+    # 模糊日期归一：early/mid/end of YEAR → 3/31、6/30、12/31
+    assert "3/31" in prompt
+    assert "6/30" in prompt
+    assert "12/31" in prompt
+    # before YEAR → 上年 12/31；through YEAR → 当年 12/31；before MONTH YEAR → 上月末
+    assert "上年" in prompt
+    assert "当年" in prompt
+    assert "上月末" in prompt
+    # 中英 token 配对（early YEAR / YEAR年初 等）确保两版措辞一致
+    assert "early YEAR" in prompt
+    assert "YEAR年初" in prompt
+    # 包含边界
+    assert "包含" in prompt
+
+
+def test_intent_prompt_defines_carrier_vs_subject_rule():
+    """意图 Prompt 必须区分载体修饰(→source_date_scope)与主体修饰(→content_date_scope)，且两类可并存、非二选一。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+    # 载体(carrier)修饰 → source_date_scope
+    assert "载体" in prompt
+    assert "source_date_scope" in prompt
+    # 主体(subject)修饰 → content_date_scope；允许晚于该时段发表的回顾性来源
+    assert "主体" in prompt
+    assert "content_date_scope" in prompt
+    assert "回顾性" in prompt
+    # 两类可并存、分别识别（非二选一）
+    assert "分别识别" in prompt
+    assert "互不替代" in prompt
+
+
+def test_intent_prompt_scopes_as_of_snapshot():
+    """as-of 快照语义只在用户要求语料按可得性截断时归 source_date。"""
+    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+    assert "as of" in prompt.lower() or "available as of" in prompt.lower()
+    assert "truncat" in prompt.lower()
 
 
 @pytest.mark.asyncio
@@ -88,6 +258,7 @@ async def test_recognize_report_intent_no_tool_calls_fallback():
     assert result.research_query == q
     assert result.research_intent == ResearchIntent()
     assert result.research_intent.report_type is None
+    assert "is_fallback" not in result.model_dump()
 
 
 @pytest.mark.asyncio
@@ -107,6 +278,96 @@ async def test_recognize_report_intent_exception_fallback():
     assert result.research_query == q
     assert result.research_intent.section_count is None
     assert result.research_intent.report_type is None
+    assert "is_fallback" not in result.model_dump()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("请分析 PMID 38132429 对应论文", {"pmid": "38132429"}),
+        ("请分析 DOI: 10.1000/Example.1", {"doi": "10.1000/Example.1"}),
+        ("请分析 arXiv: 1706.03762v7", {"arxiv_id": "1706.03762v7"}),
+    ],
+)
+async def test_recognize_report_intent_fallback_preserves_explicit_paper_identifier(query, expected):
+    """Intent failures must not discard explicit paper constraints."""
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("llm down"),
+    ):
+        result = await recognize_report_intent({"original_query": query, "llm_model_name": "basic"})
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_successful_intent_merges_explicit_target_paper_omitted_by_llm():
+    response = {
+        "tool_calls": [{
+            "name": "emit_report_intent",
+            "args": {
+                "research_query": "Transformer architecture",
+                "language": "zh-CN",
+                "needs_clarification": False,
+                "target_papers": [],
+            },
+        }],
+    }
+    query = "请使用 https://arxiv.org/abs/1706.03762v7 这篇论文"
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await recognize_report_intent({"original_query": query, "llm_model_name": "basic"})
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [{
+        "url": "https://arxiv.org/abs/1706.03762v7",
+        "arxiv_id": "1706.03762",
+    }]
+    assert "https://arxiv.org/abs/1706.03762v7" in result.research_intent.include_url
+    assert "arxiv.org" not in result.research_intent.include_domains
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("请分析 PMID 38132429 对应论文", {"pmid": "38132429"}),
+        ("请分析 DOI: 10.1000/Example.1", {"doi": "10.1000/Example.1"}),
+        ("请分析 arXiv: 1706.03762v7", {"arxiv_id": "1706.03762v7"}),
+    ],
+)
+def test_default_fallback_preserves_explicit_paper_identifier(query, expected):
+    result = _default_fallback(query)
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [expected]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "请使用 https://pubmed.ncbi.nlm.nih.gov/38132429/ 这篇论文",
+            {"url": "https://pubmed.ncbi.nlm.nih.gov/38132429/", "pmid": "38132429"},
+        ),
+        (
+            "请使用 https://arxiv.org/abs/1706.03762v7 这篇论文",
+            {"url": "https://arxiv.org/abs/1706.03762v7", "arxiv_id": "1706.03762"},
+        ),
+    ],
+)
+def test_default_fallback_preserves_and_identifies_academic_paper_url(query, expected):
+    result = _default_fallback(query)
+
+    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [expected]
 
 
 @pytest.mark.asyncio
@@ -127,6 +388,7 @@ async def test_normalize_invalid_report_type_defaults_none():
                 "args": {
                     "research_query": "topic",
                     "language": "zh-CN",
+                    "needs_clarification": False,
                     "report_type": "deep_research",
                 },
                 "id": "tc1",
@@ -158,6 +420,7 @@ async def test_normalize_invalid_section_count():
                 "args": {
                     "research_query": "topic",
                     "language": "zh-CN",
+                    "needs_clarification": False,
                     "section_count": -1,
                     "include_url": ["https://x.y/z"],
                 },
@@ -190,6 +453,7 @@ async def test_report_type_brief_is_preserved():
                     "args": {
                         "research_query": "topic",
                         "language": "zh-CN",
+                        "needs_clarification": False,
                         "report_type": "brief",
                     },
                 "id": "tc1",
@@ -222,6 +486,7 @@ async def test_report_type_remains_none_when_tool_omits_it():
                 "args": {
                     "research_query": "AI Agent 工程化落地趋势",
                     "language": "zh-CN",
+                    "needs_clarification": False,
                 },
                 "id": "tc1",
                 "type": "tool_call",
@@ -380,6 +645,7 @@ async def test_recognize_report_intent_truncates_long_research_query():
                 "args": {
                     "research_query": long_research_query,
                     "language": "zh-CN",
+                    "needs_clarification": False,
                 },
                 "id": "tc1",
                 "type": "tool_call",
@@ -544,4 +810,210 @@ def test_to_str_list_non_list_str_none():
     """非 list/str/None 类型返回空列表"""
     assert _to_str_list(123) == []
 
+@pytest.mark.asyncio
+async def test_recognize_report_intent_exclude_url_and_domains_kept_separate():
+    """exclude_url 与 exclude_domains 按 LLM 提取结果各自保留，互不派生。"""
+    response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "topic",
+                    "language": "zh-CN",
+                    "needs_clarification": False,
+                    "exclude_url": [
+                        "https://www.mdpi.com/2073-445X/11/9/1529",
+                        "https://www.mdpi.com/2410-3888/8/2/80",
+                    ],
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        result = await recognize_report_intent(
+            {"original_query": "不要引用这两篇文章", "llm_model_name": "basic"}
+        )
 
+    assert len(result.research_intent.exclude_url) == 2
+    # 关键断言：exclude_url 的域名不得被派生进 exclude_domains
+    assert result.research_intent.exclude_domains == []
+
+
+@pytest.mark.asyncio
+async def test_recognize_report_intent_emits_exclude_intent_log(caplog):
+    """exclude 字段非空时输出 [EXCLUDE_INTENT] 日志；为空时不输出。"""
+    import logging
+
+    response = {
+        "tool_calls": [
+            {
+                "name": "emit_report_intent",
+                "args": {
+                    "research_query": "topic",
+                    "language": "zh-CN",
+                    "needs_clarification": False,
+                    "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
+                },
+                "id": "tc1",
+                "type": "tool_call",
+            }
+        ],
+        "content": "",
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        with caplog.at_level(logging.INFO):
+            await recognize_report_intent({"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    assert any("[EXCLUDE_INTENT]" in record.getMessage() for record in caplog.records)
+    assert any("mdpi.com/2073-445X/11/9/1529" in record.getMessage() for record in caplog.records)
+
+
+def _exclude_intent_tool_response(**extra_args):
+    args = {
+        "research_query": "topic",
+        "language": "zh-CN",
+        "needs_clarification": False,
+        "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
+    }
+    args.update(extra_args)
+    return {
+        "tool_calls": [
+            {"name": "emit_report_intent", "args": args, "id": "tc1", "type": "tool_call"}
+        ],
+        "content": "",
+    }
+
+
+def _patched_llm(response):
+    return patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": Mock()},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=response,
+    )
+
+
+@pytest.mark.asyncio
+async def test_classify_and_recognize_intent_emits_exclude_intent_log(caplog):
+    """主工作流路径 classify_and_recognize_intent 也应输出 [EXCLUDE_INTENT] 日志。"""
+    import logging
+
+    p1, p2 = _patched_llm(_exclude_intent_tool_response())
+    with p1, p2:
+        with caplog.at_level(logging.INFO):
+            await classify_and_recognize_intent(
+                {"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    assert any("[EXCLUDE_INTENT]" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_exclude_intent_log_redacted_in_sensitive_mode(caplog):
+    """敏感模式下 [EXCLUDE_INTENT] 只记录计数，不输出 URL/标题/query。"""
+    import logging
+
+    p1, p2 = _patched_llm(_exclude_intent_tool_response(
+        exclude_titles=["Some Sensitive Paper Title"]))
+    with p1, p2, patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.LogManager.is_sensitive",
+        return_value=True,
+    ):
+        with caplog.at_level(logging.INFO):
+            await recognize_report_intent(
+                {"original_query": "不要引用某文", "llm_model_name": "basic"})
+
+    messages = [record.getMessage() for record in caplog.records
+                if "[EXCLUDE_INTENT]" in record.getMessage()]
+    assert messages, "EXCLUDE_INTENT log missing"
+    assert any("redacted" in m for m in messages)
+    assert not any("mdpi.com" in m or "Sensitive Paper" in m or "不要引用某文" in m
+                   for m in messages)
+
+
+def test_emit_intent_tool_schema_hides_report_type_when_provided():
+    """API 已指定 report_type 时，tool schema 移除该字段（硬约束）。"""
+    tool = _create_emit_intent_tool(provided_report_type="brief")
+    assert "report_type" not in tool.card.input_params["properties"]
+
+    tool_default = _create_emit_intent_tool()
+    assert "report_type" in tool_default.card.input_params["properties"]
+
+    tool_none = _create_emit_intent_tool(provided_report_type=None)
+    assert "report_type" in tool_none.card.input_params["properties"]
+
+
+def test_intent_prompts_suppress_report_type_when_provided():
+    """意图识别 prompt：provided 时完全不渲染 report_type 相关内容；缺省保持现状。"""
+    base_ctx = {"original_query": "AI Agent 趋势", "messages": []}
+    provided = apply_system_prompt("intent_recognition", {**base_ctx, "provided_report_type": "brief"})
+    content = provided[0]["content"]
+    assert "report_type" not in content
+
+    default = apply_system_prompt("intent_recognition", dict(base_ctx))
+    default_content = default[0]["content"]
+    assert "emit `report_type` accordingly" in default_content
+
+
+@pytest.mark.asyncio
+async def test_classify_and_recognize_intent_passes_provided_report_type(sample_tool_response):
+    """入口函数从 current_inputs 读取 provided_report_type 并注入 prompt 与 tool。"""
+    mock_llm = Mock()
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": mock_llm},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=sample_tool_response,
+    ) as mock_invoke:
+        await classify_and_recognize_intent({
+            "original_query": "AI Agent 趋势",
+            "llm_model_name": "basic",
+            "messages": [],
+            "provided_report_type": "brief",
+        })
+
+    prompts = mock_invoke.call_args.args[1]
+    assert "report_type" not in prompts[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_recognize_report_intent_passes_provided_report_type(sample_tool_response):
+    """反馈重解析入口同样透传 provided_report_type。"""
+    mock_llm = Mock()
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
+        return_value={"basic": mock_llm},
+    ), patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        return_value=sample_tool_response,
+    ) as mock_invoke:
+        await recognize_report_intent({
+            "original_query": "AI Agent 趋势",
+            "llm_model_name": "basic",
+            "messages": [],
+            "provided_report_type": "professional",
+        })
+
+    prompts = mock_invoke.call_args.args[1]
+    assert "report_type" not in prompts[0]["content"]

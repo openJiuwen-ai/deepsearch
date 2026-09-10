@@ -414,17 +414,14 @@ def _add_hyperlink(paragraph, url, text, *, style_r_fonts=None, superscript: boo
     若文本含 LaTeX 定界符（$$...$$ 或 $...$），将其转为 OMML 公式
     插入超链接内部。HTML 实体会先解码再进行 LaTeX 处理。
     """
-    # 创建关系 id
-    part = paragraph.part
-    r_id = part.relate_to(
-        url,
-        HYPERLINK_URI,
-        is_external=True
-    )
-
     # 创建 <w:hyperlink>
     hyperlink = OxmlElement("w:hyperlink")
-    hyperlink.set(qn("r:id"), r_id)
+    if url.startswith("#") and len(url) > 1:
+        hyperlink.set(qn("w:anchor"), _word_bookmark_name(url[1:]))
+        hyperlink.set(qn("w:history"), "1")
+    else:
+        r_id = paragraph.part.relate_to(url, HYPERLINK_URI, is_external=True)
+        hyperlink.set(qn("r:id"), r_id)
 
     # 解码 HTML 实体（处理 &amp;#92; → &#92; → \ 等双重转义）
     text = html.unescape(text)
@@ -465,6 +462,61 @@ def _add_hyperlink(paragraph, url, text, *, style_r_fonts=None, superscript: boo
                 text[cursor:], style_r_fonts, superscript))
 
     _docx_paragraph_p(paragraph).append(hyperlink)
+
+
+def _word_bookmark_name(value: str) -> str:
+    """Convert an HTML anchor into a valid, stable Word bookmark name."""
+    name = re.sub(r"[^A-Za-z0-9_]", "_", unquote(value).strip())
+    if not name or name[0].isdigit():
+        name = f"_{name}"
+    return name[:40]
+
+
+def _prepare_heading_bookmarks(container) -> None:
+    """Move standalone HTML anchors onto their following heading elements."""
+    bookmark_id = 0
+
+    def _set_bookmark(heading, anchor_id: str) -> None:
+        nonlocal bookmark_id
+        if heading.get("data-docx-bookmark-name") is not None:
+            return
+        heading["data-docx-bookmark-name"] = _word_bookmark_name(anchor_id)
+        heading["data-docx-bookmark-id"] = str(bookmark_id)
+        bookmark_id += 1
+
+    for heading in container.find_all(list(HEADING_TAGS)):
+        heading_id = heading.get("id", "")
+        if re.fullmatch(r"chapter-\d+", heading_id):
+            _set_bookmark(heading, heading_id)
+
+    for anchor in list(container.select("a[id]:not([href])")):
+        if anchor.get_text(strip=True):
+            continue
+        heading = anchor.find_parent(lambda tag: tag.name in HEADING_TAGS)
+        if heading is None:
+            heading = anchor.find_next(lambda tag: tag.name in HEADING_TAGS)
+        if heading is None:
+            continue
+
+        _set_bookmark(heading, anchor["id"])
+
+        parent = anchor.parent
+        if parent is not None and parent.name == "p" and not parent.get_text(strip=True):
+            parent.decompose()
+        else:
+            anchor.decompose()
+
+
+def _add_bookmark(paragraph, name: str, bookmark_id: str) -> None:
+    paragraph_element = _docx_paragraph_p(paragraph)
+    start = OxmlElement("w:bookmarkStart")
+    start.set(qn("w:id"), bookmark_id)
+    start.set(qn("w:name"), name)
+    end = OxmlElement("w:bookmarkEnd")
+    end.set(qn("w:id"), bookmark_id)
+
+    paragraph_element.insert(1 if paragraph_element.pPr is not None else 0, start)
+    paragraph_element.append(end)
 
 
 def _is_relative_to(path: Path, base_path: Path) -> bool:
@@ -661,6 +713,11 @@ def _add_para_and_apply_style(doc, element, context: HtmlToDocContext):
     for child in element.contents:
         _process_inline(p, child, replace(context, style_r_fonts=style_r_fonts))
 
+    bookmark_name = element.get("data-docx-bookmark-name")
+    bookmark_id = element.get("data-docx-bookmark-id")
+    if bookmark_name is not None and bookmark_id is not None:
+        _add_bookmark(p, bookmark_name, bookmark_id)
+
 
 def _insert_omml(paragraph, omml_xml: str):
     """向段落中插入 OMML 公式"""
@@ -705,13 +762,47 @@ def _latex_to_omml(latex: str) -> str:
 
 def _normalize_latex_for_omml(latex: str) -> str:
     """Normalize valid LaTeX forms that mathml2omml cannot parse directly."""
-    previous = _strip_latex_alignment_markers(latex)
+    previous = _strip_redundant_mathop(
+        _merge_arg_min_max(_strip_latex_alignment_markers(latex))
+    )
     for _ in range(8):
         current = _wrap_grouped_command_powers(previous)
         if current == previous:
             return current
         previous = current
     return previous
+
+
+_ARG_MIN_MAX_RE = re.compile(r"\\arg\s*\\(min|max)(?![a-zA-Z])")
+
+_MATHOP_OPERATORNAME_RE = re.compile(
+    r"\\mathop\s*\{(\\operatorname\*?\{[^{}]*\})\}"
+)
+
+
+def _merge_arg_min_max(latex: str) -> str:
+    """Rewrite ``\\arg\\min`` / ``\\arg\\max`` as ``\\operatorname{arg\\,min/max}``.
+
+    latex2mathml 3.81 does not recognize ``\\arg`` and emits the whole
+    ``\\arg`` token verbatim as ``<mi>\\arg</mi>`` (backslash kept). Word
+    renders that as a visible ``\\argmin``. ``\\operatorname{arg\\,min}``
+    drives latex2mathml's operator path and yields a MathML ``<mo>`` with
+    no backslash, matching LaTeX's standard ``arg min`` rendering.
+    """
+    return _ARG_MIN_MAX_RE.sub(
+        lambda m: r"\operatorname{arg\," + m.group(1) + "}",
+        latex,
+    )
+
+
+def _strip_redundant_mathop(latex: str) -> str:
+    """Strip redundant ``\\mathop{...}`` wrapper around ``\\operatorname{...}``.
+
+    ``_merge_arg_min_max`` rewrites ``\\arg\\max`` as
+    ``\\mathop{\\operatorname{arg\\,max}}``; mathml2omml cannot parse a
+    ``\\mathop`` wrapping an ``\\operatorname``, so the outer layer is removed.
+    """
+    return _MATHOP_OPERATORNAME_RE.sub(r"\1", latex)
 
 
 def _strip_latex_alignment_markers(latex: str) -> str:
@@ -1051,6 +1142,7 @@ def html_to_doc(doc, html_content, style_dict, base_path: str | Path | None = No
     container = soup.find("div", class_="report-container")
     if container is None:
         container = soup.body or soup
+    _prepare_heading_bookmarks(container)
 
     resolved_base_path = Path(base_path).resolve() if base_path is not None else None
     max_image_width = _get_available_page_width(doc)

@@ -338,7 +338,7 @@ class WebPageEnrichmentNode(BaseNode):
         logger.info(
             "section_idx: %s | step_title: %s | [WebPageEnrichmentNode] fetch enriched doc. "
             "doc_id=%s | source_id=%s | status_code=%s | original_len_before=%s | "
-            "raw_len=%s | compressed_len=%s | key_passages=%s | scores=%s",
+            "raw_len=%s | compressed_len=%s | key_passages=%s",
             state.get("section_idx", 0),
             state.get("step_title", ""),
             enriched_doc.get("doc_id", ""),
@@ -348,7 +348,6 @@ class WebPageEnrichmentNode(BaseNode):
             raw_len,
             compressed_len,
             key_passage_count,
-            enriched_doc.get("scores", {}),
         )
 
     async def _fetch_webpage(
@@ -517,9 +516,8 @@ class WebPageEnrichmentNode(BaseNode):
         if not LogManager.is_sensitive():
             logger.info(
                 "section_idx: %s | step_title: %s | [WebPageEnrichmentNode] fetching url. "
-                "candidate_index=%s | doc_index=%s | url=%s | scores=%s",
+                "candidate_index=%s | doc_index=%s | url=%s",
                 section_idx, step_title, candidate_index, doc_index, candidate.get("url", ""),
-                candidate.get("scores", {}),
             )
         fetched = await self._fetch_webpage(
             candidate["url"],

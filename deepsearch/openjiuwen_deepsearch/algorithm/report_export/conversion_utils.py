@@ -42,6 +42,17 @@ INDENTED_HTML_BLOCK_END_RE = re.compile(
 )
 MARKDOWN_TABLE_ROW_RE = re.compile(r"^[ \t]{0,3}\|")
 MARKDOWN_TABLE_DELIMITER_RE = re.compile(r":?-{1,}:?")
+REPORT_TOC_LINK_RE = re.compile(
+    r"^[ \t]*(?:[-+*][ \t]+)?\[(?P<title>.+?)\]\(\s*#chapter-(?P<index>\d+)\s*\)[ \t]*$",
+    flags=re.MULTILINE,
+)
+REPORT_CHAPTER_ANCHOR_RE = re.compile(
+    r'<a\b(?=[^>]*\bid\s*=\s*["\']chapter-\d+["\'])[^>]*>\s*</a>',
+    flags=re.IGNORECASE,
+)
+REPORT_CHAPTER_ATTRIBUTE_RE = re.compile(
+    r"[ \t]+\{#chapter-\d+\}(?=[ \t]*(?:\r?\n|$))"
+)
 SENTENCE_END_RE = re.compile(r"[。！？?!…]$")
 CITATION_RE = re.compile(r"\[\[(\d+)\]\]\((https?://[^\s)]+(?:\([^\s)]+\)[^\s)]*)*)\)")
 CHECKED_CITATION_RE = re.compile(
@@ -179,6 +190,88 @@ def normalize_whitespace(text: str) -> str:
     text = unicodedata.normalize("NFC", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text.replace("\u00a0", " ").replace("\u3000", " ")
+
+
+def add_report_chapter_ids(markdown_text: str) -> str:
+    """Add stable chapter IDs while preparing Markdown for export.
+
+    Report generation keeps the Markdown document format-neutral. Exporters
+    call this helper after reading the finished report and before rendering it
+    to HTML, DOCX, or another format. IDs are assigned only to H1 headings
+    referenced by the native report TOC.
+
+    Args:
+        markdown_text: Completed report Markdown containing ``#chapter-N`` TOC
+            links.
+
+    Returns:
+        Markdown with ``{#chapter-N}`` attributes added to matching chapter
+        headings.
+    """
+    normalized = REPORT_CHAPTER_ANCHOR_RE.sub("", markdown_text or "")
+    normalized = REPORT_CHAPTER_ATTRIBUTE_RE.sub("", normalized)
+    toc_entries = list(REPORT_TOC_LINK_RE.finditer(normalized))
+    if not toc_entries:
+        return normalized
+
+    headings: list[dict[str, int | str]] = []
+    fence_char = ""
+    fence_length = 0
+    offset = 0
+    for line in normalized.splitlines(keepends=True):
+        content_line = line.rstrip("\r\n")
+        if fence_char:
+            closing_fence = re.match(
+                r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$", content_line
+            )
+            if closing_fence:
+                marker = closing_fence.group(1)
+                if marker[0] == fence_char and len(marker) >= fence_length:
+                    fence_char = ""
+                    fence_length = 0
+            offset += len(line)
+            continue
+
+        opening_fence = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", content_line)
+        if opening_fence:
+            marker = opening_fence.group(1)
+            fence_char = marker[0]
+            fence_length = len(marker)
+            offset += len(line)
+            continue
+
+        heading_match = re.match(
+            r"^[ \t]{0,3}#[ \t]+(?P<title>.+?)\s*$", content_line
+        )
+        if heading_match:
+            title = heading_match.group("title")
+            title = re.sub(r"[ \t]+#+[ \t]*$", "", title).strip()
+            if title:
+                headings.append(
+                    {
+                        "title": title,
+                        "attribute_offset": offset + heading_match.end("title"),
+                    }
+                )
+        offset += len(line)
+
+    insertions: list[tuple[int, str]] = []
+    heading_cursor = 0
+    for toc_entry in toc_entries:
+        toc_title = toc_entry.group("title").strip()
+        while heading_cursor < len(headings):
+            heading = headings[heading_cursor]
+            heading_cursor += 1
+            if heading["title"] == toc_title:
+                chapter_index = toc_entry.group("index")
+                insertions.append(
+                    (int(heading["attribute_offset"]), f" {{#chapter-{chapter_index}}}")
+                )
+                break
+
+    for offset, attribute in reversed(insertions):
+        normalized = normalized[:offset] + attribute + normalized[offset:]
+    return normalized
 
 
 def replace_citations(text: str) -> str:
@@ -1058,6 +1151,14 @@ def _set_run_font(run, font_name: str) -> None:
     Returns:
         None.
     """
+    # ponytail: 跳过含 OMML 公式的 run。``_insert_omml`` 把 ``<m:oMath>``
+    # 嵌入 ``<w:r>`` 内，``<m:r>`` 会继承父 ``<w:r>`` 的 ``w:rFonts``。
+    # 段落字体（Microsoft YaHei）在 nary operator 的 sub/sup 上下文缺
+    # 数学 italic 字形，会让 ``i``、``a``、``C`` 等字符在 Word 中渲染
+    # 为 .notdef 平行四边形或错位 glyph。OMML 应使用 ``<m:mathPr>`` 默认
+    # Cambria Math，故此处直接跳过。
+    if run._r.find(qn("m:oMath")) is not None:  # pylint: disable=protected-access
+        return
     run.font.name = font_name
     _set_rfonts(run.element.get_or_add_rPr(), font_name)
 

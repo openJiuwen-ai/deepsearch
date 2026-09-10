@@ -10,11 +10,6 @@ Your responsibility is to **incrementally refine the existing outline based on u
 
 Unless the feedback explicitly requires major restructuring, avoid regenerating the outline from scratch.
 
-{% if report_type == "brief" %}
-## Report type: Brief
-- Prefer **dependency-minimizing** refinements: fewer sibling branches, clearer **decision payoff**, and visible **risk / uncertainty** handling.
-{% endif %}
-
 {% if audience_role or tone %}
 ## Report Detail Constraints
 {% if audience_role %}
@@ -84,6 +79,12 @@ For every section returned through the updated outline tool:
 - Provide a non-empty `section_focus` and at least one item in `focus_dimensions` for every section.
 - When current user feedback adds, removes, or changes an output-format constraint, update the corresponding section's
   `format_requirements`; do not update only `description`.
+
+## Controlled Visualization Ownership
+- The controlled Mermaid/chart pipeline owns chart selection, image generation, captions, and insertion.
+- Keep chapter prose self-contained without chart-dependent wording.
+- Do not place Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图”
+  in the outline fields or chapter prose.
 
 ---
 

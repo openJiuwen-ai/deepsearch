@@ -45,58 +45,68 @@ DeepSearch主要由管理器、查询规划、信息收集、理解分析和内�
 - **理解分析**：提供对检索结果及其他上下文信息的理解能力。主要包含对搜索结果进行评估、精炼、扩展、融合等功能。 
 - **结果生成**：提供答案、报告生成、交互式编辑及结果溯源等主要功能。
 
-openJiuwen Studio作为一站式AI Agent开发平台，提供了从开发到部署的全站解决方案。openJiuwen-DeepSearch作为典型Agent实现，可以在Studio平台进行
-模型、工具及知识库等管理及配置，同时输入用户查询，体验深度研究的过程及报告结果。而openJiuwen Ops作为AI Agent从调试、评测、到观测、调优等一站式平台，可辅助openJiuwen-DeepSearch等Agent进行调试调优。
-
 为方便叙述，后面将采用以下简称：
 - **agent-core**: openJiuwen agent-core
-- **Studio**: openJiuwen Studio
 - **DeepSearch**: openJiuwen-DeepSearch
-- **Ops**: openJiuwen Ops
 
 # 📦 安装指导
 
-本节提供了 DeepSearch 的完整安装说明，帮助您在不同系统环境下快速部署并使用系统。
+本节提供了 DeepSearch 的安装说明，帮助您在不同系统环境下快速部署并使用系统。
 
-## 完整版本快速安装指南
+## SDK 安装指导
 
-以下方式适用于希望**直接使用完整系统**（包含前端界面）的用户。
+DeepSearch 通过 SDK 方式安装，适用于快速部署体验、定制化部署及源码级调试等场景，详细步骤请参阅：[SDK安装指导](./docs/zh/2.安装指导/DeepSearch_SDK/README.md)。
 
- * Windows 系统快速安装指南：[Windows 安装指导](./docs/zh/2.安装指导/DeepSearch完整版/Windows系统安装.md)
- * MacOS 系统快速安装指南：[MacOS 安装指导](./docs/zh/2.安装指导/DeepSearch完整版/MacOS系统安装.md)
- * Linux 系统快速安装指南：[Linux 安装指导](./docs/zh/2.安装指导/DeepSearch完整版/Linux系统安装.md)
+### Docker Compose 一键部署
 
-## 其他安装方式
- 	 
-如果您需要进行二次开发、定制化部署或源码级调试，可以参考开发者安装方式。
-详细文档请参阅：[SDK安装指导](./docs/zh/2.安装指导/DeepSearch_SDK/README.md)。
+在 `deepsearch/docker/` 目录下，可用 Docker Compose 一键拉起多服务：
+
+**重要**：配置文件位置说明
+```
+📁 deepsearch/
+  ├── 📁 docker/
+  │   ├── .env            ← 必须在这里（从 ../.env.example 复制）
+  │   ├── docker-compose.yml
+  │   └── docker-compose.full.yml
+  └── .env.example        ← 模板文件
+```
+
+```bash
+cd deepsearch/docker
+cp ../.env.example .env   # 生成 deepsearch/docker/.env，编辑填入 LLM / 搜索密钥
+
+# 三种模式任选其一：
+docker compose up -d                                      # 最小栈：快速体验（sqlite + in_memory）
+docker compose -f docker-compose.full.yml up -d           # 完整栈：单机生产（MySQL + Milvus + persistence）
+docker compose -f docker-compose.distributed.yml up -d --scale deepsearch=3  # 分布式：多实例（Redis + OBS）
+```
+
+**注意**：Docker Compose 中 `BACKEND_PORT=8000` 是固定的（容器内端口），与 `.env.example` 中的 `BACKEND_PORT=6000`（本地源码运行端口）不同；`.env` 文件须放在 `deepsearch/docker/` 下（与 compose 文件同目录）。详见 [Docker 方式安装](./docs/zh/2.安装指导/DeepSearch_SDK/Docker方式安装/README.md)。
 
 # 🚀 快速上手
-以下视频帮助您快速了解 DeepSearch 的核心功能与使用流程。
 
-![DeepSearch快速上手](./docs/zh/images/DeepSearch介绍.gif)
-
-👉 如需完整清晰的演示视频，可点击下载[完整视频](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/readme/9e6e857a424167500d4b4277485ea9b1_raw.mp4) <br>
-👉 更多详情指导详见[快速上手](./docs/zh/3.快速上手/3.快速上手.md)。
+👉 如需完整清晰的演示视频，可点击下载[完整视频](https://openjiuwen-ci.obs.cn-north-4.myhuaweicloud.com/deepsearch/readme/9e6e857a424167500d4b4277485ea9b1_raw.mp4)。
 
 **_注意：_**
 
-* **_已验证模型：Qwen3-Max（推荐）、GLM-5、GLM-5.1、DeepSeek V3.2、Kimi-K2.5。_**
+* **_已验证模型：Qwen3.7-Max（推荐）、Qwen3.8-Flash、Qwen3.7-Plus、Qwen3-Max、GLM-5.3、GLM-5.3-Flash、GLM-5.2、GLM-5.1、GLM-5、DeepSeek V3.2、Kimi-K2.5。_**
 * **_建议使用性能较强的模型生成报告，以兼顾生成质量与调用稳定性。若模型能力或并发能力不足，可能影响报告效果或完整性。_**
 * **_使用思考类模型时，由于包含更复杂的推理与分析过程，报告生成耗时会显著增加。如对生成速度有要求，建议优先使用非思考模型。_**
 
 # 💻 开发指南
-想利用 DeepSearch 源码进行开发，请参考[开发指南](./docs/zh/4.开发指南/README.md)，期待您的加入。
+想利用 DeepSearch 源码进行开发，请参考[开发指南](./docs/zh/3.开发指南/README.md)，期待您的加入。
 
 **_注意：_**
 
 **_除HITL/终止等针对同一个任务的场景外，每次调用deepsearch SDK的run接口使用服务时，需要传入不同的conversation_id，不允许使用相同的conversation_id二次传入。_**
 
 # ❓ FAQ
-更多常见问题详见[FAQ](./docs/zh/5.FAQ/README.md)。
+更多常见问题详见[FAQ](./docs/zh/4.FAQ/README.md)。
 
 # ⚖️ 许可证
 本项目采用 Apache 2.0 许可证。详见 [LICENSE](LICENSE) 文件。
 
 # 🤝 贡献方式
 欢迎提交 Issue 和 Pull Request！详情请参考[贡献指南](https://www.openjiuwen.com/contribute)。
+
+本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。

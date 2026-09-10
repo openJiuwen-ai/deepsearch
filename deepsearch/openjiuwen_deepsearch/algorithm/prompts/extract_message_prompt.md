@@ -14,6 +14,14 @@ Please return the corresponding website name based on the provided domain `domai
 ## Extract Citation Content
 Please extract the fragments in `citation_content` that are most similar to `fact`. Multiple fragments may be extracted. Locate all precise matches between the `fact` and `citation_content`, focusing particularly on numerical data and specific claims. Annotate all matching segments found in `citation_content` and append them to the `marked_citation_content` list. Verify that any numbers, statistics, or measurable values are exactly identical in both texts.
 
+- Normally return **one fragment** in `marked_citation_content`.
+- Return a second fragment only when the fact contains two distinct claims that are supported by genuinely non-contiguous source text and one fragment cannot support both claims.
+- Return **no more than two fragments** for one input item.
+- Do not return duplicate, overlapping, or near-duplicate fragments, including fragments that repeat the same fact or numbers in another wording.
+- Prefer the shortest complete sentence or clause that contains the relevant claim and exact numbers. Never copy an entire paragraph, section, or webpage when a shorter fragment is sufficient.
+- Verify that any numbers, statistics, or measurable values are exactly identical in the selected fragment and `fact`. If no reliable matching fragment exists, return an empty list.
+
+
 ## Confidence Assessment
 Evaluate the citation content based on the following criteria to determine a confidence score:
 
@@ -30,7 +38,7 @@ Confidence Scoring Scale (0-1):
 Note: The score should reflect both textual similarity and factual accuracy. Higher scores require both semantic consistency and data verification when numerical information is present.
 
 ## Output Format
-You should return the **json list format** containing `source`, `mark_citation_content` and `score` according to Input, for example:
+You should return the **json list format** containing `source`, `marked_citation_content` and `score` according to Input. The `score` field MUST be a numeric float (e.g. `0.91`), not a string. For example:
 
 - Input
 [
@@ -45,7 +53,7 @@ You should return the **json list format** containing `source`, `mark_citation_c
 [
     {
         "source": "知乎",
-        "marked_citation_content": ["明确居民区智能有序慢充为主，公共充电网络快充为主的模式，鼓励开展换电模式应用。","在市区新增或改建不低于总停车位10%比例的新能源汽车停车位。"], // if `score` > 0.85 else []
+        "marked_citation_content": ["明确居民区智能有序慢充为主，公共充电网络快充为主的模式，鼓励开展换电模式应用。","在市区新增或改建不低于总停车位10%比例的新能源汽车停车位。"],
         "score": 0.91
     }
 ]
@@ -56,7 +64,7 @@ Below are the list `datas` containing dictionaries consisting of `domain`, `cita
 </datas>
 
 # Note
-1. The `mark_citation_content` you output is the original segments extracted from `citation_content`, and do not make any changes.
+1. The `marked_citation_content` you output is the original segments extracted from `citation_content`, and do not make any changes.
 2. Begin the assessment now. Output only the **JSON list**, without any conversational text or explanations.
 3. The number of elements in the input and output must be strictly equal.
 4. For every analysis object, `marked_citation_content` remains an empty list unless the `score` is above **0.85**.

@@ -184,7 +184,7 @@ def _is_horizontal_xychart(code: str, body: str) -> bool:
         return True
     return bool(
         re.search(
-            r"^\s*horizontal\s*:\s*true\s*$",
+            r"^\s*(?:horizontal\s*:\s*true|chartOrientation\s*:\s*horizontal)\s*$",
             code,
             flags=re.IGNORECASE | re.MULTILINE,
         )

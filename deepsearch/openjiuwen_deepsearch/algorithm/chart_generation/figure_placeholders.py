@@ -137,11 +137,31 @@ class FigurePlaceholderGenerator:
             )
             current_index += 1
 
-        # 过滤报告标题，摘要、结论章节章节
-        sections = sections[2:-2]
+        # 过滤报告标题及非正文 H1。目录是报告正文中的额外 H1，不能依赖
+        # 固定位置切片，否则会把摘要当成正文首章并使章节索引整体偏移。
+        excluded_titles = {
+            "目录",
+            "table of contents",
+            "contents",
+            "摘要",
+            "abstract",
+            "结论",
+            "conclusion",
+            "参考文章",
+            "参考文献",
+            "reference articles",
+            "references",
+        }
+        report_sections = []
+        for section in sections[1:]:
+            normalized_title = re.sub(r"\s+", " ", section["title"]).strip().casefold()
+            if normalized_title not in excluded_titles:
+                report_sections.append(section)
+        for index, section in enumerate(report_sections, start=1):
+            section["index"] = index
 
-        logger.info(f"Split report into {len(sections)} sections by H1")
-        return sections
+        logger.info(f"Split report into {len(report_sections)} sections by H1")
+        return report_sections
 
     @staticmethod
     def _split_section_by_h2(section: Dict) -> List[Dict[str, str]]:

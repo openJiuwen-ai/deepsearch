@@ -1,219 +1,79 @@
 **Read this in:** [简体中文](./README.md) | English
 
-# Docker Compose One-Click Deployment
+# Docker Compose Deployment
 
-Orchestrate the openJiuwen DeepSearch backend together with its dependency services (MySQL / Redis / Milvus) via Docker Compose, removing the need to start and wire up each service manually.
+This directory provides three independent Compose configurations for local evaluation, a complete single-host deployment, and a multi-instance distributed deployment.
 
 ## Prerequisites
 
-- Docker Engine ≥ 24.0
+- Docker Engine >= 24.0
 - Docker Compose >= 2.24.0 (the `docker compose` subcommand)
-- Free disk: ~2GB for minimal, ~8GB for distributed (includes Milvus + MinIO images)
+- Free disk: approximately 2 GB for the minimal stack and 8 GB for the full or distributed stack
 
-## Quick Start (Minimal Stack)
+## Prepare the Configuration
 
-The minimal stack launches only the backend container with SQLite and an in-memory checkpointer, requiring no external database:
-
-```bash
-# 1. Prepare environment variables (infrastructure: DB / Milvus / Redis / SSL, etc.)
-cp .env.example .env
-#    Edit .env and set DB_TYPE / DB_HOST / CHECKPOINTER_TYPE, etc. for the chosen tier.
-#    (LLM and search-source keys are NOT in .env; after startup, configure them via the
-#     frontend settings page or management API, where they are encrypted and stored in DB.)
-
-# 2. Start (detached)
-docker compose -f docker/docker-compose.yml up -d
-
-# 3. Verify
-curl http://localhost:8000/api/health   # backend health check
-curl http://localhost:8089              # telemetry endpoint
-# API docs: http://localhost:8000/api/docs
-```
-
-Default exposed ports:
-
-| Service | Container port | Default host port | Description |
-|---------|----------------|-------------------|-------------|
-| Backend API | 8000 | 8000 | DeepResearch / DeepSearch endpoints, `/api/docs` Swagger |
-| Telemetry | 8089 | 8089 | Event endpoint for `search_mode=search` |
-
-Compose fixes the container-side `BACKEND_PORT` at `8000`; the variable with the same name in `.env` applies only to non-Compose startup. To change the host port when using Compose, set `BACKEND_PUBLISH_PORT`.
-
-To change host ports, set in `.env`:
-
-```
-BACKEND_PUBLISH_PORT=18000
-TELEMETRY_PUBLISH_PORT=18089
-```
-
-## Three Deployment Tiers
-
-Select the dependency footprint via `--profile`. The backend container always starts; profiles only control extra services.
-
-### 1. minimal (default)
+The Compose files read environment variables from `docker/.env`. From the repository's `deepsearch/docker` directory, run:
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d
+cp ../.env.example .env
+# Edit .env and provide the settings required by your deployment.
 ```
 
-Use for: personal trials, single instance, no persistent metadata.
+`BACKEND_PORT=6000` in `.env.example` is intended for local source execution. All three Compose configurations explicitly use container port `8000`, matching the Dockerfile exposure and health check.
 
-Key `.env` settings:
+## Choose a Deployment
 
-```
-DB_TYPE=sqlite
-SQLITE_DB_PATH=data/databases
-CHECKPOINTER_TYPE=in_memory
-INDEX_MANAGER_TYPE=milvus      # may stay milvus but unused when tool_map=search
-```
+| Scenario | Compose file | Services |
+|---|---|---|
+| Local evaluation | `docker-compose.yml` | DeepSearch + SQLite + in-memory checkpointer |
+| Complete single-host stack | `docker-compose.full.yml` | DeepSearch + MySQL + Milvus + etcd + MinIO |
+| Multi-instance distributed stack | `docker-compose.distributed.yml` | Nginx + DeepSearch + Redis + MySQL + Milvus + etcd + MinIO |
 
-### 2. mysql — Persistent metadata, still single-instance
+### Minimal Stack
 
 ```bash
-docker compose -f docker/docker-compose.yml --profile mysql up -d
+docker compose up -d
 ```
 
-Use for: persisting conversation/report metadata while running a single instance.
+This mode does not start MySQL, Redis, or Milvus. Do not call knowledge-base endpoints unless an external Milvus instance is configured.
 
-Key `.env` settings (compose resolves the mysql container name as `mysql`):
-
-```
-DB_TYPE=mysql
-DB_HOST=mysql
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=root
-DEEPSEARCH_DB_NAME=openjiuwen_deepsearch
-CHECKPOINTER_TYPE=in_memory       # or persistence
-```
-
-Optional: `MYSQL_PUBLISH_PORT=3307` to change the host mapping.
-
-### 3. distributed — Multi-instance + knowledge base retrieval
+### Complete Single-Host Stack
 
 ```bash
-docker compose -f docker/docker-compose.yml --profile distributed up -d
+docker compose -f docker-compose.full.yml up -d
 ```
 
-Use for: multi-instance distributed deployment, or local knowledge-base vector retrieval (`tool_map=retrieve`).
-
-Services started: deepsearch + mysql + redis + milvus (with etcd + minio dependencies).
-
-Key `.env` settings:
-
-```
-DB_TYPE=mysql
-DB_HOST=mysql
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=root
-DEEPSEARCH_DB_NAME=openjiuwen_deepsearch
-
-# Distributed checkpointer requires redis + mysql
-CHECKPOINTER_TYPE=redis
-REDIS_URL=redis://redis:6379
-REDIS_CLUSTER_MODE=false
-
-# Knowledge-base vector retrieval
-INDEX_MANAGER_TYPE=milvus
-MILVUS_HOST=milvus
-MILVUS_PORT=19530
-MILVUS_TOKEN=
-
-# ⚠️ In distributed mode, knowledge-base documents must be written to OBS.
-# All OBS_* fields must be configured, otherwise the service will not start.
-OBS_ACCESS_KEY_ID=...
-OBS_SECRET_ACCESS_KEY=...
-OBS_SERVER=...
-OBS_REGION=...
-OBS_BUCKET=...
-```
-
-Optional host port mappings:
-
-```
-MYSQL_PUBLISH_PORT=3307
-REDIS_PUBLISH_PORT=6380
-MILVUS_PUBLISH_PORT=19531
-MINIO_PUBLISH_PORT=9002
-MILVUS_HEALTH_PUBLISH_PORT=9092
-```
-
-MySQL, Redis, Milvus, and the MinIO console bind to host `127.0.0.1` by default. Set `INFRA_BIND_ADDRESS` only when remote access is required, and configure firewall rules and authentication first.
-
-> **Production security:** The example MySQL `root/root` and MinIO `minioadmin/minioadmin` credentials, and Redis without a password, are for local evaluation only. Production deployments must replace weak default credentials, enable Redis authentication, and strictly restrict network access to infrastructure ports.
-
-## Service Orchestration Reference
-
-| Service | Image | Profile | Container ports | Purpose |
-|---------|-------|---------|-----------------|---------|
-| deepsearch | built from this repo | always | 8000 / 8089 | FastAPI backend + telemetry |
-| mysql | mysql:8.0 | mysql / distributed | 3306 | Metadata persistence |
-| redis | redis:7-alpine | distributed | 6379 | Distributed checkpointer |
-| milvus | milvusdb/milvus:v2.4.17 | distributed | 19530 | Vector retrieval |
-| etcd | quay.io/coreos/etcd:v3.5.16 | distributed | 2379 | Milvus metadata store |
-| minio | minio/minio | distributed | 9000 / 9001 | Milvus object storage |
-
-## Data Persistence
-
-All persistent data lives in named volumes and survives `docker compose down`; use `docker compose down -v` for a full cleanup:
-
-| Volume | Mount point | Content |
-|--------|-------------|---------|
-| deepsearch-data | /app/data | SQLite databases, local knowledge-base index |
-| deepsearch-output | /app/output | Runtime logs, debug results, telemetry events, and other generated output |
-| mysql-data | /var/lib/mysql | MySQL data |
-| redis-data | /data | Redis AOF |
-| milvus-data | /var/lib/milvus | Milvus vector data |
-| etcd-data | /etcd | Milvus metadata |
-| minio-data | /minio_data | MinIO objects |
-
-## Common Commands
+### Distributed Stack
 
 ```bash
-# Tail logs
-docker compose -f docker/docker-compose.yml logs -f deepsearch
-
-# Restart the backend
-docker compose -f docker/docker-compose.yml restart deepsearch
-
-# Rebuild only the backend image (after code changes)
-docker compose -f docker/docker-compose.yml build deepsearch && \
-docker compose -f docker/docker-compose.yml up -d deepsearch
-
-# Stop (keep data)
-docker compose -f docker/docker-compose.yml down
-
-# Stop and delete all data volumes
-docker compose -f docker/docker-compose.yml down -v
-
-# Inspect service health
-docker compose -f docker/docker-compose.yml ps
+docker compose -f docker-compose.distributed.yml up -d --scale deepsearch=3
 ```
 
-## Build Acceleration Behind Slow Networks
-
-`docker/Dockerfile` accepts `INDEX_URL` and `APT_MIRROR` build args. For users behind slow links, pick a closer mirror:
+After scaling, recreate Nginx so its upstream addresses are refreshed:
 
 ```bash
-docker compose -f docker/docker-compose.yml build \
-  --build-arg INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-  --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
-  deepsearch
+docker compose -f docker-compose.distributed.yml up -d \
+  --scale deepsearch=3 --force-recreate nginx
 ```
 
-The example above uses Tsinghua mirrors; substitute any mirror reachable from your build host.
+## Ports and Persistence
 
-## Troubleshooting
+- The API and telemetry endpoints use host ports `8000` and `8089` respectively.
+- The full and distributed stacks bind MySQL, Redis, Milvus, and MinIO ports to `127.0.0.1` only.
+- The minimal and full stacks mount `../data` and `../output` at `/app/data` and `/app/output`.
+- The distributed stack uses the `deepsearch-data` and `deepsearch-output` named volumes. `/app/output` contains runtime logs, debug results, telemetry events, and other generated output.
 
-| Symptom | What to check |
-|---------|---------------|
-| Backend container health check fails | `docker compose logs deepsearch` for startup errors; common causes are incorrect DB / Milvus settings in `.env`, or `SERVICE_MODE=product` without `SERVER_AES_MASTER_KEY` |
-| `distributed` won't start | Confirm all `OBS_*` fields in `.env` are filled — distributed mode requires OBS for knowledge-base files |
-| Milvus health check times out | Milvus is slow to start on first run (90s+); `start_period` is already relaxed. If it still fails, inspect `docker compose logs milvus` |
-| Port already in use | Override the host mapping with the `*_PUBLISH_PORT` environment variables |
-| Backend cannot reach mysql/redis | Confirm `.env` uses **container service names** (`DB_HOST=mysql`, `REDIS_URL=redis://redis:6379`), not `localhost` |
+## Production Security
 
-## Relationship With the Existing Dockerfile
+> The example MySQL `root/root` and MinIO `minioadmin/minioadmin` credentials, and Redis without a password, are for local evaluation only. Production deployments must replace weak default credentials, enable Redis authentication, restrict `8000/8089` with firewall or security-group rules, and keep infrastructure ports off the public network.
 
-`docker/Dockerfile` is unchanged; compose reuses it to build the backend image. Compose only adds an orchestration layer — it does not modify backend build logic or touch any business code.
+## Verify and Troubleshoot
+
+```bash
+curl http://localhost:8000/api/health
+curl http://localhost:8089
+docker compose ps
+docker compose logs -f deepsearch
+```
+
+API documentation is available at `http://localhost:8000/api/docs`.

@@ -158,5 +158,5 @@ rg -n "USER_INPUT_ACTION_MAP|UserFeedbackProcessor|enable_local_source_trace|tes
 - [真实性核验](./user-feedback-processor/truth-verification.md)
 - [新增任务处理](./user-feedback-processor/new-task-processing.md)
 - [局部溯源](./user-feedback-processor/local-source-trace.md)
-- [开发指南](../../zh/4.开发指南/README.md)
-- [目录结构](../../zh/4.开发指南/directory_structure.md)
+- [开发指南](../../zh/3.开发指南/README.md)
+- [目录结构](../../zh/3.开发指南/directory_structure.md)

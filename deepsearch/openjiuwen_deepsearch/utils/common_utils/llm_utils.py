@@ -713,6 +713,19 @@ def normalize_json_output(input_data: str) -> str:
         return input_data.strip()
 
 
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """Convert a value to float, handling string numbers from LLM output.
+
+    LLM JSON responses may return numeric values as strings (e.g. "0.9"
+    instead of 0.9). This helper safely converts them and falls back to
+    ``default`` on failure.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _extract_json(text: str) -> str:
     # 去除 ```json 或 ``` 包裹
     return re.sub(r"^```(?:json)?\n|\n```$", "", text.strip())

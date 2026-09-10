@@ -2,12 +2,12 @@
 
 ## 维护范围
 
-本文档覆盖 `openjiuwen_deepsearch/algorithm/report/` 下的报告生成能力，包括子报告生成、信息维度矩阵文档选择、候选文档预筛、Markdown 标题清理、表格标题归一、可视化 Mermaid 片段生成和最终报告拼接。
+本文档覆盖专业版使用的 `openjiuwen_deepsearch/algorithm/report/` 下的报告生成能力，包括子报告生成、信息维度矩阵段落选择、候选文档预筛、Markdown 标题清理、表格标题归一、可视化 Mermaid 片段生成和最终报告拼接。
 
-本文档不覆盖报告模板上传解析、服务端报告格式转换、全局溯源后处理和 VLM 图表文件生成。子能力细节见：
+本文档不覆盖 Brief 的大纲、证据收集、章节/摘要写作；Brief 不再复用本模块的可视化能力（其图表由自包含 HTML 报告内嵌 ECharts 承载），完整流程见 [Brief 精简版报告工作流](./brief-report.md)。本文档也不覆盖报告模板上传解析、服务端报告格式转换、全局溯源后处理和 VLM 图表文件生成。子能力细节见：
 
 - [子报告生成](./report-generation/sub-report-generation.md)
-- [信息维度矩阵文档选择](./report-generation/coverage-matrix-doc-selection.md)
+- [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)
 - [候选文档预筛](./report-generation/doc-prefilter.md)
 - [表格 Caption](./report-generation/table-caption.md)
 - [Markdown 可视化](./report-generation/visualization-markdown.md)
@@ -19,27 +19,31 @@
 ## 可见行为
 
 - 报告正文以 Markdown 输出，并清理标题编号和过深标题。
+- 最终报告在标题与摘要之间生成一级目录；目录以无项目符号的独立链接行列出正文一级章节，不展开子标题，也不包含摘要、结论和参考文章。
+- 报告生成时在正文每个一级章节标题之后插入独立 `<a id="chapter-N"></a>` HTML 锚点行（编号与目录 `#chapter-N` 链接一一对应），保证原生 Markdown 报告的目录可点击跳转；锚点位于 H1 行之后的独立行，不污染标题文本；导出层转换时会清理这些锚点并改用 `{#chapter-N}` 属性。
 - 子报告根据章节计划和候选资料生成，失败时使用统一错误格式。
 - 候选资料会先去重、按 step 分桶和按评分均衡筛选，再进入 LLM 分类。
 - 表格 caption 会被标准化为稳定的“表 N”或英文对应格式，避免引用错位。
 - 可视化抽取和单位归一化输出必须通过 schema 校验。
+- 全文抽取阶段会将 fulltext 截断到 500 字符用于子大纲生成 Prompt；完整 fulltext 仍保留给子报告写作 Prompt。
 
 ## 关键代码路径
 
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
-- n-gram 工具：`openjiuwen_deepsearch/algorithm/report/ngram_utils.py`
+  > `report.py` 已按职责拆分为 11 个模块，`report.py` 保留核心 `Reporter` 类（编排调度），其余 mixin 模块包括：
+  > `report_common.py`（常量/正则/错误格式化）、`markdown_utils.py`（Markdown 处理）、`visualization.py`（图表数据抽取与 Mermaid 生成）、`visualization_insertion.py`（图表插入）、`evidence.py`（证据生成/抽取/评分，含证据管线编排 `_prepare_evidence`）、`report_parts.py`（子报告 Prompt 构建 `_build_subsection_prompt`、后处理 `_post_process_subsection`、摘要/结论/sidecar）、`sub_section_outline.py`（子大纲生成 mixin：`_generate_sub_section_outline` / `_generate_outline_with_retry`）、`reference_utils.py`（参考文献去重/重编号）、`retry_feedback.py`（重试反馈）、`background_knowledge.py`（背景知识抽取）。
 - 报告配置：`openjiuwen_deepsearch/algorithm/report/config.py`
 - 文档预筛：`openjiuwen_deepsearch/algorithm/report/doc_prefilter.py`
 - compact doc info：`openjiuwen_deepsearch/algorithm/report/compact_doc_info.py`
+- 全文抽取管线：`openjiuwen_deepsearch/algorithm/report/report_rationale_fulltext.py`
 - 报告工具：`openjiuwen_deepsearch/algorithm/report/report_utils.py`
 - 表格 caption：`openjiuwen_deepsearch/algorithm/report/table_caption_utils.py`
 
 相关 Prompt：
 
 - `openjiuwen_deepsearch/algorithm/prompts/rationale_generator.md`
-- `openjiuwen_deepsearch/algorithm/prompts/coverage_matrix_evaluator.md`
+- `openjiuwen_deepsearch/algorithm/prompts/passages_extractor.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_brief_markdown.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`
 - `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar.md`
 - `openjiuwen_deepsearch/algorithm/prompts/report_abstract_markdown.md`
@@ -53,21 +57,29 @@
 - `tests/report/test_general_report.py`
 - `tests/report/test_sub_report.py`
 - `tests/report/test_doc_selection.py`
-- `tests/report/test_ngram_utils.py`
+- `tests/report/test_report_rationale_fulltext.py`
+- `tests/report/test_doc_selection_debug_export.py`
 - `tests/report/test_step_summaries.py`
 - `tests/report/test_doc_prefilter.py`
 - `tests/report/test_chapter_sidecar.py`
 - `tests/report/test_tools_in_report.py`
+- `tests/report/test_evidence.py`
+- `tests/report/test_markdown_utils.py`
+- `tests/report/test_reference_utils.py`
+- `tests/report/test_sub_section_outline.py`
+- `tests/report/test_visualization.py`
+- `tests/report/test_visualization_insertion.py`
+- `tests/report/test_type_safety.py`
 
 ## 核心流程
 
 1. Reporter 读取 outline、章节计划、采集结果和报告语言。
 2. 候选资料通过 doc prefilter 去重、评分、分桶和批处理。
-3. 信息维度矩阵文档选择：rationale 生成 → n-gram 粗筛（中文单字拆分）→ 覆盖矩阵分批并行评估（并发上限 5）→ 贪心子模选择 → elbow 截断 → 覆盖校验（详见 [信息维度矩阵文档选择](./report-generation/coverage-matrix-doc-selection.md)）。
+3. 信息维度矩阵段落选择：rationale 生成 → 段落抽取+评分（coverage 按 rationale 排序，reliability/data_density 按段落整体评估）→ 按 coverage 分 top-k 选择 → L1/L2 过滤 → URL 频次 top-10 全文抽取 → 覆盖校验（详见 [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)）。段落选择只依据 coverage 分；reliability/data_density 虽被评估但不参与选文，仅用于可视化选取和 Prompt 证据增强。
 4. 子报告 Prompt 根据章节契约、选中文档和历史上下文生成 Markdown。
 5. 报告工具清理标题编号、规范化表格标题，并按报告类型生成摘要、结论或建议。
 6. 可视化内容如需插入，先抽取结构化数据并校验 schema，再生成 Mermaid 或交给图表模块。
-7. 最终报告、classified contents、sidecar 和引用相关元数据交给后续溯源和前端展示。
+7. 总报告按“标题 → 一级目录 → 摘要 → 正文章节 → 结论 → 参考文章”拼接，再将最终报告、classified contents、sidecar 和引用相关元数据交给后续溯源和前端展示。
 
 ## 数据契约与依赖
 
@@ -110,7 +122,7 @@ uv run pytest tests/report/test_doc_prefilter.py
 ## 相关文档
 
 - [子报告生成](./report-generation/sub-report-generation.md)
-- [信息维度矩阵文档选择](./report-generation/coverage-matrix-doc-selection.md)
+- [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)
 - [候选文档预筛](./report-generation/doc-prefilter.md)
 - [表格 Caption](./report-generation/table-caption.md)
 - [Markdown 可视化](./report-generation/visualization-markdown.md)
@@ -119,3 +131,4 @@ uv run pytest tests/report/test_doc_prefilter.py
 - [全局溯源](./source-trace.md)
 - [图表生成](./chart-generation.md)
 - [报告模板生成](./report-template.md)
+- [Brief 精简版报告工作流](./brief-report.md)

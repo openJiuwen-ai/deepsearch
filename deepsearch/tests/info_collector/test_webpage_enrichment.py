@@ -99,6 +99,7 @@ def test_build_enrichment_candidates_filters_to_unfetched_http_urls():
         {"url": "localdataset://1", "title": "Local", "query": "q"},
         {"url": "ftp://b.com", "title": "FTP", "query": "q"},
         {"url": "https://done.com", "title": "Done", "query": "q", "enrichment": {"webpage_fetched": True}},
+        {"url": "https://scholar.example.org/1", "title": "Official", "skip_webpage_enrichment": True},
         {"url": "https://a.com", "title": "Duplicate", "query": "q"},
     ]
 

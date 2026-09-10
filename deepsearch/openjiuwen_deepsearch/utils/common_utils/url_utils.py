@@ -160,6 +160,41 @@ def extract_domain_from_url(url: Any) -> str:
     return domain
 
 
+def normalize_url_for_match(url: Any) -> str:
+    """归一化 URL 用于等价匹配.
+
+    返回 ``host + path``（小写、去 ``www.``、路径合并重复斜杠并去末尾斜杠），
+    忽略 scheme、query 和 fragment，使同一页面的 http/https、带参链接等变体能匹配上。
+    """
+    url_str = str(url or "").strip()
+    if not url_str:
+        return ""
+    parsed = urlparse(url_str if "://" in url_str else f"//{url_str}")
+    host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower().strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    if not host or any(c.isspace() for c in host):
+        return ""
+    path = re.sub(r"/+", "/", parsed.path or "").rstrip("/").lower()
+    return f"{host}{path}"
+
+
+def is_url_blocked(url: Any, blocked_urls: Any) -> bool:
+    """判断 URL 是否命中用户要求排除的链接列表.
+
+    归一化（见 ``normalize_url_for_match``）后与禁引列表中任一 URL 完全相同即命中；
+    只做 host+path 精确匹配，同域名下路径不同的其他文章不受影响。
+    """
+    if not blocked_urls:
+        return False
+    if isinstance(blocked_urls, str):
+        blocked_urls = [blocked_urls]
+    target = normalize_url_for_match(url)
+    if not target:
+        return False
+    return any(target == normalize_url_for_match(blocked) for blocked in blocked_urls)
+
+
 def normalize_path(path: str) -> str:
     """
     规范化路径，处理路径中的错误
@@ -304,6 +339,34 @@ def _unsafe_http_service_url_exception_detail(
     return f"{service_label} is not allowed ({reason}): {url!r}"
 
 
+def _is_non_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True unless the address is globally routable.
+
+    ``is_global`` covers shared/CGNAT space (100.64.0.0/10, which hosts the
+    Alibaba Cloud metadata endpoint 100.100.100.200) that ``is_private`` and
+    ``is_reserved`` both miss.
+
+    For IPv4-mapped IPv6 addresses (e.g. ``::ffff:100.100.100.200``), Python's
+    ``is_global`` returns True even when the underlying IPv4 is non-public, so
+    we explicitly extract and check the mapped IPv4 address.
+    """
+    # Check the IPv6 address itself first
+    if any((
+        not ip.is_global,
+        ip.is_loopback,
+        ip.is_link_local,
+        ip.is_multicast,
+        ip.is_unspecified,
+    )):
+        return True
+
+    # For IPv4-mapped IPv6, also check the underlying IPv4 address
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        return _is_non_public_ip(ip.ipv4_mapped)
+
+    return False
+
+
 def _validate_http_url_for_ssrf(
     url: str, *, relaxed: bool, service_label: str
 ) -> None:
@@ -379,14 +442,7 @@ def _validate_http_url_for_ssrf(
                     ),
                 ) from error
 
-            is_non_public_ip = any((
-                resolved_ip.is_private,
-                resolved_ip.is_loopback,
-                resolved_ip.is_link_local,
-                resolved_ip.is_multicast,
-                resolved_ip.is_reserved,
-                resolved_ip.is_unspecified,
-            ))
+            is_non_public_ip = _is_non_public_ip(resolved_ip)
             if is_non_public_ip:
                 raise CustomValueException(
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
@@ -398,14 +454,7 @@ def _validate_http_url_for_ssrf(
                 ) from host_parse_error
         return
 
-    is_non_public_ip = any((
-        ip.is_private,
-        ip.is_loopback,
-        ip.is_link_local,
-        ip.is_multicast,
-        ip.is_reserved,
-        ip.is_unspecified,
-    ))
+    is_non_public_ip = _is_non_public_ip(ip)
     if is_non_public_ip:
         raise CustomValueException(
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
@@ -429,6 +478,15 @@ def validate_runtime_request_url(url: str) -> None:
     )
 
 
+def validate_scholarly_full_text_url(url: str) -> None:
+    """Require a public HTTP(S) destination for scholarly full-text downloads."""
+    _validate_http_url_for_ssrf(
+        url,
+        relaxed=False,
+        service_label="scholarly full-text url",
+    )
+
+
 def validate_embedding_service_url(url: str) -> None:
     """
     Validate embedding HTTP service base URL to reduce SSRF risk.
@@ -439,4 +497,22 @@ def validate_embedding_service_url(url: str) -> None:
         url,
         relaxed=_http_service_allow_unsafe_url("EMBEDDING_SERVICE_ALLOW_UNSAFE_URL"),
         service_label="embedding service url",
+    )
+
+
+def validate_search_service_url(url: str) -> None:
+    """
+    Validate user-configured web search service URL to reduce SSRF risk.
+
+    Search engine ``search_url`` is user-controlled (persisted via the web
+    search engine config API) and reaches ``requests``/``httpx`` calls in
+    provider wrappers, so it must be checked before use. Local debugging or
+    self-hosted intranet search endpoints can bypass with
+    ``SEARCH_SERVICE_ALLOW_UNSAFE_URL=1`` (same accepted values as
+    ``RUNTIME_API_ALLOW_UNSAFE_URL``).
+    """
+    _validate_http_url_for_ssrf(
+        url,
+        relaxed=_http_service_allow_unsafe_url("SEARCH_SERVICE_ALLOW_UNSAFE_URL"),
+        service_label="search service url",
     )

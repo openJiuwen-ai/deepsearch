@@ -1,0 +1,660 @@
+"""Brief HTML 报告并行生成与装配测试。"""
+
+import inspect
+import json
+import logging
+
+import pytest
+
+from openjiuwen_deepsearch.algorithm.brief_report.html_content import (
+    BriefHtmlPreprocessResult,
+    BriefHtmlSectionChunk,
+    render_references_html,
+    preprocess_markdown,
+)
+from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
+    _generate_shell,
+    _generate_section_fragments,
+    generate_brief_html_report,
+    inject_ai_notice,
+    validate_html_report,
+)
+
+
+_NOTICE_BASE = "<!DOCTYPE html><html><head></head><body><h1>报告</h1></body></html>"
+
+
+def test_html_reporter_sibling_module_interfaces_are_public():
+    """编排层跨模块复用的 HTML 辅助项必须使用显式公开名称。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import (
+        html_charts,
+        html_content,
+        html_safety,
+    )
+
+    required_interfaces = {
+        html_charts: (
+            "TEMPLATE_BLOCK_RE",
+            "extract_fragment_charts",
+            "normalize_chart_configs",
+            "validate_chart_configs",
+        ),
+        html_content: ("render_references_html", "split_report_markdown"),
+        html_safety: (
+            "HTML_VOID_TAGS",
+            "HtmlStructureScanner",
+            "JAVASCRIPT_URL_RE",
+            "SCRIPT_TAG_RE",
+            "contains_event_attribute",
+            "insert_before",
+            "validate_css_references",
+        ),
+    }
+
+    for module, names in required_interfaces.items():
+        for name in names:
+            assert hasattr(module, name), f"{module.__name__}.{name} must be public"
+
+
+def test_generate_shell_groups_related_context_arguments():
+    """shell 生成 helper 的相关上下文参数应通过具名对象传递。"""
+    assert len(inspect.signature(_generate_shell).parameters) <= 5
+
+
+def test_assemble_html_report_applies_chart_semantic_fallback():
+    """HTML 拼装阶段必须真正应用图表语义兜底，而不是只提供未调用的辅助函数。"""
+    from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
+        _assemble_html_report,
+    )
+
+    shell = (
+        "<!DOCTYPE html><html><head><style>.card{padding:1px}</style></head><body>"
+        "<h1>报告</h1>"
+        '<div id="brief-sections"></div>'
+        '<div id="brief-references"></div>'
+        "</body></html>"
+    )
+    fragments = [
+        '<section class="card"><h2>1 甲</h2>'
+        '<div class="echarts-chart" data-chart-id="s1-c1"></div></section>'
+    ]
+    configs = [
+        {
+            "id": "s1-c1",
+            "option": {
+                "xAxis": {"type": "category", "data": ["2019", "2023", "2028"]},
+                "yAxis": [{"name": "万亿元"}, {"name": "占GDP(%)"}],
+                "legend": {"data": ["市场规模", "占GDP比重"]},
+                "series": [
+                    {"name": "市场规模", "type": "bar", "data": [4.4, 7.1, 12.3]},
+                    {
+                        "name": "占GDP比重",
+                        "type": "line",
+                        "yAxisIndex": 1,
+                        "data": [None, 6, None],
+                    },
+                ],
+            },
+        }
+    ]
+    pre = preprocess_markdown("# 报告\n\n市场规模为 4.4、7.1 和 12.3。\n")
+
+    assembled = _assemble_html_report(shell, fragments, configs, pre, "zh-CN")
+    payload = assembled.split('<template id="chart-configs">', 1)[1].split(
+        "</template>", 1
+    )[0]
+    normalized_configs = json.loads(payload)
+
+    option = normalized_configs[0]["option"]
+    assert [series["name"] for series in option["series"]] == ["市场规模"]
+    assert option["yAxis"] == [{"name": "万亿元"}]
+    assert option["legend"]["data"] == ["市场规模"]
+
+
+def test_assemble_html_report_converts_inline_citations_outside_prompt_stages():
+    """引用转换由拼装层确定性完成，shell 与章节模型只需保留原始标记。"""
+    from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
+        _assemble_html_report,
+    )
+
+    shell = (
+        "<!DOCTYPE html><html><head><style>.cite-ref{color:#1F5FBF}</style></head><body>"
+        "<p>摘要 [[1]](https://example.com/a)</p>"
+        '<div id="brief-sections"></div><div id="brief-references"></div>'
+        "</body></html>"
+    )
+    fragments = [
+        '<section class="section"><h2>1 范围</h2>'
+        "<p>章节结论 [[1]](https://example.com/a)。</p></section>"
+    ]
+    pre = preprocess_markdown(
+        "# 报告\n\n## 1 范围\n\n"
+        "章节结论 [checked_citation:1][[1]](https://example.com/a)。\n\n"
+        "[1]. [来源甲](https://example.com/a)\n"
+    )
+
+    assembled = _assemble_html_report(shell, fragments, [], pre, "zh-CN")
+    expected = (
+        '<sup class="cite-ref"><a href="https://example.com/a" '
+        'target="_blank" rel="noopener noreferrer">[1]</a></sup>'
+    )
+    assert assembled.count(expected) == 2
+    assert "[[1]](https://example.com/a)" not in assembled
+
+
+def test_assemble_html_report_removes_text_from_css_bar_fill():
+    """拼装层应兜底清除薄 CSS 填充条中的文字，避免文字被 8px 高度裁切。"""
+    from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
+        _assemble_html_report,
+    )
+
+    shell = (
+        "<!DOCTYPE html><html><head><style>"
+        ".bar-track{height:8px;overflow:hidden}.bar-fill{height:100%}"
+        "</style></head><body>"
+        '<div id="brief-sections"></div><div id="brief-references"></div>'
+        "</body></html>"
+    )
+    fragments = [
+        '<section class="section"><h2>1 对比</h2>'
+        '<div class="bar-row">'
+        '<span class="bar-label"><span class="name">海尔 — PLC有线方案</span>'
+        '<span class="num">并列第一</span></span>'
+        '<div class="bar-track"><div class="bar-fill b2" style="width:100%">'
+        "<span>PLC有线</span>"
+        "</div></div></div></section>"
+    ]
+
+    assembled = _assemble_html_report(
+        shell, fragments, [], preprocess_markdown("# 报告\n\n无引用。\n"), "zh-CN"
+    )
+
+    assert (
+        '<span class="name">海尔 — PLC有线方案</span>'
+        '<span class="num">并列第一</span>'
+    ) in assembled
+    assert '<div class="bar-fill b2" style="width:100%"></div>' in assembled
+    assert "<span>PLC有线</span>" not in assembled
+
+
+def test_inject_ai_notice_switches_by_language():
+    """规范化后的英文语言值必须生成英文 AI 声明。"""
+    zh = inject_ai_notice(_NOTICE_BASE, "zh-CN")
+    en = inject_ai_notice(_NOTICE_BASE, "en")
+
+    assert "本研究报告由 AI 生成，仅供参考" in zh
+    assert "This research report was generated by AI and is for reference only." in en
+
+
+_SHELL_CSS = (
+    "<style>"
+    ".card{padding:16px}"
+    ".section{background:#fff;padding:16px}"
+    ".chart-card{padding:12px}"
+    ".chart-title{font-weight:700}"
+    ".chart-source{color:#888}"
+    ".takeaways{margin-top:8px}"
+    ".cite-ref{color:#1F5FBF}"
+    ".references{padding:12px}"
+    ".echarts-chart{height:360px}"
+    ".bar-fill{background:#1F5FBF}"
+    ".metric-card{padding:12px}"
+    "</style>"
+)
+
+_LLM_SHELL = (
+    "<html_report><!DOCTYPE html><html><head><title>t</title>"
+    f"{_SHELL_CSS}</head><body>"
+    "<h1>报告</h1>"
+    '<nav class="card toc"><a href="#section-1">1 范围</a></nav>'
+    '<div id="brief-sections"></div>'
+    '<div id="brief-references"></div>'
+    "</body></html></html_report>"
+)
+
+_LLM_SECTION = (
+    "<html_section><section class=\"section\"><h2>1 范围</h2>"
+    '<p>结论<sup class="cite-ref"><a href="https://example.com/a" '
+    'target="_blank" rel="noopener noreferrer">[1]</a></sup>。</p>'
+    "</section></html_section>"
+)
+
+
+def _pipeline_markdown():
+    return (
+        "# 报告\n\n## 1 范围\n\n结论 [checked_citation:1][[1]](https://example.com/a)。\n\n"
+        "[1]. [来源甲](https://example.com/a)\n"
+    )
+
+
+def _dispatch_fake(monkeypatch, shell_content, section_content, calls):
+    """按 system prompt 区分 shell/章节调用并记录调用序。"""
+
+    async def fake_invoke(llm, messages, **kwargs):
+        calls.append(messages)
+        if "<html_section>" in messages[0]["content"]:
+            return {"content": section_content()}
+        return {"content": shell_content()}
+
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    monkeypatch.setattr(module, "ainvoke_llm_with_stats", fake_invoke)
+    return module
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_uses_distinct_shell_and_section_agent_names(monkeypatch):
+    """shell 与章节调用必须使用可区分的 agent_name。"""
+    agent_names: list[str] = []
+
+    async def fake_invoke(llm, messages, **kwargs):
+        agent_names.append(kwargs["agent_name"])
+        if "<html_section>" in messages[0]["content"]:
+            return {"content": _LLM_SECTION}
+        return {"content": _LLM_SHELL}
+
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    monkeypatch.setattr(module, "ainvoke_llm_with_stats", fake_invoke)
+
+    await generate_brief_html_report(
+        llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+    )
+
+    assert agent_names == [
+        "brief_html_reporter_shell",
+        "brief_html_reporter_section",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_logs_structured_lifecycle_events(monkeypatch, caplog):
+    """HTML 生成日志应覆盖主要阶段并带有稳定的结构化事件名。"""
+    calls: list = []
+    module = _dispatch_fake(monkeypatch, lambda: _LLM_SHELL, lambda: _LLM_SECTION, calls)
+
+    with caplog.at_level(logging.INFO, logger=module.__name__):
+        await generate_brief_html_report(
+            llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    for event in (
+        "event=html_start",
+        "event=attempt_start",
+        "event=shell_start",
+        "event=shell_done",
+        "event=section_batch_start",
+        "event=section_start",
+        "event=section_done",
+        "event=assembly_done",
+        "event=validation_done",
+        "event=html_done status=success",
+    ):
+        assert any(event in message for message in messages), event
+    assert any(
+        "event=section_done" in message
+        and "section_id=1" in message
+        and "duration_ms=" in message
+        for message in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_success_returns_injected_html(monkeypatch):
+    """成功路径：shell + 并行章节 → 确定性拼装 → 校验 → 注入全链路。"""
+    calls: list = []
+    module = _dispatch_fake(
+        monkeypatch, lambda: _LLM_SHELL, lambda: _LLM_SECTION, calls
+    )
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+    )
+
+    assert html.lower().startswith("<!doctype html>")
+    assert "本研究报告由 AI 生成，仅供参考" in html
+    assert "<!--openjiuwen:echarts-lib-->" not in html
+    assert "<!--openjiuwen:chart-init-->" not in html
+    assert "<script" not in html.lower()
+    # shell 挂载点被章节片段替换；参考文献确定性渲染；行内引用为 md 报告原生形态
+    # （sup 上标 [n] 直达原网站，新窗口打开）
+    assert '<div id="brief-sections"' not in html
+    assert "<h2>1 范围</h2>" in html
+    assert '<section class="section" id="section-1">' in html
+    assert (
+        '<sup class="cite-ref"><a href="https://example.com/a" '
+        'target="_blank" rel="noopener noreferrer">[1]</a></sup>' in html
+    )
+    assert '<li id="ref-1"><a href="https://example.com/a">来源甲</a></li>' in html
+    assert "<h2>参考文章</h2>" in html
+    assert len(calls) == 2  # 1 shell + 1 章节
+    assert module is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_inlines_echarts_only_when_chart_exists(monkeypatch):
+    """存在有效图表配置时，最终报告仍内嵌 ECharts 与初始化脚本。"""
+    calls: list = []
+    chart_section = (
+        "<html_section><section class=\"section\"><h2>1 范围</h2>"
+        '<p>结论<sup class="cite-ref"><a href="https://example.com/a" '
+        'target="_blank" rel="noopener noreferrer">[1]</a></sup>。</p>'
+        '<div class="chart-card"><div class="echarts-chart" data-chart-id="c1" '
+        'style="height:360px"></div></div>'
+        '<template id="chart-configs">'
+        '[{"id":"c1","option":{"series":[{"type":"bar","data":[1]}]}}]'
+        "</template></section></html_section>"
+    )
+    module = _dispatch_fake(monkeypatch, lambda: _LLM_SHELL, lambda: chart_section, calls)
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+    )
+
+    assert "<!--openjiuwen:echarts-lib-->" in html
+    assert "<!--openjiuwen:chart-init-->" in html
+    assert html.count("<script>") == 2
+    assert module is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_generates_sections_in_parallel(monkeypatch):
+    """多章节报告：shell 一次 + 章节并行 N 次，拼装保持章节顺序。"""
+    markdown = (
+        "# 报告\n\n## 1 甲\n\n甲内容 [checked_citation:1][[1]](https://example.com/a)。\n\n"
+        "## 2 乙\n\n乙内容 [checked_citation:2][[1]](https://example.com/a)。\n\n"
+        "[1]. [来源甲](https://example.com/a)\n"
+    )
+    calls: list = []
+
+    def section_content():
+        # 章节标题在 user 消息（Section Markdown）里，system prompt 不含正文
+        prompt = calls[-1][-1]["content"]
+        cite = (
+            '<sup class="cite-ref"><a href="https://example.com/a" '
+            'target="_blank" rel="noopener noreferrer">[1]</a></sup>'
+        )
+        if "1 甲" in prompt:
+            return f"<html_section><h2>1 甲</h2><p>甲{cite}。</p></html_section>"
+        return f"<html_section><h2>2 乙</h2><p>乙{cite}。</p></html_section>"
+
+    _dispatch_fake(monkeypatch, lambda: _LLM_SHELL, section_content, calls)
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=markdown, language="zh-CN"
+    )
+
+    assert html.index("<h2>1 甲</h2>") < html.index("<h2>2 乙</h2>")
+    assert len(calls) == 3  # 1 shell + 2 章节
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_retries_only_failed_sections(monkeypatch):
+    """单章失败时复用其他成功片段，下一轮只重新调用失败章节。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    markdown = (
+        "# 报告\n\n## 1 甲\n\n甲内容 [checked_citation:1][[1]](https://example.com/a)。\n\n"
+        "## 2 乙\n\n乙内容 [checked_citation:2][[1]](https://example.com/a)。\n\n"
+        "[1]. [来源甲](https://example.com/a)\n"
+    )
+    section_calls = {"1": 0, "2": 0}
+    shell_calls = 0
+    cite = (
+        '<sup class="cite-ref"><a href="https://example.com/a" '
+        'target="_blank" rel="noopener noreferrer">[1]</a></sup>'
+    )
+
+    async def fake_invoke(llm, messages, **kwargs):
+        nonlocal shell_calls
+        if "<html_section>" not in messages[0]["content"]:
+            shell_calls += 1
+            return {"content": _LLM_SHELL}
+        prompt = messages[-1]["content"]
+        section_id = "1" if "## 1 甲" in prompt else "2"
+        section_calls[section_id] += 1
+        if section_id == "2" and section_calls[section_id] == 1:
+            return {"content": "truncated section"}
+        title = "甲" if section_id == "1" else "乙"
+        return {
+            "content": (
+                f'<html_section><section class="section"><h2>{section_id} {title}</h2>'
+                f"<p>{title}{cite}。</p></section></html_section>"
+            )
+        }
+
+    monkeypatch.setattr(module, "ainvoke_llm_with_stats", fake_invoke)
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=markdown, language="zh-CN"
+    )
+
+    assert html.index("<h2>1 甲</h2>") < html.index("<h2>2 乙</h2>")
+    assert shell_calls == 1
+    assert section_calls == {"1": 1, "2": 2}
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_regenerates_all_sections_after_shell_validation_error(monkeypatch):
+    """整体验证失败时重建 shell，并重新生成全部章节。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    markdown = (
+        "# 报告\n\n## 1 甲\n\n甲内容。\n\n"
+        "## 2 乙\n\n乙内容。\n"
+    )
+    bad_shell = _LLM_SHELL.replace("<!DOCTYPE html>", "")
+    shell_calls = 0
+    section_calls = {"1": 0, "2": 0}
+
+    class _FakeConfig:
+        def __init__(self):
+            self.service_config = type("S", (), {"report_max_generate_retry_num": 2})()
+
+    async def fake_invoke(llm, messages, **kwargs):
+        nonlocal shell_calls
+        if "<html_section>" not in messages[0]["content"]:
+            shell_calls += 1
+            return {"content": bad_shell if shell_calls == 1 else _LLM_SHELL}
+        prompt = messages[-1]["content"]
+        section_id = "1" if "## 1 甲" in prompt else "2"
+        section_calls[section_id] += 1
+        title = "甲" if section_id == "1" else "乙"
+        return {
+            "content": (
+                f'<html_section><section class="section"><h2>{section_id} {title}</h2>'
+                f"<p>{title}内容。</p></section></html_section>"
+            )
+        }
+
+    monkeypatch.setattr(module, "Config", _FakeConfig)
+    monkeypatch.setattr(module, "ainvoke_llm_with_stats", fake_invoke)
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=markdown, language="zh-CN"
+    )
+
+    assert html.lower().startswith("<!doctype html>")
+    assert shell_calls == 2
+    assert section_calls == {"1": 2, "2": 2}
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_attributes_css_errors_to_failed_section(monkeypatch):
+    """章节外链 CSS 应在片段阶段报错，避免重建 shell 和其他成功章节。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    markdown = (
+        "# 报告\n\n## 1 甲\n\n甲内容 [checked_citation:1][[1]](https://example.com/a)。\n\n"
+        "## 2 乙\n\n乙内容 [checked_citation:2][[1]](https://example.com/a)。\n\n"
+        "[1]. [来源甲](https://example.com/a)\n"
+    )
+    section_calls = {"1": 0, "2": 0}
+    shell_calls = 0
+    cite = (
+        '<sup class="cite-ref"><a href="https://example.com/a" '
+        'target="_blank" rel="noopener noreferrer">[1]</a></sup>'
+    )
+
+    async def fake_invoke(llm, messages, **kwargs):
+        nonlocal shell_calls
+        if "<html_section>" not in messages[0]["content"]:
+            shell_calls += 1
+            return {"content": _LLM_SHELL}
+        prompt = messages[-1]["content"]
+        section_id = "1" if "## 1 甲" in prompt else "2"
+        section_calls[section_id] += 1
+        title = "甲" if section_id == "1" else "乙"
+        unsafe_style = (
+            ' style="background:url(https://evil.example/pixel)"'
+            if section_id == "2" and section_calls[section_id] == 1
+            else ""
+        )
+        return {
+            "content": (
+                f'<html_section><section class="section"{unsafe_style}>'
+                f"<h2>{section_id} {title}</h2><p>{title}{cite}。</p>"
+                "</section></html_section>"
+            )
+        }
+
+    monkeypatch.setattr(module, "ainvoke_llm_with_stats", fake_invoke)
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=markdown, language="zh-CN"
+    )
+
+    assert "evil.example" not in html
+    assert shell_calls == 1
+    assert section_calls == {"1": 1, "2": 2}
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_drops_invalid_chart_and_keeps_html(monkeypatch):
+    """非法图表只删除图表，不触发章节重试或报告降级。"""
+    bad_section = (
+        "<html_section><h2>1 范围</h2>"
+        '<p>结论。</p>'
+        '<div class="echarts-chart" data-chart-id="c1"></div>'
+        '<template id="chart-configs">[{"id":"c1","option":{...broken}}]</template>'
+        "</html_section>"
+    )
+    calls: list = []
+    module = _dispatch_fake(monkeypatch, lambda: _LLM_SHELL, lambda: bad_section, calls)
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+    )
+
+    assert html.lower().startswith("<!doctype html>")
+    assert "结论。" in html
+    assert "data-chart-id" not in html
+    assert "chart-configs" not in html
+    assert "<!--openjiuwen:echarts-lib-->" not in html
+    assert len(calls) == 2  # shell + 坏图表章节，各一次
+
+
+@pytest.mark.asyncio
+async def test_generate_section_fragments_propagates_keyboard_interrupt(monkeypatch):
+    """并行收集不能把 KeyboardInterrupt 当成普通章节失败。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    async def fake_gather(*coroutines, **kwargs):
+        for coroutine in coroutines:
+            coroutine.close()
+        return [KeyboardInterrupt()]
+
+    monkeypatch.setattr(module.asyncio, "gather", fake_gather)
+
+    with pytest.raises(KeyboardInterrupt):
+        await _generate_section_fragments(
+            object(),
+            "<!DOCTYPE html><html><head></head><body></body></html>",
+            [BriefHtmlSectionChunk("1", "范围", "## 1 范围\n")],
+            "zh-CN",
+            [],
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_accepts_shell_without_fixed_css_classes(monkeypatch):
+    """缺少未使用的固定类不应触发整轮 shell 重试。"""
+    incomplete_css = "<html_report><!DOCTYPE html><html><head><title>t</title>" \
+        "<style>.card{padding:16px}</style></head><body>" \
+        "<h1>报告</h1>" \
+        '<div id="brief-sections"></div>' \
+        '<div id="brief-references"></div>' \
+        "</body></html></html_report>"
+    calls: list = []
+
+    def shell_content():
+        return incomplete_css
+
+    module = _dispatch_fake(
+        monkeypatch, shell_content, lambda: _LLM_SECTION, calls
+    )
+
+    html = await generate_brief_html_report(
+        llm=object(), markdown=_pipeline_markdown(), language="zh-CN"
+    )
+
+    assert html.lower().startswith("<!doctype html>")
+    assert len(calls) == 2  # shell + 章节，各一次
+
+
+@pytest.mark.asyncio
+async def test_generate_brief_html_report_raises_after_exhausted_retries(monkeypatch):
+    """重试耗尽抛 ValueError，由节点层转为 REPORT_GENERATE_ERROR。"""
+    from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
+
+    async def fake_invoke(llm, messages, **kwargs):
+        return {"content": "no tags at all"}
+
+    class _FakeConfig:
+        def __init__(self):
+            self.service_config = type("S", (), {"report_max_generate_retry_num": 2})()
+
+    monkeypatch.setattr(module, "ainvoke_llm_with_stats", fake_invoke)
+    monkeypatch.setattr(module, "Config", _FakeConfig)
+
+    with pytest.raises(ValueError, match="brief html report generation failed"):
+        await generate_brief_html_report(llm=object(), markdown=_pipeline_markdown(), language="zh-CN")
+
+
+def test_assemble_html_report_merges_all_chart_configs():
+    """拼装会保留全部章节图表配置，不按全局数量截断。"""
+    from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
+        _assemble_html_report,
+    )
+
+    shell = (
+        "<!DOCTYPE html><html><head><style>.card{padding:1px}</style></head><body>"
+        "<h1>报告</h1>"
+        '<div id="brief-sections"></div>'
+        '<div id="brief-references"></div>'
+        "</body></html>"
+    )
+    fragments = [
+        '<section class="card"><h2>1 甲</h2><div class="echarts-chart" data-chart-id="s1-c1"></div>'
+        '<div class="echarts-chart" data-chart-id="s1-c2"></div></section>',
+        '<section class="card"><h2>2 乙</h2><div class="echarts-chart" data-chart-id="s2-c1"></div>'
+        '<div class="echarts-chart" data-chart-id="s2-c2"></div></section>',
+    ]
+    configs = [
+        {"id": f"s{s}-c{k}", "option": {"series": [{"type": "bar", "data": [k]}]}}
+        for s in (1, 2)
+        for k in (1, 2)
+    ]
+    pre = preprocess_markdown("# 报告\n\n[1]. [来源甲](https://example.com/a)\n")
+
+    assembled = _assemble_html_report(shell, fragments, configs, pre, "zh-CN")
+
+    assert assembled.count('class="echarts-chart"') == 4
+    assert 'data-chart-id="s2-c2"' in assembled
+    assert "<h2>参考文章</h2>" in assembled
+    assert '<li id="ref-1"><a href="https://example.com/a">来源甲</a></li>' in assembled
+    # 合并 template 在 body 闭合前，内容经 HTML 转义
+    assert assembled.index("<template") < assembled.rindex("</body>")
+    errors, _ = validate_html_report(assembled)
+    assert errors == []

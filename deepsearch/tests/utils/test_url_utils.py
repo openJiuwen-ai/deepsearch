@@ -10,6 +10,9 @@ from openjiuwen_deepsearch.utils.common_utils.url_utils import (
     normalize_url,
     are_similar_urls,
     validate_runtime_request_url,
+    validate_search_service_url,
+    is_url_blocked,
+    normalize_url_for_match,
 )
 
 # 构造一个长度超过 8192 的合法 URL
@@ -207,3 +210,75 @@ def test_validate_runtime_request_url_blocks_dns_to_non_public_ip(monkeypatch):
     with pytest.raises(CustomValueException):
         validate_runtime_request_url("http://metadata.attacker.test/latest/meta-data/")
 
+
+@pytest.mark.parametrize("url", [
+    # 阿里云 ECS 元数据端点位于 CGNAT 段（100.64.0.0/10），
+    # is_private/is_reserved 均不覆盖，必须由 is_global 判定拦截
+    "http://100.100.100.200/latest/meta-data/",
+    "http://[::ffff:100.100.100.200]/latest/meta-data/",
+    # CGNAT 段其他地址
+    "http://100.64.0.1/",
+    "http://100.127.255.254/",
+])
+def test_validate_search_service_url_blocks_cgnat_range(url, monkeypatch):
+    monkeypatch.delenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", raising=False)
+    with pytest.raises(CustomValueException):
+        validate_search_service_url(url)
+
+
+@pytest.mark.parametrize("url", [
+    "http://100.63.255.254/",   # CGNAT 段下边界之外
+    "http://100.128.0.0/",     # CGNAT 段上边界之外
+])
+def test_validate_search_service_url_allows_public_outside_cgnat(url, monkeypatch):
+    monkeypatch.delenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", raising=False)
+    validate_search_service_url(url)  # 不应抛出异常
+
+
+
+# ──────────────────────────────────────────────
+# is_url_blocked 相关测试
+# ──────────────────────────────────────────────
+@pytest.mark.parametrize("url, expected", [
+    ("https://www.mdpi.com/2073-445X/11/9/1529", "mdpi.com/2073-445x/11/9/1529"),
+    ("http://MDPI.COM/2073-445X/11/9/1529/", "mdpi.com/2073-445x/11/9/1529"),
+    ("https://www.mdpi.com/2073-445X/11/9/1529?utm_source=x#abs", "mdpi.com/2073-445x/11/9/1529"),
+    ("", ""),
+    ("not a url", ""),
+])
+def test_normalize_url_for_match(url, expected):
+    assert normalize_url_for_match(url) == expected
+
+
+_BLOCKED = ["https://www.mdpi.com/2073-445X/11/9/1529"]
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.mdpi.com/2073-445X/11/9/1529",
+    "http://mdpi.com/2073-445x/11/9/1529/",
+    "https://www.mdpi.com/2073-445X/11/9/1529?utm_source=x",
+])
+def test_is_url_blocked_hits(url):
+    assert is_url_blocked(url, _BLOCKED) is True
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.mdpi.com/2073-445X/11/9/1530",   # 同域名不同文章
+    "https://www.mdpi.com/2073-445X/11/9/152",    # 相近路径（少一位）
+    "https://example.com/other",
+    "",
+])
+def test_is_url_blocked_misses(url):
+    assert is_url_blocked(url, _BLOCKED) is False
+
+
+def test_is_url_blocked_empty_blocked_list():
+    assert is_url_blocked("https://www.mdpi.com/2073-445X/11/9/1529", []) is False
+    assert is_url_blocked("https://www.mdpi.com/2073-445X/11/9/1529", None) is False
+
+
+def test_is_url_blocked_accepts_single_string():
+    assert is_url_blocked(
+        "https://www.mdpi.com/2073-445X/11/9/1529",
+        "https://www.mdpi.com/2073-445X/11/9/1529",
+    ) is True

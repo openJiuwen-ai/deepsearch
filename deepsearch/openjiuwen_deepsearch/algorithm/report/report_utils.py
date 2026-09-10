@@ -1,12 +1,100 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import json
+import logging
 import math
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Tuple
 
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import safe_float
+
+logger = logging.getLogger(__name__)
+
+
+def export_outline_without_plans(outline: Outline | dict):
+    """导出不包含执行计划信息的大纲结构。"""
+    if not outline or not isinstance(outline, (Outline, dict)):
+        logger.warning(
+            "export_outline_without_plans: unsupported outline type or empty outline."
+        )
+        return outline
+
+    is_dict = isinstance(outline, dict)
+    obj = Outline.model_validate(outline) if is_dict else outline
+
+    data = obj.model_dump(exclude={"sections": {"__all__": {"plans", "doc_selection_debug"}}})
+
+    return data if is_dict else Outline.model_validate(data)
+
+
+def _section_sort_key(section_id) -> tuple[int, int | str]:
+    """Keep report sections ordered numerically when section ids are strings."""
+    text = str(section_id).strip()
+    if text.isdigit():
+        return 0, int(text)
+    return 1, text
+
+
+def resolve_current_subsection(current_inputs: dict) -> str:
+    """Resolve the ``current_subsection`` prompt parameter from the chapter outline.
+
+    If ``current_inputs`` already carries an explicit ``current_subsection``,
+    return it. Otherwise derive a default from the chapter outline: when the
+    outline has more than one non-blank line, instruct the LLM to follow each
+    Level 2 heading; otherwise keep the Level 1-only outline.
+    """
+    current_chapter_outline = current_inputs.get("sub_section_outline", "")
+    outline_lines = [
+        line.strip()
+        for line in current_chapter_outline.splitlines()
+        if line.strip()
+    ]
+    default_current_subsection = (
+        "Full current chapter; follow each Level 2 heading in the current chapter outline."
+        if len(outline_lines) > 1
+        else (
+            "Full current chapter; keep the Level 1-only outline. "
+            "Do not add Level 2 or deeper headings."
+        )
+    )
+    return current_inputs.get(
+        "current_subsection",
+        default_current_subsection,
+    )
+
+
+def _strip_chart_markup(text: str) -> str:
+    """Remove report citation/link markup that is unreadable inside Mermaid labels."""
+    cleaned = re.sub(r"\[checked_citation:\d+\]\[\[\d+\]\]\([^)]+\)", "", str(text))
+    cleaned = sanitize_citation_markers(cleaned)
+    cleaned = re.sub(r"\[\[\d+\]\]\([^)]+\)", "", cleaned)
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+_CITATION_MARKER_SANITIZE_RE = re.compile(
+    r"[<\[\]()>]?\s*(?<!checked_)citation:\s*\d+\s*[<\[\]()>]?"
+)
+
+
+def sanitize_citation_markers(text: str) -> str:
+    """Strip citation anchors including malformed delimiters.
+
+    Tolerates delimiter errors where the model emits ``<``/``>``/``(``/``)``
+    instead of matching ``[...]`` brackets, so malformed anchors such as
+    ``<citation:3]`` do not survive as visible text. Preserves
+    ``checked_citation`` markers, which are handled by dedicated strippers.
+
+    Use at citation-stripping points (abstract, conclusion, chart labels).
+    """
+    return _CITATION_MARKER_SANITIZE_RE.sub("", str(text))
+
+
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text))
 
 
 def _has_mixed_unit_separators(unit: str) -> bool:
@@ -124,6 +212,7 @@ class ArticlePart:
         },
     }
     titles = {
+        "toc": {CHINESE: "# 目录\n\n", ENGLISH: "# Table of Contents\n\n"},
         "abstract": {CHINESE: "# 摘要\n\n", ENGLISH: "# Abstract\n\n"},
         "conclusion": {CHINESE: "# 结论\n\n", ENGLISH: "# Conclusion\n\n"},
         "reference": {CHINESE: "# 参考文章\n\n", ENGLISH: "# Reference Articles\n\n"},
@@ -284,7 +373,7 @@ class XYChartMermaidGenerator:
 
     @classmethod
     def _sanitize_label(cls, label: str | None) -> str:
-        raw = (str(label) if label is not None else "").strip().replace('"', "'")
+        raw = _strip_chart_markup(str(label) if label is not None else "").replace('"', "'")
         if not raw:
             return "Item"
         return raw
@@ -306,6 +395,10 @@ class XYChartMermaidGenerator:
         weights = [cls._label_weight_length(label) for label in labels]
         total_len = sum(weights)
         max_len = max(weights, default=0.0)
+        if count >= 6:
+            return True
+        if count >= 4 and max_len >= 14:
+            return True
         per_label_limit = cls.HORIZONTAL_TOTAL_LABEL_LIMIT / max(count, 1)
         return not (
             total_len <= cls.HORIZONTAL_TOTAL_LABEL_LIMIT
@@ -357,16 +450,16 @@ class XYChartMermaidGenerator:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") not in ("bar", "line"):
+        if not isinstance(data, dict) or data.get("image_type") not in ("bar", "line"):
             raise ValueError("input must be a bar/line chart visualization JSON")
 
         chart_type = data.get("image_type")  # "bar" or "line"
-        raw_unit = (data.get("unit") or "").strip()
+        raw_unit = str(data.get("unit") or "").strip()
         if cls._detect_mixed_unit(raw_unit):
             raise ValueError("mixed units are not allowed for a single chart")
 
         records = data.get("records", [])
-        if not records or len(records) < 2:
+        if not isinstance(records, list) or len(records) < 2:
             raise ValueError("records are required")
 
         x_values: list[str] = []
@@ -401,17 +494,20 @@ class XYChartMermaidGenerator:
         use_horizontal = (
             chart_type == "bar" and cls._should_use_horizontal(x_values, count)
         )
-        chart_orientation = (
-            "xychart-beta horizontal" if use_horizontal else "xychart-beta"
-        )
+        # Keep the Mermaid directive itself standard so downstream validators can
+        # infer the chart type from the `bar [...]`/`line [...]` series. The
+        # horizontal hint uses the official xyChart.chartOrientation key so both
+        # built-in exporters and external Mermaid renderers honor it.
+        chart_orientation = "xychart-beta"
 
         lines = [
             "---",
             "config:",
-            f"    horizontal: {'true' if use_horizontal else 'false'}",
-            f"    width: {width}",
-            f"    height: {cls.HEIGHT}",
-            "    showDataLabel: true",
+            "    xyChart:",
+            *(["        chartOrientation: horizontal"] if use_horizontal else []),
+            f"        width: {width}",
+            f"        height: {cls.HEIGHT}",
+            "        showDataLabel: true",
             "    themeVariables:",
             "        xyChart:",
             "            plotColorPalette: '#7c3aed'",
@@ -473,8 +569,11 @@ class XYChartMermaidGenerator:
     ) -> tuple[float, float]:
         if not values:
             return 0.0, 1.0
-        vmin = min(values)
-        vmax = max(values)
+        # Defensive: LLM-returned chart values may be strings or other non-numeric
+        # types. Convert via safe_float to prevent TypeError in min/max/subtraction.
+        cleaned = [safe_float(x) for x in values]
+        vmin = min(cleaned)
+        vmax = max(cleaned)
         if vmax == 0 and vmin == 0:
             return 0.0, 1.0
 
@@ -558,13 +657,14 @@ class XYChartMermaidGenerator:
 
 
 class PieChartMermaidGenerator:
-    OTHER_LABEL = "other"
+    OTHER_LABEL = "Other"
+    OTHER_LABEL_ZH = "其他"
     EPSILON = 1e-6
 
     @classmethod
     def _sanitize_label(cls, label: str) -> str:
         # Keep original characters; only normalize whitespace and protect quotes.
-        label = str(label).strip()
+        label = _strip_chart_markup(str(label))
         if not label:
             return "label"
         label = label.replace('"', "'")
@@ -601,10 +701,10 @@ class PieChartMermaidGenerator:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") != "pie":
+        if not isinstance(data, dict) or data.get("image_type") != "pie":
             raise ValueError("input must be a pie chart visualization JSON")
 
-        unit = (data.get("unit") or "").strip()
+        unit = str(data.get("unit") or "").strip()
         percent_mode = bool(unit and ("%" in unit or "百分比" in unit))
         records = data.get("records", [])
         if not isinstance(records, list) or len(records) < 2:
@@ -635,7 +735,11 @@ class PieChartMermaidGenerator:
             if total > 100.0 + cls.EPSILON:
                 raise ValueError("percent values sum exceeds 100")
             if total < 100.0 - cls.EPSILON:
-                labels.append(cls.OTHER_LABEL)
+                labels.append(
+                    cls.OTHER_LABEL_ZH
+                    if any(_has_cjk(label) for label in labels)
+                    else cls.OTHER_LABEL
+                )
                 other_value = 100.0 - total
                 values.append(other_value)
                 raw_values.append(other_value)
@@ -667,24 +771,28 @@ class TimelineChartMermaidGenerator:
         title <title>
             <time> : <event><br>...
     """
+    EVENT_MAX_LEN = 72
 
-    @staticmethod
-    def _format_event_text(text: str) -> str:
+    @classmethod
+    def _format_event_text(cls, text: str) -> str:
         # Allow line breaks via <br>
-        return (
-            str(text)
+        event = (
+            _strip_chart_markup(str(text))
             .strip()
             .replace("\r\n", "\n")
             .replace("\r", "\n")
             .replace("\n", "<br>")
         )
+        if len(event) > cls.EVENT_MAX_LEN:
+            event = event[: cls.EVENT_MAX_LEN].rstrip() + "..."
+        return event
 
     @classmethod
     def generate_from_json(cls, json_string: str) -> str:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") != "timeline":
+        if not isinstance(data, dict) or data.get("image_type") != "timeline":
             raise ValueError("input must be a timeline visualization JSON")
 
         records = data.get("records", [])

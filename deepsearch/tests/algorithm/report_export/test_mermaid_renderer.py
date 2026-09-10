@@ -126,7 +126,8 @@ def test_horizontal_chart_expands_viewbox_for_long_generated_category_labels() -
         f'["{long_label}",12],["普通项目",8]]}}'
     )
 
-    assert "xychart-beta horizontal" in code
+    assert "chartOrientation: horizontal" in code
+    assert "xychart-beta horizontal" not in code
     svg = render_mermaid_chart_as_svg(code)
     png = render_mermaid_chart_as_png(code)
 
@@ -142,6 +143,82 @@ def test_horizontal_chart_expands_viewbox_for_long_generated_category_labels() -
         assert image.format == "PNG"
         assert image.width == round(viewbox_width * 2)
         assert image.height == round(viewbox_height * 2)
+
+
+def test_generated_xychart_strips_chart_markup_and_prefers_horizontal_for_crowded_bars() -> None:
+    from openjiuwen_deepsearch.algorithm.report.report_utils import XYChartMermaidGenerator
+
+    code = XYChartMermaidGenerator.generate_from_json(
+        json.dumps(
+            {
+                "image_type": "bar",
+                "unit": "亿元",
+                "records": [
+                    ["飞驰人生2[checked_citation:1][[1]](https://example.com)", 33.98],
+                    ["抓娃娃", 33.27],
+                    ["第二十条", 24.54],
+                    ["熊出没·逆转时空", 20.06],
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert "chartOrientation: horizontal" in code
+    assert "checked_citation" not in code
+    assert "https://example.com" not in code
+    assert "熊出没·逆转时空" in code
+
+
+def test_generated_pie_chart_uses_chinese_other_for_chinese_labels() -> None:
+    from openjiuwen_deepsearch.algorithm.report.report_utils import PieChartMermaidGenerator
+
+    code = PieChartMermaidGenerator.generate_from_json(
+        json.dumps(
+            {
+                "image_type": "pie",
+                "unit": "%",
+                "records": [
+                    ["二线城市", 41],
+                    ["四线城市", 24],
+                    ["三线城市", 20],
+                    ["一线城市", 14],
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert '"其他 (1%)" : 1' in code
+    assert "other" not in code.lower()
+
+
+def test_generated_timeline_strips_citations_urls_and_truncates_long_events() -> None:
+    from openjiuwen_deepsearch.algorithm.report.report_utils import (
+        TimelineChartMermaidGenerator,
+    )
+
+    long_event = (
+        "海外票房（不含中国）预计156亿美元，同比回落7%，较2017-2019年均值低21%，"
+        "同时受到供给断层与档期变化影响，北美、欧洲和亚洲多个市场复苏节奏继续分化"
+        "[checked_citation:8][[2]](https://example.com/report)"
+    )
+    code = TimelineChartMermaidGenerator.generate_from_json(
+        json.dumps(
+            {
+                "image_type": "timeline",
+                "unit": "",
+                "records": [["2024", long_event]],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert "checked_citation" not in code
+    assert "https://example.com" not in code
+    assert "..." in code
+    event_text = code.split(":", 1)[1].strip()
+    assert len(event_text) <= TimelineChartMermaidGenerator.EVENT_MAX_LEN + 3
 
 
 def test_all_negative_horizontal_labels_reserve_space_for_value_labels() -> None:
@@ -166,7 +243,8 @@ def test_all_negative_horizontal_labels_reserve_space_for_value_labels() -> None
         )
     )
 
-    assert "xychart-beta horizontal" in code
+    assert "chartOrientation: horizontal" in code
+    assert "xychart-beta horizontal" not in code
     svg = render_mermaid_chart_as_svg(code)
     assert svg is not None
     root = ET.fromstring(svg)
@@ -267,3 +345,103 @@ def test_full_pie_slice_uses_a_complete_svg_shape(items: str) -> None:
         assert image.format == "PNG"
         pie_center_x = round(image.width * 300 / 760)
         assert image.getpixel((pie_center_x, image.height // 2)) != (255, 255, 255)
+
+
+def test_generated_horizontal_xychart_uses_official_mermaid_schema() -> None:
+    """生成器横向图应输出官方 xyChart schema，外部 Mermaid 渲染器可直接识别。"""
+    from openjiuwen_deepsearch.algorithm.report.report_utils import XYChartMermaidGenerator
+
+    code = XYChartMermaidGenerator.generate_from_json(
+        json.dumps(
+            {
+                "image_type": "bar",
+                "unit": "%",
+                "records": [
+                    ["Spiking Transformer (Avg-Pooling, Cifar-100)", 76.73],
+                    ["Spiking Transformer (Max-Pool, Cifar-100)", 79.12],
+                    ["Max-Former (ImageNet)", 82.39],
+                    ["Spikformer (ImageNet)", 74.81],
+                    ["Max-ResNet-18 (CIFAR-10)", 97.17],
+                    ["Max-ResNet-18 (CIFAR-100)", 83.06],
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert "chartOrientation: horizontal" in code
+    assert "xyChart:" in code
+    assert "horizontal: true" not in code
+
+
+def test_generated_vertical_xychart_omits_orientation_key() -> None:
+    """生成器纵向图不应输出任何方向键（官方默认即纵向）。"""
+    from openjiuwen_deepsearch.algorithm.report.report_utils import XYChartMermaidGenerator
+
+    code = XYChartMermaidGenerator.generate_from_json(
+        json.dumps(
+            {
+                "image_type": "bar",
+                "unit": "分",
+                "records": [
+                    ["RoboDecision-8B", 68.06],
+                    ["Qwen3-VL-8B-Instruct", 48.84],
+                    ["RoboBrain-7B-2.0", 37.32],
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert "chartOrientation" not in code
+    assert "horizontal" not in code
+
+
+@pytest.mark.parametrize(
+    "frontmatter",
+    [
+        "---\nconfig:\n    xyChart:\n        chartOrientation: horizontal\n---\n",
+        "---\nconfig:\n    horizontal: true\n---\n",
+    ],
+)
+def test_horizontal_detection_accepts_official_and_legacy_frontmatter(
+    frontmatter: str,
+) -> None:
+    """两处横向检测应同时识别官方 chartOrientation 与存量私有键。"""
+    from openjiuwen_deepsearch.algorithm.report_export.chart_svg import (
+        is_horizontal_xychart as svg_is_horizontal,
+    )
+    from openjiuwen_deepsearch.algorithm.report_export.mermaid_preprocess import (
+        is_horizontal_xychart as preprocess_is_horizontal,
+    )
+
+    code = (
+        f"{frontmatter}xychart-beta\n"
+        '    x-axis ["甲", "乙"]\n'
+        '    y-axis "值" 0 --> 2\n'
+        "    bar [1, 2]"
+    )
+
+    assert svg_is_horizontal(code) is True
+    assert preprocess_is_horizontal(code) is True
+
+
+def test_official_vertical_frontmatter_is_not_horizontal() -> None:
+    """官方纵向 frontmatter 不含方向键，不应被误判为横向。"""
+    from openjiuwen_deepsearch.algorithm.report_export.chart_svg import (
+        is_horizontal_xychart as svg_is_horizontal,
+    )
+    from openjiuwen_deepsearch.algorithm.report_export.mermaid_preprocess import (
+        is_horizontal_xychart as preprocess_is_horizontal,
+    )
+
+    code = (
+        "---\nconfig:\n    xyChart:\n        width: 500\n---\n"
+        "xychart-beta\n"
+        '    x-axis ["甲", "乙"]\n'
+        '    y-axis "值" 0 --> 2\n'
+        "    bar [1, 2]"
+    )
+
+    assert svg_is_horizontal(code) is False
+    assert preprocess_is_horizontal(code) is False

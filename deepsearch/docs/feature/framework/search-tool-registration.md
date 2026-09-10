@@ -18,9 +18,10 @@ contextvar，避免节点直接持有全局工具对象。
 - 支持内置 local 引擎：openapi、native。
 - 支持通过 `custom_*_search_file` 和 `custom_*_search_func` 注册自定义搜索工具。
 - Tavily 支持把意图识别出的 include/exclude domains 追加到已有配置。
-- web 搜索调用受 `web_search_max_qps` 限流。
+- DeepResearch 的入口预搜索完成后，Tavily 可按 `source_date` 接收绝对起止日期；`content_date` 不发送原生日期参数。
+- web 搜索的每个 provider HTTP 请求受 `web_search_max_qps` 限流。
 - DeepSearch `search` / `react` 模式会先把活动 web search wrapper 注册到同一个 `web_search_context`，再执行 `web_search` adapter。
-- runtime API 配置会动态生成工具 schema，并可把搜索型响应转换为 collector 可消费 payload。
+- runtime API 配置会动态生成工具 schema，并可把搜索型响应转换为 collector 可消费 payload；其结果不参与来源日期过滤。
 
 ## 关键代码路径
 
@@ -48,7 +49,16 @@ contextvar，避免节点直接持有全局工具对象。
 ## 数据契约与依赖
 
 - web/local openJiuwen 工具输入均包含 `query` 和 `search_engine_name`。
+- 统一 web ToolCard 和调用签名不增加时间字段。时间范围写入当前会话的 Tavily wrapper，不使用相对当前时间的
+  `time_range`。
+- Tavily 的绝对日期参数按发表日期或最后更新时间过滤；结果随后仍由 collector 按统一发表日期过滤。
+- 开始和结束日期分别向前、向后移动一天，以适配 Tavily 严格 `after`/`before` 与内部包含边界；`date.min`、`date.max`
+  等无实际收窄作用的极值不下推。
+- 不同 workflow 运行使用独立 `web_search_context` 实例，时间状态不跨会话共享。HITL 恢复会创建新 wrapper，
+  因此接受大纲或达到交互轮次上限后会从 session 重新应用域名和时间约束。
 - web/local 工具输出包含 `search_engine` 和 `search_results`；异常时还包含 `error`。
+- Tavily `news` 结果中的 RFC 2822 或 ISO `published_date` 在 wrapper 边界归一化为 UTC ISO 日期；官方并不保证
+  `general` 主题返回该字段，缺失日期仍按未知来源处理。
 - DeepSearch 的 `algorithm/search_tools/web_search_tool.py` 不再自行选定 provider，而是从 `web_search_context` 解析当前活动实例并复用其 `search_results`。
 - native local search 必须配置 `knowledge_base_configs`。
 - runtime API 参数按 `send_method` 写入 header、query 或 JSON body；`none` 参数进入 body 但不参与 required 发送校验。
@@ -56,17 +66,23 @@ contextvar，避免节点直接持有全局工具对象。
 
 ### 学术垂直搜索引擎契约
 
-- 内置 web engine 包含 `pubmed` 和 `arxiv`。它们通过统一 `web_search_tool` 暴露，通常由 collector query item 的
-  `search_engine_name` 作为 secondary vertical engine 触发。
-- PubMed wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/pubmed.py`，
-  arXiv wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/arxiv.py`，
-  共享默认 URL、XML namespace 和响应辅助工具位于 `scholarly_search/common.py`。
+- PubMed、arXiv 和 Semantic Scholar 默认不注册。仅当
+  `AgentConfig.scholarly_search_enabled` 显式为 `true` 时，research workflow 才注册三个引擎；Web 搜索引擎 extension 中的旧同名开关不再生效。
+- 学术参数统一位于独立的 `AgentConfig.scholarly_search_config`：根级字段控制 query 级全文策略，`pubmed`、`arxiv` 和 `semantic_scholar` 子配置分别控制端点、密钥、单引擎结果数和请求速率。学术 wrapper 不继承主 Web 引擎配置。
+- 三个引擎通过统一 `web_search_tool` 暴露。Collector query item 使用复数字段 `search_engine_names`，生成的
+  `RetrievalQuery` 聚合一个 `primary_engine` 和零到三个 `secondary_engines`。
+- 普通学术、医学、技术和医学技术交叉查询分别路由到对应的学术引擎组合；开关关闭时辅助引擎列表为空。
+- 同一 query 的多引擎结果在 Collector 内统一融合、去重和排序，再按照
+  `RetrievalQuery.max_full_text_results` 的 query 级 Top-N 预算获取全文。
+- wrapper 位于 `openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/scholarly_search/`；共享请求控制、
+  响应辅助函数及全文策略位于 `common.py` 和 `full_text.py`。
 - PubMed wrapper 使用 `ESearch -> EFetch XML`。返回 item 的 `content` 优先使用 abstract 或 structured abstract；
   无 abstract 时才退回期刊、发布日期和作者等书目信息。
 - arXiv wrapper 使用 Atom API。返回 item 的 `content` 使用论文 summary，`url` 使用 arXiv entry id。
-- PubMed 和 arXiv wrapper 不做 provider 级预请求限流；请求节流仅依赖统一 web 搜索工具上的全局
-  `web_search_max_qps` 配置。HTTP 429、PubMed ESearch/EFetch 错误 payload 或异常响应会作为搜索错误返回给上层，
-  由 collector 根据 primary/secondary 策略决定 retry、fail-fast 或 fallback。
+- Semantic Scholar wrapper 返回标准化论文元数据、provider ID 和可用的开放全文候选地址。
+- PubMed 的 ESearch、PubMed EFetch 和 PMC EFetch 在进程内跨 wrapper 实例共享请求间隔；arXiv Atom API 和 Semantic Scholar 同样共享各自的请求间隔，
+  HTML/PDF 全文下载在进程内共享并发上限 2。429 冷却会同时约束对应 provider 的后续请求。
+- 每个学术 provider HTTP 请求只尝试一次。发生 HTTP、连接、超时、payload 或内容解析错误时，统一 web 搜索工具返回空结果并标记 `retryable=false`，collector 不再调用该学术引擎。429 仍会更新对应 provider 的共享冷却时间。普通 Web 引擎的临时错误重试分类保持不变，`web_search_max_qps` 仍约束顶层工具调用频率。
 
 ## 边界与错误处理
 
@@ -75,6 +91,7 @@ contextvar，避免节点直接持有全局工具对象。
 - runtime API URL 会经过 `validate_runtime_request_url`，避免不安全请求目标。
 - runtime API 响应大小限制为 2 MiB，JSON 深度限制为 20，单个对象或数组最多 1000 项。
 - 重名 runtime API 工具合并时保留已有工具并记录 warning。
+- 非 Tavily web 引擎不接收原生绝对日期参数，也不参与来源日期过滤。
 
 ## 测试与验证
 
@@ -82,6 +99,9 @@ contextvar，避免节点直接持有全局工具对象。
 - `uv run pytest tests/tools/test_web_search_rate_limit.py`
 - `uv run pytest tests/tools/test_runtime_api.py`
 - `uv run pytest tests/tools/search_api/test_scholarly_search.py`
+- `uv run pytest tests/tools/search_api/test_semantic_scholar.py`
+- `uv run pytest tests/tools/search_api/test_scholarly_full_text.py`
+- `uv run pytest tests/info_collector/test_academic_search_routing.py`
 - `uv run pytest tests/tools/search_api/test_external_import_tool.py`
 - 修改具体搜索引擎 wrapper 时，运行 `uv run pytest tests/tools/search_api/`。
 

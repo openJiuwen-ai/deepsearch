@@ -231,7 +231,12 @@ def decorate_report_html(html: str) -> str:
         elif _is_heading(node) and _is_abstract_heading(node):
             abstract = soup.new_tag("section", attrs={"class": "report-abstract"})
             abstract.append(node)
-            shell.append(abstract)
+            if content is None:
+                shell.append(abstract)
+            else:
+                # Preserve source order when a preceding TOC has already created
+                # the report-content node: TOC, abstract, then report sections.
+                content.append(abstract)
             current_container = abstract
         elif _is_heading(node) and _heading_level(node) == cover_heading_level:
             section = soup.new_tag("section", attrs={"class": "report-section"})

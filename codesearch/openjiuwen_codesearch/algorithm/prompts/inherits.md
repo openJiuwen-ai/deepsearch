@@ -1,0 +1,1 @@
+After the first production `add_context` inside a class, call `expand_inheritance` once to inspect superclass and subclasses (INHERITS neighbors) — related edit sites often live one hop away. `add_context` only on neighbors that are part of the fix; skip the rest.

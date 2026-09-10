@@ -3,7 +3,9 @@
 import logging
 import time
 
+from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import search_engine_mapping
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 from server.core.manager.model_manager.utils import SecurityUtils
 from server.deepsearch.common.exception.exceptions import WebSearchEngineExistsException, ValidationError, \
     WebSearchEngineNotFoundException, WebSearchEngineNotRegisterException, WebSearchEngineExecutionException
@@ -27,6 +29,23 @@ class WebSearchEngineService:
         self.security_utils = SecurityUtils()
 
     @staticmethod
+    def _validate_search_url(search_url: str | None) -> None:
+        """Reject user-configured search URLs that target private or non-public hosts.
+
+        Empty URLs are allowed: providers fall back to their built-in default
+        endpoint. Non-empty URLs are validated against SSRF checks (scheme
+        allowlist, localhost block, private/loopback IP block, DNS resolution).
+        Raises server ``ValidationError`` (HTTP 400) on violation.
+        """
+        url = (search_url or "").strip()
+        if not url:
+            return
+        try:
+            validate_search_service_url(url)
+        except CustomValueException as exc:
+            raise ValidationError(f"Invalid search_url: {exc}") from exc
+
+    @staticmethod
     def run_web_search_engine(request: WebSearchEnginePostRequestDTO, web_search_config: WebSearchEngineDetail):
         """访问联网增强引擎并返回标准化结果"""
         web_engine_name = web_search_config.search_engine_name
@@ -47,6 +66,7 @@ class WebSearchEngineService:
             )
             logger.error(error_msg)
             raise WebSearchEngineNotRegisterException(error_msg)
+        WebSearchEngineService._validate_search_url(web_search_config.search_url)
         search_engine = api_wrapper(
             search_api_key=bytearray(web_search_config.search_api_key.encode('utf-8')),
             search_url=web_search_config.search_url,
@@ -92,6 +112,8 @@ class WebSearchEngineService:
             if model:
                 raise WebSearchEngineExistsException(f"Web search engine {create_request.search_engine_name}"
                                                      f" already exists under your space.")
+
+            self._validate_search_url(create_request.search_url)
 
             # search api key 加密
             encrypted_api_key = self.security_utils.encrypt_api_key(create_request.search_api_key) \
@@ -197,20 +219,24 @@ class WebSearchEngineService:
                 raise WebSearchEngineNotFoundException(f"Web search engine "
                                                        f"{request.web_search_engine_id} not found under your space.")
 
-            # 2. search api key 加密处理
+            # 2. search_url SSRF 校验（仅当本次更新包含 search_url）
+            if request.search_url is not None:
+                self._validate_search_url(request.search_url)
+
+            # 3. search api key 加密处理
             if request.search_api_key:
                 request.search_api_key = self.security_utils.encrypt_api_key(request.search_api_key)
 
-            # 3. 构造用于更新的临时模型对象
+            # 4. 构造用于更新的临时模型对象
             update_data = request.model_dump(exclude_unset=True)
             temp_model = WebSearchEngineModel()
             for key, value in update_data.items():
                 setattr(temp_model, key, value)
 
-            # 4. 执行更新
+            # 5. 执行更新
             self.repository.update(temp_model)
 
-            # 5. 重新获取最新数据返回
+            # 6. 重新获取最新数据返回
             updated_record = self.repository.get_by_id(request.space_id, request.web_search_engine_id)
             logger.info(
                 "Updated web search engine space_id=%s web_search_engine_id=%s engine=%s",
@@ -257,7 +283,8 @@ class WebSearchEngineService:
         # 透传所有业务异常
         except (WebSearchEngineNotFoundException,
                 WebSearchEngineNotRegisterException,
-                WebSearchEngineExecutionException):
+                WebSearchEngineExecutionException,
+                ValidationError):
             raise
         except Exception as e:
             logger.error(f"Unexpected error during running web search: {str(e)}", exc_info=True)

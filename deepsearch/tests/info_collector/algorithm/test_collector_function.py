@@ -8,9 +8,60 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_function impor
     process_tavily_search_result, process_google_search_result, \
     process_common_search_result, process_local_search_result, \
     process_local_search_common, remove_duplicate_items, create_tool_message, \
-    filter_search_results_by_exclude_domains
+    filter_search_results_by_exclude_domains, filter_search_results_by_exclude_urls, \
+    filter_web_records_by_temporal_scope, is_title_blocked, _normalize_web_search_item
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.collector_function"
+
+
+def test_common_search_preserves_academic_identifiers():
+    agent_input = {"web_page_search_record": [], "research_intent": {}}
+
+    _, updated = process_common_search_result(agent_input, [{
+        "title": "Paper",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/",
+        "content": "Abstract",
+        "source": "pubmed",
+        "source_id": "38202877",
+        "doi": "10.1000/ABC",
+    }])
+
+    record = updated["web_page_search_record"][0]
+    assert record["academic_source"] == "pubmed"
+    assert record["academic_source_id"] == "38202877"
+    assert record["doi"] == "10.1000/ABC"
+
+
+def test_common_search_keeps_distinct_spa_fragment_routes_separate():
+    agent_input = {"web_page_search_record": [], "research_intent": {}}
+
+    _, updated = process_common_search_result(agent_input, [
+        {
+            "title": "Route A",
+            "url": "https://example.com/app#route-a",
+            "content": "Content from route A",
+        },
+        {
+            "title": "Route B",
+            "url": "https://example.com/app#route-b",
+            "content": "A longer body from route B",
+        },
+    ])
+
+    assert updated["web_page_search_record"] == [
+        {
+            "type": "page",
+            "title": "Route A",
+            "url": "https://example.com/app#route-a",
+            "content": "Content from route A",
+        },
+        {
+            "type": "page",
+            "title": "Route B",
+            "url": "https://example.com/app#route-b",
+            "content": "A longer body from route B",
+        },
+    ]
 
 class TestProcessToolCall:
     """测试 process_tool_call 函数"""
@@ -416,6 +467,7 @@ class TestProcessToolResult:
         mock_web_search.assert_called_once_with(self.agent_input, expected_payload)
         assert result == ["processed"]
         assert self.agent_input["other_tool_record"] == []
+
 class TestSearchResultProcessing:
     """测试各种搜索结果处理函数"""
 
@@ -441,7 +493,10 @@ class TestSearchResultProcessing:
                 self.agent_input, tool_content
             )
 
-            assert result == tool_content
+            assert result == [
+                {"type": "page", "title": "New1", "url": "http://new1.com", "content": "Content1"},
+                {"type": "page", "title": "New2", "url": "http://new2.com", "content": "Content2"},
+            ]
             assert "web_page_search_record" in modified_input
             mock_remove_dup.assert_called_once()
 
@@ -461,42 +516,84 @@ class TestSearchResultProcessing:
             self.agent_input, tool_content
         )
 
-        assert result == tool_content
         added_record = modified_input["web_page_search_record"][-1]
+        assert result == [added_record]
         assert added_record == {
             "type": "page",
             "title": "Tavily title",
             "url": "http://tavily.com",
             "content": "C" * MAX_SEARCH_CONTENT_LENGTH,
+            "score": 0.8,
         }
 
     def test_process_google_search_result(self):
         """测试Google搜索结果处理"""
         tool_content = [
-            {"title": "Google Result", "link": "http://google.com", "snippet": "Snippet"},
+            {
+                "title": "Google Result",
+                "link": "http://google.com",
+                "snippet": "Snippet",
+                "source_date": "2020-01-01",
+                "source_date_type": "published",
+            },
         ]
 
         result, modified_input = process_google_search_result(
             self.agent_input, tool_content
         )
 
-        assert len(result) == 1
-        assert result[0]["title"] == "Google Result"
+        assert result == tool_content
         assert "web_page_search_record" in modified_input
 
     def test_process_common_search_result(self):
         """测试通用搜索结果处理"""
         tool_content = [
-            {"title": "Common Result", "url": "https://common.com", "content": "Content"},
+            {
+                "title": "Common Result",
+                "url": "https://common.com",
+                "content": "Content",
+                "source_date": "2020-01-01",
+                "source_date_type": "published",
+            },
         ]
 
         result, modified_input = process_common_search_result(
             self.agent_input, tool_content
         )
 
-        assert len(result) == 1
-        assert result[0]["title"] == "Common Result"
+        assert result == tool_content
         assert "web_page_search_record" in modified_input
+
+    def test_process_common_search_result_attaches_date_metadata_for_published(self):
+        """common 路径开 include_date_metadata 后，带 published 的结果进记录时带 date_metadata。"""
+        agent_input = {"web_page_search_record": [], "search_query": "q"}
+        tool_content = [{
+            "title": "arxiv paper", "url": "https://arxiv.org/abs/1",
+            "content": "abs", "published": "2023-01-15T12:00:00Z",
+        }]
+        _, modified_input = process_common_search_result(agent_input, tool_content)
+        record = modified_input["web_page_search_record"][0]
+        assert record["date_metadata"]["parsed_date"] == "2023-01-15"
+        assert record["date_metadata"]["field"] == "published"
+
+    def test_process_google_search_result_attaches_date_metadata_for_source_date(self):
+        """google 路径开 include_date_metadata 后，source_date 契约结果带 date_metadata。"""
+        agent_input = {"web_page_search_record": [], "search_query": "q"}
+        tool_content = [{
+            "title": "g", "link": "https://g.com", "snippet": "s",
+            "source_date": "2020-01-01", "source_date_type": "published",
+        }]
+        _, modified_input = process_google_search_result(agent_input, tool_content)
+        record = modified_input["web_page_search_record"][0]
+        assert record["date_metadata"]["parsed_date"] == "2020-01-01"
+        assert record["date_metadata"]["field"] == "source_date"
+
+    def test_process_common_search_result_no_date_field_keeps_record_without_date_metadata(self):
+        """无日期字段的 common 结果仍不带 date_metadata（行为不变）。"""
+        agent_input = {"web_page_search_record": [], "search_query": "q"}
+        tool_content = [{"title": "x", "url": "https://x.com", "content": "c"}]
+        _, modified_input = process_common_search_result(agent_input, tool_content)
+        assert "date_metadata" not in modified_input["web_page_search_record"][0]
 
     def test_filter_search_results_by_exclude_domains(self):
         """测试按排除域名过滤搜索结果"""
@@ -564,8 +661,7 @@ class TestSearchResultProcessing:
             self.agent_input, tool_content
         )
 
-        assert result == tool_content
-        assert modified_input["web_page_search_record"][-2:] == [
+        expected_records = [
             {
                 "type": "page",
                 "title": "Alias title",
@@ -579,6 +675,275 @@ class TestSearchResultProcessing:
                 "content": "Summary body",
             },
         ]
+        assert result == tool_content
+        assert modified_input["web_page_search_record"][-2:] == expected_records
+
+    def test_normalize_tavily_result_consumes_canonical_source_date(self):
+        """Tavily 结果应消费已归一化的来源发布日期。"""
+        normalized = _normalize_web_search_item({
+            "title": "Dated",
+            "url": "https://example.com/dated",
+            "content": "body",
+            "source_date": "2020-01-02",
+            "source_date_type": "published",
+            "publication_date": "2020-01-02T12:30:00Z",
+            "date": "2021-02-03",
+            "updated_at": "2022-03-04",
+        }, include_date_metadata=True)
+
+        assert normalized["date_metadata"] == {
+            "field": "source_date",
+            "type": "published",
+            "value": "2020-01-02",
+            "parsed_date": "2020-01-02",
+        }
+
+    def test_normalize_published_iso8601_attaches_date_metadata(self):
+        """原生 published 字段（ISO 8601 带时分秒，arxiv 风格）应解析并附加 date_metadata。"""
+        normalized = _normalize_web_search_item({
+            "title": "paper", "url": "https://arxiv.org/abs/1234",
+            "content": "abstract", "published": "2023-01-15T12:00:00Z",
+        }, include_date_metadata=True)
+        assert normalized["date_metadata"] == {
+            "field": "published", "type": "published",
+            "value": "2023-01-15T12:00:00Z", "parsed_date": "2023-01-15",
+        }
+
+    def test_normalize_published_pubmed_style_attaches_date_metadata(self):
+        """PubMed 风格 'YYYY Mon DD' 应解析为日期。"""
+        normalized = _normalize_web_search_item({
+            "title": "pm", "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+            "content": "abs", "published": "2023 Jan 15",
+        }, include_date_metadata=True)
+        assert normalized["date_metadata"]["parsed_date"] == "2023-01-15"
+        assert normalized["date_metadata"]["field"] == "published"
+
+    def test_normalize_published_date_aliases_priority(self):
+        """published > published_at > published_date 顺序取第一个非空。"""
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+            "published_at": "2022-06-30", "published_date": "2020-01-01",
+        }, include_date_metadata=True)
+        assert normalized["date_metadata"]["field"] == "published_at"
+        assert normalized["date_metadata"]["parsed_date"] == "2022-06-30"
+
+    def test_normalize_no_date_field_no_date_metadata(self):
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+        }, include_date_metadata=True)
+        assert "date_metadata" not in normalized
+
+    def test_normalize_bare_date_key_not_read(self):
+        """语义含糊的裸 date 键不被读取。"""
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+            "date": "2021-02-03",
+        }, include_date_metadata=True)
+        assert "date_metadata" not in normalized
+
+    def test_normalize_source_date_unparseable_no_date_metadata(self):
+        """source_date 存在但解析不出（乱码）时不附加 date_metadata（行为收窄）。"""
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+            "source_date": "not-a-date", "source_date_type": "published",
+        }, include_date_metadata=True)
+        assert "date_metadata" not in normalized
+
+    def test_normalize_source_date_type_not_published_not_read(self):
+        """source_date_type 非 published 时不走 source_date 路径；无 published* 则不附加。"""
+        normalized = _normalize_web_search_item({
+            "title": "x", "url": "https://x.com", "content": "c",
+            "source_date": "2020-01-01", "source_date_type": "updated",
+        }, include_date_metadata=True)
+        assert "date_metadata" not in normalized
+
+    def test_normalize_scholarly_result_preserves_year_without_date_metadata(self):
+        normalized = _normalize_web_search_item({
+            "title": "Semantic Scholar paper",
+            "url": "https://www.semanticscholar.org/paper/S1",
+            "content": "abstract",
+            "source": "semantic_scholar",
+            "source_id": "W1",
+            "published": "2021",
+        }, include_date_metadata=True)
+
+        assert normalized["published"] == "2021"
+        assert "date_metadata" not in normalized
+
+    def test_normalize_web_result_preserves_retrieval_source_for_cross_engine_fusion(self):
+        normalized = _normalize_web_search_item({
+            "title": "Primary result",
+            "url": "https://example.org/paper",
+            "content": "summary",
+            "retrieval_source": "tavily",
+        })
+
+        assert normalized["retrieval_source"] == "tavily"
+
+    def test_normalize_full_text_contract_without_source_specific_logic(self):
+        normalized = _normalize_web_search_item({
+            "title": "Open study",
+            "url": "https://scholar.example.org/papers/1",
+            "content": "Abstract remains the normal content.",
+            "source": "future_scholar",
+            "full_text": "Complete official article text.",
+            "content_type": "full_text",
+            "full_text_url": "https://scholar.example.org/papers/1/full-text",
+            "full_text_format": "html",
+            "full_text_status": "available",
+            "full_text_truncated": False,
+            "skip_webpage_enrichment": True,
+        })
+
+        assert normalized["content"] == "Abstract remains the normal content."
+        assert normalized["full_text"] == "Complete official article text."
+        assert normalized["content_type"] == "full_text"
+        assert normalized["full_text_url"].startswith("https://scholar.example.org/")
+        assert normalized["full_text_format"] == "html"
+        assert normalized["full_text_status"] == "available"
+        assert normalized["full_text_truncated"] is False
+        assert normalized["skip_webpage_enrichment"] is True
+
+    def test_normalize_full_text_contract_does_not_coerce_string_booleans(self):
+        normalized = _normalize_web_search_item({
+            "title": "Open study",
+            "url": "https://scholar.example.org/papers/1",
+            "content": "Abstract.",
+            "full_text_status": "available",
+            "full_text": "Full text.",
+            "full_text_truncated": "false",
+            "skip_webpage_enrichment": "true",
+        })
+
+        assert normalized["full_text_truncated"] is False
+        assert "skip_webpage_enrichment" not in normalized
+
+    def test_source_date_filter_keeps_boundaries_and_unknown_but_drops_out_of_range(self):
+        """来源时间过滤应包含边界、保留未知日期并整篇删除越界文档。"""
+        records = [
+            _normalize_web_search_item({
+                "title": "Start",
+                "url": "https://example.com/start",
+                "content": "start body",
+                "source_date": "2020-01-01",
+                "source_date_type": "published",
+            }, include_date_metadata=True),
+            _normalize_web_search_item({
+                "title": "End",
+                "url": "https://example.com/end",
+                "content": "end body",
+                "source_date": "2022-12-31",
+                "source_date_type": "published",
+            }, include_date_metadata=True),
+            _normalize_web_search_item({
+                "title": "Old",
+                "url": "https://example.com/old",
+                "content": "sensitive old body",
+                "source_date": "2019-12-31",
+                "source_date_type": "published",
+            }, include_date_metadata=True),
+            _normalize_web_search_item({
+                "title": "Unknown",
+                "url": "https://example.com/unknown",
+                "content": "unknown body",
+                "updated_at": "2018-01-01",
+            }),
+        ]
+
+        kept = filter_web_records_by_temporal_scope(
+            records,
+            {
+                "constraint_type": "source_date",
+                "start_date": "2020-01-01",
+                "end_date": "2022-12-31",
+            },
+        )
+
+        assert [item["title"] for item in kept] == ["Start", "End", "Unknown"]
+
+    def test_content_date_scope_and_local_results_are_not_date_filtered(self):
+        """内容时间不按来源日期过滤，本地结果处理也应完全保留。"""
+        web_record = _normalize_web_search_item({
+            "title": "Later retrospective",
+            "url": "https://example.com/later",
+            "content": "body",
+            "source_date": "2025-01-01",
+            "source_date_type": "published",
+        }, include_date_metadata=True)
+        kept = filter_web_records_by_temporal_scope(
+            [web_record],
+            {"constraint_type": "content_date", "end_date": "2020-12-31"},
+        )
+        local_input = {"local_text_search_record": []}
+        _, local_output = process_local_search_common(local_input, [{
+            "knowledge_base_id": "kb",
+            "file_id": "doc",
+            "title": "Local",
+            "content": "local content",
+            "date": "2025-01-01",
+        }])
+
+        assert kept == [web_record]
+        assert len(local_output["local_text_search_record"]) == 1
+
+    def test_process_common_result_keeps_records_without_tavily_temporal_filter(self, caplog):
+        """非 Tavily 结果即使携带日期字段也不执行时间过滤。"""
+        agent_input = {
+            "web_page_search_record": [],
+            "search_query": "policy query",
+            "research_intent": {
+                "source_date_scope": {
+                    "constraint_type": "source_date",
+                    "end_date": "2020-12-31",
+                }
+            },
+        }
+        tool_content = [
+            {
+                "title": "Keep", "url": "https://keep.com", "content": "keep",
+                "source_date": "2020-12-31", "source_date_type": "published",
+            },
+            {
+                "title": "Drop", "url": "https://drop.com", "content": "secret",
+                "source_date": "2021-01-01", "source_date_type": "published",
+            },
+            {"title": "Unknown", "url": "https://unknown.com", "content": "unknown", "date": "2019-01-01"},
+        ]
+
+        tool_view, modified_input = process_common_search_result(agent_input, tool_content)
+
+        assert [item["title"] for item in modified_input["web_page_search_record"]] == ["Keep", "Drop", "Unknown"]
+        assert [item["title"] for item in tool_view] == ["Keep", "Drop", "Unknown"]
+        assert all("date_metadata" not in item for item in tool_view)
+        assert "source_date filter applied" not in caplog.text
+        assert "secret" not in caplog.text
+
+    def test_tavily_temporal_filter_logs_all_out_of_range_records(self, caplog):
+        """Tavily 日志中的越界文档计数应覆盖整批结果。"""
+        agent_input = {
+            "web_page_search_record": [],
+            "search_query": "old records",
+            "research_intent": {
+                "source_date_scope": {
+                    "constraint_type": "source_date",
+                    "start_date": "2020-01-01",
+                }
+            },
+        }
+        tool_content = [
+            {
+                "title": f"Old {index}",
+                "url": f"https://example.com/{index}",
+                "content": "body",
+                "source_date": "2019-01-01",
+                "source_date_type": "published",
+            }
+            for index in range(101)
+        ]
+
+        process_tavily_search_result(agent_input, tool_content)
+
+        assert "source_date filter applied. raw=101 kept=0 filtered_out=101 date_unknown=0" in caplog.text
 
 class TestRemoveDuplicateItems:
     """测试 remove_duplicate_items 函数"""
@@ -983,3 +1348,151 @@ class TestProcessLocalSearchCommon:
         # 原有记录应该保持不变
         assert len(agent_input["local_text_search_record"]) == 1
         assert agent_input["local_text_search_record"][0]["title"] == "Existing"
+
+
+class TestFilterSearchResultsByExcludeUrls:
+    """测试按 exclude_url 过滤搜索结果"""
+
+    def test_filter_search_results_by_exclude_urls(self):
+        """测试按排除链接过滤搜索结果"""
+        items = [
+            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
+            {"title": "Drop", "url": "https://www.mdpi.com/2073-445X/11/9/1529", "content": "drop"},
+            {"title": "DropVariant", "url": "http://mdpi.com/2073-445x/11/9/1529/?utm=x", "content": "drop"},
+            {"title": "No Url", "content": "keep"},
+        ]
+
+        result = filter_search_results_by_exclude_urls(
+            items, ["https://www.mdpi.com/2073-445X/11/9/1529"])
+
+        assert [item.get("title") for item in result] == ["Keep", "No Url"]
+
+    def test_filter_search_results_by_exclude_urls_passthrough(self):
+        """空排除列表时原样返回"""
+        items = [{"title": "Keep", "url": "https://keep.com/a"}]
+        assert filter_search_results_by_exclude_urls(items, []) is items
+
+    def test_filter_search_results_by_exclude_urls_field_alias(self):
+        """URL 字段别名（link/source_url）同样被识别"""
+        items = [
+            {"title": "DropLink", "link": "https://www.mdpi.com/2073-445X/11/9/1529"},
+            {"title": "DropSource", "source_url": "https://www.mdpi.com/2073-445X/11/9/1529"},
+            "not-a-dict",
+        ]
+        result = filter_search_results_by_exclude_urls(
+            items, ["https://www.mdpi.com/2073-445X/11/9/1529"])
+        assert result == ["not-a-dict"]
+
+    def test_process_tavily_search_result_filters_exclude_urls(self):
+        """测试Tavily搜索结果按排除链接过滤，同域其他文章不误伤"""
+        agent_input = {
+            "web_page_search_record": [],
+            "research_intent": {
+                "exclude_url": [
+                    "https://www.mdpi.com/2073-445X/11/9/1529",
+                    "https://www.mdpi.com/2410-3888/8/2/80",
+                ],
+            },
+        }
+        tool_content = [
+            {"title": "Keep", "url": "https://www.mdpi.com/2073-445X/11/9/1530", "content": "Content"},
+            {"title": "Drop1", "url": "https://www.mdpi.com/2073-445X/11/9/1529", "content": "Content"},
+            {"title": "Drop2", "url": "https://www.mdpi.com/2410-3888/8/2/80", "content": "Content"},
+        ]
+
+        result, modified_input = process_tavily_search_result(agent_input, tool_content)
+
+        assert [item.get("title") for item in result] == ["Keep"]
+        assert [item.get("title") for item in modified_input["web_page_search_record"]] == ["Keep"]
+
+    def test_process_common_search_result_filters_exclude_urls(self):
+        """测试通用搜索结果按排除链接过滤"""
+        agent_input = {
+            "web_page_search_record": [],
+            "research_intent": {"exclude_url": ["https://pubmed.ncbi.nlm.nih.gov/38202877/"]},
+        }
+        tool_content = [
+            {"title": "Keep", "url": "https://arxiv.org/abs/1234", "content": "paper"},
+            {"title": "Drop", "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/", "content": "paper"},
+        ]
+
+        result, modified_input = process_common_search_result(agent_input, tool_content)
+
+        assert [item.get("title") for item in result] == ["Keep"]
+
+
+class TestIsTitleBlocked:
+    """测试标题匹配：镜像变体命中，相近主题不误伤"""
+
+    BLOCKED = ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory"]
+
+    def test_exact_title_hit(self):
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory",
+            self.BLOCKED)
+
+    def test_html_entity_hit(self):
+        """标题中间的 HTML 实体差异应命中（反转义后精确相等）"""
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory &#40;Review&#41;",
+            ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory (Review)"])
+
+    def test_suffix_mirror_hit(self):
+        """镜像站后缀（| MDPI / - ProQuest / | IDEALS 形态）剥后缀后精确命中"""
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | MDPI",
+            self.BLOCKED)
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory - ProQuest",
+            self.BLOCKED)
+        assert is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | IDEALS",
+            self.BLOCKED)
+
+    def test_ideals_suffix_hit(self):
+        """IDEALS 机构知识库后缀剥离后命中"""
+        blocked = ["A Survey of the Story Elements of Isekai Manga"]
+        assert is_title_blocked(
+            "A survey of the story elements of Isekai manga | IDEALS",
+            blocked)
+
+    def test_metadata_wrapping_hit(self):
+        """被禁标题在目标标题中间位置（同一论文加元数据）应命中"""
+        blocked = ["A Survey of the Story Elements of Isekai Manga"]
+        assert is_title_blocked(
+            "[PDF] A Survey of the Story Elements of Isekai Manga Dr. Paul S. Price",
+            blocked)
+
+    def test_same_prefix_different_paper_no_hit(self):
+        """同前缀但不同论文不误伤（被禁标题是候选标题的前缀）"""
+        assert not is_title_blocked("Deep learning for image recognition", ["Deep learning"])
+        # 被禁标题完整，候选为被禁标题+非站点后缀（不同文献的副标题扩展）不误伤
+        assert not is_title_blocked(
+            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory: A Survey",
+            self.BLOCKED)
+
+    def test_different_paper_no_hit(self):
+        """主题相近的不同论文不误伤"""
+        assert not is_title_blocked("A 45nm 0.5V 8T Column-Interleaved SRAM with on-Chip Reference",
+                                    self.BLOCKED)
+        assert not is_title_blocked("", self.BLOCKED)
+        assert not is_title_blocked("Any title", [])
+
+    def test_filter_by_exclude_titles(self):
+        """URL 不命中但标题命中（PMC 变体形态）"""
+        agent_input = {
+            "web_page_search_record": [],
+            "research_intent": {
+                "exclude_url": ["https://pubmed.ncbi.nlm.nih.gov/38202877/"],
+                "exclude_titles": ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory"],
+            },
+        }
+        tool_content = [
+            {"title": "Keep", "url": "https://example.com/other", "content": "Content"},
+            {"title": "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory",
+             "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10780789", "content": "Content"},
+        ]
+
+        result, modified_input = process_common_search_result(agent_input, tool_content)
+
+        assert [item.get("title") for item in result] == ["Keep"]

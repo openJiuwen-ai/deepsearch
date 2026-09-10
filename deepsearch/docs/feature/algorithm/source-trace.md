@@ -23,6 +23,7 @@
 - 系统识别需要引用的句子，再从搜索记录中匹配支持来源。
 - 生成的 `[source_tracer_result]` 引用会经过有效性校验，无效引用会被移除。
 - 最终报告追加参考文献，并输出前端 citation data。
+- Brief 会把已注册的确定性引用交给同一个 citation checker 校验和整理；它在 `SourceTracerNode` 后直接结束，不进入推理链溯源或报告后用户反馈。
 
 ## 关键代码路径
 
@@ -114,3 +115,4 @@ uv run pytest tests/source_tracer
 - [推理链溯源](./source-tracer-infer.md)
 - [用户反馈处理](./user-feedback-processor.md)
 - [局部溯源](./user-feedback-processor/local-source-trace.md)
+- [Brief 精简版报告工作流](./brief-report.md)

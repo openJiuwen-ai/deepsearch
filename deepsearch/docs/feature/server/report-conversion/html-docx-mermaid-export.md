@@ -7,9 +7,13 @@
 ## 可见行为
 
 - HTML 导出会生成完整 HTML 文件并注入报告 CSS。
+- HTML 导出在转换层根据报告目录链接给对应 H1 添加 `id="chapter-N"`，普通页面和美化页面均可点击跳转；生成的原始 `report.md` 在报告生成阶段已在正文每个 H1 标题之后插入独立 `<a id="chapter-N"></a>` 锚点行，目录可在原生 Markdown 中点击跳转，转换层会先清理这些 HTML 锚点并改用 `{#chapter-N}` 属性，避免重复 ID。
+- 美化 HTML 按报告顺序保留目录、摘要和章节：摘要位于目录之后、正文首章之前。
 - HTML 中数学公式通过 KaTeX 脚本（`katex.min.js` + `auto-render.min.js` + `katex.min.css`，版本固定 0.16.11）渲染，使用 `$...$` / `$$...$$` 作为定界符；`\bm` 宏映射为 `\boldsymbol{#1}`，`throwOnError=false` 保证无法解析的公式不打断页面渲染。
 - HTML 在 KaTeX 渲染前会做"货币美元保护"：遍历正文文本节点，把 `$` + 数字开头且不像公式的片段替换为全角 `＄`（U+FF04）占位符，渲染完成后还原为 `$`，避免 `$4`、`$1,200.50` 等金额被 KaTeX 误配对为公式定界符。
 - DOCX 导出使用纯 Python 流水线从 Markdown 生成 Word 文件。
+- 导出入口只接受 `response_content_type=text/markdown` 的 Markdown 正文；未提供该字段的既有请求按 Markdown 兼容。显式 `text/html`（包括 Brief 成功生成的自包含 HTML）会返回参数校验错误，不会被误写为 `report.md`。
+- DOCX 导出在转换层将 `#chapter-N` 目录链接转换为 Word 内部超链接，并将对应 H1 ID 转换为书签；普通外部链接行为不变。
 - HTML 路径通过 `conversion_utils.protect_math_spans`、DOCX 路径通过 `word_utils._iter_math_spans` 切分公式段；两者复用 `conversion_utils` 中的公式判别函数 `_is_likely_inline_math` / 货币判别函数 `_is_currency_start` / `_find_inline_math_end` / `_is_escaped` / `_is_double_dollar`，保证两侧对"哪些 `$...$` 是公式、哪些是货币或纯文本"的判定一致。
 - DOCX 超链接文本中若包含 `$...$` 或 `$$...$$`，会把公式段单独切出并转为 OMML 公式 run，其余文本保持为普通文本 run；HTML 实体先经 `html.unescape` 解码再进入公式处理。
 - DOCX 列表嵌套按列表类型显式分支：同类型嵌套（`ul→ul` / `ol→ol`）沿用同一编号并增加缩进层级；异类型嵌套（如 `ul` 内含 `ol`）创建独立编号，避免编号串号。
@@ -39,7 +43,7 @@
 1. Markdown 先经过正文预处理，保护数学公式、修正引用、表格、列表和标题边界。
 2. HTML 导出读取 Markdown，替换 Mermaid 代码块，转换为 HTML 并注入样式与 KaTeX 资源（CSS + JS + auto-render 脚本）。
 3. DOCX 导出读取 Markdown，替换 Mermaid 代码块为图片，再把 HTML/Markdown 结构写入 docx；行内文本和超链接文本通过 `word_utils._iter_math_spans` 切分公式与非公式段，公式段经 `_latex_to_omml` 转为 OMML 插入段落或超链接 run。
-4. Mermaid 渲染前会清理代码和解析 frontmatter。
+4. Mermaid 渲染前会清理代码和解析 frontmatter；横向图检测同时兼容官方 `xyChart.chartOrientation: horizontal` 与存量 `horizontal: true` 两种 frontmatter，生成器已统一切换为官方 schema。
 5. timeline/xychart 会做文本压缩、单位归一化和值标签补强。
 6. DOCX 生成后会规范化字体、表格居中和图片尺寸。
 7. 两种格式共用 Markdown-to-HTML fragment：保护数学公式，处理引用、表格和列表边界。
@@ -52,6 +56,7 @@
 
 - Mermaid 静态渲染为纯 Python 实现，不依赖 `mmdc`、Node、Chrome 或其他外部命令行工具；仅使用仓库内置的 `chart_generation/fonts/kt_font.ttf`。
 - HTML 和 DOCX 导出都从 bundle 的 `report.md` 读取输入。
+- `/reports/convert` 不直接转换 HTML 响应内容；需要导出的调用方必须提供 Markdown 中间态。
 - 本地图片必须解析到 bundle 或允许的工作区路径内。
 - DOCX 默认字体在转换工具中统一设置。
 - HTML 公式渲染依赖 KaTeX CDN（jsdelivr），输出 HTML 会在 `<head>` 注入 `katex.min.css`，在 `<body>` 末尾注入 `katex.min.js`、`auto-render.min.js` 与一段 `DOMContentLoaded` 脚本：先做货币美元保护，再调用 `renderMathInElement`，最后还原占位符。

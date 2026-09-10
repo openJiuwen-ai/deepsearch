@@ -1,0 +1,345 @@
+"""Brief 并行单调用章节写作测试。"""
+import asyncio
+from unittest.mock import AsyncMock
+import pytest
+from openjiuwen_deepsearch.algorithm.brief_report.models import BriefAssemblyRequest, BriefWritingRequest, BriefOutline, BriefCollectionResult, BriefSummaryRequest, BriefChapter, BriefSectionWritingGuidance, BriefWritingGuidance
+from openjiuwen_deepsearch.algorithm.brief_report.writer import _chapter_validation_error, _summary_prompt_input, _writing_prompt_input, assemble_brief_report, build_writing_evidence, generate_brief_summary, write_brief_chapters
+from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+
+def _request():
+    outline=BriefOutline.model_validate({"title":"x","sections":[{"id":str(i),"title":f"章节 {i}","goal":"目标","research_steps":[{"id":f"{i}-1","requirement":"指标"},{"id":f"{i}-2","requirement":"差异"}]} for i in range(1,4)]})
+    collection=BriefCollectionResult.model_validate({"citation_registry":[{"source_id":f"s{i}","index":i,"title":"来源","url":f"https://e/{i}","original_content":"证据"} for i in range(1,4)],"section_evidence":{str(i):{"selected_docs":[{"source_id":f"s{i}","step_ids":[f"{i}-1",f"{i}-2"],"evaluation_rank":1}],"coverage":[{"step_id":f"{i}-1","status":"covered","reason":"d"},{"step_id":f"{i}-2","status":"covered","reason":"d"}]} for i in range(1,4)}})
+    return BriefWritingRequest(llm=object(),outline=outline,collection=collection)
+
+
+def test_brief_sub_reporter_keeps_research_steps_internal_and_generates_reader_facing_subheadings():
+    """研究步骤只能约束取证，二级标题必须由现有写作调用生成。"""
+    request = _request().model_copy(
+        update={"audience_role": "业务负责人", "tone": "直接、审慎", "user_format": "用表格比较关键差异"}
+    )
+    section = request.outline.sections[0]
+    rendered = apply_system_prompt(
+        "brief_sub_reporter",
+        _writing_prompt_input(
+            request,
+            section,
+            [{"index": 1, "title": "来源", "url": "https://e/1", "snippet": "证据", "step_ids": ["1-1"]}],
+        ),
+    )
+    prompt = rendered[0]["content"]
+    normalized_prompt = " ".join(prompt.split())
+    collected_information = rendered[1]["content"]
+
+    for required in (
+        "<overall_outline>",
+        "<current_section>",
+        "Generate 2-3 concise reader-facing Level 2 headings",
+        "Never use a research requirement as a heading",
+        "Do NOT output Mermaid syntax, chart source, chart code",
+        "Do not replace a required table with prose",
+    ):
+        assert required in normalized_prompt
+    assert "1 章节 1" in prompt
+    assert "1.1 指标" not in prompt
+    assert "Collected Information" in collected_information
+    assert "[citation:1 begin]" in collected_information
+    assert "[citation:1 end]" in collected_information
+    assert "业务负责人" in prompt
+
+
+def test_chapter_prompt_receives_report_and_matching_section_guidance():
+    """章节仅接收报告总策略与本章对应的内部编辑指引。"""
+    request = _request().model_copy(
+        update={
+            "writing_guidance": BriefWritingGuidance(
+                report_strategy="先比较月度趋势",
+                section_guidance=[
+                    BriefSectionWritingGuidance(section_id="1", guidance="先给出趋势结论"),
+                    BriefSectionWritingGuidance(section_id="2", guidance="不应进入本章"),
+                ],
+            )
+        }
+    )
+
+    prompt = _writing_prompt_input(request, request.outline.sections[0], [])
+
+    assert "报告主线：先比较月度趋势" in prompt["messages"][1]["content"]
+    assert "本章指引：先给出趋势结论" in prompt["messages"][1]["content"]
+    assert "不应进入本章" not in prompt["messages"][1]["content"]
+
+
+def test_summary_prompt_receives_report_strategy_but_not_section_guidance():
+    """核心摘要只应接收整体编辑策略，不能混入分章指引。"""
+    request = BriefSummaryRequest(
+        llm=object(), title="报告", language="zh-CN", chapters=[], section_evidence={},
+        citation_registry=[],
+        writing_guidance=BriefWritingGuidance(
+            report_strategy="先比较月度趋势",
+            section_guidance=[BriefSectionWritingGuidance(section_id="1", guidance="先给出趋势结论")],
+        ),
+    )
+
+    prompt = _summary_prompt_input(request, [], [])
+
+    assert "报告主线：先比较月度趋势" in prompt["messages"][0]["content"]
+    assert "本章指引" not in prompt["messages"][0]["content"]
+
+
+def test_assemble_brief_report_uses_english_headings_for_normalized_language():
+    """规范化后的英文语言值必须生成英文摘要和参考文献标题。"""
+    assembly = assemble_brief_report(
+        BriefAssemblyRequest(
+            title="Market analysis",
+            language="en",
+            executive_summary="Key findings.",
+            chapters=[BriefChapter(section_id="1", raw_markdown="## Market\n\nDetails.")],
+            citation_registry=[],
+            section_order={"1": 1},
+        )
+    )
+
+    assert "## Executive Summary" in assembly.report_content
+    assert "## References" in assembly.report_content
+
+
+def test_brief_chapter_prompt_does_not_describe_context_that_is_not_provided():
+    """Brief 写作只能声明实际传入的证据与编辑指引上下文。"""
+    rendered = apply_system_prompt(
+        "brief_sub_reporter",
+        _writing_prompt_input(_request(), _request().outline.sections[0], []),
+    )
+    prompt = "\n".join(message["content"] for message in rendered)
+
+    assert "Background Knowledge" not in prompt
+    assert "structured evidence guidance" not in prompt.lower()
+    assert "Chapter Writing Directive" not in prompt
+
+
+def test_brief_summary_prompt_requires_the_requested_output_language():
+    """摘要模板必须把请求语言作为明确的输出约束。"""
+    rendered = apply_system_prompt(
+        "brief_reporter",
+        _summary_prompt_input(
+            BriefSummaryRequest(
+                llm=object(), title="报告", language="en-US", chapters=[],
+                section_evidence={}, citation_registry=[],
+            ),
+            [],
+            [],
+        ),
+    )
+
+    assert "Output language must be **en-US**" in rendered[0]["content"]
+
+@pytest.mark.asyncio
+async def test_writes_all_chapters_in_parallel_once(monkeypatch):
+    entered=0; release=asyncio.Event()
+    async def invoke(*args, **kwargs):
+        nonlocal entered
+        entered += 1
+        if entered==3: release.set()
+        await release.wait()
+        return {"content":"正文。[citation:1]"}
+    mock=AsyncMock(side_effect=invoke)
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats",mock)
+    chapters=await write_brief_chapters(_request())
+    assert [x.section_id for x in chapters]==["1","2","3"] and mock.await_count==3
+
+
+@pytest.mark.asyncio
+async def test_parallel_chapters_stream_tokens_with_section_identity(monkeypatch):
+    """并行章节流必须传递可稳定归属的章节 ID 和显示顺序。"""
+    invoke = AsyncMock(return_value={"content": "正文。[citation:1]"})
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    await write_brief_chapters(_request())
+
+    assert invoke.await_count == 3
+    assert [call.kwargs["need_stream_out"] for call in invoke.await_args_list] == [True, True, True]
+    assert [call.kwargs["stream_meta"] for call in invoke.await_args_list] == [
+        {"section_id": "1", "section_idx": "1"},
+        {"section_id": "2", "section_idx": "2"},
+        {"section_id": "3", "section_idx": "3"},
+    ]
+
+@pytest.mark.asyncio
+async def test_chapter_context_limit_retries_with_lower_priority_evidence_removed(monkeypatch):
+    """多条证据超限后，重试必须移除末尾的低优先级证据。"""
+    request = _request()
+    payload = request.collection.model_dump()
+    payload["citation_registry"].append({"source_id": "s4", "index": 4, "title": "次要来源", "url": "https://e/4", "original_content": "次要证据"})
+    payload["section_evidence"]["1"]["selected_docs"].append({"source_id": "s4", "step_ids": ["1-2"], "evaluation_rank": 2})
+    request = request.model_copy(update={
+        "outline": request.outline.model_copy(update={"sections": [request.outline.sections[0]]}),
+        "collection": BriefCollectionResult.model_validate(payload),
+    })
+    document_counts = []
+
+    async def invoke(_llm, messages, **_kwargs):
+        document_counts.append(messages["messages"][0]["content"].count(" begin]"))
+        if document_counts[-1] > 1:
+            raise RuntimeError("context_length_exceeded")
+        return {"content": "正文。[citation:1]"}
+
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    chapters = await write_brief_chapters(request)
+
+    assert document_counts == [2, 1]
+    assert chapters[0].raw_markdown.endswith("正文。[citation:1]")
+
+
+@pytest.mark.asyncio
+async def test_chapter_context_limit_retries_with_shortened_single_evidence(monkeypatch):
+    """唯一证据超限后，下一次写作调用必须使用更短的摘要。"""
+    request = _request()
+    payload = request.collection.model_dump()
+    payload["citation_registry"][0]["original_content"] = "唯一超长证据" * 20
+    request = request.model_copy(
+        update={
+            "outline": request.outline.model_copy(update={"sections": [request.outline.sections[0]]}),
+            "collection": BriefCollectionResult.model_validate(payload),
+        }
+    )
+    prompt_contents = []
+
+    async def invoke(_llm, messages, **_kwargs):
+        prompt_contents.append(messages["messages"][0]["content"])
+        if len(prompt_contents) == 1:
+            raise RuntimeError("context_length_exceeded")
+        return {"content": "压缩后正文。[citation:1]"}
+
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    chapters = await write_brief_chapters(request)
+
+    assert len(prompt_contents) == 2
+    assert len(prompt_contents[1]) < len(prompt_contents[0])
+    assert chapters[0].raw_markdown.endswith("压缩后正文。[citation:1]")
+
+
+@pytest.mark.asyncio
+async def test_chapter_context_limit_fails_when_single_evidence_cannot_shrink(monkeypatch):
+    """唯一证据已无法再缩短时，章节必须失败而非原样空转重试。"""
+    request = _request()
+    payload = request.collection.model_dump()
+    payload["citation_registry"][0]["original_content"] = "x"
+    request = request.model_copy(
+        update={
+            "outline": request.outline.model_copy(update={"sections": [request.outline.sections[0]]}),
+            "collection": BriefCollectionResult.model_validate(payload),
+        }
+    )
+    call_count = 0
+
+    async def invoke(_llm, _messages, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("context_length_exceeded")
+
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    chapters = await write_brief_chapters(request)
+
+    assert call_count == 1
+    assert chapters == []
+
+
+@pytest.mark.asyncio
+async def test_chapter_writer_retries_when_model_outputs_mermaid(monkeypatch):
+    """若写作模型仍输出 Mermaid，章节不得把图表源码带入报告。"""
+    request = _request().model_copy(
+        update={"outline": _request().outline.model_copy(update={"sections": [_request().outline.sections[0]]})}
+    )
+    responses = [
+        {"content": "正文。[citation:1]\n\n```mermaid\ngraph TD\nA --> B\n```"},
+        {"content": "修正后的正文。[citation:1]"},
+    ]
+    invoke = AsyncMock(side_effect=responses)
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    chapters = await write_brief_chapters(request)
+
+    assert invoke.await_count == 2
+    assert "mermaid" not in chapters[0].raw_markdown.lower()
+    assert chapters[0].raw_markdown.endswith("修正后的正文。[citation:1]")
+
+
+@pytest.mark.asyncio
+async def test_failed_chapter_does_not_block_other_parallel_chapters(monkeypatch):
+    """单个章节失败后，其他并行章节仍应正常写作并返回。"""
+    request = _request()
+    payload = request.collection.model_dump()
+    payload["citation_registry"][0]["original_content"] = "超长证据" * 64
+    request = request.model_copy(update={"collection": BriefCollectionResult.model_validate(payload)})
+    attempts_by_section = {"1": 0, "2": 0, "3": 0}
+
+    async def invoke(_llm, messages, **_kwargs):
+        section_id = messages["current_section"].rsplit(" ", 1)[-1]
+        attempts_by_section[section_id] += 1
+        if section_id == "1":
+            raise RuntimeError("temporary")
+        return {"content": f"章节 {section_id} 正文。[citation:{section_id}]"}
+
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    chapters = await write_brief_chapters(request)
+
+    assert attempts_by_section == {"1": 3, "2": 1, "3": 1}
+    assert [chapter.section_id for chapter in chapters] == ["2", "3"]
+    assert chapters[0].raw_markdown.endswith("章节 2 正文。[citation:2]")
+    assert chapters[1].raw_markdown.endswith("章节 3 正文。[citation:3]")
+
+
+@pytest.mark.asyncio
+async def test_chapter_batch_propagates_workflow_cancellation(monkeypatch):
+    """工作流取消不能被当作单章节失败吞掉。"""
+    request = _request().model_copy(
+        update={"outline": _request().outline.model_copy(update={"sections": [_request().outline.sections[0]]})}
+    )
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats",
+        AsyncMock(side_effect=asyncio.CancelledError()),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await write_brief_chapters(request)
+
+
+@pytest.mark.asyncio
+async def test_summary_context_limit_retries_with_compacted_chapters(monkeypatch):
+    """摘要超限时，下一次请求必须改用标题、首段与带引用事实句。"""
+    request = _request()
+    summary_request = BriefSummaryRequest(
+        llm=object(), title="报告", language="zh-CN",
+        chapters=[BriefChapter(section_id="1", raw_markdown="## 章节\n\n首段结论。\n\n冗余背景。\n\n关键事实。[citation:1]")],
+        section_evidence={"1": request.collection.section_evidence["1"]},
+        citation_registry=[request.collection.citation_registry[0]],
+    )
+    chapter_markdowns = []
+
+    async def invoke(_llm, messages, **_kwargs):
+        chapter_markdowns.append(messages["messages"][0]["content"])
+        if len(chapter_markdowns) == 1:
+            raise RuntimeError("context_length_exceeded")
+        return {"content": "<executive_summary>已压缩。[citation:1]</executive_summary>"}
+
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
+
+    summary = await generate_brief_summary(summary_request)
+
+    assert summary == "已压缩。[citation:1]"
+    assert chapter_markdowns[0] != chapter_markdowns[1]
+    assert "冗余背景" not in chapter_markdowns[1]
+
+
+def test_chapter_validation_keeps_existing_guards():
+    """空响应、Mermaid 越权与未闭合代码围栏守卫不受移除长度限制影响。"""
+    assert "empty_content" in str(_chapter_validation_error(""))
+    assert "mermaid_output_forbidden" in str(_chapter_validation_error("```mermaid\nA-->B\n```"))
+    # 长度不再做代码级拦截：超长内容交由 prompt 软约束引导。
+    assert _chapter_validation_error("字" * 2000) is None
