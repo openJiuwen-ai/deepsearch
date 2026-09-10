@@ -36,18 +36,16 @@ services:
     env_file:
       - ../.env
     environment:
-      # 在容器内固定绑定，端口映射由 ports 控制
+      # Compose 部署在容器内固定使用 8000，宿主端口由 ports 控制
       HOST: "0.0.0.0"
       BACKEND_PORT: "8000"
-      # 让容器内进程把对外的 telemetry 地址写进公开端点
-      TELEMETRY_PUBLIC_BASE: "http://127.0.0.1:8089"
     ports:
       - "${BACKEND_PUBLISH_PORT:-8000}:8000"   # 后端 API
       - "${TELEMETRY_PUBLISH_PORT:-8089}:8089" # Telemetry 事件端点
     volumes:
-      # 持久化 SQLite 数据、日志、报告输出（minimal / mysql 模式下均有用）
+      # 持久化 SQLite 数据与 output 下的日志、结果和 telemetry 事件
       - deepsearch-data:/app/data
-      - deepsearch-logs:/app/output
+      - deepsearch-output:/app/output
     depends_on:
       # mysql / redis / milvus 由 profile 控制，未启用时 depends_on 条件不生效
       mysql:
@@ -87,7 +85,7 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
     ports:
-      - "${MYSQL_PUBLISH_PORT:-3306}:3306"
+      - "${INFRA_BIND_ADDRESS:-127.0.0.1}:${MYSQL_PUBLISH_PORT:-3306}:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-root}"]
       interval: 10s
@@ -110,7 +108,7 @@ services:
     volumes:
       - redis-data:/data
     ports:
-      - "${REDIS_PUBLISH_PORT:-6379}:6379"
+      - "${INFRA_BIND_ADDRESS:-127.0.0.1}:${REDIS_PUBLISH_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -162,7 +160,7 @@ services:
       timeout: 20s
       retries: 3
     ports:
-      - "${MINIO_PUBLISH_PORT:-9001}:9001"
+      - "${INFRA_BIND_ADDRESS:-127.0.0.1}:${MINIO_PUBLISH_PORT:-9001}:9001"
     networks:
       - deepsearch-net
 
@@ -181,8 +179,8 @@ services:
     volumes:
       - milvus-data:/var/lib/milvus
     ports:
-      - "${MILVUS_PUBLISH_PORT:-19530}:19530"
-      - "9091:9091"
+      - "${INFRA_BIND_ADDRESS:-127.0.0.1}:${MILVUS_PUBLISH_PORT:-19530}:19530"
+      - "${INFRA_BIND_ADDRESS:-127.0.0.1}:${MILVUS_HEALTH_PUBLISH_PORT:-9091}:9091"
     depends_on:
       etcd:
         condition: service_healthy
@@ -203,7 +201,7 @@ networks:
 
 volumes:
   deepsearch-data:
-  deepsearch-logs:
+  deepsearch-output:
   mysql-data:
   redis-data:
   etcd-data:

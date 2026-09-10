@@ -7,7 +7,7 @@ Orchestrate the openJiuwen DeepSearch backend together with its dependency servi
 ## Prerequisites
 
 - Docker Engine ≥ 24.0
-- Docker Compose v2 (the `docker compose` subcommand)
+- Docker Compose >= 2.24.0 (the `docker compose` subcommand)
 - Free disk: ~2GB for minimal, ~8GB for distributed (includes Milvus + MinIO images)
 
 ## Quick Start (Minimal Stack)
@@ -36,6 +36,8 @@ Default exposed ports:
 |---------|----------------|-------------------|-------------|
 | Backend API | 8000 | 8000 | DeepResearch / DeepSearch endpoints, `/api/docs` Swagger |
 | Telemetry | 8089 | 8089 | Event endpoint for `search_mode=search` |
+
+Compose fixes the container-side `BACKEND_PORT` at `8000`; the variable with the same name in `.env` applies only to non-Compose startup. To change the host port when using Compose, set `BACKEND_PUBLISH_PORT`.
 
 To change host ports, set in `.env`:
 
@@ -134,7 +136,12 @@ MYSQL_PUBLISH_PORT=3307
 REDIS_PUBLISH_PORT=6380
 MILVUS_PUBLISH_PORT=19531
 MINIO_PUBLISH_PORT=9002
+MILVUS_HEALTH_PUBLISH_PORT=9092
 ```
+
+MySQL, Redis, Milvus, and the MinIO console bind to host `127.0.0.1` by default. Set `INFRA_BIND_ADDRESS` only when remote access is required, and configure firewall rules and authentication first.
+
+> **Production security:** The example MySQL `root/root` and MinIO `minioadmin/minioadmin` credentials, and Redis without a password, are for local evaluation only. Production deployments must replace weak default credentials, enable Redis authentication, and strictly restrict network access to infrastructure ports.
 
 ## Service Orchestration Reference
 
@@ -154,7 +161,7 @@ All persistent data lives in named volumes and survives `docker compose down`; u
 | Volume | Mount point | Content |
 |--------|-------------|---------|
 | deepsearch-data | /app/data | SQLite databases, local knowledge-base index |
-| deepsearch-logs | /app/output | Runtime logs, generated reports |
+| deepsearch-output | /app/output | Runtime logs, debug results, telemetry events, and other generated output |
 | mysql-data | /var/lib/mysql | MySQL data |
 | redis-data | /data | Redis AOF |
 | milvus-data | /var/lib/milvus | Milvus vector data |

@@ -7,7 +7,7 @@
 ## 前置要求
 
 - Docker Engine ≥ 24.0
-- Docker Compose v2（`docker compose` 子命令）
+- Docker Compose ≥ 2.24.0（`docker compose` 子命令）
 - 可用磁盘：minimal 约 2GB，distributed 约 8GB（含 Milvus + MinIO 镜像）
 
 ## 快速开始（最小栈）
@@ -35,6 +35,8 @@ curl http://localhost:8089              # Telemetry 端点
 |------|----------|--------------|------|
 | 后端 API | 8000 | 8000 | DeepResearch / DeepSearch 接口，`/api/docs` Swagger |
 | Telemetry | 8089 | 8089 | `search_mode=search` 时的事件端点 |
+
+Compose 会将容器内的 `BACKEND_PORT` 固定为 `8000`；`.env` 中的同名变量仅用于非 Compose 启动方式。Compose 下如需修改宿主端口，请使用 `BACKEND_PUBLISH_PORT`。
 
 如需改宿主端口，在 `.env` 里设：
 
@@ -133,7 +135,12 @@ MYSQL_PUBLISH_PORT=3307
 REDIS_PUBLISH_PORT=6380
 MILVUS_PUBLISH_PORT=19531
 MINIO_PUBLISH_PORT=9002
+MILVUS_HEALTH_PUBLISH_PORT=9092
 ```
+
+MySQL、Redis、Milvus 和 MinIO Console 默认只绑定到宿主的 `127.0.0.1`。如确需从其他主机访问，可设置 `INFRA_BIND_ADDRESS`，但应先配置防火墙和认证。
+
+> **生产安全：** 示例中的 MySQL `root/root`、MinIO `minioadmin/minioadmin` 以及无密码 Redis 仅适用于本地试用。生产部署必须替换弱默认凭据、为 Redis 启用认证，并严格限制基础设施端口的网络访问。
 
 ## 服务编排一览
 
@@ -153,7 +160,7 @@ MINIO_PUBLISH_PORT=9002
 | 卷 | 挂载点 | 内容 |
 |----|--------|------|
 | deepsearch-data | /app/data | SQLite 数据库、知识库本地索引 |
-| deepsearch-logs | /app/output | 运行日志、生成的报告 |
+| deepsearch-output | /app/output | 运行日志、调试结果、Telemetry 事件和其他生成输出 |
 | mysql-data | /var/lib/mysql | MySQL 数据 |
 | redis-data | /data | Redis AOF |
 | milvus-data | /var/lib/milvus | Milvus 向量数据 |
