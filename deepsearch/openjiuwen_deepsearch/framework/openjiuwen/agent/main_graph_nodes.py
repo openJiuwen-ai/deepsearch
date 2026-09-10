@@ -639,7 +639,7 @@ class FeedbackHandlerNode(BaseNode):
         if reparsed_intent:
             merged_intent_dict = self._merge_reparsed_intent(session, reparsed_intent)
             if not merged_intent_dict.get("report_type"):
-                merged_intent_dict["report_type"] = "professional"
+                merged_intent_dict["report_type"] = "brief"
             merged_policy = resolve_report_type_policy(merged_intent_dict.get("report_type"))
             session.update_global_state(
                 {
@@ -704,7 +704,7 @@ class ReporterNode(BaseNode):
             user_query=session.get_global_state("search_context.original_query"),
             llm_model_name=llm_model_name,
             visualization_enable=visualization_enable,
-            report_type=rtp.get("report_type", "professional"),
+            report_type=rtp.get("report_type", "brief"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             report_type_policy=rtp,
             research_intent=research_intent,
@@ -1031,7 +1031,7 @@ class OutlineNode(BaseNode):
             outline_interaction_enabled=outline_interaction_enabled,
             previous_feedback=previous_feedback,
             api_tools_config=api_tools_config,
-            report_type=rtp.get("report_type", "professional"),
+            report_type=rtp.get("report_type", "brief"),
             require_summary_first=rtp.get("require_summary_first", False),
             require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
             audience_role=audience_role,

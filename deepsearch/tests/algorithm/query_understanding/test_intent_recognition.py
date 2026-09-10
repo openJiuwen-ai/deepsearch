@@ -970,7 +970,7 @@ def test_intent_prompts_suppress_report_type_when_provided():
 
     default = apply_system_prompt("intent_recognition", dict(base_ctx))
     default_content = default[0]["content"]
-    assert "emit `report_type` accordingly" in default_content
+    assert "emit `report_type` = `brief`" in default_content
 
 
 @pytest.mark.asyncio

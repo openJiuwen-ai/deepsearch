@@ -28,7 +28,7 @@ From the user's **original_query** (below), extract:
    - **audience_role**: who the report is for (e.g. CTO, investor), short phrase; omit if not stated.
    - **tone**: map the user's style request to ONE English enum value when possible, e.g. `objective`, `formal`, `analytical`, `informative`, `explanatory`, `persuasive`, `descriptive`, `critical`, `comparative`, `simple`, `casual`. Omit if unclear.
 {% if not provided_report_type %}
-   - **report_type**: MUST be exactly `professional` or `brief`. Use `professional` for full deep-research reports (e.g. 专业版、深度研究); use `brief` for concise reports (e.g. 精简版、简报、概述). Omit if unclear.
+   - **report_type**: MUST be exactly `professional` or `brief`. **Default to `brief`.** Only emit `professional` when the user's message *explicitly* requests a professional/in-depth full report — e.g. "专业版", "professional", "详细完整报告", "完整版". For ordinary research requests with no explicit format request, or when the user asks for "精简版", "简报", "概述", "brief", emit `brief`. Always emit one of the two values; do NOT omit. **Important:** the bare phrase "深度研究" (with or without the skill-invocation frame "使用 deepresearch 技能") is the deep-research skill name / a verb meaning "research in depth" — it is NOT a request for the professional report version. Treat "深度研究" as no format request and emit `brief`. Only the explicit version words above ("专业版"/"professional"/"详细完整报告"/"完整版") trigger `professional`.
 {% endif %}
    - **include_url**: full HTTP(S) URLs the user explicitly lists or asks to use / focus on (e.g. "重点参考 https://a.com/x 这篇"). Do NOT invent URLs; extract exactly as given in the text.
    - **exclude_url**: full HTTP(S) URLs the user explicitly asks to avoid. Article-level exclusion ALWAYS goes here: when the user names specific article(s)/page(s) to avoid — one or many, even if several URLs share the same domain — put every URL here, and NEVER derive a domain from them into `exclude_domains`.
@@ -96,9 +96,9 @@ You may receive prior conversation context in `messages`, including clarificatio
 Use that context to refine intent when it is directly related to report constraints.
 
 {% if not provided_report_type %}
-- If the clarification feedback explicitly selects report type (e.g., "精简版", "专业版", "brief", "professional"),
-  emit `report_type` accordingly.
-- If report type is still unclear after reading context, omit `report_type`.
+- If the clarification feedback explicitly requests a professional/in-depth full report (e.g. "专业版", "professional", "详细完整报告", "完整版"),
+  emit `report_type` = `professional`. The bare skill name "深度研究" alone (incl. the "使用 deepresearch 技能" frame) does NOT count as a professional request — emit `brief` for it.
+- Otherwise (including when the feedback selects "精简版", "简报", "概述", "brief", or is silent on format), emit `report_type` = `brief`. Always emit one of the two values; do NOT omit.
 {% endif %}
 - Keep `research_query` focused on the research topic rather than the clarification wording itself.
 

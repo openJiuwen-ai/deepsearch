@@ -269,7 +269,7 @@ class Reporter(
         self.gen_report_context = gen_report_context
         rtp = self.gen_report_context.get("report_type_policy")
         if isinstance(rtp, dict):
-            self.gen_report_context.setdefault("report_type", rtp.get("report_type", "professional"))
+            self.gen_report_context.setdefault("report_type", rtp.get("report_type", "brief"))
             self.gen_report_context.setdefault("paragraph_style", rtp.get("paragraph_style", "detailed"))
             self.gen_report_context.setdefault(
                 "require_summary_first", rtp.get("require_summary_first", False)
@@ -457,7 +457,7 @@ class Reporter(
             )
         rtp = current_inputs.get("report_type_policy") or {}
         if isinstance(rtp, dict):
-            current_inputs.setdefault("report_type", rtp.get("report_type", "professional"))
+            current_inputs.setdefault("report_type", rtp.get("report_type", "brief"))
             current_inputs.setdefault("paragraph_style", rtp.get("paragraph_style", "detailed"))
             current_inputs.setdefault("require_summary_first", rtp.get("require_summary_first", False))
             current_inputs.setdefault(

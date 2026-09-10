@@ -154,7 +154,7 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
         current_inputs["added_completed_steps"] = added_completed_steps
         current_inputs["current_plan_is_completed"] = current_plan_is_completed
         rtp = session.get_global_state("section_context.report_type_policy") or {}
-        current_inputs["report_type"] = rtp.get("report_type", "professional")
+        current_inputs["report_type"] = rtp.get("report_type", "brief")
         current_inputs["research_intent"] = session.get_global_state("section_context.research_intent") or {}
 
         return current_inputs
@@ -303,7 +303,7 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
             "max_search_query_count": max_search_query_count,
             "max_research_loops": max_research_loops,
             "max_tool_call_turns_per_query": max_tool_call_turns_per_query,
-            "report_type": state.get("report_type", "professional"),
+            "report_type": state.get("report_type", "brief"),
             "research_intent": state.get("research_intent") or {},
         }
 

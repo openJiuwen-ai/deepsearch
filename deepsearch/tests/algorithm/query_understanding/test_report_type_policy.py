@@ -43,7 +43,7 @@ def test_resolve_professional_policy():
 
 def test_resolve_default_policy_when_none():
     p = resolve_report_type_policy(None)
-    assert p.report_type == "professional"
-    assert p.paragraph_style == "detailed"
+    assert p.report_type == "brief"
+    assert p.paragraph_style == "concise"
 
 
