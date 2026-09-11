@@ -40,8 +40,9 @@ class LocalDatasetAPIWrapper(BaseModel, Generic[T]):
     )
 
     def model_post_init(self, __context) -> None:
-        """预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析"""
-        _ = self._resolved_search_url
+        """预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析；空 URL 保持原有请求时报错时机"""
+        if self.search_url and self.search_url.get_secret_value().strip():
+            _ = self._resolved_search_url
 
     def results(self, query: str) -> List[Dict]:
         """Run query through LocalSearch."""
