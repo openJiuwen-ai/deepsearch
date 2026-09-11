@@ -34,7 +34,7 @@ COPY . .
 RUN uv pip install --system -e . --group backend --index-url ${INDEX_URL} --prerelease allow
 
 # 创建必要的目录
-RUN mkdir -p data/databases logs
+RUN mkdir -p data/databases output
 
 # 设置权限
 RUN chmod +x start_backend.py || true
