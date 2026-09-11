@@ -59,7 +59,7 @@
 - Code Q&A context supply: Provide line-precise code evidence for questions like "where is this feature implemented"
 - Large repository navigation: Exchange natural language for relevant code slices in unfamiliar large codebases
 
-**Quick start:** [CodeSearch quick start guide](./codesearch/docs/en/2.Installation%20Guide/Quick%20Start.md)
+**Quick guide:** [CodeSearch quick guide](./codesearch/docs/en/2.Installation%20Guide/Quick%20Guide.md)
 
 **Documentation:** [CodeSearch project docs](./codesearch/README.md)
 
@@ -118,7 +118,7 @@ codesearch index --repo /path/to/your/repo --collection my_repo
 codesearch search --collection my_repo --query "TypeError when calling foo() with empty list"
 ```
 
-Detailed usage guide: [CodeSearch quick start](./codesearch/docs/en/3.Quick%20Start/3.Quick%20Start.md)
+Detailed usage quick start: [CodeSearch quick start](./codesearch/docs/en/3.Quick%20Start/3.Quick%20Start.md)
 
 ---
 
