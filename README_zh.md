@@ -2,6 +2,20 @@
 
 <h1 align="center">openJiuwen Search</h1>
 
+本仓库包含 openJiuwen 检索类产品及其公共基础能力：
+
+| 目录 | 包名 | 说明 |
+|---|---|---|
+| [`deepsearch/`](./deepsearch/) | **openJiuwen-DeepSearch** | 知识增强的深度研究 / 报告生成 |
+| [`codesearch/`](./codesearch/) | **openJiuwen-CodeSearch** | 面向代码仓库的智能体检索引擎（Issue → 文件/行） |
+| [`base/`](./base/) | **openjiuwen-search-base** | 供上述产品复用的公共基础能力（LLM、embedding、Milvus、工作流等） |
+
+- DeepSearch 详情：见下文及 [`deepsearch/README.md`](./deepsearch/README.md) / [`deepsearch/README_zh.md`](./deepsearch/README_zh.md)
+- CodeSearch 详情：[`codesearch/README.md`](./codesearch/README.md) · [中文](./codesearch/README_zh.md)
+- 公共基础详情：[`base/README.md`](./base/README.md)
+
+# 🔬 什么是openJiuwen-DeepSearch
+
 <p align="center">
   <strong>从深度研究到代码搜索的全方位智能搜索解决方案</strong>
 </p>

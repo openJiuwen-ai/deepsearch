@@ -2,6 +2,20 @@
 
 <h1 align="center">openJiuwen Search</h1>
 
+This repository hosts openJiuwen retrieval products and their shared foundation:
+
+| Path | Package | What it is |
+|---|---|---|
+| [`deepsearch/`](./deepsearch/) | **openJiuwen-DeepSearch** | Knowledge-augmented deep research / report generation |
+| [`codesearch/`](./codesearch/) | **openJiuwen-CodeSearch** | Agentic code-repository retrieval (issue → files/lines) |
+| [`base/`](./base/) | **openjiuwen-search-base** | Shared primitives (LLM, embedding, Milvus, workflow helpers) used by the products above |
+
+- DeepSearch details: this README (below) and [`deepsearch/README.md`](./deepsearch/README.md)
+- CodeSearch details: [`codesearch/README.md`](./codesearch/README.md) · [中文](./codesearch/README_zh.md)
+- Shared base details: [`base/README.md`](./base/README.md)
+
+# 🔬 What is openJiuwen-DeepSearch?
+
 <p align="center">
   <strong>Comprehensive intelligent search solutions from deep research to code search</strong>
 </p>
