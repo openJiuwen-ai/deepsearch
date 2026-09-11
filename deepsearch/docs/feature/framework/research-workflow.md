@@ -30,6 +30,7 @@
 
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/workflow.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/main_graph_nodes.py`
+- `openjiuwen_deepsearch/framework/openjiuwen/agent/metadata_injectors.py`
 - `openjiuwen_deepsearch/algorithm/query_understanding/outline_mode_router.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/editor_team_manager_node.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/core/workflow_agent/workflow_agent.py`
@@ -43,7 +44,7 @@
 
 1. `DeepresearchAgent.run` 校验参数和 `AgentConfig`。
 2. 根据 `llm_config` 创建 LLM 对象并写入 `llm_context`，同时初始化 web/local 搜索工具 context。
-3. `StartNode` 初始化 `search_context` 和合并后的 `config`。
+3. `StartNode` 初始化 `search_context` 和合并后的 `config`；携带 metadata 时由注入器注册表注入状态并可接管路由（brief 大纲升级运行跳过意图识别直达大纲节点，见 [brief-outline-upgrade.md](brief-outline-upgrade.md)）。
 4. `IntentRecognitionNode` 识别研究意图、语言、报告类型策略，并在 web/all 模式下做入口预搜索；当 `execution_method=hybrid` 时，同一节点额外调用大纲模式 router LLM。
 5. hybrid router 的结果写入 `search_context.outline_execution_method`，取值为 `parallel` 或 `dependency_driving`；非 hybrid 模式写入对应的固定执行结果。
 6. HITL 开启时，若意图识别 LLM 判断 `needs_clarification=True`（用户输入不充足）则进入 `GenerateQuestionsNode` 和 `FeedbackHandlerNode`；若 `needs_clarification=False`（输入充足）则跳过澄清。HITL 关闭时一律跳过澄清，按报告类型直接进入 `BriefOutlineNode` 或专业版 `OutlineNode`。
@@ -55,12 +56,12 @@
 
 ## 数据契约与依赖
 
-- `run` 输入：`message`、`conversation_id`、`agent_config`、`report_template`、`interrupt_feedback`。
-- workflow 输入 schema 包含 `query`、`thread_id`、`conversation_id`、`report_template`、`interrupt_feedback`、`agent_config`。
+- `run` 输入：`message`、`conversation_id`、`agent_config`、`report_template`、`interrupt_feedback`、`metadata`（可选运行时元数据，仅 research 模式的 `DeepresearchAgent.run` 签名接受）。
+- workflow 输入 schema 包含 `query`、`thread_id`、`conversation_id`、`report_template`、`interrupt_feedback`、`agent_config`、`metadata`。
 - `agent_config.execution_method=hybrid` 是外部执行模式入口；`search_context.outline_execution_method` 是本次大纲模式的实际路由结果。
 - `outline_mode_router.md` 的输出契约只允许 `parallel` 或 `dependency_driving`，不能输出解释、标点或其他文本。
-- `search_context.final_result` 是最终对外响应载体，包含正文、引用、推理链、图表、LLM token 统计、告警和异常。
-- Brief 的过程状态位于 `search_context.brief_state`；该分支不写入专业版 `current_outline` 或章节 Plan。
+- `search_context.final_result` 是最终对外响应载体，包含正文、引用、推理链、图表、LLM token 统计、告警、异常和 metadata。
+- Brief 的过程状态位于 `search_context.brief_state`；该分支不写入专业版 `current_outline` 或章节 Plan。brief 大纲升级运行（[brief-outline-upgrade.md](brief-outline-upgrade.md)）由注入器写入 `brief_state` 并由专业版 `OutlineNode` 读取。
 - `workflow_feedback_mode=web` 时通过 `session.interact` 进入 openJiuwen 交互恢复链路。
 - `stats_info_llm=True` 时，节点会在中断前保存 token 使用量，结束时由 `EndNode` 汇总。
 
@@ -93,4 +94,6 @@
 - [节点基类与会话上下文](./base-node-and-session-context.md)
 - [搜索上下文与数据契约](./search-context.md)
 - [Brief 精简版报告工作流](../algorithm/brief-report.md)
+- [用户反馈处理](../algorithm/user-feedback-processor.md)
+- [Brief 大纲升级专业版报告](./brief-outline-upgrade.md)
 - [用户反馈处理](../algorithm/user-feedback-processor.md)

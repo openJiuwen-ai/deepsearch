@@ -1,6 +1,40 @@
 """Brief 数据模型的可观察契约测试。"""
 
-from openjiuwen_deepsearch.algorithm.brief_report.models import BriefWorkflowState
+from openjiuwen_deepsearch.algorithm.brief_report.models import BriefOutline, BriefWorkflowState
+
+
+def test_brief_outline_matches_section_titles_with_numbering_noise():
+    """标题一致性校验：数量/顺序/标题（含编号噪声归一化）必须一致。"""
+    brief = BriefOutline.model_validate(
+        {
+            "title": "测试升级",
+            "sections": [
+                {
+                    "id": "1",
+                    "title": "背景",
+                    "goal": "梳理背景",
+                    "research_steps": [
+                        {"id": "1-1", "requirement": "检索行业资料"},
+                        {"id": "1-2", "requirement": "归纳现状"},
+                    ],
+                },
+                {
+                    "id": "2",
+                    "title": "结论",
+                    "goal": "给出结论",
+                    "research_steps": [
+                        {"id": "2-1", "requirement": "汇总证据"},
+                        {"id": "2-2", "requirement": "形成判断"},
+                    ],
+                },
+            ],
+        }
+    )
+
+    # 生成标题带编号噪声时归一化后仍视为一致
+    assert brief.matches_section_titles(["背景", "2. 结论"]) is True
+    # 标题不同则不一致
+    assert brief.matches_section_titles(["背景", "风险"]) is False
 
 
 def test_brief_workflow_state_serializes_collection_context_and_review():

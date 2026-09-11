@@ -183,6 +183,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.FinalResul
 - **chart_messages**(list): vlm迭代生成图信息。报告导出时会读取其中的 `base64`，并写出为图片资源。
 - **exception_info**(str)：异常信息。
 - **warning_info**(str)：告警信息。
+- **metadata**(dict)：附加元数据。brief 运行会写入 `brief_outline` / `research_intent` / `language` 三键结构，客户端可将其原样作为 `/run` 的 `metadata` 入参回传，以 brief 大纲为结构基准升级生成专业版报告（见 [brief 大纲升级](../../../feature/framework/brief-outline-upgrade.md)）。默认值：空字典。
 
 ---
 

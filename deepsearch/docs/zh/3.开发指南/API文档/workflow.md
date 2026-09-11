@@ -47,7 +47,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchAgen
 
 ### run
 ```python
-async run(message: Optional[str] = None, conversation_id: Optional[str] = None, agent_config: Optional[dict] = None, report_template: str = "", interrupt_feedback: str = "")
+async run(message: Optional[str] = None, conversation_id: Optional[str] = None, agent_config: Optional[dict] = None, report_template: str = "", interrupt_feedback: str = "", metadata: Optional[dict] = None)
 ```
 运行工作流并返回流式输出。
 
@@ -60,7 +60,7 @@ async run(message: Optional[str] = None, conversation_id: Optional[str] = None, 
   - `"revise_comment"`：大纲交互场景，用户对大纲提供修改意见，系统将重新生成大纲
   - `"revise_outline"`：大纲交互场景，用户直接修改大纲内容，系统将基于用户修改重新生成
 - `report_template` 若为 base64 字符串会自动解码，解码失败则回退原文。
-
+- `metadata` 为可选的运行时元数据（由客户端持有回传、服务端不持久化），如 brief 报告 `final_result.metadata` 的原样回传，用于以 brief 大纲为结构基准升级生成专业版报告（见 [brief 大纲升级](../../../feature/framework/brief-outline-upgrade.md)）。携带 brief 大纲时要求并行执行模式，直连依赖/hybrid Agent 会抛出 `CustomValueException`（错误码 200031）。
 
 **返回**：
 - **AsyncGenerator[str]**：流式 JSON 字符串（默认执行、HITL 恢复、大纲交互、报告后局部优化场景）。

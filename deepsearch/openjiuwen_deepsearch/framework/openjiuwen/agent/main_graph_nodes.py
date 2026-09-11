@@ -16,6 +16,7 @@ from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
 
+from openjiuwen_deepsearch.algorithm.brief_report.models import BriefOutline, BriefWorkflowState
 from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
 from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     anonymize_config_for_logging,
@@ -101,6 +102,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ValidationResult,
     _resolve_source_date_scope,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.metadata_injectors import apply_injectors
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name,
                                                                         adapt_vlm_model_name)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
@@ -253,6 +255,15 @@ class StartNode(Start):
             service_config["visualization_enable"] = False
         merge_config = agent_config | service_config
         session.update_global_state({"config": merge_config})
+
+        next_node = NodeId.INTENT_RECOGNITION.value
+        injection = apply_injectors(inputs.get("metadata"), inputs)
+        if injection is not None:
+            session.update_global_state(dict(injection.state_updates))
+            if injection.next_node:
+                next_node = injection.next_node
+                logger.info("[StartNode] Injected metadata change next node, go to %s.", next_node)
+        return dict(next_node=next_node)
 
 
 class IntentRecognitionNode(BaseNode):
@@ -1007,8 +1018,22 @@ class OutlineNode(BaseNode):
         entry_search_results = session.get_global_state("search_context.entry_search_results") or []
         rtp = session.get_global_state("search_context.report_type_policy") or {}
         research_intent = session.get_global_state("search_context.research_intent") or {}
+
+        # Brief 大纲注入检测：brief_state 携带 outline 视为升级运行。
+        # brief_state 仅由注入器写入（BriefWorkflowState.model_dump），类型安全
+        # 由写入方保证，读取时无需容错降级
+        injected_brief_outline = None
+        brief_state = session.get_global_state("search_context.brief_state")
+        if brief_state:
+            injected_brief_outline = BriefWorkflowState.model_validate(brief_state).outline
+
         requested_section_num = research_intent.get("section_count")
-        if requested_section_num:
+        if injected_brief_outline is not None and not outline_interaction_mode:
+            # 注入场景首版生成：章节数以 brief 大纲为准，不做 max 截断。
+            # 交互轮不受此约束（brief 结构仅作用于首版），否则工具 schema 的
+            # Target count 会把用户增删章节的诉求隐性拉回 brief 章节数
+            section_num = len(injected_brief_outline.sections)
+        elif requested_section_num:
             section_num = min(int(requested_section_num), OUTLINER_SECTION_NUM_MAX)
         else:
             section_num = configured_section_num
@@ -1036,6 +1061,9 @@ class OutlineNode(BaseNode):
             require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
             audience_role=audience_role,
             tone=tone,
+            brief_outline=(
+                injected_brief_outline.model_dump_json() if injected_brief_outline is not None else ""
+            ),
         )
         result.update(build_research_intent_prompt_context(research_intent))
         return result
@@ -1065,6 +1093,14 @@ class OutlineNode(BaseNode):
         Returns:
             prompt 名称、是否启用 dependency_driving 工具 schema，以及本轮实际执行的大纲模式。
         """
+        if current_inputs.get("brief_outline"):
+            # 注入场景：brief 大纲无依赖结构，强制普通大纲工具（PARALLEL）。
+            # 首轮忽略报告模板（brief 结构优先）；交互轮回跳的 prompt 选择与
+            # 普通运行完全一致（复用 _select_prompt_name 的交互分流与
+            # user_outline 解析），交互不受 brief 结构约束。
+            if not current_inputs.get("outline_interaction_mode"):
+                return "outliner", False, ExecutionMethod.PARALLEL.value
+            return self._select_prompt_name(current_inputs), False, ExecutionMethod.PARALLEL.value
         prompt_name = self._select_prompt_name(current_inputs)
         if prompt_name in {"outliner_template", "outliner_user_revised"}:
             return prompt_name, False, ExecutionMethod.PARALLEL.value
@@ -1091,10 +1127,10 @@ class OutlineNode(BaseNode):
             selected_method: 本轮实际执行的大纲模式。
         """
         current_method = current_inputs.get("outline_execution_method")
-        if current_method not in {ExecutionMethod.PARALLEL.value, ExecutionMethod.DEPENDENCY_DRIVING.value}:
-            return
         if current_method == selected_method:
             return
+        # current_method 为空（如注入场景跳过意图识别）时同样写回，
+        # 否则 dependency workflow 的大纲后路由仍会按默认依赖驱动走。
         current_inputs["outline_execution_method"] = selected_method
         session.update_global_state({"search_context.outline_execution_method": selected_method})
         logger.info(
@@ -1143,6 +1179,25 @@ class OutlineNode(BaseNode):
             algorithm_output = await outliner.generate_outline(current_inputs)
             success_flag = algorithm_output.get("success_flag")
             error_msg = algorithm_output.get("error_msg")
+            if (
+                success_flag
+                and current_inputs.get("brief_outline")
+                and not current_inputs.get("outline_interaction_mode")
+            ):
+                # 结构一致性约束由 prompt 中的权威结构块承担，此处仅观测首版生成的漂移：
+                # 硬校验会导致同输入无效重试、首轮升级无兜底中止、交互轮用户标题修订被静默回滚；
+                # 交互轮用户可任意改结构，比对 brief 只会产生误导性噪声日志，故跳过。
+                # success_flag = bool(outline)，此时 current_outline 必非 None；
+                # brief_outline 来自 _pre_handle 注入器写入的合法序列化结果
+                outline_candidate = algorithm_output.get("current_outline")
+                parsed_brief = BriefOutline.model_validate_json(current_inputs["brief_outline"])
+                if not parsed_brief.matches_section_titles([s.title for s in outline_candidate.sections]):
+                    logger.warning(
+                        f"{self.log_prefix} Injected brief outline title drifted "
+                        f"(expected={[s.title for s in parsed_brief.sections]}, "
+                        f"actual={[s.title for s in outline_candidate.sections]}); "
+                        f"proceeding without retry."
+                    )
 
         if success_flag:
             outline: Outline = algorithm_output.get("current_outline")

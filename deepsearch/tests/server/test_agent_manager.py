@@ -308,3 +308,22 @@ def test_agent_config_accepts_report_type():
     """AgentConfig 支持 report_type，缺省 None。"""
     assert AgentConfig().report_type is None
     assert AgentConfig(report_type="brief").report_type == "brief"
+
+
+def test_agent_cache_key_excludes_metadata():
+    """metadata 是每次运行不同的注入数据，不得参与 Agent 缓存键。"""
+    request_a = _build_request("conversation-1")
+    request_b = _build_request("conversation-1")
+    request_b.metadata = {
+        "brief_outline": {
+            "title": "T",
+            "sections": [
+                {"id": "s1", "title": "S1", "goal": "G1", "research_steps": []},
+            ],
+        },
+    }
+
+    key_a = DeepSearchAgentManager._compute_agent_cache_key(request_a)
+    key_b = DeepSearchAgentManager._compute_agent_cache_key(request_b)
+
+    assert key_a == key_b

@@ -300,6 +300,20 @@ class BriefOutlineNode(BaseNode):
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> Output:
         outline = algorithm_output["outline"]
         session.update_global_state({"search_context.brief_state": BriefWorkflowState(outline=outline).model_dump()})
+        # 写入升级 metadata：客户端回传 /run 的 metadata 入参即可基于此大纲跑专业版
+        research_intent = session.get_global_state("search_context.research_intent") or {}
+        language = session.get_global_state("search_context.language") or "zh-CN"
+        session.update_global_state(
+            {
+                "search_context.final_result.metadata": {
+                    "brief_outline": outline.model_dump(mode="json"),
+                    # research_intent 中的时间范围是 date 对象，EndNode 会 json.dumps(final_result)，
+                    # 必须转 JSON 安全值，否则带日期约束的请求无法输出最终结果。
+                    "research_intent": ResearchIntent.model_validate(research_intent).model_dump(mode="json"),
+                    "language": language,
+                }
+            }
+        )
         next_node = NodeId.BRIEF_INFO_COLLECTOR.value
         logger.info("[BriefOutlineNode] Generated outline sections=%d.", len(outline.sections))
         _log_node_detail("BriefOutlineNode", "Generated outline", outline.model_dump())
