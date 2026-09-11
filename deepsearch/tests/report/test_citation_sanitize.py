@@ -49,3 +49,13 @@ def test_sanitize_preserves_checked_citation_markers():
 
 def test_strip_chart_markup_clears_malformed_citation_delimiters():
     assert _strip_chart_markup("标题<citation:3]数据") == "标题数据"
+
+
+def test_sanitize_strips_ccitation_typo_markers():
+    # Qwen professional reports sometimes emit [ccitation:N] instead of [citation:N]
+    assert sanitize_citation_markers("提升产品技术水平[ccitation:27]。") == "提升产品技术水平。"
+
+
+def test_sanitize_strips_malformed_ccitation_delimiters():
+    assert sanitize_citation_markers("a<ccitation:27]b") == "ab"
+
