@@ -1028,8 +1028,10 @@ class OutlineNode(BaseNode):
             injected_brief_outline = BriefWorkflowState.model_validate(brief_state).outline
 
         requested_section_num = research_intent.get("section_count")
-        if injected_brief_outline is not None:
-            # 注入场景：章节数以 brief 大纲为准，不做 max 截断
+        if injected_brief_outline is not None and not outline_interaction_mode:
+            # 注入场景首版生成：章节数以 brief 大纲为准，不做 max 截断。
+            # 交互轮不受此约束（brief 结构仅作用于首版），否则工具 schema 的
+            # Target count 会把用户增删章节的诉求隐性拉回 brief 章节数
             section_num = len(injected_brief_outline.sections)
         elif requested_section_num:
             section_num = min(int(requested_section_num), OUTLINER_SECTION_NUM_MAX)
@@ -1177,9 +1179,14 @@ class OutlineNode(BaseNode):
             algorithm_output = await outliner.generate_outline(current_inputs)
             success_flag = algorithm_output.get("success_flag")
             error_msg = algorithm_output.get("error_msg")
-            if success_flag and current_inputs.get("brief_outline"):
-                # 结构一致性约束由 prompt 中的权威结构块承担，此处仅观测漂移：
-                # 硬校验会导致同输入无效重试、首轮升级无兜底中止、交互轮用户标题修订被静默回滚。
+            if (
+                success_flag
+                and current_inputs.get("brief_outline")
+                and not current_inputs.get("outline_interaction_mode")
+            ):
+                # 结构一致性约束由 prompt 中的权威结构块承担，此处仅观测首版生成的漂移：
+                # 硬校验会导致同输入无效重试、首轮升级无兜底中止、交互轮用户标题修订被静默回滚；
+                # 交互轮用户可任意改结构，比对 brief 只会产生误导性噪声日志，故跳过。
                 # success_flag = bool(outline)，此时 current_outline 必非 None；
                 # brief_outline 来自 _pre_handle 注入器写入的合法序列化结果
                 outline_candidate = algorithm_output.get("current_outline")

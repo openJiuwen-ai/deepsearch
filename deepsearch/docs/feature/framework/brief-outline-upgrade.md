@@ -52,9 +52,9 @@ metadata 入参与校验、工作流注入路由、大纲 LLM 扩写转换及标
   `OutlineNode._select_prompt_and_dep_driving` 注入场景强制普通大纲工具
   与 PARALLEL：首轮走 `outliner`（忽略报告模板），交互轮回跳复用
   `_select_prompt_name` 的通用交互分流（与普通运行一致）；
-  `OutlineNode._do_invoke` 生成后调用
+  `OutlineNode._do_invoke` 首版生成后调用
   `BriefOutline.matches_section_titles` 做标题漂移观测（仅记 warning，
-  不拦截不重试；结构一致性由 prompt 引导承担）。
+  不拦截不重试；结构一致性由 prompt 引导承担）；交互轮跳过该观测。
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/workflow.py`：仅并行图
   （parallel）的 START 边含 INTENT_RECOGNITION 与 OUTLINE 两个目标，由
   StartNode 返回的 `next_node` 决定路由；hybrid 与 dependency_driving 图的
@@ -133,8 +133,10 @@ metadata 三键结构：
 
 - 不做服务端持久化：metadata 由客户端持有并回传，服务端只在运行期消费。
 - 仅在升级运行首轮生效：注入发生在 StartNode，后续轮次（大纲交互反馈等）由
-  workflow 状态机自然接管；`brief_state` 在运行内保留，使交互轮 prompt 的
-  brief 结构块持续可用。
+  workflow 状态机自然接管。`brief_state` 在运行内保留，仅用于维持升级运行的
+  执行模式判定（`_select_prompt_and_dep_driving` 据此强制普通大纲工具与
+  PARALLEL）；交互轮不再消费 brief 结构——prompt 不携带 brief 大纲、
+  `section_num` 不按 brief 章节数、不做标题漂移观测。
 - `metadata` 仅 research 模式的 run 签名接受；server 层仅在 research 模式时
   透传到 run_kwargs，search/react 模式不受影响；brief 模式透传后由 SDK 注入器
   在 inject 阶段忽略（server 校验只看结构，不区分 report_type）。

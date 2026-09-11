@@ -2036,7 +2036,7 @@ def test_dependency_outline_node_keeps_dependency_contract():
 
 @pytest.mark.asyncio
 async def test_outline_post_handle_keeps_brief_state_after_success():
-    """转换成功后运行内保留 brief_state：交互回跳 OUTLINE 的修订轮次仍受标题一致性约束。"""
+    """转换成功后运行内保留 brief_state：交互回跳 OUTLINE 时仍能识别为升级运行（强制 PARALLEL）。"""
     from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline as OutlineModel
 
     session = _outline_session_with_injection()
@@ -2106,6 +2106,79 @@ async def test_outline_injection_title_drift_only_logs_and_proceeds(caplog):
     }
     assert updated["search_context.current_outline"] is drifted_outline
     assert any("title drifted" in r.message for r in caplog.records)
+
+
+def test_outline_pre_handle_interaction_round_ignores_brief_section_num():
+    """交互轮：section_num 不再按 brief 章节数，回退常规逻辑（brief 约束仅首版生成）。"""
+    session = _outline_session_with_injection(
+        **{
+            "search_context.research_intent": {"section_count": 5},
+            "search_context.outline_interactions": [
+                {"feedback": "再加一章风险分析", "interaction_mode": "revise_comment"}
+            ],
+        }
+    )
+    node = OutlineNode()
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="basic",
+    ):
+        current_inputs = node._pre_handle({}, session, Context())
+
+    # brief 有 2 章，但交互轮应按用户诉求的 5 章，不被 brief 拉回
+    assert current_inputs["section_num"] == 5
+    # brief_outline 仍需保留：_select_prompt_and_dep_driving 依赖它强制 PARALLEL
+    assert current_inputs["brief_outline"]
+
+
+@pytest.mark.asyncio
+async def test_outline_interaction_round_skips_title_drift_observation(caplog):
+    """交互轮：用户合法改结构不应再打 title drifted 噪声日志（观测仅首版生成）。"""
+    session = _outline_session_with_injection(
+        **{
+            "search_context.outline_interactions": [
+                {"feedback": "把第一章改名为行业背景", "interaction_mode": "revise_comment"}
+            ],
+        }
+    )
+    revised_outline = Outline(
+        language="zh-CN",
+        title="测试升级",
+        thought="mock",
+        sections=[Section(id="1", title="行业背景", description="d")],
+    )
+
+    class RevisingOutliner:
+        def __init__(self, llm_model_name, prompt_name):
+            self.with_dep_driving = False
+
+        async def generate_outline(self, current_inputs):
+            return {
+                "success_flag": True,
+                "error_msg": "",
+                "current_outline": revised_outline,
+            }
+
+    node = OutlineNode()
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="basic",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.Outliner",
+        new=RevisingOutliner,
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.custom_stream_output",
+        new_callable=AsyncMock,
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.add_debug_log_wrapper",
+    ):
+        with caplog.at_level(
+            logging.WARNING,
+            logger="openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes",
+        ):
+            await node._do_invoke({}, session, Context())
+
+    assert not any("title drifted" in r.message for r in caplog.records)
 
 
 def test_outline_sync_execution_method_initializes_when_missing():
