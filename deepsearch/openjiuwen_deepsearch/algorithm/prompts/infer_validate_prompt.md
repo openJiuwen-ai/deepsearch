@@ -23,6 +23,11 @@ Example format of input references:
 Use the following output format strictly. Generate output in JSON format and do not include any non-existent IDs:
 [0, 1]
 
+**Output constraints (must follow exactly):**
+- Each element MUST be an **integer** (a reference `id`). Do NOT use strings, nested arrays, dict objects, or any other type.
+- Output a flat JSON array of integers. Do NOT wrap in additional brackets or objects.
+- If no references are relevant, return an empty array `[]`.
+
 # User Input
 
 Below are the provided "statement" and "references":

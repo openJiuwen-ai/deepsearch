@@ -283,7 +283,13 @@ class FigurePlaceholderGenerator:
             logger.error(f"Error processing sections_h1: {len(results)} != {len(sections)}")
         h1_tasks = []
         for result in results:
-            h1_tasks.extend(result)
+            if isinstance(result, Exception):
+                logger.warning("[CHART GENERATION] section task failed: %s", result)
+                continue
+            if isinstance(result, list):
+                h1_tasks.extend(result)
+            else:
+                logger.warning("[CHART GENERATION] skip non-list result: %r (type=%s)", result, type(result).__name__)
         # 为每个一级章节下的图表生成唯一的图表id
         chart_id_in_section = 0
         for task in h1_tasks:

@@ -40,7 +40,8 @@ async def query_interpreter(current_inputs: dict) -> dict:
             logger.info("[query_interpreter] output: %s", response.get("content"))
         else:
             logger.info("[query_interpreter] got output (redacted).")
-        return dict(result=response.get("content"))
+        content = response.get("content", "") if isinstance(response, dict) else ""
+        return dict(result=content)
     except Exception as e:
         err_msg = format_exception_info(StatusCode.INTERPRETATION_GENERATE_ERROR, e)
         if LogManager.is_sensitive():
