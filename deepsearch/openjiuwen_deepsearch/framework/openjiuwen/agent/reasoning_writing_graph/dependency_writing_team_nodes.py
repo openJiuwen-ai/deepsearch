@@ -32,6 +32,7 @@ class SectionWritingStartNode(Start):
         """执行起始节点"""
         # 初始化section_context
         section_context = SectionContext(
+            original_query=inputs.get("original_query", ""),
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
             section_idx=inputs.get("section_idx", '1'),
@@ -61,6 +62,7 @@ def build_dependency_writing_workflow():
 
     sub_workflow.set_start_comp(NodeId.START.value, SectionWritingStartNode(),
         inputs_schema={
+            "original_query": "${original_query}",
             "language": "${language}",
             "messages": "${messages}",
             "section_idx": "${section_idx}",

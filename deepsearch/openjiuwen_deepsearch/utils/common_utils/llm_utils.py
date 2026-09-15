@@ -87,6 +87,23 @@ _THINKING_SWITCH_UNSUPPORTED_MARKERS = (
 )
 
 
+@dataclass(frozen=True)
+class WorkflowLlmUsageDelta:
+    """表示一次 LLM 调用要累加的 token 用量。
+
+    Attributes:
+        input_tokens: 本次调用的输入 token 数。
+        output_tokens: 本次调用的输出 token 数。
+        total_tokens: 本次调用的总 token 数。
+        cache_tokens: 缓存读取 token 数；None 表示未提供缓存统计。
+    """
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cache_tokens: int | None = None
+
+
 def _clamp_agent_llm_timeout(timeout: Any) -> int:
     """将调用方提供的 agent LLM timeout 限制在服务端策略上限内。
     Args:
@@ -461,32 +478,26 @@ def save_workflow_llm_usage_to_session(session: Any, session_id: str) -> dict[st
 
 def add_workflow_llm_usage(
     session_id: str,
-    input_tokens: int,
-    output_tokens: int,
-    total_tokens: int,
+    token_usage: WorkflowLlmUsageDelta,
     agent_name: str = "",
-    cache_tokens: int | None = None,
 ) -> None:
     """累加指定 workflow 的 LLM token 消耗。
 
     Args:
         session_id (str): workflow 对应会话 ID。
-        input_tokens (int): 本次调用输入 token 数。
-        output_tokens (int): 本次调用输出 token 数。
-        total_tokens (int): 本次调用总 token 数。
+        token_usage: 本次调用的输入、输出、总量及可选缓存 token 数。
         agent_name (str): 本次调用的 agent 名称。
-        cache_tokens: 缓存读取 token 数；None 表示未提供缓存统计。
     """
     if not session_id or session_id == "-":
         return
 
     usage = _WORKFLOW_LLM_USAGE.setdefault(session_id, _build_empty_workflow_llm_usage())
-    usage["input_tokens"] += _to_non_negative_int(input_tokens)
-    usage["output_tokens"] += _to_non_negative_int(output_tokens)
-    usage["total_tokens"] += _to_non_negative_int(total_tokens)
+    usage["input_tokens"] += _to_non_negative_int(token_usage.input_tokens)
+    usage["output_tokens"] += _to_non_negative_int(token_usage.output_tokens)
+    usage["total_tokens"] += _to_non_negative_int(token_usage.total_tokens)
     usage["llm_call_count"] += 1
-    cache_usage = {} if cache_tokens is None else {
-        "cache_tokens": cache_tokens,
+    cache_usage = {} if token_usage.cache_tokens is None else {
+        "cache_tokens": token_usage.cache_tokens,
     }
     _merge_cache_usage(usage, cache_usage)
     if agent_name:
@@ -503,9 +514,9 @@ def add_workflow_llm_usage(
         if target_usage is None:
             target_usage = _build_empty_agent_name_usage(normalized_name)
             agent_usage_list.append(target_usage)
-        target_usage["input_tokens"] += _to_non_negative_int(input_tokens)
-        target_usage["output_tokens"] += _to_non_negative_int(output_tokens)
-        target_usage["total_tokens"] += _to_non_negative_int(total_tokens)
+        target_usage["input_tokens"] += _to_non_negative_int(token_usage.input_tokens)
+        target_usage["output_tokens"] += _to_non_negative_int(token_usage.output_tokens)
+        target_usage["total_tokens"] += _to_non_negative_int(token_usage.total_tokens)
         target_usage["llm_call_count"] += 1
         _merge_cache_usage(target_usage, cache_usage)
 
@@ -1618,11 +1629,13 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
         }
         add_workflow_llm_usage(
             session_id=session_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
+            token_usage=WorkflowLlmUsageDelta(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cache_tokens=cache_tokens,
+            ),
             agent_name=agent_name,
-            cache_tokens=cache_tokens,
         )
         metrics_logger.info(
             f"{TIME_LOGGER_TAG} session_id: {session_id_ctx.get()} ------ [LLM CALL STATISTICS]: {llm_stat}"

@@ -6,7 +6,10 @@ from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 from pydantic import BaseModel, Field
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
+    PromptBuildOptions,
+    build_prompt_messages,
+)
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_runtime_api_tools, \
@@ -244,7 +247,16 @@ class Planner:
             f"{current_inputs.get('max_plan_executed_num')} | "
         )
         logger.info(f"{log_prefix}Planner starting")
-        prompt = apply_system_prompt(self.config.prompt, current_inputs)
+        prompt_context = {
+            key: value for key, value in current_inputs.items() if key != "messages"
+        }
+        prompt = build_prompt_messages(
+            self.config.prompt,
+            prompt_context,
+            options=PromptBuildOptions(
+                prior_messages=current_inputs.get("messages") or [],
+            ),
+        )
         if LogManager.is_sensitive():
             logger.info(f"{log_prefix}The planner invoke messages is ready.")
         else:

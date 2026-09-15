@@ -2,16 +2,15 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 import json
 import logging
-from datetime import datetime, timezone
 
 from tenacity import (
     after_log,
-    retry,
+    AsyncRetrying,
     stop_after_attempt,
     retry_if_exception_type,
 )
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.markdown_utils import _convert_bold_formula_to_inline_math
 from openjiuwen_deepsearch.algorithm.report.report_common import EFFECT_SUB_REPORT_TAG, build_citation_infos
@@ -44,11 +43,6 @@ class ReportPartsMixin:
         - self._format_background_knowledge_for_prompt: (from BackgroundKnowledgeMixin)
     """
 
-    @retry(
-        stop=stop_after_attempt(Config().service_config.report_max_generate_retry_num),
-        retry=retry_if_exception_type(Exception),
-        after=after_log(logger, logging.WARNING),
-    )
     async def generate_abstract(self, sub_reports_content: str) -> str:
         """Generate abstract for report"""
         logger.info(f"Start to generate abstract with llm...")
@@ -60,11 +54,6 @@ class ReportPartsMixin:
         logger.info(f"Generating report abstract Done.")
         return abstract
 
-    @retry(
-        stop=stop_after_attempt(Config().service_config.report_max_generate_retry_num),
-        retry=retry_if_exception_type(Exception),
-        after=after_log(logger, logging.WARNING),
-    )
     async def generate_conclusion(self, sub_reports_content: str) -> str:
         """Generate conclusion for report"""
         logger.info(f"Start to generate conclusion with llm...")
@@ -77,12 +66,9 @@ class ReportPartsMixin:
         return conclusion
 
     async def _generate_with_llm(self, task_type, prompt, content):
-        if isinstance(self.gen_report_context, dict):
-            self.gen_report_context["CURRENT_TIME"] = datetime.now(
-                tz=timezone.utc
-            ).strftime("%a %b %d %H:%M:%S %Y %Z")
-        llm_input = apply_system_prompt(prompt, self.gen_report_context)
-        llm_input.append(dict(role="user", content=f"Main Content: {content}\n\n"))
+        llm_input = build_prompt_messages(
+            prompt, {**self.gen_report_context, "main_content": content}
+        )
         if not LogManager.is_sensitive():
             logger.debug(
                 "llm input when generating %s with llm: %s", task_type, llm_input
@@ -94,11 +80,17 @@ class ReportPartsMixin:
         agent_name = agent_name_by_task_type.get(task_type)
         if agent_name is None:
             raise KeyError(f"Unsupported report task type: {task_type}")
-        llm_output = await ainvoke_llm_with_stats(
-            llm=self._llm,
-            messages=llm_input,
-            agent_name=agent_name,
-        )
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(Config().service_config.report_max_generate_retry_num),
+            retry=retry_if_exception_type(Exception),
+            after=after_log(logger, logging.WARNING),
+        ):
+            with attempt:
+                llm_output = await ainvoke_llm_with_stats(
+                    llm=self._llm,
+                    messages=llm_input,
+                    agent_name=agent_name,
+                )
         if not LogManager.is_sensitive():
             logger.debug(
                 "llm output when generating %s with llm: %s", task_type, llm_output
@@ -159,7 +151,7 @@ class ReportPartsMixin:
             return current_inputs.get("content", "")
 
         try:
-            llm_input = apply_system_prompt(
+            llm_input = build_prompt_messages(
                 "generate_transition_sentence",
                 dict(
                     section_id=current_inputs.get("section_idx", 1),
@@ -301,17 +293,16 @@ class ReportPartsMixin:
             )
             return dict(rs_success=True, result="")
 
-        sub_content_message = f"sub report content is {sub_report_content}"
         current_outline = current_inputs.get("current_outline", {})
         current_outline_without_plans = export_outline_without_plans(
             current_outline
         )
 
         try:
-            llm_input = apply_system_prompt(
+            llm_input = build_prompt_messages(
                 "sub_report_summary",
                 dict(
-                    messages=[dict(role="user", content=sub_content_message)],
+                    sub_report_content=sub_report_content,
                     section_id=current_inputs.get("section_idx", 1),
                     language=current_inputs.get("language", "zh-CN"),
                     outline=current_outline_without_plans,
@@ -414,19 +405,15 @@ class ReportPartsMixin:
             current_outline_without_plans = export_outline_without_plans(
                 current_inputs.get("current_outline", {})
             )
-            llm_input = apply_system_prompt(
-                "sub_report_sidecar",
-                dict(
-                    messages=[
-                        dict(role="user", content=f"Sub report content:\n{sub_report_content}")
-                    ],
+            base_context = dict(
+                    sub_report_content=sub_report_content,
                     section_id=section_idx,
                     language=current_inputs.get("language", "zh-CN"),
                     outline=current_outline_without_plans,
                     user_query=current_inputs.get("report_task", ""),
                     report_type=current_inputs.get("report_type", "professional"),
-                ),
             )
+            llm_input = build_prompt_messages("sub_report_sidecar", base_context)
             retry_num = max(
                 int(
                     current_inputs.get(
@@ -445,13 +432,22 @@ class ReportPartsMixin:
             return dict(sidecar=None, summary=sub_report_content, warning=warning)
 
         last_error = "unknown sidecar error"
+        retry_feedback = ""
+        rendered_feedback = ""
         for attempt in range(retry_num):
+            response_received = False
             try:
+                if retry_feedback != rendered_feedback:
+                    llm_input = build_prompt_messages(
+                        "sub_report_sidecar", {**base_context, "retry_feedback": retry_feedback}
+                    )
+                    rendered_feedback = retry_feedback
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
                     agent_name=AgentLlmName.SUB_REPORTER_SIDECAR.value,
                 )
+                response_received = True
                 raw_content = (llm_output or {}).get("content", "")
                 if not raw_content:
                     raise ValueError("LLM returned empty sidecar content")
@@ -469,6 +465,8 @@ class ReportPartsMixin:
                 return dict(sidecar=sidecar, summary=sidecar.chapter_summary, warning="")
             except Exception as error:
                 last_error = str(error)
+                if response_received:
+                    retry_feedback = last_error[:500]
                 logger.warning(
                     "%s [_generate_sub_report_sidecar] section_idx: %s attempt %s/%s failed: %s",
                     EFFECT_SUB_REPORT_TAG,
@@ -485,68 +483,26 @@ class ReportPartsMixin:
         logger.warning("%s [_generate_sub_report_sidecar] %s", EFFECT_SUB_REPORT_TAG, warning)
         return dict(sidecar=None, summary=sub_report_content, warning=warning)
 
-    def _build_subsection_prompt(
-        self, current_inputs: dict, section_task: str, background_knowledge_contents: list
-    ) -> str:
-        """Build the sub-section prompt message for LLM generation."""
-        infos = build_citation_infos(current_inputs.get("classified_content", []))
-        required_target_citations = current_inputs.get("required_target_citation_indexes", [])
-        required_target_citation_instruction = (
-            "The following citations are user-specified papers and MUST each be cited at least once "
-            f"in this chapter body: {', '.join(f'[citation:{index}]' for index in required_target_citations)}.\n\n"
-            if required_target_citations else ""
-        )
-        current_outline = current_inputs.get("current_outline", {})
-        current_outline_without_plans = export_outline_without_plans(
-            current_outline
-        )
-        background_knowledge_prompt = self._format_background_knowledge_for_prompt(
-            background_knowledge_contents
-        )
-        current_section_description = current_inputs.get("section_description", "")
-        current_section_format_requirements = current_inputs.get("section_format_requirements", [])
-        current_chapter_outline = current_inputs.get("sub_section_outline", "")
-        current_subsection = resolve_current_subsection(current_inputs)
-        structured_evidence_guide = current_inputs.get("structured_evidence_guide", "")
-        retry_feedback = self._sub_report_retry_feedback_from_failure(
-            str(current_inputs.get("sub_report_retry_feedback", "") or "")
-        )
-        retry_feedback_prompt = ""
-        if retry_feedback:
-            retry_feedback_prompt = (
-                "\n\n# Previous Attempt Feedback\n"
-                "The previous chapter attempt failed validation. "
-                "Use only the controlled fields below to correct the next draft; "
-                "do not copy these fields into the report body.\n"
-                f"{retry_feedback}\n\n"
-            )
-        structured_evidence_section = (
-            f"# Structured Evidence Guidance\n{structured_evidence_guide}\n\n"
-            if structured_evidence_guide
-            else ""
-        )
-        background_knowledge_section = (
-            f"# Background Knowledge\n{background_knowledge_prompt}\n\n"
-            if background_knowledge_prompt
-            else ""
-        )
-        sub_content_message = (
-            "# Current Section\n"
-            f"section_id: {current_inputs.get('section_idx', 1)}\n"
-            f"title: {section_task}\n"
-            f"description: {current_section_description}\n\n"
-            "# Current Chapter Outline\n"
-            f"{current_chapter_outline}\n\n"
-            f"{structured_evidence_section}"
-            f"{background_knowledge_section}"
-            "# Collected Evidence\n"
-            f"{infos}\n\n"
-            f"{required_target_citation_instruction}"
-            "# References\n"
-            f"{current_inputs.get('sub_section_references', '')}\n\n"
-            f"{retry_feedback_prompt}"
-        )
-        return sub_content_message
+    def _build_subsection_context(
+        self, current_inputs: dict, background_knowledge_contents: list
+    ) -> dict:
+        """Prepare evidence, citations, and controlled feedback for the user template."""
+        return {
+            "section_id": current_inputs.get("section_idx", 1),
+            "citation_infos": build_citation_infos(current_inputs.get("classified_content", [])),
+            "required_target_citations": ", ".join(
+                f"[citation:{index}]"
+                for index in current_inputs.get("required_target_citation_indexes", [])
+            ),
+            "background_knowledge": self._format_background_knowledge_for_prompt(
+                background_knowledge_contents
+            ),
+            "structured_evidence_guide": current_inputs.get("structured_evidence_guide", ""),
+            "references": current_inputs.get("sub_section_references", ""),
+            "retry_feedback": self._sub_report_retry_feedback_from_failure(
+                str(current_inputs.get("sub_report_retry_feedback", "") or "")
+            ),
+        }
 
     async def _post_process_subsection(self, current_inputs: dict) -> tuple[bool, str]:
         """Post-process sub-section report: visualization insertion, table captions,

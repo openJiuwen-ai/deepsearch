@@ -27,12 +27,8 @@ async def test_insert_visualization_plan_accepts_fenced_json():
     ):
         result = await _visualization_reporter()._request_visualization_insert_plan(
             VisualizationInsertPlanContext(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "report\n=== VISUALIZATION DATA ===",
-                    }
-                ],
+                numbered_report="report",
+                visualization_data="",
                 current_inputs={
                     "language": "en",
                     "section_idx": 1,
@@ -57,18 +53,8 @@ async def test_insert_visualization_plan_retry_preserves_report_and_visualizatio
             {"content": '{"insertions":[{"after_row":2,"index":1}]}'},
         ]
     )
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "[ROW:1] # Title\n"
-                "[ROW:2] Body paragraph.\n\n"
-                "=== VISUALIZATION DATA ===\n"
-                '{"index":1,"image_title":"Chart"}\n'
-                "=== END VISUALIZATION DATA ===\n"
-            ),
-        }
-    ]
+    numbered_report = "[ROW:1] # Title\n[ROW:2] Body paragraph."
+    visualization_data = '{"index":1,"image_title":"Chart"}'
 
     with patch(
         "openjiuwen_deepsearch.algorithm.report.visualization_insertion.ainvoke_llm_with_stats",
@@ -76,7 +62,8 @@ async def test_insert_visualization_plan_retry_preserves_report_and_visualizatio
     ):
         result = await _visualization_reporter()._request_visualization_insert_plan(
             VisualizationInsertPlanContext(
-                messages=messages,
+                numbered_report=numbered_report,
+                visualization_data=visualization_data,
                 current_inputs={
                     "language": "en",
                     "section_idx": 1,
@@ -91,6 +78,8 @@ async def test_insert_visualization_plan_retry_preserves_report_and_visualizatio
 
     assert result["rs_success"] is True
     second_messages = mock_ainvoke.await_args_list[1].kwargs["messages"]
+    assert [message["role"] for message in second_messages] == ["system", "user"]
+    assert "<retry_feedback>" in second_messages[-1]["content"]
     second_prompt = "\n".join(
         str(message.get("content", ""))
         for message in second_messages

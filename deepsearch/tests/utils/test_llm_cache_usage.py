@@ -32,8 +32,16 @@ def test_cache_usage_survives_workflow_normalization():
     session_id = "cache-usage-test"
     llm_utils.pop_workflow_llm_usage(session_id)
     try:
-        llm_utils.add_workflow_llm_usage(session_id, 100, 20, 120, "collector", cache_tokens=60)
-        llm_utils.add_workflow_llm_usage(session_id, 100, 20, 120, "collector")
+        llm_utils.add_workflow_llm_usage(
+            session_id,
+            llm_utils.WorkflowLlmUsageDelta(100, 20, 120, cache_tokens=60),
+            "collector",
+        )
+        llm_utils.add_workflow_llm_usage(
+            session_id,
+            llm_utils.WorkflowLlmUsageDelta(100, 20, 120),
+            "collector",
+        )
         usage = llm_utils.normalize_workflow_llm_usage(llm_utils.get_workflow_llm_usage(session_id))
         assert usage["cache_tokens"] == 60
         assert list(usage).index("cache_tokens") == list(usage).index("total_tokens") + 1

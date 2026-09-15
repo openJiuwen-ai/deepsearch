@@ -37,10 +37,10 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/collector.md`
-- `openjiuwen_deepsearch/algorithm/prompts/collector_final.md`
-- `openjiuwen_deepsearch/algorithm/prompts/collector_gen_query.md`
-- `openjiuwen_deepsearch/algorithm/prompts/collector_supervisor.md`
+- `openjiuwen_deepsearch/algorithm/prompts/collector/`
+- `openjiuwen_deepsearch/algorithm/prompts/collector_final/`
+- `openjiuwen_deepsearch/algorithm/prompts/collector_gen_query/`
+- `openjiuwen_deepsearch/algorithm/prompts/collector_supervisor/`
 
 主要测试：
 

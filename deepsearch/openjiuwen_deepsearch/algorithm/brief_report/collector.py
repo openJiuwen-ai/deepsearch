@@ -19,7 +19,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefStepCoverage,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.search import build_section_candidates
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import build_material_evidence_items
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
@@ -48,11 +48,11 @@ async def generate_brief_queries(llm: object, request: BriefQueryRequest) -> lis
     prompt_context.update(build_research_intent_prompt_context(request.research_intent))
     prompt_context.update(build_temporal_scope_prompt_context(request.research_intent))
     prompt_context.update(request.material_context)
-    messages = apply_system_prompt("brief_collector_query_generation", prompt_context)
     last_error: Exception | None = None
     attempts = max(1, Config().service_config.info_collector_max_retry_num)
     for attempt_num in range(1, attempts + 1):
         try:
+            messages = build_prompt_messages("brief_collector_query_generation", prompt_context)
             response = await ainvoke_llm_with_stats(
                 llm,
                 messages,

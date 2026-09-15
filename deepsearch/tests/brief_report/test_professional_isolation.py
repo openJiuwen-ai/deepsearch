@@ -5,17 +5,24 @@ import re
 
 
 PROFESSIONAL_PROMPTS = [
-    "outliner.md", "dep_driving_outliner.md", "outliner_interaction.md", "dep_driving_outliner_interaction.md",
-    "outliner_user_revised.md", "planner.md", "dep_driving_planner.md", "collector_supervisor.md",
-    "sub_section_outline.md", "sub_report_sidecar.md", "report_abstract_markdown.md",
-    "report_conclusion_markdown.md",
+    "outliner",
+    "dep_driving_outliner",
+    "outliner_interaction",
+    "dep_driving_outliner_interaction",
+    "planner",
+    "dep_driving_planner",
+    "collector_supervisor",
+    "sub_section_outline",
+    "sub_report_sidecar",
+    "report_abstract_markdown",
+    "report_conclusion_markdown",
 ]
 
 # 允许携带 brief_outline 注入契约变量的 prompt（brief 大纲升级转换场景）。
 # brief 结构约束仅作用于首版大纲生成，故只有 outliner.md 可携带；
 # 两个交互 prompt 与普通专业版运行完全一致，不得再出现 brief_outline。
 BRIEF_OUTLINE_EXEMPTED_PROMPTS = {
-    "outliner.md",
+    "outliner",
 }
 
 
@@ -27,13 +34,19 @@ def test_professional_prompts_have_no_brief_conditions():
     场景），允许保留；交互轮 prompt 不在例外之列。
     """
     directory = Path("openjiuwen_deepsearch/algorithm/prompts")
-    for filename in PROFESSIONAL_PROMPTS:
-        content = (directory / filename).read_text(encoding="utf-8")
-        assert "report_type" not in content, filename
-        if filename in BRIEF_OUTLINE_EXEMPTED_PROMPTS:
-            # 允许 brief_outline 注入契约变量，其余 brief 条件仍禁止
-            assert not re.search(
-                r"\{%\s*(?:if|elif)[^%]*brief(?!_outline)", content, flags=re.IGNORECASE
-            ), filename
-        else:
-            assert not re.search(r"\{%\s*(?:if|elif)[^%]*brief", content, flags=re.IGNORECASE), filename
+    for prompt_name in PROFESSIONAL_PROMPTS:
+        for template_name in ("system.md", "user.md"):
+            template_path = directory / prompt_name / template_name
+            if not template_path.is_file():
+                continue
+            content = template_path.read_text(encoding="utf-8")
+            identifier = f"{prompt_name}/{template_name}"
+            assert "report_type" not in content, identifier
+            if prompt_name == "outliner" and template_name == "user.md":
+                assert not re.search(
+                    r"\{%\s*(?:if|elif)[^%]*brief(?!_outline)", content, flags=re.IGNORECASE
+                ), identifier
+            else:
+                assert not re.search(
+                    r"\{%\s*(?:if|elif)[^%]*brief", content, flags=re.IGNORECASE
+                ), identifier

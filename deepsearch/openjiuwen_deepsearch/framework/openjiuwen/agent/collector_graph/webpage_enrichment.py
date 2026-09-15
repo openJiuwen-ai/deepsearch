@@ -35,7 +35,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.webpage_enrichment impor
     truncate_raw_content_for_compression,
 )
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
@@ -142,10 +142,10 @@ class WebPageEnrichmentNode(BaseNode):
         if not candidates:
             return []
         user_payload = build_selection_user_payload(state, candidates)
-        formatted_prompt = [
-            *apply_system_prompt("collector_webpage_enrichment_select", {}),
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-        ]
+        formatted_prompt = build_prompt_messages(
+            "collector_webpage_enrichment_select",
+            {"payload": json.dumps(user_payload, ensure_ascii=False)},
+        )
         try:
             decision = await ainvoke_llm_with_stats(
                 self.llm,
@@ -184,10 +184,10 @@ class WebPageEnrichmentNode(BaseNode):
         if not raw_content.strip():
             return None
         user_payload = build_compression_user_payload(state, doc_info, fetched)
-        formatted_prompt = [
-            *apply_system_prompt("collector_webpage_enrichment_compress", {}),
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-        ]
+        formatted_prompt = build_prompt_messages(
+            "collector_webpage_enrichment_compress",
+            {"payload": json.dumps(user_payload, ensure_ascii=False)},
+        )
         try:
             evidence = await ainvoke_llm_with_stats(
                 self.llm,

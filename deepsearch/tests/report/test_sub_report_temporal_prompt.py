@@ -1,6 +1,6 @@
 import datetime
 
-from openjiuwen_deepsearch.algorithm.prompts.template import get_prompt_section
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ResearchIntent,
     TemporalScope,
@@ -19,7 +19,7 @@ def _content_date_intent() -> ResearchIntent:
 
 
 def _render_sub_report(**ctx) -> str:
-    return get_prompt_section("sub_report_markdown", ctx)
+    return "\n".join(m["content"] for m in build_prompt_messages("sub_report_markdown", ctx))
 
 
 def test_temporal_scope_instruction_rendered_for_content_date():
@@ -90,7 +90,7 @@ def test_sub_report_prompt_renders_temporal_scope_for_content_date():
     rendered = _render_sub_report(
         has_temporal_scope=ctx["has_temporal_scope"],
         temporal_scope_instruction=ctx["temporal_scope_instruction"],
-        CURRENT_TIME="fixed now",
+        current_date="2026-08-22",
     )
     # The temporal_scope_instruction is surfaced verbatim in the rendered prompt.
     assert "from 2018-01-01 through 2023-12-31" in rendered
@@ -105,10 +105,10 @@ def test_sub_report_prompt_renders_no_scope_fallback():
     rendered = _render_sub_report(
         has_temporal_scope=ctx["has_temporal_scope"],
         temporal_scope_instruction=ctx["temporal_scope_instruction"],
-        CURRENT_TIME="fixed now",
+        current_date="2026-08-22",
     )
     assert "No explicit time boundary" in rendered
-    assert "fixed now" in rendered
+    assert "2026-08-22" in rendered
 
 
 # --- content_time surfaced in writing citation blocks ---

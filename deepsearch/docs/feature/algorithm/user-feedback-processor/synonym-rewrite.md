@@ -25,9 +25,9 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/synonym_rewrite_expand.md`
-- `openjiuwen_deepsearch/algorithm/prompts/synonym_rewrite_polish.md`
-- `openjiuwen_deepsearch/algorithm/prompts/synonym_rewrite_shorten.md`
+- `openjiuwen_deepsearch/algorithm/prompts/synonym_rewrite_expand/`
+- `openjiuwen_deepsearch/algorithm/prompts/synonym_rewrite_polish/`
+- `openjiuwen_deepsearch/algorithm/prompts/synonym_rewrite_shorten/`
 
 主要测试：
 

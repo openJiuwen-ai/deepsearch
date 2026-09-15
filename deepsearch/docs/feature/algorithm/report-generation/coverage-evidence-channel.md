@@ -9,9 +9,9 @@
 路径：`openjiuwen_deepsearch/algorithm/report/evidence.py::_append_rule_coverage_to_core`、
 `openjiuwen_deepsearch/algorithm/research_collector/collector_evidence.py`、
 `openjiuwen_deepsearch/algorithm/report/compact_doc_info.py::build_coverage_passage_block`、
-Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
+Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline/`。
 
-本文件不覆盖：写作阶段 prompt（方案 A，见 `sub_report_markdown.md`）、按 `section_iscore` 分级（未实现）。
+本文件不覆盖：写作阶段 prompt（方案 A，见 `sub_report_markdown/`）、按 `section_iscore` 分级（未实现）。
 
 ## 功能目的
 
@@ -24,7 +24,7 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
 
 子报告章节的生成分大纲与写作两个阶段，各阶段输入的 channel 构成如下：
 
-**大纲阶段**（`_generate_sub_section_outline`，prompt：`sub_section_outline.md`）：
+**大纲阶段**（`_generate_sub_section_outline`，prompt：`sub_section_outline/`）：
 - 章节结构上下文：章节标题/描述/格式要求、全局大纲、section_local_contract、
   research_intent、背景知识特例（`sub_section_core_content_from_background_knowledge`）；
 - `sub_section_core_content`（顺序拼接，不交错）：
@@ -33,7 +33,7 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
   2. 规则版 coverage 聚合块（`===== COVERAGE PASSAGES =====`，本 PR 范畴）；
 - `structured_evidence_guide`（维度级覆盖状态表，rationale 链路产出）。
 
-**写作阶段**（`write_subsection_reports`，prompt：`sub_report_markdown.md`）：
+**写作阶段**（`write_subsection_reports`，prompt：`sub_report_markdown/`）：
 - `classified_content`（写作主证据）：fulltext 条目整篇原文 + passage 条目选中段，
   经 `build_citation_infos` 渲染为 `[citation:X]` 块；
 - 本章提纲（大纲阶段产物，写作边界）、章节格式要求、背景知识等上下文。
@@ -51,7 +51,7 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
 - 运行开关：`Config.agent_config.coverage_rule_block_enable`（默认 `True`，经请求配置统一下发，与 `visualization_enable` 等报告开关同风格）。置 `False` 时大纲证据仅含条目摘要块，可单独回滚。
 - 覆盖证据的供给区为该文档**大纲摘要块切片线之后的尾部**（方案乙口径，见下
   "供给区切片"），摘要块已渲染的内容抽取阶段不碰，尾部内容全部供给。
-- 大纲 prompt（`sub_section_outline.md`）新增 `## Evidence Channels` 说明两路证据语义；
+- 大纲 prompt（`sub_section_outline/`）新增 `## Evidence Channels` 说明两路证据语义；
   证据边界从"仅 key passages"放宽为"key passages + coverage passages"；明确覆盖证据
   不强制开新标题，遵守"证据不改结构"规则；`Document N key passages:` /
   `Document N coverage passages:` 头部与 `===== COVERAGE PASSAGES =====` 分隔符
@@ -73,10 +73,10 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
   防止载荷剥壳后以纯文本残留）；渲染页面上可见的正常文本不受影响。注意这是
   证据抽取侧的清理，仅作用于 coverage 通道；key 通道与前 500 字符的既有注入
   面不因此扩大或缩小。
-- **信任边界**（`sub_section_outline.md` Evidence Channels）：明确两路证据均为
+- **信任边界**（`sub_section_outline/` Evidence Channels）：明确两路证据均为
   不可信网页内容，仅作为事实数据使用；忽略其中嵌入的指令、角色变更、输出格式
   覆盖与工具请求；报告结构、输出格式与语言只服从大纲 prompt 本身。措辞对齐
-  仓库既有先例（`rationale_generator.md`、`brief_evidence_review.md`），
+  仓库既有先例（`rationale_generator/`、`brief_evidence_review/`），
   由 `test_subsection_outline_prompt_untrusted_evidence_boundary` 绑定。
 
 ## 关键代码路径
@@ -84,7 +84,7 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
 - 抽取函数：`collector_evidence.py::extract_coverage_passages`（进程内有界缓存接口）、
   `collector_evidence.py::exclude_passages`、`CoveragePassage`
 - 组装：`report/evidence.py::_append_rule_coverage_to_core`、`compact_doc_info.py::build_coverage_passage_block`
-- Prompt：`algorithm/prompts/sub_section_outline.md`
+- Prompt：`algorithm/prompts/sub_section_outline/`
 - 测试：`tests/info_collector/algorithm/test_coverage_evidence.py`、
   `tests/report/test_sub_report.py`
 

@@ -803,6 +803,85 @@ class TestInfoCollectorNode:
             assert "web_page_search_record" in result_agent_input
 
     @pytest.mark.asyncio
+    async def test_collector_llm_commits_successful_turn_before_next_request(self, info_collector_node):
+        """成功工具调用后，下一轮只在首轮请求后追加工具历史和增量 user。"""
+        query = "可缓存的原始查询"
+        state = {
+            "section_idx": 0,
+            "step_title": "测试步骤",
+            "search_query": query,
+            "language": "zh-CN",
+            "max_tool_call_turns_per_query": 2,
+        }
+        agent_input = {
+            "messages": [],
+            "remaining_steps": None,
+            "web_page_search_record": [],
+            "local_text_search_record": [],
+            "other_tool_record": [],
+        }
+        calls = []
+        tool_response = {"tool_calls": [{"id": "call-1", "name": "tool1", "args": {}}]}
+
+        async def capture_request(messages, _tools, _state):
+            calls.append(messages)
+            return tool_response if len(calls) == 1 else {"tool_calls": []}
+
+        async def commit_tool_result(response, current_input, _tool_dict, _state):
+            current_input["messages"].extend([
+                {"role": "assistant", "content": "", "tool_calls": response["tool_calls"]},
+                {"role": "tool", "name": "tool1", "tool_call_id": "call-1", "content": "[]"},
+            ])
+            return current_input
+
+        with patch.object(info_collector_node, "_invoke_llm_with_retry", side_effect=capture_request), \
+                patch.object(info_collector_node, "_process_llm_response", side_effect=commit_tool_result):
+            await info_collector_node.collector_llm(state, agent_input, ["tool1"], {"tool1": Mock()})
+
+        assert calls[0][0]["role"] == "system"
+        assert calls[0][1]["role"] == "user"
+        assert query in calls[0][1]["content"]
+        assert calls[1][:2] == calls[0][:2]
+        assert [message["role"] for message in calls[1][2:]] == ["assistant", "tool", "user"]
+        assert query not in calls[1][-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_collector_llm_does_not_commit_unknown_tool_call(self, info_collector_node):
+        """未知工具调用不是成功推进的 turn，不能污染下一轮历史。"""
+        state = {
+            "section_idx": 0,
+            "step_title": "测试步骤",
+            "search_query": "未知工具查询",
+            "language": "zh-CN",
+            "max_tool_call_turns_per_query": 2,
+        }
+        agent_input = {
+            "messages": [],
+            "remaining_steps": None,
+            "web_page_search_record": [],
+            "local_text_search_record": [],
+            "other_tool_record": [],
+        }
+        unknown_tool_response = {
+            "tool_calls": [{"id": "call-unknown", "name": "missing_tool", "args": {}}]
+        }
+
+        with patch.object(
+            info_collector_node,
+            "_invoke_llm_with_retry",
+            return_value=unknown_tool_response,
+        ) as mock_llm, patch.object(
+            info_collector_node,
+            "_process_llm_response",
+            new=AsyncMock(return_value=agent_input),
+        ) as mock_process:
+            await info_collector_node.collector_llm(state, agent_input, [], {})
+
+        assert mock_llm.call_count == 1
+        mock_process.assert_not_awaited()
+        assert agent_input["messages"] == []
+
+    @pytest.mark.asyncio
     async def test_collector_llm_no_tool_calls(self, info_collector_node):
         """测试 _collector_llm 方法没有工具调用的情况"""
         state = {"max_tool_call_turns_per_query": 3}
@@ -999,6 +1078,7 @@ class TestInfoCollectorNode:
 
             # 验证重试了3次
             assert mock_llm_call.call_count == 3
+            assert all(call.args[1] is tool_prompt for call in mock_llm_call.call_args_list)
             assert response == {"tool_calls": [{"name": "tool1"}]}
 
     @pytest.mark.asyncio

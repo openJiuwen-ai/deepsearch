@@ -37,17 +37,17 @@ openjiuwen_deepsearch/
 
 **主要子目录**：
 
-- **prompts/** - 提示词模板（`.md`）
-  - `synonym_rewrite_expand.md` - 扩写提示词
-  - `synonym_rewrite_polish.md` - 润色提示词
-  - `synonym_rewrite_shorten.md` - 缩写提示词
-  - `supplementary_search_task.md` - 补充检索任务生成提示词
-  - `supplementary_search_rewrite_selected_only.md` - 仅改写选区的补充检索提示词
-  - `supplementary_search_rewrite_selected_and_related.md` - 整章联动改写的补充检索提示词
-  - `new_task_assessment.md` - 新增任务资料充分性评估提示词
-  - `new_task_rewrite_section.md` - 新增任务章节改写提示词
-  - `truth_verification_assessment.md` - 内容真实性核验评估提示词
-  - `truth_verification_search_task.md` - 内容真实性核验补充检索任务提示词
+- **prompts/** - 提示词模板目录（各含 `system.md` 和 `user.md`），以及兼容旧链路的单文件模板
+  - `synonym_rewrite_expand/` - 扩写提示词
+  - `synonym_rewrite_polish/` - 润色提示词
+  - `synonym_rewrite_shorten/` - 缩写提示词
+  - `supplementary_search_task/` - 补充检索任务生成提示词
+  - `supplementary_search_rewrite_selected_only/` - 仅改写选区的补充检索提示词
+  - `supplementary_search_rewrite_selected_and_related/` - 整章联动改写的补充检索提示词
+  - `new_task_assessment/` - 新增任务资料充分性评估提示词
+  - `new_task_rewrite_section/` - 新增任务章节改写提示词
+  - `truth_verification_assessment/` - 内容真实性核验评估提示词
+  - `truth_verification_search_task/` - 内容真实性核验补充检索任务提示词
 - **query_understanding/** - 查询理解
   - `interpreter.py` - 生成澄清问题
   - `outliner.py` - 生成大纲

@@ -56,6 +56,7 @@ LLM 调用辅助为算法和 framework 节点提供统一调用入口，使调�
 - session thinking fallback registry 使用 `llm_runtime.thinking_fallback_active_keys`。
 - `AgentLlmName` 是 agent_name 的集中事实源，供超时配置、统计和测试复用。
 - LLM token usage 字段归一化为 input/output/total 三类非负整数。
+- `add_workflow_llm_usage` 接收 `WorkflowLlmUsageDelta`，将一次调用的 input/output/total 与可选缓存 token 计数作为一个具名数据对象传入；会话 ID 和 agent 名称单独传入。
 - 缓存读取量兼容 SDK `cache_tokens`、DeepSeek `prompt_cache_hit_tokens`、
   `prompt_tokens_details.cached_tokens`、`input_tokens_details.cached_tokens`、
   `input_token_details.cache_read` 和 `cache_read_input_tokens`；也支持嵌套 `token_usage`。

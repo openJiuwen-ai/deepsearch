@@ -9,7 +9,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     EvidenceType,
     OutputFormat,
 )
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
     extract_material_ids,
     normalize_material_bindings,
@@ -121,11 +121,11 @@ async def generate_brief_outline(llm: object, request: BriefOutlineRequest) -> B
     prompt_context.update(build_research_intent_prompt_context(request.research_intent))
     prompt_context.update(build_temporal_scope_prompt_context(request.research_intent))
     prompt_context.update(request.material_context)
-    messages = apply_system_prompt("brief_outliner", prompt_context)
     attempts = max(1, Config().service_config.outliner_max_generate_outline_retry_num)
     last_error: Exception | None = None
     for _ in range(attempts):
         try:
+            messages = build_prompt_messages("brief_outliner", prompt_context)
             response = await ainvoke_llm_with_stats(
                 llm,
                 messages,

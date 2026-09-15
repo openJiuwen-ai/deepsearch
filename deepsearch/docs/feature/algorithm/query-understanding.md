@@ -21,7 +21,9 @@
 - `brief` 只在意图识别后改变主图路由：它使用独立的 Brief 大纲和报告级证据工作流，不生成专业版 `Outline` 或章节 `Plan`。入口预搜索仍按当前搜索方式执行，但其结果不直接并入 Brief 证据集合。
 - 大纲生成要求章节标题不带编号，并在代码侧修复章节 ID、依赖关系和 parent/relationship 一致性。
 - 用户显式指定顶层结构时，大纲生成按用户给出的主要章节数量、标题和顺序组织，不为了默认章节数、brief 摘要或维度覆盖规则额外新增顶层章节。
+- 普通专业版初始大纲在用户未指定顶层结构时以 `section_num` 为目标章节数；未提供反馈时不向模型渲染反馈块。普通与依赖驱动的交互式大纲均以 `max_section_num` 为章节数上限，允许按反馈增删或调整章节但不得超过上限。用户直接修订大纲时，章节标题、描述和思考字段均使用指定语言。
 - 计划生成按章节生成信息采集步骤，依赖驱动模式会保留 step id、parent ids 和关系描述。
+- 依赖驱动规划将章节标题和非空 `section_description` 渲染到当前 user 消息中，保留章节描述中的研究范围与排除项；这些动态内容不进入 system 消息，也不额外构造历史消息。
 - 用户明确提出资料或事实时间范围时，同一次意图识别 LLM 调用会输出 `source_date_scope` 和/或
   `content_date_scope` 两个可选子对象（同一 query 两类可并存）。`source_date_scope` 限制资料发表时间，
   `content_date_scope` 限制事实或数据时间；日期边界均为包含关系。
@@ -42,13 +44,15 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/intent_recognition.md`
-- `openjiuwen_deepsearch/algorithm/prompts/query_rewrite.md`
-- `openjiuwen_deepsearch/algorithm/prompts/outliner.md`
-- `openjiuwen_deepsearch/algorithm/prompts/outliner_interaction.md`
-- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_outliner.md`
-- `openjiuwen_deepsearch/algorithm/prompts/planner.md`
-- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_planner.md`
+- `openjiuwen_deepsearch/algorithm/prompts/intent_recognition/`
+- `openjiuwen_deepsearch/algorithm/prompts/query_rewrite/`
+- `openjiuwen_deepsearch/algorithm/prompts/outliner/`
+- `openjiuwen_deepsearch/algorithm/prompts/outliner_interaction/`
+- `openjiuwen_deepsearch/algorithm/prompts/outliner_user_revised/`
+- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_outliner/`
+- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_outliner_interaction/`
+- `openjiuwen_deepsearch/algorithm/prompts/planner/`
+- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_planner/`
 
 主要测试：
 

@@ -2,7 +2,7 @@ from unittest.mock import patch, MagicMock, ANY
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.source_trace.content_analyzer import (
     recognize_content_to_cite,
     validate_and_enhance_sentences,
@@ -32,22 +32,23 @@ class TestRecognizeContentToCite:
         assert result == []
 
 
-class TestApplySystemPrompt:
-    """Test cases for apply_system_prompt function when used in content recognition."""
+class TestBuildPromptMessages:
+    """Test cases for the stable prompt builder used in content recognition."""
 
-    def test_apply_system_prompt_content_recognition(self):
-        """Test that apply_system_prompt works correctly for content recognition."""
-        # 测试 content_recognition 模板的使用
+    def test_build_prompt_messages_content_recognition(self):
+        """Report content is isolated in user while system remains stable."""
         context = {"report": "This is a sample report with some content."}
-        result = apply_system_prompt("content_recognition", context)
+        result = build_prompt_messages("content_recognition", context)
 
-        # 验证返回结果的结构
         assert isinstance(result, list)
-        assert len(result) == 1  # 没有提供 messages 参数，所以应该只返回 system prompt
+        assert len(result) == 2
         assert result[0]["role"] == "system"
-        assert "This is a sample report with some content." in result[0]["content"]
+        assert "This is a sample report with some content." not in result[0]["content"]
         assert "content recognition" in result[0]["content"].lower(
         ) or "content" in result[0]["content"].lower()
+        assert result[1]["role"] == "user"
+        assert "This is a sample report with some content." in result[1]["content"]
+        assert "CURRENT_TIME" not in "\n".join(message["content"] for message in result)
 
 
 class TestValidateAndEnhanceSentences:
