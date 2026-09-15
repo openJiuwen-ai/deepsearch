@@ -5,7 +5,7 @@ import logging
 from typing import List, Dict
 import asyncio
 
-from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import call_model, type_check
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import call_model, type_check, is_list_of
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
@@ -108,6 +108,12 @@ class ResearchInferPreprocess():
         # 定位结论在章节中的位置
         for section_index, conclusion in enumerate(conclusions):
             for sentence in conclusion:
+                if not isinstance(sentence, str) or isinstance(sentence, bool):
+                    logger.warning(
+                        "[SOURCE TRACER INFER] skip non-str conclusion sentence: %r (type=%s)",
+                        sentence, type(sentence).__name__,
+                    )
+                    continue
                 sentence = sentence.strip()
                 if not sentence:
                     continue
@@ -149,7 +155,7 @@ class ResearchInferPreprocess():
         """从每个章节中提取1个推理结论"""
         logger.info(f"[INFERENCE INFO EXTRACT] extract_conclusions starting...")
 
-        detection_func_and_args = {"detection_func": type_check, "args": list}
+        detection_func_and_args = {"detection_func": is_list_of, "args": str}
         tasks = [call_model(self.llm_model, "infer_extract_conclusion_prompt", {"input": section.get("content", "")},
                             detection_func_and_args=detection_func_and_args,
                             agent_name=AgentLlmName.SOURCE_TRACER_INFER_EXTRACT_CONCLUSION.value)

@@ -158,6 +158,13 @@ class CitationVerifyResearch:
             if field not in result:
                 return False, f"missing required field: {field}"
 
+        # 硬校验 marked_citation_content 类型，避免下游按字符串列表消费时崩溃
+        marked_content = result.get("marked_citation_content")
+        if not isinstance(marked_content, list):
+            return False, "marked_citation_content must be a list"
+        if not all(isinstance(item, str) and not isinstance(item, bool) for item in marked_content):
+            return False, "marked_citation_content must be a list of strings"
+
         return True, "valid"
 
     async def run(self, datas: list) -> list:
@@ -447,6 +454,12 @@ class CitationVerifyResearch:
                 - 第二个元素为修正后的结果字典（如果成功）或错误信息字符串（如果失败）
         """
         marked_content = result.get("marked_citation_content", [])
+        if not isinstance(marked_content, list):
+            logger.warning(
+                "[CITATION VERIFY] marked_citation_content is not a list: %r, treating as empty",
+                type(marked_content).__name__,
+            )
+            marked_content = []
         if not marked_content:
             return True, result  # 无内容可匹配，视为成功
 
@@ -456,6 +469,12 @@ class CitationVerifyResearch:
         found_any_match = False
 
         for marked_item in marked_content:
+            if not isinstance(marked_item, str) or isinstance(marked_item, bool):
+                logger.warning(
+                    "[CITATION VERIFY] skip non-str marked_item: %r (type=%s)",
+                    marked_item, type(marked_item).__name__,
+                )
+                continue
             # 查找匹配的原始内容
             actual_matched_text = self.find_matching_content(marked_item, handle_data)
             if actual_matched_text is not None:

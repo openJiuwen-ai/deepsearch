@@ -159,8 +159,8 @@ class TemplateGenerator:
                 response = await ainvoke_llm_with_stats(
                     llm, messages, llm_type="basic", agent_name=AgentLlmName.TEMPLATE.value
                 )
-                processed = response["content"]
-                processed = processed.strip() if processed else ""
+                processed = response.get("content", "") if isinstance(response, dict) else ""
+                processed = processed.strip() if isinstance(processed, str) else ""
 
             except Exception as e:
                 last_exception = e

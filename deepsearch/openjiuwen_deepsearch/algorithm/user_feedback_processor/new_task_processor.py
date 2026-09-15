@@ -1285,6 +1285,19 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
                 "reasoning_summary": "无法稳定解析评估结果，已降级为资料不足。",
             }
 
+        if not isinstance(data, dict):
+            logger.warning(
+                "[NewTaskProcessor] assess_section_assets LLM JSON is not a dict; "
+                "fallback to insufficient assets. data_type=%s",
+                type(data).__name__,
+            )
+            data = {
+                "relevant_doc_indices": [],
+                "is_sufficient": False,
+                "missing_aspects": [feedback.get("user_instruction", "")] if feedback.get("user_instruction") else [],
+                "reasoning_summary": "无法稳定解析评估结果，已降级为资料不足。",
+            }
+
         edit_strategy = self._normalize_edit_strategy(data.get("edit_strategy"))
         indices = data.get("relevant_doc_indices", [])
         invalid_indices = []
@@ -1329,10 +1342,15 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
                 len(assets.historical_doc_infos),
             )
 
+        raw_missing = data.get("missing_aspects") or []
+        if not isinstance(raw_missing, list):
+            raw_missing = []
+        missing_aspects = [str(item) for item in raw_missing if isinstance(item, str) and not isinstance(item, bool)]
+
         return NewTaskAssetAssessment(
             relevant_doc_infos=relevant_doc_infos,
             is_sufficient=is_sufficient,
-            missing_aspects=data.get("missing_aspects", []),
+            missing_aspects=missing_aspects,
             reasoning_summary=data.get("reasoning_summary", ""),
             edit_strategy=edit_strategy,
             subsection_title=data.get("subsection_title", "") or data.get("new_subsection_title", ""),
