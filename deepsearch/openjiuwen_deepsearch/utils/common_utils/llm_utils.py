@@ -1581,7 +1581,17 @@ def _unify_responnse(response):
             if func and func.get("arguments"):
                 if not tool_call.get("args"):
                     arguments = normalize_json_output(func.get("arguments"))
-                    parsed_args = json.loads(arguments)
+                    try:
+                        parsed_args = json.loads(arguments)
+                    except (json.JSONDecodeError, TypeError) as exc:
+                        logger.warning("[LLM] failed to parse tool_call arguments, fallback to empty dict: %s", exc)
+                        parsed_args = {}
+                    if not isinstance(parsed_args, dict):
+                        logger.warning(
+                            "[LLM] tool_call arguments is not a dict: %s, fallback to empty dict",
+                            type(parsed_args).__name__,
+                        )
+                        parsed_args = {}
                     new_response.get("tool_calls")[idx]["args"] = parsed_args
                 else:
                     parsed_args = tool_call.get("args")
