@@ -240,7 +240,7 @@ def _remove_reference_section(report_text: str) -> Tuple[str, str]:
         # 检查标题文字是否匹配参考文献模式
         if re.search(reference_pattern, title_content, re.IGNORECASE):
             # 找到这个标题之后的所有内容
-            section_pattern = rf'{re.escape(title_text)}\s*\n.*?(?=\n#{1, 6}\s.+$|$)'
+            section_pattern = rf'{re.escape(title_text)}\s*\n.*?(?=\n#{{1,6}}\s.+$|$)'
             match = re.search(section_pattern, report_text[start:], re.DOTALL)
             if match:
                 last_ref_match = (start, start + match.end())
