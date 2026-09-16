@@ -188,7 +188,7 @@ class TestDependencyPlanReasoningNode:
             "config.api_tools_config": {},
             "section_context.report_type_policy": {},
             "section_context.research_intent": {
-                "temporal_scope": {
+                "content_date_scope": {
                     "constraint_type": "content_date",
                     "end_date": "2019-06-30",
                 }

@@ -12,6 +12,7 @@ from openjiuwen.core.session.state.workflow_state import InMemoryState
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import (
     build_info_collector_sub_graph,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import ensure_ledger
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message, Plan, Step, StepType
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -226,6 +227,13 @@ class CollectorExecutionService:
         rtp = session.get_global_state("section_context.report_type_policy") or {}
         report_type = rtp.get("report_type", "professional") if isinstance(rtp, dict) else "professional"
         research_intent = session.get_global_state("section_context.research_intent") or {}
+        section_ledger = ensure_ledger(
+            session.get_global_state("section_context.target_paper_ledger") or {}
+        )
+        target_tracking_ledger: dict = {
+            "target_paper_attempts": section_ledger.target_paper_attempts,
+            "confirmed_target_papers": section_ledger.confirmed_target_papers,
+        }
 
         for idx, step in enumerate(plan.steps):
             step.id = f"{idx + 1}"
@@ -243,6 +251,7 @@ class CollectorExecutionService:
                     research_intent=research_intent,
                 )
             )
+            sub_inputs["evidence_ledger"] = target_tracking_ledger
             logger.info(
                 f"{log_prefix} Start step {step.id}: The input is"
                 f"{'*' if LogManager.is_sensitive() else sub_inputs}",
@@ -254,6 +263,14 @@ class CollectorExecutionService:
                 context
             )
 
+            evidence_ledger = collector_context.get("evidence_ledger") or {}
+            target_tracking_ledger = {
+                "target_paper_attempts": evidence_ledger.get("target_paper_attempts", {}),
+                "confirmed_target_papers": evidence_ledger.get("confirmed_target_papers", []),
+            }
+            session.update_global_state({
+                "section_context.target_paper_ledger": target_tracking_ledger,
+            })
             info_summary = collector_context.get("info_summary")
             evaluation = collector_context.get("evaluation")
             history_queries = collector_context.get("history_queries")

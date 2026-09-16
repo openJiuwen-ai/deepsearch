@@ -1,0 +1,1 @@
+Ranked definitions (file:start-end  definition  score). Prefer production modules over examples/galleries/docs. Use read_file to inspect, then add_context for the tightest relevant span — do not keep searching the same symbols:

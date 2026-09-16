@@ -6,9 +6,10 @@ import logging
 import os
 import threading
 from contextlib import contextmanager
+from functools import cached_property
 from typing import Any, ClassVar, Generic, Optional, TypeVar
 
-from openjiuwen.harness.tools.web_tools import WebFetchWebpageTool, WebPaidSearchTool
+from openjiuwen.harness.tools.web import WebFetchWebpageTool, WebPaidSearchTool, _http
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from openjiuwen_deepsearch.common.common_constants import (
@@ -17,6 +18,7 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
 )
 from openjiuwen_deepsearch.utils.common_utils.text_utils import truncate_string
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,10 @@ class WebFetchWebpageAdapter(WebFetchWebpageTool):
     @classmethod
     def fetch_webpage_sync(cls, url: str, timeout_seconds: int) -> dict[str, str | int]:
         """Fetch webpage content through the inherited web_tools implementation."""
-        return dict(cls._fetch_webpage_sync(url, timeout_seconds))
+        async def _fetch_coro():
+            async with _http.new_session() as session:
+                return await cls._fetch_webpage(session, url, timeout_seconds, cls._byte_cap())
+        return dict(asyncio.run(_fetch_coro()))
 
     @classmethod
     def fetch_via_jina_reader_sync(cls, url: str, timeout_seconds: int) -> dict[str, str | int]:
@@ -44,7 +49,10 @@ class WebFetchWebpageAdapter(WebFetchWebpageTool):
         Returns:
             包含 URL、状态码、标题和正文的抓取结果。
         """
-        return dict(cls._fetch_via_jina_reader_sync(url, timeout_seconds))
+        async def _jina_coro():
+            async with _http.new_session() as session:
+                return await cls._fetch_via_jina_reader(session, url, timeout_seconds, cls._byte_cap())
+        return dict(asyncio.run(_jina_coro()))
 
 
 _PROVIDER_KEY_ENV = {
@@ -92,8 +100,8 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
     _provider_runner_names: ClassVar[dict[str, str]] = {
-        "bocha": "_bocha_search_sync",
-        "perplexity": "_perplexity_search_sync",
+        "bocha": "_bocha_search",
+        "perplexity": "_perplexity_search",
     }
 
     def model_post_init(self, __context: Any) -> None:
@@ -105,6 +113,9 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
             self.timeout_seconds = int(ext["timeout_seconds"])
         if "fetch_webpage" in ext:
             self.fetch_webpage = bool(ext["fetch_webpage"])
+
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析
+        _ = self._configured_search_url
 
     @property
     def resolved_provider(self) -> str:
@@ -144,7 +155,7 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
         api_key = self._api_key_to_str().strip()
         if api_key:
             env_values[_PROVIDER_KEY_ENV[provider]] = api_key
-        configured_url = self._configured_search_url()
+        configured_url = self._configured_search_url
         if configured_url and provider not in _WEB_TOOLS_URL_OVERRIDE_ENV:
             logger.warning(
                 "Configured search_url for provider %s is ignored because web_tools does not expose a URL override.",
@@ -158,8 +169,11 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
         timeout_seconds = self._resolved_timeout_seconds(provider=provider, minimum=10)
         max_results = max(1, min(int(self.max_web_search_results or 5), 20))
 
+        async def _search_coro():
+            async with _http.new_session() as session:
+                return await runner(session, query=query, max_results=max_results, timeout_seconds=timeout_seconds)
         with _temporary_env(env_values):
-            return runner(query=query, max_results=max_results, timeout_seconds=timeout_seconds)
+            return asyncio.run(_search_coro())
 
     def _build_result_from_url(self, *, url: str, provider: str, answer: str) -> dict[str, Any]:
         """Build a normalized result, fetching raw page content when possible."""
@@ -203,9 +217,13 @@ class HarnessWebSearchAPIWrapper(BaseModel, Generic[T]):
             return value.decode("utf-8")
         return str(value or "")
 
+    @cached_property
     def _configured_search_url(self) -> str:
-        """Return project-level configured search_url, if any."""
-        return self._secret_to_str(self.search_url).strip().rstrip("/")
+        """Return project-level configured search_url, if any, after SSRF validation."""
+        configured = self._secret_to_str(self.search_url).strip().rstrip("/")
+        if configured:
+            validate_search_service_url(configured)
+        return configured
 
     def _resolved_timeout_seconds(self, *, provider: str, minimum: int) -> int:
         """Return configured timeout for harness web_tools providers."""
@@ -242,9 +260,11 @@ class BochaSearchAPIWrapper(HarnessWebSearchAPIWrapper[T]):
     """Bocha harness web search adapter."""
 
     provider: str = "bocha"
+    fetch_webpage: bool = False
 
 
 class PerplexitySearchAPIWrapper(HarnessWebSearchAPIWrapper[T]):
     """Perplexity harness web search adapter."""
 
     provider: str = "perplexity"
+    fetch_webpage: bool = False

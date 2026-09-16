@@ -1,11 +1,10 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-from typing import Any, List, Literal, Dict, Optional
+from typing import Any, ClassVar, List, Literal, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from openjiuwen_deepsearch.config.runtime_api_models import ApiToolsConfig
-
 OUTLINER_SECTION_NUM_MAX = 15
 
 
@@ -55,6 +54,61 @@ class WebFetchProviderConfig(BaseModel):
     extension: dict = Field(default_factory=dict, description="网页抓取 provider 扩展配置项")
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class ScholarlyProviderConfig(BaseModel):
+    official_search_url: ClassVar[str] = ""
+
+    search_api_key: bytearray = Field(default_factory=bytearray)
+    search_url: str = ""
+    max_search_results: int = Field(default=1, ge=1, le=10)
+    requests_per_second: float = Field(gt=0, le=10)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    @field_validator("search_url")
+    @classmethod
+    def _validate_http_endpoint(cls, value: str) -> str:
+        endpoint = value.strip().rstrip("/")
+        if not endpoint:
+            return ""
+        if endpoint != cls.official_search_url:
+            raise ValueError(
+                f"search_url must use the official endpoint: {cls.official_search_url}"
+            )
+        return endpoint
+
+
+class PubMedScholarlyConfig(ScholarlyProviderConfig):
+    official_search_url: ClassVar[str] = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+
+    requests_per_second: float = Field(default=1 / 3, gt=0, le=10)
+    email: str = ""
+    tool: str = "openjiuwen-deepsearch"
+
+
+class ArxivScholarlyConfig(ScholarlyProviderConfig):
+    official_search_url: ClassVar[str] = "https://export.arxiv.org/api/query"
+
+    requests_per_second: float = Field(default=1 / 3, gt=0, le=10)
+
+
+class SemanticScholarConfig(ScholarlyProviderConfig):
+    official_search_url: ClassVar[str] = (
+        "https://api.semanticscholar.org/graph/v1/paper/search"
+    )
+
+    requests_per_second: float = Field(default=0.5, gt=0, le=10)
+
+
+class ScholarlySearchConfig(BaseModel):
+    fetch_full_text: bool = True
+    max_full_text_results_per_query: int = Field(default=1, ge=0, le=10)
+    pubmed: PubMedScholarlyConfig = Field(default_factory=PubMedScholarlyConfig)
+    arxiv: ArxivScholarlyConfig = Field(default_factory=ArxivScholarlyConfig)
+    semantic_scholar: SemanticScholarConfig = Field(default_factory=SemanticScholarConfig)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
 
 class EmbedModelConfig(BaseModel):
@@ -239,7 +293,7 @@ class RetrievalSettingsConfig(BaseModel):
     top_k: int = Field(default=3, description="最大检索结果数量")
     top_k_multiply_factor: int = Field(default=5, description="最大检索结果数量乘数因子")
     add_instruction: bool = Field(default=True, description="是否添加指令")
-    mode: Literal["dense", "sparse", "hybrid"] = Field(default="hybrid", description="检索模式")    
+    mode: Literal["dense", "sparse", "hybrid"] = Field(default="hybrid", description="检索模式")
 
 
 class StateCreationAgentConfig(BaseModel):
@@ -307,6 +361,15 @@ class AgentConfig(BaseModel):
             "hybrid：混合大纲路由模式，由意图识别节点调用LLM选择普通大纲或依赖驱动大纲。"
         ),
     )
+    report_type: Literal["brief", "professional"] | None = Field(
+        default=None,
+        description="报告类型；None 时由意图识别与澄清机制决定",
+    )
+    coverage_rule_block_enable: bool = Field(
+        default=True,
+        description="子报告大纲阶段规则版覆盖证据（coverage passages）开关，"
+                    "关闭后大纲证据仅含条目摘要块",
+    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=5,
@@ -333,6 +396,11 @@ class AgentConfig(BaseModel):
         description="是否启用 DeepResearch 信息收集阶段的网页正文增强节点",
     )
     web_search_engine_config: WebSearchEngineConfig = Field(default_factory=WebSearchEngineConfig)
+    scholarly_search_enabled: bool = Field(
+        default=False,
+        description="Whether to enable the built-in scholarly search engines.",
+    )
+    scholarly_search_config: ScholarlySearchConfig = Field(default_factory=ScholarlySearchConfig)
     web_fetch_provider_config: WebFetchProviderConfig = Field(default_factory=WebFetchProviderConfig)
     local_search_engine_config: LocalSearchEngineConfig = Field(default_factory=LocalSearchEngineConfig)
     custom_web_search_config: CustomWebSearchConfig = Field(default_factory=CustomWebSearchConfig)
@@ -370,6 +438,11 @@ class AgentConfig(BaseModel):
     @classmethod
     def _reject_retired_search_fetch_keys(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if "scholarly_search_engine_configs" in data:
+                raise ValueError(
+                    "Unsupported config field: scholarly_search_engine_configs. "
+                    "Use scholarly_search_config instead."
+                )
             retired = {"jina_api_key", "serper_api_key"}.intersection(data)
             if retired:
                 raise ValueError(
@@ -416,7 +489,7 @@ class ServiceConfig(BaseModel):
     )
     info_collector_max_research_loops: int = Field(default=2, description="最大研究循环次数")
     info_collector_max_tool_call_turns_per_query: int = Field(default=2, ge=1, description="单个检索 query 最大工具调用轮次")
-    info_collector_max_retry_num: int = Field(default=3, description="最大重试次数")
+    info_collector_max_retry_num: int = Field(default=3, description="信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）")
     info_collector_allow_programmer: bool = Field(default=False, description="")
     info_collector_webpage_enrich_max_urls: int = Field(
         default=3,
@@ -432,8 +505,13 @@ class ServiceConfig(BaseModel):
     )
 
     # 报告节点参数
-    sub_report_classify_doc_infos_res_top_k_num: int = Field(default=20,
-                                                             description="子报告中单次llm处理返回的top_k数量")
+    sub_report_classify_doc_infos_res_top_k_num: int = Field(
+        default=15,
+        description="子报告中按覆盖度评分在每个 rationale 下选择的"
+                    " top-k 段落数量（_select_by_rationale_coverage 使用）；"
+                    "建议 ≤15：超过 15 时下游 dedup_passages_by_rationale 的"
+                    " top-15 纯覆盖度截断会重新生效，可能撤销时间加权的提升",
+    )
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=True, description="报告插入图表开关")
 

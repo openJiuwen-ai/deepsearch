@@ -42,13 +42,6 @@ For every section returned through the outline tool:
 - Do not place Mermaid syntax, chart code, chart captions, or forward references such as “下图”“见图”“如下图”
   in the outline fields or chapter prose.
 
-{% if report_type == "brief" %}
-## Report type: Brief
-- Fewer sections; each must earn its place for **decisions, conclusions, or risk framing**—not decorative completeness.
-{% if require_summary_first %}- Early sections should establish **problem boundary, headline conclusions, and non-goals**.{% endif %}
-{% if require_methodology_and_risk %}- Surface **how evidence was formed**, its **limits**, and **top risks / unknowns** before deep dives.{% endif %}
-{% endif %}
-
 {% if audience_role or tone %}
 ## Report Detail Constraints
 {% if audience_role %}

@@ -4,7 +4,11 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import CitationVerifyResearch, BatchContext
+from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import (
+    BatchContext,
+    CitationVerificationAttemptError,
+    CitationVerifyResearch,
+)
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 
@@ -554,8 +558,8 @@ class TestCitationVerifyResearch:
 
                 result = await self.verifier.extract_messages_batch(handle_datas)
 
-                # Should return empty dict when max retries exceeded
-                assert result == [{'extract_failed_reason': 'LLM retry times exceeded'}]
+                # Terminal failures preserve their classified reason.
+                assert result == [{'extract_failed_reason': 'invocation'}]
                 assert mock_call_model.call_count == 3
 
     @pytest.mark.asyncio
@@ -634,3 +638,106 @@ class TestCitationVerifyResearch:
                     result = await self.verifier.call_model(user_prompt)
                     assert result == expected_raw_content
                     mock_normalize.assert_called_once_with(expected_raw_content)
+
+    @pytest.mark.asyncio
+    async def test_call_model_repairs_unescaped_quotes_before_decoding(self):
+        """Malformed JSON with unescaped quotes is normalized before decoding."""
+        raw_content = (
+            '[{"source":"甲","marked_citation_content":'
+            '["他说"你好""],"score":0.9}]'
+        )
+
+        with patch(f'{MODULE_PATH}.llm_context') as mock_llm_context:
+            mock_llm_context.get.return_value.get.return_value = MagicMock()
+            with patch(f'{MODULE_PATH}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_ainvoke:
+                mock_ainvoke.return_value = {"content": raw_content}
+
+                result = await self.verifier.call_model(["test prompt"])
+
+        assert json.loads(result) == [
+            {
+                "source": "甲",
+                "marked_citation_content": ['他说"你好"'],
+                "score": 0.9,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_split_retry_halves_failed_ten_item_batch_for_each_attempt(self):
+        """A failed ten-item batch is retried as 5/5 then 2/3 leaves."""
+        handle_datas = [
+            {"domain": f"{index}.example", "citation_content": f"标记{index}", "fact": f"事实{index}"}
+            for index in range(10)
+        ]
+        attempt_sizes = []
+
+        async def always_fail(batch, semaphore):
+            attempt_sizes.append(len(batch))
+            raise CitationVerificationAttemptError("parse", "bad json")
+
+        with patch.object(self.verifier, "extract_messages_once", side_effect=always_fail):
+            result = await self.verifier.extract_messages_with_split_retry(
+                handle_datas,
+                attempt=1,
+                lineage="root",
+                semaphore=asyncio.Semaphore(2),
+            )
+
+        assert sorted(attempt_sizes) == [2, 2, 3, 3, 5, 5, 10]
+        assert result == [{"extract_failed_reason": "parse"} for _ in handle_datas]
+
+    @pytest.mark.asyncio
+    async def test_split_retry_keeps_successful_branch_in_original_order(self):
+        """A successful child is retained while only its failing sibling is split."""
+        handle_datas = [{"id": index} for index in range(4)]
+        calls = []
+
+        async def process(batch, semaphore):
+            identifiers = [item["id"] for item in batch]
+            calls.append(identifiers)
+            if identifiers in ([0, 1, 2, 3], [2, 3]):
+                raise CitationVerificationAttemptError("count", "result count mismatch")
+            return [{"id": identifier} for identifier in identifiers]
+
+        with patch.object(self.verifier, "extract_messages_once", side_effect=process):
+            result = await self.verifier.extract_messages_with_split_retry(
+                handle_datas, attempt=1, lineage="root", semaphore=asyncio.Semaphore(2))
+
+        assert calls == [[0, 1, 2, 3], [0, 1], [2, 3], [2], [3]]
+        assert result == [{"id": index} for index in range(4)]
+
+    @pytest.mark.asyncio
+    async def test_split_retry_shares_call_concurrency_limit(self):
+        """Child retries cannot exceed the provided LLM-call semaphore limit."""
+        handle_datas = [{"id": index} for index in range(10)]
+        active_calls = 0
+        peak_calls = 0
+
+        async def limited_failure(batch, semaphore):
+            nonlocal active_calls, peak_calls
+            async with semaphore:
+                active_calls += 1
+                peak_calls = max(peak_calls, active_calls)
+                await asyncio.sleep(0.01)
+                active_calls -= 1
+            raise CitationVerificationAttemptError("parse", "bad json")
+
+        semaphore = asyncio.Semaphore(2)
+        with patch.object(self.verifier, "extract_messages_once", side_effect=limited_failure):
+            await self.verifier.extract_messages_with_split_retry(
+                handle_datas, attempt=1, lineage="root", semaphore=semaphore)
+
+        assert peak_calls == 2
+
+    def test_update_citation_data_invalidates_regular_terminal_failure(self):
+        """A terminal failure placeholder deletes a regular citation."""
+        self.verifier.datas = [{"content": "普通引用", "valid": True}]
+
+        self.verifier.update_citation_data(
+            [0],
+            [{"extract_failed_reason": "parse"}],
+            [{"domain": "example.com", "citation_content": "普通引用", "fact": "事实"}],
+        )
+
+        assert self.verifier.datas[0]["valid"] is False
+        assert self.verifier.datas[0]["invalid_reason"] == "parse"

@@ -1,0 +1,1 @@
+After the first production `add_context`, call `expand_imports` once to follow IMPORTS edges: modules it imports and other files that import it — related edit sites often live one import hop away. Prefer production modules over tests/examples/galleries. Then `read_file` / `add_context` only on neighbors that are part of the fix.

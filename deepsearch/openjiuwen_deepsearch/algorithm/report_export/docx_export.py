@@ -14,6 +14,7 @@ from docx import Document
 from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
     MERMAID_BLOCK_RE,
     MermaidRenderStats,
+    add_report_chapter_ids,
     normalize_docx_fonts,
     normalize_docx_tables,
     normalize_headings,
@@ -150,7 +151,9 @@ def convert_md_to_docx(md_path: str | Path, docx_path: str | Path) -> None:
     content, mermaid_stats = replace_mermaid_blocks(content)
     # Mermaid fence 是否属于运行时契约必须在标题归一化前判断，后者会移除短缩进。
     content = normalize_headings(content)
-    html_text = DOCX_HTML_TEMPLATE.format(content=render_markdown_html_fragment(content))
+    content = add_report_chapter_ids(content)
+    html_content = render_markdown_html_fragment(content)
+    html_text = DOCX_HTML_TEMPLATE.format(content=html_content)
 
     document = Document()
     set_global_styles(document)

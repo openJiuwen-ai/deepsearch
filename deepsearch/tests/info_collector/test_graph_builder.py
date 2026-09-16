@@ -178,6 +178,29 @@ class TestStartNode:
         assert collector_context.evidence_ledger == {}
 
     @pytest.mark.asyncio
+    async def test_start_node_inherits_only_target_tracking_ledger(
+        self, start_node, mock_session, mock_context
+    ):
+        inputs = {
+            "evidence_ledger": {
+                "known_facts": ["old fact"],
+                "missing_evidence": ["old missing"],
+                "attempted_queries": ["old query"],
+                "target_paper_attempts": {"arxiv-target": 1},
+                "confirmed_target_papers": ["confirmed-target"],
+            }
+        }
+
+        await start_node.invoke(inputs, mock_session, mock_context)
+
+        call_args = mock_session.update_global_state.call_args[0][0]
+        collector_context = CollectorContext(**call_args["collector_context"])
+        assert collector_context.evidence_ledger == {
+            "target_paper_attempts": {"arxiv-target": 1},
+            "confirmed_target_papers": ["confirmed-target"],
+        }
+
+    @pytest.mark.asyncio
     async def test_start_node_rejects_none_tool_call_turns(self, start_node, mock_session, mock_context):
         """非法的工具调用轮次配置不应被静默改写成默认值。"""
         with pytest.raises(ValidationError):
@@ -222,7 +245,8 @@ class TestGenerateQueryNode:
             "collector_context.step_description": "步骤描述",
             "collector_context.evidence_ledger": {},
             "collector_context.research_intent": {
-                "temporal_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"}
+                "content_date_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"},
+                "target_papers": [{"pmid": "38202877", "title": "A Full Paper Title"}],
             },
         }
         return state_map.get(key)
@@ -259,7 +283,10 @@ class TestGenerateQueryNode:
 
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
-                search_queries = [RetrievalQuery(query=query) for query in queries]
+                search_queries = [
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=query, primary_engine="petal") for query in queries],
+                ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries
                 })
@@ -271,6 +298,9 @@ class TestGenerateQueryNode:
                 agent_input = mock_apply_prompt.call_args.args[1]
                 assert agent_input["max_search_query_count"] == 5
                 assert "number_queries" not in agent_input
+                assert agent_input["has_target_papers"] is True
+                assert agent_input["target_papers"][0]["pmid"] == "38202877"
+                assert '"pmid": "38202877"' in agent_input["target_papers_text"]
 
                 # 验证返回结果
                 assert result == {}
@@ -297,7 +327,10 @@ class TestGenerateQueryNode:
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
-                fallback_queries = [RetrievalQuery(query=f"缺口{i}") for i in range(1, 6)]
+                fallback_queries = [
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=f"缺口{i}", primary_engine="petal") for i in range(1, 5)],
+                ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": fallback_queries
                 })
@@ -327,7 +360,10 @@ class TestGenerateQueryNode:
                 await generate_query_node.invoke(inputs, mock_session, mock_context)
 
                 # 验证使用了默认查询
-                search_queries = [RetrievalQuery(query=query) for query in queries]
+                search_queries = [
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=query, primary_engine="petal") for query in queries],
+                ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries
                 })
@@ -393,7 +429,7 @@ class TestSupervisorNode:
                 "attempted_queries": ["已查 query"],
             },
             "collector_context.research_intent": {
-                "temporal_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
+                "source_date_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
             },
         }
         return state_map.get(key)
@@ -475,7 +511,7 @@ class TestSupervisorNode:
                 assert result["next_node"] == "collector_info_retrieval"
 
                 # 验证查询被更新
-                search_queries = [RetrievalQuery(query=query) for query in next_queries]
+                search_queries = [RetrievalQuery(query=query, primary_engine="petal") for query in next_queries]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries,
                 })
@@ -519,7 +555,9 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query=query) for query in next_queries],
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query=query, primary_engine="petal") for query in next_queries
+                    ],
                 })
                 agent_input = mock_apply_prompt.call_args.args[1]
                 assert agent_input["max_search_query_count"] == 5
@@ -638,7 +676,9 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query="需要官方口径")]
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query="需要官方口径", primary_engine="petal")
+                    ]
                 })
         finally:
             llm_context.reset(token)
@@ -667,7 +707,9 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query="需要更多市场数据")]
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query="需要更多市场数据", primary_engine="petal")
+                    ]
                 })
         finally:
             llm_context.reset(token)
@@ -771,7 +813,8 @@ def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
     assert "Return `queries: []` only when the current step explicitly does not require external retrieval." in prompt
     assert "Separate display language from retrieval language" in prompt
     assert "Keep `missing_evidence` in `{{ language }}`" in prompt
-    assert 'search_engine_name` set to `"pubmed"` or `"arxiv"`' in prompt
+    assert '`search_engine_names`' in prompt
+    assert '`["pubmed", "arxiv", "semantic_scholar"]`' in prompt
     assert "write `query` in English using academic terms" in prompt
     assert "{{ max_search_query_count }}" in prompt
     assert "{{ number_queries }}" not in prompt
@@ -989,6 +1032,14 @@ def test_build_info_collector_sub_graph():
     """测试子图构建"""
     collector_graph = build_info_collector_sub_graph()
     assert isinstance(collector_graph, Workflow)
+
+
+def test_info_collector_graph_maps_evidence_ledger_start_input():
+    collector_graph = build_info_collector_sub_graph()
+    spec = collector_graph._internal._workflow_spec
+    inputs_schema = spec.comp_configs[NodeId.START.value].io_configs.inputs_schema
+
+    assert inputs_schema["evidence_ledger"] == "${evidence_ledger}"
 
 
 def test_service_config_uses_relaxed_collector_loop_defaults():

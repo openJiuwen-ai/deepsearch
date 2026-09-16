@@ -44,9 +44,9 @@ RUN chmod +x server/telemetry_event_server.py || true
 EXPOSE 8000
 EXPOSE 8089
 
-# 健康检查
+# 健康检查（使用环境变量 BACKEND_PORT，默认 8000）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health'); urllib.request.urlopen('http://localhost:8089')" || exit 1
+    CMD python -c "import os, urllib.request; port = os.getenv('BACKEND_PORT', '8000'); urllib.request.urlopen('http://localhost:' + port + '/api/health', timeout=5); urllib.request.urlopen('http://localhost:8089', timeout=5)" || exit 1
 
 # 同时启动：8000 主 API（DeepResearch 等）、8089 Telemetry（DeepSearch 模式 search_mode=search）
 CMD ["sh", "-c", "python -m server.telemetry_event_server --host 0.0.0.0 & python start_backend.py"]

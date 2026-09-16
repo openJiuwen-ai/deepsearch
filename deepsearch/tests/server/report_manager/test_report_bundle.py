@@ -120,6 +120,19 @@ def test_build_report_bundle_raises_validation_exception_when_response_content_e
         build_report_bundle(final_result, tmp_path)
 
 
+def test_build_report_bundle_rejects_html_response_content(tmp_path):
+    """导出不能将 HTML 响应内容写成 Markdown 中间文件。"""
+    final_result = {
+        "response_content": "<!DOCTYPE html><html><body>Brief</body></html>",
+        "response_content_type": "text/html",
+        "infer_messages": [],
+        "chart_messages": [],
+    }
+
+    with pytest.raises(CustomValueException, match="text/markdown"):
+        build_report_bundle(final_result, tmp_path)
+
+
 def test_build_report_bundle_raises_validation_exception_when_chart_base64_invalid(tmp_path):
     """Validate invalid chart payloads are surfaced as validation errors.
 

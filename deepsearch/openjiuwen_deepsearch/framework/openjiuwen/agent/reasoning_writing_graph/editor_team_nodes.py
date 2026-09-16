@@ -108,6 +108,25 @@ class SectionStartNode(Start):
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
 
         # 初始化section_context
+        history_plans = inputs.get("history_plans") or []
+        # 从 history_plans 中统计已收集的 doc_info 数量
+        collected_doc_num = 0
+        for plan in history_plans:
+            steps = plan.steps if hasattr(plan, "steps") else plan.get("steps", [])
+            for step in steps:
+                queries = (
+                    step.retrieval_queries
+                    if hasattr(step, "retrieval_queries")
+                    else step.get("retrieval_queries", [])
+                ) or []
+                for query in queries:
+                    doc_infos = (
+                        query.doc_infos
+                        if hasattr(query, "doc_infos")
+                        else query.get("doc_infos", [])
+                    ) or []
+                    collected_doc_num += len(doc_infos)
+
         section_context = SectionContext(
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
@@ -123,6 +142,8 @@ class SectionStartNode(Start):
             report_type_policy=inputs.get("report_type_policy") or {},
             research_intent=inputs.get("research_intent") or {},
             section_local_contract=inputs.get("section_local_contract") or {},
+            history_plans=history_plans,
+            collected_doc_num=collected_doc_num,
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(),
@@ -390,17 +411,24 @@ class SubReporterNode(BaseNode):
             section_format_requirements=session.get_global_state(
                 "section_context.section_format_requirements"
             ) or [],
-            doc_infos=_collect_doc_infos(session.get_global_state("section_context.history_plans")),
+            passages=_collect_doc_infos(session.get_global_state("section_context.history_plans")),
             step_summaries=_collect_step_summaries(session.get_global_state("section_context.history_plans")),
             current_outline=session.get_global_state("section_context.current_outline")
             if session.get_global_state("section_context.current_outline") else "",
             max_generate_retry_num=session.get_global_state("config.report_max_generate_retry_num") or 3,
             classify_doc_infos_res_top_k_num=session.get_global_state(
-                "config.sub_report_classify_doc_infos_res_top_k_num") or 20,
+                "config.sub_report_classify_doc_infos_res_top_k_num") or 15,
             llm_model_name=adapt_llm_model_name(session, NodeId.SUB_REPORTER.value),
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],
             visualization_enable=session.get_global_state("config.visualization_enable"),
+            # 会话缺键时 get_global_state 返回 None，归一回默认开启，
+            # 避免消费端 .get(key, True) 命中键存在值 None 而误关闭。
+            coverage_rule_block_enable=(
+                True
+                if session.get_global_state("config.coverage_rule_block_enable") is None
+                else bool(session.get_global_state("config.coverage_rule_block_enable"))
+            ),
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             require_summary_first=rtp.get("require_summary_first", False),
@@ -418,7 +446,22 @@ class SubReporterNode(BaseNode):
                     f"{'*' if LogManager.is_sensitive() else updating_state.get('current_outline')}")
 
         reporter = Reporter(updating_state.get('llm_model_name'))
-        success, msg, sub_report_content, classified_content = await reporter.generate_sub_report(updating_state)
+        try:
+            success, msg, sub_report_content, classified_content = await reporter.generate_sub_report(updating_state)
+        except (TypeError, ValueError, AttributeError, KeyError) as e:
+            # Last-resort guard: LLM-returned data may contain unexpected types
+            # that escape inner try/except blocks. Fail this section gracefully
+            # instead of crashing the entire session.
+            logger.error(
+                f"{self.log_prefix} generate_sub_report raised {type(e).__name__}: {e}. "
+                f"Section will be marked as failed.",
+                exc_info=True,
+            )
+            success, msg, sub_report_content, classified_content = (
+                False,
+                format_exception_info(StatusCode.SUB_REPORT_GENERATE_ERROR, e),
+                "", [],
+            )
 
         algorithm_output = dict(success=success, msg=msg,
                                 classified_content=classified_content,
@@ -429,9 +472,9 @@ class SubReporterNode(BaseNode):
         return self._post_handle(inputs, updating_state, session, context)
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        doc_infos = algorithm_output.get("doc_infos") or []
+        passages = algorithm_output.get("passages") or []
         detail_msg = (
-            f"{algorithm_output.get('msg')}, doc_infos_num:{len(doc_infos)}, "
+            f"{algorithm_output.get('msg')}, passages_num:{len(passages)}, "
             f"classified_content_num:{len(algorithm_output.get('classified_content', []))}"
         )
         if algorithm_output.get("success") and algorithm_output.get("sub_report_content"):
@@ -452,7 +495,7 @@ class SubReporterNode(BaseNode):
             section_idx=algorithm_output.get("section_idx"),
             report_task=algorithm_output.get("report_task"),
             section_task=algorithm_output.get("section_task"),
-            doc_infos=doc_infos,
+            passages=passages,
         )
         sub_report_content = SubReportContent(
             classified_content=algorithm_output.get("classified_content", []),
@@ -504,6 +547,16 @@ class SubSourceTracerNode(BaseNode):
         else:
             report = ""
             classified_content = []
+
+        cc_count = len(classified_content) if isinstance(classified_content, list) else 0
+        cc_sample_keys = (
+            sorted(list(classified_content[0].keys()))
+            if cc_count > 0 and isinstance(classified_content[0], dict) else None
+        )
+        logger.info(
+            "[TRACE_DIAG] SubSourceTracer _pre_handle: classified_content count=%d, sample_keys=%s",
+            cc_count, cc_sample_keys,
+        )
 
         return dict(
             report=report,
@@ -759,6 +812,7 @@ def build_editor_team_workflow():
             "report_type_policy": "${report_type_policy}",
             "research_intent": "${research_intent}",
             "section_local_contract": "${section_local_contract}",
+            "history_plans": "${history_plans}",
         }
     )
 

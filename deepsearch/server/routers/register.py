@@ -39,6 +39,7 @@ def register_deepsearch_router():
     """Register sub routers to deepsearch routers."""
     deepsearch_router = APIRouter(prefix="/api/v1/agent/deepsearch")
     deepsearch_router.include_router(deepsearch_run.run_router, prefix="/run", tags=["Run"])
+    deepsearch_router.include_router(deepsearch_run.brief_run_router, prefix="/run_brief", tags=["Run"])
     deepsearch_router.include_router(web_search_engine_router.router, prefix="/web_search", tags=["Web Search Engine"])
     deepsearch_router.include_router(report.reports_router, prefix="/reports", tags=["Reports"])
     deepsearch_router.include_router(report_template.router, prefix="/template", tags=["Report Template"])

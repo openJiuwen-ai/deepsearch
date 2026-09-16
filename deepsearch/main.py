@@ -16,6 +16,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import (
     parse_endnode_content,
 )
 from openjiuwen_deepsearch.utils.debug_utils.result_exporter import ResultExporter
+from openjiuwen_deepsearch.utils.log_utils.log_common import run_id_ctx, RotationConfig
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.run_telemetry import (
     RunTelemetryConfig,
@@ -27,8 +28,7 @@ from openjiuwen_deepsearch.utils.question_model_router import route_question_sea
 
 LogManager.init(
     log_dir="./output/logs",
-    max_bytes=100 * 1024 * 1024,
-    backup_count=20,
+    rotation=RotationConfig(max_bytes=100 * 1024 * 1024, backup_count=20),
     level="INFO",
     is_sensitive=False,
 )
@@ -60,6 +60,19 @@ async def run_jiuwen_workflow(query: str, agent_config: dict, report_template: s
         None
     """
     conversation_id = str(uuid.uuid4())
+    run_id = LogManager.new_run()
+    run_token = run_id_ctx.set(run_id) if run_id else None
+    try:
+        await _run_jiuwen_workflow_inner(query, agent_config, report_template, conversation_id)
+    finally:
+        if run_token is not None:
+            run_id_ctx.reset(run_token)
+        if run_id:
+            LogManager.end_run(run_id)
+
+
+async def _run_jiuwen_workflow_inner(query: str, agent_config: dict, report_template: str, conversation_id: str):
+    """实际工作流逻辑,由 run_jiuwen_workflow 调用。"""
     _qp = (
         "***"
         if LogManager.is_sensitive()

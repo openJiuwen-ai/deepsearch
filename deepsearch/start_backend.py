@@ -11,12 +11,12 @@ openJiuwen-DeepSearch Server - 主入口
 
 import logging
 from server.main import main
+from openjiuwen_deepsearch.utils.log_utils.log_common import RotationConfig
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 LogManager.init(
     log_dir="./output/logs",
-    max_bytes=100 * 1024 * 1024,
-    backup_count=20,
+    rotation=RotationConfig(max_bytes=100 * 1024 * 1024, backup_count=20),
     level="INFO",
     is_sensitive=False
 )

@@ -100,6 +100,14 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     ValidateNewStateNode,
     VLMChartGeneratorNode,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.brief_nodes import (
+    BriefEvidenceReviewNode,
+    BriefHtmlReporterNode,
+    BriefInfoCollectorNode,
+    BriefOutlineNode,
+    BriefReporterNode,
+    BriefSubReporterNode,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Action,
     Result,
@@ -127,7 +135,9 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
     get_current_time,
 )
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
-from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
+from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
+    SCHOLARLY_PROVIDER_NAMES,
+)
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
@@ -135,6 +145,33 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     tool_context,
     web_search_context,
 )
+
+
+def _add_brief_branch(flow: Workflow) -> None:
+    """向任意研究主图注册相同且独立的 Brief 支路。"""
+    flow.add_workflow_comp(NodeId.BRIEF_OUTLINE.value, BriefOutlineNode())
+    flow.add_workflow_comp(NodeId.BRIEF_INFO_COLLECTOR.value, BriefInfoCollectorNode())
+    flow.add_workflow_comp(NodeId.BRIEF_EVIDENCE_REVIEWER.value, BriefEvidenceReviewNode())
+    flow.add_workflow_comp(NodeId.BRIEF_SUB_REPORTER.value, BriefSubReporterNode())
+    flow.add_workflow_comp(NodeId.BRIEF_REPORTER.value, BriefReporterNode())
+    flow.add_workflow_comp(NodeId.BRIEF_SOURCE_TRACER.value, SourceTracerNode(NodeId.BRIEF_HTML_REPORTER.value))
+    flow.add_workflow_comp(NodeId.BRIEF_HTML_REPORTER.value, BriefHtmlReporterNode())
+    for source, targets in (
+        (NodeId.BRIEF_OUTLINE.value, [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.END.value]),
+        (
+            NodeId.BRIEF_INFO_COLLECTOR.value,
+            [NodeId.BRIEF_EVIDENCE_REVIEWER.value, NodeId.BRIEF_SUB_REPORTER.value, NodeId.END.value],
+        ),
+        (
+            NodeId.BRIEF_EVIDENCE_REVIEWER.value,
+            [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.BRIEF_SUB_REPORTER.value, NodeId.END.value],
+        ),
+        (NodeId.BRIEF_SUB_REPORTER.value, [NodeId.BRIEF_REPORTER.value, NodeId.END.value]),
+        (NodeId.BRIEF_REPORTER.value, [NodeId.BRIEF_SOURCE_TRACER.value, NodeId.END.value]),
+        (NodeId.BRIEF_SOURCE_TRACER.value, [NodeId.BRIEF_HTML_REPORTER.value]),
+        (NodeId.BRIEF_HTML_REPORTER.value, [NodeId.END.value]),
+    ):
+        flow.add_conditional_connection(source, router=init_router(source, targets))
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from openjiuwen_deepsearch.utils.log_utils.log_interface import record_interface_log
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -172,6 +209,44 @@ def _build_retrieve_tool(milvus_cfg: MilvusConfig) -> RetrieveTool:
 logger = logging.getLogger(__name__)
 
 
+def _zero_scholarly_search_secrets(config: AgentConfig | dict | None) -> None:
+    """Zero mutable scholarly provider keys held by a config model or dump."""
+    if config is None:
+        return
+    scholarly = (
+        config.get("scholarly_search_config")
+        if isinstance(config, dict)
+        else getattr(config, "scholarly_search_config", None)
+    )
+    if scholarly is None:
+        return
+    for provider_name in SCHOLARLY_PROVIDER_NAMES:
+        provider = (
+            scholarly.get(provider_name)
+            if isinstance(scholarly, dict)
+            else getattr(scholarly, provider_name, None)
+        )
+        secret = (
+            provider.get("search_api_key")
+            if isinstance(provider, dict)
+            else getattr(provider, "search_api_key", None)
+        )
+        if isinstance(secret, bytearray) and secret:
+            zero_secret(secret)
+
+
+def _zero_active_scholarly_wrapper_secrets() -> None:
+    """Zero provider-key copies owned by wrappers before resetting their context."""
+    try:
+        engines = web_search_context.get() or {}
+    except LookupError:
+        return
+    for provider_name in SCHOLARLY_PROVIDER_NAMES:
+        secret = getattr(engines.get(provider_name), "search_api_key", None)
+        if isinstance(secret, bytearray) and secret:
+            zero_secret(secret)
+
+
 def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
     """Build a redacted copy of agent_config for workflow logging boundaries."""
     return anonymize_config_for_logging(copy.deepcopy(to_dict_safe(agent_config)))
@@ -179,22 +254,30 @@ def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
 
 def _initialize_web_search_context_from_agent_config(
     agent_config: AgentConfig,
-    *,
-    include_academic_engines: bool = False,
 ):
     """Instantiate the active engine and optional research-only academic engines for a run."""
     custom_web = agent_config.custom_web_search_config
     web_search_config = agent_config.web_search_engine_config
     web_engine_name, web_mapping = DeepresearchAgent.register_web_search_tool(custom_web, web_search_config)
     web_engine_configs = {web_engine_name: web_search_config.model_dump()}
-    if include_academic_engines:
-        for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
+    if agent_config.scholarly_search_enabled:
+        scholarly_config = agent_config.scholarly_search_config
+        for engine_name in SCHOLARLY_PROVIDER_NAMES:
             if engine_name not in web_mapping or engine_name in web_engine_configs:
                 continue
-            academic_config = web_search_config.model_dump()
-            academic_config["search_engine_name"] = engine_name
-            academic_config["search_url"] = ""
-            academic_config["search_api_key"] = bytearray()
+            provider_config = getattr(scholarly_config, engine_name)
+            academic_config = {
+                "search_engine_name": engine_name,
+                "search_url": provider_config.search_url,
+                "search_api_key": provider_config.search_api_key,
+                "max_web_search_results": provider_config.max_search_results,
+                "requests_per_second": provider_config.requests_per_second,
+            }
+            if engine_name == "pubmed":
+                academic_config.update(
+                    email=provider_config.email,
+                    tool=provider_config.tool,
+                )
             web_engine_configs[engine_name] = academic_config
     web_search_token = web_search_context.set(
         {
@@ -513,6 +596,7 @@ class DeepresearchAgent(BaseAgent):
         if llm_token is not None:
             llm_context.reset(llm_token)
         if web_search_token is not None:
+            _zero_active_scholarly_wrapper_secrets()
             web_search_context.reset(web_search_token)
         if local_search_token is not None:
             local_search_context.reset(local_search_token)
@@ -573,6 +657,11 @@ class DeepresearchAgent(BaseAgent):
         filter_dup_flag = False
         stream_query, is_report_feedback = self._prepare_stream_query(message, interrupt_feedback)
         workflow_agent_config = _redact_agent_config_for_workflow_inputs(session_agent_config)
+        scholarly_config = workflow_agent_config.get("scholarly_search_config", {})
+        for provider_name in SCHOLARLY_PROVIDER_NAMES:
+            provider_config = scholarly_config.get(provider_name)
+            if isinstance(provider_config, dict):
+                provider_config["search_api_key"] = bytearray()
 
         async for chunk in Runner.run_agent_streaming(
             agent=self.agent,
@@ -634,6 +723,7 @@ class DeepresearchAgent(BaseAgent):
         llm_token = None
         web_search_token = None
         local_search_token = None
+        session_agent_config = None
 
         try:
             session_agent_config = AgentConfig.model_validate(agent_config)
@@ -655,9 +745,11 @@ class DeepresearchAgent(BaseAgent):
             await self._aopen_local_search_engines()
         except CustomValueException:
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             raise
         except ValidationError as e:
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             if LogManager.is_sensitive():
                 raise CustomValueException(
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR_NO_PRINT.code,
@@ -667,6 +759,10 @@ class DeepresearchAgent(BaseAgent):
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(e)),
             ) from e
+        except Exception:
+            self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
+            raise
 
         token = session_id_ctx.set(conversation_id)
         stats_info_llm_enabled = bool(session_agent_config.stats_info_llm)
@@ -746,6 +842,8 @@ class DeepresearchAgent(BaseAgent):
             finally:
                 self._reset_context_tokens(llm_token, web_search_token, local_search_token)
 
+            _zero_scholarly_search_secrets(session_agent_config)
+
             if is_all_end:
                 zero_secret(
                     session_agent_config.get("web_search_engine_config", {}).get(
@@ -790,6 +888,7 @@ class DeepresearchAgent(BaseAgent):
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
@@ -798,7 +897,7 @@ class DeepresearchAgent(BaseAgent):
         # 添加条件边
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -810,7 +909,9 @@ class DeepresearchAgent(BaseAgent):
             NodeId.OUTLINE_INTERACTION.value, [NodeId.OUTLINE.value, NodeId.EDITOR_TEAM.value, NodeId.END.value]
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
         user_feedback_processor_router = init_router(
             NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
@@ -874,7 +975,6 @@ class DeepresearchAgent(BaseAgent):
         local_engine_name, local_mapping = self._register_local_search_tool(custom_local, local_search_config)
         web_search_token = _initialize_web_search_context_from_agent_config(
             agent_config,
-            include_academic_engines=True,
         )
         local_search_token = local_search_context.set(
             {local_engine_name: local_mapping[local_engine_name](**local_search_config.model_dump())}
@@ -945,6 +1045,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边 add_connection
@@ -953,7 +1054,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         # 添加条件边
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -967,7 +1068,9 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
             [NodeId.OUTLINE.value, NodeId.DEPENDENCY_EDITOR_TEAM.value, NodeId.END.value],
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         dependency_editor_router = init_router(
             NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]
         )
@@ -1025,8 +1128,10 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         """
         构建 hybrid research workflow。
 
-        该 workflow 复用普通 OutlineNode 和 OutlineInteractionNode，同时注册普通写作团队与依赖驱动写作团队。
-        大纲模式由 IntentRecognitionNode 写入 session，后续节点按该结果选择 prompt、tool schema 和写作分支。
+        该 workflow 复用普通 OutlineNode 和 OutlineInteractionNode，同时注册普通写作团队与依赖驱动
+        写作团队。
+        大纲模式由 IntentRecognitionNode 写入 session，后续节点按该结果选择 prompt、tool schema
+        和写作分支。
         """
         _id = self.research_name
         name = self.research_name
@@ -1053,13 +1158,14 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
         flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
 
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -1083,7 +1189,9 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
             ],
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
         dependency_editor_router = init_router(
             NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]
@@ -1351,7 +1459,7 @@ class DeepSearchAgent(BaseAgent):
         return agent
 
     @classmethod
-    def _get_shared_agent(cls):
+    def get_shared_agent(cls):
         if cls._workflow_agent is None:
             with cls._workflow_agent_lock:
                 if cls._workflow_agent is None:
@@ -1359,7 +1467,7 @@ class DeepSearchAgent(BaseAgent):
         return cls._workflow_agent
 
     def _build_agent(self):
-        self.agent = self._get_shared_agent()
+        self.agent = self.get_shared_agent()
         return self.agent
 
     async def _cancel_running_tasks(
@@ -1805,7 +1913,10 @@ class DeepSearchAgent(BaseAgent):
         run_context: DeepSearchRunContext | None = None
         try:
             session_agent_config = AgentConfig.model_validate(agent_config_for_model).model_copy(deep=True)
-            logger.info(f"[DeepSearchAgent] agent_config: {session_agent_config}")
+            logger.info(
+                "[DeepSearchAgent] agent_config: %s",
+                _redact_agent_config_for_workflow_inputs(session_agent_config),
+            )
 
             try:
                 search_config = SearchWorkflowConfig.model_validate(
@@ -1917,6 +2028,7 @@ class DeepSearchAgent(BaseAgent):
             if llm_token is not None:
                 llm_context.reset(llm_token)
             if web_search_token is not None:
+                _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
@@ -1926,6 +2038,7 @@ class DeepSearchAgent(BaseAgent):
                 run_context.agent_config if run_context is not None else None,
             ):
                 if cleanup_agent_config is not None:
+                    _zero_scholarly_search_secrets(cleanup_agent_config)
                     zero_secret(cleanup_agent_config.web_fetch_provider_config.api_key)
                     zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
 
@@ -2194,7 +2307,9 @@ class SimpleReactSearchAgent(BaseAgent):
         finally:
             llm_context.reset(llm_token)
             if web_search_token is not None:
+                _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             zero_secret(session_agent_config.web_fetch_provider_config.api_key)
             zero_secret(session_agent_config.web_search_engine_config.search_api_key)
 

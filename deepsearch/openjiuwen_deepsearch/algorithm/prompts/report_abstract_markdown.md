@@ -34,9 +34,6 @@ Do not include any section titles (e.g., "摘要"), metadata, or explanatory not
 {% endif %}
 {% endif %}
 
-{% if report_type | default("professional") == "brief" %}
-- Keep the abstract **extra short** (about **120–220** Chinese characters or **70–130** English words) while still bolding critical numbers/claims.
-{% endif %}
 
 # Critical Requirements
 

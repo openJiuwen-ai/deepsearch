@@ -2,33 +2,39 @@
 
 ## 维护范围
 
-本文档覆盖 `openjiuwen_deepsearch/algorithm/research_collector/` 下的资料采集后处理能力，包括工具调用结果处理、证据 ID 生成、内容去重、compact evidence 构建、文档评估和工具日志。
+本文档覆盖 `openjiuwen_deepsearch/algorithm/research_collector/` 下的资料采集后处理能力，包括工具调用结果处理、证据 ID 生成、内容去重、compact evidence 构建和工具日志。
 
 本文档不覆盖 `framework/openjiuwen/agent/collector_graph/` 中的图编排，也不覆盖搜索工具自身的实现。
 
 ## 功能目的
 
-资料采集把搜索、本地检索和运行时工具返回的原始结果整理为后续报告生成可使用的证据。它负责过滤排除域名、保留来源身份、生成稳定 doc/source id、提取关键片段、构造 compact evidence，并对候选文档进行评分。
+资料采集把搜索、本地检索和运行时工具返回的原始结果整理为后续报告生成可使用的证据。它负责过滤排除域名、保留来源身份、生成稳定 doc/source id、提取关键片段、构造 compact evidence。
 
 ## 可见行为
 
 - web search、local search 和运行时 API 工具结果会被归一化为记录列表。
 - `exclude_domains`、`exclude_url`、`exclude_titles` 三类排除约束仅作用于 Web 搜索结果（tavily/google/common 三条路径的统一入口），本地知识库检索（local search）结果不在其过滤范围内，行为不变。
-- `exclude_domains` 按命中域名及其子域名过滤；`exclude_url` 按命中禁引链接过滤（归一化 host+path 精确匹配）；`exclude_titles` 按命中禁引标题的来源过滤（归一化精确匹配，或剥离枚举聚合站后缀后精确匹配），用于拦截同一文献在 Web 上的镜像变体。
+- `exclude_domains` 按命中域名及其子域名过滤；`exclude_url` 按命中禁引链接过滤（归一化 host+path 精确匹配）；`exclude_titles` 按命中禁引标题的来源过滤，使用四层匹配规则拦截同一文献在 Web 上的镜像变体：
+  1. **R1 精确匹配**：归一化（转小写、去标点、合并空白）后完全相同。
+  2. **R2 剥后缀精确匹配**：剥离尾部聚合/出版站标记词（如 MDPI、ProQuest、IDEALS 等）后精确匹配。
+  3. **R3 包含匹配**：被禁标题 ≥30 归一化字符时，做单向包含检查（仅 `blocked in target`，即被禁标题包含在目标标题中，不再反向检查 `target in blocked`）。防误杀保护：当被禁标题是目标标题的严格前缀 **且** 剥后缀后两者不同时跳过（视为不同论文的副标题扩展）；若剥后缀后相同则仍 block（视为同一论文加站点标签）。
+  4. **R4 Jaccard 相似度匹配**：词级 Jaccard 相似度 ≥ 70% 视为同一文献变体，同样适用防误杀保护。
 - 每个文档或证据片段会获得稳定的 `doc_id` / `source_id`，用于后续引用、去重和 source store 回查。
-- 文档评估只接收 compact evidence，不应把完整 `original_content` 直接送入 evaluator Prompt。
+- jieba 分词在后台线程中初始化，通过 `_jieba_ready` 事件同步就绪状态，避免阻塞主流程的首次工具调用。
 - 采集阶段的说明性结构化字段遵循报告语言；搜索 `queries` 和 `next_queries` 不强制遵循报告语言，可以选择更容易召回权威证据的源语言或混合语言。
+- 目标论文只在 collector 中定位。第一轮查询生成会先判断目标是否与当前步骤相关；相关时最多生成一个定位查询，并按 PMID、DOI、arXiv ID、完整标题、隐式指纹的顺序选择最强线索。PubMed 与 arXiv 继续使用现有 `search_engine_name` 路由，查询数据结构和检索执行接口不新增专用类型。
+- 论文定位查询与普通主题查询分开构造。隐式指纹可由 collector 临时生成英文检索词，但数据集名称、数据年份和通用词不得无差别污染其他主题查询；数据年份也不是发表日期过滤条件。
+- 精确 PMID、DOI、arXiv ID 或完整标题命中时，复用规范化文档元数据、去重和 evidence ledger 记录确定性事实。数据集、年份和主题的隐式组合只用于召回，不单独证明论文身份，也不引入第二套候选评分或 token 匹配器。
+- 各 section/step 的 collector 状态彼此隔离，因此不同步骤可能重复定位同一论文。当前实现通过步骤相关性判断、每轮最多一个定位查询和已有去重限制成本；不为全局恰好一次语义改造并行架构。
 
 ## 关键代码路径
 
 - 工具调用处理：`openjiuwen_deepsearch/algorithm/research_collector/collector_function.py`
 - 证据结构：`openjiuwen_deepsearch/algorithm/research_collector/collector_evidence.py`
-- 文档评估：`openjiuwen_deepsearch/algorithm/research_collector/doc_evaluation.py`
 - 工具日志：`openjiuwen_deepsearch/algorithm/research_collector/tool_log.py`
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/info_evaluator_doc.md`
 - `openjiuwen_deepsearch/algorithm/prompts/collector.md`
 - `openjiuwen_deepsearch/algorithm/prompts/collector_final.md`
 - `openjiuwen_deepsearch/algorithm/prompts/collector_gen_query.md`
@@ -38,7 +44,6 @@
 
 - `tests/info_collector/algorithm/test_collector_function.py`
 - `tests/info_collector/algorithm/test_collector_evidence.py`
-- `tests/info_collector/algorithm/test_doc_evaluation.py`
 - `tests/info_collector/algorithm/test_tool_log.py`
 - `tests/info_collector/test_info_collector.py`
 - `tests/info_collector/test_collector_execution_service.py`
@@ -51,8 +56,7 @@
 3. 工具返回结果按来源类型写入 web、本地或其他工具记录。
 4. 证据层生成 `doc_id`、`source_id`、正文 hash 和 `content_ref`。
 5. compact evidence 提取标题、URL、来源、关键片段、发布时间和评分。
-6. 文档评估 Prompt 对 compact evidence 打分，代码侧校验 `document_index` 和分数字段。
-7. 下游报告生成和溯源使用整理后的 `doc_infos`、source store 和搜索记录。
+6. 下游报告生成和溯源使用整理后的 `doc_infos`、source store 和搜索记录。
 
 ## 数据契约与依赖
 
@@ -71,14 +75,15 @@
 - `doc_id`：文档级稳定 ID。
 - `source_id`：证据片段级稳定 ID。
 - `content_ref`：指向 source store 或 legacy doc info 的正文引用。
-- `scores`：`authority`、`relevance`、`answerability`、`data_density`。
+- `scores`：`authority`、`relevance`、`answerability`。
 
 ## 边界与错误处理
 
 - 工具名不在 tool dict 中时跳过本次工具调用，不应伪造结果。
 - 工具调用异常会记录错误并返回空结果，避免中断整个采集流程。
+- PubMed 或 arXiv 未找到目标论文时，按现有垂域回退继续普通 Web 检索。精确查询后至多允许一次更宽的后续查询；仍未找到时将其作为证据限制而非流程错误，不中止报告，也不得把其他论文冒充为目标论文。
+- 未确认目标论文时，supervisor 可将缺口保留为有望解决的下一轮检索，或在继续搜索收益很低时转为 `knowledge_gap`。后续总结只能陈述已检索证据及限制，不能声称隐式指纹已经确认身份。
 - URL 去重会移除常见跟踪参数，但不替换报告展示和引用使用的原始 URL。
-- evaluator 输出缺少 `document_index`、索引越界或 JSON 解析失败时，该评分项会被丢弃。
 - 敏感日志模式下不应输出完整网页正文、检索 query 或工具响应。
 
 ## 测试与验证
