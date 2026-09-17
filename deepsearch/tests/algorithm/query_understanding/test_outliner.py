@@ -389,3 +389,24 @@ class TestOutliner:
         assert tool_name in tool_names
         assert "runtime_outline_tool" in tool_names
 
+
+def test_outliner_prompt_renders_brief_outline_block_conditionally():
+    """brief_outline 存在时渲染结构约束块，缺省时保持与现状一致的渲染结果。"""
+    context = {
+        "messages": [],
+        "questions": "测试问题",
+        "entry_search_results": [],
+        "section_num": 3,
+        "language": "zh-CN",
+        "user_feedback": "",
+    }
+    baseline = apply_system_prompt("outliner", dict(context))[0]["content"]
+
+    context_with_brief = dict(context)
+    context_with_brief["brief_outline"] = '{"title": "T", "sections": [{"title": "S1"}, {"title": "S2"}]}'
+    rendered = apply_system_prompt("outliner", context_with_brief)[0]["content"]
+
+    assert "Authoritative Brief Outline" in rendered
+    assert '{"title": "T"' in rendered
+    assert "Authoritative Brief Outline" not in baseline
+

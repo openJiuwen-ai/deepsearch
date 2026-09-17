@@ -148,6 +148,14 @@ class DeepSearchRequest(BaseModel):
             "None 时由意图识别与澄清机制决定。仅 research 模式生效，任务首轮指定后不可变更。"
         ),
     )
+    metadata: dict | None = Field(
+        default=None,
+        description=(
+            "运行时元数据（可选），由客户端持有并回传，服务端不持久化。"
+            "当前支持键：brief_outline / research_intent / language（即 brief 报告"
+            " final_result.metadata 的原样回传），用于以 brief 大纲为结构基准生成专业版报告。"
+        ),
+    )
     web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
     user_feedback_processor_enable: bool = Field(default=False, description="是否启用用户反馈优化功能")
     user_feedback_processor_max_interactions: int = Field(default=100, ge=1, le=100, description="最大交互次数")

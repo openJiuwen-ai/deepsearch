@@ -15,6 +15,7 @@ class StartNode(Start)
 - 初始化 `SearchContext`：`query`、`session_id`、`messages`、`search_mode`、`report_template`。
 - 合并 `agent_config` 与 `service_config` 写入 runtime `config`。
 - 写入 `thread_id` 与 `interrupt_feedback` 到 runtime 配置。
+- 携带 `metadata` 时通过注入器注册表注入状态并接管路由（如 brief 大纲升级运行跳过意图识别直达 `OutlineNode`，见 [brief 大纲升级](../../../feature/framework/brief-outline-upgrade.md)）；并行主图的 START 为条件边，依赖/hybrid 主图为固定边。
 
 ---
 
@@ -68,6 +69,7 @@ class OutlineNode(BaseNode)
 - `report_template` 存在时使用 `outliner_template` 提示词，否则使用 `outliner`。
 - 按 `outliner_max_generate_outline_retry_num` 重试。
 - 成功时流式输出大纲并写入 `search_context.current_outline`。
+- brief 大纲升级运行（`search_context.brief_state` 携带大纲）时：章节数以注入的 brief 大纲为准（不做 max 截断），由 LLM 扩写补齐研究计划字段，生成后做标题序列一致性校验（归一化编号噪声后比较），不一致按重试机制重试。
 
 ---
 
@@ -296,6 +298,8 @@ StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerN
 -> [OutlineInteractionNode -> OutlineNode]* -> EditorTeamNode -> ReporterNode -> SourceTracerNode -> EndNode
 -> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
 ```
+
+说明：`StartNode` 的出边为条件边——普通运行进入 `IntentRecognitionNode`；携带升级 metadata 的运行由注入器接管，直达 `OutlineNode`。
 
 ### 主工作流（依赖驱动）
 ```text

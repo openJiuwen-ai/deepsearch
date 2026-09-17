@@ -110,8 +110,12 @@ class DeepSearchAgentManager:
         以及运行期策略字段（report_type，不参与 Agent 构建），保留与 build_agent_config
         相关的全部字段（含 space_id、local_search_config_ids、web_search_config_id、
         LLM 与各开关），保证换知识库/引擎后不会误复用旧 Agent。
+        metadata 为每次运行不同的注入数据（brief 大纲升级），不参与 Agent 构建，
+        同样排除，避免同一会话升级运行时缓存键漂移。
         """
-        payload = request.model_dump(exclude={"message", "interrupt_feedback", "report_type"})
+        payload = request.model_dump(
+            exclude={"message", "interrupt_feedback", "report_type", "metadata"}
+        )
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 

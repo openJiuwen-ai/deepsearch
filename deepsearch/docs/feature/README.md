@@ -83,6 +83,8 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [用户反馈处理](./algorithm/user-feedback-processor.md)
 - [Agent 工厂与运行模式](./framework/agent-factory.md)
 - [报告研究主工作流](./framework/research-workflow.md)
+- [运行时 Metadata 注入器机制](./framework/metadata-injectors.md)
+- [Brief 大纲升级专业版报告](./framework/brief-outline-upgrade.md)
 - [DeepSearch 搜索子工作流](./framework/deepsearch-sub-workflows.md)
 - [章节推理与写作子工作流](./framework/section-reasoning-writing-sub-workflows.md)
 - [信息采集子图](./framework/info-collector-subgraph.md)

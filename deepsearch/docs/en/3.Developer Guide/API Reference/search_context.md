@@ -37,10 +37,11 @@ Sub-report shell: **section_id**, **section_task**, **background_knowledge** (de
 Aggregated report: **report_task**, **report_template**, **sub_reports**, **report_content**, **all_classified_contents**, **merged_trace_source_datas**, **checked_trace_source_report_content**, **checked_trace_source_datas**.
 
 ## `FinalResult`
-**response_content**, **citation_messages**, **infer_messages**, **chart_messages**, **exception_info**, **warning_info**.
+**response_content**, **citation_messages**, **infer_messages**, **chart_messages**, **exception_info**, **warning_info**, **metadata**.
 
 - `infer_messages` stores source-tracing graph payloads. Report export reads `html_base64` and writes standalone HTML resources.
 - `chart_messages` stores VLM chart payloads. Report export reads `base64` and writes image resources.
+- `metadata` holds runtime metadata: a brief run writes `brief_outline` / `research_intent` / `language`, which the client can pass back as the `/run` `metadata` parameter to upgrade the brief outline into a professional report. Defaults to an empty dict.
 
 ## `ReportTypePolicy`
 Runtime policy derived from `research_intent.report_type`, used to keep report-style decisions consistent across the workflow.

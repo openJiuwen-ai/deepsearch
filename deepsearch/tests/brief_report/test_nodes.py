@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import date
 from unittest.mock import AsyncMock
 
 import pytest
@@ -448,6 +449,59 @@ async def test_brief_collector_failure_uses_info_collecting_error_code(monkeypat
         f"[{StatusCode.INFO_COLLECTING_EMPTY.code}]"
         "Info collecting exists Abnormal, No doc infos found.: query generation failed"
     )
+
+
+@pytest.mark.asyncio
+async def test_brief_outline_writes_upgrade_metadata_into_final_result(monkeypatch):
+    """Brief 大纲生成后应把升级所需 metadata 写入 final_result。"""
+    session = _BriefSession()
+    session.values["search_context.research_intent"] = {"audience_role": "CTO", "tone": "formal"}
+    outline = _brief_outline()
+    monkeypatch.setattr(brief_nodes, "_llm", lambda *_: object())
+    monkeypatch.setattr(brief_nodes, "generate_brief_outline", AsyncMock(return_value=outline))
+    monkeypatch.setattr(
+        brief_nodes, "custom_stream_output", AsyncMock()
+    )
+
+    result = await BriefOutlineNode()._do_invoke({}, session, None)
+
+    metadata = session.values["search_context.final_result.metadata"]
+    assert metadata["brief_outline"]["title"] == outline.title
+    assert [s["title"] for s in metadata["brief_outline"]["sections"]] == ["范围", "结论"]
+    # model_dump(mode="json") 会带出全部默认字段，按关键键断言
+    assert metadata["research_intent"]["audience_role"] == "CTO"
+    assert metadata["research_intent"]["tone"] == "formal"
+    assert metadata["language"] == "zh-CN"
+    assert result["next_node"] == NodeId.BRIEF_INFO_COLLECTOR.value
+
+
+@pytest.mark.asyncio
+async def test_brief_outline_metadata_is_json_serializable_with_date_scope(monkeypatch):
+    """research_intent 含 date 时间范围时，metadata 必须可被 EndNode 的 json.dumps 序列化。"""
+    session = _BriefSession()
+    session.values["search_context.research_intent"] = {
+        "audience_role": "CTO",
+        "tone": "formal",
+        "source_date_scope": {
+            "constraint_type": "source_date",
+            "start_date": date(2025, 1, 1),
+            "end_date": date(2025, 6, 30),
+        },
+    }
+    outline = _brief_outline()
+    monkeypatch.setattr(brief_nodes, "_llm", lambda *_: object())
+    monkeypatch.setattr(brief_nodes, "generate_brief_outline", AsyncMock(return_value=outline))
+    monkeypatch.setattr(
+        brief_nodes, "custom_stream_output", AsyncMock()
+    )
+
+    await BriefOutlineNode()._do_invoke({}, session, None)
+
+    metadata = session.values["search_context.final_result.metadata"]
+    # EndNode 会对 final_result 做 json.dumps；date 对象必须已转为 ISO 字符串
+    serialized = json.dumps({"metadata": metadata}, ensure_ascii=False)
+    assert "2025-01-01" in serialized
+    assert "2025-06-30" in serialized
 
 
 @pytest.mark.asyncio

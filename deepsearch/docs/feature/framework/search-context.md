@@ -53,7 +53,7 @@
   `content_date` 只通过 collector query 表达事实或数据的时间范围，不按来源发布日期过滤。
 - `build_temporal_scope_prompt_context(intent, engine_name=None, scholarly_enabled=False)` 为 collector query、补搜和 `sub_report_markdown` 写作 Prompt 生成六字段：`has_temporal_scope`、`source_date_instruction`、`content_date_instruction`、`temporal_scope_instruction`（两条指令的拼接兼容字段，供旧 Prompt 直接消费）、`temporal_embed_in_query`、`temporal_query_instruction`（合并 embed 指引）；无约束时返回同形六键空值。embed 决策由 `resolve_temporal_embed_in_query` 按 引擎×双 scope 决定搜索词带不带"约束时间词"（content_date 始终带；source_date 在 Tavily 等原生引擎不带、其余引擎带、副引擎启用强制带），主题年份始终放行。intent 支持模型实例与 dict 双形态，统一经 `_resolve_source_date_scope`/`_resolve_content_date_scope` 取值，dict 带旧 `temporal_scope` 键时按 constraint_type 回退路由。`engine_name`/`scholarly_enabled` 默认 None/False 向后兼容。
 - `outline_execution_method` 保存本次大纲实际执行方式，当前有效值为 `parallel` 或 `dependency_driving`；缺失或非法时按普通并行大纲处理。
-- `brief_state` 是可空的持久化字典，保存 `BriefWorkflowState`：精简大纲、最终证据、已执行 Query 和搜索结果、审阅写作指引、章节正文及核心摘要。它只供 Brief 分支节点读取，不作为专业版章节子图输入。
+- `brief_state` 是可空的持久化字典，保存 `BriefWorkflowState`：精简大纲、最终证据、已执行 Query 和搜索结果、审阅写作指引、章节正文及核心摘要。除 Brief 分支节点外，brief 大纲升级运行也读写该字段：注入器写入 brief 大纲，专业版 `OutlineNode` 读取做扩写与标题一致性校验（见 [brief-outline-upgrade.md](brief-outline-upgrade.md)）；它仍不作为专业版章节子图输入。
 
 ## 边界与错误处理
 
