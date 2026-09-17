@@ -54,6 +54,31 @@ def type_check(result, expected_type):
                                     format(e=error_msg))
 
 
+def is_list_of(result, expected_type=int):
+    """校验结果为 list 且每个元素为指定非 bool 类型，避免嵌套 list / dict / str 通过顶层 type_check。
+
+    - 针对 int: expected_type=int，同时排除 bool（Python 中 bool 是 int 子类）。
+    - 针对 str: expected_type=str。
+    """
+    if not isinstance(result, list):
+        error_msg = (
+            f"[SOURCE TRACER INFER]: 生成结果类型错误, "
+            f"生成结果类型{type(result)}, 期望类型为 list[{expected_type.__name__}]"
+        )
+        raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                    StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.
+                                    format(e=error_msg))
+    for i, item in enumerate(result):
+        if not isinstance(item, expected_type) or isinstance(item, bool):
+            error_msg = (
+                f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                f"索引 {i}: 元素类型{type(item)}, 期望类型为 {expected_type.__name__} (非 bool)"
+            )
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                        StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.
+                                        format(e=error_msg))
+
+
 def is_equal_length(result, target):
     """校验结果是否为固定长度的结构。"""
     type_check(result, list)
@@ -64,6 +89,51 @@ def is_equal_length(result, target):
             error_msg += f"生成结果数量{len(result)}, 目标数量{target}"
             raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_LEN_ERROR.code,
                                         StatusCode.SOURCE_TRACER_INFER_DATA_LEN_ERROR.errmsg.
+                                        format(e=error_msg))
+
+
+def is_valid_supplement_triples(result, target=3):
+    """校验补边三元组列表：result 为 list[[int, ...], str, int]，每个三元组长度为 target。
+
+    消费端假设（supplement_graph）：
+    - new_tuple[0] 必须可下标且非空（取 new_tuple[0][0] 与连通分量比对）；
+    - new_tuple[0] 元素与 new_tuple[2] 必须是可哈希的非 bool int（用于 set 成员判断）；
+    - new_tuple[1] 必须是 str（作为图的边 label）。
+    """
+    type_check(result, list)
+    for i, triple in enumerate(result):
+        type_check(triple, list)
+        if len(triple) != target:
+            error_msg = f"[SOURCE TRACER INFER]: 生成结果数量错误,"
+            error_msg += f"索引 {i}: 三元组数量{len(triple)}, 目标数量{target}"
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_LEN_ERROR.code,
+                                        StatusCode.SOURCE_TRACER_INFER_DATA_LEN_ERROR.errmsg.
+                                        format(e=error_msg))
+        head_ids, relation, tail_id = triple
+        if not isinstance(head_ids, list) or not head_ids:
+            error_msg = (f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                         f"索引 {i}: 头实体类型{type(head_ids)}, 期望类型为非空 list[int]")
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                        StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.
+                                        format(e=error_msg))
+        for head_id in head_ids:
+            if not isinstance(head_id, int) or isinstance(head_id, bool):
+                error_msg = (f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                             f"索引 {i}: 头实体节点类型{type(head_id)}, 期望类型为 int (非 bool)")
+                raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                            StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.
+                                            format(e=error_msg))
+        if not isinstance(relation, str) or isinstance(relation, bool):
+            error_msg = (f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                         f"索引 {i}: 关系类型{type(relation)}, 期望类型为 str")
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                        StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.
+                                        format(e=error_msg))
+        if not isinstance(tail_id, int) or isinstance(tail_id, bool):
+            error_msg = (f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                         f"索引 {i}: 尾实体类型{type(tail_id)}, 期望类型为 int (非 bool)")
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                        StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.
                                         format(e=error_msg))
 
 
@@ -93,7 +163,10 @@ async def call_model(model_name: str, prompt: str, user_input: dict,
                 # 需要对输出进行检验
                 detection_func = detection_func_and_args.get("detection_func")
                 params = detection_func_and_args.get("args")
-                detection_func(llm_result, params)
+                if params is not None:
+                    detection_func(llm_result, params)
+                else:
+                    detection_func(llm_result)
             return llm_result
         except CustomValueException as e:
             retries += 1
