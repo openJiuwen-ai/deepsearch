@@ -76,7 +76,7 @@ def _strip_chart_markup(text: str) -> str:
 
 
 _CITATION_MARKER_SANITIZE_RE = re.compile(
-    r"[<\[\]()>]?\s*(?<!checked_)citation:\s*\d+\s*[<\[\]()>]?"
+    r"[<\[\]()>]?\s*(?:ccitation|(?<!checked_)citation):\s*\d+\s*[<\[\]()>]?"
 )
 
 
@@ -85,7 +85,7 @@ def sanitize_citation_markers(text: str) -> str:
 
     Tolerates delimiter errors where the model emits ``<``/``>``/``(``/``)``
     instead of matching ``[...]`` brackets, so malformed anchors such as
-    ``<citation:3]`` do not survive as visible text. Preserves
+    ``<citation:3]`` / ``[ccitation:27]`` do not survive as visible text. Preserves
     ``checked_citation`` markers, which are handled by dedicated strippers.
 
     Use at citation-stripping points (abstract, conclusion, chart labels).
