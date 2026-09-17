@@ -20,6 +20,26 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
 不为它们安排结构，造成结构性事实遗漏。Coverage 通道在抽取逻辑上与关键词无关，按客观
 信息密度打分，兜住关键词检索漏掉的事实，降低大纲阶段的结构性事实遗漏。
 
+## 章节生成两阶段的证据输入来源
+
+子报告章节的生成分大纲与写作两个阶段，各阶段输入的 channel 构成如下：
+
+**大纲阶段**（`_generate_sub_section_outline`，prompt：`sub_section_outline.md`）：
+- 章节结构上下文：章节标题/描述/格式要求、全局大纲、section_local_contract、
+  research_intent、背景知识特例（`sub_section_core_content_from_background_knowledge`）；
+- `sub_section_core_content`（顺序拼接，不交错）：
+  1. 条目摘要块（`build_core_content_list`）：fulltext 条目渲染清洗后原文前 500 字符
+     （`outline_summary_text`），passage 条目渲染被选中的段落；
+  2. 规则版 coverage 聚合块（`===== COVERAGE PASSAGES =====`，本 PR 范畴）；
+- `structured_evidence_guide`（维度级覆盖状态表，rationale 链路产出）。
+
+**写作阶段**（`write_subsection_reports`，prompt：`sub_report_markdown.md`）：
+- `classified_content`（写作主证据）：fulltext 条目整篇原文 + passage 条目选中段，
+  经 `build_citation_infos` 渲染为 `[citation:X]` 块；
+- 本章提纲（大纲阶段产物，写作边界）、章节格式要求、背景知识等上下文。
+
+LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划，未在本 PR 落地。
+
 ## 可见行为
 
 与 `structured_evidence_guide`（维度级覆盖信号）并存，但定位为**段落级**补充。
@@ -28,7 +48,9 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
   `===== COVERAGE PASSAGES =====` 块，追加到 `core_content_list` 末尾（key 块在前、
   coverage 块在后、不交错）。
 - 纯叙述、无事实特征的文档不产生覆盖证据；所有文档都无有效事实时不追加该块。
-- 覆盖证据与同文档 `key_passages` 重复（相同/高相似/高占比子串）时被剔除，避免 token 冗余。
+- 运行开关：`Config.agent_config.coverage_rule_block_enable`（默认 `True`，经请求配置统一下发，与 `visualization_enable` 等报告开关同风格）。置 `False` 时大纲证据仅含条目摘要块，可单独回滚。
+- 覆盖证据的供给区为该文档**大纲摘要块切片线之后的尾部**（方案乙口径，见下
+  "供给区切片"），摘要块已渲染的内容抽取阶段不碰，尾部内容全部供给。
 - 大纲 prompt（`sub_section_outline.md`）新增 `## Evidence Channels` 说明两路证据语义；
   证据边界从"仅 key passages"放宽为"key passages + coverage passages"；明确覆盖证据
   不强制开新标题，遵守"证据不改结构"规则；`Document N key passages:` /
@@ -69,11 +91,11 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
 ## 核心流程
 
 1. 大纲输入装载时（`generate_sub_report` → `enrich_fulltext_for_section` + `_append_rule_coverage_to_core`），对每个全文证据：
-   - `extract_coverage_passages(item.original_content, max_passages=_COVERAGE_TOP_K_CAP, max_chars=1200)`
-     抽取覆盖证据块（结果按 `(content, 全部参数)` 做进程内有界缓存，
+   - `extract_coverage_passages(outline_summary_tail_text(item.original_content),
+     max_passages=_COVERAGE_TOP_K_CAP, max_chars=1200)` 从摘要块切片线之后的
+     尾部抽取覆盖证据块（结果按 `(content, 全部参数)` 做进程内有界缓存，
      `functools.lru_cache(maxsize=512)`，同章节重试/重生成不重复计算）；
      选段不预设硬 Top-K，由单文档字符预算兜底（方案2：预算即终止条件）；
-   - `exclude_passages(coverage, item.key_passages)` 与同文档关键片段去重；
    - 裁入章节级总预算 `_COVERAGE_MAX_TOTAL_CHARS = 6000`（`_fit_coverage_to_budget`）。
 2. 所有 key 块先进入 `core_content_list`；最终把一个聚合 coverage 块追加到末尾。
 3. `_generate_sub_section_outline` 把 `sub_section_core_content`（含两路证据）与
@@ -113,29 +135,39 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
   （`1,000`≡`1000`、`20%`≡`20％`、`3 万`≡`3万`）；因此 `20%` 与 `20个百分点`
   不同键、`1.5亿元` 与 `15%` 不同键。单锚点块跳过近似去重——一个共享数字不足
   以判定"同一事实的换措辞"（如"收入增长20%"与"成本下降20%"）。结构相似但
-  版本/年份/单位/量级不同的事实不会被误删；`exclude_passages` 与 key 去重沿用
-  "归一化相同 / 字符二元组 Jaccard ≥0.6 / 一方是另一方 ≥60% 占比子串"。
-- 邻域扩展：`expansion_density_threshold`（方案3 密度门控，默认 0 关闭）。预算兜底
-  （K≈候选全集）下邻居扩展为空操作，故默认关闭；参数保留供有限 K 场景评估。
-- 集成常量（`collector_evidence.py` 唯一真源，`report/evidence.py` 集成层引用）：
-  `_COVERAGE_TOP_K_CAP = 128`（选段数量上界，实际由预算兜底）、
-  `_COVERAGE_MAX_CHARS_PER_DOC = 1200`（单文档预算，`extract_coverage_passages`
-  的 `max_chars` 默认值即引用此常量）、`_COVERAGE_MAX_TOTAL_CHARS = 6000`
-  （章节级总预算，由 `report/evidence.py` `_fit_coverage_to_budget` 二次裁剪）、
-  `_COVERAGE_SCORE_MODE`、`_COVERAGE_DENSITY_MIN_LEN`。
-- coverage 块格式：`===== COVERAGE PASSAGES =====` / `Document N coverage passages:`
-  + `- passage`，`N` 与 key 块编号对齐。
-- 运行开关：环境变量 `DS_COVERAGE_RULE_BLOCK`（默认开）可单独关闭覆盖通道做回滚。
-  按标准布尔口径解析：`1`/`true`/`yes`/`on`（大小写与首尾空白不敏感）开启，
-  其余值（`0`/`false`/`off`/空串）关闭。
-- 性能：正则抽取流水线为纯 CPU（生产口径 10 篇 × 10000 字符、高事实密度最坏
-  用例冷调用约 150 ms；锚点去重键集合按块缓存复用，lru_cache 命中时 <10 ms）。
-  `generate_sub_report` 经 `asyncio.to_thread` 调用组装函数，不阻塞事件循环；
-  章节共享预算耗尽后跳过剩余文档的抽取。
-- 不修改 `doc_info` / `classified_doc_infos`，写作阶段证据输入不受影响。
+  版本/年份/单位/量级不同的事实不会被误删。
+
+### 供给区切片（方案乙：摘要块之外的尾部全量供给）
+
+rationale 选材接管证据选择后，`key_passages` 通道已退役（不再进入大纲/写作
+prompt，仅保留 target-paper 兜底用途）。条目摘要块的实际渲染文本（与
+`report_rationale_fulltext.build_core_content_list` 渲染口径一致）为：
+
+- fulltext 条目：清洗后原文前 500 字符（`collector_evidence.py::outline_summary_text`，
+  `OUTLINE_SUMMARY_MAX_CHARS = 500` 单一真源）；
+- passage 条目：被选中的 `passage_text`（当前规则块只对 fulltext 条目运行，此条
+  供后续复用方沿用同一口径）。
+
+覆盖证据**不做与摘要块的判重**，而是直接从 `collector_evidence.py::
+outline_summary_tail_text` 返回的尾部抽取——该函数与 `outline_summary_text`
+在同一个 `_normalize_coverage_content` 清洗文本上取互补切片
+（`[OUTLINE_SUMMARY_MAX_CHARS:]`），因此摘要块已供给的内容在抽取阶段构造性地
+不被触碰，摘要块之外的内容全部供给。原则是**宁可多供（token 冗余）不可漏供
+（事实丢失）**，冗余由单文档/章节共享预算兜底。
+
+> 演进说明：早期实现为"全文抽取后按文本重叠 + 锚点救援判重剔除"，但锚点是
+> 字面记号而非语义——不同事实可共用同一组锚点（如"收入增长20%"与"成本下降
+> 20%"），重叠块因"无新锚点"被整段误删（PR !406 评审复现）。切片方案把判重
+> 环节整个移除：供给区与摘要块构造性互补，该类丢失在机制上不可能再发生。
+> 代价是尾部与摘要块的换措辞复述也会被供给（预算兜底）；跨切片线的句子会在
+> 覆盖块中以残句形式出现（优于整句丢失）。
+
+边界：≤500 字符的 fulltext 文档整篇已进大纲摘要块，尾部供给区为空，覆盖证据
+对该文档为空（正确行为，非缺陷）。
 
 ## 边界与错误处理
 
+- 清洗后长度 ≤ 500 字符的 fulltext 文档，其正文已完整进入大纲摘要块，尾部供给区为空，覆盖证据对该文档为空（方案乙切片的必然结果，属正确行为而非缺陷）。
 - 空内容、纯噪声（过短、标题、导航、无数字分隔行、**纯引用/链接列表**）、无任何事实
   特征 → 不产覆盖证据。
 - Markdown 表格原子性：`_coverage_split_passages` 把连续以 `|` 起始的行识别为原子
@@ -153,9 +185,10 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`。
 - 定向：`uv run pytest tests/info_collector/algorithm/test_coverage_evidence.py`
 - 组装与 prompt：`uv run pytest tests/report/test_sub_report.py tests/report/test_tools_in_report.py`
 - 必须覆盖：事实密度优先于位置、噪声过滤、特征计数与封顶、Neighbor Expansion 与相邻合并、
-  两级去重、字符预算、`exclude_passages` 去重、`_append_rule_coverage_to_core` 追加 coverage 块、
-  outline prompt 渲染两路证据语义、缓存键隔离与返回隔离、markdown 表格原子性（表头与数据
-  同块、无数字表头不丢、表格与段落边界）。
+  两级去重、字符预算、摘要基准去重（含锚点救援与基准内包含判定）、候选池两级装配
+  （保底份额/缺口配额/回收不净淘汰/同 URL 合并）、`_append_rule_coverage_to_core`
+  追加 coverage 块、outline prompt 渲染两路证据语义、缓存键隔离与返回隔离、
+  markdown 表格原子性（表头与数据同块、无数字表头不丢、表格与段落边界）。
 
 ## 相关文档
 

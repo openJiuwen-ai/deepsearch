@@ -4,12 +4,14 @@ import json
 import logging
 import os
 import asyncio
+from functools import cached_property
 from typing import Any, Literal, Optional, Generic, TypeVar, List, Dict, Union
 import httpx
 import requests
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 from openjiuwen.core.common.security.ssl_utils import SslUtils
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,9 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
         if "tbs" in ext:
             self.tbs = ext["tbs"]
 
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析
+        _ = self._resolved_search_url
+
     def results(self, query: str) -> List[Dict]:
         """Run query through Serper GoogleSearch API."""
         return self.google_search_results(search_term=query)
@@ -80,7 +85,7 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
             "X-API-KEY": self.search_api_key.decode("utf-8") or "",
             "Content-Type": "application/json",
         }
-        url = f"{self._resolved_search_url()}/{self.type}"
+        url = f"{self._resolved_search_url}/{self.type}"
         params: Dict[str, Any] = {
             "q": search_term,
             "gl": self.gl,
@@ -106,6 +111,7 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
             return []
         return items
 
+    @cached_property
     def _resolved_search_url(self) -> str:
         """Return configured URL or Serper's public default URL."""
         if self.search_url is None:
@@ -115,7 +121,10 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
         else:
             configured = str(self.search_url)
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_SERPER_SEARCH_URL
+        if not configured:
+            return DEFAULT_SERPER_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured
 
     def _execute_search_request(self, search_term: str, is_async: bool = False) -> Any:
         """Execute search request with optional async support."""

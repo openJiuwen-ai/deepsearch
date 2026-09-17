@@ -100,14 +100,11 @@ class KnowledgeBaseUpdateRequest(BaseModel):
 
 
 class KnowledgeBaseInfo(BaseModel):
-    """知识库信息"""
+    """知识库搜索结果中的公开元数据。"""
     kb_id: str = Field(..., alias="id")
     space_id: str = Field(..., description="空间ID")
     name: str = Field(..., description="知识库名称")
     description: Optional[str] = Field(None, description="知识库描述")
-    embed_model_config: Optional[Dict[str, Any]] = Field(None, description="Embedding 模型配置（来自 config）")
-    llm_config: Optional[Dict[str, Any]] = Field(None, description="LLM 模型配置（来自 config）")
-    config: Optional[Dict[str, Any]] = Field(None, description="知识库配置")
     create_time: Optional[int] = Field(None, description="创建时间")
     update_time: Optional[int] = Field(None, description="更新时间")
     has_graph_enhancement: Optional[bool] = Field(None, description="是否有图增强构建的文档")

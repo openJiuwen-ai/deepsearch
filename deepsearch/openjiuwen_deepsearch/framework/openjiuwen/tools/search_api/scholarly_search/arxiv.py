@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import xml.etree.ElementTree as ET
+from functools import cached_property
 from typing import Any, Generic, Optional, TypeVar
 from urllib.parse import quote_plus
 
@@ -36,6 +37,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
     should_fetch_full_text,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -85,6 +87,9 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
             self.sort_by = ext["arxiv_sort_by"]
         if "arxiv_sort_order" in ext:
             self.sort_order = ext["arxiv_sort_order"]
+
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析
+        _ = self._resolved_search_url
 
     def results(self, query: str) -> list[dict[str, Any]]:
         if not (query or "").strip():
@@ -172,17 +177,17 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
         ARXIV_REQUEST_CONTROL.wait_sync(self.requests_per_second)
 
     def _is_search_api_url(self, url: str) -> bool:
-        return str(url).startswith(self._resolved_search_url())
+        return str(url).startswith(self._resolved_search_url)
 
     def _build_url(self, query: str) -> str:
         exact_id = normalize_arxiv_id(query)
         if exact_id:
             return (
-                f"{self._resolved_search_url()}?id_list={quote_plus(exact_id)}"
+                f"{self._resolved_search_url}?id_list={quote_plus(exact_id)}"
                 f"&start=0&max_results={self.max_web_search_results}"
             )
         return (
-            f"{self._resolved_search_url()}?search_query=all:{quote_plus(query)}"
+            f"{self._resolved_search_url}?search_query=all:{quote_plus(query)}"
             f"&start=0&max_results={self.max_web_search_results}"
             f"&sortBy={quote_plus(self.sort_by)}&sortOrder={quote_plus(self.sort_order)}"
         )
@@ -399,6 +404,7 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
     def _is_error_entry(arxiv_id: str, title: str) -> bool:
         return title.strip().casefold() == "error" and "/api/errors#" in arxiv_id
 
+    @cached_property
     def _resolved_search_url(self) -> str:
         configured = ""
         if self.search_url is not None:
@@ -408,4 +414,7 @@ class ArxivSearchAPIWrapper(BaseModel, Generic[T]):
                 else str(self.search_url)
             )
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_ARXIV_SEARCH_URL
+        if not configured:
+            return DEFAULT_ARXIV_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured

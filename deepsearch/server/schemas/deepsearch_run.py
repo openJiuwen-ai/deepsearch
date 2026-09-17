@@ -110,6 +110,10 @@ class DeepSearchRequest(BaseModel):
         default=False,
         description="是否启用信息收集阶段的网页正文增强",
     )
+    coverage_rule_block_enable: bool = Field(
+        default=True,
+        description="是否启用子报告大纲阶段的规则版覆盖证据（coverage passages）",
+    )
     llm_config: dict = Field(default_factory=dict, description="LLM配置")
     web_search_config: WebSearchConfig = Field(default=None, description="联网增强引擎配置，和本地知识库配置至少选择一个")
     local_search_config: LocalSearchConfig = Field(default=None,

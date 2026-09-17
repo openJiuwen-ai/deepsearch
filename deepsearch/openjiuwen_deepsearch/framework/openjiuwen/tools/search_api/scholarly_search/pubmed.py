@@ -7,6 +7,7 @@ import asyncio
 import xml.etree.ElementTree as ET
 import logging
 import re
+from functools import cached_property
 from typing import Any, Generic, Optional, TypeVar, Union
 
 import httpx
@@ -29,6 +30,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
     should_fetch_full_text,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -78,6 +80,9 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         if "pubmed_tool" in ext:
             self.tool = ext["pubmed_tool"]
 
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析
+        _ = self._resolved_search_url
+
     def results(self, query: str) -> list[dict[str, Any]]:
         if not (query or "").strip():
             return []
@@ -87,7 +92,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         if not ids:
             return []
         text = self._get_text(
-            f"{self._resolved_search_url()}/efetch.fcgi",
+            f"{self._resolved_search_url}/efetch.fcgi",
             params=self._fetch_params(ids),
             verify=verify,
         )
@@ -105,7 +110,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
             else:
                 search_raw = await self._aget_json(
                     client,
-                    f"{self._resolved_search_url()}/esearch.fcgi",
+                    f"{self._resolved_search_url}/esearch.fcgi",
                     params=self._search_params(query),
                 )
                 ids = self._parse_ids(search_raw)
@@ -113,7 +118,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
                 return []
             fetch_text = await self._aget_text(
                 client,
-                f"{self._resolved_search_url()}/efetch.fcgi",
+                f"{self._resolved_search_url}/efetch.fcgi",
                 params=self._fetch_params(ids),
             )
             rows = self._parse_fetch_xml(fetch_text, ids)
@@ -121,7 +126,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
 
     def _search_ids(self, query: str, verify: Union[str, bool]) -> list[str]:
         raw = self._get_json(
-            f"{self._resolved_search_url()}/esearch.fcgi",
+            f"{self._resolved_search_url}/esearch.fcgi",
             params=self._search_params(query),
             verify=verify,
         )
@@ -280,7 +285,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
                 continue
             try:
                 text = self._get_text(
-                    f"{self._resolved_search_url()}/efetch.fcgi",
+                    f"{self._resolved_search_url}/efetch.fcgi",
                     params=self._pmc_fetch_params(pmcid),
                     verify=verify,
                 )
@@ -310,7 +315,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
         try:
             text = await self._aget_text(
                 client,
-                f"{self._resolved_search_url()}/efetch.fcgi",
+                f"{self._resolved_search_url}/efetch.fcgi",
                 params=self._pmc_fetch_params(pmcid),
             )
             full_text, truncated = self._parse_pmc_xml(text)
@@ -519,6 +524,7 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
             return ""
         return " ".join("".join(element.itertext()).split())
 
+    @cached_property
     def _resolved_search_url(self) -> str:
         configured = ""
         if self.search_url is not None:
@@ -528,7 +534,10 @@ class PubMedSearchAPIWrapper(BaseModel, Generic[T]):
                 else str(self.search_url)
             )
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_PUBMED_SEARCH_URL
+        if not configured:
+            return DEFAULT_PUBMED_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured
 
     def _api_key_to_str(self) -> str:
         value = self.search_api_key

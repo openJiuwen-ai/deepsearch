@@ -293,7 +293,7 @@ class RetrievalSettingsConfig(BaseModel):
     top_k: int = Field(default=3, description="最大检索结果数量")
     top_k_multiply_factor: int = Field(default=5, description="最大检索结果数量乘数因子")
     add_instruction: bool = Field(default=True, description="是否添加指令")
-    mode: Literal["dense", "sparse", "hybrid"] = Field(default="hybrid", description="检索模式")    
+    mode: Literal["dense", "sparse", "hybrid"] = Field(default="hybrid", description="检索模式")
 
 
 class StateCreationAgentConfig(BaseModel):
@@ -364,6 +364,11 @@ class AgentConfig(BaseModel):
     report_type: Literal["brief", "professional"] | None = Field(
         default=None,
         description="报告类型；None 时由意图识别与澄清机制决定",
+    )
+    coverage_rule_block_enable: bool = Field(
+        default=True,
+        description="子报告大纲阶段规则版覆盖证据（coverage passages）开关，"
+                    "关闭后大纲证据仅含条目摘要块",
     )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(

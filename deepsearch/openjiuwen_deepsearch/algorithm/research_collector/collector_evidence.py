@@ -758,7 +758,6 @@ _COVERAGE_ENTITY_WEIGHT = 1.5
 _COVERAGE_CITATION_WEIGHT = 1.0
 _COVERAGE_NUMBER_CAP = 5
 _COVERAGE_FEATURE_CAP = 3
-_COVERAGE_NEAR_DEDUP_RATIO = 0.6
 #: 信息结构特征：长度落在合理区间给满分，过长线性衰减。
 _COVERAGE_STRUCTURE_WEIGHT = 1.0
 _COVERAGE_STRUCTURE_MIN_CHARS = 40
@@ -788,6 +787,38 @@ _COVERAGE_SCORE_MODE = "density"
 _COVERAGE_DENSITY_MIN_LEN = 40
 #: 合并跨度上限：相邻高分段连续并入一个证据块的最多段数，防止雪崩式吞并。
 _COVERAGE_MAX_MERGE_SPAN = 5
+#: 条目摘要块截断长度（`report_rationale_fulltext.build_core_content_list`
+#: 对 fulltext 条目渲染原文前 500 字符）。coverage 抽取只取该切片之后的尾部：
+#: 摘要块已供给的内容抽取阶段压根不碰，摘要块之外的内容全部供给、不做判重
+#: （宁多供不漏供，预算由单文档/章节共享上限兜底）。与渲染共用同一清洗与
+#: 切片线（方案乙：基准 = 大纲实际渲染文本），取代与已退役 key_passages
+#: 通道的去重。
+OUTLINE_SUMMARY_MAX_CHARS = 500
+
+
+def outline_summary_text(content: str, max_chars: int = OUTLINE_SUMMARY_MAX_CHARS) -> str:
+    """按大纲条目摘要块的渲染口径返回文本（清洗后前 N 字符）。
+
+    渲染层（`report_rationale_fulltext.build_core_content_list`）对 fulltext 条目
+    渲染原文前 500 字符 + ``"..."`` 截断标记。本函数与
+    `outline_summary_tail_text` 共用同一清洗与切片线，保证摘要块与其尾部
+    覆盖抽取区精确互补。
+    """
+    text = _normalize_coverage_content(str(content or ""))
+    if len(text) > max_chars:
+        return text[:max_chars]
+    return text
+
+
+def outline_summary_tail_text(content: str, max_chars: int = OUTLINE_SUMMARY_MAX_CHARS) -> str:
+    """返回清洗后超出摘要块切片线的尾部（覆盖抽取的供给区）。
+
+    与 `outline_summary_text` 在同一归一化文本上取互补切片，因此尾部内容
+    必然不含摘要块已渲染的部分——覆盖证据直接从尾部抽取，无需再与摘要块
+    判重。短文档（清洗后 ≤ max_chars）尾部为空，返回空串。
+    """
+    text = _normalize_coverage_content(str(content or ""))
+    return text[max_chars:]
 
 
 @dataclass(frozen=True)
@@ -1148,21 +1179,6 @@ def extract_fact_anchors(text: str) -> set[str]:
     return anchors
 
 
-def _coverage_char_bigrams(text: str) -> set[str]:
-    """字符二元组集合，作为零依赖的词级近似（对语序重排鲁棒）。"""
-    return {text[index:index + 2] for index in range(len(text) - 1)}
-
-
-def _coverage_jaccard_similarity(first: str, second: str) -> float:
-    """两段归一化文本的字符二元组 Jaccard 相似度。"""
-    first_bigrams = _coverage_char_bigrams(first)
-    second_bigrams = _coverage_char_bigrams(second)
-    if not first_bigrams or not second_bigrams:
-        return 0.0
-    union = len(first_bigrams | second_bigrams)
-    return len(first_bigrams & second_bigrams) / union if union else 0.0
-
-
 def _anchor_dedup_key(anchor: str) -> tuple[str, str]:
     """把锚点规约为去重键：数值锚点保留原文（数字/小数点/正负号/单位/量级词
     一律保留），仅做三类字符级规整；其余（实体等）保留原文。
@@ -1367,61 +1383,6 @@ def extract_coverage_passages(
         )
         for item in cached
     ]
-
-
-def _is_duplicate_text(text: str, reference: str, threshold: float) -> bool:
-    """判断归一化后的两段文本是否构成实质重复。
-
-    Args:
-        text: 归一化后的待判断文本。
-        reference: 归一化后的参照文本。
-        threshold: 近似重复的字符二元组 Jaccard 相似度阈值。
-
-    Returns:
-        True 表示两段文本相同、高度相似，或其中一段是另一段的高占比子串。
-    """
-    if text == reference:
-        return True
-    if _coverage_jaccard_similarity(text, reference) >= threshold:
-        return True
-    shorter, longer = (text, reference) if len(text) <= len(reference) else (reference, text)
-    if shorter and shorter in longer and len(shorter) >= 0.6 * len(longer):
-        return True
-    return False
-
-
-def exclude_passages(
-    coverage_passages: list[CoveragePassage],
-    key_passages: list[str],
-    similarity_threshold: float = _COVERAGE_NEAR_DEDUP_RATIO,
-) -> list[CoveragePassage]:
-    """剔除覆盖证据中与同文档 key passages 高度重复的段落。
-
-    覆盖证据与关键片段高度重叠时同时进入 prompt 只会增加 token 而信息冗余。
-    覆盖证据块常把一条 key passage 连同相邻上下文合并进来，因此除相同/高相似
-    外，还把"高占比子串"视为重复。
-
-    Args:
-        coverage_passages: Coverage 抽取结果（保持原顺序）。
-        key_passages: 同一文档的关键片段列表。
-        similarity_threshold: 判定近似重复的归一化相似度阈值。
-
-    Returns:
-        与 key passages 不重复的覆盖证据（保持原顺序）。
-    """
-    if not coverage_passages or not key_passages:
-        return list(coverage_passages)
-    normalized_keys = [normalize_content_for_dedup(key) for key in key_passages]
-    kept: list[CoveragePassage] = []
-    for passage in coverage_passages:
-        normalized = normalize_content_for_dedup(passage.text)
-        if any(
-            _is_duplicate_text(normalized, key, similarity_threshold)
-            for key in normalized_keys
-        ):
-            continue
-        kept.append(passage)
-    return kept
 
 
 def build_evidence_atom(

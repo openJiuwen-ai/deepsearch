@@ -160,6 +160,34 @@ def test_build_agent_config_passes_webpage_enrichment_enable(monkeypatch):
     assert config["info_collector_webpage_enrich_enable"] is True
 
 
+def test_build_agent_config_passes_coverage_rule_block_enable(monkeypatch):
+    """验证 server 构建 agent_config 时透传规则版覆盖证据开关，缺省为 True。"""
+    factory = _FakeAgentFactory()
+    manager = DeepSearchAgentManager(agent_factory=factory)
+
+    default_request = _build_request("conversation-a")
+    assert default_request.coverage_rule_block_enable is True
+
+    request = _build_request("conversation-b")
+    request.coverage_rule_block_enable = False
+
+    monkeypatch.setattr(
+        manager,
+        "_load_web_search_config",
+        lambda space_id, web_search_config, db: {
+            "search_engine_name": "mock",
+            "search_api_key": bytearray(b"secret"),
+            "search_url": "https://example.com/search",
+            "max_web_search_results": 5,
+            "extension": {},
+        },
+    )
+
+    config = manager.build_agent_config(request, object())
+
+    assert config["coverage_rule_block_enable"] is False
+
+
 def test_build_agent_config_propagates_scholarly_switch_outside_engine_config(monkeypatch):
     factory = _FakeAgentFactory()
     manager = DeepSearchAgentManager(agent_factory=factory)

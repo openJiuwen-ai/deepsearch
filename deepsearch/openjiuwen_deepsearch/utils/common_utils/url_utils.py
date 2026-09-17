@@ -339,6 +339,34 @@ def _unsafe_http_service_url_exception_detail(
     return f"{service_label} is not allowed ({reason}): {url!r}"
 
 
+def _is_non_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True unless the address is globally routable.
+
+    ``is_global`` covers shared/CGNAT space (100.64.0.0/10, which hosts the
+    Alibaba Cloud metadata endpoint 100.100.100.200) that ``is_private`` and
+    ``is_reserved`` both miss.
+
+    For IPv4-mapped IPv6 addresses (e.g. ``::ffff:100.100.100.200``), Python's
+    ``is_global`` returns True even when the underlying IPv4 is non-public, so
+    we explicitly extract and check the mapped IPv4 address.
+    """
+    # Check the IPv6 address itself first
+    if any((
+        not ip.is_global,
+        ip.is_loopback,
+        ip.is_link_local,
+        ip.is_multicast,
+        ip.is_unspecified,
+    )):
+        return True
+
+    # For IPv4-mapped IPv6, also check the underlying IPv4 address
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        return _is_non_public_ip(ip.ipv4_mapped)
+
+    return False
+
+
 def _validate_http_url_for_ssrf(
     url: str, *, relaxed: bool, service_label: str
 ) -> None:
@@ -414,14 +442,7 @@ def _validate_http_url_for_ssrf(
                     ),
                 ) from error
 
-            is_non_public_ip = any((
-                resolved_ip.is_private,
-                resolved_ip.is_loopback,
-                resolved_ip.is_link_local,
-                resolved_ip.is_multicast,
-                resolved_ip.is_reserved,
-                resolved_ip.is_unspecified,
-            ))
+            is_non_public_ip = _is_non_public_ip(resolved_ip)
             if is_non_public_ip:
                 raise CustomValueException(
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
@@ -433,14 +454,7 @@ def _validate_http_url_for_ssrf(
                 ) from host_parse_error
         return
 
-    is_non_public_ip = any((
-        ip.is_private,
-        ip.is_loopback,
-        ip.is_link_local,
-        ip.is_multicast,
-        ip.is_reserved,
-        ip.is_unspecified,
-    ))
+    is_non_public_ip = _is_non_public_ip(ip)
     if is_non_public_ip:
         raise CustomValueException(
             StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
@@ -483,4 +497,22 @@ def validate_embedding_service_url(url: str) -> None:
         url,
         relaxed=_http_service_allow_unsafe_url("EMBEDDING_SERVICE_ALLOW_UNSAFE_URL"),
         service_label="embedding service url",
+    )
+
+
+def validate_search_service_url(url: str) -> None:
+    """
+    Validate user-configured web search service URL to reduce SSRF risk.
+
+    Search engine ``search_url`` is user-controlled (persisted via the web
+    search engine config API) and reaches ``requests``/``httpx`` calls in
+    provider wrappers, so it must be checked before use. Local debugging or
+    self-hosted intranet search endpoints can bypass with
+    ``SEARCH_SERVICE_ALLOW_UNSAFE_URL=1`` (same accepted values as
+    ``RUNTIME_API_ALLOW_UNSAFE_URL``).
+    """
+    _validate_http_url_for_ssrf(
+        url,
+        relaxed=_http_service_allow_unsafe_url("SEARCH_SERVICE_ALLOW_UNSAFE_URL"),
+        service_label="search service url",
     )

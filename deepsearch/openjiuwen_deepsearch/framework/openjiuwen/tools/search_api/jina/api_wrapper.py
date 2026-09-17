@@ -1,6 +1,7 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+from functools import cached_property
 from typing import Any, Generic, Optional, TypeVar, Union
 
 import httpx
@@ -9,6 +10,7 @@ from openjiuwen.core.common.security.ssl_utils import SslUtils
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH, MAX_URL_LENGTH
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
 
@@ -41,6 +43,9 @@ class JinaSearchAPIWrapper(BaseModel, Generic[T]):
             self.location = ext["location"]
         if "page" in ext:
             self.page = int(ext["page"])
+
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析
+        _ = self._resolved_search_url
 
     def results(self, query: str) -> list[dict[str, Any]]:
         """Run query through Jina Search API and return cleaned result rows."""
@@ -82,7 +87,7 @@ class JinaSearchAPIWrapper(BaseModel, Generic[T]):
 
         ssl_verify, ssl_cert = SslUtils.get_ssl_config("TOOL_SSL_VERIFY", "TOOL_SSL_CERT", ["false"])
         verify = ssl_cert if ssl_verify else False
-        return headers, payload, f"{self._resolved_search_url()}/", verify
+        return headers, payload, f"{self._resolved_search_url}/", verify
 
     def _parsed_results(self, raw: Any) -> list[dict[str, Any]]:
         """Normalize Jina JSON response data into research-compatible rows."""
@@ -112,6 +117,7 @@ class JinaSearchAPIWrapper(BaseModel, Generic[T]):
             )
         return results
 
+    @cached_property
     def _resolved_search_url(self) -> str:
         """Return configured URL or Jina Search's public default URL."""
         if self.search_url is None:
@@ -121,7 +127,10 @@ class JinaSearchAPIWrapper(BaseModel, Generic[T]):
         else:
             configured = str(self.search_url)
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_JINA_SEARCH_URL
+        if not configured:
+            return DEFAULT_JINA_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured
 
     def _api_key_to_str(self) -> str:
         """Decode configured API key."""

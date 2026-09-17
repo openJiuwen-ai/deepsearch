@@ -491,7 +491,13 @@ def is_horizontal_xychart(code: str) -> bool:
         return False
 
     frontmatter = frontmatter_match.group(1)
-    return bool(re.search(r"^\s*horizontal\s*:\s*true\s*$", frontmatter, flags=re.IGNORECASE | re.MULTILINE))
+    return bool(
+        re.search(
+            r"^\s*(?:horizontal\s*:\s*true|chartOrientation\s*:\s*horizontal)\s*$",
+            frontmatter,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+    )
 
 
 def preprocess_xychart_mermaid(code: str, *, warn_on_invalid: bool = True) -> str:

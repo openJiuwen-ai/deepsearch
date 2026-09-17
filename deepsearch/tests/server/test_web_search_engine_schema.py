@@ -3,6 +3,9 @@
 import logging
 from types import SimpleNamespace
 
+import pytest
+
+from server.deepsearch.common.exception.exceptions import ValidationError
 from server.schemas.web_search_engine import (
     WebSearchEngineCreateRequestDTO,
     WebSearchEngineListRequestDTO,
@@ -97,3 +100,91 @@ def test_web_search_engine_list_logs_space_and_count(caplog):
         "Listed web search engines space_id=space-a count=1" in record.message
         for record in caplog.records
     )
+
+
+def test_create_web_search_engine_rejects_ssrf_url(monkeypatch):
+    """Create service must reject search_url pointing to private/non-public hosts."""
+    from server.deepsearch.core.manager.web_search_engine_service import WebSearchEngineService
+
+    class FakeRepository:
+        def get_by_name(self, space_id, search_engine_name):
+            return None
+
+        def create(self, model):
+            model.web_search_engine_id = 1
+
+    monkeypatch.delenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", raising=False)
+    service = WebSearchEngineService(FakeRepository())
+    request = WebSearchEngineCreateRequestDTO(
+        space_id="space",
+        search_engine_name="jina",
+        search_api_key="key",
+        search_url="http://169.254.169.254/",
+    )
+    with pytest.raises(ValidationError):
+        service.create_web_search_engine(request)
+
+
+def test_update_web_search_engine_rejects_ssrf_url(monkeypatch):
+    """Update service must reject search_url pointing to private/non-public hosts."""
+    from server.deepsearch.core.manager.web_search_engine_service import WebSearchEngineService
+
+    class FakeRepository:
+        def get_by_id(self, space_id, web_search_engine_id):
+            return SimpleNamespace(search_engine_name="jina")
+
+        def update(self, model):
+            pass
+
+    monkeypatch.delenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", raising=False)
+    service = WebSearchEngineService(FakeRepository())
+    request = WebSearchEngineUpdateRequestDTO(
+        space_id="space",
+        web_search_engine_id=1,
+        search_url="http://127.0.0.1/",
+    )
+    with pytest.raises(ValidationError):
+        service.update_web_search_engine(request)
+
+
+def test_update_web_search_engine_allows_clearing_search_url():
+    """Updating search_url to empty must be allowed (falls back to provider default)."""
+    from server.deepsearch.core.manager.web_search_engine_service import WebSearchEngineService
+
+    class FakeRepository:
+        def get_by_id(self, space_id, web_search_engine_id):
+            return SimpleNamespace(
+                search_engine_name="jina",
+                search_url="",
+                extension=None,
+                is_active=True,
+                web_search_engine_id=web_search_engine_id,
+            )
+
+        def update(self, model):
+            pass
+
+    service = WebSearchEngineService(FakeRepository())
+    request = WebSearchEngineUpdateRequestDTO(
+        space_id="space",
+        web_search_engine_id=1,
+        search_url="",
+    )
+    response = service.update_web_search_engine(request)
+    assert response.web_search_engine_id == 1
+
+
+def test_run_web_search_engine_rejects_ssrf_url(monkeypatch):
+    """Run path must reject a stored search_url targeting private/non-public hosts."""
+    from server.schemas.web_search_engine import WebSearchEngineDetail, WebSearchEnginePostRequestDTO
+    from server.deepsearch.core.manager.web_search_engine_service import WebSearchEngineService
+
+    monkeypatch.delenv("SEARCH_SERVICE_ALLOW_UNSAFE_URL", raising=False)
+    config = WebSearchEngineDetail(
+        search_engine_name="jina",
+        search_url="http://169.254.169.254/",
+        search_api_key="key",
+    )
+    request = WebSearchEnginePostRequestDTO(space_id="space", web_search_engine_id=1, query="q")
+    with pytest.raises(ValidationError):
+        WebSearchEngineService.run_web_search_engine(request, config)

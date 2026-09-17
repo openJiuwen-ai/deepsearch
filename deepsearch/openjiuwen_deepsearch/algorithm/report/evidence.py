@@ -3,13 +3,11 @@
 import asyncio
 import json
 import logging
-import os
 from dataclasses import dataclass
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_coverage_passage_block,
-    normalize_key_passages,
 )
 from openjiuwen_deepsearch.algorithm.report.report_common import (
     CONTENT_DATE_TIMELINESS_WEIGHT,
@@ -25,8 +23,8 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     _COVERAGE_MAX_CHARS_PER_DOC,
     _COVERAGE_MAX_TOTAL_CHARS,
     _COVERAGE_TOP_K_CAP,
-    exclude_passages,
     extract_coverage_passages,
+    outline_summary_tail_text,
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     enrich_fulltext_for_section,
@@ -1170,9 +1168,9 @@ class EvidenceMixin:
 
         classified_content = fulltext_result["classified_content"]
 
-        # Part A：规则版覆盖证据（默认开，"key + coverage"双通道）。
-        # 独立开关 DS_COVERAGE_RULE_BLOCK 可单独关闭/回滚。
-        if _rule_coverage_block_enabled():
+        # Part A：规则版覆盖证据（默认开，Config 开关 coverage_rule_block_enable 统一下发，
+        # 与 visualization_enable 等报告开关同风格）。
+        if current_inputs.get("coverage_rule_block_enable", True):
             # 纯 CPU 的正则抽取流水线（最坏 ~百 ms/章节），放线程池避免
             # 阻塞事件循环；GIL 下无真并行，收益是循环恢复可调度。
             core_content_list, rule_passage_texts = await asyncio.to_thread(
@@ -1194,9 +1192,8 @@ class EvidenceMixin:
             rule_passage_texts = {}
             logger.info(
                 "[generate_sub_report] section_idx=%s rule coverage block disabled "
-                "(DS_COVERAGE_RULE_BLOCK=%s)",
+                "(coverage_rule_block_enable=False)",
                 section_idx,
-                os.environ.get("DS_COVERAGE_RULE_BLOCK", "1").strip(),
             )
         current_inputs["sub_section_core_content"] = core_content_list
 
@@ -1208,32 +1205,27 @@ class EvidenceMixin:
         return True, "", classified_content
 
 
-# 方案 B 覆盖证据集成预算由 collector_evidence 统一提供（见 _COVERAGE_TOP_K_CAP /
-# _COVERAGE_MAX_CHARS_PER_DOC / _COVERAGE_MAX_TOTAL_CHARS）。选段不预设硬 Top-K，
-# 由单文档/章节字符预算兜底（方案2：预算即终止条件）。
-def _rule_coverage_block_enabled() -> bool:
-    """解析独立开关 DS_COVERAGE_RULE_BLOCK（默认开）。
-
-    标准布尔口径：`1`/`true`/`yes`/`on`（大小写与首尾空白不敏感）开启，
-    其余值（如 `0`/`false`/`off`/空串）关闭，避免用户写 `true` 被静默关闭。
-    """
-    return os.environ.get("DS_COVERAGE_RULE_BLOCK", "1").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
-
-
 def _extract_doc_coverage_passages(item: dict) -> list[str]:
-    """抽取单个选中文档的覆盖证据，并与同一文档的 key passages 去重。"""
+    """抽取单个选中文档的覆盖证据，供给区为摘要块切片线之后的尾部。
+
+    条目摘要块渲染清洗后原文前 500 字符（方案乙：基准 = 大纲实际渲染文本），
+    覆盖证据直接从 `outline_summary_tail_text` 的互补尾部抽取——摘要块已供给
+    的内容抽取阶段不碰，尾部内容全部供给、不做判重（宁多供不漏供；换措辞
+    复述、共用锚点的不同事实都不会再被误删，预算由单文档/章节共享上限兜底）。
+    key_passages 通道已退役（rationale 接管后不再进入大纲/写作 prompt）。
+    短文档（清洗后 ≤500 字符）整篇已进摘要块，尾部为空 → 无覆盖证据。
+    """
     original_content = str(item.get("original_content") or "")
     if not original_content:
         return []
+    supply_zone = outline_summary_tail_text(original_content)
+    if not supply_zone:
+        return []
     passages = extract_coverage_passages(
-        content=original_content,
+        content=supply_zone,
         max_passages=_COVERAGE_TOP_K_CAP,
         max_chars=_COVERAGE_MAX_CHARS_PER_DOC,
     )
-    key_passages = normalize_key_passages(item.get("key_passages"))
-    passages = exclude_passages(passages, key_passages)
     return [passage.text for passage in passages]
 
 
@@ -1288,7 +1280,6 @@ def _append_rule_coverage_to_core(
             _extract_doc_coverage_passages(
                 {
                     "original_content": str(getattr(evidence, "original_content", "") or ""),
-                    "key_passages": list(getattr(evidence, "key_passages", None) or []),
                 }
             ),
             budget,

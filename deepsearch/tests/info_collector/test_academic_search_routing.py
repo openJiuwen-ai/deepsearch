@@ -9,6 +9,17 @@ from openjiuwen_deepsearch.config.config import (
     ScholarlySearchConfig,
     WebSearchEngineConfig,
 )
+
+
+@pytest.fixture(autouse=True)
+def _mock_search_url_validation():
+    """Disable SSRF URL validation in tests to allow fake URLs like primary.example."""
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.jina.api_wrapper.validate_search_service_url"
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.local_search_api.api_wrapper.validate_search_service_url"
+    ):
+        yield
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import (
     GenerateQueryNode,
     SearchQueryItem,

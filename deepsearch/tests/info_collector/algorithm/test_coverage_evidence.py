@@ -10,9 +10,9 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     _coverage_score,
     _count_entities,
     _normalize_coverage_content,
-    exclude_passages,
     extract_coverage_passages,
     extract_fact_anchors,
+    outline_summary_tail_text,
 )
 
 
@@ -493,49 +493,68 @@ def test_neighbor_window_expands_beyond_adjacent():
     assert result[0].source_indices == [0, 1, 2, 3, 4]
 
 
-def _coverage_item(text: str) -> CoveragePassage:
-    return CoveragePassage(
-        text=text,
-        score=1.0,
-        source_indices=[0],
-        features={"number": 1.0, "date": 1.0, "time": 0.0, "entity": 0.0, "citation": 0.0},
-    )
-
-
-def test_exclude_passages_exact_duplicate_of_key_passage():
-    passage = _coverage_item("2025年营收100亿元，同比增长20%。")
-    assert exclude_passages([passage], ["2025年营收100亿元，同比增长20%。"]) == []
-
-
-def test_exclude_passages_high_similarity_duplicate_of_key_passage():
-    passage = _coverage_item("OpenAI于2025年发布产品X，推理性能提升50%，成为行业标杆。")
-    assert exclude_passages(
-        [passage], ["OpenAI于2025年发布产品X，推理性能提升50%。"]
+def test_extract_coverage_passages_empty_for_short_fulltext_doc():
+    """意见4 边界：清洗后长度 ≤ 500 字符的 fulltext 文档，正文已完整进入大纲
+    摘要块（方案乙切片线），尾部供给区为空 → 规则版 coverage 对该文档为空。
+    这是可观察的正确行为，不是缺陷。
+    """
+    short_doc = "2025年营收100亿元，同比增长20%。该产品定价4999元。"  # 远小于 500 字符
+    assert outline_summary_tail_text(short_doc) == ""
+    assert extract_coverage_passages(
+        content=outline_summary_tail_text(short_doc), max_passages=128, max_chars=1200
     ) == []
 
 
-def test_exclude_passages_keeps_non_overlapping_passage():
-    passage = _coverage_item("2025年营收100亿元，同比增长20%。")
-    assert exclude_passages(
-        [passage], ["该产品定价4999元，覆盖30个国家和地区。"]
-    ) == [passage]
-
-
-def test_exclude_passages_keeps_block_with_substantial_extra_context():
-    block = _coverage_item(
-        "2025年，DeepSeek发布新模型，推理速度提升50%，定价99美元/月。"
-        "该模型已覆盖30个国家，客户突破3万家。"
+def test_outline_summary_tail_is_exact_complement_of_summary():
+    """尾部供给区与摘要块在同一清洗文本上取互补切片：拼接恢复原文（长文档）。"""
+    from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
+        OUTLINE_SUMMARY_MAX_CHARS,
+        outline_summary_text,
     )
-    # key passage 只是块内的一小部分，块携带了额外事实上下文 → 保留。
-    assert exclude_passages(
-        [block], ["DeepSeek发布新模型，推理速度提升50%"]
-    ) == [block]
+
+    doc = "2025年营收100亿元，同比增长20%。" * 100
+    normalized = _normalize_coverage_content(doc)
+    summary = outline_summary_text(doc)
+    tail = outline_summary_tail_text(doc)
+    assert summary == normalized[:OUTLINE_SUMMARY_MAX_CHARS]
+    assert tail == normalized[OUTLINE_SUMMARY_MAX_CHARS:]
+    assert summary + tail == normalized
 
 
-def test_exclude_passages_with_empty_sides_returns_input():
-    passage = _coverage_item("2025年营收100亿元。")
-    assert exclude_passages([passage], []) == [passage]
-    assert exclude_passages([], ["任何关键片段"]) == []
+def test_doc_coverage_supply_zone_excludes_summary_prefix():
+    """供给区不含摘要块已渲染的前 500 字符：前缀区事实不再经覆盖块重复供给。"""
+    lead_fact = "2025年公司营收100亿元，同比增长20%。"
+    filler = "本节为背景叙述。" * 100
+    doc = lead_fact + filler + "结尾叙述。"
+    tail = outline_summary_tail_text(doc)
+    assert lead_fact not in tail
+    assert "结尾叙述" in tail
+
+
+def test_reviewer_repro_cost_fact_with_shared_anchors_is_supplied():
+    """PR !406 评审复现回归：成本事实与营收事实共用锚点（2025年/20%），
+    且成本事实位于摘要块切片线之后 → 必须被规则块供给。
+
+    旧"锚点救援"口径下该块因"无基准外新锚点"被整段判死，事实无声丢失；
+    切片方案下判重环节不存在，丢失在机制上不可能发生。
+    """
+    from openjiuwen_deepsearch.algorithm.report.evidence import _extract_doc_coverage_passages
+
+    basis = ("2025年营业收入增长20%，" + "经营情况保持稳定" * 100)[:500]
+    content = basis + "同期营业成本下降20%。"
+    result = _extract_doc_coverage_passages({"original_content": content})
+    assert result, "成本事实必须被供给"
+    assert any("营业成本下降20%" in text for text in result)
+
+
+def test_supply_zone_fact_right_after_500_boundary_is_supplied():
+    """紧贴切片线之后的事实（复用基准内锚点值）必被供给——宁多供不漏供。"""
+    from openjiuwen_deepsearch.algorithm.report.evidence import _extract_doc_coverage_passages
+
+    lead = "背景叙述。" * 100  # 恰 500 字符进摘要块
+    doc = lead + "2026年研发投入5亿元扩建产能。"
+    result = _extract_doc_coverage_passages({"original_content": doc})
+    assert any("5亿元" in text for text in result)
 
 
 def test_extract_uses_bounded_cache_per_content_and_params():

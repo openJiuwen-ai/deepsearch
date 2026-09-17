@@ -43,6 +43,15 @@ from tests.utils.mock_config import get_default_agent_config
 logger = logging.getLogger(__name__)
 
 
+@pytest.fixture(autouse=True)
+def _mock_search_url_validation():
+    """Disable SSRF URL validation in tests to allow empty or fake URLs."""
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.local_search_api.api_wrapper.validate_search_service_url"
+    ):
+        yield
+
+
 # 公共执行逻辑：运行 agent 并返回所有 chunk（可选）
 async def _run_agent_with_mocks(pre_handle_return, sub_graph_return):
     with patch.object(EditorTeamNode, '_pre_handle', return_value=pre_handle_return):

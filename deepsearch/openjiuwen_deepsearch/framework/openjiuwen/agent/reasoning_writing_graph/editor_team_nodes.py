@@ -422,6 +422,13 @@ class SubReporterNode(BaseNode):
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],
             visualization_enable=session.get_global_state("config.visualization_enable"),
+            # 会话缺键时 get_global_state 返回 None，归一回默认开启，
+            # 避免消费端 .get(key, True) 命中键存在值 None 而误关闭。
+            coverage_rule_block_enable=(
+                True
+                if session.get_global_state("config.coverage_rule_block_enable") is None
+                else bool(session.get_global_state("config.coverage_rule_block_enable"))
+            ),
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             require_summary_first=rtp.get("require_summary_first", False),
