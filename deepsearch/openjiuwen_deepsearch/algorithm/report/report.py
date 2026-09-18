@@ -684,8 +684,12 @@ class Reporter(
                     **build_temporal_scope_prompt_context(
                         current_inputs.get("research_intent")
                     ),
-                    **build_exclusion_prompt_context(
-                        current_inputs.get("research_intent")
+                    # 禁引约束注入受 exclusion_constraint_enable 控制；
+                    # 关闭时不注入 Excluded Sources，writer 对禁引清单无感知（baseline 行为）。
+                    **(
+                        build_exclusion_prompt_context(current_inputs.get("research_intent"))
+                        if current_inputs.get("exclusion_constraint_enable", False)
+                        else {}
                     ),
                 ),
             )

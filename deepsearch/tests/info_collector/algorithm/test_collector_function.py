@@ -1397,7 +1397,7 @@ class TestFilterSearchResultsByExcludeUrls:
              "content": "mirror", "pmid": "38132429"},
         ]
         result = filter_search_results_by_exclude_urls(
-            items, ["https://pubmed.ncbi.nlm.nih.gov/38132429/"])
+            items, ["https://pubmed.ncbi.nlm.nih.gov/38132429/"], enable_exclusion=True)
         assert [item.get("title") for item in result] == ["Keep"]
 
     def test_filter_search_results_by_exclude_urls_catches_mirror_by_doi(self):
@@ -1409,7 +1409,7 @@ class TestFilterSearchResultsByExcludeUrls:
              "content": "mirror", "doi": "10.3390/dj11120291"},
         ]
         result = filter_search_results_by_exclude_urls(
-            items, ["https://doi.org/10.3390/dj11120291"])
+            items, ["https://doi.org/10.3390/dj11120291"], enable_exclusion=True)
         assert [item.get("title") for item in result] == ["Keep"]
 
     def test_filter_search_results_by_exclude_urls_catches_pmc_title_suffix(self):
@@ -1421,8 +1421,36 @@ class TestFilterSearchResultsByExcludeUrls:
              "content": "mirror"},
         ]
         result = filter_search_results_by_exclude_urls(
-            items, [], ["Profile of Orthodontic Use across Demographics"])
+            items, [], ["Profile of Orthodontic Use across Demographics"], enable_exclusion=True)
         assert [item.get("title") for item in result] == ["Keep"]
+
+    def test_exclusion_disabled_leaves_pmc_mirror_in_results(self):
+        """默认关（exclusion_constraint_enable=False）：不剥镜像后缀，PMC 镜像不被 catch。
+
+        这是 baseline 行为——`- PMC` 后缀让 title_stripped 与 blocked_stripped 不等，
+        标题匹配失效，镜像留在结果里。
+        """
+        items = [
+            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
+            {"title": "Profile of Orthodontic Use across Demographics - PMC",
+             "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10742803",
+             "content": "mirror"},
+        ]
+        result = filter_search_results_by_exclude_urls(
+            items, [], ["Profile of Orthodontic Use across Demographics"])
+        assert [item.get("title") for item in result] == [
+            "Keep", "Profile of Orthodontic Use across Demographics - PMC"]
+
+    def test_exclusion_disabled_skips_id_match(self):
+        """默认关：不做文献 ID 交集匹配，同 doi 的镜像不被 catch。"""
+        items = [
+            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
+            {"title": "Mirror rehost", "url": "https://rehost.example.org/paper-fulltext",
+             "content": "mirror", "doi": "10.3390/dj11120291"},
+        ]
+        result = filter_search_results_by_exclude_urls(
+            items, ["https://doi.org/10.3390/dj11120291"])
+        assert [item.get("title") for item in result] == ["Keep", "Mirror rehost"]
 
     def test_process_tavily_search_result_filters_exclude_urls(self):
         """测试Tavily搜索结果按排除链接过滤，同域其他文章不误伤"""
