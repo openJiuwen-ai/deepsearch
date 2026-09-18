@@ -1412,6 +1412,18 @@ class TestFilterSearchResultsByExcludeUrls:
             items, ["https://doi.org/10.3390/dj11120291"])
         assert [item.get("title") for item in result] == ["Keep"]
 
+    def test_filter_search_results_by_exclude_urls_catches_pmc_title_suffix(self):
+        """PMC 镜像标题带 '- PMC' 后缀，应被标题包含匹配 catch（后缀词表含 pmc）。"""
+        items = [
+            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
+            {"title": "Profile of Orthodontic Use across Demographics - PMC",
+             "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10742803",
+             "content": "mirror"},
+        ]
+        result = filter_search_results_by_exclude_urls(
+            items, [], ["Profile of Orthodontic Use across Demographics"])
+        assert [item.get("title") for item in result] == ["Keep"]
+
     def test_process_tavily_search_result_filters_exclude_urls(self):
         """测试Tavily搜索结果按排除链接过滤，同域其他文章不误伤"""
         agent_input = {
