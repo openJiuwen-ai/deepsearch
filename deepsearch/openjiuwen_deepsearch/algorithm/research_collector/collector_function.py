@@ -45,6 +45,11 @@ from openjiuwen_deepsearch.algorithm.research_collector.scholarly_fusion import 
     SCHOLARLY_SOURCES,
     fuse_scholarly_records,
 )
+from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
+    normalize_arxiv_id,
+    normalize_doi,
+    normalize_pmid,
+)
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url, is_url_blocked, \
     normalize_domains
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -278,6 +283,59 @@ def filter_search_results_by_exclude_domains(items: list, exclude_domains: list[
     return filtered_items
 
 
+_PMCID_RE = re.compile(r"PMC(\d{4,})", re.IGNORECASE)
+
+
+def _ids_from_urls(urls: list[str]) -> set[str]:
+    """从一组 URL/字符串提取带类型的文献 ID：doi:/pmid:/pmcid:/arxiv:。
+
+    用于把禁引清单的 exclude_urls 解析成可比较的 ID 集，与搜索结果 item 的 ID
+    做交集，识别 URL/标题都变了但同篇的镜像（PMC 转载、DOI rehost 等）。
+    """
+    ids: set[str] = set()
+    for value in urls or []:
+        text = str(value or "")
+        pmid = normalize_pmid(text)
+        if pmid:
+            ids.add(f"pmid:{pmid}")
+        doi = normalize_doi(text)
+        if doi:
+            ids.add(f"doi:{doi}")
+        arxiv_id = normalize_arxiv_id(text)
+        if arxiv_id:
+            ids.add(f"arxiv:{arxiv_id}")
+        match = _PMCID_RE.search(text)
+        if match:
+            ids.add(f"pmcid:{match.group(1)}")
+    return ids
+
+
+def _item_ids(item: dict) -> set[str]:
+    """从搜索结果 item 提取带类型的文献 ID（与 _ids_from_urls 同格式）。
+
+    来源：item 的 url/link/source_url（经 _ids_from_urls）+ scholarly 结果带的
+    doi/pmid/pmcid/arxiv_id 字段（_normalize_web_search_item 已归一化出来）。
+    """
+    url = str(item.get("url") or item.get("link") or item.get("source_url") or "")
+    ids = _ids_from_urls([url])
+    for key, prefix in (
+        ("doi", "doi"),
+        ("pmid", "pmid"),
+        ("pmcid", "pmcid"),
+        ("arxiv_id", "arxiv"),
+    ):
+        raw = item.get(key)
+        if not raw:
+            continue
+        value = str(raw).strip()
+        if prefix == "pmcid":
+            match = _PMCID_RE.search(value)
+            value = match.group(1) if match else value
+        if value:
+            ids.add(f"{prefix}:{value}")
+    return ids
+
+
 def filter_search_results_by_exclude_urls(
         items: list,
         exclude_urls: list[str],
@@ -285,7 +343,12 @@ def filter_search_results_by_exclude_urls(
 ) -> list:
     """按 exclude_url / exclude_titles 过滤搜索结果.
 
-    URL 命中禁引列表（归一化 host+path 精确匹配）或标题命中禁引文章标题的条目会被剔除，
+    命中以下任一则剔除：
+    - URL 命中禁引列表（归一化 host+path 精确匹配）；
+    - 标题命中禁引文章标题（归一化包含，含镜像后缀词归一）；
+    - 文献 ID（doi/pmid/pmcid/arxiv）与禁引清单 ID 相交——catch URL/标题都变了
+      但同篇的镜像（PMC 转载、DOI rehost 等）。
+
     防止用户明确要求避开的页面/文献（含同文献的镜像变体）进入收集、抓取与引用环节。
     """
     if not exclude_urls and not exclude_titles:
@@ -293,6 +356,8 @@ def filter_search_results_by_exclude_urls(
 
     # 预处理被禁标题，避免循环内重复归一化
     preprocessed_titles = preprocess_blocked_titles(exclude_titles) if exclude_titles else []
+    # 预解析禁引清单的文献 ID 集，循环内做交集
+    blocked_ids = _ids_from_urls(exclude_urls) if exclude_urls else set()
 
     filtered_items = []
     removed_count = 0
@@ -304,17 +369,18 @@ def filter_search_results_by_exclude_urls(
         item_title = item.get("title") or item.get("name") or ""
         url_hit = item_url and is_url_blocked(item_url, exclude_urls)
         title_hit = bool(item_title and _is_title_blocked_preprocessed(item_title, preprocessed_titles))
-        if url_hit or title_hit:
+        id_hit = bool(blocked_ids and (_item_ids(item) & blocked_ids))
+        if url_hit or title_hit or id_hit:
             removed_count += 1
             if LogManager.is_sensitive():
                 logger.info(
-                    "[COLLECTOR FUNCTION] blocked item excluded (redacted, url_hit=%s, title_hit=%s)",
-                    bool(url_hit), bool(title_hit),
+                    "[COLLECTOR FUNCTION] blocked item excluded (redacted, url_hit=%s, title_hit=%s, id_hit=%s)",
+                    bool(url_hit), bool(title_hit), bool(id_hit),
                 )
             else:
                 logger.info(
-                    "[COLLECTOR FUNCTION] blocked item excluded (url_hit=%s, title_hit=%s). url=%s title=%s",
-                    bool(url_hit), bool(title_hit), str(item_url)[:120], str(item_title)[:100],
+                    "[COLLECTOR FUNCTION] blocked item excluded (url_hit=%s, title_hit=%s, id_hit=%s). url=%s title=%s",
+                    bool(url_hit), bool(title_hit), bool(id_hit), str(item_url)[:120], str(item_title)[:100],
                 )
             continue
         filtered_items.append(item)
