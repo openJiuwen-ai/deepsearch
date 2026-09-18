@@ -169,6 +169,8 @@ _AGGREGATOR_SUFFIX_TOKENS = {
     "ieee", "xplore", "nature", "wiley", "semanticscholar", "jstor",
     "acm", "oup", "sage", "tandfonline", "ebsco", "scopus", "bohrium", "aminer", "dblp",
     "ideals",
+    # 文献库/转载镜像站点把文章标题追加这些站点词（如 "原标题 - PMC - NIH"）。
+    "pmc", "nih", "ncbi", "pubmed", "europepmc",
 }
 
 
