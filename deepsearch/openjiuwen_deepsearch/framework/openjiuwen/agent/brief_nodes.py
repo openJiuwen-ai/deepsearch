@@ -163,7 +163,10 @@ async def _search_brief_queries(
             continue
         if isinstance(processed_results, list):
             batches.append((query, processed_results))
-    results = normalize_brief_search_results(batches, intent)
+    results = normalize_brief_search_results(
+        batches, intent,
+        enable_exclusion=bool(session.get_global_state("config.exclusion_constraint_enable")),
+    )
     await _stream_brief_search_results(session, results, queries)
     return results
 

@@ -37,7 +37,8 @@ From the user's **original_query** (below), extract:
    - **exclude_domains**: domain names only (no `http://`), lowercase hostnames the user explicitly asks to exclude site-wide (e.g. "不要用CSDN的文章" → `csdn.net`). Fill ONLY when the user explicitly expresses site-level exclusion. Banning N articles on the same domain is NOT site-level exclusion — do NOT put that domain here.
    - **target_papers**: papers explicitly or implicitly identified by the user.
      - Preserve a supplied full title, academic paper URL, PMID, DOI, or arXiv ID verbatim.
-     - When the user supplies a paper URL, put it in both `include_url` and `target_papers` as `{"url":"..."}`.
+     - When the user asks to use/focus on a paper URL, put it in both `include_url` and `target_papers` as `{"url":"..."}`.
+     - URLs the user asks to AVOID go in `exclude_url` ONLY — NEVER in `include_url` or `target_papers`.
      - For an implicit paper, extract only stated dataset, data year, and discriminative topic clues.
      - Do not invent identifiers, titles, translations, or `search_terms`.
      - A dataset observation year is not temporal_scope unless the user separately limits source or fact time.

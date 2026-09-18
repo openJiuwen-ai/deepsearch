@@ -429,6 +429,10 @@ class SubReporterNode(BaseNode):
                 if session.get_global_state("config.coverage_rule_block_enable") is None
                 else bool(session.get_global_state("config.coverage_rule_block_enable"))
             ),
+            # 禁引约束总开关，默认关（缺键时也按关处理）
+            exclusion_constraint_enable=bool(
+                session.get_global_state("config.exclusion_constraint_enable")
+            ),
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             require_summary_first=rtp.get("require_summary_first", False),

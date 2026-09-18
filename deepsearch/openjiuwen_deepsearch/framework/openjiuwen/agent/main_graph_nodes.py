@@ -246,6 +246,7 @@ class StartNode(Start):
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
             agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
+            agent_config["exclusion_constraint_enable"] = origin_agent_config.get("exclusion_constraint_enable", False)
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -312,6 +313,9 @@ class IntentRecognitionNode(BaseNode):
             web_search_engine_config=session.get_global_state("config.web_search_engine_config"),
             info_collector_search_method=session.get_global_state("config.info_collector_search_method") or "web",
             provided_report_type=session.get_global_state("config.report_type"),
+            exclusion_constraint_enable=bool(
+                session.get_global_state("config.exclusion_constraint_enable")
+            ),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -405,6 +409,7 @@ class IntentRecognitionNode(BaseNode):
                 algorithm_output.entry_search_results,
                 algorithm_output.research_intent.exclude_url,
                 algorithm_output.research_intent.exclude_titles,
+                enable_exclusion=bool(session.get_global_state("config.exclusion_constraint_enable")),
             )
             session.update_global_state({
                 "search_context.entry_search_results": entry_search_results,

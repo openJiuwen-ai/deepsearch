@@ -405,6 +405,7 @@ class TestInfoCollectorNode:
             "api_tools_config": {},
             "research_intent": {},
             "evidence_ledger": {},
+            "exclusion_constraint_enable": False,
         }
         assert result == expected_state
 
