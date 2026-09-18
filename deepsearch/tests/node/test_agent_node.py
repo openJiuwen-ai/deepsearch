@@ -404,6 +404,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         "web_search_engine_config": web_search_engine_config,
         "info_collector_search_method": "web",
         "provided_report_type": None,
+        "exclusion_constraint_enable": False,
     })
     mock_web_search.assert_awaited_once_with({
         "query": "AI Agent 趋势",

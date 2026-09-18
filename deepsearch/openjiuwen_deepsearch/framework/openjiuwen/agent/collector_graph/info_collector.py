@@ -188,6 +188,9 @@ class InfoRetrievalNode(BaseNode):
             api_tools_config=session.get_global_state("config.api_tools_config") or {},
             research_intent=session.get_global_state("collector_context.research_intent") or {},
             evidence_ledger=session.get_global_state("collector_context.evidence_ledger") or {},
+            exclusion_constraint_enable=bool(
+                session.get_global_state("config.exclusion_constraint_enable")
+            ),
         )
         return state
 
@@ -519,6 +522,7 @@ class InfoRetrievalNode(BaseNode):
             "local_text_search_record": [],
             "other_tool_record": [],
             "research_intent": state.get("research_intent", {}),
+            "exclusion_constraint_enable": state.get("exclusion_constraint_enable", False),
         }
 
         tool_list, tool_dict = self._prepare_collector_tool(state)

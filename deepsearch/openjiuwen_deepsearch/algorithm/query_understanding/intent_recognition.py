@@ -27,7 +27,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    exclusion_constraint_context,
+    llm_context,
+)
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -334,16 +337,18 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
 
     # exclude_url 中的 URL 不应同时出现在 include_url / target_papers
     # （防止 collector 搜索注定被采集层挡掉的被禁源，浪费搜索轮次）
-    exclude_url_set = set(exclude_url)
-    exclude_pmids = {normalize_pmid(u) for u in exclude_url if normalize_pmid(u)}
-    exclude_dois = {normalize_doi(u) for u in exclude_url if normalize_doi(u)}
-    include_url = [u for u in include_url if u not in exclude_url_set]
-    target_papers = [
-        p for p in target_papers
-        if not (p.url and p.url in exclude_url_set)
-        and not (p.pmid and p.pmid in exclude_pmids)
-        and not (p.doi and p.doi in exclude_dois)
-    ]
+    # 受 exclusion_constraint_enable 控制：关闭时跳过本去重，退回 baseline 行为。
+    if exclusion_constraint_context.get():
+        exclude_url_set = set(exclude_url)
+        exclude_pmids = {normalize_pmid(u) for u in exclude_url if normalize_pmid(u)}
+        exclude_dois = {normalize_doi(u) for u in exclude_url if normalize_doi(u)}
+        include_url = [u for u in include_url if u not in exclude_url_set]
+        target_papers = [
+            p for p in target_papers
+            if not (p.url and p.url in exclude_url_set)
+            and not (p.pmid and p.pmid in exclude_pmids)
+            and not (p.doi and p.doi in exclude_dois)
+        ]
 
     source_date_scope = _normalize_date_scope(data.get("source_date_scope"), "source_date")
     content_date_scope = _normalize_date_scope(data.get("content_date_scope"), "content_date")
@@ -414,16 +419,18 @@ def _merge_explicit_target_papers(intent: ResearchIntent, original_query: str) -
     # exclude_url 中的 URL 不应出现在 include_url / target_papers
     # （_normalize_research_intent 已去重，但 _merge_explicit_target_papers 从
     # original_query 重新提取了被禁源标识符并加回，需再次去重）
-    exclude_url_set = set(intent.exclude_url)
-    exclude_pmids = {normalize_pmid(u) for u in intent.exclude_url if normalize_pmid(u)}
-    exclude_dois = {normalize_doi(u) for u in intent.exclude_url if normalize_doi(u)}
-    include_url = [u for u in include_url if u not in exclude_url_set]
-    target_papers = [
-        p for p in target_papers
-        if not (p.url and p.url in exclude_url_set)
-        and not (p.pmid and p.pmid in exclude_pmids)
-        and not (p.doi and p.doi in exclude_dois)
-    ]
+    # 与 _normalize_research_intent 共用同一个总开关——只开一处等于没开。
+    if exclusion_constraint_context.get():
+        exclude_url_set = set(intent.exclude_url)
+        exclude_pmids = {normalize_pmid(u) for u in intent.exclude_url if normalize_pmid(u)}
+        exclude_dois = {normalize_doi(u) for u in intent.exclude_url if normalize_doi(u)}
+        include_url = [u for u in include_url if u not in exclude_url_set]
+        target_papers = [
+            p for p in target_papers
+            if not (p.url and p.url in exclude_url_set)
+            and not (p.pmid and p.pmid in exclude_pmids)
+            and not (p.doi and p.doi in exclude_dois)
+        ]
 
     return intent.model_copy(update={
         "target_papers": target_papers,
@@ -727,6 +734,9 @@ async def _recognize_intent(
     original_query = (current_inputs.get("original_query") or "").strip()
     if not original_query:
         return _default_fallback(original_query)
+
+    # 下发禁引约束总开关，供下方 include_url/target_papers 去重逻辑读取
+    exclusion_constraint_context.set(bool(current_inputs.get("exclusion_constraint_enable", False)))
 
     try:
         result, response = await _invoke_llm_for_intent(

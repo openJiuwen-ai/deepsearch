@@ -97,6 +97,15 @@ def _get_exclude_titles(agent_input: dict) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _get_exclusion_constraint_enable(agent_input: dict) -> bool:
+    """从 agent_input 读取禁引约束总开关（exclusion_constraint_enable）.
+
+    默认 False：不显式开启时，禁引过滤退回 baseline 行为（无 ID 匹配、
+    标题归一化不剥文献库镜像后缀）。
+    """
+    return bool(agent_input.get("exclusion_constraint_enable", False))
+
+
 def _normalize_title_for_match(title: Any) -> str:
     """归一化标题用于等价匹配：反转义 HTML 实体、小写、去标点、合并空白（保留 CJK 字符）."""
     text = unescape(str(title or "")).strip().lower()
@@ -140,8 +149,16 @@ _PreprocessedBlockedTitle = namedtuple("_PreprocessedBlockedTitle", [
 ])
 
 
-def preprocess_blocked_titles(titles: list[str]) -> list[_PreprocessedBlockedTitle]:
+def preprocess_blocked_titles(
+    titles: list[str],
+    *,
+    enable_exclusion: bool = False,
+) -> list[_PreprocessedBlockedTitle]:
     """预处理被禁标题列表，避免每次匹配重复归一化.
+
+    Args:
+        titles: 被禁标题原文列表。
+        enable_exclusion: 为 True 时剥离文献库镜像后缀（pmc/nih/...）。
 
     Returns:
         预处理后的被禁标题列表，每个元素含归一化字符串、剥离后缀字符串和词集合。
@@ -151,7 +168,7 @@ def preprocess_blocked_titles(titles: list[str]) -> list[_PreprocessedBlockedTit
         norm = _normalize_title_for_match(t)
         if not norm:
             continue
-        stripped = _strip_aggregator_suffix(norm)
+        stripped = _strip_aggregator_suffix(norm, enable_exclusion=enable_exclusion)
         result.append(_PreprocessedBlockedTitle(
             raw=t,
             normalized=norm,
@@ -164,25 +181,39 @@ def preprocess_blocked_titles(titles: list[str]) -> list[_PreprocessedBlockedTit
 
 # 镜像/聚合站点为页面标题追加的站点标记词（如 "原标题 | MDPI"、"原标题 - ProQuest"），
 # 归一化后位于标题尾部时允许剥离后再做精确匹配。只收明确的站点名，避免误剥正文词汇。
-_AGGREGATOR_SUFFIX_TOKENS = {
+_BASE_AGGREGATOR_SUFFIX_TOKENS = {
     "proquest", "mdpi", "researchgate", "sciencedirect", "springer", "springerlink",
     "ieee", "xplore", "nature", "wiley", "semanticscholar", "jstor",
     "acm", "oup", "sage", "tandfonline", "ebsco", "scopus", "bohrium", "aminer", "dblp",
     "ideals",
-    # 文献库/转载镜像站点把文章标题追加这些站点词（如 "原标题 - PMC - NIH"）。
-    "pmc", "nih", "ncbi", "pubmed", "europepmc",
 }
 
+# 文献库/转载镜像站点把文章标题追加这些站点词（如 "原标题 - PMC - NIH"）。
+# 仅在 exclusion_constraint_enable 开启时参与剥离：关闭时标题归一化不认这些后缀，
+# 镜像标题匹配随之失效（即 baseline 行为）。
+_EXCLUSION_AGGREGATOR_SUFFIX_TOKENS = {"pmc", "nih", "ncbi", "pubmed", "europepmc"}
 
-def _strip_aggregator_suffix(normalized_title: str) -> str:
-    """去掉归一化标题尾部的聚合/出版站点标记词，返回剩余部分（无标记时原样返回）."""
+
+def _strip_aggregator_suffix(normalized_title: str, *, enable_exclusion: bool = False) -> str:
+    """去掉归一化标题尾部的聚合/出版站点标记词，返回剩余部分（无标记时原样返回）。
+
+    Args:
+        normalized_title: 归一化后的标题。
+        enable_exclusion: 为 True 时才额外剥离文献库镜像后缀（pmc/nih/...）。
+    """
     words = normalized_title.split()
-    while words and words[-1] in _AGGREGATOR_SUFFIX_TOKENS:
-        words.pop()
+    while words:
+        last = words[-1]
+        if last in _BASE_AGGREGATOR_SUFFIX_TOKENS or (
+            enable_exclusion and last in _EXCLUSION_AGGREGATOR_SUFFIX_TOKENS
+        ):
+            words.pop()
+            continue
+        break
     return " ".join(words)
 
 
-def is_title_blocked(title: Any, blocked_titles: list[str]) -> bool:
+def is_title_blocked(title: Any, blocked_titles: list[str], *, enable_exclusion: bool = False) -> bool:
     """判断标题是否命中用户要求排除的文章标题.
 
     匹配规则（任一命中即视为 blocked）：
@@ -190,16 +221,23 @@ def is_title_blocked(title: Any, blocked_titles: list[str]) -> bool:
     2. 剥离聚合站后缀后完全相同；
     3. 当被禁标题足够长（≥30 归一化字符）时，做包含匹配；
     4. 词重叠率 ≥ 70% 时视为同一文献（捕获镜像站标题变体）。
+
+    Args:
+        title: 待判断的标题。
+        blocked_titles: 被禁标题列表。
+        enable_exclusion: 为 True 时才把文献库镜像后缀（pmc/nih/...）纳入剥离范围。
     """
     if not blocked_titles:
         return False
-    preprocessed = preprocess_blocked_titles(blocked_titles)
-    return _is_title_blocked_preprocessed(title, preprocessed)
+    preprocessed = preprocess_blocked_titles(blocked_titles, enable_exclusion=enable_exclusion)
+    return _is_title_blocked_preprocessed(title, preprocessed, enable_exclusion=enable_exclusion)
 
 
 def _is_title_blocked_preprocessed(
     title: Any,
     blocked_preprocessed: list[_PreprocessedBlockedTitle],
+    *,
+    enable_exclusion: bool = False,
 ) -> bool:
     """使用预处理后的被禁标题进行匹配（内部函数）."""
     if not blocked_preprocessed:
@@ -208,7 +246,7 @@ def _is_title_blocked_preprocessed(
     target = _normalize_title_for_match(title)
     if not target:
         return False
-    target_stripped = _strip_aggregator_suffix(target)
+    target_stripped = _strip_aggregator_suffix(target, enable_exclusion=enable_exclusion)
     target_tokens = _tokenize_title(target)
     target_stripped_tokens = _tokenize_title(target_stripped)
 
@@ -342,6 +380,8 @@ def filter_search_results_by_exclude_urls(
         items: list,
         exclude_urls: list[str],
         exclude_titles: list[str] | None = None,
+        *,
+        enable_exclusion: bool = False,
 ) -> list:
     """按 exclude_url / exclude_titles 过滤搜索结果.
 
@@ -352,14 +392,36 @@ def filter_search_results_by_exclude_urls(
       但同篇的镜像（PMC 转载、DOI rehost 等）。
 
     防止用户明确要求避开的页面/文献（含同文献的镜像变体）进入收集、抓取与引用环节。
+
+    Args:
+        items: 待过滤的搜索结果。
+        exclude_urls: 禁引 URL 列表。
+        exclude_titles: 禁引标题列表。
+        enable_exclusion: 禁引约束总开关（exclusion_constraint_enable）。为 False 时
+            关闭禁引增强能力——不做文献 ID 匹配、标题归一化不剥文献库镜像后缀，
+            行为等同 baseline。
     """
     if not exclude_urls and not exclude_titles:
+        # 即便没有禁引清单也打一行开关状态，排查时能区分「开关关了」和
+        # 「开关开了但没传禁引清单」——后者意味着禁引规则没流到采集层。
+        logger.info(
+            "[COLLECTOR FUNCTION] exclude_url/title filter skipped (no exclude list). "
+            "enable_exclusion=%s",
+            "on" if enable_exclusion else "off",
+        )
         return items
 
     # 预处理被禁标题，避免循环内重复归一化
-    preprocessed_titles = preprocess_blocked_titles(exclude_titles) if exclude_titles else []
-    # 预解析禁引清单的文献 ID 集，循环内做交集
-    blocked_ids = _ids_from_urls(exclude_urls) if exclude_urls else set()
+    preprocessed_titles = (
+        preprocess_blocked_titles(exclude_titles, enable_exclusion=enable_exclusion)
+        if exclude_titles else []
+    )
+    # 预解析禁引清单的文献 ID 集，循环内做交集（关闭时不启用 ID 匹配）
+    blocked_ids = (
+        _ids_from_urls(exclude_urls)
+        if (exclude_urls and enable_exclusion)
+        else set()
+    )
 
     filtered_items = []
     removed_count = 0
@@ -370,7 +432,8 @@ def filter_search_results_by_exclude_urls(
         item_url = item.get("url") or item.get("link") or item.get("source_url") or ""
         item_title = item.get("title") or item.get("name") or ""
         url_hit = item_url and is_url_blocked(item_url, exclude_urls)
-        title_hit = bool(item_title and _is_title_blocked_preprocessed(item_title, preprocessed_titles))
+        title_hit = bool(item_title and _is_title_blocked_preprocessed(
+            item_title, preprocessed_titles, enable_exclusion=enable_exclusion))
         id_hit = bool(blocked_ids and (_item_ids(item) & blocked_ids))
         if url_hit or title_hit or id_hit:
             removed_count += 1
@@ -387,7 +450,9 @@ def filter_search_results_by_exclude_urls(
             continue
         filtered_items.append(item)
     logger.info(
-        "[COLLECTOR FUNCTION] exclude_url/title filter applied. before=%s after=%s removed=%s",
+        "[COLLECTOR FUNCTION] exclude_url/title filter applied. enable_exclusion=%s "
+        "before=%s after=%s removed=%s",
+        "on" if enable_exclusion else "off",
         len(items),
         len(filtered_items),
         removed_count,
@@ -792,7 +857,8 @@ def process_tavily_search_result(agent_input: dict, tool_content: Any) -> (list,
         raw_results = tool_content if isinstance(tool_content, list) else []
         raw_results = filter_search_results_by_exclude_domains(raw_results, _get_exclude_domains(agent_input))
         raw_results = filter_search_results_by_exclude_urls(
-            raw_results, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
+            raw_results, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input),
+            enable_exclusion=_get_exclusion_constraint_enable(agent_input))
         added_records = []
         for item in raw_results:
             new_item = _normalize_web_search_item(item, include_date_metadata=True)
@@ -824,7 +890,8 @@ def process_google_search_result(agent_input: dict, tool_content: Any) -> (list,
         tool_result = tool_content if isinstance(tool_content, list) else []
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
         tool_result = filter_search_results_by_exclude_urls(
-            tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
+            tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input),
+            enable_exclusion=_get_exclusion_constraint_enable(agent_input))
         added_records = []
         for item in tool_result:
             new_item = _normalize_web_search_item(item, include_date_metadata=True)
@@ -856,7 +923,8 @@ def process_common_search_result(
         tool_result = tool_content if isinstance(tool_content, list) else []
         tool_result = filter_search_results_by_exclude_domains(tool_result, _get_exclude_domains(agent_input))
         tool_result = filter_search_results_by_exclude_urls(
-            tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input))
+            tool_result, _get_exclude_urls(agent_input), _get_exclude_titles(agent_input),
+            enable_exclusion=_get_exclusion_constraint_enable(agent_input))
         added_records = []
         for item in tool_result:
             new_item = _normalize_web_search_item(item, include_date_metadata=True)
