@@ -598,6 +598,46 @@ def build_section_local_contract_prompt_context(contract: SectionLocalContract |
     }
 
 
+def build_exclusion_prompt_context(intent: ResearchIntent | dict | None) -> dict:
+    """把用户"禁止引用某来源（exclude_url/exclude_titles）"转为写作 prompt 可消费的上下文。
+
+    只读 exclude_url / exclude_titles（域名排除由采集层确定性过滤负责）。返回
+    ``has_exclusion`` 与 ``exclusion_instruction`` 两个键；无约束时返回空字段。
+    不输出 blocked authors 段（exclude_authors 已移除，避免 writer 误伤同作者合法论文）。
+    """
+    if intent is None:
+        model = ResearchIntent()
+    elif isinstance(intent, ResearchIntent):
+        model = intent
+    else:
+        model = ResearchIntent.model_validate(intent)
+
+    exclude_urls = [u for u in model.exclude_url if u]
+    exclude_titles = [t for t in model.exclude_titles if t]
+    if not exclude_urls and not exclude_titles:
+        return {"has_exclusion": False, "exclusion_instruction": ""}
+
+    # 列表过长会膨胀 system prompt；取 top-N，超出部分依赖采集层确定性过滤兜底。
+    urls = exclude_urls[:20]
+    titles = exclude_titles[:20]
+
+    parts = [
+        "The following sources are blocked and must NOT appear anywhere in your output — "
+        "never cite them, never mention their titles/URLs, and never quote or paraphrase their content, "
+        "even if they slipped into the Collected Information.",
+        "This is a silent constraint: do NOT restate, explain, or echo this rule in the report; "
+        "just omit these sources without any mention that they were excluded.",
+    ]
+    if urls:
+        urls_text = "\n".join(f"- {u}" for u in urls)
+        parts.append(f"Blocked URLs (primary, match exactly):\n{urls_text}")
+    if titles:
+        titles_text = "\n".join(f"- {t}" for t in titles)
+        parts.append(f"Blocked titles (auxiliary, semantic match):\n{titles_text}")
+
+    return {"has_exclusion": True, "exclusion_instruction": "\n\n".join(parts)}
+
+
 class SearchContext(BaseModel):
     """
     上下文状态模型：工作流运行时的状态上下文
