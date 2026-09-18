@@ -340,15 +340,26 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
     # 受 exclusion_constraint_enable 控制：关闭时跳过本去重，退回 baseline 行为。
     if exclusion_constraint_context.get():
         exclude_url_set = set(exclude_url)
-        exclude_pmids = {normalize_pmid(u) for u in exclude_url if normalize_pmid(u)}
-        exclude_dois = {normalize_doi(u) for u in exclude_url if normalize_doi(u)}
+        exclude_pmids = set()
+        exclude_dois = set()
+        for u in exclude_url:
+            pmid = normalize_pmid(u)
+            if pmid:
+                exclude_pmids.add(pmid)
+            doi = normalize_doi(u)
+            if doi:
+                exclude_dois.add(doi)
         include_url = [u for u in include_url if u not in exclude_url_set]
-        target_papers = [
-            p for p in target_papers
-            if not (p.url and p.url in exclude_url_set)
-            and not (p.pmid and p.pmid in exclude_pmids)
-            and not (p.doi and p.doi in exclude_dois)
-        ]
+        filtered_papers = []
+        for p in target_papers:
+            if p.url and p.url in exclude_url_set:
+                continue
+            if p.pmid and p.pmid in exclude_pmids:
+                continue
+            if p.doi and p.doi in exclude_dois:
+                continue
+            filtered_papers.append(p)
+        target_papers = filtered_papers
 
     source_date_scope = _normalize_date_scope(data.get("source_date_scope"), "source_date")
     content_date_scope = _normalize_date_scope(data.get("content_date_scope"), "content_date")
@@ -422,15 +433,26 @@ def _merge_explicit_target_papers(intent: ResearchIntent, original_query: str) -
     # 与 _normalize_research_intent 共用同一个总开关——只开一处等于没开。
     if exclusion_constraint_context.get():
         exclude_url_set = set(intent.exclude_url)
-        exclude_pmids = {normalize_pmid(u) for u in intent.exclude_url if normalize_pmid(u)}
-        exclude_dois = {normalize_doi(u) for u in intent.exclude_url if normalize_doi(u)}
+        exclude_pmids = set()
+        exclude_dois = set()
+        for u in intent.exclude_url:
+            pmid = normalize_pmid(u)
+            if pmid:
+                exclude_pmids.add(pmid)
+            doi = normalize_doi(u)
+            if doi:
+                exclude_dois.add(doi)
         include_url = [u for u in include_url if u not in exclude_url_set]
-        target_papers = [
-            p for p in target_papers
-            if not (p.url and p.url in exclude_url_set)
-            and not (p.pmid and p.pmid in exclude_pmids)
-            and not (p.doi and p.doi in exclude_dois)
-        ]
+        filtered_papers = []
+        for p in target_papers:
+            if p.url and p.url in exclude_url_set:
+                continue
+            if p.pmid and p.pmid in exclude_pmids:
+                continue
+            if p.doi and p.doi in exclude_dois:
+                continue
+            filtered_papers.append(p)
+        target_papers = filtered_papers
 
     return intent.model_copy(update={
         "target_papers": target_papers,
