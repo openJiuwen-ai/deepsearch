@@ -332,6 +332,19 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         if paper.url and paper.url not in include_url:
             include_url.append(paper.url)
 
+    # exclude_url 中的 URL 不应同时出现在 include_url / target_papers
+    # （防止 collector 搜索注定被采集层挡掉的被禁源，浪费搜索轮次）
+    exclude_url_set = set(exclude_url)
+    exclude_pmids = {normalize_pmid(u) for u in exclude_url if normalize_pmid(u)}
+    exclude_dois = {normalize_doi(u) for u in exclude_url if normalize_doi(u)}
+    include_url = [u for u in include_url if u not in exclude_url_set]
+    target_papers = [
+        p for p in target_papers
+        if not (p.url and p.url in exclude_url_set)
+        and not (p.pmid and p.pmid in exclude_pmids)
+        and not (p.doi and p.doi in exclude_dois)
+    ]
+
     source_date_scope = _normalize_date_scope(data.get("source_date_scope"), "source_date")
     content_date_scope = _normalize_date_scope(data.get("content_date_scope"), "content_date")
     # 兼容旧序列化 state：旧 temporal_scope 单对象按 constraint_type 路由到 source_date_scope/

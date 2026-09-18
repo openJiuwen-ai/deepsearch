@@ -29,6 +29,38 @@ def test_target_paper_accepts_explicit_and_implicit_clues():
     assert implicit.dataset.startswith("Medical Expenditure")
 
 
+def test_normalize_research_intent_removes_exclude_url_from_include_and_target_papers():
+    """被禁源不应同时出现在 include_url 和 target_papers（防止 collector 搜注定被挡的源）。"""
+    forbidden = "https://pubmed.ncbi.nlm.nih.gov/38132429/"
+    intent = _normalize_research_intent({
+        "include_url": [forbidden, "https://keep.com/a"],
+        "exclude_url": [forbidden, "https://www.mdpi.com/2304-6767/11/12/291"],
+        "target_papers": [{"url": forbidden}, {"dataset": "MEPS"}],
+    })
+    assert forbidden not in intent.include_url
+    assert "https://keep.com/a" in intent.include_url
+    assert all(not p.url == forbidden for p in intent.target_papers)
+    assert forbidden in intent.exclude_url
+
+
+def test_normalize_research_intent_removes_target_paper_by_pmid_doi():
+    """被禁源的 PMID/DOI 出现在 target_papers 时也应移除（即使 URL 为空）。"""
+    intent = _normalize_research_intent({
+        "exclude_url": [
+            "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+            "https://doi.org/10.3390/dj11120291",
+        ],
+        "target_papers": [
+            {"pmid": "38132429"},                   # PMID 匹配 exclude 的 pubmed URL
+            {"doi": "10.3390/dj11120291"},          # DOI 匹配 exclude 的 doi URL
+            {"dataset": "MEPS"},                     # 无关，保留
+        ],
+    })
+    assert all(p.pmid != "38132429" for p in intent.target_papers)
+    assert all(p.doi != "10.3390/dj11120291" for p in intent.target_papers)
+    assert any(p.dataset == "MEPS" for p in intent.target_papers)
+
+
 def test_target_paper_rejects_empty_item():
     with pytest.raises(ValueError, match="at least one clue"):
         TargetPaper()
