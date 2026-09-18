@@ -411,6 +411,20 @@ def _merge_explicit_target_papers(intent: ResearchIntent, original_query: str) -
         if paper.url and paper.url not in include_url:
             include_url.append(paper.url)
 
+    # exclude_url 中的 URL 不应出现在 include_url / target_papers
+    # （_normalize_research_intent 已去重，但 _merge_explicit_target_papers 从
+    # original_query 重新提取了被禁源标识符并加回，需再次去重）
+    exclude_url_set = set(intent.exclude_url)
+    exclude_pmids = {normalize_pmid(u) for u in intent.exclude_url if normalize_pmid(u)}
+    exclude_dois = {normalize_doi(u) for u in intent.exclude_url if normalize_doi(u)}
+    include_url = [u for u in include_url if u not in exclude_url_set]
+    target_papers = [
+        p for p in target_papers
+        if not (p.url and p.url in exclude_url_set)
+        and not (p.pmid and p.pmid in exclude_pmids)
+        and not (p.doi and p.doi in exclude_dois)
+    ]
+
     return intent.model_copy(update={
         "target_papers": target_papers,
         "include_url": include_url,
