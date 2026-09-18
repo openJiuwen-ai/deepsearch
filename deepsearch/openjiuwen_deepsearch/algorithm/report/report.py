@@ -45,6 +45,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_research_intent_prompt_context,
     build_section_local_contract_prompt_context,
     build_temporal_scope_prompt_context,
+    build_exclusion_prompt_context,
 )
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
@@ -681,6 +682,9 @@ class Reporter(
                         current_inputs.get("research_intent")
                     ),
                     **build_temporal_scope_prompt_context(
+                        current_inputs.get("research_intent")
+                    ),
+                    **build_exclusion_prompt_context(
                         current_inputs.get("research_intent")
                     ),
                 ),
