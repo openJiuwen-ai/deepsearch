@@ -321,6 +321,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
 - **visualization_enable** (bool, optional): Whether to enable visualization illustrations in Professional reports. Default value: `True`. It does not affect Brief report text-and-visual generation.
 - **coverage_rule_block_enable** (bool, optional): Toggle for rule-based coverage passages in the sub-report outline stage. Default value: `True`. When disabled, outline evidence contains only the entry-summary blocks. The HTTP entry point `DeepSearchRequest.coverage_rule_block_enable` is passed through to `AgentConfig.coverage_rule_block_enable`.
+- **exclusion_constraint_enable** (bool, optional): Master switch for sub-report exclusion constraints. Default value: `False`. When enabled: activates collector-layer literary ID intersection matching and mirror suffix tokens, writer-layer Excluded Sources injection, and intent-layer include_url/target_papers deduplication. When disabled, behavior is identical to baseline. The HTTP entry point `DeepSearchRequest.exclusion_constraint_enable` is passed through to `AgentConfig.exclusion_constraint_enable`.
 
 ### Provenance parameters
 - **source_tracer_citation_verify_max_concurrency_num** (int, optional): Maximum concurrency for citation verification. Default value: `30`.
