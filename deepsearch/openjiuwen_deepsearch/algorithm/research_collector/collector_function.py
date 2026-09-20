@@ -402,8 +402,7 @@ def filter_search_results_by_exclude_urls(
             行为等同 baseline。
     """
     if not exclude_urls and not exclude_titles:
-        # 即便没有禁引清单也打一行开关状态，排查时能区分「开关关了」和
-        # 「开关开了但没传禁引清单」——后者意味着禁引规则没流到采集层。
+        # 无禁引清单时仍记录开关状态，便于确认禁引规则是否到达采集层。
         logger.info(
             "[COLLECTOR FUNCTION] exclude_url/title filter skipped (no exclude list). "
             "enable_exclusion=%s",

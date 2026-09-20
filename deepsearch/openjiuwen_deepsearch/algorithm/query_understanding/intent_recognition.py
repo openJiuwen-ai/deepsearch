@@ -427,10 +427,9 @@ def _merge_explicit_target_papers(intent: ResearchIntent, original_query: str) -
         if paper.url and paper.url not in include_url:
             include_url.append(paper.url)
 
-    # exclude_url 中的 URL 不应出现在 include_url / target_papers
-    # （_normalize_research_intent 已去重，但 _merge_explicit_target_papers 从
-    # original_query 重新提取了被禁源标识符并加回，需再次去重）
-    # 与 _normalize_research_intent 共用同一个总开关——只开一处等于没开。
+    # exclude_url 中的 URL 不应出现在 include_url / target_papers。
+    # 本函数会从 original_query 重新提取标识符，故需再次去重。
+    # 与 _normalize_research_intent 共用同一个总开关。
     if exclusion_constraint_context.get():
         exclude_url_set = set(intent.exclude_url)
         exclude_pmids = set()

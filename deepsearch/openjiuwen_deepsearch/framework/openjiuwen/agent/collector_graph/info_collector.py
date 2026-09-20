@@ -225,8 +225,7 @@ class InfoRetrievalNode(BaseNode):
                 "local_search_engine_name": state.get("local_search_engine_name", None),
                 "api_tools_config": state.get("api_tools_config", {}),
                 "research_intent": state.get("research_intent", {}),
-                # 禁引约束总开关必须随 sub_state 下传，否则 _collector_main 的
-                # agent_input 读到 False，过滤函数 enable_exclusion 永远 off。
+                # 禁引约束总开关随 sub_state 下传，供 _collector_main 的 agent_input 读取。
                 "exclusion_constraint_enable": state.get("exclusion_constraint_enable", False),
             }
             sub_task = self._run_retrieval_query(sub_state, retrieval_query)
