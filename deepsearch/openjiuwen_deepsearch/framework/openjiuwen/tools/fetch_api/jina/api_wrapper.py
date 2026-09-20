@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable, Optional
 
@@ -74,15 +75,17 @@ class JinaWebFetchProvider:
         self._reader_timeout = jina_reader_request_timeout()
 
     def fetch_page(self, url: str) -> str:
-        for _ in range(2):
+        # 阶段 3: 3 次重试 + 指数退避, 应对镜像偶发限流/超时(漏网之鱼根因)
+        for attempt in range(3):
             content = self._read_via_jina(url)
-            if not content:
-                continue
-            is_not_failed = not content.startswith("[web_fetch] Failed")
-            is_not_empty = content != "[web_fetch] Empty content."
-            is_not_parser_error = not content.startswith("[document_parser]")
-            if is_not_failed and is_not_empty and is_not_parser_error:
-                return content
+            if content:
+                is_not_failed = not content.startswith("[web_fetch] Failed")
+                is_not_empty = content != "[web_fetch] Empty content."
+                is_not_parser_error = not content.startswith("[document_parser]")
+                if is_not_failed and is_not_empty and is_not_parser_error:
+                    return content
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
         return "[web_fetch] Failed to read page."
 
     def _read_via_jina(self, url: str) -> str:

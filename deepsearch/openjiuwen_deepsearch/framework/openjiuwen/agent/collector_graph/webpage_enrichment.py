@@ -54,6 +54,8 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 MAX_SELECTION_CANDIDATES = 10
+# 阶段 3: enrichment 抓取并发上限, 避免 JinaWebFetchProvider 瞬时高并发打爆 r.jinaai.cn 镜像
+ENRICH_FETCH_CONCURRENCY = 3
 
 
 def _remaining_timeout_seconds(deadline: float) -> int:
@@ -648,12 +650,18 @@ class WebPageEnrichmentNode(BaseNode):
         all_docs = list(state.get("doc_infos") or [])
         source_store = dict(state.get("source_store") or {})
         replacements: list[tuple[dict[str, str], dict[str, Any]]] = []
-        tasks = [
-            self._enrich_candidate(state=state, loop_docs=loop_docs, candidate_index=candidate_index)
-            for candidate_index in selected_indexes
-        ]
+        # 阶段 3: 限并发, 避免瞬时高并发打爆 r.jinaai.cn 镜像(漏网之鱼根因)
+        sem = asyncio.Semaphore(ENRICH_FETCH_CONCURRENCY)
+
+        async def _bounded_enrich(candidate_index: int):
+            async with sem:
+                return await self._enrich_candidate(
+                    state=state, loop_docs=loop_docs, candidate_index=candidate_index
+                )
+
+        bounded_tasks = [_bounded_enrich(i) for i in selected_indexes]
         # fetch 与压缩并行执行；状态写回仍集中在 gather 之后，避免并发修改共享列表。
-        for result in await asyncio.gather(*tasks, return_exceptions=True):
+        for result in await asyncio.gather(*bounded_tasks, return_exceptions=True):
             if isinstance(result, Exception):
                 if LogManager.is_sensitive():
                     logger.warning(
