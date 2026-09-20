@@ -56,6 +56,8 @@ logger = logging.getLogger(__name__)
 MAX_SELECTION_CANDIDATES = 10
 # 阶段 3: enrichment 抓取并发上限, 避免 JinaWebFetchProvider 瞬时高并发打爆 r.jinaai.cn 镜像
 ENRICH_FETCH_CONCURRENCY = 3
+# v5 B 路: 简版 UA 直连 PDF 本地解析最大页数
+SIMPLE_UA_PDF_MAX_PAGES = 50
 
 
 def _remaining_timeout_seconds(deadline: float) -> int:
@@ -397,13 +399,118 @@ class WebPageEnrichmentNode(BaseNode):
             )
             return {}
 
+    async def _fetch_via_simple_ua(
+        self,
+        url: str,
+        deadline: float,
+        required_length: int,
+    ) -> dict:
+        """v5 B 路: httpx 简版 Mozilla UA 直连 + HTML/PDF 抽取。
+
+        解 A 路(完整 Chrome UA)因 JA3 指纹被 Cloudflare 拦的站(investing.com 类):
+        简版 UA 不冒充特定浏览器, 不触发 JA3 比对, 反而能过。
+
+        Args:
+            url: 目标 URL。
+            deadline: event loop 单调时钟上的整体截止时间。
+            required_length: 抓取正文动态最低长度。
+
+        Returns:
+            成功返回结构化结果(含 ``fetch_method='simple_ua'``), 失败返回空字典。
+        """
+        import httpx
+        from openjiuwen.harness.tools.web import WebFetchWebpageTool
+        from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
+            _extract_pdf,
+        )
+
+        timeout = _remaining_timeout_seconds(deadline)
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=True,
+                trust_env=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; DeepResearchEnrichment/1.0)"},
+            ) as client:
+                resp = await client.get(url)
+        except Exception as exc:
+            self._log_fetch_event(
+                logging.WARNING,
+                "simple_ua_failed",
+                url,
+                required_len=required_length,
+                exc=exc,
+            )
+            return {}
+        if resp.status_code != 200 or not resp.content:
+            self._log_fetch_event(
+                logging.INFO,
+                "simple_ua_failed",
+                url,
+                content_len=len(resp.content) if resp.content else 0,
+                required_len=required_length,
+            )
+            return {}
+        data = resp.content
+        content_type = resp.headers.get("Content-Type", "")
+        title = ""
+        truncated = False
+        try:
+            if "pdf" in content_type.lower() or data[:5] == b"%PDF-":
+                text, truncated = await asyncio.to_thread(
+                    _extract_pdf,
+                    data,
+                    MAX_COLLECTOR_DOC_CONTENT_LENGTH,
+                    SIMPLE_UA_PDF_MAX_PAGES,
+                )
+            else:
+                decoded = resp.text
+                if "html" in content_type.lower():
+                    title, decoded = WebFetchWebpageTool._extract_main_text_from_html(decoded)
+                text = decoded[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
+                truncated = len(decoded) > MAX_COLLECTOR_DOC_CONTENT_LENGTH
+        except Exception as exc:
+            self._log_fetch_event(
+                logging.WARNING,
+                "simple_ua_parse_failed",
+                url,
+                content_len=len(data),
+                required_len=required_length,
+                exc=exc,
+            )
+            return {}
+        if not text or len(text) < required_length:
+            self._log_fetch_event(
+                logging.INFO,
+                "simple_ua_short",
+                url,
+                content_len=len(text),
+                required_len=required_length,
+            )
+            return {}
+        self._log_fetch_event(
+            logging.INFO,
+            "simple_ua_ok",
+            url,
+            content_len=len(text),
+            required_len=required_length,
+        )
+        return {
+            "url": url,
+            "status_code": 200,
+            "title": title,
+            "content": text,
+            "truncated": truncated,
+            "fetch_method": "simple_ua",
+        }
+
     async def _fetch_webpage_before_deadline(
         self,
         url: str,
         deadline: float,
         required_length: int,
     ) -> dict:
-        """在既定 deadline 内执行 direct、PDF 和 Jina fallback。
+        """在既定 deadline 内执行 A(direct)→ B(simple UA)→ C(jina) 三路级联。
 
         Args:
             url: 目标网页 URL。
@@ -459,6 +566,10 @@ class WebPageEnrichmentNode(BaseNode):
                 content_len=len(str(direct_result.get("content") or "")),
                 required_len=required_length,
             )
+        # v5 B 路: A 失败/太短时, 用简版 Mozilla UA 直连(解 investing.com 类 JA3 站)
+        b_result = await self._fetch_via_simple_ua(url, deadline, required_length)
+        if b_result:
+            return b_result
         # 第二段 jina fallback (阶段 2): 优先用带鉴权的 JinaWebFetchProvider(体系 A),
         # 未配置 provider 时退回 legacy WebFetchWebpageAdapter
         if self._jina_provider is not None:
