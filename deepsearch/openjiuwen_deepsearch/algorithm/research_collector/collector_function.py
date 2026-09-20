@@ -354,25 +354,27 @@ def _item_ids(item: dict) -> set[str]:
     """从搜索结果 item 提取带类型的文献 ID（与 _ids_from_urls 同格式）。
 
     来源：item 的 url/link/source_url（经 _ids_from_urls）+ scholarly 结果带的
-    doi/pmid/pmcid/arxiv_id 字段（_normalize_web_search_item 已归一化出来）。
+    doi/pmid/pmcid/arxiv_id 字段（经同一组归一化函数处理，确保两侧格式一致）。
     """
     url = str(item.get("url") or item.get("link") or item.get("source_url") or "")
     ids = _ids_from_urls([url])
-    for key, prefix in (
-        ("doi", "doi"),
-        ("pmid", "pmid"),
-        ("pmcid", "pmcid"),
-        ("arxiv_id", "arxiv"),
+    for key, prefix, normalize_fn in (
+        ("doi", "doi", normalize_doi),
+        ("pmid", "pmid", normalize_pmid),
+        ("arxiv_id", "arxiv", normalize_arxiv_id),
     ):
         raw = item.get(key)
         if not raw:
             continue
-        value = str(raw).strip()
-        if prefix == "pmcid":
-            match = _PMCID_RE.search(value)
-            value = match.group(1) if match else value
+        value = normalize_fn(raw)
         if value:
             ids.add(f"{prefix}:{value}")
+    # pmcid 单独处理（无对应 normalize 函数，用正则提取数字部分）
+    raw_pmcid = item.get("pmcid")
+    if raw_pmcid:
+        match = _PMCID_RE.search(str(raw_pmcid).strip())
+        if match:
+            ids.add(f"pmcid:{match.group(1)}")
     return ids
 
 
