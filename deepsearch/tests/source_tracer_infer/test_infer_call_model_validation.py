@@ -11,7 +11,10 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import
     is_list_of,
     type_check,
     is_equal_length,
+    is_valid_structured_triples,
     is_valid_supplement_triples,
+    normalize_structured_triple_reference_ids,
+    normalize_supplement_triple_node_ids,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 
@@ -232,3 +235,48 @@ class TestIsValidSupplementTriplesElements:
         """关系不是 str → 拒绝。"""
         with pytest.raises(CustomValueException):
             is_valid_supplement_triples([[[0], 1, 5]])
+
+
+def test_normalize_supplement_triple_numeric_string_ids():
+    result = [[["0", "12"], "related", "5"]]
+    normalized = normalize_supplement_triple_node_ids(result)
+    assert normalized == [[[0, 12], "related", 5]]
+    is_valid_supplement_triples(normalized)
+
+
+def test_normalize_supplement_triple_keeps_non_numeric_values_for_validation():
+    result = [[["node-0"], "related", "tail"]]
+    normalized = normalize_supplement_triple_node_ids(result)
+    assert normalized == result
+    with pytest.raises(CustomValueException):
+        is_valid_supplement_triples(normalized)
+
+
+def test_structured_triples_accept_text_conclusions_and_integer_references():
+    is_valid_structured_triples([
+        [[1, 2], "引用", "结论 1"],
+        [["结论 1"], "推理", "最终结论"],
+    ])
+
+
+def test_normalize_structured_triple_quoted_reference_ids_only_in_heads():
+    result = [[["1", "2"], "引用", "2026"]]
+
+    normalized = normalize_structured_triple_reference_ids(result)
+
+    assert normalized == [[[1, 2], "引用", "2026"]]
+    is_valid_structured_triples(normalized)
+
+
+def test_normalize_structured_triple_keeps_textual_premises():
+    result = [[["结论 1"], "推理", "最终结论"]]
+
+    normalized = normalize_structured_triple_reference_ids(result)
+
+    assert normalized == result
+    is_valid_structured_triples(normalized)
+
+
+def test_structured_triples_reject_numeric_tail_id():
+    with pytest.raises(CustomValueException):
+        is_valid_structured_triples([[[1], "引用", 2]])

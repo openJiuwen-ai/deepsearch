@@ -14,6 +14,8 @@ You will process a piece of reasoning content that involves drawing conclusions 
 4. **Explore relationships between conclusions**: Add new relations to connect any disconnected nodes, **ensuring graph connectivity**.
 5. The head entity of every triple must be enclosed in square brackets [].
 6. Each triple must strictly be a sequence of **length 3**.
+7. Reference material IDs in a head entity must be JSON integers without quotes, for example `[1, 2]`, never `["1", "2"]`.
+8. The tail entity is conclusion text and must be a JSON string; do not replace conclusion text with a numeric node ID.
 
 ## Graph Structure Requirements
 1. All triples must form a single connected graph (a path exists between any two nodes).
@@ -82,11 +84,12 @@ Output a list of triples in JSON format, for example:
 # Note
 1. Strictly ensure the output is in complete, valid JSON format.
 2. All triples must have a length of 3.
-3. The constructed graph must be connected **(all nodes must be reachable from each other)**.
-4. Self-loops are prohibited.
-5. All content must be based strictly on the input text; do not fabricate information.
-6. **Ensure Connectivity**: All nodes must be interconnected via paths.
-7. Always use the language specified by the locale = **{{ language }}**.
+3. Every triple must follow `[[integer reference IDs or string premises], "relation", "string conclusion"]`; integer IDs must never be quoted.
+4. The constructed graph must be connected **(all nodes must be reachable from each other)**.
+5. Self-loops are prohibited.
+6. All content must be based strictly on the input text; do not fabricate information.
+7. **Ensure Connectivity**: All nodes must be interconnected via paths.
+8. Always use the language specified by the locale = **{{ language }}**.
 
 
 

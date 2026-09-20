@@ -62,7 +62,7 @@
 - `llm_model_name`
 - `source_tracer_response`
 - `conclusion_with_records`
-- `all_classified_contents`：按章节组织的证据列表，供 `classify_search_record` 转换为 `{章节索引 → [{title, url, content}]}`。`content` 字段优先取 `passage_text`（段落级记录的提取文本），无 `passage_text` 时回退到 `original_content`（全文级记录的整篇文档），避免同一文档的 N 个段落各自携带整篇父文档全文导致 LLM 输入膨胀。
+- `all_classified_contents`：按章节组织的证据列表，供 `classify_search_record` 转换为 `{章节索引 → [{title, url, content}]}`。`content` 字段优先取非空白的 `passage_text`（段落级记录的提取文本），缺失或仅含空白时回退到 `original_content`（全文级记录的整篇文档），避免同一文档的 N 个段落各自携带整篇父文档全文导致 LLM 输入膨胀。
 
 输出：
 

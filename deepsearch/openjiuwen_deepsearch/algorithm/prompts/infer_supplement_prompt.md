@@ -12,6 +12,7 @@ You will be given a set of nodes grouped into connected components (each as a li
 3. Do **not** generate new relationships for nodes within the **same connected component**; only mine for relationships **between different connected components**.
 4. The head entity of each output triple must be wrapped in [].
 5. Each triple must be a **sequence of length 3**!
+6. Node IDs in both the head list and tail must be JSON integers without quotes. Output `[[0], "related", 5]`, never `[["0"], "related", "5"]`.
 
 # Output Format
 Output a list of triples in JSON format, for example:
@@ -55,4 +56,5 @@ Avoid outputs like the *bad case* where the head and tail node IDs come from the
 1. Strictly ensure the output is in complete, valid JSON format.
 2. Do **not** generate new relationships for nodes **within the same connected component**!
 3. Do **not** use node IDs that do not exist in the input!
-4. Always use the language specified by the locale = **{{ language }}**.
+4. Head and tail node IDs must be unquoted JSON integers; quoted numeric strings are invalid.
+5. Always use the language specified by the locale = **{{ language }}**.
