@@ -38,7 +38,7 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 
 ### 并发控制
 
-可视化数据提取阶段（步骤 2）中，每个候选资料最多触发 4 次 LLM 调用（数据抽取、可溯源校验、合规校验、可选归一化），每轮最多重试 3 次。为避免同一章节内大量并发 LLM 调用超出模型 API 的 TPM（Tokens Per Minute）限制，`_generate_content_for_visualization` 使用 `asyncio.Semaphore` 限制同一 section 内的最大并发 task 数为 `MAX_CONCURRENT_VISUALIZATION_TASKS`（默认 5）。该信号量是 section 内局部信号量，不跨 section 共享。
+可视化数据提取阶段（步骤 2）中，每个候选资料最多触发 4 次 LLM 调用（数据抽取、可溯源校验、合规校验、可选归一化），每轮最多重试 3 次。为避免同一章节内大量并发 LLM 调用超出模型 API 的 TPM（Tokens Per Minute）限制，`_generate_content_for_visualization` 使用 `asyncio.Semaphore` 限制同一 section 内的最大并发 task 数为 `MAX_CONCURRENT_VISUALIZATION_TASKS`（默认 5）。该信号量是 section 内局部信号量，不跨 section 共享。候选选择阶段只考虑全文文档（`is_fulltext=True`），优先 `data_density >= 0.9`，若为空则回退 `>= 0.8`；不做数量限制（上游已限制 top_n=10）。
 
 ## 关键代码路径
 
@@ -67,7 +67,7 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 
 ## 核心流程
 
-1. 报告生成阶段根据 `classified_content` 的数据密度选择适合可视化的章节资料。`data_density` 是 `classified_content` 条目的顶级字段（不在 `"scores"` 键内）；全文条目（`is_fulltext=True`）也携带从 passage 聚合的 `data_density`，因此可视化候选池包含全文文档。
+1. 报告生成阶段根据 `classified_content` 的数据密度选择适合可视化的全文文档（`is_fulltext=True`）。`data_density` 是 `classified_content` 条目的顶级字段（不在 `"scores"` 键内）；全文条目也携带从 passage 聚合的 `data_density`。段落级内容不参与图表候选选择。
 2. 根据章节标题和章节大纲推断期望图型；该结果只作为软约束，不能覆盖真实数据形态。
 3. LLM 从候选原始资料中抽取图表标题、类型、records 和单位。
 4. 抽取结果通过 schema 校验；混合单位、空 records、字段缺失等结果会被拒绝。
