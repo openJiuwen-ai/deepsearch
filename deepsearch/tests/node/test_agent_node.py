@@ -1146,6 +1146,51 @@ def test_feedback_handler_merges_task_type_dimensions_and_targets_from_clarifica
     assert merged["comparison_targets"] == ["方案A", "方案B"]
 
 
+def test_feedback_handler_pre_handle_carries_exclusion_constraint_enable():
+    """澄清反馈节点的 _pre_handle 必须从 session 读 exclusion_constraint_enable，
+    否则反馈重解析时去重失效、被禁源被加回 target_papers。"""
+    session = Mock(spec=Session)
+    session.update_global_state = Mock()
+
+    def _get_global_state(key):
+        mapping = {
+            "config.workflow_feedback_mode": "cmd",
+            "search_context.original_query": "测试",
+            "search_context.messages": [{"role": "user", "content": "测试"}],
+            "search_context.questions": "请选择报告类型",
+            "config.report_type": None,
+            "config.exclusion_constraint_enable": True,
+        }
+        return mapping.get(key)
+
+    session.get_global_state.side_effect = _get_global_state
+    node = FeedbackHandlerNode()
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="test-model",
+    ):
+        inputs = node._pre_handle(Mock(), session, Mock())
+
+    assert inputs["exclusion_constraint_enable"] is True
+
+
+def test_feedback_handler_reparse_inputs_carries_exclusion_constraint_enable():
+    """_build_intent_reparse_inputs 必须把 exclusion_constraint_enable 透传给重解析参数。"""
+    node = FeedbackHandlerNode()
+    current_inputs = {
+        "original_query": "测试",
+        "messages": [{"role": "user", "content": "测试"}],
+        "llm_model_name": "test-model",
+        "provided_report_type": None,
+        "exclusion_constraint_enable": True,
+    }
+
+    reparse_inputs = node._build_intent_reparse_inputs(current_inputs, "补充信息")
+
+    assert reparse_inputs["exclusion_constraint_enable"] is True
+
+
 def test_outline_accept_reapplies_search_constraints_after_hitl_resume():
     """大纲恢复轮次创建新 wrapper 后，接受大纲必须从 session 重灌搜索约束。"""
     session = Mock(spec=Session)
