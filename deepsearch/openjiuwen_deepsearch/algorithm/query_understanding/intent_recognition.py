@@ -758,8 +758,7 @@ async def _recognize_intent(
         return _default_fallback(original_query)
 
     # 下发禁引约束总开关，供下方 include_url/target_papers 去重逻辑读取
-    exclusion_constraint_context.set(bool(current_inputs.get("exclusion_constraint_enable", False)))
-
+    token = exclusion_constraint_context.set(bool(current_inputs.get("exclusion_constraint_enable", False)))
     try:
         result, response = await _invoke_llm_for_intent(
             "intent_recognition", original_query,
@@ -790,6 +789,8 @@ async def _recognize_intent(
         else:
             logger.warning("[%s] Exception, using fallback: %s", log_tag, exc)
         return _default_fallback(original_query)
+    finally:
+        exclusion_constraint_context.reset(token)
 
 
 async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResult:
