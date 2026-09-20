@@ -31,6 +31,9 @@ from openjiuwen_deepsearch.algorithm.brief_report.writer import (
     generate_brief_summary,
     write_brief_chapters,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    build_exclusion_prompt_context,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report, ResearchIntent
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
@@ -151,6 +154,7 @@ async def _search_brief_queries(
             "local_text_search_record": [],
             "other_tool_record": [],
             "research_intent": intent.model_dump(),
+            "exclusion_constraint_enable": bool(session.get_global_state("config.exclusion_constraint_enable")),
         }
         try:
             processed_results = process_tool_result(
@@ -543,6 +547,9 @@ class BriefSubReporterNode(BaseNode):
             {"outline": state.outline.model_dump(), "collection": state.collection.model_dump()},
         )
         intent = session.get_global_state("search_context.research_intent") or {}
+        exclusion_ctx = {}
+        if session.get_global_state("config.exclusion_constraint_enable"):
+            exclusion_ctx = build_exclusion_prompt_context(intent)
         return {
             "state": state,
             "request": BriefWritingRequest(
@@ -551,6 +558,8 @@ class BriefSubReporterNode(BaseNode):
                 audience_role=intent.get("audience_role", ""), tone=intent.get("tone", ""),
                 user_format=session.get_global_state("search_context.report_template") or "",
                 writing_guidance=state.evidence_review.writing_guidance if state.evidence_review else None,
+                has_exclusion=exclusion_ctx.get("has_exclusion", False),
+                exclusion_instruction=exclusion_ctx.get("exclusion_instruction", ""),
             ),
         }
 

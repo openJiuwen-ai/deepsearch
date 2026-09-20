@@ -116,6 +116,11 @@ format_requirements: {{ current_section_format_requirements }}
 - If a heading requests a diagram or flow, keep the heading but express the stages and relationships as prose,
   lists, or a table.
 
+{% if has_exclusion %}
+## 11) Excluded Sources
+{{ exclusion_instruction }}
+{% endif %}
+
 # Output Example (format only)
 # 1 Chapter title
 ## 1.1 Sub chapter title 1

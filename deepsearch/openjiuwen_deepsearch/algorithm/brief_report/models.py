@@ -267,6 +267,8 @@ class BriefWritingRequest(BaseModel):
     tone: str = ""
     user_format: str = ""
     writing_guidance: BriefWritingGuidance | None = None
+    has_exclusion: bool = False
+    exclusion_instruction: str = ""
 
 
 class BriefWritingEvidence(BaseModel):
