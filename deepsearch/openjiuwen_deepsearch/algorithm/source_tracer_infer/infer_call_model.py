@@ -3,7 +3,7 @@
 import logging
 import json
 from dataclasses import dataclass, field
-from typing import List, Dict, NamedTuple, Set
+from typing import Any, List, Dict, NamedTuple, Set
 import copy
 
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
@@ -92,6 +92,83 @@ def is_equal_length(result, target):
                                         format(e=error_msg))
 
 
+def _normalize_decimal_node_id(value: Any) -> Any:
+    if isinstance(value, str) and value.isdecimal():
+        return int(value)
+    return value
+
+
+def normalize_structured_triple_reference_ids(result: Any) -> Any:
+    """Convert quoted reference IDs in structured-triple heads to integers.
+
+    Only head entries are normalized because structured-triple tails are
+    conclusion text by contract and must remain strings. Mutates and returns
+    ``result`` when it is a list.
+    """
+    if not isinstance(result, list):
+        return result
+
+    for triple in result:
+        if not isinstance(triple, list) or len(triple) != 3:
+            continue
+        if isinstance(triple[0], list):
+            triple[0] = [_normalize_decimal_node_id(head) for head in triple[0]]
+    return result
+
+
+def normalize_supplement_triple_node_ids(result: Any) -> Any:
+    """Convert decimal string node IDs in supplement triples to integers.
+
+    Only the head/tail node-ID positions are normalized. Other values are left
+    untouched so the strict validator can still reject malformed model output.
+    Mutates and returns ``result`` when it is a list.
+    """
+    if not isinstance(result, list):
+        return result
+
+    for triple in result:
+        if not isinstance(triple, list) or len(triple) != 3:
+            continue
+        if isinstance(triple[0], list):
+            triple[0] = [_normalize_decimal_node_id(node_id) for node_id in triple[0]]
+        triple[2] = _normalize_decimal_node_id(triple[2])
+    return result
+
+
+def is_valid_structured_triples(result: Any, target: int = 3) -> None:
+    """Validate reasoning triples with textual conclusions."""
+    type_check(result, list)
+    for i, triple in enumerate(result):
+        type_check(triple, list)
+        if len(triple) != target:
+            error_msg = (f"[SOURCE TRACER INFER]: 生成结果数量错误,"
+                         f"索引 {i}: 三元组数量{len(triple)}, 目标数量{target}")
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_LEN_ERROR.code,
+                                       StatusCode.SOURCE_TRACER_INFER_DATA_LEN_ERROR.errmsg.format(e=error_msg))
+        heads, relation, tail = triple
+        if not isinstance(heads, list) or not heads:
+            error_msg = (f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                         f"索引 {i}: 头实体类型{type(heads)}, 期望类型为非空 list[int | str]")
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                       StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.format(e=error_msg))
+        for head in heads:
+            if isinstance(head, bool) or not isinstance(head, (int, str)):
+                error_msg = (f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                             f"索引 {i}: 头实体类型{type(head)}, 期望类型为 int | str (非 bool)")
+                raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                           StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.format(e=error_msg))
+        if isinstance(relation, bool) or not isinstance(relation, str):
+            error_msg = (f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                         f"索引 {i}: 关系类型{type(relation)}, 期望类型为 str")
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                       StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.format(e=error_msg))
+        if isinstance(tail, bool) or not isinstance(tail, str):
+            error_msg = (f"[SOURCE TRACER INFER]: 生成结果元素类型错误, "
+                         f"索引 {i}: 尾实体类型{type(tail)}, 期望类型为 str")
+            raise CustomValueException(StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.code,
+                                       StatusCode.SOURCE_TRACER_INFER_DATA_TYPE_ERROR.errmsg.format(e=error_msg))
+
+
 def is_valid_supplement_triples(result, target=3):
     """校验补边三元组列表：result 为 list[[int, ...], str, int]，每个三元组长度为 target。
 
@@ -160,6 +237,9 @@ async def call_model(model_name: str, prompt: str, user_input: dict,
             content = normalize_json_output(content)
             llm_result = json.loads(content.replace("```json", "").replace("```", ""))
             if detection_func_and_args:
+                normalizer = detection_func_and_args.get("normalizer")
+                if normalizer is not None:
+                    llm_result = normalizer(llm_result)
                 # 需要对输出进行检验
                 detection_func = detection_func_and_args.get("detection_func")
                 params = detection_func_and_args.get("args")

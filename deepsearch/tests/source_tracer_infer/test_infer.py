@@ -139,6 +139,23 @@ def test_classify_search_record_falls_back_to_original_content():
     assert record["content"] == full_content
 
 
+def test_classify_search_record_falls_back_for_blank_passage_text():
+    """仅含空白的 passage_text 不是有效段落，应回退到全文。"""
+    preprocess = ResearchInferPreprocess({
+        "source_tracer_response": "",
+        "all_classified_contents": [[{
+            "title": "Doc B",
+            "url": "https://example.com/b",
+            "passage_text": "  \n\t",
+            "original_content": "full document content",
+        }]],
+    })
+
+    preprocess.classify_search_record()
+
+    assert preprocess.search_record_with_index[0][0]["content"] == "full document content"
+
+
 def test_classify_search_record_mixed_passage_and_fulltext():
     """同一章节混合 passage 和 fulltext 记录时各自取正确字段。"""
     passage_text = "passage excerpt"

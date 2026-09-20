@@ -11,10 +11,15 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info impo
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.number_node import NumberNode
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.supplement_graph import SupplementGraph
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.generate_html import GenerateHTML
-from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (call_model, is_list_of,
-                                                                                  is_equal_length,
-                                                                                  is_valid_supplement_triples,
-                                                                                  type_check, GraphInfo)
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
+    GraphInfo,
+    call_model,
+    is_equal_length,
+    is_list_of,
+    is_valid_structured_triples,
+    normalize_structured_triple_reference_ids,
+    type_check,
+)
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
@@ -269,7 +274,11 @@ class SourceTracerInfer:
         结构化inference，提取结构化参考材料的关系
         """
         logger.info(f"[SOURCE TRACER INFER] structured_infer starting...")
-        detection_func_and_args = {"detection_func": is_valid_supplement_triples, "args": 3} # 需要添加检测函数，检测输出的每个结构为三元组
+        detection_func_and_args = {
+            "normalizer": normalize_structured_triple_reference_ids,
+            "detection_func": is_valid_structured_triples,
+            "args": 3,
+        }
         result = await call_model(self.model_name, "infer_structured_prompt", inference, 
                                   detection_func_and_args=detection_func_and_args, 
                                   agent_name=AgentLlmName.SOURCE_TRACER_INFER_STRUCTURED_INFER.value)
