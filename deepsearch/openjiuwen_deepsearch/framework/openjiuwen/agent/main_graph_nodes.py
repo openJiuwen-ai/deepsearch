@@ -458,6 +458,7 @@ class FeedbackHandlerNode(BaseNode):
             questions=session.get_global_state("search_context.questions") or "",
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
             provided_report_type=session.get_global_state("config.report_type"),
+            exclusion_constraint_enable=bool(session.get_global_state("config.exclusion_constraint_enable")),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -534,6 +535,7 @@ class FeedbackHandlerNode(BaseNode):
             "messages": messages,
             "llm_model_name": current_inputs.get("llm_model_name"),
             "provided_report_type": current_inputs.get("provided_report_type"),
+            "exclusion_constraint_enable": current_inputs.get("exclusion_constraint_enable", False),
         }
 
     def _merge_reparsed_intent(self, session: Session, reparsed_intent: dict) -> dict:
