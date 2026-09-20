@@ -123,7 +123,8 @@ class JinaWebFetchProvider:
                         "[WebFetch] Jina reader %s rejected credentials for target url",
                         base,
                     )
-                    return "[web_fetch] Failed to read page."
+                    # 不短路: 让其它 base 继续竞速(匿名时 r.jina.ai 403, r.jinaai.cn 仍可能 200)
+                    continue
                 logger.warning(
                     "[WebFetch] Jina reader %s returned HTTP %s for target url",
                     base,

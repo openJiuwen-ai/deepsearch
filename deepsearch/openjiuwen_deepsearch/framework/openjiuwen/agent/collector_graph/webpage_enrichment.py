@@ -41,6 +41,12 @@ from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
     WebFetchWebpageAdapter,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.registry import (
+    resolve_web_fetch_provider,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina import (
+    JinaWebFetchProvider,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
@@ -107,9 +113,18 @@ class WebPageEnrichmentNode(BaseNode):
         step_title = session.get_global_state("collector_context.step_title")
         enabled = bool(session.get_global_state("config.info_collector_webpage_enrich_enable"))
         self.llm = None
+        # 阶段 2: 第二段 jina fallback 改用体系 A(JinaWebFetchProvider, 带 Bearer/镜像/短路修复)。
+        # 配了 web_fetch_provider_config(provider=jina) 就用配置; 否则默认构造(无 key, 走 r.jinaai.cn 镜像)。
+        self._jina_provider = None
         if enabled:
             llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
             self.llm = llm_context.get().get(llm_model_name)
+            _wfpc = session.get_global_state("config.web_fetch_provider_config") or {}
+            _provider_name, _provider = resolve_web_fetch_provider(_wfpc)
+            if _provider_name == "jina" and _provider is not None:
+                self._jina_provider = _provider
+            else:
+                self._jina_provider = JinaWebFetchProvider()
         return {
             "enabled": enabled,
             "max_urls": session.get_global_state("config.info_collector_webpage_enrich_max_urls") or 3,
@@ -442,6 +457,62 @@ class WebPageEnrichmentNode(BaseNode):
                 content_len=len(str(direct_result.get("content") or "")),
                 required_len=required_length,
             )
+        # 第二段 jina fallback (阶段 2): 优先用带鉴权的 JinaWebFetchProvider(体系 A),
+        # 未配置 provider 时退回 legacy WebFetchWebpageAdapter
+        if self._jina_provider is not None:
+            try:
+                jina_content = await asyncio.to_thread(self._jina_provider.fetch_page, url)
+            except Exception as exc:
+                self._log_fetch_event(
+                    logging.WARNING,
+                    "jina_fetch_failed",
+                    url,
+                    required_len=required_length,
+                    exc=exc,
+                )
+                return {}
+            if not jina_content or jina_content.startswith("[web_fetch] Failed"):
+                self._log_fetch_event(
+                    logging.WARNING,
+                    "jina_fetch_failed",
+                    url,
+                    content_len=len(jina_content or ""),
+                    required_len=required_length,
+                )
+                return {}
+            if has_pdf_magic({"content": jina_content}):
+                self._log_fetch_event(
+                    logging.WARNING,
+                    "jina_pdf_payload",
+                    url,
+                    content_len=len(jina_content),
+                    required_len=required_length,
+                )
+                return {}
+            if len(jina_content) < required_length:
+                self._log_fetch_event(
+                    logging.WARNING,
+                    "jina_content_short",
+                    url,
+                    content_len=len(jina_content),
+                    required_len=required_length,
+                )
+                return {}
+            self._log_fetch_event(
+                logging.INFO,
+                "jina_provider_ok",
+                url,
+                content_len=len(jina_content),
+                required_len=required_length,
+            )
+            return {
+                "url": url,
+                "status_code": 200,
+                "title": "",
+                "content": jina_content,
+                "truncated": False,
+                "fetch_method": "jina_provider",
+            }
         try:
             jina_result = await asyncio.to_thread(
                 WebFetchWebpageAdapter.fetch_via_jina_reader_sync,
