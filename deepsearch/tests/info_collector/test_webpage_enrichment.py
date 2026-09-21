@@ -24,6 +24,16 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 
+@pytest.fixture(autouse=True)
+def _stub_simple_ua_network(monkeypatch):
+    """抓取级联 A→B→C 中的 B 段（简版 UA 直连）会真的发网络请求，单测里打桩为立即失败。"""
+    monkeypatch.setattr(
+        WebPageEnrichmentNode,
+        "_fetch_via_simple_ua",
+        AsyncMock(return_value={}),
+    )
+
+
 def test_webpage_enrichment_agent_config_defaults_disabled():
     """网页正文增强默认关闭，避免改变现有 DeepResearch 行为。"""
     config = AgentConfig()

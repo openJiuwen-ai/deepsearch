@@ -101,6 +101,9 @@ class WebPageEnrichmentNode(BaseNode):
         """初始化网页正文增强节点。"""
         super().__init__()
         self.llm: Any = None
+        # C 路 jina provider；_pre_handle 会在 enabled 时覆盖它。
+        # 这里给默认值，使不经 _pre_handle 的直接调用（测试等）落回 legacy 分支而非 AttributeError。
+        self._jina_provider: Any = None
 
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
         """读取网页增强节点需要的运行状态。
@@ -570,8 +573,8 @@ class WebPageEnrichmentNode(BaseNode):
         b_result = await self._fetch_via_simple_ua(url, deadline, required_length)
         if b_result:
             return b_result
-        # 第二段 jina fallback (阶段 2): 优先用带鉴权的 JinaWebFetchProvider(体系 A),
-        # 未配置 provider 时退回 legacy WebFetchWebpageAdapter
+        # C 路 jina fallback（阶段 2）: 用带鉴权/多 base 的 JinaWebFetchProvider。
+        # 生产路径下 _pre_handle 必会构造 provider，故此处恒为真; `is not None` 保留给直接调用的 legacy 回退。
         if self._jina_provider is not None:
             try:
                 jina_content = await asyncio.to_thread(self._jina_provider.fetch_page, url)
