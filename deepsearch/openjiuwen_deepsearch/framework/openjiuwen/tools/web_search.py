@@ -12,6 +12,7 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
+    AgcAiNetworkingSearchAPIWrapper,
     XunfeiSearchAPIWrapper,
     TavilySearchAPIWrapper,
     PubMedSearchAPIWrapper,
@@ -42,6 +43,7 @@ from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_
 logger = logging.getLogger(__name__)
 
 search_engine_mapping = {
+    SearchEngine.AGC_AINETWORKING.value: AgcAiNetworkingSearchAPIWrapper,
     SearchEngine.TAVILY.value: TavilySearchAPIWrapper,
     SearchEngine.PUBMED.value: PubMedSearchAPIWrapper,
     SearchEngine.ARXIV.value: ArxivSearchAPIWrapper,
@@ -58,6 +60,7 @@ search_engine_mapping = {
 
 SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES = {
     SearchEngine.TAVILY.value,
+    SearchEngine.AGC_AINETWORKING.value,
 }
 
 
@@ -124,6 +127,22 @@ def apply_web_search_domain_constraints(
             exclude_domains,
             api_wrapper.include_domains,
             api_wrapper.exclude_domains,
+        )
+
+    elif search_engine_name == SearchEngine.AGC_AINETWORKING.value:
+        # AGC 华为端要求 sites 为带 www. 的完整 host(如 www.huawei.com),
+        # apex 域名不匹配;故保留 www. 前缀.
+        merged = normalize_domains(getattr(api_wrapper, "sites", None), keep_www=True)
+        merged.extend(normalize_domains(include_domains, keep_www=True))
+        api_wrapper.sites = normalize_domains(merged, keep_www=True)[:20]
+        # exclude_domains ignored: 华为 API 无原生 exclude 参数，由收集器 process_common_search_result 通用后置过滤兜底
+        logger.info(
+            "apply_web_search_domain_constraints [%s]: intent include_domains=%s, "
+            "exclude_domains=%s (ignored: filtered by collector); merged sites=%s",
+            search_engine_name,
+            include_domains,
+            exclude_domains,
+            api_wrapper.sites,
         )
 
     return True

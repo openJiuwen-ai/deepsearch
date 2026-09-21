@@ -123,8 +123,15 @@ def normalize_domain(domain: str) -> str:
     return normalized
 
 
-def normalize_domains(domains: Any) -> list[str]:
-    """归一化域名列表."""
+def normalize_domains(domains: Any, *, keep_www: bool = False) -> list[str]:
+    """归一化域名列表.
+
+    Args:
+        domains: 域名列表或单个域名.
+        keep_www: 是否保留 ``www.`` 前缀.默认 False(剥掉 www.),用于 URL 等价匹配;
+            传 True 时保留完整 host,用于发送给要求完整 host 的外部 API
+            (如华为 AGC AI Networking 要求 sites 为带 www. 的完整 host).
+    """
     if not domains:
         return []
     if isinstance(domains, str):
@@ -139,7 +146,7 @@ def normalize_domains(domains: Any) -> list[str]:
         parsed = urlparse(domain_str if "://" in domain_str else f"//{domain_str}")
         domain_str = parsed.netloc or parsed.path
         domain_str = domain_str.split("@")[-1].split(":")[0].strip(".")
-        if domain_str.startswith("www."):
+        if not keep_www and domain_str.startswith("www."):
             domain_str = domain_str[4:]
         if not domain_str or domain_str in seen:
             continue
