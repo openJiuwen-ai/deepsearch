@@ -22,14 +22,16 @@ from server.deepsearch.common.exception.exceptions import (
     SearchEngineConfigException,
     WebSearchEngineConfigGetException,
     WebSearchEngineNotFoundException, LocalSearchEngineConfigGetException,
+    McpServerNotFoundException,
 )
+from server.deepsearch.core.manager.repositories.mcp_server_repository import McpServerRepository
 from server.deepsearch.core.manager.repositories.report_template_repository import ReportTemplateRepository
 from server.deepsearch.core.manager.repositories.web_search_engine_repository import \
     WebSearchEngineRepository
 from server.local_retrieval.core.manager.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
-from server.schemas.deepsearch_run import DeepSearchRequest, WebSearchConfig, LocalSearchConfig, RuntimeApiToolRequest
+from server.schemas.deepsearch_run import DeepSearchRequest, WebSearchConfig, LocalSearchConfig, RuntimeApiToolRequest, McpServerConfig
 from server.schemas.knowledge_base import KnowledgeBaseGet
 
 logger = logging.getLogger(__name__)
@@ -355,6 +357,8 @@ class DeepSearchAgentManager:
             )
         if request.tools:
             res["api_tools_config"] = self._build_api_tools_config(request.tools)
+        if request.mcp_servers:
+            res["mcp_servers"] = self._load_mcp_config(space_id, request.mcp_servers, db)
         logger.info(
             "Built agent config conversation_id=%s execution_method=%s search_mode=%s "
             "outline_interaction_enabled=%s human_in_the_loop=%s",
@@ -488,3 +492,26 @@ class DeepSearchAgentManager:
         except Exception as e:
             logger.error("Failed to load local search config: %s", str(e))
             raise LocalSearchEngineConfigGetException(f"Failed to build config: {str(e)}") from e
+
+    @staticmethod
+    def _load_mcp_config(space_id: str, mcp_configs: list[McpServerConfig], db: Session) -> list[dict]:
+        """查库加载 MCP server 配置列表。"""
+        repo = McpServerRepository(db)
+        servers = []
+        for cfg in mcp_configs:
+            detail = repo.get_server_detail_by_id(space_id, cfg.mcp_server_id)
+            if not detail:
+                raise McpServerNotFoundException(
+                    f"MCP server {cfg.mcp_server_id} not found under space {space_id}."
+                )
+            if detail.is_active is False:
+                continue
+            servers.append({
+                "server_name": detail.server_name,
+                "server_url": detail.server_url,
+                "transport_type": detail.transport_type,
+                "headers": detail.headers or {},
+                "timeout": detail.timeout,
+                "type": cfg.type,
+            })
+        return servers
