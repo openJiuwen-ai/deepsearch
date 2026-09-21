@@ -6,7 +6,10 @@ import logging
 import networkx as nx
 
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
-from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import call_model, is_equal_length, GraphInfo
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (call_model,
+                                                                                  normalize_supplement_triple_node_ids,
+                                                                                  is_valid_supplement_triples,
+                                                                                  GraphInfo)
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
@@ -69,7 +72,12 @@ class SupplementGraph:
                     input_comp.append({"id": node_id, "label": node_map[node_id].get("origin_text", "")})
             llm_input.append(input_comp)
 
-        detection_func_and_args = {"detection_func": is_equal_length, "args": 3} # 需要添加检测函数，检测输出的每个结构为三元组
+        # 校验输出为 [[int,...], str, int] 三元组
+        detection_func_and_args = {
+            "normalizer": normalize_supplement_triple_node_ids,
+            "detection_func": is_valid_supplement_triples,
+            "args": 3,
+        }
         new_tuples = await call_model(self.model_name, "infer_supplement_prompt",
                                       {"graphs": llm_input}, detection_func_and_args,
                                       agent_name=AgentLlmName.SOURCE_TRACER_INFER_SUPPLEMENT_GRAPH.value)

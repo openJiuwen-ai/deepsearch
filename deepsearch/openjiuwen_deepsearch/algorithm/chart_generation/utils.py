@@ -28,6 +28,7 @@ def type_check(result, expected_type):
 
 
 def is_equal_length(result, target):
+    """校验结果顶层 list 长度是否等于 target（list[dict] 场景使用）。"""
     type_check(result, list)
     if len(result) != target:
         error_msg = f"[CHART GENERATION]: 生成结果数量错误,"

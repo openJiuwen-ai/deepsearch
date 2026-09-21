@@ -32,7 +32,7 @@ Reads user feedback (`workflow_feedback_mode` `cmd`/`web`); `FINISH_TASK` ends r
 ```python
 class OutlineNode(BaseNode)
 ```
-Outline generation: `report_template` present uses `outliner_template` prompt else `outliner`; retries via `outliner_max_generate_outline_retry_num`; streams outline to `search_context.current_outline`.
+Outline generation: `report_template` present uses `outliner_template` prompt else `outliner`; retries via `outliner_max_generate_outline_retry_num`; streams outline to `search_context.current_outline`. For brief-outline upgrade runs (`search_context.brief_state` carries an outline), the section count follows the injected brief outline (no max clamp), the LLM expands it with research-plan fields, and generated titles are validated against the brief outline (normalized numbering comparison) with retry on mismatch.
 
 ### `DependencyOutlineNode`
 ```python

@@ -299,6 +299,12 @@ class ChartGenerator:
                 )
                 
                 score = suggestion_and_score.get("score", 0)
+                # 消费端兜底防御：score 必须是非 bool 数值，否则无法与阈值比较
+                if not isinstance(score, (int, float)) or isinstance(score, bool):
+                    logger.warning("[CHART GENERATION] VLM iterate score is not a number: "
+                                   "%r (%s), fallback to 0.",
+                                   score, type(score).__name__)
+                    score = 0
                 suggestions = suggestion_and_score.get("suggestion", "")
                 iterate += 1
                 
@@ -545,7 +551,11 @@ class ChartGenerator:
                 agent_name=AgentLlmName.VLM_CHART_GENERATOR_VLM_ITERATE.value,
             )
             response = await call_model(call_model_input, use_vlm=True)
-            if not response:
+            # 消费端兜底防御：后续通过 .get() 取 score/suggestion，必须是 dict
+            if not isinstance(response, dict) or not response:
+                logger.warning("[CHART GENERATION] VLM iterate response is not a dict: "
+                               "%s, skip this round.",
+                               type(response).__name__)
                 return {}
             return response
 

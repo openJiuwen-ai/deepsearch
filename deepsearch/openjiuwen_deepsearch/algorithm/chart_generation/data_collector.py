@@ -273,6 +273,14 @@ class ChartDataCollector:
         data_sources = self._all_data_source_with_index[section_index]
         data_sources_length = len(data_sources)
         for result_item in result:
+            # 消费端兜底防御：严格要求 dict（才能做 .get 操作）
+            if not isinstance(result_item, dict):
+                logger.warning(
+                    "%s skip non-dict result item: %r (type=%s)",
+                    self._log_prefix, result_item, type(result_item).__name__,
+                )
+                section_data.append({})
+                continue
             try:
                 if "NO DATA" in result_item.get("data", "NO DATA"):
                     section_data.append({})
@@ -286,6 +294,13 @@ class ChartDataCollector:
                 new_result_item["source_datas"] = []
                 new_result_item["data"] = result_item.get("data", "NO DATA")
                 for source_index in source_indexes:
+                    # 消费端兜底防御：source_index 必须是非 bool 的 int
+                    if not isinstance(source_index, int) or isinstance(source_index, bool):
+                        logger.warning(
+                            "%s skip non-int source_index: %r (type=%s)",
+                            self._log_prefix, source_index, type(source_index).__name__,
+                        )
+                        continue
                     if 0 <= source_index < data_sources_length:
                         data_source = data_sources[source_index]
                         new_result_item["source_datas"].append(data_source) # 保存相应溯源的所有信息

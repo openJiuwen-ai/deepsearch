@@ -308,3 +308,169 @@ async def test_run_brief_allows_non_research_mode():
 
     assert request.report_type == "brief"
     mock_run.assert_awaited_once()
+
+
+def _build_valid_upgrade_metadata() -> dict:
+    """构造可通过 BriefOutline/ResearchIntent 校验的合法升级 metadata。"""
+    return {
+        "brief_outline": {
+            "title": "算力经济研究",
+            "sections": [
+                {
+                    "id": "s1",
+                    "title": "理论基础",
+                    "goal": "阐述算力经济基本概念",
+                    "research_steps": [
+                        {"id": "s1-r1", "requirement": "梳理算力经济定义"},
+                        {"id": "s1-r2", "requirement": "总结政策背景"},
+                    ],
+                },
+                {
+                    "id": "s2",
+                    "title": "产业格局",
+                    "goal": "分析全球算力产业格局",
+                    "research_steps": [
+                        {"id": "s2-r1", "requirement": "梳理主要参与者"},
+                        {"id": "s2-r2", "requirement": "对比区域发展差异"},
+                    ],
+                },
+            ],
+        },
+        "research_intent": {"audience_role": "analyst", "tone": "formal"},
+        "language": "zh-CN",
+    }
+
+
+def _patch_agent_manager_for_prepare(monkeypatch):
+    """打桩 agent_manager，使 _prepare_stream_context 跳过数据库与真实 Agent 创建。"""
+    fake_agent = SimpleNamespace(research_name="demo")
+    fake_config = {"search_mode": "research", "execution_method": "parallel"}
+
+    deepsearch_run.agent_manager._agent_cache.clear()
+
+    monkeypatch.setattr(
+        deepsearch_run.agent_manager,
+        "build_agent_config",
+        lambda request, db: fake_config,
+    )
+    monkeypatch.setattr(
+        deepsearch_run.agent_manager._agent_factory,
+        "create_agent",
+        lambda config: fake_agent,
+    )
+    return fake_agent, fake_config
+
+
+def test_run_metadata_accepted_and_passed_to_run_kwargs(monkeypatch):
+    """合法 metadata 进入 run_kwargs['metadata']。"""
+    _patch_agent_manager_for_prepare(monkeypatch)
+    metadata = _build_valid_upgrade_metadata()
+
+    request = _build_request()
+    request.metadata = metadata
+    _, _, run_kwargs = deepsearch_run._prepare_stream_context(request, object())
+
+    assert run_kwargs["metadata"] == metadata
+
+
+def test_run_metadata_requires_valid_brief_outline(monkeypatch):
+    """metadata.brief_outline 非法时返回 400，不进入流式启动。"""
+    from fastapi import HTTPException
+
+    _patch_agent_manager_for_prepare(monkeypatch)
+
+    request = _build_request()
+    request.metadata = {
+        "brief_outline": {"title": "", "sections": []},  # title 为空、章节不足
+        "research_intent": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        deepsearch_run._prepare_stream_context(request, object())
+
+    assert exc_info.value.status_code == 400
+    assert "upgrade metadata is invalid" in str(exc_info.value.detail)
+    assert "200030" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_invalid_metadata_returns_400_not_500(monkeypatch):
+    """endpoint 级：非法 metadata 的 400 必须透传，不得被 run() 兜底重包装为 500。"""
+    from fastapi import HTTPException
+
+    _patch_agent_manager_for_prepare(monkeypatch)
+
+    request = _build_request()
+    request.metadata = {
+        "brief_outline": {"title": "", "sections": []},
+        "research_intent": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await deepsearch_run.run(request, db=Mock())
+
+    assert exc_info.value.status_code == 400
+
+
+def test_run_brief_report_type_still_validates_metadata_structure(monkeypatch):
+    """校验只看结构：brief 模式下非法 metadata 同样 400，忽略契约仅在运行期注入阶段生效。"""
+    from fastapi import HTTPException
+
+    _patch_agent_manager_for_prepare(monkeypatch)
+
+    request = _build_request()
+    request.report_type = "brief"
+    request.metadata = {
+        "brief_outline": {"title": "", "sections": []},
+        "research_intent": {},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        deepsearch_run._prepare_stream_context(request, object())
+
+    assert exc_info.value.status_code == 400
+
+
+def test_run_brief_report_type_passes_valid_metadata_through(monkeypatch):
+    """合法 metadata + brief：不 400，research 模式下照常透传（运行期由注入器忽略）。"""
+    _patch_agent_manager_for_prepare(monkeypatch)
+
+    request = _build_request()
+    request.report_type = "brief"
+    request.metadata = _build_valid_upgrade_metadata()
+
+    _, _, run_kwargs = deepsearch_run._prepare_stream_context(request, object())
+    assert run_kwargs["metadata"] == request.metadata
+
+
+def test_run_search_mode_does_not_pass_metadata_to_agent(monkeypatch):
+    """search/react 模式的 run 签名不接受 metadata，透传会导致 TypeError。"""
+    _patch_agent_manager_for_prepare(monkeypatch)
+
+    request = _build_request()
+    request.search_mode = "search"
+    request.metadata = _build_valid_upgrade_metadata()
+
+    _, _, run_kwargs = deepsearch_run._prepare_stream_context(request, object())
+    assert "metadata" not in run_kwargs
+
+
+def test_run_metadata_forces_parallel_execution_method(monkeypatch):
+    """升级运行强制并行图：Agent 构建前 execution_method 被注入器声明覆盖。"""
+    _patch_agent_manager_for_prepare(monkeypatch)
+
+    request = _build_request()
+    request.execution_method = "dependency_driving"
+    request.metadata = _build_valid_upgrade_metadata()
+
+    deepsearch_run._force_execution_method_for_metadata(request)
+    assert request.execution_method == "parallel"
+
+
+def test_run_metadata_keeps_execution_method_when_not_forced(monkeypatch):
+    """无 metadata 或注入器未声明强制时，execution_method 不被改动。"""
+    request = _build_request()
+    request.execution_method = "dependency_driving"
+
+    deepsearch_run._force_execution_method_for_metadata(request)
+    assert request.execution_method == "dependency_driving"

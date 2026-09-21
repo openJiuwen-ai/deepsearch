@@ -61,9 +61,16 @@ commands directly.
   and related workflow classes are lower-level orchestration surfaces.
 - User-facing run flows depend on `conversation_id`; do not accidentally reuse
   one conversation for unrelated tasks.
-- LLM and search credentials must stay in environment/config inputs. Secrets
+- LLM and search credentials must come from environment/config inputs. Secrets
   are often stored as `bytearray` and should be cleared with `zero_secret`
   after use when the surrounding code does so.
+- Treat all LLM JSON output as untrusted data. Never assume the structure or
+  element types match the prompt contract. Use nested validation that reaches
+  the consumer's actual assumption (e.g. `list[int]`, not just `list`), exclude
+  Python `bool` from `int` checks, and add defensive `isinstance` guards at
+  every consumption site. See `.claude/rules/prompt-workflow.md#llm-output-validation`
+  for the full three-rule checklist and existing helpers (`is_list_of`,
+  `is_equal_length`).
 - Prompt changes under `algorithm/prompts/` are behavioral changes. Update
   prompt variables, parser expectations, and tests together.
 - Server changes must preserve Pydantic request/response validation, async

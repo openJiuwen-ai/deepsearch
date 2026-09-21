@@ -890,14 +890,23 @@ class VisualizationMixin:
     def _select_visualization_from_classified_content(
         classified_content_for_visualization,
     ):
+        """筛选满足 data_density 阈值的 fulltext 文档作为图表候选。
+
+        只考虑 fulltext（is_fulltext=True）文档，不考虑段落级内容。
+        优先 dd >= 0.9；若为空则回退 dd >= 0.8。
+        fulltext 不做数量限制（上游已限制 top_n=10）。
+        """
         selected_visualizations = []
         fallback_visualizations = []
         for item in classified_content_for_visualization:
             if not isinstance(item, dict):
+                continue
+            if not item.get("is_fulltext", False):
                 continue
             dd = safe_float(item.get("data_density"), default=-1.0)
             if dd >= 0.9:
                 selected_visualizations.append(item)
             elif dd >= 0.8:
                 fallback_visualizations.append(item)
+
         return selected_visualizations or fallback_visualizations

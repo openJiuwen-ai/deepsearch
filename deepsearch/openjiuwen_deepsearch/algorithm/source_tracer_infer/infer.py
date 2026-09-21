@@ -11,8 +11,15 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info impo
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.number_node import NumberNode
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.supplement_graph import SupplementGraph
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.generate_html import GenerateHTML
-from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (call_model, is_equal_length, 
-                                                                              type_check, GraphInfo)
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
+    GraphInfo,
+    call_model,
+    is_equal_length,
+    is_list_of,
+    is_valid_structured_triples,
+    normalize_structured_triple_reference_ids,
+    type_check,
+)
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
@@ -173,7 +180,7 @@ class SourceTracerInfer:
 
         records = [{"id": index, "content": record.get("content", "")} for index, record in enumerate(search_records)]
         handle_datas = {"statement": conclusions[0], "references": records}  # 不包含最后一个主要结论
-        detection_func_and_args = {"detection_func": type_check, "args": list}
+        detection_func_and_args = {"detection_func": is_list_of, "args": int}
         results = await call_model(self.model_name, "infer_validate_prompt", handle_datas, 
                                    detection_func_and_args=detection_func_and_args, 
                                    agent_name=AgentLlmName.SOURCE_TRACER_INFER_EXTRACT_REFERENCE.value)
@@ -184,6 +191,13 @@ class SourceTracerInfer:
         references = []
         try:
             for index in results:
+                # 消费端兜底防御：严格要求非 bool 的 int
+                if not isinstance(index, int) or isinstance(index, bool):
+                    logger.warning(
+                        "[SOURCE TRACER INFER] skip non-int reference index: %r (type=%s)",
+                        index, type(index).__name__,
+                    )
+                    continue
                 if 0 <= index < len(search_records):
                     references.append({"id": index, "content": search_records[index].get("content", "")})
             evidence = {"conclusion": conclusions[-1], "reference": references}  # 最后一个是主要结论
@@ -216,11 +230,21 @@ class SourceTracerInfer:
             }
         """
         logger.info(f"[SOURCE TRACER INFER] infer start...")
-        detection_func_and_args = {"detection_func": type_check, "args": list}
+        detection_func_and_args = {"detection_func": is_list_of, "args": str}
         results = await call_model(self.model_name, "infer_conclusion_prompt", evidences, 
                                    detection_func_and_args=detection_func_and_args, 
                                    agent_name=AgentLlmName.SOURCE_TRACER_INFER_INFER.value)
-        inference = results[0] if (isinstance(results, list) and results) else ""
+        # 消费端兜底防御：严格要求非 bool 的 str
+        inference = ""
+        if isinstance(results, list) and results:
+            first = results[0]
+            if isinstance(first, str) and not isinstance(first, bool):
+                inference = first
+            else:
+                logger.warning(
+                    "[SOURCE TRACER INFER] infer first element not str: %r (type=%s), fallback to empty",
+                    first, type(first).__name__,
+                )
         results = {"conclusion": evidences.get("conclusion", ""), "inference": inference}
         logger.debug("[SOURCE TRACER INFER] infer result:\n %s", json.dumps(results, ensure_ascii=False, indent=4))
         logger.info(f"[SOURCE TRACER INFER] infer end.")
@@ -250,7 +274,11 @@ class SourceTracerInfer:
         结构化inference，提取结构化参考材料的关系
         """
         logger.info(f"[SOURCE TRACER INFER] structured_infer starting...")
-        detection_func_and_args = {"detection_func": is_equal_length, "args": 3} # 需要添加检测函数，检测输出的每个结构为三元组
+        detection_func_and_args = {
+            "normalizer": normalize_structured_triple_reference_ids,
+            "detection_func": is_valid_structured_triples,
+            "args": 3,
+        }
         result = await call_model(self.model_name, "infer_structured_prompt", inference, 
                                   detection_func_and_args=detection_func_and_args, 
                                   agent_name=AgentLlmName.SOURCE_TRACER_INFER_STRUCTURED_INFER.value)
