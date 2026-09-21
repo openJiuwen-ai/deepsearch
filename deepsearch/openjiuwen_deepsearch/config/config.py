@@ -346,6 +346,16 @@ class SearchWorkflowConfig(BaseModel):
     state_creation_agent: StateCreationAgentConfig = Field(default_factory=StateCreationAgentConfig)
 
 
+class McpServerRuntimeConfig(BaseModel):
+    """MCP server 运行时配置（CLI 直接传入，Server 经 DB 查询后拼装）"""
+    server_name: str = Field(..., description="MCP server 名称")
+    server_url: str = Field(..., description="MCP server URL")
+    transport_type: str = Field(default="streamable_http", description="传输类型")
+    headers: dict = Field(default_factory=dict, description="请求头")
+    timeout: float = Field(default=30.0, description="超时（秒）")
+    type: str = Field(default="search", description="用途类型")
+
+
 class AgentConfig(BaseModel):
     """
     Agent配置类
@@ -415,6 +425,7 @@ class AgentConfig(BaseModel):
     )
     search_workflow_per_question_params: PerQuestionParams = Field(default_factory=PerQuestionParams)
     search_workflow_milvus_config: MilvusConfig = Field(default_factory=MilvusConfig)
+    mcp_servers: list[McpServerRuntimeConfig] = Field(default_factory=list, description="MCP server 配置列表")
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # 联网增强引擎 QPS 流控配置
