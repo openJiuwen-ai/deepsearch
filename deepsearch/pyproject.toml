@@ -39,6 +39,10 @@ dependencies = [
     "jieba>=0.42.1",
 ]
 
+[project.optional-dependencies]
+# MCP server 客户端依赖，用于连接外部 MCP 服务器
+mcp = ["mcp>=1.0"]
+
 # 1. 告诉 setuptools 把 openjiuwen_deepsearch 当成一个「命名空间包」
 #    这样无论子目录有没有 __init__.py 都会被收录
 [tool.setuptools.packages.find]
