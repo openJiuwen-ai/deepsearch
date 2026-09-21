@@ -48,7 +48,6 @@ class McpServerService:
 
     def __init__(self, mcp_server_repository: McpServerRepositoryInter) -> None:
         self.repository = mcp_server_repository
-        self.security_utils = SecurityUtils()
 
     @staticmethod
     def _validate_server_url(server_url: str | None) -> None:

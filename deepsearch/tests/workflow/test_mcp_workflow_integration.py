@@ -3,7 +3,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from openjiuwen_deepsearch.framework.openjiuwen.tools.mcp.bundle import McpToolBundle
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import mcp_tool_context
 
 

@@ -1,6 +1,5 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
-import json
 import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock

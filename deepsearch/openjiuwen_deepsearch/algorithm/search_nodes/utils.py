@@ -59,7 +59,7 @@ _SENSITIVE_HEADER_NAMES = frozenset(
 
 
 def _is_sensitive_config_key(name: str) -> bool:
-    lk = name.lower()
+    lk = name.lower().replace("-", "_")
     if lk in (
         "api_key",
         "apikey",
