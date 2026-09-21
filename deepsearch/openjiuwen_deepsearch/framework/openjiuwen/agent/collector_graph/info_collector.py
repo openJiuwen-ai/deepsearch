@@ -51,7 +51,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, mcp_tool_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 max_retries = Config().service_config.info_collector_max_retry_num
@@ -189,6 +189,14 @@ class InfoRetrievalNode(BaseNode):
             research_intent=session.get_global_state("collector_context.research_intent") or {},
             evidence_ledger=session.get_global_state("collector_context.evidence_ledger") or {},
         )
+        mcp_tools = []
+        try:
+            mcp_bundle = mcp_tool_context.get()
+            if mcp_bundle is not None:
+                mcp_tools = mcp_bundle.get_tools_by_type("search")
+        except LookupError:
+            pass
+        state["mcp_tools"] = mcp_tools
         return state
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -521,12 +529,13 @@ class InfoRetrievalNode(BaseNode):
             "research_intent": state.get("research_intent", {}),
         }
 
-        tool_list, tool_dict = self._prepare_collector_tool(state)
+        tool_list, tool_dict = await self._prepare_collector_tool(state)
 
         # 当 collector_tools 为空且 search_method 为 web/local 时，直接调用对应 search tool
         collector_tools = state.get("api_tools_config", {}).get("collector_tools", [])
+        mcp_tools = state.get("mcp_tools", [])
         search_method = state.get("search_method", "web")
-        if not collector_tools and search_method in ("web", "local"):
+        if not collector_tools and not mcp_tools and search_method in ("web", "local"):
             # 直接调用对应 search tool
             tool_name = f"{search_method}_search_tool"
             if tool_name not in tool_dict:
@@ -953,7 +962,7 @@ class InfoRetrievalNode(BaseNode):
 
         return doc_infos, source_store.to_dict()
 
-    def _prepare_collector_tool(self, state: dict):
+    async def _prepare_collector_tool(self, state: dict):
         """准备信息收集器工具."""
         search_method = state.get("search_method", "web")
         web_search_tool = create_web_search_tool()
@@ -961,6 +970,7 @@ class InfoRetrievalNode(BaseNode):
         api_tools = build_runtime_api_tools(
             state.get("api_tools_config", {}).get("collector_tools", []),
         )
+        mcp_tools = state.get("mcp_tools", [])
 
         tool_dict = {}
         tool_list = []
@@ -983,5 +993,9 @@ class InfoRetrievalNode(BaseNode):
         for api_tool in api_tools:
             tool_list.append(api_tool.card.tool_info())
             tool_dict[api_tool.card.name] = api_tool
+
+        for mcp_tool in mcp_tools:
+            tool_list.append(mcp_tool.card.tool_info())
+            tool_dict[mcp_tool.card.name] = mcp_tool
 
         return tool_list, tool_dict
