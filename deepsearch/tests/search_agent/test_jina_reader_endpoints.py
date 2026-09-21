@@ -80,3 +80,44 @@ def test_web_fetch_falls_back_to_global_reader_endpoint():
         side_effect=fake_get,
     ):
         assert fetch._read_via_jina("https://example.com") == "from-global"
+
+
+def test_web_fetch_logs_summary_when_every_endpoint_rejects_credentials(caplog):
+    """全 base 返 401/403 时必须留下汇总日志。
+
+    回归用：原先只有 RequestException 才设置 last_error，汇总日志因此被跳过；
+    "所有 base 都被拦下"（配错 key / 匿名被 Cloudflare 拦）这种最常见场景反而没有汇总。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    forbidden = Mock(status_code=403, text="Just a moment...")
+
+    def fake_get(url, **kwargs):
+        return forbidden
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        side_effect=fake_get,
+    ), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://example.com") == "[web_fetch] Failed to read page."
+
+    assert "all Jina reader endpoints failed" in caplog.text
+    assert "https://example.com" in caplog.text
+    # 每个 base 的原因都要出现在汇总里
+    for base in fetch._reader_bases:
+        assert base in caplog.text
+
+
+def test_web_fetch_summary_reports_http_status_for_non_auth_failures(caplog):
+    """非鉴权类的 HTTP 失败（如 500）同样要进汇总，且不带 auth rejected 标注。"""
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    server_error = Mock(status_code=500, text="boom")
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        return_value=server_error,
+    ), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://example.com") == "[web_fetch] Failed to read page."
+
+    assert "all Jina reader endpoints failed" in caplog.text
+    assert "HTTP 500" in caplog.text
+    assert "auth rejected" not in caplog.text

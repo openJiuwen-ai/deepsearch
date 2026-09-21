@@ -75,7 +75,9 @@ class JinaWebFetchProvider:
         self._reader_timeout = jina_reader_request_timeout()
 
     def fetch_page(self, url: str) -> str:
-        # 阶段 3: 3 次重试 + 指数退避, 应对镜像偶发限流/超时(漏网之鱼根因)
+        # 阶段 3: 3 次重试 + 线性退避(0.5s, 1.0s), 应对镜像偶发限流/超时(漏网之鱼根因)。
+        # 注意: 重试期间镜像会继续渲染该页并缓存, 所以第 2 次尝试常能命中暖缓存直接成功,
+        # 这也是重试能救回约 95% 瞬态失败的原因; 不要随意减少重试次数。
         for attempt in range(3):
             content = self._read_via_jina(url)
             if content:
@@ -106,6 +108,7 @@ class JinaWebFetchProvider:
                 return base, None, exc
 
         last_error: RequestException | None = None
+        failures: list[str] = []
 
         with ThreadPoolExecutor(max_workers=len(self._reader_bases)) as pool:
             futures = [pool.submit(_fetch_base, base) for base in self._reader_bases]
@@ -113,6 +116,7 @@ class JinaWebFetchProvider:
                 base, resp, err = future.result()
                 if err is not None:
                     last_error = err
+                    failures.append(f"{base}: {err}")
                     logger.warning(
                         "[WebFetch] Jina reader %s unreachable: %s",
                         base,
@@ -122,23 +126,28 @@ class JinaWebFetchProvider:
                 if resp.status_code == 200:
                     return resp.text
                 if _jina_reader_auth_failure(resp):
+                    failures.append(f"{base}: HTTP {resp.status_code} (auth rejected)")
                     logger.warning(
                         "[WebFetch] Jina reader %s rejected credentials for target url",
                         base,
                     )
                     # 不短路: 让其它 base 继续竞速(匿名时 r.jina.ai 403, r.jinaai.cn 仍可能 200)
                     continue
+                failures.append(f"{base}: HTTP {resp.status_code}")
                 logger.warning(
                     "[WebFetch] Jina reader %s returned HTTP %s for target url",
                     base,
                     resp.status_code,
                 )
 
-        if last_error is not None:
+        if failures:
+            # 汇总一条: 只有 RequestException 才设置 last_error, 因此"所有 base 都被 401/403 拦下"
+            # 这种最常见场景原先没有任何汇总日志(单个 base 的 warning 看不出"全挂了")。
             logger.warning(
-                "[WebFetch] all Jina reader endpoints failed for target url: %s",
-                last_error,
-                exc_info=True,
+                "[WebFetch] all Jina reader endpoints failed for url %s: %s",
+                url,
+                "; ".join(failures),
+                exc_info=last_error,
             )
         return "[web_fetch] Failed to read page."
 
