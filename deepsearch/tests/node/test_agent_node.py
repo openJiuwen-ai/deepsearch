@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from openjiuwen.core.session.node import Session
+from openjiuwen.core.runner.runner import Runner
 from openjiuwen.core.workflow.base import WorkflowCard
 from openjiuwen.core.workflow.workflow import Workflow
 
@@ -55,6 +56,20 @@ def _mock_search_url_validation():
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.local_search_api.api_wrapper.validate_search_service_url"
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_registered_workflows():
+    """清理全局资源管理器中遗留的 workflow 注册。
+
+    tests/workflow 等模块会向全局 Runner.resource_mgr 注册 research_workflow_1，
+    且注册信息跨测试残留；先注册不同拓扑的同名 workflow 会让本文件的 agent.run
+    走入异常分支（resource already exist），导致 missing_sections 断言失败。
+    每个用例前清理，保证本文件的 MockAgent 注册路径一致。
+    """
+    Runner.resource_mgr.remove_workflow("research_workflow_1")
+    yield
+    Runner.resource_mgr.remove_workflow("research_workflow_1")
 
 
 # 公共执行逻辑：运行 agent 并返回所有 chunk（可选）
@@ -405,6 +420,8 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         "info_collector_search_method": "web",
         "provided_report_type": None,
         "exclusion_constraint_enable": False,
+        "user_materials": [],
+        "material_analysis": None,
     })
     mock_web_search.assert_awaited_once_with({
         "query": "AI Agent 趋势",

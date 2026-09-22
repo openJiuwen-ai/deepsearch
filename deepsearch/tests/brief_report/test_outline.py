@@ -41,6 +41,34 @@ async def test_generate_outline_repairs_ids_and_invalid_enums(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_outline_normalizes_bracketed_material_ids(monkeypatch):
+    invoke = AsyncMock(return_value={
+        "content": """{"title":"Test","sections":[
+        {"title":"Evidence","goal":"Use supplied paper","research_steps":[
+          {"requirement":"Extract method"},{"requirement":"Extract result"}],
+         "material_bindings":[{"material_id":"[paper-1]","role":"primary_evidence","claims_to_use":"method"}]},
+        {"title":"Limitations","goal":"State limits","research_steps":[
+          {"requirement":"Extract limit"},{"requirement":"State gap"}]}
+        ]}"""
+    })
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.algorithm.brief_report.outline.ainvoke_llm_with_stats",
+        invoke,
+    )
+
+    result = await generate_brief_outline(
+        object(),
+        BriefOutlineRequest(
+            query="summarize supplied paper",
+            material_context={"_analysis_items": [{"material_id": "paper-1"}]},
+        ),
+    )
+
+    assert result.sections[0].use_material_ids == ["paper-1"]
+    assert result.sections[0].material_bindings[0]["material_id"] == "paper-1"
+
+
+@pytest.mark.asyncio
 async def test_generate_outline_preserves_more_than_five_valid_sections(monkeypatch):
     """有效章节不得因 Brief 的章节数量上限而被截断。"""
     invoke = AsyncMock(return_value={

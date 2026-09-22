@@ -7,6 +7,8 @@ from openjiuwen_deepsearch.algorithm.query_understanding.outliner import (
     Outliner,
     check_tool_call,
     create_outline_tool,
+    ensure_material_first_bindings,
+    generate_outline,
     normalize_sections,
 )
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
@@ -78,6 +80,81 @@ functioncall_response = {
 
 # 测试用例
 class TestOutliner:
+    def test_material_first_empty_bindings_are_distributed_across_sections(self):
+        outline = Outline(
+            title="Test",
+            thought="Test",
+            sections=[
+                Section(id="1", title="A", description="A"),
+                Section(id="2", title="B", description="B"),
+            ],
+        )
+
+        changed = ensure_material_first_bindings(outline, ["M1", "M2", "M3"], True)
+
+        assert changed is True
+        assert [binding["material_id"] for binding in outline.sections[0].material_bindings] == ["M1", "M3"]
+        assert [binding["material_id"] for binding in outline.sections[1].material_bindings] == ["M2"]
+
+    def test_material_first_keeps_llm_bindings(self):
+        outline = Outline(
+            title="Test",
+            thought="Test",
+            sections=[Section(
+                id="1",
+                title="A",
+                description="A",
+                material_bindings=[{"material_id": "M1", "role": "primary"}],
+            )],
+        )
+
+        changed = ensure_material_first_bindings(outline, ["M1", "M2"], True)
+
+        assert changed is False
+        assert outline.sections[0].material_bindings == [{"material_id": "M1", "role": "primary"}]
+
+    def test_material_first_fills_only_unbound_sections(self):
+        outline = Outline(
+            title="Test",
+            thought="Test",
+            sections=[
+                Section(
+                    id="1",
+                    title="A",
+                    description="A",
+                    material_bindings=[{"material_id": "M1", "role": "primary"}],
+                ),
+                Section(id="2", title="B", description="B"),
+            ],
+        )
+
+        changed = ensure_material_first_bindings(outline, ["M1", "M2"], True)
+
+        assert changed is True
+        assert outline.sections[1].material_bindings[0]["material_id"] == "M2"
+
+    def test_generate_outline_preserves_material_bindings(self):
+        outline = generate_outline(
+            "en-US",
+            "Title",
+            "Thought",
+            [{
+                "id": "1",
+                "title": "Evidence",
+                "description": "Use the supplied study.",
+                "material_bindings": [{
+                    "material_id": "M1",
+                    "role": "primary_evidence",
+                    "claims_to_use": "Reported outcome",
+                }],
+            }],
+        )
+        assert outline.sections[0].material_bindings == [{
+            "material_id": "M1",
+            "role": "primary_evidence",
+            "claims_to_use": "Reported outcome",
+        }]
+
 
     @pytest.fixture
     def mock_llm(self):

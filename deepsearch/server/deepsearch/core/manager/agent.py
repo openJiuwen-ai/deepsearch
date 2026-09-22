@@ -305,11 +305,14 @@ class DeepSearchAgentManager:
         if isinstance(template_id, int) and template_id > 0:
             has_template = True
 
+        metadata = request.metadata or {}
         res = {
             "search_mode": request.search_mode,
             "execute_mode": "commercial",
             "execution_method": request.execution_method,
             "report_type": request.report_type,
+            "user_materials_enabled": bool(metadata.get("user_materials_enabled", False)),
+            "user_materials": metadata.get("user_materials") or [],
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,
             "outliner_max_section_num": request.outliner_max_section_num,
             "source_tracer_research_trace_source_switch": request.source_tracer_research_trace_source_switch,

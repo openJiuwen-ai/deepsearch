@@ -3,7 +3,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 from typing import Literal, List
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from openjiuwen_deepsearch.config.config import (
     ArxivScholarlyConfig,
@@ -19,6 +19,7 @@ _CONVERSATION_ID_SCHEMA_ERR = (
     "conversation_id must be 1–128 characters and use only ASCII letters, digits, "
     "underscore, or hyphen (^[A-Za-z0-9_-]{1,128}$)."
 )
+MAX_USER_MATERIALS_TOTAL_CHARS = 5_000_000
 
 
 class PubMedScholarlyRequestConfig(PubMedScholarlyConfig):
@@ -159,7 +160,9 @@ class DeepSearchRequest(BaseModel):
         description=(
             "运行时元数据（可选），由客户端持有并回传，服务端不持久化。"
             "当前支持键：brief_outline / research_intent / language（即 brief 报告"
-            " final_result.metadata 的原样回传），用于以 brief 大纲为结构基准生成专业版报告。"
+            " final_result.metadata 的原样回传），用于以 brief 大纲为结构基准生成专业版报告；"
+            "user_materials_enabled(bool) 与 user_materials(list)。素材条目须含 content，可选 "
+            "material_id/title/url/publish_time/content_time。"
         ),
     )
     web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
@@ -170,6 +173,36 @@ class DeepSearchRequest(BaseModel):
     vlm_chart_generator_enable: bool = Field(default=False, description="vlm迭代生成图开关")
     vlm_chart_generator_max_iterations: int = Field(default=1, ge=1, le=3, description="vlm迭代生成图最大迭代次数")
     agent_llm_timeouts: dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
+
+    @model_validator(mode="after")
+    def _validate_user_materials_shape(self) -> "DeepSearchRequest":
+        # 素材定义位于 metadata；关闭开关时素材整体被忽略，不因格式问题拒绝请求。
+        metadata = self.metadata or {}
+        enabled = metadata.get("user_materials_enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError("metadata.user_materials_enabled must be a boolean")
+        if not enabled:
+            return self
+        materials = metadata.get("user_materials") or []
+        if not isinstance(materials, list):
+            raise ValueError("metadata.user_materials must be a list")
+        total_content_chars = 0
+        for index, item in enumerate(materials):
+            if not isinstance(item, dict):
+                raise ValueError(f"metadata.user_materials[{index}] must be an object")
+            content = str(item.get("content") or "")
+            if not content.strip():
+                raise ValueError(
+                    f"metadata.user_materials[{index}] requires non-empty content"
+                )
+            total_content_chars += len(content)
+        if total_content_chars > MAX_USER_MATERIALS_TOTAL_CHARS:
+            raise ValueError(
+                "metadata.user_materials total content length must not exceed "
+                f"{MAX_USER_MATERIALS_TOTAL_CHARS} characters"
+            )
+        return self
+
 
     @field_validator("conversation_id")
     @classmethod

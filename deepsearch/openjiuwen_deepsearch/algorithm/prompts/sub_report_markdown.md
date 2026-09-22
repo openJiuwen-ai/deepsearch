@@ -55,6 +55,18 @@ format_requirements: {{ current_section_format_requirements }}
 {{ current_chapter_outline }}
 </current_chapter_outline>
 
+{% if section_material_bindings_text %}
+<section_material_use_contract>
+The following user-material assignments apply only to this section. A material may
+also support another section; do not infer that material's role or claims there.
+Use each material only for its listed role and allowed claims. Treat the source
+content as authoritative: do not turn an allowed claim into a broader conclusion,
+and do not use a binding as evidence for facts absent from the cited material.
+
+{{ section_material_bindings_text }}
+</section_material_use_contract>
+{% endif %}
+
 {% if current_subsection %}
 <current_subsection>
 {{ current_subsection }}

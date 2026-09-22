@@ -154,7 +154,8 @@ async def export_report(
                 baseline_html = html_path.read_text(encoding="utf-8")
                 markdown = bundle.markdown_path.read_text(encoding="utf-8")
                 styled_html, style_applied = await _apply_html_style(baseline_html, markdown, llm)
-                html_path.write_text(styled_html, encoding="utf-8")
+                # 固定 LF 换行，避免 Windows 文本模式把 \n 转成 \r\n 破坏 bundle 内容字节一致性
+                html_path.write_text(styled_html, encoding="utf-8", newline="\n")
                 style_status = "applied" if style_applied else "fallback"
             else:
                 convert_md_to_html(bundle.markdown_path, bundle.root_dir / "report.html")

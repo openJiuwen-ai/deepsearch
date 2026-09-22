@@ -20,6 +20,22 @@ class SectionBaseContext(BaseModel):
     report_type_policy: dict = Field(default_factory=dict, description="报告类型策略")
     research_intent: dict = Field(default_factory=dict, description="结构化报告细节约束")
     section_local_contract: dict = Field(default_factory=dict, description="章节级局部合同约束")
+    material_analysis: Dict | None = Field(
+        default=None,
+        description="用户素材预处理产物（含摘要），规划/撰写时据此引用素材",
+    )
+    material_bindings: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="该章节绑定的用户素材及其证据角色",
+    )
+    bound_material_ids: List[str] = Field(
+        default_factory=list,
+        description="该章节允许规划、检索和写作使用的用户素材 ID",
+    )
+    material_usage_mode: str = Field(
+        default="none",
+        description="用户素材使用策略：none、supplementary 或 required",
+    )
 
 
 class SectionReasoningContext(SectionBaseContext):

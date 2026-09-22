@@ -253,7 +253,8 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
     markdown_text = _rewrite_inference_links(markdown_text)
     markdown_text = _rewrite_chart_placeholders(markdown_text, chart_messages)
     markdown_path = root_dir / "report.md"
-    markdown_path.write_text(markdown_text, encoding="utf-8")
+    # 固定 LF 换行，避免 Windows 文本模式把 \n 转成 \r\n 破坏 bundle 内容字节一致性
+    markdown_path.write_text(markdown_text, encoding="utf-8", newline="\n")
     logger.info(
         "Built report bundle infer_assets=%s chart_assets=%s duration_ms=%.2f",
         len(list(infer_dir.glob("*.html"))),

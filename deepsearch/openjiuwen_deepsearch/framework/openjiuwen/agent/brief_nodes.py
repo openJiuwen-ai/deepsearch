@@ -14,6 +14,7 @@ from openjiuwen.core.session.node import Session
 from openjiuwen_deepsearch.algorithm.brief_report.collector import (
     collect_initial_brief_evidence,
     generate_brief_queries,
+    merge_material_evidence,
     supplement_brief_evidence,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import generate_brief_html_report
@@ -26,6 +27,10 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
 from openjiuwen_deepsearch.algorithm.brief_report.outline import generate_brief_outline
 from openjiuwen_deepsearch.algorithm.brief_report.review import review_brief_evidence
 from openjiuwen_deepsearch.algorithm.brief_report.search import normalize_brief_search_results
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    build_material_prompt_context,
+    restore_material_analysis,
+)
 from openjiuwen_deepsearch.algorithm.brief_report.writer import (
     assemble_brief_report,
     generate_brief_summary,
@@ -55,6 +60,19 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 
 logger = logging.getLogger(__name__)
+
+
+def _is_material_first_request(query: str, has_materials: bool) -> bool:
+    """Identify requests that ask to synthesize the supplied materials first."""
+    if not has_materials:
+        return False
+    normalized = " ".join((query or "").casefold().split())
+    markers = (
+        "基于我提供", "基于提供", "提供的论文", "所提供的材料", "总结里面的内容",
+        "仅根据", "provided material", "provided paper", "supplied material",
+        "summarize the provided", "summarise the provided",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def _log_node_failure(node_name: str, stage: str, exc: Exception) -> None:
@@ -267,6 +285,13 @@ class BriefOutlineNode(BaseNode):
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
         logger.info("[BriefOutlineNode] Start BriefOutlineNode.")
         intent = session.get_global_state("search_context.research_intent") or {}
+        # 注入已在 IntentRecognition 节点完成筛选的素材清单。
+        material_context = build_material_prompt_context(
+            restore_material_analysis(session.get_global_state("search_context.material_analysis")),
+            include_analysis=False,
+        )
+        if not material_context.get("has_materials"):
+            material_context = {}
         request = BriefOutlineRequest(
             query=session.get_global_state("search_context.original_query") or "",
             language=session.get_global_state("search_context.language") or "zh-CN",
@@ -276,6 +301,7 @@ class BriefOutlineNode(BaseNode):
             clarification_questions=session.get_global_state("search_context.questions") or "",
             user_feedback=session.get_global_state("search_context.user_feedback") or "",
             report_template=session.get_global_state("search_context.report_template") or "",
+            material_context=material_context,
         )
         _log_node_detail("BriefOutlineNode", "current_inputs", request.model_dump())
         return {"llm": _llm(session, NodeId.BRIEF_OUTLINE), "request": request}
@@ -338,10 +364,19 @@ class BriefInfoCollectorNode(BaseNode):
             logger.warning("[BriefInfoCollectorNode] Missing outline, skip evidence collection.")
             return {"skip": True}
         intent = session.get_global_state("search_context.research_intent") or {}
+        material_analysis = restore_material_analysis(
+            session.get_global_state("search_context.material_analysis")
+        )
+        material_context = build_material_prompt_context(material_analysis)
+        material_first = _is_material_first_request(
+            session.get_global_state("search_context.original_query") or "",
+            bool(material_context.get("has_materials")),
+        )
         _log_node_detail(
             "BriefInfoCollectorNode", "current_inputs",
             {"outline": state.outline.model_dump(), "research_intent": intent,
-             "search_method": session.get_global_state("config.info_collector_search_method") or "web"},
+             "search_method": session.get_global_state("config.info_collector_search_method") or "web",
+             "material_first": material_first},
         )
         return {
             "state": state,
@@ -351,6 +386,8 @@ class BriefInfoCollectorNode(BaseNode):
                 research_intent=ResearchIntent.model_validate(intent).model_dump(),
                 llm=_llm(session, NodeId.BRIEF_INFO_COLLECTOR),
             ),
+            "material_first": material_first,
+            "material_context": material_context,
         }
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -367,6 +404,8 @@ class BriefInfoCollectorNode(BaseNode):
                         outline=request.outline,
                         user_query=request.user_query,
                         research_intent=request.research_intent,
+                        material_first=pre_output["material_first"],
+                        material_context=pre_output["material_context"],
                     ),
                 )
                 search_results = await _search_brief_queries(
@@ -392,6 +431,8 @@ class BriefInfoCollectorNode(BaseNode):
                         research_intent=request.research_intent,
                         executed_queries=state.collection_context.executed_queries,
                         blocking_gaps=blocking_gaps,
+                        material_first=pre_output["material_first"],
+                        material_context=pre_output["material_context"],
                     ),
                 ) if blocking_gaps else []
                 search_results = await _search_brief_queries(
@@ -410,6 +451,12 @@ class BriefInfoCollectorNode(BaseNode):
                     state.evidence_review = review.model_copy(update={"blocking_gaps": []})
                 next_node = NodeId.BRIEF_SUB_REPORTER.value
                 stage = "Supplementary evidence collection"
+            # 合并用户素材证据（引用登记 + 按相关度路由到章节），首轮与补搜路径统一处理
+            collection = merge_material_evidence(
+                collection,
+                request.outline,
+                restore_material_analysis(session.get_global_state("search_context.material_analysis")),
+            )
         except Exception as exc:
             return _finish_brief_node_failure(
                 session,

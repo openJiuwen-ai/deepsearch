@@ -140,6 +140,7 @@ class TestStartNode:
             "max_search_query_count": 3,
             "max_research_loops": 2,
             "max_tool_call_turns_per_query": 4,
+            "material_evidence": [{"material_id": "M1", "original_content": "material fact"}],
         }
 
         result = await start_node.invoke(inputs, mock_session, mock_context)
@@ -159,6 +160,9 @@ class TestStartNode:
         assert collector_context.max_search_query_count == 3
         assert collector_context.max_tool_call_turns_per_query == 4
         assert collector_context.evidence_ledger == {}
+        assert collector_context.material_evidence == [
+            {"material_id": "M1", "original_content": "material fact"}
+        ]
 
     @pytest.mark.asyncio
     async def test_start_node_does_not_inherit_input_ledger(self, start_node, mock_session, mock_context):

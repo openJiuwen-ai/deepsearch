@@ -4,6 +4,7 @@ import pytest
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
+    _normalize_material_relevance_map,
     _normalize_research_intent,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
@@ -103,6 +104,24 @@ def test_normalize_research_intent_keeps_overlap_when_exclusion_disabled():
 def test_target_paper_rejects_empty_item():
     with pytest.raises(ValueError, match="at least one clue"):
         TargetPaper()
+
+
+def test_normalize_material_relevance_map_discards_malformed_entries():
+    entries = _normalize_material_relevance_map([
+        {
+            "material_id": "M1",
+            "relevance": "direct",
+            "relevant_dimensions": ["efficacy"],
+            "supported_claims": [{"claim": "Improves outcome", "confidence": "high"}],
+            "research_gaps": ["long-term outcomes"],
+        },
+        {"material_id": "M2", "relevance": "unsupported"},
+        "invalid",
+    ])
+
+    assert len(entries) == 1
+    assert entries[0].material_id == "M1"
+    assert entries[0].supported_claims[0].claim == "Improves outcome"
 
 
 def test_legacy_research_intent_defaults_target_papers_to_empty():

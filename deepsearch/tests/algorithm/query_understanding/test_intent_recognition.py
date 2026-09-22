@@ -10,6 +10,7 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     MAX_RESEARCH_QUERY_LENGTH,
     _create_emit_intent_tool,
     _default_fallback,
+    _drop_empty_optional_intent_fields,
     _normalize_research_intent,
     _to_str_list,
     classify_and_recognize_intent,
@@ -102,6 +103,17 @@ def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
         assert "required" not in scope_schema
         assert "anyOf" not in scope_schema
         assert "oneOf" not in scope_schema
+
+
+def test_drop_empty_optional_intent_fields_before_tool_validation():
+    args = _drop_empty_optional_intent_fields({
+        "research_query": "topic",
+        "section_count": "",
+        "source_date_scope": "  ",
+        "content_date_scope": "",
+    })
+
+    assert args == {"research_query": "topic"}
 
 
 def test_target_paper_url_is_preserved_and_added_to_include_url():

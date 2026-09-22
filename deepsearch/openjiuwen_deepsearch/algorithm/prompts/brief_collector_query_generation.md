@@ -30,9 +30,21 @@ schema. Queries are sent only to search APIs.
 - Keep queries retrieval-oriented and concise. Do not include instructions to the search provider, JSON, citations, or
   narrative explanations in the query string.
 
+{% if material_first %}
+- This is a material-first report. The supplied user materials are the primary evidence. Generate web queries only for
+  claims, dimensions, or research gaps that the material analyses do not cover; do not re-search material-supported
+  claims merely for corroboration.
+- Retain a query for a material-backed section only when its outlined step is explicitly outside the listed supported
+  claims or gaps. Prefer the smallest possible set of such gap-filling queries.
+{% endif %}
+
 # Research Contract
 
 <outline>{{ outline | tojson }}</outline>
+{% if material_first %}
+<user_material_analysis>{{ materials_analysis_text }}</user_material_analysis>
+<user_material_relevance>{{ materials_relevance_text }}</user_material_relevance>
+{% endif %}
 <research_intent>
 <task_type>{{ task_type }}</task_type>
 <required_dimensions>{{ required_dimensions | tojson }}</required_dimensions>

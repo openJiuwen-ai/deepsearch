@@ -193,6 +193,52 @@ async def test_query_generation_retries_transient_llm_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_material_first_query_generation_receives_material_gap_contract(monkeypatch):
+    invoke = AsyncMock(return_value={
+        "content": '{"queries":[{"query":"missing metric","section_ids":["1"],"step_ids":["1-1"]}]}'
+    })
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.collector.ainvoke_llm_with_stats", invoke)
+
+    await generate_brief_queries(
+        object(),
+        BriefQueryRequest(
+            outline=_collector_outline(),
+            user_query="基于我提供的论文总结",
+            material_first=True,
+            material_context={
+                "materials_analysis_text": "[M1] covers the architecture.",
+                "materials_relevance_text": "[M1] gaps: benchmark metrics",
+            },
+        ),
+    )
+
+    prompt = invoke.await_args.args[1][0]["content"]
+    assert "material-first report" in prompt
+    assert "covers the architecture" in prompt
+
+
+@pytest.mark.asyncio
+async def test_material_first_allows_empty_queries_and_skips_web_evaluation(monkeypatch):
+    invoke = AsyncMock(return_value={"content": '{"queries": []}'})
+    evaluate = AsyncMock()
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.collector.ainvoke_llm_with_stats", invoke)
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.collector.evaluate_brief_sections", evaluate)
+    request = _collector_request()
+
+    queries = await generate_brief_queries(
+        object(),
+        BriefQueryRequest(outline=request.outline, user_query="基于提供论文总结", material_first=True),
+    )
+    collection, context = await collect_initial_brief_evidence(request, queries, [])
+
+    assert queries == []
+    assert context.executed_queries == []
+    assert set(collection.section_evidence) == {"1", "2", "3"}
+    assert all(not evidence.selected_docs for evidence in collection.section_evidence.values())
+    evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_query_generation_logs_each_failed_attempt_before_retry(monkeypatch, caplog):
     """Query 重试必须留下失败原因和重试序号，便于定位采集失败。"""
     invoke = AsyncMock(side_effect=[

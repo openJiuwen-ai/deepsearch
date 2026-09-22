@@ -68,6 +68,28 @@ def test_chapter_prompt_receives_report_and_matching_section_guidance():
     assert "不应进入本章" not in prompt["messages"][1]["content"]
 
 
+def test_chapter_prompt_scopes_material_claims_to_current_section():
+    request = _request()
+    section = request.outline.sections[0].model_copy(
+        update={
+            "use_material_ids": ["M1"],
+            "material_bindings": [{
+                "material_id": "M1",
+                "role": "primary_evidence",
+                "claims_to_use": "only the reported adoption rate",
+            }],
+        }
+    )
+
+    rendered = apply_system_prompt(
+        "brief_sub_reporter", _writing_prompt_input(request, section, [])
+    )
+
+    assert "<section_material_use_contract>" in rendered[0]["content"]
+    assert "M1: role=primary_evidence" in rendered[0]["content"]
+    assert "only the reported adoption rate" in rendered[0]["content"]
+
+
 def test_summary_prompt_receives_report_strategy_but_not_section_guidance():
     """核心摘要只应接收整体编辑策略，不能混入分章指引。"""
     request = BriefSummaryRequest(

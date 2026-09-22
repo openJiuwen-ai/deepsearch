@@ -72,6 +72,9 @@ class BriefSection(BaseModel):
     research_steps: list[BriefResearchStep] = Field(min_length=2, max_length=4)
     output_formats: list[OutputFormat] = Field(default_factory=lambda: [OutputFormat.PARAGRAPH])
     format_note: str = Field(default="", max_length=240)
+    # use_material_ids is derived from material_bindings during outline normalization.
+    use_material_ids: list[str] = Field(default_factory=list)
+    material_bindings: list[dict[str, str]] = Field(default_factory=list)
 
 
 class BriefOutline(BaseModel):
@@ -107,6 +110,9 @@ class BriefOutlineRequest(BaseModel):
     clarification_questions: str = ""
     user_feedback: str = ""
     report_template: str = ""
+    # build_material_prompt_context 的扁平产物，
+    # 仅在存在素材时由节点填充；generate_brief_outline 原样并入 prompt 上下文。
+    material_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class BriefQuery(BaseModel):
@@ -125,6 +131,8 @@ class BriefQueryRequest(BaseModel):
     research_intent: dict[str, Any] = Field(default_factory=dict)
     executed_queries: list[str] = Field(default_factory=list)
     blocking_gaps: list["BriefStepCoverage"] = Field(default_factory=list)
+    material_first: bool = False
+    material_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class BriefSearchResult(BaseModel):
