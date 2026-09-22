@@ -324,39 +324,35 @@ def test_publishtime_huge_integer_does_not_crash():
     assert result[1]["published"] == "2023-11-14"
 
 
-# ---- Scenario 9: sites 必须保留 www. 前缀（华为端要求完整 host） ---------------
+# ---- Scenario 9: sites 统一剥离 www. 前缀（共享 normalize_domains 行为） ---------------
 
-def test_extension_sites_preserves_www_prefix():
-    """extension.sites 带 www. 前缀时,wrapper.sites 必须保留 www.。
-
-    回归: normalize_domains 曾剥掉 www.,导致华为端收到 apex 域名(huawei.com)
-    而非完整 host(www.huawei.com),不匹配返回 0 条结果。
-    """
+def test_extension_sites_strips_www_prefix():
+    """extension.sites 带 www. 前缀时,wrapper.sites 统一剥离 www.。"""
     wrapper = AgcAiNetworkingSearchAPIWrapper(
         search_api_key=bytearray(b"k"),
         search_url="",
         extension={"sites": ["www.huawei.com"]},
     )
-    assert wrapper.sites == ["www.huawei.com"]
+    assert wrapper.sites == ["huawei.com"]
 
 
-def test_extension_sites_normalizes_scheme_case_port_but_keeps_www():
-    """sites 清洗 scheme/大小写/端口/去重,但保留 www. 前缀。"""
+def test_extension_sites_normalizes_scheme_case_port_but_strips_www():
+    """sites 清洗 scheme/大小写/端口/去重,并剥离 www. 前缀。"""
     wrapper = AgcAiNetworkingSearchAPIWrapper(
         search_api_key=bytearray(b"k"),
         search_url="",
         extension={"sites": ["https://WWW.Huawei.com:443", "www.huawei.com"]},
     )
-    # 去重 + 清洗后保留一个,带 www. 前缀
-    assert wrapper.sites == ["www.huawei.com"]
+    # 去重 + 清洗后保留一个,无 www. 前缀
+    assert wrapper.sites == ["huawei.com"]
 
 
-def test_request_body_sites_preserves_www_prefix():
-    """发给华为端的请求体 sites 字段必须保留 www. 前缀。"""
+def test_request_body_sites_strips_www_prefix():
+    """发给华为端的请求体 sites 字段为剥离 www. 后的域名。"""
     wrapper = AgcAiNetworkingSearchAPIWrapper(
         search_api_key=bytearray(b"k"),
         search_url="",
         extension={"sites": ["www.huawei.com"]},
     )
     body = wrapper._build_request_body("q")
-    assert body["sites"] == ["www.huawei.com"]
+    assert body["sites"] == ["huawei.com"]

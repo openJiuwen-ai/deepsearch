@@ -55,11 +55,7 @@ class AgcAiNetworkingSearchAPIWrapper(BaseModel, Generic[T]):
         ext = self.extension
         if ext:
             if "sites" in ext:
-                # 华为 AGC 端要求 sites 为带 www. 的完整 host(如 www.huawei.com),
-                # apex 域名(huawei.com)不匹配;故保留 www. 前缀.
-                self.sites = normalize_domains(ext["sites"], keep_www=True)[
-                    :MAX_SITES_NUM
-                ]
+                self.sites = normalize_domains(ext["sites"])[:MAX_SITES_NUM]
             if "category" in ext:
                 self.category = [
                     str(c).strip() for c in ext["category"] if str(c).strip()

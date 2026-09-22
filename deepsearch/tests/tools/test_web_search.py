@@ -207,7 +207,7 @@ class TestWebSearchDomainConstraints:
         assert mock_wrapper.exclude_domains == []
 
     def test_apply_domain_constraints_agc_ainetworking_merges_sites(self):
-        """agc_ainetworking: intent include_domains 合并进 wrapper.sites，归一化(小写/保留www/去重)且 ≤20。"""
+        """agc_ainetworking: intent include_domains 合并进 wrapper.sites，归一化(小写/剥www/去重)且 ≤20。"""
         mock_wrapper = Mock()
         mock_wrapper.sites = ["configured.com", "shared.com"]
 
@@ -221,8 +221,8 @@ class TestWebSearchDomainConstraints:
             )
 
         assert applied is True
-        # 归一化: 小写/保留 www/去重; 意图识别站点优先, exclude_domains 被忽略
-        assert mock_wrapper.sites == ["intent.com", "shared.com", "www.duplicate.com", "configured.com"]
+        # 归一化: 小写/剥 www/去重; 意图识别站点优先, exclude_domains 被忽略
+        assert mock_wrapper.sites == ["intent.com", "shared.com", "duplicate.com", "configured.com"]
         assert len(mock_wrapper.sites) <= 20
 
     def test_agc_ainetworking_intent_sites_precede_configured_sites(self):

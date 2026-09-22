@@ -108,17 +108,15 @@ scheme，拒绝 localhost、私网、回环、链路本地、CGNAT 段等非公�
 写回 `api_wrapper.sites`：
 
 ```text
-intent_sites = normalize_domains(include_domains, keep_www=True)
-configured_sites = normalize_domains(api_wrapper.sites, keep_www=True)
+intent_sites = normalize_domains(include_domains)
+configured_sites = normalize_domains(api_wrapper.sites)
 merged = intent_sites + [s for s in configured_sites if s not in intent_sites]
 api_wrapper.sites = merged[:20]
 ```
 
-华为 AGC 端要求 `sites` 为带 `www.` 的完整 host（如 `www.huawei.com`），
-apex 域名（如 `huawei.com`）不匹配。`agc_ainetworking` 分支调用
-`normalize_domains` 时显式传入 `keep_www=True`，保留 `www.` 前缀；其余
-归一化规则（小写化、剥 scheme、去重）与 tavily 共享。`model_post_init`
-中读取 `extension["sites"]` 时同样使用 `keep_www=True`。本引擎不重写该函数。
+`sites` 统一复用 `normalize_domains` 共享规则：小写化、剥 scheme、
+剥离 `www.` 前缀、去重（与 tavily 一致）。`model_post_init` 中读取
+`extension["sites"]` 时同样走默认归一化。本引擎不重写该函数。
 
 ### 4.2 excludes（排除站点）
 
@@ -201,20 +199,7 @@ DeepSearch 标准行。字段映射如下：
 以下风险项**不阻塞交付**，但上线前需用真实 API key 人工验收，验收结果
 回填到本节或 `issues.md`：
 
-### 8.1 www. 前缀保留（已解决）
-
-华为官方文档示例使用 `www.pku.edu.cn` 等带 `www` 前缀的域名作为 `sites`
-取值。`agc_ainetworking` 分支在 `apply_web_search_domain_constraints`
-（`web_search.py`）与 `model_post_init`（`api_wrapper.py`）中调用
-`normalize_domains` 时均显式传入 `keep_www=True`，保留完整 host（如
-`www.huawei.com`），不再剥离 `www.` 前缀。
-
-测试 `tests/tools/test_web_search.py` 与
-`tests/tools/search_api/test_agc_ainetworking.py` 均断言
-`wrapper.sites == ["www.huawei.com"]` 等 keep_www 行为。此项已通过代码实现
-闭环，不再为待验证风险。
-
-### 8.2 sites 数组格式
+### 8.1 sites 数组格式
 
 华为官方文档类型标注 `sites` 为 `String`，但示例为 JSON 数组
 `["www.pku.edu.cn","www.sz.gov.cn"]`。包装器按**示例**发送 JSON 数组。
@@ -223,7 +208,7 @@ DeepSearch 标准行。字段映射如下：
 字符串形式（如 `"www.pku.edu.cn;www.sz.gov.cn"`），需要在
 `_build_request_body` 中改写 `sites` 序列化方式。
 
-### 8.3 count 夹取上限与实际返回数量
+### 8.2 count 夹取上限与实际返回数量
 
 华为文档注明「实际返回结果可能会小于 `count` 指定的数量」，不保证返回量。
 不同入口对 `max_web_search_results` 的取值范围约束不同：
@@ -237,7 +222,7 @@ DeepSearch 标准行。字段映射如下：
 因此「`max_web_search_results` 上限 50」仅指包装器层对华为接口的合规夹取，
 实际可配置上限由调用入口决定。上游若依赖固定条数需自行兜底。
 
-### 8.4 publishTime 字段格式
+### 8.3 publishTime 字段格式
 
 文档未明确 `publishTime` 的取值范围与时间基准。包装器当前实现：
 `int()` 成功且 >0 视为 Unix 秒，转 UTC 日期 ISO 字符串；`"0"`/非数字/
