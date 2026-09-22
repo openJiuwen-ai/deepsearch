@@ -80,6 +80,9 @@ format_requirements: {{ current_section_format_requirements }}
 {% else %}
   - No explicit time boundary. Prefer the most current evidence; the current time is {{ CURRENT_TIME }}.
 {% endif %}
+{% if has_exclusion %}
+- **Excluded Sources**:
+  {{ exclusion_instruction }}{% endif %}
 - **Source Faithfulness**:
     - Stay close to the wording, entities, scope, and limitations of the original source text.
     - Do not infer, estimate, or fabricate missing numbers, dates, amounts, percentages, rankings, company names, policy names, cases, or examples.

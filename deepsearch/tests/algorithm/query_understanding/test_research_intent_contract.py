@@ -15,6 +15,25 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_target_papers_prompt_context,
     build_temporal_scope_prompt_context,
 )
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    exclusion_constraint_context,
+)
+
+
+@pytest.fixture
+def exclusion_on():
+    """开启禁引约束总开关（exclusion_constraint_enable=True）。"""
+    token = exclusion_constraint_context.set(True)
+    yield
+    exclusion_constraint_context.reset(token)
+
+
+@pytest.fixture
+def exclusion_off():
+    """关闭禁引约束总开关（默认态）。"""
+    token = exclusion_constraint_context.set(False)
+    yield
+    exclusion_constraint_context.reset(token)
 
 
 def test_target_paper_accepts_explicit_and_implicit_clues():
@@ -27,6 +46,58 @@ def test_target_paper_accepts_explicit_and_implicit_clues():
 
     assert explicit.pmid == "38202877"
     assert implicit.dataset.startswith("Medical Expenditure")
+
+
+@pytest.mark.usefixtures("exclusion_on")
+def test_normalize_research_intent_removes_exclude_url_from_include_and_target_papers():
+    """被禁源不应同时出现在 include_url 和 target_papers（防止 collector 搜注定被挡的源）。"""
+    forbidden = "https://pubmed.ncbi.nlm.nih.gov/38132429/"
+    intent = _normalize_research_intent({
+        "include_url": [forbidden, "https://keep.com/a"],
+        "exclude_url": [forbidden, "https://www.mdpi.com/2304-6767/11/12/291"],
+        "target_papers": [{"url": forbidden}, {"dataset": "MEPS"}],
+    })
+    assert forbidden not in intent.include_url
+    assert "https://keep.com/a" in intent.include_url
+    assert all(not p.url == forbidden for p in intent.target_papers)
+    assert forbidden in intent.exclude_url
+
+
+@pytest.mark.usefixtures("exclusion_on")
+def test_normalize_research_intent_removes_target_paper_by_pmid_doi():
+    """被禁源的 PMID/DOI 出现在 target_papers 时也应移除（即使 URL 为空）。"""
+    intent = _normalize_research_intent({
+        "exclude_url": [
+            "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+            "https://doi.org/10.3390/dj11120291",
+        ],
+        "target_papers": [
+            {"pmid": "38132429"},                   # PMID 匹配 exclude 的 pubmed URL
+            {"doi": "10.3390/dj11120291"},          # DOI 匹配 exclude 的 doi URL
+            {"dataset": "MEPS"},                     # 无关，保留
+        ],
+    })
+    assert all(p.pmid != "38132429" for p in intent.target_papers)
+    assert all(p.doi != "10.3390/dj11120291" for p in intent.target_papers)
+    assert any(p.dataset == "MEPS" for p in intent.target_papers)
+
+
+@pytest.mark.usefixtures("exclusion_off")
+def test_normalize_research_intent_keeps_overlap_when_exclusion_disabled():
+    """默认关（exclusion_constraint_enable=False）：不去重，被禁源仍留在两处。
+
+    这是 baseline 行为——包括被禁源进 target_papers 后被 ensure_exact_target_documents
+    强制塞回证据的那条链路。
+    """
+    forbidden = "https://pubmed.ncbi.nlm.nih.gov/38132429/"
+    intent = _normalize_research_intent({
+        "include_url": [forbidden, "https://keep.com/a"],
+        "exclude_url": [forbidden],
+        "target_papers": [{"url": forbidden}, {"pmid": "38132429"}],
+    })
+    assert forbidden in intent.include_url
+    assert any(p.url == forbidden for p in intent.target_papers)
+    assert any(p.pmid == "38132429" for p in intent.target_papers)
 
 
 def test_target_paper_rejects_empty_item():
