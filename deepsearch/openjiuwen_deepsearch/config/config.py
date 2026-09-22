@@ -41,7 +41,7 @@ class WebSearchEngineConfig(BaseModel):
                                                                                          description="联网增强引擎名称")
     search_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="联网增强引擎调用密钥")
     search_url: str = Field(default="", description="联网增强引擎调用地址")
-    max_web_search_results: int = Field(default=5, ge=1, le=10, description="最大搜索结果数量")
+    max_web_search_results: int = Field(default=5, ge=1, le=10, description="最大搜索结果数量") 
     extension: dict = Field(default_factory=dict, description="联网增强引擎扩展配置项，根据具体联网增强引擎接口设置")
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
