@@ -20,7 +20,7 @@ def _make_payload(rows):
 # ---- Scenario 1: sync happy path -------------------------------------------------
 
 def test_sync_results_normalize_web_result_rows():
-    """sync results() should normalize webResult[] (chunk→content, published ISO, site_name)."""
+    """sync results() should normalize webResult[] (content→chunk, published ISO, site_name)."""
     wrapper = AgcAiNetworkingSearchAPIWrapper(
         search_api_key=bytearray(b"agc-key"),
         search_url="",
@@ -57,7 +57,7 @@ def test_sync_results_normalize_web_result_rows():
         "published": "2023-11-14",
         "site_name": "Example",
     }
-    # row 2: no chunk (content fallback), no siteName
+    # row 2: content present, no siteName
     assert result[1]["content"] == "fallback content"
     assert result[1]["published"] == "2020-09-13"
     assert "site_name" not in result[1]
@@ -247,13 +247,13 @@ async def test_empty_query_returns_empty_list_async():
 # ---- Scenario 7: content three-state fallback -----------------------------------
 
 def test_content_three_state_fallback():
-    """chunk present → use chunk; chunk empty + content present → content; both empty → ''."""
+    """content present → use content; content empty + chunk present → chunk; both empty → ''."""
     wrapper = AgcAiNetworkingSearchAPIWrapper(
         search_api_key=bytearray(b"k"), search_url="",
     )
     payload = _make_payload([
-        {"title": "r1", "url": "https://a.com/1", "chunk": "chunk-body", "content": "ignored"},
-        {"title": "r2", "url": "https://a.com/2", "chunk": "", "content": "content-body"},
+        {"title": "r1", "url": "https://a.com/1", "chunk": "chunk-body", "content": "content-wins"},
+        {"title": "r2", "url": "https://a.com/2", "chunk": "chunk-fallback", "content": ""},
         {"title": "r3", "url": "https://a.com/3"},
     ])
     mock_response = Mock()
@@ -265,8 +265,8 @@ def test_content_three_state_fallback():
         result = wrapper.results("q")
 
     assert len(result) == 3
-    assert result[0]["content"] == "chunk-body"
-    assert result[1]["content"] == "content-body"
+    assert result[0]["content"] == "content-wins"
+    assert result[1]["content"] == "chunk-fallback"
     assert result[2]["content"] == ""
 
 

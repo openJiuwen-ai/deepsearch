@@ -217,8 +217,8 @@ class AgcAiNetworkingSearchAPIWrapper(BaseModel, Generic[T]):
             if not url:
                 continue
             title = str(item.get("title") or url)
-            # chunk 优先，空则回退 content 字段，再空则 ""
-            content = str(item.get("chunk") or item.get("content") or "")
+            # content 优先，空则回退 chunk 字段，再空则 ""
+            content = str(item.get("content") or item.get("chunk") or "")
             row: dict[str, Any] = {
                 "title": title[:MAX_SEARCH_CONTENT_LENGTH],
                 "url": url[:MAX_URL_LENGTH],
