@@ -295,6 +295,35 @@ def test_publishtime_zero_or_invalid_omits_published():
         assert "published" not in row
 
 
+# ---- Scenario 8b: 超大整数 publishTime 不崩溃 ---------------------------------
+
+def test_publishtime_huge_integer_does_not_crash():
+    """超大整数 publishTime 不抛异常，跳过该条 published 键，不影响同批其他记录。"""
+    wrapper = AgcAiNetworkingSearchAPIWrapper(
+        search_api_key=bytearray(b"k"),
+        search_url="",
+    )
+    payload = _make_payload([
+        {"title": "bad", "url": "https://a.com/bad", "publishTime": "99999999999999999"},
+        {"title": "good", "url": "https://a.com/good", "publishTime": "1700000000"},
+    ])
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status.return_value = None
+    mock_response.json.return_value = payload
+
+    with patch(f"{MODULE_PATH}.requests.post", return_value=mock_response):
+        result = wrapper.results("q")
+
+    assert len(result) == 2
+    # 超大整数的该条记录：无 published 键，其余字段正常
+    assert "published" not in result[0]
+    assert result[0]["title"] == "bad"
+    assert result[0]["url"] == "https://a.com/bad"
+    # 同批正常记录不受影响
+    assert result[1]["published"] == "2023-11-14"
+
+
 # ---- Scenario 9: sites 必须保留 www. 前缀（华为端要求完整 host） ---------------
 
 def test_extension_sites_preserves_www_prefix():

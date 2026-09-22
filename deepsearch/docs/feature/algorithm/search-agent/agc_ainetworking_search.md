@@ -108,12 +108,17 @@ scheme，拒绝 localhost、私网、回环、链路本地、CGNAT 段等非公�
 写回 `api_wrapper.sites`：
 
 ```text
-merged = normalize_domains(api_wrapper.sites) + normalize_domains(include_domains)
-api_wrapper.sites = normalize_domains(merged)[:20]
+intent_sites = normalize_domains(include_domains, keep_www=True)
+configured_sites = normalize_domains(api_wrapper.sites, keep_www=True)
+merged = intent_sites + [s for s in configured_sites if s not in intent_sites]
+api_wrapper.sites = merged[:20]
 ```
 
-`normalize_domains` 复用 tavily 既有共享规则：小写化、剥 scheme、剥 `www.`
-前缀、去重。本引擎不重写该函数。
+华为 AGC 端要求 `sites` 为带 `www.` 的完整 host（如 `www.huawei.com`），
+apex 域名（如 `huawei.com`）不匹配。`agc_ainetworking` 分支调用
+`normalize_domains` 时显式传入 `keep_www=True`，保留 `www.` 前缀；其余
+归一化规则（小写化、剥 scheme、去重）与 tavily 共享。`model_post_init`
+中读取 `extension["sites"]` 时同样使用 `keep_www=True`。本引擎不重写该函数。
 
 ### 4.2 excludes（排除站点）
 
@@ -196,15 +201,18 @@ DeepSearch 标准行。字段映射如下：
 以下风险项**不阻塞交付**，但上线前需用真实 API key 人工验收，验收结果
 回填到本节或 `issues.md`：
 
-### 8.1 裸域名 sites 匹配语义
+### 8.1 www. 前缀保留（已解决）
 
 华为官方文档示例使用 `www.pku.edu.cn` 等带 `www` 前缀的域名作为 `sites`
-取值。DeepSearch 复用的 `normalize_domains` 函数（tavily 既有共享规则）
-会剥离 `www.` 前缀，最终发送给华为的 `sites` 数组中是 `pku.edu.cn` 形式。
+取值。`agc_ainetworking` 分支在 `apply_web_search_domain_constraints`
+（`web_search.py`）与 `model_post_init`（`api_wrapper.py`）中调用
+`normalize_domains` 时均显式传入 `keep_www=True`，保留完整 host（如
+`www.huawei.com`），不再剥离 `www.` 前缀。
 
-**待验证**：华为 `webSearch` 接口对剥离 `www.` 后的裸域名是否仍能命中原
-站点过滤。若不能命中，需要在 `agc_ainetworking` 分支保留 `www.` 前缀，
-或换用专门的归一化函数。
+测试 `tests/tools/test_web_search.py` 与
+`tests/tools/search_api/test_agc_ainetworking.py` 均断言
+`wrapper.sites == ["www.huawei.com"]` 等 keep_www 行为。此项已通过代码实现
+闭环，不再为待验证风险。
 
 ### 8.2 sites 数组格式
 
@@ -217,9 +225,17 @@ DeepSearch 标准行。字段映射如下：
 
 ### 8.3 count 夹取上限与实际返回数量
 
-华为文档注明「实际返回结果可能会小于 `count` 指定的数量」，因此
-`max_web_search_results` 上限 50 仅保证请求量合规，不保证返回量。
-上游若依赖固定条数需自行兜底。
+华为文档注明「实际返回结果可能会小于 `count` 指定的数量」，不保证返回量。
+不同入口对 `max_web_search_results` 的取值范围约束不同：
+
+| 入口 | 文件 | 取值范围 | 说明 |
+|---|---|---|---|
+| 包装器 `_build_request_body` | `search_api/agc_ainetworking/api_wrapper.py` | 1 至 50 | `min(max(max_web_search_results, 1), 50)`，夹取到华为接口允许的上限 50 |
+| 公开 SDK 配置模型 | `openjiuwen_deepsearch/config/config.py` | 1 至 10 | `Field(ge=1, le=10)`，SDK 层收紧上限，避免单次请求过载 |
+| 服务端试运行（引擎管理页试搜） | `server/deepsearch/core/manager/web_search_engine_service.py` | 固定 3 | `MAX_SEARCH_RESULT_NUM = 3`，不读取用户配置，仅用于一次性试搜验证 |
+
+因此「`max_web_search_results` 上限 50」仅指包装器层对华为接口的合规夹取，
+实际可配置上限由调用入口决定。上游若依赖固定条数需自行兜底。
 
 ### 8.4 publishTime 字段格式
 

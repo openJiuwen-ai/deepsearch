@@ -237,11 +237,21 @@ class AgcAiNetworkingSearchAPIWrapper(BaseModel, Generic[T]):
                 except (TypeError, ValueError):
                     ts = 0
                 if ts > 0:
-                    row["published"] = (
-                        datetime.fromtimestamp(ts, tz=UTC)
-                        .date()
-                        .isoformat()
-                    )
+                    try:
+                        row["published"] = (
+                            datetime.fromtimestamp(ts, tz=UTC)
+                            .date()
+                            .isoformat()
+                        )
+                    except (OverflowError, OSError):
+                        # 超大/非法时间戳(如 99999999999999999)会导致
+                        # fromtimestamp 抛出 OverflowError/OSError,跳过该条 published
+                        logger.warning(
+                            "%s skip bad publishTime: %r (type=%s)",
+                            "agc_ainetworking",
+                            publish_time,
+                            type(publish_time).__name__,
+                        )
             # siteName: 非空才输出
             site_name = str(item.get("siteName") or "").strip()
             if site_name:

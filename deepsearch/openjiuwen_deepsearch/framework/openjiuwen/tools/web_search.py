@@ -132,9 +132,17 @@ def apply_web_search_domain_constraints(
     elif search_engine_name == SearchEngine.AGC_AINETWORKING.value:
         # AGC 华为端要求 sites 为带 www. 的完整 host(如 www.huawei.com),
         # apex 域名不匹配;故保留 www. 前缀.
-        merged = normalize_domains(getattr(api_wrapper, "sites", None), keep_www=True)
-        merged.extend(normalize_domains(include_domains, keep_www=True))
-        api_wrapper.sites = normalize_domains(merged, keep_www=True)[:20]
+        intent_sites = normalize_domains(include_domains, keep_www=True)
+        configured_sites = normalize_domains(getattr(api_wrapper, "sites", None), keep_www=True)
+        # 意图识别站点优先,配置站点补充;去重后取前 MAX_SITES_NUM 条
+        merged = intent_sites + [site for site in configured_sites if site not in intent_sites]
+        dropped = merged[20:]
+        if dropped:
+            logger.warning(
+                "apply_web_search_domain_constraints [%s]: %d sites dropped due to limit; dropped=%s",
+                search_engine_name, len(dropped), dropped,
+            )
+        api_wrapper.sites = merged[:20]
         # exclude_domains ignored: 华为 API 无原生 exclude 参数，由收集器 process_common_search_result 通用后置过滤兜底
         logger.info(
             "apply_web_search_domain_constraints [%s]: intent include_domains=%s, "

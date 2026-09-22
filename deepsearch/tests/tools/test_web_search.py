@@ -221,9 +221,29 @@ class TestWebSearchDomainConstraints:
             )
 
         assert applied is True
-        # 归一化: 小写/保留 www/去重; exclude_domains 被忽略
-        assert mock_wrapper.sites == ["configured.com", "shared.com", "intent.com", "www.duplicate.com"]
+        # 归一化: 小写/保留 www/去重; 意图识别站点优先, exclude_domains 被忽略
+        assert mock_wrapper.sites == ["intent.com", "shared.com", "www.duplicate.com", "configured.com"]
         assert len(mock_wrapper.sites) <= 20
+
+    def test_agc_ainetworking_intent_sites_precede_configured_sites(self):
+        """意图识别站点优先于配置站点；配置已满20个时新站点也不能被截断丢弃。"""
+        configured_sites = [f"configured{i}.com" for i in range(20)]
+        mock_wrapper = Mock()
+        mock_wrapper.sites = list(configured_sites)
+
+        with patch('openjiuwen_deepsearch.framework.openjiuwen.tools.web_search.web_search_context') as mock_ctx:
+            mock_ctx.get.return_value = {"agc_ainetworking": mock_wrapper}
+
+            applied = apply_web_search_domain_constraints(
+                "agc_ainetworking",
+                include_domains=["intent-new.com"],
+                exclude_domains=["ignored.com"],
+            )
+
+        assert applied is True
+        assert "intent-new.com" in mock_wrapper.sites
+        assert mock_wrapper.sites[0] == "intent-new.com"
+        assert len(mock_wrapper.sites) == 20
 
     def test_agc_ainetworking_excludes_filtered_by_collector(self):
         """excludes闭环: agc_ainetworking 行由 process_common_search_result 通用后置过滤兜底。"""
@@ -273,7 +293,7 @@ class TestWebSearchDomainConstraints:
         assert tavily_wrapper.include_domains == ["tavily-configured.com", "tavily-intent.com"]
         assert tavily_wrapper.exclude_domains == ["tavily-blocked.com", "tavily-intent-blocked.com"]
         # tavily 调用不影响 agc wrapper (后续 tavily 调用不应改变 agc 之前合并的 sites)
-        assert agc_wrapper.sites == ["agc-configured.com", "agc-intent.com"]
+        assert agc_wrapper.sites == ["agc-intent.com", "agc-configured.com"]
 
 
 class TestWebSearchTemporalScope:
