@@ -49,7 +49,12 @@ class McpServerRepositoryInter(ABC):
 
 logger = logging.getLogger(__name__)
 
-SENSITIVE_HEADER_KEYS = {"authorization", "x-api-key", "x-auth-token"}
+SENSITIVE_HEADER_KEYS = {
+    "authorization", "proxy-authorization",
+    "x-api-key", "api-key", "apikey",
+    "x-auth-token", "x-custom-token", "x-auth", "bearer-token",
+    "x-secret", "secret",
+}
 
 
 class McpServerRepository(McpServerRepositoryInter):
@@ -134,7 +139,11 @@ def _decrypt_sensitive_headers(headers: dict) -> dict:
         if key.lower() in SENSITIVE_HEADER_KEYS and isinstance(value, str) and value:
             try:
                 decrypted[key] = security_utils.decrypt_api_key(value)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "Failed to decrypt header key '%s', keeping raw value: %s",
+                    key, e,
+                )
                 decrypted[key] = value
         else:
             decrypted[key] = value

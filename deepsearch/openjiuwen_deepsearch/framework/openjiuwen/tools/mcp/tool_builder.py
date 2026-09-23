@@ -52,12 +52,17 @@ async def build_mcp_local_functions(client, server_name: str) -> list:
         async def _invoke(_client=client, _tool_name=tool.name, **kwargs):
             result = await _client.call_tool(_tool_name, kwargs)
             if result.is_error:
-                return {"error": _extract_text_content(result) or "MCP tool execution failed"}
+                error_text = _extract_text_content(result) or "MCP tool execution failed"
+                logger.warning(
+                    "MCP tool '%s' on server '%s' returned error: %s",
+                    _tool_name, server_name, error_text,
+                )
+                return {"error": error_text}
             text = _extract_text_content(result)
             try:
                 return json.loads(text)
             except (json.JSONDecodeError, TypeError):
-                return {"content": text}
+                return {"mcp_raw_output": text}
 
         local_functions.append(LocalFunction(card=card, func=_invoke))
     return local_functions

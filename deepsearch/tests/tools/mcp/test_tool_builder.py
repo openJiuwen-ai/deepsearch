@@ -90,7 +90,7 @@ async def test_build_mcp_local_functions_invoke_returns_content_on_non_json():
     )
     tools = await build_mcp_local_functions(mock_client, "srv")
     result = await tools[0].invoke({"query": "test"})
-    assert result == {"content": "plain text result"}
+    assert result == {"mcp_raw_output": "plain text result"}
 
 
 @pytest.mark.asyncio
