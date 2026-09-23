@@ -65,8 +65,9 @@ async run(message: Optional[str] = None, conversation_id: Optional[str] = None, 
   用户提供的研究素材当前通过该运行时通道传入：将
   `metadata.user_materials_enabled` 设为 `true`，并在
   `metadata.user_materials` 中提供对象列表。每个对象必须包含非空的
-  `content`；`material_id`、`title`、`url`、`publish_time`、`content_time`
-  均为可选字段。全部 `content` 的总长度不得超过 5,000,000 个字符。
+  `content` 和 `url`；`url` 可为本地绝对文件路径或 HTTP(S) 链接，用于
+  后续去重与引用校验。`material_id`、`title`、`publish_time`、`content_time`
+  为可选字段。全部 `content` 的总长度不得超过 5,000,000 个字符。
   由于 metadata 不在服务端持久化，任何需要使用素材的运行都必须随请求重复传入。
   开关为 `false` 或缺省时，`user_materials` 会被忽略。这些键是保留的运行时输入字段，
   客户端不应将其用于无关元数据。

@@ -657,20 +657,6 @@ class TestBuildCitationMapping:
 
         assert result == {}
 
-    def test_build_citation_mapping_preserves_user_material_identity(self):
-        result = _build_citation_mapping([{
-            "index": 1,
-            "title": "Supplied paper",
-            "url": "",
-            "source": "user_material",
-            "material_id": "M1",
-            "original_content": "Evidence",
-        }])
-
-        assert result[1]["source_type"] == "user_material"
-        assert result[1]["material_id"] == "M1"
-
-
 class TestBuildDatasFromChunks:
     """Test cases for _build_datas_from_chunks function."""
 

@@ -45,8 +45,9 @@ Streams JSON chunks (`AsyncGenerator[str]`) for normal execution, HITL resume, o
   User-provided research materials currently use this runtime channel. Set
   `metadata.user_materials_enabled` to `true` and provide
   `metadata.user_materials` as a list of objects. Each object requires a
-  non-empty `content`; `material_id`, `title`, `url`, `publish_time`, and
-  `content_time` are optional. The total `content` length must not exceed
+  non-empty `content` and `url`; `url` may be an absolute local file path or
+  an HTTP(S) URL and is used for later deduplication and citation validation.
+  `material_id`, `title`, `publish_time`, and `content_time` are optional. The total `content` length must not exceed
   5,000,000 characters. Send the same metadata with every run that needs the
   materials: it is not server-persisted. When the flag is `false` or absent,
   `user_materials` is ignored. These keys are reserved runtime-input fields;

@@ -490,6 +490,23 @@ def test_user_materials_rejected_when_content_missing_and_enabled():
     assert "requires non-empty content" in str(exc_info.value)
 
 
+def test_user_materials_require_safe_url_or_local_file_path():
+    base = _build_request().model_dump(exclude_none=True)
+    with pytest.raises(ValidationError, match="requires non-empty url"):
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"content": "正文"},
+        ]})
+    with pytest.raises(ValidationError, match="absolute local file path or HTTP"):
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"url": "javascript:alert(1)", "content": "正文"},
+        ]})
+
+    request = DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+        {"url": "D:\\materials\\paper.pdf", "content": "正文"},
+    ]})
+    assert request.metadata["user_materials"][0]["url"] == "D:\\materials\\paper.pdf"
+
+
 @pytest.mark.parametrize("content", [{"nested": "value"}, 1, True])
 def test_user_materials_rejects_non_string_content(content):
     base = _build_request().model_dump(exclude_none=True)
@@ -535,5 +552,5 @@ def test_user_materials_rejects_total_content_larger_than_five_million_character
     base = _build_request().model_dump(exclude_none=True)
     with pytest.raises(ValidationError, match="total content length must not exceed"):
         DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
-            {"content": "x" * (MAX_USER_MATERIALS_TOTAL_CHARS + 1)},
+            {"url": "D:\\materials\\too-large.txt", "content": "x" * (MAX_USER_MATERIALS_TOTAL_CHARS + 1)},
         ]})

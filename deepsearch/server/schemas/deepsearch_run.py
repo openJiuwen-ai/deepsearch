@@ -14,6 +14,10 @@ from openjiuwen_deepsearch.config.config import (
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import (
     SAFE_CONVERSATION_ID_PATTERN,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import (
+    is_local_file_path,
+    validate_url_scheme,
+)
 
 _CONVERSATION_ID_SCHEMA_ERR = (
     "conversation_id must be 1–128 characters and use only ASCII letters, digits, "
@@ -161,8 +165,8 @@ class DeepSearchRequest(BaseModel):
             "运行时元数据（可选），由客户端持有并回传，服务端不持久化。"
             "当前支持键：brief_outline / research_intent / language（即 brief 报告"
             " final_result.metadata 的原样回传），用于以 brief 大纲为结构基准生成专业版报告；"
-            "user_materials_enabled(bool) 与 user_materials(list)。素材条目须含 content，可选 "
-            "material_id/title/url/publish_time/content_time。"
+            "user_materials_enabled(bool) 与 user_materials(list)。素材条目须含 content 与 url；"
+            "url 可为本地绝对文件路径或 HTTP(S) 链接。material_id/title/publish_time/content_time 可选。"
         ),
     )
     web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
@@ -203,6 +207,18 @@ class DeepSearchRequest(BaseModel):
                 raise ValueError(
                     f"metadata.user_materials[{index}] requires non-empty content"
                 )
+            if "url" not in item or not isinstance(item["url"], str) or not item["url"].strip():
+                raise ValueError(
+                    f"metadata.user_materials[{index}] requires non-empty url"
+                )
+            url = item["url"].strip()
+            if not is_local_file_path(url):
+                _, is_safe_url = validate_url_scheme(url)
+                if not is_safe_url:
+                    raise ValueError(
+                        f"metadata.user_materials[{index}].url must be an absolute local "
+                        "file path or HTTP(S) URL"
+                    )
             total_content_chars += len(content)
         if total_content_chars > MAX_USER_MATERIALS_TOTAL_CHARS:
             raise ValueError(

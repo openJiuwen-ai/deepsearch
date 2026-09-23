@@ -985,6 +985,21 @@ def test_intent_prompts_suppress_report_type_when_provided():
     assert "emit `report_type` accordingly" in default_content
 
 
+def test_intent_prompt_renders_material_guidance_only_when_materials_exist():
+    base_ctx = {"original_query": "AI Agent 趋势", "messages": []}
+
+    without_materials = apply_system_prompt("intent_recognition", base_ctx)[0]["content"]
+    with_materials = apply_system_prompt(
+        "intent_recognition",
+        {**base_ctx, "has_materials": True, "material_manifest": "[M1] Paper"},
+    )[0]["content"]
+
+    assert "## User Materials (when present)" not in without_materials
+    assert "materials can compensate for a thin query" not in without_materials
+    assert "## User Materials (when present)" in with_materials
+    assert "materials can compensate for a thin query" in with_materials
+
+
 @pytest.mark.asyncio
 async def test_classify_and_recognize_intent_passes_provided_report_type(sample_tool_response):
     """入口函数从 current_inputs 读取 provided_report_type 并注入 prompt 与 tool。"""

@@ -15,13 +15,16 @@
 import asyncio
 import hashlib
 import logging
-import os
 import re
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, model_validator
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.utils.common_utils.url_utils import (
+    is_local_file_path,
+    validate_url_scheme,
+)
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
@@ -29,21 +32,24 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
-# 阈值（token 为保守估算值），支持环境变量覆盖
-MATERIAL_DIRECT_TOKEN_LIMIT = int(os.getenv("MATERIAL_DIRECT_TOKEN_LIMIT", "4000"))
-MATERIAL_SINGLE_CALL_TOKEN_LIMIT = int(os.getenv("MATERIAL_SINGLE_CALL_TOKEN_LIMIT", "96000"))
-MATERIAL_CHUNK_TOKEN_LIMIT = int(os.getenv("MATERIAL_CHUNK_TOKEN_LIMIT", "64000"))
-MATERIAL_CHUNK_OVERLAP_TOKENS = int(os.getenv("MATERIAL_CHUNK_OVERLAP_TOKENS", "512"))
-MATERIAL_SUMMARY_MAX_TOKENS = int(os.getenv("MATERIAL_SUMMARY_MAX_TOKENS", "4000"))
-MATERIAL_INJECTION_BUDGET_TOKENS = int(os.getenv("MATERIAL_INJECTION_BUDGET_TOKENS", "200000"))
+# Token limits are conservative estimates. Keep these defaults in code until
+# they are promoted as documented runtime configuration.
+MATERIAL_DIRECT_TOKEN_LIMIT = 4000
+MATERIAL_SINGLE_CALL_TOKEN_LIMIT = 96000
+MATERIAL_CHUNK_TOKEN_LIMIT = 64000
+MATERIAL_CHUNK_OVERLAP_TOKENS = 512
+MATERIAL_SUMMARY_MAX_TOKENS = 4000
+MATERIAL_INJECTION_BUDGET_TOKENS = 200000
 # 摘要并发上限：多篇素材同时做摘要时最多同时处理的篇数
-MATERIAL_MAX_CONCURRENCY = int(os.getenv("MATERIAL_MAX_CONCURRENCY", "5"))
+MATERIAL_MAX_CONCURRENCY = 5
 # 素材数量软上限：去重后保留前 N 条，超出部分记 dropped 观测（不报错、不阻断）
-MATERIAL_MAX_COUNT = int(os.getenv("MATERIAL_MAX_COUNT", "50"))
+MATERIAL_MAX_COUNT = 50
 # 单行 digest 摘要保留的字符数
 MATERIAL_DIGEST_CHARS = 160
 # 摘要失败兜底保留的 token 数（4K）：keep_chars 按 3 字符/token 保守换算
 MATERIAL_FALLBACK_TRUNCATE_TOKENS = min(MATERIAL_DIRECT_TOKEN_LIMIT, 4000)
+# Reserve room for the summarization prompt, material metadata, and output.
+MATERIAL_SUMMARY_PROMPT_RESERVE_TOKENS = 2048
 
 _SUMMARIZE_PROMPT = "material_summarize"
 _REDUCE_PROMPT = "material_reduce_summaries"
@@ -72,12 +78,13 @@ def content_hash(text: str) -> str:
 class UserMaterial(BaseModel):
     """用户提供的一条已有信息素材。
 
-    content 必填非空：素材内容必须由调用方直接传入，系统不依据 url/title
-    主动抓取。title/url 仅作为 manifest 展示与溯源的元数据。
+    url 与 content 必填非空：素材内容必须由调用方直接传入，系统不依据
+    url/title 主动抓取。url 可为本地绝对文件路径或安全的 HTTP(S) 链接，
+    用作 manifest 展示、去重与溯源的统一来源标识。
     """
 
     material_id: str = Field(default="", description="调用方自定义素材ID，用于全程追踪与去重")
-    url: str = Field(default="", description="素材来源链接，可为空")
+    url: str = Field(default="", description="素材来源：本地绝对文件路径或 HTTP(S) 链接，必填")
     title: str = Field(default="", description="素材标题")
     publish_time: str = Field(default="", description="素材发布/数据时间，可为空")
     content_time: str = Field(default="", description="素材内容覆盖的时间范围，可为空")
@@ -89,6 +96,14 @@ class UserMaterial(BaseModel):
             setattr(self, name, (getattr(self, name) or "").strip())
         if not self.content:
             raise ValueError("user material requires non-empty content")
+        if not self.url:
+            raise ValueError("user material requires non-empty url")
+        if not is_local_file_path(self.url):
+            _, is_safe_url = validate_url_scheme(self.url)
+            if not is_safe_url:
+                raise ValueError(
+                    "user material url must be an absolute local file path or HTTP(S) URL"
+                )
         return self
 
     @property
@@ -201,7 +216,6 @@ def normalize_user_materials(raw: Any) -> Tuple[List[UserMaterial], List[Dict[st
 
     seen_url = set()
     seen_hash = set()
-    seen_title = set()
     seen_material_ids = set()
     kept_indices: List[int] = []
     for index, item in enumerate(raw):
@@ -221,16 +235,13 @@ def normalize_user_materials(raw: Any) -> Tuple[List[UserMaterial], List[Dict[st
                 "has_content": bool(item.get("content")),
             })
             continue
-        url = canonicalize_url(material.url) if material.url else ""
+        url = material.url if is_local_file_path(material.url) else canonicalize_url(material.url)
         hash_key = content_hash(material.content) if material.content else ""
-        title_key = material.title.casefold()
         dup_reason = ""
         if material.material_id and material.material_id in seen_material_ids:
             dup_reason = "duplicate_material_id"
         elif url and url in seen_url:
             dup_reason = "duplicate_url"
-        elif title_key and title_key in seen_title:
-            dup_reason = "duplicate_title"
         elif hash_key and hash_key in seen_hash:
             dup_reason = "duplicate_content"
         if dup_reason:
@@ -240,8 +251,6 @@ def normalize_user_materials(raw: Any) -> Tuple[List[UserMaterial], List[Dict[st
             seen_url.add(url)
         if hash_key:
             seen_hash.add(hash_key)
-        if title_key:
-            seen_title.add(title_key)
         if material.material_id:
             seen_material_ids.add(material.material_id)
         materials.append(material)
@@ -257,70 +266,56 @@ def normalize_user_materials(raw: Any) -> Tuple[List[UserMaterial], List[Dict[st
 
 
 def _split_into_chunks(text: str, max_tokens: int, overlap_tokens: int) -> List[str]:
-    """按段落合并切分，保证块内完整段落；超长段落按句子硬切。带尾部重叠。"""
-    if not text:
+    """Split text into token-bounded chunks with token-bounded overlap."""
+    if not text or max_tokens <= 0:
         return []
-    max_chars = max(max_tokens * 3, 100)
-    overlap_chars = min(overlap_tokens * 3, max_chars // 2)
+    effective_overlap_tokens = min(max(overlap_tokens, 0), max(max_tokens - 1, 0))
 
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    if not paragraphs:
-        paragraphs = [text]
-
-    # 超长段落先按句子硬切
-    units: List[str] = []
-    for paragraph in paragraphs:
-        if len(paragraph) <= max_chars:
-            units.append(paragraph)
-            continue
-        sentences = re.split(r"(?<=[。！？.!?])\s*", paragraph)
-        current = ""
-        for sentence in sentences:
-            sentence = sentence.strip()
-            while len(sentence) > max_chars:
-                if current:
-                    units.append(current)
-                    current = ""
-                units.append(sentence[:max_chars])
-                sentence = sentence[max_chars:]
-            if not sentence:
-                continue
-            if len(current) + len(sentence) + 1 > max_chars and current:
-                units.append(current)
-                current = sentence
+    def largest_prefix_end(start: int) -> int:
+        low, high = start + 1, len(text)
+        best = start
+        while low <= high:
+            middle = (low + high) // 2
+            if estimate_text_tokens(text[start:middle]) <= max_tokens:
+                best = middle
+                low = middle + 1
             else:
-                current = f"{current} {sentence}".strip() if current else sentence
-        if current:
-            units.append(current)
+                high = middle - 1
+        return best
+
+    def prefer_boundary(start: int, end: int) -> int:
+        minimum = start + max(1, (end - start) // 2)
+        for boundary in range(end, minimum - 1, -1):
+            if text[boundary - 1] in "\n。！？!?;； ":
+                return boundary
+        return end
+
+    def overlap_start(start: int, end: int) -> int:
+        if effective_overlap_tokens <= 0:
+            return end
+        low, high = start, end
+        best = end
+        while low <= high:
+            middle = (low + high) // 2
+            if estimate_text_tokens(text[middle:end]) <= effective_overlap_tokens:
+                best = middle
+                high = middle - 1
+            else:
+                low = middle + 1
+        return best
 
     chunks: List[str] = []
-    current = ""
-    for unit in units:
-        candidate = f"{current}\n\n{unit}" if current else unit
-        if len(candidate) > max_chars and current:
-            chunks.append(current)
-            tail = current[-overlap_chars:] if overlap_chars else ""
-            # Keep the overlap, but never truncate the next unit.  A long
-            # unit can fill the remaining space after the overlap; splitting
-            # it here would silently discard its tail because it has already
-            # been consumed from ``units``.
-            current = tail
-            while unit:
-                separator = "\n\n" if current else ""
-                available = max_chars - len(current) - len(separator)
-                if available <= 0:
-                    chunks.append(current)
-                    current = current[-overlap_chars:] if overlap_chars else ""
-                    continue
-                current = f"{current}{separator}{unit[:available]}"
-                unit = unit[available:]
-                if unit:
-                    chunks.append(current)
-                    current = current[-overlap_chars:] if overlap_chars else ""
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
+    start = 0
+    while start < len(text):
+        end = largest_prefix_end(start)
+        if end == start:
+            end = start + 1
+        end = prefer_boundary(start, end)
+        chunks.append(text[start:end])
+        if end >= len(text):
+            break
+        next_start = overlap_start(start, end)
+        start = next_start if next_start > start else end
     return chunks
 
 
@@ -347,27 +342,6 @@ def _material_relevance_text(material: UserMaterial) -> str:
     ])
 
 
-def _has_comparable_script(query: str, material_text: str) -> bool:
-    """Whether lexical zero-overlap is meaningful for this query/material pair.
-
-    A Chinese query and an English-only paper have no shared lexical space even
-    when they discuss the same topic.  Keep those pairs for intent recognition,
-    which already performs semantic relevance assessment in its existing LLM
-    call.  Hard filtering is reserved for pairs with a shared CJK or Latin
-    lexical channel.
-    """
-    query_has_cjk = bool(_CJK_RE.search(query or ""))
-    material_has_cjk = bool(_CJK_RE.search(material_text or ""))
-    if query_has_cjk != material_has_cjk:
-        return False
-    if query_has_cjk:
-        return True
-    return (
-        bool(_ALNUM_RE.search(query or ""))
-        and bool(_ALNUM_RE.search(material_text or ""))
-    )
-
-
 def rank_materials_by_query(materials: List[UserMaterial], query: str) -> List[float]:
     """按与 query 的词面重叠度打分（0~1），返回与 materials 对齐的分数列表。"""
     query_tokens = _query_tokens(query)
@@ -388,25 +362,13 @@ def rank_materials_by_query(materials: List[UserMaterial], query: str) -> List[f
 def filter_materials_by_query(
     materials: List[UserMaterial], query: str, *, preserve_all: bool = False,
 ) -> Tuple[List[UserMaterial], List[Dict[str, Any]]]:
-    """Conservatively filter materials that are lexically unrelated to the query.
+    """Retain materials until intent recognition can assess semantic relevance.
 
-    Filtering happens before summarization to keep plainly unrelated materials
-    from consuming the LLM, prompt, and evidence budget.  A zero lexical score
-    is only decisive when query and material share a comparable script. Cross-
-    language pairs are retained for the existing intent-recognition LLM call.
+    Lexical scores remain useful for ranking under the injection budget, but a
+    zero lexical overlap cannot prove that a user-provided source is irrelevant.
     """
-    if not materials:
-        return [], []
-    if preserve_all or not (query or "").strip():
-        return materials, []
-    scores = rank_materials_by_query(materials, query)
-    kept, dropped = [], []
-    for index, (material, score) in enumerate(zip(materials, scores)):
-        if score > 0 or not _has_comparable_script(query, _material_relevance_text(material)):
-            kept.append(material)
-        else:
-            dropped.append({"index": index, "reason": "irrelevant_to_query"})
-    return kept, dropped
+    del query, preserve_all
+    return materials, []
 
 
 def _manifest_line(material_id: str, title: str, url: str, publish_time: str, content_time: str) -> str:
@@ -522,22 +484,14 @@ def build_fallback_material_relevance_map(
     usage_mode: str,
 ) -> List[MaterialRelevance]:
     """Create conservative relevance records when the intent tool omits them."""
-    scores = rank_materials_by_query(
-        [UserMaterial(material_id=item.material_id, title=item.title, content=item.summary or "x")
-         for item in analysis.items],
-        query,
-    )
+    del query, usage_mode
     entries: List[MaterialRelevance] = []
-    for item, score in zip(analysis.items, scores):
-        is_candidate = score > 0 or usage_mode == "required"
+    for item in analysis.items:
         entries.append(MaterialRelevance(
             material_id=item.material_id,
-            relevance="partial" if is_candidate else "contextual",
-            supported_claims=[MaterialEvidenceClaim(
-                claim="Synthesize only findings supported by this user-provided material.",
-                confidence="low",
-            )] if is_candidate else [],
-            research_gaps=[] if is_candidate else ["Query relevance requires validation."],
+            relevance="contextual",
+            supported_claims=[],
+            research_gaps=["Material relevance and supported claims require validation."],
             evidence_quality=item.summary_kind,
         ))
     return entries
@@ -739,11 +693,23 @@ async def _summarize_material(
     """单篇素材摘要：单次调用或篇内 map-reduce。返回 (摘要, 是否降级截断)。"""
     title = material.title or (material.url or "用户素材")
     token_count = estimate_text_tokens(material.content)
-    if token_count <= MATERIAL_SINGLE_CALL_TOKEN_LIMIT:
+    single_call_input_limit = max(
+        MATERIAL_SINGLE_CALL_TOKEN_LIMIT
+        - MATERIAL_SUMMARY_MAX_TOKENS
+        - MATERIAL_SUMMARY_PROMPT_RESERVE_TOKENS,
+        1,
+    )
+    if token_count <= single_call_input_limit:
         summary = await _summarize_chunk(llm_model_name, material.content, title, query)
         return summary, False
 
-    chunks = _split_into_chunks(material.content, MATERIAL_CHUNK_TOKEN_LIMIT, MATERIAL_CHUNK_OVERLAP_TOKENS)
+    chunk_input_limit = max(
+        MATERIAL_CHUNK_TOKEN_LIMIT
+        - MATERIAL_SUMMARY_MAX_TOKENS
+        - MATERIAL_SUMMARY_PROMPT_RESERVE_TOKENS,
+        1,
+    )
+    chunks = _split_into_chunks(material.content, chunk_input_limit, MATERIAL_CHUNK_OVERLAP_TOKENS)
     partials = []
     for chunk in chunks:
         partials.append(await _summarize_chunk(llm_model_name, chunk, title, query))
@@ -760,8 +726,12 @@ async def _summarize_material(
 
 def _fallback_truncate(material: UserMaterial) -> str:
     """摘要失败降级：头部截断，绝不阻断主流程。"""
-    keep_chars = max(MATERIAL_FALLBACK_TRUNCATE_TOKENS * 3, 200)
-    return material.content[:keep_chars]
+    chunks = _split_into_chunks(
+        material.content,
+        max(MATERIAL_FALLBACK_TRUNCATE_TOKENS, 1),
+        overlap_tokens=0,
+    )
+    return chunks[0] if chunks else ""
 
 
 def _summary_injection_tokens(material_id: str, item: MaterialManifestItem) -> int:

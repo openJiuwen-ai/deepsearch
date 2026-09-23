@@ -2,10 +2,10 @@
 
 ## 接口
 
-在 run 请求的 `metadata` 中传入 `user_materials_enabled: true` 和 `user_materials`。每条素材必须包含非空 `content`，可选 `material_id`、`title`、`url`、`publish_time`、`content_time`。启用时所有素材 `content` 的总长度不得超过 500 万字符；关闭开关时素材会被忽略；系统不依据 URL 或标题抓取正文。
+在 run 请求的 `metadata` 中传入 `user_materials_enabled: true` 和 `user_materials`。每条素材必须包含非空 `content` 和 `url`；`url` 可为本地绝对文件路径或 HTTP(S) 链接，并作为去重和引用校验的统一来源标识。`material_id`、`title`、`publish_time`、`content_time` 可选。启用时所有素材 `content` 的总长度不得超过 500 万字符；关闭开关时素材会被忽略；系统不依据 URL 或标题抓取正文。
 
 ```json
-{"metadata":{"user_materials_enabled":true,"user_materials":[{"content":"..."}]}}
+{"metadata":{"user_materials_enabled":true,"user_materials":[{"url":"D:\\materials\\paper.pdf","content":"..."}]}}
 ```
 
 ## 流程
