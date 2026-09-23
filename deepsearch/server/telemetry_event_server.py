@@ -178,6 +178,7 @@ class WebSearchEngineFieldsIn(BaseModel):
         "jina",
         "perplexity",
         "serper",
+        "agc_ainetworking",
     ] = Field(default=_AC_CONFIG.web_search_engine_config.search_engine_name)
     search_api_key: str = Field(default=_bytearray_to_str(_AC_CONFIG.web_search_engine_config.search_api_key))
     search_url: str = Field(default=_AC_CONFIG.web_search_engine_config.search_url)

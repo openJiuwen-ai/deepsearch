@@ -37,8 +37,9 @@ class WebSearchEngineConfig(BaseModel):
         "jina",
         "perplexity",
         "serper",
+        "agc_ainetworking",
     ] = Field(default="tavily",
-                                                                                         description="联网增强引擎名称")
+                                                                                          description="联网增强引擎名称")
     search_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="联网增强引擎调用密钥")
     search_url: str = Field(default="", description="联网增强引擎调用地址")
     max_web_search_results: int = Field(default=5, ge=1, le=10, description="最大搜索结果数量")
