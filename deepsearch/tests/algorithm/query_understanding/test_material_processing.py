@@ -23,6 +23,8 @@ from openjiuwen_deepsearch.algorithm.query_understanding.material_processing imp
     extract_material_ids,
     filter_materials_by_query,
     format_section_material_bindings,
+    is_material_first_request,
+    normalize_material_bindings,
     normalize_user_materials,
     rank_materials_by_query,
     resolve_material_evidence,
@@ -190,6 +192,11 @@ class TestBuildMaterialPromptContext:
 
 
 class TestMaterialUsagePolicy:
+    def test_material_first_markers_cover_british_and_american_spelling(self):
+        assert is_material_first_request("Summarize the provided papers", True)
+        assert is_material_first_request("Summarise the provided papers", True)
+        assert not is_material_first_request("Summarise the provided papers", False)
+
     def test_required_mode_and_fallback_relevance_records(self):
         analysis = MaterialAnalysis(items=[
             MaterialManifestItem(material_id="M1", title="Deep Research", summary="evidence", summary_kind="summary"),
@@ -273,6 +280,31 @@ class TestFormatSectionMaterialBindings:
         assert "M1" not in rendered
 
 
+class TestNormalizeMaterialBindings:
+    def test_normalizes_without_a_known_id_allowlist(self):
+        bindings = normalize_material_bindings([
+            {"material_id": "M1", "role": "primary"},
+            {"material_id": "M1", "claims_to_use": "duplicate"},
+            {"material_id": " M2 ", "claims_to_use": "claim"},
+            "invalid",
+        ])
+
+        assert bindings == [
+            {"material_id": "M1", "role": "primary", "claims_to_use": ""},
+            {"material_id": "M2", "role": "supporting_evidence", "claims_to_use": "claim"},
+        ]
+
+    def test_normalizes_and_filters_with_a_known_id_allowlist(self):
+        bindings = normalize_material_bindings([
+            {"material_id": "[M1]"},
+            {"material_id": "unknown"},
+        ], ["M1"])
+
+        assert bindings == [
+            {"material_id": "M1", "role": "supporting_evidence", "claims_to_use": ""},
+        ]
+
+
 class TestRankMaterialsByQuery:
     def test_relevance_ordering(self):
         materials = [
@@ -343,6 +375,15 @@ class TestChunkSplitting:
         chunks = mp._split_into_chunks(text, max_tokens=2, overlap_tokens=0)
 
         assert "".join(chunks) == text
+        assert all(len(chunk) <= 100 for chunk in chunks)
+
+    def test_preserves_the_entire_next_unit_when_overlap_is_enabled(self):
+        next_unit = "".join(chr(0x4E00 + index) for index in range(95))
+        text = "A" * 80 + "\n\n" + next_unit
+
+        chunks = mp._split_into_chunks(text, max_tokens=2, overlap_tokens=10)
+
+        assert all(char in "".join(chunks) for char in next_unit)
         assert all(len(chunk) <= 100 for chunk in chunks)
 
 

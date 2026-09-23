@@ -490,6 +490,16 @@ def test_user_materials_rejected_when_content_missing_and_enabled():
     assert "requires non-empty content" in str(exc_info.value)
 
 
+@pytest.mark.parametrize("content", [{"nested": "value"}, 1, True])
+def test_user_materials_rejects_non_string_content(content):
+    base = _build_request().model_dump(exclude_none=True)
+
+    with pytest.raises(ValidationError, match="content must be a string"):
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"content": content},
+        ]})
+
+
 def test_user_materials_ignored_when_disabled_even_if_invalid():
     """关闭素材开关时素材整体被忽略，不因条目格式问题拒绝请求。"""
     base = _build_request().model_dump(exclude_none=True)

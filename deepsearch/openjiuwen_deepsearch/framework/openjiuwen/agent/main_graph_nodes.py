@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Any
 
@@ -288,6 +289,14 @@ class StartNode(Start):
         return dict(next_node=next_node)
 
 
+@dataclass
+class IntentPostHandleMaterialState:
+    """Material routing values produced during intent recognition."""
+
+    analysis: Any = None
+    usage_mode: str | None = None
+
+
 class IntentRecognitionNode(BaseNode):
     """
     报告意图识别节点：从原始 query 中解析报告生成约束，
@@ -341,16 +350,17 @@ class IntentRecognitionNode(BaseNode):
             material_analysis=session.get_global_state("search_context.material_analysis"),
         )
 
-    async def _prepare_material_context(self, current_inputs: dict, session: Session) -> dict:
+    async def _prepare_material_context(self, current_inputs: dict, session: Session) -> tuple[dict, Any]:
         """素材预处理：校验/去重/摘要（带跨轮 content_hash 缓存），产物落 state。
 
         Returns:
             意图识别 prompt 可直接消费的素材上下文（含清单区/分析区）；
-            未启用或无素材时返回空 dict。
+            一个二元组：意图识别 prompt 上下文与本轮内存中的素材分析产物。
+            未启用或无素材时分别为空 dict 和 None。
         """
         raw_materials = current_inputs.get("user_materials") or []
         if not raw_materials:
-            return {}
+            return {}, None
         previous_analysis = restore_material_analysis(current_inputs.get("material_analysis"))
         analysis = await prepare_material_analysis(
             raw_materials,
@@ -369,21 +379,27 @@ class IntentRecognitionNode(BaseNode):
         )
         material_context = build_material_prompt_context(analysis)
         # 无素材时返回空 dict（build 产物为含键 empty dict，truthy）。
-        return material_context if material_context.get("has_materials") else {}
+        return (
+            material_context if material_context.get("has_materials") else {},
+            analysis,
+        )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
         # 素材预处理：摘要管线（带跨轮缓存），产物落 state 并注入意图识别 prompt
-        material_context = await self._prepare_material_context(current_inputs, session)
+        material_context, material_analysis = await self._prepare_material_context(current_inputs, session)
         if material_context:
             current_inputs["material_context"] = material_context
 
         # 执行意图识别
         intent_result = await classify_and_recognize_intent(current_inputs)
-        material_analysis = restore_material_analysis(
-            session.get_global_state("search_context.material_analysis")
-        )
+        # 本节点内刚 update_global_state 的值不保证能够立即由 session 读回；
+        # 优先使用预处理阶段保留在内存中的分析结果，避免把有素材误判为无素材。
+        if material_analysis is None:
+            material_analysis = restore_material_analysis(
+                session.get_global_state("search_context.material_analysis")
+            )
         material_usage_mode = resolve_material_usage_mode(
             current_inputs.get("original_query") or "",
             bool(material_analysis and material_analysis.items),
@@ -456,9 +472,27 @@ class IntentRecognitionNode(BaseNode):
             logger.info("[IntentRecognitionNode] Local-only mode, skipping web search.")
             intent_result.entry_search_results = []
 
-        return self._post_handle(inputs, intent_result, session, context)
+        return self._post_handle(
+            inputs,
+            intent_result,
+            session,
+            context,
+            IntentPostHandleMaterialState(
+                analysis=material_analysis,
+                usage_mode=material_usage_mode,
+            ),
+        )
 
-    def _post_handle(self, inputs: Input, algorithm_output: Any, session: Session, context: ModelContext):
+    def _post_handle(
+        self,
+        inputs: Input,
+        algorithm_output: Any,
+        session: Session,
+        context: ModelContext,
+        material_state: IntentPostHandleMaterialState | None = None,
+    ):
+        material_analysis = material_state.analysis if material_state else None
+        material_usage_mode = material_state.usage_mode if material_state else None
         original_q = algorithm_output.original_query
 
         lang = (algorithm_output.lang or "zh-CN").lower()
@@ -485,9 +519,13 @@ class IntentRecognitionNode(BaseNode):
             "search_context.research_intent": algorithm_output.research_intent.model_dump(),
             "search_context.report_type_policy": report_policy.model_dump(),
             "search_context.language": lang,
-            "search_context.material_usage_mode": resolve_material_usage_mode(
+            "search_context.material_usage_mode": material_usage_mode
+            if material_usage_mode is not None
+            else resolve_material_usage_mode(
                 original_q,
-                bool(session.get_global_state("search_context.material_analysis")),
+                bool(material_analysis and material_analysis.items)
+                if material_analysis is not None
+                else bool(session.get_global_state("search_context.material_analysis")),
             ),
         })
 

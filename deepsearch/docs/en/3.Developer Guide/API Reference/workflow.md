@@ -42,6 +42,16 @@ Streams JSON chunks (`AsyncGenerator[str]`) for normal execution, HITL resume, o
 - **report_template**: if base64, decoded automatically; decode errors fall back to raw string.
 - **metadata**: optional runtime metadata (client-held, not persisted server-side), e.g. the passthrough of a brief run's `final_result.metadata` to upgrade it into a professional report with the brief outline as the structural baseline. Requires the parallel execution method; calling a dependency/hybrid agent directly raises `CustomValueException` (error code 200031).
 
+  User-provided research materials currently use this runtime channel. Set
+  `metadata.user_materials_enabled` to `true` and provide
+  `metadata.user_materials` as a list of objects. Each object requires a
+  non-empty `content`; `material_id`, `title`, `url`, `publish_time`, and
+  `content_time` are optional. The total `content` length must not exceed
+  5,000,000 characters. Send the same metadata with every run that needs the
+  materials: it is not server-persisted. When the flag is `false` or absent,
+  `user_materials` is ignored. These keys are reserved runtime-input fields;
+  clients should not overwrite them with unrelated metadata.
+
 Behavior highlights: initializes LLM + search tools; `native` local search requires non-empty `knowledge_base_configs`; wraps interactive interrupts; `ALL END` completes and clears context; cancel works in-process and with Redis checkpointer; when `user_feedback_processor_enable=True`, flow enters `UserFeedbackProcessorNode` after `SourceTracerInferNode` for post-report local editing.
 
 ### `register_web_search_tool` / `_register_local_search_tool`

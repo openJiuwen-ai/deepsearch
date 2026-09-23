@@ -22,6 +22,7 @@ import asyncio
 import logging
 import re
 import uuid
+from typing import Any
 
 from tenacity import RetryError
 
@@ -64,6 +65,7 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     session_context,
 )
 
+
 # ── Mixin imports ───────────────────────────────────────────────────────────
 from openjiuwen_deepsearch.algorithm.report.markdown_utils import MarkdownProcessorMixin
 from openjiuwen_deepsearch.algorithm.report.visualization import VisualizationMixin
@@ -89,6 +91,16 @@ from openjiuwen_deepsearch.algorithm.report.retry_feedback import RetryFeedbackM
 from openjiuwen_deepsearch.algorithm.report.background_knowledge import BackgroundKnowledgeMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _next_classified_content_index(items: list[Any]) -> int:
+    """Return the next evidence index without assuming existing indexes are contiguous."""
+    existing_indexes = [
+        item.get("index")
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("index"), int)
+    ]
+    return max(existing_indexes, default=0) + 1
 
 
 class Reporter(
@@ -519,7 +531,7 @@ class Reporter(
         # 把素材证据并入 classified_content（编号续接既有条目，供写作引用与溯源）
         if material_evidence:
             existing_items = current_inputs.get("classified_content") or []
-            next_index = len(existing_items) + 1
+            next_index = _next_classified_content_index(existing_items)
             for offset, item in enumerate(material_evidence):
                 item["index"] = next_index + offset
             current_inputs["classified_content"] = existing_items + material_evidence

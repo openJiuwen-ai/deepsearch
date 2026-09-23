@@ -190,7 +190,15 @@ class DeepSearchRequest(BaseModel):
         for index, item in enumerate(materials):
             if not isinstance(item, dict):
                 raise ValueError(f"metadata.user_materials[{index}] must be an object")
-            content = str(item.get("content") or "")
+            if "content" not in item:
+                raise ValueError(
+                    f"metadata.user_materials[{index}] requires non-empty content"
+                )
+            content = item["content"]
+            if not isinstance(content, str):
+                raise ValueError(
+                    f"metadata.user_materials[{index}].content must be a string"
+                )
             if not content.strip():
                 raise ValueError(
                     f"metadata.user_materials[{index}] requires non-empty content"

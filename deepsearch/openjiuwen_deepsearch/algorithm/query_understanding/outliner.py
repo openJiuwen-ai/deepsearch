@@ -111,27 +111,6 @@ def _section_description_description(
     )
 
 
-def _normalize_material_bindings(value) -> list[dict[str, str]]:
-    """Normalize section-level material bindings without accepting arbitrary payloads."""
-    if not isinstance(value, list):
-        return []
-    bindings: list[dict[str, str]] = []
-    seen_ids: set[str] = set()
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        material_id = str(item.get("material_id") or "").strip()
-        if not material_id or material_id in seen_ids:
-            continue
-        seen_ids.add(material_id)
-        bindings.append({
-            "material_id": material_id,
-            "role": str(item.get("role") or "supporting_evidence").strip(),
-            "claims_to_use": str(item.get("claims_to_use") or "").strip(),
-        })
-    return bindings
-
-
 def ensure_material_first_bindings(
     outline: Outline,
     material_ids: list[str],
@@ -141,12 +120,14 @@ def ensure_material_first_bindings(
     if not material_first or not material_ids or not outline.sections:
         return False
 
-    bound_ids = {
-        binding.get("material_id")
-        for section in outline.sections
-        for binding in section.material_bindings
-        if isinstance(binding, dict) and binding.get("material_id")
-    }
+    bound_ids: set[str] = set()
+    for section in outline.sections:
+        for binding in section.material_bindings:
+            if not isinstance(binding, dict):
+                continue
+            material_id = binding.get("material_id")
+            if material_id:
+                bound_ids.add(material_id)
     candidate_ids = [material_id for material_id in material_ids if material_id not in bound_ids]
     empty_sections = [section for section in outline.sections if not section.material_bindings]
     if not empty_sections:
@@ -198,7 +179,7 @@ def generate_outline(
             relationships=section.get("relationships", []),
             section_focus=section.get("section_focus", ""),
             focus_dimensions=section.get("focus_dimensions", []),
-            material_bindings=_normalize_material_bindings(section.get("material_bindings")),
+            material_bindings=normalize_material_bindings(section.get("material_bindings")),
         )
         for section in sections
     ]

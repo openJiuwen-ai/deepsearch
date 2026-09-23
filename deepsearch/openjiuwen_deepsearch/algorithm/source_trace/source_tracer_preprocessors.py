@@ -466,17 +466,21 @@ def _build_citation_mapping(classified_content: List) -> Dict:
             continue
         title = _normalize_citation_title(content.get("title", ""))
         url = content.get("url", "")
-        content = content.get("original_content", "")
+        source_type = content.get("source", "")
+        material_id = content.get("material_id", "")
+        original_content = content.get("original_content", "")
 
         # 如果该index已存在，则把content补充在原content后
         if index in citation_mapping:
-            citation_mapping[index]["content"] += content
+            citation_mapping[index]["content"] += original_content
         else:
             # 否则创建新的entry
             citation_mapping[index] = {
                 "title": title,
                 "url": url,
-                "content": content
+                "content": original_content,
+                "source_type": source_type,
+                "material_id": material_id,
             }
 
     return citation_mapping
@@ -512,6 +516,8 @@ def _build_datas_from_chunks(citation_chunks: List, citation_mapping: Dict) -> L
                 "url": url,
                 "title": title,
                 "content": content,
+                "source_type": mapping.get("source_type", ""),
+                "material_id": mapping.get("material_id", ""),
                 "chunk": chunk,
                 "_sentence_position": sentence_position,
                 "_is_origin_data": True

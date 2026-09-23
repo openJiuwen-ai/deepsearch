@@ -300,10 +300,25 @@ def _split_into_chunks(text: str, max_tokens: int, overlap_tokens: int) -> List[
         if len(candidate) > max_chars and current:
             chunks.append(current)
             tail = current[-overlap_chars:] if overlap_chars else ""
-            current = f"{tail}\n\n{unit}" if tail else unit
-            current = current[:max_chars]
+            # Keep the overlap, but never truncate the next unit.  A long
+            # unit can fill the remaining space after the overlap; splitting
+            # it here would silently discard its tail because it has already
+            # been consumed from ``units``.
+            current = tail
+            while unit:
+                separator = "\n\n" if current else ""
+                available = max_chars - len(current) - len(separator)
+                if available <= 0:
+                    chunks.append(current)
+                    current = current[-overlap_chars:] if overlap_chars else ""
+                    continue
+                current = f"{current}{separator}{unit[:available]}"
+                unit = unit[available:]
+                if unit:
+                    chunks.append(current)
+                    current = current[-overlap_chars:] if overlap_chars else ""
         else:
-            current = candidate[:max_chars]
+            current = candidate
     if current:
         chunks.append(current)
     return chunks
@@ -487,6 +502,7 @@ def is_material_first_request(query: str, has_materials: bool) -> bool:
     markers = (
         "基于我提供", "基于提供", "提供的论文", "所提供的材料", "总结里面的内容", "仅根据",
         "provided material", "provided paper", "supplied material", "summarize the provided",
+        "summarise the provided",
     )
     return any(marker in normalized for marker in markers)
 
@@ -640,9 +656,9 @@ def normalize_material_id(material_id: Any, known_ids: List[str]) -> str:
 
 def normalize_material_bindings(
     bindings: Any,
-    known_ids: List[str],
+    known_ids: List[str] | None = None,
 ) -> List[Dict[str, str]]:
-    """Validate and normalize per-section material bindings from LLM output."""
+    """Normalize per-section material bindings, optionally filtering by known IDs."""
     if not isinstance(bindings, list):
         return []
     normalized: List[Dict[str, str]] = []
@@ -650,7 +666,12 @@ def normalize_material_bindings(
     for binding in bindings:
         if not isinstance(binding, dict):
             continue
-        material_id = normalize_material_id(binding.get("material_id"), known_ids)
+        raw_material_id = binding.get("material_id")
+        material_id = (
+            normalize_material_id(raw_material_id, known_ids)
+            if known_ids is not None
+            else str(raw_material_id or "").strip()
+        )
         if not material_id or material_id in seen_ids:
             continue
         seen_ids.add(material_id)

@@ -247,6 +247,11 @@ class CitationCheckerResearch:
         if not datas[citation_index].get('valid', False):
             return url, False
 
+        # User-provided material may deliberately have no public URL.  Keep
+        # its local evidence citation instead of applying web URL validation.
+        if datas[citation_index].get("source_type") == "user_material":
+            return url, True
+
         # 首先验证URL scheme安全性
         datas_url = datas[citation_index].get('url', '')
         safe_url, is_safe_scheme = validate_url_scheme(datas_url)

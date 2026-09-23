@@ -29,6 +29,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.review import review_brief_evi
 from openjiuwen_deepsearch.algorithm.brief_report.search import normalize_brief_search_results
 from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
     build_material_prompt_context,
+    is_material_first_request,
     restore_material_analysis,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.writer import (
@@ -60,19 +61,6 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 
 logger = logging.getLogger(__name__)
-
-
-def _is_material_first_request(query: str, has_materials: bool) -> bool:
-    """Identify requests that ask to synthesize the supplied materials first."""
-    if not has_materials:
-        return False
-    normalized = " ".join((query or "").casefold().split())
-    markers = (
-        "基于我提供", "基于提供", "提供的论文", "所提供的材料", "总结里面的内容",
-        "仅根据", "provided material", "provided paper", "supplied material",
-        "summarize the provided", "summarise the provided",
-    )
-    return any(marker in normalized for marker in markers)
 
 
 def _log_node_failure(node_name: str, stage: str, exc: Exception) -> None:
@@ -368,7 +356,7 @@ class BriefInfoCollectorNode(BaseNode):
             session.get_global_state("search_context.material_analysis")
         )
         material_context = build_material_prompt_context(material_analysis)
-        material_first = _is_material_first_request(
+        material_first = is_material_first_request(
             session.get_global_state("search_context.original_query") or "",
             bool(material_context.get("has_materials")),
         )

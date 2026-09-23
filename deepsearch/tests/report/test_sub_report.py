@@ -11,11 +11,24 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     normalize_key_passages,
 )
 from openjiuwen_deepsearch.algorithm.report.evidence import _fit_coverage_to_budget
-from openjiuwen_deepsearch.algorithm.report.report import Reporter
+from openjiuwen_deepsearch.algorithm.report.report import (
+    Reporter,
+    _next_classified_content_index,
+)
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
+
+
+def test_next_classified_content_index_uses_existing_maximum_not_item_count():
+    assert _next_classified_content_index([
+        {"index": 1},
+        {"index": 7},
+        {"index": "invalid"},
+        "invalid",
+    ]) == 8
+    assert _next_classified_content_index([]) == 1
 
 
 @pytest.mark.parametrize(
