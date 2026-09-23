@@ -54,9 +54,9 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 MAX_SELECTION_CANDIDATES = 10
-# 阶段 3: enrichment 抓取并发上限, 避免 JinaWebFetchProvider 瞬时高并发打爆 r.jinaai.cn 镜像
+# enrichment 抓取并发上限: 避免 JinaWebFetchProvider 瞬时高并发打爆镜像
 ENRICH_FETCH_CONCURRENCY = 3
-# v5 B 路: 简版 UA 直连 PDF 本地解析最大页数
+# httpx 直连路本地解析 PDF 的最大页数
 SIMPLE_UA_PDF_MAX_PAGES = 50
 
 
@@ -101,7 +101,7 @@ class WebPageEnrichmentNode(BaseNode):
         """初始化网页正文增强节点。"""
         super().__init__()
         self.llm: Any = None
-        # C 路 jina provider；_pre_handle 会在 enabled 时覆盖它。
+        # jina 兜底 provider；_pre_handle 会在 enabled 时覆盖它。
         # 这里给默认值，使不经 _pre_handle 的直接调用（测试等）落回 legacy 分支而非 AttributeError。
         self._jina_provider: Any = None
 
@@ -120,7 +120,7 @@ class WebPageEnrichmentNode(BaseNode):
         step_title = session.get_global_state("collector_context.step_title")
         enabled = bool(session.get_global_state("config.info_collector_webpage_enrich_enable"))
         self.llm = None
-        # 阶段 2: 第二段 jina fallback 改用体系 A(JinaWebFetchProvider, 带 Bearer/镜像/短路修复)。
+        # jina 兜底用 JinaWebFetchProvider(带 Bearer / 多 base / 鉴权失败不短路)。
         # 配了 web_fetch_provider_config(provider=jina) 就用配置; 否则默认构造(无 key, 走 r.jinaai.cn 镜像)。
         self._jina_provider = None
         if enabled:
@@ -408,10 +408,14 @@ class WebPageEnrichmentNode(BaseNode):
         deadline: float,
         required_length: int,
     ) -> dict:
-        """v5 B 路: httpx 简版 Mozilla UA 直连 + HTML/PDF 抽取。
+        """httpx 直连 + HTML/PDF 抽取。
 
-        解 A 路(完整 Chrome UA)因 JA3 指纹被 Cloudflare 拦的站(investing.com 类):
-        简版 UA 不冒充特定浏览器, 不触发 JA3 比对, 反而能过。
+        补 harness 直连没有的 PDF 抓取能力: 它对 `.pdf` 结尾的 URL 直接跳过, 对其它 URL
+        拿到的 PDF 字节也不解析、直接弃用; 本方法保留 httpx 返回的原始 bytes 并交
+        _extract_pdf 处理。
+
+        同时换了一个请求客户端(本方法 httpx, harness 直连是 aiohttp), 覆盖到 harness
+        直连取不到正文的站点。
 
         Args:
             url: 目标 URL。
@@ -513,7 +517,8 @@ class WebPageEnrichmentNode(BaseNode):
         deadline: float,
         required_length: int,
     ) -> dict:
-        """在既定 deadline 内执行 A(direct)→ B(simple UA)→ C(jina) 三路级联。
+        """依次尝试三条抓取路, 前一条拿不到正文才退到下一条:
+        harness 直连(完整 Chrome UA) -> httpx 直连(带 PDF 本地解析) -> jina reader 代理。
 
         Args:
             url: 目标网页 URL。
@@ -569,11 +574,11 @@ class WebPageEnrichmentNode(BaseNode):
                 content_len=len(str(direct_result.get("content") or "")),
                 required_len=required_length,
             )
-        # v5 B 路: A 失败/太短时, 用简版 Mozilla UA 直连(解 investing.com 类 JA3 站)
+        # harness 直连失败或正文太短时, 换 httpx 直连再试一次
         b_result = await self._fetch_via_simple_ua(url, deadline, required_length)
         if b_result:
             return b_result
-        # C 路 jina fallback（阶段 2）: 用带鉴权/多 base 的 JinaWebFetchProvider。
+        # jina 兜底: 用带鉴权/多 base 的 JinaWebFetchProvider。
         # 生产路径下 _pre_handle 必会构造 provider，故此处恒为真; `is not None` 保留给直接调用的 legacy 回退。
         if self._jina_provider is not None:
             try:
@@ -764,7 +769,7 @@ class WebPageEnrichmentNode(BaseNode):
         all_docs = list(state.get("doc_infos") or [])
         source_store = dict(state.get("source_store") or {})
         replacements: list[tuple[dict[str, str], dict[str, Any]]] = []
-        # 阶段 3: 限并发, 避免瞬时高并发打爆 r.jinaai.cn 镜像(漏网之鱼根因)
+        # 限并发, 避免瞬时高并发打爆镜像
         sem = asyncio.Semaphore(ENRICH_FETCH_CONCURRENCY)
 
         async def _bounded_enrich(candidate_index: int):

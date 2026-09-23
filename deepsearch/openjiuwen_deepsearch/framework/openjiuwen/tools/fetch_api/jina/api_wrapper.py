@@ -75,9 +75,7 @@ class JinaWebFetchProvider:
         self._reader_timeout = jina_reader_request_timeout()
 
     def fetch_page(self, url: str) -> str:
-        # 阶段 3: 3 次重试 + 线性退避(0.5s, 1.0s), 应对镜像偶发限流/超时(漏网之鱼根因)。
-        # 注意: 重试期间镜像会继续渲染该页并缓存, 所以第 2 次尝试常能命中暖缓存直接成功,
-        # 这也是重试能救回约 95% 瞬态失败的原因; 不要随意减少重试次数。
+        # 3 次重试 + 线性退避(0.5s, 1.0s), 应对镜像偶发限流/超时。
         for attempt in range(3):
             content = self._read_via_jina(url)
             if content:
