@@ -669,7 +669,7 @@ class SearchContext(BaseModel):
     entry_search_results: List[Dict] = Field(default_factory=list, description="Entry节点预搜索结果")
     user_materials: List[Dict[str, Any]] = Field(
         default_factory=list,
-        description="规范化后的用户素材（UserMaterial dict 列表），StartNode 写入，意图识别/大纲/撰写消费",
+        description="原始用户素材（UserMaterial dict 列表），由 StartNode 写入；预处理后的素材由 material_analysis 供后续节点消费",
     )
     material_analysis: Dict[str, Any] | None = Field(
         default=None,

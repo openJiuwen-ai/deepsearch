@@ -371,7 +371,8 @@ class AgentConfig(BaseModel):
     )
     user_materials: List[Dict[str, Any]] = Field(
         default_factory=list,
-        description="用户提供的已有信息素材（UserMaterial dict 列表），由 IntentRecognitionNode 规范化后写入 search_context.user_materials",
+        description="用户提供的原始已有信息素材（UserMaterial dict 列表），由 StartNode 写入 search_context.user_materials；"
+                    "校验、去重、摘要和相关性结果写入 search_context.material_analysis",
     )
     coverage_rule_block_enable: bool = Field(
         default=True,

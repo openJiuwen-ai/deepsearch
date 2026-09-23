@@ -466,7 +466,21 @@ def is_material_first_request(query: str, has_materials: bool) -> bool:
         "provided material", "provided paper", "supplied material", "summarize the provided",
         "summarise the provided",
     )
-    return any(marker in normalized for marker in markers)
+    negations = (
+        "不要", "不用", "不使用", "不基于", "并非", "不是", "而不是", "拒绝", "排除", "忽略",
+        "do not", "don't", "dont", "not based on", "rather than", "without using",
+    )
+    for marker in markers:
+        position = normalized.find(marker)
+        while position >= 0:
+            # A negation immediately before a material-first phrase reverses
+            # its meaning (for example, "不要基于提供..." or "do not summarize
+            # the provided..."). Do not route such requests as required use.
+            prefix = normalized[max(0, position - 32):position]
+            if not any(negation in prefix for negation in negations):
+                return True
+            position = normalized.find(marker, position + len(marker))
+    return False
 
 
 def resolve_material_usage_mode(query: str, has_materials: bool) -> str:

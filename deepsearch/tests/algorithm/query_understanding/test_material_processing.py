@@ -207,6 +207,13 @@ class TestMaterialUsagePolicy:
         assert is_material_first_request("Summarise the provided papers", True)
         assert not is_material_first_request("Summarise the provided papers", False)
 
+    def test_negated_material_first_request_is_not_required(self):
+        query = "不要基于提供的旧结论下判断"
+
+        assert not is_material_first_request(query, True)
+        assert resolve_material_usage_mode(query, True) == "supplementary"
+        assert not is_material_first_request("Do not summarize the provided papers", True)
+
     def test_required_mode_and_fallback_relevance_records(self):
         analysis = MaterialAnalysis(items=[
             MaterialManifestItem(material_id="M1", title="Deep Research", summary="evidence", summary_kind="summary"),
