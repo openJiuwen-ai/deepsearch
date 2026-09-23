@@ -8,7 +8,7 @@
 
 不覆盖通用联网搜索引擎管理 CRUD、SSRF 校验、密钥加解密等
 所有引擎共享行为，详见
-[模板与联网搜索引擎管理](./server/template-and-web-search-engine-management.md)。
+[模板与联网搜索引擎管理](../server/template-and-web-search-engine-management.md)。
 不覆盖 `webBoxSearch` 与 `webSearch/multiLang` 端点（见「明确不支持项」）。
 
 权威语言：中文。本文档与代码行为不一致时以代码为准，并请同步更新本文档。
@@ -48,7 +48,7 @@ DeepSearch 仅接入 `webSearch` 端点，不复用同服务下的 `webBoxSearch
 ### 2.2 引擎管理页配置
 
 在 DeepSearch 引擎管理页（详见
-[模板与联网搜索引擎管理](./server/template-and-web-search-engine-management.md)）
+[模板与联网搜索引擎管理](../server/template-and-web-search-engine-management.md)）
 新增一条记录，按以下字段填入：
 
 | 字段 | 取值 | 说明 |
@@ -130,7 +130,7 @@ excludes 的实际过滤由收集器 `process_common_search_result` 调用
 按归一化域名匹配，命中即被丢弃。该路径零新增代码，复用引擎无关的通用后置过滤。
 
 详见
-[信息采集](./algorithm/research-collector.md)
+[信息采集](../algorithm/research-collector.md)
 与 T4 测试 `tests/tools/test_web_search.py` 中 excludes 闭环验收用例。
 
 ## 5. 响应归一化
@@ -142,14 +142,14 @@ DeepSearch 标准行。字段映射如下：
 |---|---|---|
 | `title` | `webResult[].title` | `str()[:MAX_SEARCH_CONTENT_LENGTH]`；为空时用 `url` 兜底 |
 | `url` | `webResult[].url` | `str().strip()[:MAX_URL_LENGTH]`；为空跳过该条 |
-| `content` | `chunk` 优先，空则回退 `content`，再空为 `""` | 截断 `[:MAX_SEARCH_CONTENT_LENGTH]` |
+| `content` | `content` 优先，空则回退 `chunk`，再空为 `""` | 截断 `[:MAX_SEARCH_CONTENT_LENGTH]` |
 | `source` | 字面量 | 固定 `"agc_ainetworking"` |
 | `published` | `webResult[].publishTime` | Unix 秒字符串；`int()` 成功且 >0 时转 `datetime.fromtimestamp(v, tz=timezone.utc).date().isoformat()`；`"0"`/非法/缺失时不输出该键 |
 | `site_name` | `webResult[].siteName` | 非空才输出；归一化为 snake_case 键，丢弃原键 |
 
-注意：华为返回的 `chunk` 字段优先级高于 `content`，因为 `chunk` 通常已经是
-按 query 抽取的精炼片段，无需在客户端再次切片。若 `chunk` 为空再回退到
-`content` 字段，最后兜底为空串。
+注意：华为返回的 `content` 字段优先级高于 `chunk`。`content` 为空时回退到
+`chunk` 字段，两者均空时兜底为空串。最终 `content` 截断到
+`MAX_SEARCH_CONTENT_LENGTH`（`common/common_constants.py`，100 万字符）上限。
 
 异步路径 `aresults(query)` 镜像 petal 软失败约定：HTTP 非 200/201、
 `aiohttp.ClientError`、业务 `code != 0` 均记录日志并 `return []`；
@@ -265,9 +265,9 @@ cd deepsearch && uv run pytest -m "not llm"
 
 ## 相关文档
 
-- [模板与联网搜索引擎管理](./server/template-and-web-search-engine-management.md)
-- [搜索工具注册与运行时 API 工具](./framework/search-tool-registration.md)
-- [信息采集](./algorithm/research-collector.md)
-- [时间约束软过滤](./temporal-soft-filter.md)
+- [模板与联网搜索引擎管理](../server/template-and-web-search-engine-management.md)
+- [搜索工具注册与运行时 API 工具](./search-tool-registration.md)
+- [信息采集](../algorithm/research-collector.md)
+- [时间约束软过滤](../temporal-soft-filter.md)
 - 官方文档：
   https://developer.huawei.com/consumer/cn/doc/AppGallery-connect-References/agc-ainetworking-interfaceinvoking_webpage-0000002312954296
