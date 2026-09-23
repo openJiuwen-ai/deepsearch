@@ -188,6 +188,9 @@ class InfoRetrievalNode(BaseNode):
             api_tools_config=session.get_global_state("config.api_tools_config") or {},
             research_intent=session.get_global_state("collector_context.research_intent") or {},
             evidence_ledger=session.get_global_state("collector_context.evidence_ledger") or {},
+            exclusion_constraint_enable=bool(
+                session.get_global_state("config.exclusion_constraint_enable")
+            ),
         )
         mcp_tools = []
         try:
@@ -230,6 +233,9 @@ class InfoRetrievalNode(BaseNode):
                 "local_search_engine_name": state.get("local_search_engine_name", None),
                 "api_tools_config": state.get("api_tools_config", {}),
                 "research_intent": state.get("research_intent", {}),
+                # 禁引约束总开关必须随 sub_state 下传，否则 _collector_main 的
+                # agent_input 读到 False，过滤函数 enable_exclusion 永远 off。
+                "exclusion_constraint_enable": state.get("exclusion_constraint_enable", False),
             }
             sub_task = self._run_retrieval_query(sub_state, retrieval_query)
             tasks.append(sub_task)
@@ -527,6 +533,7 @@ class InfoRetrievalNode(BaseNode):
             "local_text_search_record": [],
             "other_tool_record": [],
             "research_intent": state.get("research_intent", {}),
+            "exclusion_constraint_enable": state.get("exclusion_constraint_enable", False),
         }
 
         tool_list, tool_dict = await self._prepare_collector_tool(state)

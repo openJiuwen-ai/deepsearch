@@ -380,6 +380,12 @@ class AgentConfig(BaseModel):
         description="子报告大纲阶段规则版覆盖证据（coverage passages）开关，"
                     "关闭后大纲证据仅含条目摘要块",
     )
+    exclusion_constraint_enable: bool = Field(
+        default=False,
+        description="子报告禁引约束总开关（默认关）。开启后启用："
+                    "采集层文献 ID 交集匹配 + 镜像后缀词表、写作层 Excluded Sources 注入、"
+                    "intent 层 include_url/target_papers 去重。关闭时行为等同 baseline",
+    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=5,

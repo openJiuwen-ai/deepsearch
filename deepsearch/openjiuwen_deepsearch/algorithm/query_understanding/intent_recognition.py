@@ -27,7 +27,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    exclusion_constraint_context,
+    llm_context,
+)
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -332,6 +335,32 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         if paper.url and paper.url not in include_url:
             include_url.append(paper.url)
 
+    # exclude_url 中的 URL 不应同时出现在 include_url / target_papers
+    # （防止 collector 搜索注定被采集层挡掉的被禁源，浪费搜索轮次）
+    # 受 exclusion_constraint_enable 控制：关闭时跳过本去重，退回 baseline 行为。
+    if exclusion_constraint_context.get():
+        exclude_url_set = set(exclude_url)
+        exclude_pmids = set()
+        exclude_dois = set()
+        for u in exclude_url:
+            pmid = normalize_pmid(u)
+            if pmid:
+                exclude_pmids.add(pmid)
+            doi = normalize_doi(u)
+            if doi:
+                exclude_dois.add(doi)
+        include_url = [u for u in include_url if u not in exclude_url_set]
+        filtered_papers = []
+        for p in target_papers:
+            if p.url and p.url in exclude_url_set:
+                continue
+            if p.pmid and p.pmid in exclude_pmids:
+                continue
+            if p.doi and p.doi in exclude_dois:
+                continue
+            filtered_papers.append(p)
+        target_papers = filtered_papers
+
     source_date_scope = _normalize_date_scope(data.get("source_date_scope"), "source_date")
     content_date_scope = _normalize_date_scope(data.get("content_date_scope"), "content_date")
     # 兼容旧序列化 state：旧 temporal_scope 单对象按 constraint_type 路由到 source_date_scope/
@@ -397,6 +426,33 @@ def _merge_explicit_target_papers(intent: ResearchIntent, original_query: str) -
     for paper in target_papers:
         if paper.url and paper.url not in include_url:
             include_url.append(paper.url)
+
+    # exclude_url 中的 URL 不应出现在 include_url / target_papers
+    # （_normalize_research_intent 已去重，但 _merge_explicit_target_papers 从
+    # original_query 重新提取了被禁源标识符并加回，需再次去重）
+    # 与 _normalize_research_intent 共用同一个总开关——只开一处等于没开。
+    if exclusion_constraint_context.get():
+        exclude_url_set = set(intent.exclude_url)
+        exclude_pmids = set()
+        exclude_dois = set()
+        for u in intent.exclude_url:
+            pmid = normalize_pmid(u)
+            if pmid:
+                exclude_pmids.add(pmid)
+            doi = normalize_doi(u)
+            if doi:
+                exclude_dois.add(doi)
+        include_url = [u for u in include_url if u not in exclude_url_set]
+        filtered_papers = []
+        for p in target_papers:
+            if p.url and p.url in exclude_url_set:
+                continue
+            if p.pmid and p.pmid in exclude_pmids:
+                continue
+            if p.doi and p.doi in exclude_dois:
+                continue
+            filtered_papers.append(p)
+        target_papers = filtered_papers
 
     return intent.model_copy(update={
         "target_papers": target_papers,
@@ -701,6 +757,8 @@ async def _recognize_intent(
     if not original_query:
         return _default_fallback(original_query)
 
+    # 下发禁引约束总开关，供下方 include_url/target_papers 去重逻辑读取
+    token = exclusion_constraint_context.set(bool(current_inputs.get("exclusion_constraint_enable", False)))
     try:
         result, response = await _invoke_llm_for_intent(
             "intent_recognition", original_query,
@@ -731,6 +789,8 @@ async def _recognize_intent(
         else:
             logger.warning("[%s] Exception, using fallback: %s", log_tag, exc)
         return _default_fallback(original_query)
+    finally:
+        exclusion_constraint_context.reset(token)
 
 
 async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResult:

@@ -406,6 +406,7 @@ class TestInfoCollectorNode:
             "research_intent": {},
             "evidence_ledger": {},
             "mcp_tools": [],
+            "exclusion_constraint_enable": False,
         }
         assert result == expected_state
 

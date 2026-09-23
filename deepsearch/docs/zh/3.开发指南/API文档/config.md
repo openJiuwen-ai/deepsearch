@@ -433,6 +433,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **report_max_generate_retry_num**(int, 可选)：生成内容最大重试次数。默认值：`3`。
 - **visualization_enable**(bool, 可选)：专业版报告插图可视化开关。默认值：`True`。不影响 Brief 报告的图文生成。
 - **coverage_rule_block_enable**(bool, 可选)：子报告大纲阶段规则版覆盖证据（coverage passages）开关。默认值：`True`。关闭后大纲证据仅含条目摘要块。HTTP 服务入口 `DeepSearchRequest.coverage_rule_block_enable` 会透传到 `AgentConfig.coverage_rule_block_enable`。
+- **exclusion_constraint_enable**(bool, 可选)：子报告禁引约束总开关。默认值：`False`。开启后启用：采集层文献 ID 交集匹配与镜像后缀词表、写作层 Excluded Sources 注入、intent 层 include_url/target_papers 去重。关闭时行为等同 baseline。HTTP 服务入口 `DeepSearchRequest.exclusion_constraint_enable` 会透传到 `AgentConfig.exclusion_constraint_enable`。
 
 ### 溯源节点参数
 - **source_tracer_citation_verify_max_concurrency_num**(int, 可选)：溯源校验最大并发数量。默认值：`30`。

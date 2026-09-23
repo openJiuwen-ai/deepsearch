@@ -119,6 +119,8 @@ def _writing_prompt_input(
         "current_section_format_requirements": "\n".join(format_requirements),
         "current_chapter_outline": _numbered_chapter_outline(section),
         "messages": messages,
+        "has_exclusion": request.has_exclusion,
+        "exclusion_instruction": request.exclusion_instruction,
     }
 
 

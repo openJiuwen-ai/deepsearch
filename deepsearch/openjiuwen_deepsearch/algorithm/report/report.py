@@ -45,6 +45,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_research_intent_prompt_context,
     build_section_local_contract_prompt_context,
     build_temporal_scope_prompt_context,
+    build_exclusion_prompt_context,
 )
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
@@ -682,6 +683,13 @@ class Reporter(
                     ),
                     **build_temporal_scope_prompt_context(
                         current_inputs.get("research_intent")
+                    ),
+                    # 禁引约束注入受 exclusion_constraint_enable 控制；
+                    # 关闭时不注入 Excluded Sources，writer 对禁引清单无感知（baseline 行为）。
+                    **(
+                        build_exclusion_prompt_context(current_inputs.get("research_intent"))
+                        if current_inputs.get("exclusion_constraint_enable", False)
+                        else {}
                     ),
                 ),
             )
