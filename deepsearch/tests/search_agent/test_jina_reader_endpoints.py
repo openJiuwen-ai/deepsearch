@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina import api_wrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper import (
     JinaWebFetchProvider,
     _unreachable_reason,
@@ -248,3 +249,62 @@ def test_fetch_page_returns_mirror_content_when_official_endpoint_rejects():
         assert fetch.fetch_page("https://example.com") == "from-mirror"
 
     assert mock_get.call_count == len(fetch._reader_bases)
+
+
+class _FakeClock:
+    """可控时钟：请求本身不耗时，只有 sleep 推进时间。"""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _stalling_get(timeouts: list[tuple[float, float]]):
+    def fake_get(url, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        raise requests.exceptions.ConnectTimeout("blocked")
+
+    return fake_get
+
+
+def test_fetch_page_clamps_request_timeout_and_backoff_to_budget(monkeypatch):
+    """给了预算后，单次请求超时与退避都不得超过剩余预算，预算耗尽即停止重试。
+
+    asyncio.to_thread 的线程不可取消，只能靠把每个阻塞点压进预算让它自己到点结束。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    clock = _FakeClock()
+    timeouts: list[tuple[float, float]] = []
+    monkeypatch.setattr(api_wrapper, "time", clock)
+    monkeypatch.setattr(api_wrapper.requests, "get", _stalling_get(timeouts))
+
+    assert fetch.fetch_page("https://example.com", budget=1.0) == "[web_fetch] Failed to read page."
+
+    # 每轮对每个 base 各发一次；第 3 轮开始前预算已耗尽，所以只有 2 轮（不设界时是 3 轮）
+    assert len(timeouts) == 2 * len(fetch._reader_bases)
+    for connect, read in timeouts:
+        assert connect <= 1.0 and read <= 1.0
+    assert sum(clock.sleeps) <= 1.0
+
+
+def test_fetch_page_without_budget_keeps_fixed_schedule(monkeypatch):
+    """不传 budget 时行为不变：固定 3 次重试、固定 (4, 8) 超时、固定退避。"""
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    clock = _FakeClock()
+    timeouts: list[tuple[float, float]] = []
+    monkeypatch.setattr(api_wrapper, "time", clock)
+    monkeypatch.setattr(api_wrapper.requests, "get", _stalling_get(timeouts))
+
+    assert fetch.fetch_page("https://example.com") == "[web_fetch] Failed to read page."
+
+    # 3 轮 × 每个 base 一次，超时始终是固定的 (4, 8)
+    assert len(timeouts) == 3 * len(fetch._reader_bases)
+    assert set(timeouts) == {(4.0, 8.0)}
+    assert clock.sleeps == [0.5, 1.0]

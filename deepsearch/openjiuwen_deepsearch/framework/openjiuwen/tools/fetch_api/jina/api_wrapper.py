@@ -90,10 +90,48 @@ class JinaWebFetchProvider:
         self._reader_bases = resolve_jina_reader_base_urls(base_url)
         self._reader_timeout = jina_reader_request_timeout()
 
-    def fetch_page(self, url: str) -> str:
+    @staticmethod
+    def _budget_left(deadline: float | None) -> float | None:
+        """剩余预算(秒)。``None`` 表示未设界。"""
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.monotonic())
+
+    def _request_timeout(self, budget: float | None) -> tuple[float, float]:
+        """单次请求的 (connect, read) 超时, 各自压到剩余预算。
+
+        必须压到这一层: 即使某个 base 已经返回 200 提前 return, ``ThreadPoolExecutor``
+        退出时仍会 join 其它 base 在飞的请求, 线程照样跑满固定超时。
+
+        两个超时是串行生效的, 所以一次请求最坏花 connect + read, 可以超过预算本身。
+        没有按比例缩放去凑出"和不超预算": 那会把连接较慢的站点的成功机会压掉, 而调用
+        方此刻仍在自己那份预算里等着。预算充裕时不触发, 与设界前逐字一致。
+        """
+        connect, read = self._reader_timeout
+        if budget is None:
+            return connect, read
+        return min(connect, budget), min(read, budget)
+
+    def fetch_page(self, url: str, *, budget: float | None = None) -> str:
+        """抓取单个 URL 的正文。
+
+        Args:
+            url: 目标页面地址。
+            budget: 本次调用的时长预算(秒)。给定后每轮先看还剩多少, 退避与单次请求
+                超时都压进剩余预算, 预算耗尽即停止重试——``asyncio.to_thread`` 的线程
+                本身不可取消, 只能让它尽早结束。线程实际收在预算附近, 最坏再多花一次
+                请求的 connect + read。``None`` 表示不设界, 沿用固定重试次数与固定超时。
+
+        Returns:
+            正文; 失败时返回 ``"[web_fetch] Failed to read page."``。
+        """
         # 3 次重试 + 线性退避(0.5s, 1.0s), 应对镜像偶发限流/超时。
+        deadline = None if budget is None else time.monotonic() + budget
         for attempt in range(3):
-            content = self._read_via_jina(url)
+            left = self._budget_left(deadline)
+            if left is not None and left <= 0:
+                break
+            content = self._read_via_jina(url, left)
             if content:
                 is_not_failed = not content.startswith("[web_fetch] Failed")
                 is_not_empty = content != "[web_fetch] Empty content."
@@ -101,13 +139,21 @@ class JinaWebFetchProvider:
                 if is_not_failed and is_not_empty and is_not_parser_error:
                     return content
             if attempt < 2:
-                time.sleep(0.5 * (attempt + 1))
+                pause = 0.5 * (attempt + 1)
+                left = self._budget_left(deadline)
+                if left is not None:
+                    if left <= 0:
+                        break
+                    pause = min(pause, left)
+                time.sleep(pause)
         return "[web_fetch] Failed to read page."
 
-    def _read_via_jina(self, url: str) -> str:
+    def _read_via_jina(self, url: str, budget: float | None = None) -> str:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         if not self._reader_bases:
             return "[web_fetch] Failed to read page."
+
+        request_timeout = self._request_timeout(budget)
 
         def _fetch_base(base: str) -> tuple[str, requests.Response | None, RequestException | None]:
             reader_url = build_jina_reader_url(base, url)
@@ -115,7 +161,7 @@ class JinaWebFetchProvider:
                 resp = requests.get(
                     reader_url,
                     headers=headers,
-                    timeout=self._reader_timeout,
+                    timeout=request_timeout,
                 )
                 return base, resp, None
             except RequestException as exc:

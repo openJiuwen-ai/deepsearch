@@ -68,9 +68,13 @@ SIMPLE_UA_PARSE_TIMEOUT_SECONDS = 15
 # 按字节截断会破坏 PDF 尾部的交叉引用表, 导致本可解析的文档解析失败。
 SIMPLE_UA_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 # Jina Reader 路的阶段上限。provider 内部是固定 3 次重试 + 线性退避(最坏约 37s),
-# 自身不知道还剩多少预算, 这里给它一个独立上限: 与 A/B 路一样"每段各自有界",
-# 也让超时原因能记成 jina_fetch_failed 而不是笼统的整串 deadline。
-# 注意 asyncio.to_thread 的底层线程不可取消, 到点只是不再等待, 不省线程资源。
+# 自身不知道还剩多少预算, 这里给它一个独立上限: 与 A/B 路一样"每段各自有界"。
+# 注意 _remaining_timeout_seconds 向上取整, 阶段上限因而恒 >= 实际剩余: 只有剩余
+# 超过 30s 时才由它先到并把原因记成 jina_fetch_failed, 否则先到的是外层 deadline
+# (记 fetch_deadline_exceeded)。
+# 同一个值也作为 budget 传给 provider: asyncio.to_thread 的线程不可取消, 但内部
+# 重试、退避与单次请求超时都被压进这个预算, 线程收在预算附近(最坏再多花一次请求的
+# connect + read), 不会跑满固定的 3 次重试。预算充裕时不触发, 与设界前一致。
 JINA_STAGE_TIMEOUT_SECONDS = 30
 
 
@@ -660,11 +664,14 @@ class WebPageEnrichmentNode(BaseNode):
         if self._jina_provider is not None:
             try:
                 # 给 C 路一个独立阶段上限, 与 A/B 路一致; 取 min 保证不超过剩余总预算。
+                # 同一个值再作为预算传进 provider: to_thread 的线程不可取消, 只能让它
+                # 把内部重试、退避与单次请求超时都压进这个窗口, 到点自行结束。
+                stage_timeout = float(
+                    max(1, min(JINA_STAGE_TIMEOUT_SECONDS, _remaining_timeout_seconds(deadline)))
+                )
                 jina_content = await asyncio.wait_for(
-                    asyncio.to_thread(self._jina_provider.fetch_page, url),
-                    timeout=float(
-                        max(1, min(JINA_STAGE_TIMEOUT_SECONDS, _remaining_timeout_seconds(deadline)))
-                    ),
+                    asyncio.to_thread(self._jina_provider.fetch_page, url, budget=stage_timeout),
+                    timeout=stage_timeout,
                 )
             except Exception as exc:
                 self._log_fetch_event(

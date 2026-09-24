@@ -939,8 +939,10 @@ async def test_jina_provider_call_is_capped_by_its_own_stage_limit(monkeypatch):
     node = ExposedWebPageEnrichmentNode()
     monkeypatch.setattr(webpage_enrichment_module, "JINA_STAGE_TIMEOUT_SECONDS", 1)
     release = threading.Event()
+    budgets: list[float | None] = []
 
-    def blocking_fetch_page(url: str) -> str:
+    def blocking_fetch_page(url: str, *, budget: float | None = None) -> str:
+        budgets.append(budget)
         release.wait(timeout=10)
         return "z" * 400
 
@@ -963,6 +965,8 @@ async def test_jina_provider_call_is_capped_by_its_own_stage_limit(monkeypatch):
     assert result == {}
     assert "jina_fetch_failed" in logged
     assert elapsed < 5
+    # 阶段上限同时作为预算传进 provider: to_thread 的线程不可取消, 只能靠它自己到点结束
+    assert budgets == [1.0]
 
 
 @pytest.mark.asyncio
