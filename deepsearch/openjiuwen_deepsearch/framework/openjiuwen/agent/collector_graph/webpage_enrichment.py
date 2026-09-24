@@ -542,7 +542,10 @@ class WebPageEnrichmentNode(BaseNode):
                 # 直接用 httpx 的 .text 在缺 charset 的 GBK 等页面上会整篇解码成乱码。
                 decoded = _decode_response_text(data, content_type=content_type)
                 if "html" in content_type.lower():
-                    title, decoded = WebFetchWebpageTool._extract_main_text_from_html(decoded)
+                    # 复用 harness 的正文抽取, 让 B 路与 A 路解析出同一份正文。
+                    # harness 没有公开的等价入口, 只能取这个私有静态方法; 照仓内
+                    # report_export 处理 python-docx 内部成员的先例声明豁免。
+                    title, decoded = WebFetchWebpageTool._extract_main_text_from_html(decoded)  # pylint: disable=protected-access
                 text = decoded[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
                 truncated = len(decoded) > MAX_COLLECTOR_DOC_CONTENT_LENGTH
         except Exception as exc:
