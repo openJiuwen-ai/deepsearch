@@ -15,6 +15,7 @@ Cache is keyed by ``collection`` name. A hit requires matching
 index to rebuild.
 """
 
+import io
 import json
 import pickle
 import re
@@ -36,6 +37,49 @@ DOCUMENTS_NAME = "documents.json"
 BM25_DIRNAME = "bm25"
 
 _SAFE_COLLECTION_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+_GRAPH_TYPES_MODULE = "openjiuwen_codesearch.retropus.graph.graph_types"
+
+# Globals a well-formed knowledge-graph dump is allowed to reference. Anything
+# else is rejected, so a tampered ``kg.pkl`` cannot execute arbitrary code.
+_ALLOWED_PICKLE_GLOBALS = frozenset(
+    {
+        ("builtins", name)
+        for name in (
+            "bool",
+            "bytes",
+            "dict",
+            "float",
+            "frozenset",
+            "int",
+            "list",
+            "set",
+            "str",
+            "tuple",
+        )
+    }
+    | {
+        (_GRAPH_TYPES_MODULE, "KnowledgeGraphNode"),
+        (_GRAPH_TYPES_MODULE, "KnowledgeGraphEdge"),
+        (_GRAPH_TYPES_MODULE, "KnowledgeGraphEdgeType"),
+        (_GRAPH_TYPES_MODULE, "FileNode"),
+        (_GRAPH_TYPES_MODULE, "ASTNode"),
+        (_GRAPH_TYPES_MODULE, "TextNode"),
+    }
+)
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """Unpickler that only resolves known-safe globals."""
+
+    def find_class(self, module: str, name: str):
+        if (module, name) not in _ALLOWED_PICKLE_GLOBALS:
+            raise pickle.UnpicklingError(f"forbidden global: {module}.{name}")
+        return super().find_class(module, name)
+
+
+def _load_restricted_pickle(data: bytes):
+    return _RestrictedUnpickler(io.BytesIO(data)).load()
 
 
 def safe_collection_name(collection: str) -> str:
@@ -85,9 +129,12 @@ def dump_knowledge_graph(kg: KnowledgeGraph, path: Path) -> None:
 
 
 def load_knowledge_graph(path: Path) -> KnowledgeGraph:
-    """Rebuild a ``KnowledgeGraph`` from :func:`dump_knowledge_graph` output."""
-    with path.open("rb") as fh:
-        payload = pickle.load(fh)
+    """Rebuild a ``KnowledgeGraph`` from :func:`dump_knowledge_graph` output.
+
+    The dump is read with a restricted unpickler that only resolves the
+    graph value types, so a tampered cache file cannot execute code.
+    """
+    payload = _load_restricted_pickle(path.read_bytes())
 
     kg = KnowledgeGraph(
         max_ast_depth=int(payload["max_ast_depth"]),
