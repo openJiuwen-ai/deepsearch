@@ -1,6 +1,9 @@
 import asyncio
+import threading
+import time
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph import webpage_enrichment as webpage_enrichment_module
@@ -8,6 +11,7 @@ from openjiuwen_deepsearch.algorithm.research_collector import webpage_enrichmen
 from openjiuwen_deepsearch.config.config import AgentConfig, ServiceConfig
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment import (
+    SIMPLE_UA_PDF_MAX_PAGES,
     WebPageEnrichmentDecision,
     WebPageEnrichmentNode,
     WebPageEvidenceContent,
@@ -22,6 +26,105 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+
+
+# 在 autouse 夹具打桩之前抓住真实实现，供 real_simple_ua 夹具还原。
+_REAL_FETCH_VIA_SIMPLE_UA = WebPageEnrichmentNode._fetch_via_simple_ua
+
+# 模拟"卡住的下载"时的挂起秒数。取有限值而非永久挂起，
+# 这样一旦阶段超时失效，用例会断言失败而不是把整轮测试挂死。
+_STALL_SECONDS = 8
+
+
+@pytest.fixture(autouse=True)
+def _stub_simple_ua_network(monkeypatch):
+    """抓取级联第二路（httpx 直连 + PDF 本地解析）会真的发网络请求，单测里默认打桩为立即失败。
+
+    需要验证 B 段自身逻辑的用例请加 ``real_simple_ua`` 夹具还原真实实现。
+    """
+    monkeypatch.setattr(
+        WebPageEnrichmentNode,
+        "_fetch_via_simple_ua",
+        AsyncMock(return_value={}),
+    )
+
+
+@pytest.fixture
+def real_simple_ua(monkeypatch):
+    """还原 B 段的真实实现；用例内部需自行打桩 httpx，保证不发网络请求。"""
+    monkeypatch.setattr(WebPageEnrichmentNode, "_fetch_via_simple_ua", _REAL_FETCH_VIA_SIMPLE_UA)
+
+
+class _FakeHttpxResponse:
+    """B 段测试用的假响应，字段与代码实际读取的保持一一对应。"""
+
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        content: bytes = b"",
+        headers: dict[str, str] | None = None,
+        chunks: list[bytes] | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self.content = content
+        self.headers = headers or {}
+        # 默认整块吐出；要验证下载字节上限时用 chunks 指定分片。
+        self._chunks = list(chunks) if chunks is not None else ([content] if content else [])
+
+    async def aiter_bytes(self):
+        """逐个吐出分片，对应 httpx 的流式读取。"""
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeHttpxStream:
+    """替代 client.stream(...) 返回的异步上下文管理器。"""
+
+    def __init__(self, response: _FakeHttpxResponse) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _FakeHttpxResponse:
+        return self._response
+
+    async def __aexit__(self, *exc_info) -> bool:
+        return False
+
+
+class _FakeHttpxClient:
+    """替代 httpx.AsyncClient 的异步上下文管理器，避免真实网络请求。"""
+
+    def __init__(self, response: _FakeHttpxResponse, called_urls: list[str]) -> None:
+        self._response = response
+        self._called_urls = called_urls
+
+    async def __aenter__(self) -> "_FakeHttpxClient":
+        return self
+
+    async def __aexit__(self, *exc_info) -> bool:
+        return False
+
+    def stream(self, method: str, url: str, **kwargs) -> _FakeHttpxStream:
+        del method, kwargs
+        self._called_urls.append(url)
+        return _FakeHttpxStream(self._response)
+
+
+def _patch_httpx_async_client(
+    monkeypatch: pytest.MonkeyPatch,
+    response: _FakeHttpxResponse,
+    called_urls: list[str],
+) -> None:
+    """把 B 段函数体内 import 的 httpx.AsyncClient 换成假客户端。"""
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeHttpxClient(response, called_urls))
+
+
+def _patch_extract_pdf(monkeypatch: pytest.MonkeyPatch, fake) -> None:
+    """替换 B 段函数体内 import 的 extract_pdf。"""
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text.extract_pdf",
+        fake,
+    )
 
 
 def test_webpage_enrichment_agent_config_defaults_disabled():
@@ -180,6 +283,11 @@ class ExposedWebPageEnrichmentNode(WebPageEnrichmentNode):
     ) -> dict:
         """调用节点网页抓取方法。"""
         return await self._fetch_webpage(url, timeout_seconds, minimum_content_length)
+
+    async def simple_ua(self, url: str, timeout_seconds: int, required_length: int) -> dict:
+        """调用节点 B 段（httpx 直连 + HTML/PDF 抽取）抓取方法。"""
+        deadline = asyncio.get_running_loop().time() + float(timeout_seconds)
+        return await self._fetch_via_simple_ua(url, deadline, required_length)
 
     async def compress_content(
         self,
@@ -467,6 +575,398 @@ async def test_sensitive_fetch_logs_redact_url_and_exception(caplog):
     assert jina_secret not in caplog.text
     assert "direct_fetch_failed" in caplog.text
     assert "jina_fetch_failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_parses_pdf_by_magic_bytes(monkeypatch, real_simple_ua):
+    """URL 不带 .pdf 后缀、但响应体是 PDF 时，应按 %PDF- 魔数识别并交本地解析。
+
+    补的是 harness 直连的缺口：它把 PDF 字节按文本解码后弃用，本段保留原始 bytes。
+    """
+    node = ExposedWebPageEnrichmentNode()
+    called_urls: list[str] = []
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            content=b"%PDF-1.7\nraw-bytes",
+            headers={"Content-Type": "application/octet-stream"},
+        ),
+        called_urls,
+    )
+    seen: list[tuple[bytes, int, int]] = []
+
+    def fake_extract_pdf(data: bytes, limit: int, max_pages: int) -> tuple[str, bool]:
+        seen.append((data, limit, max_pages))
+        return "p" * 300, False
+
+    _patch_extract_pdf(monkeypatch, fake_extract_pdf)
+
+    result = await node.simple_ua("https://a.com/bitstreams/x/content", 45, 200)
+
+    assert called_urls == ["https://a.com/bitstreams/x/content"]
+    # 交给 pdfium 的必须是未经解码的原始字节
+    assert seen == [(b"%PDF-1.7\nraw-bytes", MAX_COLLECTOR_DOC_CONTENT_LENGTH, SIMPLE_UA_PDF_MAX_PAGES)]
+    assert result["content"] == "p" * 300
+    assert result["fetch_method"] == "simple_ua"
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_parses_pdf_by_content_type(monkeypatch, real_simple_ua):
+    """Content-Type 声明 PDF 时同样走本地解析，并保留 truncated 标记。"""
+    node = ExposedWebPageEnrichmentNode()
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            content=b"not-a-magic-prefix",
+            headers={"Content-Type": "application/pdf; charset=binary"},
+        ),
+        [],
+    )
+    seen: list[int] = []
+
+    def fake_extract_pdf(data: bytes, limit: int, max_pages: int) -> tuple[str, bool]:
+        seen.append(len(data))
+        return "q" * 300, True
+
+    _patch_extract_pdf(monkeypatch, fake_extract_pdf)
+
+    result = await node.simple_ua("https://a.com/paper", 45, 200)
+
+    assert seen == [len(b"not-a-magic-prefix")]
+    assert result["content"] == "q" * 300
+    assert result["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_extracts_html_main_text(monkeypatch, real_simple_ua):
+    """HTML 响应应抽正文并回填 title，而不是把整段 HTML 当正文返回。"""
+    node = ExposedWebPageEnrichmentNode()
+    paragraphs = "".join(f"<p>第 {i} 段正文，用于验证正文抽取。</p>" for i in range(40))
+    html = f"<html><head><title>示例标题</title></head><body><article>{paragraphs}</article></body></html>"
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            content=html.encode("utf-8"),
+            headers={"Content-Type": "text/html; charset=utf-8"},
+        ),
+        [],
+    )
+
+    result = await node.simple_ua("https://a.com/article", 45, 200)
+
+    assert result["title"] == "示例标题"
+    assert "<p>" not in result["content"]
+    assert "第 0 段正文" in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_decodes_html_carrying_content_encoding_header(monkeypatch, real_simple_ua):
+    """响应带 Content-Encoding 时也必须能解码。
+
+    回归用：aiter_bytes() 给出的字节已经解过压缩，若把原始 headers 原样交给重建的
+    httpx.Response，httpx 会按 Content-Encoding 再解一次并抛 DecodingError；
+    真实站点普遍带 gzip，这条会打到绝大多数 HTML 页面。
+    """
+    node = ExposedWebPageEnrichmentNode()
+    paragraphs = "".join(f"<p>第 {i} 段正文，用于验证压缩页解码。</p>" for i in range(40))
+    html = f"<html><head><title>压缩页</title></head><body><article>{paragraphs}</article></body></html>"
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            # aiter_bytes 吐出的已是解压后的字节，这里用明文模拟
+            content=html.encode("utf-8"),
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Encoding": "gzip",
+                "Content-Length": str(len(html)),
+            },
+        ),
+        [],
+    )
+
+    result = await node.simple_ua("https://a.com/gzipped", 45, 200)
+
+    assert result["title"] == "压缩页"
+    assert "第 0 段正文" in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_records_failure_when_response_has_no_content(monkeypatch, real_simple_ua):
+    """非 200 或空 body 时记 simple_ua_failed 并放弃，让级联继续退到 C 段。"""
+    node = ExposedWebPageEnrichmentNode()
+    logged: list[str] = []
+    monkeypatch.setattr(node, "_log_fetch_event", lambda level, category, url, **kw: logged.append(category))
+    _patch_httpx_async_client(monkeypatch, _FakeHttpxResponse(status_code=404, content=b"nope"), [])
+
+    result = await node.simple_ua("https://a.com/missing", 45, 200)
+
+    assert result == {}
+    assert logged == ["simple_ua_failed"]
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_never_raises_on_transport_error(monkeypatch, real_simple_ua):
+    """httpx 传输异常必须被吞掉，否则会中断整条抓取级联。"""
+    node = ExposedWebPageEnrichmentNode()
+    logged: list[str] = []
+    monkeypatch.setattr(node, "_log_fetch_event", lambda level, category, url, **kw: logged.append(category))
+
+    class _BoomClient(_FakeHttpxClient):
+        def stream(self, method: str, url: str, **kwargs) -> _FakeHttpxStream:
+            raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _BoomClient(_FakeHttpxResponse(), []))
+
+    result = await node.simple_ua("https://a.com", 45, 200)
+
+    assert result == {}
+    assert logged == ["simple_ua_failed"]
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_rejects_content_below_required_length(monkeypatch, real_simple_ua):
+    """拿到 200 但正文未达动态门槛时应放弃。"""
+    node = ExposedWebPageEnrichmentNode()
+    logged: list[str] = []
+    monkeypatch.setattr(node, "_log_fetch_event", lambda level, category, url, **kw: logged.append(category))
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            content=b"short",
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+        ),
+        [],
+    )
+
+    result = await node.simple_ua("https://a.com/short", 45, 200)
+
+    assert result == {}
+    assert logged == ["simple_ua_short"]
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_records_local_pdf_parse_failure(monkeypatch, real_simple_ua):
+    """PDF 本地解析抛错时应记 simple_ua_parse_failed 并放弃，而不是外抛。"""
+    node = ExposedWebPageEnrichmentNode()
+    logged: list[str] = []
+    monkeypatch.setattr(node, "_log_fetch_event", lambda level, category, url, **kw: logged.append(category))
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(content=b"%PDF-1.7 broken", headers={"Content-Type": "application/pdf"}),
+        [],
+    )
+
+    def boom(data: bytes, limit: int, max_pages: int) -> tuple[str, bool]:
+        raise ValueError("bad pdf")
+
+    _patch_extract_pdf(monkeypatch, boom)
+
+    result = await node.simple_ua("https://a.com/broken.pdf", 45, 200)
+
+    assert result == {}
+    assert logged == ["simple_ua_parse_failed"]
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_aborts_download_over_byte_cap(monkeypatch, real_simple_ua):
+    """累计字节超过上限时必须中断，而不是把整个响应读进内存。"""
+    node = ExposedWebPageEnrichmentNode()
+    logged: list[dict] = []
+    monkeypatch.setattr(
+        node,
+        "_log_fetch_event",
+        lambda level, category, url, **kw: logged.append(kw.get("extra") or {}),
+    )
+    monkeypatch.setattr(webpage_enrichment_module, "SIMPLE_UA_MAX_DOWNLOAD_BYTES", 10)
+    # 第 3 片就会越过上限；第 4 片只用于证明真的提前中断了。
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            headers={"Content-Type": "application/pdf"},
+            chunks=[b"aaaa", b"bbbb", b"cccc", b"dddd"],
+        ),
+        [],
+    )
+
+    result = await node.simple_ua("https://a.com/huge.pdf", 45, 200)
+
+    assert result == {}
+    assert logged[0]["downloaded_bytes"] == 12
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_aborts_download_when_stage_timeout_expires(monkeypatch, real_simple_ua):
+    """下载阶段超时必须自己中断，而不是一直等到外层 deadline。
+
+    httpx 的 timeout 只作用于单次操作，慢速滴流与连接重试会累加，所以要单独设界。
+    """
+    node = ExposedWebPageEnrichmentNode()
+    logged: list[str] = []
+    monkeypatch.setattr(node, "_log_fetch_event", lambda level, category, url, **kw: logged.append(category))
+
+    class _StallingResponse(_FakeHttpxResponse):
+        async def aiter_bytes(self):
+            # 必须是 async generator（含 yield），否则 async for 会抛 TypeError 而非挂住。
+            await asyncio.sleep(_STALL_SECONDS)
+            yield b"late"
+
+    _patch_httpx_async_client(
+        monkeypatch,
+        _StallingResponse(headers={"Content-Type": "application/pdf"}),
+        [],
+    )
+
+    started = time.monotonic()
+    result = await node.simple_ua("https://a.com/stuck.pdf", 1, 200)
+    elapsed = time.monotonic() - started
+
+    assert result == {}
+    assert logged == ["simple_ua_failed"]
+    # 真正验证"下载阶段自己超时"：必须远早于 stall 就返回。
+    assert elapsed < _STALL_SECONDS / 2
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_aborts_parse_when_stage_timeout_expires(monkeypatch, real_simple_ua):
+    """解析阶段超时必须放弃本轮，把剩余预算留给 jina 兜底。"""
+    node = ExposedWebPageEnrichmentNode()
+    logged: list[str] = []
+    monkeypatch.setattr(node, "_log_fetch_event", lambda level, category, url, **kw: logged.append(category))
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            content=b"%PDF-1.7 payload",
+            headers={"Content-Type": "application/pdf"},
+        ),
+        [],
+    )
+    release = threading.Event()
+
+    def blocking_extract(data: bytes, limit: int, max_pages: int) -> tuple[str, bool]:
+        release.wait(timeout=10)
+        return "x", False
+
+    _patch_extract_pdf(monkeypatch, blocking_extract)
+    try:
+        result = await node.simple_ua("https://a.com/stuck.pdf", 1, 200)
+    finally:
+        release.set()
+
+    assert result == {}
+    assert logged == ["simple_ua_parse_failed"]
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_logs_stage_timings_on_success(monkeypatch, real_simple_ua):
+    """成功日志要带上两段耗时与下载字节数，否则无法回看约束取值是否合适。"""
+    node = ExposedWebPageEnrichmentNode()
+    logged: list[dict] = []
+    monkeypatch.setattr(
+        node,
+        "_log_fetch_event",
+        lambda level, category, url, **kw: logged.append(kw.get("extra") or {}),
+    )
+    payload = b"%PDF-1.7 payload"
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(content=payload, headers={"Content-Type": "application/pdf"}),
+        [],
+    )
+    _patch_extract_pdf(monkeypatch, lambda data, limit, max_pages: ("p" * 300, False))
+
+    result = await node.simple_ua("https://a.com/paper.pdf", 45, 200)
+
+    assert result["fetch_method"] == "simple_ua"
+    assert logged[0]["downloaded_bytes"] == len(payload)
+    assert logged[0]["download_ms"] >= 0
+    assert logged[0]["parse_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_webpage_prefers_configured_jina_provider():
+    """_pre_handle 构造好 provider 后，C 段应走 provider.fetch_page 而非 legacy reader。"""
+    node = ExposedWebPageEnrichmentNode()
+    node._jina_provider = Mock(fetch_page=Mock(return_value="z" * 400))
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
+        "WebFetchWebpageAdapter.fetch_webpage_sync",
+        return_value={"url": "https://a.com", "status_code": 200, "content": "x" * 10},
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
+        "WebFetchWebpageAdapter.fetch_via_jina_reader_sync",
+    ) as mock_legacy:
+        result = await node.fetch_webpage("https://a.com", 45)
+
+    assert result["fetch_method"] == "jina_provider"
+    assert result["content"] == "z" * 400
+    mock_legacy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_decodes_html_without_declared_charset(monkeypatch, real_simple_ua):
+    """Content-Type 不带 charset 的 GBK 页面必须正确解码，不能整篇乱码。
+
+    httpx 的 .text 在缺 charset 时固定按 utf-8 解，非 UTF-8 页面会得到等长的乱码正文，
+    既不会被长度门槛拦下、也不会退到 C 路。此处与 A 路共用 harness 的字符集嗅探。
+    """
+    node = ExposedWebPageEnrichmentNode()
+    paragraphs = "".join(f"<p>第 {i} 段中文正文，用于验证字符集探测是否正确。</p>" for i in range(40))
+    html = f"<html><head><title>中文标题</title></head><body><article>{paragraphs}</article></body></html>"
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            content=html.encode("gbk"),
+            headers={"Content-Type": "text/html"},  # 刻意不带 charset
+        ),
+        [],
+    )
+
+    result = await node.simple_ua("https://a.com/gbk", 45, 200)
+
+    assert result["title"] == "中文标题"
+    assert "第 0 段中文正文" in result["content"]
+    assert "�" not in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_jina_provider_call_is_capped_by_its_own_stage_limit(monkeypatch):
+    """C 路要有独立阶段上限，而不是只靠外层 deadline 强杀。
+
+    provider 内部是固定 3 次重试 + 线性退避（最坏约 37s），自身不知道还剩多少预算。
+    总预算给足（45s）、阶段上限压到 1s，因此被触发的只能是阶段上限。
+    """
+    node = ExposedWebPageEnrichmentNode()
+    monkeypatch.setattr(webpage_enrichment_module, "JINA_STAGE_TIMEOUT_SECONDS", 1)
+    release = threading.Event()
+    budgets: list[float | None] = []
+
+    def blocking_fetch_page(url: str, *, budget: float | None = None) -> str:
+        budgets.append(budget)
+        release.wait(timeout=10)
+        return "z" * 400
+
+    node._jina_provider = Mock(fetch_page=blocking_fetch_page)
+    logged: list[str] = []
+    monkeypatch.setattr(node, "_log_fetch_event", lambda level, category, u, **kw: logged.append(category))
+
+    try:
+        with patch(
+            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
+            "WebFetchWebpageAdapter.fetch_webpage_sync",
+            return_value={"url": "https://a.com", "status_code": 200, "content": "x" * 10},
+        ):
+            started = time.monotonic()
+            result = await node.fetch_webpage("https://a.com", 45)
+            elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert result == {}
+    assert "jina_fetch_failed" in logged
+    assert elapsed < 5
+    # 阶段上限同时作为预算传进 provider: to_thread 的线程不可取消, 只能靠它自己到点结束
+    assert budgets == [1.0]
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,12 @@ from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
     WebFetchWebpageAdapter,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.registry import (
+    resolve_web_fetch_provider,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina import (
+    JinaWebFetchProvider,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
@@ -48,6 +55,27 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 MAX_SELECTION_CANDIDATES = 10
+# enrichment 抓取并发上限: 避免 JinaWebFetchProvider 瞬时高并发打爆镜像
+ENRICH_FETCH_CONCURRENCY = 3
+# httpx 直连路本地解析 PDF 的最大页数
+SIMPLE_UA_PDF_MAX_PAGES = 50
+# httpx 直连路下载阶段的总时长上限。httpx 自带的 timeout 只作用于单次操作,
+# 慢速滴流和连接重试会累加, 所以要给整个下载阶段单独设界, 也给后面的解析和 jina 兜底留出预算。
+SIMPLE_UA_DOWNLOAD_TIMEOUT_SECONDS = 30
+# httpx 直连路解析阶段的时长上限。下载上限 + 解析上限把单 URL 预算切成两段, 各自有界。
+SIMPLE_UA_PARSE_TIMEOUT_SECONDS = 15
+# httpx 直连路下载字节上限。只作 OOM 护栏, 取值远高于真实 PDF:
+# 按字节截断会破坏 PDF 尾部的交叉引用表, 导致本可解析的文档解析失败。
+SIMPLE_UA_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+# Jina Reader 路的阶段上限。provider 内部是固定 3 次重试 + 线性退避(最坏约 37s),
+# 自身不知道还剩多少预算, 这里给它一个独立上限: 与 A/B 路一样"每段各自有界"。
+# 注意 _remaining_timeout_seconds 向上取整, 阶段上限因而恒 >= 实际剩余: 只有剩余
+# 超过 30s 时才由它先到并把原因记成 jina_fetch_failed, 否则先到的是外层 deadline
+# (记 fetch_deadline_exceeded)。
+# 同一个值也作为 budget 传给 provider: asyncio.to_thread 的线程不可取消, 但内部
+# 重试、退避与单次请求超时都被压进这个预算, 线程收在预算附近(最坏再多花一次请求的
+# connect + read), 不会跑满固定的 3 次重试。预算充裕时不触发, 与设界前一致。
+JINA_STAGE_TIMEOUT_SECONDS = 30
 
 
 def _remaining_timeout_seconds(deadline: float) -> int:
@@ -61,6 +89,11 @@ def _remaining_timeout_seconds(deadline: float) -> int:
     """
     remaining = deadline - asyncio.get_running_loop().time()
     return max(1, math.ceil(remaining))
+
+
+def _elapsed_ms(started: float) -> int:
+    """返回自 ``started`` 起经过的毫秒数，用于抓取各阶段耗时日志。"""
+    return int((time.monotonic() - started) * 1000)
 
 
 @dataclass(frozen=True)
@@ -91,6 +124,9 @@ class WebPageEnrichmentNode(BaseNode):
         """初始化网页正文增强节点。"""
         super().__init__()
         self.llm: Any = None
+        # jina 兜底 provider；_pre_handle 会在 enabled 时覆盖它。
+        # 这里给默认值，使不经 _pre_handle 的直接调用（测试等）落回 legacy 分支而非 AttributeError。
+        self._jina_provider: Any = None
 
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
         """读取网页增强节点需要的运行状态。
@@ -107,9 +143,18 @@ class WebPageEnrichmentNode(BaseNode):
         step_title = session.get_global_state("collector_context.step_title")
         enabled = bool(session.get_global_state("config.info_collector_webpage_enrich_enable"))
         self.llm = None
+        # jina 兜底用 JinaWebFetchProvider(带 Bearer / 多 base / 鉴权失败不短路)。
+        # 配了 web_fetch_provider_config(provider=jina) 就用配置; 否则默认构造(无 key, 走 r.jinaai.cn 镜像)。
+        self._jina_provider = None
         if enabled:
             llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
             self.llm = llm_context.get().get(llm_model_name)
+            _wfpc = session.get_global_state("config.web_fetch_provider_config") or {}
+            _provider_name, _provider = resolve_web_fetch_provider(_wfpc)
+            if _provider_name == "jina" and _provider is not None:
+                self._jina_provider = _provider
+            else:
+                self._jina_provider = JinaWebFetchProvider()
         return {
             "enabled": enabled,
             "max_urls": session.get_global_state("config.info_collector_webpage_enrich_max_urls") or 3,
@@ -230,6 +275,7 @@ class WebPageEnrichmentNode(BaseNode):
         content_len: int | None = None,
         required_len: int | None = None,
         exc: Exception | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         """记录抓取事件，并在敏感模式下移除 URL 和异常正文。
 
@@ -240,26 +286,31 @@ class WebPageEnrichmentNode(BaseNode):
             content_len: 抓取正文长度。
             required_len: 当前动态最低正文长度。
             exc: 抓取异常；仅非敏感模式记录。
+            extra: 额外的非敏感键值对（如阶段耗时、下载字节数），按 ``key=value`` 追加。
 
         Returns:
             None.
         """
+        extra_text = "".join(f" {key}={value}" for key, value in extra.items()) if extra else ""
         if LogManager.is_sensitive():
             logger.log(
                 level,
-                "[WebPageEnrichmentNode] fetch event. category=%s content_len=%s required_len=%s",
+                "[WebPageEnrichmentNode] fetch event. category=%s content_len=%s required_len=%s%s",
                 category,
                 content_len,
                 required_len,
+                extra_text,
             )
             return
         logger.log(
             level,
-            "[WebPageEnrichmentNode] fetch event. category=%s url=%s content_len=%s required_len=%s error=%s",
+            "[WebPageEnrichmentNode] fetch event. category=%s url=%s content_len=%s "
+            "required_len=%s%s error=%s",
             category,
             url,
             content_len,
             required_len,
+            extra_text,
             exc,
         )
 
@@ -380,13 +431,178 @@ class WebPageEnrichmentNode(BaseNode):
             )
             return {}
 
+    async def _fetch_via_simple_ua(
+        self,
+        url: str,
+        deadline: float,
+        required_length: int,
+    ) -> dict:
+        """httpx 直连 + HTML/PDF 抽取。
+
+        补 harness 直连没有的 PDF 抓取能力: 它对 `.pdf` 结尾的 URL 直接跳过, 对其它 URL
+        拿到的 PDF 字节也不解析、直接弃用; 本方法保留 httpx 返回的原始 bytes 并交
+        extract_pdf 处理。
+
+        同时换了一个请求客户端(本方法 httpx, harness 直连是 aiohttp), 覆盖到 harness
+        直连取不到正文的站点。
+
+        下载与解析各自设时长上限(`SIMPLE_UA_DOWNLOAD_TIMEOUT_SECONDS` /
+        `SIMPLE_UA_PARSE_TIMEOUT_SECONDS`), 下载另有字节上限
+        (`SIMPLE_UA_MAX_DOWNLOAD_BYTES`); 三者都从当前 URL 的总 deadline 里取,
+        避免某个阶段无限期占用预算, 也给后面的 jina 兜底留出重试时间。
+
+        Args:
+            url: 目标 URL。
+            deadline: event loop 单调时钟上的整体截止时间。
+            required_length: 抓取正文动态最低长度。
+
+        Returns:
+            成功返回结构化结果(含 ``fetch_method='simple_ua'``), 失败返回空字典。
+        """
+        import httpx
+        from openjiuwen.harness.tools.web import WebFetchWebpageTool
+        from openjiuwen.harness.tools.web._decode import _decode_response_text
+        from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
+            extract_pdf,
+        )
+
+        remaining = _remaining_timeout_seconds(deadline)
+        download_timeout = max(1, min(SIMPLE_UA_DOWNLOAD_TIMEOUT_SECONDS, remaining))
+        download_started = time.monotonic()
+        downloaded_bytes = 0
+        status_code = 0
+        response_headers: dict[str, str] = {}
+        data = b""
+        try:
+            async with httpx.AsyncClient(
+                timeout=download_timeout,
+                follow_redirects=True,
+                trust_env=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; DeepResearchEnrichment/1.0)"},
+            ) as client:
+                async with asyncio.timeout(download_timeout):
+                    async with client.stream("GET", url) as resp:
+                        status_code = resp.status_code
+                        response_headers = resp.headers
+                        chunks: list[bytes] = []
+                        if status_code == 200:
+                            async for chunk in resp.aiter_bytes():
+                                downloaded_bytes += len(chunk)
+                                if downloaded_bytes > SIMPLE_UA_MAX_DOWNLOAD_BYTES:
+                                    raise ValueError(
+                                        "download size exceeds "
+                                        f"{SIMPLE_UA_MAX_DOWNLOAD_BYTES} bytes"
+                                    )
+                                chunks.append(chunk)
+                        data = b"".join(chunks)
+        except Exception as exc:
+            self._log_fetch_event(
+                logging.WARNING,
+                "simple_ua_failed",
+                url,
+                required_len=required_length,
+                exc=exc,
+                extra={
+                    "status": status_code,
+                    "downloaded_bytes": downloaded_bytes,
+                    "download_ms": _elapsed_ms(download_started),
+                },
+            )
+            return {}
+        if status_code != 200 or not data:
+            self._log_fetch_event(
+                logging.INFO,
+                "simple_ua_failed",
+                url,
+                content_len=len(data),
+                required_len=required_length,
+                extra={"status": status_code, "download_ms": _elapsed_ms(download_started)},
+            )
+            return {}
+        content_type = response_headers.get("Content-Type", "")
+        download_ms = _elapsed_ms(download_started)
+        title = ""
+        truncated = False
+        parse_timeout = max(1, min(SIMPLE_UA_PARSE_TIMEOUT_SECONDS, _remaining_timeout_seconds(deadline)))
+        parse_started = time.monotonic()
+        try:
+            if "pdf" in content_type.lower() or data[:5] == b"%PDF-":
+                text, truncated = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        extract_pdf,
+                        data,
+                        MAX_COLLECTOR_DOC_CONTENT_LENGTH,
+                        SIMPLE_UA_PDF_MAX_PAGES,
+                    ),
+                    timeout=parse_timeout,
+                )
+            else:
+                # 流式读取后 httpx 不再保留 resp.text; 改用 harness 的解码函数, 与 A 路一致:
+                # 先按 Content-Type 声明的字符集, 缺失时交给 charset_normalizer 嗅探。
+                # 直接用 httpx 的 .text 在缺 charset 的 GBK 等页面上会整篇解码成乱码。
+                decoded = _decode_response_text(data, content_type=content_type)
+                if "html" in content_type.lower():
+                    # 复用 harness 的正文抽取, 让 B 路与 A 路解析出同一份正文。
+                    # harness 没有公开的等价入口, 只能取这个私有静态方法; 照仓内
+                    # report_export 处理 python-docx 内部成员的先例声明豁免。
+                    title, decoded = WebFetchWebpageTool._extract_main_text_from_html(decoded)  # pylint: disable=protected-access
+                text = decoded[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
+                truncated = len(decoded) > MAX_COLLECTOR_DOC_CONTENT_LENGTH
+        except Exception as exc:
+            self._log_fetch_event(
+                logging.WARNING,
+                "simple_ua_parse_failed",
+                url,
+                content_len=len(data),
+                required_len=required_length,
+                exc=exc,
+                extra={
+                    "downloaded_bytes": downloaded_bytes,
+                    "download_ms": download_ms,
+                    "parse_ms": _elapsed_ms(parse_started),
+                },
+            )
+            return {}
+        parse_ms = _elapsed_ms(parse_started)
+        if not text or len(text) < required_length:
+            self._log_fetch_event(
+                logging.INFO,
+                "simple_ua_short",
+                url,
+                content_len=len(text),
+                required_len=required_length,
+                extra={"download_ms": download_ms, "parse_ms": parse_ms},
+            )
+            return {}
+        self._log_fetch_event(
+            logging.INFO,
+            "simple_ua_ok",
+            url,
+            content_len=len(text),
+            required_len=required_length,
+            extra={
+                "downloaded_bytes": downloaded_bytes,
+                "download_ms": download_ms,
+                "parse_ms": parse_ms,
+            },
+        )
+        return {
+            "url": url,
+            "status_code": 200,
+            "title": title,
+            "content": text,
+            "truncated": truncated,
+            "fetch_method": "simple_ua",
+        }
+
     async def _fetch_webpage_before_deadline(
         self,
         url: str,
         deadline: float,
         required_length: int,
     ) -> dict:
-        """在既定 deadline 内执行 direct、PDF 和 Jina fallback。
+        """依次尝试三条抓取路, 前一条拿不到正文才退到下一条:
+        harness 直连(完整 Chrome UA) -> httpx 直连(带 PDF 本地解析) -> jina reader 代理。
 
         Args:
             url: 目标网页 URL。
@@ -442,6 +658,75 @@ class WebPageEnrichmentNode(BaseNode):
                 content_len=len(str(direct_result.get("content") or "")),
                 required_len=required_length,
             )
+        # harness 直连失败或正文太短时, 换 httpx 直连再试一次
+        b_result = await self._fetch_via_simple_ua(url, deadline, required_length)
+        if b_result:
+            return b_result
+        # jina 兜底: 用带鉴权/多 base 的 JinaWebFetchProvider。
+        # 生产路径下 _pre_handle 必会构造 provider，故此处恒为真; `is not None` 保留给直接调用的 legacy 回退。
+        if self._jina_provider is not None:
+            try:
+                # 给 C 路一个独立阶段上限, 与 A/B 路一致; 取 min 保证不超过剩余总预算。
+                # 同一个值再作为预算传进 provider: to_thread 的线程不可取消, 只能让它
+                # 把内部重试、退避与单次请求超时都压进这个窗口, 到点自行结束。
+                stage_timeout = float(
+                    max(1, min(JINA_STAGE_TIMEOUT_SECONDS, _remaining_timeout_seconds(deadline)))
+                )
+                jina_content = await asyncio.wait_for(
+                    asyncio.to_thread(self._jina_provider.fetch_page, url, budget=stage_timeout),
+                    timeout=stage_timeout,
+                )
+            except Exception as exc:
+                self._log_fetch_event(
+                    logging.WARNING,
+                    "jina_fetch_failed",
+                    url,
+                    required_len=required_length,
+                    exc=exc,
+                )
+                return {}
+            if not jina_content or jina_content.startswith("[web_fetch] Failed"):
+                self._log_fetch_event(
+                    logging.WARNING,
+                    "jina_fetch_failed",
+                    url,
+                    content_len=len(jina_content or ""),
+                    required_len=required_length,
+                )
+                return {}
+            if has_pdf_magic({"content": jina_content}):
+                self._log_fetch_event(
+                    logging.WARNING,
+                    "jina_pdf_payload",
+                    url,
+                    content_len=len(jina_content),
+                    required_len=required_length,
+                )
+                return {}
+            if len(jina_content) < required_length:
+                self._log_fetch_event(
+                    logging.WARNING,
+                    "jina_content_short",
+                    url,
+                    content_len=len(jina_content),
+                    required_len=required_length,
+                )
+                return {}
+            self._log_fetch_event(
+                logging.INFO,
+                "jina_provider_ok",
+                url,
+                content_len=len(jina_content),
+                required_len=required_length,
+            )
+            return {
+                "url": url,
+                "status_code": 200,
+                "title": "",
+                "content": jina_content,
+                "truncated": False,
+                "fetch_method": "jina_provider",
+            }
         try:
             jina_result = await asyncio.to_thread(
                 WebFetchWebpageAdapter.fetch_via_jina_reader_sync,
@@ -577,12 +862,18 @@ class WebPageEnrichmentNode(BaseNode):
         all_docs = list(state.get("doc_infos") or [])
         source_store = dict(state.get("source_store") or {})
         replacements: list[tuple[dict[str, str], dict[str, Any]]] = []
-        tasks = [
-            self._enrich_candidate(state=state, loop_docs=loop_docs, candidate_index=candidate_index)
-            for candidate_index in selected_indexes
-        ]
+        # 限并发, 避免瞬时高并发打爆镜像
+        sem = asyncio.Semaphore(ENRICH_FETCH_CONCURRENCY)
+
+        async def _bounded_enrich(candidate_index: int):
+            async with sem:
+                return await self._enrich_candidate(
+                    state=state, loop_docs=loop_docs, candidate_index=candidate_index
+                )
+
+        bounded_tasks = [_bounded_enrich(i) for i in selected_indexes]
         # fetch 与压缩并行执行；状态写回仍集中在 gather 之后，避免并发修改共享列表。
-        for result in await asyncio.gather(*tasks, return_exceptions=True):
+        for result in await asyncio.gather(*bounded_tasks, return_exceptions=True):
             if isinstance(result, Exception):
                 if LogManager.is_sensitive():
                     logger.warning(

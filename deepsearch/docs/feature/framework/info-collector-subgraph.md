@@ -63,6 +63,7 @@
 - `AgentConfig.info_collector_webpage_enrich_enable`：默认 `False`。只有开启时才执行该节点。
 - `ServiceConfig.info_collector_webpage_enrich_max_urls`：默认 `3`。每轮最多增强的 URL 数。
 - `ServiceConfig.info_collector_webpage_enrich_fetch_timeout_seconds`：默认 `45`。单个 URL 抓取超时时间。
+- `AgentConfig.web_fetch_provider_config`：可选。Jina Reader 路据此解析 provider（`provider_name` / `api_key` / `base_url`），契约见 [web fetch provider 注册](./web-fetch-provider-registry.md)。
 
 运行流程：
 
@@ -70,8 +71,12 @@
 2. 过滤非 HTTP/HTTPS URL、重复 URL、已增强条目；URL 去重统一复用 collector 的 canonical URL 规则，移除常见跟踪参数和 fragment、规范化 scheme/host，但保留可能区分资源的路径大小写。候选最多保留 10 个，并按已有 `scores` 做轻量排序。
 3. 候选交给选择 LLM，候选字段包含 `candidate_index/title/url/source/query/key_passages/scores`，不包含 `doc_index` 和 `original_content`。固定规则位于 system message，任务字段、候选字段和网页正文以不可信 JSON 放入独立 user message；模型必须忽略这些字段内的指令文本。
 4. 选择 LLM 只返回 `selected_indexes`，其值必须是可见的 `candidate_index`；节点负责去重、过滤越界并限制数量。如果没有高价值网页，可以返回空列表。
-5. 对选中的 URL 使用 `asyncio.gather` 并行执行 fetch 和压缩；最大并发数受 `info_collector_webpage_enrich_max_urls` 限制。
-6. fetch 使用 `WebFetchWebpageAdapter.fetch_webpage_sync()`。当前能力是单页抓取，不递归爬站；遇到 `401/403/429` 时由 openJiuwen fetch 实现 fallback 到公开 Jina Reader。显式 `.pdf` URL 直接使用 Jina Reader；无扩展名 URL 的直接响应以 `%PDF-` 文件魔数开头时也切换到 Jina，避免把 PDF 对象流送入压缩 LLM。普通抓取异常，或正文少于 `max(200, 旧 original_content 长度)` 时，同样使用 Jina 重试；Jina 返回 PDF 原始数据或仍未达到动态门槛时保留旧证据。direct、PDF 和 Jina fallback 共享同一个单 URL deadline，不会在 fallback 时重新获得一份完整超时预算。当前不依赖 Jina key。
+5. 对选中的 URL 使用 `asyncio.gather` 并行执行 fetch 和压缩；并发数同时受 `info_collector_webpage_enrich_max_urls`（每轮 URL 数）和 `ENRICH_FETCH_CONCURRENCY`（抓取并发，默认 `3`）限制。
+6. 每个 URL 依次尝试三条抓取路，前一条拿不到可用正文才退到下一条；三路共享同一个单 URL deadline（见 `info_collector_webpage_enrich_fetch_timeout_seconds`，默认 45 秒），退到下一条时不会重新获得完整超时预算。当前能力是单页抓取，不递归爬站。
+   - **harness 直连**（`WebFetchWebpageAdapter.fetch_webpage_sync()`）：以完整 Chrome UA 直连目标站。该入口在目标站返回 `401/403/429` 时，会由 openJiuwen fetch 实现内部 fallback 到第三方包内置的匿名 Jina Reader（地址与请求头写死、不可配置），因此该路返回值不代表一定来自直连。
+   - **httpx 直连**（`_fetch_via_simple_ua`）：换请求客户端以覆盖连接层被拦的站点；用 pypdfium2 把响应 PDF 字节**本地解析**为正文（最多 `SIMPLE_UA_PDF_MAX_PAGES`，默认 50 页），补直连路缺失的 PDF 能力。
+   - **Jina Reader 代理**（`JinaWebFetchProvider.fetch_page`）：provider 由 `_pre_handle` 经 `resolve_web_fetch_provider` 从 `agent_config.web_fetch_provider_config` 解析，未配置时默认构造；并发向多个 reader base（默认 `r.jinaai.cn` 与 `r.jina.ai`）竞速取先返回者，单个 base 鉴权失败不再短路整次竞速。
+   判定与回退：URL 以 `.pdf` 结尾时跳过 harness 直连、直接进入 httpx 直连；正文少于 `max(200, 旧 original_content 长度)` 时继续退下一路；任一路返回 `%PDF-` 原始数据或三路都未达到动态门槛时保留旧证据。
 7. raw content 进入压缩 LLM 前截断到 `MAX_COLLECTOR_DOC_CONTENT_LENGTH * 10`。
 8. 压缩 LLM 同时接收已有 `original_content` 和新抓取正文，合并并保留已有可验证事实；浏览器验证、CAPTCHA、访问拒绝、登录、JavaScript 提示、错误页或重定向占位页视为无效抓取内容并被忽略。输出正文保持网页来源语言，不在证据增强阶段按 collector 的 `language` 翻译；面向用户的语言本地化由后续报告生成处理。写回前限制在 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 以内。
 9. 节点使用已有 `key_passages` 检查数字、单位和设备/数据集标识是否保留；匹配时忽略大小写、空格和标点差异。质量门禁通过后才集中写回 `new_doc_infos_current_loop`、累计 `doc_infos`、`history_queries[*].doc_infos` 和 `source_store`，然后交给 `SupervisorNode`、`SummaryNode` 和最终报告器使用。
@@ -82,9 +87,9 @@
 - `key_passages`：压缩 LLM 基于新正文生成的关键片段；为空时降级为规则抽取。
 - `source_id`：基于原 `doc_id` 和新正文生成，用于区分同一文档下不同 evidence content。
 - `content_ref`：指向新的 `source_store` 内容。
-- `enrichment`：记录 `webpage_fetched`、抓取状态码、抓取后的 URL 和内容来源。`content_source` 为 `harness_webpage_fetch` 或 `jina_reader`；前者准确表示 openJiuwen harness 入口自身也可能执行内部 fallback。
+- `enrichment`：记录 `webpage_fetched`、抓取状态码、抓取后的 URL 和内容来源。`content_source` 取 `harness_webpage_fetch`（harness 直连路；注意该入口自身也可能执行内部 fallback）、`simple_ua`（httpx 直连路）或 `jina_provider`（Jina Reader 路）。
 
-普通抓取、Jina Reader、压缩 LLM 或质量门禁任一环节失败时，节点保留原 `original_content`、`key_passages`、`source_id`、`content_ref` 和 `source_store`，不会把失败结果标记为已增强。
+三路抓取、压缩 LLM 或质量门禁任一环节失败时，节点保留原 `original_content`、`key_passages`、`source_id`、`content_ref` 和 `source_store`，不会把失败结果标记为已增强。
 
 增强成功后保持不变：
 
@@ -108,7 +113,7 @@
 - Info 日志记录候选数量、选中数量、最大 URL 数。
 - fetch 前 Info 日志记录 URL、候选索引、doc 索引和 scores。
 - fetch 成功后 Info 日志记录 `doc_id/source_id/status_code/raw_len/compressed_len/key_passages/scores`。
-- 普通抓取过短、Jina Reader 失败或质量门禁拒绝替换时记录原因和长度。
+- 抓取失败、正文过短或质量门禁拒绝替换时记录原因和长度；httpx 直连路额外记录 `downloaded_bytes` / `download_ms` / `parse_ms`，用于判断阶段上限取值是否合适。
 - 非敏感模式下 Debug 日志只记录 `original_content` 增强前后的长度，不记录正文全文。
 - 敏感模式下 fetch、质量门禁和候选异常日志只保留固定事件分类与长度，不记录 URL、异常正文、事实锚点、标题或步骤文本。
 
@@ -162,9 +167,11 @@
 
 - collector 子图使用独立 workflow session，依赖驱动并发时避免共享子图状态。
 - runtime API 响应大小、JSON 深度和容器长度限制由工具层保护。
-- 网页抓取正文少于 200 字符或短于旧证据时不会直接覆盖旧证据；Jina Reader 重试仍不满足动态门槛时按抓取失败处理。
-- direct、PDF 和 Jina fallback 共用 `info_collector_webpage_enrich_fetch_timeout_seconds` 指定的整体 deadline；超时保留旧证据。
-- PDF URL 或 PDF 原始响应必须经 Jina Reader 转换为正文；Jina 仍返回 `%PDF-` 原始数据时按抓取失败处理。
+- 网页抓取正文少于 200 字符或短于旧证据时不会直接覆盖旧证据；三路都未达到动态门槛时按抓取失败处理。
+- 三条抓取路共用 `info_collector_webpage_enrich_fetch_timeout_seconds` 指定的整体 deadline；整体超时保留旧证据。
+- httpx 直连路的下载与解析各自设阶段上限（下载 30 秒、解析 15 秒），下载另有字节上限（100 MB）；任一阶段超时视为该路失败，继续退到 Jina Reader 路。字节上限定位是 OOM 护栏而非截断策略——按字节截断会破坏 PDF 尾部的交叉引用表，使本可解析的文档解析失败。
+- Jina Reader 路另有 30 秒阶段上限（`JINA_STAGE_TIMEOUT_SECONDS`）。provider 内部是固定 3 次重试 + 线性退避（不设界时最坏约 37 秒），自身不知道剩余预算，所以在节点侧单独设界：该上限取「30 秒」与「剩余预算向上取整」的较小值，因向上取整，多数情况下先到的仍是整体 deadline（事件记 `fetch_deadline_exceeded`，而非 `jina_fetch_failed`）。该上限同时作为 `budget` 传入 `fetch_page`——`asyncio.to_thread` 的底层线程不可取消，但 provider 会把内部重试、退避与单次请求超时都压进这个预算，线程收在预算附近（最坏再多花一次请求的 `connect + read`）。预算充裕时该预算不触发，行为与设界前逐字一致。
+- PDF 由 httpx 直连路用 pypdfium2 本地解析；该路拿不到正文时，PDF 仍可由 Jina Reader 路转换。三路都返回 `%PDF-` 原始数据时按抓取失败处理。
 - 压缩结果丢失旧关键片段中的数字或技术标识时，质量门禁拒绝替换并保留旧证据身份；描述性内容允许同义改写或翻译。
 - 空结果不会直接中断主图，但会通过 warning 进入章节和最终报告状态。
 - 候选和网页内容不会插入 system prompt；其中的指令样文本只能作为不可信数据处理。
@@ -176,7 +183,7 @@
 - `uv run pytest tests/framework/test_background_knowledge.py`
 - `uv run pytest tests/info_collector/test_webpage_enrichment.py`
 - `uv run pytest tests/info_collector/algorithm/test_tool_log.py`
-- 网页增强测试覆盖 canonical URL 去重、Prompt 消息隔离、输出语言、整体 fetch deadline、PDF/Jina fallback、质量门禁、敏感日志脱敏、历史 query/最终报告同步和并发异常隔离。
+- 网页增强测试覆盖 canonical URL 去重、Prompt 消息隔离、输出语言、三路抓取级联与整体 deadline、httpx 直连路各分支及其阶段上限、Jina 多 base 竞速与阶段上限、质量门禁、敏感日志脱敏、历史 query/最终报告同步和并发异常隔离。
 - `uv run pytest tests/info_collector/test_academic_search_routing.py`
 - `uv run pytest tests/info_collector/test_graph_builder.py::test_validate_query_count_accepts_structured_query_items`
 - `uv run pytest tests/info_collector/test_graph_builder.py::test_collector_query_prompt_contract_uses_dynamic_max_query_count`
@@ -187,4 +194,5 @@
 
 - [章节推理与写作子工作流](./section-reasoning-writing-sub-workflows.md)
 - [搜索工具注册与运行时 API 工具](./search-tool-registration.md)
+- [web fetch provider 注册](./web-fetch-provider-registry.md)
 - [资料采集](../algorithm/research-collector.md)
