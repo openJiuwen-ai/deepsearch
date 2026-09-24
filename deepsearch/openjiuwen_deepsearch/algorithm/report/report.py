@@ -26,7 +26,7 @@ from typing import Any
 
 from tenacity import RetryError
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import (
     EFFECT_SUB_REPORT_TAG,
     _format_report_error,
@@ -589,8 +589,11 @@ class Reporter(
         session = session_context.get()
         stream_id = str(uuid.uuid4())
         write_retry_feedback = ""
+        retry_messages = None
         for attempt_num in range(max_attempt_num):
-            write_res = await self._write_subsection_reports(current_inputs)
+            retry_options = {"retry_messages": retry_messages} if retry_messages is not None else {}
+            write_res = await self._write_subsection_reports(current_inputs, **retry_options)
+            retry_messages = write_res.get("retry_messages")
             if write_res["success"]:
                 if LogManager.is_sensitive():
                     logger.info(
@@ -617,9 +620,10 @@ class Reporter(
                 f"Warning: Generate section report failed on attempt {attempt_num + 1}/{max_attempt_num}"
                 f"{detail}. retry ..."
             )
-            current_inputs["sub_report_retry_feedback"] = (
-                self._sub_report_retry_feedback_from_failure(write_retry_feedback)
-            )
+            if retry_messages is None:
+                current_inputs["sub_report_retry_feedback"] = (
+                    self._sub_report_retry_feedback_from_failure(write_retry_feedback)
+                )
             await session.write_custom_stream(
                 self._make_payload(
                     stream_id,
@@ -634,8 +638,18 @@ class Reporter(
                 )
         return False, _format_sub_report_error("generate section report fail"), "", classified_content
 
-    async def _write_subsection_reports(self, current_inputs: dict) -> dict:
-        """Write subsection report to disk"""
+    async def _write_subsection_reports(
+        self, current_inputs: dict, *, retry_messages: list | None = None
+    ) -> dict:
+        """生成章节正文，并区分请求异常与内容失败的重试。
+
+        Args:
+            current_inputs: 章节上下文及待更新的正文数据。
+            retry_messages: 上次请求异常时保留的消息；内容失败应重新构建消息。
+
+        Returns:
+            成功状态及结果；仅请求调用抛出异常时附带可复用的 retry_messages。
+        """
         if LogManager.is_sensitive():
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [write_subsection_reports] Starting section_idx: "
@@ -706,17 +720,19 @@ class Reporter(
                 current_inputs.get("classified_content", []),
             )
 
-        sub_content_message = self._build_subsection_prompt(current_inputs, section_task, background_knowledge_contents)
+        subsection_context = self._build_subsection_context(current_inputs, background_knowledge_contents)
         current_section_description = current_inputs.get("section_description", "")
         current_section_format_requirements = current_inputs.get("section_format_requirements", [])
         current_chapter_outline = current_inputs.get("sub_section_outline", "")
         current_subsection = resolve_current_subsection(current_inputs)
+        llm_input = retry_messages
+        llm_request_in_progress = False
         try:
             sub_report_prompt = "sub_report_markdown"
-            llm_input = apply_system_prompt(
+            llm_input = llm_input if llm_input is not None else build_prompt_messages(
                 sub_report_prompt,
                 dict(
-                    messages=[dict(role="user", content=sub_content_message)],
+                    **subsection_context,
                     language=current_inputs.get("language"),
                     section_iscore=current_inputs.get("section_iscore", False),
                     audience_role=current_inputs.get("audience_role", ""),
@@ -756,12 +772,14 @@ class Reporter(
                     current_inputs.get("section_idx", 1),
                     llm_input,
                 )
+            llm_request_in_progress = True
             llm_output = await ainvoke_llm_with_stats(
                 llm=self._llm,
                 messages=llm_input,
                 agent_name=AgentLlmName.SUB_REPORTER.value,
                 need_stream_out=True,
             )
+            llm_request_in_progress = False
             if not LogManager.is_sensitive():
                 logger.debug(
                     "%s [write_subsection_reports] section_idx: %s llm_output is %s",
@@ -771,9 +789,12 @@ class Reporter(
                 )
             # Validate LLM output
             if not llm_output or not llm_output.get("content"):
-                raise CustomValueException(
-                    error_code=StatusCode.LLM_RESPONSE_ERROR.code,
-                    message=f"LLM returned empty content for the section {current_inputs.get('section_idx', 1)}",
+                current_inputs["sub_report_content"] = ""
+                return dict(
+                    success=False,
+                    result=self._build_sub_report_retry_feedback(
+                        "SUB_REPORT_CONTENT_EMPTY", "chapter"
+                    ),
                 )
 
             current_inputs["sub_report_content"] = llm_output.get("content", "")
@@ -797,5 +818,8 @@ class Reporter(
                 f"{EFFECT_SUB_REPORT_TAG} [write_subsection_reports] {log_msg}",
                 exc_info=True,
             )
-            return dict(success=False, result=result_msg)
-
+            # 仅请求调用异常复用消息；生成空内容或后处理失败需要新的纠错反馈。
+            result = dict(success=False, result=result_msg)
+            if llm_request_in_progress:
+                result["retry_messages"] = llm_input
+            return result

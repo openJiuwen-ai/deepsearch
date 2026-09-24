@@ -25,8 +25,8 @@ a返回给前端的结果是核验展示文本，不是替换报告正文的改�
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/truth_verification_assessment.md`
-- `openjiuwen_deepsearch/algorithm/prompts/truth_verification_search_task.md`
+- `openjiuwen_deepsearch/algorithm/prompts/truth_verification_assessment/`
+- `openjiuwen_deepsearch/algorithm/prompts/truth_verification_search_task/`
 
 主要测试：
 

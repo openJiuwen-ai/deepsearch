@@ -136,6 +136,7 @@ class SectionStartNode(Start):
                     collected_doc_num += len(doc_infos)
 
         section_context = SectionContext(
+            original_query=inputs.get("original_query", ""),
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
             section_idx=inputs.get("section_idx", '1'),
@@ -184,6 +185,17 @@ class BasePlanReasoningNode(BaseNode):
         research_intent = session.get_global_state("section_context.research_intent") or {}
         section_local_contract = session.get_global_state("section_context.section_local_contract") or {}
         current_inputs = {
+            "original_query": session.get_global_state("section_context.original_query") or "",
+            "query": (
+                session.get_global_state("section_context.section_task")
+                or session.get_global_state("section_context.original_query")
+                or ""
+            ),
+            "report_task": session.get_global_state("section_context.report_task") or "",
+            "section_task": session.get_global_state("section_context.section_task") or "",
+            "section_description": session.get_global_state(
+                "section_context.section_description"
+            ) or "",
             "section_idx": section_idx,
             "language": session.get_global_state("section_context.language"),
             "messages": session.get_global_state("section_context.messages"),
@@ -896,6 +908,7 @@ def build_editor_team_workflow():
         NodeId.START.value,
         SectionStartNode(),
         inputs_schema={
+            "original_query": "${original_query}",
             "language": "${language}",
             "messages": "${messages}",
             "section_idx": "${section_idx}",

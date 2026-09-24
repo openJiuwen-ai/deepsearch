@@ -36,7 +36,7 @@ async def test_generate_sub_report_sidecar_repairs_json_and_normalizes_soft_fiel
     mock_llm_context,
     mock_ainvoke_llm,
 ):
-    mock_ainvoke_llm.return_value = {
+    valid_response = {
         "content": (
             "```json\n"
             '{"chapter_summary":"摘要","key_findings":["发现",123],'
@@ -44,6 +44,7 @@ async def test_generate_sub_report_sidecar_repairs_json_and_normalizes_soft_fiel
             "```"
         )
     }
+    mock_ainvoke_llm.side_effect = [{"content": '{"chapter_summary":""}'}, valid_response]
     reporter = Reporter("basic")
 
     result = await reporter._generate_sub_report_sidecar(
@@ -64,6 +65,12 @@ async def test_generate_sub_report_sidecar_repairs_json_and_normalizes_soft_fiel
         risk_points=[],
     )
     assert mock_ainvoke_llm.await_args.kwargs["agent_name"] == AgentLlmName.SUB_REPORTER_SIDECAR.value
+    messages = mock_ainvoke_llm.await_args.kwargs["messages"]
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert "正文主体" in messages[-1]["content"]
+    assert "<retry_feedback>" in messages[-1]["content"]
+    assert "chapter_summary is missing or empty" in messages[-1]["content"]
+    assert '{"chapter_summary":""}' not in messages[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -100,11 +107,11 @@ async def test_generate_sub_report_sidecar_falls_back_to_full_body_after_retries
 @pytest.mark.asyncio
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 @patch(
-    "openjiuwen_deepsearch.algorithm.report.report_parts.apply_system_prompt",
+    "openjiuwen_deepsearch.algorithm.report.report_parts.build_prompt_messages",
     side_effect=ValueError("prompt render failed"),
 )
 async def test_generate_sub_report_sidecar_falls_back_when_prompt_render_fails(
-    mock_apply_system_prompt,
+    mock_build_prompt_messages,
     mock_llm_context,
 ):
     reporter = Reporter("basic")

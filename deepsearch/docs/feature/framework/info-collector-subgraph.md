@@ -34,6 +34,8 @@
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/collector_graph/info_collector.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/collector_graph/webpage_enrichment.py`
 - `openjiuwen_deepsearch/algorithm/research_collector/webpage_enrichment.py`
+- `openjiuwen_deepsearch/algorithm/prompts/collector_webpage_enrichment_select/`
+- `openjiuwen_deepsearch/algorithm/prompts/collector_webpage_enrichment_compress/`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/editor_team_nodes.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/dependency_reasoning_team_nodes.py`
 - `tests/framework/test_background_knowledge.py`
@@ -73,7 +75,7 @@
 5. 对选中的 URL 使用 `asyncio.gather` 并行执行 fetch 和压缩；最大并发数受 `info_collector_webpage_enrich_max_urls` 限制。
 6. fetch 使用 `WebFetchWebpageAdapter.fetch_webpage_sync()`。当前能力是单页抓取，不递归爬站；遇到 `401/403/429` 时由 openJiuwen fetch 实现 fallback 到公开 Jina Reader。显式 `.pdf` URL 直接使用 Jina Reader；无扩展名 URL 的直接响应以 `%PDF-` 文件魔数开头时也切换到 Jina，避免把 PDF 对象流送入压缩 LLM。普通抓取异常，或正文少于 `max(200, 旧 original_content 长度)` 时，同样使用 Jina 重试；Jina 返回 PDF 原始数据或仍未达到动态门槛时保留旧证据。direct、PDF 和 Jina fallback 共享同一个单 URL deadline，不会在 fallback 时重新获得一份完整超时预算。当前不依赖 Jina key。
 7. raw content 进入压缩 LLM 前截断到 `MAX_COLLECTOR_DOC_CONTENT_LENGTH * 10`。
-8. 压缩 LLM 同时接收已有 `original_content` 和新抓取正文，合并并保留已有可验证事实；浏览器验证、CAPTCHA、访问拒绝、登录、JavaScript 提示、错误页或重定向占位页视为无效抓取内容并被忽略。输出正文保持网页来源语言，不在证据增强阶段按 collector 的 `language` 翻译；面向用户的语言本地化由后续报告生成处理。写回前限制在 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 以内。
+8. 压缩 LLM 同时接收已有 `original_content` 和新抓取正文，合并并保留已有可验证事实；浏览器验证、CAPTCHA、访问拒绝、登录、JavaScript 提示、错误页或重定向占位页视为无效抓取内容并被忽略。输出正文保持网页来源语言，不在证据增强阶段按 collector 的 `language` 翻译；面向用户的语言本地化由后续报告生成处理。Prompt 中的 `max_content_length` 仅限制 `original_content` 字符数，不限制整个 JSON 或 `key_passages` 的合计长度。
 9. 节点使用已有 `key_passages` 检查数字、单位和设备/数据集标识是否保留；匹配时忽略大小写、空格和标点差异。质量门禁通过后才集中写回 `new_doc_infos_current_loop`、累计 `doc_infos`、`history_queries[*].doc_infos` 和 `source_store`，然后交给 `SupervisorNode`、`SummaryNode` 和最终报告器使用。
 
 增强成功后会刷新：

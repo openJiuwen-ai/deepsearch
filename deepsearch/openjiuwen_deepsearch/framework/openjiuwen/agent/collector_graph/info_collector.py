@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from openjiuwen.core.context_engine.base import ModelContext
-from openjiuwen.core.foundation.llm.schema.message import UserMessage
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
+    PromptBuildOptions,
+    build_prompt_messages,
+)
 from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_call, \
     process_tool_result, remove_duplicate_items
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
@@ -519,7 +521,7 @@ class InfoRetrievalNode(BaseNode):
 
         query = state.get("search_query", step_title)
         agent_input = {
-            "messages": [UserMessage(content=f"Now deal with the Query:\n[Query]: {query}\n\n"), ],
+            "messages": [],
             "remaining_steps": None,
             "web_page_search_record": [],
             "local_text_search_record": [],
@@ -914,14 +916,34 @@ class InfoRetrievalNode(BaseNode):
                             f"Collecting info for query: {query} | "
                             f"[InfoRetrievalNode] Current step index: {i + 1}")
             agent_input["remaining_steps"] = max_tool_call_turns_per_query - i
-            tool_prompt = apply_system_prompt("collector", agent_input)
+            prompt_context = {
+                **agent_input,
+                "query": query if i == 0 else "",
+            }
+            prompt_context.pop("messages", None)
+            tool_prompt = build_prompt_messages(
+                "collector",
+                prompt_context,
+                options=PromptBuildOptions(prior_messages=agent_input["messages"]),
+            )
+            current_user = tool_prompt[-1]
 
             response = await self._invoke_llm_with_retry(tool_prompt, tool_list, state)
             tool_calls = response.get("tool_calls", []) if response else []
             executed_tool_call = tool_calls[-1] if tool_calls else None
-            agent_input = await self._process_llm_response(response, agent_input, tool_dict, state)
             if not tool_calls:
                 break
+            if (
+                    not isinstance(executed_tool_call, dict)
+                    or executed_tool_call.get("name") not in tool_dict
+            ):
+                logger.warning(
+                    "section_idx: %s | [InfoRetrievalNode] Collector returned an unavailable tool call.",
+                    section_idx,
+                )
+                break
+            agent_input["messages"].append(current_user)
+            agent_input = await self._process_llm_response(response, agent_input, tool_dict, state)
             if (
                     executed_tool_call.get("name") == "web_search_tool"
                     and "web_search_tool" in tool_dict

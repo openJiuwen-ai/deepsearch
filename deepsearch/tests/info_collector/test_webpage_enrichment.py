@@ -254,6 +254,7 @@ async def test_select_candidate_indexes_sends_candidate_index_without_doc_index_
 
     prompt_text = captured_prompt[1]["content"] if isinstance(captured_prompt, list) else captured_prompt
     assert result == [0]
+    assert [message["role"] for message in captured_prompt] == ["system", "user"]
     assert '"candidate_index": 0' in prompt_text
     assert "doc_index" not in prompt_text
 

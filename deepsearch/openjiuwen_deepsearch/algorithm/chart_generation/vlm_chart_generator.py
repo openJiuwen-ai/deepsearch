@@ -20,6 +20,10 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
+    PromptBuildOptions,
+    build_prompt_messages,
+)
 from openjiuwen_deepsearch.algorithm.chart_generation.utils import get_chart_base64
 from openjiuwen_deepsearch.algorithm.chart_generation.figure_placeholders import (
     FigurePlaceholderGenerator,
@@ -115,14 +119,11 @@ class VLMChartGenerator:
         try:
             test_figure_path = "openjiuwen_deepsearch/algorithm/chart_generation/fonts/test.png"
             test_base64 = get_chart_base64(test_figure_path)
-            prompt = [{"role": "user", 
-                       "content": [
-                           {"type": "image_url", 
-                            "image_url": {"url": f"data:image/png;base64,{test_base64}"},
-                            },
-                           {"type": "text", "text": "图中描绘的是什么内容？如果无法看到图的内容，直接输出'not supported'"},
-                           ],
-                        }]
+            prompt = build_prompt_messages(
+                "vlm_model_capability_probe",
+                {},
+                options=PromptBuildOptions(images=(test_base64,)),
+            )
             llm = llm_context.get().get(llm_model_name)
             response = await ainvoke_llm_with_stats(
                 llm, prompt, 

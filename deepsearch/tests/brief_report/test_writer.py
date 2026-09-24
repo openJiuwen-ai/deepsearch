@@ -1,10 +1,11 @@
 """Brief 并行单调用章节写作测试。"""
 import asyncio
+import re
 from unittest.mock import AsyncMock
 import pytest
 from openjiuwen_deepsearch.algorithm.brief_report.models import BriefAssemblyRequest, BriefWritingRequest, BriefOutline, BriefCollectionResult, BriefSummaryRequest, BriefChapter, BriefSectionWritingGuidance, BriefWritingGuidance
 from openjiuwen_deepsearch.algorithm.brief_report.writer import _chapter_validation_error, _summary_prompt_input, _writing_prompt_input, assemble_brief_report, build_writing_evidence, generate_brief_summary, write_brief_chapters
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 
 def _request():
     outline=BriefOutline.model_validate({"title":"x","sections":[{"id":str(i),"title":f"章节 {i}","goal":"目标","research_steps":[{"id":f"{i}-1","requirement":"指标"},{"id":f"{i}-2","requirement":"差异"}]} for i in range(1,4)]})
@@ -18,7 +19,7 @@ def test_brief_sub_reporter_keeps_research_steps_internal_and_generates_reader_f
         update={"audience_role": "业务负责人", "tone": "直接、审慎", "user_format": "用表格比较关键差异"}
     )
     section = request.outline.sections[0]
-    rendered = apply_system_prompt(
+    rendered = build_prompt_messages(
         "brief_sub_reporter",
         _writing_prompt_input(
             request,
@@ -26,7 +27,7 @@ def test_brief_sub_reporter_keeps_research_steps_internal_and_generates_reader_f
             [{"index": 1, "title": "来源", "url": "https://e/1", "snippet": "证据", "step_ids": ["1-1"]}],
         ),
     )
-    prompt = rendered[0]["content"]
+    prompt = "\n".join(message["content"] for message in rendered)
     normalized_prompt = " ".join(prompt.split())
     collected_information = rendered[1]["content"]
 
@@ -63,9 +64,9 @@ def test_chapter_prompt_receives_report_and_matching_section_guidance():
 
     prompt = _writing_prompt_input(request, request.outline.sections[0], [])
 
-    assert "报告主线：先比较月度趋势" in prompt["messages"][1]["content"]
-    assert "本章指引：先给出趋势结论" in prompt["messages"][1]["content"]
-    assert "不应进入本章" not in prompt["messages"][1]["content"]
+    assert "报告主线：先比较月度趋势" in prompt["writing_guidance"]
+    assert "本章指引：先给出趋势结论" in prompt["writing_guidance"]
+    assert "不应进入本章" not in prompt["writing_guidance"]
 
 
 def test_chapter_prompt_scopes_material_claims_to_current_section():
@@ -81,13 +82,13 @@ def test_chapter_prompt_scopes_material_claims_to_current_section():
         }
     )
 
-    rendered = apply_system_prompt(
+    rendered = build_prompt_messages(
         "brief_sub_reporter", _writing_prompt_input(request, section, [])
     )
 
-    assert "<section_material_use_contract>" in rendered[0]["content"]
-    assert "M1: role=primary_evidence" in rendered[0]["content"]
-    assert "only the reported adoption rate" in rendered[0]["content"]
+    assert "<section_material_use_contract>" in rendered[-1]["content"]
+    assert "M1: role=primary_evidence" in rendered[-1]["content"]
+    assert "only the reported adoption rate" in rendered[-1]["content"]
 
 
 def test_summary_prompt_receives_report_strategy_but_not_section_guidance():
@@ -103,8 +104,8 @@ def test_summary_prompt_receives_report_strategy_but_not_section_guidance():
 
     prompt = _summary_prompt_input(request, [], [])
 
-    assert "报告主线：先比较月度趋势" in prompt["messages"][0]["content"]
-    assert "本章指引" not in prompt["messages"][0]["content"]
+    assert "报告主线：先比较月度趋势" in prompt["main_content"]
+    assert "本章指引" not in prompt["main_content"]
 
 
 def test_assemble_brief_report_uses_english_headings_for_normalized_language():
@@ -126,7 +127,7 @@ def test_assemble_brief_report_uses_english_headings_for_normalized_language():
 
 def test_brief_chapter_prompt_does_not_describe_context_that_is_not_provided():
     """Brief 写作只能声明实际传入的证据与编辑指引上下文。"""
-    rendered = apply_system_prompt(
+    rendered = build_prompt_messages(
         "brief_sub_reporter",
         _writing_prompt_input(_request(), _request().outline.sections[0], []),
     )
@@ -139,7 +140,7 @@ def test_brief_chapter_prompt_does_not_describe_context_that_is_not_provided():
 
 def test_brief_summary_prompt_requires_the_requested_output_language():
     """摘要模板必须把请求语言作为明确的输出约束。"""
-    rendered = apply_system_prompt(
+    rendered = build_prompt_messages(
         "brief_reporter",
         _summary_prompt_input(
             BriefSummaryRequest(
@@ -151,7 +152,7 @@ def test_brief_summary_prompt_requires_the_requested_output_language():
         ),
     )
 
-    assert "Output language must be **en-US**" in rendered[0]["content"]
+    assert "Output language must be **en-US**" in rendered[-1]["content"]
 
 @pytest.mark.asyncio
 async def test_writes_all_chapters_in_parallel_once(monkeypatch):
@@ -198,12 +199,11 @@ async def test_chapter_context_limit_retries_with_lower_priority_evidence_remove
     document_counts = []
 
     async def invoke(_llm, messages, **_kwargs):
-        document_counts.append(messages["messages"][0]["content"].count(" begin]"))
+        document_counts.append(messages[-1]["content"].count(" begin]"))
         if document_counts[-1] > 1:
             raise RuntimeError("context_length_exceeded")
         return {"content": "正文。[citation:1]"}
 
-    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
 
     chapters = await write_brief_chapters(request)
@@ -227,12 +227,11 @@ async def test_chapter_context_limit_retries_with_shortened_single_evidence(monk
     prompt_contents = []
 
     async def invoke(_llm, messages, **_kwargs):
-        prompt_contents.append(messages["messages"][0]["content"])
+        prompt_contents.append(messages[-1]["content"])
         if len(prompt_contents) == 1:
             raise RuntimeError("context_length_exceeded")
         return {"content": "压缩后正文。[citation:1]"}
 
-    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
 
     chapters = await write_brief_chapters(request)
@@ -285,6 +284,10 @@ async def test_chapter_writer_retries_when_model_outputs_mermaid(monkeypatch):
     chapters = await write_brief_chapters(request)
 
     assert invoke.await_count == 2
+    retry_messages = [call.args[1] for call in invoke.await_args_list]
+    assert [len(messages) for messages in retry_messages] == [2, 2]
+    assert retry_messages[1][0]["content"] == retry_messages[0][0]["content"]
+    assert "mermaid" not in retry_messages[1][-1]["content"].lower()
     assert "mermaid" not in chapters[0].raw_markdown.lower()
     assert chapters[0].raw_markdown.endswith("修正后的正文。[citation:1]")
 
@@ -299,13 +302,12 @@ async def test_failed_chapter_does_not_block_other_parallel_chapters(monkeypatch
     attempts_by_section = {"1": 0, "2": 0, "3": 0}
 
     async def invoke(_llm, messages, **_kwargs):
-        section_id = messages["current_section"].rsplit(" ", 1)[-1]
+        section_id = re.search(r"title: 章节 (\d+)", messages[-1]["content"]).group(1)
         attempts_by_section[section_id] += 1
         if section_id == "1":
             raise RuntimeError("temporary")
         return {"content": f"章节 {section_id} 正文。[citation:{section_id}]"}
 
-    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
 
     chapters = await write_brief_chapters(request)
@@ -344,12 +346,11 @@ async def test_summary_context_limit_retries_with_compacted_chapters(monkeypatch
     chapter_markdowns = []
 
     async def invoke(_llm, messages, **_kwargs):
-        chapter_markdowns.append(messages["messages"][0]["content"])
+        chapter_markdowns.append(messages[-1]["content"])
         if len(chapter_markdowns) == 1:
             raise RuntimeError("context_length_exceeded")
         return {"content": "<executive_summary>已压缩。[citation:1]</executive_summary>"}
 
-    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.apply_system_prompt", lambda _name, payload: payload)
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats", invoke)
 
     summary = await generate_brief_summary(summary_request)

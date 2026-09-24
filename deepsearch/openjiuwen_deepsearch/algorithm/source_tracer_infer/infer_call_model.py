@@ -7,7 +7,7 @@ from typing import Any, List, Dict, NamedTuple, Set
 import copy
 
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -230,7 +230,7 @@ async def call_model(model_name: str, prompt: str, user_input: dict,
     retries = 0
     while retries < MAX_LLM_RETRY_TIMES:
         try:
-            user_prompt = apply_system_prompt(prompt, user_input)
+            user_prompt = build_prompt_messages(prompt, user_input)
             llm = llm_context.get().get(model_name)
             response = await ainvoke_llm_with_stats(llm, user_prompt, agent_name=agent_name)
             content = response.get("content", "")

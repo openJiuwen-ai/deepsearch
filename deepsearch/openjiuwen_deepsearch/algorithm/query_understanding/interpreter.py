@@ -3,7 +3,7 @@
 
 import logging
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -31,7 +31,10 @@ async def query_interpreter(current_inputs: dict) -> dict:
         current_inputs.get("report_type"),
         len(current_inputs.get("entry_search_results") or []),
     )
-    prompt = apply_system_prompt("generate_questions", current_inputs)
+    prompt = build_prompt_messages(
+        "generate_questions",
+        {key: value for key, value in current_inputs.items() if key != "messages"},
+    )
     try:
         llm = llm_context.get().get(current_inputs.get("llm_model_name"))
         response = await ainvoke_llm_with_stats(llm, prompt, llm_type="basic",

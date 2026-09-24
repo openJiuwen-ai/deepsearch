@@ -37,17 +37,17 @@ openjiuwen_deepsearch/
 
 **Main subdirectories**:
 
-- **prompts/** - Prompt templates (`.md`)
-  - `synonym_rewrite_expand.md` - Prompt for expansion
-  - `synonym_rewrite_polish.md` - Prompt for polishing
-  - `synonym_rewrite_shorten.md` - Prompt for shortening
-  - `supplementary_search_task.md` - Prompt for supplementary-search task generation
-  - `supplementary_search_rewrite_selected_only.md` - Prompt for supplementary search that rewrites only the selected span
-  - `supplementary_search_rewrite_selected_and_related.md` - Prompt for supplementary search that rewrites the entire related section
-  - `new_task_assessment.md` - Prompt for assessing sufficiency of historical evidence for new-task requests
-  - `new_task_rewrite_section.md` - Prompt for rewriting sections based on new-task edit strategy
-  - `truth_verification_assessment.md` - Prompt for content truth verification assessment
-  - `truth_verification_search_task.md` - Prompt for truth-verification supplementary search task generation
+- **prompts/** - Prompt template directories (each with `system.md` and `user.md`), plus legacy single-file templates
+  - `synonym_rewrite_expand/` - Prompt for expansion
+  - `synonym_rewrite_polish/` - Prompt for polishing
+  - `synonym_rewrite_shorten/` - Prompt for shortening
+  - `supplementary_search_task/` - Prompt for supplementary-search task generation
+  - `supplementary_search_rewrite_selected_only/` - Prompt for supplementary search that rewrites only the selected span
+  - `supplementary_search_rewrite_selected_and_related/` - Prompt for supplementary search that rewrites the entire related section
+  - `new_task_assessment/` - Prompt for assessing sufficiency of historical evidence for new-task requests
+  - `new_task_rewrite_section/` - Prompt for rewriting sections based on new-task edit strategy
+  - `truth_verification_assessment/` - Prompt for content truth verification assessment
+  - `truth_verification_search_task/` - Prompt for truth-verification supplementary search task generation
 - **query_understanding/** - Query understanding
   - `interpreter.py` - Generate clarification questions
   - `outliner.py` - Generate outlines

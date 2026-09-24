@@ -11,6 +11,24 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info import (
     ResearchInferPreprocess,
 )
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
+
+
+def test_infer_prompt_keeps_runtime_inputs_out_of_system():
+    messages = build_prompt_messages(
+        "infer_validate_prompt",
+        {
+            "statement": "runtime statement",
+            "references": [{"id": 0, "content": "runtime reference"}],
+            "language": "en-US",
+        },
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert "runtime statement" not in messages[0]["content"]
+    assert "runtime reference" not in messages[0]["content"]
+    assert "runtime statement" in messages[1]["content"]
+    assert "runtime reference" in messages[1]["content"]
 
 
 @pytest.mark.asyncio

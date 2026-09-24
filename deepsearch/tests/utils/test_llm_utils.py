@@ -11,6 +11,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     _resolve_node_agent_key,
     _install_usage_only_chunk_parser,
     _unify_responnse,
+    WorkflowLlmUsageDelta,
     ainvoke_llm_with_stats,
     add_workflow_llm_usage,
     get_workflow_llm_usage,
@@ -547,9 +548,9 @@ def test_workflow_llm_usage_can_accumulate_and_pop():
     thread_id = "workflow-usage-case"
     pop_workflow_llm_usage(thread_id)
 
-    add_workflow_llm_usage(thread_id, input_tokens=3, output_tokens=5, total_tokens=8, agent_name="entry")
-    add_workflow_llm_usage(thread_id, input_tokens=7, output_tokens=11, total_tokens=18, agent_name="entry")
-    add_workflow_llm_usage(thread_id, input_tokens=2, output_tokens=3, total_tokens=5, agent_name="reporter")
+    add_workflow_llm_usage(thread_id, WorkflowLlmUsageDelta(3, 5, 8), agent_name="entry")
+    add_workflow_llm_usage(thread_id, WorkflowLlmUsageDelta(7, 11, 18), agent_name="entry")
+    add_workflow_llm_usage(thread_id, WorkflowLlmUsageDelta(2, 3, 5), agent_name="reporter")
 
     usage = get_workflow_llm_usage(thread_id)
     assert usage == {
@@ -599,9 +600,7 @@ async def test_workflow_llm_usage_is_stable_under_coroutine_concurrency():
         for _ in range(rounds):
             add_workflow_llm_usage(
                 session_id=thread_id,
-                input_tokens=1,
-                output_tokens=2,
-                total_tokens=3,
+                token_usage=WorkflowLlmUsageDelta(1, 2, 3),
                 agent_name="intent_recognition",
             )
             # 主动让出事件循环，模拟 workflow 节点并发调度下的交错调用。
@@ -706,7 +705,7 @@ def test_save_workflow_llm_usage_to_session_writes_snapshot():
     """验证可将当前 workflow token 累计写入 session。"""
     thread_id = "save-workflow-usage"
     pop_workflow_llm_usage(thread_id)
-    add_workflow_llm_usage(thread_id, input_tokens=2, output_tokens=3, total_tokens=5, agent_name="entry")
+    add_workflow_llm_usage(thread_id, WorkflowLlmUsageDelta(2, 3, 5), agent_name="entry")
     captured = {}
 
     class _FakeSession:

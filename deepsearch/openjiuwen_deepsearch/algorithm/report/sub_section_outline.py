@@ -2,12 +2,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 import logging
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import EFFECT_SUB_REPORT_TAG
 from openjiuwen_deepsearch.algorithm.report.report_utils import export_outline_without_plans
-from openjiuwen_deepsearch.algorithm.report.retry_feedback import _append_retry_feedback_message
-from openjiuwen_deepsearch.common.exception import CustomValueException
-from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_section_local_contract_prompt_context,
     build_research_intent_prompt_context,
@@ -30,9 +27,18 @@ class SubSectionOutlineMixin:
     """
 
     async def _generate_sub_section_outline(
-        self, current_inputs: dict, failure_feedback: str = ""
+        self, current_inputs: dict, failure_feedback: str = "", *, retry_messages: list | None = None
     ) -> dict:
-        """Generate subsection outline"""
+        """生成章节大纲，并为内容失败保留纠错机会。
+
+        Args:
+            current_inputs: 章节范围、证据及格式约束。
+            failure_feedback: 上一次内容生成或校验失败的反馈。
+            retry_messages: 上一次请求异常时保留的消息。
+
+        Returns:
+            成功状态及大纲；仅请求调用抛出异常时附带 retry_messages。
+        """
         section_idx = current_inputs.get("section_idx", 1)  # Section index
         logger.info(
             f"{EFFECT_SUB_REPORT_TAG} [generate_sub_section_outline] Starting to generate sub section outline, "
@@ -70,24 +76,22 @@ class SubSectionOutlineMixin:
                 f"{error_msg}"
             )
             return dict(rs_success=False, sub_section_outline=error_msg)
+        llm_input = retry_messages
+        llm_request_in_progress = False
         try:
             if current_inputs.get("sub_section_core_content_from_background_knowledge"):
                 core_context = self._format_background_knowledge_for_prompt(collected_infos)
             else:
-                core_context = f"Collected information is {collected_infos}"
-            sub_content_message = (
-                f"Section id is {section_idx},"
-                f"Section title is {section_task},"
-                f"Report task is {report_task},"
-                f"{core_context},"
-                f"Section description is {section_description},"
-                f"Section format requirements are {section_format_requirements},"
-            )
-            structured_evidence_guide = current_inputs.get("structured_evidence_guide", "")
-            if structured_evidence_guide:
-                sub_content_message += f"\n\n# Structured Evidence Guidance\n{structured_evidence_guide}\n\n"
-            tmp_context = {}
-            tmp_context["messages"] = [dict(role="user", content=sub_content_message)]
+                core_context = collected_infos
+            tmp_context = {
+                "report_task": report_task,
+                "core_context": core_context,
+                "core_from_background": current_inputs.get(
+                    "sub_section_core_content_from_background_knowledge", False
+                ),
+                "structured_evidence_guide": current_inputs.get("structured_evidence_guide", ""),
+                "retry_feedback": (failure_feedback or "").strip()[:500],
+            }
             tmp_context["section_idx"] = section_idx
             tmp_context["language"] = current_inputs.get("language")
             tmp_context["has_template"] = current_inputs.get("has_template")
@@ -114,8 +118,8 @@ class SubSectionOutlineMixin:
                 f"{EFFECT_SUB_REPORT_TAG} [generate_sub_section_outline] has_template: "
                 f"{tmp_context['has_template']}"
             )
-            llm_input = apply_system_prompt("sub_section_outline", tmp_context)
-            _append_retry_feedback_message(llm_input, failure_feedback)
+            if llm_input is None:
+                llm_input = build_prompt_messages("sub_section_outline", tmp_context)
             if not LogManager.is_sensitive():
                 logger.debug(
                     "%s [generate_sub_section_outline] section_idx: [%s] llm_input is %s",
@@ -123,11 +127,13 @@ class SubSectionOutlineMixin:
                     section_idx,
                     llm_input,
                 )
+            llm_request_in_progress = True
             llm_output = await ainvoke_llm_with_stats(
                 llm=self._llm,
                 messages=llm_input,
                 agent_name=AgentLlmName.SUB_REPORTER_OUTLINE.value,
             )
+            llm_request_in_progress = False
             if not LogManager.is_sensitive():
                 logger.debug(
                     "%s [generate_sub_section_outline] section_idx: [%s] llm_output is %s",
@@ -137,9 +143,9 @@ class SubSectionOutlineMixin:
                 )
             # Validate LLM output
             if not llm_output or not llm_output.get("content"):
-                raise CustomValueException(
-                    error_code=StatusCode.LLM_RESPONSE_ERROR.code,
-                    message=f"LLM returned empty content for the section {section_idx}",
+                return dict(
+                    rs_success=False,
+                    sub_section_outline=f"LLM returned empty content for the section {section_idx}",
                 )
             return dict(rs_success=True, sub_section_outline=llm_output.get("content"))
         except Exception as e:
@@ -155,7 +161,11 @@ class SubSectionOutlineMixin:
                 f"{log_msg}",
                 exc_info=True,
             )
-            return dict(rs_success=False, sub_section_outline=result_msg)
+            # 请求异常可原样重发；空内容及处理异常应让外层更新纠错反馈。
+            result = dict(rs_success=False, sub_section_outline=result_msg)
+            if llm_request_in_progress:
+                result["retry_messages"] = llm_input
+            return result
 
     async def _generate_outline_with_retry(
         self, current_inputs: dict, section_idx, max_attempt_num: int
@@ -165,8 +175,13 @@ class SubSectionOutlineMixin:
         Returns (success, error_message). On success, sets current_inputs["sub_section_outline"].
         """
         outline_retry_feedback = ""
+        retry_messages = None
         for attempt_num in range(max_attempt_num):
-            gen_sub_res = await self._generate_sub_section_outline(current_inputs, outline_retry_feedback)
+            retry_options = {"retry_messages": retry_messages} if retry_messages is not None else {}
+            gen_sub_res = await self._generate_sub_section_outline(
+                current_inputs, outline_retry_feedback, **retry_options
+            )
+            retry_messages = gen_sub_res.get("retry_messages")
             outline_text = gen_sub_res.get("sub_section_outline") or ""
             if gen_sub_res["rs_success"]:
                 ok, reason = self.check_chapter_format(outline_text, section_idx)
@@ -177,7 +192,8 @@ class SubSectionOutlineMixin:
             else:
                 fail_detail = f"LLM outline generation failed: {outline_text[:500]}"
 
-            outline_retry_feedback = fail_detail
+            if retry_messages is None:
+                outline_retry_feedback = fail_detail
             if LogManager.is_sensitive():
                 outline_log = f"<{len(outline_text)} chars>"
             else:

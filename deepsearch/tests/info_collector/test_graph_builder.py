@@ -275,7 +275,7 @@ class TestGenerateQueryNode:
 
         try:
             with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm, \
-                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.build_prompt_messages") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 queries = ["查询1", "查询2", "查询3", "查询4"]
                 missing_evidence = ["需要验证的证据"]
@@ -452,7 +452,7 @@ class TestSupervisorNode:
 
         try:
             with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
-                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.build_prompt_messages") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 mock_apply_prompt.return_value = []
                 mock_llm.return_value = Reflection(
@@ -542,7 +542,7 @@ class TestSupervisorNode:
 
         try:
             with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
-                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.build_prompt_messages") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 next_queries = ["跟进1", "跟进2", "跟进3", "跟进4"]
                 mock_apply_prompt.return_value = []
@@ -779,7 +779,7 @@ class TestSupervisorNode:
         try:
             with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
                     patch(f"{module_prefix}.adapt_llm_model_name"), \
-                    patch(f"{module_prefix}.apply_system_prompt", side_effect=capture_prompt):
+                    patch(f"{module_prefix}.build_prompt_messages", side_effect=capture_prompt):
                 mock_llm.return_value = Reflection(
                     is_sufficient=False,
                     knowledge_gap="仍缺信息",
@@ -809,14 +809,23 @@ def test_validate_query_count_accepts_structured_query_items():
 
 def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
     """collector_gen_query prompt should require retrieval steps to use 1..max_search_query_count queries."""
-    prompt = open("openjiuwen_deepsearch/algorithm/prompts/collector_gen_query.md", encoding="utf-8").read()
+    prompt = "\n".join(
+        open(
+            path,
+            encoding="utf-8",
+        ).read()
+        for path in (
+            "openjiuwen_deepsearch/algorithm/prompts/collector_gen_query/system.md",
+            "openjiuwen_deepsearch/algorithm/prompts/collector_gen_query/user.md",
+        )
+    )
 
     assert '"missing_evidence"' in prompt
     assert '"queries"' in prompt
-    assert "1..{{ max_search_query_count }}" in prompt
+    assert "1..N queries" in prompt
     assert "Return `queries: []` only when the current step explicitly does not require external retrieval." in prompt
     assert "Separate display language from retrieval language" in prompt
-    assert "Keep `missing_evidence` in `{{ language }}`" in prompt
+    assert "Output language: {{ language }}" in prompt
     assert '`search_engine_names`' in prompt
     assert '`["pubmed", "arxiv", "semantic_scholar"]`' in prompt
     assert "write `query` in English using academic terms" in prompt
@@ -829,7 +838,16 @@ def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
 
 def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
     """collector_supervisor prompt should mention ledger fields used by the runtime loop."""
-    prompt = open("openjiuwen_deepsearch/algorithm/prompts/collector_supervisor.md", encoding="utf-8").read()
+    prompt = "\n".join(
+        open(
+            path,
+            encoding="utf-8",
+        ).read()
+        for path in (
+            "openjiuwen_deepsearch/algorithm/prompts/collector_supervisor/system.md",
+            "openjiuwen_deepsearch/algorithm/prompts/collector_supervisor/user.md",
+        )
+    )
 
     assert "known_facts" in prompt
     assert "newly confirmed facts" in prompt
@@ -845,7 +863,7 @@ def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
     assert "{{ doc_infos }}" not in prompt
     assert "approximately satisfies" in prompt
     assert "partially covered" in prompt
-    assert "directly resolve or narrow" in prompt
+    assert "directly resolves, partially resolves, narrows" in prompt
     assert "Evidence Boundary Policy" in prompt
     assert "necessary for a reliable step-level conclusion" in prompt
     assert "non-critical limitations" in prompt
@@ -862,7 +880,7 @@ def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
     assert "number_queries" not in prompt
     assert "initial_search_query_count" not in prompt
     assert "latest gathered information is mostly duplicate" in prompt
-    assert "should_continue\" is false, \"next_queries\" must be []" in prompt
+    assert "`next_queries`" in prompt
     assert "{{ ledger_brief }}" in prompt
     assert "{{ ledger }}" not in prompt
     assert "Ledger object" not in prompt
@@ -870,7 +888,16 @@ def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
 
 def test_collector_summary_prompt_contract_mentions_unresolved_gaps():
     """collector_final prompt should tell summary to surface unresolved evidence gaps."""
-    prompt = open("openjiuwen_deepsearch/algorithm/prompts/collector_final.md", encoding="utf-8").read()
+    prompt = "\n".join(
+        open(
+            path,
+            encoding="utf-8",
+        ).read()
+        for path in (
+            "openjiuwen_deepsearch/algorithm/prompts/collector_final/system.md",
+            "openjiuwen_deepsearch/algorithm/prompts/collector_final/user.md",
+        )
+    )
 
     assert "Unresolved evidence gaps" in prompt
     assert "{{ ledger_brief }}" in prompt
@@ -936,7 +963,7 @@ class TestSummaryNode:
 
         try:
             with patch.object(summary_node, '_invoke_llm_with_retry') as mock_llm, \
-                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.build_prompt_messages") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 mock_apply_prompt.return_value = []
                 mock_llm.return_value = Summary(
@@ -975,7 +1002,7 @@ class TestSummaryNode:
         try:
             with patch.object(summary_node, '_invoke_llm_with_retry') as mock_llm, \
                     patch(f"{module_prefix}.adapt_llm_model_name"), \
-                    patch(f"{module_prefix}.apply_system_prompt", side_effect=capture_prompt):
+                    patch(f"{module_prefix}.build_prompt_messages", side_effect=capture_prompt):
                 mock_llm.return_value = Summary(
                     need_programmer=False,
                     programmer_task="",

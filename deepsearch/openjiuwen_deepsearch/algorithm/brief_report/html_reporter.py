@@ -36,7 +36,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_safety import (
     final_security_assert,
     sanitize_html,
 )
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
@@ -223,37 +223,16 @@ def _ensure_section_anchor(fragment: str, section_id: str) -> str:
     return fragment[:match.start()] + tag + fragment[match.end():]
 
 
-def _error_feedback_lines(errors: list[str]) -> list[str]:
-    """把上一轮错误格式化为可执行的 LLM 反馈。
+def _validation_feedback_errors(errors: list[str]) -> list[str]:
+    """过滤空错误并保留上一轮校验错误，由模板负责写出稳定的修复说明。
 
     Args:
-        errors: 上一轮生成或校验产生的错误信息。
+        errors: 上一轮校验错误列表。
 
     Returns:
-        可直接附加到 LLM 请求中的反馈行；没有错误时返回空列表。
+        过滤掉空字符串后的错误列表。
     """
-    if not errors:
-        return []
-    lines: list[str] = []
-    for error in errors:
-        lines.append(f"- {error}")
-        if "chart_config" in error:
-            lines.append(
-                '  Fix: ECharts placeholders (<div class="echarts-chart" data-chart-id="...">) and '
-                'the config block (<template id="chart-configs">[...]</template> at the end) MUST appear '
-                "in pairs with matching ids. Either remove ALL placeholder divs and render those charts as "
-                "CSS bar rows instead, or add/fix the template block so every placeholder has one config "
-                "entry with the same id."
-            )
-    lines.insert(
-        0,
-        "Your previous output failed validation. Fix ALL of the following issues and regenerate:",
-    )
-    if any("truncated" in error for error in errors):
-        lines.append(
-            "The previous output was truncated. Reduce CSS size and use fewer charts so the full output fits."
-        )
-    return lines
+    return [error for error in errors if error]
 
 
 def _shell_messages(
@@ -281,14 +260,12 @@ def _shell_messages(
     if sections:
         titles = "\n".join(f"- {chunk.section_id} {chunk.title}" for chunk in sections)
         content_parts.append(f"Section titles (in order, for the table of contents):\n{titles}")
-    feedback = _error_feedback_lines(
-        [error for error in errors if not error.startswith("section ")]
-    )
-    if feedback:
-        content_parts.append("\n".join(feedback))
     return {
         "language": language,
-        "messages": [{"role": "user", "content": "\n\n".join(content_parts)}],
+        "request_content": "\n\n".join(content_parts),
+        "retry_feedback": _validation_feedback_errors(
+            [error for error in errors if not error.startswith("section ")]
+        ),
     }
 
 
@@ -317,14 +294,11 @@ def _section_messages(
         for error in errors
         if not error.startswith("section ") or error.startswith(f"section {chunk.section_id}:")
     ]
-    feedback = _error_feedback_lines(section_errors)
-    if feedback:
-        content_parts.append(
-            f"You are generating section {chunk.section_id}.\n" + "\n".join(feedback)
-        )
     return {
         "language": language,
-        "messages": [{"role": "user", "content": "\n\n".join(content_parts)}],
+        "request_content": "\n\n".join(content_parts),
+        "section_id": chunk.section_id,
+        "retry_feedback": _validation_feedback_errors(section_errors),
     }
 
 
@@ -352,7 +326,7 @@ async def _generate_shell(
     try:
         response = await ainvoke_llm_with_stats(
             llm,
-            apply_system_prompt(
+            build_prompt_messages(
                 "brief_html_reporter",
                 _shell_messages(
                     context.title,
@@ -452,7 +426,7 @@ async def _generate_section_fragments(
         try:
             response = await ainvoke_llm_with_stats(
                 llm,
-                apply_system_prompt(
+                build_prompt_messages(
                     "brief_html_section",
                     _section_messages(chunk, shell_css, language, errors),
                 ),
