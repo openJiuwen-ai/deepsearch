@@ -9,6 +9,8 @@ from typing import Iterable, Optional
 import requests
 from requests.exceptions import RequestException
 
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_JINA_READER_BASE_URLS: tuple[str, ...] = (
@@ -141,12 +143,20 @@ class JinaWebFetchProvider:
         if failures:
             # 汇总一条: 只有 RequestException 才设置 last_error, 因此"所有 base 都被 401/403 拦下"
             # 这种最常见场景原先没有任何汇总日志(单个 base 的 warning 看不出"全挂了")。
-            logger.warning(
-                "[WebFetch] all Jina reader endpoints failed for url %s: %s",
-                url,
-                "; ".join(failures),
-                exc_info=last_error,
-            )
+            if LogManager.is_sensitive():
+                # 敏感模式下只保留固定事件与数量: 目标 url 和各 base 的失败详情
+                # (异常文本可能带上请求地址)都不能落盘。
+                logger.warning(
+                    "[WebFetch] all Jina reader endpoints failed (%d endpoints)",
+                    len(failures),
+                )
+            else:
+                logger.warning(
+                    "[WebFetch] all Jina reader endpoints failed for url %s: %s",
+                    url,
+                    "; ".join(failures),
+                    exc_info=last_error,
+                )
         return "[web_fetch] Failed to read page."
 
     @staticmethod

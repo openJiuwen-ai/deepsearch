@@ -67,6 +67,11 @@ SIMPLE_UA_PARSE_TIMEOUT_SECONDS = 15
 # httpx 直连路下载字节上限。只作 OOM 护栏, 取值远高于真实 PDF:
 # 按字节截断会破坏 PDF 尾部的交叉引用表, 导致本可解析的文档解析失败。
 SIMPLE_UA_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+# Jina Reader 路的阶段上限。provider 内部是固定 3 次重试 + 线性退避(最坏约 37s),
+# 自身不知道还剩多少预算, 这里给它一个独立上限: 与 A/B 路一样"每段各自有界",
+# 也让超时原因能记成 jina_fetch_failed 而不是笼统的整串 deadline。
+# 注意 asyncio.to_thread 的底层线程不可取消, 到点只是不再等待, 不省线程资源。
+JINA_STAGE_TIMEOUT_SECONDS = 30
 
 
 def _remaining_timeout_seconds(deadline: float) -> int:
@@ -432,7 +437,7 @@ class WebPageEnrichmentNode(BaseNode):
 
         补 harness 直连没有的 PDF 抓取能力: 它对 `.pdf` 结尾的 URL 直接跳过, 对其它 URL
         拿到的 PDF 字节也不解析、直接弃用; 本方法保留 httpx 返回的原始 bytes 并交
-        _extract_pdf 处理。
+        extract_pdf 处理。
 
         同时换了一个请求客户端(本方法 httpx, harness 直连是 aiohttp), 覆盖到 harness
         直连取不到正文的站点。
@@ -452,8 +457,9 @@ class WebPageEnrichmentNode(BaseNode):
         """
         import httpx
         from openjiuwen.harness.tools.web import WebFetchWebpageTool
+        from openjiuwen.harness.tools.web._decode import _decode_response_text
         from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
-            _extract_pdf,
+            extract_pdf,
         )
 
         remaining = _remaining_timeout_seconds(deadline)
@@ -519,7 +525,7 @@ class WebPageEnrichmentNode(BaseNode):
             if "pdf" in content_type.lower() or data[:5] == b"%PDF-":
                 text, truncated = await asyncio.wait_for(
                     asyncio.to_thread(
-                        _extract_pdf,
+                        extract_pdf,
                         data,
                         MAX_COLLECTOR_DOC_CONTENT_LENGTH,
                         SIMPLE_UA_PDF_MAX_PAGES,
@@ -527,16 +533,10 @@ class WebPageEnrichmentNode(BaseNode):
                     timeout=parse_timeout,
                 )
             else:
-                # 流式读取后 httpx 不再保留 resp.text; 用同一份 headers 重建响应来解码,
-                # 与原先走 resp.text 时的字符集判定保持一致。
-                # 必须剔除 Content-Encoding: aiter_bytes() 给出的已是解压后的字节,
-                # 原样带过去会被 httpx 二次解压并抛 DecodingError。
-                decode_headers = {
-                    key: value
-                    for key, value in response_headers.items()
-                    if key.lower() not in {"content-encoding", "content-length"}
-                }
-                decoded = httpx.Response(status_code, headers=decode_headers, content=data).text
+                # 流式读取后 httpx 不再保留 resp.text; 改用 harness 的解码函数, 与 A 路一致:
+                # 先按 Content-Type 声明的字符集, 缺失时交给 charset_normalizer 嗅探。
+                # 直接用 httpx 的 .text 在缺 charset 的 GBK 等页面上会整篇解码成乱码。
+                decoded = _decode_response_text(data, content_type=content_type)
                 if "html" in content_type.lower():
                     title, decoded = WebFetchWebpageTool._extract_main_text_from_html(decoded)
                 text = decoded[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
@@ -659,7 +659,13 @@ class WebPageEnrichmentNode(BaseNode):
         # 生产路径下 _pre_handle 必会构造 provider，故此处恒为真; `is not None` 保留给直接调用的 legacy 回退。
         if self._jina_provider is not None:
             try:
-                jina_content = await asyncio.to_thread(self._jina_provider.fetch_page, url)
+                # 给 C 路一个独立阶段上限, 与 A/B 路一致; 取 min 保证不超过剩余总预算。
+                jina_content = await asyncio.wait_for(
+                    asyncio.to_thread(self._jina_provider.fetch_page, url),
+                    timeout=float(
+                        max(1, min(JINA_STAGE_TIMEOUT_SECONDS, _remaining_timeout_seconds(deadline)))
+                    ),
+                )
             except Exception as exc:
                 self._log_fetch_event(
                     logging.WARNING,

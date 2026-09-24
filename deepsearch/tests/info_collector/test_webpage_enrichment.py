@@ -120,9 +120,9 @@ def _patch_httpx_async_client(
 
 
 def _patch_extract_pdf(monkeypatch: pytest.MonkeyPatch, fake) -> None:
-    """替换 B 段函数体内 import 的 _extract_pdf。"""
+    """替换 B 段函数体内 import 的 extract_pdf。"""
     monkeypatch.setattr(
-        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text._extract_pdf",
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text.extract_pdf",
         fake,
     )
 
@@ -901,6 +901,68 @@ async def test_fetch_webpage_prefers_configured_jina_provider():
     assert result["fetch_method"] == "jina_provider"
     assert result["content"] == "z" * 400
     mock_legacy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_simple_ua_decodes_html_without_declared_charset(monkeypatch, real_simple_ua):
+    """Content-Type 不带 charset 的 GBK 页面必须正确解码，不能整篇乱码。
+
+    httpx 的 .text 在缺 charset 时固定按 utf-8 解，非 UTF-8 页面会得到等长的乱码正文，
+    既不会被长度门槛拦下、也不会退到 C 路。此处与 A 路共用 harness 的字符集嗅探。
+    """
+    node = ExposedWebPageEnrichmentNode()
+    paragraphs = "".join(f"<p>第 {i} 段中文正文，用于验证字符集探测是否正确。</p>" for i in range(40))
+    html = f"<html><head><title>中文标题</title></head><body><article>{paragraphs}</article></body></html>"
+    _patch_httpx_async_client(
+        monkeypatch,
+        _FakeHttpxResponse(
+            content=html.encode("gbk"),
+            headers={"Content-Type": "text/html"},  # 刻意不带 charset
+        ),
+        [],
+    )
+
+    result = await node.simple_ua("https://a.com/gbk", 45, 200)
+
+    assert result["title"] == "中文标题"
+    assert "第 0 段中文正文" in result["content"]
+    assert "�" not in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_jina_provider_call_is_capped_by_its_own_stage_limit(monkeypatch):
+    """C 路要有独立阶段上限，而不是只靠外层 deadline 强杀。
+
+    provider 内部是固定 3 次重试 + 线性退避（最坏约 37s），自身不知道还剩多少预算。
+    总预算给足（45s）、阶段上限压到 1s，因此被触发的只能是阶段上限。
+    """
+    node = ExposedWebPageEnrichmentNode()
+    monkeypatch.setattr(webpage_enrichment_module, "JINA_STAGE_TIMEOUT_SECONDS", 1)
+    release = threading.Event()
+
+    def blocking_fetch_page(url: str) -> str:
+        release.wait(timeout=10)
+        return "z" * 400
+
+    node._jina_provider = Mock(fetch_page=blocking_fetch_page)
+    logged: list[str] = []
+    monkeypatch.setattr(node, "_log_fetch_event", lambda level, category, u, **kw: logged.append(category))
+
+    try:
+        with patch(
+            "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment."
+            "WebFetchWebpageAdapter.fetch_webpage_sync",
+            return_value={"url": "https://a.com", "status_code": 200, "content": "x" * 10},
+        ):
+            started = time.monotonic()
+            result = await node.fetch_webpage("https://a.com", 45)
+            elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert result == {}
+    assert "jina_fetch_failed" in logged
+    assert elapsed < 5
 
 
 @pytest.mark.asyncio

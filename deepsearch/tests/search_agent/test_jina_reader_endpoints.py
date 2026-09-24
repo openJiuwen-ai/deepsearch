@@ -12,6 +12,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper
     build_jina_reader_url,
     resolve_jina_reader_base_urls,
 )
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 
 def test_resolve_jina_reader_base_urls_prefers_china_mirror(monkeypatch):
@@ -122,6 +123,26 @@ def test_web_fetch_summary_reports_http_status_for_non_auth_failures(caplog):
 
     assert "all Jina reader endpoints failed" in caplog.text
     assert "HTTP 500" in caplog.text
+    assert "auth rejected" not in caplog.text
+
+
+def test_web_fetch_summary_hides_url_in_sensitive_mode(caplog):
+    """敏感模式下汇总日志不得出现目标 URL 或各 base 的失败详情。
+
+    回归用：汇总日志最初直接打印 target url，而本模块的 logger 不走
+    webpage_enrichment 的 _log_fetch_event 脱敏，会把 URL 落盘。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    forbidden = Mock(status_code=403, text="Just a moment...")
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        return_value=forbidden,
+    ), patch.object(LogManager, "is_sensitive", return_value=True), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://secret.example/private") == "[web_fetch] Failed to read page."
+
+    assert "all Jina reader endpoints failed" in caplog.text
+    assert "secret.example" not in caplog.text
     assert "auth rejected" not in caplog.text
 
 

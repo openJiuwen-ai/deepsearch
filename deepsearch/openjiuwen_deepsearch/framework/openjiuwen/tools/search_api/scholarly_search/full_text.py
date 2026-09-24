@@ -118,7 +118,17 @@ async def _download(url: str, config: FullTextConfig) -> bytes:
     raise ValueError("full-text redirect limit exceeded")
 
 
-def _extract_pdf(data: bytes, limit: int, max_pages: int) -> tuple[str, bool]:
+def extract_pdf(data: bytes, limit: int, max_pages: int) -> tuple[str, bool]:
+    """从 PDF 字节本地解析正文，供 scholarly 全文与 collector 抓取共用。
+
+    Args:
+        data: PDF 原始字节。
+        limit: 返回正文的字符上限。
+        max_pages: 最多解析的页数。
+
+    Returns:
+        (正文, 是否被截断)。
+    """
     document = pdfium.PdfDocument(BytesIO(data))
     try:
         parts: list[str] = []
@@ -149,7 +159,7 @@ def _extract_text(
         max_pdf_pages: int,
 ) -> tuple[str, bool]:
     if str(candidate.get("format") or "").casefold() == "pdf" or str(candidate.get("kind") or "").endswith("_pdf"):
-        return _extract_pdf(data, limit, max_pdf_pages)
+        return extract_pdf(data, limit, max_pdf_pages)
     soup = BeautifulSoup(data, "html.parser")
     for element in soup.select("script, style, nav, header, footer, aside"):
         element.decompose()
