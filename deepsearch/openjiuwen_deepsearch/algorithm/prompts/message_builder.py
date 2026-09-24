@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 """Build stable DeepResearch prompt messages without retaining conversation state."""
 
 from dataclasses import dataclass
@@ -223,19 +224,20 @@ def _multimodal_content(text: str, images: Sequence[str]) -> list[dict[str, Any]
     ]
 
 
-def _raise_missing_prompt(prompt_name: str, error: Exception) -> NoReturn:
+def _raise_missing_prompt(prompt_name: str, error: TemplateNotFound) -> NoReturn:
     """提示模板缺失时抛出文件未找到错误。
 
     Args:
         prompt_name: 提示名。
-        error: 原始异常。
+        error: 包含缺失模板路径的原始异常。
 
     Raises:
         CustomValueException: 始终抛出提示文件未找到错误。
     """
+    missing_template = error.name or f"{prompt_name}/system.md"
     raise CustomValueException(
         error_code=StatusCode.FILE_NOT_FOUND_ERROR_PROMPT.code,
-        message=StatusCode.FILE_NOT_FOUND_ERROR_PROMPT.errmsg.format(name=prompt_name),
+        message=f"Prompt file {missing_template} not found.",
     ) from error
 
 
@@ -254,7 +256,10 @@ def _raise_prompt_error(
         CustomValueException: 始终抛出应用系统提示失败错误。
     """
     cause = error or ValueError(detail)
+    safe_detail = f": {detail}" if detail.startswith("reserved context keys:") else ""
+    # 静态模板校验传入具体文件路径，普通构建校验传入模板目录名。
+    template_location = prompt_name if prompt_name.endswith(".md") else f"{prompt_name}/"
     raise CustomValueException(
         error_code=StatusCode.APPLY_SYSTEM_PROMPT_FAILED.code,
-        message=StatusCode.APPLY_SYSTEM_PROMPT_FAILED.errmsg.format(name=prompt_name),
+        message=f"Applying DeepResearch prompt template {template_location} failed{safe_detail}",
     ) from cause

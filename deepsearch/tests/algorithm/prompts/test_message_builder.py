@@ -1,3 +1,6 @@
+# -*- coding: UTF-8 -*-
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+
 from datetime import datetime, timezone
 
 import pytest
@@ -8,6 +11,7 @@ from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
     build_prompt_messages,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.common.status_code import StatusCode
 
 
 @pytest.fixture
@@ -124,3 +128,36 @@ def test_invalid_prompt_inputs_raise_custom_value_exception(
 
     with pytest.raises(CustomValueException):
         build_prompt_messages(name, context, options=options)
+
+
+def test_missing_prompt_reports_directory_template_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(message_builder, "PROMPT_ROOT", tmp_path)
+
+    with pytest.raises(CustomValueException) as caught:
+        build_prompt_messages("missing")
+
+    assert caught.value.error_code == StatusCode.FILE_NOT_FOUND_ERROR_PROMPT.code
+    assert caught.value.message == "Prompt file missing/system.md not found."
+
+
+def test_reserved_context_error_reports_directory_and_key(prompt_root):
+    with pytest.raises(CustomValueException) as caught:
+        build_prompt_messages("sample", {"messages": []})
+
+    assert caught.value.error_code == StatusCode.APPLY_SYSTEM_PROMPT_FAILED.code
+    assert "sample/" in caught.value.message
+    assert "reserved context keys: ['messages']" in caught.value.message
+    assert "sample.md" not in caught.value.message
+
+
+def test_dynamic_system_error_reports_template_file(tmp_path, monkeypatch):
+    prompt = tmp_path / "dynamic"
+    prompt.mkdir()
+    (prompt / "system.md").write_text("Rule: {{ query }}", encoding="utf-8")
+    monkeypatch.setattr(message_builder, "PROMPT_ROOT", tmp_path)
+
+    with pytest.raises(CustomValueException) as caught:
+        build_prompt_messages("dynamic", {"query": "research"})
+
+    assert caught.value.error_code == StatusCode.APPLY_SYSTEM_PROMPT_FAILED.code
+    assert caught.value.message == "Applying DeepResearch prompt template dynamic/system.md failed"

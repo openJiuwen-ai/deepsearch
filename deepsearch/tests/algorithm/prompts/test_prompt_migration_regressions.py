@@ -1,3 +1,6 @@
+# -*- coding: UTF-8 -*-
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+
 """提示词迁移中研究范围、条件边界和字段隔离的回归契约。"""
 
 import pytest

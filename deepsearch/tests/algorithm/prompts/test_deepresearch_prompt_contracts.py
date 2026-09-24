@@ -1,3 +1,6 @@
+# -*- coding: UTF-8 -*-
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+
 """Repository-wide contracts for stable DeepResearch prompt templates."""
 
 from dataclasses import dataclass
