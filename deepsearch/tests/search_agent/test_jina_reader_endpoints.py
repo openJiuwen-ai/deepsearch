@@ -9,6 +9,7 @@ import requests
 
 from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper import (
     JinaWebFetchProvider,
+    _unreachable_reason,
     build_jina_reader_url,
     resolve_jina_reader_base_urls,
 )
@@ -144,6 +145,56 @@ def test_web_fetch_summary_hides_url_in_sensitive_mode(caplog):
     assert "all Jina reader endpoints failed" in caplog.text
     assert "secret.example" not in caplog.text
     assert "auth rejected" not in caplog.text
+
+
+def test_unreachable_reason_keeps_raw_text_only_outside_sensitive_mode():
+    """_unreachable_reason 是这条规则的唯一落点。
+
+    requests 异常的原文含请求地址（reader 地址是 `{base}/{目标 URL}`）。敏感模式下
+    归类成异常类名，非敏感模式下原样返回，调用点不再各自判断。
+    """
+    err = requests.exceptions.ConnectionError(
+        "HTTPSConnectionPool(host='r.jinaai.cn', port=443): Max retries exceeded "
+        "with url: /https://secret.example/private-page"
+    )
+
+    with patch.object(LogManager, "is_sensitive", return_value=True):
+        assert _unreachable_reason(err) == "ConnectionError"
+
+    with patch.object(LogManager, "is_sensitive", return_value=False):
+        assert _unreachable_reason(err) == str(err)
+        assert "secret.example" in _unreachable_reason(err)
+
+
+def test_web_fetch_unreachable_log_hides_exception_text_in_sensitive_mode(caplog):
+    """敏感模式下连接异常的原文不得落盘。
+
+    requests 异常的原文含请求地址，而 reader 地址是 `{base}/{目标 URL}`，
+    形如 "Max retries exceeded with url: /https://secret.example/private-page"。
+    回归用：汇总日志已脱敏，但每个 base 的 unreachable 日志仍在打印 err 原文。
+    401/403 走的是另一个分支，到不了这行，因此原有敏感用例覆盖不到。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    leaked = (
+        "HTTPSConnectionPool(host='r.jinaai.cn', port=443): Max retries exceeded "
+        "with url: /https://secret.example/private-page"
+    )
+
+    def fake_get(url, **kwargs):
+        raise requests.exceptions.ConnectionError(leaked)
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        side_effect=fake_get,
+    ), patch.object(LogManager, "is_sensitive", return_value=True), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://secret.example/private-page") == "[web_fetch] Failed to read page."
+
+    # 失败类别仍要保留，便于排查
+    assert "unreachable" in caplog.text
+    assert "ConnectionError" in caplog.text
+    # 目标地址与异常原文都不能出现
+    assert "secret.example" not in caplog.text
+    assert "Max retries exceeded" not in caplog.text
 
 
 def _racing_get_rejected_first(rejected: Mock, mirror_ok: Mock):

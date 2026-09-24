@@ -61,6 +61,20 @@ def _jina_reader_auth_failure(response: requests.Response) -> bool:
     return "authenticate" in body or "authenticationrequired" in body
 
 
+def _unreachable_reason(err: RequestException) -> str:
+    """连接失败的落盘文本。
+
+    requests 异常的 str() 里带着请求地址, 而 reader 地址是 `{base}/{目标 URL}`,
+    原文会把目标 URL 写进日志(例如
+    "Max retries exceeded with url: /https://host/secret-page")。敏感模式下只
+    保留异常类名作为失败类别。
+
+    只在这里做判断: 调用点拿到的一定是可以直接落盘的文本, 新增日志不必再各自
+    记住判一次。
+    """
+    return type(err).__name__ if LogManager.is_sensitive() else str(err)
+
+
 class JinaWebFetchProvider:
     provider_name = "jina"
 
@@ -115,12 +129,13 @@ class JinaWebFetchProvider:
             for future in as_completed(futures):
                 base, resp, err = future.result()
                 if err is not None:
+                    reason = _unreachable_reason(err)
                     last_error = err
-                    failures.append(f"{base}: {err}")
+                    failures.append(f"{base}: {reason}")
                     logger.warning(
                         "[WebFetch] Jina reader %s unreachable: %s",
                         base,
-                        err,
+                        reason,
                     )
                     continue
                 if resp.status_code == 200:
@@ -144,8 +159,9 @@ class JinaWebFetchProvider:
             # 汇总一条: 只有 RequestException 才设置 last_error, 因此"所有 base 都被 401/403 拦下"
             # 这种最常见场景原先没有任何汇总日志(单个 base 的 warning 看不出"全挂了")。
             if LogManager.is_sensitive():
-                # 敏感模式下只保留固定事件与数量: 目标 url 和各 base 的失败详情
-                # (异常文本可能带上请求地址)都不能落盘。
+                # 敏感模式下只保留固定事件与数量。failures 里的异常文本已由
+                # _unreachable_reason 归类, 这里仍要挡住的是目标 url 与 exc_info
+                # (异常 traceback 里同样带着请求地址)。
                 logger.warning(
                     "[WebFetch] all Jina reader endpoints failed (%d endpoints)",
                     len(failures),
