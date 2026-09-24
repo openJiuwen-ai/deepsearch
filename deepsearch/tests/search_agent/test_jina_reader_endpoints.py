@@ -1,8 +1,10 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+import threading
 from unittest.mock import Mock, patch
 
+import pytest
 import requests
 
 from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper import (
@@ -121,3 +123,56 @@ def test_web_fetch_summary_reports_http_status_for_non_auth_failures(caplog):
     assert "all Jina reader endpoints failed" in caplog.text
     assert "HTTP 500" in caplog.text
     assert "auth rejected" not in caplog.text
+
+
+def _racing_get_rejected_first(rejected: Mock, mirror_ok: Mock):
+    """构造一个顺序确定的竞速：被拒的 base 先完成，可用的 base 后完成。
+
+    as_completed 的完成顺序在测试里本来就是不确定的；这里强制"被拒的先回"，
+    才能稳定复现"最快返回的 base 把整次请求短路掉"这一回归。
+    """
+    rejected_done = threading.Event()
+
+    def fake_get(url, **kwargs):
+        if url.startswith("https://r.jina.ai/"):
+            rejected_done.set()
+            return rejected
+        assert rejected_done.wait(timeout=5), "被拒的 base 未先完成，测试失去意义"
+        return mirror_ok
+
+    return fake_get
+
+
+@pytest.mark.parametrize("rejected_status", [401, 403])
+def test_web_fetch_does_not_short_circuit_on_credential_rejection(rejected_status, caplog):
+    """某个 base 返 401/403 时不得结束竞速。
+
+    回归用：原先鉴权失败直接 return，而官方 base 对本机请求回得最快，
+    于是整次请求被它抢先结束，镜像能返回的 200 正文反而拿不到。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    rejected = Mock(status_code=rejected_status, text="Just a moment...")
+    mirror_ok = Mock(status_code=200, text="from-mirror")
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        side_effect=_racing_get_rejected_first(rejected, mirror_ok),
+    ), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://example.com") == "from-mirror"
+
+    assert "all Jina reader endpoints failed" not in caplog.text
+
+
+def test_fetch_page_returns_mirror_content_when_official_endpoint_rejects():
+    """端到端：官方 base 被拒时 fetch_page 仍应拿到镜像正文，且无需重试。"""
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    rejected = Mock(status_code=403, text="Just a moment...")
+    mirror_ok = Mock(status_code=200, text="from-mirror")
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        side_effect=_racing_get_rejected_first(rejected, mirror_ok),
+    ) as mock_get:
+        assert fetch.fetch_page("https://example.com") == "from-mirror"
+
+    assert mock_get.call_count == len(fetch._reader_bases)

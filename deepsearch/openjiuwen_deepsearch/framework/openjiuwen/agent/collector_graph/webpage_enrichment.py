@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,6 +59,14 @@ MAX_SELECTION_CANDIDATES = 10
 ENRICH_FETCH_CONCURRENCY = 3
 # httpx 直连路本地解析 PDF 的最大页数
 SIMPLE_UA_PDF_MAX_PAGES = 50
+# httpx 直连路下载阶段的总时长上限。httpx 自带的 timeout 只作用于单次操作,
+# 慢速滴流和连接重试会累加, 所以要给整个下载阶段单独设界, 也给后面的解析和 jina 兜底留出预算。
+SIMPLE_UA_DOWNLOAD_TIMEOUT_SECONDS = 30
+# httpx 直连路解析阶段的时长上限。下载上限 + 解析上限把单 URL 预算切成两段, 各自有界。
+SIMPLE_UA_PARSE_TIMEOUT_SECONDS = 15
+# httpx 直连路下载字节上限。只作 OOM 护栏, 取值远高于真实 PDF:
+# 按字节截断会破坏 PDF 尾部的交叉引用表, 导致本可解析的文档解析失败。
+SIMPLE_UA_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 
 def _remaining_timeout_seconds(deadline: float) -> int:
@@ -71,6 +80,11 @@ def _remaining_timeout_seconds(deadline: float) -> int:
     """
     remaining = deadline - asyncio.get_running_loop().time()
     return max(1, math.ceil(remaining))
+
+
+def _elapsed_ms(started: float) -> int:
+    """返回自 ``started`` 起经过的毫秒数，用于抓取各阶段耗时日志。"""
+    return int((time.monotonic() - started) * 1000)
 
 
 @dataclass(frozen=True)
@@ -252,6 +266,7 @@ class WebPageEnrichmentNode(BaseNode):
         content_len: int | None = None,
         required_len: int | None = None,
         exc: Exception | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         """记录抓取事件，并在敏感模式下移除 URL 和异常正文。
 
@@ -262,26 +277,31 @@ class WebPageEnrichmentNode(BaseNode):
             content_len: 抓取正文长度。
             required_len: 当前动态最低正文长度。
             exc: 抓取异常；仅非敏感模式记录。
+            extra: 额外的非敏感键值对（如阶段耗时、下载字节数），按 ``key=value`` 追加。
 
         Returns:
             None.
         """
+        extra_text = "".join(f" {key}={value}" for key, value in extra.items()) if extra else ""
         if LogManager.is_sensitive():
             logger.log(
                 level,
-                "[WebPageEnrichmentNode] fetch event. category=%s content_len=%s required_len=%s",
+                "[WebPageEnrichmentNode] fetch event. category=%s content_len=%s required_len=%s%s",
                 category,
                 content_len,
                 required_len,
+                extra_text,
             )
             return
         logger.log(
             level,
-            "[WebPageEnrichmentNode] fetch event. category=%s url=%s content_len=%s required_len=%s error=%s",
+            "[WebPageEnrichmentNode] fetch event. category=%s url=%s content_len=%s "
+            "required_len=%s%s error=%s",
             category,
             url,
             content_len,
             required_len,
+            extra_text,
             exc,
         )
 
@@ -417,6 +437,11 @@ class WebPageEnrichmentNode(BaseNode):
         同时换了一个请求客户端(本方法 httpx, harness 直连是 aiohttp), 覆盖到 harness
         直连取不到正文的站点。
 
+        下载与解析各自设时长上限(`SIMPLE_UA_DOWNLOAD_TIMEOUT_SECONDS` /
+        `SIMPLE_UA_PARSE_TIMEOUT_SECONDS`), 下载另有字节上限
+        (`SIMPLE_UA_MAX_DOWNLOAD_BYTES`); 三者都从当前 URL 的总 deadline 里取,
+        避免某个阶段无限期占用预算, 也给后面的 jina 兜底留出重试时间。
+
         Args:
             url: 目标 URL。
             deadline: event loop 单调时钟上的整体截止时间。
@@ -431,15 +456,35 @@ class WebPageEnrichmentNode(BaseNode):
             _extract_pdf,
         )
 
-        timeout = _remaining_timeout_seconds(deadline)
+        remaining = _remaining_timeout_seconds(deadline)
+        download_timeout = max(1, min(SIMPLE_UA_DOWNLOAD_TIMEOUT_SECONDS, remaining))
+        download_started = time.monotonic()
+        downloaded_bytes = 0
+        status_code = 0
+        response_headers: dict[str, str] = {}
+        data = b""
         try:
             async with httpx.AsyncClient(
-                timeout=timeout,
+                timeout=download_timeout,
                 follow_redirects=True,
                 trust_env=True,
                 headers={"User-Agent": "Mozilla/5.0 (compatible; DeepResearchEnrichment/1.0)"},
             ) as client:
-                resp = await client.get(url)
+                async with asyncio.timeout(download_timeout):
+                    async with client.stream("GET", url) as resp:
+                        status_code = resp.status_code
+                        response_headers = resp.headers
+                        chunks: list[bytes] = []
+                        if status_code == 200:
+                            async for chunk in resp.aiter_bytes():
+                                downloaded_bytes += len(chunk)
+                                if downloaded_bytes > SIMPLE_UA_MAX_DOWNLOAD_BYTES:
+                                    raise ValueError(
+                                        "download size exceeds "
+                                        f"{SIMPLE_UA_MAX_DOWNLOAD_BYTES} bytes"
+                                    )
+                                chunks.append(chunk)
+                        data = b"".join(chunks)
         except Exception as exc:
             self._log_fetch_event(
                 logging.WARNING,
@@ -447,31 +492,51 @@ class WebPageEnrichmentNode(BaseNode):
                 url,
                 required_len=required_length,
                 exc=exc,
+                extra={
+                    "status": status_code,
+                    "downloaded_bytes": downloaded_bytes,
+                    "download_ms": _elapsed_ms(download_started),
+                },
             )
             return {}
-        if resp.status_code != 200 or not resp.content:
+        if status_code != 200 or not data:
             self._log_fetch_event(
                 logging.INFO,
                 "simple_ua_failed",
                 url,
-                content_len=len(resp.content) if resp.content else 0,
+                content_len=len(data),
                 required_len=required_length,
+                extra={"status": status_code, "download_ms": _elapsed_ms(download_started)},
             )
             return {}
-        data = resp.content
-        content_type = resp.headers.get("Content-Type", "")
+        content_type = response_headers.get("Content-Type", "")
+        download_ms = _elapsed_ms(download_started)
         title = ""
         truncated = False
+        parse_timeout = max(1, min(SIMPLE_UA_PARSE_TIMEOUT_SECONDS, _remaining_timeout_seconds(deadline)))
+        parse_started = time.monotonic()
         try:
             if "pdf" in content_type.lower() or data[:5] == b"%PDF-":
-                text, truncated = await asyncio.to_thread(
-                    _extract_pdf,
-                    data,
-                    MAX_COLLECTOR_DOC_CONTENT_LENGTH,
-                    SIMPLE_UA_PDF_MAX_PAGES,
+                text, truncated = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _extract_pdf,
+                        data,
+                        MAX_COLLECTOR_DOC_CONTENT_LENGTH,
+                        SIMPLE_UA_PDF_MAX_PAGES,
+                    ),
+                    timeout=parse_timeout,
                 )
             else:
-                decoded = resp.text
+                # 流式读取后 httpx 不再保留 resp.text; 用同一份 headers 重建响应来解码,
+                # 与原先走 resp.text 时的字符集判定保持一致。
+                # 必须剔除 Content-Encoding: aiter_bytes() 给出的已是解压后的字节,
+                # 原样带过去会被 httpx 二次解压并抛 DecodingError。
+                decode_headers = {
+                    key: value
+                    for key, value in response_headers.items()
+                    if key.lower() not in {"content-encoding", "content-length"}
+                }
+                decoded = httpx.Response(status_code, headers=decode_headers, content=data).text
                 if "html" in content_type.lower():
                     title, decoded = WebFetchWebpageTool._extract_main_text_from_html(decoded)
                 text = decoded[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
@@ -484,8 +549,14 @@ class WebPageEnrichmentNode(BaseNode):
                 content_len=len(data),
                 required_len=required_length,
                 exc=exc,
+                extra={
+                    "downloaded_bytes": downloaded_bytes,
+                    "download_ms": download_ms,
+                    "parse_ms": _elapsed_ms(parse_started),
+                },
             )
             return {}
+        parse_ms = _elapsed_ms(parse_started)
         if not text or len(text) < required_length:
             self._log_fetch_event(
                 logging.INFO,
@@ -493,6 +564,7 @@ class WebPageEnrichmentNode(BaseNode):
                 url,
                 content_len=len(text),
                 required_len=required_length,
+                extra={"download_ms": download_ms, "parse_ms": parse_ms},
             )
             return {}
         self._log_fetch_event(
@@ -501,6 +573,11 @@ class WebPageEnrichmentNode(BaseNode):
             url,
             content_len=len(text),
             required_len=required_length,
+            extra={
+                "downloaded_bytes": downloaded_bytes,
+                "download_ms": download_ms,
+                "parse_ms": parse_ms,
+            },
         )
         return {
             "url": url,
