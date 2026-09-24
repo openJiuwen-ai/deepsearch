@@ -170,6 +170,7 @@
 - 网页抓取正文少于 200 字符或短于旧证据时不会直接覆盖旧证据；三路都未达到动态门槛时按抓取失败处理。
 - 三条抓取路共用 `info_collector_webpage_enrich_fetch_timeout_seconds` 指定的整体 deadline；整体超时保留旧证据。
 - httpx 直连路的下载与解析各自设阶段上限（下载 30 秒、解析 15 秒），下载另有字节上限（100 MB）；任一阶段超时视为该路失败，继续退到 Jina Reader 路。字节上限定位是 OOM 护栏而非截断策略——按字节截断会破坏 PDF 尾部的交叉引用表，使本可解析的文档解析失败。
+- Jina Reader 路另有 30 秒阶段上限（`JINA_STAGE_TIMEOUT_SECONDS`）。provider 内部是固定 3 次重试 + 线性退避（不设界时最坏约 37 秒），自身不知道剩余预算，所以在节点侧单独设界：该上限取「30 秒」与「剩余预算向上取整」的较小值，因向上取整，多数情况下先到的仍是整体 deadline（事件记 `fetch_deadline_exceeded`，而非 `jina_fetch_failed`）。该上限同时作为 `budget` 传入 `fetch_page`——`asyncio.to_thread` 的底层线程不可取消，但 provider 会把内部重试、退避与单次请求超时都压进这个预算，线程收在预算附近（最坏再多花一次请求的 `connect + read`）。预算充裕时该预算不触发，行为与设界前逐字一致。
 - PDF 由 httpx 直连路用 pypdfium2 本地解析；该路拿不到正文时，PDF 仍可由 Jina Reader 路转换。三路都返回 `%PDF-` 原始数据时按抓取失败处理。
 - 压缩结果丢失旧关键片段中的数字或技术标识时，质量门禁拒绝替换并保留旧证据身份；描述性内容允许同义改写或翻译。
 - 空结果不会直接中断主图，但会通过 warning 进入章节和最终报告状态。
@@ -182,7 +183,7 @@
 - `uv run pytest tests/framework/test_background_knowledge.py`
 - `uv run pytest tests/info_collector/test_webpage_enrichment.py`
 - `uv run pytest tests/info_collector/algorithm/test_tool_log.py`
-- 网页增强测试覆盖 canonical URL 去重、Prompt 消息隔离、输出语言、三路抓取级联与整体 deadline、httpx 直连路各分支及其阶段上限、Jina 多 base 竞速、质量门禁、敏感日志脱敏、历史 query/最终报告同步和并发异常隔离。
+- 网页增强测试覆盖 canonical URL 去重、Prompt 消息隔离、输出语言、三路抓取级联与整体 deadline、httpx 直连路各分支及其阶段上限、Jina 多 base 竞速与阶段上限、质量门禁、敏感日志脱敏、历史 query/最终报告同步和并发异常隔离。
 - `uv run pytest tests/info_collector/test_academic_search_routing.py`
 - `uv run pytest tests/info_collector/test_graph_builder.py::test_validate_query_count_accepts_structured_query_items`
 - `uv run pytest tests/info_collector/test_graph_builder.py::test_collector_query_prompt_contract_uses_dynamic_max_query_count`
