@@ -63,6 +63,12 @@ class LocalSearchConfig(BaseModel):
     recall_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="知识库检索阈值")
 
 
+class McpServerConfig(BaseModel):
+    """请求中引用的 MCP server 配置"""
+    mcp_server_id: int = Field(..., description="MCP server 配置 ID")
+    type: str = Field(default="search", description="MCP server 用途类型")
+
+
 class PluginToolParam(BaseModel):
     name: str = Field(..., description="参数名称")
     desc: str = Field(default="", description="参数描述")
@@ -129,6 +135,7 @@ class DeepSearchRequest(BaseModel):
     web_search_config: WebSearchConfig = Field(default=None, description="联网增强引擎配置，和本地知识库配置至少选择一个")
     local_search_config: LocalSearchConfig = Field(default=None,
                                                    description="本地知识库配置，和联网增强引擎配置至少选择一个")
+    mcp_servers: List[McpServerConfig] = Field(default_factory=list, description="MCP server 配置引用列表")
     template_id: int = Field(default=-1, description="报告模板ID（可选）")
     interrupt_feedback: Literal[
         "", "accepted", "cancel", "revise_outline", "revise_comment"

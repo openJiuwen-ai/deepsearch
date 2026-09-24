@@ -121,6 +121,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools import (
     update_local_search_mapping,
     update_web_search_mapping,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.tools.mcp import McpToolBundle
 from openjiuwen_deepsearch.llm.llm_request_adapter import resolve_llm_thinking_enabled
 from openjiuwen_deepsearch.llm.llm_wrapper import create_llm_obj
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
@@ -141,6 +142,7 @@ from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
+    mcp_tool_context,
     session_context,
     tool_context,
     web_search_context,
@@ -287,6 +289,25 @@ def _initialize_web_search_context_from_agent_config(
     )
     qps_rate_limiter.set_max_qps(agent_config.web_search_max_qps)
     return web_search_token
+
+
+async def _initialize_mcp_context_from_agent_config(agent_config: AgentConfig):
+    """连接 MCP servers 并注册到 contextvar。返回 token 供 finally reset。"""
+    mcp_servers = getattr(agent_config, "mcp_servers", None) or []
+    if not mcp_servers:
+        return None
+    servers_dict_list = [
+        s.model_dump() if hasattr(s, "model_dump") else s
+        for s in mcp_servers
+    ]
+    bundle = McpToolBundle()
+    try:
+        await bundle.connect_and_build_tools(servers_dict_list)
+    except Exception as e:
+        logger.warning("[MCP] Failed to initialize MCP tools: %s", e)
+        await bundle.close_all()
+        return None
+    return mcp_tool_context.set(bundle)
 
 
 def _build_search_fetch_tools(agent_config: AgentConfig):
@@ -1949,6 +1970,7 @@ class DeepSearchAgent(BaseAgent):
 
         llm_token = None
         web_search_token = None
+        mcp_token = None
         tool_token = None
         workflow_session_token = None
         session_agent_config: AgentConfig | None = None
@@ -2006,6 +2028,7 @@ class DeepSearchAgent(BaseAgent):
             tool_class: list[Any] = []
             if per_question_params.tool_map == "search_fetch":
                 tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
+                mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class.append(_build_retrieve_tool(milvus_cfg))
@@ -2072,6 +2095,11 @@ class DeepSearchAgent(BaseAgent):
             if web_search_token is not None:
                 _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            if mcp_token is not None:
+                bundle = mcp_tool_context.get()
+                if bundle is not None:
+                    await bundle.close_all()
+                mcp_tool_context.reset(mcp_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
             # The run context owns a deep copy, so clear both per-run configurations.

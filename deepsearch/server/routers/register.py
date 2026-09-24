@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 from fastapi import FastAPI, APIRouter
 
-from server.routers import deepsearch_run, report, report_template, web_search_engine_router, knowledge_base
+from server.routers import deepsearch_run, report, report_template, web_search_engine_router, knowledge_base, mcp_server_router
 
 api_router = APIRouter()
 
@@ -43,6 +43,7 @@ def register_deepsearch_router():
     deepsearch_router.include_router(web_search_engine_router.router, prefix="/web_search", tags=["Web Search Engine"])
     deepsearch_router.include_router(report.reports_router, prefix="/reports", tags=["Reports"])
     deepsearch_router.include_router(report_template.router, prefix="/template", tags=["Report Template"])
+    deepsearch_router.include_router(mcp_server_router.router, prefix="/mcp", tags=["MCP Server"])
     return deepsearch_router
 
 

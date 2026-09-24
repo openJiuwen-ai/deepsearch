@@ -298,8 +298,8 @@ class ExposedInfoRetrievalNode(InfoRetrievalNode):
     async def structure_result(self, *args, **kwargs):
         return await self._structure_result(*args, **kwargs)
 
-    def prepare_collector_tool(self, *args, **kwargs):
-        return self._prepare_collector_tool(*args, **kwargs)
+    async def prepare_collector_tool(self, *args, **kwargs):
+        return await self._prepare_collector_tool(*args, **kwargs)
 
     async def invoke_llm_with_retry(self, *args, **kwargs):
         return await self._invoke_llm_with_retry(*args, **kwargs)
@@ -405,6 +405,7 @@ class TestInfoCollectorNode:
             "api_tools_config": {},
             "research_intent": {},
             "evidence_ledger": {},
+            "mcp_tools": [],
             "exclusion_constraint_enable": False,
         }
         assert result == expected_state
@@ -742,7 +743,7 @@ class TestInfoCollectorNode:
         with patch.object(
             info_collector_node,
             '_prepare_collector_tool',
-            return_value=([], {"web_search_tool": tool}),
+            new=AsyncMock(return_value=([], {"web_search_tool": tool})),
         ), patch.object(
             info_collector_node,
             '_structure_result',
@@ -845,7 +846,8 @@ class TestInfoCollectorNode:
         assert doc_infos == []
         assert source_store == {}
 
-    def test_prepare_collector_tool_web(self, info_collector_node):
+    @pytest.mark.asyncio
+    async def test_prepare_collector_tool_web(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - 联网增强 搜索"""
         state = {"search_method": "web"}
 
@@ -859,14 +861,15 @@ class TestInfoCollectorNode:
             mock_local_tool.card.tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
 
-            tool_list, tool_dict = info_collector_node.prepare_collector_tool(state)
+            tool_list, tool_dict = await info_collector_node.prepare_collector_tool(state)
 
             # 验证只包含 web 工具
             assert tool_list == ["web_tool_info"]
             assert "web_search_tool" in tool_dict
             assert "local_search_tool" not in tool_dict
 
-    def test_prepare_collector_tool_local(self, info_collector_node):
+    @pytest.mark.asyncio
+    async def test_prepare_collector_tool_local(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - local 搜索"""
         state = {"search_method": "local"}
 
@@ -880,14 +883,15 @@ class TestInfoCollectorNode:
             mock_local_tool.card.tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
 
-            tool_list, tool_dict = info_collector_node.prepare_collector_tool(state)
+            tool_list, tool_dict = await info_collector_node.prepare_collector_tool(state)
 
             # 验证只包含 local 工具
             assert tool_list == ["local_tool_info"]
             assert "local_search_tool" in tool_dict
             assert "web_search_tool" not in tool_dict
 
-    def test_prepare_collector_tool_both(self, info_collector_node):
+    @pytest.mark.asyncio
+    async def test_prepare_collector_tool_both(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - 两种搜索"""
         state = {"search_method": "both"}
 
@@ -901,7 +905,7 @@ class TestInfoCollectorNode:
             mock_local_tool.card.tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
 
-            tool_list, tool_dict = info_collector_node.prepare_collector_tool(state)
+            tool_list, tool_dict = await info_collector_node.prepare_collector_tool(state)
 
             # 验证包含两种工具
             assert len(tool_list) == 2
@@ -910,7 +914,8 @@ class TestInfoCollectorNode:
             assert "web_search_tool" in tool_dict
             assert "local_search_tool" in tool_dict
 
-    def test_prepare_collector_tool_with_api_tools_config(self, info_collector_node):
+    @pytest.mark.asyncio
+    async def test_prepare_collector_tool_with_api_tools_config(self, info_collector_node):
         """测试 _prepare_collector_tool 方法 - 动态 API 工具"""
         state = {
             "search_method": "web",
@@ -945,7 +950,7 @@ class TestInfoCollectorNode:
             mock_local_tool.card.tool_info.return_value = "local_tool_info"
             mock_local.return_value = mock_local_tool
 
-            tool_list, tool_dict = info_collector_node.prepare_collector_tool(state)
+            tool_list, tool_dict = await info_collector_node.prepare_collector_tool(state)
 
         tool_names = [
             tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", tool)
