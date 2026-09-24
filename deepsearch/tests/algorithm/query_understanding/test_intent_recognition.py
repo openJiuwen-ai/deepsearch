@@ -10,6 +10,7 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     MAX_RESEARCH_QUERY_LENGTH,
     _create_emit_intent_tool,
     _default_fallback,
+    _drop_empty_optional_intent_fields,
     _normalize_research_intent,
     _to_str_list,
     classify_and_recognize_intent,
@@ -102,6 +103,17 @@ def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
         assert "required" not in scope_schema
         assert "anyOf" not in scope_schema
         assert "oneOf" not in scope_schema
+
+
+def test_drop_empty_optional_intent_fields_before_tool_validation():
+    args = _drop_empty_optional_intent_fields({
+        "research_query": "topic",
+        "section_count": "",
+        "source_date_scope": "  ",
+        "content_date_scope": "",
+    })
+
+    assert args == {"research_query": "topic"}
 
 
 def test_target_paper_url_is_preserved_and_added_to_include_url():
@@ -971,6 +983,21 @@ def test_intent_prompts_suppress_report_type_when_provided():
     default = apply_system_prompt("intent_recognition", dict(base_ctx))
     default_content = default[0]["content"]
     assert "emit `report_type` accordingly" in default_content
+
+
+def test_intent_prompt_renders_material_guidance_only_when_materials_exist():
+    base_ctx = {"original_query": "AI Agent 趋势", "messages": []}
+
+    without_materials = apply_system_prompt("intent_recognition", base_ctx)[0]["content"]
+    with_materials = apply_system_prompt(
+        "intent_recognition",
+        {**base_ctx, "has_materials": True, "material_manifest": "[M1] Paper"},
+    )[0]["content"]
+
+    assert "## User Materials (when present)" not in without_materials
+    assert "materials can compensate for a thin query" not in without_materials
+    assert "## User Materials (when present)" in with_materials
+    assert "materials can compensate for a thin query" in with_materials
 
 
 @pytest.mark.asyncio

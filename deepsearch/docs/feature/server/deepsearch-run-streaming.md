@@ -75,6 +75,7 @@ DeepSearch 运行接口把前端请求转为可流式消费的研究任务。它
 ## 相关文档
 
 - [DeepSearch Agent 配置组装](./deepsearch-agent-config.md)
+- [用户素材](../algorithm/user-materials.md)
 - [Server 应用运行时](./fastapi-app-runtime.md)
 - [Agent 工厂与运行模式](../framework/agent-factory.md)
 - [报告研究主工作流](../framework/research-workflow.md)

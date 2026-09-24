@@ -2,6 +2,7 @@
 
 import json
 import logging
+from typing import Any
 
 from openjiuwen_deepsearch.algorithm.brief_report.evaluation import evaluate_brief_sections
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
@@ -9,14 +10,17 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefCollectionContext,
     BriefCollectionResult,
     BriefCollectorRequest,
+    BriefOutline,
     BriefQuery,
     BriefQueryRequest,
     BriefSearchResult,
     BriefSectionEvidence,
+    BriefSelectedDoc,
     BriefStepCoverage,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.search import build_section_candidates
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import build_material_evidence_items
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_research_intent_prompt_context,
@@ -40,9 +44,10 @@ async def generate_brief_queries(llm: object, request: BriefQueryRequest) -> lis
     Returns:
         已按合法章节/步骤及去重规则清洗的 Query 列表。
     """
-    prompt_context = request.model_dump(exclude={"research_intent"})
+    prompt_context = request.model_dump(exclude={"research_intent", "material_context"})
     prompt_context.update(build_research_intent_prompt_context(request.research_intent))
     prompt_context.update(build_temporal_scope_prompt_context(request.research_intent))
+    prompt_context.update(request.material_context)
     messages = apply_system_prompt("brief_collector_query_generation", prompt_context)
     last_error: Exception | None = None
     attempts = max(1, Config().service_config.info_collector_max_retry_num)
@@ -61,6 +66,11 @@ async def generate_brief_queries(llm: object, request: BriefQueryRequest) -> lis
                 raise ValueError("brief queries payload must contain a list")
             queries = _clean_brief_queries(raw_queries, request)
             if not queries:
+                if request.material_first:
+                    logger.info(
+                        "[MATERIAL_FIRST] no web gaps found; skip web search and write from user materials."
+                    )
+                    return []
                 raise ValueError("brief query payload contains no valid query after cleaning")
             return queries
         except Exception as exc:
@@ -255,6 +265,83 @@ def build_citation_registry(
     return list(record_by_url.values())
 
 
+def merge_material_evidence(
+    collection: BriefCollectionResult,
+    outline: BriefOutline,
+    material_analysis: Any,
+) -> BriefCollectionResult:
+    """按章节 ``material_bindings`` 精确并入用户素材证据。"""
+    items = build_material_evidence_items(material_analysis)
+    if not items or not outline.sections:
+        return collection
+
+    registry = list(collection.citation_registry)
+    known_sources = {record.source_id for record in registry}
+    next_index = max((record.index for record in registry), default=0)
+    section_evidence = dict(collection.section_evidence)
+    for section in outline.sections:
+        evidence = section_evidence.get(section.id) or BriefSectionEvidence()
+        docs = list(evidence.selected_docs)
+        owned = {doc.source_id for doc in docs}
+
+        # Bindings, rather than a separate boolean, are the sole source of
+        # truth for whether this section can use user-provided material.
+        declared_ids = {
+            binding.get("material_id")
+            for binding in section.material_bindings
+            if isinstance(binding, dict) and binding.get("material_id")
+        }
+        material_docs: list[BriefSelectedDoc] = []
+        if declared_ids:
+            # 分支 1：大纲声明了具体素材 ID → 精确过滤
+            for item in items:
+                if item["material_id"] not in declared_ids:
+                    continue
+                source_id = f"user_material:{item['material_id']}"
+                if source_id in owned:
+                    continue
+                material_docs.append(BriefSelectedDoc(source_id=source_id, step_ids=[], evaluation_rank=1))
+                owned.add(source_id)
+        prioritized_docs = [*material_docs, *docs]
+        prioritized_docs = [
+            doc.model_copy(update={"evaluation_rank": rank})
+            for rank, doc in enumerate(prioritized_docs, start=1)
+        ]
+        logger.info(
+            "[MATERIAL_ROUTE] section=%s declared=%d resolved=%d material_docs=%d web_docs=%d ids=%s",
+            section.id,
+            len(declared_ids),
+            sum(doc.source_id.startswith("user_material:") for doc in material_docs),
+            len(material_docs),
+            len(docs),
+            ",".join(doc.source_id.removeprefix("user_material:") for doc in material_docs),
+        )
+        section_evidence[section.id] = evidence.model_copy(update={"selected_docs": prioritized_docs})
+
+    for item in items:
+        source_id = f"user_material:{item['material_id']}"
+        if source_id in known_sources:
+            continue
+        next_index += 1
+        registry.append(BriefCitationRecord(
+            source_id=source_id,
+            index=next_index,
+            title=item["title"],
+            url=item["url"],
+            original_content=item["original_content"],
+        ))
+        known_sources.add(source_id)
+
+    selected_material_docs = sum(
+        doc.source_id.startswith("user_material:")
+        for evidence in section_evidence.values()
+        for doc in evidence.selected_docs
+    )
+    if any(section.material_bindings for section in outline.sections) and not selected_material_docs:
+        logger.error("[MATERIAL_ROUTE] material-bound outline produced no selected material evidence.")
+    return collection.model_copy(update={"section_evidence": section_evidence, "citation_registry": registry})
+
+
 async def collect_initial_brief_evidence(
     request: BriefCollectorRequest,
     formal_queries: list[BriefQuery],
@@ -271,11 +358,18 @@ async def collect_initial_brief_evidence(
         首轮证据结果及供审阅、补搜消费的搜索上下文。
     """
     section_ids = [section.id for section in request.outline.sections]
-    section_evidence = await evaluate_brief_sections(
-        request.llm,
-        request.outline,
-        build_section_candidates(first_results, section_ids),
-    )
+    if first_results or formal_queries:
+        section_evidence = await evaluate_brief_sections(
+            request.llm,
+            request.outline,
+            build_section_candidates(first_results, section_ids),
+        )
+    else:
+        logger.info("[MATERIAL_FIRST] initialized empty web evidence for %d sections.", len(section_ids))
+        section_evidence = {
+            section_id: BriefSectionEvidence()
+            for section_id in section_ids
+        }
     registry = build_citation_registry(first_results, section_evidence)
     return BriefCollectionResult(
         section_evidence=section_evidence,

@@ -366,6 +366,15 @@ class AgentConfig(BaseModel):
         default=None,
         description="报告类型；None 时由意图识别与澄清机制决定",
     )
+    user_materials_enabled: bool = Field(
+        default=False,
+        description="是否启用用户素材（已有信息素材）能力；关闭时即使传入 user_materials 也会被忽略",
+    )
+    user_materials: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="用户提供的原始已有信息素材（UserMaterial dict 列表），由 StartNode 写入 search_context.user_materials；"
+                    "校验、去重、摘要和相关性结果写入 search_context.material_analysis",
+    )
     coverage_rule_block_enable: bool = Field(
         default=True,
         description="子报告大纲阶段规则版覆盖证据（coverage passages）开关，"

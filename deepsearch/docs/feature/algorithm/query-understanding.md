@@ -119,6 +119,7 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 ## 相关文档
 
 - [Prompt 模板系统](./prompt-template-system.md)
+- [用户素材](./user-materials.md)
 - [资料采集](./research-collector.md)
 - [DeepSearch 搜索智能体](./search-agent.md)
 - [报告生成](./report-generation.md)

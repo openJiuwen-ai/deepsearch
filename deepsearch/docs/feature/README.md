@@ -70,6 +70,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 ## 文档入口
 
 - [查询理解](./algorithm/query-understanding.md)
+- [用户素材](./algorithm/user-materials.md)
 - [资料采集](./algorithm/research-collector.md)
 - [DeepSearch 搜索智能体](./algorithm/search-agent.md)
 - [报告生成](./algorithm/report-generation.md)

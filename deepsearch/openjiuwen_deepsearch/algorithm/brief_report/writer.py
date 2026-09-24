@@ -16,6 +16,9 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
 )
 from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    format_section_material_bindings,
+)
 from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import _is_context_limit_error as _matches_context_limit
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.config.config import Config
@@ -118,6 +121,10 @@ def _writing_prompt_input(
         "current_section_description": section.goal,
         "current_section_format_requirements": "\n".join(format_requirements),
         "current_chapter_outline": _numbered_chapter_outline(section),
+        "section_material_bindings_text": format_section_material_bindings(
+            section.material_bindings,
+            section.use_material_ids,
+        ),
         "messages": messages,
         "has_exclusion": request.has_exclusion,
         "exclusion_instruction": request.exclusion_instruction,

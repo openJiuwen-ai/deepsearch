@@ -38,6 +38,10 @@ class CollectorContext(BaseModel):
     max_tool_call_turns_per_query: int = Field(default=2, description="单个检索 query 最大工具调用轮次")
     report_type: str = Field(default="professional", description="报告类型：professional / brief")
     research_intent: dict = Field(default_factory=dict, description="结构化报告约束")
+    material_evidence: list[dict] = Field(
+        default_factory=list,
+        description="本章节绑定用户素材的摘要证据，供 Supervisor 评估检索缺口",
+    )
     evidence_ledger: dict = Field(default_factory=dict, description="collector 内部 evidence ledger")
     search_queries: list[RetrievalQuery] = Field(default_factory=list, description="当前的检索Query列表")  # info_collector
     history_queries: list[RetrievalQuery] = Field(default_factory=list, description="历史的检索Query列表")  # info_collector

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from openjiuwen.core.session.node import Session
+from openjiuwen.core.runner.runner import Runner
 from openjiuwen.core.workflow.base import WorkflowCard
 from openjiuwen.core.workflow.workflow import Workflow
 
@@ -29,6 +30,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     UserFeedbackProcessorNode,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import IntentRecognitionResult
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    MaterialAnalysis,
+    MaterialManifestItem,
+)
 from openjiuwen_deepsearch.algorithm.brief_report.models import BriefOutline, BriefWorkflowState
 from openjiuwen_deepsearch.config.config import OUTLINER_SECTION_NUM_MAX
 from openjiuwen_deepsearch.config.method import ExecutionMethod
@@ -55,6 +60,20 @@ def _mock_search_url_validation():
         "openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.local_search_api.api_wrapper.validate_search_service_url"
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_registered_workflows():
+    """清理全局资源管理器中遗留的 workflow 注册。
+
+    tests/workflow 等模块会向全局 Runner.resource_mgr 注册 research_workflow_1，
+    且注册信息跨测试残留；先注册不同拓扑的同名 workflow 会让本文件的 agent.run
+    走入异常分支（resource already exist），导致 missing_sections 断言失败。
+    每个用例前清理，保证本文件的 MockAgent 注册路径一致。
+    """
+    Runner.resource_mgr.remove_workflow("research_workflow_1")
+    yield
+    Runner.resource_mgr.remove_workflow("research_workflow_1")
 
 
 # 公共执行逻辑：运行 agent 并返回所有 chunk（可选）
@@ -405,6 +424,8 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         "info_collector_search_method": "web",
         "provided_report_type": None,
         "exclusion_constraint_enable": False,
+        "user_materials": [],
+        "material_analysis": None,
     })
     mock_web_search.assert_awaited_once_with({
         "query": "AI Agent 趋势",
@@ -430,6 +451,63 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         temporal_scope=intent_result.research_intent.source_date_scope,
     )
     assert call_order == ["entry_search", "temporal_scope"]
+
+
+@pytest.mark.asyncio
+async def test_intent_node_keeps_prepared_materials_before_session_state_is_committed():
+    """本节点内不能因 session 尚未提交素材状态而丢失素材优先策略。"""
+    original_query = "Please summarize the provided papers."
+    analysis = MaterialAnalysis(items=[
+        MaterialManifestItem(
+            material_id="M1",
+            title="Paper",
+            summary="A supported finding.",
+            summary_kind="summary",
+        )
+    ])
+    intent_result = IntentRecognitionResult(
+        original_query=original_query,
+        research_query="research topic",
+        research_intent=ResearchIntent(),
+        lang="en-US",
+    )
+    web_search_engine_config = Mock(search_engine_name="tavily")
+    session = Mock(spec=Session)
+    session.get_global_state.side_effect = lambda key: {
+        "search_context.original_query": original_query,
+        "search_context.messages": [],
+        "search_context.user_materials": [{"content": "source"}],
+        # Deliberately stale: update_global_state from preparation is not visible yet.
+        "search_context.material_analysis": None,
+        "config.web_search_engine_config": web_search_engine_config,
+    }.get(key)
+    session.update_global_state = Mock()
+    node = IntentRecognitionNode()
+    node._prepare_material_context = AsyncMock(return_value=({"has_materials": True}, analysis))
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
+        return_value="basic",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.classify_and_recognize_intent",
+        new_callable=AsyncMock,
+        return_value=intent_result,
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.web_search_for_query",
+        new_callable=AsyncMock,
+        return_value={"search_results": [], "error_msg": ""},
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_domain_constraints",
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.apply_web_search_temporal_scope",
+    ):
+        await node.invoke({}, session, Context())
+
+    update_payloads = [call.args[0] for call in session.update_global_state.call_args_list]
+    intent_update = next(payload for payload in update_payloads if "search_context.material_usage_mode" in payload)
+    assert intent_update["search_context.material_usage_mode"] == "required"
+    analysis_update = next(payload for payload in update_payloads if "search_context.material_analysis" in payload)
+    assert analysis_update["search_context.material_analysis"]["relevance_map"][0]["material_id"] == "M1"
 
 
 @pytest.mark.asyncio

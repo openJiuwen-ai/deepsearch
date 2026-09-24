@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from server.routers import deepsearch_run
-from server.schemas.deepsearch_run import DeepSearchRequest
+from server.schemas.deepsearch_run import DeepSearchRequest, MAX_USER_MATERIALS_TOTAL_CHARS
 
 
 def _build_request() -> DeepSearchRequest:
@@ -474,3 +474,83 @@ def test_run_metadata_keeps_execution_method_when_not_forced(monkeypatch):
 
     deepsearch_run._force_execution_method_for_metadata(request)
     assert request.execution_method == "dependency_driving"
+def test_user_materials_rejected_when_content_missing_and_enabled():
+    """启用素材功能时，content 缺省/为空的条目直接拒绝（title/url 无法替代）。"""
+    base = _build_request().model_dump(exclude_none=True)
+    with pytest.raises(ValidationError) as exc_info:
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"material_id": "M1"},
+        ]})
+    assert "metadata.user_materials[0] requires non-empty content" in str(exc_info.value)
+
+    with pytest.raises(ValidationError) as exc_info:
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"title": "仅标题", "url": "https://example.com/a"},
+        ]})
+    assert "requires non-empty content" in str(exc_info.value)
+
+
+def test_user_materials_require_safe_url_or_local_file_path():
+    base = _build_request().model_dump(exclude_none=True)
+    with pytest.raises(ValidationError, match="requires non-empty url"):
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"content": "正文"},
+        ]})
+    with pytest.raises(ValidationError, match="absolute local file path or HTTP"):
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"url": "javascript:alert(1)", "content": "正文"},
+        ]})
+
+    request = DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+        {"url": "D:\\materials\\paper.pdf", "content": "正文"},
+    ]})
+    assert request.metadata["user_materials"][0]["url"] == "D:\\materials\\paper.pdf"
+
+
+@pytest.mark.parametrize("content", [{"nested": "value"}, 1, True])
+def test_user_materials_rejects_non_string_content(content):
+    base = _build_request().model_dump(exclude_none=True)
+
+    with pytest.raises(ValidationError, match="content must be a string"):
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"content": content},
+        ]})
+
+
+def test_user_materials_ignored_when_disabled_even_if_invalid():
+    """关闭素材开关时素材整体被忽略，不因条目格式问题拒绝请求。"""
+    base = _build_request().model_dump(exclude_none=True)
+    request = DeepSearchRequest(**base, metadata={"user_materials_enabled": False, "user_materials": [
+        {"material_id": "M1"},
+        "not-a-dict",
+    ]})
+
+    assert request.metadata["user_materials_enabled"] is False
+
+
+def test_user_materials_accepts_full_clue_material_and_rejects_non_dict():
+    """合法条目通过；启用开关时非 object 条目被拒绝。"""
+    base = _build_request().model_dump(exclude_none=True)
+    request = DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+        {
+            "material_id": "paper-1",
+            "title": "销量白皮书",
+            "content": "……",
+            "url": "https://arxiv.org/abs/2501.12345",
+            "publish_time": "2025-06",
+            "content_time": "2025Q2",
+        },
+    ]})
+    assert request.metadata["user_materials"][0]["material_id"] == "paper-1"
+
+    with pytest.raises(ValidationError) as exc_info:
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": ["not-a-dict"]})
+    assert "metadata.user_materials[0] must be an object" in str(exc_info.value)
+
+
+def test_user_materials_rejects_total_content_larger_than_five_million_characters():
+    base = _build_request().model_dump(exclude_none=True)
+    with pytest.raises(ValidationError, match="total content length must not exceed"):
+        DeepSearchRequest(**base, metadata={"user_materials_enabled": True, "user_materials": [
+            {"url": "D:\\materials\\too-large.txt", "content": "x" * (MAX_USER_MATERIALS_TOTAL_CHARS + 1)},
+        ]})

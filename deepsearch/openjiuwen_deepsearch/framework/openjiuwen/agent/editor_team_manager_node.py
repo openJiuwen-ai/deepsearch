@@ -98,7 +98,9 @@ class EditorTeamNode(BaseNode):
                     report_template=report_template, history_reports=history_reports, session_id=session_id,
                     config=config,
                     report_type_policy=session.get_global_state("search_context.report_type_policy") or {},
-                    research_intent=session.get_global_state("search_context.research_intent") or {})
+                    research_intent=session.get_global_state("search_context.research_intent") or {},
+                    material_analysis=session.get_global_state("search_context.material_analysis"),
+                    material_usage_mode=session.get_global_state("search_context.material_usage_mode") or "none")
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         # 1. 从上下文中获取大纲，并初始化报告
@@ -215,6 +217,12 @@ class EditorTeamNode(BaseNode):
                 name="outliner"
             )
         ]
+        material_bindings = list(getattr(section, "material_bindings", []) or [])
+        bound_material_ids = list(dict.fromkeys(
+            binding.get("material_id")
+            for binding in material_bindings
+            if isinstance(binding, dict) and binding.get("material_id")
+        ))
         section_state = {
             "language": state.get("language", "zh-CN"),
             "messages": messages,
@@ -234,6 +242,11 @@ class EditorTeamNode(BaseNode):
             "report_type_policy": state.get("report_type_policy") or {},
             "research_intent": state.get("research_intent") or {},
             "section_local_contract": self._build_section_local_contract(section),
+            "material_analysis": state.get("material_analysis"),
+            "material_usage_mode": state.get("material_usage_mode", "none"),
+            "material_bindings": material_bindings,
+            "bound_material_ids": bound_material_ids,
+            "use_material_ids": bound_material_ids,
         }
 
         return section_state

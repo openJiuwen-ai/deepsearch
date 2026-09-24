@@ -20,43 +20,65 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 logger = logging.getLogger(__name__)
 
 
-def generate_plan(language: str, title: str, thought: str, is_research_completed: bool,
-                  steps: list[Step] = None) -> Plan:
-    """从FunctionCall封装plan"""
-    plan = Plan(
-        language=language,
-        title=title,
-        thought=thought,
-        is_research_completed=is_research_completed,
-        steps=[
-            Step(type=StepType.INFO_COLLECTING, title=step.get("title", ""), description=step.get("description", ""))
-            for step in (steps or [])
-        ],
+class PlanToolInput(BaseModel):
+    """Structured arguments accepted from the plan-generation tool."""
+
+    language: str
+    title: str
+    thought: str
+    is_research_completed: bool
+    steps: list[dict] = Field(default_factory=list)
+    use_material_ids: list[str] = Field(default_factory=list)
+
+
+def _build_plan(request: PlanToolInput, dependency_driving: bool = False) -> Plan:
+    """Build a plan from normalized tool input."""
+    steps = [
+        Step(
+            type=StepType.INFO_COLLECTING,
+            title=step.get("title", ""),
+            description=step.get("description", ""),
+            **({
+                "id": step.get("id", ""),
+                "parent_ids": step.get("parent_ids", []),
+                "relationships": step.get("relationships", []),
+            } if dependency_driving else {}),
+        )
+        for step in request.steps
+    ]
+    return Plan(
+        language=request.language,
+        title=request.title,
+        thought=request.thought,
+        is_research_completed=request.is_research_completed,
+        steps=steps,
+        use_material_ids=request.use_material_ids,
     )
 
-    return plan
 
-
-def generate_dependency_plan(language: str, title: str, thought: str, is_research_completed: bool,
-                             steps: list[Step] = None) -> Plan:
-    """从FunctionCall封装dependency plan"""
-    plan = Plan(
-        language=language,
-        title=title,
-        thought=thought,
-        is_research_completed=is_research_completed,
-        steps=[
-            Step(type=StepType.INFO_COLLECTING,
-                 title=step.get("title", ""),
-                 description=step.get("description", ""),
-                 id=step.get("id", ""),
-                 parent_ids=step.get("parent_ids", []),
-                 relationships=step.get("relationships", []))
-            for step in (steps or [])
-        ],
+def _normalize_plan_tool_arguments(args: tuple, kwargs: dict) -> dict:
+    """Support legacy positional calls while normalizing to named tool arguments."""
+    field_names = (
+        "language", "title", "thought", "is_research_completed", "steps", "use_material_ids",
     )
+    if len(args) > len(field_names):
+        raise TypeError(f"expected at most {len(field_names)} positional arguments")
+    normalized = {**dict(zip(field_names, args)), **kwargs}
+    for field_name in ("steps", "use_material_ids"):
+        if normalized.get(field_name) is None:
+            normalized.pop(field_name, None)
+    return normalized
 
-    return plan
+
+def generate_plan(*args, **kwargs) -> Plan:
+    """Build a regular plan from tool arguments."""
+    return _build_plan(PlanToolInput.model_validate(_normalize_plan_tool_arguments(args, kwargs)))
+
+
+def generate_dependency_plan(*args, **kwargs) -> Plan:
+    """Build a dependency-driven plan from tool arguments."""
+    request = PlanToolInput.model_validate(_normalize_plan_tool_arguments(args, kwargs))
+    return _build_plan(request, dependency_driving=True)
 
 
 def create_plan_tool(state: dict, prompt_template: str):
@@ -64,6 +86,110 @@ def create_plan_tool(state: dict, prompt_template: str):
     section_idx = state.get("section_idx", '1')
     max_step_num = state.get("max_step_num")
     plan_idx = state.get("plan_executed_num", 0) + 1
+    known_material_ids = state.get("use_material_ids") or []
+
+    properties = {
+        "language": {
+            "type": "string",
+            "description": "Output language, e.g. 'zh-CN' or 'en-US'"
+        },
+        "title": {
+            "type": "string",
+            "description": "Title of the plan without numbering, summarizing the overall objectives. Never "
+                           "include numbers, bullets, or prefixes like '1.', '2)', 'I.', '一、'."
+        },
+        "thought": {
+            "type": "string",
+            "description": (
+                "The thought process behind the plan, explaining the sequence of steps "
+                "and the reasons for the choices."
+            )
+        },
+        "is_research_completed": {
+            "type": "boolean",
+            "description": "Is the information sufficient? Has the information collection been completed?"
+        },
+        "steps": {
+            "type": "array",
+            "description": (
+                "Detailed list of step-by-step tasks if information is still insufficient. "
+                f"(Maximum number of steps: {max_step_num})"
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "description": (
+                            "Step Type (Enumeration Value: "
+                            f"{StepType.INFO_COLLECTING.value})"
+                        )
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": (
+                            "The title of the task without numbering, summarizing the content of this step."
+                            "Never include numbers, bullets, or prefixes like '1.', '2)', 'I.', '一、'."
+                        )
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "Detailed instructions for this step, clearly specifying the data "
+                            "or content that needs to be collected."
+                        )
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": f"Unique identifier of the step. "
+                                       f"Format: '{section_idx}-{plan_idx}-sequence_number' (e.g., 3-1-2, "
+                                       f"2-2-3). Only specify if this is a new step; do not recreate IDs "
+                                       f"already present in Background Knowledge."
+                    },
+                    "parent_ids": {
+                        "type": "array",
+                        "description": "Array of parent step IDs that this step depends on. Empty array [] "
+                                       "for root steps. Each parent ID must exist in either background "
+                                       "knowledge or the current execution steps of plan.",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "relationships": {
+                        "type": "array",
+                        "description": "Array specifying the relationship type to each corresponding parent "
+                                       "step in parent_ids. Must have the same length as parent_ids array. "
+                                       "Use terms like 'data correlation', 'causality', 'influence', "
+                                       "'temporal', 'perspective', 'methodological', or other appropriate "
+                                       "relationship descriptors.",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": ["type", "title", "description"]
+            }
+        },
+    }
+    # 始终声明 use_material_ids：无素材时提示留空，LLM 幻觉输出由 generate_plan 统一过滤清空，
+    # 避免 schema 未声明导致 tool-call 校验直接失败。
+    properties["use_material_ids"] = {
+        "type": "array",
+        "description": (
+            "IDs of user-provided materials that this plan directly relies on as already-available "
+            "information. "
+            + (
+                f"Only choose from the provided material IDs ({', '.join(known_material_ids)}); do not invent IDs. "
+                if known_material_ids
+                else "No user materials are available in this run; leave it empty. "
+            )
+            + "Steps must still cover the information that is NOT covered by these materials. "
+              "Leave empty if no material is needed."
+        ),
+        "items": {
+            "type": "string"
+        }
+    }
 
     card = ToolCard(
         id="generate_plan",
@@ -71,89 +197,7 @@ def create_plan_tool(state: dict, prompt_template: str):
         description="Generate a research plan for one section of the Systematic Research Report.",
         input_params={
             "type": "object",
-            "properties": {
-                "language": {
-                    "type": "string",
-                    "description": "Output language, e.g. 'zh-CN' or 'en-US'"
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Title of the plan without numbering, summarizing the overall objectives. Never "
-                                   "include numbers, bullets, or prefixes like '1.', '2)', 'I.', '一、'."
-                },
-                "thought": {
-                    "type": "string",
-                    "description": (
-                        "The thought process behind the plan, explaining the sequence of steps "
-                        "and the reasons for the choices."
-                    )
-                },
-                "is_research_completed": {
-                    "type": "boolean",
-                    "description": "Is the information sufficient? Has the information collection been completed?"
-                },
-                "steps": {
-                    "type": "array",
-                    "description": (
-                        "Detailed list of step-by-step tasks if information is still insufficient. "
-                        f"(Maximum number of steps: {max_step_num})"
-                    ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "type": {
-                                "type": "string",
-                                "description": (
-                                    "Step Type (Enumeration Value: "
-                                    f"{StepType.INFO_COLLECTING.value})"
-                                )
-                            },
-                            "title": {
-                                "type": "string",
-                                "description": (
-                                    "The title of the task without numbering, summarizing the content of this step."
-                                    "Never include numbers, bullets, or prefixes like '1.', '2)', 'I.', '一、'."
-                                )
-                            },
-                            "description": {
-                                "type": "string",
-                                "description": (
-                                    "Detailed instructions for this step, clearly specifying the data "
-                                    "or content that needs to be collected."
-                                )
-                            },
-                            "id": {
-                                "type": "string",
-                                "description": f"Unique identifier of the step. "
-                                               f"Format: '{section_idx}-{plan_idx}-sequence_number' (e.g., 3-1-2, "
-                                               f"2-2-3). Only specify if this is a new step; do not recreate IDs "
-                                               f"already present in Background Knowledge."
-                            },
-                            "parent_ids": {
-                                "type": "array",
-                                "description": "Array of parent step IDs that this step depends on. Empty array [] "
-                                               "for root steps. Each parent ID must exist in either background "
-                                               "knowledge or the current execution steps of plan.",
-                                "items": {
-                                    "type": "string"
-                                }
-                            },
-                            "relationships": {
-                                "type": "array",
-                                "description": "Array specifying the relationship type to each corresponding parent "
-                                               "step in parent_ids. Must have the same length as parent_ids array. "
-                                               "Use terms like 'data correlation', 'causality', 'influence', "
-                                               "'temporal', 'perspective', 'methodological', or other appropriate "
-                                               "relationship descriptors.",
-                                "items": {
-                                    "type": "string"
-                                }
-                            }
-                        },
-                        "required": ["type", "title", "description"]
-                    }
-                }
-            },
+            "properties": properties,
             "required": ["language", "title", "thought", "is_research_completed"]
         }
     )
@@ -162,6 +206,7 @@ def create_plan_tool(state: dict, prompt_template: str):
         func=generate_plan if prompt_template == "planner" else generate_dependency_plan
     )
     plan_tool.max_step_num = max_step_num
+    plan_tool.use_material_ids = list(known_material_ids)
 
     return plan_tool
 
@@ -235,6 +280,13 @@ class Planner:
                 for tool_call in tool_calls:
                     tool = tool_dict[tool_call.get("name")]
                     plan = await tool.invoke(tool_call.get("args"))
+                    # 过滤 LLM 幻觉出的非法素材 ID（无素材时强制清空）
+                    known_ids = getattr(tool, "use_material_ids", None)
+                    if known_ids is not None and plan.use_material_ids:
+                        plan.use_material_ids = [mid for mid in plan.use_material_ids if mid in known_ids]
+                    bound_ids = current_inputs.get("bound_material_ids") or []
+                    if bound_ids and not plan.use_material_ids:
+                        plan.use_material_ids = list(bound_ids)
                     # 规划成功
                     planner_result.plan_success = True
                     planner_result.plan = plan

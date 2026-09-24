@@ -36,6 +36,15 @@ Ledger brief:
 
 {{ evidence_table }}
 
+{% if material_evidence %}
+# Bound user-material evidence
+
+{{ material_evidence | tojson }}
+
+Treat this as already available evidence. Only request follow-up web searches for claims, validation, or gaps that it
+does not cover; do not mark the step insufficient merely because a fact is absent from the web evidence table.
+{% endif %}
+
 The table intentionally contains key_passages and scores instead of full source text. The key_passages may be short snippets or compact search-result excerpts, not full article bodies or complete datasets. Judge sufficiency from this evidence. Do not assume unavailable full-text details. If it is empty, rely on the ledger and do not assume the full historical documents are available.
 
 ## Instructions

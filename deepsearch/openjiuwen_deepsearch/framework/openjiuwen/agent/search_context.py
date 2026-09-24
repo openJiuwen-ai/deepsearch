@@ -81,6 +81,10 @@ class Plan(BaseModel):
     is_research_completed: bool = Field(..., description="是否已完成信息收集工作")
     steps: List[Step] = Field(default_factory=list, description="info_collecting类型的步骤")
     background_knowledge: Optional[Dict[str, str]] = Field(default_factory=dict, description="plan执行所需要的背景知识")
+    use_material_ids: List[str] = Field(
+        default_factory=list,
+        description="规划阶段确认引用的用户素材ID（material_analysis.items[].material_id），报告撰写时并入 classified_content",
+    )
 
 
 class Section(BaseModel):
@@ -103,6 +107,10 @@ class Section(BaseModel):
         ),
     )
     focus_dimensions: List[str] = Field(default_factory=list, description="该章节应主展开的 2-4 个分析维度，其他章节不应深入展开这些维度")
+    material_bindings: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="章节使用的用户素材：material_id、role 与 claims_to_use",
+    )
     doc_selection_debug: Optional[Dict] = Field(
         default=None,
         description=(
@@ -320,7 +328,7 @@ class ResearchIntent(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _route_legacy_temporal_scope(cls, data):
+    def _route_legacy_fields(cls, data):
         if isinstance(data, BaseModel):
             data = data.model_dump()
         if not isinstance(data, dict):
@@ -659,6 +667,14 @@ class SearchContext(BaseModel):
     report_template: str = Field(default="", description="模板内容")
     search_mode: str = Field(default="research", description="搜索类型，research 或 search 对应研究或深搜模式")
     entry_search_results: List[Dict] = Field(default_factory=list, description="Entry节点预搜索结果")
+    user_materials: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="原始用户素材（UserMaterial dict 列表），由 StartNode 写入；预处理后的素材由 material_analysis 供后续节点消费",
+    )
+    material_analysis: Dict[str, Any] | None = Field(
+        default=None,
+        description="素材预处理产物（MaterialAnalysis.model_dump），含 manifest+摘要，多轮复用缓存",
+    )
 
     # 2、feedback相关参数
     questions: str = Field(default="", description="系统基于用户问题提出的问题")

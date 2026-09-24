@@ -8,6 +8,10 @@ from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    extract_material_ids,
+    normalize_material_bindings,
+)
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_runtime_api_tools, \
@@ -107,6 +111,40 @@ def _section_description_description(
     )
 
 
+def ensure_material_first_bindings(
+    outline: Outline,
+    material_ids: list[str],
+    material_first: bool,
+) -> bool:
+    """Ensure every material-first section has at least one evidence binding."""
+    if not material_first or not material_ids or not outline.sections:
+        return False
+
+    bound_ids: set[str] = set()
+    for section in outline.sections:
+        for binding in section.material_bindings:
+            if not isinstance(binding, dict):
+                continue
+            material_id = binding.get("material_id")
+            if material_id:
+                bound_ids.add(material_id)
+    candidate_ids = [material_id for material_id in material_ids if material_id not in bound_ids]
+    empty_sections = [section for section in outline.sections if not section.material_bindings]
+    if not empty_sections:
+        return False
+    if not candidate_ids:
+        candidate_ids = material_ids
+
+    for index, material_id in enumerate(candidate_ids):
+        section = empty_sections[index % len(empty_sections)]
+        section.material_bindings.append({
+            "material_id": material_id,
+            "role": "user_provided_evidence",
+            "claims_to_use": "Use only claims supported by this user-provided material.",
+        })
+    return True
+
+
 def _format_requirements_description() -> str:
     return (
         "Output format requirements that apply to this section, extracted from the user request. "
@@ -141,6 +179,7 @@ def generate_outline(
             relationships=section.get("relationships", []),
             section_focus=section.get("section_focus", ""),
             focus_dimensions=section.get("focus_dimensions", []),
+            material_bindings=normalize_material_bindings(section.get("material_bindings")),
         )
         for section in sections
     ]
@@ -162,7 +201,7 @@ def generate_outline(
     # 验证依赖关系是否正确
     validation = validate_section_dependencies(outline.sections)
     if not validation["is_valid"]:
-        logger.warning(f"Outline has dependency issues, fixing...")
+        logger.warning("Outline has dependency issues, fixing...")
         outline.sections = fix_section_dependency_issues(outline.sections)
         validation = validate_section_dependencies(outline.sections)
         if not validation["is_valid"]:
@@ -244,6 +283,19 @@ def create_outline_tool(section_num: int):
                                 ),
                                 "items": {
                                     "type": "string"
+                                },
+                            },
+                            "material_bindings": {
+                                "type": "array",
+                                "description": "Materials this section must use as evidence.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "material_id": {"type": "string"},
+                                        "role": {"type": "string"},
+                                        "claims_to_use": {"type": "string"},
+                                    },
+                                    "required": ["material_id"],
                                 },
                             },
                         },
@@ -356,6 +408,19 @@ def creat_dep_driving_outline_tool(section_num: int):
                                 ),
                                 "items": {
                                     "type": "string"
+                                },
+                            },
+                            "material_bindings": {
+                                "type": "array",
+                                "description": "Materials this section must use as evidence.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "material_id": {"type": "string"},
+                                        "role": {"type": "string"},
+                                        "claims_to_use": {"type": "string"},
+                                    },
+                                    "required": ["material_id"],
                                 },
                             }
                             },
@@ -565,6 +630,24 @@ class Outliner:
             for tool_call in tool_calls:
                 tool = tool_dict[tool_call.get("name")]
                 outline = await tool.invoke(tool_call.get("args"))
+                known_material_ids = extract_material_ids(current_inputs)
+                if known_material_ids:
+                    for section in outline.sections:
+                        section.material_bindings = normalize_material_bindings(
+                            section.material_bindings,
+                            known_material_ids,
+                        )
+                if ensure_material_first_bindings(
+                    outline,
+                    known_material_ids,
+                    bool(current_inputs.get("material_first")),
+                ):
+                    logger.warning(
+                        "[MATERIAL_ROUTE] material-first outline had empty bindings; "
+                        "assigned missing bindings from %d materials across %d sections.",
+                        len(known_material_ids),
+                        len(outline.sections),
+                    )
                 logger.info(
                     f"The outline generation is completed: "
                     f"{'**' if LogManager.is_sensitive() else outline.model_dump_json(indent=4)}",

@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Any
 
@@ -29,6 +30,15 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     recognize_report_intent,
     resolve_report_type_policy,
     web_search_for_query,
+)
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    apply_material_relevance_map,
+    build_fallback_material_relevance_map,
+    build_material_prompt_context,
+    is_material_first_request,
+    prepare_material_analysis,
+    restore_material_analysis,
+    resolve_material_usage_mode,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
     route_outline_execution_method,
@@ -188,6 +198,18 @@ class StartNode(Start):
             report_template=inputs.get("report_template", ""),
         )
 
+        # StartNode 只转存原始素材；校验、去重、相关性过滤和摘要均在 IntentRecognitionNode 执行。
+        _origin_agent_config = inputs.get("agent_config", {}) or {}
+        _materials_enabled = bool(_origin_agent_config.get("user_materials_enabled", False))
+        _raw_materials = _origin_agent_config.get("user_materials") or []
+        if _raw_materials and not _materials_enabled:
+            logger.warning(
+                "[StartNode] user_materials provided (%d items) but user_materials_enabled is false, ignored.",
+                len(_raw_materials),
+            )
+        elif _raw_materials:
+            search_context.user_materials = list(_raw_materials)
+
         session.update_global_state({"search_context": search_context.model_dump()})
 
         origin_agent_config = inputs.get("agent_config", {})
@@ -267,6 +289,14 @@ class StartNode(Start):
         return dict(next_node=next_node)
 
 
+@dataclass
+class IntentPostHandleMaterialState:
+    """Material routing values produced during intent recognition."""
+
+    analysis: Any = None
+    usage_mode: str | None = None
+
+
 class IntentRecognitionNode(BaseNode):
     """
     报告意图识别节点：从原始 query 中解析报告生成约束，
@@ -316,13 +346,82 @@ class IntentRecognitionNode(BaseNode):
             exclusion_constraint_enable=bool(
                 session.get_global_state("config.exclusion_constraint_enable")
             ),
+            user_materials=session.get_global_state("search_context.user_materials") or [],
+            material_analysis=session.get_global_state("search_context.material_analysis"),
+        )
+
+    async def _prepare_material_context(self, current_inputs: dict, session: Session) -> tuple[dict, Any]:
+        """素材预处理：校验/去重/摘要（带跨轮 content_hash 缓存），产物落 state。
+
+        Returns:
+            意图识别 prompt 可直接消费的素材上下文（含清单区/分析区）；
+            一个二元组：意图识别 prompt 上下文与本轮内存中的素材分析产物。
+            未启用或无素材时分别为空 dict 和 None。
+        """
+        raw_materials = current_inputs.get("user_materials") or []
+        if not raw_materials:
+            return {}, None
+        previous_analysis = restore_material_analysis(current_inputs.get("material_analysis"))
+        analysis = await prepare_material_analysis(
+            raw_materials,
+            llm_model_name=current_inputs.get("llm_model_name") or "",
+            query=current_inputs.get("original_query") or "",
+            previous_items=previous_analysis.items if previous_analysis else None,
+        )
+        session.update_global_state({
+            "search_context.material_analysis": analysis.model_dump(),
+        })
+        logger.info(
+            "[IntentRecognitionNode] materials prepared: items=%d cached_reuse=%s downgraded=%d",
+            len(analysis.items),
+            bool(previous_analysis),
+            len(analysis.downgraded_ids),
+        )
+        material_context = build_material_prompt_context(analysis)
+        # 无素材时返回空 dict（build 产物为含键 empty dict，truthy）。
+        return (
+            material_context if material_context.get("has_materials") else {},
+            analysis,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
+        # 素材预处理：摘要管线（带跨轮缓存），产物落 state 并注入意图识别 prompt
+        material_context, material_analysis = await self._prepare_material_context(current_inputs, session)
+        if material_context:
+            current_inputs["material_context"] = material_context
+
         # 执行意图识别
         intent_result = await classify_and_recognize_intent(current_inputs)
+        # 本节点内刚 update_global_state 的值不保证能够立即由 session 读回；
+        # 优先使用预处理阶段保留在内存中的分析结果，避免把有素材误判为无素材。
+        if material_analysis is None:
+            material_analysis = restore_material_analysis(
+                session.get_global_state("search_context.material_analysis")
+            )
+        material_usage_mode = resolve_material_usage_mode(
+            current_inputs.get("original_query") or "",
+            bool(material_analysis and material_analysis.items),
+        )
+        if material_analysis and not intent_result.material_relevance_map:
+            intent_result.material_relevance_map = build_fallback_material_relevance_map(
+                material_analysis,
+                current_inputs.get("original_query") or "",
+                material_usage_mode,
+            )
+            logger.warning(
+                "[MATERIAL_ROUTE] intent omitted relevance map; generated %d fallback records.",
+                len(intent_result.material_relevance_map),
+            )
+        if material_analysis and intent_result.material_relevance_map:
+            material_analysis = apply_material_relevance_map(
+                material_analysis,
+                intent_result.material_relevance_map,
+            )
+            session.update_global_state({
+                "search_context.material_analysis": material_analysis.model_dump(),
+            })
         await self._resolve_outline_execution_method(current_inputs, session)
 
         # 检查搜索模式：仅在 web 或 all 模式下执行网络搜索
@@ -373,9 +472,27 @@ class IntentRecognitionNode(BaseNode):
             logger.info("[IntentRecognitionNode] Local-only mode, skipping web search.")
             intent_result.entry_search_results = []
 
-        return self._post_handle(inputs, intent_result, session, context)
+        return self._post_handle(
+            inputs,
+            intent_result,
+            session,
+            context,
+            IntentPostHandleMaterialState(
+                analysis=material_analysis,
+                usage_mode=material_usage_mode,
+            ),
+        )
 
-    def _post_handle(self, inputs: Input, algorithm_output: Any, session: Session, context: ModelContext):
+    def _post_handle(
+        self,
+        inputs: Input,
+        algorithm_output: Any,
+        session: Session,
+        context: ModelContext,
+        material_state: IntentPostHandleMaterialState | None = None,
+    ):
+        material_analysis = material_state.analysis if material_state else None
+        material_usage_mode = material_state.usage_mode if material_state else None
         original_q = algorithm_output.original_query
 
         lang = (algorithm_output.lang or "zh-CN").lower()
@@ -402,6 +519,14 @@ class IntentRecognitionNode(BaseNode):
             "search_context.research_intent": algorithm_output.research_intent.model_dump(),
             "search_context.report_type_policy": report_policy.model_dump(),
             "search_context.language": lang,
+            "search_context.material_usage_mode": material_usage_mode
+            if material_usage_mode is not None
+            else resolve_material_usage_mode(
+                original_q,
+                bool(material_analysis and material_analysis.items)
+                if material_analysis is not None
+                else bool(session.get_global_state("search_context.material_analysis")),
+            ),
         })
 
         if algorithm_output.entry_search_results:
@@ -459,6 +584,7 @@ class FeedbackHandlerNode(BaseNode):
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
             provided_report_type=session.get_global_state("config.report_type"),
             exclusion_constraint_enable=bool(session.get_global_state("config.exclusion_constraint_enable")),
+            material_analysis=session.get_global_state("search_context.material_analysis"),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -530,13 +656,20 @@ class FeedbackHandlerNode(BaseNode):
             user_feedback=user_feedback,
         )
 
-        return {
+        intent_inputs = {
             "original_query": current_inputs.get("original_query", ""),
             "messages": messages,
             "llm_model_name": current_inputs.get("llm_model_name"),
             "provided_report_type": current_inputs.get("provided_report_type"),
             "exclusion_constraint_enable": current_inputs.get("exclusion_constraint_enable", False),
         }
+        # 复用首轮素材分析缓存（按 content_hash 命中），重解析不丢素材上下文
+        material_context = build_material_prompt_context(
+            restore_material_analysis(current_inputs.get("material_analysis"))
+        )
+        if material_context.get("has_materials"):
+            intent_inputs["material_context"] = material_context
+        return intent_inputs
 
     def _merge_reparsed_intent(self, session: Session, reparsed_intent: dict) -> dict:
         current_intent = ResearchIntent.model_validate(session.get_global_state("search_context.research_intent") or {})
@@ -1073,6 +1206,17 @@ class OutlineNode(BaseNode):
             ),
         )
         result.update(build_research_intent_prompt_context(research_intent))
+        # 仅把已在 IntentRecognition 节点完成筛选的素材清单透传给大纲。
+        material_analysis = restore_material_analysis(
+            session.get_global_state("search_context.material_analysis")
+        )
+        material_context = build_material_prompt_context(material_analysis, include_analysis=False)
+        if material_context.get("has_materials"):
+            result.update(material_context)
+            result["material_first"] = is_material_first_request(
+                session.get_global_state("search_context.original_query") or "",
+                True,
+            )
         return result
 
     def _get_with_dep_driving(self, current_inputs: dict) -> bool:

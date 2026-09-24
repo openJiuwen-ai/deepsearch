@@ -22,6 +22,7 @@ import asyncio
 import logging
 import re
 import uuid
+from typing import Any
 
 from tenacity import RetryError
 
@@ -37,6 +38,10 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
     _section_sort_key,
     export_outline_without_plans,
     resolve_current_subsection,
+)
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    format_section_material_bindings,
+    resolve_material_evidence,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -59,6 +64,7 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     session_context,
 )
+
 
 # ── Mixin imports ───────────────────────────────────────────────────────────
 from openjiuwen_deepsearch.algorithm.report.markdown_utils import MarkdownProcessorMixin
@@ -85,6 +91,16 @@ from openjiuwen_deepsearch.algorithm.report.retry_feedback import RetryFeedbackM
 from openjiuwen_deepsearch.algorithm.report.background_knowledge import BackgroundKnowledgeMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _next_classified_content_index(items: list[Any]) -> int:
+    """Return the next evidence index without assuming existing indexes are contiguous."""
+    existing_indexes = [
+        item.get("index")
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("index"), int)
+    ]
+    return max(existing_indexes, default=0) + 1
 
 
 class Reporter(
@@ -468,29 +484,64 @@ class Reporter(
         background_contents = self._get_background_knowledge_contents(
             current_inputs.get("sub_report_background_knowledge", [])
         )
+        # 步骤4：解析规划阶段声明引用（或素材兜底章节）的用户素材证据条目
+        material_evidence = resolve_material_evidence(current_inputs)
         if not raw_passages:
-            if not background_contents:
+            if not background_contents and not material_evidence:
                 logger.error(
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] fail to generate subsection report, "
                     f"section_idx: [{section_idx}], not found passages"
                 )
                 return False, _format_sub_report_error("Not found passages"), "", []
-            logger.info(
-                "%s [generate_sub_report] section_idx: [%s], no passages found, "
-                "use dependency background knowledge as fallback.",
-                EFFECT_SUB_REPORT_TAG,
-                section_idx,
-            )
-            current_inputs["sub_section_core_content"] = background_contents
-            current_inputs["sub_section_core_content_from_background_knowledge"] = True
-            current_inputs["sub_section_references"] = []
-            current_inputs["classified_content"] = []
-            current_inputs["structured_evidence_guide"] = ""
-            classified_content = []
+            if background_contents:
+                logger.info(
+                    "%s [generate_sub_report] section_idx: [%s], no passages found, "
+                    "use dependency background knowledge as fallback.",
+                    EFFECT_SUB_REPORT_TAG,
+                    section_idx,
+                )
+                current_inputs["sub_section_core_content"] = background_contents
+                current_inputs["sub_section_core_content_from_background_knowledge"] = True
+                current_inputs["sub_section_references"] = []
+                current_inputs["classified_content"] = []
+                current_inputs["structured_evidence_guide"] = ""
+                classified_content = []
+            else:
+                # 素材兜底：无检索段落时直接用用户素材证据写作（素材覆盖型章节的常态）
+                logger.info(
+                    "%s [generate_sub_report] section_idx: [%s], no passages found, "
+                    "use user material evidence as fallback.",
+                    EFFECT_SUB_REPORT_TAG,
+                    section_idx,
+                )
+                current_inputs["sub_section_core_content"] = [
+                    f"[{item['material_id']}] {item['title']}: {item['original_content']}"
+                    for item in material_evidence
+                ]
+                current_inputs["sub_section_core_content_from_background_knowledge"] = False
+                current_inputs["sub_section_references"] = []
+                # 素材条目统一由下方合并块写入 classified_content，此处仅清空占位
+                current_inputs["classified_content"] = []
+                current_inputs["structured_evidence_guide"] = ""
+                classified_content = []
         else:
             ev_ok, ev_err, classified_content = await self._prepare_evidence(current_inputs, raw_passages, section_idx)
             if not ev_ok:
                 return False, _format_sub_report_error(ev_err), "", []
+        # 把素材证据并入 classified_content（编号续接既有条目，供写作引用与溯源）
+        if material_evidence:
+            existing_items = current_inputs.get("classified_content") or []
+            next_index = _next_classified_content_index(existing_items)
+            for offset, item in enumerate(material_evidence):
+                item["index"] = next_index + offset
+            current_inputs["classified_content"] = existing_items + material_evidence
+            classified_content = current_inputs["classified_content"]
+            logger.info(
+                "%s [generate_sub_report] section_idx: [%s], merged %d user material evidence item(s).",
+                EFFECT_SUB_REPORT_TAG,
+                section_idx,
+                len(material_evidence),
+            )
         if not LogManager.is_sensitive():
             logger.debug(
                 "%s [generate_sub_report] section_idx: [%s], sub section content is: [%s], "
@@ -675,6 +726,10 @@ class Reporter(
                     current_section_format_requirements=current_section_format_requirements,
                     current_chapter_outline=current_chapter_outline,
                     current_subsection=current_subsection,
+                    section_material_bindings_text=format_section_material_bindings(
+                        current_inputs.get("material_bindings"),
+                        current_inputs.get("use_material_ids"),
+                    ),
                     **build_section_local_contract_prompt_context(
                         current_inputs.get("section_local_contract")
                     ),

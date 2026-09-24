@@ -12,6 +12,14 @@ from openjiuwen.core.workflow.components.flow.start_comp import Start
 from openjiuwen.core.workflow.components.flow.workflow_comp import SUB_WORKFLOW_COMPONENT
 from openjiuwen.core.workflow.workflow import Workflow
 
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    build_section_material_coverage,
+    build_material_evidence_items,
+    build_material_prompt_context,
+    extract_material_ids,
+    format_section_material_bindings,
+    restore_material_analysis,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerConfig
 from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import deduplicate_doc_infos
@@ -142,6 +150,10 @@ class SectionStartNode(Start):
             report_type_policy=inputs.get("report_type_policy") or {},
             research_intent=inputs.get("research_intent") or {},
             section_local_contract=inputs.get("section_local_contract") or {},
+            material_analysis=inputs.get("material_analysis"),
+            material_bindings=inputs.get("material_bindings") or [],
+            bound_material_ids=inputs.get("bound_material_ids") or [],
+            material_usage_mode=inputs.get("material_usage_mode", "none"),
             history_plans=history_plans,
             collected_doc_num=collected_doc_num,
         )
@@ -200,6 +212,42 @@ class BasePlanReasoningNode(BaseNode):
         current_inputs.update(
             build_research_intent_prompt_context(research_intent)
         )
+        # 注入已在 IntentRecognition 节点完成筛选的素材清单。
+        material_analysis = restore_material_analysis(
+            session.get_global_state("section_context.material_analysis")
+        )
+        material_context = build_material_prompt_context(
+            material_analysis,
+            include_analysis=False,
+        )
+        if material_context.get("has_materials"):
+            current_inputs.update(material_context)
+            # 供 generate_plan 工具 schema 生成 use_material_ids 字段及其合法性校验
+            binding_ids = [
+                binding.get("material_id")
+                for binding in session.get_global_state("section_context.material_bindings") or []
+                if isinstance(binding, dict) and binding.get("material_id")
+            ]
+            bound_ids = session.get_global_state("section_context.bound_material_ids") or binding_ids
+            bound_ids = list(dict.fromkeys(bound_ids))
+            current_inputs["use_material_ids"] = bound_ids or extract_material_ids(material_context)
+            current_inputs["bound_material_ids"] = bound_ids
+            bindings = session.get_global_state("section_context.material_bindings") or []
+            coverage = build_section_material_coverage(material_analysis, bindings)
+            current_inputs["section_material_bindings_text"] = format_section_material_bindings(
+                bindings, bound_ids or None
+            )
+            current_inputs["section_material_coverage_text"] = coverage["text"]
+            current_inputs["material_coverage_sufficient"] = coverage["is_sufficient"]
+            current_inputs["material_usage_mode"] = (
+                session.get_global_state("section_context.material_usage_mode") or "supplementary"
+            )
+            current_inputs["material_first"] = current_inputs["material_usage_mode"] == "required"
+            bound_evidence = build_material_evidence_items(material_analysis, bound_ids)
+            current_inputs["bound_materials_analysis_text"] = "\n\n".join(
+                f"[{item['material_id']}] {item['title']}\n{item['original_content'][:1200]}"
+                for item in bound_evidence
+            )
         return current_inputs
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -247,6 +295,19 @@ class BasePlanReasoningNode(BaseNode):
 
         # 执行planner
         planner_result = await planner.generate_plan(current_input)
+
+        # For an explicit material-first request, a complete deterministic
+        # coverage review is sufficient evidence.  Do not spend web budget
+        # merely because the planner defaults to further collection.
+        should_skip_web = planner_result.plan_success and planner_result.plan is not None
+        if should_skip_web:
+            should_skip_web = bool(
+                current_input.get("material_first")
+                and current_input.get("material_coverage_sufficient")
+            )
+        if should_skip_web:
+            planner_result.plan.is_research_completed = True
+            planner_result.plan.steps = []
 
         # 手动流式输出plan结果
         if planner_result.plan_success:
@@ -395,6 +456,21 @@ class SubReporterNode(BaseNode):
         rtp = session.get_global_state("section_context.report_type_policy") or {}
         research_intent = session.get_global_state("section_context.research_intent") or {}
         section_local_contract = session.get_global_state("section_context.section_local_contract") or {}
+        # 收集规划阶段声明引用的素材 ID（去重），供写作证据合并
+        use_material_ids: list = []
+        for plan in session.get_global_state("section_context.history_plans") or []:
+            plan_ids = (
+                plan.use_material_ids if hasattr(plan, "use_material_ids")
+                else (plan.get("use_material_ids") or [] if isinstance(plan, dict) else [])
+            ) or []
+            use_material_ids.extend(plan_ids)
+        if not use_material_ids:
+            use_material_ids.extend(
+                binding.get("material_id")
+                for binding in session.get_global_state("section_context.material_bindings") or []
+                if isinstance(binding, dict) and binding.get("material_id")
+            )
+        use_material_ids = list(dict.fromkeys(use_material_ids))
 
         return dict(
             thread_id=session.get_global_state("section_context.session_id"),
@@ -441,6 +517,9 @@ class SubReporterNode(BaseNode):
             tone=research_intent.get("tone", ""),
             research_intent=research_intent,
             section_local_contract=section_local_contract,
+            use_material_ids=use_material_ids,
+            material_bindings=session.get_global_state("section_context.material_bindings") or [],
+            material_analysis=session.get_global_state("section_context.material_analysis"),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -628,6 +707,21 @@ class SubSourceTracerNode(BaseNode):
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         trace_source_datas = algorithm_output.get("trace_source_datas", [])
         modified_report = algorithm_output.get("modified_report", "")
+        bindings = session.get_global_state("section_context.material_bindings") or []
+        bound_ids = {
+            binding.get("material_id") for binding in bindings
+            if isinstance(binding, dict) and binding.get("material_id")
+        }
+        analysis = restore_material_analysis(session.get_global_state("section_context.material_analysis"))
+        if bound_ids and analysis:
+            missing_ids = [
+                item.material_id for item in analysis.items
+                if item.material_id in bound_ids and item.url and item.url not in modified_report
+            ]
+            if missing_ids:
+                warning = "[MATERIAL_CITATION_AUDIT] missing=" + ",".join(missing_ids)
+                logger.error("%s %s", self.log_prefix, warning)
+                _handle_warning_exception_info(session, added_warning=warning)
 
         # 获取现有的 sub_report_content 对象并更新
         sub_report_content_obj = session.get_global_state("section_context.sub_report_content")

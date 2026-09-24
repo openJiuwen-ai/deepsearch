@@ -126,6 +126,7 @@ uv run pytest tests/source_tracer/test_extract_message_prompt.py
 ## 相关文档
 
 - [查询理解](./query-understanding.md)
+- [用户素材](./user-materials.md)
 - [报告研究主工作流](../framework/research-workflow.md)
 - [搜索上下文与数据契约](../framework/search-context.md)
 - [Agent 与服务运行配置](../config/agent-and-service-config.md)
