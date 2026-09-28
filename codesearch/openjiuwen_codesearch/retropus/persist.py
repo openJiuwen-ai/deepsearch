@@ -42,22 +42,21 @@ _GRAPH_TYPES_MODULE = "openjiuwen_codesearch.retropus.graph.graph_types"
 
 # Globals a well-formed knowledge-graph dump is allowed to reference. Anything
 # else is rejected, so a tampered ``kg.pkl`` cannot execute arbitrary code.
+_BUILTIN_PICKLE_NAMES = (
+    "bool",
+    "bytes",
+    "dict",
+    "float",
+    "frozenset",
+    "int",
+    "list",
+    "set",
+    "str",
+    "tuple",
+)
+
 _ALLOWED_PICKLE_GLOBALS = frozenset(
-    {
-        ("builtins", name)
-        for name in (
-            "bool",
-            "bytes",
-            "dict",
-            "float",
-            "frozenset",
-            "int",
-            "list",
-            "set",
-            "str",
-            "tuple",
-        )
-    }
+    {("builtins", name) for name in _BUILTIN_PICKLE_NAMES}
     | {
         (_GRAPH_TYPES_MODULE, "KnowledgeGraphNode"),
         (_GRAPH_TYPES_MODULE, "KnowledgeGraphEdge"),
