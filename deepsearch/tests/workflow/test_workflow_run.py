@@ -1,5 +1,7 @@
 import logging
+import json
 from copy import deepcopy
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -246,3 +248,42 @@ async def test_consume_stream_chunks_passes_metadata_into_runner_inputs(monkeypa
         pass
 
     assert captured["metadata"] == metadata
+
+
+@pytest.mark.asyncio
+async def test_consume_stream_chunks_emits_interrupt_with_context_conversation_id(monkeypatch):
+    """HITL interaction chunks must be forwarded without relying on an outer local variable."""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent import workflow as workflow_module
+
+    interaction_chunk = SimpleNamespace(
+        type="__interaction__",
+        payload=SimpleNamespace(id="feedback_handler", value="Please confirm."),
+        section_idx="0",
+        plan_idx="0",
+        step_idx="0",
+        created_time="",
+    )
+
+    async def _fake_streaming(*, agent, inputs):
+        yield interaction_chunk
+
+    monkeypatch.setattr(workflow_module.Runner, "run_agent_streaming", _fake_streaming)
+    agent = workflow_module.DeepresearchAgent()
+    outputs = [
+        output
+        async for output in agent._consume_stream_chunks(
+            workflow_module.StreamRunContext(
+                conversation_id="hitl-conversation",
+                message="research",
+                decoded_template="",
+                interrupt_feedback="",
+                session_agent_config={},
+            )
+        )
+    ]
+
+    assert len(outputs) == 1
+    message, is_all_end, final_result_info = outputs[0]
+    assert json.loads(message)["conversation_id"] == "hitl-conversation"
+    assert is_all_end is False
+    assert final_result_info == {}
