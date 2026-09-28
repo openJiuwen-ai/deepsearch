@@ -118,6 +118,7 @@
 
 - collector 输入包含 `language`、`messages`、`section_idx`、`plan_idx`、`step_idx`、`max_search_query_count`、
   `max_research_loops`、`max_tool_call_turns_per_query`、`report_type`、`research_intent`。
+- `InfoRetrievalNode` 从 `collector_context.language` 取得语言，并传入工具调用分支的 collector Prompt；该 Prompt 的输出语言约束使用此值。
 - collector 输出至少包含 `history_queries`、`doc_infos`、`info_summary`、`evaluation`、`messages`。
 - `EvidenceLedger` 记录 accepted/rejected/pending 证据、尝试过的 query 和缺口，供后续采集轮次判断。
 - `CollectorContext.should_continue` 保存 supervisor 对下一轮检索价值的判断；为 `false` 时，collector 清空后续 query

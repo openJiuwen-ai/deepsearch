@@ -19,7 +19,6 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
     ArticlePart,
     _section_sort_key,
     export_outline_without_plans,
-    resolve_current_subsection,
     sanitize_citation_markers,
 )
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH

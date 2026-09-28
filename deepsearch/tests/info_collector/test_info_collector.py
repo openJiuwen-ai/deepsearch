@@ -332,6 +332,7 @@ class TestInfoCollectorNode:
             "collector_context.max_tool_call_turns_per_query": 3,
             "collector_context.section_idx": 0,
             "collector_context.step_title": "测试步骤",
+            "collector_context.language": "en-US",
             "config.info_collector_search_method": "web",
             "collector_context.doc_infos": [],
             "collector_context.gathered_info": [],
@@ -397,6 +398,7 @@ class TestInfoCollectorNode:
             "plan_idx": None,
             "step_idx": None,
             "step_title": "测试步骤",
+            "language": "en-US",
             "research_loop_count": None,
             "max_research_loops": None,
             "search_method": "web",
@@ -414,6 +416,7 @@ class TestInfoCollectorNode:
         mock_session.get_global_state.assert_any_call("collector_context.max_tool_call_turns_per_query")
         mock_session.get_global_state.assert_any_call("collector_context.research_loop_count")
         mock_session.get_global_state.assert_any_call("collector_context.max_research_loops")
+        mock_session.get_global_state.assert_any_call("collector_context.language")
 
     @pytest.mark.asyncio
     async def test_do_invoke_success(self, info_collector_node, mock_session, mock_context):
@@ -454,6 +457,7 @@ class TestInfoCollectorNode:
 
                 # 验证为每个查询创建了任务
                 assert mock_collector.call_count == 2
+                assert all(call.args[0]["language"] == "en-US" for call in mock_collector.call_args_list)
 
                 # 验证调用了 _post_handle
                 assert result == {}
@@ -801,6 +805,32 @@ class TestInfoCollectorNode:
             # 验证返回结果
             assert result_state == state
             assert "web_page_search_record" in result_agent_input
+
+    @pytest.mark.asyncio
+    async def test_collector_main_passes_language_to_rendered_prompt(self, info_collector_node):
+        """工具调用分支使用 collector 会话语言渲染用户提示词。"""
+        state = {
+            "section_idx": 0,
+            "step_title": "Test step",
+            "search_query": "test query",
+            "language": "en-US",
+            "max_tool_call_turns_per_query": 1,
+            "search_method": "all",
+            "api_tools_config": {"collector_tools": ["custom_tool"]},
+        }
+        captured_prompts = []
+
+        async def capture_request(messages, _tools, _state):
+            captured_prompts.append(messages)
+            return {"tool_calls": []}
+
+        with patch.object(info_collector_node, "_prepare_collector_tool", return_value=([], {})), \
+                patch.object(info_collector_node, "_invoke_llm_with_retry", side_effect=capture_request), \
+                patch.object(info_collector_node, "_structure_result", new=AsyncMock(return_value=([], {}))):
+            await info_collector_node.collector_main(state)
+
+        assert len(captured_prompts) == 1
+        assert "All outputs must be in the specified language: **en-US**" in captured_prompts[0][-1]["content"]
 
     @pytest.mark.asyncio
     async def test_collector_llm_commits_successful_turn_before_next_request(self, info_collector_node):

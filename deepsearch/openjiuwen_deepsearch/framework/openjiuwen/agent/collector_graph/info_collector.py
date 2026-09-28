@@ -182,6 +182,7 @@ class InfoRetrievalNode(BaseNode):
             plan_idx=session.get_global_state("collector_context.plan_idx"),
             step_idx=session.get_global_state("collector_context.step_idx"),
             step_title=step_title,
+            language=session.get_global_state("collector_context.language"),
             research_loop_count=session.get_global_state("collector_context.research_loop_count"),
             max_research_loops=session.get_global_state("collector_context.max_research_loops"),
             search_method=session.get_global_state("config.info_collector_search_method"),
@@ -220,6 +221,7 @@ class InfoRetrievalNode(BaseNode):
                 "plan_idx": state.get("plan_idx", 0),
                 "step_idx": state.get("step_idx", 0),
                 "step_title": state.get("step_title", ""),
+                "language": state.get("language", "zh-CN"),
                 "max_tool_call_turns_per_query": state.get("max_tool_call_turns_per_query", 2),
                 "search_method": state.get("search_method", "web"),
                 "web_search_engine_name": retrieval_query.primary_engine or state.get("web_search_engine_name", None),
@@ -526,6 +528,7 @@ class InfoRetrievalNode(BaseNode):
             "web_page_search_record": [],
             "local_text_search_record": [],
             "other_tool_record": [],
+            "language": state.get("language", "zh-CN"),
             "research_intent": state.get("research_intent", {}),
             "exclusion_constraint_enable": state.get("exclusion_constraint_enable", False),
         }
