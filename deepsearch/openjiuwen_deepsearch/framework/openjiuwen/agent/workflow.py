@@ -707,7 +707,7 @@ class DeepresearchAgent(BaseAgent):
         ):
             if getattr(chunk, "type", "") == "__interaction__":
                 filter_dup_flag = False
-                yield self._build_interrupt_message(conversation_id, chunk), is_all_end, final_result_info
+                yield self._build_interrupt_message(run_context.conversation_id, chunk), is_all_end, final_result_info
                 continue
             if filter_dup_flag:
                 continue
