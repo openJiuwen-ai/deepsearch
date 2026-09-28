@@ -290,6 +290,22 @@ Same as above but upload a sample report (Markdown, DOCX, PDF, HTML) and set `is
 
 For uploaded sample reports, the decoded source file must be no larger than `50 MB`. PDFs support up to `512` pages. For DOCX, the uncompressed package must stay within `50 MB`, and `word/document.xml` must stay within `8 MB`. The parsed Markdown output is capped at `5 MB`.
 
+# Report types and user materials
+
+`report_type` accepts `brief` or `professional`; `POST /api/v1/agent/deepsearch/run_brief/` forces a Brief report. Supply user materials in request `metadata`; when enabled, they participate in intent recognition, section planning, and report writing:
+
+```json
+{
+  "report_type": "professional",
+  "metadata": {
+    "user_materials_enabled": true,
+    "user_materials": [{"url": "https://example.com/source", "content": "Existing material text"}]
+  }
+}
+```
+
+Each material requires a non-empty `url` and `content`; the URL may be an absolute local path or an HTTP(S) URL.
+
 # Human-in-the-loop (HITL)
 
 ---

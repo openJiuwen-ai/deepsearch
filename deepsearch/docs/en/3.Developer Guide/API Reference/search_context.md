@@ -31,7 +31,7 @@ Outline section: **id**, **title**, **description**, **is_core_section** (defaul
 Outline HITL record: **feedback**, **interaction_mode** (`revise_comment` / `revise_outline`), **outline_before**.
 
 ## `SubReport` / `SubReportContent`
-Sub-report shell: **section_id**, **section_task**, **background_knowledge** (dependency mode may hold `{"section_id", "content_summary"}` parents), **content** (`SubReportContent` with **classified_content**, **sub_report_content**, **sub_report_content_summary**, **sub_report_trace_source_datas**).
+Sub-report shell: **section_id** (`str | int`, default `"1"`), **section_task**, **background_knowledge** (dependency mode may hold `{"section_id", "content_summary"}` parents), **content** (`SubReportContent` with **classified_content**, **sub_report_content_text**, **sub_report_content_summary**, **sub_report_trace_source_datas**).
 
 ## `Report`
 Aggregated report: **report_task**, **report_template**, **sub_reports**, **report_content**, **all_classified_contents**, **merged_trace_source_datas**, **checked_trace_source_report_content**, **checked_trace_source_datas**.
@@ -101,3 +101,11 @@ Structured report-generation constraints parsed from the user query.
 - **feedback_snapshot_sent**: Whether the initial feedback snapshot has already been pushed to the frontend. Default value: `False`.
 - **rewrite_history**: Local rewrite history.
 - **debug_pre_node**: Previous debug node. Default value: `""`.
+
+### Additional fields
+
+- `ResearchIntent` also includes `task_type`, `required_dimensions`, `comparison_targets`, `exclude_titles`, `source_date_scope`, `content_date_scope`, and `target_papers`. The legacy `temporal_scope` exists only for serialized-state compatibility.
+- `Plan.use_material_ids` records selected user-material IDs. `Section` also has `format_requirements`, `section_focus`, `focus_dimensions`, `material_bindings`, and `doc_selection_debug`; `ChapterSidecar` and `SectionLocalContract` support structured chapter summaries and ownership boundaries.
+- `SearchContext` also has `brief_state`, `user_materials`, and `material_analysis`; `Report.report_html` holds Brief HTML output.
+- `FinalResult.response_content_type` is `text/markdown` or `text/html`; `workflow_llm_token_usage` contains workflow-level LLM token totals.
+- `SubReportContent.sub_report_content_text` is the body text; `SubReport.section_id` is `str | int` with default `"1"`.

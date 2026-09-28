@@ -348,6 +348,22 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
         logger.debug("[Final Report is: %s]", report_result)
 ```
 
+# 报告类型与用户素材
+
+`report_type` 可取 `brief` 或 `professional`；也可使用 `POST /api/v1/agent/deepsearch/run_brief/` 强制生成 Brief 报告。用户素材通过服务端请求的 `metadata` 传入，启用后会参与意图识别、章节规划和报告写作：
+
+```json
+{
+  "report_type": "professional",
+  "metadata": {
+    "user_materials_enabled": true,
+    "user_materials": [{"url": "https://example.com/source", "content": "已有材料正文"}]
+  }
+}
+```
+
+每条素材必须有非空 `url` 和 `content`；`url` 可以是绝对本地路径或 HTTP(S) 链接。完整约束见 [用户素材](../../../feature/algorithm/user-materials.md)，HTTP 流式/HITL 契约见 [运行接口](../../../feature/server/deepsearch-run-streaming.md)。
+
 # 人机交互
 
 ---

@@ -129,7 +129,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReport(
 
 **字段**：
 - **id**(str)：默认值：`""`。
-- **section_id**(int)：默认值：`0`。
+- **section_id**(str | int)：默认值：`"1"`。
 - **section_task**(str)：子章节任务标题。
 - **background_knowledge**(List[Dict], 可选)：写作背景知识。依赖驱动模式下会记录父章节的摘要信息，
   典型结构为 `{"section_id": str, "content_summary": str}`，可在当前章节没有检索文档时作为写作兜底上下文。
@@ -145,7 +145,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReportC
 
 **字段**：
 - **classified_content**(List[Dict])：子章节筛选的文档信息。若当前章节直接使用 `background_knowledge` 生成内容，该字段可能为空列表。
-- **sub_report_content**(str)：子报告内容。
+- **sub_report_content_text**(str)：子报告内容。
 - **sub_report_content_summary**(str)：子报告摘要。
 - **sub_report_trace_source_datas**(List[Dict])：子报告溯源信息。
 
@@ -255,3 +255,11 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 - **feedback_snapshot_sent**(bool)：是否已经向前端推送过初始反馈快照。默认值：`False`。
 - **rewrite_history**(List[Dict])：局部改写历史记录。
 - **debug_pre_node**(str)：上一个调试节点。默认值：`""`。
+
+### 补充字段
+
+- `ResearchIntent` 还包含 `task_type`、`required_dimensions`、`comparison_targets`、`exclude_titles`、`source_date_scope`、`content_date_scope` 与 `target_papers`。前两类日期范围分别约束来源发布时间和事实/事件内容时间；旧 `temporal_scope` 仅为反序列化兼容字段。
+- `Plan.use_material_ids` 保存章节计划确认使用的用户素材 ID。`Section` 还包含 `format_requirements`、`section_focus`、`focus_dimensions`、`material_bindings` 和 `doc_selection_debug`；`ChapterSidecar` 与 `SectionLocalContract` 用于章节结构化汇总和职责边界。
+- `SearchContext` 还包含 `brief_state`、`user_materials` 与 `material_analysis`。`Report.report_html` 保存 Brief HTML 输出。
+- `FinalResult.response_content_type` 标识 `text/markdown` 或 `text/html`；`workflow_llm_token_usage` 提供本次工作流的 LLM token 汇总。
+- `SubReportContent.sub_report_content_text` 是子报告正文；`SubReport.section_id` 类型为 `str | int`，默认值为 `"1"`。
