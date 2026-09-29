@@ -7,6 +7,7 @@ import pytest
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTracerInfer
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
     GraphInfo,
+    normalize_reference_ids,
 )
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info import (
     ResearchInferPreprocess,
@@ -194,6 +195,8 @@ class TestSourceTracerInfer:
             assert len(result["reference"]) == 2
             assert result["reference"][0]["id"] == 0
             assert result["reference"][0]["content"] == "test content 1"
+            detection_config = mock_call_model.await_args.kwargs["detection_func_and_args"]
+            assert detection_config["normalizer"] is normalize_reference_ids
 
     @pytest.mark.asyncio
     async def test_extract_reference_invalid_index(self):

@@ -39,6 +39,7 @@
 主要测试：
 
 - `tests/source_tracer_infer/test_infer.py`
+- `tests/source_tracer_infer/test_infer_call_model_validation.py`
 - `tests/source_tracer_infer/test_number_node.py`
 - `tests/source_tracer_infer/test_supplement_graph.py`
 
@@ -76,6 +77,7 @@
 - 单个结论处理失败时返回空 infer message，不应阻塞其他结论。
 - 结论或搜索记录为空时跳过当前推理。
 - LLM 输出必须经过类型和长度检测。
+- 引用筛选的模型输出契约要求使用 JSON 整数 ID；为防止模型偶发将整数错误加引号，代码会仅将可无损转换的纯十进制字符串（如 `"0"`）归一化为整数，其他非整数值仍会被严格拒绝。
 - 图修补会删除自环、捏造节点和不连通的非关键子图。
 - HTML base64 会做反解校验，失败时抛出异常并跳过当前结论。
 - 敏感日志模式下不输出结论正文、搜索记录或推理文本。
