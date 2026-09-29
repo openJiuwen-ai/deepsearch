@@ -224,7 +224,7 @@ class StartNode(Start):
             agent_config["outline_interaction_max_rounds"] = origin_agent_config.get(
                 "outline_interaction_max_rounds", 3
             )
-            agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 5)
+            agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 10)
             agent_config["source_tracer_research_trace_source_switch"] = origin_agent_config.get(
                 "source_tracer_research_trace_source_switch", True
             )

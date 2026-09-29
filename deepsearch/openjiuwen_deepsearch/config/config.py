@@ -388,7 +388,7 @@ class AgentConfig(BaseModel):
     )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
-        default=5,
+        default=10,
         ge=1,
         le=OUTLINER_SECTION_NUM_MAX,
         description=f"大纲章节数量，取值范围:[1,{OUTLINER_SECTION_NUM_MAX}]",

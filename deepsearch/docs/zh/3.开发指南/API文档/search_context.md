@@ -71,6 +71,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Plan(...)
 - **is_research_completed**(bool)：是否完成信息收集。
 - **steps**(List[Step])：默认空列表。
 - **background_knowledge**(Dict[str, str], 可选)：默认空字典。
+- **use_material_ids**(List[str])：规划阶段确认引用的用户素材 ID；报告撰写时会并入 `classified_content`。默认空列表。
 
 ---
 
@@ -84,10 +85,41 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Section(..
 - **id**(str)：默认值：`""`。
 - **title**(str)：章节标题。
 - **description**(str)：章节说明。
+- **format_requirements**(List[str])：章节级输出格式要求，例如表格、列名、逐项枚举、字数或样式约束。默认空列表。
 - **is_core_section**(bool)：是否核心章节。默认值：`False`。
 - **parent_ids**(List[str])：依赖章节。
 - **relationships**(List[str])：依赖关系说明。
 - **plans**(List[Plan])：章节计划列表。
+- **section_focus**(str)：章节的分析职责标签，例如 `market_size_and_growth`、`vendors_and_supply`。默认值：`""`。
+- **focus_dimensions**(List[str])：本章节应重点展开的分析维度。默认空列表。
+- **material_bindings**(List[Dict[str, str]])：章节使用的用户素材，包含 `material_id`、`role` 与 `claims_to_use`。默认空列表。
+- **doc_selection_debug**(Optional[Dict])：可选的文档选择调试信息。
+
+---
+
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ChapterSidecar
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ChapterSidecar(...)
+```
+**ChapterSidecar** 是供总报告生成复用的章节结构化汇总信息。
+
+**字段**：
+- **chapter_summary**(str)：章节摘要。默认值：`""`。
+- **key_findings**(List[str])：章节关键发现。默认空列表。
+- **risk_points**(List[str])：风险、限制或不确定性。默认空列表。
+
+---
+
+## class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SectionLocalContract
+```python
+class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SectionLocalContract(...)
+```
+**SectionLocalContract** 用于限制章节仅覆盖其负责的分析职责。
+
+**字段**：
+- **section_focus**(str)：当前章节的核心职责标签。默认值：`""`。
+- **allowed_dimensions**(List[str])：允许重点展开的维度。默认空列表。
+- **is_final_decision_section**(bool)：是否承担最终判断或排序职责。默认值：`False`。
 
 ---
 
@@ -129,7 +161,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReport(
 
 **字段**：
 - **id**(str)：默认值：`""`。
-- **section_id**(int)：默认值：`0`。
+- **section_id**(str | int)：默认值：`"1"`。
 - **section_task**(str)：子章节任务标题。
 - **background_knowledge**(List[Dict], 可选)：写作背景知识。依赖驱动模式下会记录父章节的摘要信息，
   典型结构为 `{"section_id": str, "content_summary": str}`，可在当前章节没有检索文档时作为写作兜底上下文。
@@ -145,8 +177,9 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SubReportC
 
 **字段**：
 - **classified_content**(List[Dict])：子章节筛选的文档信息。若当前章节直接使用 `background_knowledge` 生成内容，该字段可能为空列表。
-- **sub_report_content**(str)：子报告内容。
+- **sub_report_content_text**(str)：子报告内容。
 - **sub_report_content_summary**(str)：子报告摘要。
+- **sub_report_chapter_sidecar**(Optional[ChapterSidecar])：子报告的结构化章节汇总信息。
 - **sub_report_trace_source_datas**(List[Dict])：子报告溯源信息。
 
 ---
@@ -167,6 +200,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.Report(...
 - **merged_trace_source_datas**(List[Dict])：溯源校验前的引用信息。
 - **checked_trace_source_report_content**(str)：溯源后报告内容。
 - **checked_trace_source_datas**(List[Dict])：最终溯源信息。
+- **report_html**(str)：Brief HTML 报告内容；Markdown 中间态保留在 `report_content`。默认值：`""`。
 
 ---
 
@@ -178,9 +212,11 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.FinalResul
 
 **字段**：
 - **response_content**(str)：响应内容。
+- **response_content_type**(str)：响应内容类型，`text/markdown` 或 `text/html`。默认值：`text/markdown`。
 - **citation_messages**(dict)：引用信息。
 - **infer_messages**(list): 溯源推理信息。报告导出时会读取其中的 `html_base64`，并写出为独立 HTML 资源。
 - **chart_messages**(list): vlm迭代生成图信息。报告导出时会读取其中的 `base64`，并写出为图片资源。
+- **workflow_llm_token_usage**(Dict[str, Any])：本次工作流的 LLM token 消耗汇总，包含总量与 `agent_name` 维度统计。默认空字典。
 - **exception_info**(str)：异常信息。
 - **warning_info**(str)：告警信息。
 - **metadata**(dict)：附加元数据。brief 运行会写入 `brief_outline` / `research_intent` / `language` 三键结构，客户端可将其原样作为 `/run` 的 `metadata` 入参回传，以 brief 大纲为结构基准升级生成专业版报告（见 [brief 大纲升级](../../../feature/framework/brief-outline-upgrade.md)）。默认值：空字典。
@@ -208,16 +244,25 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.ResearchIn
 **ResearchIntent** 是从用户查询中解析出的结构化报告生成约束。
 
 **字段**：
+- **task_type**(Optional[str])：任务类型，例如 `comparison`、`classification`、`trend_judgement`。
+- **required_dimensions**(List[str])：必须覆盖的比较或分析维度。默认空列表。
+- **comparison_targets**(List[str])：需要显式比较的对象。默认空列表。
 - **section_count**(Optional[int])：用户希望的章节数量。仅正整数会被保留。
 - **audience_role**(Optional[str])：目标读者角色。
 - **tone**(Optional[str])：写作风格，建议使用稳定英文枚举值，例如 `formal`、`analytical`。
 - **report_type**(Optional[str])：报告类型，建议使用稳定英文枚举值 `professional`、`brief`。其中 `professional` 表示专业版报告，`brief` 表示精简版报告。
 - **include_url**(List[str])：用户指定包含的链接。默认值：`[]`。
 - **exclude_url**(List[str])：用户指定排除的链接。默认值：`[]`。
+- **exclude_titles**(List[str])：用户指定排除的文章标题。默认值：`[]`。
 - **include_domains**(List[str])：用户指定的站点域名。默认值：`[]`。
 - **exclude_domains**(List[str])：用户排除的站点域名。默认值：`[]`。
+- **source_date_scope**(Optional[TemporalScope])：来源发表或可得时间的硬约束。
+- **content_date_scope**(Optional[TemporalScope])：事实、事件、研究或数据时段的软约束。
+- **target_papers**(List[TargetPaper])：用户明确指定或隐式描述的目标论文。默认空列表。
+- **temporal_scope**(Optional[TemporalScope])：已废弃，仅用于反序列化兼容旧状态；应改用 `source_date_scope` 与 `content_date_scope`。
 
 **运行期生效说明**：
+- 若 `brief_state` 带有注入的 Brief 大纲，且当前不是大纲交互轮，则 `section_num` 直接等于该 Brief 大纲的章节数，不受 `section_count` 和 `OUTLINER_SECTION_NUM_MAX` 限制。
 - 大纲阶段 `section_num`：用户指定 `section_count` 时为 `min(section_count, OUTLINER_SECTION_NUM_MAX)`，否则为 `config.outliner_max_section_num`。
 - `audience_role` 与 `tone` 会透传到大纲、章节规划（Plan）、子报告写作与总报告汇总阶段。
 - `report_type` 会透传到大纲、章节规划（Plan）、信息收集、子报告写作与总报告汇总阶段。
@@ -240,6 +285,9 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.SearchCont
 - **report_template**(str)：模板内容。默认值：`""`。
 - **search_mode**(str)：默认值：`"research"`。
 - **entry_search_results**(List[Dict])：Entry节点预搜索结果。默认值：`[]`。
+- **brief_state**(Dict[str, Any] | None)：Brief 工作流的序列化状态。默认值：`None`。
+- **user_materials**(List[Dict[str, Any]])：StartNode 写入的原始用户素材。默认空列表。
+- **material_analysis**(Dict[str, Any] | None)：素材预处理产物，包含 manifest 与摘要，可跨轮复用。默认值：`None`。
 - **questions**(str)：系统提问。默认值：`""`。
 - **user_feedback**(str)：用户反馈。默认值：`""`。
 - **outline_interactions**(List[OutlineInteraction])：大纲多轮交互历史记录。默认值：`[]`。

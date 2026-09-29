@@ -1,224 +1,87 @@
-# `openjiuwen_deepsearch` directory layout
+# `openjiuwen_deepsearch` Directory Structure
 
-This document reflects the current `deepsearch/openjiuwen_deepsearch` tree and what each major area does.
+This document describes the current stable module boundaries and key entry points in `deepsearch/openjiuwen_deepsearch/`. It is for extension and maintenance work: the tree is organized by responsibility and does not enumerate cache directories or volatile internal files.
 
 ## Overview
 
-```
+```text
 openjiuwen_deepsearch/
-├── algorithm/                      # Core algorithms
-│   ├── prompts/                    # Prompt templates
-│   ├── query_understanding/        # Query understanding (router/outliner/planner/interpreter)
-│   ├── report/                     # Report generation
-│   ├── report_template/            # Template parse/generate
-│   ├── research_collector/         # Gathering and evaluation
-│   ├── source_trace/               # Provenance and validation
-│   ├── source_tracer_infer/        # Provenance reasoning
-│   └── user_feedback_processor/    # Post-report local edits from user feedback
-├── framework/                      # Framework integration
-│   └── openjiuwen/
-│       ├── agent/                  # Workflow and nodes
-│       ├── core/                   # WorkflowAgent and controller
-│       ├── tools/                  # Search tool wrappers
-│       └── llm/                    # LLM factory
-├── config/                         # Configuration
-├── common/                         # Shared exceptions and status codes
-├── utils/                          # Utilities
-└── llm/                            # Unified LLM wrapper
+├── algorithm/                  # Research, search, writing, and tracing algorithms
+├── common/                     # Exceptions, status codes, and shared definitions
+├── config/                     # Pydantic configuration and runtime-API models
+├── framework/openjiuwen/       # Workflow orchestration, nodes, tools, and LLM adapters
+├── llm/                        # Unified LLM invocation layer
+└── utils/                      # Security, logging, rate limiting, validation, and constants
 ```
 
----
+## `algorithm/`: domain algorithms
 
-## Details
-
-### `algorithm/` — core algorithms
-
-**Functions**: Core algorithm implementations for each stage of the research workflow.
-
-**Main subdirectories**:
-
-- **prompts/** - Prompt template directories (each with `system.md` and `user.md`), plus legacy single-file templates
-  - `synonym_rewrite_expand/` - Prompt for expansion
-  - `synonym_rewrite_polish/` - Prompt for polishing
-  - `synonym_rewrite_shorten/` - Prompt for shortening
-  - `supplementary_search_task/` - Prompt for supplementary-search task generation
-  - `supplementary_search_rewrite_selected_only/` - Prompt for supplementary search that rewrites only the selected span
-  - `supplementary_search_rewrite_selected_and_related/` - Prompt for supplementary search that rewrites the entire related section
-  - `new_task_assessment/` - Prompt for assessing sufficiency of historical evidence for new-task requests
-  - `new_task_rewrite_section/` - Prompt for rewriting sections based on new-task edit strategy
-  - `truth_verification_assessment/` - Prompt for content truth verification assessment
-  - `truth_verification_search_task/` - Prompt for truth-verification supplementary search task generation
-- **query_understanding/** - Query understanding
-  - `interpreter.py` - Generate clarification questions
-  - `outliner.py` - Generate outlines
-  - `planner.py` - Generate section plans
-  - `router.py` - Decide whether to enter deep search
-- **report/** - Report generation
-  - `background_knowledge.py` - Background knowledge extraction mixin
-  - `compact_doc_info.py` - Document info compaction
-  - `config.py` - Report format configuration
-  - `doc_prefilter.py` - Document pre-filtering
-  - `evidence.py` - Evidence extraction and scoring mixin (evidence pipeline orchestration: `_prepare_evidence`)
-  - `markdown_utils.py` - Markdown processing mixin
-  - `reference_utils.py` - Reference management mixin
-  - `report.py` - Core Reporter class (orchestration)
-  - `report_common.py` - Constants, regex patterns, error formatting
-  - `report_parts.py` - Report parts mixin (sub-section prompt building `_build_subsection_prompt`, post-processing `_post_process_subsection`, abstract, conclusion, sidecar)
-  - `report_rationale_fulltext.py` - Full-text evidence enrichment
-  - `report_utils.py` - Report utility classes
-  - `retry_feedback.py` - Retry feedback mixin
-  - `sub_section_outline.py` - Sub-section outline generation mixin (`_generate_sub_section_outline`, `_generate_outline_with_retry`)
-  - `table_caption_utils.py` - Table caption utilities
-  - `visualization.py` - Visualization generation mixin
-  - `visualization_insertion.py` - Visualization insertion mixin
-- **report_template/** - Template generation and parsing
-  - `template_generator.py`
-  - `template_utils.py`
-- **research_collector/** - Information collection and evaluation
-  - `collector_function.py`
-  - `tool_log.py`
-- **source_trace/** - Provenance module
-  - `source_tracer.py`
-  - `checker.py`
-  - `add_source.py`
-  - `citation_checker_research.py`
-  - `citation_verify_research.py`
-  - `content_analyzer.py`
-  - `source_matcher.py`
-  - `source_tracer_preprocessors.py`
-- **source_tracer_infer/** - Provenance reasoning module
-  - `generate_html.py`
-  - `html_template.py`
-  - `infer.py`
-  - `infer_call_model.py`
-  - `infer_extract_info.py`
-  - `number_node.py`
-  - `supplement_graph.py`
-- **user_feedback_processor/** - User-feedback local editing module
-  - `action_definitions.py` - Mapping between frontend actions and unified internal actions
-  - `common.py` - Shared utilities (session/model context resolution, LLM invocation entry)
-  - `history.py` - Rewrite history and outline update management
-  - `new_task_processor.py` - New-task action processing logic
-  - `report_edit_utils.py` - Tools for stripping citation / inference markers and updating offsets
-  - `section_locator.py` - Locate the smallest Markdown heading block for a selection
-  - `supplementary_search.py` - Execution logic for supplementary search and local / whole-section rewriting
-  - `synonym_rewrite.py` - Execution logic for expansion, polishing, and shortening
-  - `truth_verification.py` - Content truth verification
-  - `user_feedback_processor.py` - Parse feedback, validate, execute, and send results
-
----
-
-### `framework/` — orchestration
-
-**Functions**: Workflow and node orchestration based on openjiuwen.
-
-**Main subdirectories**:
-
-- **openjiuwen/agent/** - Workflows and nodes
-  - `workflow.py` - Agent and workflow entry
-  - `main_graph_nodes.py` - Main graph nodes (Start/Entry/Outline/Reporter/SourceTracer, etc.)
-  - `editor_team_manager_node.py` - Editor-team subgraph manager
-  - `reasoning_writing_graph/` - Editor-team subgraph nodes and state
-    - `editor_team_nodes.py`
-    - `dependency_reasoning_team_nodes.py`
-    - `dependency_writing_team_nodes.py`
-    - `section_context.py`
-  - `collector_graph/` - Information-collection subgraph
-    - `collector_execution_service.py` - Reusable information-collection execution service
-    - `graph_builder.py`
-    - `info_collector.py`
-    - `collector_context.py`
-  - `agent_factory.py` - Agent factory
-  - `base_node.py` - Base class for nodes
-  - `search_context.py` - Search context model
-
-- **`openjiuwen/core/workflow_agent/`** — WorkflowAgent & controller  
-  - `config.py`, `workflow_controller.py`, `workflow_agent.py`  
-
-- **`openjiuwen/tools/`** — search tools  
-  - `web_search.py`, `local_search.py`, `search_api/` (`external_tool/`, `petal/`, `tavily/`, `serper/`, `xunfei/`, `local_search_api/`, `native_local_search_api/`)  
-
-- **`openjiuwen/llm/`** — LLM factory  
-  - `llm_model_factory.py`, `llm_adapter.py`  
-
----
-
-### `config/`
-
-- `config.py` — `LLMConfig`, `AgentConfig`, `ServiceConfig`, etc.  
-- `method.py` — execution mode enum  
-- `search_mode.py` — search mode enum  
-
----
-
-### `common/`
-
-- `common_constants.py`  
-- `exception.py`  
-- `status_code.py`  
-
----
-
-### `utils/`
-
-- `common_utils/` — `llm_utils.py`, `security_utils.py`, `stream_utils.py`, `text_utils.py`, `url_utils.py`  
-- `constants_utils/` — `node_constants.py`, `session_contextvars.py`, `search_engine_constants.py`  
-- `debug_utils/` — `node_debug.py`, `outline_visualization.py`, `result_exporter.py`  
-- `log_utils/` — logging helpers  
-- `validation_utils/` — `field_validation.py`, `param_validation.py`  
-- `rate_limiter_utils/` — `qps_limiter.py`  
-
----
-
-### `llm/`
-
-- `llm_wrapper.py` — unified LLM calls  
-- `llm_request_adapter.py` — LLM request parameter adaptation, including provider rules for the model thinking-mode switch
-
----
-
-## Module relationships
-
-```
-User request
-    ↓
-framework/openjiuwen/agent/workflow.py
-    ├── validate & merge agent_config
-    ├── init LLM & search tools
-    └── Runner.run_agent_streaming(...)
-            ↓
-framework/openjiuwen/agent/main_graph_nodes.py
-    ├── StartNode
-    ├── EntryNode → algorithm/query_understanding/router.py
-    ├── [GenerateQuestionsNode -> FeedbackHandlerNode] (optional HITL)
-    ├── OutlineNode / DependencyOutlineNode → algorithm/query_understanding/outliner.py
-    ├── OutlineInteractionNode / DependencyOutlineInteractionNode (optional)
-    ├── EditorTeamNode / DependencyReasoningTeamNode / DependencyWritingTeamNode
-    │   ├── ResearchPlanReasoningNode → algorithm/query_understanding/planner.py
-    │   ├── InfoCollectorNode → collector_graph/
-    │   └── SubReporterNode → algorithm/report/report.py
-    ├── ReporterNode → algorithm/report/report.py
-    ├── SourceTracerNode → algorithm/source_trace/
-    ├── SourceTracerInferNode → algorithm/source_tracer_infer/
-    └── UserFeedbackProcessorNode → algorithm/user_feedback_processor/
+```text
+algorithm/
+├── brief_report/               # Brief reports, material merging, and HTML output
+├── chart_generation/           # Chart generation and sandbox assets
+├── prompts/                    # Prompt templates
+├── query_understanding/        # Intent, materials, outlines, planning, clarification
+├── report/                     # Subreports/reports, evidence, visualization
+├── report_export/, report_style/, report_template/
+├── research_collector/         # Collection, evidence fusion, webpage enrichment
+├── search_agent/, search_index/, search_nodes/, search_tools/
+├── source_trace/, source_tracer_infer/
+└── user_feedback_processor/    # Post-report local edits and supplementary search
 ```
 
----
+The primary `query_understanding/` entry points are `intent_recognition.py`, `material_processing.py`, `outline_mode_router.py`, `interpreter.py`, `outliner.py`, and `planner.py`. This layer produces user-material constraints and section bindings that are consumed by collection and writing.
 
-## Where to look
+## `framework/openjiuwen/`: runtime orchestration
 
-- **Workflow** → `framework/openjiuwen/agent/`  
-- **Algorithms** → `algorithm/`  
-- **Config** → `config/config.py`  
-- **Web search backends** → `framework/openjiuwen/tools/search_api/`  
-- **Prompts** → `algorithm/prompts/`  
-- **Context model** → `framework/openjiuwen/agent/search_context.py`  
+```text
+framework/openjiuwen/
+├── agent/
+│   ├── workflow.py             # Streaming Agent entry point and workflow assembly
+│   ├── main_graph_nodes.py     # Main-graph nodes
+│   ├── brief_nodes.py          # Brief-specific nodes
+│   ├── metadata_injectors.py   # Request metadata injectors
+│   ├── search_context.py       # Workflow state models
+│   ├── collector_graph/        # Collection graph, evidence ledger, webpage enrichment
+│   └── reasoning_writing_graph/# Section reasoning/writing graphs
+├── core/workflow_agent/        # WorkflowAgent and controller integration
+├── llm/                        # Workflow LLM factories and adapters
+└── tools/
+    ├── fetch_api/              # Web fetch providers, including Jina
+    ├── runtime_api/            # Runtime HTTP-tool construction and invocation
+    └── search_api/             # Web, local, and scholarly search providers
+```
 
----
+`search_api/` includes `agc_ainetworking`, `harness_web_search`, `jina`, `petal`, `serper`, `tavily`, `xunfei`, and `scholarly_search/` (PubMed, arXiv, Semantic Scholar, and full-text retrieval). External and local adapters are under `framework/openjiuwen/tools/search_api/`: `external_tool/`, `local_search_api/`, and `native_local_search_api/`.
 
-## Design principles
+## Configuration and utilities
 
-1. **Layering**: `algorithm/` = logic; `framework/` = orchestration.  
-2. **Modularity**: nodes stay decoupled from algorithm details.  
-3. **Configuration**: `config/` is the single place for tunables.  
-4. **Reuse**: `utils/` holds shared infrastructure.  
+```text
+config/
+├── config.py                  # AgentConfig, ServiceConfig, provider configuration
+├── runtime_api_models.py      # Pydantic models for runtime HTTP tools
+├── method.py                  # Execution-method enums
+└── search_mode.py             # Search-mode enums
+
+utils/
+├── common_utils/              # Common, text, URL, and security helpers
+├── constants_utils/           # Node, session, and search-engine constants
+├── debug_utils/               # Debugging, visualization, result export
+├── log_utils/                 # Structured logs, metrics, interface logs
+├── rate_limiter_utils/        # QPS rate limiting
+└── validation_utils/          # Field and request validation
+```
+
+## Main execution path and development entry points
+
+```text
+workflow.py → main_graph_nodes.py / brief_nodes.py
+→ query_understanding → collector_graph + research_collector
+→ reasoning_writing_graph + report → source_trace / source_tracer_infer
+→ streaming output or a HITL waiting event
+```
+
+- Workflow nodes: `framework/openjiuwen/agent/`.
+- Report algorithms and prompts: `algorithm/report/` and `algorithm/prompts/`.
+- Search or fetch providers: `framework/openjiuwen/tools/search_api/` or `fetch_api/`; also update `config/config.py`.
+- State contracts: `framework/openjiuwen/agent/search_context.py`; also update the API reference.
