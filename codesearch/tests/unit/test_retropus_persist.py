@@ -1,7 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """On-disk Retropus KnowledgeGraph / BM25 dump-load (no tree-sitter required for KnowledgeGraph tests)."""
 
-import os
 import pickle
 from pathlib import Path
 
@@ -83,12 +82,17 @@ def test_dump_load_knowledge_graph(tmp_path: Path):
     assert loaded.get_file_nodes()[0].node.relative_path in (".", "a.py")
 
 
+def _arbitrary_code_probe(marker: str) -> None:
+    """Stand-in for an attacker-controlled callable: it must never run on unpickling."""
+    Path(marker).write_text("pwned", encoding="utf-8")
+
+
 def _write_evil_kg(path: Path, marker: Path) -> None:
-    """Write a kg.pkl whose unpickling would run ``os.system`` if unrestricted."""
+    """Write a kg.pkl that would invoke an arbitrary global if unpickling were unrestricted."""
 
     class _Evil:
         def __reduce__(self):
-            return (os.system, (f'echo pwned > "{marker}"',))
+            return (_arbitrary_code_probe, (str(marker),))
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as fh:
