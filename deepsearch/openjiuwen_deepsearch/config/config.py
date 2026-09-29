@@ -442,7 +442,7 @@ class AgentConfig(BaseModel):
     user_feedback_processor_max_interactions: int = Field(default=100, ge=1, le=100, description="最大交互次数")
 
     # 统计性能信息参数
-    stats_info_llm: bool = Field(default=True, description="LLM调用统计")
+    stats_info_llm: bool = Field(default=False, description="LLM调用统计")
 
     # vlm迭代生成图参数
     vlm_chart_generator_enable: bool = Field(default=False, description="vlm迭代生成图开关")
@@ -506,10 +506,7 @@ class ServiceConfig(BaseModel):
     info_collector_max_research_loops: int = Field(default=2, description="最大研究循环次数")
     info_collector_max_tool_call_turns_per_query: int = Field(default=2, ge=1, description="单个检索 query 最大工具调用轮次")
     info_collector_max_retry_num: int = Field(default=3, description="信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）")
-    info_collector_allow_programmer: bool = Field(
-        default=False,
-        description="预留字段；当前运行时未接入，设置不会改变信息收集器行为",
-    )
+    info_collector_allow_programmer: bool = Field(default=False, description="")
     info_collector_webpage_enrich_max_urls: int = Field(
         default=3,
         ge=1,
@@ -543,7 +540,7 @@ class ServiceConfig(BaseModel):
     )
 
     # 统计性能信息参数
-    stats_info_node_duration: bool = Field(default=True, description="节点持续时间统计")
+    stats_info_node_duration: bool = Field(default=False, description="节点持续时间统计")
     stats_info_search: bool = Field(default=False, description="搜索工具调用统计")
 
     # 大模型超时参数
