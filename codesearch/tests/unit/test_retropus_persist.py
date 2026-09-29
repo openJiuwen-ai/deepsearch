@@ -8,7 +8,6 @@ import pytest
 from openjiuwen_codesearch.config.agent import RetropusSearchAgentConfig
 from openjiuwen_codesearch.config.config import CodeSearchConfig
 from openjiuwen_codesearch.config.llm import LLMConfig, LLMSuite
-from openjiuwen_codesearch.retropus import persist
 from openjiuwen_codesearch.retropus.graph.graph_types import (
     ASTNode,
     FileNode,
@@ -30,6 +29,9 @@ from openjiuwen_codesearch.retropus.persist import (
     read_manifest,
     safe_collection_name,
     write_manifest,
+)
+from openjiuwen_codesearch.retropus.persist import (
+    pickle as _pickle,
 )
 
 
@@ -84,28 +86,36 @@ def test_dump_load_knowledge_graph(tmp_path: Path):
 
 def _arbitrary_code_probe(marker: str) -> None:
     """Stand-in for an attacker-controlled callable: it must never run on unpickling."""
-    Path(marker).write_text("pwned", encoding="utf-8")
+    Path(marker).write_text("tampered", encoding="utf-8")
 
 
-def _write_evil_kg(path: Path, marker: Path) -> None:
+def _tampered_kg_bytes(marker: Path) -> bytes:
+    """Hand-build a protocol-2 pickle whose REDUCE step targets an arbitrary global."""
+    module = _arbitrary_code_probe.__module__.encode()
+    name = _arbitrary_code_probe.__qualname__.encode()
+    arg = str(marker).encode()
+    return (
+        b"\x80\x02"  # PROTO 2
+        + b"c" + module + b"\n" + name + b"\n"  # GLOBAL <probe>
+        + b"X" + len(arg).to_bytes(4, "little") + arg  # BINUNICODE <marker>
+        + b"\x85"  # TUPLE1
+        + b"R"  # REDUCE
+        + b"."  # STOP
+    )
+
+
+def _write_tampered_kg(path: Path, marker: Path) -> None:
     """Write a kg.pkl that would invoke an arbitrary global if unpickling were unrestricted."""
-
-    class _Evil:
-        def __reduce__(self):
-            return (_arbitrary_code_probe, (str(marker),))
-
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as fh:
-        # ``pickle`` is reused from ``persist`` to avoid importing it here.
-        persist.pickle.dump(_Evil(), fh, protocol=persist.pickle.HIGHEST_PROTOCOL)
+    path.write_bytes(_tampered_kg_bytes(marker))
 
 
 def test_load_knowledge_graph_rejects_arbitrary_global(tmp_path: Path):
-    marker = tmp_path / "pwned.txt"
+    marker = tmp_path / "tampered.txt"
     path = tmp_path / "kg.pkl"
-    _write_evil_kg(path, marker)
+    _write_tampered_kg(path, marker)
 
-    with pytest.raises(persist.pickle.UnpicklingError, match="forbidden global"):
+    with pytest.raises(_pickle.UnpicklingError, match="forbidden global"):
         load_knowledge_graph(path)
     assert not marker.exists()
 
@@ -122,8 +132,8 @@ def test_load_retropus_index_treats_forbidden_global_as_miss(tmp_path: Path):
         fingerprint=config_fingerprint(cfg),
     )
 
-    marker = tmp_path / "pwned.txt"
-    _write_evil_kg(cache / "kg.pkl", marker)
+    marker = tmp_path / "tampered.txt"
+    _write_tampered_kg(cache / "kg.pkl", marker)
 
     assert load_retropus_index(cache, config=cfg, repo_dir=repo) is None
     assert not marker.exists()
