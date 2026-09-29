@@ -1,6 +1,8 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """On-disk Retropus KnowledgeGraph / BM25 dump-load (no tree-sitter required for KnowledgeGraph tests)."""
 
+import os
+import pickle
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ from openjiuwen_codesearch.retropus.persist import (
     load_retropus_index,
     read_manifest,
     safe_collection_name,
+    write_manifest,
 )
 
 
@@ -78,6 +81,47 @@ def test_dump_load_knowledge_graph(tmp_path: Path):
     assert loaded.chunk_overlap == 200
     assert loaded.get_imports_label(1, 1) == "self"
     assert loaded.get_file_nodes()[0].node.relative_path in (".", "a.py")
+
+
+def _write_evil_kg(path: Path, marker: Path) -> None:
+    """Write a kg.pkl whose unpickling would run ``os.system`` if unrestricted."""
+
+    class _Evil:
+        def __reduce__(self):
+            return (os.system, (f'echo pwned > "{marker}"',))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as fh:
+        pickle.dump(_Evil(), fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def test_load_knowledge_graph_rejects_arbitrary_global(tmp_path: Path):
+    marker = tmp_path / "pwned.txt"
+    path = tmp_path / "kg.pkl"
+    _write_evil_kg(path, marker)
+
+    with pytest.raises(pickle.UnpicklingError, match="forbidden global"):
+        load_knowledge_graph(path)
+    assert not marker.exists()
+
+
+def test_load_retropus_index_treats_forbidden_global_as_miss(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    cfg = RetropusSearchAgentConfig()
+    cache = tmp_path / "cache" / "col"
+    write_manifest(
+        cache,
+        repo_dir=repo,
+        collection="col",
+        fingerprint=config_fingerprint(cfg),
+    )
+
+    marker = tmp_path / "pwned.txt"
+    _write_evil_kg(cache / "kg.pkl", marker)
+
+    assert load_retropus_index(cache, config=cfg, repo_dir=repo) is None
+    assert not marker.exists()
 
 
 def test_cache_fingerprint_mismatch(tmp_path: Path):
