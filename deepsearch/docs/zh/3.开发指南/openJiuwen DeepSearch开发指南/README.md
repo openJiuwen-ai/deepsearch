@@ -350,7 +350,7 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 
 # 报告类型与用户素材
 
-`report_type` 可取 `brief` 或 `professional`；也可使用 `POST /api/v1/agent/deepsearch/run_brief/` 强制生成 Brief 报告。用户素材通过服务端请求的 `metadata` 传入，启用后会参与意图识别、章节规划和报告写作：
+`report_type` 可取 `brief`、`professional`，也可不传或传 `null`；后两种情况下由意图识别与澄清流程决定报告类型。也可使用 `POST /api/v1/agent/deepsearch/run_brief/` 强制生成 Brief 报告。用户素材通过服务端请求的 `metadata` 传入，启用后会参与意图识别、章节规划和报告写作：
 
 ```json
 {

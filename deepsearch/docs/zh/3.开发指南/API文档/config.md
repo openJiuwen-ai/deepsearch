@@ -74,6 +74,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 - `petal`：使用小艺联网增强 Wrapper。
 - `bocha` / `perplexity`：使用 harness `web_tools` 适配层。
 - `jina`：使用直接 HTTP 调用的 JinaSearchAPIWrapper。
+- `agc_ainetworking`：使用 AGC AI Networking 的 `webSearch` 接口；通过 `WebSearchEngineConfig` 或 HTTP 请求配置时，`max_web_search_results` 的校验上限为 `10`。wrapper 内部的 `[1, 50]` 夹取只约束直接构造 wrapper 的调用，不扩大配置接口的取值范围。完整参数与站点约束见 [AGC AI Networking 联网搜索](../../../feature/framework/agc_ainetworking_search.md)。
 - `custom`：通过 `CustomWebSearchConfig` 动态加载。
 
 **样例**：
@@ -302,7 +303,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **workflow_human_in_the_loop**(bool, 可选)：工作流是否启用人机交互。默认值：`True`。
 - **report_type**(Literal["brief", "professional"] | None, 可选)：报告类型；`None` 时由意图识别和澄清流程决定。默认值：`None`。
 - **user_materials_enabled**(bool, 可选)：是否启用用户素材；关闭时 `user_materials` 会被忽略。默认值：`False`。
-- **user_materials**(List[Dict[str, Any]], 可选)：用户提供的素材列表。默认值：`[]`；HTTP 服务应通过 `metadata` 的同名字段传入。
+- **user_materials**(List[Dict[str, Any]], 可选)：用户提供的素材列表。默认值：`[]`；HTTP 服务应通过 `metadata` 的同名字段传入。素材的数据格式和使用场景见 [用户素材](../../../feature/algorithm/user-materials.md)。
 - **coverage_rule_block_enable**(bool, 可选)：子报告大纲规则版覆盖证据开关。默认值：`True`。
 - **exclusion_constraint_enable**(bool, 可选)：子报告禁引约束总开关。默认值：`False`。
 - **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 15]。SDK `AgentConfig` 与 HTTP 服务 `DeepSearchRequest` 默认值均为 `10`。
@@ -317,6 +318,8 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **web_search_engine_config**(WebSearchEngineConfig, 可选)：联网增强引擎配置。默认值：`WebSearchEngineConfig()`。
 - **scholarly_search_enabled**(bool, 可选)：是否启用内置学术搜索 provider。默认值：`False`。
 - **scholarly_search_config**(ScholarlySearchConfig, 可选)：PubMed、arXiv、Semantic Scholar 的配置集合。默认值：`ScholarlySearchConfig()`。
+
+`ScholarlySearchConfig` 聚合 `PubMedScholarlyConfig`、`ArxivScholarlyConfig` 和 `SemanticScholarConfig`；各 provider 支持 `search_api_key`、官方 `search_url`、`max_search_results`（范围 `[1, 10]`）及限速参数。
 - **local_search_engine_config**(LocalSearchEngineConfig, 可选)：本地搜索引擎配置。默认值：`LocalSearchEngineConfig()`。
 - **custom_web_search_config**(CustomWebSearchConfig, 可选)：自定义联网增强引擎配置。默认值：`CustomWebSearchConfig()`。
 - **custom_local_search_config**(CustomLocalSearchConfig, 可选)：自定义本地搜索配置。默认值：`CustomLocalSearchConfig()`。
@@ -434,7 +437,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_max_research_loops**(int, 可选)：最大研究循环次数。默认值：`2`。
 - **info_collector_max_tool_call_turns_per_query**(int, 可选)：单个 collector query 最大工具调用轮次。默认值：`2`。
 - **info_collector_max_retry_num**(int, 可选)：信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）。默认值：`3`。
-- **info_collector_allow_programmer**(bool, 可选)：是否允许信息收集器使用 programmer 能力。默认值：`False`。
+- **info_collector_allow_programmer**(bool, 可选)：预留字段；当前运行时未接入，设置不会改变信息收集器行为。默认值：`False`。
 - **info_collector_webpage_enrich_max_urls**(int, 可选)：网页正文增强每轮最多抓取并增强的 URL 数量。默认值：`3`。
 - **info_collector_webpage_enrich_fetch_timeout_seconds**(int, 可选)：网页正文增强单个 URL 抓取超时时间，单位秒。默认值：`45`。
 
@@ -524,12 +527,3 @@ general 3600
 >>> print(config.agent_config.execute_mode, config.service_config.workflow_execution_timeout)
 commercial 7200
 ```
-
-## 补充：联网、学术搜索与用户素材
-
-- `WebSearchEngineConfig.search_engine_name` 支持 `agc_ainetworking`。该引擎使用 AGC AI Networking 的 `webSearch` 接口；`max_web_search_results` 在配置层限制为 `[1, 10]`，wrapper 内部会按服务端能力夹取为 `[1, 50]`。完整参数与站点约束见 [AGC AI Networking 联网搜索](../../../feature/framework/agc_ainetworking_search.md)。
-- `ScholarlySearchConfig` 聚合 `PubMedScholarlyConfig`、`ArxivScholarlyConfig` 与 `SemanticScholarConfig`；各 provider 均支持 `search_api_key`、官方 `search_url`、`max_search_results`（`[1, 10]`）和限速参数。通过 `AgentConfig.scholarly_search_enabled` 与 `scholarly_search_config` 启用和配置。
-- `AgentConfig.report_type` 可取 `brief`、`professional` 或 `None`；`user_materials_enabled` 与 `user_materials` 用于 SDK 直接传入用户素材。HTTP 请求中应在 `metadata` 使用同名字段，详见 [用户素材](../../../feature/algorithm/user-materials.md)。
-- `coverage_rule_block_enable` 与 `exclusion_constraint_enable` 属于 `AgentConfig`，不属于 `ServiceConfig`。
-
-`ServiceConfig` 还包含：`search_workflow`（`SearchWorkflowConfig`）、`info_collector_allow_programmer`（默认 `False`）和 `source_tracer_domain_source_map_path`（默认 `domain_source_map.json`）。

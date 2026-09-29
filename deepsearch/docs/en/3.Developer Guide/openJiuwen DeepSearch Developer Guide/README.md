@@ -292,7 +292,7 @@ For uploaded sample reports, the decoded source file must be no larger than `50 
 
 # Report types and user materials
 
-`report_type` accepts `brief` or `professional`; `POST /api/v1/agent/deepsearch/run_brief/` forces a Brief report. Supply user materials in request `metadata`; when enabled, they participate in intent recognition, section planning, and report writing:
+`report_type` accepts `brief`, `professional`, or omission/`null`; in the latter cases, intent recognition and clarification choose the report type. `POST /api/v1/agent/deepsearch/run_brief/` forces a Brief report. Supply user materials in request `metadata`; when enabled, they participate in intent recognition, section planning, and report writing:
 
 ```json
 {

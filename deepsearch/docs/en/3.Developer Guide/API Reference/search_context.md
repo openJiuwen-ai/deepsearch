@@ -19,10 +19,16 @@ Per-step query bundle: **query**, **description**, **doc_infos** (`Optional[List
 Plan step: **id**, **type** (`StepType`), **title**, **description**, **parent_ids**, **relationships**, **background_knowledge**, **retrieval_queries**, **step_result**, **evaluation**.
 
 ## `Plan`
-Section plan: **id**, **language** (default `zh-CN`), **title**, **thought**, **is_research_completed**, **steps**, **background_knowledge**.
+Section plan: **id**, **language** (default `zh-CN`), **title**, **thought**, **is_research_completed**, **steps**, **background_knowledge**, **use_material_ids** (user-material IDs confirmed during planning and incorporated into `classified_content` during report writing).
 
 ## `Section`
-Outline section: **id**, **title**, **description**, **is_core_section** (default `False`), **parent_ids**, **relationships**, **plans**.
+Outline section: **id**, **title**, **description**, **format_requirements** (output-format requirements), **is_core_section** (default `False`), **parent_ids**, **relationships**, **plans**, **section_focus** (analysis-responsibility label), **focus_dimensions** (dimensions this section should cover in depth), **material_bindings** (the material ID, role, and claims to use), and **doc_selection_debug** (optional document-selection diagnostics).
+
+## `ChapterSidecar`
+Structured per-chapter summary: **chapter_summary**, **key_findings**, **risk_points**.
+
+## `SectionLocalContract`
+Section responsibility boundary: **section_focus**, **allowed_dimensions**, **is_final_decision_section**.
 
 ## `Outline`
 **id**, **language** (default `zh-CN`), **thought**, **title**, **sections**.
@@ -31,13 +37,13 @@ Outline section: **id**, **title**, **description**, **is_core_section** (defaul
 Outline HITL record: **feedback**, **interaction_mode** (`revise_comment` / `revise_outline`), **outline_before**.
 
 ## `SubReport` / `SubReportContent`
-Sub-report shell: **section_id** (`str | int`, default `"1"`), **section_task**, **background_knowledge** (dependency mode may hold `{"section_id", "content_summary"}` parents), **content** (`SubReportContent` with **classified_content**, **sub_report_content_text**, **sub_report_content_summary**, **sub_report_trace_source_datas**).
+Sub-report shell: **section_id** (`str | int`, default `"1"`), **section_task**, **background_knowledge** (dependency mode may hold `{"section_id", "content_summary"}` parents), **content** (`SubReportContent` with **classified_content**, **sub_report_content_text**, **sub_report_content_summary**, **sub_report_chapter_sidecar** (`ChapterSidecar`), and **sub_report_trace_source_datas**).
 
 ## `Report`
-Aggregated report: **report_task**, **report_template**, **sub_reports**, **report_content**, **all_classified_contents**, **merged_trace_source_datas**, **checked_trace_source_report_content**, **checked_trace_source_datas**.
+Aggregated report: **report_task**, **report_template**, **sub_reports**, **report_content**, **all_classified_contents**, **merged_trace_source_datas**, **checked_trace_source_report_content**, **checked_trace_source_datas**, **report_html** (Brief HTML output; the Markdown intermediate result remains in `report_content`).
 
 ## `FinalResult`
-**response_content**, **citation_messages**, **infer_messages**, **chart_messages**, **exception_info**, **warning_info**, **metadata**.
+**response_content**, **response_content_type** (`text/markdown` or `text/html`), **citation_messages**, **infer_messages**, **chart_messages**, **workflow_llm_token_usage** (workflow-level LLM token totals), **exception_info**, **warning_info**, **metadata**.
 
 - `infer_messages` stores source-tracing graph payloads. Report export reads `html_base64` and writes standalone HTML resources.
 - `chart_messages` stores VLM chart payloads. Report export reads `base64` and writes image resources.
@@ -59,16 +65,25 @@ Structured report-generation constraints parsed from the user query.
 **Fields**:
 
 - **section_count**: Desired section count. Only positive integers are kept.
+- **task_type**: Task type, such as `comparison`, `classification`, or `trend_judgement`.
+- **required_dimensions**: Comparison or analysis dimensions that must be covered. Default value: `[]`.
+- **comparison_targets**: Objects that must be compared explicitly. Default value: `[]`.
 - **audience_role**: Target reader role.
 - **tone**: Writing tone as a stable English enum value, such as `formal` or `analytical`.
 - **report_type**: Report type as a stable English enum value: `professional` or `brief`. `professional` means a fuller professional report, while `brief` means a concise report.
 - **include_url**: URLs the user explicitly wants to include. Default value: `[]`.
 - **exclude_url**: URLs the user wants to exclude. Default value: `[]`.
+- **exclude_titles**: Article titles the user wants to exclude. Default value: `[]`.
 - **include_domains**: Site domains specified by the user. Default value: `[]`.
 - **exclude_domains**: Site domains excluded by the user. Default value: `[]`.
+- **source_date_scope**: Optional `TemporalScope` hard constraint on source publication or availability dates.
+- **content_date_scope**: Optional `TemporalScope` soft constraint on the dates of facts, events, research, or data.
+- **target_papers**: Explicitly identified or implicitly described papers (`TargetPaper` entries). Default value: `[]`.
+- **temporal_scope**: Deprecated compatibility field for deserializing legacy state; use `source_date_scope` and `content_date_scope` instead.
 
 **Runtime behavior**:
 
+- When `brief_state` carries an injected Brief outline and the current run is not an outline-interaction round, `section_num` equals that Brief outline's section count directly; neither `section_count` nor `OUTLINER_SECTION_NUM_MAX` applies.
 - Outline `section_num`: when the user sets `section_count`, use `min(section_count, OUTLINER_SECTION_NUM_MAX)`; otherwise use `config.outliner_max_section_num`.
 - `audience_role` and `tone` are passed through to outline generation, section planning (Plan), sub-report writing, and final report synthesis.
 - `report_type` is passed through to outline generation, section planning (Plan), information collection, sub-report writing, and final report synthesis.
@@ -86,6 +101,9 @@ Structured report-generation constraints parsed from the user query.
 - **report_template**: Report template.
 - **search_mode**: Search mode. Default value: `research`.
 - **entry_search_results**: Entry-node pre-search results.
+- **brief_state**: Serialized state of the Brief workflow.
+- **user_materials**: Original user-material dictionaries written by `StartNode`.
+- **material_analysis**: Preprocessed material analysis, including the manifest and summaries; reusable across turns.
 - **questions**: Clarification questions.
 - **user_feedback**: User feedback.
 - **outline_interactions**: Outline interaction history.
@@ -101,11 +119,3 @@ Structured report-generation constraints parsed from the user query.
 - **feedback_snapshot_sent**: Whether the initial feedback snapshot has already been pushed to the frontend. Default value: `False`.
 - **rewrite_history**: Local rewrite history.
 - **debug_pre_node**: Previous debug node. Default value: `""`.
-
-### Additional fields
-
-- `ResearchIntent` also includes `task_type`, `required_dimensions`, `comparison_targets`, `exclude_titles`, `source_date_scope`, `content_date_scope`, and `target_papers`. The legacy `temporal_scope` exists only for serialized-state compatibility.
-- `Plan.use_material_ids` records selected user-material IDs. `Section` also has `format_requirements`, `section_focus`, `focus_dimensions`, `material_bindings`, and `doc_selection_debug`; `ChapterSidecar` and `SectionLocalContract` support structured chapter summaries and ownership boundaries.
-- `SearchContext` also has `brief_state`, `user_materials`, and `material_analysis`; `Report.report_html` holds Brief HTML output.
-- `FinalResult.response_content_type` is `text/markdown` or `text/html`; `workflow_llm_token_usage` contains workflow-level LLM token totals.
-- `SubReportContent.sub_report_content_text` is the body text; `SubReport.section_id` is `str | int` with default `"1"`.

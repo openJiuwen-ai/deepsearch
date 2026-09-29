@@ -20,7 +20,6 @@ openjiuwen_deepsearch/
 algorithm/
 ├── brief_report/               # Brief 报告、素材合并与 HTML 输出
 ├── chart_generation/           # 图表生成和沙箱资源
-├── paper_report/、paper_research/ # 论文报告与研究辅助
 ├── prompts/                    # 提示词模板
 ├── query_understanding/        # 意图、素材、大纲、计划与澄清
 ├── report/                     # 子报告/总报告、证据和可视化
@@ -53,7 +52,7 @@ framework/openjiuwen/
     └── search_api/             # 联网、本地和学术搜索 provider
 ```
 
-`search_api/` 包括 `agc_ainetworking`、`harness_web_search`、`jina`、`petal`、`serper`、`tavily`、`xunfei` 和 `scholarly_search/`（PubMed、arXiv、Semantic Scholar、全文获取）；外部及本地适配位于 `external_tool/`、`local_search_api/`、`native_local_search_api/`。
+`search_api/` 包括 `agc_ainetworking`、`harness_web_search`、`jina`、`petal`、`serper`、`tavily`、`xunfei` 和 `scholarly_search/`（PubMed、arXiv、Semantic Scholar、全文获取）；外部及本地适配位于 `framework/openjiuwen/tools/search_api/` 下的 `external_tool/`、`local_search_api/`、`native_local_search_api/`。
 
 ## 配置与工具
 

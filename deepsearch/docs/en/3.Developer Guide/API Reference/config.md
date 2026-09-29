@@ -58,6 +58,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 - `petal`: Petal web augmentation wrapper.
 - `bocha` / `perplexity`: harness `web_tools` adapter wrappers.
 - `jina`: direct HTTP wrapper for Jina Search.
+- `agc_ainetworking`: AGC AI Networking `webSearch`; when configured through `WebSearchEngineConfig` or HTTP, validation caps `max_web_search_results` at `10`. The wrapper's internal `[1, 50]` clamp applies only to direct wrapper construction and does not expand the configuration interface's range. See [AGC AI Networking search](../../../feature/framework/agc_ainetworking_search.md) for parameters and site constraints.
 - `custom`: dynamically loaded external search tool.
 
 **Examples**
@@ -161,7 +162,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **workflow_human_in_the_loop** (bool, optional): Whether to enable HITL before planning. Default value: `True`.
 - **report_type** (`Literal["brief", "professional"] | None`, optional): Report type; `None` delegates selection to intent recognition and clarification. Default value: `None`.
 - **user_materials_enabled** (bool, optional): Enables user materials; `user_materials` is ignored when disabled. Default value: `False`.
-- **user_materials** (`List[Dict[str, Any]]`, optional): User-provided material entries. Default value: `[]`; HTTP callers provide the same fields in `metadata`.
+- **user_materials** (`List[Dict[str, Any]]`, optional): User-provided material entries. Default value: `[]`; HTTP callers provide the same fields in `metadata`. See [User materials](../../../feature/algorithm/user-materials.md) for the data format and usage scenarios.
 - **coverage_rule_block_enable** (bool, optional): Enables rule-based coverage evidence for sub-report outlines. Default value: `True`.
 - **exclusion_constraint_enable** (bool, optional): Master switch for sub-report exclusion constraints. Default value: `False`.
 - **outliner_max_section_num** (int, optional): Maximum number of outline sections. Range: `[1, 15]`. Both SDK `AgentConfig` and HTTP `DeepSearchRequest` default to `10`.
@@ -176,6 +177,8 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **web_search_engine_config** (WebSearchEngineConfig, optional): Web augmentation engine configuration. Default value: `WebSearchEngineConfig()`.
 - **scholarly_search_enabled** (bool, optional): Enables built-in scholarly providers. Default value: `False`.
 - **scholarly_search_config** (ScholarlySearchConfig, optional): Aggregated configuration for PubMed, arXiv, and Semantic Scholar. Default value: `ScholarlySearchConfig()`.
+
+`ScholarlySearchConfig` aggregates `PubMedScholarlyConfig`, `ArxivScholarlyConfig`, and `SemanticScholarConfig`; each provider supports `search_api_key`, its official `search_url`, `max_search_results` (range `[1, 10]`), and rate limiting.
 - **local_search_engine_config** (LocalSearchEngineConfig, optional): Local search engine configuration. Default value: `LocalSearchEngineConfig()`.
 - **custom_web_search_config** (CustomWebSearchConfig, optional): Custom web augmentation engine configuration. Default value: `CustomWebSearchConfig()`.
 - **custom_local_search_config** (CustomLocalSearchConfig, optional): Custom local search configuration. Default value: `CustomLocalSearchConfig()`.
@@ -322,7 +325,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_max_research_loops** (int, optional): Maximum number of research loops. Default value: `2`.
 - **info_collector_max_tool_call_turns_per_query** (int, optional): Maximum tool-call turns for each collector query. Default value: `2`.
 - **info_collector_max_retry_num** (int, optional): Maximum retry count for search tool calls during information collection (e.g. Tavily web search). Default value: `3`.
-- **info_collector_allow_programmer** (bool, optional): Whether the collector may use programmer capability. Default value: `False`.
+- **info_collector_allow_programmer** (bool, optional): Reserved field; it is not consumed by the current runtime, so setting it does not change collector behavior. Default value: `False`.
 - **info_collector_webpage_enrich_max_urls** (int, optional): Maximum number of URLs to fetch and enrich per collector loop. Default value: `3`.
 - **info_collector_webpage_enrich_fetch_timeout_seconds** (int, optional): Timeout in seconds for fetching one webpage during webpage enrichment. Default value: `45`.
 
@@ -372,12 +375,3 @@ class openjiuwen_deepsearch.config.config.Config()
 ...        service_config=ServiceConfig(workflow_execution_timeout=3600))
 >>> Config()
 ```
-
-## Addendum: web, scholarly search, and user materials
-
-- `WebSearchEngineConfig.search_engine_name` supports `agc_ainetworking`, backed by AGC AI Networking `webSearch`. The configuration limit for `max_web_search_results` is `[1, 10]`; its wrapper clamps values to the service range `[1, 50]`.
-- `ScholarlySearchConfig` aggregates `PubMedScholarlyConfig`, `ArxivScholarlyConfig`, and `SemanticScholarConfig`. Enable it with `AgentConfig.scholarly_search_enabled` and configure it with `scholarly_search_config`.
-- `AgentConfig.report_type` accepts `brief`, `professional`, or `None`. `user_materials_enabled` and `user_materials` support SDK callers; HTTP callers supply the same fields in `metadata`.
-- `coverage_rule_block_enable` and `exclusion_constraint_enable` are `AgentConfig` fields, not `ServiceConfig` fields.
-
-`ServiceConfig` also exposes `search_workflow`, `info_collector_allow_programmer` (default `False`), and `source_tracer_domain_source_map_path` (default `domain_source_map.json`).

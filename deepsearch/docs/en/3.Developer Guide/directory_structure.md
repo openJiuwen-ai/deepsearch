@@ -20,7 +20,6 @@ openjiuwen_deepsearch/
 algorithm/
 ├── brief_report/               # Brief reports, material merging, and HTML output
 ├── chart_generation/           # Chart generation and sandbox assets
-├── paper_report/, paper_research/ # Paper reports and research assistance
 ├── prompts/                    # Prompt templates
 ├── query_understanding/        # Intent, materials, outlines, planning, clarification
 ├── report/                     # Subreports/reports, evidence, visualization
@@ -53,7 +52,7 @@ framework/openjiuwen/
     └── search_api/             # Web, local, and scholarly search providers
 ```
 
-`search_api/` includes `agc_ainetworking`, `harness_web_search`, `jina`, `petal`, `serper`, `tavily`, `xunfei`, and `scholarly_search/` (PubMed, arXiv, Semantic Scholar, and full-text retrieval). `external_tool/`, `local_search_api/`, and `native_local_search_api/` provide external and local adapters.
+`search_api/` includes `agc_ainetworking`, `harness_web_search`, `jina`, `petal`, `serper`, `tavily`, `xunfei`, and `scholarly_search/` (PubMed, arXiv, Semantic Scholar, and full-text retrieval). External and local adapters are under `framework/openjiuwen/tools/search_api/`: `external_tool/`, `local_search_api/`, and `native_local_search_api/`.
 
 ## Configuration and utilities
 
