@@ -30,13 +30,6 @@ def test_parse_outline_execution_method_strictly(text, expected):
     assert omr.parse_outline_execution_method(text) == expected
 
 
-def test_system_prompt_file_loaded():
-    """确认 router prompt 文件已被加载。"""
-    assert isinstance(omr.OUTLINE_MODE_ROUTER_SYSTEM_PROMPT, str)
-    assert "parallel" in omr.OUTLINE_MODE_ROUTER_SYSTEM_PROMPT
-    assert "dependency_driving" in omr.OUTLINE_MODE_ROUTER_SYSTEM_PROMPT
-
-
 def test_search_context_outline_execution_method_has_state_contract():
     """大纲实际执行方式只允许空值、parallel 或 dependency_driving；hybrid 只作为外部入口。"""
     assert SearchContext().outline_execution_method == ""
@@ -147,7 +140,8 @@ async def test_route_messages_and_call_options():
         llm_context.reset(token)
 
     assert seen["messages"][0]["role"] == "system"
-    assert omr.OUTLINE_MODE_ROUTER_SYSTEM_PROMPT in seen["messages"][0]["content"]
+    assert "用户问题" not in seen["messages"][0]["content"]
+    assert "Current Time" not in seen["messages"][0]["content"]
     assert seen["messages"][1] == {"role": "user", "content": "用户问题"}
     assert seen["kwargs"]["llm_type"] == "basic"
     assert seen["kwargs"]["agent_name"] == AgentLlmName.OUTLINE_MODE_ROUTER.value

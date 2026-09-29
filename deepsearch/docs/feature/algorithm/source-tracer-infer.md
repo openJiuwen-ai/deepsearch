@@ -29,12 +29,12 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/infer_validate_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_conclusion_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_filter_inference_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_structured_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_supplement_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_extract_conclusion_prompt.md`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_validate_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_conclusion_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_filter_inference_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_structured_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_supplement_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_extract_conclusion_prompt/`
 
 主要测试：
 

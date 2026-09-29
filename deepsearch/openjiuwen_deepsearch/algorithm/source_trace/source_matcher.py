@@ -5,7 +5,7 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -150,7 +150,7 @@ async def call_llm_for_trace(source_type: str, search_record: Dict[str, Any],
 
     try:
         llm = llm_context.get().get(llm_model_name)
-        llm_input = apply_system_prompt(
+        llm_input = build_prompt_messages(
             "source_matching", source_tracer_context)
         llm_output = await ainvoke_llm_with_stats(llm, llm_input,
                                                   agent_name=AgentLlmName.SOURCE_TRACER_SOURCE_MATCHING.value)

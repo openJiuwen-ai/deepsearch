@@ -35,7 +35,7 @@
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/editor_team_manager_node.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/core/workflow_agent/workflow_agent.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/core/workflow_agent/workflow_controller.py`
-- `openjiuwen_deepsearch/algorithm/prompts/outline_mode_router.md`
+- `openjiuwen_deepsearch/algorithm/prompts/outline_mode_router/`
 - `tests/workflow/test_workflow_run.py`
 - `tests/workflow/test_workflow_llm_usage_lifecycle.py`
 - `tests/user_feedback_processor/test_workflow_integration.py`
@@ -59,7 +59,7 @@
 - `run` 输入：`message`、`conversation_id`、`agent_config`、`report_template`、`interrupt_feedback`、`metadata`（可选运行时元数据，仅 research 模式的 `DeepresearchAgent.run` 签名接受）。
 - workflow 输入 schema 包含 `query`、`thread_id`、`conversation_id`、`report_template`、`interrupt_feedback`、`agent_config`、`metadata`。
 - `agent_config.execution_method=hybrid` 是外部执行模式入口；`search_context.outline_execution_method` 是本次大纲模式的实际路由结果。
-- `outline_mode_router.md` 的输出契约只允许 `parallel` 或 `dependency_driving`，不能输出解释、标点或其他文本。
+- `outline_mode_router/` 的输出契约只允许 `parallel` 或 `dependency_driving`，不能输出解释、标点或其他文本。
 - `search_context.final_result` 是最终对外响应载体，包含正文、引用、推理链、图表、LLM token 统计、告警、异常和 metadata。
 - Brief 的过程状态位于 `search_context.brief_state`；该分支不写入专业版 `current_outline` 或章节 Plan。brief 大纲升级运行（[brief-outline-upgrade.md](brief-outline-upgrade.md)）由注入器写入 `brief_state` 并由专业版 `OutlineNode` 读取。
 - `workflow_feedback_mode=web` 时通过 `session.interact` 进入 openJiuwen 交互恢复链路。

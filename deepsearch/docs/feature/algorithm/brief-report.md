@@ -35,15 +35,15 @@ Brief 面向需要快速获得有引用、可决策结论的场景。它以报�
 
 相关 Prompt：
 
-- `brief_outliner.md`
-- `brief_collector_query_generation.md`
-- `brief_doc_evaluator.md`
-- `brief_evidence_review.md`
-- `brief_sub_reporter.md`
-- `brief_reporter.md`
-- `brief_html_reporter.md`
-- `brief_html_common.md`
-- `brief_html_section.md`
+- `brief_outliner/`
+- `brief_collector_query_generation/`
+- `brief_doc_evaluator/`
+- `brief_evidence_review/`
+- `brief_sub_reporter/`
+- `brief_reporter/`
+- `brief_html_reporter/`
+- `brief_html_common/`
+- `brief_html_section/`
 
 主要测试：`tests/brief_report/`、`tests/source_tracer/test_extract_message_prompt.py`。
 

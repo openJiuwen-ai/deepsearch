@@ -212,9 +212,28 @@ async def test_material_first_query_generation_receives_material_gap_contract(mo
         ),
     )
 
-    prompt = invoke.await_args.args[1][0]["content"]
-    assert "material-first report" in prompt
-    assert "covers the architecture" in prompt
+    system_message, user_message = invoke.await_args.args[1]
+    assert "material-first report" not in system_message["content"]
+    assert "This is a material-first report" in user_message["content"]
+    assert "covers the architecture" in user_message["content"]
+
+
+@pytest.mark.asyncio
+async def test_regular_query_generation_omits_material_first_rules(monkeypatch):
+    invoke = AsyncMock(return_value={
+        "content": '{"queries":[{"query":"missing metric","section_ids":["1"],"step_ids":["1-1"]}]}'
+    })
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.collector.ainvoke_llm_with_stats", invoke)
+
+    await generate_brief_queries(
+        object(),
+        BriefQueryRequest(outline=_collector_outline(), user_query="测试"),
+    )
+
+    system_message, user_message = invoke.await_args.args[1]
+    assert "material-first report" not in system_message["content"]
+    assert "material-first report" not in user_message["content"]
+    assert "<material_first>" not in user_message["content"]
 
 
 @pytest.mark.asyncio
@@ -282,7 +301,7 @@ async def test_query_generation_accepts_temporal_scope_with_date_objects(monkeyp
     )
 
     assert [item.query for item in queries] == ["2024 市场规模"]
-    assert "on or before 2024-12-31" in invoke.await_args.args[1][0]["content"]
+    assert "on or before 2024-12-31" in invoke.await_args.args[1][-1]["content"]
 
 
 @pytest.mark.asyncio

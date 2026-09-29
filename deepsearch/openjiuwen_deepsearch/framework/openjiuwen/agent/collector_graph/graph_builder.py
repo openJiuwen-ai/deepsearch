@@ -17,7 +17,7 @@ from openjiuwen.core.workflow.components.flow.start_comp import Start
 from openjiuwen.core.workflow.workflow import Workflow
 from pydantic import BaseModel, Field, model_validator
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     build_summary_evidence_pack,
     build_supervisor_evidence_table,
@@ -476,7 +476,7 @@ class GenerateQueryNode(BaseNode):
             engine_name=getattr(_web_config, "search_engine_name", "") or "",
             scholarly_enabled=_scholarly_search_is_available(),
         ))
-        formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
+        formatted_prompt = build_prompt_messages("collector_gen_query", agent_input)
 
         result: SearchQueryList = await self._invoke_llm_with_retry(
             formatted_prompt,
@@ -689,7 +689,7 @@ class SupervisorNode(BaseNode):
             engine_name=getattr(_web_config, "search_engine_name", "") or "",
             scholarly_enabled=_scholarly_search_is_available(),
         ))
-        formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
+        formatted_prompt = build_prompt_messages("collector_supervisor", agent_input)
 
         result: Reflection = await self._invoke_llm_with_retry(
             formatted_prompt,
@@ -927,7 +927,7 @@ class SummaryNode(BaseNode):
             "ledger_brief": evidence_brief,
             "missing_evidence": current_ledger.missing_evidence,
         }
-        formatted_prompt = apply_system_prompt("collector_final", agent_input)
+        formatted_prompt = build_prompt_messages("collector_final", agent_input)
 
         result: Summary = await self._invoke_llm_with_retry(formatted_prompt, state, doc_infos)
 

@@ -25,8 +25,8 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/template_structure_extract.md`
-- `openjiuwen_deepsearch/algorithm/prompts/template_semantic_extract.md`
+- `openjiuwen_deepsearch/algorithm/prompts/template_structure_extract/`
+- `openjiuwen_deepsearch/algorithm/prompts/template_semantic_extract/`
 
 主要测试：
 

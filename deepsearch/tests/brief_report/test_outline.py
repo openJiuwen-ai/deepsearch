@@ -158,4 +158,4 @@ async def test_generate_outline_accepts_temporal_scope_with_date_objects(monkeyp
     )
 
     assert result.title == "测试"
-    assert "on or before 2024-12-31" in invoke.await_args.args[1][0]["content"]
+    assert "on or before 2024-12-31" in invoke.await_args.args[1][-1]["content"]

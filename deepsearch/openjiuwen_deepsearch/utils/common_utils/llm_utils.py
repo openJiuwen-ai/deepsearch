@@ -87,6 +87,23 @@ _THINKING_SWITCH_UNSUPPORTED_MARKERS = (
 )
 
 
+@dataclass(frozen=True)
+class WorkflowLlmUsageDelta:
+    """表示一次 LLM 调用要累加的 token 用量。
+
+    Attributes:
+        input_tokens: 本次调用的输入 token 数。
+        output_tokens: 本次调用的输出 token 数。
+        total_tokens: 本次调用的总 token 数。
+        cache_tokens: 缓存读取 token 数；None 表示未提供缓存统计。
+    """
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cache_tokens: int | None = None
+
+
 def _clamp_agent_llm_timeout(timeout: Any) -> int:
     """将调用方提供的 agent LLM timeout 限制在服务端策略上限内。
     Args:
@@ -319,6 +336,7 @@ def _merge_agent_name_usage_list(agent_usage_list: Any) -> list[dict[str, Any]]:
         current_usage["output_tokens"] += _to_non_negative_int(usage_item.get("output_tokens", 0))
         current_usage["total_tokens"] += _to_non_negative_int(usage_item.get("total_tokens", 0))
         current_usage["llm_call_count"] += _to_non_negative_int(usage_item.get("llm_call_count", 0))
+        _merge_cache_usage(current_usage, usage_item)
     return list(merged_usage.values())
 
 
@@ -348,13 +366,15 @@ def normalize_workflow_llm_usage(usage: Any) -> dict[str, Any]:
     """
     if not isinstance(usage, dict):
         return _build_empty_workflow_llm_usage()
-    return {
+    normalized = {
         "input_tokens": _to_non_negative_int(usage.get("input_tokens", 0)),
         "output_tokens": _to_non_negative_int(usage.get("output_tokens", 0)),
         "total_tokens": _to_non_negative_int(usage.get("total_tokens", 0)),
         "llm_call_count": _to_non_negative_int(usage.get("llm_call_count", 0)),
         "agent_name_token_usage": _merge_agent_name_usage_list(usage.get("agent_name_token_usage", [])),
     }
+    _merge_cache_usage(normalized, usage)
+    return normalized
 
 
 def is_workflow_llm_usage_empty(usage: dict[str, Any]) -> bool:
@@ -372,6 +392,7 @@ def is_workflow_llm_usage_empty(usage: dict[str, Any]) -> bool:
         and normalized_usage["output_tokens"] == 0
         and normalized_usage["total_tokens"] == 0
         and normalized_usage["llm_call_count"] == 0
+        and normalized_usage.get("cache_tokens", 0) == 0
         and len(normalized_usage["agent_name_token_usage"]) == 0
     )
 
@@ -457,28 +478,28 @@ def save_workflow_llm_usage_to_session(session: Any, session_id: str) -> dict[st
 
 def add_workflow_llm_usage(
     session_id: str,
-    input_tokens: int,
-    output_tokens: int,
-    total_tokens: int,
+    token_usage: WorkflowLlmUsageDelta,
     agent_name: str = "",
 ) -> None:
     """累加指定 workflow 的 LLM token 消耗。
 
     Args:
         session_id (str): workflow 对应会话 ID。
-        input_tokens (int): 本次调用输入 token 数。
-        output_tokens (int): 本次调用输出 token 数。
-        total_tokens (int): 本次调用总 token 数。
+        token_usage: 本次调用的输入、输出、总量及可选缓存 token 数。
         agent_name (str): 本次调用的 agent 名称。
     """
     if not session_id or session_id == "-":
         return
 
     usage = _WORKFLOW_LLM_USAGE.setdefault(session_id, _build_empty_workflow_llm_usage())
-    usage["input_tokens"] += _to_non_negative_int(input_tokens)
-    usage["output_tokens"] += _to_non_negative_int(output_tokens)
-    usage["total_tokens"] += _to_non_negative_int(total_tokens)
+    usage["input_tokens"] += _to_non_negative_int(token_usage.input_tokens)
+    usage["output_tokens"] += _to_non_negative_int(token_usage.output_tokens)
+    usage["total_tokens"] += _to_non_negative_int(token_usage.total_tokens)
     usage["llm_call_count"] += 1
+    cache_usage = {} if token_usage.cache_tokens is None else {
+        "cache_tokens": token_usage.cache_tokens,
+    }
+    _merge_cache_usage(usage, cache_usage)
     if agent_name:
         normalized_name = _normalize_agent_name(agent_name)
         agent_usage_list = usage.setdefault("agent_name_token_usage", [])
@@ -493,10 +514,27 @@ def add_workflow_llm_usage(
         if target_usage is None:
             target_usage = _build_empty_agent_name_usage(normalized_name)
             agent_usage_list.append(target_usage)
-        target_usage["input_tokens"] += _to_non_negative_int(input_tokens)
-        target_usage["output_tokens"] += _to_non_negative_int(output_tokens)
-        target_usage["total_tokens"] += _to_non_negative_int(total_tokens)
+        target_usage["input_tokens"] += _to_non_negative_int(token_usage.input_tokens)
+        target_usage["output_tokens"] += _to_non_negative_int(token_usage.output_tokens)
+        target_usage["total_tokens"] += _to_non_negative_int(token_usage.total_tokens)
         target_usage["llm_call_count"] += 1
+        _merge_cache_usage(target_usage, cache_usage)
+
+
+def _merge_cache_usage(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """累加可用的缓存统计，同时保留旧快照的缺失状态。
+
+    Args:
+        target: 接收累计值的统计字典。
+        source: 包含缓存 token 的统计字典。
+    """
+    if source.get("cache_tokens") is None:
+        return
+    target["cache_tokens"] = target.get("cache_tokens", 0) + _to_non_negative_int(source["cache_tokens"])
+    # 将后续字段移至缓存量之后，统一原始累计值和快照归一化的打印顺序。
+    for key in ("llm_call_count", "agent_name_token_usage"):
+        if key in target:
+            target[key] = target.pop(key)
 
 
 def get_workflow_llm_usage(session_id: str) -> dict[str, Any]:
@@ -609,6 +647,34 @@ def _extract_usage_tokens(usage_payload: Any) -> tuple[int, int, int]:
         total_tokens = input_tokens + output_tokens
     total_tokens = _to_non_negative_int(total_tokens, default=input_tokens + output_tokens)
     return input_tokens, output_tokens, total_tokens
+
+
+def _extract_cache_tokens(usage_payload: Any) -> int | None:
+    """提取供应商或 SDK 的缓存读取 token 数。
+
+    Args:
+        usage_payload: 原始 usage 或 SDK 归一化的 usage 元数据。
+
+    Returns:
+        缓存读取 token 数；缺失或无效时返回 None，不计入缓存写入量。
+    """
+    usage = _to_dict_safe(usage_payload)
+    usage = {**_to_dict_safe(usage.get("token_usage")), **usage}
+    candidates = [
+        usage.get("prompt_cache_hit_tokens"),
+        _to_dict_safe(usage.get("prompt_tokens_details")).get("cached_tokens"),
+        _to_dict_safe(usage.get("input_tokens_details")).get("cached_tokens"),
+        _to_dict_safe(usage.get("input_token_details")).get("cache_read"),
+        usage.get("cache_read_input_tokens"),
+        usage.get("cache_tokens"),
+    ]
+    for value in candidates:
+        if value is not None:
+            try:
+                return max(int(value), 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+    return None
 
 
 def _is_llm_stats_enabled() -> bool:
@@ -1080,6 +1146,7 @@ def _build_usage_only_chunk(raw_chunk: Any, model_name: str) -> AssistantMessage
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cache_tokens=_extract_cache_tokens(usage_payload) or 0,
         ),
         finish_reason="null",
     )
@@ -1113,8 +1180,12 @@ def _install_usage_only_chunk_parser(llm_model: Any) -> Any:
         model_name = getattr(getattr(llm_model, "model_config", None), "model_name", "")
 
         def _patched_parser(raw_chunk: Any):
+            """保留原始 usage 中的缓存量，再补偿 usage-only chunk。"""
             parsed_chunk = original_parser(raw_chunk)
             if parsed_chunk is not None:
+                cache_tokens = _extract_cache_tokens(_extract_usage_payload_from_stream_chunk(raw_chunk))
+                if cache_tokens is not None and parsed_chunk.usage_metadata is not None:
+                    parsed_chunk.usage_metadata.cache_tokens = cache_tokens
                 return parsed_chunk
             return _build_usage_only_chunk(raw_chunk, model_name=model_name)
 
@@ -1546,19 +1617,24 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
 
         # get usage token usage info
         input_tokens, output_tokens, total_tokens = _extract_usage_tokens(response.usage_metadata)
+        cache_tokens = _extract_cache_tokens(response.usage_metadata)
 
         llm_stat = {
             "method_name": agent_name,
             "duration": duration,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": total_tokens
+            "total_tokens": total_tokens,
+            "cache_tokens": cache_tokens,
         }
         add_workflow_llm_usage(
             session_id=session_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
+            token_usage=WorkflowLlmUsageDelta(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cache_tokens=cache_tokens,
+            ),
             agent_name=agent_name,
         )
         metrics_logger.info(

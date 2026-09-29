@@ -60,9 +60,9 @@ metadata 入参与校验、工作流注入路由、大纲 LLM 扩写转换及标
   StartNode 返回的 `next_node` 决定路由；hybrid 与 dependency_driving 图的
   START 边为固定边（直达 INTENT_RECOGNITION），依赖图也不注册普通编辑团队
   节点——升级运行在 server 层已强制并行图，这两个图不做任何注入适配。
-- `openjiuwen_deepsearch/algorithm/prompts/outliner.md`：注入场景
+- `openjiuwen_deepsearch/algorithm/prompts/outliner/`：注入场景
   brief_outline 权威结构条件块（首版大纲强约束，标题必须一致）；
-  `outliner_interaction.md`、`outliner_user_revised.md` 不携带 brief 大纲，
+  `outliner_interaction/`、`outliner_user_revised/` 不携带 brief 大纲，
   交互轮与普通专业版运行语义完全一致。
 - `server/schemas/deepsearch_run.py`：`DeepSearchRequest.metadata` 字段。
 - `server/routers/deepsearch_run.py`：`_validate_upgrade_metadata` 入口校验、

@@ -40,8 +40,8 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/rationale_generator.md`
-- `openjiuwen_deepsearch/algorithm/prompts/passages_extractor.md`
+- `openjiuwen_deepsearch/algorithm/prompts/rationale_generator/`
+- `openjiuwen_deepsearch/algorithm/prompts/passages_extractor/`
 
 常量定义：
 

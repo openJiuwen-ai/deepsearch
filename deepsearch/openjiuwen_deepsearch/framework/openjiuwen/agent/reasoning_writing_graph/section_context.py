@@ -13,6 +13,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 
 
 class SectionBaseContext(BaseModel):
+    original_query: str = Field(default="", description="用户输入的原始问题")
     language: str = Field(default="", description="语言")
     messages: list = Field(default=[], description="消息列表")
     section_idx: str = Field(default="", description="章节索引")
@@ -39,6 +40,9 @@ class SectionBaseContext(BaseModel):
 
 
 class SectionReasoningContext(SectionBaseContext):
+    report_task: str = Field(default="", description="报告任务")
+    section_task: str = Field(default="", description="章节任务")
+    section_description: str = Field(default="", description="章节描述")
     plan_executed_num: int = Field(default=0, description="章节plan执行次数")
     collected_doc_num: int = Field(default=0, description="章节内已收集文档数量")
     plan_background_knowledge: Dict[str, str] = Field(default_factory=dict, description="当前计划的背景知识")

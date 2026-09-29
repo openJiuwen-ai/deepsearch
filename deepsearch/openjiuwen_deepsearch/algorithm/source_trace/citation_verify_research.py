@@ -14,7 +14,7 @@ from openjiuwen_deepsearch.algorithm.source_trace.source_match_algo import class
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
 from openjiuwen_deepsearch.algorithm.source_trace.domain_source_mapping import _extract_registered_domain
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
@@ -539,7 +539,7 @@ class CitationVerifyResearch:
                 必填字段缺失，或标记引用内容无法校正时抛出。
         """
         agent_input = dict(datas=handle_datas)
-        user_prompt = apply_system_prompt("extract_message_prompt", agent_input)
+        user_prompt = build_prompt_messages("extract_message_prompt", agent_input)
 
         async with semaphore:
             response = await self.call_model(user_prompt)

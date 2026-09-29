@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
@@ -63,7 +63,7 @@ async def invoke_user_feedback_prompt(
     Returns:
         LLM 返回的文本内容。
     """
-    messages = apply_system_prompt(prompt_name, context_vars)
+    messages = build_prompt_messages(prompt_name, context_vars)
     llm = llm_context.get().get(llm_model_name)
     response = await ainvoke_llm_with_stats(
         llm=llm,

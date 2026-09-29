@@ -52,13 +52,18 @@ class SectionReasoningStartNode(Start):
 
         # 初始化section_context和config
         section_context = SectionReasoningContext(
+            original_query=inputs.get("original_query", ""),
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
             section_idx=inputs.get("section_idx", '1'),
+            report_task=inputs.get("report_task", ""),
+            section_task=inputs.get("section_task", ""),
+            section_description=inputs.get("section_description", ""),
             plan_background_knowledge=plan_background_knowledge,
             step_background_knowledge=step_background_knowledge,
             report_type_policy=inputs.get("report_type_policy") or {},
             research_intent=inputs.get("research_intent") or {},
+            section_local_contract=inputs.get("section_local_contract") or {},
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(),
@@ -469,13 +474,18 @@ def build_dependency_reasoning_workflow():
         NodeId.START.value,
         SectionReasoningStartNode(),
         inputs_schema={
+            "original_query": "${original_query}",
             "language": "${language}",
             "messages": "${messages}",
             "section_idx": "${section_idx}",
             "parent_section_steps": "${parent_section_steps}",
             "config": "${config}",
+            "report_task": "${report_task}",
+            "section_task": "${section_task}",
+            "section_description": "${section_description}",
             "report_type_policy": "${report_type_policy}",
             "research_intent": "${research_intent}",
+            "section_local_contract": "${section_local_contract}",
         }
     )
 

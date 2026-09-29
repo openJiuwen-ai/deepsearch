@@ -7,7 +7,10 @@ from copy import deepcopy
 from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
+    PromptBuildOptions,
+    build_prompt_messages,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
     extract_material_ids,
     normalize_material_bindings,
@@ -591,7 +594,16 @@ class Outliner:
     async def generate_outline(self, current_inputs: dict) -> dict:
         """Generating an outline of the report."""
         logger.info("Outliner starting")
-        prompt = apply_system_prompt(self.prompt, current_inputs)
+        prompt_context = {
+            key: value for key, value in current_inputs.items() if key != "messages"
+        }
+        prompt = build_prompt_messages(
+            self.prompt,
+            prompt_context,
+            options=PromptBuildOptions(
+                prior_messages=current_inputs.get("messages") or [],
+            ),
+        )
         outline = {}
         error_msg = ""
         section_num = current_inputs.get("section_num")

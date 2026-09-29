@@ -38,8 +38,8 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/content_recognition.md`
-- `openjiuwen_deepsearch/algorithm/prompts/source_matching.md`
+- `openjiuwen_deepsearch/algorithm/prompts/content_recognition/`
+- `openjiuwen_deepsearch/algorithm/prompts/source_matching/`
 
 主要测试：
 

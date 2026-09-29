@@ -10,7 +10,7 @@ from openjiuwen_deepsearch.algorithm.query_understanding.outliner import (
     create_outline_tool,
     generate_outline,
 )
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.exception import CustomValueException
 
 
@@ -168,7 +168,7 @@ class TestDepDrivingOutlineTool:
         self, prompt_name
     ):
         rendered = str(
-            apply_system_prompt(
+            build_prompt_messages(
                 prompt_name,
                 {
                     "questions": "Compare products in a table",
@@ -189,7 +189,7 @@ class TestDepDrivingOutlineTool:
 
     def test_dependency_interaction_prompt_updates_structured_format_field(self):
         rendered = str(
-            apply_system_prompt(
+            build_prompt_messages(
                 "dep_driving_outliner_interaction",
                 {
                     "questions": "Compare products",

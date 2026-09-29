@@ -49,11 +49,10 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_content.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_normalize_units.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_mermaid.md`
-- `openjiuwen_deepsearch/algorithm/prompts/insert_visualization.md`
-- `openjiuwen_deepsearch/algorithm/prompts/chart_compliance_validate.md`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_content/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_normalize_units/`
+- `openjiuwen_deepsearch/algorithm/prompts/insert_visualization/`
+- `openjiuwen_deepsearch/algorithm/prompts/chart_compliance_validate/`
 
 主要测试：
 

@@ -34,6 +34,8 @@
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/collector_graph/info_collector.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/collector_graph/webpage_enrichment.py`
 - `openjiuwen_deepsearch/algorithm/research_collector/webpage_enrichment.py`
+- `openjiuwen_deepsearch/algorithm/prompts/collector_webpage_enrichment_select/`
+- `openjiuwen_deepsearch/algorithm/prompts/collector_webpage_enrichment_compress/`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/editor_team_nodes.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/reasoning_writing_graph/dependency_reasoning_team_nodes.py`
 - `tests/framework/test_background_knowledge.py`
@@ -78,7 +80,7 @@
    - **Jina Reader 代理**（`JinaWebFetchProvider.fetch_page`）：provider 由 `_pre_handle` 经 `resolve_web_fetch_provider` 从 `agent_config.web_fetch_provider_config` 解析，未配置时默认构造；并发向多个 reader base（默认 `r.jinaai.cn` 与 `r.jina.ai`）竞速取先返回者，单个 base 鉴权失败不再短路整次竞速。
    判定与回退：URL 以 `.pdf` 结尾时跳过 harness 直连、直接进入 httpx 直连；正文少于 `max(200, 旧 original_content 长度)` 时继续退下一路；任一路返回 `%PDF-` 原始数据或三路都未达到动态门槛时保留旧证据。
 7. raw content 进入压缩 LLM 前截断到 `MAX_COLLECTOR_DOC_CONTENT_LENGTH * 10`。
-8. 压缩 LLM 同时接收已有 `original_content` 和新抓取正文，合并并保留已有可验证事实；浏览器验证、CAPTCHA、访问拒绝、登录、JavaScript 提示、错误页或重定向占位页视为无效抓取内容并被忽略。输出正文保持网页来源语言，不在证据增强阶段按 collector 的 `language` 翻译；面向用户的语言本地化由后续报告生成处理。写回前限制在 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 以内。
+8. 压缩 LLM 同时接收已有 `original_content` 和新抓取正文，合并并保留已有可验证事实；浏览器验证、CAPTCHA、访问拒绝、登录、JavaScript 提示、错误页或重定向占位页视为无效抓取内容并被忽略。输出正文保持网页来源语言，不在证据增强阶段按 collector 的 `language` 翻译；面向用户的语言本地化由后续报告生成处理。Prompt 中的 `max_content_length` 仅限制 `original_content` 字符数，不限制整个 JSON 或 `key_passages` 的合计长度。
 9. 节点使用已有 `key_passages` 检查数字、单位和设备/数据集标识是否保留；匹配时忽略大小写、空格和标点差异。质量门禁通过后才集中写回 `new_doc_infos_current_loop`、累计 `doc_infos`、`history_queries[*].doc_infos` 和 `source_store`，然后交给 `SupervisorNode`、`SummaryNode` 和最终报告器使用。
 
 增强成功后会刷新：
@@ -121,6 +123,7 @@
 
 - collector 输入包含 `language`、`messages`、`section_idx`、`plan_idx`、`step_idx`、`max_search_query_count`、
   `max_research_loops`、`max_tool_call_turns_per_query`、`report_type`、`research_intent`。
+- `InfoRetrievalNode` 从 `collector_context.language` 取得语言，并传入工具调用分支的 collector Prompt；该 Prompt 的输出语言约束使用此值。
 - collector 输出至少包含 `history_queries`、`doc_infos`、`info_summary`、`evaluation`、`messages`。
 - `EvidenceLedger` 记录 accepted/rejected/pending 证据、尝试过的 query 和缺口，供后续采集轮次判断。
 - `CollectorContext.should_continue` 保存 supervisor 对下一轮检索价值的判断；为 `false` 时，collector 清空后续 query

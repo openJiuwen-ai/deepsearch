@@ -9,7 +9,10 @@ from pydantic import BaseModel, Field, ValidationError
 from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
+    PromptBuildOptions,
+    build_prompt_messages,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
     MaterialEvidenceClaim,
     MaterialRelevance,
@@ -785,13 +788,16 @@ async def _invoke_llm_for_intent(
     """
     prompt_ctx = {
         "original_query": request.original_query,
-        "messages": request.messages,
         "provided_report_type": request.provided_report_type,
     }
     if request.material_context and request.material_context.get("has_materials"):
-        # 素材清单/摘要注入（_analysis_items 仅供程序消费，模板不引用）
+        # 素材仅作为当前请求数据传入；_analysis_items 仍由程序消费。
         prompt_ctx.update(request.material_context)
-    prompts = apply_system_prompt(request.prompt_name, prompt_ctx)
+    prompts = build_prompt_messages(
+        request.prompt_name,
+        prompt_ctx,
+        options=PromptBuildOptions(prior_messages=request.messages),
+    )
 
     tool = _create_emit_intent_tool(request.provided_report_type)
     llm = llm_context.get().get(request.llm_model_name)

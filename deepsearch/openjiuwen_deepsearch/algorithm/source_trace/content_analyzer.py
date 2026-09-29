@@ -6,7 +6,7 @@ import logging
 import difflib
 from typing import List
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -36,7 +36,7 @@ async def recognize_content_to_cite(modified_report: str, similarity_threshold: 
 
     try:
         llm = llm_context.get().get(llm_model_name)
-        llm_input = apply_system_prompt(
+        llm_input = build_prompt_messages(
             "content_recognition", source_tracer_context)
         llm_output = await ainvoke_llm_with_stats(llm, llm_input,
                                                   agent_name=AgentLlmName.SOURCE_TRACER_CONTENT_RECOGNITION.value)

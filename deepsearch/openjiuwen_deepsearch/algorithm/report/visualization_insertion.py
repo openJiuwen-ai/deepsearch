@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import EFFECT_SUB_REPORT_TAG
 from openjiuwen_deepsearch.common.common_constants import CHINESE
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VisualizationInsertPlanContext:
-    messages: list
+    numbered_report: str
+    visualization_data: str
     current_inputs: Dict
     report_lines: list[str]
     invalid_rows: set[int]
@@ -151,16 +152,17 @@ class VisualizationInsertionMixin:
     async def _request_visualization_insert_plan(
         self, context: VisualizationInsertPlanContext
     ) -> dict:
-        base_messages = list(context.messages)
-        active_messages = base_messages
+        base_context = {
+            "numbered_report": context.numbered_report,
+            "visualization_data": context.visualization_data,
+            "language": context.current_inputs.get("language"),
+        }
+        retry_feedback = ""
         max_attempt_num = context.current_inputs.get("max_generate_retry_num", 3)
         for attempt in range(max_attempt_num):
-            llm_input = apply_system_prompt(
+            llm_input = build_prompt_messages(
                 "insert_visualization",
-                dict(
-                    messages=active_messages,
-                    language=context.current_inputs.get("language"),
-                ),
+                {**base_context, "retry_feedback": retry_feedback},
             )
 
             try:
@@ -187,15 +189,7 @@ class VisualizationInsertionMixin:
                     attempt + 1,
                     max_attempt_num,
                 )
-                active_messages = base_messages + [
-                    dict(
-                        role="user",
-                        content=(
-                            "Your output is empty or invalid. Return JSON only with schema: "
-                            '{"insertions":[{"after_row":int,"index":int},...]}'
-                        ),
-                    )
-                ]
+                retry_feedback = "EMPTY_OR_INVALID_OUTPUT"
                 continue
 
             raw = str(llm_output.get("content") or "").strip()
@@ -216,18 +210,7 @@ class VisualizationInsertionMixin:
                     attempt + 1,
                     max_attempt_num,
                 )
-                active_messages = base_messages + [
-                    dict(
-                        role="user",
-                        content=(
-                            "Your previous output is invalid. Return JSON only with schema: "
-                            '{"insertions":[{"after_row":int,"index":int},...]} '
-                            "Issue: "
-                            f"{error_msg}. "
-                            "Ensure after_row is valid and index exists in visualization data."
-                        ),
-                    )
-                ]
+                retry_feedback = error_msg[:500]
                 continue
 
             return dict(rs_success=True, plan=plan, result="")
@@ -435,18 +418,13 @@ class VisualizationInsertionMixin:
                 # No valid visualization blocks, return original content.
                 return dict(rs_success=False, result=original_report)
 
-            llm_input_message = numbered_report.rstrip("\r\n") + "\n\n"
-            llm_input_message += "=== VISUALIZATION DATA ===\n"
-            for visualization_item in visualization_items:
-                llm_input_message += (
-                    json.dumps(visualization_item, ensure_ascii=False)
-                    + "\n"
-                )
-            llm_input_message += "=== END VISUALIZATION DATA ===\n"
-            messages = [dict(role="user", content=llm_input_message)]
+            visualization_data = "\n".join(
+                json.dumps(item, ensure_ascii=False) for item in visualization_items
+            )
             plan_result = await self._request_visualization_insert_plan(
                 VisualizationInsertPlanContext(
-                    messages=messages,
+                    numbered_report=numbered_report.rstrip("\r\n"),
+                    visualization_data=visualization_data,
                     current_inputs=current_inputs,
                     report_lines=report_lines,
                     invalid_rows=invalid_rows,

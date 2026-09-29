@@ -41,16 +41,16 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/rationale_generator.md`
-- `openjiuwen_deepsearch/algorithm/prompts/passages_extractor.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar.md`
-- `openjiuwen_deepsearch/algorithm/prompts/report_abstract_markdown.md`
-- `openjiuwen_deepsearch/algorithm/prompts/report_conclusion_markdown.md`
-- `openjiuwen_deepsearch/algorithm/prompts/report_implications_and_recommendations_markdown.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_content.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_normalize_units.md`
+- `openjiuwen_deepsearch/algorithm/prompts/rationale_generator/`
+- `openjiuwen_deepsearch/algorithm/prompts/passages_extractor/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar/`
+- `openjiuwen_deepsearch/algorithm/prompts/report_abstract_markdown/`
+- `openjiuwen_deepsearch/algorithm/prompts/report_conclusion_markdown/`
+- `openjiuwen_deepsearch/algorithm/prompts/report_implications_and_recommendations_markdown/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_content/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_normalize_units/`
 
 主要测试：
 

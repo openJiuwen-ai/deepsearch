@@ -419,9 +419,7 @@ class ChartGenerator:
                     "suggestion": (
                         pre_suggestion if isinstance(pre_suggestion, list) else []
                     )
-                    + [
-                        "\nThe chart was not generated. Please ensure you create a matplotlib figure."
-                    ],
+                    + ["chart_not_generated"],
                 }
                 continue
         return {}

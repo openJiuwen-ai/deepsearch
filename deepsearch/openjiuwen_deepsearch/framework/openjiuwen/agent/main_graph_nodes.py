@@ -1120,6 +1120,7 @@ class OutlineNode(BaseNode):
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
         language = session.get_global_state("search_context.language")
         messages = session.get_global_state("search_context.messages")
+        original_query = session.get_global_state("search_context.original_query") or ""
         questions = session.get_global_state("search_context.questions")
         user_feedback = session.get_global_state("search_context.user_feedback")
         configured_section_num = session.get_global_state("config.outliner_max_section_num")
@@ -1180,6 +1181,7 @@ class OutlineNode(BaseNode):
         audience_role = research_intent.get("audience_role") or ""
         tone = research_intent.get("tone") or ""
         result = dict(
+            original_query=original_query,
             messages=messages,
             user_feedback=user_feedback,
             questions=questions,

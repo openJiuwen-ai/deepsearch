@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, model_validator
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.common_utils.url_utils import (
     is_local_file_path,
     validate_url_scheme,
@@ -676,7 +676,7 @@ def _merge_cached_summaries(
 
 
 async def _invoke_material_llm(prompt_name: str, prompt_ctx: dict, llm_model_name: str) -> str:
-    prompt = apply_system_prompt(prompt_name, prompt_ctx)
+    prompt = build_prompt_messages(prompt_name, prompt_ctx)
     llm = llm_context.get().get(llm_model_name)
     response = await llm_utils.ainvoke_llm_with_stats(
         llm,
@@ -697,7 +697,6 @@ async def _summarize_chunk(
         "chunk": chunk,
         "is_final_merge": is_final_merge,
         "SUMMARY_MAX_TOKENS": MATERIAL_SUMMARY_MAX_TOKENS,
-        "CURRENT_TIME": "",
     }, llm_model_name)
 
 

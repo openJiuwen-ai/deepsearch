@@ -13,7 +13,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefStepCoverage,
     CoverageStatus,
 )
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -132,13 +132,13 @@ async def _evaluate_shard(
     Raises:
         ValueError: 既有重试预算耗尽且无法解析有效评估结果时抛出。
     """
-    messages = apply_system_prompt(
-        "brief_doc_evaluator",
-        {"section": section.model_dump(), "candidates": [item.model_dump() for item in candidates]},
-    )
+    prompt_context = {
+        "section": section.model_dump(),
+        "candidates": [item.model_dump() for item in candidates],
+    }
     attempts = max(1, Config().service_config.info_collector_max_retry_num)
     last_error: Exception | None = None
-    prompt_chars = _prompt_char_count(messages)
+    prompt_chars = _prompt_char_count(build_prompt_messages("brief_doc_evaluator", prompt_context))
     logger.info(
         "[BriefEvaluator] Start section evaluation section_id=%s candidates=%d "
         "prompt_chars=%d max_attempts=%d.",
@@ -150,6 +150,7 @@ async def _evaluate_shard(
     for attempt_num in range(1, attempts + 1):
         stage = "llm_invoke"
         try:
+            messages = build_prompt_messages("brief_doc_evaluator", prompt_context)
             logger.info(
                 "[BriefEvaluator] Start evaluation attempt section_id=%s attempt=%d/%d "
                 "candidates=%d prompt_chars=%d.",

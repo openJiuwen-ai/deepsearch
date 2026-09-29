@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import logging
 import base64
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report_template.template_utils import TemplateUtils
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -126,7 +126,7 @@ class TemplateGenerator:
             prompt_name="template_semantic_extract",
             max_retries=max_retries,
             file_content=file_content,
-            extra_content=f"Step 1 extracted structure:\n{processed_structure}",
+            extracted_structure=processed_structure,
         )
         return semantic_output
 
@@ -136,7 +136,7 @@ class TemplateGenerator:
             prompt_name: str,
             max_retries: int,
             file_content: str,
-            extra_content: str = None,
+            extracted_structure: str = "",
     ) -> str:
         attempt = 0
         last_exception = None
@@ -147,14 +147,13 @@ class TemplateGenerator:
             logger.info(f"Template extract attempt: {attempt}")
 
             try:
-                messages = apply_system_prompt(prompt_name, context_vars={})
-                messages.append({
-                    "role": "user",
-                    "content": f"Below is the report provided by the user:\n\n{file_content}"
-                })
-
-                if extra_content:
-                    messages.append({"role": "user", "content": extra_content})
+                prompt_context = {"file_content": file_content}
+                if prompt_name == "template_semantic_extract":
+                    prompt_context["extracted_structure"] = extracted_structure
+                messages = build_prompt_messages(
+                    prompt_name,
+                    prompt_context,
+                )
 
                 response = await ainvoke_llm_with_stats(
                     llm, messages, llm_type="basic", agent_name=AgentLlmName.TEMPLATE.value

@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report_template.template_generator import TemplateGenerator
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from tests.utils.mock_config import get_default_agent_config
@@ -33,10 +34,13 @@ def mock_config():
 @pytest.fixture
 def mock_apply_prompt():
     with patch(
-            "openjiuwen_deepsearch.algorithm.report_template.template_generator.apply_system_prompt",
-            return_value=[{"role": "system", "content": "sys"}]
-    ):
-        yield
+            "openjiuwen_deepsearch.algorithm.report_template.template_generator.build_prompt_messages",
+            return_value=[
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "input"},
+            ]
+    ) as mock_builder:
+        yield mock_builder
 
 
 @pytest.fixture
@@ -48,18 +52,42 @@ def mock_pdf_convert():
         yield
 
 
+def test_template_semantic_prompt_keeps_report_and_structure_in_one_user_message():
+    messages = build_prompt_messages(
+        "template_semantic_extract",
+        {
+            "file_content": "runtime report body",
+            "extracted_structure": "# Runtime Heading",
+        },
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert "runtime report body" not in messages[0]["content"]
+    assert "# Runtime Heading" not in messages[0]["content"]
+    assert "runtime report body" in messages[1]["content"]
+    assert "# Runtime Heading" in messages[1]["content"]
+
+
 @pytest.mark.asyncio
 async def test_process_step_success(mock_logger, mock_not_sensitive, mock_config, mock_apply_prompt):
     with patch("openjiuwen_deepsearch.algorithm.report_template.template_generator.ainvoke_llm_with_stats",
                new_callable=AsyncMock, return_value={"content": "OK"}) as mock_llm:
         res = await TemplateGenerator._process_step(
             llm=MagicMock(),
-            prompt_name="test",
+            prompt_name="template_structure_extract",
             max_retries=2,
             file_content="test file content"
         )
         assert res == "OK"
         assert mock_llm.await_count == 1
+        mock_apply_prompt.assert_called_once_with(
+            "template_structure_extract",
+            {"file_content": "test file content"},
+        )
+        assert mock_llm.await_args.args[1] == [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "input"},
+        ]
 
 
 @pytest.mark.asyncio
@@ -68,7 +96,7 @@ async def test_process_step_retry_then_success(mock_logger, mock_not_sensitive, 
                new_callable=AsyncMock, side_effect=[{"content": ""}, {"content": "OK"}]) as mock_llm:
         res = await TemplateGenerator._process_step(
             llm=MagicMock(),
-            prompt_name="test",
+            prompt_name="template_structure_extract",
             max_retries=2,
             file_content="test file content"
         )
@@ -86,7 +114,7 @@ async def test_process_step_fail_after_retries(mock_logger, mock_not_sensitive, 
         with pytest.raises(CustomValueException):
             await TemplateGenerator._process_step(
                 llm=MagicMock(),
-                prompt_name="test",
+                prompt_name="template_structure_extract",
                 max_retries=2,
                 file_content="test file content"
             )
