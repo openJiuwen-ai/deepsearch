@@ -1,7 +1,8 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """On-disk Retropus KnowledgeGraph / BM25 dump-load (no tree-sitter required for KnowledgeGraph tests)."""
 
-import pickle
+# This test intentionally crafts a malicious pickle to prove it is rejected.
+import pickle  # nosec B403
 from pathlib import Path
 
 import pytest
