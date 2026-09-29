@@ -1,8 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """On-disk Retropus KnowledgeGraph / BM25 dump-load (no tree-sitter required for KnowledgeGraph tests)."""
 
-# This test intentionally crafts a malicious pickle to prove it is rejected.
-import pickle  # nosec B403
 from pathlib import Path
 
 import pytest
@@ -10,6 +8,7 @@ import pytest
 from openjiuwen_codesearch.config.agent import RetropusSearchAgentConfig
 from openjiuwen_codesearch.config.config import CodeSearchConfig
 from openjiuwen_codesearch.config.llm import LLMConfig, LLMSuite
+from openjiuwen_codesearch.retropus import persist
 from openjiuwen_codesearch.retropus.graph.graph_types import (
     ASTNode,
     FileNode,
@@ -97,7 +96,8 @@ def _write_evil_kg(path: Path, marker: Path) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as fh:
-        pickle.dump(_Evil(), fh, protocol=pickle.HIGHEST_PROTOCOL)
+        # ``pickle`` is reused from ``persist`` to avoid importing it here.
+        persist.pickle.dump(_Evil(), fh, protocol=persist.pickle.HIGHEST_PROTOCOL)
 
 
 def test_load_knowledge_graph_rejects_arbitrary_global(tmp_path: Path):
@@ -105,7 +105,7 @@ def test_load_knowledge_graph_rejects_arbitrary_global(tmp_path: Path):
     path = tmp_path / "kg.pkl"
     _write_evil_kg(path, marker)
 
-    with pytest.raises(pickle.UnpicklingError, match="forbidden global"):
+    with pytest.raises(persist.pickle.UnpicklingError, match="forbidden global"):
         load_knowledge_graph(path)
     assert not marker.exists()
 
