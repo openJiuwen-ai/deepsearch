@@ -52,6 +52,7 @@ from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     _save_and_return_search_final_result,
     to_dict_safe,
     to_json_safe,
+    redact_urls_in_text,
 )
 from openjiuwen_deepsearch.algorithm.search_tools.retriever_tool import RetrieveTool
 from openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool import WebFetch
@@ -141,6 +142,7 @@ from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
+    mcp_tool_context,
     session_context,
     tool_context,
     web_search_context,
@@ -287,6 +289,52 @@ def _initialize_web_search_context_from_agent_config(
     )
     qps_rate_limiter.set_max_qps(agent_config.web_search_max_qps)
     return web_search_token
+
+
+async def _initialize_mcp_context_from_agent_config(agent_config: AgentConfig):
+    """连接 MCP servers 并注册到 contextvar。返回 token 供 finally reset。
+
+    MCP 客户端依赖为可选依赖（pyproject [mcp]），故在此延迟导入；
+    无配置或未装 mcp 包时直接返回 None,不抛异常。
+    """
+    mcp_servers = getattr(agent_config, "mcp_servers", None) or []
+    if not mcp_servers:
+        return None
+    try:
+        from openjiuwen_deepsearch.framework.openjiuwen.tools.mcp import McpToolBundle
+    except ImportError:
+        logger.warning("[MCP] mcp package not installed; skipping MCP tools")
+        return None
+    servers_dict_list = [
+        s.model_dump() if hasattr(s, "model_dump") else s
+        for s in mcp_servers
+    ]
+    bundle = McpToolBundle()
+    try:
+        await bundle.connect_and_build_tools(servers_dict_list)
+    except Exception as e:
+        logger.warning("[MCP] Failed to initialize MCP tools: %s", redact_urls_in_text(str(e)))
+        await bundle.close_all()
+        return None
+    return mcp_tool_context.set(bundle)
+
+
+async def _close_mcp_bundle(mcp_token) -> None:
+    """关闭并重置 MCP contextvar。token 为 None 时直接返回。
+
+    供 DeepresearchAgent / SimpleReactSearchAgent 的各 except / finally 分支复用,
+    确保 MCP 连接在成功、失败、取消三条路径上都被关闭。
+    """
+    if mcp_token is None:
+        return
+    try:
+        bundle = mcp_tool_context.get()
+        if bundle is not None:
+            await bundle.close_all()
+    except Exception as e:
+        logger.warning("[MCP] Failed to close MCP bundle during cleanup: %s", e)
+    finally:
+        mcp_tool_context.reset(mcp_token)
 
 
 def _build_search_fetch_tools(agent_config: AgentConfig):
@@ -759,6 +807,7 @@ class DeepresearchAgent(BaseAgent):
         llm_token = None
         web_search_token = None
         local_search_token = None
+        mcp_token = None
         session_agent_config = None
 
         try:
@@ -779,11 +828,16 @@ class DeepresearchAgent(BaseAgent):
 
             web_search_token, local_search_token = self._initialize_tools(session_agent_config)
             await self._aopen_local_search_engines()
+            mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
         except CustomValueException:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
             _zero_scholarly_search_secrets(session_agent_config)
             raise
         except ValidationError as e:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
             _zero_scholarly_search_secrets(session_agent_config)
             if LogManager.is_sensitive():
@@ -796,6 +850,8 @@ class DeepresearchAgent(BaseAgent):
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(e)),
             ) from e
         except Exception:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
             _zero_scholarly_search_secrets(session_agent_config)
             raise
@@ -880,6 +936,9 @@ class DeepresearchAgent(BaseAgent):
                     logger.warning(f"Failed to close local search engines.")
             finally:
                 self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+
+            # MCP 连接在成功/失败/取消三条路径都必须关闭；token 已在 except 分支重置为 None。
+            await _close_mcp_bundle(mcp_token)
 
             _zero_scholarly_search_secrets(session_agent_config)
 
@@ -1949,6 +2008,7 @@ class DeepSearchAgent(BaseAgent):
 
         llm_token = None
         web_search_token = None
+        mcp_token = None
         tool_token = None
         workflow_session_token = None
         session_agent_config: AgentConfig | None = None
@@ -2006,6 +2066,7 @@ class DeepSearchAgent(BaseAgent):
             tool_class: list[Any] = []
             if per_question_params.tool_map == "search_fetch":
                 tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
+                mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class.append(_build_retrieve_tool(milvus_cfg))
@@ -2072,6 +2133,11 @@ class DeepSearchAgent(BaseAgent):
             if web_search_token is not None:
                 _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            if mcp_token is not None:
+                bundle = mcp_tool_context.get()
+                if bundle is not None:
+                    await bundle.close_all()
+                mcp_tool_context.reset(mcp_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
             # The run context owns a deep copy, so clear both per-run configurations.
@@ -2130,6 +2196,7 @@ class SimpleReactSearchAgent(BaseAgent):
         llm_registry = {general.model_name: create_llm_obj(general.model_copy(deep=True))}
 
         web_search_token = None
+        mcp_token = None
         llm_token = llm_context.set(llm_registry)
         try:
             per_question_params: PerQuestionParams = (
@@ -2137,6 +2204,7 @@ class SimpleReactSearchAgent(BaseAgent):
             )
             if per_question_params.tool_map == "search_fetch":
                 tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
+                mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class = [_build_retrieve_tool(milvus_cfg)]
@@ -2351,6 +2419,7 @@ class SimpleReactSearchAgent(BaseAgent):
             if web_search_token is not None:
                 _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            await _close_mcp_bundle(mcp_token)
             _zero_scholarly_search_secrets(session_agent_config)
             zero_secret(session_agent_config.web_fetch_provider_config.api_key)
             zero_secret(session_agent_config.web_search_engine_config.search_api_key)

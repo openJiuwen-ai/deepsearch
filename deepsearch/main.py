@@ -283,6 +283,57 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
                 parser.error("--milvus_port 必须在 1–65535 范围内")
 
 
+def _build_mcp_servers_config(args: argparse.Namespace) -> list[dict]:
+    """从 CLI args 构造 MCP server 配置列表。
+
+    streamable_http 传输经 ``httpx.AsyncClient(headers, timeout)`` 注入鉴权头
+    与超时(``streamable_http_client`` 本身不接收 headers/timeout,见 client.py),
+    敏感 header value 经 ``anonymize_config_for_logging`` 脱敏后才进入日志。
+
+    Raises:
+        ValueError: ``--mcp_server_name`` 或 ``--mcp_server_headers`` 数量与
+            ``--mcp_server_url`` 不匹配时。
+    """
+    urls_str = getattr(args, "mcp_server_url", "") or ""
+    if not urls_str:
+        return []
+    urls = [u.strip() for u in urls_str.split(",") if u.strip()]
+    names = [n.strip() for n in (getattr(args, "mcp_server_name", "") or "").split(",") if n.strip()]
+    if names and len(names) != len(urls):
+        raise ValueError(
+            f"--mcp_server_name 数量({len(names)})与 --mcp_server_url 数量({len(urls)})不匹配"
+        )
+    if not names:
+        names = [f"mcp_server_{i}" for i in range(len(urls))]
+    headers_str = getattr(args, "mcp_server_headers", "") or ""
+    if headers_str:
+        parsed = json.loads(headers_str)
+        if isinstance(parsed, dict):
+            headers_list = [parsed] * len(urls)
+        elif isinstance(parsed, list):
+            if len(parsed) != len(urls):
+                raise ValueError(
+                    f"--mcp_server_headers 数组长度({len(parsed)})与 --mcp_server_url 数量({len(urls)})不匹配"
+                )
+            headers_list = parsed
+        else:
+            raise ValueError("--mcp_server_headers 必须是 JSON 对象或数组")
+    else:
+        headers_list = [{}] * len(urls)
+    server_type = getattr(args, "mcp_server_type", "search")
+    return [
+        {
+            "server_name": names[i],
+            "server_url": urls[i],
+            "transport_type": "streamable_http",
+            "headers": headers_list[i],
+            "timeout": 30.0,
+            "type": server_type,
+        }
+        for i in range(len(urls))
+    ]
+
+
 def main(
     argv: list[str] | None = None,
     telemetry: RunTelemetryConfig | None = None,
@@ -365,6 +416,31 @@ def main(
             help="vlm 迭代生成图最大迭代次数, 最大值: 3",
         )
         research_group.add_argument("--vlm_chart_generator_enable", action="store_true", help="开启 vlm 迭代生成图")
+        research_group.add_argument(
+            "--mcp_server_url",
+            type=str,
+            default="",
+            help="MCP server URL（支持多个，逗号分隔）",
+        )
+        research_group.add_argument(
+            "--mcp_server_name",
+            type=str,
+            default="",
+            help="MCP server 名称（支持多个，逗号分隔，与 URL 一一对应；为空时按序号兜底）",
+        )
+        research_group.add_argument(
+            "--mcp_server_headers",
+            type=str,
+            default="",
+            help='MCP server 鉴权头，JSON 字符串。单个 JSON 对象适用于所有 server；'
+            'JSON 数组与 URL 一一对应。例如 \'{"x-api-key":"sk-xxx"}\'',
+        )
+        research_group.add_argument(
+            "--mcp_server_type",
+            type=str,
+            default="search",
+            help="MCP server 用途类型（search/extract 等），默认 search",
+        )
 
         search_group = parser.add_argument_group("Search", "搜索引擎 / 向量库（DeepSearch 等）")
         search_group.add_argument(
@@ -484,6 +560,14 @@ def main(
             )
             current_agent_config["web_search_engine_config"]["search_url"] = args.web_search_url
             current_agent_config["web_search_engine_config"]["max_web_search_results"] = args.max_web_search_results
+        # 解析 MCP server 配置。streamable_http 经 httpx.AsyncClient 注入 headers/timeout
+        # (streamable_http_client 本身不接收这些参数,见 client.py),敏感 header value
+        # 经 anonymize_config_for_logging 脱敏后才进入日志。
+        try:
+            current_agent_config["mcp_servers"] = _build_mcp_servers_config(args)
+        except ValueError as e:
+            parser.error(str(e))
+
         current_agent_config["search_workflow_per_question_params"]["tool_map"] = args.tool_map
         current_agent_config["search_workflow_per_question_params"]["max_workers"] = args.max_workers
         current_agent_config["search_workflow_per_question_params"][

@@ -118,3 +118,30 @@ class ReportConvertExecutionException(ReportConvertBasicException):
 
     CODE = "REPORT_CONVERT_EXECUTION_ERR"
     STATUS_CODE = 500
+
+
+class McpServerBasicException(Exception):
+    CODE = "MCP_SERVER_EX"
+
+    def __init__(self, msg: str):
+        super().__init__(f"[{self.CODE}] {msg}")
+
+
+class McpServerExistsException(McpServerBasicException):
+    """MCP server 已存在异常"""
+    pass
+
+
+class McpServerNotFoundException(McpServerBasicException):
+    """MCP server 不存在异常"""
+    pass
+
+
+class McpServerHeaderDecryptError(Exception):
+    """MCP server headers 解密失败异常"""
+    pass
+
+
+class McpServerValidationError(Exception):
+    """MCP server 数据验证失败异常"""
+    pass

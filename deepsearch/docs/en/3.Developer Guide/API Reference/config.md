@@ -149,6 +149,53 @@ class openjiuwen_deepsearch.config.config.LocalSearchEngineConfig()
 ## `CustomWebSearchConfig` / `CustomLocalSearchConfig`
 Custom tool hooks: **custom_*_file**, **custom_*_func**, **extension** (defaults empty).
 
+## `McpServerRuntimeConfig`
+```python
+class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig()
+```
+**McpServerRuntimeConfig** configures a single MCP (Model Context Protocol) server. Used as an element of `AgentConfig.mcp_servers`. SDK users configure it directly; the server assembles the same shape after DB lookup.
+
+**Fields**:
+
+- **server_name** (str, required): MCP server name, unique within a space; used as the tool namespace prefix at runtime (`mcp{server_name}__{tool}`).
+- **server_url** (str, required): MCP server URL.
+- **transport_type** (str, optional): Transport type; only `sse` and `streamable_http` are effective. Default value: `"streamable_http"`.
+- **headers** (dict, optional): Request headers. Sensitive header values are encrypted at the server side; when the SDK passes them directly, they are used as-is. Default value: `{}`.
+- **timeout** (float, optional): Connect/read timeout in seconds. Default value: `30.0`.
+- **type** (str, optional): MCP server purpose type, selecting which collector branch the tools are injected into; currently fixed to `"search"`. Default value: `"search"`.
+
+**Notes**:
+
+- The `mcp` package is transitively pulled in via the core dependency `openjiuwen→fastmcp→mcp`; a standard `uv sync` already includes it. To pin the version explicitly, run `uv sync --extra mcp` (constrains `mcp>=1.26,<2.0`).
+- When configured, the three agent entries (`DeepresearchAgent`, `DeepSearchAgent`, `SimpleReactSearchAgent`) connect to the MCP servers when `tool_map == "search_fetch"` and inject tools into the information collection node `InfoRetrievalNode` as `mcp{server_name}__{tool}`; connections are closed when the run ends.
+- If a single server fails to connect, a warning is logged and that server is skipped without blocking other servers; if the `mcp` package is not installed, the run proceeds without MCP tools while everything else works normally.
+
+**Example**:
+
+```python
+>>> from openjiuwen_deepsearch.config.config import AgentConfig, McpServerRuntimeConfig
+
+>>> # Example 1: configure a single MCP server
+>>> agent_config = AgentConfig(
+...     mcp_servers=[
+...         McpServerRuntimeConfig(
+...             server_name="custom_search",
+...             server_url="http://localhost:8000/mcp",
+...             transport_type="streamable_http",
+...             headers={"Authorization": "Bearer xxx"},
+...             timeout=30.0,
+...         )
+...     ]
+... )
+>>> print(agent_config.mcp_servers[0].server_name)
+custom_search
+
+>>> # Example 2: no MCP server by default
+>>> agent_config = AgentConfig()
+>>> print(agent_config.mcp_servers)
+[]
+```
+
 ## `AgentConfig`
 ```python
 class openjiuwen_deepsearch.config.config.AgentConfig()
@@ -187,6 +234,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **search_workflow_per_question_params** (`PerQuestionParams`, optional): Per-question control knobs for search/react runs (time, workers, tool map, limits, etc.). Default value: `PerQuestionParams()`.
 - **search_workflow_milvus_config** (`MilvusConfig`, optional): Milvus/embedder settings used when retrieval tool path is selected. Default value: `MilvusConfig()`.
 - **web_fetch_provider_config** (`WebFetchProviderConfig`, optional): Explicit DeepSearch fetch-provider config. Current v1 requires `provider_name="jina"` to enable `web_fetch`. Default value: `WebFetchProviderConfig()`.
+- **mcp_servers** (`List[McpServerRuntimeConfig]`, optional): MCP (Model Context Protocol) server config list. When configured, the three agent entries (`DeepresearchAgent`, `DeepSearchAgent`, `SimpleReactSearchAgent`) connect to the MCP servers when `tool_map == "search_fetch"` and inject tools into `InfoRetrievalNode` as `mcp{server_name}__{tool}`. Default value: `[]`.
 - **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
 - **web_search_max_qps** (float, optional): Maximum QPS for the web augmentation engine. `0` means no rate limit. Floating-point values such as `0.5` are supported and mean one request every 2 seconds. Default value: `0`.
 - **user_feedback_processor_enable** (bool, optional): Whether to enable post-report local optimization. Default value: `False`.
