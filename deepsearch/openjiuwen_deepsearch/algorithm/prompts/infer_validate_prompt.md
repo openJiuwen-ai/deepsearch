@@ -20,13 +20,34 @@ Example format of input references:
 1. Compare each "content" in the references with the statement to determine relevance. Relevance is defined as: the content contains the same facts or data (data may be approximately matched) as those mentioned in the statement.
 2. If a reference is deemed relevant, add its "id" to the output list.
 
-Use the following output format strictly. Generate output in JSON format and do not include any non-existent IDs:
-[0, 1]
+## Output Contract (strict JSON)
 
-**Output constraints (must follow exactly):**
-- Each element MUST be an **integer** (a reference `id`). Do NOT use strings, nested arrays, dict objects, or any other type.
-- Output a flat JSON array of integers. Do NOT wrap in additional brackets or objects.
-- If no references are relevant, return an empty array `[]`.
+Return exactly one flat JSON array containing the selected reference IDs. Copy each selected `id` as a JSON **number**, not as text.
+
+Valid outputs:
+
+```json
+[0, 1]
+```
+
+```json
+[]
+```
+
+Invalid outputs — never produce these:
+
+```json
+["0", "1"]
+[[0, 1]]
+{"ids": [0, 1]}
+```
+
+Before responding, verify all of the following:
+
+1. The response begins with `[` and ends with `]` and contains no explanation, Markdown, or code fence.
+2. Every element is an unquoted JSON integer copied from an input reference `id`.
+3. Do not invent, renumber, stringify, or use IDs not present in `references`.
+4. If no reference is relevant, output exactly `[]`.
 
 # User Input
 
