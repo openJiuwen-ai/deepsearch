@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel
 
@@ -52,14 +53,28 @@ _SENSITIVE_HEADER_NAMES = frozenset(
         "proxy-authorization",
         "x-api-key",
         "api-key",
+        "apikey",
         "x-auth-token",
+        "x-custom-token",
+        "x-auth",
+        "bearer-token",
+        "x-secret",
+        "secret",
         "x-goog-api-key",
+        "x-goog-cloud-api-key",
+        "anthropic-api-key",
+        "x-deepseek-api-key",
+        "cookie",
+        "set-cookie",
     }
 )
 
 
 def _is_sensitive_config_key(name: str) -> bool:
-    lk = name.lower()
+    # 统一检查敏感 header 名(与 Server 端 SENSITIVE_HEADER_KEYS 对齐)
+    if name.lower() in _SENSITIVE_HEADER_NAMES:
+        return True
+    lk = name.lower().replace("-", "_")
     if lk in (
         "api_key",
         "apikey",
@@ -80,6 +95,48 @@ def _is_sensitive_config_key(name: str) -> bool:
     if "api_key" in lk:
         return True
     return False
+
+
+# ponytail: 启发式子串匹配,覆盖 key/token/secret/password/auth/credential;
+# 若出现不含这些 hint 的凭据 param 名(如 sid/jwt),需扩展此列表
+_SENSITIVE_URL_PARAM_HINTS = ("key", "token", "secret", "password", "auth", "credential")
+
+
+def _redact_url_query_params(url: str) -> str:
+    """将 URL query param 中疑似凭据的 value 替换为 ***。"""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return url
+    if not parsed.query:
+        return url
+    pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    changed = False
+    new_pairs = []
+    for k, v in pairs:
+        kl = k.lower()
+        if any(h in kl for h in _SENSITIVE_URL_PARAM_HINTS):
+            new_pairs.append((k, "***"))
+            changed = True
+        else:
+            new_pairs.append((k, v))
+    if not changed:
+        return url
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(new_pairs, safe="*"), parsed.fragment)
+    )
+
+
+# ponytail: 启发式 URL 匹配,覆盖 http/https;不含端口/路径的裸 host 不扫
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"')]+")
+
+
+def redact_urls_in_text(text: str) -> str:
+    """对文本中所有 URL 的 query param 疑似凭据 value 替换为 ***。
+
+    用于异常消息等自由文本中的 URL 脱敏(如 MCP 连接失败时异常消息含 URL)。
+    """
+    return _URL_PATTERN.sub(lambda m: _redact_url_query_params(m.group()), text)
 
 
 def anonymize_config_for_logging(obj: Any) -> Any:
@@ -103,6 +160,8 @@ def anonymize_config_for_logging(obj: Any) -> Any:
             ks = k if isinstance(k, str) else str(k)
             if _is_sensitive_config_key(ks):
                 out[ks] = "***"
+            elif ks.lower() == "server_url" and isinstance(v, str):
+                out[ks] = _redact_url_query_params(v)
             else:
                 out[ks] = anonymize_config_for_logging(v)
         return out

@@ -39,6 +39,12 @@ dependencies = [
     "jieba>=0.42.1",
 ]
 
+[project.optional-dependencies]
+# MCP server 客户端依赖。mcp 经核心依赖 openjiuwen==0.1.17 传递引入
+# (openjiuwen 直接要求 mcp>=1.26.0，其 fastmcp 依赖限制 mcp<2.0)，
+# 正常 uv sync 即已安装；此 extra 仅作显式声明，装不装效果一致。
+mcp = ["mcp>=1.26,<2.0"]
+
 # 1. 告诉 setuptools 把 openjiuwen_deepsearch 当成一个「命名空间包」
 #    这样无论子目录有没有 __init__.py 都会被收录
 [tool.setuptools.packages.find]

@@ -290,6 +290,53 @@ class openjiuwen_deepsearch.config.config.CustomLocalSearchConfig()
 >>> print(custom_local_config.custom_local_search_file)
 ```
 
+## class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig
+```python
+class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig()
+```
+**McpServerRuntimeConfig** 是单个 MCP（Model Context Protocol）server 的运行时配置类，作为 `AgentConfig.mcp_servers` 列表元素使用。SDK 直接配置或服务端经 DB 查询后拼装为同一形态。
+
+**字段**：
+
+- **server_name**(str, 必填)：MCP server 名称，同一 space 内唯一；运行时作为工具命名空间前缀（`mcp{server_name}__{tool}`）。
+- **server_url**(str, 必填)：MCP server URL。
+- **transport_type**(str, 可选)：传输类型，实际仅 `sse` 与 `streamable_http` 有效。默认值：`"streamable_http"`。
+- **headers**(dict, 可选)：请求头字典。敏感 header key 的 value 在服务端会加密存储；SDK 直接传入时按原值使用。默认值：`{}`。
+- **timeout**(float, 可选)：连接/读取超时（秒）。默认值：`30.0`。
+- **type**(str, 可选)：MCP server 用途类型，决定工具注入到哪个采集分支；当前固定为 `"search"`。默认值：`"search"`。
+
+**说明**：
+
+- `mcp` 包经核心依赖 `openjiuwen→fastmcp→mcp` 传递引入，`uv sync` 标准安装即包含；如需显式锁定版本可 `uv sync --extra mcp`（约束 `mcp>=1.26,<2.0`）。
+- 配置后，三个 Agent 入口（`DeepresearchAgent`、`DeepSearchAgent`、`SimpleReactSearchAgent`）在 `tool_map == "search_fetch"` 时会连接 MCP servers，将工具以 `mcp{server_name}__{tool}` 形式注入到信息采集节点 `InfoRetrievalNode`，并在运行结束后关闭连接。
+- 单个 server 连接失败时记 warning 并跳过，不阻塞其他 server；MCP 包未安装时该次运行不接入 MCP 工具，其余流程正常。
+
+**样例**：
+
+```python
+>>> from openjiuwen_deepsearch.config.config import AgentConfig, McpServerRuntimeConfig
+
+>>> # 样例1：配置单个 MCP server
+>>> agent_config = AgentConfig(
+...     mcp_servers=[
+...         McpServerRuntimeConfig(
+...             server_name="custom_search",
+...             server_url="http://localhost:8000/mcp",
+...             transport_type="streamable_http",
+...             headers={"Authorization": "Bearer xxx"},
+...             timeout=30.0,
+...         )
+...     ]
+... )
+>>> print(agent_config.mcp_servers[0].server_name)
+custom_search
+
+>>> # 样例2：默认不接入 MCP server
+>>> agent_config = AgentConfig()
+>>> print(agent_config.mcp_servers)
+[]
+```
+
 ## class openjiuwen_deepsearch.config.config.AgentConfig
 ```python
 class openjiuwen_deepsearch.config.config.AgentConfig()
@@ -328,6 +375,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **search_workflow_per_question_params**(PerQuestionParams, 可选)：search/react 单问题控制参数（时间、并发、工具映射、上限等）。默认值：`PerQuestionParams()`。
 - **search_workflow_milvus_config**(MilvusConfig, 可选)：`retrieve` 工具路径使用的 Milvus/Embedding 配置。默认值：`MilvusConfig()`。
 - **web_fetch_provider_config**(WebFetchProviderConfig, 可选)：显式 DeepSearch 抓取 provider 配置。当前 v1 需设置 `provider_name="jina"` 才能启用 `web_fetch`。默认值：`WebFetchProviderConfig()`。
+- **mcp_servers**(List[McpServerRuntimeConfig], 可选)：MCP（Model Context Protocol）server 配置列表。配置后，三个 Agent 入口（`DeepresearchAgent`、`DeepSearchAgent`、`SimpleReactSearchAgent`）在 `tool_map == "search_fetch"` 时会连接 MCP servers，将工具以 `mcp{server_name}__{tool}` 形式注入到信息采集节点 `InfoRetrievalNode`。默认值：`[]`。
 - **model_config**(ConfigDict，内部配置)：Pydantic 模型配置；`arbitrary_types_allowed=True`。
 - **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
 - **user_feedback_processor_enable**(bool, 可选)：是否启用报告生成后的局部优化能力。默认值：`False`。
