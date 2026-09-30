@@ -19,8 +19,10 @@
 - 聚焦、简洁且不需要独立比较轴、类别、阶段、机制、对象、问题或步骤的章节，可以生成仅含一级标题的扁平子大纲；需要显式内部结构时仍生成连续编号的二级标题。
 - 子大纲的每个非空行必须是第一行一级标题或后续二级标题。说明文字、代码围栏、正文、空标题、错序标题和其他章节标题均视为非法输出，并触发子大纲重试。
 - 所有传入 LLM prompt 的 outline 均经 `export_outline_without_plans` 处理：剥离 `plans`（含 `step_result`/`evaluation` 等收集结果全文），仅保留章节标题、描述、依赖关系等结构骨架，避免超长输入导致模型 token 超限。
-- 子大纲生成 Prompt 中使用的 fulltext 内容会被截断到 500 字符以控制输入长度；完整 fulltext 内容仍保留给后续子报告写作 Prompt 使用。
-- key passages 只约束模型新增的具体事实、指标、案例、公司名和命名示例，不用于重命名或泛化用户指定的 subsection titles。
+- 子大纲 Prompt 使用 `outline_evidence_cards`，而非旧 `sub_section_core_content`：全文卡提供确定性截取的 `outline_excerpt`、该来源 rationale 选中的原文 `selected_passages` 和规则抽取的 `coverage_passages`，段落卡提供入选的 `passage_text`。完整 `original_content` 只保留给后续子报告写作 Prompt 使用。
+- 子大纲使用 `time_contract` 的 source/content 时间范围；子报告写作从同一 `research_intent` 单独构造既有时间 Prompt 上下文。两个阶段共享 `rationale_contract`，其中以单一 `coverage_status` 提供 rationale 覆盖状态，另含覆盖分、优先级和 citation 导航；阶段差异由各自 Prompt 解释，不在数据中分别重复编码 `heading_policy` 与 `writing_policy`。采集链路的 `key_passages` 不再作为新子大纲的正式输入。
+- 子大纲中的显式年份必须落在 `time_contract.content_date_scope` 内；越界时作为受控校验失败进入重试。
+- 标题时间校验支持完整日期、中文年月日、数字年月与缩写年份范围。歧义的 `YYYY-MM` / `YYYY/MM` 在后两位为 `01`—`12` 时优先解释为整月；`2020-21`、`2020–21` 等解释为跨年范围，分隔符必须存在。ISO、IEC、RFC、IEEE、DIN、EN、GB 标准编号（含冒号后的版本年）及 RTX/GTX 型号不作为事实时间；同一标题中的其他年份仍须校验。
 - 全文抽取阶段（`enrich_fulltext_for_section` 为同步调用，非 async），`FullTextEvidence` 会聚合同一 URL 下所有段落的 reliability（取最大值）和 data_density，使全文证据继承段落级的质量评估。
 - 子报告写作严格复用已批准的子大纲标题。单行扁平大纲只允许一个 H1，不得增加子大纲之外的 Markdown 标题；章节要求的结论、建议、启示等内容仍须保留，并使用段落、编号句、列表、表格或加粗引导语表达。
 - professional 写作 Prompt 对标题施加与下游校验一致的硬约束：禁止 H3 及更深标题（深层结构用加粗无序列表表达）、子大纲每一行必须恰好输出为一个 Markdown 标题、禁止子大纲之外的任何 `#`/`##` 标题、标题文字必须逐字复制，并明示"标题不匹配将导致整章校验失败作废"。
@@ -64,8 +66,8 @@
 
 1. Reporter 读取 outline section、章节计划和 classified contents。
 2. 构建章节局部契约和资料摘要。
-3. LLM 生成当前章节的子大纲；`Reporter.check_chapter_format()`（定义于 `markdown_utils.py`）逐行验证标题格式和顺序，非法输出进入重试。
-4. 信息维度矩阵文档选择：rationale 生成 → 抽取式总结+打分 → 按维度 top-k 段落选择（0 分段落不参与选择） → L1/L2 过滤 → 全文抽取（同步调用） → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。
+3. 信息维度矩阵文档选择：rationale 生成 → 抽取式总结+打分 → 按维度 top-k 段落选择（0 分段落不参与选择） → L1/L2 过滤 → 全文抽取（同步调用） → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。随后基于已有数据构造 `outline_evidence_cards`、`time_contract` 与 `rationale_contract`，不增加 LLM 调用。
+4. LLM 使用章节结构上下文、evidence cards 和两个 contract 生成当前章节的子大纲；`Reporter.check_chapter_format()`（定义于 `markdown_utils.py`）逐行验证标题格式和顺序，随后校验显式年份是否落在 content 时间契约内；非法输出进入重试。
 5. 使用专业版子报告 Prompt，并遵循已批准子大纲的扁平/层级标题契约；Brief 由独立 Brief 工作流处理，不经过本 Reporter 子报告流程。
 6. LLM 按已批准的子大纲生成章节 Markdown。
 7. 标题编号和过深标题被清理，并校验 Markdown 标题与子大纲逐项一致；章节草稿同时校验不含 Mermaid/图表源码，且 Mermaid 语法判断仅针对代码围栏内容，不会因普通正文关键词误判；任一章节校验失败，生成受控重试反馈并重新生成章节。
@@ -80,7 +82,7 @@
 
 - `Outline` / `Section`。
 - 章节 `Plan`。
-- `classified_content`。
+- `classified_content`、`outline_evidence_cards`、`time_contract`、`rationale_contract`。
 - `ResearchIntent`。
 - section local contract。
 
@@ -123,12 +125,14 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 
 ## 结构化证据辅助
 
-文档选择完成后，Reporter 使用已有的 rationale 和覆盖矩阵构建精简的结构化证据说明，不增加 LLM 调用。guide 提供维度、优先级、覆盖状态到 citation 的导航，每个维度最多保留三篇覆盖分最高的入选文档；key passages 和完整证据继续由原有的子大纲上下文与 `Collected Evidence` 提供，避免重复内容和额外的模型输出协议。guide builder 接收与最终文档顺序对齐的 `doc_N` 键，用于读取对应的覆盖矩阵行。
+文档选择完成后，Reporter 使用已有的 rationale、入选段落、`classified_content` 和覆盖矩阵构造三个机器可读 sidecar，不增加 LLM 调用：`rationale_contract` 以 `coverage_status` 提供维度覆盖状态，并含覆盖分、优先级和 citation 导航；大纲与写作 Prompt 分别解释该状态对阶段行为的指导，不再通过 `heading_policy`、`writing_policy` 重复表达。写作阶段的 `covered` 表示有相关证据可用，不代表必须逐项写入；是否纳入正文由任务、章节大纲、优先级及与章节主线的相关性共同决定。`time_contract` 仅提供 source/content 时间范围；子大纲 system Prompt 负责固定的标题时间规则；`outline_evidence_cards` 为子大纲提供与最终写作证据对齐的紧凑视图。全文卡包含确定性摘要和对应 `coverage_passages`，段落卡包含入选 `passage_text`；写作继续使用 `classified_content` 中的完整证据和由同一 `research_intent` 构造的时间 Prompt 上下文。
 
-被提升为 fulltext 的段落会同时保留在 evidence_guide 中，确保其所属 rationale 的覆盖状态仍被计入，避免这些维度在 guide 中被误标为"未覆盖"。
+覆盖状态、分数及全文卡的段落关联统一使用 `enrich_fulltext_for_section` 返回的 `retained_passages`：它包含 L1/L2 过滤与去重后保留的段落，以及被提升为 fulltext 的对应段落；已被过滤或去重删除的段落不再影响合同评分。被提升为 fulltext 的段落仍参与 rationale 覆盖计算，并通过 URL 与全文 evidence card 关联，避免相应维度被误标为"未覆盖"。
 
-该说明提供给专业版模板化/非模板化子大纲及子报告：证据充分的主要信息维度用于辅助组织内容，弱证据要求谨慎表述，未覆盖维度不得作为新增事实的依据。模型仍可基于其他 covered citations 进行明确标识的综合分析，但必须说明剩余证据限制，不得把综合判断表述为来源直接报告的事实。Brief 由独立工作流使用其专有的证据收集、评审和写作契约。
+无搜索段落而使用前章背景兜底时，背景卡与用户素材卡可同时进入子大纲；背景卡的 citation ID 为 null，只用于章节衔接，不可作为外部引用。写作阶段继续接收同一前章背景。
 
-结构化证据说明只辅助组织已有材料，不替代 `classified_content`、原文和引用编号。覆盖矩阵缺失、稳定文档键不一致或 background-knowledge-only 路径下，系统使用空 guide 并保持原有生成流程。
+两个 contract 同时提供给专业版模板化/非模板化子大纲及子报告：证据充分的主要信息维度可辅助组织内容，弱证据要求谨慎表述，未覆盖维度不得作为新增事实的依据；大纲的模型新增显式年份不得超出 content 时间范围。Brief 由独立工作流使用其专有的证据收集、评审和写作契约。
 
-端到端排查时可在 INFO 日志中搜索 `[structured_evidence]`。`[build]` 只记录状态计数、文档数、字符数和 guide hash；`[sub_outline]` 与 `[sub_report]` 记录完整 guide 是否实际出现在对应 LLM 输入中，子报告还记录 `Collected Evidence` citation block 的数量和边界是否配对。INFO 不输出 rationale、URL 或完整 guide；`is_sensitive=False` 时只在 build 阶段通过 DEBUG 提供详细诊断。
+这些 sidecar 只辅助组织已有材料，不替代 `classified_content`、原文和引用编号。覆盖矩阵缺失、稳定文档键不一致或 background-knowledge-only 路径下，系统使用空 rationale contract 和可用的背景 evidence card 保持生成流程。
+
+端到端排查时可在 INFO 日志中搜索 `[structured_evidence]`。`[build]` 只记录状态计数、文档数、字符数和 contract/card 摘要；`[sub_outline]` 与 `[sub_report]` 记录相应 contracts 是否实际出现在 LLM 输入中，子报告还记录 `Collected Evidence` citation block 的数量和边界是否配对。INFO 不输出 rationale、URL 或完整 cards/contracts；`is_sensitive=False` 时只在 build 阶段通过 DEBUG 提供详细诊断。

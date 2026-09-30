@@ -610,7 +610,9 @@ def enrich_fulltext_for_section(
     Returns:
         Dict with keys ``classified_content``, ``sub_section_core_content``,
         ``sub_section_references``, ``structured_evidence_guide`` (passage-only),
-        ``fulltext_count`` and ``remaining_count``.
+        ``fulltext_count`` and ``remaining_count``. ``retained_passages`` holds
+        the final passage evidence, including passages promoted to fulltext,
+        for shared rationale contracts and outline cards.
     """
     selected_passages = passages.get("selected") or []
     raw_passages = passages.get("raw") or []
@@ -773,6 +775,9 @@ def enrich_fulltext_for_section(
         "remaining_count": len(remaining_passages),
         "fulltext_evidences": fulltext_evidences,
         "remaining_passages": remaining_passages,
+        # Include passages represented by fulltext citations, but exclude
+        # passages removed by coverage filtering or cross-source deduplication.
+        "retained_passages": remaining_passages + removed_passages,
         "remaining_passage_keys": remaining_passage_keys,
         "required_target_citation_indexes": required_target_citation_indexes,
     }
