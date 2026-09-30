@@ -17,6 +17,7 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import
     is_equal_length,
     is_list_of,
     is_valid_structured_triples,
+    normalize_reference_ids,
     normalize_structured_triple_reference_ids,
     type_check,
 )
@@ -180,7 +181,11 @@ class SourceTracerInfer:
 
         records = [{"id": index, "content": record.get("content", "")} for index, record in enumerate(search_records)]
         handle_datas = {"statement": conclusions[0], "references": records}  # 不包含最后一个主要结论
-        detection_func_and_args = {"detection_func": is_list_of, "args": int}
+        detection_func_and_args = {
+            "normalizer": normalize_reference_ids,
+            "detection_func": is_list_of,
+            "args": int,
+        }
         results = await call_model(self.model_name, "infer_validate_prompt", handle_datas, 
                                    detection_func_and_args=detection_func_and_args, 
                                    agent_name=AgentLlmName.SOURCE_TRACER_INFER_EXTRACT_REFERENCE.value)
