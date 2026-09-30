@@ -28,6 +28,10 @@ from openjiuwen_codesearch.retropus.persist import (
     load_retropus_index,
     read_manifest,
     safe_collection_name,
+    write_manifest,
+)
+from openjiuwen_codesearch.retropus.persist import (
+    pickle as _pickle,
 )
 
 
@@ -78,6 +82,61 @@ def test_dump_load_knowledge_graph(tmp_path: Path):
     assert loaded.chunk_overlap == 200
     assert loaded.get_imports_label(1, 1) == "self"
     assert loaded.get_file_nodes()[0].node.relative_path in (".", "a.py")
+
+
+def _arbitrary_code_probe(marker: str) -> None:
+    """Stand-in for an attacker-controlled callable: it must never run on unpickling."""
+    Path(marker).write_text("tampered", encoding="utf-8")
+
+
+def _tampered_kg_bytes(marker: Path) -> bytes:
+    """Hand-build a protocol-2 pickle whose REDUCE step targets an arbitrary global."""
+    module = _arbitrary_code_probe.__module__.encode()
+    name = _arbitrary_code_probe.__qualname__.encode()
+    arg = str(marker).encode()
+    return (
+        b"\x80\x02"  # PROTO 2
+        + b"c" + module + b"\n" + name + b"\n"  # GLOBAL <probe>
+        + b"X" + len(arg).to_bytes(4, "little") + arg  # BINUNICODE <marker>
+        + b"\x85"  # TUPLE1
+        + b"R"  # REDUCE
+        + b"."  # STOP
+    )
+
+
+def _write_tampered_kg(path: Path, marker: Path) -> None:
+    """Write a kg.pkl that would invoke an arbitrary global if unpickling were unrestricted."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_tampered_kg_bytes(marker))
+
+
+def test_load_knowledge_graph_rejects_arbitrary_global(tmp_path: Path):
+    marker = tmp_path / "tampered.txt"
+    path = tmp_path / "kg.pkl"
+    _write_tampered_kg(path, marker)
+
+    with pytest.raises(_pickle.UnpicklingError, match="forbidden global"):
+        load_knowledge_graph(path)
+    assert not marker.exists()
+
+
+def test_load_retropus_index_treats_forbidden_global_as_miss(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    cfg = RetropusSearchAgentConfig()
+    cache = tmp_path / "cache" / "col"
+    write_manifest(
+        cache,
+        repo_dir=repo,
+        collection="col",
+        fingerprint=config_fingerprint(cfg),
+    )
+
+    marker = tmp_path / "tampered.txt"
+    _write_tampered_kg(cache / "kg.pkl", marker)
+
+    assert load_retropus_index(cache, config=cfg, repo_dir=repo) is None
+    assert not marker.exists()
 
 
 def test_cache_fingerprint_mismatch(tmp_path: Path):
