@@ -52,7 +52,7 @@ class SourceTracerInfer:
         logger.debug("[SOURCE TRACER INFER] The response before Source Tracer Infer:\n %s", self.response)
         infer_messages = []
         error = None
-        try:
+        try:  # test
             # 根据生成模式获取结论与搜索记录
             await self.get_conclusion_and_records()
             # 异步生成每个结论的推理图和图结构数据
