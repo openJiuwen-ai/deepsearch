@@ -76,6 +76,7 @@ openJiuwen-DeepSearch 当前支持以下内置联网增强引擎，均通过 `we
 - `bocha`：通过 harness `web_tools` 适配的博查搜索。
 - `jina`：直接接入 Jina Search API，默认地址为 `https://s.jina.ai`。
 - `perplexity`：通过 harness `web_tools` 适配的 Perplexity 搜索。
+- `agc_ainetworking`：AGC AI Networking 的 `webSearch` 接口。
 - `custom`：加载外部自定义联网搜索工具。
 
 不同引擎的接入方式与配置重点如下：
@@ -83,6 +84,7 @@ openJiuwen-DeepSearch 当前支持以下内置联网增强引擎，均通过 `we
 - `jina` 使用项目内置的直接 HTTP API Wrapper；当 `search_url` 为空时，会自动回退到 `https://s.jina.ai`。国内网络环境如无法访问该默认地址，可显式将 `search_url` 配置为 `https://s.jinaai.cn`。可通过 `extension` 传入 `gl`、`hl`、`location`、`page` 等查询参数。
 - `bocha`、`perplexity` 使用 harness `web_tools` 适配层；默认不抓取网页正文，直接使用搜索 API 返回的摘要答案作为 content。如需抓取网页正文，可通过 `extension.fetch_webpage=True` 开启。支持通过 `extension.timeout_seconds` 控制调用超时。仅当底层 provider 支持 URL 覆盖时，`search_url` 才会生效。国内网络环境如无法访问 Perplexity 默认服务，需要配置可访问的代理或转发地址，并通过 `search_url` 显式覆盖。
 - `serper` 在研究态 `web_search_tool` 中映射到 Google/Serper Wrapper，便于与服务端配置名称保持一致。
+- `agc_ainetworking` 使用 AGC AI Networking 的 `webSearch` 接口；其参数和站点约束见[AGC AI Networking 联网搜索](../../../feature/framework/agc_ainetworking_search.md)。
 - `tavily`、`google/serper`、`xunfei`、`petal` 保持原有接入方式，其中公共引擎允许 `search_url=""`，此时使用内置默认地址或 provider 默认行为。
 
 搜索结果进入 Collector 链路前，系统还会执行统一的内容裁剪与归一化：
@@ -192,6 +194,12 @@ import uuid
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
+# 可选：让本次查询报告使用用户提供的素材。
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/background", "content": "用户提供的背景资料正文"}
+]
+
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
@@ -258,6 +266,12 @@ async for chunk in agent.run(message=message, conversation_id=str(uuid.uuid4()),
 import base64
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 
+# 可选：模板约束与用户素材可同时使用；在创建 Agent 前配置素材。
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/template-source", "content": "应按模板分析的已有资料"}
+]
+
 # 提供入参
 file_path = "用户提供的模板文件名，以md后缀结尾"
 file_stream = base64.b64encode(read_file_safely(file_path)).decode("utf-8")  # "用户提供的模板文件内容的base64编码"
@@ -310,6 +324,12 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 ```python
 import base64
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+
+# 可选：样例报告用于提取结构，用户素材则作为本次研究的额外事实来源。
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/report-source", "content": "补充到样例报告结构中的最新资料"}
+]
 
 # 提供入参
 file_path = "用户提供的样例报告文件的文件名，以md/docx/pdf/html后缀结尾"
@@ -690,4 +710,4 @@ async for chunk in agent.run(message=finish_message, conversation_id=conversatio
 ---
 
  - 开发指南的完整示例代码，详见：https://gitcode.com/openJiuwen/deepsearch/blob/dev/main.py
- - 更多关于openJiuwen-DeepSearch的API介绍，详见：https://gitcode.com/openJiuwen/deepsearch/tree/dev/docs/zh/4.%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97
+ - 更多关于openJiuwen-DeepSearch的API介绍，详见：https://gitcode.com/openJiuwen/deepsearch/tree/dev/docs/zh/3.%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97
