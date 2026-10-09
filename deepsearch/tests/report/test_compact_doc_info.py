@@ -41,6 +41,41 @@ def test_build_structured_evidence_guide_maps_selected_docs_to_dimensions():
     assert "R3 [primary, uncovered]: Policy impact" in guide
 
 
+def test_build_structured_evidence_guide_reports_requirement_evidence_gaps():
+    docs = [{"index": 1, "doc_title": "Evidence"}]
+    rationales = [
+        {"id": "R1", "description": "Supported requirement", "covers": ["q1"]},
+        {"id": "R2", "description": "Missing requirement", "covers": ["q2"]},
+    ]
+    guide = build_structured_evidence_guide(
+        docs,
+        rationales,
+        {"coverage_matrix": {"passage_0": {"R1": 0.8, "R2": 0.1}}},
+        selected_passage_keys=["passage_0"],
+        requirements=[
+            {"id": "q1", "description": "Requirement one"},
+            {"id": "q2", "description": "Requirement two"},
+        ],
+    )
+
+    assert "Requirement evidence coverage: 1/2" in guide
+    assert "[requirement:q1, evidence found" in guide
+    assert "[requirement:q2, evidence gap" in guide
+
+
+def test_build_structured_evidence_guide_reports_gaps_when_no_passage_survives():
+    guide = build_structured_evidence_guide(
+        [],
+        [{"id": "R1", "description": "A need", "covers": ["q1"]}],
+        {"coverage_matrix": {}},
+        selected_passage_keys=[],
+        requirements=[{"id": "q1", "description": "Required fact"}],
+    )
+
+    assert "Requirement evidence coverage: 0/1" in guide
+    assert "evidence gap" in guide
+
+
 def test_build_structured_evidence_guide_returns_empty_without_matrix_rows():
     doc = {"index": 1, "doc_title": "Document", "key_passages": ["Evidence"]}
 

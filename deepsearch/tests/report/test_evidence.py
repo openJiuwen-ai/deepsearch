@@ -1,4 +1,5 @@
 import logging
+import json
 from unittest.mock import patch, AsyncMock
 
 import pytest
@@ -47,8 +48,10 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
             "language": ENGLISH,
             "section_idx": 3,
             "section_task": "3 企业经营与行业分析",
-            "section_description": "desc",
+            "section_description": "Compare regional outcomes across historical periods and explain the differences",
             "report_task": "task",
+            "original_query": "Compare the topic across multiple regions and time periods",
+            "section_format_requirements": ["include a comparison table"],
             "current_outline": "1 Context\n3 企业经营与行业分析",
             "max_generate_retry_num": 3,
         }
@@ -63,7 +66,14 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
                     return {"content": "[]"}
                 if len(calls) == 2:
                     return {"content": '{"rationales": "invalid"}'}
-                return {"content": '{"rationales": [{"id": "r1", "description": "d", "type": "factual"}]}'}
+                requirements = [{"id": f"q{i}", "description": f"Requirement {i}"} for i in range(1, 11)]
+                rationales = [
+                    {"id": f"r{i}", "description": f"Evidence dimension {i}", "type": "qualitative",
+                     "priority": "primary", "covers": [f"q{i}"]}
+                    for i in range(1, 11)
+                ]
+                return {"content": json.dumps({"requirements": requirements, "rationales": rationales})}
+                # Valid payload is constructed above with a full checklist.
             mock_ainvoke.side_effect = side_effect
             rationales, last_error = await reporter._generate_section_rationales(current_inputs)
         assert rationales and last_error == ""
@@ -71,6 +81,10 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
         assert all([m["role"] for m in attempt] == ["system", "user"] for attempt in calls)
         assert calls[0][0] == calls[1][0] == calls[2][0]
         assert all("企业经营与行业分析" in attempt[-1]["content"] for attempt in calls)
+        assert "Task complexity assessment: medium" in calls[0][-1]["content"]
+        assert "Generate between 10 and 15 rationales" in calls[0][-1]["content"]
+        assert "Section format requirements:" in calls[0][-1]["content"]
+        assert "include a comparison table" in calls[0][-1]["content"]
         assert "not a JSON object" in calls[1][-1]["content"]
         assert "not a JSON object" not in calls[2][-1]["content"]
         assert "not a list" in calls[2][-1]["content"]
