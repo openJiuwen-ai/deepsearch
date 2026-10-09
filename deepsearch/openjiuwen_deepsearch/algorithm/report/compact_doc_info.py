@@ -56,13 +56,33 @@ def build_structured_evidence_guide(
     coverage_result: dict[str, Any],
     *,
     selected_passage_keys: list[str],
+    requirements: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build compact writing guidance from existing document-selection results."""
     coverage_matrix = coverage_result.get("coverage_matrix", {})
     if not isinstance(coverage_matrix, dict):
         coverage_matrix = {}
     if not selected_passages or not rationales or not coverage_matrix:
-        return ""
+        if not requirements:
+            return ""
+        diagnostics = build_requirement_evidence_diagnostics(
+            rationales, requirements, coverage_result, selected_passage_keys
+        )
+        lines = [
+            "Structured evidence guidance:",
+            f"Requirement evidence coverage: {diagnostics['requirements_with_evidence']}/"
+            f"{diagnostics['requirement_count']} requirements have selected evidence "
+            "(coverage >= 0.30).",
+        ]
+        for item in diagnostics["items"]:
+            rationale_ids = ", ".join(item["rationale_ids"]) or "unmapped"
+            status = "evidence found" if item["status"] == "evidence_found" else "evidence gap"
+            lines.append(
+                f"- [requirement:{item['requirement_id']}, {status}, "
+                f"best_coverage:{item['best_coverage']:.2f}, rationales:{rationale_ids}] "
+                f"{item['description']}"
+            )
+        return "\n".join(lines)
     if len(selected_passages) != len(selected_passage_keys):
         logger.warning(
             "Cannot build structured evidence guide: selected passages and stable keys are misaligned"
@@ -109,7 +129,78 @@ def build_structured_evidence_guide(
                 f"  - [citation:{citation_index}] {title} (coverage: {score:.2f})"
             )
 
+    if requirements:
+        diagnostics = build_requirement_evidence_diagnostics(
+            rationales,
+            requirements,
+            coverage_result,
+            selected_passage_keys,
+        )
+        lines.append(
+            f"Requirement evidence coverage: {diagnostics['requirements_with_evidence']}/"
+            f"{diagnostics['requirement_count']} "
+            "requirements have selected evidence (coverage >= 0.30)."
+        )
+        for item in diagnostics["items"]:
+            rationale_ids = ", ".join(item["rationale_ids"]) or "unmapped"
+            status = "evidence found" if item["status"] == "evidence_found" else "evidence gap"
+            lines.append(
+                f"- [requirement:{item['requirement_id']}, {status}, "
+                f"best_coverage:{item['best_coverage']:.2f}, rationales:{rationale_ids}] "
+                f"{item['description']}"
+            )
+
     return "\n".join(lines)
+
+
+def build_requirement_evidence_diagnostics(
+    rationales: list[dict[str, Any]],
+    requirements: list[dict[str, Any]],
+    coverage_result: dict[str, Any],
+    selected_passage_keys: list[str],
+    *,
+    evidence_threshold: float = 0.3,
+) -> dict[str, Any]:
+    """Report whether each checklist requirement has selected supporting evidence."""
+    coverage_matrix = coverage_result.get("coverage_matrix", {})
+    if not isinstance(coverage_matrix, dict):
+        coverage_matrix = {}
+    items = []
+    for requirement in requirements:
+        requirement_id = str(requirement.get("id", "") or "")
+        mapped = [
+            rationale
+            for rationale in rationales
+            if isinstance(rationale, dict)
+            and requirement_id in rationale.get("covers", [])
+        ]
+        rationale_ids = [str(rationale.get("id", "")) for rationale in mapped]
+        best_coverage = max(
+            (
+                safe_float(coverage.get(rationale_id, 0.0))
+                for rationale_id in rationale_ids
+                for passage_key in selected_passage_keys
+                for coverage in [coverage_matrix.get(passage_key, {})]
+                if isinstance(coverage, dict)
+            ),
+            default=0.0,
+        )
+        items.append({
+            "requirement_id": requirement_id,
+            "description": str(requirement.get("description", "") or ""),
+            "rationale_ids": rationale_ids,
+            "best_coverage": best_coverage,
+            "status": "evidence_found" if best_coverage >= evidence_threshold else "evidence_gap",
+        })
+    found = sum(item["status"] == "evidence_found" for item in items)
+    total = len(items)
+    return {
+        "requirement_count": total,
+        "requirements_with_evidence": found,
+        "coverage_rate": (found / total) if total else 0.0,
+        "evidence_threshold": evidence_threshold,
+        "items": items,
+    }
 
 
 def build_coverage_passage_block(coverage_sections: list[tuple[int, list[str]]]) -> str:

@@ -80,6 +80,8 @@ class TestWriteDocSelectionDebug:
         assert set(debug.keys()) == {
             "rationales", "doc_filter", "coverage_matrix",
             "dimension_scores", "passage_info_map", "selected_passages",
+            "rationale_requirements", "rationale_coverage_diagnostics",
+            "requirement_evidence_diagnostics",
         }
 
     def test_doc_filter_counts(self):

@@ -492,6 +492,7 @@ class SubReporterNode(BaseNode):
             report_format=session.get_global_state("section_context.report_format") or ReportFormat.MARKDOWN,
             report_style=session.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
             section_idx=section_idx,  # 章节序号,
+            original_query=session.get_global_state("section_context.original_query") or "",
             report_task=session.get_global_state("section_context.report_task"),  # 总报告标题
             section_task=session.get_global_state("section_context.section_task"),  # 当前章节标题
             section_iscore=session.get_global_state("section_context.section_iscore") or False,  # 是否核心章节
