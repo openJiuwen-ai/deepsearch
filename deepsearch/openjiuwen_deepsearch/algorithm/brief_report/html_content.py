@@ -45,6 +45,7 @@ _CHECKED_CITATION_RE = re.compile(r"\[checked_citation:[^\]]*\]\[\[(?P<num>\d+)\
 _SOURCE_TRACER_RE = re.compile(
     r"(?P<image>!)?\[source_tracer_result\]\[(?P<title>.*?)\]\(", re.DOTALL
 )
+_SOURCE_TRACE_ID_COMMENT_RE = re.compile(r"<!--source-trace-id:[A-Za-z0-9_-]+-->")
 _ENTRY_LINE_RE = re.compile(r"(?ms)^\[(?P<num>\d+)\]\.\s*\[(?P<title>.*?)\]\(")
 _INLINE_CITATION_PREFIX_RE = re.compile(r"\[\[(?P<number>\d+)\]\]\(")
 _CITATION_OPAQUE_TAGS = frozenset({"a", "style", "template"})
@@ -103,6 +104,10 @@ def preprocess_markdown(markdown: str) -> BriefHtmlPreprocessResult:
         if parsed is None:
             continue
         url, end = parsed
+        if fixed_number is None:
+            source_trace_id_comment = _SOURCE_TRACE_ID_COMMENT_RE.match(markdown, end)
+            if source_trace_id_comment is not None:
+                end = source_trace_id_comment.end()
         if fixed_number is not None:
             number = fixed_number
         elif url in url_to_number:

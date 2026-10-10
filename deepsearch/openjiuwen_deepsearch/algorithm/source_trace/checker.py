@@ -57,10 +57,15 @@ def preprocess_info(report: str, datas: list, language: str) -> dict:
             "CitationChecker: empty report, skipped citation check.")
         return dict(need_check=False)
 
-    if len(datas) == 0:
+    has_source_tracer_marker = "[source_tracer_result]" in report
+    if len(datas) == 0 and not has_source_tracer_marker:
         logger.warning(
             "CitationChecker: empty datas means no inline citation in the text, skipped citation check.")
         return dict(need_check=False)
+
+    if len(datas) == 0:
+        logger.warning(
+            "CitationChecker: empty datas with inline citations; continuing to remove unmatched citations.")
 
     report = remove_last_section(report)
 

@@ -15,6 +15,7 @@ import copy
 
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import ensure_source_trace_id
 from openjiuwen_deepsearch.utils.common_utils.text_utils import (
     escape_html_text,
     escape_markdown_link_text,
@@ -121,7 +122,11 @@ class InsertChartNode:
 
                 # 如果URL验证失败，使用一个占位链接文本（不插入实际链接）
                 if safe_url:
-                    insertion += f"[source_tracer_result][{safe_link_title}]({safe_url})"
+                    source_trace_id = ensure_source_trace_id(source_data)
+                    insertion += (
+                        f"[source_tracer_result][{safe_link_title}]({safe_url})"
+                        f"<!--source-trace-id:{source_trace_id}-->"
+                    )
             logger.debug("%s Inserted source trace data, the figure id is %s",
                         self._log_prefix, chart.get('chart_id', ''))
         else:
@@ -179,6 +184,7 @@ class InsertChartNode:
             insert_source_traces = []
             for source_data in source_datas:
                 pos_offset += 1
+                source_trace_id = ensure_source_trace_id(source_data)
                 chart_source_data = {
                     "name": "",
                     "url": source_data.get("url", ""),
@@ -190,6 +196,7 @@ class InsertChartNode:
                     "chunk": chart.get("description", ""),
                     "score": chart.get("score", 0) / 100, # 后续分数应用于溯源模块，分制对齐
                     "id": "",
+                    "source_trace_id": source_trace_id,
                     "_sentence_position": sentence_position + pos_offset, # 符合datas中位置递增变化即可
                     "is_vlm_chart": True,
                 }

@@ -8,8 +8,7 @@ from openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research impo
     CitationCheckerResearch,
     SourceTracerCitationMarker,
 )
-from openjiuwen_deepsearch.common.exception import CustomIndexException
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import ensure_source_trace_id
 
 
 def make_source_tracer_marker(start, end, string="mocked string"):
@@ -306,33 +305,45 @@ class TestResearchCitationChecker:
         assert datas[0]['valid'] is False
 
     def test_process_single_citation_index_out_of_range(self):
-        """Test processing a citation with index out of range."""
+        """An unmatched citation is skipped instead of aborting SourceTracer."""
         para = "这是一个测试[source_tracer_result][示例](https://example.com)引用。"
         marker = self.checker._iter_source_tracer_citation_markers(para, self.checker.citation_regex)[0]
         datas = []  # Empty datas
         processed_citation_urls = {}
         data_index = 0
 
-        with pytest.raises(CustomIndexException):
-            self.checker.validate_and_process_single_citation(
-                marker, datas, processed_citation_urls, data_index)
+        assert self.checker.validate_and_process_single_citation(
+            marker, datas, processed_citation_urls, data_index
+        ) == []
+        assert self.checker.invalid_citation_counts["missing source data"] == 1
 
     def test_process_single_paragraph_length_mismatch(self):
-        """Test processing a paragraph with citation length mismatch."""
+        """A validation skip does not turn into a paragraph-level exception."""
         para = "这是一个测试[source_tracer_result][示例](https://example.com)引用。"
-        datas = []
+        datas = [{"url": "https://example.com", "valid": True}]
         data_index = 0
 
-        # Mock to simulate that validate_and_process_single_citation raises an exception
+        # Simulate a validator that skips the marker without deleting data.
         with patch.object(self.checker, 'validate_and_process_single_citation') as mock_process:
-            mock_process.side_effect = CustomIndexException(
-                StatusCode.PARAM_CHECK_ERROR_INDEX_OUT_OF_RANGE.code,
-                "Index out of range"
-            )
+            mock_process.return_value = []
 
-            with pytest.raises(CustomIndexException):
-                self.checker.process_single_paragraph_citations(
-                    para, datas, data_index)
+            result_para, result_index, del_indices = self.checker.process_single_paragraph_citations(
+                para, datas, data_index
+            )
+            assert result_para == para
+            assert result_index == 1
+            assert del_indices == []
+
+    def test_process_single_paragraph_removes_excess_markers_without_data(self):
+        para = "正文[source_tracer_result][示例](https://example.com)结尾"
+
+        result_para, result_index, del_indices = self.checker.process_single_paragraph_citations(
+            para, [], 0
+        )
+
+        assert result_para == "正文结尾"
+        assert result_index == 0
+        assert del_indices == []
 
     @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     def test_preprocess_text_and_datas_with_logging(self, mock_log_manager):
@@ -345,7 +356,7 @@ class TestResearchCitationChecker:
             text, datas)
 
         assert result_text == "这是一个测试文章"
-        assert result_datas == datas
+        assert result_datas == []
 
     def test_replace_inline_citations_with_image(self):
         """Test replacement with image citation."""
@@ -372,6 +383,125 @@ class TestResearchCitationChecker:
         assert datas[0]["reference_index"] == 1
         assert "citation_start_offset" not in datas[0]
         assert "citation_end_offset" not in datas[0]
+
+    def test_transform_references_matches_sources_by_url_not_data_position(self):
+        url_a = "https://example.com/a"
+        url_b = "https://example.com/b"
+        text = {
+            "article": (
+                f"B[source_tracer_result][B]({url_b}) "
+                f"A[source_tracer_result][A]({url_a})"
+            )
+        }
+        # Deliberately reverse source-data order. Position-based association
+        # would incorrectly invalidate both citations.
+        datas = [
+            {"url": url_a, "title": "A", "valid": True, "score": 0.9},
+            {"url": url_b, "title": "B", "valid": True, "score": 0.8},
+        ]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert f"[checked_citation:0][[1]]({url_b})" in result_text
+        assert f"[checked_citation:1][[2]]({url_a})" in result_text
+        assert [item["url"] for item in result_datas] == [url_b, url_a]
+
+    def test_transform_references_removes_only_unmatched_citation(self):
+        known_url = "https://example.com/known"
+        missing_url = "https://example.com/missing"
+        text = {
+            "article": (
+                f"坏引用[source_tracer_result][Missing]({missing_url})；"
+                f"好引用[source_tracer_result][Known]({known_url})"
+            )
+        }
+        datas = [{"url": known_url, "title": "Known", "valid": True, "score": 0.9}]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert missing_url not in result_text
+        assert f"[checked_citation:0][[1]]({known_url})" in result_text
+        assert [item["url"] for item in result_datas] == [known_url]
+        assert self.checker.invalid_citation_counts["missing source data"] == 1
+
+    def test_transform_references_removes_markers_when_all_source_data_is_missing(self):
+        text = {
+            "article": (
+                "Body[source_tracer_result][Missing](https://example.com/missing)"
+            )
+        }
+
+        result_text, result_datas = self.checker.transform_references(text, [])
+
+        assert result_text == "Body\n\n"
+        assert result_datas == []
+        assert self.checker.invalid_citation_counts["missing source data"] == 1
+
+    def test_transform_references_prefers_source_trace_id_for_same_url(self):
+        url = "https://example.com/shared"
+        data_a = {
+            "source_trace_id": "source-a",
+            "url": url,
+            "title": "A",
+            "content": "source A content",
+            "valid": True,
+            "score": 0.9,
+        }
+        data_b = {
+            "source_trace_id": "source-b",
+            "url": url,
+            "title": "B",
+            "content": "source B content",
+            "valid": True,
+            "score": 0.8,
+        }
+        text = {
+            "article": (
+                f"B[source_tracer_result][B]({url})<!--source-trace-id:source-b-->。独立正文。"
+                f"A[source_tracer_result][A]({url})<!--source-trace-id:source-a-->"
+            )
+        }
+
+        _result_text, result_datas = self.checker.transform_references(text, [data_a, data_b])
+
+        assert [item["source_trace_id"] for item in result_datas] == ["source-b", "source-a"]
+        assert [item["content"] for item in result_datas] == ["source B content", "source A content"]
+
+    def test_transform_references_uses_unique_ids_for_identical_source_instances(self):
+        url = "https://example.com/shared"
+        data_a = {"url": url, "title": "Shared", "content": "Same", "valid": True, "score": 0.9}
+        data_b = {"url": url, "title": "Shared", "content": "Same", "valid": True, "score": 0.8}
+        source_id_a = ensure_source_trace_id(data_a)
+        source_id_b = ensure_source_trace_id(data_b)
+        text = {
+            "article": (
+                f"B[source_tracer_result][Shared]({url})<!--source-trace-id:{source_id_b}-->"
+                " independent text "
+                f"A[source_tracer_result][Shared]({url})<!--source-trace-id:{source_id_a}-->"
+            )
+        }
+
+        _result_text, result_datas = self.checker.transform_references(text, [data_a, data_b])
+
+        assert source_id_a != source_id_b
+        assert [item["score"] for item in result_datas] == [0.8, 0.9]
+
+    def test_transform_references_replaces_unsafe_legacy_data_source_trace_id(self):
+        url = "https://example.com/legacy"
+        text = {"article": f"正文[source_tracer_result][Legacy]({url})"}
+        datas = [{
+            "source_trace_id": "safe--><script>alert(1)</script>",
+            "url": url,
+            "title": "Legacy",
+            "valid": True,
+            "score": 0.9,
+        }]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert "<script>" not in result_text
+        assert result_datas[0]["source_trace_id"].isalnum()
+        assert len(result_datas[0]["source_trace_id"]) == 32
 
     @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     def test_transform_references_with_logging(self, mock_log_manager):
