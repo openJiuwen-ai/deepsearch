@@ -14,8 +14,42 @@ from unittest.mock import patch, AsyncMock
 from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import (
     CitationVerifyResearch,
 )
+from openjiuwen_deepsearch.algorithm.chart_generation.insert_chart import InsertChartNode
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research"
+
+
+class TestChartSourceTraceInsertion:
+    """Chart source markers and data must keep the same stable identity."""
+
+    def test_chart_source_marker_and_data_share_source_trace_id(self):
+        node = InsertChartNode(output_dir="")
+        chart = {
+            "anchor_match_para": "Chart anchor",
+            "chart_id": "chart-1",
+            "chart_title": "Chart title",
+            "description": "Chart description",
+            "score": 80,
+            "source_datas": [{
+                "url": "https://example.com/chart-source",
+                "title": "Chart source",
+                "original_content": "Chart source content",
+            }],
+        }
+
+        report, source_trace_datas = node.run(
+            report_content="Chart anchor",
+            charts_info={"section-1": [chart]},
+            source_trace_datas=[{
+                "_sentence_position": 0,
+                "url": "https://example.com/existing",
+            }],
+        )
+
+        inserted_source = source_trace_datas[0]
+        source_trace_id = inserted_source["source_trace_id"]
+        assert f"<!--source-trace-id:{source_trace_id}-->" in report
+        assert source_trace_id == chart["source_datas"][0]["source_trace_id"]
 
 
 class TestChartCitationLlmPath:
