@@ -54,6 +54,19 @@ def test_preprocess_handles_source_tracer_fallback_and_deduplicates_urls():
     assert "[2]. [来源乙](https://example.com/b)" in pre.cleaned_markdown
 
 
+def test_preprocess_removes_source_trace_id_comment_from_fallback_marker():
+    markdown = (
+        "Conclusion [source_tracer_result][Source](https://example.com/a)"
+        "<!--source-trace-id:stable-source-id-->。\n"
+    )
+
+    pre = preprocess_markdown(markdown)
+
+    assert "source-trace-id" not in pre.cleaned_markdown
+    assert "Conclusion [[1]](https://example.com/a)。" in pre.cleaned_markdown
+    assert pre.reference_entries == [(1, "Source", "https://example.com/a")]
+
+
 def test_preprocess_converts_image_references_into_text_citations():
     """source_tracer 图片引用（! 前缀）按文本引用统一处理并进入参考文献集合。"""
     markdown = "说明 ![source_tracer_result][图](https://example.com/img) 结束。\n"

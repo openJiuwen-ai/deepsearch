@@ -5,6 +5,7 @@ import logging
 import re
 from typing import List, Dict, Any, Optional, Tuple
 
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import ensure_source_trace_id
 from openjiuwen_deepsearch.utils.common_utils.text_utils import split_into_sentences
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -381,7 +382,14 @@ def _process_citation_match(match, report: str, citation_pattern: str, citation_
     if citation_num in citation_mapping:
         mapping = citation_mapping[citation_num]
         if mapping:
-            replacement_text = f"[source_tracer_result][{mapping['title']}]({mapping['url']})"
+            source_trace_id = mapping.get("source_trace_id")
+            source_id_suffix = (
+                f"<!--source-trace-id:{source_trace_id}-->" if source_trace_id else ""
+            )
+            replacement_text = (
+                f"[source_tracer_result][{mapping['title']}]({mapping['url']})"
+                f"{source_id_suffix}"
+            )
         else:
             logger.warning(f"{citation_num} 不存在mapping")
             replacement_text = ""
@@ -479,6 +487,9 @@ def _build_citation_mapping(classified_content: List) -> Dict:
                 "content": original_content,
             }
 
+    for mapping in citation_mapping.values():
+        ensure_source_trace_id(mapping)
+
     return citation_mapping
 
 
@@ -512,6 +523,7 @@ def _build_datas_from_chunks(citation_chunks: List, citation_mapping: Dict) -> L
                 "url": url,
                 "title": title,
                 "content": content,
+                "source_trace_id": mapping.get("source_trace_id"),
                 "chunk": chunk,
                 "_sentence_position": sentence_position,
                 "_is_origin_data": True
