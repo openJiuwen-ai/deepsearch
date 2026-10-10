@@ -145,6 +145,33 @@ bocha 30
 - `web_search_tool` 返回结果进入 Collector 前会统一归一化为 `title`、`url`、`content`、`type` 等字段；字段别名如 `link`、`source_url`、`snippet`、`summary`、`answer` 会在 Collector 中兼容处理。
 - 搜索 API 返回的摘要答案以及（开启抓取后）预抓取的网页正文都会按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 进行裁剪，以限制网页搜索结果对后续链路的上下文占用。
 
+## 学术搜索配置
+
+### `ScholarlySearchConfig`
+
+聚合内置的 PubMed、arXiv 和 Semantic Scholar provider 配置；模型禁止未声明字段。
+
+- **fetch_full_text**(bool, 可选)：是否获取检索结果的全文。默认值：`True`。
+- **max_full_text_results_per_query**(int, 可选)：每个查询最多获取全文的结果数，取值范围 `[0, 10]`。默认值：`1`；`0` 表示不获取全文。
+- **pubmed**(PubMedScholarlyConfig, 可选)：PubMed provider 配置。默认值：`PubMedScholarlyConfig()`。
+- **arxiv**(ArxivScholarlyConfig, 可选)：arXiv provider 配置。默认值：`ArxivScholarlyConfig()`。
+- **semantic_scholar**(SemanticScholarConfig, 可选)：Semantic Scholar provider 配置。默认值：`SemanticScholarConfig()`。
+
+### `ScholarlyProviderConfig`（provider 通用字段）
+
+- **search_api_key**(bytearray, 可选)：provider API 密钥。默认值：空 `bytearray`。
+- **search_url**(str, 可选)：provider 搜索端点。默认值：`""`；非空时必须恰好为该 provider 的官方端点（不接受自定义或代理 URL）。
+- **max_search_results**(int, 可选)：每次查询返回的最大搜索结果数，取值范围 `[1, 10]`。默认值：`1`。
+- **requests_per_second**(float, 必填)：请求速率上限，取值范围 `(0, 10]`；各内置 provider 提供自己的默认值。
+
+### 内置 provider 默认值与专有字段
+
+| Provider | `search_url` 官方端点 | `requests_per_second` 默认值 | 专有字段 |
+| --- | --- | --- | --- |
+| `PubMedScholarlyConfig` | `https://eutils.ncbi.nlm.nih.gov/entrez/eutils` | `1 / 3` | **email**(str，默认 `""`)；**tool**(str，默认 `"openjiuwen-deepsearch"`) |
+| `ArxivScholarlyConfig` | `https://export.arxiv.org/api/query` | `1 / 3` | 无 |
+| `SemanticScholarConfig` | `https://api.semanticscholar.org/graph/v1/paper/search` | `0.5` | 无 |
+
 ## class openjiuwen_deepsearch.config.config.EmbedModelConfig
 ```python
 class openjiuwen_deepsearch.config.config.EmbedModelConfig()
@@ -298,7 +325,7 @@ class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig()
 
 **字段**：
 
-- **server_name**(str, 必填)：MCP server 名称，同一 space 内唯一；运行时作为工具命名空间前缀（`mcp{server_name}__{tool}`）。
+- **server_name**(str, 必填)：MCP server 名称，同一 space 内唯一；运行时作为工具命名空间的一部分，完整工具名格式为 `mcp__{server_name}__{tool}`。
 - **server_url**(str, 必填)：MCP server URL。
 - **transport_type**(str, 可选)：传输类型，实际仅 `sse` 与 `streamable_http` 有效。默认值：`"streamable_http"`。
 - **headers**(dict, 可选)：请求头字典。敏感 header key 的 value 在服务端会加密存储；SDK 直接传入时按原值使用。默认值：`{}`。
@@ -308,7 +335,7 @@ class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig()
 **说明**：
 
 - `mcp` 包经核心依赖 `openjiuwen→fastmcp→mcp` 传递引入，`uv sync` 标准安装即包含；如需显式锁定版本可 `uv sync --extra mcp`（约束 `mcp>=1.26,<2.0`）。
-- 配置后，三个 Agent 入口（`DeepresearchAgent`、`DeepSearchAgent`、`SimpleReactSearchAgent`）在 `tool_map == "search_fetch"` 时会连接 MCP servers，将工具以 `mcp{server_name}__{tool}` 形式注入到信息采集节点 `InfoRetrievalNode`，并在运行结束后关闭连接。
+- 配置后，三个 Agent 入口（`DeepresearchAgent`、`DeepSearchAgent`、`SimpleReactSearchAgent`）在 `tool_map == "search_fetch"` 时会连接 MCP servers，将工具以 `mcp__{server_name}__{tool}` 形式注入到信息采集节点 `InfoRetrievalNode`，并在运行结束后关闭连接。
 - 单个 server 连接失败时记 warning 并跳过，不阻塞其他 server；MCP 包未安装时该次运行不接入 MCP 工具，其余流程正常。
 
 **样例**：
@@ -375,7 +402,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **search_workflow_per_question_params**(PerQuestionParams, 可选)：search/react 单问题控制参数（时间、并发、工具映射、上限等）。默认值：`PerQuestionParams()`。
 - **search_workflow_milvus_config**(MilvusConfig, 可选)：`retrieve` 工具路径使用的 Milvus/Embedding 配置。默认值：`MilvusConfig()`。
 - **web_fetch_provider_config**(WebFetchProviderConfig, 可选)：显式 DeepSearch 抓取 provider 配置。当前 v1 需设置 `provider_name="jina"` 才能启用 `web_fetch`。默认值：`WebFetchProviderConfig()`。
-- **mcp_servers**(List[McpServerRuntimeConfig], 可选)：MCP（Model Context Protocol）server 配置列表。配置后，三个 Agent 入口（`DeepresearchAgent`、`DeepSearchAgent`、`SimpleReactSearchAgent`）在 `tool_map == "search_fetch"` 时会连接 MCP servers，将工具以 `mcp{server_name}__{tool}` 形式注入到信息采集节点 `InfoRetrievalNode`。默认值：`[]`。
+- **mcp_servers**(List[McpServerRuntimeConfig], 可选)：MCP（Model Context Protocol）server 配置列表。配置后，三个 Agent 入口（`DeepresearchAgent`、`DeepSearchAgent`、`SimpleReactSearchAgent`）在 `tool_map == "search_fetch"` 时会连接 MCP servers，将工具以 `mcp__{server_name}__{tool}` 形式注入到信息采集节点 `InfoRetrievalNode`。默认值：`[]`。
 - **model_config**(ConfigDict，内部配置)：Pydantic 模型配置；`arbitrary_types_allowed=True`。
 - **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
 - **user_feedback_processor_enable**(bool, 可选)：是否启用报告生成后的局部优化能力。默认值：`False`。

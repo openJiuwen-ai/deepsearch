@@ -77,6 +77,7 @@ Supported engines (set `web_search_engine_config.search_engine_name`):
 - `bocha`
 - `jina`
 - `perplexity`
+- `agc_ainetworking` (AGC AI Networking `webSearch`)
 - `custom`
 
 Integration notes:
@@ -84,6 +85,7 @@ Integration notes:
 - `jina` uses the built-in direct HTTP wrapper. When `search_url=""`, the runtime falls back to `https://s.jina.ai`. In China network environments where the default endpoint is unreachable, explicitly set `search_url` to `https://s.jinaai.cn`. Provider-specific query options such as `gl`, `hl`, `location`, and `page` are carried through `extension`.
 - `bocha` and `perplexity` use the harness `web_tools` adapter layer. By default they do not fetch webpage content and use the search API summary answer directly. To enable webpage fetching, set `extension.fetch_webpage=True`. They also support `extension.timeout_seconds`. `search_url` is only honored when the underlying provider supports URL override in `web_tools`. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
 - `serper` is exposed as a dedicated engine name so server-side configuration can use `serper`, while research-mode `web_search_tool` still reuses the Google/Serper wrapper internally.
+- `agc_ainetworking` uses AGC AI Networking's `webSearch` API. See [AGC AI Networking search](../../../feature/framework/agc_ainetworking_search.md) for its parameters and site constraints.
 - Public engines may keep `search_url` empty and rely on built-in defaults or provider defaults.
 
 Search results are also bounded before they reach the collector LLM path:
@@ -193,6 +195,12 @@ import uuid
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
+# Optional: make this query-only report use supplied materials.
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/background", "content": "User-provided background material"}
+]
+
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
@@ -254,6 +262,13 @@ Call `generate_template` with `is_template=True`:
 import base64
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 
+# Optional: template constraints and user materials can be used together.
+# Configure the materials before creating the agent.
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/template-source", "content": "Existing material to analyze under the template"}
+]
+
 file_path = "template.md"
 file_stream = base64.b64encode(read_file_safely(file_path)).decode("utf-8")
 is_template = True
@@ -289,6 +304,15 @@ async for chunk in agent.run(
 Same as above but upload a sample report (Markdown, DOCX, PDF, HTML) and set `is_template=False` in `generate_template`. The service extracts a template, then you call `run` with `report_template=user_template_content` as in the previous section.
 
 For uploaded sample reports, the decoded source file must be no larger than `50 MB`. PDFs support up to `512` pages. For DOCX, the uncompressed package must stay within `50 MB`, and `word/document.xml` must stay within `8 MB`. The parsed Markdown output is capped at `5 MB`.
+
+To add materials for this sample-report flow, configure them before creating the agent; the sample report supplies the structure and the materials supply additional facts:
+
+```python
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/report-source", "content": "Latest material for the sample-report structure"}
+]
+```
 
 # Report types and user materials
 

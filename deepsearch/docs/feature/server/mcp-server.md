@@ -57,15 +57,16 @@ pyproject 的 `[mcp]` extra（`uv sync --extra mcp`）为显式声明，装不�
 
 ## API 用法
 
-MCP server CRUD 端点注册在 `server/routers/mcp_server_router.py`：
+MCP server CRUD 端点由 `server/routers/mcp_server_router.py` 定义，并通过
+`server/routers/register.py` 注册在 `/api/v1/agent/deepsearch/mcp` 前缀下：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/mcp_server/create` | 创建 MCP server |
-| POST | `/mcp_server/get` | 获取指定 MCP server |
-| POST | `/mcp_server/list` | 获取 MCP server 列表 |
-| POST | `/mcp_server/delete` | 删除指定 MCP server |
-| POST | `/mcp_server/update` | 更新指定 MCP server |
+| POST | `/api/v1/agent/deepsearch/mcp/` | 创建 MCP server |
+| GET | `/api/v1/agent/deepsearch/mcp/{space_id}/{mcp_server_id}` | 获取指定 MCP server |
+| GET | `/api/v1/agent/deepsearch/mcp/{space_id}` | 获取 MCP server 列表 |
+| PUT | `/api/v1/agent/deepsearch/mcp/` | 更新 MCP server |
+| DELETE | `/api/v1/agent/deepsearch/mcp/{space_id}/{mcp_server_id}` | 删除指定 MCP server |
 
 运行请求中通过 `mcp_servers: List[McpServerConfig]` 引用已创建的 MCP server（按 `mcp_server_id` + `type`）。
 

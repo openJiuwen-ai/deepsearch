@@ -107,6 +107,33 @@ tavily ["www.sz.gov.cn", "www.pku.edu.cn"]
 - Search results are normalized before collector-side storage so aliases like `link`, `source_url`, `snippet`, `summary`, and `answer` are mapped into the common `title` / `url` / `content` / `type` shape.
 - The search API summary answer and (when fetching is enabled) prefetched webpage content are both bounded by `MAX_COLLECTOR_DOC_CONTENT_LENGTH` to prevent oversized search payloads from reaching downstream LLM evaluation unchanged.
 
+## Scholarly search configuration
+
+### `ScholarlySearchConfig`
+
+Aggregates the built-in PubMed, arXiv, and Semantic Scholar provider configurations. The model rejects undeclared fields.
+
+- **fetch_full_text** (bool, optional): Whether to retrieve full text for search results. Default value: `True`.
+- **max_full_text_results_per_query** (int, optional): Maximum results for which full text is retrieved per query. Range: `[0, 10]`. Default value: `1`; `0` disables full-text retrieval.
+- **pubmed** (`PubMedScholarlyConfig`, optional): PubMed provider configuration. Default value: `PubMedScholarlyConfig()`.
+- **arxiv** (`ArxivScholarlyConfig`, optional): arXiv provider configuration. Default value: `ArxivScholarlyConfig()`.
+- **semantic_scholar** (`SemanticScholarConfig`, optional): Semantic Scholar provider configuration. Default value: `SemanticScholarConfig()`.
+
+### `ScholarlyProviderConfig` (common provider fields)
+
+- **search_api_key** (bytearray, optional): Provider API key. Default value: an empty `bytearray`.
+- **search_url** (str, optional): Provider search endpoint. Default value: `""`; when non-empty, it must exactly match that provider's official endpoint—custom and proxy URLs are rejected.
+- **max_search_results** (int, optional): Maximum results returned per query. Range: `[1, 10]`. Default value: `1`.
+- **requests_per_second** (float, required): Request-rate limit. Range: `(0, 10]`; each built-in provider supplies its own default.
+
+### Built-in provider defaults and dedicated fields
+
+| Provider | Official `search_url` | Default `requests_per_second` | Dedicated fields |
+| --- | --- | --- | --- |
+| `PubMedScholarlyConfig` | `https://eutils.ncbi.nlm.nih.gov/entrez/eutils` | `1 / 3` | **email** (str, default `""`); **tool** (str, default `"openjiuwen-deepsearch"`) |
+| `ArxivScholarlyConfig` | `https://export.arxiv.org/api/query` | `1 / 3` | None |
+| `SemanticScholarConfig` | `https://api.semanticscholar.org/graph/v1/paper/search` | `0.5` | None |
+
 ## `EmbedModelConfig`
 ```python
 class openjiuwen_deepsearch.config.config.EmbedModelConfig()
@@ -157,7 +184,7 @@ class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig()
 
 **Fields**:
 
-- **server_name** (str, required): MCP server name, unique within a space; used as the tool namespace prefix at runtime (`mcp{server_name}__{tool}`).
+- **server_name** (str, required): MCP server name, unique within a space; part of the runtime tool namespace. The complete tool-name format is `mcp__{server_name}__{tool}`.
 - **server_url** (str, required): MCP server URL.
 - **transport_type** (str, optional): Transport type; only `sse` and `streamable_http` are effective. Default value: `"streamable_http"`.
 - **headers** (dict, optional): Request headers. Sensitive header values are encrypted at the server side; when the SDK passes them directly, they are used as-is. Default value: `{}`.
@@ -167,7 +194,7 @@ class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig()
 **Notes**:
 
 - The `mcp` package is transitively pulled in via the core dependency `openjiuwen→fastmcp→mcp`; a standard `uv sync` already includes it. To pin the version explicitly, run `uv sync --extra mcp` (constrains `mcp>=1.26,<2.0`).
-- When configured, the three agent entries (`DeepresearchAgent`, `DeepSearchAgent`, `SimpleReactSearchAgent`) connect to the MCP servers when `tool_map == "search_fetch"` and inject tools into the information collection node `InfoRetrievalNode` as `mcp{server_name}__{tool}`; connections are closed when the run ends.
+- When configured, the three agent entries (`DeepresearchAgent`, `DeepSearchAgent`, `SimpleReactSearchAgent`) connect to the MCP servers when `tool_map == "search_fetch"` and inject tools into the information collection node `InfoRetrievalNode` as `mcp__{server_name}__{tool}`; connections are closed when the run ends.
 - If a single server fails to connect, a warning is logged and that server is skipped without blocking other servers; if the `mcp` package is not installed, the run proceeds without MCP tools while everything else works normally.
 
 **Example**:
@@ -234,7 +261,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **search_workflow_per_question_params** (`PerQuestionParams`, optional): Per-question control knobs for search/react runs (time, workers, tool map, limits, etc.). Default value: `PerQuestionParams()`.
 - **search_workflow_milvus_config** (`MilvusConfig`, optional): Milvus/embedder settings used when retrieval tool path is selected. Default value: `MilvusConfig()`.
 - **web_fetch_provider_config** (`WebFetchProviderConfig`, optional): Explicit DeepSearch fetch-provider config. Current v1 requires `provider_name="jina"` to enable `web_fetch`. Default value: `WebFetchProviderConfig()`.
-- **mcp_servers** (`List[McpServerRuntimeConfig]`, optional): MCP (Model Context Protocol) server config list. When configured, the three agent entries (`DeepresearchAgent`, `DeepSearchAgent`, `SimpleReactSearchAgent`) connect to the MCP servers when `tool_map == "search_fetch"` and inject tools into `InfoRetrievalNode` as `mcp{server_name}__{tool}`. Default value: `[]`.
+- **mcp_servers** (`List[McpServerRuntimeConfig]`, optional): MCP (Model Context Protocol) server config list. When configured, the three agent entries (`DeepresearchAgent`, `DeepSearchAgent`, `SimpleReactSearchAgent`) connect to the MCP servers when `tool_map == "search_fetch"` and inject tools into `InfoRetrievalNode` as `mcp__{server_name}__{tool}`. Default value: `[]`.
 - **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
 - **web_search_max_qps** (float, optional): Maximum QPS for the web augmentation engine. `0` means no rate limit. Floating-point values such as `0.5` are supported and mean one request every 2 seconds. Default value: `0`.
 - **user_feedback_processor_enable** (bool, optional): Whether to enable post-report local optimization. Default value: `False`.
