@@ -7,7 +7,7 @@ from openjiuwen.core.workflow.workflow import Workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import SearchQueryList, \
     Reflection, Summary, CollectorContext, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, \
     GraphEndNode, SearchQueryItem, build_info_collector_sub_graph, get_research_record, llm_context, \
-    _validate_query_count
+    _validate_query_count, normalize_search_query_item
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import EvidenceLedger
 from openjiuwen_deepsearch.config.config import Config
@@ -35,6 +35,34 @@ class TestSearchQueryList:
 
         assert query_list.queries == ["test query 1", "test query 2"]
         assert query_list.missing_evidence == ["需要测试证据"]
+
+
+class TestSearchQueryItemTool:
+    """测试 SearchQueryItem.tool 字段与防御性过滤。"""
+
+    def test_tool_field_defaults_none(self):
+        item = SearchQueryItem(query="q")
+        assert item.tool is None
+
+    def test_tool_field_accepts_value(self):
+        item = SearchQueryItem(query="q", tool="mcp__srv__tool")
+        assert item.tool == "mcp__srv__tool"
+
+    def test_normalize_drops_tool_not_in_available(self):
+        """LLM 给的 tool 不在可用列表 → 置 None（LLM 输出不可信，防御式消费）。"""
+        item = SearchQueryItem(query="q", tool="mcp__unknown__tool")
+        normalized = normalize_search_query_item(item, available_tool_names={"mcp__srv__real"})
+        assert normalized.tool is None
+
+    def test_normalize_keeps_tool_in_available(self):
+        item = SearchQueryItem(query="q", tool="mcp__srv__real")
+        normalized = normalize_search_query_item(item, available_tool_names={"mcp__srv__real"})
+        assert normalized.tool == "mcp__srv__real"
+
+    def test_normalize_plain_string_no_available_keeps_none(self):
+        """纯字符串 query、无可用工具列表时 tool 保持 None。"""
+        normalized = normalize_search_query_item("plain query", available_tool_names=None)
+        assert normalized.tool is None
 
 
 class TestReflection:

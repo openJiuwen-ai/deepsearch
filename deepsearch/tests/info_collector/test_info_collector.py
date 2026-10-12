@@ -1,3 +1,4 @@
+﻿import json
 import logging
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
@@ -292,20 +293,14 @@ class ExposedInfoRetrievalNode(InfoRetrievalNode):
     async def collector_main(self, *args, **kwargs):
         return await self._collector_main(*args, **kwargs)
 
-    async def collector_llm(self, *args, **kwargs):
-        return await self._collector_llm(*args, **kwargs)
-
     async def structure_result(self, *args, **kwargs):
         return await self._structure_result(*args, **kwargs)
 
     async def prepare_collector_tool(self, *args, **kwargs):
         return await self._prepare_collector_tool(*args, **kwargs)
 
-    async def invoke_llm_with_retry(self, *args, **kwargs):
-        return await self._invoke_llm_with_retry(*args, **kwargs)
-
-    async def process_llm_response(self, *args, **kwargs):
-        return await self._process_llm_response(*args, **kwargs)
+    async def resolve_mcp_param_tool_assignments(self, *args, **kwargs):
+        return await self._resolve_mcp_param_tool_assignments(*args, **kwargs)
 
 
 class TestInfoCollectorNode:
@@ -408,6 +403,7 @@ class TestInfoCollectorNode:
             "research_intent": {},
             "evidence_ledger": {},
             "mcp_tools": [],
+            "mcp_param_tools": [],
             "exclusion_constraint_enable": False,
         }
         assert result == expected_state
@@ -657,7 +653,7 @@ class TestInfoCollectorNode:
 
     @pytest.mark.asyncio
     async def test_collector_main_success(self, info_collector_node, sample_web_record, sample_local_record):
-        """测试 _collector_main 方法成功执行（走 LLM tool-calling 路径）"""
+        """测试 _collector_main 方法成功执行（走 web 直调路径，0 LLM 循环）"""
         state = {
             "section_idx": 0,
             "step_title": "测试步骤",
@@ -665,33 +661,27 @@ class TestInfoCollectorNode:
             "max_tool_call_turns_per_query": 2,
             "search_method": "web",
             "web_search_engine_name": "tavily",
-            "api_tools_config": {
-                "collector_tools": [{"name": "custom_tool"}]
-            },
+            "api_tools_config": {},
             "research_intent": {},
         }
+        web_tool = AsyncMock()
+        web_tool.invoke.return_value = {
+            "search_results": [
+                {"url": "http://example.com/1", "title": "标题1", "snippet": "正文1"},
+            ],
+        }
 
-        with patch.object(info_collector_node, '_collector_llm') as mock_collector_llm, \
-                patch.object(info_collector_node, '_structure_result') as mock_structure:
-            # Mock LLM 收集过程
-            mock_collector_llm.return_value = (
-                state,
-                {
-                    "messages": [{"role": "user", "content": "test"}],
-                    "web_page_search_record": sample_web_record,
-                    "local_text_search_record": sample_local_record
-                }
-            )
-
-            # Mock 结构化结果
+        with patch.object(
+            info_collector_node, '_prepare_collector_tool',
+            new=AsyncMock(return_value=([], {"web_search_tool": web_tool})),
+        ), patch.object(info_collector_node, '_structure_result') as mock_structure:
             mock_structure.return_value = (
-                [{"url": "http://example.com/1", "title": "标题1"}],  # doc_infos
+                [{"url": "http://example.com/1", "title": "标题1"}],
                 {"web_1": "正文"},
             )
 
             result = await info_collector_node.collector_main(state)
 
-            # 验证返回结构
             assert "messages" in result
             assert "doc_infos" in result
             assert "web_record" in result
@@ -699,8 +689,7 @@ class TestInfoCollectorNode:
             assert "search_query" in result
             assert result["source_store"] == {"web_1": "正文"}
 
-            # 验证调用了相关方法
-            mock_collector_llm.assert_called_once()
+            web_tool.invoke.assert_awaited()
             mock_structure.assert_called_once()
 
     @pytest.mark.asyncio
@@ -759,186 +748,178 @@ class TestInfoCollectorNode:
         assert [record["title"] for record in web_records] == ["In range", "Unknown"]
 
     @pytest.mark.asyncio
-    async def test_collector_llm_success(self, info_collector_node):
-        """测试 _collector_llm 方法成功执行"""
+    async def test_collector_main_direct_calls_mcp_tool_hint_without_llm_loop(
+        self, info_collector_node
+    ):
+        """MCP query-兼容工具：query-gen 给 tool 提示时直调，不走 _collector_llm（0 额外 LLM 调用）。"""
+        mcp_tool = AsyncMock()
+        mcp_tool.invoke.return_value = {
+            "search_results": [{"title": "mcp 命中", "link": "https://mcp.example/1", "snippet": "mcp 正文"}],
+        }
         state = {
             "section_idx": 0,
-            "step_title": "测试步骤",
-            "max_tool_call_turns_per_query": 2
-        }
-
-        agent_input = {
-            "messages": [{"role": "user", "content": "初始消息"}],
-            "remaining_steps": None,
-            "web_page_search_record": [],
-            "local_text_search_record": [],
-            "other_tool_record": [],
-        }
-
-        tool_list = ["tool1", "tool2"]
-        tool_dict = {"tool1": Mock(), "tool2": Mock()}
-
-        # Mock LLM 响应
-        mock_response = {
-            "tool_calls": [
-                {"name": "tool1", "args": {"query": "test"}}
-            ]
-        }
-
-        with patch.object(info_collector_node, '_invoke_llm_with_retry') as mock_llm, \
-                patch.object(info_collector_node, '_process_llm_response') as mock_process:
-            mock_llm.return_value = mock_response
-            mock_process.return_value = {
-                **agent_input,
-                "web_page_search_record": [{"url": "http://example.com", "title": "测试"}]
-            }
-
-            result_state, result_agent_input = await info_collector_node.collector_llm(
-                state, agent_input, tool_list, tool_dict
-            )
-
-            # 验证 LLM 被调用了 max_tool_call_turns_per_query 次
-            assert mock_llm.call_count == 2
-
-            # 验证处理响应被调用
-            assert mock_process.call_count == 2
-
-            # 验证返回结果
-            assert result_state == state
-            assert "web_page_search_record" in result_agent_input
-
-    @pytest.mark.asyncio
-    async def test_collector_main_passes_language_to_rendered_prompt(self, info_collector_node):
-        """工具调用分支使用 collector 会话语言渲染用户提示词。"""
-        state = {
-            "section_idx": 0,
-            "step_title": "Test step",
-            "search_query": "test query",
-            "language": "en-US",
-            "max_tool_call_turns_per_query": 1,
-            "search_method": "all",
-            "api_tools_config": {"collector_tools": ["custom_tool"]},
-        }
-        captured_prompts = []
-
-        async def capture_request(messages, _tools, _state):
-            captured_prompts.append(messages)
-            return {"tool_calls": []}
-
-        with patch.object(info_collector_node, "_prepare_collector_tool", return_value=([], {})), \
-                patch.object(info_collector_node, "_invoke_llm_with_retry", side_effect=capture_request), \
-                patch.object(info_collector_node, "_structure_result", new=AsyncMock(return_value=([], {}))):
-            await info_collector_node.collector_main(state)
-
-        assert len(captured_prompts) == 1
-        assert "All outputs must be in the specified language: **en-US**" in captured_prompts[0][-1]["content"]
-
-    @pytest.mark.asyncio
-    async def test_collector_llm_commits_successful_turn_before_next_request(self, info_collector_node):
-        """成功工具调用后，下一轮只在首轮请求后追加工具历史和增量 user。"""
-        query = "可缓存的原始查询"
-        state = {
-            "section_idx": 0,
-            "step_title": "测试步骤",
-            "search_query": query,
-            "language": "zh-CN",
+            "step_title": "mcp 步骤",
+            "search_query": "mcp query",
             "max_tool_call_turns_per_query": 2,
-        }
-        agent_input = {
-            "messages": [],
-            "remaining_steps": None,
-            "web_page_search_record": [],
-            "local_text_search_record": [],
-            "other_tool_record": [],
-        }
-        calls = []
-        tool_response = {"tool_calls": [{"id": "call-1", "name": "tool1", "args": {}}]}
-
-        async def capture_request(messages, _tools, _state):
-            calls.append(messages)
-            return tool_response if len(calls) == 1 else {"tool_calls": []}
-
-        async def commit_tool_result(response, current_input, _tool_dict, _state):
-            current_input["messages"].extend([
-                {"role": "assistant", "content": "", "tool_calls": response["tool_calls"]},
-                {"role": "tool", "name": "tool1", "tool_call_id": "call-1", "content": "[]"},
-            ])
-            return current_input
-
-        with patch.object(info_collector_node, "_invoke_llm_with_retry", side_effect=capture_request), \
-                patch.object(info_collector_node, "_process_llm_response", side_effect=commit_tool_result):
-            await info_collector_node.collector_llm(state, agent_input, ["tool1"], {"tool1": Mock()})
-
-        assert calls[0][0]["role"] == "system"
-        assert calls[0][1]["role"] == "user"
-        assert query in calls[0][1]["content"]
-        assert calls[1][:2] == calls[0][:2]
-        assert [message["role"] for message in calls[1][2:]] == ["assistant", "tool", "user"]
-        assert query not in calls[1][-1]["content"]
-
-    @pytest.mark.asyncio
-    async def test_collector_llm_does_not_commit_unknown_tool_call(self, info_collector_node):
-        """未知工具调用不是成功推进的 turn，不能污染下一轮历史。"""
-        state = {
-            "section_idx": 0,
-            "step_title": "测试步骤",
-            "search_query": "未知工具查询",
-            "language": "zh-CN",
-            "max_tool_call_turns_per_query": 2,
-        }
-        agent_input = {
-            "messages": [],
-            "remaining_steps": None,
-            "web_page_search_record": [],
-            "local_text_search_record": [],
-            "other_tool_record": [],
-        }
-        unknown_tool_response = {
-            "tool_calls": [{"id": "call-unknown", "name": "missing_tool", "args": {}}]
+            "search_method": "web",
+            "api_tools_config": {},
+            "research_intent": {},
+            "mcp_tools": [mcp_tool],
+            "retrieval_query": RetrievalQuery(
+                query="mcp query",
+                primary_engine="petal",
+                tool="mcp__srv__search_tool",
+            ),
         }
 
         with patch.object(
             info_collector_node,
-            "_invoke_llm_with_retry",
-            return_value=unknown_tool_response,
-        ) as mock_llm, patch.object(
+            '_prepare_collector_tool',
+            new=AsyncMock(return_value=([], {
+                "web_search_tool": AsyncMock(),
+                "mcp__srv__search_tool": mcp_tool,
+            })),
+        ), patch.object(
             info_collector_node,
-            "_process_llm_response",
-            new=AsyncMock(return_value=agent_input),
-        ) as mock_process:
-            await info_collector_node.collector_llm(state, agent_input, [], {})
+            '_structure_result',
+            new=AsyncMock(return_value=([{"url": "https://mcp.example/1"}], {})),
+        ):
+            result = await info_collector_node.collector_main(state)
 
-        assert mock_llm.call_count == 1
-        mock_process.assert_not_awaited()
-        assert agent_input["messages"] == []
+        mcp_tool.invoke.assert_awaited_once()
+        called_args = mcp_tool.invoke.call_args.args[0] if mcp_tool.invoke.call_args.args else mcp_tool.invoke.call_args.kwargs
+        assert called_args.get("query") == "mcp query"
+        assert result["search_query"] == "mcp query"
 
     @pytest.mark.asyncio
-    async def test_collector_llm_no_tool_calls(self, info_collector_node):
-        """测试 _collector_llm 方法没有工具调用的情况"""
-        state = {"max_tool_call_turns_per_query": 3}
-        agent_input = {"messages": [], "remaining_steps": None}
-        tool_list = []
-        tool_dict = {}
+    async def test_collector_main_direct_calls_mcp_param_tool_via_batch_assignment(
+        self, info_collector_node
+    ):
+        """query-不兼容 MCP 工具：经批量参数通道直调，单次 LLM 调用产出参数。"""
+        mcp_param_tool = AsyncMock()
+        mcp_param_tool.card.name = "mcp__db__search"
+        mcp_param_tool.invoke.return_value = {
+            "search_results": [{"title": "db 命中", "link": "https://db.example/1", "snippet": "db 正文"}],
+        }
+        web_tool = AsyncMock()
+        web_tool.invoke.return_value = {"search_results": []}
+        state = {
+            "section_idx": 0,
+            "step_title": "db 步骤",
+            "search_query": "db query",
+            "max_tool_call_turns_per_query": 2,
+            "search_method": "web",
+            "web_search_engine_name": "petal",
+            "api_tools_config": {},
+            "research_intent": {},
+            "retrieval_query": RetrievalQuery(query="db query", primary_engine="petal"),
+            "mcp_param_assignments": [
+                {"tool": "mcp__db__search", "args": {"query": "db query", "limit": 5}},
+            ],
+        }
 
-        with patch.object(info_collector_node, '_invoke_llm_with_retry') as mock_llm:
-            # Mock 没有工具调用的响应
-            mock_llm.return_value = {"tool_calls": []}
+        with patch.object(
+            info_collector_node,
+            '_prepare_collector_tool',
+            new=AsyncMock(return_value=([], {
+                "web_search_tool": web_tool,
+                "mcp__db__search": mcp_param_tool,
+            })),
+        ), patch.object(
+            info_collector_node,
+            '_structure_result',
+            new=AsyncMock(return_value=([{"url": "https://db.example/1"}], {})),
+        ):
+            result = await info_collector_node.collector_main(state)
 
-            result_state, result_agent_input = await info_collector_node.collector_llm(
-                state, agent_input, tool_list, tool_dict
+        mcp_param_tool.invoke.assert_awaited_once()
+        called_args = mcp_param_tool.invoke.call_args.args[0]
+        assert called_args == {"query": "db query", "limit": 5}
+        assert result["search_query"] == "db query"
+
+    @pytest.mark.asyncio
+    async def test_resolve_mcp_param_tool_assignments_parses_content_json(
+        self, info_collector_node
+    ):
+        """回归：LLM 统一响应把 JSON 放在 content 字段，必须解析 content 才能取到 assignments。"""
+        tool = MagicMock()
+        tool.card.name = "mcp__db__search"
+        tool.card.description = "db search"
+        tool.card.input_params = {"type": "object", "properties": {"query": {"type": "string"}}}
+        state = {"mcp_param_tools": [tool], "section_idx": 0, "step_title": "db 步骤", "language": "zh-CN"}
+        content = json.dumps({
+            "assignments": [
+                {"query": "solid state battery", "tool": "mcp__db__search",
+                 "args": {"query": "solid state battery", "limit": 5}},
+            ]
+        })
+        info_collector_node.llm = MagicMock()
+
+        with patch(
+            f"{module_prefix}.ainvoke_llm_with_stats",
+            new=AsyncMock(return_value={"role": "assistant", "content": content}),
+        ):
+            assignments = await info_collector_node.resolve_mcp_param_tool_assignments(
+                state, [RetrievalQuery(query="solid state battery")]
             )
 
-            # 验证只调用了一次 LLM（因为没有工具调用就退出了）
-            assert mock_llm.call_count == 1
+        assert assignments == {
+            "solid state battery": [
+                {"tool": "mcp__db__search", "args": {"query": "solid state battery", "limit": 5}},
+            ]
+        }
 
     @pytest.mark.asyncio
-    async def test_collector_llm_rejects_none_tool_call_turns(self, info_collector_node):
-        """非法的工具调用轮次配置不应被静默改写成默认值。"""
-        state = {"max_tool_call_turns_per_query": None}
-        agent_input = {"messages": [], "remaining_steps": None}
+    async def test_resolve_mcp_param_tool_assignments_drops_untrusted_entries(
+        self, info_collector_node
+    ):
+        """LLM 输出不可信：未知 tool / 非 dict args / 非 str query 一律丢弃。"""
+        tool = MagicMock()
+        tool.card.name = "mcp__db__search"
+        tool.card.description = "db search"
+        tool.card.input_params = {"type": "object", "properties": {"query": {"type": "string"}}}
+        state = {"mcp_param_tools": [tool], "section_idx": 0, "step_title": "db 步骤", "language": "zh-CN"}
+        content = json.dumps({
+            "assignments": [
+                {"query": "ok", "tool": "mcp__db__search", "args": {"query": "ok"}},
+                {"query": "bad-tool", "tool": "mcp__unknown", "args": {"query": "x"}},
+                {"query": "bad-args", "tool": "mcp__db__search", "args": "not-a-dict"},
+                {"query": 123, "tool": "mcp__db__search", "args": {"query": "x"}},
+            ]
+        })
+        info_collector_node.llm = MagicMock()
 
-        with pytest.raises(TypeError):
-            await info_collector_node.collector_llm(state, agent_input, [], {})
+        with patch(
+            f"{module_prefix}.ainvoke_llm_with_stats",
+            new=AsyncMock(return_value={"role": "assistant", "content": content}),
+        ):
+            assignments = await info_collector_node.resolve_mcp_param_tool_assignments(
+                state, [RetrievalQuery(query="ok")]
+            )
+
+        assert assignments == {"ok": [{"tool": "mcp__db__search", "args": {"query": "ok"}}]}
+
+    @pytest.mark.asyncio
+    async def test_resolve_mcp_param_tool_assignments_returns_empty_on_bad_content(
+        self, info_collector_node
+    ):
+        """content 非合法 JSON 时不抛异常，返回空 assignments。"""
+        tool = MagicMock()
+        tool.card.name = "mcp__db__search"
+        tool.card.description = "db search"
+        tool.card.input_params = {"type": "object", "properties": {}}
+        state = {"mcp_param_tools": [tool], "section_idx": 0, "step_title": "db 步骤", "language": "zh-CN"}
+        info_collector_node.llm = MagicMock()
+
+        with patch(
+            f"{module_prefix}.ainvoke_llm_with_stats",
+            new=AsyncMock(return_value={"role": "assistant", "content": "not-a-json"}),
+        ):
+            assignments = await info_collector_node.resolve_mcp_param_tool_assignments(
+                state, [RetrievalQuery(query="q")]
+            )
+
+        assert assignments == {}
 
     @pytest.mark.asyncio
     async def test_structure_result_empty_records(self, info_collector_node):
@@ -1069,131 +1050,6 @@ class TestInfoCollectorNode:
         assert "runtime_collector_tool" in tool_names
         assert "web_search_tool" in tool_dict
         assert "runtime_collector_tool" in tool_dict
-
-    @pytest.mark.asyncio
-    async def test_invoke_llm_with_retry_success(self, info_collector_node):
-        """测试 _invoke_llm_with_retry 方法成功"""
-        tool_prompt = [{"role": "system", "content": "测试提示"}]
-        tool_list = ["tool1"]
-        state = {
-            "section_idx": 0,
-            "step_title": "测试步骤",
-            "search_query": "测试查询"
-        }
-
-        with patch(f'{self.MODULE_PATH}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
-            mock_llm_call.return_value = {"tool_calls": [{"name": "tool1"}]}
-
-            response = await info_collector_node.invoke_llm_with_retry(tool_prompt, tool_list, state)
-
-            # 验证 LLM 被调用
-            mock_llm_call.assert_called_once()
-            assert response == {"tool_calls": [{"name": "tool1"}]}
-
-    @pytest.mark.asyncio
-    async def test_invoke_llm_with_retry_failure(self, info_collector_node):
-        """测试 _invoke_llm_with_retry 方法失败重试"""
-        tool_prompt = [{"role": "system", "content": "测试提示"}]
-        tool_list = ["tool1"]
-        state = {
-            "section_idx": 0,
-            "step_title": "测试步骤",
-            "search_query": "测试查询"
-        }
-
-        with patch(f'{self.MODULE_PATH}.ainvoke_llm_with_stats', new_callable=AsyncMock) as mock_llm_call:
-            # Mock 前两次失败，第三次成功
-            mock_llm_call.side_effect = [
-                Exception("第一次失败"),
-                Exception("第二次失败"),
-                {"tool_calls": [{"name": "tool1"}]}
-            ]
-
-            response = await info_collector_node.invoke_llm_with_retry(tool_prompt, tool_list, state)
-
-            # 验证重试了3次
-            assert mock_llm_call.call_count == 3
-            assert all(call.args[1] is tool_prompt for call in mock_llm_call.call_args_list)
-            assert response == {"tool_calls": [{"name": "tool1"}]}
-
-    @pytest.mark.asyncio
-    async def test_process_llm_response_with_tool_calls(self, info_collector_node):
-        """测试 _process_llm_response 方法有工具调用"""
-        response = {
-            "tool_calls": [{"name": "web_search_tool", "args": {"query": "test"}}]
-        }
-        agent_input = {
-            "messages": [],
-            "web_page_search_record": [],
-            "local_text_search_record": [],
-            "other_tool_record": []
-        }
-        tool_dict = {
-            "web_search_tool": AsyncMock()
-        }
-        state = {
-            "section_idx": 0,
-            "step_title": "测试步骤",
-            "search_query": "测试查询"
-        }
-
-        with patch(f'{self.MODULE_PATH}.process_tool_call') as mock_process:
-            mock_process.return_value = {
-                **agent_input,
-                "web_page_search_record": [{"url": "http://example.com"}]
-            }
-
-            result = await info_collector_node.process_llm_response(response, agent_input, tool_dict, state)
-
-            # 验证调用了工具处理
-            mock_process.assert_called_once()
-            assert "web_page_search_record" in result
-
-    @pytest.mark.asyncio
-    async def test_process_llm_response_no_tool_calls(self, info_collector_node):
-        """测试 _process_llm_response 方法没有工具调用"""
-        response = {"tool_calls": []}
-        agent_input = {
-            "messages": [],
-            "web_page_search_record": [],
-            "local_text_search_record": [],
-            "other_tool_record": []
-        }
-        tool_dict = {}
-        state = {}
-
-        result = await info_collector_node.process_llm_response(response, agent_input, tool_dict, state)
-
-        # 验证返回原始输入
-        assert result == agent_input
-
-
-class TestEditorTeamInfoCollectorNode:
-    MODULE_PATH = "openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes"
-
-    @pytest.fixture
-    def editor_info_collector_node(self):
-        return InfoCollectorNode()
-
-    @staticmethod
-    def _make_session(plan):
-        session = MagicMock()
-        state_map = {
-            "section_context.section_idx": 1,
-            "section_context.language": "zh-CN",
-            "section_context.messages": [],
-            "section_context.current_plan": plan,
-            "section_context.history_plans": [],
-            "section_context.collected_doc_num": 0,
-            "section_context.warning_infos": [],
-            "config.info_collector_max_search_query_count": 2,
-            "config.info_collector_max_research_loops": 2,
-            "config.info_collector_max_tool_call_turns_per_query": 3,
-            "config": {"mock": True},
-        }
-        session.get_global_state = MagicMock(side_effect=state_map.get)
-        session.update_global_state = MagicMock()
-        return session
 
     @pytest.mark.asyncio
     async def test_do_invoke_uses_collector_execution_service(self, editor_info_collector_node):

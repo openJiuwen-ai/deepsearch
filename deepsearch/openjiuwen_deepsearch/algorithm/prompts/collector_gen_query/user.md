@@ -41,6 +41,13 @@ Task description:
 - Do not use provider-specific filter syntax (e.g. engine date parameters); only natural-language time phrases are allowed.
 - A query may contain at most five topical keywords; the time phrase does not count toward the five topical keywords.
 {% endif %}
+{% if has_mcp_query_tools %}
+## Available MCP search tools
+{% for tool in mcp_query_tools %}
+- `{{ tool.name }}`: {{ tool.description }}
+{% endfor %}
+Set `tool` to one of the above names to route a query directly to that tool, or use `"native"` for the configured web/local search. Omit `tool` when unsure.
+{% endif %}
 {% if has_temporal_scope == false %}
 Query should ensure that the most current information available as of {{ current_date }} is gathered.
 {% endif %}
