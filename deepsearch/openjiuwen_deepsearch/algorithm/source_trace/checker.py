@@ -11,11 +11,14 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
+_REFERENCE_SECTION_TITLES = frozenset({
+    "参考文章", "参考文献", "参考资料", "references", "reference articles",
+})
 
 
 def remove_last_section(markdown_text):
     """
-    删除Markdown文本中最后一个标题及其后面的所有内容
+    仅删除最后一个已识别的参考文献标题之后的内容。
 
     参数:
         markdown_text (str): Markdown格式的文本
@@ -31,8 +34,11 @@ def remove_last_section(markdown_text):
     if not headings:
         return markdown_text  # 如果没有标题，返回原文本
 
-    # 获取最后一个标题的位置
-    last_heading_end = headings[-1][1]
+    last_heading_start, last_heading_end = headings[-1]
+    heading = markdown_text[last_heading_start:last_heading_end]
+    heading_title = re.sub(r"^#{1,6}\s+", "", heading).strip().lower()
+    if heading_title not in _REFERENCE_SECTION_TITLES:
+        return markdown_text
 
     # 截取到最后一个标题之前的内容
     return markdown_text[:last_heading_end]
@@ -57,15 +63,10 @@ def preprocess_info(report: str, datas: list, language: str) -> dict:
             "CitationChecker: empty report, skipped citation check.")
         return dict(need_check=False)
 
-    has_source_tracer_marker = "[source_tracer_result]" in report
-    if len(datas) == 0 and not has_source_tracer_marker:
+    if len(datas) == 0:
         logger.warning(
             "CitationChecker: empty datas means no inline citation in the text, skipped citation check.")
         return dict(need_check=False)
-
-    if len(datas) == 0:
-        logger.warning(
-            "CitationChecker: empty datas with inline citations; continuing to remove unmatched citations.")
 
     report = remove_last_section(report)
 

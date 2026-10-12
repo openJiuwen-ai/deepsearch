@@ -49,7 +49,47 @@ class TestChartSourceTraceInsertion:
         inserted_source = source_trace_datas[0]
         source_trace_id = inserted_source["source_trace_id"]
         assert f"<!--source-trace-id:{source_trace_id}-->" in report
-        assert source_trace_id == chart["source_datas"][0]["source_trace_id"]
+        assert "source_trace_id" not in chart["source_datas"][0]
+
+    def test_charts_sharing_one_source_get_distinct_source_trace_ids(self):
+        """Each chart insertion owns a distinct ID even with a shared input source."""
+        node = InsertChartNode(output_dir="")
+        shared_sources = [{
+            "url": "https://example.com/shared-source",
+            "title": "Shared source",
+            "original_content": "Shared evidence",
+        }]
+        charts_info = {"section-1": [
+            {
+                "anchor_match_para": "First anchor",
+                "chart_id": "chart-1",
+                "chart_title": "First chart",
+                "description": "First description",
+                "score": 80,
+                "source_datas": shared_sources,
+            },
+            {
+                "anchor_match_para": "Second anchor",
+                "chart_id": "chart-2",
+                "chart_title": "Second chart",
+                "description": "Second description",
+                "score": 90,
+                "source_datas": shared_sources,
+            },
+        ]}
+
+        report, source_trace_datas = node.run(
+            report_content="First anchor\nSecond anchor",
+            charts_info=charts_info,
+            source_trace_datas=[{"_sentence_position": 0, "url": "https://example.com/existing"}],
+        )
+
+        chart_datas = [data for data in source_trace_datas if data.get("is_vlm_chart")]
+        chart_ids = [data["source_trace_id"] for data in chart_datas]
+        assert len(chart_ids) == 2
+        assert chart_ids[0] != chart_ids[1]
+        assert all(f"<!--source-trace-id:{source_id}-->" in report for source_id in chart_ids)
+        assert "source_trace_id" not in shared_sources[0]
 
 
 class TestChartCitationLlmPath:

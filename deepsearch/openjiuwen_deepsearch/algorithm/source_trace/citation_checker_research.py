@@ -7,7 +7,11 @@ import re
 from collections import OrderedDict, defaultdict, deque
 from dataclasses import dataclass
 
-from openjiuwen_deepsearch.algorithm.source_trace.add_source import ensure_source_trace_id
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import (
+    SOURCE_TRACE_ID_COMMENT_CAPTURE_RE,
+    ensure_source_trace_id,
+    format_source_trace_id_comment,
+)
 from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import CitationVerifyResearch
 from openjiuwen_deepsearch.utils.common_utils.markdown_url_utils import extract_markdown_url
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -80,12 +84,10 @@ class CitationCheckerResearch:
                 continue
             url, end = parsed_url
             source_trace_id = None
-            id_match = re.match(
-                r"<!--source-trace-id:([A-Za-z0-9_-]+)-->", text[end:]
-            )
+            id_match = SOURCE_TRACE_ID_COMMENT_CAPTURE_RE.match(text, end)
             if id_match:
                 source_trace_id = id_match.group(1)
-                end += id_match.end()
+                end = id_match.end()
 
             markers.append(
                 SourceTracerCitationMarker(
@@ -180,7 +182,7 @@ class CitationCheckerResearch:
                 safe_url = info.get("url", "")
                 source_trace_id = ensure_source_trace_id(info)
                 temp_str += f'[source_tracer_result][{safe_title}]({safe_url})'
-                temp_str += f'<!--source-trace-id:{source_trace_id}-->'
+                temp_str += format_source_trace_id_comment(source_trace_id)
                 new_parts.append(temp_str)
             last_pos = marker.raw_end
             datas[index]["citation_range"] = (marker.raw_start, marker.raw_end)
@@ -612,7 +614,7 @@ class CitationCheckerResearch:
             image_marker = "!" if marker.image_marker else ""
             title = _normalize_citation_title(marker.title)
             source_id_suffix = (
-                f"<!--source-trace-id:{marker.source_trace_id}-->"
+                format_source_trace_id_comment(marker.source_trace_id)
                 if marker.source_trace_id else ""
             )
             return f"[source_tracer_result]{image_marker}[{title}]({marker.paren_url}){source_id_suffix}"
@@ -639,9 +641,10 @@ class CitationCheckerResearch:
         Source data may be filtered after the report has been edited.  Binding
         the N-th placeholder to ``datas[N]`` then shifts every later citation.
         New markers carry a stable ``source_trace_id`` in a trailing HTML
-        comment. Legacy markers fall back to their URL (or local-material
-        path). Each matching data item is consumed once, so repeated URLs are
-        no longer coupled to their position in ``datas``.
+        comment. Markers without a valid identity are removed: URL is used
+        only after association for consistency and safety validation. Each
+        matching data item is consumed once, so repeated URLs are no longer
+        coupled to their position in ``datas``.
 
         A placeholder that has no matching source is an invalid individual
         citation: remove it and continue with the remainder of the report.
@@ -649,12 +652,10 @@ class CitationCheckerResearch:
         markers = self._iter_source_tracer_citation_markers(markdown_text, self.citation_regex)
         available_indices = set(range(len(datas)))
         data_indices_by_source_id = defaultdict(deque)
-        data_indices_by_url = defaultdict(deque)
         for index, data in enumerate(datas):
             source_trace_id = data.get("source_trace_id")
             if source_trace_id:
                 data_indices_by_source_id[str(source_trace_id)].append(index)
-            data_indices_by_url[str(data.get("url", "")).strip()].append(index)
 
         def pop_available(indices):
             while indices and indices[0] not in available_indices:
@@ -672,19 +673,7 @@ class CitationCheckerResearch:
                     data_indices_by_source_id[marker.source_trace_id]
                 )
             else:
-                matched_index = pop_available(data_indices_by_url[marker_url])
-
-            if matched_index is None and not marker.source_trace_id:
-                # Retain existing similar-URL compatibility only as a fallback
-                # after exact source-identity matching has failed.
-                for index in sorted(available_indices):
-                    data_url = str(datas[index].get("url", ""))
-                    if is_local_file_path(data_url):
-                        continue
-                    if not are_similar_urls(marker_url, data_url):
-                        continue
-                    matched_index = index
-                    break
+                matched_index = None
 
             parts.append(markdown_text[cursor:marker.raw_start])
             cursor = marker.raw_end

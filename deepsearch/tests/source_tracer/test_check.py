@@ -41,16 +41,22 @@ class TestPreprocessInfo:
 
     @patch('openjiuwen_deepsearch.algorithm.source_trace.checker.logger')
     def test_preprocess_info_empty_datas_with_source_marker(self, mock_logger):
-        """Missing data must not bypass cleanup of existing source markers."""
+        """Empty data skips checking even when the report has source markers."""
         report = "Text [source_tracer_result][Source](https://example.com)"
 
         result = preprocess_info(report, [], CHINESE)
 
-        assert result["need_check"] is True
-        assert result["response_content"]["article"] == report
+        assert result["need_check"] is False
         mock_logger.warning.assert_called_once_with(
-            "CitationChecker: empty datas with inline citations; continuing to remove unmatched citations."
+            "CitationChecker: empty datas means no inline citation in the text, skipped citation check."
         )
+
+    def test_preprocess_info_preserves_non_reference_last_section(self):
+        report = "正文[source_tracer_result][Source](https://example.com)\n\n# 结论\n不能被删除。"
+
+        result = preprocess_info(report, [], CHINESE)
+
+        assert result["need_check"] is False
 
     def test_preprocess_info_language_handling(self):
         """Test that language is handled correctly without normalization."""
