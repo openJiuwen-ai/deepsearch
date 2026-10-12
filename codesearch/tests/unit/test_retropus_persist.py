@@ -69,6 +69,36 @@ def test_safe_collection_name():
     assert safe_collection_name("") == "default"
 
 
+def test_safe_collection_name_rejects_dot_segments():
+    # "." / ".." survive the character whitelist and would otherwise make
+    # collection_index_dir() resolve outside index_dir.
+    assert safe_collection_name(".") == "default"
+    assert safe_collection_name("..") == "default"
+    assert safe_collection_name("  ..  ") == "default"
+    assert safe_collection_name("...") == "..."  # not a path segment escape
+
+
+def test_collection_index_dir_stays_inside_index_root(tmp_path: Path):
+    root = tmp_path / "index_root"
+    root.mkdir()
+    for collection in (".", "..", "../../etc", "a/../../../..", ""):
+        resolved = collection_index_dir(root, collection)
+        assert resolved.is_relative_to(root.resolve())
+        assert resolved != root.resolve()
+        assert resolved.parent == root.resolve()
+
+
+def test_collection_index_dir_sanitizes_traversal_strings(tmp_path: Path):
+    root = tmp_path / "index_root"
+    root.mkdir()
+    # Slash-bearing traversal input collapses into one safe segment instead of
+    # climbing out of the index root.
+    for collection in ("normal/../escape", "../../etc/passwd", "a/../../../.."):
+        resolved = collection_index_dir(root, collection)
+        assert resolved.parent == root.resolve()
+        assert "/" not in resolved.name and "\\" not in resolved.name
+
+
 def test_dump_load_knowledge_graph(tmp_path: Path):
     kg = _mini_kg()
     path = tmp_path / "kg.pkl"

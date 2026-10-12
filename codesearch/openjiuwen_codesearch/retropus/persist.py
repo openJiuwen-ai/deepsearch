@@ -82,14 +82,31 @@ def _load_restricted_pickle(data: bytes):
 
 
 def safe_collection_name(collection: str) -> str:
-    """Map a collection name to a single path segment."""
+    """Map a collection name to a single path segment.
+
+    ``"."`` and ``".."`` contain no characters that ``_SAFE_COLLECTION_RE``
+    rewrites, so they would otherwise survive as directory names and let the
+    resolved path escape ``index_dir`` (``index_dir / ".."`` is the *parent*
+    of the index root, which later gets ``shutil.rmtree``'d).
+    """
     cleaned = _SAFE_COLLECTION_RE.sub("_", (collection or "").strip())
+    if cleaned in (".", ".."):
+        return "default"
     return cleaned or "default"
 
 
 def collection_index_dir(index_dir: str | Path, collection: str) -> Path:
-    """Directory that holds one collection's Retropus dump."""
-    return Path(index_dir).expanduser().resolve() / safe_collection_name(collection)
+    """Directory that holds one collection's Retropus dump.
+
+    Always contained in ``index_dir``; raises if it would not be.
+    """
+    root = Path(index_dir).expanduser().resolve()
+    target = root / safe_collection_name(collection)
+    if not target.is_relative_to(root) or target == root:
+        raise ValueError(
+            f"collection name escapes the index root: {collection!r}"
+        )
+    return target
 
 
 def config_fingerprint(config: RetropusSearchAgentConfig) -> dict[str, Any]:
