@@ -347,6 +347,37 @@ def _mcp_query_tool_descriptions() -> list[dict]:
     return descriptions
 
 
+def _runtime_api_tool_descriptions(api_tools_config: dict | None) -> list[dict]:
+    """构造 runtime API 工具的 {name, description} 清单，用于注入 gen_query prompt。"""
+    if not isinstance(api_tools_config, dict):
+        return []
+    collector_tools = api_tools_config.get("collector_tools") or []
+    descriptions = []
+    for tool_config in collector_tools:
+        if not isinstance(tool_config, dict):
+            continue
+        name = tool_config.get("name") or ""
+        desc = tool_config.get("description") or ""
+        if name:
+            descriptions.append({"name": name, "description": desc})
+    return descriptions
+
+
+def _runtime_api_tool_names(api_tools_config: dict | None) -> set[str] | None:
+    """返回 runtime API 工具名集合；无配置时返回 None。"""
+    if not isinstance(api_tools_config, dict):
+        return None
+    collector_tools = api_tools_config.get("collector_tools") or []
+    names: set[str] = set()
+    for tool_config in collector_tools:
+        if not isinstance(tool_config, dict):
+            continue
+        name = tool_config.get("name") or ""
+        if name:
+            names.add(name)
+    return names or None
+
+
 def build_retrieval_queries(
         items: Sequence[SearchQueryItem],
         *,
@@ -480,6 +511,7 @@ class GenerateQueryNode(BaseNode):
         language = session.get_global_state("collector_context.language")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         research_intent = session.get_global_state("collector_context.research_intent") or {}
+        api_tools_config = session.get_global_state("config.api_tools_config") or {}
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
@@ -487,7 +519,7 @@ class GenerateQueryNode(BaseNode):
                     step_description=step_description,
                     max_search_query_count=max_search_query_count,
                     language=language, evidence_ledger=evidence_ledger,
-                    research_intent=research_intent)
+                    research_intent=research_intent, api_tools_config=api_tools_config)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """根据研究记录生成当前采集轮次的检索 query。
@@ -532,9 +564,11 @@ class GenerateQueryNode(BaseNode):
             scholarly_enabled=_scholarly_search_is_available(),
         ))
         mcp_tools_for_prompt = _mcp_query_tool_descriptions()
-        if mcp_tools_for_prompt:
+        runtime_api_tools_for_prompt = _runtime_api_tool_descriptions(state.get("api_tools_config"))
+        all_query_tools = mcp_tools_for_prompt + runtime_api_tools_for_prompt
+        if all_query_tools:
             agent_input["has_mcp_query_tools"] = True
-            agent_input["mcp_query_tools"] = mcp_tools_for_prompt
+            agent_input["mcp_query_tools"] = all_query_tools
         else:
             agent_input["has_mcp_query_tools"] = False
         formatted_prompt = build_prompt_messages("collector_gen_query", agent_input)
@@ -564,6 +598,11 @@ class GenerateQueryNode(BaseNode):
         research_intent = session.get_global_state("collector_context.research_intent") or {}
         scholarly_search_enabled = _scholarly_search_is_available()
         available_tool_names = _available_mcp_query_tool_names()
+        runtime_api_names = _runtime_api_tool_names(session.get_global_state("config.api_tools_config"))
+        if available_tool_names is None and runtime_api_names:
+            available_tool_names = runtime_api_names
+        elif available_tool_names is not None and runtime_api_names:
+            available_tool_names = available_tool_names | runtime_api_names
         locator_items = [
             normalize_search_query_item(
                 item,
@@ -892,7 +931,7 @@ class SupervisorNode(BaseNode):
         logger.info("section_idx: %s | step_title: %s | [SupervisorNode] End SupervisorNode.",
                     section_idx, step_title)
 
-        return dict(next_node=NodeId.COLLECTOR_INFO.value)
+        return dict(next_node=NodeId.COLLECTOR_QUERY_GEN.value)
 
     async def _invoke_llm_with_retry(
         self,
@@ -1130,7 +1169,7 @@ def build_info_collector_sub_graph() -> Workflow:
     sub_workflow.add_connection(NodeId.COLLECTOR_INFO.value, NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value, NodeId.COLLECTOR_SUPERVISOR.value)
     supervisor_router = init_router(NodeId.COLLECTOR_SUPERVISOR.value,
-                                    [NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_INFO.value])
+                                    [NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_QUERY_GEN.value])
     sub_workflow.add_conditional_connection(NodeId.COLLECTOR_SUPERVISOR.value, router=supervisor_router)
     sub_workflow.add_connection(NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_END.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_END.value, NodeId.END.value)

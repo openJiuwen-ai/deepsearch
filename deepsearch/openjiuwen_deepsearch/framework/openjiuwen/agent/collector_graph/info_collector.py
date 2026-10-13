@@ -324,7 +324,7 @@ class InfoRetrievalNode(BaseNode):
             query = entry.get("query")
             tool = entry.get("tool")
             args = entry.get("args")
-            if not isinstance(query, str) or tool not in valid_names or not isinstance(args, dict):
+            if not isinstance(query, str) or not isinstance(tool, str) or tool not in valid_names or not isinstance(args, dict):
                 continue
             result.setdefault(query, []).append({"tool": tool, "args": args})
         total_assignments = sum(len(v) for v in result.values())
@@ -640,33 +640,48 @@ class InfoRetrievalNode(BaseNode):
         processed_results = []
 
         if tool_hint and tool_hint in tool_dict and tool_hint not in ("web_search_tool", "local_search_tool"):
-            logger.info(
-                f"section_idx: {section_idx} | step title: {step_title} | "
-                f"[InfoRetrievalNode] Dispatch route=mcp_direct tool='{tool_hint}'"
-            )
+            if LogManager.is_sensitive():
+                logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] Dispatch route=mcp_direct")
+            else:
+                logger.info(
+                    f"section_idx: {section_idx} | step title: {step_title} | "
+                    f"[InfoRetrievalNode] Dispatch route=mcp_direct tool='{tool_hint}'"
+                )
             mcp_tool_result = await self._direct_invoke_mcp_tool(
                 tool_dict[tool_hint], tool_hint, query, section_idx, step_title,
             )
             if mcp_tool_result:
                 tool_result_json = json.dumps(mcp_tool_result, ensure_ascii=False, indent=4)
                 processed_results = process_tool_result(tool_hint, tool_result_json, agent_input)
-        else:
-            logger.info(
-                f"section_idx: {section_idx} | step title: {step_title} | "
-                f"[InfoRetrievalNode] Dispatch route=native search_method='{search_method}'"
+            # MCP 直调后补跑学术引擎（secondary web search），避免丢失 PubMed/arXiv 等证据源。
+            processed_results = await self._run_secondary_web_search_for_direct_path(
+                state, tool_dict, query, agent_input, processed_results, section_idx, step_title,
             )
+        else:
+            if LogManager.is_sensitive():
+                logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] Dispatch route=native")
+            else:
+                logger.info(
+                    f"section_idx: {section_idx} | step title: {step_title} | "
+                    f"[InfoRetrievalNode] Dispatch route=native search_method='{search_method}'"
+                )
             processed_results = await self._direct_call_native_tools(
                 state, tool_dict, query, agent_input, section_idx, step_title,
             )
 
         mcp_param_assignments = state.get("mcp_param_assignments", []) or []
+        max_param_calls = max(0, int(state.get("max_tool_call_turns_per_query", 2)))
+        param_call_count = 0
         for assignment in mcp_param_assignments:
+            if param_call_count >= max_param_calls:
+                break
             if not isinstance(assignment, dict):
                 continue
             assigned_tool = assignment.get("tool")
             assigned_args = assignment.get("args")
             if not isinstance(assigned_args, dict) or assigned_tool not in tool_dict:
                 continue
+            param_call_count += 1
             try:
                 param_result = await tool_dict[assigned_tool].invoke(assigned_args)
             except Exception as e:
@@ -678,17 +693,20 @@ class InfoRetrievalNode(BaseNode):
                 )
                 continue
             if param_result:
-                logger.info(
-                    f"section_idx: {section_idx} | step title: {step_title} | "
-                    f"[InfoRetrievalNode] MCP param direct call succeeded: tool='{assigned_tool}'"
-                )
+                if LogManager.is_sensitive():
+                    logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] MCP param direct call succeeded")
+                else:
+                    logger.info(
+                        f"section_idx: {section_idx} | step title: {step_title} | "
+                        f"[InfoRetrievalNode] MCP param direct call succeeded: tool='{assigned_tool}'"
+                    )
                 tool_result_json = json.dumps(param_result, ensure_ascii=False, indent=4)
                 processed_results.extend(process_tool_result(assigned_tool, tool_result_json, agent_input))
 
         if collector_tools:
             logger.warning(
                 "section_idx: %s | [InfoRetrievalNode] api_tools_config.collector_tools present but "
-                "direct-call path does not execute them; tools=%s",
+                "no tool_hint matched; tools=%s",
                 section_idx, [t.get("name") for t in collector_tools if isinstance(t, dict)],
             )
 
@@ -717,15 +735,60 @@ class InfoRetrievalNode(BaseNode):
             "search_query": query,
         }
 
+    async def _run_secondary_web_search_for_direct_path(
+            self,
+            state: dict,
+            tool_dict: dict,
+            query: str,
+            agent_input: dict,
+            processed_results: list,
+            section_idx,
+            step_title,
+    ) -> list:
+        """MCP 直调后补跑学术引擎，避免丢失 PubMed/arXiv 等证据源。"""
+        retrieval_query = state.get("retrieval_query")
+        secondary_engines = list(getattr(retrieval_query, "secondary_engines", []) or [])
+        if not secondary_engines:
+            return processed_results
+        tool_name = "web_search_tool"
+        if tool_name not in tool_dict:
+            return processed_results
+        max_tool_calls = max(0, int(state.get("max_tool_call_turns_per_query", 2)))
+        engine_names = list(dict.fromkeys(secondary_engines))[:max_tool_calls]
+        if not engine_names:
+            return processed_results
+        raw_results = await asyncio.gather(*[
+            self._direct_search_with_retry(
+                DirectSearchRequest(
+                    tool=tool_dict[tool_name],
+                    tool_name=tool_name,
+                    query=query,
+                    search_engine_name=engine_name,
+                    retry_on_error=True,
+                ),
+                state,
+            )
+            for engine_name in engine_names
+        ])
+        for tool_result_raw in raw_results:
+            if not tool_result_raw:
+                continue
+            tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+            processed_results.extend(process_tool_result(tool_name, tool_result_json, agent_input))
+        return processed_results
+
     @staticmethod
     async def _direct_invoke_mcp_tool(tool, tool_name: str, query: str, section_idx, step_title):
         """直调 query-兼容 MCP 工具，参数为 {query}。失败返回 None，由 Supervisor 循环兜底。"""
         try:
             result = await tool.invoke({"query": query})
-            logger.info(
-                f"section_idx: {section_idx} | step title: {step_title} | "
-                f"[InfoRetrievalNode] MCP direct call succeeded: tool='{tool_name}'"
-            )
+            if LogManager.is_sensitive():
+                logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] MCP direct call succeeded")
+            else:
+                logger.info(
+                    f"section_idx: {section_idx} | step title: {step_title} | "
+                    f"[InfoRetrievalNode] MCP direct call succeeded: tool='{tool_name}'"
+                )
             return result
         except Exception as e:
             record_llm_retry_log(

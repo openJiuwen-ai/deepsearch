@@ -42,7 +42,7 @@ Task description:
 - A query may contain at most five topical keywords; the time phrase does not count toward the five topical keywords.
 {% endif %}
 {% if has_mcp_query_tools %}
-## Available MCP search tools
+## Available search tools
 {% for tool in mcp_query_tools %}
 - `{{ tool.name }}`: {{ tool.description }}
 {% endfor %}

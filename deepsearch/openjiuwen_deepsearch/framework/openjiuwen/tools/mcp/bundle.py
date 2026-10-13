@@ -59,14 +59,26 @@ class McpToolBundle:
 
 
 def _is_query_compatible(input_schema: dict | None) -> bool:
-    """inputSchema 的必填字段是否仅 ⊆ {query}（可被 query-gen 直调）。
+    """inputSchema 的必填字段是否仅 ⊆ {query} 且 query 接受字符串（可被 query-gen 直调）。
 
-    无 required 或 required ⊆ {query} 视为兼容：直调用 {query} 或空参即可。
-    存在 query 以外的必填字段视为不兼容，需独立 LLM 通道生成参数。
+    无 required 或 required ⊆ {query} 且 query 属性为 string 类型时视为兼容：
+    直调用 {query} 即可。存在 query 以外的必填字段或 query 非 string 类型视为不兼容，
+    需独立 LLM 通道生成参数。
     """
     if not isinstance(input_schema, dict):
         return True
     required = input_schema.get("required")
     if not isinstance(required, list) or not required:
         return True
-    return all(field == "query" for field in required)
+    if not all(field == "query" for field in required):
+        return False
+    properties = input_schema.get("properties")
+    if not isinstance(properties, dict):
+        return True
+    query_prop = properties.get("query")
+    if not isinstance(query_prop, dict):
+        return True
+    query_type = query_prop.get("type")
+    if isinstance(query_type, list):
+        return "string" in query_type
+    return query_type in (None, "string")

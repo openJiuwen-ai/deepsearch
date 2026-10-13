@@ -539,8 +539,8 @@ class TestSupervisorNode:
 
                 result = await supervisor_node.invoke(inputs, mock_session, mock_context)
 
-                # 验证下一个节点是 INFO_COLLECTOR
-                assert result["next_node"] == "collector_info_retrieval"
+                # 验证下一个节点是 QUERY_GEN（后续轮次重走 query-gen 以选择工具）
+                assert result["next_node"] == "collector_query_generation"
 
                 # 验证查询被更新
                 search_queries = [RetrievalQuery(query=query, primary_engine="petal") for query in next_queries]
@@ -585,7 +585,7 @@ class TestSupervisorNode:
 
                 result = await supervisor_node.invoke(inputs, mock_session, mock_context)
 
-                assert result["next_node"] == "collector_info_retrieval"
+                assert result["next_node"] == "collector_query_generation"
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": [
                         RetrievalQuery(query=query, primary_engine="petal") for query in next_queries
@@ -706,7 +706,7 @@ class TestSupervisorNode:
 
                 result = await supervisor_node.invoke(inputs, mock_session, mock_context)
 
-                assert result["next_node"] == "collector_info_retrieval"
+                assert result["next_node"] == "collector_query_generation"
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": [
                         RetrievalQuery(query="需要官方口径", primary_engine="petal")
@@ -737,7 +737,7 @@ class TestSupervisorNode:
 
                 result = await supervisor_node.invoke(inputs, mock_session, mock_context)
 
-                assert result["next_node"] == "collector_info_retrieval"
+                assert result["next_node"] == "collector_query_generation"
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": [
                         RetrievalQuery(query="需要更多市场数据", primary_engine="petal")

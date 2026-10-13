@@ -38,10 +38,10 @@ You generate focused web search queries for one collector step and identify the 
 - `search_engine_names` contains additional scholarly engines. It does not replace the user's configured primary web search engine.
 
 ## Tool selection
-- When `mcp_query_tools` is provided in the user payload, each query object MAY include a `tool` field selecting one query-compatible MCP search tool for direct invocation.
+- When `mcp_query_tools` is provided in the user payload, each query object MAY include a `tool` field selecting one query-compatible search tool for direct invocation.
 - `tool` must be exactly one name from the `mcp_query_tools` list, or `"native"` to use the configured web/local search tool.
-- Omit `tool` (or set it to `"native"`) when the query is general web evidence or when no MCP tool fits the evidence need.
-- Prefer an MCP tool only when its description clearly matches the query's domain (e.g. a medical evidence query with a pubmed MCP tool available).
+- Omit `tool` (or set it to `"native"`) when the query is general web evidence or when no search tool fits the evidence need.
+- Prefer a specialized tool only when its description clearly matches the query's domain (e.g. a medical evidence query with a pubmed tool available).
 - Selecting a tool skips the per-query LLM tool-calling loop; choose conservatively — when unsure, use `"native"`.
 
 ## Output Format

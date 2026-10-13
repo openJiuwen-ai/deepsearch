@@ -1051,6 +1051,34 @@ class TestInfoCollectorNode:
         assert "web_search_tool" in tool_dict
         assert "runtime_collector_tool" in tool_dict
 
+
+class TestEditorTeamInfoCollectorNode:
+    MODULE_PATH = "openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes"
+
+    @pytest.fixture
+    def editor_info_collector_node(self):
+        return InfoCollectorNode()
+
+    @staticmethod
+    def _make_session(plan):
+        session = MagicMock()
+        state_map = {
+            "section_context.section_idx": 1,
+            "section_context.language": "zh-CN",
+            "section_context.messages": [],
+            "section_context.current_plan": plan,
+            "section_context.history_plans": [],
+            "section_context.collected_doc_num": 0,
+            "section_context.warning_infos": [],
+            "config.info_collector_max_search_query_count": 2,
+            "config.info_collector_max_research_loops": 2,
+            "config.info_collector_max_tool_call_turns_per_query": 3,
+            "config": {"mock": True},
+        }
+        session.get_global_state = MagicMock(side_effect=state_map.get)
+        session.update_global_state = MagicMock()
+        return session
+
     @pytest.mark.asyncio
     async def test_do_invoke_uses_collector_execution_service(self, editor_info_collector_node):
         plan = Plan(
