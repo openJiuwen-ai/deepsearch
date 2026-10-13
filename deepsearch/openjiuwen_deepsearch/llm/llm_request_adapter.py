@@ -3,6 +3,7 @@
 
 import copy
 import logging
+import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 from urllib.parse import urlparse
@@ -152,6 +153,32 @@ def _select_thinking_rule(config: LLMConfig) -> Optional[ThinkingRule]:
     return next((rule for rule in THINKING_RULES if rule.match(config)), None)
 
 
+def is_glm53_model(llm_config: LLMConfig) -> bool:
+    """识别 GLM-5.3 模型名，包括厂商命名空间和部署后缀。"""
+    return bool(re.search(
+        r"(?:^|/)glm[-_]?5\.3(?:$|[-_])",
+        (llm_config.model_name or "").strip(),
+        re.IGNORECASE,
+    ))
+
+
+def _build_glm53_low_extension(llm_config: LLMConfig) -> dict:
+    """GLM-5.3 保持思考开启，以 low effort 替代关闭思考。"""
+    extension = copy.deepcopy(llm_config.extension or {})
+    _remove_existing_thinking_fields(extension)
+    extension.pop("thinking", None)
+    extra_body = extension.get("extra_body")
+    if isinstance(extra_body, dict):
+        extra_body.pop("reasoning_effort", None)
+    rule = _select_thinking_rule(llm_config)
+    if rule is not None and rule.supported and rule.apply is not None:
+        rule.apply(extension, True, llm_config)
+    else:
+        _apply_extra_body_thinking_type(extension, True, llm_config)
+    extension["reasoning_effort"] = "low"
+    return extension
+
+
 def _remove_existing_thinking_fields(extension: dict) -> list[str]:
     """清理旧思考参数，避免同一次请求中出现多个互相冲突的开关字段。"""
     removed_fields = []
@@ -239,6 +266,8 @@ def build_thinking_fallback_extension(llm_config: LLMConfig, extension: dict) ->
     extension 中与思考开关无关的字段，避免把主请求临时注入的字段泄漏到
     fallback model。
     """
+    if is_glm53_model(llm_config):
+        return _build_glm53_low_extension(llm_config), []
     fallback_extension = copy.deepcopy(extension or {})
     rule = _select_thinking_rule(llm_config)
     if rule is None or not rule.supported or rule.apply is None:
@@ -252,8 +281,10 @@ def build_thinking_fallback_extension(llm_config: LLMConfig, extension: dict) ->
     return fallback_extension, removed_fields
 
 
-def merge_thinking_extension(llm_config: LLMConfig, thinking_enabled: bool) -> dict:
+def merge_thinking_extension(llm_config: LLMConfig, thinking_enabled: Optional[bool]) -> dict:
     """按厂商规则把 SDK 内部思考开关合并到 extension，不修改原始 LLMConfig。"""
+    if is_glm53_model(llm_config):
+        return _build_glm53_low_extension(llm_config)
     extension = copy.deepcopy(llm_config.extension or {})
     rule = _select_thinking_rule(llm_config)
     if rule is None or not rule.supported or rule.apply is None:
