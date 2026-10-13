@@ -924,6 +924,11 @@ def build_editor_team_workflow():
             "research_intent": "${research_intent}",
             "section_local_contract": "${section_local_contract}",
             "history_plans": "${history_plans}",
+            "material_analysis": "${material_analysis}",
+            "material_usage_mode": "${material_usage_mode}",
+            "material_bindings": "${material_bindings}",
+            "bound_material_ids": "${bound_material_ids}",
+            "use_material_ids": "${use_material_ids}",
         }
     )
 
