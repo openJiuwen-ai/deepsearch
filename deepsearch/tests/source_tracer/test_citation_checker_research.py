@@ -69,6 +69,42 @@ def test_filtered_repeated_citation_keeps_later_instance_when_datas_are_reordere
     ]
 
 
+@pytest.mark.parametrize("marker_count,data_count", [(1, 2), (2, 1), (2, 2)])
+@pytest.mark.parametrize("reverse_datas", [False, True])
+def test_duplicate_source_identity_removes_ambiguous_markers_only(
+    marker_count, data_count, reverse_datas
+):
+    """Duplicate identities cannot bind evidence by position, even after filtering."""
+    checker = CitationCheckerResearch("mock_model")
+    duplicate_marker = (
+        "[source_tracer_result][Shared](https://example.com/shared)"
+        "<!--source-trace-id:duplicate-->"
+    )
+    article = "".join(f"Fact {index}{duplicate_marker}." for index in range(marker_count))
+    article += (
+        "Good fact[source_tracer_result][Good](https://example.com/good)"
+        "<!--source-trace-id:unique-->."
+    )
+    datas = [
+        {"source_trace_id": "duplicate", "url": "https://example.com/shared",
+         "title": "Shared", "chunk": f"Evidence {index}", "valid": True, "score": 0.9}
+        for index in range(data_count)
+    ]
+    datas.append({"source_trace_id": "unique", "url": "https://example.com/good",
+                  "title": "Good", "valid": True, "score": 0.9})
+    if reverse_datas:
+        datas.reverse()
+
+    result_text, result_datas = checker.transform_references({"article": article}, datas)
+
+    assert result_text.startswith("".join(f"Fact {index}." for index in range(marker_count)))
+    assert "Good fact[checked_citation:0]" in result_text
+    assert "https://example.com/shared" not in result_text
+    assert "source_tracer_result" not in result_text
+    assert [data["source_trace_id"] for data in result_datas] == ["unique"]
+    assert checker.invalid_citation_counts["ambiguous source identity"] == marker_count
+
+
 def make_source_tracer_marker(start, end, string="mocked string"):
     """构造 source tracer 引用标记测试对象。
 

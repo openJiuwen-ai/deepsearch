@@ -17,6 +17,7 @@ Citation 校验用于保证报告中插入的引用真实有效、URL 安全、�
 - 无效或无法解析的 citation 会从段落中移除。
 - 引用标记必须携带不可见的 `source_trace_id`；校验器只按该稳定 ID 与来源 data 一对一关联，而不是依赖 data 列表位置。缺少或无法匹配 ID 的标记会被单独移除，不会按 URL 回退。
 - 没有匹配来源 data 的单条引用会以 `missing source data` 记录并移除，不会中断整份报告的溯源；未被任何引用标记使用的来源 data 会被丢弃并记录告警。
+- SourceTracer 预处理时，`datas` 为空但正文仍含真实 `[source_tracer_result][title](url)` 标记，会继续进入校验器并删除这些无匹配标记；仅当 `datas` 为空且正文不存在真实标记时才跳过校验并原样回填报告。
 - LLM 返回仅有 JSON 语法问题时会先进行本地格式恢复，恢复结果仍需满足引用数量、字段和原文片段校验。
 - LLM 批次失败会在每条引用最多三次调用的限制内二分降批；最终失败的普通引用会移除，图表引用保持现有兜底展示。
 - 输出给前端的数据包含 URL、标题、正文片段、来源、发布时间、分数和 reference index 等字段。
@@ -47,7 +48,7 @@ Citation 校验用于保证报告中插入的引用真实有效、URL 安全、�
 
 输入：
 
-- 含 `[source_tracer_result]` 的报告段落。
+- 含 `[source_tracer_result][title](url)<!--source-trace-id:{source_trace_id}-->` 的报告段落；标记与对应来源 data 必须使用同一 `source_trace_id`。
 - 来源 data items。
 - LLM verifier。
 - `json-repair`：用于恢复常见 JSON 语法问题，不用于改写引用语义。
@@ -62,6 +63,7 @@ Citation 校验用于保证报告中插入的引用真实有效、URL 安全、�
 - URL 未闭合时该引用保持或跳过，不应误删周边正文。
 - 报告中的引用标记数量与来源 data 数量不一致时，必须按 `source_trace_id` 重新关联。无法关联的标记仅影响自身，不能触发整个 SourceTracer 节点失败。
 - 相同 URL 的多个引用依靠不同的 `source_trace_id` 区分。
+- 同一 `source_trace_id` 出现在多个引用标记或多条来源 data 中时，视为 `ambiguous source identity`：移除该 ID 对应的所有引用标记，保留周边正文并继续处理其他唯一 ID，不按顺序或 URL 选择来源。
 - Markdown 链接标题需要转义，避免破坏链接结构。
 - 图片引用和 invalid data 不进入前端 citation 列表。
 - JSON 恢复后只要不是对象数组、数量不符、缺少必填字段或标记片段不能回查原文，就视为本次 LLM 校验失败。

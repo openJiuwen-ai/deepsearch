@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 _REFERENCE_SECTION_TITLES = frozenset({
     "参考文章", "参考文献", "参考资料", "references", "reference articles",
 })
+_SOURCE_TRACER_RESULT_MARKER_RE = re.compile(
+    r"(?<!\\)\[source_tracer_result\](?:!)?\[.*?\]\(", re.DOTALL
+)
 
 
 def remove_last_section(markdown_text):
@@ -63,10 +66,16 @@ def preprocess_info(report: str, datas: list, language: str) -> dict:
             "CitationChecker: empty report, skipped citation check.")
         return dict(need_check=False)
 
-    if len(datas) == 0:
+    if len(datas) == 0 and not _SOURCE_TRACER_RESULT_MARKER_RE.search(report):
         logger.warning(
             "CitationChecker: empty datas means no inline citation in the text, skipped citation check.")
         return dict(need_check=False)
+
+    if len(datas) == 0:
+        logger.warning(
+            "CitationChecker: empty datas but source markers remain in the text, "
+            "continue citation check to remove unmatched markers."
+        )
 
     report = remove_last_section(report)
 

@@ -4,7 +4,7 @@
 import json
 import logging
 import re
-from collections import OrderedDict, defaultdict, deque
+from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
 
 from openjiuwen_deepsearch.algorithm.source_trace.add_source import (
@@ -651,16 +651,12 @@ class CitationCheckerResearch:
         """
         markers = self._iter_source_tracer_citation_markers(markdown_text, self.citation_regex)
         available_indices = set(range(len(datas)))
-        data_indices_by_source_id = defaultdict(deque)
+        marker_id_counts = Counter(marker.source_trace_id for marker in markers if marker.source_trace_id)
+        data_indices_by_source_id = defaultdict(list)
         for index, data in enumerate(datas):
             source_trace_id = data.get("source_trace_id")
             if source_trace_id:
                 data_indices_by_source_id[str(source_trace_id)].append(index)
-
-        def pop_available(indices):
-            while indices and indices[0] not in available_indices:
-                indices.popleft()
-            return indices.popleft() if indices else None
 
         reconciled_datas = []
         parts = []
@@ -668,23 +664,25 @@ class CitationCheckerResearch:
 
         for marker in markers:
             marker_url = marker.paren_url.strip()
-            if marker.source_trace_id:
-                matched_index = pop_available(
-                    data_indices_by_source_id[marker.source_trace_id]
-                )
-            else:
-                matched_index = None
+            indices = data_indices_by_source_id.get(marker.source_trace_id, [])
+            ambiguous_identity = bool(marker.source_trace_id) and (
+                marker_id_counts[marker.source_trace_id] > 1 or len(indices) > 1
+            )
+            matched_index = (
+                indices[0] if not ambiguous_identity and len(indices) == 1 else None
+            )
 
             parts.append(markdown_text[cursor:marker.raw_start])
             cursor = marker.raw_end
             if matched_index is None:
-                invalid_reason = "missing source data"
+                invalid_reason = "ambiguous source identity" if ambiguous_identity else "missing source data"
                 self.invalid_citation_counts[invalid_reason] = (
                     self.invalid_citation_counts.get(invalid_reason, 0) + 1
                 )
                 logger.warning(
-                    "[CITATION CHECKER]: remove citation without matching source data: "
+                    "[CITATION CHECKER]: remove citation: reason=%s, "
                     "source_trace_id=%r, marker url=%r, remaining data count=%d",
+                    invalid_reason,
                     marker.source_trace_id,
                     marker_url,
                     len(available_indices),
