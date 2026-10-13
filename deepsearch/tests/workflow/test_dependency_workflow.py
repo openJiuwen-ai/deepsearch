@@ -219,3 +219,13 @@ class TestDependencyWorkflowRegistrationIsolation:
 
         assert _get_workflow_node_type(resource_mgr, hybrid_key, "outline") != "HybridOutlineNode"
         assert _get_workflow_node_type(resource_mgr, hybrid_key, "outline_interaction") != "HybridOutlineInteractionNode"
+
+    def test_dependency_workflow_excludes_parallel_editor_team(self, monkeypatch):
+        """注入场景在 server 层已强制并行图；依赖图不应注册普通 editor_team。"""
+        resource_mgr = ResourceMgr()
+        _patch_runner_resource_mgr(monkeypatch, resource_mgr)
+
+        agent = DeepresearchDependencyAgent()
+        dependency_key = generate_workflow_key(agent.research_name, agent.version)
+
+        assert _get_workflow_node_type(resource_mgr, dependency_key, "editor_team") is None

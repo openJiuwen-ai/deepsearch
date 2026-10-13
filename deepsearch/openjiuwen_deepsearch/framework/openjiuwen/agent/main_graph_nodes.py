@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Any
 
@@ -16,6 +17,7 @@ from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
 
+from openjiuwen_deepsearch.algorithm.brief_report.models import BriefOutline, BriefWorkflowState
 from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
 from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     anonymize_config_for_logging,
@@ -28,6 +30,15 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     recognize_report_intent,
     resolve_report_type_policy,
     web_search_for_query,
+)
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    apply_material_relevance_map,
+    build_fallback_material_relevance_map,
+    build_material_prompt_context,
+    is_material_first_request,
+    prepare_material_analysis,
+    restore_material_analysis,
+    resolve_material_usage_mode,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
     route_outline_execution_method,
@@ -101,6 +112,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ValidationResult,
     _resolve_source_date_scope,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.metadata_injectors import apply_injectors
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name,
                                                                         adapt_vlm_model_name)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
@@ -186,6 +198,18 @@ class StartNode(Start):
             report_template=inputs.get("report_template", ""),
         )
 
+        # StartNode 只转存原始素材；校验、去重、相关性过滤和摘要均在 IntentRecognitionNode 执行。
+        _origin_agent_config = inputs.get("agent_config", {}) or {}
+        _materials_enabled = bool(_origin_agent_config.get("user_materials_enabled", False))
+        _raw_materials = _origin_agent_config.get("user_materials") or []
+        if _raw_materials and not _materials_enabled:
+            logger.warning(
+                "[StartNode] user_materials provided (%d items) but user_materials_enabled is false, ignored.",
+                len(_raw_materials),
+            )
+        elif _raw_materials:
+            search_context.user_materials = list(_raw_materials)
+
         session.update_global_state({"search_context": search_context.model_dump()})
 
         origin_agent_config = inputs.get("agent_config", {})
@@ -200,7 +224,7 @@ class StartNode(Start):
             agent_config["outline_interaction_max_rounds"] = origin_agent_config.get(
                 "outline_interaction_max_rounds", 3
             )
-            agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 5)
+            agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 10)
             agent_config["source_tracer_research_trace_source_switch"] = origin_agent_config.get(
                 "source_tracer_research_trace_source_switch", True
             )
@@ -244,6 +268,7 @@ class StartNode(Start):
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
             agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
+            agent_config["exclusion_constraint_enable"] = origin_agent_config.get("exclusion_constraint_enable", False)
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -253,6 +278,23 @@ class StartNode(Start):
             service_config["visualization_enable"] = False
         merge_config = agent_config | service_config
         session.update_global_state({"config": merge_config})
+
+        next_node = NodeId.INTENT_RECOGNITION.value
+        injection = apply_injectors(inputs.get("metadata"), inputs)
+        if injection is not None:
+            session.update_global_state(dict(injection.state_updates))
+            if injection.next_node:
+                next_node = injection.next_node
+                logger.info("[StartNode] Injected metadata change next node, go to %s.", next_node)
+        return dict(next_node=next_node)
+
+
+@dataclass
+class IntentPostHandleMaterialState:
+    """Material routing values produced during intent recognition."""
+
+    analysis: Any = None
+    usage_mode: str | None = None
 
 
 class IntentRecognitionNode(BaseNode):
@@ -301,13 +343,85 @@ class IntentRecognitionNode(BaseNode):
             web_search_engine_config=session.get_global_state("config.web_search_engine_config"),
             info_collector_search_method=session.get_global_state("config.info_collector_search_method") or "web",
             provided_report_type=session.get_global_state("config.report_type"),
+            exclusion_constraint_enable=bool(
+                session.get_global_state("config.exclusion_constraint_enable")
+            ),
+            user_materials=session.get_global_state("search_context.user_materials") or [],
+            material_analysis=session.get_global_state("search_context.material_analysis"),
+        )
+
+    async def _prepare_material_context(self, current_inputs: dict, session: Session) -> tuple[dict, Any]:
+        """素材预处理：校验/去重/摘要（带跨轮 content_hash 缓存），产物落 state。
+
+        Returns:
+            意图识别 prompt 可直接消费的素材上下文（含清单区/分析区）；
+            一个二元组：意图识别 prompt 上下文与本轮内存中的素材分析产物。
+            未启用或无素材时分别为空 dict 和 None。
+        """
+        raw_materials = current_inputs.get("user_materials") or []
+        if not raw_materials:
+            return {}, None
+        previous_analysis = restore_material_analysis(current_inputs.get("material_analysis"))
+        analysis = await prepare_material_analysis(
+            raw_materials,
+            llm_model_name=current_inputs.get("llm_model_name") or "",
+            query=current_inputs.get("original_query") or "",
+            previous_items=previous_analysis.items if previous_analysis else None,
+        )
+        session.update_global_state({
+            "search_context.material_analysis": analysis.model_dump(),
+        })
+        logger.info(
+            "[IntentRecognitionNode] materials prepared: items=%d cached_reuse=%s downgraded=%d",
+            len(analysis.items),
+            bool(previous_analysis),
+            len(analysis.downgraded_ids),
+        )
+        material_context = build_material_prompt_context(analysis)
+        # 无素材时返回空 dict（build 产物为含键 empty dict，truthy）。
+        return (
+            material_context if material_context.get("has_materials") else {},
+            analysis,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
+        # 素材预处理：摘要管线（带跨轮缓存），产物落 state 并注入意图识别 prompt
+        material_context, material_analysis = await self._prepare_material_context(current_inputs, session)
+        if material_context:
+            current_inputs["material_context"] = material_context
+
         # 执行意图识别
         intent_result = await classify_and_recognize_intent(current_inputs)
+        # 本节点内刚 update_global_state 的值不保证能够立即由 session 读回；
+        # 优先使用预处理阶段保留在内存中的分析结果，避免把有素材误判为无素材。
+        if material_analysis is None:
+            material_analysis = restore_material_analysis(
+                session.get_global_state("search_context.material_analysis")
+            )
+        material_usage_mode = resolve_material_usage_mode(
+            current_inputs.get("original_query") or "",
+            bool(material_analysis and material_analysis.items),
+        )
+        if material_analysis and not intent_result.material_relevance_map:
+            intent_result.material_relevance_map = build_fallback_material_relevance_map(
+                material_analysis,
+                current_inputs.get("original_query") or "",
+                material_usage_mode,
+            )
+            logger.warning(
+                "[MATERIAL_ROUTE] intent omitted relevance map; generated %d fallback records.",
+                len(intent_result.material_relevance_map),
+            )
+        if material_analysis and intent_result.material_relevance_map:
+            material_analysis = apply_material_relevance_map(
+                material_analysis,
+                intent_result.material_relevance_map,
+            )
+            session.update_global_state({
+                "search_context.material_analysis": material_analysis.model_dump(),
+            })
         await self._resolve_outline_execution_method(current_inputs, session)
 
         # 检查搜索模式：仅在 web 或 all 模式下执行网络搜索
@@ -358,9 +472,27 @@ class IntentRecognitionNode(BaseNode):
             logger.info("[IntentRecognitionNode] Local-only mode, skipping web search.")
             intent_result.entry_search_results = []
 
-        return self._post_handle(inputs, intent_result, session, context)
+        return self._post_handle(
+            inputs,
+            intent_result,
+            session,
+            context,
+            IntentPostHandleMaterialState(
+                analysis=material_analysis,
+                usage_mode=material_usage_mode,
+            ),
+        )
 
-    def _post_handle(self, inputs: Input, algorithm_output: Any, session: Session, context: ModelContext):
+    def _post_handle(
+        self,
+        inputs: Input,
+        algorithm_output: Any,
+        session: Session,
+        context: ModelContext,
+        material_state: IntentPostHandleMaterialState | None = None,
+    ):
+        material_analysis = material_state.analysis if material_state else None
+        material_usage_mode = material_state.usage_mode if material_state else None
         original_q = algorithm_output.original_query
 
         lang = (algorithm_output.lang or "zh-CN").lower()
@@ -387,6 +519,14 @@ class IntentRecognitionNode(BaseNode):
             "search_context.research_intent": algorithm_output.research_intent.model_dump(),
             "search_context.report_type_policy": report_policy.model_dump(),
             "search_context.language": lang,
+            "search_context.material_usage_mode": material_usage_mode
+            if material_usage_mode is not None
+            else resolve_material_usage_mode(
+                original_q,
+                bool(material_analysis and material_analysis.items)
+                if material_analysis is not None
+                else bool(session.get_global_state("search_context.material_analysis")),
+            ),
         })
 
         if algorithm_output.entry_search_results:
@@ -394,6 +534,7 @@ class IntentRecognitionNode(BaseNode):
                 algorithm_output.entry_search_results,
                 algorithm_output.research_intent.exclude_url,
                 algorithm_output.research_intent.exclude_titles,
+                enable_exclusion=bool(session.get_global_state("config.exclusion_constraint_enable")),
             )
             session.update_global_state({
                 "search_context.entry_search_results": entry_search_results,
@@ -442,6 +583,8 @@ class FeedbackHandlerNode(BaseNode):
             questions=session.get_global_state("search_context.questions") or "",
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
             provided_report_type=session.get_global_state("config.report_type"),
+            exclusion_constraint_enable=bool(session.get_global_state("config.exclusion_constraint_enable")),
+            material_analysis=session.get_global_state("search_context.material_analysis"),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -513,12 +656,20 @@ class FeedbackHandlerNode(BaseNode):
             user_feedback=user_feedback,
         )
 
-        return {
+        intent_inputs = {
             "original_query": current_inputs.get("original_query", ""),
             "messages": messages,
             "llm_model_name": current_inputs.get("llm_model_name"),
             "provided_report_type": current_inputs.get("provided_report_type"),
+            "exclusion_constraint_enable": current_inputs.get("exclusion_constraint_enable", False),
         }
+        # 复用首轮素材分析缓存（按 content_hash 命中），重解析不丢素材上下文
+        material_context = build_material_prompt_context(
+            restore_material_analysis(current_inputs.get("material_analysis"))
+        )
+        if material_context.get("has_materials"):
+            intent_inputs["material_context"] = material_context
+        return intent_inputs
 
     def _merge_reparsed_intent(self, session: Session, reparsed_intent: dict) -> dict:
         current_intent = ResearchIntent.model_validate(session.get_global_state("search_context.research_intent") or {})
@@ -969,6 +1120,7 @@ class OutlineNode(BaseNode):
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
         language = session.get_global_state("search_context.language")
         messages = session.get_global_state("search_context.messages")
+        original_query = session.get_global_state("search_context.original_query") or ""
         questions = session.get_global_state("search_context.questions")
         user_feedback = session.get_global_state("search_context.user_feedback")
         configured_section_num = session.get_global_state("config.outliner_max_section_num")
@@ -1007,14 +1159,29 @@ class OutlineNode(BaseNode):
         entry_search_results = session.get_global_state("search_context.entry_search_results") or []
         rtp = session.get_global_state("search_context.report_type_policy") or {}
         research_intent = session.get_global_state("search_context.research_intent") or {}
+
+        # Brief 大纲注入检测：brief_state 携带 outline 视为升级运行。
+        # brief_state 仅由注入器写入（BriefWorkflowState.model_dump），类型安全
+        # 由写入方保证，读取时无需容错降级
+        injected_brief_outline = None
+        brief_state = session.get_global_state("search_context.brief_state")
+        if brief_state:
+            injected_brief_outline = BriefWorkflowState.model_validate(brief_state).outline
+
         requested_section_num = research_intent.get("section_count")
-        if requested_section_num:
+        if injected_brief_outline is not None and not outline_interaction_mode:
+            # 注入场景首版生成：章节数以 brief 大纲为准，不做 max 截断。
+            # 交互轮不受此约束（brief 结构仅作用于首版），否则工具 schema 的
+            # Target count 会把用户增删章节的诉求隐性拉回 brief 章节数
+            section_num = len(injected_brief_outline.sections)
+        elif requested_section_num:
             section_num = min(int(requested_section_num), OUTLINER_SECTION_NUM_MAX)
         else:
             section_num = configured_section_num
         audience_role = research_intent.get("audience_role") or ""
         tone = research_intent.get("tone") or ""
         result = dict(
+            original_query=original_query,
             messages=messages,
             user_feedback=user_feedback,
             questions=questions,
@@ -1036,8 +1203,22 @@ class OutlineNode(BaseNode):
             require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
             audience_role=audience_role,
             tone=tone,
+            brief_outline=(
+                injected_brief_outline.model_dump_json() if injected_brief_outline is not None else ""
+            ),
         )
         result.update(build_research_intent_prompt_context(research_intent))
+        # 仅把已在 IntentRecognition 节点完成筛选的素材清单透传给大纲。
+        material_analysis = restore_material_analysis(
+            session.get_global_state("search_context.material_analysis")
+        )
+        material_context = build_material_prompt_context(material_analysis, include_analysis=False)
+        if material_context.get("has_materials"):
+            result.update(material_context)
+            result["material_first"] = is_material_first_request(
+                session.get_global_state("search_context.original_query") or "",
+                True,
+            )
         return result
 
     def _get_with_dep_driving(self, current_inputs: dict) -> bool:
@@ -1065,6 +1246,14 @@ class OutlineNode(BaseNode):
         Returns:
             prompt 名称、是否启用 dependency_driving 工具 schema，以及本轮实际执行的大纲模式。
         """
+        if current_inputs.get("brief_outline"):
+            # 注入场景：brief 大纲无依赖结构，强制普通大纲工具（PARALLEL）。
+            # 首轮忽略报告模板（brief 结构优先）；交互轮回跳的 prompt 选择与
+            # 普通运行完全一致（复用 _select_prompt_name 的交互分流与
+            # user_outline 解析），交互不受 brief 结构约束。
+            if not current_inputs.get("outline_interaction_mode"):
+                return "outliner", False, ExecutionMethod.PARALLEL.value
+            return self._select_prompt_name(current_inputs), False, ExecutionMethod.PARALLEL.value
         prompt_name = self._select_prompt_name(current_inputs)
         if prompt_name in {"outliner_template", "outliner_user_revised"}:
             return prompt_name, False, ExecutionMethod.PARALLEL.value
@@ -1091,10 +1280,10 @@ class OutlineNode(BaseNode):
             selected_method: 本轮实际执行的大纲模式。
         """
         current_method = current_inputs.get("outline_execution_method")
-        if current_method not in {ExecutionMethod.PARALLEL.value, ExecutionMethod.DEPENDENCY_DRIVING.value}:
-            return
         if current_method == selected_method:
             return
+        # current_method 为空（如注入场景跳过意图识别）时同样写回，
+        # 否则 dependency workflow 的大纲后路由仍会按默认依赖驱动走。
         current_inputs["outline_execution_method"] = selected_method
         session.update_global_state({"search_context.outline_execution_method": selected_method})
         logger.info(
@@ -1143,6 +1332,25 @@ class OutlineNode(BaseNode):
             algorithm_output = await outliner.generate_outline(current_inputs)
             success_flag = algorithm_output.get("success_flag")
             error_msg = algorithm_output.get("error_msg")
+            if (
+                success_flag
+                and current_inputs.get("brief_outline")
+                and not current_inputs.get("outline_interaction_mode")
+            ):
+                # 结构一致性约束由 prompt 中的权威结构块承担，此处仅观测首版生成的漂移：
+                # 硬校验会导致同输入无效重试、首轮升级无兜底中止、交互轮用户标题修订被静默回滚；
+                # 交互轮用户可任意改结构，比对 brief 只会产生误导性噪声日志，故跳过。
+                # success_flag = bool(outline)，此时 current_outline 必非 None；
+                # brief_outline 来自 _pre_handle 注入器写入的合法序列化结果
+                outline_candidate = algorithm_output.get("current_outline")
+                parsed_brief = BriefOutline.model_validate_json(current_inputs["brief_outline"])
+                if not parsed_brief.matches_section_titles([s.title for s in outline_candidate.sections]):
+                    logger.warning(
+                        f"{self.log_prefix} Injected brief outline title drifted "
+                        f"(expected={[s.title for s in parsed_brief.sections]}, "
+                        f"actual={[s.title for s in outline_candidate.sections]}); "
+                        f"proceeding without retry."
+                    )
 
         if success_flag:
             outline: Outline = algorithm_output.get("current_outline")

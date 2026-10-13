@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
+    _normalize_material_relevance_map,
     _normalize_research_intent,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
@@ -15,6 +16,33 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_target_papers_prompt_context,
     build_temporal_scope_prompt_context,
 )
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    exclusion_constraint_context,
+)
+
+
+@pytest.fixture
+def exclusion_on():
+    """开启禁引约束总开关（exclusion_constraint_enable=True）。"""
+    token = exclusion_constraint_context.set(True)
+    yield
+    exclusion_constraint_context.reset(token)
+
+
+@pytest.fixture
+def exclusion_off():
+    """关闭禁引约束总开关（默认态）。"""
+    token = exclusion_constraint_context.set(False)
+    yield
+    exclusion_constraint_context.reset(token)
+
+
+def _render_prompt(prompt_name: str, context: dict) -> str:
+    """Render both stable system rules and this call's dynamic user task."""
+    messages = build_prompt_messages(
+        prompt_name, {key: value for key, value in context.items() if key != "messages"}
+    )
+    return "\n".join(message["content"] for message in messages)
 
 
 def test_target_paper_accepts_explicit_and_implicit_clues():
@@ -29,9 +57,79 @@ def test_target_paper_accepts_explicit_and_implicit_clues():
     assert implicit.dataset.startswith("Medical Expenditure")
 
 
+@pytest.mark.usefixtures("exclusion_on")
+def test_normalize_research_intent_removes_exclude_url_from_include_and_target_papers():
+    """被禁源不应同时出现在 include_url 和 target_papers（防止 collector 搜注定被挡的源）。"""
+    forbidden = "https://pubmed.ncbi.nlm.nih.gov/38132429/"
+    intent = _normalize_research_intent({
+        "include_url": [forbidden, "https://keep.com/a"],
+        "exclude_url": [forbidden, "https://www.mdpi.com/2304-6767/11/12/291"],
+        "target_papers": [{"url": forbidden}, {"dataset": "MEPS"}],
+    })
+    assert forbidden not in intent.include_url
+    assert "https://keep.com/a" in intent.include_url
+    assert all(not p.url == forbidden for p in intent.target_papers)
+    assert forbidden in intent.exclude_url
+
+
+@pytest.mark.usefixtures("exclusion_on")
+def test_normalize_research_intent_removes_target_paper_by_pmid_doi():
+    """被禁源的 PMID/DOI 出现在 target_papers 时也应移除（即使 URL 为空）。"""
+    intent = _normalize_research_intent({
+        "exclude_url": [
+            "https://pubmed.ncbi.nlm.nih.gov/38132429/",
+            "https://doi.org/10.3390/dj11120291",
+        ],
+        "target_papers": [
+            {"pmid": "38132429"},                   # PMID 匹配 exclude 的 pubmed URL
+            {"doi": "10.3390/dj11120291"},          # DOI 匹配 exclude 的 doi URL
+            {"dataset": "MEPS"},                     # 无关，保留
+        ],
+    })
+    assert all(p.pmid != "38132429" for p in intent.target_papers)
+    assert all(p.doi != "10.3390/dj11120291" for p in intent.target_papers)
+    assert any(p.dataset == "MEPS" for p in intent.target_papers)
+
+
+@pytest.mark.usefixtures("exclusion_off")
+def test_normalize_research_intent_keeps_overlap_when_exclusion_disabled():
+    """默认关（exclusion_constraint_enable=False）：不去重，被禁源仍留在两处。
+
+    这是 baseline 行为——包括被禁源进 target_papers 后被 ensure_exact_target_documents
+    强制塞回证据的那条链路。
+    """
+    forbidden = "https://pubmed.ncbi.nlm.nih.gov/38132429/"
+    intent = _normalize_research_intent({
+        "include_url": [forbidden, "https://keep.com/a"],
+        "exclude_url": [forbidden],
+        "target_papers": [{"url": forbidden}, {"pmid": "38132429"}],
+    })
+    assert forbidden in intent.include_url
+    assert any(p.url == forbidden for p in intent.target_papers)
+    assert any(p.pmid == "38132429" for p in intent.target_papers)
+
+
 def test_target_paper_rejects_empty_item():
     with pytest.raises(ValueError, match="at least one clue"):
         TargetPaper()
+
+
+def test_normalize_material_relevance_map_discards_malformed_entries():
+    entries = _normalize_material_relevance_map([
+        {
+            "material_id": "M1",
+            "relevance": "direct",
+            "relevant_dimensions": ["efficacy"],
+            "supported_claims": [{"claim": "Improves outcome", "confidence": "high"}],
+            "research_gaps": ["long-term outcomes"],
+        },
+        {"material_id": "M2", "relevance": "unsupported"},
+        "invalid",
+    ])
+
+    assert len(entries) == 1
+    assert entries[0].material_id == "M1"
+    assert entries[0].supported_claims[0].claim == "Improves outcome"
 
 
 def test_legacy_research_intent_defaults_target_papers_to_empty():
@@ -203,10 +301,12 @@ def test_outliner_prompt_renders_task_contract_context():
         )
     )
 
-    prompts = apply_system_prompt("outliner", context)
-    system_prompt = prompts[0]["content"]
+    prompts = build_prompt_messages(
+        "outliner", {key: value for key, value in context.items() if key != "messages"}
+    )
+    system_prompt = "\n".join(message["content"] for message in prompts)
 
-    assert "Primary task type" in system_prompt
+    assert "Task type" in system_prompt
     assert "comparison" in system_prompt
     assert "growth, dividend" in system_prompt
     assert "AIA, Ping An" in system_prompt
@@ -232,8 +332,7 @@ def test_sub_report_prompt_renders_task_contract_context():
         )
     )
 
-    prompts = apply_system_prompt("sub_report_markdown", context)
-    system_prompt = prompts[0]["content"]
+    system_prompt = _render_prompt("sub_report_markdown", context)
 
     # Verify prompt renders successfully with basic sections
     assert "Citation & Grounding" in system_prompt
@@ -278,8 +377,7 @@ def test_sub_section_outline_prompt_renders_section_local_contract_context():
         )
     )
 
-    prompts = apply_system_prompt("sub_section_outline", context)
-    system_prompt = prompts[0]["content"]
+    system_prompt = _render_prompt("sub_section_outline", context)
 
     assert "Chapter Writing Directive" in system_prompt
     assert "recommendation_and_ranking" in system_prompt
@@ -300,8 +398,7 @@ def test_sub_section_outline_prompt_allows_flat_outline_when_section_is_focused(
         "paragraph_style": "concise",
     }
 
-    prompts = apply_system_prompt("sub_section_outline", context)
-    system_prompt = prompts[0]["content"]
+    system_prompt = _render_prompt("sub_section_outline", context)
 
     assert "Flat outline" in system_prompt
     assert "only the Level 1 heading" in system_prompt
@@ -323,8 +420,7 @@ def test_sub_report_prompts_render_flat_outline_writing_rule(prompt_name):
         "current_chapter_outline": "1 市场概览",
     }
 
-    prompts = apply_system_prompt(prompt_name, context)
-    system_prompt = prompts[0]["content"]
+    system_prompt = _render_prompt(prompt_name, context)
 
     # Both prompt versions have citation and output structure rules
     assert "Citation & Grounding" in system_prompt or "Citation" in system_prompt
@@ -346,8 +442,7 @@ def test_sub_report_prompts_always_forbid_body_mermaid(prompt_name):
         "current_chapter_outline": "1 Market overview",
     }
 
-    prompts = apply_system_prompt(prompt_name, context)
-    system_prompt = prompts[0]["content"]
+    system_prompt = _render_prompt(prompt_name, context)
 
     # sub_report_markdown uses "Visualization Boundary" section
     assert (
@@ -377,8 +472,7 @@ def test_sub_report_prompt_renders_section_local_contract_context():
         )
     )
 
-    prompts = apply_system_prompt("sub_report_markdown", context)
-    system_prompt = prompts[0]["content"]
+    system_prompt = _render_prompt("sub_report_markdown", context)
 
     # Verify prompt renders successfully with basic sections
     assert "Citation & Grounding" in system_prompt
@@ -403,10 +497,9 @@ def test_report_implications_prompt_renders_answer_first_contract():
         )
     )
 
-    prompts = apply_system_prompt(
+    system_prompt = _render_prompt(
         "report_implications_and_recommendations_markdown", context
     )
-    system_prompt = prompts[0]["content"]
 
     assert "answer-first" in system_prompt.lower()
     assert "AIA, Ping An" in system_prompt
@@ -429,8 +522,10 @@ def test_planner_prompt_renders_section_local_contract_context():
         )
     )
 
-    prompts = apply_system_prompt("planner", context)
-    system_prompt = prompts[0]["content"]
+    prompts = build_prompt_messages(
+        "planner", {key: value for key, value in context.items() if key != "messages"}
+    )
+    system_prompt = "\n".join(message["content"] for message in prompts)
 
     assert "Section Scope" in system_prompt
     assert "Current Section Responsibility" in system_prompt
@@ -454,9 +549,11 @@ def test_planner_prompt_renders_section_local_contract_context():
 )
 def test_non_collector_prompts_do_not_consume_temporal_scope(prompt_name):
     """时间约束不进入下列非 collector Prompt（sub_report_markdown 为有意消费者，已排除）。"""
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / f"{prompt_name}.md").read_text(
-        encoding="utf-8"
-    )
+    prompt_root = Path("openjiuwen_deepsearch/algorithm/prompts")
+    prompt_dir = prompt_root / prompt_name
+    prompt = "\n".join(
+        file.read_text(encoding="utf-8") for file in prompt_dir.glob("*.md")
+    ) if prompt_dir.is_dir() else (prompt_root / f"{prompt_name}.md").read_text(encoding="utf-8")
 
     assert "temporal_scope" not in prompt
     assert "has_temporal_scope" not in prompt

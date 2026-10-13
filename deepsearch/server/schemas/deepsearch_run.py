@@ -3,7 +3,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 from typing import Literal, List
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from openjiuwen_deepsearch.config.config import (
     ArxivScholarlyConfig,
@@ -14,11 +14,16 @@ from openjiuwen_deepsearch.config.config import (
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import (
     SAFE_CONVERSATION_ID_PATTERN,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import (
+    is_local_file_path,
+    validate_url_scheme,
+)
 
 _CONVERSATION_ID_SCHEMA_ERR = (
     "conversation_id must be 1–128 characters and use only ASCII letters, digits, "
     "underscore, or hyphen (^[A-Za-z0-9_-]{1,128}$)."
 )
+MAX_USER_MATERIALS_TOTAL_CHARS = 5_000_000
 
 
 class PubMedScholarlyRequestConfig(PubMedScholarlyConfig):
@@ -56,6 +61,12 @@ class LocalSearchConfig(BaseModel):
     local_search_config_ids: List[str] = Field(default=[], description="本地知识库ID列表")
     max_local_search_results: int = Field(default=5, ge=1, le=10, description="最大本地搜索结果数量")
     recall_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="知识库检索阈值")
+
+
+class McpServerConfig(BaseModel):
+    """请求中引用的 MCP server 配置"""
+    mcp_server_id: int = Field(..., description="MCP server 配置 ID")
+    type: str = Field(default="search", description="MCP server 用途类型")
 
 
 class PluginToolParam(BaseModel):
@@ -114,10 +125,17 @@ class DeepSearchRequest(BaseModel):
         default=True,
         description="是否启用子报告大纲阶段的规则版覆盖证据（coverage passages）",
     )
+    exclusion_constraint_enable: bool = Field(
+        default=False,
+        description="是否启用子报告禁引约束（采集层文献 ID 匹配与镜像后缀词、"
+                    "写作层 Excluded Sources 注入、intent 层 include_url/target_papers 去重）。"
+                    "默认关闭，关闭时行为等同 baseline",
+    )
     llm_config: dict = Field(default_factory=dict, description="LLM配置")
     web_search_config: WebSearchConfig = Field(default=None, description="联网增强引擎配置，和本地知识库配置至少选择一个")
     local_search_config: LocalSearchConfig = Field(default=None,
                                                    description="本地知识库配置，和联网增强引擎配置至少选择一个")
+    mcp_servers: List[McpServerConfig] = Field(default_factory=list, description="MCP server 配置引用列表")
     template_id: int = Field(default=-1, description="报告模板ID（可选）")
     interrupt_feedback: Literal[
         "", "accepted", "cancel", "revise_outline", "revise_comment"
@@ -148,6 +166,16 @@ class DeepSearchRequest(BaseModel):
             "None 时由意图识别与澄清机制决定。仅 research 模式生效，任务首轮指定后不可变更。"
         ),
     )
+    metadata: dict | None = Field(
+        default=None,
+        description=(
+            "运行时元数据（可选），由客户端持有并回传，服务端不持久化。"
+            "当前支持键：brief_outline / research_intent / language（即 brief 报告"
+            " final_result.metadata 的原样回传），用于以 brief 大纲为结构基准生成专业版报告；"
+            "user_materials_enabled(bool) 与 user_materials(list)。素材条目须含 content 与 url；"
+            "url 可为本地绝对文件路径或 HTTP(S) 链接。material_id/title/publish_time/content_time 可选。"
+        ),
+    )
     web_search_max_qps: float = Field(default=0, description="联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求")
     user_feedback_processor_enable: bool = Field(default=False, description="是否启用用户反馈优化功能")
     user_feedback_processor_max_interactions: int = Field(default=100, ge=1, le=100, description="最大交互次数")
@@ -156,6 +184,56 @@ class DeepSearchRequest(BaseModel):
     vlm_chart_generator_enable: bool = Field(default=False, description="vlm迭代生成图开关")
     vlm_chart_generator_max_iterations: int = Field(default=1, ge=1, le=3, description="vlm迭代生成图最大迭代次数")
     agent_llm_timeouts: dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
+
+    @model_validator(mode="after")
+    def _validate_user_materials_shape(self) -> "DeepSearchRequest":
+        # 素材定义位于 metadata；关闭开关时素材整体被忽略，不因格式问题拒绝请求。
+        metadata = self.metadata or {}
+        enabled = metadata.get("user_materials_enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError("metadata.user_materials_enabled must be a boolean")
+        if not enabled:
+            return self
+        materials = metadata.get("user_materials") or []
+        if not isinstance(materials, list):
+            raise ValueError("metadata.user_materials must be a list")
+        total_content_chars = 0
+        for index, item in enumerate(materials):
+            if not isinstance(item, dict):
+                raise ValueError(f"metadata.user_materials[{index}] must be an object")
+            if "content" not in item:
+                raise ValueError(
+                    f"metadata.user_materials[{index}] requires non-empty content"
+                )
+            content = item["content"]
+            if not isinstance(content, str):
+                raise ValueError(
+                    f"metadata.user_materials[{index}].content must be a string"
+                )
+            if not content.strip():
+                raise ValueError(
+                    f"metadata.user_materials[{index}] requires non-empty content"
+                )
+            if "url" not in item or not isinstance(item["url"], str) or not item["url"].strip():
+                raise ValueError(
+                    f"metadata.user_materials[{index}] requires non-empty url"
+                )
+            url = item["url"].strip()
+            if not is_local_file_path(url):
+                _, is_safe_url = validate_url_scheme(url)
+                if not is_safe_url:
+                    raise ValueError(
+                        f"metadata.user_materials[{index}].url must be an absolute local "
+                        "file path or HTTP(S) URL"
+                    )
+            total_content_chars += len(content)
+        if total_content_chars > MAX_USER_MATERIALS_TOTAL_CHARS:
+            raise ValueError(
+                "metadata.user_materials total content length must not exceed "
+                f"{MAX_USER_MATERIALS_TOTAL_CHARS} characters"
+            )
+        return self
+
 
     @field_validator("conversation_id")
     @classmethod

@@ -261,6 +261,18 @@ class TruthVerificationProcessor(UserFeedbackPromptInvoker):
                 "need_more_search": True,
             }
 
+        if not isinstance(data, dict):
+            logger.warning(
+                "[TruthVerificationProcessor] assessment JSON is not a dict, fallback to insufficient. data_type=%s",
+                type(data).__name__,
+            )
+            return {
+                "display_text": _insufficient_evidence_fallback_text(language),
+                "conclusion": "insufficient_evidence",
+                "evidences": [],
+                "need_more_search": True,
+            }
+
         conclusion = data.get("conclusion", "")
         if conclusion not in _ALLOWED_CONCLUSIONS:
             logger.warning(

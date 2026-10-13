@@ -5,7 +5,7 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -150,7 +150,7 @@ async def call_llm_for_trace(source_type: str, search_record: Dict[str, Any],
 
     try:
         llm = llm_context.get().get(llm_model_name)
-        llm_input = apply_system_prompt(
+        llm_input = build_prompt_messages(
             "source_matching", source_tracer_context)
         llm_output = await ainvoke_llm_with_stats(llm, llm_input,
                                                   agent_name=AgentLlmName.SOURCE_TRACER_SOURCE_MATCHING.value)
@@ -185,11 +185,34 @@ def parse_trace_response(llm_result: str, source_type: str) -> List[Dict[str, An
 
     # 解析JSON
     trace_results = json.loads(cleaned_result)
+    if not isinstance(trace_results, dict):
+        logger.warning(
+            "[merge_trace_results] trace_results is not a dict, got %s. "
+            "Returning empty results.",
+            type(trace_results).__name__,
+        )
+        return []
 
     # 提取并设置source字段
     results = []
     if "source_traced_results" in trace_results:
-        for result in trace_results["source_traced_results"]:
+        traced = trace_results["source_traced_results"]
+        # 防御性校验：source_traced_results 必须是 list
+        if not isinstance(traced, list):
+            logger.warning(
+                "[merge_trace_results] source_traced_results is not a list, got %s. "
+                "Returning empty results.",
+                type(traced).__name__,
+            )
+            return []
+        for result in traced:
+            # 消费端兜底防御：每个元素必须是 dict（才能做 result["source"] 赋值）
+            if not isinstance(result, dict):
+                logger.warning(
+                    "[merge_trace_results] skip non-dict traced result: %r (type=%s)",
+                    result, type(result).__name__,
+                )
+                continue
             result["source"] = source_type
             results.append(result)
 
@@ -211,6 +234,10 @@ def merge_trace_results(trace_results: List[Dict[str, Any]]) -> List[Dict[str, A
         sentence = result.get("sentence", "")
         source = result.get("source", "")
         matched_indices = result.get("matched_source_indices", [])
+        if not isinstance(matched_indices, list):
+            matched_indices = []
+        else:
+            matched_indices = [i for i in matched_indices if isinstance(i, int) and not isinstance(i, bool)]
         if not matched_indices:
             continue
 

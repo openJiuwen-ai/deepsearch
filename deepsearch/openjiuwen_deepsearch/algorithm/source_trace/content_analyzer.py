@@ -6,7 +6,7 @@ import logging
 import difflib
 from typing import List
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -36,7 +36,7 @@ async def recognize_content_to_cite(modified_report: str, similarity_threshold: 
 
     try:
         llm = llm_context.get().get(llm_model_name)
-        llm_input = apply_system_prompt(
+        llm_input = build_prompt_messages(
             "content_recognition", source_tracer_context)
         llm_output = await ainvoke_llm_with_stats(llm, llm_input,
                                                   agent_name=AgentLlmName.SOURCE_TRACER_CONTENT_RECOGNITION.value)
@@ -78,13 +78,36 @@ def validate_and_enhance_sentences(llm_result: str, report: str, similarity_thre
     """
     # 解析JSON结果
     result_data = json.loads(llm_result)
+    if not isinstance(result_data, dict):
+        logger.warning(
+            "[recognize_content_to_cite] result_data is not a dict, got %s. "
+            "Falling back to empty list.",
+            type(result_data).__name__,
+        )
+        return []
     sentences = result_data.get("sentences", [])
+
+    # 防御性校验：sentences 必须是 list，每个元素必须是非 bool 的 str
+    if not isinstance(sentences, list):
+        logger.warning(
+            "[recognize_content_to_cite] sentences is not a list, got %s. "
+            "Falling back to empty list.",
+            type(sentences).__name__,
+        )
+        return []
 
     # 处理每个句子
     processed_sentences = []
     seen_sentences = set()  # 用于去重
 
     for sentence in sentences:
+        # 消费端兜底防御：严格要求非 bool 的 str
+        if not isinstance(sentence, str) or isinstance(sentence, bool):
+            logger.warning(
+                "[recognize_content_to_cite] skip non-str sentence: %r (type=%s)",
+                sentence, type(sentence).__name__,
+            )
+            continue
         # 1. 尝试在报告中找到完全匹配的句子
         if sentence in report:
             if sentence not in seen_sentences:

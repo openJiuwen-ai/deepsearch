@@ -29,9 +29,9 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_task.md`
-- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_rewrite_selected_only.md`
-- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_rewrite_selected_and_related.md`
+- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_task/`
+- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_rewrite_selected_only/`
+- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_rewrite_selected_and_related/`
 
 主要测试：
 

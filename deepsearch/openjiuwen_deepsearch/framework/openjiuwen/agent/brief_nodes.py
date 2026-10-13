@@ -14,6 +14,7 @@ from openjiuwen.core.session.node import Session
 from openjiuwen_deepsearch.algorithm.brief_report.collector import (
     collect_initial_brief_evidence,
     generate_brief_queries,
+    merge_material_evidence,
     supplement_brief_evidence,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import generate_brief_html_report
@@ -26,10 +27,18 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
 from openjiuwen_deepsearch.algorithm.brief_report.outline import generate_brief_outline
 from openjiuwen_deepsearch.algorithm.brief_report.review import review_brief_evidence
 from openjiuwen_deepsearch.algorithm.brief_report.search import normalize_brief_search_results
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    build_material_prompt_context,
+    is_material_first_request,
+    restore_material_analysis,
+)
 from openjiuwen_deepsearch.algorithm.brief_report.writer import (
     assemble_brief_report,
     generate_brief_summary,
     write_brief_chapters,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
+    build_exclusion_prompt_context,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report, ResearchIntent
@@ -151,6 +160,7 @@ async def _search_brief_queries(
             "local_text_search_record": [],
             "other_tool_record": [],
             "research_intent": intent.model_dump(),
+            "exclusion_constraint_enable": bool(session.get_global_state("config.exclusion_constraint_enable")),
         }
         try:
             processed_results = process_tool_result(
@@ -163,7 +173,10 @@ async def _search_brief_queries(
             continue
         if isinstance(processed_results, list):
             batches.append((query, processed_results))
-    results = normalize_brief_search_results(batches, intent)
+    results = normalize_brief_search_results(
+        batches, intent,
+        enable_exclusion=bool(session.get_global_state("config.exclusion_constraint_enable")),
+    )
     await _stream_brief_search_results(session, results, queries)
     return results
 
@@ -260,6 +273,13 @@ class BriefOutlineNode(BaseNode):
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
         logger.info("[BriefOutlineNode] Start BriefOutlineNode.")
         intent = session.get_global_state("search_context.research_intent") or {}
+        # 注入已在 IntentRecognition 节点完成筛选的素材清单。
+        material_context = build_material_prompt_context(
+            restore_material_analysis(session.get_global_state("search_context.material_analysis")),
+            include_analysis=False,
+        )
+        if not material_context.get("has_materials"):
+            material_context = {}
         request = BriefOutlineRequest(
             query=session.get_global_state("search_context.original_query") or "",
             language=session.get_global_state("search_context.language") or "zh-CN",
@@ -269,6 +289,7 @@ class BriefOutlineNode(BaseNode):
             clarification_questions=session.get_global_state("search_context.questions") or "",
             user_feedback=session.get_global_state("search_context.user_feedback") or "",
             report_template=session.get_global_state("search_context.report_template") or "",
+            material_context=material_context,
         )
         _log_node_detail("BriefOutlineNode", "current_inputs", request.model_dump())
         return {"llm": _llm(session, NodeId.BRIEF_OUTLINE), "request": request}
@@ -300,6 +321,20 @@ class BriefOutlineNode(BaseNode):
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> Output:
         outline = algorithm_output["outline"]
         session.update_global_state({"search_context.brief_state": BriefWorkflowState(outline=outline).model_dump()})
+        # 写入升级 metadata：客户端回传 /run 的 metadata 入参即可基于此大纲跑专业版
+        research_intent = session.get_global_state("search_context.research_intent") or {}
+        language = session.get_global_state("search_context.language") or "zh-CN"
+        session.update_global_state(
+            {
+                "search_context.final_result.metadata": {
+                    "brief_outline": outline.model_dump(mode="json"),
+                    # research_intent 中的时间范围是 date 对象，EndNode 会 json.dumps(final_result)，
+                    # 必须转 JSON 安全值，否则带日期约束的请求无法输出最终结果。
+                    "research_intent": ResearchIntent.model_validate(research_intent).model_dump(mode="json"),
+                    "language": language,
+                }
+            }
+        )
         next_node = NodeId.BRIEF_INFO_COLLECTOR.value
         logger.info("[BriefOutlineNode] Generated outline sections=%d.", len(outline.sections))
         _log_node_detail("BriefOutlineNode", "Generated outline", outline.model_dump())
@@ -317,10 +352,19 @@ class BriefInfoCollectorNode(BaseNode):
             logger.warning("[BriefInfoCollectorNode] Missing outline, skip evidence collection.")
             return {"skip": True}
         intent = session.get_global_state("search_context.research_intent") or {}
+        material_analysis = restore_material_analysis(
+            session.get_global_state("search_context.material_analysis")
+        )
+        material_context = build_material_prompt_context(material_analysis)
+        material_first = is_material_first_request(
+            session.get_global_state("search_context.original_query") or "",
+            bool(material_context.get("has_materials")),
+        )
         _log_node_detail(
             "BriefInfoCollectorNode", "current_inputs",
             {"outline": state.outline.model_dump(), "research_intent": intent,
-             "search_method": session.get_global_state("config.info_collector_search_method") or "web"},
+             "search_method": session.get_global_state("config.info_collector_search_method") or "web",
+             "material_first": material_first},
         )
         return {
             "state": state,
@@ -330,6 +374,8 @@ class BriefInfoCollectorNode(BaseNode):
                 research_intent=ResearchIntent.model_validate(intent).model_dump(),
                 llm=_llm(session, NodeId.BRIEF_INFO_COLLECTOR),
             ),
+            "material_first": material_first,
+            "material_context": material_context,
         }
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -346,6 +392,8 @@ class BriefInfoCollectorNode(BaseNode):
                         outline=request.outline,
                         user_query=request.user_query,
                         research_intent=request.research_intent,
+                        material_first=pre_output["material_first"],
+                        material_context=pre_output["material_context"],
                     ),
                 )
                 search_results = await _search_brief_queries(
@@ -371,6 +419,8 @@ class BriefInfoCollectorNode(BaseNode):
                         research_intent=request.research_intent,
                         executed_queries=state.collection_context.executed_queries,
                         blocking_gaps=blocking_gaps,
+                        material_first=pre_output["material_first"],
+                        material_context=pre_output["material_context"],
                     ),
                 ) if blocking_gaps else []
                 search_results = await _search_brief_queries(
@@ -389,6 +439,12 @@ class BriefInfoCollectorNode(BaseNode):
                     state.evidence_review = review.model_copy(update={"blocking_gaps": []})
                 next_node = NodeId.BRIEF_SUB_REPORTER.value
                 stage = "Supplementary evidence collection"
+            # 合并用户素材证据（引用登记 + 按相关度路由到章节），首轮与补搜路径统一处理
+            collection = merge_material_evidence(
+                collection,
+                request.outline,
+                restore_material_analysis(session.get_global_state("search_context.material_analysis")),
+            )
         except Exception as exc:
             return _finish_brief_node_failure(
                 session,
@@ -526,6 +582,9 @@ class BriefSubReporterNode(BaseNode):
             {"outline": state.outline.model_dump(), "collection": state.collection.model_dump()},
         )
         intent = session.get_global_state("search_context.research_intent") or {}
+        exclusion_ctx = {}
+        if session.get_global_state("config.exclusion_constraint_enable"):
+            exclusion_ctx = build_exclusion_prompt_context(intent)
         return {
             "state": state,
             "request": BriefWritingRequest(
@@ -534,6 +593,8 @@ class BriefSubReporterNode(BaseNode):
                 audience_role=intent.get("audience_role", ""), tone=intent.get("tone", ""),
                 user_format=session.get_global_state("search_context.report_template") or "",
                 writing_guidance=state.evidence_review.writing_guidance if state.evidence_review else None,
+                has_exclusion=exclusion_ctx.get("has_exclusion", False),
+                exclusion_instruction=exclusion_ctx.get("exclusion_instruction", ""),
             ),
         }
 

@@ -7,9 +7,11 @@ from openjiuwen_deepsearch.algorithm.query_understanding.outliner import (
     Outliner,
     check_tool_call,
     create_outline_tool,
+    ensure_material_first_bindings,
+    generate_outline,
     normalize_sections,
 )
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
 
@@ -78,6 +80,81 @@ functioncall_response = {
 
 # 测试用例
 class TestOutliner:
+    def test_material_first_empty_bindings_are_distributed_across_sections(self):
+        outline = Outline(
+            title="Test",
+            thought="Test",
+            sections=[
+                Section(id="1", title="A", description="A"),
+                Section(id="2", title="B", description="B"),
+            ],
+        )
+
+        changed = ensure_material_first_bindings(outline, ["M1", "M2", "M3"], True)
+
+        assert changed is True
+        assert [binding["material_id"] for binding in outline.sections[0].material_bindings] == ["M1", "M3"]
+        assert [binding["material_id"] for binding in outline.sections[1].material_bindings] == ["M2"]
+
+    def test_material_first_keeps_llm_bindings(self):
+        outline = Outline(
+            title="Test",
+            thought="Test",
+            sections=[Section(
+                id="1",
+                title="A",
+                description="A",
+                material_bindings=[{"material_id": "M1", "role": "primary"}],
+            )],
+        )
+
+        changed = ensure_material_first_bindings(outline, ["M1", "M2"], True)
+
+        assert changed is False
+        assert outline.sections[0].material_bindings == [{"material_id": "M1", "role": "primary"}]
+
+    def test_material_first_fills_only_unbound_sections(self):
+        outline = Outline(
+            title="Test",
+            thought="Test",
+            sections=[
+                Section(
+                    id="1",
+                    title="A",
+                    description="A",
+                    material_bindings=[{"material_id": "M1", "role": "primary"}],
+                ),
+                Section(id="2", title="B", description="B"),
+            ],
+        )
+
+        changed = ensure_material_first_bindings(outline, ["M1", "M2"], True)
+
+        assert changed is True
+        assert outline.sections[1].material_bindings[0]["material_id"] == "M2"
+
+    def test_generate_outline_preserves_material_bindings(self):
+        outline = generate_outline(
+            "en-US",
+            "Title",
+            "Thought",
+            [{
+                "id": "1",
+                "title": "Evidence",
+                "description": "Use the supplied study.",
+                "material_bindings": [{
+                    "material_id": "M1",
+                    "role": "primary_evidence",
+                    "claims_to_use": "Reported outcome",
+                }],
+            }],
+        )
+        assert outline.sections[0].material_bindings == [{
+            "material_id": "M1",
+            "role": "primary_evidence",
+            "claims_to_use": "Reported outcome",
+        }]
+
 
     @pytest.fixture
     def mock_llm(self):
@@ -115,6 +192,40 @@ class TestOutliner:
         assert "do not create" in rendered_prompt
         assert "additional top-level sections" in rendered_prompt
         assert "do not add top-level sections to reach 4 dimensions" in rendered_prompt
+        assert prompt[1] is test_data["messages"][0]
+
+    @pytest.mark.asyncio
+    async def test_generate_outline_preserves_prior_messages_and_original_query(
+        self, setup_outliner
+    ):
+        current_inputs = {
+            **test_data,
+            "original_query": "原始研究问题",
+            "questions": "澄清问题",
+            "language": "zh-CN",
+            "section_num": 5,
+        }
+        with patch(
+            "openjiuwen_deepsearch.algorithm.query_understanding.outliner.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            return_value=functioncall_response,
+        ) as invoke:
+            await setup_outliner.generate_outline(current_inputs)
+
+        prompt = invoke.await_args.args[1]
+        assert prompt[1] is test_data["messages"][0]
+        assert "原始研究问题" in prompt[-1]["content"]
+
+    def test_outliner_prompt_separates_stable_system_from_query_and_date(self):
+        messages = build_prompt_messages(
+            "outliner",
+            {"questions": "测试查询", "current_date": "2026-09-14"},
+        )
+
+        assert "测试查询" not in messages[0]["content"]
+        assert "2026-09-14" not in messages[0]["content"]
+        assert "测试查询" in messages[1]["content"]
+        assert "2026-09-14" in messages[1]["content"]
 
     def test_normalize_sections_parses_json_string(self):
         args = {
@@ -258,7 +369,7 @@ class TestOutliner:
         assert "focus_dimensions" in required_items
 
     def test_outliner_template_prompt_requires_section_contract_fields(self):
-        prompts = apply_system_prompt(
+        prompts = build_prompt_messages(
             "outliner_template",
             {
                 "entry_search_results": [],
@@ -389,3 +500,22 @@ class TestOutliner:
         assert tool_name in tool_names
         assert "runtime_outline_tool" in tool_names
 
+
+def test_outliner_prompt_renders_brief_outline_block_conditionally():
+    """brief_outline 存在时渲染结构约束块，缺省时保持与现状一致的渲染结果。"""
+    context = {
+        "questions": "测试问题",
+        "entry_search_results": [],
+        "section_num": 3,
+        "language": "zh-CN",
+        "user_feedback": "",
+    }
+    baseline = build_prompt_messages("outliner", context)[-1]["content"]
+
+    context_with_brief = dict(context)
+    context_with_brief["brief_outline"] = '{"title": "T", "sections": [{"title": "S1"}, {"title": "S2"}]}'
+    rendered = build_prompt_messages("outliner", context_with_brief)[-1]["content"]
+
+    assert "<authoritative_brief_outline>" in rendered
+    assert '{"title": "T"' in rendered
+    assert "<authoritative_brief_outline>" not in baseline

@@ -9,7 +9,14 @@ from pydantic import BaseModel, Field, ValidationError
 from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
+    PromptBuildOptions,
+    build_prompt_messages,
+)
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    MaterialEvidenceClaim,
+    MaterialRelevance,
+)
 from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
     normalize_arxiv_id,
     normalize_doi,
@@ -27,7 +34,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    exclusion_constraint_context,
+    llm_context,
+)
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -99,6 +109,10 @@ class IntentRecognitionResult(BaseModel):
     lang: str = Field(default="zh-CN", description="检测到的用户语言（归一化前的原始值）")
     entry_search_results: List[Dict] = Field(default_factory=list, description="初始网络搜索结果")
     needs_clarification: bool = Field(default=False, description="LLM 判断用户输入是否充足，不充足时需要走问题澄清")
+    material_relevance_map: List[MaterialRelevance] = Field(
+        default_factory=list,
+        description="用户素材与当前研究问题的结构化证据映射",
+    )
 
 
 def _default_fallback(original_query: str | None) -> IntentRecognitionResult:
@@ -332,6 +346,32 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         if paper.url and paper.url not in include_url:
             include_url.append(paper.url)
 
+    # exclude_url 中的 URL 不应同时出现在 include_url / target_papers
+    # （防止 collector 搜索注定被采集层挡掉的被禁源，浪费搜索轮次）
+    # 受 exclusion_constraint_enable 控制：关闭时跳过本去重，退回 baseline 行为。
+    if exclusion_constraint_context.get():
+        exclude_url_set = set(exclude_url)
+        exclude_pmids = set()
+        exclude_dois = set()
+        for u in exclude_url:
+            pmid = normalize_pmid(u)
+            if pmid:
+                exclude_pmids.add(pmid)
+            doi = normalize_doi(u)
+            if doi:
+                exclude_dois.add(doi)
+        include_url = [u for u in include_url if u not in exclude_url_set]
+        filtered_papers = []
+        for p in target_papers:
+            if p.url and p.url in exclude_url_set:
+                continue
+            if p.pmid and p.pmid in exclude_pmids:
+                continue
+            if p.doi and p.doi in exclude_dois:
+                continue
+            filtered_papers.append(p)
+        target_papers = filtered_papers
+
     source_date_scope = _normalize_date_scope(data.get("source_date_scope"), "source_date")
     content_date_scope = _normalize_date_scope(data.get("content_date_scope"), "content_date")
     # 兼容旧序列化 state：旧 temporal_scope 单对象按 constraint_type 路由到 source_date_scope/
@@ -363,6 +403,41 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
     )
 
 
+def _normalize_material_relevance_map(raw: object) -> List[MaterialRelevance]:
+    """Normalize best-effort material evidence records returned by the intent tool."""
+    if not isinstance(raw, list):
+        return []
+    entries: List[MaterialRelevance] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        claims: List[MaterialEvidenceClaim] = []
+        for claim in item.get("supported_claims") or []:
+            if not isinstance(claim, dict):
+                continue
+            try:
+                parsed = MaterialEvidenceClaim.model_validate(claim)
+            except ValidationError:
+                continue
+            if parsed.claim:
+                claims.append(parsed)
+        try:
+            entry = MaterialRelevance(
+                material_id=str(item.get("material_id") or "").strip(),
+                relevance=str(item.get("relevance") or "partial").strip().lower(),
+                relevant_dimensions=_dedupe_preserve_order(_to_str_list(item.get("relevant_dimensions"))),
+                roles=_dedupe_preserve_order(_to_str_list(item.get("roles"))),
+                supported_claims=claims,
+                limitations=_dedupe_preserve_order(_to_str_list(item.get("limitations"))),
+                research_gaps=_dedupe_preserve_order(_to_str_list(item.get("research_gaps"))),
+            )
+        except (ValidationError, TypeError, ValueError):
+            continue
+        if entry.material_id:
+            entries.append(entry)
+    return entries
+
+
 async def _emit_report_intent(**kwargs) -> IntentRecognitionResult:
     """将 LLM tool_call args 转换为意图识别结果。"""
     research_query = normalize_research_query(kwargs.get("research_query"))
@@ -380,6 +455,7 @@ async def _emit_report_intent(**kwargs) -> IntentRecognitionResult:
         research_intent=_normalize_research_intent(kwargs),
         lang=language,
         needs_clarification=needs_clarification,
+        material_relevance_map=_normalize_material_relevance_map(kwargs.get("material_relevance_map")),
     )
 
 
@@ -397,6 +473,33 @@ def _merge_explicit_target_papers(intent: ResearchIntent, original_query: str) -
     for paper in target_papers:
         if paper.url and paper.url not in include_url:
             include_url.append(paper.url)
+
+    # exclude_url 中的 URL 不应出现在 include_url / target_papers
+    # （_normalize_research_intent 已去重，但 _merge_explicit_target_papers 从
+    # original_query 重新提取了被禁源标识符并加回，需再次去重）
+    # 与 _normalize_research_intent 共用同一个总开关——只开一处等于没开。
+    if exclusion_constraint_context.get():
+        exclude_url_set = set(intent.exclude_url)
+        exclude_pmids = set()
+        exclude_dois = set()
+        for u in intent.exclude_url:
+            pmid = normalize_pmid(u)
+            if pmid:
+                exclude_pmids.add(pmid)
+            doi = normalize_doi(u)
+            if doi:
+                exclude_dois.add(doi)
+        include_url = [u for u in include_url if u not in exclude_url_set]
+        filtered_papers = []
+        for p in target_papers:
+            if p.url and p.url in exclude_url_set:
+                continue
+            if p.pmid and p.pmid in exclude_pmids:
+                continue
+            if p.doi and p.doi in exclude_dois:
+                continue
+            filtered_papers.append(p)
+        target_papers = filtered_papers
 
     return intent.model_copy(update={
         "target_papers": target_papers,
@@ -605,6 +708,44 @@ def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFu
                         },
                     },
                 },
+                "material_relevance_map": {
+                    "type": "array",
+                    "description": (
+                        "For each supplied material that is relevant to the original query, emit its ID, "
+                        "relevance, supported claims, limitations, and research gaps. Only use IDs from "
+                        "User-provided materials. Omit this field when no materials are supplied."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "material_id": {"type": "string"},
+                            "relevance": {
+                                "type": "string",
+                                "enum": ["direct", "partial", "contextual", "irrelevant"],
+                            },
+                            "relevant_dimensions": {"type": "array", "items": {"type": "string"}},
+                            "roles": {"type": "array", "items": {"type": "string"}},
+                            "supported_claims": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "claim": {"type": "string"},
+                                        "scope": {"type": "string"},
+                                        "evidence_excerpt": {"type": "string"},
+                                        "confidence": {
+                                            "type": "string", "enum": ["high", "medium", "low"],
+                                        },
+                                    },
+                                    "required": ["claim"],
+                                },
+                            },
+                            "limitations": {"type": "array", "items": {"type": "string"}},
+                            "research_gaps": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["material_id", "relevance"],
+                    },
+                },
                 "needs_clarification": {
                     "type": "boolean",
                     "description": (
@@ -612,7 +753,9 @@ def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFu
                         "questions before proceeding to outline generation. Set to true only "
                         "when the query is genuinely ambiguous, too broad, missing critical "
                         "comparison targets or analysis dimensions. Default to false when the "
-                        "query is clear enough to produce a quality outline."
+                        "query is clear enough to produce a quality outline. When user-provided "
+                        "materials are present, treat them as information the user already has: "
+                        "do not ask clarification for aspects the materials already supply."
                     ),
                 },
             },
@@ -627,24 +770,37 @@ def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFu
     return LocalFunction(card=card, func=_emit_report_intent)
 
 
+class IntentInvocation(BaseModel):
+    """Inputs required for one intent-recognition LLM invocation."""
+
+    prompt_name: str
+    original_query: str
+    messages: list
+    llm_model_name: str
+    provided_report_type: str | None = None
+    material_context: dict | None = None
+
+
 async def _invoke_llm_for_intent(
-    prompt_name: str,
-    original_query: str,
-    messages: list,
-    llm_model_name: str,
-    provided_report_type: str | None = None,
+    request: IntentInvocation,
 ) -> tuple[IntentRecognitionResult | None, dict]:
     """公共 LLM 调用逻辑：构建提示词、调用 LLM、解析 tool_call 结果
     """
     prompt_ctx = {
-        "original_query": original_query,
-        "messages": messages,
-        "provided_report_type": provided_report_type,
+        "original_query": request.original_query,
+        "provided_report_type": request.provided_report_type,
     }
-    prompts = apply_system_prompt(prompt_name, prompt_ctx)
+    if request.material_context and request.material_context.get("has_materials"):
+        # 素材仅作为当前请求数据传入；_analysis_items 仍由程序消费。
+        prompt_ctx.update(request.material_context)
+    prompts = build_prompt_messages(
+        request.prompt_name,
+        prompt_ctx,
+        options=PromptBuildOptions(prior_messages=request.messages),
+    )
 
-    tool = _create_emit_intent_tool(provided_report_type)
-    llm = llm_context.get().get(llm_model_name)
+    tool = _create_emit_intent_tool(request.provided_report_type)
+    llm = llm_context.get().get(request.llm_model_name)
     response = await llm_utils.ainvoke_llm_with_stats(
         llm,
         prompts,
@@ -670,19 +826,33 @@ async def _invoke_llm_for_intent(
     if not isinstance(args, dict):
         return (None, response)
 
+    args = _drop_empty_optional_intent_fields(args)
+
     tool_result = await tool.invoke(args)
     research_query = normalize_research_query(tool_result.research_query) or normalize_research_query(
-        original_query
+        request.original_query
     )
-    merged_intent = _merge_explicit_target_papers(tool_result.research_intent, original_query)
+    merged_intent = _merge_explicit_target_papers(tool_result.research_intent, request.original_query)
     result = tool_result.model_copy(
         update={
-            "original_query": original_query,
+            "original_query": request.original_query,
             "research_query": research_query,
             "research_intent": merged_intent,
         }
     )
     return (result, response)
+
+
+def _drop_empty_optional_intent_fields(args: dict) -> dict:
+    """Remove empty-string encodings of optional structured tool arguments."""
+    sanitized = dict(args)
+    # Some models serialize an omitted value as an empty string, which fails
+    # LocalFunction schema validation before _normalize_research_intent can
+    # discard it.
+    for field in ("section_count", "source_date_scope", "content_date_scope"):
+        if isinstance(sanitized.get(field), str) and not sanitized[field].strip():
+            sanitized.pop(field)
+    return sanitized
 
 
 async def _recognize_intent(
@@ -701,13 +871,17 @@ async def _recognize_intent(
     if not original_query:
         return _default_fallback(original_query)
 
+    # 下发禁引约束总开关，供下方 include_url/target_papers 去重逻辑读取
+    token = exclusion_constraint_context.set(bool(current_inputs.get("exclusion_constraint_enable", False)))
     try:
-        result, response = await _invoke_llm_for_intent(
-            "intent_recognition", original_query,
-            current_inputs.get("messages") or [],
-            current_inputs.get("llm_model_name"),
-            current_inputs.get("provided_report_type"),
-        )
+        result, response = await _invoke_llm_for_intent(IntentInvocation(
+            prompt_name="intent_recognition",
+            original_query=original_query,
+            messages=current_inputs.get("messages") or [],
+            llm_model_name=current_inputs.get("llm_model_name"),
+            provided_report_type=current_inputs.get("provided_report_type"),
+            material_context=current_inputs.get("material_context"),
+        ))
         if result is None:
             logger.warning("[%s] No tool_calls in LLM response, using fallback.", log_tag)
             return _default_fallback(original_query)
@@ -731,6 +905,8 @@ async def _recognize_intent(
         else:
             logger.warning("[%s] Exception, using fallback: %s", log_tag, exc)
         return _default_fallback(original_query)
+    finally:
+        exclusion_constraint_context.reset(token)
 
 
 async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResult:

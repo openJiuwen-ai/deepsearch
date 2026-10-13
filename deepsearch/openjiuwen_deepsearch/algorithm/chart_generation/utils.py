@@ -8,7 +8,10 @@ import base64
 from pydantic import BaseModel, Field
 
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt, apply_vlm_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
+    PromptBuildOptions,
+    build_prompt_messages,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -28,6 +31,7 @@ def type_check(result, expected_type):
 
 
 def is_equal_length(result, target):
+    """校验结果顶层 list 长度是否等于 target（list[dict] 场景使用）。"""
     type_check(result, list)
     if len(result) != target:
         error_msg = f"[CHART GENERATION]: 生成结果数量错误,"
@@ -62,15 +66,27 @@ async def call_model(call_model_input: CallModelInput,
     agent_name = call_model_input.agent_name
     model_name = call_model_input.model_name
     
+    prompt_messages = None
     retries = 0
     while retries < MAX_LLM_RETRY_TIMES:
         try:
-            if use_vlm:
-                user_prompt = apply_vlm_prompt(prompt, user_input, [user_input.get("chart_base64", "")])
-            else:
-                user_prompt = apply_system_prompt(prompt, user_input)
+            if prompt_messages is None:
+                prompt_context = dict(user_input)
+                options = None
+                if use_vlm:
+                    chart_base64 = prompt_context.pop("chart_base64", "")
+                    options = PromptBuildOptions(images=(chart_base64,))
+                prompt_messages = build_prompt_messages(
+                    prompt,
+                    prompt_context,
+                    options=options,
+                )
             llm = llm_context.get().get(model_name)
-            response = await ainvoke_llm_with_stats(llm, user_prompt, agent_name=agent_name)
+            response = await ainvoke_llm_with_stats(
+                llm,
+                prompt_messages,
+                agent_name=agent_name,
+            )
             content = response.get("content", "")
             
             if not content:

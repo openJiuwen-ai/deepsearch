@@ -12,7 +12,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefWritingGuidance,
     CoverageStatus,
 )
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -137,7 +137,7 @@ async def review_brief_evidence(request: BriefReviewRequest) -> BriefEvidenceRev
     attempts = max(1, Config().service_config.info_collector_max_retry_num)
     for attempt_num in range(1, attempts + 1):
         try:
-            messages = apply_system_prompt("brief_evidence_review", prompt_input)
+            messages = build_prompt_messages("brief_evidence_review", prompt_input)
             response = await ainvoke_llm_with_stats(
                 request.llm,
                 messages,
