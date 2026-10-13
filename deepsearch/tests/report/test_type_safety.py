@@ -8,6 +8,7 @@ report_utils.py, and report.py.
 """
 
 import json
+import re
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -392,6 +393,104 @@ def test_timeline_chart_generator_non_dict_json():
     """Timeline with JSON scalar raises ValueError, not AttributeError."""
     with pytest.raises(ValueError, match="timeline"):
         TimelineChartMermaidGenerator.generate_from_json('42')
+
+
+# =====================================================================
+# _should_use_horizontal — long CJK labels force horizontal (bug fix)
+# =====================================================================
+
+def test_long_cjk_labels_force_horizontal():
+    """Three long CJK labels (each ≥10 chars, weight ≥20) must use
+    horizontal orientation to avoid x-axis label overlap.
+
+    Regression: '协议兼容性与本地联动能力' (12 CJK, weight 24) kept
+    vertical orientation because total weight 64 ≤ 80 and per-label
+    limit 80/3 ≈ 26.7 > 24.  In a 430 px / 3-column vertical chart,
+    a 12-char label (≈168 px) exceeds the 143 px per-column space.
+    """
+    labels = [
+        "协议兼容性与本地联动能力",
+        "主动智能场景覆盖数量",
+        "一站式安装与售后时效",
+    ]
+    assert XYChartMermaidGenerator._should_use_horizontal(labels, 3) is True
+
+
+def test_short_labels_stay_vertical():
+    """Short labels (weight ≤ 20) with count < 4 stay vertical."""
+    labels = ["产品性能", "设计美学", "品牌口碑"]
+    assert XYChartMermaidGenerator._should_use_horizontal(labels, 3) is False
+
+
+# =====================================================================
+# _nice_step — D3-aligned multipliers (bug fix)
+# =====================================================================
+
+def test_nice_step_uses_d3_aligned_multipliers():
+    """_nice_step must use D3-aligned multipliers (1, 1.5, 2, 2.5, 5, 10)
+    to produce y-axis ranges that render with fewer ticks.
+
+    Regression: _nice_step(1029.8) returned 1100 (multiplier 1.1 from
+    NICE_MULTIPLIERS), leading to y_max=6600 and 14 D3 ticks at 500
+    intervals in a 500 px chart.  With D3-aligned multipliers, it
+    returns 1500, leading to y_max=7500 and ≤ 8 ticks.
+    """
+    assert XYChartMermaidGenerator._nice_step(1029.8) == 1500
+    assert XYChartMermaidGenerator._nice_step(110) == 150
+    assert XYChartMermaidGenerator._nice_step(17.37) == 20
+
+
+def test_large_bar_values_avoid_tick_overlap():
+    """End-to-end: bar [2999, 3999, 4999, 5999] must produce a y-axis
+    max that avoids tick overlap in a 500 px chart.
+
+    Old y_max=6600 → 14 D3 ticks at 500 intervals (36 px/tick, overlap).
+    New y_max=7500 → 6-8 D3 ticks (63-83 px/tick, no overlap).
+    """
+    import re
+    data = {
+        "image_type": "bar",
+        "unit": "元",
+        "records": [
+            ["两居智慧入门套餐", 2999],
+            ["两居智慧进阶套餐", 3999],
+            ["三居智慧旗舰套餐", 4999],
+            ["凌云E3套系", 5999],
+        ],
+    }
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    m = re.search(r'y-axis "[^"]*" 0 --> (\d+(?:\.\d+)?)', result)
+    assert m, f"y-axis not found in: {result}"
+    y_max = float(m.group(1))
+    assert y_max != 6600, f"y_max=6600 causes 14 ticks (overlap); got y_max={y_max}"
+
+
+# =====================================================================
+# generate_from_json — tick density vs width constraint (bug fix)
+# =====================================================================
+
+def test_tick_density_forces_wider_chart():
+    """Vertical chart with large value range must widen to avoid tick overlap.
+
+    Regression: 2 short labels + values [2999, 5999] produced width=360
+    (minimum) with y_max=7500.  D3 selects 1000-step → 8 ticks →
+    360/8 = 45 px/tick → overlap.  The generator must ensure width can
+    accommodate the estimated D3 tick count.
+    """
+    data = {
+        "image_type": "bar",
+        "unit": "元",
+        "records": [
+            ["项目甲", 2999],
+            ["项目乙", 5999],
+        ],
+    }
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    m = re.search(r"width: (\d+)", result)
+    assert m, f"width not found in: {result}"
+    width = int(m.group(1))
+    # 8 D3 ticks × 50 px minimum = 400 px
+    assert width >= 400, f"width={width} causes tick overlap (need ≥400 for 8 ticks)"
 
 
 # =====================================================================
