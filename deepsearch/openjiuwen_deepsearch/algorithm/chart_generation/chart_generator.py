@@ -28,6 +28,10 @@ from openjiuwen_deepsearch.algorithm.chart_generation.utils import (
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    StopRequested,
+    raise_if_stop_requested_in_results,
+)
 from openjiuwen_deepsearch.algorithm.chart_generation.sandbox import (
     AsyncCodeExecutor,
 )
@@ -131,12 +135,18 @@ class ChartGenerator:
                 )
 
             results = await asyncio.gather(*section_coroutines, return_exceptions=True)
+            # 停止分流:先于结果后处理重抛 StopRequested,防止被包装成
+            # CustomValueException 丢掉停止语义。
+            raise_if_stop_requested_in_results(results)
 
             # 结果后处理
             report_chart_results = self._post_process_report_results(
                 results, section_indices
             )
             return report_chart_results
+        except StopRequested:
+            # 停止穿透:不得包装成业务异常,否则 workflow 层标记识别失效。
+            raise
         except Exception as e:
             error_msg = f"Error generating charts: {e}"
             logger.error(error_msg)
@@ -199,6 +209,9 @@ class ChartGenerator:
 
         # 等待所有图表生成完成
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 停止分流:先于后处理重抛,防止 StopRequested 落入 result.get 触发
+        # AttributeError 被吞成"无图表"假完成。
+        raise_if_stop_requested_in_results(results)
 
         # 结果后处理
         section_chart_results = self._post_process_section_results(
@@ -352,6 +365,10 @@ class ChartGenerator:
                     code = result.get("code", "")
                     chart_base64 = result.get("chart_base64", "")
 
+        except StopRequested:
+            # 停止穿透:单图生成链(LLM 产码/VLM 迭代)吞掉停止会返回空图,
+            # 被上层当作正常"无图表"假完成。
+            raise
         except Exception as e:
             logger.warning(f"Error generating chart: {e}")
             return {}
@@ -459,6 +476,9 @@ class ChartGenerator:
             # 代码规范化
             return self._normalize_code(code)
 
+        except StopRequested:
+            # 停止穿透:产码 LLM 链吞掉停止会返回 None,被当作生成失败降级。
+            raise
         except Exception as e:
             logger.error(f"Error generating chart code: {e}")
             return None
@@ -559,6 +579,10 @@ class ChartGenerator:
                 return {}
             return response
 
+        except StopRequested:
+            # 停止穿透:VLM 迭代链吞掉停止会包装成 CustomValueException,
+            # 丢掉停止语义后被 _generate_single_chart 当普通失败降级。
+            raise
         except Exception as e:
             error_msg = f"Error in VLM iteration: {e}"
             logger.error(error_msg)

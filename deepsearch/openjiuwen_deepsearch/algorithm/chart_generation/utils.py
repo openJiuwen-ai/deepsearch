@@ -12,6 +12,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
@@ -85,6 +86,12 @@ async def call_model(call_model_input: CallModelInput,
                 params = detection_func_and_args.get("args", {})
                 detection_func(content, params)
             return content
+        except StopRequested:
+            # 用户停止不重试、不降级为空结果，立即向上传播。
+            # 必须先于下方通用 Exception 分支（StopRequested 是普通
+            # Exception 子类，落入通用分支会被当可重试错误烧完预算后
+            # 返回 []，产码/占位/采集/VLM 外层的停止透传全部不可达）。
+            raise
         except CustomValueException as e:
             retries += 1
             logger.warning(f'[CHART GENERATION] retry: {retries}/{MAX_LLM_RETRY_TIMES}, '

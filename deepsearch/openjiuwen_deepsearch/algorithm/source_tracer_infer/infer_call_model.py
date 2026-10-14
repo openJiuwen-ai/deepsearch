@@ -11,6 +11,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
@@ -168,6 +169,9 @@ async def call_model(model_name: str, prompt: str, user_input: dict,
                 else:
                     detection_func(llm_result)
             return llm_result
+        except StopRequested:
+            # 用户停止不重试、不降级为空结果，立即向上传播。
+            raise
         except CustomValueException as e:
             retries += 1
             logger.warning(f'[SOURCE TRACER INFER] retry: {retries}/{MAX_LLM_RETRY_TIMES}, '

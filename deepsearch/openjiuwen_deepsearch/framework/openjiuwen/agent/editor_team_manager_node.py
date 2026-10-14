@@ -1,6 +1,5 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-import asyncio
 import logging
 import uuid
 
@@ -14,6 +13,10 @@ from openjiuwen.core.workflow.components.flow.workflow_comp import SUB_WORKFLOW_
 
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    gather_with_stop,
+    raise_if_stop_requested,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
     build_editor_team_workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.dependency_reasoning_team_nodes import \
@@ -144,7 +147,7 @@ class EditorTeamNode(BaseNode):
                 self._run_section_sub_graph_await(
                     session, sub_workflow, section_state)
             )
-        tasks_results = await asyncio.gather(*tasks)
+        tasks_results = await gather_with_stop(*tasks)
 
         # 3. 填充结果字段，并更新在state中
         state = self._update_state(state, sections, sub_reports, tasks_results)
@@ -239,6 +242,8 @@ class EditorTeamNode(BaseNode):
         return section_state
 
     async def _run_section_sub_graph_await(self, workflow_session, sub_workflow, input_state):
+        # 停止检查：开新章节子图前拦截，避免停止后仍启动长耗时子图。
+        raise_if_stop_requested()
         section_idx = input_state.get("section_idx", "0")
         # 执行每个子图，得到每个section的结果
         logger.info(
@@ -505,7 +510,7 @@ class DependencyEditorTeamNode(EditorTeamNode):
                         )
                     )
                 if tasks:
-                    current_results = await asyncio.gather(*tasks)
+                    current_results = await gather_with_stop(*tasks)
                     for i, section_id in enumerate(valid_ids_level0):
                         if i < len(current_results):
                             reasoning_results[section_id] = current_results[i]
@@ -553,7 +558,7 @@ class DependencyEditorTeamNode(EditorTeamNode):
                     )
                 all_tasks = writing_tasks + reasoning_tasks
                 if all_tasks:
-                    results = await asyncio.gather(*all_tasks)
+                    results = await gather_with_stop(*all_tasks)
                     n_w = len(writing_tasks)
                     for i, section_id in enumerate(valid_writing_ids):
                         if i < n_w:
@@ -585,7 +590,7 @@ class DependencyEditorTeamNode(EditorTeamNode):
                 )
             )
         if last_level_tasks:
-            last_level_results = await asyncio.gather(*last_level_tasks)
+            last_level_results = await gather_with_stop(*last_level_tasks)
             for i, section_id in enumerate(valid_section_ids):
                 if i < len(last_level_results):
                     writing_results[section_id] = last_level_results[i]

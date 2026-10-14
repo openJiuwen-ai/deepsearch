@@ -15,6 +15,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
 )
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested, gather_with_stop
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -181,6 +182,10 @@ async def _evaluate_shard(
                 len(evidence.coverage),
             )
             return evidence
+        except StopRequested:
+            # 用户停止不参与重试预算,也不能被降级为规则评估的"正常
+            # 返回",直接上抛。
+            raise
         except Exception as exc:  # 由调用层决定继续拆分还是规则降级。
             if _is_context_limit_error(exc):
                 logger.warning(
@@ -328,6 +333,10 @@ async def evaluate_brief_sections(
                         continue
                     raise
             return section.id, _merge_shards(section, results)
+        except StopRequested:
+            # 用户停止不降级为 _fallback 规则评估的"正常返回"(那会让
+            # 图"正常完成"并清除 checkpoint),直接上抛。
+            raise
         except Exception as exc:
             logger.warning(
                 "[BriefEvaluator] Evaluation fallback section_id=%s candidates=%d error_type=%s error=%s.",
@@ -338,4 +347,6 @@ async def evaluate_brief_sections(
             )
             return section.id, _fallback(section, section_candidates)
 
-    return dict(await asyncio.gather(*(evaluate_one(section) for section in outline.sections)))
+    # gather_with_stop:裸 gather 在 StopRequested 抛出瞬间会孤儿化其余章节
+    # 的评估协程,继续烧 LLM 调用并在 checkpoint 落盘后污染恢复状态。
+    return dict(await gather_with_stop(*(evaluate_one(section) for section in outline.sections)))

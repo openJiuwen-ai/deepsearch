@@ -39,6 +39,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_safety import (
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
@@ -507,6 +508,10 @@ async def _generate_section_fragments(
     generated: dict[str, tuple[str, list[dict]]] = {}
     section_errors: list[str] = []
     for chunk, result in zip(sections, results, strict=True):
+        if isinstance(result, StopRequested):
+            # 用户停止是 Exception 子类,不能被当作普通章节失败吞进
+            # section_errors 重试循环(空转重试后仍可能被节点层降级)。
+            raise result
         if isinstance(result, Exception):
             section_errors.append(f"section {chunk.section_id}: {result}")
             continue

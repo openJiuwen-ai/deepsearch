@@ -21,6 +21,10 @@ from openjiuwen_deepsearch.algorithm.report.report_utils import (
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    StopRequested,
+    raise_if_stop_requested_in_results,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output, safe_float
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -231,6 +235,9 @@ class VisualizationMixin:
                 )
             payload = str(llm_output.get("content") or "").strip()
             return dict(rs_success=True, sub_section_visualization_content=payload)
+        except StopRequested:
+            # 停止穿透:本方法在并发 gather 分流链上,吞掉会被误判局部失败。
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 error_msg = "Error generating visualization content"
@@ -295,6 +302,9 @@ class VisualizationMixin:
                 if valid:
                     return dict(valid=True, error_msg="")
                 return dict(valid=False, error_msg=error_msg)
+            except StopRequested:
+                # 停止穿透:重试循环会把停止当普通失败重试烧完预算。
+                raise
             except Exception as e:
                 if isinstance(e, (json.JSONDecodeError, TypeError, ValueError)):
                     error_msg = (
@@ -370,6 +380,9 @@ class VisualizationMixin:
                 if valid:
                     return dict(valid=True, error_msg="")
                 return dict(valid=False, error_msg=error_msg)
+            except StopRequested:
+                # 停止穿透:重试循环会把停止当普通失败重试烧完预算。
+                raise
             except Exception as e:
                 if isinstance(e, (json.JSONDecodeError, TypeError, ValueError)):
                     error_msg = (
@@ -855,6 +868,9 @@ class VisualizationMixin:
         results = await asyncio.gather(
             *[_run_with_sem(t) for t in tasks], return_exceptions=True
         )
+        # 停止分流:return_exceptions 会把 StopRequested 压平成结果项,
+        # 先于下方通用 Exception 分流重抛,防止停止被置空内容吞成假完成。
+        raise_if_stop_requested_in_results(results)
 
         # Aggregate results
         for i, res in enumerate(results):

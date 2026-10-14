@@ -1,12 +1,19 @@
 import asyncio
 import json
+import threading
 import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    StopRequested,
+    clear_stop,
+    request_stop,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
+    _consume_llm_stream,
     _resolve_agent_llm_timeout,
     _resolve_node_agent_key,
     _install_usage_only_chunk_parser,
@@ -797,3 +804,333 @@ def test_install_usage_only_chunk_parser_is_safe_for_nested_restore():
 
     restore_inner()
     assert getattr(fake_model._client._parse_stream_chunk, "__func__", None) is getattr(original_parser, "__func__", None)
+
+
+class _StopDuringTtftModel:
+    """模拟 thinking 模式下 TTFT 分钟级等待的流式 LLM。
+
+    首个 chunk 前长时间不产出（模拟 thinking 首 token 延迟），
+    期间测试侧置停止标志，验证轮询能在等待期命中停止。
+    """
+
+    def __init__(self, delay: float):
+        self.delay = delay
+
+    async def stream(self, **kwargs):
+        del kwargs
+        await asyncio.sleep(self.delay)
+        yield _StreamingChunk("late")
+
+
+class _StopBetweenChunksModel:
+    """模拟 chunk 间隙长时间等待的流式 LLM。"""
+
+    def __init__(self, delay: float):
+        self.delay = delay
+
+    async def stream(self, **kwargs):
+        del kwargs
+        yield _StreamingChunk("a")
+        await asyncio.sleep(self.delay)
+        yield _StreamingChunk("b")
+
+
+def _make_stream_request(model, **overrides):
+    """构造 _consume_llm_stream 的最小请求对象。"""
+    from openjiuwen_deepsearch.utils.common_utils.llm_utils import _ConsumeLlmStreamRequest
+
+    defaults = dict(
+        llm=model,
+        stream_kwargs={},
+        can_write_stream=False,
+        need_stream_out=False,
+        session=None,
+        stream_id=None,
+        stream_meta=None,
+        agent_name="sub_reporter",
+    )
+    defaults.update(overrides)
+    return _ConsumeLlmStreamRequest(**defaults)
+
+
+@pytest.fixture(autouse=True)
+def _ensure_stop_flag_clean():
+    """每个用例前后清零停止标志，避免全局单例跨用例泄漏。"""
+    clear_stop()
+    yield
+    clear_stop()
+
+
+@pytest.mark.asyncio
+async def test_consume_llm_stream_raises_stop_during_ttft_wait():
+    """TTFT 等待期命中停止：轮询模式必须在分钟级首 token 延迟内秒级抛出。"""
+    request = _make_stream_request(_StopDuringTtftModel(delay=30))
+
+    async def _stop_soon():
+        await asyncio.sleep(0.2)
+        request_stop()
+
+    stopper = asyncio.ensure_future(_stop_soon())
+    with pytest.raises(StopRequested):
+        await asyncio.wait_for(_consume_llm_stream(request), timeout=10)
+    await stopper
+
+    assert not stopper.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_consume_llm_stream_raises_stop_during_chunk_gap():
+    """chunk 间隙命中停止：长间隙等待中轮询检查必须生效。"""
+    request = _make_stream_request(_StopBetweenChunksModel(delay=30))
+
+    async def _stop_soon():
+        await asyncio.sleep(0.2)
+        request_stop()
+
+    stopper = asyncio.ensure_future(_stop_soon())
+    with pytest.raises(StopRequested):
+        await asyncio.wait_for(_consume_llm_stream(request), timeout=10)
+    await stopper
+
+
+@pytest.mark.asyncio
+async def test_consume_llm_stream_returns_full_chunk_without_stop():
+    """无停止时轮询模式聚合行为与原 async for 消费完全一致。"""
+    request = _make_stream_request(_SlowStreamingModel(delay=0.05))
+
+    full_chunk = await asyncio.wait_for(_consume_llm_stream(request), timeout=10)
+
+    assert full_chunk.content == "ab"
+    assert full_chunk.usage_metadata.get("total_tokens") == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_astream_propagates_stop_during_stream_without_wrapping():
+    """流式全链路：TTFT 等待期停止必须以 StopRequested 原样穿透 llm_astream。"""
+    # 无 session：无 wall-clock 超时包装，纯走 _consume_llm_stream 轮询。
+    from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+
+    class _NoTimeoutSession:
+        def get_global_state(self, key):
+            return None
+
+        async def write_custom_stream(self, payload):
+            pass
+
+    token = session_context.set(_NoTimeoutSession())
+    try:
+        async def _stop_soon():
+            await asyncio.sleep(0.2)
+            request_stop()
+
+        stopper = asyncio.ensure_future(_stop_soon())
+        with pytest.raises(StopRequested):
+            await asyncio.wait_for(
+                llm_astream(
+                    llm=_StopDuringTtftModel(delay=30),
+                    messages=[{"role": "user", "content": "hello"}],
+                    model_name="demo-model",
+                    agent_name="sub_reporter",
+                ),
+                timeout=10,
+            )
+        await stopper
+    finally:
+        session_context.reset(token)
+
+
+class _SyncInvokeModel:
+    """模拟 sync invoke 的 react 节点模型（经 asyncio.to_thread 执行）。
+
+    阻塞中无停止感知，用 threading.Event 提前释放阻塞，避免孤儿线程
+    拖住 pytest 进程退出。
+    """
+
+    def __init__(self, delay: float):
+        self.delay = delay
+        self.release = threading.Event()
+
+    def invoke(self, **kwargs):
+        # 模拟分钟级同步调用；测试结束后提前放行让线程退出。
+        self.release.wait(self.delay)
+        return _FakeResponse(content="sync-late")
+
+
+class _AsyncInvokeModel:
+    """模拟 _ainvoke 的 react 节点模型（async 方法可直接取消）。"""
+
+    def __init__(self, delay: float):
+        self.delay = delay
+        self.cancelled = False
+
+    async def _ainvoke(self, **kwargs):
+        try:
+            await asyncio.sleep(self.delay)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return _FakeResponse(content="async-late")
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_react_node_sync_invoke_stops_within_poll_interval():
+    """非流式 sync invoke：等待期轮询命中停止，秒级抛 StopRequested 且不被包装。"""
+    model = _SyncInvokeModel(delay=30)
+    llm_obj = {"model": model, "model_name": "demo-model"}
+
+    async def _stop_soon():
+        await asyncio.sleep(0.2)
+        request_stop()
+
+    stopper = asyncio.ensure_future(_stop_soon())
+    try:
+        with pytest.raises(StopRequested):
+            await asyncio.wait_for(
+                ainvoke_llm_with_stats(
+                    llm=llm_obj,
+                    messages=[{"role": "user", "content": "hello"}],
+                    agent_name="simple_react_search",
+                ),
+                timeout=10,
+            )
+    finally:
+        model.release.set()
+        await stopper
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_react_node_async_invoke_cancels_on_stop():
+    """非流式 async _ainvoke：停止时后台任务被取消并等待退出。"""
+    model = _AsyncInvokeModel(delay=30)
+    llm_obj = {"model": model, "model_name": "demo-model"}
+
+    async def _stop_soon():
+        await asyncio.sleep(0.2)
+        request_stop()
+
+    stopper = asyncio.ensure_future(_stop_soon())
+    with pytest.raises(StopRequested):
+        await asyncio.wait_for(
+            ainvoke_llm_with_stats(
+                llm=llm_obj,
+                messages=[{"role": "user", "content": "hello"}],
+                agent_name="simple_react_search",
+            ),
+            timeout=10,
+        )
+    await stopper
+
+    assert model.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_streaming_path_stop_not_swallowed_by_fallback_logic():
+    """流式路径停止穿透：thinking fallback 分支不得将 StopRequested 误判为可重试错误。"""
+    llm_obj = {
+        "model": _StopDuringTtftModel(delay=30),
+        "model_name": "demo-model",
+        "thinking_fallback_model": _StopDuringTtftModel(delay=30),
+        "thinking_fallback_active": False,
+    }
+
+    async def _stop_soon():
+        await asyncio.sleep(0.2)
+        request_stop()
+
+    stopper = asyncio.ensure_future(_stop_soon())
+    with pytest.raises(StopRequested):
+        await asyncio.wait_for(
+            ainvoke_llm_with_stats(
+                llm=llm_obj,
+                messages=[{"role": "user", "content": "hello"}],
+                agent_name="intent_recognition",
+            ),
+            timeout=10,
+        )
+    await stopper
+
+
+class _ContinuousStreamModel:
+    """模拟高频持续输出的流式 LLM。
+
+    chunk 间隔远小于停止轮询周期（2s），总时长跨越多个轮询周期；
+    在指定 chunk 序号前置停止标志。旧实现（仅等待期轮询检查）下
+    此类流中停止检测完全失效——每轮 chunk 都在超时前到达 done 分支。
+    """
+
+    def __init__(self, chunk_count: int, chunk_delay: float, stop_at: int):
+        self.chunk_count = chunk_count
+        self.chunk_delay = chunk_delay
+        self.stop_at = stop_at
+        self.completed = False
+
+    async def stream(self, **kwargs):
+        del kwargs
+        for i in range(self.chunk_count):
+            if i == self.stop_at:
+                request_stop()
+            yield _StreamingChunk("x")
+            await asyncio.sleep(self.chunk_delay)
+        self.completed = True
+
+
+@pytest.mark.asyncio
+async def test_consume_llm_stream_stop_during_continuous_output():
+    """持续输出中途停止：chunk 到达即查的检查点必须秒级命中，
+    不得消费完整流后假完成（旧实现返回完整聚合结果）。"""
+    model = _ContinuousStreamModel(chunk_count=20, chunk_delay=0.15, stop_at=2)
+    request_obj = _make_stream_request(model)
+
+    with pytest.raises(StopRequested):
+        await asyncio.wait_for(_consume_llm_stream(request_obj), timeout=10)
+
+    # 流未跑完即被停止打断；旧实现会完整消费 20 个 chunk 正常返回。
+    assert model.completed is False
+
+
+class _StopAtStreamTailModel:
+    """在最后一个 chunk 产出前置停止标志的流式 LLM。"""
+
+    async def stream(self, **kwargs):
+        del kwargs
+        yield _StreamingChunk("a")
+        request_stop()
+        yield _StreamingChunk("b")
+
+
+@pytest.mark.asyncio
+async def test_consume_llm_stream_stop_at_stream_tail_raises_not_complete():
+    """停止落在最后一个 chunk 附近：返回前最后检查点必须上抛停止，
+    不得产出完整聚合结果假完成（若为本节点最后一次 LLM 调用，
+    假完成会触发快照清理）。"""
+    request_obj = _make_stream_request(_StopAtStreamTailModel())
+
+    with pytest.raises(StopRequested):
+        await asyncio.wait_for(_consume_llm_stream(request_obj), timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_consume_llm_stream_keeps_generator_context_across_chunks():
+    """流生成器内部跨 yield 的 ContextVar（如 LLM 调用追踪 ID）必须在
+    后续 chunk 间保持有效：整个 async for 运行在同一消费 task context 内，
+    不得逐 chunk 从外层复制旧上下文导致第二轮起丢失调用归属。"""
+    from contextvars import ContextVar
+
+    call_id_var = ContextVar("llm_call_id_for_test", default="")
+    observed = []
+
+    class _ContextAwareModel:
+        async def stream(self, **kwargs):
+            del kwargs
+            # 模拟 Model.stream 首轮 chunk 生成路径写入调用追踪 ID。
+            call_id_var.set("call-123")
+            for _ in range(3):
+                # 每轮 chunk 生成前读取，验证跨 yield 状态不丢。
+                observed.append(call_id_var.get())
+                yield _StreamingChunk("c")
+
+    request_obj = _make_stream_request(_ContextAwareModel())
+    full_chunk = await asyncio.wait_for(_consume_llm_stream(request_obj), timeout=10)
+
+    assert full_chunk.content == "ccc"
+    assert observed == ["call-123", "call-123", "call-123"]
