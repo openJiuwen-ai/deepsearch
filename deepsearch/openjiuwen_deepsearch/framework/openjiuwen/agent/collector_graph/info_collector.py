@@ -716,6 +716,13 @@ class InfoRetrievalNode(BaseNode):
         if len(agent_input["local_text_search_record"]) > 0:
             local_record = remove_duplicate_items(agent_input["local_text_search_record"])
 
+        for record in agent_input.get("other_tool_record", []):
+            web_record.append({
+                "title": str(record.get("tool_name") or "Untitled"),
+                "url": "",
+                "content": str(record.get("content") or ""),
+            })
+
         doc_infos, source_store = await self._structure_result(web_record, local_record, query)
 
         if LogManager.is_sensitive():
