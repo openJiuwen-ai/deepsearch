@@ -55,7 +55,8 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, S
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, web_search_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, web_search_context, \
+    mcp_tool_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,11 @@ class SearchQueryItem(BaseModel):
     search_engine_names: list[Literal["pubmed", "arxiv", "semantic_scholar"]] | None = Field(
         default=None,
         description="Ordered scholarly engines used to fan out this query.",
+    )
+    tool: str | None = Field(
+        default=None,
+        description="query-gen 选择的直调工具名（query-兼容 MCP 工具）或 native。"
+                    "不在可用工具列表时由 normalize 置 None。",
     )
 
     @model_validator(mode="before")
@@ -258,24 +264,34 @@ def normalize_search_query_item(
         item: str | SearchQueryItem,
         *,
         enable_scholarly_search: bool = True,
+        available_tool_names: set[str] | None = None,
 ) -> SearchQueryItem:
+    def _validated_tool(raw: str | None) -> str | None:
+        if not raw:
+            return None
+        if available_tool_names is None:
+            return None
+        return raw if raw in available_tool_names else None
+
     if isinstance(item, SearchQueryItem):
         query = item.query
+        tool = _validated_tool(item.tool)
         if not enable_scholarly_search:
-            return SearchQueryItem(query=query, search_engine_names=[])
+            return SearchQueryItem(query=query, search_engine_names=[], tool=tool)
         elif "search_engine_names" in item.model_fields_set and item.search_engine_names is not None:
             engines = list(dict.fromkeys(item.search_engine_names))[:4]
         else:
             engines = route_secondary_search_engines_for_query(query)
         pmid = normalize_pmid(query)
         if pmid and "pubmed.ncbi.nlm.nih.gov" in query.casefold():
-            return SearchQueryItem(query=pmid, search_engine_names=["pubmed"])
+            return SearchQueryItem(query=pmid, search_engine_names=["pubmed"], tool=tool)
         arxiv_id = normalize_arxiv_id(query)
         if arxiv_id and "arxiv.org" in query.casefold():
-            return SearchQueryItem(query=arxiv_id, search_engine_names=["arxiv"])
+            return SearchQueryItem(query=arxiv_id, search_engine_names=["arxiv"], tool=tool)
         return SearchQueryItem(
             query=query,
             search_engine_names=engines,
+            tool=tool,
         )
     query = str(item)
     engines = route_secondary_search_engines_for_query(query) if enable_scholarly_search else []
@@ -291,6 +307,75 @@ def _scholarly_search_is_available() -> bool:
     except LookupError:
         return False
     return any(name in engines for name in ("pubmed", "arxiv", "semantic_scholar"))
+
+
+def _available_mcp_query_tool_names() -> set[str] | None:
+    """返回 query-兼容 MCP 搜索工具名集合；无 bundle 时返回 None（不校验 tool）。"""
+    try:
+        bundle = mcp_tool_context.get()
+    except LookupError:
+        return None
+    if bundle is None:
+        return None
+    tools = bundle.get_tools_by_type("search")
+    names: set[str] = set()
+    for tool in tools or []:
+        name = getattr(getattr(tool, "card", None), "name", None)
+        if name:
+            names.add(name)
+    return names or None
+
+
+def _mcp_query_tool_descriptions() -> list[dict]:
+    """构造 query-兼容 MCP 工具的 {name, description} 清单，用于注入 gen_query prompt。"""
+    try:
+        bundle = mcp_tool_context.get()
+    except LookupError:
+        return []
+    if bundle is None:
+        return []
+    tools = bundle.get_tools_by_type("search")
+    descriptions = []
+    for tool in tools or []:
+        card = getattr(tool, "card", None)
+        if card is None:
+            continue
+        name = getattr(card, "name", "")
+        desc = getattr(card, "description", "") or ""
+        if name:
+            descriptions.append({"name": name, "description": desc})
+    return descriptions
+
+
+def _runtime_api_tool_descriptions(api_tools_config: dict | None) -> list[dict]:
+    """构造 runtime API 工具的 {name, description} 清单，用于注入 gen_query prompt。"""
+    if not isinstance(api_tools_config, dict):
+        return []
+    collector_tools = api_tools_config.get("collector_tools") or []
+    descriptions = []
+    for tool_config in collector_tools:
+        if not isinstance(tool_config, dict):
+            continue
+        name = tool_config.get("name") or ""
+        desc = tool_config.get("description") or ""
+        if name:
+            descriptions.append({"name": name, "description": desc})
+    return descriptions
+
+
+def _runtime_api_tool_names(api_tools_config: dict | None) -> set[str] | None:
+    """返回 runtime API 工具名集合；无配置时返回 None。"""
+    if not isinstance(api_tools_config, dict):
+        return None
+    collector_tools = api_tools_config.get("collector_tools") or []
+    names: set[str] = set()
+    for tool_config in collector_tools:
+        if not isinstance(tool_config, dict):
+            continue
+        name = tool_config.get("name") or ""
+        if name:
+            names.add(name)
+    return names or None
 
 
 def build_retrieval_queries(
@@ -314,6 +399,7 @@ def build_retrieval_queries(
             secondary_engines=secondary_engines,
             max_full_text_results=effective_config.max_full_text_results_per_query,
             scholarly_full_text_config=full_text_config if secondary_engines else {},
+            tool=item.tool,
         ))
     return queries
 
@@ -425,6 +511,7 @@ class GenerateQueryNode(BaseNode):
         language = session.get_global_state("collector_context.language")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         research_intent = session.get_global_state("collector_context.research_intent") or {}
+        api_tools_config = session.get_global_state("config.api_tools_config") or {}
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
@@ -432,7 +519,7 @@ class GenerateQueryNode(BaseNode):
                     step_description=step_description,
                     max_search_query_count=max_search_query_count,
                     language=language, evidence_ledger=evidence_ledger,
-                    research_intent=research_intent)
+                    research_intent=research_intent, api_tools_config=api_tools_config)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """根据研究记录生成当前采集轮次的检索 query。
@@ -476,6 +563,14 @@ class GenerateQueryNode(BaseNode):
             engine_name=getattr(_web_config, "search_engine_name", "") or "",
             scholarly_enabled=_scholarly_search_is_available(),
         ))
+        mcp_tools_for_prompt = _mcp_query_tool_descriptions()
+        runtime_api_tools_for_prompt = _runtime_api_tool_descriptions(state.get("api_tools_config"))
+        all_query_tools = mcp_tools_for_prompt + runtime_api_tools_for_prompt
+        if all_query_tools:
+            agent_input["has_mcp_query_tools"] = True
+            agent_input["mcp_query_tools"] = all_query_tools
+        else:
+            agent_input["has_mcp_query_tools"] = False
         formatted_prompt = build_prompt_messages("collector_gen_query", agent_input)
 
         result: SearchQueryList = await self._invoke_llm_with_retry(
@@ -502,10 +597,17 @@ class GenerateQueryNode(BaseNode):
         current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
         research_intent = session.get_global_state("collector_context.research_intent") or {}
         scholarly_search_enabled = _scholarly_search_is_available()
+        available_tool_names = _available_mcp_query_tool_names()
+        runtime_api_names = _runtime_api_tool_names(session.get_global_state("config.api_tools_config"))
+        if available_tool_names is None and runtime_api_names:
+            available_tool_names = runtime_api_names
+        elif available_tool_names is not None and runtime_api_names:
+            available_tool_names = available_tool_names | runtime_api_names
         locator_items = [
             normalize_search_query_item(
                 item,
                 enable_scholarly_search=scholarly_search_enabled,
+                available_tool_names=available_tool_names,
             )
             for item in build_target_paper_locator_items(research_intent, current_ledger)
         ]
@@ -513,6 +615,7 @@ class GenerateQueryNode(BaseNode):
             normalize_search_query_item(
                 query,
                 enable_scholarly_search=scholarly_search_enabled,
+                available_tool_names=available_tool_names,
             )
             for query in algorithm_output.queries
         ]
@@ -828,7 +931,7 @@ class SupervisorNode(BaseNode):
         logger.info("section_idx: %s | step_title: %s | [SupervisorNode] End SupervisorNode.",
                     section_idx, step_title)
 
-        return dict(next_node=NodeId.COLLECTOR_INFO.value)
+        return dict(next_node=NodeId.COLLECTOR_QUERY_GEN.value)
 
     async def _invoke_llm_with_retry(
         self,
@@ -1066,7 +1169,7 @@ def build_info_collector_sub_graph() -> Workflow:
     sub_workflow.add_connection(NodeId.COLLECTOR_INFO.value, NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_WEBPAGE_ENRICHMENT.value, NodeId.COLLECTOR_SUPERVISOR.value)
     supervisor_router = init_router(NodeId.COLLECTOR_SUPERVISOR.value,
-                                    [NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_INFO.value])
+                                    [NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_QUERY_GEN.value])
     sub_workflow.add_conditional_connection(NodeId.COLLECTOR_SUPERVISOR.value, router=supervisor_router)
     sub_workflow.add_connection(NodeId.COLLECTOR_SUMMARY.value, NodeId.COLLECTOR_END.value)
     sub_workflow.add_connection(NodeId.COLLECTOR_END.value, NodeId.END.value)

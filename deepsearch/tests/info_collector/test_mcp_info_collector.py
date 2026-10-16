@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 import pytest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
     InfoRetrievalNode,
@@ -132,3 +132,43 @@ async def test_do_invoke_propagates_mcp_tools_into_substate():
 
     assert captured.get("mcp_tools"), "sub_state must propagate mcp_tools to _run_retrieval_query"
     assert captured["mcp_tools"][0].card.name == "mcp__srv__t"
+
+
+@pytest.mark.asyncio
+async def test_collector_main_aggregates_other_tool_record_into_doc_infos():
+    """_collector_main 必须将 other_tool_record 中的 MCP param 工具结果聚合为 doc_infos。
+
+    回归：MCP param 工具（如 tavily_research）返回非标准搜索格式时，
+    process_tool_result 将结果放入 other_tool_record，但 _collector_main
+    的提取逻辑只读 web_page_search_record 和 local_text_search_record，
+    导致 param 调用成功但证据丢失（Gathered 0 items）。
+    """
+    node = InfoRetrievalNode()
+
+    mock_tool = AsyncMock()
+    mock_tool.invoke = AsyncMock(return_value={"mcp_raw_output": "research content"})
+
+    async def fake_prepare(state):
+        return [], {"mcp__tavily__tavily_research": mock_tool}
+
+    async def fake_native(state, tool_dict, query, agent_input):
+        return []
+
+    with patch.object(node, "_prepare_collector_tool", side_effect=fake_prepare), \
+         patch.object(node, "_direct_call_native_tools", side_effect=fake_native):
+        state = {
+            "section_idx": 0,
+            "step_title": "test",
+            "search_query": "test query",
+            "search_method": "web",
+            "language": "zh-CN",
+            "research_intent": {},
+            "mcp_param_assignments": [
+                {"tool": "mcp__tavily__tavily_research", "args": {"query": "test"}},
+            ],
+            "max_tool_call_turns_per_query": 2,
+            "api_tools_config": {},
+        }
+        result = await node._collector_main(state)
+
+    assert len(result["doc_infos"]) > 0, "other_tool_record results must be aggregated into doc_infos"

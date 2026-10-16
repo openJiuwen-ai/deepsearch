@@ -37,12 +37,20 @@ You generate focused web search queries for one collector step and identify the 
   - general web evidence: `[]`.
 - `search_engine_names` contains additional scholarly engines. It does not replace the user's configured primary web search engine.
 
+## Tool selection
+- When `mcp_query_tools` is provided in the user payload, each query object MAY include a `tool` field selecting one query-compatible search tool for direct invocation.
+- `tool` must be exactly one name from the `mcp_query_tools` list, or `"native"` to use the configured web/local search tool.
+- Omit `tool` (or set it to `"native"`) when the query is general web evidence or when no search tool fits the evidence need.
+- Prefer a specialized tool only when its description clearly matches the query's domain (e.g. a medical evidence query with a pubmed tool available).
+- Selecting a tool skips the per-query LLM tool-calling loop; choose conservatively — when unsure, use `"native"`.
+
 ## Output Format
 - Return a JSON object with exactly these keys:
   - `missing_evidence`: A list of verifiable evidence requirements for the current step.
   - `queries`: A list of query objects. Each object contains:
     - `query`: A search query with at most 5 topical keywords; an applicable time phrase is excluded from this limit.
     - `search_engine_names`: An ordered list containing zero or more of `semantic_scholar`, `pubmed`, and `arxiv`.
+    - `tool`: (optional) One MCP tool name from `mcp_query_tools`, or `"native"`. Omit when `mcp_query_tools` is absent.
 - Do not output explanations, rationale, markdown fences, or any extra keys.
 
 ## Example
