@@ -226,7 +226,13 @@ async def _write_one(
                 apply_system_prompt("brief_sub_reporter", prompt_input),
                 agent_name=AgentLlmName.BRIEF_SUB_REPORTER.value,
                 need_stream_out=True,
-                stream_meta={"section_id": section.id, "section_idx": str(section_idx)},
+                # section_total 让消费端(路由器)能区分"首个章节完成"与
+                # "全部章节完成",对齐专业版进度口径(全部完成才进入报告交付)。
+                stream_meta={
+                    "section_id": section.id,
+                    "section_idx": str(section_idx),
+                    "section_total": str(len(request.outline.sections)),
+                },
             )
             raw = str(response.get("content") or "").strip()
             validation_error = _chapter_validation_error(raw)
