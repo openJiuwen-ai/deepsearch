@@ -311,7 +311,7 @@ class InfoRetrievalNode(BaseNode):
             return result
         try:
             payload = json.loads(normalize_json_output(content))
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except (TypeError, ValueError):
             return result
         if not isinstance(payload, dict):
             return result
@@ -324,7 +324,9 @@ class InfoRetrievalNode(BaseNode):
             query = entry.get("query")
             tool = entry.get("tool")
             args = entry.get("args")
-            if not isinstance(query, str) or not isinstance(tool, str) or tool not in valid_names or not isinstance(args, dict):
+            if not isinstance(query, str) or not isinstance(tool, str):
+                continue
+            if tool not in valid_names or not isinstance(args, dict):
                 continue
             result.setdefault(query, []).append({"tool": tool, "args": args})
         total_assignments = sum(len(v) for v in result.values())
@@ -654,9 +656,10 @@ class InfoRetrievalNode(BaseNode):
                 tool_result_json = json.dumps(mcp_tool_result, ensure_ascii=False, indent=4)
                 processed_results = process_tool_result(tool_hint, tool_result_json, agent_input)
             # MCP 直调后补跑学术引擎（secondary web search），避免丢失 PubMed/arXiv 等证据源。
-            processed_results = await self._run_secondary_web_search_for_direct_path(
-                state, tool_dict, query, agent_input, processed_results, section_idx, step_title,
+            secondary_results = await self._run_secondary_web_search_for_direct_path(
+                state, tool_dict, query, agent_input,
             )
+            processed_results.extend(secondary_results)
         else:
             if LogManager.is_sensitive():
                 logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] Dispatch route=native")
@@ -666,7 +669,7 @@ class InfoRetrievalNode(BaseNode):
                     f"[InfoRetrievalNode] Dispatch route=native search_method='{search_method}'"
                 )
             processed_results = await self._direct_call_native_tools(
-                state, tool_dict, query, agent_input, section_idx, step_title,
+                state, tool_dict, query, agent_input,
             )
 
         mcp_param_assignments = state.get("mcp_param_assignments", []) or []
@@ -748,22 +751,20 @@ class InfoRetrievalNode(BaseNode):
             tool_dict: dict,
             query: str,
             agent_input: dict,
-            processed_results: list,
-            section_idx,
-            step_title,
     ) -> list:
         """MCP 直调后补跑学术引擎，避免丢失 PubMed/arXiv 等证据源。"""
+        secondary_results: list = []
         retrieval_query = state.get("retrieval_query")
         secondary_engines = list(getattr(retrieval_query, "secondary_engines", []) or [])
         if not secondary_engines:
-            return processed_results
+            return secondary_results
         tool_name = "web_search_tool"
         if tool_name not in tool_dict:
-            return processed_results
+            return secondary_results
         max_tool_calls = max(0, int(state.get("max_tool_call_turns_per_query", 2)))
         engine_names = list(dict.fromkeys(secondary_engines))[:max_tool_calls]
         if not engine_names:
-            return processed_results
+            return secondary_results
         raw_results = await asyncio.gather(*[
             self._direct_search_with_retry(
                 DirectSearchRequest(
@@ -781,8 +782,8 @@ class InfoRetrievalNode(BaseNode):
             if not tool_result_raw:
                 continue
             tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
-            processed_results.extend(process_tool_result(tool_name, tool_result_json, agent_input))
-        return processed_results
+            secondary_results.extend(process_tool_result(tool_name, tool_result_json, agent_input))
+        return secondary_results
 
     @staticmethod
     async def _direct_invoke_mcp_tool(tool, tool_name: str, query: str, section_idx, step_title):
@@ -808,9 +809,10 @@ class InfoRetrievalNode(BaseNode):
 
     async def _direct_call_native_tools(
         self, state: dict, tool_dict: dict, query: str, agent_input: dict,
-        section_idx, step_title,
     ) -> list:
         """按 search_method 直调 native 搜索工具：web 扇出 / local 重试 / all 两者。"""
+        section_idx = state.get("section_idx", 0)
+        step_title = state.get("step_title", "")
         search_method = state.get("search_method", "web")
         results: list = []
         methods = ["web", "local"] if search_method == "all" else [search_method]

@@ -151,7 +151,7 @@ async def test_collector_main_aggregates_other_tool_record_into_doc_infos():
     async def fake_prepare(state):
         return [], {"mcp__tavily__tavily_research": mock_tool}
 
-    async def fake_native(state, tool_dict, query, agent_input, section_idx, step_title):
+    async def fake_native(state, tool_dict, query, agent_input):
         return []
 
     with patch.object(node, "_prepare_collector_tool", side_effect=fake_prepare), \
