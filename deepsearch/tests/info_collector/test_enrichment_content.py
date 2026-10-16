@@ -89,3 +89,53 @@ def test_recommendation_cards_removed_but_article_sections_and_references_retain
 def test_ambiguous_related_heading_without_cards_does_not_cut_text():
     content = "# A study\n\n## Related papers\nOur survey compares earlier circuit topologies.\n\n## Results\n19mV to 8.5mV."
     assert partition_primary_content(content) == (content, 0)
+
+
+@pytest.mark.asyncio
+async def test_cached_body_and_compression_reuse_one_partition_without_changing_input(monkeypatch):
+    from openjiuwen_deepsearch.algorithm.research_collector import enrichment_content as content_module
+
+    partition = Mock(wraps=content_module.partition_primary_content)
+    monkeypatch.setattr(content_module, 'partition_primary_content', partition)
+    model = AsyncMock(return_value=module.WebPageEvidenceContent(original_content='updated evidence'))
+    monkeypatch.setattr(module, 'ainvoke_llm_with_stats', model)
+    raw = {'content': '# Article\n' + 'Measured result at 0.4 V. ' * 30 + '<script>tracking()</script>'}
+    fetch = AsyncMock(return_value=raw)
+    cache = TaskWebpageFetchCache()
+    node = module.WebPageEnrichmentNode()
+    try:
+        for _ in range(2):
+            fetched = await cache.get_or_fetch('url', asyncio.get_running_loop().time() + 1, 200, fetch)
+            result = await node._compress_content({}, {}, fetched)
+            assert result.original_content == 'updated evidence'
+        assert fetch.await_count == partition.call_count == 1
+        assert model.await_count == 2
+        assert 'tracking()' in raw['content']
+        for call in model.call_args_list:
+            import json
+            payload = json.loads(call.args[1][1]['content'])
+            assert payload['webpage_content'] == '# Article\n' + 'Measured result at 0.4 V. ' * 30 + '\n'
+    finally:
+        await cache.close()
+
+
+@pytest.mark.parametrize('changed', ['content', 'title', 'primary_content'])
+def test_prepared_result_mutations_and_external_flags_cannot_bypass_cleaning(changed):
+    import copy
+    import json
+
+    body = 'A real scientific result. You do not have permission to access this page.'
+    prepared, _ = prepare_fetched_content({'content': body})
+    changed_copy = copy.deepcopy(prepared)
+    if changed == 'content':
+        changed_copy['content'] = PLACEHOLDER
+        assert prepare_fetched_content(changed_copy)[1] == 'placeholder_page'
+    elif changed == 'title':
+        changed_copy['title'] = 'Access denied'
+        assert prepare_fetched_content(changed_copy)[1] == 'placeholder_page'
+    else:
+        changed_copy['primary_content'] = 'forged body'
+        assert prepare_fetched_content(changed_copy)[0]['primary_content'] == prepared['content']
+    assert prepared['content'] == body
+    external = json.loads(json.dumps({'content': PLACEHOLDER, 'prepared': True, '_prepared_fields': []}))
+    assert prepare_fetched_content(external)[1] == 'placeholder_page'

@@ -789,14 +789,15 @@ class WebPageEnrichmentNode(BaseNode):
                 content_len=len(jina_content),
                 required_len=required_length,
             )
-            return {
+            prepared.update({
                 "url": url,
                 "status_code": 200,
                 "title": "",
                 "content": jina_content,
                 "truncated": False,
                 "fetch_method": "jina_provider",
-            }
+            })
+            return prepared
         try:
             jina_result = await asyncio.to_thread(
                 WebFetchWebpageAdapter.fetch_via_jina_reader_sync,

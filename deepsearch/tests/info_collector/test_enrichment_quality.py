@@ -90,3 +90,27 @@ def test_continuous_list_ordinals_are_not_measurements():
     assert {a.text for a in required_fact_anchors(doc)} == {'0.13 V', '98.96%', '65 nm'}
     assert any(a.kind == 'number' and a.number == '2' for a in required_fact_anchors(document('2. Samples were tested.')))
     assert any(a.kind == 'number' and a.number == '1' for a in required_fact_anchors(document('1. MHz\n2. GHz')))
+
+
+@pytest.mark.parametrize('passages', [
+    ['Low-voltage SRAM operates at 0.4 V.', None, 'A high-reliability-application uses low-voltage SRAM.'],
+    [],
+])
+def test_payload_reuses_anchor_extraction_and_cleans_description_passages_once(monkeypatch, passages):
+    from unittest.mock import Mock
+    from openjiuwen_deepsearch.algorithm.research_collector import enrichment_quality as quality
+    from openjiuwen_deepsearch.algorithm.research_collector import webpage_enrichment as enrichment
+
+    doc = {'original_content': 'Low-voltage SRAM operates at 0.4 V.', 'key_passages': passages}
+    expected = quality.required_description_contexts(doc)
+    extraction = Mock(wraps=quality.required_fact_anchors)
+    cleaning = Mock(wraps=quality.clean_fact_text)
+    monkeypatch.setattr(quality, 'required_fact_anchors', extraction)
+    monkeypatch.setattr(enrichment, 'required_fact_anchors', extraction)
+    monkeypatch.setattr(quality, 'clean_fact_text', cleaning)
+    payload = enrichment.build_compression_user_payload({}, doc, {'content': 'article'})
+    assert extraction.call_count == 1
+    assert payload['required_descriptions'] == expected
+    if passages:
+        assert cleaning.call_count == 4  # 两个有效片段各提取一次，再各清洗一次关联所有描述。
+        assert payload['required_descriptions'][0]['key_passage_indexes'] == [0, 2]

@@ -284,6 +284,7 @@ def build_compression_user_payload(
         包含任务、旧证据、抓取正文、必保留表达、软目标与硬上限的JSON数据。
     """
     payload = _build_task_payload(state)
+    anchors = required_fact_anchors(doc_info)
     payload.update({
         "document": {
             "query": doc_info.get("query", ""),
@@ -300,9 +301,9 @@ def build_compression_user_payload(
         "max_content_length": MAX_COLLECTOR_DOC_CONTENT_LENGTH,
         "target_content_length": max(1, MAX_COLLECTOR_DOC_CONTENT_LENGTH - 500),
         "required_facts": list(dict.fromkeys(
-            anchor.text for anchor in required_fact_anchors(doc_info) if anchor.kind != "description"
+            anchor.text for anchor in anchors if anchor.kind != "description"
         )),
-        "required_descriptions": required_description_contexts(doc_info),
+        "required_descriptions": required_description_contexts(doc_info, anchors),
     })
     return payload
 

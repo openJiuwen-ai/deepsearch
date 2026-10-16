@@ -661,7 +661,7 @@ class DependencyEditorTeamNode(EditorTeamNode):
                 )
             )
         if last_level_tasks:
-            last_level_results = await asyncio.gather(*last_level_tasks)
+            last_level_results = await self._gather_section_tasks(last_level_tasks)
             for i, section_id in enumerate(valid_section_ids):
                 if i < len(last_level_results):
                     writing_results[section_id] = last_level_results[i]

@@ -343,22 +343,31 @@ def required_fact_anchors(original_doc: dict) -> list[FactAnchor]:
     return list(unique.values())
 
 
-def required_description_contexts(original_doc: dict) -> list[dict]:
+def required_description_contexts(
+    original_doc: dict, anchors: list[FactAnchor] | None = None,
+) -> list[dict]:
     """为复合描述词关联已有关键片段，避免模型将其当作无上下文标识列表。
 
     Args:
         original_doc: 已有搜索证据。
+        anchors: 已提取的事实提示清单；未提供时独立提取。
 
     Returns:
         描述表达与原关键片段索引；缺少可关联片段时引用 existing_content，不重复正文。
     """
+    if anchors is None:
+        anchors = required_fact_anchors(original_doc)
+    descriptions = [anchor for anchor in anchors if anchor.kind == "description"]
+    if not descriptions:
+        return []
     raw = original_doc.get("key_passages")
-    passages = [(i, p) for i, p in enumerate(raw) if isinstance(p, str)] if isinstance(raw, list) else []
+    passages = [
+        (i, clean_fact_text(p)) for i, p in enumerate(raw) if isinstance(p, str)
+    ] if isinstance(raw, list) else []
     result = []
-    for anchor in required_fact_anchors(original_doc):
-        if anchor.kind != "description":
-            continue
-        indexes = [i for i, p in passages if re.search(_description_pattern(anchor.text), clean_fact_text(p), re.I)]
+    for anchor in descriptions:
+        pattern = re.compile(_description_pattern(anchor.text), re.I)
+        indexes = [i for i, passage in passages if pattern.search(passage)]
         result.append({
             "expression": anchor.text,
             "key_passage_indexes": indexes,

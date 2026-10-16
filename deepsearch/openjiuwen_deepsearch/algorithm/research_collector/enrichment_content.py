@@ -9,6 +9,38 @@ import re
 from typing import Any
 
 
+class _PreparedFetchedContent(dict):
+    """标识内部已清理的结果；正文或分区字段变化后须重新清理。"""
+
+    def __init__(self, fetched: dict[str, Any]) -> None:
+        """记录清理所依赖及生成的字段，元数据变动不使结果失效。
+
+        Args:
+            fetched: 清理函数已验证的结果。
+        """
+        super().__init__(fetched)
+        self._prepared_fields = self._content_fields()
+
+    def can_reuse_preparation(self) -> bool:
+        """判断当前正文与分区字段是否仍与清理快照一致。
+
+        Returns:
+            字段未变化时为 True，可复用已有清理结果。
+        """
+        return self._prepared_fields == self._content_fields()
+
+    def _content_fields(self) -> tuple:
+        """读取正文相关字段，用于判断已有清理结果能否复用。
+
+        Returns:
+            正文、标题、主文与分区计数；字符串保持原值，避免重复扫描。
+        """
+        return (
+            str(self.get("content") or ""), str(self.get("title") or ""),
+            self.get("primary_content"), self.get("excluded_content_chars"),
+        )
+
+
 def partition_primary_content(content: str, title: str = "") -> tuple[str, int]:
     """按标题层级分离有明确论文卡片结构的推荐区，保留正文相关工作。
 
@@ -73,6 +105,9 @@ def prepare_fetched_content(fetched: Any) -> tuple[dict[str, Any], str]:
     """
     if not isinstance(fetched, dict):
         return {}, "invalid_fetch_result"
+    # 只认可内部类型，不相信外部字典中的 prepared 等标记；副本被修改则重新清理。
+    if isinstance(fetched, _PreparedFetchedContent) and fetched.can_reuse_preparation():
+        return _PreparedFetchedContent(fetched), ""
     content = str(fetched.get("content") or "")
     if not content.strip():
         return {}, ""
@@ -102,8 +137,8 @@ def prepare_fetched_content(fetched: Any) -> tuple[dict[str, Any], str]:
     if not primary.strip():
         return {}, "no_primary_content"
     # 缓存保存与任务无关的正文分区；原文仍在 content 中，压缩只使用主文视图。
-    return {
+    return _PreparedFetchedContent({
         **fetched, "content": cleaned,
         "primary_content": primary,
         "excluded_content_chars": excluded,
-    }, ""
+    }), ""

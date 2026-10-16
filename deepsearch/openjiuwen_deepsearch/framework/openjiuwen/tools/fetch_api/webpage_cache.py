@@ -113,7 +113,8 @@ class TaskWebpageFetchCache:
             while not self.closed:
                 cached = self._results.get(url)
                 if cached is not None:
-                    if is_cacheable_fetch(cached, required_length):
+                    # 内部结果仅在完整清理和验证后存入，复用只检查调用者长度门槛。
+                    if has_sufficient_fetched_content(cached, required_length):
                         self._counts["cache_hit"] += 1
                         log_fetch_cache_event("enrichment_cache_hit", url)
                         return copy.deepcopy(cached)
@@ -135,7 +136,7 @@ class TaskWebpageFetchCache:
                 fetched = await asyncio.shield(flight)
                 if self.closed or not fetched:
                     return {}
-                if is_cacheable_fetch(fetched, required_length):
+                if has_sufficient_fetched_content(fetched, required_length):
                     return copy.deepcopy(fetched)
                 # 共享任务可能按较低门槛提前返回；下一次循环以本次门槛补抓。
             return {}
@@ -167,7 +168,10 @@ class TaskWebpageFetchCache:
             except TimeoutError:
                 log_fetch_cache_event("fetch_deadline_exceeded", url)
                 fetched = {}
-            if self.closed or not is_cacheable_fetch(fetched, required_length):
+            if (
+                self.closed or not has_sufficient_fetched_content(fetched, required_length)
+                or has_pdf_magic(fetched)
+            ):
                 self._counts["fetch_failed"] += 1
                 log_fetch_cache_event("enrichment_fetch_failed", url)
                 return {}

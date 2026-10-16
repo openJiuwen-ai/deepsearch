@@ -166,3 +166,53 @@ async def test_scope_cancels_shared_fetch_and_does_not_retain_late_body(monkeypa
     with pytest.raises(asyncio.CancelledError):
         await run
     assert caches[0].closed and caches[0].snapshot()['cache_entries'] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cancel', [False, True])
+async def test_dependency_last_writing_layer_finishes_before_scope_exit(monkeypatch, cancel):
+    node = module.DependencyEditorTeamNode()
+    outline = module.Outline(title='test', thought='test', sections=[
+        module.Section(id='slow', title='slow', description='slow'),
+        module.Section(id='failed', title='failed', description='failed'),
+    ])
+    monkeypatch.setattr(node, '_pre_handle', lambda *args: {'outline': outline})
+    monkeypatch.setattr(node, '_create_section_state_from_state', lambda state, outline, section, *args: {'section_idx': section.id})
+    monkeypatch.setattr(module, 'build_dependency_reasoning_workflow', lambda: None)
+    monkeypatch.setattr(module, 'build_dependency_writing_workflow', lambda: None)
+    monkeypatch.setattr(node, '_run_reasoning_await', AsyncMock(return_value={'plans': []}))
+    started = asyncio.Event()
+    cleaned, caches, child_tasks = [], [], []
+
+    async def write_section(current_session, workflow, state):
+        child_tasks.append(asyncio.current_task())
+        cache = webpage_fetch_cache_context.get()
+        caches.append(cache)
+        if state['section_idx'] == 'slow':
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaned.append(cache.closed)
+        else:
+            await started.wait()
+            if cancel:
+                await asyncio.Event().wait()
+            raise RuntimeError('writing failed')
+
+    monkeypatch.setattr(node, '_run_section_sub_graph_await', write_section)
+    run = asyncio.create_task(node.invoke({}, session(), None))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        if cancel:
+            run.cancel()
+        with pytest.raises(asyncio.CancelledError if cancel else RuntimeError):
+            await asyncio.wait_for(run, 1)
+        assert cleaned == [False]
+        assert all(task.done() for task in child_tasks)
+        assert all(cache.closed for cache in caches)
+    finally:
+        run.cancel()
+        for task in child_tasks:
+            task.cancel()
+        await asyncio.gather(run, *child_tasks, return_exceptions=True)
