@@ -8,15 +8,14 @@ import json
 import logging
 import math
 import time
-from dataclasses import dataclass
 from typing import Any
 
 from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import extract_key_passages
+from openjiuwen_deepsearch.algorithm.research_collector.enrichment_content import prepare_fetched_content
 from openjiuwen_deepsearch.algorithm.research_collector.webpage_enrichment import (
-    DEFAULT_FETCH_TIMEOUT_SECONDS,
     MIN_FETCHED_CONTENT_LENGTH,
     WebPageEnrichmentDecision,
     WebPageEvidenceContent,
@@ -31,13 +30,12 @@ from openjiuwen_deepsearch.algorithm.research_collector.webpage_enrichment impor
     has_sufficient_fetched_content,
     is_explicit_pdf_url,
     sanitize_selected_indexes,
-    should_replace_original_content,
     synchronize_history_queries,
-    truncate_raw_content_for_compression,
 )
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import build_evidence_constraint_prompt_context
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
     WebFetchWebpageAdapter,
@@ -48,15 +46,20 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.registry import 
 from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina import (
     JinaWebFetchProvider,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.webpage_cache import (
+    is_cacheable_fetch,
+    log_fetch_cache_event,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context, session_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import webpage_fetch_cache_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 MAX_SELECTION_CANDIDATES = 10
-# enrichment 抓取并发上限: 避免 JinaWebFetchProvider 瞬时高并发打爆镜像
-ENRICH_FETCH_CONCURRENCY = 3
+# 单轮增强任务并发上限，覆盖抓取与压缩，限制瞬时请求量。
+ENRICH_FETCH_CONCURRENCY = 5
 # httpx 直连路本地解析 PDF 的最大页数
 SIMPLE_UA_PDF_MAX_PAGES = 50
 # httpx 直连路下载阶段的总时长上限。httpx 自带的 timeout 只作用于单次操作,
@@ -94,27 +97,6 @@ def _remaining_timeout_seconds(deadline: float) -> int:
 def _elapsed_ms(started: float) -> int:
     """返回自 ``started`` 起经过的毫秒数，用于抓取各阶段耗时日志。"""
     return int((time.monotonic() - started) * 1000)
-
-
-@dataclass(frozen=True)
-class QualityRejectionLogContext:
-    """封装质量门禁拒绝事件的关联日志信息。
-
-    Attributes:
-        section_idx: 当前章节索引。
-        step_title: 当前采集步骤标题。
-        original_doc: 增强前文档。
-        quality_reason: 质量门禁拒绝原因。
-        fetched: 网页抓取结果。
-        evidence: 压缩后的候选证据。
-    """
-
-    section_idx: int
-    step_title: str
-    original_doc: dict[str, Any]
-    quality_reason: str
-    fetched: dict[str, Any]
-    evidence: WebPageEvidenceContent
 
 
 class WebPageEnrichmentNode(BaseNode):
@@ -157,7 +139,7 @@ class WebPageEnrichmentNode(BaseNode):
                 self._jina_provider = JinaWebFetchProvider()
         return {
             "enabled": enabled,
-            "max_urls": session.get_global_state("config.info_collector_webpage_enrich_max_urls") or 3,
+            "max_urls": session.get_global_state("config.info_collector_webpage_enrich_max_urls") or 5,
             "fetch_timeout_seconds": session.get_global_state(
                 "config.info_collector_webpage_enrich_fetch_timeout_seconds"
             ),
@@ -166,6 +148,10 @@ class WebPageEnrichmentNode(BaseNode):
             "plan_thought": session.get_global_state("collector_context.plan_thought") or "",
             "step_title": step_title,
             "step_description": session.get_global_state("collector_context.step_description") or "",
+            "research_constraints": build_evidence_constraint_prompt_context(
+                session.get_global_state("collector_context.research_intent"),
+                exclusion_enabled=bool(session.get_global_state("config.exclusion_constraint_enable")),
+            ),
             "new_doc_infos_current_loop": (
                 session.get_global_state("collector_context.new_doc_infos_current_loop") or []
             ),
@@ -211,11 +197,34 @@ class WebPageEnrichmentNode(BaseNode):
         return sanitize_selected_indexes(
             decision.selected_indexes,
             candidate_count=len(candidates),
-            max_urls=state.get("max_urls", 3),
+            max_urls=state.get("max_urls", 5),
+        )
+
+    @staticmethod
+    def _log_compression_debug(stage: str, state: dict, doc_info: dict, metrics: dict, contents: dict) -> None:
+        """记录压缩阶段的长度与正文，敏感模式仅保留长度。
+
+        Args:
+            stage: input 或 output，区分送模输入和处理后的输出。
+            state: 节点状态，用章节索引关联并发调用。
+            doc_info: 当前文档，非敏感模式使用文档 ID 关联输入输出。
+            metrics: 不含正文、URL 或凭据的长度和处理标记。
+            contents: 仅非敏感模式输出的压缩输入或输出正文。
+        """
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        details = {"stage": stage, "section_idx": state.get("section_idx", 0), **metrics}
+        if not LogManager.is_sensitive():
+            details.update({"doc_id": doc_info.get("doc_id", ""), "contents": contents})
+        logger.debug(
+            "[WebPageEnrichmentNode] category=enrichment_compression_debug details_json=%s",
+            json.dumps(details, ensure_ascii=False),
+            # 用户显式启用DEBUG查看压缩前后全文，不受普通日志的头尾截断影响。
+            extra={"skip_truncation": True},
         )
 
     async def _compress_content(self, state: dict, doc_info: dict, fetched: dict) -> WebPageEvidenceContent | None:
-        """把抓取正文压缩为 bounded original_content。
+        """压缩网页正文并限制输出长度，不执行旧事实保留门禁。
 
         Args:
             state: 节点运行状态。
@@ -225,18 +234,43 @@ class WebPageEnrichmentNode(BaseNode):
         Returns:
             压缩后的证据内容；失败时返回 None。
         """
+        fetched, invalid_reason = prepare_fetched_content(fetched)
+        if invalid_reason:
+            return None
         raw_content = str(fetched.get("content") or "")
         if not raw_content.strip():
             return None
         user_payload = build_compression_user_payload(state, doc_info, fetched)
+        self._log_compression_debug(
+            "input", state, doc_info,
+            {
+                "fetched_len": len(raw_content),
+                "webpage_input_len": len(user_payload["webpage_content"]),
+                "existing_input_len": len(user_payload["existing_content"]),
+                "excluded_content_chars": fetched.get("excluded_content_chars", 0),
+                "target_content_length": user_payload["target_content_length"],
+                "max_content_length": user_payload["max_content_length"],
+            },
+            {
+                "task": user_payload["task"],
+                "title": user_payload["document"]["title"],
+                "query": user_payload["document"]["query"],
+                "research_constraints": user_payload.get("research_constraints", {}),
+                "webpage_content_scope": user_payload["webpage_content_scope"],
+                "existing_content": user_payload["existing_content"],
+                "key_passages": user_payload["document"]["key_passages"],
+                "required_facts": user_payload["required_facts"],
+                "required_descriptions": user_payload["required_descriptions"],
+                "webpage_content": user_payload["webpage_content"],
+            },
+        )
         formatted_prompt = build_prompt_messages(
             "collector_webpage_enrichment_compress",
             {"payload": json.dumps(user_payload, ensure_ascii=False)},
         )
         try:
             evidence = await ainvoke_llm_with_stats(
-                self.llm,
-                formatted_prompt,
+                self.llm, formatted_prompt,
                 agent_name=AgentLlmName.COLLECTOR_WEBPAGE_ENRICHMENT_COMPRESSION.value,
                 schema=WebPageEvidenceContent,
             )
@@ -250,7 +284,21 @@ class WebPageEnrichmentNode(BaseNode):
                 operation="compress fetched webpage content",
             )
             return None
-        original_content = str(evidence.original_content or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH].strip()
+        if not isinstance(evidence, WebPageEvidenceContent):
+            return None
+        model_output = str(evidence.original_content or "")
+        original_content = model_output[:MAX_COLLECTOR_DOC_CONTENT_LENGTH].strip()
+        truncated = len(model_output) > MAX_COLLECTOR_DOC_CONTENT_LENGTH
+        self._log_compression_debug(
+            "output", state, doc_info,
+            {
+                "model_output_len": len(model_output),
+                "final_content_len": len(original_content),
+                "truncated": truncated,
+                "unchanged_from_existing": original_content == str(doc_info.get("original_content") or "").strip(),
+            },
+            {"model_output": model_output, "final_content": original_content},
+        )
         if not original_content:
             return None
         key_passages = [
@@ -258,7 +306,8 @@ class WebPageEnrichmentNode(BaseNode):
             for passage in (evidence.key_passages or [])
             if str(passage or "").strip()
         ][:5]
-        if not key_passages:
+        # 被裁剪的模型片段可能指向已移除的尾部，改从最终正文规则抽取。
+        if truncated or not key_passages:
             key_passages = extract_key_passages(
                 content=original_content,
                 query=str(doc_info.get("query") or ""),
@@ -314,42 +363,6 @@ class WebPageEnrichmentNode(BaseNode):
             exc,
         )
 
-    def _log_quality_rejection(self, context: QualityRejectionLogContext) -> None:
-        """记录质量门禁拒绝事件，并在敏感模式下隐藏证据细节。
-
-        Args:
-            context: 质量门禁拒绝事件的关联日志信息。
-
-        Returns:
-            None.
-        """
-        original_len = len(str(context.original_doc.get("original_content") or ""))
-        fetched_len = len(str(context.fetched.get("content") or ""))
-        enriched_len = len(context.evidence.original_content)
-        if LogManager.is_sensitive():
-            logger.info(
-                "section_idx: %s | [WebPageEnrichmentNode] quality guard rejected enrichment. "
-                "category=quality_guard_rejected | original_len=%s | fetched_len=%s | enriched_len=%s",
-                context.section_idx,
-                original_len,
-                fetched_len,
-                enriched_len,
-            )
-            return
-        logger.info(
-            "section_idx: %s | step_title: %s | [WebPageEnrichmentNode] "
-            "enrichment skipped by quality guard. doc_id=%s | url=%s | reason=%s | "
-            "original_len=%s | fetched_len=%s | enriched_len=%s",
-            context.section_idx,
-            context.step_title,
-            context.original_doc.get("doc_id", ""),
-            context.original_doc.get("url", ""),
-            context.quality_reason,
-            original_len,
-            fetched_len,
-            enriched_len,
-        )
-
     def _log_enrichment_success(
         self,
         state: dict,
@@ -374,6 +387,13 @@ class WebPageEnrichmentNode(BaseNode):
         raw_len = len(str(fetched.get("content") or ""))
         compressed_len = len(evidence.original_content)
         key_passage_count = len(evidence.key_passages)
+        if enriched_doc.get("enrichment", {}).get("content_changed") is False:
+            log_fetch_cache_event(
+                "enrichment_unchanged", original_doc.get("url"),
+                section_idx=state.get("section_idx", 0),
+                original_len_before=original_len, raw_len=raw_len, compressed_len=compressed_len,
+            )
+            return
         if LogManager.is_sensitive():
             logger.info(
                 "section_idx: %s | [WebPageEnrichmentNode] enrichment succeeded. "
@@ -407,7 +427,7 @@ class WebPageEnrichmentNode(BaseNode):
         timeout_seconds: int,
         minimum_content_length: int = MIN_FETCHED_CONTENT_LENGTH,
     ) -> dict:
-        """异步抓取网页正文。
+        """复用任务缓存或异步抓取网页正文，等待包含在本次超时预算内。
 
         Args:
             url: 目标网页 URL。
@@ -419,9 +439,27 @@ class WebPageEnrichmentNode(BaseNode):
         """
         required_length = max(MIN_FETCHED_CONTENT_LENGTH, int(minimum_content_length))
         deadline = asyncio.get_running_loop().time() + float(timeout_seconds)
+        cache = webpage_fetch_cache_context.get()
         try:
             async with asyncio.timeout_at(deadline):
-                return await self._fetch_webpage_before_deadline(url, deadline, required_length)
+                if cache is not None:
+                    return await cache.get_or_fetch(
+                        url, deadline, required_length,
+                        lambda fetch_deadline, length: self._fetch_webpage_before_deadline(
+                            url, fetch_deadline, length,
+                        ),
+                    )
+                log_fetch_cache_event("enrichment_fetch_started", url)
+                try:
+                    fetched = await self._fetch_webpage_before_deadline(url, deadline, required_length)
+                except BaseException:
+                    log_fetch_cache_event("enrichment_fetch_failed", url)
+                    raise
+                category = "enrichment_fetch_succeeded" if is_cacheable_fetch(
+                    fetched, required_length,
+                ) else "enrichment_fetch_failed"
+                log_fetch_cache_event(category, url)
+                return fetched
         except TimeoutError:
             self._log_fetch_event(
                 logging.WARNING,
@@ -430,6 +468,26 @@ class WebPageEnrichmentNode(BaseNode):
                 required_len=required_length,
             )
             return {}
+
+    def _prepare_fetched_content(self, fetched: dict | None, url: str, required_length: int) -> dict:
+        """清理非正文脚本并拒绝明确的验证或错误占位页。
+
+        Args:
+            fetched: 当前抓取路的原始结果。
+            url: 用于现有脱敏日志的目标地址。
+            required_length: 原抓取流程的最低长度门槛。
+
+        Returns:
+            清理后的独立结果；明确无效时为空字典，供原流程继续回退。
+        """
+        prepared, reason = prepare_fetched_content(fetched)
+        if reason:
+            self._log_fetch_event(
+                logging.INFO, "invalid_fetched_content", url,
+                content_len=len(str(fetched.get("content") or "")) if isinstance(fetched, dict) else 0,
+                required_len=required_length, extra={"reason": reason},
+            )
+        return prepared
 
     async def _fetch_via_simple_ua(
         self,
@@ -545,7 +603,9 @@ class WebPageEnrichmentNode(BaseNode):
                     # 复用 harness 的正文抽取, 让 B 路与 A 路解析出同一份正文。
                     # harness 没有公开的等价入口, 只能取这个私有静态方法; 照仓内
                     # report_export 处理 python-docx 内部成员的先例声明豁免。
-                    title, decoded = WebFetchWebpageTool._extract_main_text_from_html(decoded)  # pylint: disable=protected-access
+                    title, decoded = (
+                        WebFetchWebpageTool._extract_main_text_from_html(decoded)  # pylint: disable=protected-access
+                    )
                 text = decoded[:MAX_COLLECTOR_DOC_CONTENT_LENGTH]
                 truncated = len(decoded) > MAX_COLLECTOR_DOC_CONTENT_LENGTH
         except Exception as exc:
@@ -564,6 +624,10 @@ class WebPageEnrichmentNode(BaseNode):
             )
             return {}
         parse_ms = _elapsed_ms(parse_started)
+        prepared = self._prepare_fetched_content({"title": title, "content": text}, url, required_length)
+        if not prepared:
+            return {}
+        text = prepared["content"]
         if not text or len(text) < required_length:
             self._log_fetch_event(
                 logging.INFO,
@@ -637,6 +701,7 @@ class WebPageEnrichmentNode(BaseNode):
                     exc=exc,
                 )
 
+        direct_result = self._prepare_fetched_content(direct_result, url, required_length)
         direct_pdf_payload = has_pdf_magic(direct_result)
         if not direct_pdf_payload and has_sufficient_fetched_content(direct_result, required_length):
             direct_result["fetch_method"] = "harness_webpage_fetch"
@@ -660,6 +725,7 @@ class WebPageEnrichmentNode(BaseNode):
             )
         # harness 直连失败或正文太短时, 换 httpx 直连再试一次
         b_result = await self._fetch_via_simple_ua(url, deadline, required_length)
+        b_result = self._prepare_fetched_content(b_result, url, required_length)
         if b_result:
             return b_result
         # jina 兜底: 用带鉴权/多 base 的 JinaWebFetchProvider。
@@ -703,6 +769,10 @@ class WebPageEnrichmentNode(BaseNode):
                     required_len=required_length,
                 )
                 return {}
+            prepared = self._prepare_fetched_content({"content": jina_content}, url, required_length)
+            if not prepared:
+                return {}
+            jina_content = prepared["content"]
             if len(jina_content) < required_length:
                 self._log_fetch_event(
                     logging.WARNING,
@@ -719,14 +789,15 @@ class WebPageEnrichmentNode(BaseNode):
                 content_len=len(jina_content),
                 required_len=required_length,
             )
-            return {
+            prepared.update({
                 "url": url,
                 "status_code": 200,
                 "title": "",
                 "content": jina_content,
                 "truncated": False,
                 "fetch_method": "jina_provider",
-            }
+            })
+            return prepared
         try:
             jina_result = await asyncio.to_thread(
                 WebFetchWebpageAdapter.fetch_via_jina_reader_sync,
@@ -742,6 +813,7 @@ class WebPageEnrichmentNode(BaseNode):
                 exc=exc,
             )
             return {}
+        jina_result = self._prepare_fetched_content(jina_result, url, required_length)
         if has_pdf_magic(jina_result):
             self._log_fetch_event(
                 logging.WARNING,
@@ -813,19 +885,6 @@ class WebPageEnrichmentNode(BaseNode):
             return None
         evidence = await self._compress_content(state, original_doc, fetched)
         if evidence is None:
-            return None
-        should_replace, quality_reason = should_replace_original_content(original_doc, evidence)
-        if not should_replace:
-            self._log_quality_rejection(
-                QualityRejectionLogContext(
-                    section_idx=section_idx,
-                    step_title=step_title,
-                    original_doc=original_doc,
-                    quality_reason=quality_reason,
-                    fetched=fetched,
-                    evidence=evidence,
-                )
-            )
             return None
         enriched_doc = self._apply_enrichment(original_doc, evidence, fetched)
         if not LogManager.is_sensitive():
@@ -956,7 +1015,7 @@ class WebPageEnrichmentNode(BaseNode):
                 state.get("section_idx", 0),
                 len(state["new_doc_infos_current_loop"]),
                 len(state["candidates"]),
-                state.get("max_urls", 3),
+                state.get("max_urls", 5),
             )
         else:
             logger.info(
@@ -966,7 +1025,7 @@ class WebPageEnrichmentNode(BaseNode):
                 state.get("step_title", ""),
                 len(state["new_doc_infos_current_loop"]),
                 len(state["candidates"]),
-                state.get("max_urls", 3),
+                state.get("max_urls", 5),
             )
         selected_indexes = await self._select_candidate_indexes(state)
         if LogManager.is_sensitive():
