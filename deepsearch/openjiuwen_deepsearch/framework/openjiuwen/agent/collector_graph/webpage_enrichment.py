@@ -37,6 +37,11 @@ from openjiuwen_deepsearch.algorithm.research_collector.webpage_enrichment impor
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    StopRequested,
+    gather_results_with_stop,
+    raise_if_stop_requested_in_results,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_search.api_wrapper import (
     WebFetchWebpageAdapter,
@@ -153,6 +158,9 @@ class WebPageEnrichmentNode(BaseNode):
                 agent_name=AgentLlmName.COLLECTOR_WEBPAGE_ENRICHMENT_SELECTION.value,
                 schema=WebPageEnrichmentDecision,
             )
+        except StopRequested:
+            # 停止穿透:候选选择 LLM 链吞掉停止会返回空列表假完成。
+            raise
         except Exception as exc:
             record_llm_retry_log(
                 current_try=1,
@@ -195,6 +203,9 @@ class WebPageEnrichmentNode(BaseNode):
                 agent_name=AgentLlmName.COLLECTOR_WEBPAGE_ENRICHMENT_COMPRESSION.value,
                 schema=WebPageEvidenceContent,
             )
+        except StopRequested:
+            # 停止穿透:正文压缩 LLM 链吞掉停止会返回 None 假完成。
+            raise
         except Exception as exc:
             record_llm_retry_log(
                 current_try=1,
@@ -582,7 +593,14 @@ class WebPageEnrichmentNode(BaseNode):
             for candidate_index in selected_indexes
         ]
         # fetch 与压缩并行执行；状态写回仍集中在 gather 之后，避免并发修改共享列表。
-        for result in await asyncio.gather(*tasks, return_exceptions=True):
+        # gather_results_with_stop：保留普通候选失败的压平分流语义，但停止
+        # 置位后秒级取消并等待其余协程退出（原生 gather 会等全部候选跑完
+        # ——含长网络抓取——才让停止可见，慢候选拖住停止传播）。
+        results = await gather_results_with_stop(*tasks)
+        # 停止分流:先于下方通用 Exception 分流重抛,防止停止被 continue 吞掉。
+        # 兜底 gather 与停止几乎同时完成的竞速窗口（停止只出现在结果列表）。
+        raise_if_stop_requested_in_results(results)
+        for result in results:
             if isinstance(result, Exception):
                 if LogManager.is_sensitive():
                     logger.warning(

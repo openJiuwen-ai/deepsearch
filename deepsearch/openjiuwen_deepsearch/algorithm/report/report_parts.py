@@ -9,6 +9,7 @@ from tenacity import (
     retry,
     stop_after_attempt,
     retry_if_exception_type,
+    retry_if_not_exception_type,
 )
 
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
@@ -28,6 +29,7 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ChapterSidecar
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -46,7 +48,8 @@ class ReportPartsMixin:
 
     @retry(
         stop=stop_after_attempt(Config().service_config.report_max_generate_retry_num),
-        retry=retry_if_exception_type(Exception),
+        # StopRequested 不重试：用户停止需立即向上传播，走异常保存分支落盘。
+        retry=retry_if_exception_type(Exception) & retry_if_not_exception_type(StopRequested),
         after=after_log(logger, logging.WARNING),
     )
     async def generate_abstract(self, sub_reports_content: str) -> str:
@@ -62,7 +65,8 @@ class ReportPartsMixin:
 
     @retry(
         stop=stop_after_attempt(Config().service_config.report_max_generate_retry_num),
-        retry=retry_if_exception_type(Exception),
+        # StopRequested 不重试：用户停止需立即向上传播，走异常保存分支落盘。
+        retry=retry_if_exception_type(Exception) & retry_if_not_exception_type(StopRequested),
         after=after_log(logger, logging.WARNING),
     )
     async def generate_conclusion(self, sub_reports_content: str) -> str:

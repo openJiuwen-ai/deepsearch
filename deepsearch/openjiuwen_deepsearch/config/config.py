@@ -434,6 +434,11 @@ class AgentConfig(BaseModel):
 
     agent_llm_timeouts: Dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
 
+    # 宿主会话归属标识:由宿主(jiuwenswarm)注入,标识本研究会话的创建者。
+    # StartNode 将其写入会话 config 并随快照落盘;宿主认领(probe/扫库)
+    # 时校验归属,不匹配则拒绝续跑,防止跨会话/跨用户误认领陈旧快照。
+    host_session_id: str = Field(default="", description="宿主会话ID,用于快照归属校验")
+
     @model_validator(mode="before")
     @classmethod
     def _reject_retired_search_fetch_keys(cls, data: Any) -> Any:

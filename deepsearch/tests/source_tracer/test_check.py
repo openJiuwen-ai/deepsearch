@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.algorithm.source_trace.checker import (
 from openjiuwen_deepsearch.common.exception import CustomException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.common.common_constants import ENGLISH, CHINESE
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 
 pytest_plugins = ["pytest_asyncio"]
 
@@ -98,3 +99,17 @@ class TestPostprocessByCitationChecker:
             await postprocess_by_citation_checker(report, datas, "mock_model")
 
         assert exc_info.value.error_code == StatusCode.CITATION_CHECKER_POST_PROCESS_ERROR.code
+
+    @patch('openjiuwen_deepsearch.algorithm.source_trace.checker.CitationCheckerResearch')
+    @pytest.mark.asyncio
+    async def test_postprocess_propagates_stop_requested(self, mock_checker_class):
+        """用户停止必须原样上抛，不得包装成 CustomException（否则节点层
+        except StopRequested 接不住，会被降级为正常返回进而清除 checkpoint）。"""
+        mock_checker = AsyncMock()
+        mock_checker_class.return_value = mock_checker
+        mock_checker.checker.side_effect = StopRequested(
+            "deepresearch task stopped by user")
+
+        with pytest.raises(StopRequested):
+            await postprocess_by_citation_checker(
+                {"language": CHINESE, "article": "Test article"}, ["data1"], "mock_model")

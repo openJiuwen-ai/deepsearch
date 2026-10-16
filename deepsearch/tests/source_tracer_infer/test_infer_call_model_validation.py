@@ -232,3 +232,32 @@ class TestIsValidSupplementTriplesElements:
         """关系不是 str → 拒绝。"""
         with pytest.raises(CustomValueException):
             is_valid_supplement_triples([[[0], 1, 5]])
+
+
+class TestCallModelStopPropagation:
+    """用户停止（StopRequested）必须穿透 call_model 的重试/降级逻辑。"""
+
+    @pytest.mark.asyncio
+    async def test_call_model_propagates_stop_requested(self):
+        """停止异常不重试 3 次、不降级为空列表，立即原样上抛。"""
+        from unittest.mock import patch, AsyncMock, MagicMock
+
+        from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import call_model
+        from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model.llm_context"
+        ) as mock_llm_context:
+            mock_llm_context.get.return_value.get.return_value = MagicMock()
+            with patch(
+                "openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model.ainvoke_llm_with_stats",
+                new_callable=AsyncMock,
+            ) as mock_ainvoke:
+                mock_ainvoke.side_effect = StopRequested(
+                    "deepresearch task stopped by user")
+
+                with pytest.raises(StopRequested):
+                    await call_model("mock_model", "infer_conclusion_prompt", {})
+
+                # 立即上抛，不进入重试循环
+                assert mock_ainvoke.call_count == 1

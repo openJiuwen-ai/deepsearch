@@ -29,6 +29,7 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested, raise_if_stop_requested
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, cancel_context
@@ -890,10 +891,30 @@ def llm_error_chain_blob(exc: BaseException | None, *, max_depth: int = 8) -> st
 
 
 async def _call_model_method(method, primary_kwargs: dict):
-    """Invoke sync or async model methods without losing awaitables."""
+    """Invoke sync or async model methods without losing awaitables.
+
+    停止感知：invoke 等待期（thinking 模式可达分钟级）以固定间隔轮询停止
+    标志，命中即抛 StopRequested（普通 Exception，走异常保存分支保留
+    checkpoint）。sync 方法经 asyncio.to_thread 运行在线程池，无法中断：
+    停止传播时该线程成为孤儿（只读不写共享状态，结果被丢弃，进程退出
+    兜底回收）；async 方法直接取消并等待退出。
+    """
+    call = asyncio.ensure_future(
+        _call_model_method_raw(method, primary_kwargs))
+    try:
+        while True:
+            done, _ = await asyncio.wait({call}, timeout=_STOP_POLL_INTERVAL)
+            if done:
+                return call.result()
+            raise_if_stop_requested()
+    except BaseException:
+        await _cancel_pending_task(call)
+        raise
+
+
+async def _call_model_method_raw(method, primary_kwargs: dict):
     if inspect.iscoroutinefunction(method):
         return await method(**primary_kwargs)
-
     return await asyncio.to_thread(method, **primary_kwargs)
 
 
@@ -1171,10 +1192,36 @@ def _resolve_stream_options(llm_model: Any, need_include_usage: bool) -> dict | 
     return merged_options or None
 
 
-async def _consume_llm_stream(
-    request: _ConsumeLlmStreamRequest,
-) -> Any:
-    """消费流式 LLM 输出并聚合完整结果。
+# 用户停止轮询间隔（秒）：LLM 调用等待期（流式 chunk 间隙/TTFT、非流式
+# invoke）内以该间隔检查停止标志，保证停止→StopRequested 异常延迟为秒级，
+# 在宿主 30s 硬杀窗口内可靠完成「停止→异常→快照落盘」闭环。
+_STOP_POLL_INTERVAL = 2.0
+# 停止传播时取消后台任务的宽限等待（秒）：等待 __anext__/to_thread 任务
+# 收到取消并完成清理；超时则放弃等待（孤儿由进程退出兜底）。
+_STOP_CANCEL_GRACE = 5.0
+
+
+async def _cancel_pending_task(task: "asyncio.Future") -> None:
+    """取消并短暂等待后台任务退出（停止/异常传播的兜底清理）。"""
+    if task.done():
+        return
+    task.cancel()
+    await asyncio.wait({task}, timeout=_STOP_CANCEL_GRACE)
+
+
+async def _drain_llm_stream(request: _ConsumeLlmStreamRequest) -> Any:
+    """在单个长驻消费 task 内驱动整个流并聚合完整结果。
+
+    停止感知（持续输出主检查点）：每轮迭代消费 chunk 前调用
+    ``raise_if_stop_requested``。高频 chunk 到达（间隔远小于轮询周期）时
+    不能只依赖等待期轮询兜底——旧实现下持续输出期间停止检测完全失效，
+    流会跑完并假完成，若为本节点最后一次 LLM 调用将触发快照清理。
+
+    ContextVar 生命周期：整个 ``async for`` 运行在同一 task context 内。
+    流生成器首轮迭代中写入的 ContextVar（如 LLM 调用追踪 ID）在后续
+    chunk 间保持有效；旧实现逐 chunk 用独立 ``ensure_future`` 驱动
+    ``__anext__``，每轮从外层消费协程复制旧上下文，跨 yield 的生成器
+    内部状态（调用 ID 等）在第二轮起丢失。
 
     Args:
         request: 流消费阶段的具名上下文参数。
@@ -1183,7 +1230,10 @@ async def _consume_llm_stream(
         Any: 聚合后的完整响应块。
     """
     full_chunk = None
-    async for chunk in request.llm.stream(**request.stream_kwargs):
+    stream = request.llm.stream(**request.stream_kwargs)
+    async for chunk in stream:
+        # chunk 到达即查停止：持续输出场景的主检查点（秒级命中）。
+        raise_if_stop_requested()
         _raise_if_cancelled()
         if full_chunk is None:
             full_chunk = chunk
@@ -1209,7 +1259,41 @@ async def _consume_llm_stream(
             if request.stream_meta:
                 payload.update(dict(request.stream_meta))
             await request.session.write_custom_stream(payload)
+    # 正常返回前最后检查一次停止：停止已置位时本次调用不再产出结果，
+    # 交由上层节点边界统一走停止分支，防最后一次 LLM 调用假完成清快照。
+    raise_if_stop_requested()
     return full_chunk
+
+
+async def _consume_llm_stream(
+    request: _ConsumeLlmStreamRequest,
+) -> Any:
+    """消费流式 LLM 输出并聚合完整结果（外层停止轮询壳）。
+
+    停止感知：流驱动整体运行在单个消费 task（``_drain_llm_stream``）内，
+    本协程以固定间隔轮询停止标志；等待期（thinking 模式下首 token 延迟
+    可达分钟级、chunk 间隙）命中即取消消费 task 并抛 StopRequested（普通
+    Exception，走 agent-core 异常保存分支保留 checkpoint）。持续输出场景
+    由消费 task 内每个 chunk 前的检查点覆盖，与本层轮询互为补充。
+
+    Args:
+        request: 流消费阶段的具名上下文参数。
+
+    Returns:
+        Any: 聚合后的完整响应块。
+    """
+    consumer = asyncio.ensure_future(_drain_llm_stream(request))
+    try:
+        while True:
+            done, _ = await asyncio.wait({consumer}, timeout=_STOP_POLL_INTERVAL)
+            if done:
+                break
+            # chunk 间隙/TTFT 等待期内的用户停止检查（秒级响应）。
+            raise_if_stop_requested()
+        return consumer.result()
+    except BaseException:
+        await _cancel_pending_task(consumer)
+        raise
 
 
 async def llm_astream(*args, **kwargs):
@@ -1238,6 +1322,8 @@ async def llm_astream(*args, **kwargs):
     stream_options = kwargs.get("stream_options", None)
 
     _raise_if_cancelled()
+    # 用户停止检查：普通 Exception 走保存分支（见 ainvoke_llm_with_stats 处注释）。
+    raise_if_stop_requested()
     full_chunk = None
     can_write_stream = True
     session = None
@@ -1396,6 +1482,9 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     stream_meta = invoke_args["stream_meta"]
 
     _raise_if_cancelled()
+    # 用户停止（普通 Exception）：走 agent-core 异常保存分支，保留 checkpoint。
+    # 与 _raise_if_cancelled（CancelledError → 清除分支）语义相反，勿混淆。
+    raise_if_stop_requested()
     if not llm:
         raise CustomValueException(
             error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,
@@ -1481,6 +1570,11 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
                     stream_meta=stream_meta,
                     stream_options=resolved_stream_options,
                 )
+        except StopRequested:
+            # 用户停止原样上抛：一旦包装成 LLM_CALL_FAILED，下游按类型识别
+            # StopRequested 的分支（agent run 跳过 release、harness 停止
+            # 快照 probe 识别）将全部失效，停止语义退化为普通 LLM 失败。
+            raise
         except Exception as e:
             detail = _format_llm_invoke_exception(e)
             corr = format_llm_log_correlation_suffix()
@@ -1517,6 +1611,9 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
 
         try:
             response = await _invoke_stream_model(llm_model)
+        except StopRequested:
+            # 用户停止不触发 thinking fallback 重试：停止必须立即传播落盘。
+            raise
         except Exception as e:
             fallback_succeeded = False
             if not _has_available_inactive_thinking_fallback(llm):

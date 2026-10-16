@@ -114,6 +114,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     SearchFinalResult,
     State,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    STOP_REQUESTED_MARKER,
+    StopRequested,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent import WorkflowControllerConfig
 from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent.workflow_agent import WorkflowAgent
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import LlmConfigCategory
@@ -638,6 +642,29 @@ class DeepresearchAgent(BaseAgent):
             logger.warning("[DeepResearchAgent.run] Failed to emit error stream event: %s", stream_err)
 
     @staticmethod
+    def _build_stream_stopped_payload(conversation_id: str):
+        return {
+            "conversation_id": conversation_id,
+            "message_id": str(uuid.uuid4()),
+            "agent": NodeId.FRAMEWORK.value,
+            "role": "assistant",
+            "content": json.dumps({"stopped": True}, ensure_ascii=False),
+            "message_type": MessageType.MESSAGE_CHUNK.value,
+            "event": StreamEvent.STOPPED.value,
+            "created_time": get_current_time(),
+        }
+
+    @staticmethod
+    async def _emit_stopped_and_end_stream(conversation_id: str):
+        try:
+            yield json.dumps(
+                DeepresearchAgent._build_stream_stopped_payload(conversation_id), ensure_ascii=False
+            )
+            yield json.dumps(DeepresearchAgent._build_stream_end_payload(conversation_id), ensure_ascii=False)
+        except Exception as stream_err:
+            logger.warning("[DeepResearchAgent.run] Failed to emit stopped stream event: %s", stream_err)
+
+    @staticmethod
     def _prepare_stream_query(message: str, interrupt_feedback: str):
         is_report_feedback = _is_report_feedback_payload(message)
         if interrupt_feedback and not is_report_feedback:
@@ -718,6 +745,10 @@ class DeepresearchAgent(BaseAgent):
         """
         validate_run_agent_params(message, conversation_id, report_template, interrupt_feedback)
         validate_agent_required_field(agent_config)
+        # 注意: 不要在这里 clear_stop()。runner 是单次运行进程,标志出厂即清;
+        # boot 窗口内到达的停止请求是本轮真实停止,清掉会导致停止信号丢失
+        # (实测: 16:50 停止帧在 checkpoint_restore 前到达,被入口清除后
+        #  子代理空转至 30s 超时硬杀)。
 
         start_time = time.time()
         llm_token = None
@@ -785,39 +816,65 @@ class DeepresearchAgent(BaseAgent):
                 final_result_info = stream_info
                 yield payload
         except Exception as e:
-            if not LogManager.is_sensitive() or isinstance(e, CustomValueException):
-                logger.error(f"[DeepResearchAgent.run] Session closed with error: {e}")
-                final_result_info = {
-                    "exception_info": format_exception_info(StatusCode.WORKFLOW_RUN_ERROR, e)
-                }
-            else:
-                logger.error(f"[DeepResearchAgent.run] Session closed with error.")
-                final_result_info = {
-                    "exception_info": format_exception_info(
-                        StatusCode.WORKFLOW_RUN_ERROR, "Session closed with error."
-                    )
-                }
-            if stats_info_llm_enabled:
-                try:
-                    current_session = session_context.get()
-                except Exception:
-                    current_session = None
-                workflow_usage = get_effective_workflow_llm_usage(
-                    session_id=conversation_id,
-                    session=current_session,
+            # 停止识别不能只依赖 isinstance：实机链路中 pregel vertex 层会
+            # 把节点异常包装成 [100054] 组件异常（reason 含停止标记），
+            # isinstance(StopRequested) 永远不命中 → 误判普通错误 → 走
+            # release_session 分支 delete_by_prefix 刚落盘的停止快照，
+            # probe 落空后扫库兜底命中陈旧对象（实机事故 2026-10-13）。
+            # 按标记识别与父进程 tools.py 的 _is_stop_requested_exception
+            # 口径一致（跨进程降级为 RuntimeError 后同样只能按标记识别）。
+            if isinstance(e, StopRequested) or STOP_REQUESTED_MARKER in str(e):
+                # 用户停止：checkpoint 已由 agent-core 异常保存分支落盘
+                # （graph._invoke except Exception → post_workflow_execute 保存）。
+                # 此处必须跳过 release_session/_release_checkpointer_session，
+                # 否则快照被 delete_by_prefix 清除，续跑将回退到上一个交互确认点。
+                # 代价：停止后不再续跑的会话快照将永久存留（checkpointer 无
+                # TTL/GC，kv_store 表无时间戳列），依赖 reset/续跑成功清理；
+                # 服务端长驻部署需关注 checkpointer.db 体积增长（TTL/GC
+                # 已列入 backlog，方案见 2026-10-15 评审：时间戳 sidecar 键
+                # + scan-claim 顺带清扫）。
+                logger.info(
+                    "[DeepResearchAgent.run] Session stopped by user; checkpoint preserved."
                 )
-                if not is_workflow_llm_usage_empty(workflow_usage):
-                    final_result_info["workflow_llm_token_usage"] = workflow_usage
+                async for payload in self._emit_stopped_and_end_stream(conversation_id):
+                    yield payload
+                if stats_info_llm_enabled:
+                    pop_workflow_llm_usage(conversation_id)
+                session_id_ctx.reset(token)
+            else:
+                if not LogManager.is_sensitive() or isinstance(e, CustomValueException):
+                    logger.error(f"[DeepResearchAgent.run] Session closed with error: {e}")
+                    final_result_info = {
+                        "exception_info": format_exception_info(StatusCode.WORKFLOW_RUN_ERROR, e)
+                    }
+                else:
+                    logger.error(f"[DeepResearchAgent.run] Session closed with error.")
+                    final_result_info = {
+                        "exception_info": format_exception_info(
+                            StatusCode.WORKFLOW_RUN_ERROR, "Session closed with error."
+                        )
+                    }
+                if stats_info_llm_enabled:
+                    try:
+                        current_session = session_context.get()
+                    except Exception:
+                        current_session = None
+                    workflow_usage = get_effective_workflow_llm_usage(
+                        session_id=conversation_id,
+                        session=current_session,
+                    )
+                    if not is_workflow_llm_usage_empty(workflow_usage):
+                        final_result_info["workflow_llm_token_usage"] = workflow_usage
 
-            async for payload in self._emit_error_and_end_stream(conversation_id, final_result_info):
-                yield payload
+                async for payload in self._emit_error_and_end_stream(conversation_id, final_result_info):
+                    yield payload
 
-            if stats_info_llm_enabled:
-                pop_workflow_llm_usage(conversation_id)
+                if stats_info_llm_enabled:
+                    pop_workflow_llm_usage(conversation_id)
 
-            await self.agent.release_session(conversation_id)
-            await self._release_checkpointer_session(conversation_id)
-            session_id_ctx.reset(token)
+                await self.agent.release_session(conversation_id)
+                await self._release_checkpointer_session(conversation_id)
+                session_id_ctx.reset(token)
         finally:
             metrics_logger.info(
                 f"{TIME_LOGGER_TAG} thread_id: {conversation_id} ------ [DeepResearchAgent[0].run]"

@@ -80,6 +80,7 @@ from openjiuwen_deepsearch.common.exception import (
     CustomValueException,
 )
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.config.config import (
     Config,
     LocalSearchEngineConfig,
@@ -244,6 +245,9 @@ class StartNode(Start):
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
             agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
+            # 宿主会话归属标识:写入会话 config 随快照落盘,resume 不重跑
+            # StartNode 故归属保持原始值;宿主认领时校验,防跨会话误认领。
+            agent_config["host_session_id"] = origin_agent_config.get("host_session_id", "")
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -1339,6 +1343,11 @@ class SourceTracerNode(BaseNode):
             check_result_dict = await self.build_citation_checker_result(
                 citation_checker_info, datas, current_inputs.get("llm_model_name", "")
             )
+        except StopRequested:
+            # 用户停止不降级为 check_result=False 的正常返回（那会让图
+            # "正常完成"并清除 checkpoint），直接上抛走异常保存分支，
+            # resume 时从本节点续跑。
+            raise
         except CustomException as e:
             # 溯源异常的情况下，设置check_result为False，让post_handle记录异常信息返回出去
             if LogManager.is_sensitive():
@@ -1721,6 +1730,10 @@ class SourceTracerInferNode(BaseNode):
             check_infos["llm_model_name"] = current_inputs.get("llm_model_name", "")
             check_infos["language"] = current_inputs.get("language", "zh")
 
+        except StopRequested:
+            # 用户停止不降级为 infer_success=False 的正常返回（那会让图
+            # "正常完成"并清除 checkpoint），直接上抛走异常保存分支。
+            raise
         except Exception as e:
             error_msg = f"source_tracer_infer failed."
             if LogManager.is_sensitive():
@@ -2158,6 +2171,11 @@ class VLMChartGeneratorNode(BaseNode):
 
             vlm_chart_generator_output = await self._run_vlm_chart_generator_handle(current_inputs)
 
+        except StopRequested:
+            # 用户停止不降级为 error_msg 的正常返回（本节点通用 Exception
+            # 分支会把停止吞成图表失败、转 source_tracer 继续跑完并清除
+            # checkpoint），直接上抛走异常保存分支，resume 时从本节点续跑。
+            raise
         except CustomException as e:
             if LogManager.is_sensitive():
                 logger.error(f"[VLMChartGeneratorNode] vlm_chart_generator failed.")

@@ -1,14 +1,24 @@
 import logging
 from copy import deepcopy
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    STOP_REQUESTED_MARKER,
+    StopRequested,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
+    local_search_context,
+    web_search_context,
+)
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import validate_run_agent_params
+from tests.utils.mock_config import get_default_agent_config
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +145,127 @@ def test_validate_run_agent_params_rejects_unsafe_conversation_id(conversation_i
 
     assert exc_info.value.error_code == 200013
     assert "conversation_id" in str(exc_info.value)
+
+
+# ============================================================================
+# 修复12: 停止识别必须兼容被包装的停止异常,防止 release 误删停止快照
+# ============================================================================
+
+
+async def _run_agent_with_stream_exc(agent, agent_config, conversation_id, exc):
+    """驱动 agent.run 走到流式异常分支,收集输出并返回。
+
+    _consume_stream_chunks 被打桩为立即抛出给定异常,模拟 pregel 把
+    StopRequested 包装成 [100054] 组件异常后冒泡到 DeepresearchAgent.run
+    的实机链路。stopped/error 两条终态流均打桩,返回 error emit 的 mock
+    供调用断言。
+    """
+    async def _fake_consume_stream_chunks(**kwargs):
+        raise exc
+        yield  # pragma: no cover
+
+    def _fake_initialize_tools(_):
+        return web_search_context.set({}), local_search_context.set({})
+
+    def _fake_stopped_stream(_cid):
+        async def _gen():
+            yield '{"event":"stopped_stream"}'
+        return _gen()
+
+    def _fake_error_stream(_cid, _info):
+        async def _gen():
+            yield '{"event":"error_stream"}'
+        return _gen()
+
+    mock_emit_error = MagicMock(side_effect=_fake_error_stream)
+    with patch.object(agent, "_initialize_tools", side_effect=_fake_initialize_tools), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.create_llm_obj",
+        return_value=object(),
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchAgent"
+        "._consume_stream_chunks",
+        side_effect=_fake_consume_stream_chunks,
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.record_interface_log",
+    ), patch.object(
+        agent, "_emit_stopped_and_end_stream", new=_fake_stopped_stream
+    ), patch.object(
+        agent, "_emit_error_and_end_stream", new=mock_emit_error
+    ):
+        outputs = []
+        async for item in agent.run(
+            message="hello",
+            conversation_id=conversation_id,
+            agent_config=agent_config,
+            report_template="",
+            interrupt_feedback="",
+        ):
+            outputs.append(item)
+    return outputs, mock_emit_error
+
+
+def _make_stop_test_agent():
+    agent = DeepresearchAgent()
+    agent.agent.release_session = AsyncMock()
+    agent._release_checkpointer_session = AsyncMock()
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_run_preserves_checkpoint_for_wrapped_stop_exception():
+    """修复12:被 pregel 包装成 [100054] 的停止异常(消息含停止标记)必须
+    走停止分支——跳过 release_session,保住刚落盘的停止快照。
+
+    实机事故(2026-10-13):isinstance(StopRequested) 对包装异常永远不命中,
+    走 error 分支 delete_by_prefix 误删快照,probe 落空后扫库兜底认领
+    陈旧会话。
+    """
+    agent = _make_stop_test_agent()
+    wrapped = RuntimeError(
+        "[100054] component 'researcher' execute 'run' error, "
+        f"reason='{STOP_REQUESTED_MARKER}', workflow='deepresearch'"
+    )
+
+    outputs, mock_emit_error = await _run_agent_with_stream_exc(
+        agent, get_default_agent_config(), "stop-wrapped-exception", wrapped
+    )
+
+    assert outputs == ['{"event":"stopped_stream"}']
+    mock_emit_error.assert_not_called()
+    agent.agent.release_session.assert_not_called()
+    agent._release_checkpointer_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_preserves_checkpoint_for_stop_requested_exception():
+    """未包装的 StopRequested(单测/直连链路)仍走停止分支——防回归。"""
+    agent = _make_stop_test_agent()
+
+    outputs, mock_emit_error = await _run_agent_with_stream_exc(
+        agent, get_default_agent_config(), "stop-direct-exception", StopRequested()
+    )
+
+    assert outputs == ['{"event":"stopped_stream"}']
+    mock_emit_error.assert_not_called()
+    agent.agent.release_session.assert_not_called()
+    agent._release_checkpointer_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_releases_session_for_ordinary_error():
+    """普通异常(消息不含停止标记)必须照常走 error 分支清理会话,
+    防止标记识别过度匹配把真错误留在库中。"""
+    agent = _make_stop_test_agent()
+
+    outputs, mock_emit_error = await _run_agent_with_stream_exc(
+        agent, get_default_agent_config(), "ordinary-error",
+        RuntimeError("mock streaming error"),
+    )
+
+    assert outputs == ['{"event":"error_stream"}']
+    mock_emit_error.assert_called_once()
+    agent.agent.release_session.assert_called_once()
+    agent._release_checkpointer_session.assert_called_once()
 
 
 # 测试用例5: agent_config 参数验证

@@ -19,6 +19,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import _is_context_limit_error as _matches_context_limit
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -246,6 +247,9 @@ async def _write_one(
                 section.id, _response_preview(clean),
             )
             return BriefChapter(section_id=section.id, raw_markdown=clean)
+        except StopRequested:
+            # 用户停止不参与单章重试预算,直接上抛。
+            raise
         except Exception as exc:
             last_error = exc
             validation = ""
@@ -306,6 +310,9 @@ async def write_brief_chapters(request: BriefWritingRequest) -> list[BriefChapte
             chapters.append(result)
             continue
         if isinstance(result, asyncio.CancelledError):
+            raise result
+        if isinstance(result, StopRequested):
+            # 用户停止是 Exception 子类,不能被当作"单章失败继续"吞掉。
             raise result
         if isinstance(result, Exception):
             logger.error(
@@ -489,6 +496,10 @@ async def generate_brief_summary(request: BriefSummaryRequest) -> str:
                 )
                 return summary
             raise ValueError("empty executive_summary")
+        except StopRequested:
+            # 用户停止不参与重试预算,也不能走 _summary_fallback 降级为
+            # "正常返回",直接上抛。
+            raise
         except Exception as exc:
             detail = "<detail masked>" if LogManager.is_sensitive() else str(exc)
             logger.warning(

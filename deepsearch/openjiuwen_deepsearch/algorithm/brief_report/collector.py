@@ -18,6 +18,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
 from openjiuwen_deepsearch.algorithm.brief_report.search import build_section_candidates
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.config.config import Config
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_research_intent_prompt_context,
     build_temporal_scope_prompt_context,
@@ -63,6 +64,10 @@ async def generate_brief_queries(llm: object, request: BriefQueryRequest) -> lis
             if not queries:
                 raise ValueError("brief query payload contains no valid query after cleaning")
             return queries
+        except StopRequested:
+            # 用户停止不参与重试预算,直接上抛(否则重试循环会反复撞
+            # 停止检查点空转直到预算耗尽)。
+            raise
         except Exception as exc:
             last_error = exc
             logger.warning(

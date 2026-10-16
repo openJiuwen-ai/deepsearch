@@ -89,6 +89,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [节点基类与会话上下文](./framework/base-node-and-session-context.md)
 - [搜索上下文与数据契约](./framework/search-context.md)
 - [WorkflowAgent 封装](./framework/workflow-agent.md)
+- [优雅停止与断点恢复](./framework/graceful-stop-and-resume.md)
 - [LLM 模型槽位适配](./framework/llm-model-adaptation.md)
 - [搜索工具注册与运行时 API 工具](./framework/search-tool-registration.md)
 - [DeepSearch 网页抓取 Provider 注册](./framework/web-fetch-provider-registry.md)
