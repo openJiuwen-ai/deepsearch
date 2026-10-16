@@ -165,7 +165,7 @@ def main() -> None:
             )
         )
     except (NotADirectoryError, FileNotFoundError) as exc:
-        print_hw(f"Error: {exc}", file=sys.stderr)
+        print_hw(f"Error: {exc}")
         sys.exit(1)
 
     print_hw(f"Parsed {len(files)} files from {root}")
