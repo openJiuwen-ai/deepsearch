@@ -157,9 +157,9 @@ async def test_parallel_chapters_stream_tokens_with_section_identity(monkeypatch
     assert invoke.await_count == 3
     assert [call.kwargs["need_stream_out"] for call in invoke.await_args_list] == [True, True, True]
     assert [call.kwargs["stream_meta"] for call in invoke.await_args_list] == [
-        {"section_id": "1", "section_idx": "1"},
-        {"section_id": "2", "section_idx": "2"},
-        {"section_id": "3", "section_idx": "3"},
+        {"section_id": "1", "section_idx": "1", "section_total": "3"},
+        {"section_id": "2", "section_idx": "2", "section_total": "3"},
+        {"section_id": "3", "section_idx": "3", "section_total": "3"},
     ]
 
 @pytest.mark.asyncio
