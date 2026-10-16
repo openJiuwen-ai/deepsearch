@@ -57,6 +57,22 @@ def test_common_mermaid_fence_matches_only_run_contract() -> None:
     assert MERMAID_BLOCK_RE.search("说明 ```mermaid\nxychart-beta\n```") is None
 
 
+def test_docx_export_strips_internal_source_trace_comments(tmp_path: Path) -> None:
+    """Internal source IDs are never visible in the exported document."""
+    from openjiuwen_deepsearch.algorithm.report_export.docx_export import convert_md_to_docx
+
+    markdown_path = tmp_path / "report.md"
+    docx_path = tmp_path / "report.docx"
+    markdown_path.write_text(
+        "正文<!--source-trace-id:source_1-->继续。", encoding="utf-8"
+    )
+    convert_md_to_docx(markdown_path, docx_path)
+
+    assert "source-trace-id" not in "\n".join(
+        paragraph.text for paragraph in Document(docx_path).paragraphs
+    )
+
+
 @pytest.mark.parametrize(
     "markdown_text",
     [
