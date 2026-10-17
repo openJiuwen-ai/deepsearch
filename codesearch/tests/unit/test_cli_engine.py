@@ -6,6 +6,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from openjiuwen_codesearch.cli import _run
 from openjiuwen_codesearch.domain.result import CodeSearchResult, Termination
 
@@ -65,3 +67,23 @@ def test_cli_sets_retropus_engine_and_index_dir(tmp_path: Path):
     assert cfg.retropus.index_dir == str(tmp_path / "idx")
     ctor.assert_called_once()
     fake.index_repository.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [("", 0), ("retropus index not ready", 1)],
+)
+def test_search_exit_code_reflects_result_error(error: str, expected: int):
+    """搜索结果带 error（如 INDEX_NOT_READY）时退出码必须非零，否则脚本/CI 误判成功。"""
+    termination = Termination.INDEX_NOT_READY if error else Termination.SUBMITTED
+    result = CodeSearchResult(hits=[], termination=termination, error=error)
+
+    fake = MagicMock()
+    fake.search = AsyncMock(return_value=result)
+
+    with patch("openjiuwen_codesearch.cli.CodeSearchRetriever", return_value=fake):
+        with patch("openjiuwen_codesearch.cli.CodeSearchConfig.from_env") as from_env:
+            from_env.return_value = MagicMock()
+            code = asyncio.run(_run(_args()))
+
+    assert code == expected
