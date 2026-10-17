@@ -941,6 +941,26 @@ def test_outline_evidence_cards_preserve_card_types_content_and_rationale_links(
     ]
 
 
+@pytest.mark.parametrize("url", [None, "", "   "])
+def test_fulltext_card_without_url_does_not_claim_unidentified_passages(url):
+    cards = _build_outline_evidence_cards(
+        [{"index": 1, "is_fulltext": True, "url": url, "original_content": "Own full text."}],
+        {"items": [{"rationale_id": "r1"}]},
+        {1: ["Own coverage passage."]},
+        [
+            {"doc_url": missing_url, "passage_text": "Unrelated passage.",
+             "scores": {"r1": {"coverage": 0.9}}}
+            for missing_url in [None, "", "   "]
+        ],
+    )
+
+    card, = cards
+    assert card["rationale_refs"] == []
+    assert card["selected_passages"] == []
+    assert card["outline_excerpt"] == "Own full text."
+    assert card["coverage_passages"] == ["Own coverage passage."]
+
+
 def test_rationale_contract_citation_ids_are_deduplicated_from_evidence_cards():
     contract = {"items": [{"rationale_id": "r1"}, {"rationale_id": "r2"}]}
     cards = [

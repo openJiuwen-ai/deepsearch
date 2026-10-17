@@ -159,11 +159,14 @@ def _build_outline_evidence_cards(
         rationale_refs = []
         related_passages = [item]
         if item.get("is_fulltext"):
-            item_url = str(item.get("url") or "")
-            related_passages = [
-                passage for passage in selected_passages
-                if isinstance(passage, dict) and str(passage.get("doc_url") or "") == item_url
-            ]
+            item_url = str(item.get("url") or "").strip()
+            related_passages = []
+            if item_url:
+                for passage in selected_passages:
+                    if not isinstance(passage, dict):
+                        continue
+                    if str(passage.get("doc_url") or "").strip() == item_url:
+                        related_passages.append(passage)
         for rationale_id in rationale_ids:
             score = max(
                 (_coverage_score_for_rationale(passage, rationale_id) for passage in related_passages),
@@ -1297,14 +1300,10 @@ class EvidenceMixin:
                 section_idx,
             )
         current_inputs["sub_section_core_content"] = core_content_list
-        coverage_passages_by_citation = {
-            citation_id: passages
-            for citation_id, passages in rule_passage_texts.items()
-        }
         outline_evidence_cards = _build_outline_evidence_cards(
             classified_content=current_inputs["classified_content"],
             rationale_contract=rationale_contract,
-            coverage_passages_by_citation=coverage_passages_by_citation,
+            coverage_passages_by_citation=rule_passage_texts,
             selected_passages=retained_passages,
         )
         _attach_rationale_citation_ids(rationale_contract, outline_evidence_cards)
