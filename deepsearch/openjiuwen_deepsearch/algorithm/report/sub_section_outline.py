@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from calendar import monthrange
+from collections.abc import Callable
 from datetime import date
 
 from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
@@ -58,24 +59,21 @@ def _validate_outline_years(outline_text: str, time_contract: dict) -> tuple[boo
     )
     remaining = identifier_pattern.sub(lambda match: " " * len(match.group(0)), remaining)
 
-    def _mask_matches(pattern: re.Pattern, *, year_range: bool = False) -> None:
+    def _mask_matches(
+        pattern: re.Pattern[str], parse_interval: Callable[[re.Match[str]], tuple[date, date]],
+    ) -> None:
+        """Parse and mask each expression once, including invalid intervals."""
         nonlocal remaining
         chars = list(remaining)
         for match in pattern.finditer(remaining):
             try:
-                if year_range:
-                    first_year, last_year = (int(match.group(1)), int(match.group(2)))
-                    interval_start = date(first_year, 1, 1)
-                    interval_end = date(last_year, 12, 31)
-                    if interval_start > interval_end:
-                        invalid_expressions.append(match.group(0))
-                        chars[match.start():match.end()] = " " * (match.end() - match.start())
-                        continue
-                else:
-                    interval_start = interval_end = date.fromisoformat(match.group(1))
-                intervals.append((match.group(0), interval_start, interval_end))
+                interval_start, interval_end = parse_interval(match)
+                if interval_start > interval_end:
+                    raise ValueError("reversed time interval")
             except ValueError:
                 invalid_expressions.append(match.group(0))
+            else:
+                intervals.append((match.group(0), interval_start, interval_end))
             chars[match.start():match.end()] = " " * (match.end() - match.start())
         remaining = "".join(chars)
 
@@ -86,20 +84,9 @@ def _validate_outline_years(outline_text: str, time_contract: dict) -> tuple[boo
     )
     # Date ranges are handled before individual dates, so each range is checked
     # as one interval rather than as two unrelated points.
-    date_range_chars = list(remaining)
-    for match in date_range_pattern.finditer(remaining):
-        try:
-            interval_start = date.fromisoformat(match.group(1))
-            interval_end = date.fromisoformat(match.group(2))
-        except ValueError:
-            invalid_expressions.append(match.group(0))
-        else:
-            if interval_start > interval_end:
-                invalid_expressions.append(match.group(0))
-            else:
-                intervals.append((match.group(0), interval_start, interval_end))
-        date_range_chars[match.start():match.end()] = " " * (match.end() - match.start())
-    remaining = "".join(date_range_chars)
+    _mask_matches(date_range_pattern, lambda match: (
+        date.fromisoformat(match.group(1)), date.fromisoformat(match.group(2)),
+    ))
 
     def _parse_chinese_date(expression: str) -> tuple[date, date]:
         match = re.fullmatch(r"(\d{4})年(\d{1,2})月(?:(\d{1,2})日?)?", expression)
@@ -118,48 +105,28 @@ def _validate_outline_years(outline_text: str, time_contract: dict) -> tuple[boo
         rf"({chinese_date_token})(?!\d)",
         re.IGNORECASE,
     )
-    chinese_range_chars = list(remaining)
-    for match in chinese_range_pattern.finditer(remaining):
-        try:
-            interval_start, _ = _parse_chinese_date(match.group(1))
-            _, interval_end = _parse_chinese_date(match.group(2))
-            if interval_start > interval_end:
-                invalid_expressions.append(match.group(0))
-            else:
-                intervals.append((match.group(0), interval_start, interval_end))
-        except ValueError:
-            invalid_expressions.append(match.group(0))
-        chinese_range_chars[match.start():match.end()] = " " * (match.end() - match.start())
-    remaining = "".join(chinese_range_chars)
+    _mask_matches(chinese_range_pattern, lambda match: (
+        _parse_chinese_date(match.group(1))[0], _parse_chinese_date(match.group(2))[1],
+    ))
 
     chinese_date_pattern = re.compile(rf"(?<!\d){chinese_date_token}(?!\d)")
-    chinese_date_chars = list(remaining)
-    for match in chinese_date_pattern.finditer(remaining):
-        try:
-            interval_start, interval_end = _parse_chinese_date(match.group(0))
-            intervals.append((match.group(0), interval_start, interval_end))
-        except ValueError:
-            invalid_expressions.append(match.group(0))
-        chinese_date_chars[match.start():match.end()] = " " * (match.end() - match.start())
-    remaining = "".join(chinese_date_chars)
+    _mask_matches(chinese_date_pattern, lambda match: _parse_chinese_date(match.group(0)))
 
-    _mask_matches(re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)"))
+    def _parse_iso_date(match: re.Match[str]) -> tuple[date, date]:
+        parsed = date.fromisoformat(match.group(1))
+        return parsed, parsed
+
+    _mask_matches(re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)"), _parse_iso_date)
 
     # Prefer calendar months over abbreviated years for the ambiguous YYYY-MM
     # and YYYY/MM forms. Other range separators are unambiguously year ranges.
     month_pattern = re.compile(r"(?<!\d)(\d{4})[-/](0[1-9]|1[0-2])(?!\d)")
-    month_chars = list(remaining)
-    for match in month_pattern.finditer(remaining):
+
+    def _parse_month(match: re.Match[str]) -> tuple[date, date]:
         year, month = int(match.group(1)), int(match.group(2))
-        try:
-            interval_start = date(year, month, 1)
-            interval_end = date(year, month, monthrange(year, month)[1])
-        except ValueError:
-            invalid_expressions.append(match.group(0))
-        else:
-            intervals.append((match.group(0), interval_start, interval_end))
-        month_chars[match.start():match.end()] = " " * (match.end() - match.start())
-    remaining = "".join(month_chars)
+        return date(year, month, 1), date(year, month, monthrange(year, month)[1])
+
+    _mask_matches(month_pattern, _parse_month)
 
     # Accept abbreviated ranges such as 2020-21 and 2020/21. The end year is
     # interpreted within the start year's century, rolling forward if needed
@@ -168,26 +135,20 @@ def _validate_outline_years(outline_text: str, time_contract: dict) -> tuple[boo
         r"(?<!\d)(\d{4})\s*(?:-|/|–|—|－|至|到|~|～|to)\s*(\d{2})(?!\d)",
         re.IGNORECASE,
     )
-    abbreviated_range_chars = list(remaining)
-    for match in abbreviated_year_range_pattern.finditer(remaining):
+
+    def _parse_abbreviated_range(match: re.Match[str]) -> tuple[date, date]:
         start_year = int(match.group(1))
         end_year = (start_year // 100) * 100 + int(match.group(2))
         if end_year < start_year:
             end_year += 100
-        try:
-            interval_start = date(start_year, 1, 1)
-            interval_end = date(end_year, 12, 31)
-        except ValueError:
-            invalid_expressions.append(match.group(0))
-        else:
-            intervals.append((match.group(0), interval_start, interval_end))
-        abbreviated_range_chars[match.start():match.end()] = " " * (match.end() - match.start())
-    remaining = "".join(abbreviated_range_chars)
+        return date(start_year, 1, 1), date(end_year, 12, 31)
+
+    _mask_matches(abbreviated_year_range_pattern, _parse_abbreviated_range)
 
     _mask_matches(re.compile(
         r"(?<!\d)(\d{4})\s*(?:至|到|~|～|–|—|－|to|-)\s*(\d{4})(?!\d)",
         re.IGNORECASE,
-    ), year_range=True)
+    ), lambda match: (date(int(match.group(1)), 1, 1), date(int(match.group(2)), 12, 31)))
 
     year_pattern = re.compile(r"(?<!\d)(\d{4})(?!\d)")
     for match in year_pattern.finditer(remaining):
@@ -293,7 +254,6 @@ class SubSectionOutlineMixin:
             tmp_context = {
                 "report_task": report_task,
                 "core_context": json.dumps(outline_evidence_cards, ensure_ascii=False),
-                "core_from_background": False,
                 "time_contract_json": json.dumps(time_contract, ensure_ascii=False),
                 "rationale_contract_json": json.dumps(rationale_contract, ensure_ascii=False),
                 "retry_feedback": (failure_feedback or "").strip()[:500],

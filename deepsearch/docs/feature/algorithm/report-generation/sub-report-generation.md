@@ -129,6 +129,8 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 
 覆盖状态、分数及全文卡的段落关联统一使用 `enrich_fulltext_for_section` 返回的 `retained_passages`：它包含 L1/L2 过滤与去重后保留的段落，以及被提升为 fulltext 的对应段落；已被过滤或去重删除的段落不再影响合同评分。被提升为 fulltext 的段落仍参与 rationale 覆盖计算，并通过 URL 与全文 evidence card 关联，避免相应维度被误标为"未覆盖"。
 
+全文卡仅通过非空 URL 关联入选段落；URL 为 null、空串或纯空白时不关联段落，也不从无 URL 的段落推导 rationale 关系。卡片自身的原文摘要和按 citation 归属的 coverage passages 仍保留。
+
 无搜索段落而使用前章背景兜底时，背景卡与用户素材卡可同时进入子大纲；背景卡的 citation ID 为 null，只用于章节衔接，不可作为外部引用。写作阶段继续接收同一前章背景。
 
 两个 contract 同时提供给专业版模板化/非模板化子大纲及子报告：证据充分的主要信息维度可辅助组织内容，弱证据要求谨慎表述，未覆盖维度不得作为新增事实的依据；大纲的模型新增显式年份不得超出 content 时间范围。Brief 由独立工作流使用其专有的证据收集、评审和写作契约。
