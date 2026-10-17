@@ -97,9 +97,10 @@ description: {{current_section_description}}
 # Current Chapter Outline
 {{current_chapter_outline}}
 
-{% if structured_evidence_guide %}# Structured Evidence Guidance
-{{structured_evidence_guide}}
-{% endif %}
+# Rationale Contract
+{{ rationale_contract_json }}
+# Time Contract
+{{ time_contract_json }}
 {% if background_knowledge %}# Background Knowledge
 {{background_knowledge}}
 {% endif %}

@@ -24,6 +24,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence impor
     _COVERAGE_MAX_TOTAL_CHARS,
     _COVERAGE_TOP_K_CAP,
     extract_coverage_passages,
+    outline_summary_text,
     outline_summary_tail_text,
 )
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
@@ -35,6 +36,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.target_paper import find
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     TemporalScope,
     _resolve_content_date_scope,
+    build_time_contract,
     build_section_local_contract_prompt_context,
 )
 from openjiuwen_deepsearch.utils.common_utils.date_utils import (
@@ -71,6 +73,127 @@ class TemporalSelectionOptions:
     """
     temporal_scope: TemporalScope | dict | None = None
     timeliness_weight: float = 0.0
+
+
+def _coverage_score_for_rationale(passage: dict, rationale_id: str) -> float:
+    """Read one rationale coverage score from a selected passage safely."""
+    scores = passage.get("scores") or {}
+    entry = scores.get(rationale_id, {}) if isinstance(scores, dict) else {}
+    if isinstance(entry, dict):
+        return safe_float(entry.get("coverage"))
+    return safe_float(entry)
+
+
+def _build_rationale_contract(rationales: list, selected_passages: list) -> dict:
+    """Build a shared, machine-readable rationale contract without new LLM work."""
+    items = []
+    for rationale in rationales:
+        if not isinstance(rationale, dict):
+            continue
+        rationale_id = str(rationale.get("id") or "")
+        if not rationale_id:
+            continue
+        scored = []
+        for passage in selected_passages:
+            if not isinstance(passage, dict):
+                continue
+            score = _coverage_score_for_rationale(passage, rationale_id)
+            if score > 0:
+                scored.append((score, passage))
+        max_score = max((score for score, _ in scored), default=0.0)
+        coverage_status = "covered" if max_score >= 0.6 else "weak" if max_score >= 0.3 else "uncovered"
+        items.append({
+            "rationale_id": rationale_id,
+            "description": str(rationale.get("description") or ""),
+            "priority": str(rationale.get("priority") or "supplementary"),
+            "coverage_status": coverage_status,
+            "coverage_score": max_score,
+            "citation_ids": [],
+        })
+    return {"items": items}
+
+
+def _attach_rationale_citation_ids(rationale_contract: dict, evidence_cards: list[dict]) -> None:
+    """Attach the citation IDs represented by each rationale's evidence cards."""
+    citation_ids_by_rationale = {
+        item["rationale_id"]: []
+        for item in rationale_contract.get("items", [])
+        if isinstance(item, dict) and item.get("rationale_id")
+    }
+    for card in evidence_cards:
+        if not isinstance(card, dict):
+            continue
+        citation_id = card.get("citation_id")
+        for reference in card.get("rationale_refs", []):
+            if not isinstance(reference, dict):
+                continue
+            rationale_id = reference.get("rationale_id")
+            if rationale_id in citation_ids_by_rationale:
+                citation_ids_by_rationale[rationale_id].append(citation_id)
+    for item in rationale_contract.get("items", []):
+        if isinstance(item, dict) and item.get("rationale_id") in citation_ids_by_rationale:
+            rationale_id = item["rationale_id"]
+            item["citation_ids"] = list(dict.fromkeys(citation_ids_by_rationale[rationale_id]))
+
+
+def _build_outline_evidence_cards(
+    classified_content: list,
+    rationale_contract: dict,
+    coverage_passages_by_citation: dict[int, list[str]],
+    selected_passages: list,
+) -> list[dict]:
+    """Build the compact outline evidence view from final writer evidence.
+
+    This intentionally performs no semantic summarisation or cross-channel
+    deduplication.  Full-text cards use a deterministic prefix excerpt and
+    optional rule coverage passages; passage cards use the selected passage.
+    """
+    rationale_ids = [item["rationale_id"] for item in rationale_contract.get("items", [])]
+    cards = []
+    for item in classified_content or []:
+        if not isinstance(item, dict):
+            continue
+        citation_id = item.get("index")
+        if not isinstance(citation_id, int):
+            continue
+        rationale_refs = []
+        related_passages = [item]
+        if item.get("is_fulltext"):
+            item_url = str(item.get("url") or "").strip()
+            related_passages = []
+            if item_url:
+                for passage in selected_passages:
+                    if not isinstance(passage, dict):
+                        continue
+                    if str(passage.get("doc_url") or "").strip() == item_url:
+                        related_passages.append(passage)
+        for rationale_id in rationale_ids:
+            score = max(
+                (_coverage_score_for_rationale(passage, rationale_id) for passage in related_passages),
+                default=0.0,
+            )
+            if score > 0:
+                rationale_refs.append({"rationale_id": rationale_id, "coverage_score": score})
+        card = {
+            "citation_id": citation_id,
+            "evidence_type": "fulltext" if item.get("is_fulltext") else "passage",
+            "source_title": str(item.get("title") or ""),
+            "publish_time": str(item.get("doc_time") or ""),
+            "content_time": item.get("content_time"),
+            "rationale_refs": rationale_refs,
+        }
+        if item.get("is_fulltext"):
+            card["outline_excerpt"] = outline_summary_text(str(item.get("original_content") or ""))
+            card["selected_passages"] = list(dict.fromkeys(
+                str(passage.get("passage_text") or "").strip()
+                for passage in related_passages
+                if str(passage.get("passage_text") or "").strip()
+            ))
+            card["coverage_passages"] = coverage_passages_by_citation.get(citation_id, [])
+        else:
+            card["passage_text"] = str(item.get("passage_text") or "")
+        cards.append(card)
+    return cards
 
 
 def ensure_exact_target_documents(
@@ -1107,6 +1230,11 @@ class EvidenceMixin:
         current_inputs["required_target_citation_indexes"] = fulltext_result.get(
             "required_target_citation_indexes", []
         )
+        current_inputs["time_contract"] = build_time_contract(
+            current_inputs.get("research_intent")
+        )
+        retained_passages = fulltext_result.get("retained_passages", [])
+        rationale_contract = _build_rationale_contract(rationales, retained_passages)
 
         # Store full-text evidence debug data for Excel export
         fulltext_result_remaining = fulltext_result.get("remaining_passages", [])
@@ -1172,6 +1300,15 @@ class EvidenceMixin:
                 section_idx,
             )
         current_inputs["sub_section_core_content"] = core_content_list
+        outline_evidence_cards = _build_outline_evidence_cards(
+            classified_content=current_inputs["classified_content"],
+            rationale_contract=rationale_contract,
+            coverage_passages_by_citation=rule_passage_texts,
+            selected_passages=retained_passages,
+        )
+        _attach_rationale_citation_ids(rationale_contract, outline_evidence_cards)
+        current_inputs["rationale_contract"] = rationale_contract
+        current_inputs["outline_evidence_cards"] = outline_evidence_cards
 
         if LogManager.is_sensitive():
             logger.info(
