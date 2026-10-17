@@ -447,7 +447,6 @@ def test_large_bar_values_avoid_tick_overlap():
     Old y_max=6600 → 14 D3 ticks at 500 intervals (36 px/tick, overlap).
     New y_max=7500 → 6-8 D3 ticks (63-83 px/tick, no overlap).
     """
-    import re
     data = {
         "image_type": "bar",
         "unit": "元",
@@ -462,20 +461,63 @@ def test_large_bar_values_avoid_tick_overlap():
     m = re.search(r'y-axis "[^"]*" 0 --> (\d+(?:\.\d+)?)', result)
     assert m, f"y-axis not found in: {result}"
     y_max = float(m.group(1))
-    assert y_max != 6600, f"y_max=6600 causes 14 ticks (overlap); got y_max={y_max}"
+    assert y_max == 7500, f"expected y_max=7500 (≤8 ticks), got y_max={y_max}"
+
+
+# =====================================================================
+# _d3_tick_count — d3-array tick-step algorithm (bug fix)
+# =====================================================================
+
+def test_d3_tick_count_matches_d3_array():
+    """_d3_tick_count must match d3-array's linear.ticks() step selection.
+
+    d3 uses √50/√10/√2 error thresholds from {1, 2, 5, 10} × 10ⁿ, NOT a
+    (1, 2, 2.5, 5, 10) multiplier scan. Counter-examples the old scan
+    underestimated, all on STEP_MULTIPLIERS-produced y_max shapes:
+      y_range=10000 → old scan: 2, d3 actual: 11
+      y_range=2500  → old scan: 3, d3 actual: 13
+      y_range=5000  → old scan: 6, d3 actual: 11
+    """
+    assert XYChartMermaidGenerator._d3_tick_count(10000) == 11
+    assert XYChartMermaidGenerator._d3_tick_count(2500) == 13
+    assert XYChartMermaidGenerator._d3_tick_count(5000) == 11
 
 
 # =====================================================================
 # generate_from_json — tick density vs width constraint (bug fix)
 # =====================================================================
 
-def test_tick_density_forces_wider_chart():
-    """Vertical chart with large value range must widen to avoid tick overlap.
+def test_tick_density_forces_wider_chart_horizontal():
+    """Horizontal chart with large value range must widen width to avoid
+    tick label overlap on the horizontal value axis.
 
-    Regression: 2 short labels + values [2999, 5999] produced width=360
-    (minimum) with y_max=7500.  D3 selects 1000-step → 8 ticks →
-    360/8 = 45 px/tick → overlap.  The generator must ensure width can
-    accommodate the estimated D3 tick count.
+    Long labels (weight > 20 each) force use_horizontal. y_range=7500 →
+    D3 picks 1000-step → 8 ticks → width must be ≥ 8 × 50 = 400 px.
+    """
+    data = {
+        "image_type": "bar",
+        "unit": "元",
+        "records": [
+            ["超长标签名称测试用例一", 2999],
+            ["超长标签名称测试用例二", 5999],
+        ],
+    }
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    assert "chartOrientation: horizontal" in result
+    m = re.search(r"width: (\d+)", result)
+    assert m, f"width not found in: {result}"
+    width = int(m.group(1))
+    assert width >= 400, f"width={width} causes tick overlap (need ≥400 for 8 ticks)"
+
+
+def test_vertical_chart_not_widened_for_ticks():
+    """Vertical chart must NOT widen width for tick density — the value
+    axis is vertical (d3 axisLeft), so tick spacing depends on height,
+    not width. Width widening only applies when use_horizontal is True.
+
+    Regression guard for the direction-mismatch bug: previously all
+    charts had width widened, including vertical charts where it has no
+    effect on the vertical value-axis tick spacing.
     """
     data = {
         "image_type": "bar",
@@ -486,11 +528,11 @@ def test_tick_density_forces_wider_chart():
         ],
     }
     result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    assert "chartOrientation: horizontal" not in result
     m = re.search(r"width: (\d+)", result)
     assert m, f"width not found in: {result}"
     width = int(m.group(1))
-    # 8 D3 ticks × 50 px minimum = 400 px
-    assert width >= 400, f"width={width} causes tick overlap (need ≥400 for 8 ticks)"
+    assert width == 360, f"vertical chart width should stay at WIDTH_MIN(360), got {width}"
 
 
 # =====================================================================

@@ -372,6 +372,7 @@ class XYChartMermaidGenerator:
         4, 4.5, 5, 6, 7, 8, 9, 10, 10.5, 11, 12, 15,
     )
     STEP_MULTIPLIERS = (1.0, 1.5, 2.0, 2.5, 5.0, 10.0)  # D3-aligned step sizes for fewer, rounder axis ticks
+    MIN_PX_PER_TICK = 50  # minimum pixels per D3 tick label on a horizontal value axis
 
     @classmethod
     def _sanitize_label(cls, label: str | None) -> str:
@@ -448,30 +449,39 @@ class XYChartMermaidGenerator:
                 return candidate
         return 10 * exp
 
-    D3_TICK_MULTIPLIERS = (1, 2, 2.5, 5, 10)
-    MIN_PX_PER_TICK = 50
+    @classmethod
+    def _d3_tick_count(cls, y_range: float) -> int:
+        """Replicate d3-array's ``linear.ticks()`` step selection (count=10).
+
+        d3 picks the step from {1, 2, 5, 10} × 10ⁿ using √50 / √10 / √2
+        error thresholds, then emits ``floor(range/step) + 1`` ticks.
+        """
+        if y_range <= 0:
+            return 0
+        step0 = y_range / 10.0
+        step1 = 10 ** math.floor(math.log10(step0))
+        error = step0 / step1
+        if error >= math.sqrt(50):
+            step = step1 * 10
+        elif error >= math.sqrt(10):
+            step = step1 * 5
+        elif error >= math.sqrt(2):
+            step = step1 * 2
+        else:
+            step = step1
+        return int(y_range // step) + 1
 
     @classmethod
     def _min_width_for_ticks(cls, y_range: float) -> float:
-        """Estimate D3's tick count for a y-axis range and return the
-        minimum chart width that avoids tick label overlap.
+        """Return the minimum chart width that avoids tick label overlap
+        on a horizontal value axis.
 
-        D3's ``linear.ticks()`` picks step sizes from (1, 2, 2.5, 5) × 10ⁿ
-        targeting 6–10 ticks.  We replicate that selection and require
-        at least ``MIN_PX_PER_TICK`` pixels per tick label.
+        Uses d3-array's real tick-count algorithm (see ``_d3_tick_count``)
+        and requires at least ``MIN_PX_PER_TICK`` pixels per tick label.
         """
-        if y_range <= 0:
+        tick_count = cls._d3_tick_count(y_range)
+        if tick_count <= 0:
             return 0.0
-        exp = 10 ** math.floor(math.log10(y_range))
-        tick_count = 0
-        for m in cls.D3_TICK_MULTIPLIERS:
-            step = m * exp
-            tc = int(y_range / step) + 1
-            if 5 <= tc <= 10:
-                tick_count = tc
-                break
-        if tick_count == 0:
-            tick_count = int(y_range / exp) + 1
         return tick_count * cls.MIN_PX_PER_TICK
 
     @classmethod
@@ -524,10 +534,15 @@ class XYChartMermaidGenerator:
         use_horizontal = (
             chart_type == "bar" and cls._should_use_horizontal(x_values, count)
         )
-        # Ensure width can accommodate D3 axis ticks without character overlap.
-        y_range = y_max - y_min
-        if y_range > 0:
-            width = max(width, cls._min_width_for_ticks(y_range))
+        # Widen width only for horizontal charts: the value axis runs along
+        # the horizontal direction, so tick density is bounded by width.
+        # Vertical charts have a vertical value axis (d3 axisLeft) whose tick
+        # spacing depends on height, not width — widening width there does
+        # nothing for tick overlap.
+        if use_horizontal:
+            y_range = y_max - y_min
+            if y_range > 0:
+                width = max(width, cls._min_width_for_ticks(y_range))
         # Keep the Mermaid directive itself standard so downstream validators can
         # infer the chart type from the `bar [...]`/`line [...]` series. The
         # horizontal hint uses the official xyChart.chartOrientation key so both
