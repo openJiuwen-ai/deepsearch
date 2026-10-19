@@ -30,6 +30,7 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
+from openjiuwen_deepsearch.utils.common_utils.moderation_detection import Source, detect_error, detect_response
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, cancel_context
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
@@ -185,6 +186,7 @@ class _ConsumeLlmStreamRequest:
     stream_id: str | None
     stream_meta: dict[str, Any] | None
     agent_name: str
+    moderation_enabled: bool = False
 
 
 def _normalize_agent_name(agent_name: Any) -> str:
@@ -1242,6 +1244,17 @@ def _resolve_stream_options(llm_model: Any, need_include_usage: bool) -> dict | 
     return merged_options or None
 
 
+def _raise_if_moderation_response(response: Any, source: Source) -> None:
+    signal = detect_response(response, source)
+    if signal is not None:
+        error = CustomValueException(
+            StatusCode.LLM_CALL_FAILED.code,
+            StatusCode.LLM_CALL_FAILED.errmsg.format(e=f"moderation detected: {signal.code}"),
+        )
+        error.moderation_signal = signal
+        raise error
+
+
 async def _consume_llm_stream(
     request: _ConsumeLlmStreamRequest,
 ) -> Any:
@@ -1256,6 +1269,8 @@ async def _consume_llm_stream(
     full_chunk = None
     async for chunk in request.llm.stream(**request.stream_kwargs):
         _raise_if_cancelled()
+        if request.moderation_enabled:
+            _raise_if_moderation_response(chunk, "stream")
         if full_chunk is None:
             full_chunk = chunk
         else:
@@ -1280,6 +1295,8 @@ async def _consume_llm_stream(
             if request.stream_meta:
                 payload.update(dict(request.stream_meta))
             await request.session.write_custom_stream(payload)
+    if request.moderation_enabled:
+        _raise_if_moderation_response(full_chunk, "stream")
     return full_chunk
 
 
@@ -1307,6 +1324,7 @@ async def llm_astream(*args, **kwargs):
     need_stream_out = kwargs.get("need_stream_out", False)
     stream_meta = kwargs.get("stream_meta", None)
     stream_options = kwargs.get("stream_options", None)
+    moderation_enabled = bool(kwargs.get("moderation_enabled", False))
 
     _raise_if_cancelled()
     full_chunk = None
@@ -1374,6 +1392,7 @@ async def llm_astream(*args, **kwargs):
                     stream_id=stream_id,
                     stream_meta=stream_meta,
                     agent_name=agent_name,
+                    moderation_enabled=moderation_enabled,
                 )),
                 timeout=resolved_timeout.timeout,
             )
@@ -1387,6 +1406,7 @@ async def llm_astream(*args, **kwargs):
                 stream_id=stream_id,
                 stream_meta=stream_meta,
                 agent_name=agent_name,
+                moderation_enabled=moderation_enabled,
             ))
     except asyncio.TimeoutError as exc:
         if can_write_stream and need_stream_out:
@@ -1554,6 +1574,7 @@ async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
                     need_stream_out=False,
                     stream_meta=stream_meta,
                     stream_options=resolved_stream_options,
+                    moderation_enabled=bool(llm.get("moderation_mask_retry")),
                 )
         except Exception as e:
             detail = _format_llm_invoke_exception(e)
@@ -1587,6 +1608,7 @@ async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
                 need_stream_out=need_stream_out,
                 stream_meta=stream_meta,
                 stream_options=_resolve_call_stream_options(target_model, stats_info_llm),
+                moderation_enabled=bool(llm.get("moderation_mask_retry")),
             )
 
         try:
@@ -1614,6 +1636,9 @@ async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
 
             if not fallback_succeeded:
                 raise
+
+    if llm.get("moderation_mask_retry"):
+        _raise_if_moderation_response(response, "response")
 
     if stats_info_llm:
         duration = time.time() - start
@@ -1672,18 +1697,20 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     try:
         response = await _ainvoke_llm_with_stats_impl(*call_args, **call_kwargs)
     except Exception as error:
-        detail = _format_llm_invoke_exception(error)
-        cause = getattr(error, "__cause__", None)
-        if moderation_mask.is_moderation_error(detail, cause):
-            side = moderation_mask.moderation_error_side(detail, cause) or moderation_mask.SIDE_INPUT
-            if side == moderation_mask.SIDE_OUTPUT:
+        signal = detect_error(error)
+        if signal is not None:
+            if signal.side == moderation_mask.SIDE_OUTPUT:
                 policy.constrain_output = True
+                strategy = "output_constraint"
             else:
                 policy.mask_input = True
+                strategy = "input_mask"
             policy.pending_recovery = True
             logger.info(
-                "moderation-blocked call_id=%s attempt=%d side=%s agent=%s recovery_policy_recorded=true%s",
-                policy.call_id, policy.attempts, side, agent, format_llm_log_correlation_suffix(),
+                "moderation-blocked call_id=%s attempt=%d side=%s strategy=%s code=%s "
+                "source=%s evidence=%s agent=%s recovery_policy_recorded=true%s",
+                policy.call_id, policy.attempts, signal.side, strategy, signal.code,
+                signal.source, signal.evidence, agent, format_llm_log_correlation_suffix(),
             )
         raise
     if policy.pending_recovery:

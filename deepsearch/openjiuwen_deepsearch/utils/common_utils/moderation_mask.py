@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from openjiuwen_deepsearch.utils.common_utils.llm_utils import llm_error_chain_blob
+from openjiuwen_deepsearch.utils.common_utils.moderation_detection import detect_error
 from openjiuwen_deepsearch.utils.common_utils.lexicon_resource import FORMAT, decode_lexicon
 
 logger = logging.getLogger(__name__)
@@ -37,15 +37,6 @@ _ADDRESS = re.compile(
     r"(?::[^\s<>\"'`，。；！？/?#]*)?(?:[/?#][^\s<>\"'`，。；！？]*)?",
     re.UNICODE,
 )
-# 只匹配明确的风控短语，避免误伤普通 input/output data 错误
-_MODERATION_INPUT_PHRASE = "input data may contain inappropriate"
-_MODERATION_OUTPUT_PHRASE = "output data may contain inappropriate"
-_MODERATION_PHRASES = (
-    _MODERATION_INPUT_PHRASE,
-    _MODERATION_OUTPUT_PHRASE,
-    "data_inspection_failed",
-)
-
 # 侧向常量：风控发生在输入侧 / 输出侧 / 判不出侧
 SIDE_INPUT = "input"
 SIDE_OUTPUT = "output"
@@ -111,43 +102,15 @@ def get_lexicon(lexicon_dir: str | None = None) -> frozenset[str]:
     return _load_lexicon_bundled()
 
 
-def _moderation_blob(detail: str, cause: BaseException | None) -> str:
-    """把 detail 与异常链拼成一段小写文本，供风控短语匹配。"""
-    blob = detail or ""
-    if cause is not None:
-        blob = f"{blob}\n{llm_error_chain_blob(cause)}"
-    return blob.lower()
-
-
 def is_moderation_error(detail: str, cause: BaseException | None = None) -> bool:
-    """判断异常是否内容风控 400（Input/Output data inappropriate / data_inspection_failed）。
-
-    复用 llm_error_chain_blob 遍历异常链，与 _is_context_limit_error 保持一致的覆盖方式。
-    """
-    if not detail and cause is None:
-        return False
-    lower = _moderation_blob(detail, cause)
-    return any(p in lower for p in _MODERATION_PHRASES)
+    """Compatibility entry point for normalized moderation detection."""
+    return detect_error(cause, detail) is not None
 
 
 def moderation_error_side(detail: str, cause: BaseException | None = None) -> str:
-    """判断风控 400 发生在哪一侧：`SIDE_INPUT` / `SIDE_OUTPUT`，判不出则返回 "" 。
-
-    用于分流重试策略——输入侧的内容是我们发出去的文本，掩码能直接移除触发内容；
-    输出侧被拦的是模型现场生成的内容（我们从未收到），掩码够不着，只能追加提示约束生成。
-    `data_inspection_failed` 不带侧信息，返回 "" 由调用方决定兜底走向。
-
-    输出侧优先判断：平台的输出侧错误串里也可能带 input 字样（如 "input id"），
-    先命中更长更明确的 output 串可避免误判。
-    """
-    if not detail and cause is None:
-        return ""
-    lower = _moderation_blob(detail, cause)
-    if _MODERATION_OUTPUT_PHRASE in lower:
-        return SIDE_OUTPUT
-    if _MODERATION_INPUT_PHRASE in lower:
-        return SIDE_INPUT
-    return ""
+    """Return explicit input/output side; preserve the legacy empty unknown value."""
+    signal = detect_error(cause, detail)
+    return signal.side if signal is not None and signal.side != "unknown" else ""
 
 
 def append_retry_feedback(

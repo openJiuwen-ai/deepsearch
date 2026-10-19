@@ -30,6 +30,7 @@ SDK／提供商内部重试及原有 thinking 开关兼容处理保持不变，�
 
 - `config/config.py`、`llm/llm_wrapper.py`：开关与外部词库目录配置。
 - `utils/common_utils/llm_utils.py`：公共入口、异常识别与观测日志。
+- `utils/common_utils/moderation_detection.py`：结构化错误、过滤结束原因及异常链的统一识别。
 - `utils/common_utils/moderation_retry.py`：在既有重试操作内保存补救状态，不发请求。
 - `utils/common_utils/moderation_mask.py`：风控判侧、掩码及输出约束提示。
 - `algorithm/` 与 `framework/` 中已有重试操作：只增加状态作用域，保留循环与降级。
@@ -84,9 +85,25 @@ python tools/build_moderation_lexicon.py --source-dir /path/to/Sensitive-lexicon
 
 ## 边界与错误处理
 
-当前识别仍兼容 `Input data may contain inappropriate`、
-`Output data may contain inappropriate` 与 `data_inspection_failed`；输出短语优先。
-未知侧别沿用输入策略，不代表已完成多平台适配；厂商错误码及网关透传仍待单独核实。
+开关开启时，先读取异常的完整响应 JSON、body 及异常链，文本短语只作兜底。
+兼容 `data_inspection_failed` 的 Input data / Input text data / Output data 变体、
+`SensitiveContentDetected`、GLM `1301` 错误结构及 MiniMax 的已验证 422 错误结构。
+GLM 顶层 `contentFilter.role=user` 提供输入证据；没有实测过的 role 不推导为输出侧。
+不将裸数字 `1301`、`1026` 识别为通用异常文本信号。
+
+非流式响应在 JSON / schema 解析前检查 `finish_reason=content_filter`；流式在聚合和
+推送片段前检查该字段。流中 error 沿用 SDK 异常链，不新增 SSE 客户端。
+200/filter 转为 `CustomValueException(LLM_CALL_FAILED)`，附带固定识别结果，
+回到调用方原有失败路径；已有 SDK 异常仍保留原有异常类型及包装。
+已经发送到前端的部分正文不回滚，失败结果不能作为完整答案继续解析。
+
+识别不依赖模型名，也不扫描生成正文猜测风控。`content_filter` 本身侧别未知，
+响应消息角色为 assistant 不代表输出审核；明确侧别冲突时同样保留 unknown。
+unknown 沿用输入策略，但日志区分 `side=unknown` 与 `strategy=input_mask`。
+开关关闭时不执行新增检查或补救；没有重试作用域时也不增加调用。
+这些规则只覆盖已采集格式，不证明所有厂商都采用同一种错误响应。
+JSON / schema 校验异常可能回显生成正文，不用其中的文本做短语兜底，
+避免正文提到风控码时被误识别为平台拦截。结构化上游风控证据仍正常识别。
 
 不再使用 `ModerationRetryExhausted` 改变异常类型。异常识别后使用原异常进入既有捕获路径，
 例如检索词兜底、sidecar 使用正文、章节失败及报告摘要的 tenacity 耗尽行为均保留。
@@ -109,11 +126,14 @@ python tools/build_moderation_lexicon.py --source-dir /path/to/Sensitive-lexicon
 ## 测试与验证
 
 ```bash
-pytest tests/utils/test_lexicon_resource.py tests/utils/test_moderation_mask.py tests/utils/test_moderation_retry.py
+pytest tests/utils/test_lexicon_resource.py tests/utils/test_moderation_mask.py tests/utils/test_moderation_retry.py tests/utils/test_moderation_detection.py tests/utils/test_moderation_integration.py
 ```
 
 重点覆盖原有三次／四次预算、非风控错误、两侧切换、开关关闭、零命中继续原有尝试、
 参数及原消息保留、格式纠错后重新掩码、并发与递归隔离、取消清理，
 以及规划失败、检索词兜底、tenacity、sidecar、HTML 局部重试和一次调用后降级。
+使用内存 HTTP transport 驱动真实 OpenAI SDK 和 OpenJiuwen，验证 200/filter、
+部分正文后的流内 error，以及 GLM 顶层判侧字段穿过异常包装后仍可读取。
+这些集成测试不访问真实平台，不使用真实 key。
 报告、检索、简报、溯源和工作流的原有非在线测试应同步回归。
 这些测试不证明真实平台救回率、端到端成本或报告质量；须另做在线实验。
