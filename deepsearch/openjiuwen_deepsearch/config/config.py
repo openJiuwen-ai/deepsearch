@@ -519,7 +519,7 @@ class ServiceConfig(BaseModel):
     info_collector_max_retry_num: int = Field(default=3, description="信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）")
     info_collector_allow_programmer: bool = Field(default=False, description="")
     info_collector_webpage_enrich_max_urls: int = Field(
-        default=3,
+        default=5,
         ge=1,
         le=10,
         description="网页正文增强每轮最多抓取并增强的 URL 数量",
