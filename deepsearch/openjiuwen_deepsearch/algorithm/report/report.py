@@ -26,6 +26,7 @@ from typing import Any
 
 from tenacity import RetryError
 
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import (
     EFFECT_SUB_REPORT_TAG,
@@ -577,6 +578,7 @@ class Reporter(
 
         return await self._write_with_retry(current_inputs, max_attempt_num, section_idx, classified_content)
 
+    @moderation_retry_scope
     async def _write_with_retry(
         self, current_inputs: dict, max_attempt_num: int, section_idx, classified_content: list
     ) -> tuple[bool, str, str, list]:

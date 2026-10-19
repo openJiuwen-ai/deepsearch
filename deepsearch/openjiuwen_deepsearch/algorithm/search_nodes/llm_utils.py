@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -110,6 +111,7 @@ def _is_context_limit_error(msg: str, chain_root: BaseException | None = None) -
     return False
 
 
+@moderation_retry_scope
 async def _run_llm_via_ainvoke(
     *,
     messages: List[Dict],

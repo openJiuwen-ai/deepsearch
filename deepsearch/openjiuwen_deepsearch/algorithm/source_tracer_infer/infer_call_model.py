@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Dict, NamedTuple, Set
 import copy
 
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
@@ -227,6 +228,7 @@ def is_valid_supplement_triples(result, target=3):
                                         format(e=error_msg))
 
 
+@moderation_retry_scope
 async def call_model(model_name: str, prompt: str, user_input: dict, 
                      detection_func_and_args: dict = None, 
                      agent_name: str = AgentLlmName.SOURCE_TRACER_INFER.value):

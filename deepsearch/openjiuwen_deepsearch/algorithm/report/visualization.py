@@ -7,6 +7,7 @@ import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import (
     EFFECT_SUB_REPORT_TAG,
@@ -229,6 +230,7 @@ class VisualizationMixin:
             )
             return dict(rs_success=False, visualization_content=error_msg, retry_messages=llm_input)
 
+    @moderation_retry_scope
     async def _validate_chart_compliance(
         self,
         extracted_chart_json: str,
@@ -303,6 +305,7 @@ class VisualizationMixin:
                 )
         return dict(valid=False, error_msg="")
 
+    @moderation_retry_scope
     async def _validate_chart_traceability(
         self,
         extracted_chart_json: str,
@@ -378,6 +381,7 @@ class VisualizationMixin:
                 )
         return dict(valid=False, error_msg="")
 
+    @moderation_retry_scope
     async def _extract_visualization_data(
         self,
         visualization_dict: dict,
@@ -594,6 +598,7 @@ class VisualizationMixin:
 
         return {"unit": normalized_unit, "records": normalized_records}
 
+    @moderation_retry_scope
     async def _normalize_visualization_content(
         self,
         visualization_content: dict,

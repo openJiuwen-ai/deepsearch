@@ -24,6 +24,17 @@ class LLMConfig(BaseModel):
         default=False,
         description="是否在消息中追加 think 标签"
     )
+    moderation_mask_retry: bool = Field(
+        default=False,
+        description=(
+            "命中内容风控 400 时是否重试（默认关，实验验证质量无损后再开）。"
+            "复用调用方原有重试预算：输入侧仅掩 user，输出侧追加提示；不增加模型调用次数。"
+        )
+    )
+    moderation_mask_lexicon_dir: str = Field(
+        default="",
+        description="风控掩码词库目录；留空则用打包的默认词库。仅 moderation_mask_retry=True 时生效"
+    )
 
 
 class WebSearchEngineConfig(BaseModel):

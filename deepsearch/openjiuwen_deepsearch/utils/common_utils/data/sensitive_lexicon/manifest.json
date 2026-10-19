@@ -1,0 +1,10 @@
+{
+  "format": "dslex-v1-gzip-utf8-lines",
+  "sha256": "d8768dd52b8bc044e5766fa4231922608386aead20701cc4ab1273bff3487796",
+  "term_count": 50837,
+  "binary_bytes": 307968,
+  "source_file_count": 17,
+  "source_url": "https://github.com/Konsheng/Sensitive-lexicon",
+  "source_license": "MIT",
+  "terms_sha256": "9298bf50eea0a36097a59815f1db35bba06d12e2bd01b2463267dbea0318cb76"
+}

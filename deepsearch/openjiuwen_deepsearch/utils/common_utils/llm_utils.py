@@ -1441,8 +1441,11 @@ def _parse_invoke_llm_args(args, kwargs) -> dict:
     }
 
 
-async def ainvoke_llm_with_stats(*args, **kwargs):
-    """调用 LLM 并按配置记录调用统计。
+async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
+    """调用 LLM 并按配置记录统计，保留既有 thinking 兼容处理。
+
+    公共入口 `ainvoke_llm_with_stats` 只为调用方下一轮重试准备风控策略，
+    不在此调用之外增加独立的风控重试循环。
 
     Args:
         llm (dict): LLM 配置字典，包含 model 与 model_name。
@@ -1645,6 +1648,60 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     if schema is not None:
         return _model_validate_repaired_json(schema, response.content)
     return _unify_responnse(response)
+
+
+async def ainvoke_llm_with_stats(*args, **kwargs):
+    """Invoke once; recovery changes only the next caller-owned attempt."""
+    request_key = kwargs.pop("moderation_retry_key", None)
+    invoke_args = _parse_invoke_llm_args(args, kwargs)
+    llm = invoke_args["llm"]
+    messages = invoke_args["messages"]
+    if not (isinstance(llm, dict) and llm.get("moderation_mask_retry")) or not isinstance(messages, list):
+        return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
+
+    from openjiuwen_deepsearch.utils.common_utils import moderation_mask
+    from openjiuwen_deepsearch.utils.common_utils.moderation_retry import get_moderation_retry_policy
+
+    agent = invoke_args["agent_name"] or "-"
+    policy = get_moderation_retry_policy(llm, agent, request_key)
+    if policy is None:
+        return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
+    policy.attempts += 1
+    current_messages = policy.prepare(messages, llm.get("moderation_mask_lexicon_dir") or "")
+    call_args, call_kwargs = _with_messages(args, kwargs, current_messages)
+    try:
+        response = await _ainvoke_llm_with_stats_impl(*call_args, **call_kwargs)
+    except Exception as error:
+        detail = _format_llm_invoke_exception(error)
+        cause = getattr(error, "__cause__", None)
+        if moderation_mask.is_moderation_error(detail, cause):
+            side = moderation_mask.moderation_error_side(detail, cause) or moderation_mask.SIDE_INPUT
+            if side == moderation_mask.SIDE_OUTPUT:
+                policy.constrain_output = True
+            else:
+                policy.mask_input = True
+            policy.pending_recovery = True
+            logger.info(
+                "moderation-blocked call_id=%s attempt=%d side=%s agent=%s recovery_policy_recorded=true%s",
+                policy.call_id, policy.attempts, side, agent, format_llm_log_correlation_suffix(),
+            )
+        raise
+    if policy.pending_recovery:
+        logger.info(
+            "moderation-recovered call_id=%s attempts=%d agent=%s%s",
+            policy.call_id, policy.attempts, agent, format_llm_log_correlation_suffix(),
+        )
+        policy.pending_recovery = False
+    return response
+
+
+def _with_messages(args: tuple, kwargs: dict, messages: list) -> tuple[tuple, dict]:
+    """返回一份把 messages 替换为指定值的 (args, kwargs)，其余参数原样保留。"""
+    if "messages" in kwargs:
+        return args, {**kwargs, "messages": messages}
+    if len(args) > 1:
+        return (*args[:1], messages, *args[2:]), kwargs
+    return args, {**kwargs, "messages": messages}
 
 
 def _unify_responnse(response):

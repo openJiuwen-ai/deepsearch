@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefOutline,
     BriefSearchResult,
@@ -114,6 +115,7 @@ def _validate_evaluation_output(
     return BriefSectionEvidence(selected_docs=selected, coverage=coverage)
 
 
+@moderation_retry_scope
 async def _evaluate_shard(
     llm: object,
     section: BriefSection,

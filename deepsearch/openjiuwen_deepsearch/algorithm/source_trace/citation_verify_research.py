@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import re
 import difflib
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.source_trace.domain_source_mapping import lookup_source, save_mapping
 from openjiuwen_deepsearch.algorithm.source_trace.source_match_algo import classify_and_match
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
@@ -589,6 +590,7 @@ class CitationVerifyResearch:
         return await self.extract_messages_with_split_retry(
             handle_datas, attempt=1, lineage="root", semaphore=semaphore)
 
+    @moderation_retry_scope
     async def extract_messages_with_split_retry(
             self, handle_datas: list, attempt: int, lineage: str,
             semaphore: asyncio.Semaphore) -> list:

@@ -7,6 +7,7 @@ import base64
 
 from pydantic import BaseModel, Field
 
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
     PromptBuildOptions,
@@ -48,6 +49,7 @@ class CallModelInput(BaseModel):
     agent_name: str = Field(default=AgentLlmName.VLM_CHART_GENERATOR.value, description="agent名称")
 
 
+@moderation_retry_scope
 async def call_model(call_model_input: CallModelInput, 
                      detection_func_and_args: dict = None, 
                      use_vlm: bool = False):

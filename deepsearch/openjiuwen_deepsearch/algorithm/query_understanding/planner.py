@@ -6,6 +6,7 @@ from openjiuwen.core.foundation.tool.base import ToolCard
 from openjiuwen.core.foundation.tool.function.function import LocalFunction
 from pydantic import BaseModel, Field
 
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
     PromptBuildOptions,
     build_prompt_messages,
@@ -239,6 +240,7 @@ class Planner:
         if not self.config.llm:
             self.config.llm = llm_context.get().get(config.llm_model_name)
 
+    @moderation_retry_scope
     async def generate_plan(self, current_inputs: dict) -> PlannerResult:
         """Generating a complete plan."""
         log_prefix = (

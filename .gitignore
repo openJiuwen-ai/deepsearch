@@ -9,3 +9,6 @@ results*/
 testdata/
 .jiuwen_graph/
 
+# Plaintext lexicons are external build inputs, not repository resources.
+deepsearch/openjiuwen_deepsearch/utils/common_utils/data/sensitive_lexicon/*.txt
+

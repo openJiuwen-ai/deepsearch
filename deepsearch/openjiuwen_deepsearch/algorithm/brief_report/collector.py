@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Any
 
+from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.evaluation import evaluate_brief_sections
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefCitationRecord,
@@ -34,6 +35,7 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 logger = logging.getLogger(__name__)
 
 
+@moderation_retry_scope
 async def generate_brief_queries(llm: object, request: BriefQueryRequest) -> list[BriefQuery]:
     """一次生成报告级正式 Query 或全部阻断缺口的补充 Query。
 
