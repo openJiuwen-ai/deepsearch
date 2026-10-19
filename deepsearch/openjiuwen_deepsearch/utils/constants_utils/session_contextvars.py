@@ -17,6 +17,8 @@ cancel_context = contextvars.ContextVar("cancel_event", default=None)
 tool_context = contextvars.ContextVar("tool_map", default=None)
 # MCP tool bundle (持有持久连接，不可 deep-copy，故用 contextvar)
 mcp_tool_context = contextvars.ContextVar("mcp_tool_bundle", default=None)
+# 任务持有的网页正文缓存；不进入会被深拷贝或持久化的 workflow state。
+webpage_fetch_cache_context = contextvars.ContextVar("webpage_fetch_cache", default=None)
 # 禁引约束总开关（对应 AgentConfig.exclusion_constraint_enable）。
 # 意图识别内部需要它，但 `_emit_report_intent` 是 LLM tool_call 的 handler，
 # 入参完全来自模型输出，无法再挂额外上下文，故与 tool_context 同样用 ContextVar 传递。
