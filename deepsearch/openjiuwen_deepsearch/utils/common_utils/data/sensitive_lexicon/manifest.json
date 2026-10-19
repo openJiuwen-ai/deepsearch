@@ -1,10 +1,13 @@
 {
   "format": "dslex-v1-gzip-utf8-lines",
-  "sha256": "d8768dd52b8bc044e5766fa4231922608386aead20701cc4ab1273bff3487796",
-  "term_count": 50837,
-  "binary_bytes": 307968,
+  "sha256": "8c346c9e7ae0da0a11bd2c091cb5fa4ca294d78e7ed48c9818fb604d9627bb71",
+  "term_count": 49968,
+  "binary_bytes": 302726,
   "source_file_count": 17,
+  "source_term_count": 50837,
+  "excluded_decimal_count": 869,
+  "filter_policy": "exclude_unicode_decimal_v1",
   "source_url": "https://github.com/Konsheng/Sensitive-lexicon",
   "source_license": "MIT",
-  "terms_sha256": "9298bf50eea0a36097a59815f1db35bba06d12e2bd01b2463267dbea0318cb76"
+  "terms_sha256": "3b44612cbf6a0f4f044dcc2c35a2bb54eb4808fc3fb6e7c0a255ac2df398c6ac"
 }

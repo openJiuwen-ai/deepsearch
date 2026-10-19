@@ -111,6 +111,21 @@ def test_bundled_lexicon_loads_nonempty():
     assert len(terms) > 1000, "打包词库应含大量词条"
 
 
+def test_bundled_lexicon_excludes_decimal_entries():
+    terms = moderation_mask.get_lexicon()
+    assert not any(term.isdecimal() for term in terms)
+
+
+@pytest.mark.parametrize("text", [
+    "year=2024; amount=189; count=65",
+    "web_31ec7f2479ec60e7_pa0e88d32d13bf01b",
+    "web_ad16af38ba218943_p39d7e9cc010b6e1f",
+    "24 64 189 ２４",
+])
+def test_bundled_lexicon_does_not_mask_numbers_or_source_ids(text):
+    assert moderation_mask.mask_text(text, moderation_mask.get_lexicon()) == (text, 0, 0)
+
+
 def test_get_lexicon_falls_back_to_bundled_on_bad_dir(tmp_path):
     """外部目录无效时退回打包词库。"""
     terms = moderation_mask.get_lexicon("/nonexistent/path/xyz")

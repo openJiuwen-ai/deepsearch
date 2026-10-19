@@ -49,7 +49,7 @@ def test_decompression_is_bounded(monkeypatch):
 def test_builder_reproduces_resources_without_plaintext_copy(tmp_path):
     source = tmp_path / "input"
     source.mkdir()
-    (source / "sample.txt").write_text("example\nexample\n测试\nx\n# ignored\n", encoding="utf-8")
+    (source / "sample.txt").write_text("example\nexample\n测试\nx\n# ignored\n24\n509\n２４\n", encoding="utf-8")
     builder = Path(__file__).resolve().parents[2] / "tools/build_moderation_lexicon.py"
     outputs = [tmp_path / "one", tmp_path / "two"]
     for destination in outputs:
@@ -60,6 +60,9 @@ def test_builder_reproduces_resources_without_plaintext_copy(tmp_path):
     assert (outputs[0] / "lexicon.bin").read_bytes() == (outputs[1] / "lexicon.bin").read_bytes()
     manifest = json.loads((outputs[0] / "manifest.json").read_text())
     assert manifest["term_count"] == 2
+    assert manifest["source_term_count"] == 5
+    assert manifest["excluded_decimal_count"] == 3
+    assert codec.decode_lexicon((outputs[0] / "lexicon.bin").read_bytes(), manifest["sha256"]) == frozenset({"example", "测试"})
     assert set(p.name for p in outputs[0].iterdir()) == {"lexicon.bin", "manifest.json"}
 
 
@@ -91,6 +94,9 @@ def test_packaged_manifest_matches_loaded_terms():
     root = moderation_mask.resources.files(moderation_mask._LEXICON_DIR_RESOURCE)
     manifest = json.loads(root.joinpath("manifest.json").read_text(encoding="utf-8"))
     terms = moderation_mask._load_lexicon_bundled()
-    assert len(terms) == manifest["term_count"] == 50837
+    assert len(terms) == manifest["term_count"] == 49968
+    assert manifest["source_term_count"] == 50837
+    assert manifest["excluded_decimal_count"] == 869
+    assert not any(term.isdecimal() for term in terms)
     assert hashlib.sha256("\n".join(sorted(terms)).encode("utf-8")).hexdigest() == manifest["terms_sha256"]
     assert not any(p.name.endswith(".txt") for p in root.iterdir())

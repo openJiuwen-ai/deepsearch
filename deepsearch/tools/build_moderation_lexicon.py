@@ -20,12 +20,13 @@ def build(source: Path, destination: Path) -> dict:
     files = sorted(source.glob("*.txt"))
     if not files:
         raise ValueError("Source directory contains no text lexicons")
-    terms = frozenset(
+    source_terms = frozenset(
         term
         for path in files
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
         if (term := line.strip()) and len(term) >= 2 and not term.startswith("#")
     )
+    terms = frozenset(term for term in source_terms if not term.isdecimal())
     data = encode_lexicon(terms)
     checksum = hashlib.sha256(data).hexdigest()
     if decode_lexicon(data, checksum) != terms:
@@ -36,6 +37,9 @@ def build(source: Path, destination: Path) -> dict:
         "term_count": len(terms),
         "binary_bytes": len(data),
         "source_file_count": len(files),
+        "source_term_count": len(source_terms),
+        "excluded_decimal_count": len(source_terms) - len(terms),
+        "filter_policy": "exclude_unicode_decimal_v1",
         "source_url": "https://github.com/Konsheng/Sensitive-lexicon",
         "source_license": "MIT",
         "terms_sha256": hashlib.sha256("\n".join(sorted(terms)).encode("utf-8")).hexdigest(),
