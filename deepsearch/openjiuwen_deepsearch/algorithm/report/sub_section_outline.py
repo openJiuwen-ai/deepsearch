@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_section_local_contract_prompt_context,
     build_research_intent_prompt_context,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -148,6 +149,10 @@ class SubSectionOutlineMixin:
                     sub_section_outline=f"LLM returned empty content for the section {section_idx}",
                 )
             return dict(rs_success=True, sub_section_outline=llm_output.get("content"))
+        except StopRequested:
+            # 停止信号不得降级为 (rs_success=False, 纠错反馈) 返回（会驱动
+            # 外层重试循环继续跑完报告阶段）。原样上抛走异常保存分支。
+            raise
         except Exception as e:
             error_detail = f"Error generating sub section outline: {type(e).__name__}: {str(e)[:500]}"
             if LogManager.is_sensitive():

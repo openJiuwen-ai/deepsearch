@@ -15,6 +15,7 @@ from openjiuwen_deepsearch.common.status_code import StatusCode, format_exceptio
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_runtime_api_tools, \
     merge_runtime_api_tools
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, StepType, Step
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json, ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
@@ -321,6 +322,12 @@ class Planner:
                     break  # only one toolcall
 
                 break  # Success, exit retry loop
+            except StopRequested:
+                # 用户停止不降级为 planner_result.error_msg 数据返回（那会让
+                # section "正常"收尾、图正常完成并清除 checkpoint，实机事故
+                # 2026-10-20 professional 模式快照双删回 stage1），直接上抛走
+                # 异常保存分支，resume 时从本节点续跑。口径同 brief_nodes。
+                raise
             except Exception as e:
                 msg = format_exception_info(
                     StatusCode.PLANNER_GENERATE_ERROR,

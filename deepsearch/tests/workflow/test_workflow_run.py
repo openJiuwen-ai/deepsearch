@@ -270,6 +270,95 @@ async def test_run_releases_session_for_ordinary_error():
     agent._release_checkpointer_session.assert_called_once()
 
 
+# ============================================================================
+# 实机事故 2026-10-20: professional 模式停止被调研链路 retry 循环吞成降级
+# 数据,图"正常完成"走到 is_all_end 分支 release 双删快照,续跑 claim 落空
+# 回 stage1。
+# reviewer 核实 2026-10-21: 图引擎在 CompiledGraph._invoke 内部的
+# post_workflow_execute 正常完成分支中已清除 workflow checkpoint
+# (persistence.py clear),本层"跳过 release"保不住已被删除的快照——
+# 终检兜底无法实现 checkpoint 保留,降级为 warning 观测(残余吞没点定位
+# 信号,各链路补齐穿透后预期永不触发),资源清理一律按正常完成路径执行。
+# ============================================================================
+
+
+async def _run_agent_with_stream_complete(agent, agent_config, conversation_id):
+    """驱动 agent.run 走到流正常结束(is_all_end=True)分支,收集输出。
+
+    _consume_stream_chunks 被打桩为立即 yield (payload, stream_end=True, {}),
+    模拟停止信号被吞后图"正常完成"的实机链路。
+    """
+    async def _fake_consume_stream_chunks(*args, **kwargs):
+        yield "payload", True, {}
+
+    def _fake_initialize_tools(_):
+        return web_search_context.set({}), local_search_context.set({})
+
+    with patch.object(agent, "_initialize_tools", side_effect=_fake_initialize_tools), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.create_llm_obj",
+        return_value=object(),
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchAgent"
+        "._consume_stream_chunks",
+        new=_fake_consume_stream_chunks,
+    ), patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.record_interface_log",
+    ):
+        outputs = []
+        async for item in agent.run(
+            message="hello",
+            conversation_id=conversation_id,
+            agent_config=agent_config,
+            report_template="",
+            interrupt_feedback="",
+        ):
+            outputs.append(item)
+    return outputs
+
+
+@pytest.mark.asyncio
+async def test_run_warns_and_releases_when_stream_completes_with_stop_flag(caplog):
+    """终检观测(reviewer 核实 2026-10-21): 流正常完成但停止标志置位
+    (停止被吞的实机特征)时只发 warning 定位残余吞没点,并按正常完成路径
+    执行 release 清理——图引擎在 post_workflow_execute 正常完成分支中
+    已清除 checkpoint,本层跳过 release 保不住已被删除的快照。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+        clear_stop,
+        request_stop,
+    )
+
+    agent = _make_stop_test_agent()
+    request_stop()
+    try:
+        with caplog.at_level(logging.WARNING):
+            outputs = await _run_agent_with_stream_complete(
+                agent, get_default_agent_config(), "stop-flag-complete"
+            )
+    finally:
+        clear_stop()
+
+    assert outputs  # 流正常完成,有输出帧
+    assert not any('"event": "error"' in item for item in outputs)
+    assert any("stop flag set" in message for message in caplog.messages)
+    agent.agent.release_session.assert_called_once()
+    agent._release_checkpointer_session.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_releases_session_on_normal_completion():
+    """防回归: 未停止的正常完成必须照常 release 清理会话。"""
+    agent = _make_stop_test_agent()
+
+    outputs = await _run_agent_with_stream_complete(
+        agent, get_default_agent_config(), "normal-complete"
+    )
+
+    assert outputs  # 流正常完成,有输出帧
+    assert not any('"event": "error"' in item for item in outputs)
+    agent.agent.release_session.assert_called_once()
+    agent._release_checkpointer_session.assert_called_once()
+
+
 # 测试用例5: agent_config 参数验证
 wrong_agent_config = Config().agent_config.model_dump()
 wrong_agent_config["outliner_max_section_num"] = -1

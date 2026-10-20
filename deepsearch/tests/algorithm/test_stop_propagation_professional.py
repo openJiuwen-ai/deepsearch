@@ -22,6 +22,7 @@ import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent import stop_control
 from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    STOP_REQUESTED_MARKER,
     StopRequested,
     clear_stop,
     gather_results_with_stop,
@@ -585,3 +586,840 @@ async def test_webpage_enrichment_stop_cancels_slow_fetch_sibling(monkeypatch):
 
     assert time.monotonic() - started < 10
     assert completed == []
+
+
+# ---------------------------------------------------------------------------
+# 实机事故 2026-10-20：professional 模式调研链路 retry 循环吞停止
+# ---------------------------------------------------------------------------
+
+PLANNER_MODULE = "openjiuwen_deepsearch.algorithm.query_understanding.planner"
+OUTLINER_MODULE = "openjiuwen_deepsearch.algorithm.query_understanding.outliner"
+INTERPRETER_MODULE = "openjiuwen_deepsearch.algorithm.query_understanding.interpreter"
+OMR_MODULE = "openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router"
+IR_MODULE = "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition"
+GB_MODULE = (
+    "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder"
+)
+IC_MODULE = (
+    "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector"
+)
+SM_MODULE = "openjiuwen_deepsearch.algorithm.source_trace.source_matcher"
+CA_MODULE = "openjiuwen_deepsearch.algorithm.source_trace.content_analyzer"
+
+
+def _fake_llm_registry(monkeypatch, module: str):
+    """打桩模块级 llm_context，避免依赖真实 contextvar 注册表。"""
+    monkeypatch.setattr(
+        module + ".llm_context", SimpleNamespace(get=lambda: {"mock_llm": object()})
+    )
+
+
+@pytest.mark.asyncio
+async def test_planner_retry_stop_not_swallowed_as_error_msg(monkeypatch):
+    """实机事故铁证路径：planner retry 循环遇停止必须立即上抛，
+    不得烧完 3 次重试预算后把停止写入 error_msg 数据"正常"返回。"""
+    _fake_llm_registry(monkeypatch, PLANNER_MODULE)
+    monkeypatch.setattr(PLANNER_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    monkeypatch.setattr(PLANNER_MODULE + ".build_runtime_api_tools", lambda *a, **k: [])
+    monkeypatch.setattr(
+        PLANNER_MODULE + ".merge_runtime_api_tools", lambda tools, extra: tools
+    )
+    invoke = _stop_mock()
+    monkeypatch.setattr(PLANNER_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.query_understanding.planner import (
+        Planner,
+        PlannerConfig,
+    )
+
+    planner = Planner(PlannerConfig(max_retry_num=3))
+    with pytest.raises(StopRequested):
+        await planner.generate_plan({"section_idx": 1, "plan_executed_num": 0})
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_outliner_stop_not_swallowed_as_error_msg(monkeypatch):
+    """大纲生成 retry 循环遇停止必须上抛，不得降级为 error_msg 数据返回。"""
+    _fake_llm_registry(monkeypatch, OUTLINER_MODULE)
+    monkeypatch.setattr(OUTLINER_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    monkeypatch.setattr(OUTLINER_MODULE + ".build_runtime_api_tools", lambda *a, **k: [])
+    monkeypatch.setattr(
+        OUTLINER_MODULE + ".merge_runtime_api_tools", lambda tools, extra: tools
+    )
+    invoke = _stop_mock()
+    monkeypatch.setattr(OUTLINER_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
+
+    outliner = Outliner("mock_llm", "outliner")
+    with pytest.raises(StopRequested):
+        await outliner.generate_outline({"section_num": 5})
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_query_interpreter_stop_not_swallowed_as_exception_info(monkeypatch):
+    """问题澄清生成遇停止必须上抛，不得降级为 exception_info 数据返回。"""
+    _fake_llm_registry(monkeypatch, INTERPRETER_MODULE)
+    monkeypatch.setattr(INTERPRETER_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(INTERPRETER_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.query_understanding.interpreter import (
+        query_interpreter,
+    )
+
+    with pytest.raises(StopRequested):
+        await query_interpreter({"query": "q", "llm_model_name": "mock_llm"})
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_outline_mode_router_stop_not_defaulted_to_parallel(monkeypatch):
+    """大纲模式路由遇停止必须上抛，不得静默降级为 parallel 默认模式。"""
+    _fake_llm_registry(monkeypatch, OMR_MODULE)
+    invoke = _stop_mock()
+    monkeypatch.setattr(OMR_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
+        route_outline_execution_method,
+    )
+
+    with pytest.raises(StopRequested):
+        await route_outline_execution_method("研究问题", "mock_llm")
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_intent_recognition_stop_not_swallowed_as_fallback(monkeypatch):
+    """意图识别遇停止必须上抛，不得降级为 _default_fallback 数据返回。"""
+    async def _stop_intent(*args, **kwargs):
+        raise _STOP
+
+    monkeypatch.setattr(IR_MODULE + "._invoke_llm_for_intent", _stop_intent)
+
+    from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
+        classify_and_recognize_intent,
+    )
+
+    with pytest.raises(StopRequested):
+        await classify_and_recognize_intent(
+            {"original_query": "研究主题", "llm_model_name": "mock_llm"}
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_cls,method,args", [
+    ("GenerateQueryNode", "_invoke_llm_with_retry", ([], 1, "t", 3)),
+    ("SupervisorNode", "_invoke_llm_with_retry", ([], 1, "t", 3)),
+])
+async def test_graph_builder_retry_stop_not_swallowed_as_fallback(
+    monkeypatch, node_cls, method, args
+):
+    """collector 子图 LLM retry 循环遇停止必须上抛，不得降级为
+    fallback 查询列表 / Reflection(is_sufficient=True) 等正常返回。"""
+    invoke = _stop_mock()
+    monkeypatch.setattr(GB_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    import importlib
+
+    gb = importlib.import_module(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder"
+    )
+    node = getattr(gb, node_cls)()
+    node.llm = object()
+    with pytest.raises(StopRequested):
+        await getattr(node, method)(*args)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_node_retry_stop_not_swallowed(monkeypatch):
+    """SummaryNode retry 循环遇停止必须上抛，不得降级为空 Summary。"""
+    invoke = _stop_mock()
+    monkeypatch.setattr(GB_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import (
+        SummaryNode,
+    )
+
+    node = SummaryNode()
+    node.llm = object()
+    with pytest.raises(StopRequested):
+        await node._invoke_llm_with_retry([], {"section_idx": 1, "step_title": "t"}, [])
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_info_retrieval_retry_stop_not_swallowed(monkeypatch):
+    """InfoRetrievalNode retry 循环遇停止必须上抛，不得降级为 None 继续。"""
+    invoke = _stop_mock()
+    monkeypatch.setattr(IC_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
+        InfoRetrievalNode,
+    )
+
+    node = InfoRetrievalNode()
+    node.llm = object()
+    with pytest.raises(StopRequested):
+        await node._invoke_llm_with_retry([], [], {"section_idx": 1, "step_title": "t"})
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_match_sources_stop_not_swallowed_as_empty_list(monkeypatch):
+    """溯源匹配遇停止必须上抛：降级为空列表会让 source_tracer 正常返回，
+    绕过 SourceTracerNode 的节点级停止穿透。"""
+    _fake_llm_registry(monkeypatch, SM_MODULE)
+    invoke = _stop_mock()
+    monkeypatch.setattr(SM_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.source_trace.source_matcher import match_sources
+
+    with pytest.raises(StopRequested):
+        await match_sources(
+            ["待溯源句"],
+            {"web": [{"title": "标题", "content": "内容"}]},
+            10,
+            "mock_llm",
+        )
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_recognize_content_to_cite_stop_not_swallowed(monkeypatch):
+    """引用内容识别遇停止必须上抛，不得降级为空列表。"""
+    _fake_llm_registry(monkeypatch, CA_MODULE)
+    invoke = _stop_mock()
+    monkeypatch.setattr(CA_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.source_trace.content_analyzer import (
+        recognize_content_to_cite,
+    )
+
+    with pytest.raises(StopRequested):
+        await recognize_content_to_cite("报告正文", 0.8, "mock_llm")
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_sub_report_visualization_stop_not_swallowed():
+    """三层连续吞链第一层：generate_sub_report 可视化段遇停止必须上抛，
+    不得降级为 visualization_result=[] 继续写报告。"""
+    from openjiuwen_deepsearch.algorithm.report.report import Reporter
+
+    reporter = Reporter.__new__(Reporter)
+    reporter._get_background_knowledge_contents = lambda x: []
+    reporter._prepare_evidence = AsyncMock(return_value=(True, None, []))
+    reporter._generate_outline_with_retry = AsyncMock(return_value=(True, None))
+    reporter._generate_content_for_visualization = _stop_mock()
+
+    current_inputs = {
+        "passages": ["p"],
+        "visualization_enable": True,
+        "max_generate_retry_num": 3,
+        "section_idx": 1,
+    }
+    with pytest.raises(StopRequested):
+        await reporter.generate_sub_report(current_inputs)
+    assert reporter._generate_content_for_visualization.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_post_process_subsection_visualization_stop_not_swallowed():
+    """三层连续吞链第二层：可视化插图段遇停止必须上抛，
+    不得"警告后使用原内容继续"。"""
+    from openjiuwen_deepsearch.algorithm.report.report import Reporter
+
+    reporter = Reporter.__new__(Reporter)
+    reporter._clean_internal_callback_labels = lambda s: s
+    reporter._contains_mermaid_source = lambda s: False
+    reporter._insert_visualization = _stop_mock()
+
+    current_inputs = {
+        "sub_report_content": "章节正文",
+        "visualization_enable": True,
+        "section_idx": 1,
+    }
+    with pytest.raises(StopRequested):
+        await reporter._post_process_subsection(current_inputs)
+    assert reporter._insert_visualization.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# init_state 停止传播：停止不得被包装为 AGENT_INIT_STATE_ERROR（那会遮蔽
+# 停止标记，外层按标记识别的兜底失效误删快照）。实机链路中 init_state_1
+# 子工作流节点抛出的 StopRequested 会被 openjiuwen vertex 层包装成
+# BaseError[100054]（reason=str(e) 保留标记但类型丢失），故裸异常与包装
+# 异常两种形态都必须原样上抛。
+# ---------------------------------------------------------------------------
+
+WF_MODULE = "openjiuwen_deepsearch.framework.openjiuwen.agent.workflow"
+
+
+def _make_search_agent_and_context(tmp_path):
+    from openjiuwen_deepsearch.config.config import AgentConfig, SearchWorkflowConfig
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepSearchAgent
+
+    agent = DeepSearchAgent()
+    agent_config = AgentConfig()
+    per_question_params = agent_config.search_workflow_per_question_params.model_copy(
+        update={
+            "max_workers": 1,
+            "retry_count_on_empty_action_space": 0,
+            "time_limit": 120,
+            "actions_explored_limit": 0,
+            "fail_limit": 0,
+            "answer_mode_top_k": 1,
+            "provide_best_guess": False,
+        }
+    )
+    run_context = agent._create_run_context(
+        agent_config=agent_config,
+        per_question_params=per_question_params,
+        search_config=SearchWorkflowConfig(),
+        query="capital question",
+        log_dir=str(tmp_path),
+        time_limit=120,
+        tool_map={},
+    )
+    return agent, run_context
+
+
+def _raise_in_init_state(monkeypatch, exc: BaseException):
+    """打桩 Runner.run_workflow：init_state_1 抛给定异常，其余工作流报错。"""
+
+    async def _fake_run_workflow(*, workflow, inputs):
+        if workflow == "init_state_1":
+            raise exc
+        raise AssertionError(f"unexpected workflow: {workflow}")
+
+    monkeypatch.setattr(f"{WF_MODULE}.Runner.run_workflow", _fake_run_workflow)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        pytest.param(
+            StopRequested("deepresearch task stopped by user"),
+            id="raw-stop-requested",
+        ),
+        pytest.param(
+            RuntimeError(
+                "[100054] component 'initialize_state' execute 'invoke' error, "
+                "reason='deepresearch task stopped by user', workflow='init_state'"
+            ),
+            id="vertex-wrapped-stop",
+        ),
+    ],
+)
+async def test_init_state_stop_not_wrapped_as_init_state_error(
+    monkeypatch, tmp_path, exc
+):
+    """init_state 遇停止（裸 / vertex 包装两形态）必须原样上抛，
+    不得包装为 AGENT_INIT_STATE_ERROR 遮蔽停止标记。"""
+    agent, run_context = _make_search_agent_and_context(tmp_path)
+    _raise_in_init_state(monkeypatch, exc)
+
+    with pytest.raises(type(exc)) as exc_info:
+        await agent._run_internal(run_context)
+    assert STOP_REQUESTED_MARKER in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_init_state_ordinary_error_still_wrapped(monkeypatch, tmp_path):
+    """防回归：普通异常（不含停止标记）仍照常包装为 AGENT_INIT_STATE_ERROR，
+    防止标记识别过度匹配把真错误当停止上抛。"""
+    from openjiuwen_deepsearch.common.exception import CustomValueException
+    from openjiuwen_deepsearch.common.status_code import StatusCode
+
+    agent, run_context = _make_search_agent_and_context(tmp_path)
+    _raise_in_init_state(monkeypatch, ValueError("boom"))
+
+    with pytest.raises(CustomValueException) as exc_info:
+        await agent._run_internal(run_context)
+    assert exc_info.value.error_code == StatusCode.AGENT_INIT_STATE_ERROR.code
+
+
+# ---------------------------------------------------------------------------
+# reviewer 核实 2026-10-21（P1 修订）：终检兜底无效，图引擎在
+# CompiledGraph._invoke 内部的 post_workflow_execute 正常完成分支中已清除
+# checkpoint，本层跳过 release 保不住已被删除的快照。修订方案：
+# 1. report 链摘要/结论段补穿透 + gather_with_stop 并发收口；
+# 2. ReporterNode 失败分支返回 END 前节点级停止检查（对照实验注入位置）；
+# 3. 第三档吞没点全量穿透。
+# ---------------------------------------------------------------------------
+
+RP_MODULE = "openjiuwen_deepsearch.algorithm.report.report"
+PARTS_MODULE = "openjiuwen_deepsearch.algorithm.report.report_parts"
+SSO_MODULE = "openjiuwen_deepsearch.algorithm.report.sub_section_outline"
+VI_MODULE = "openjiuwen_deepsearch.algorithm.report.visualization_insertion"
+EV_REPORT_MODULE = "openjiuwen_deepsearch.algorithm.report.evidence"
+MGN_MODULE = "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes"
+
+
+def _make_reporter():
+    from openjiuwen_deepsearch.algorithm.report.report import Reporter
+
+    reporter = Reporter.__new__(Reporter)
+    reporter._llm = object()
+    reporter.strip_leading_number = lambda s: s
+    return reporter
+
+
+@pytest.mark.asyncio
+async def test_generate_report_abstract_stop_propagates_and_cancels_conclusion():
+    """摘要/结论段停止穿透 + 并发收口：abstract 抛停止时 conclusion 孤儿
+    任务必须被取消（gather_with_stop），不得降级为 (False, error) 数据返回
+    ——那会让图引擎按正常完成清 checkpoint。"""
+    from openjiuwen_deepsearch.algorithm.report.report import Reporter
+
+    reporter = Reporter.__new__(Reporter)
+    reporter._set_context_variables = lambda x: True
+    reporter.gen_report_context = {"language": "zh-CN"}
+
+    async def _fake_process_sub_report():
+        return {
+            "sub_reports_content": "章节内容",
+            "refreshed_all_classified_contents": [],
+            "sub_references": "",
+        }
+
+    reporter._process_sub_report = _fake_process_sub_report
+    reporter._build_reporter_compact_context = lambda target: ""
+
+    completed = []
+
+    async def _stop_abstract(content):
+        raise _STOP
+
+    async def _slow_conclusion(content):
+        try:
+            await asyncio.sleep(0.25)
+        except asyncio.CancelledError:
+            raise
+        completed.append("conclusion")
+        return "结论"
+
+    reporter.generate_abstract = _stop_abstract
+    reporter.generate_conclusion = _slow_conclusion
+
+    with pytest.raises(StopRequested):
+        await reporter.generate_report({"language": "zh-CN"})
+    # conclusion 孤儿任务被取消，未跑完落地
+    assert completed == []
+
+
+@pytest.mark.asyncio
+async def test_write_subsection_reports_stop_not_swallowed(monkeypatch):
+    """章节正文生成遇停止必须上抛，不得降级为 retry 反馈数据
+    （那会驱动重试循环跑完整个报告阶段）。"""
+    monkeypatch.setattr(RP_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(RP_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    reporter = _make_reporter()
+    reporter._get_background_knowledge_contents = lambda x: []
+    reporter.gen_report_context = {}
+
+    current_inputs = {
+        "section_idx": 1,
+        "section_task": "1. 测试章节",
+        "sub_section_outline": "小节大纲",
+        "classified_content": [{"passage_text": "内容"}],
+        "language": "zh-CN",
+    }
+    with pytest.raises(StopRequested):
+        await reporter._write_subsection_reports(current_inputs)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_reporter_node_failed_report_with_stop_raises_before_end():
+    """ReporterNode 失败分支返回 END 前的节点级停止检查（reviewer 对照
+    实验注入位置）：停止标志置位时必须抛 StopRequested 走异常保存分支
+    （写入 reporter pending_node），不得返回 END 让图正常完成清快照。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
+        ReporterNode,
+    )
+    from types import SimpleNamespace
+
+    node = ReporterNode()
+    session = SimpleNamespace(
+        get_global_state=lambda key: None,
+        update_global_state=lambda state: None,
+    )
+    request_stop()
+    try:
+        with pytest.raises(StopRequested):
+            node._post_handle(
+                inputs={},
+                algorithm_output={"success": False, "report_str": "[x] mock error"},
+                session=session,
+                context=object(),
+            )
+    finally:
+        clear_stop()
+
+
+@pytest.mark.asyncio
+async def test_reporter_node_failed_report_without_stop_still_returns_end():
+    """防回归：未停止时报告失败仍照常返回 END（error 语义不变）。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
+        ReporterNode,
+    )
+    from types import SimpleNamespace
+
+    node = ReporterNode()
+    session = SimpleNamespace(
+        get_global_state=lambda key: None,
+        update_global_state=lambda state: None,
+    )
+    result = node._post_handle(
+        inputs={},
+        algorithm_output={"success": False, "report_str": "[x] mock error"},
+        session=session,
+        context=object(),
+    )
+    from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+
+    assert result["next_node"] == NodeId.END.value
+
+
+# --- 第三档吞没点：report_parts / sub_section_outline /
+# --- visualization_insertion / evidence / search 模式 3 节点
+
+
+@pytest.mark.asyncio
+async def test_sub_report_transaction_stop_not_swallowed(monkeypatch):
+    """过渡句生成遇停止必须上抛，不得降级为原 content 返回。"""
+    monkeypatch.setattr(PARTS_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(PARTS_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.report.report_parts import ReportPartsMixin
+
+    parts = ReportPartsMixin.__new__(ReportPartsMixin)
+    parts._llm = object()
+    current_inputs = {
+        "section_idx": 1,
+        "content": "正文",
+        "summary_prev": "上一章摘要",
+        "summary_next": "下一章摘要",
+    }
+    with pytest.raises(StopRequested):
+        await parts._add_sub_report_transaction(current_inputs)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sub_report_summary_stop_not_swallowed(monkeypatch):
+    """章节摘要生成遇停止必须上抛，不得降级为 (rs_success=False, "")。"""
+    monkeypatch.setattr(PARTS_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(PARTS_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.report.report_parts import ReportPartsMixin
+
+    parts = ReportPartsMixin.__new__(ReportPartsMixin)
+    parts._llm = object()
+    current_inputs = {"section_idx": 1, "sub_report_content": "章节正文"}
+    with pytest.raises(StopRequested):
+        await parts._generate_sub_report_summary(current_inputs)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sub_report_sidecar_stop_not_swallowed(monkeypatch):
+    """章节 sidecar 生成遇停止必须上抛，不得降级为 fallback sidecar /
+    进入重试循环烧完预算。"""
+    monkeypatch.setattr(PARTS_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(PARTS_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.report.report_parts import ReportPartsMixin
+
+    parts = ReportPartsMixin.__new__(ReportPartsMixin)
+    parts._llm = object()
+    current_inputs = {"section_idx": 1, "sub_report_content": "章节正文"}
+    with pytest.raises(StopRequested):
+        await parts._generate_sub_report_sidecar(current_inputs)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sub_section_outline_stop_not_swallowed(monkeypatch):
+    """小节大纲生成遇停止必须上抛，不得降级为纠错反馈数据返回。"""
+    monkeypatch.setattr(SSO_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(SSO_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.report.sub_section_outline import (
+        SubSectionOutlineMixin,
+    )
+
+    mixin = SubSectionOutlineMixin.__new__(SubSectionOutlineMixin)
+    mixin._llm = object()
+    mixin.strip_leading_number = lambda s: s
+    current_inputs = {
+        "section_idx": 1,
+        "section_task": "1. 测试章节",
+        "sub_section_core_content": [{"content": "核心信息"}],
+    }
+    with pytest.raises(StopRequested):
+        await mixin._generate_sub_section_outline(current_inputs)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_visualization_insert_plan_stop_not_swallowed(monkeypatch):
+    """可视化插图规划 LLM 调用遇停止必须上抛，不得降级为
+    (rs_success=False, 原报告) 返回。"""
+    monkeypatch.setattr(VI_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(VI_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.report.visualization_insertion import (
+        VisualizationInsertionMixin,
+        VisualizationInsertPlanContext,
+    )
+
+    mixin = VisualizationInsertionMixin.__new__(VisualizationInsertionMixin)
+    mixin._llm = object()
+    context = VisualizationInsertPlanContext(
+        numbered_report="1 正文",
+        visualization_data="[]",
+        current_inputs={"section_idx": 1, "language": "zh-CN"},
+        report_lines=["1 正文"],
+        invalid_rows=set(),
+        mermaid_map={},
+        original_report="正文",
+    )
+    with pytest.raises(StopRequested):
+        await mixin._request_visualization_insert_plan(context)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_section_rationales_stop_not_swallowed(monkeypatch):
+    """章节 rationale 生成遇停止必须上抛，不得进入重试循环
+    烧完 max_retries 次再降级返回。"""
+    monkeypatch.setattr(EV_REPORT_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(EV_REPORT_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.report.evidence import EvidenceMixin
+
+    mixin = EvidenceMixin.__new__(EvidenceMixin)
+    mixin._llm = object()
+    mixin.strip_leading_number = lambda s: s
+    current_inputs = {"section_idx": 1, "section_task": "1. 测试章节"}
+    with pytest.raises(StopRequested):
+        await mixin._generate_section_rationales(current_inputs)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_extract_batch_stop_not_swallowed(monkeypatch):
+    """passages 批次提取遇停止必须上抛，不得进入重试循环
+    烧完 max_retries 次再降级返回。"""
+    monkeypatch.setattr(EV_REPORT_MODULE + ".build_prompt_messages", lambda *a, **k: [])
+    invoke = _stop_mock()
+    monkeypatch.setattr(EV_REPORT_MODULE + ".ainvoke_llm_with_stats", invoke)
+
+    from openjiuwen_deepsearch.algorithm.report.evidence import EvidenceMixin
+
+    mixin = EvidenceMixin.__new__(EvidenceMixin)
+    mixin._llm = object()
+    batch_docs = [{"original_content": "文档内容"}]
+    section_ctx = {"section_idx": 1, "section_task": "任务", "section_description": ""}
+    with pytest.raises(StopRequested):
+        await mixin._extract_batch(batch_docs, 0, "rationales", section_ctx)
+    assert invoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_search_mode_nodes_stop_not_swallowed(monkeypatch):
+    """search 模式 3 节点（FindActionSpace / RunAction / ValidateNewState）
+    遇停止必须上抛，不得降级为 (success=False, END) fallback ——那会让
+    search 图正常完成到 END，引擎清 checkpoint，续跑从头重跑。"""
+    import importlib
+    from types import SimpleNamespace
+
+    mgn = importlib.import_module(MGN_MODULE)
+
+    session = SimpleNamespace(
+        get_global_state=lambda key: None,
+        update_global_state=lambda state: None,
+    )
+
+    # FindActionSpaceNode
+    monkeypatch.setattr(
+        mgn, "run_find_action_space", AsyncMock(side_effect=_STOP)
+    )
+    node = mgn.FindActionSpaceNode()
+    monkeypatch.setattr(
+        mgn.FindActionSpaceNode,
+        "_pre_handle",
+        lambda self, i, s, c: {"llm_config": {"general": {}}},
+    )
+    with pytest.raises(StopRequested):
+        await node._do_invoke(inputs={}, session=session, context=object())
+
+    # RunActionNode
+    monkeypatch.setattr(mgn, "run_action", AsyncMock(side_effect=_STOP))
+    node = mgn.RunActionNode()
+    monkeypatch.setattr(
+        mgn.RunActionNode,
+        "_pre_handle",
+        lambda self, i, s, c: {
+            "action_start_time": 0.0,
+            "config": {},
+            "llm_config": {"general": {}},
+            "validate_new_states": True,
+            "validate_answer": True,
+            "retrieval_settings": {},
+            "new_found_evidence_ids": [],
+            "retrieval_tool_only": False,
+            "llm_budget": 10,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "messages": [],
+            "action": {},
+            "query": "q",
+            "state": {},
+        },
+    )
+    with pytest.raises(StopRequested):
+        await node._do_invoke(inputs={}, session=session, context=object())
+
+    # ValidateNewStateNode
+    monkeypatch.setattr(mgn, "run_validations", AsyncMock(side_effect=_STOP))
+    node = mgn.ValidateNewStateNode()
+    monkeypatch.setattr(
+        mgn.ValidateNewStateNode,
+        "_pre_handle",
+        lambda self, i, s, c: {
+            "config": {},
+            "validator_config": {},
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "new_states": [],
+            "query": "q",
+            "new_found_evidence_ids": [],
+            "answer": None,
+            "messages": [],
+            "mode": "state_creation",
+            "action": {"id": "a1", "state": {}},
+        },
+    )
+    with pytest.raises(StopRequested):
+        await node._do_invoke(inputs={}, session=session, context=object())
+
+
+# ---------------------------------------------------------------------------
+# 真实持久化契约（reviewer P1 修订要求）：引擎 post_workflow_execute 的
+# 异常保存 / 正常完成清快照语义，是"节点返回前抛 StopRequested 可续跑、
+# 吞成数据必回 stage1"机制成立的前提。直接对 agent-core
+# PersistenceCheckpointer 用真实 KV 存储断言该契约，防止上游重构
+# 静默破坏停止恢复机制。
+# ---------------------------------------------------------------------------
+
+
+class _DictKVStore:
+    """与 agent-core MockKVStore 等价的最小同步字典 KV 实现。"""
+
+    def __init__(self):
+        self._store = {}
+
+    async def set(self, key, value):
+        self._store[key] = value
+
+    async def get(self, key):
+        return self._store.get(key)
+
+    async def delete(self, key):
+        self._store.pop(key, None)
+
+    async def exclusive_set(self, key, value, expiry=None):
+        if key in self._store:
+            return False
+        self._store[key] = value
+        return True
+
+    async def exists(self, key):
+        return key in self._store
+
+    async def get_by_prefix(self, prefix):
+        return {k: v for k, v in self._store.items() if k.startswith(prefix)}
+
+    async def delete_by_prefix(self, prefix, batch_size=None):
+        for k in [k for k in self._store if k.startswith(prefix)]:
+            del self._store[k]
+
+    async def mget(self, keys):
+        return [self._store.get(k) for k in keys]
+
+    async def batch_delete(self, keys, batch_size=None):
+        n = sum(1 for k in keys if k in self._store)
+        for k in keys:
+            self._store.pop(k, None)
+        return n
+
+    def pipeline(self):
+        from openjiuwen.core.foundation.store.base_kv_store import (
+            BasedKVStorePipeline,
+        )
+
+        async def execute(operations):
+            results = []
+            for operation in operations:
+                if operation[0] == "set":
+                    self._store[operation[1]] = operation[2]
+                    results.append(None)
+                elif operation[0] == "get":
+                    results.append(self._store.get(operation[1]))
+                elif operation[0] == "exists":
+                    results.append(operation[1] in self._store)
+            return results
+
+        return BasedKVStorePipeline(execute)
+
+
+@pytest.mark.asyncio
+async def test_persistence_checkpoint_contract_save_on_exception_clear_on_completion():
+    """契约：异常（StopRequested 上抛）→ workflow state 保存；
+    正常完成（无 interrupt）→ graph state 删除 + workflow storage 清空。
+    该契约是终检兜底降级为观测告警的依据：正常完成路径上引擎清理先于
+    workflow.py finally 终检，吞成数据的停止无法在 agent 层保住快照。"""
+    from openjiuwen.core.graph.store import create_state
+    from openjiuwen.core.session.checkpointer.persistence import (
+        PersistenceCheckpointer,
+    )
+    from openjiuwen.core.session.config.base import Config
+    from openjiuwen.core.session.internal.agent import AgentSession
+    from openjiuwen.core.session.internal.workflow import WorkflowSession
+
+    kv = _DictKVStore()
+    checkpointer = PersistenceCheckpointer(kv)
+    parent = AgentSession(session_id="stop-contract", config=Config())
+    session = WorkflowSession(
+        workflow_id="wf-stop", parent=parent, session_id="stop-contract"
+    )
+
+    # 异常路径：StopRequested 上抛 → 保存 workflow state 后原样重抛
+    with pytest.raises(StopRequested):
+        await checkpointer.post_workflow_execute(session, {}, _STOP)
+    assert await checkpointer._workflow_storage.exists(session) is True
+
+    # 正常完成路径（无 interrupt）→ graph state 删除 + workflow storage 清空
+    await checkpointer._graph_state.save(
+        "stop-contract", "wf-stop", create_state("wf-stop", 3, {"chan": "v"})
+    )
+    await checkpointer.post_workflow_execute(session, {}, None)
+    assert await checkpointer._workflow_storage.exists(session) is False
+    graph_keys = await kv.get_by_prefix("stop-contract")
+    assert graph_keys == {}

@@ -204,6 +204,10 @@ class ReportPartsMixin:
                     new = old + "\n" + str(llm_output.get("content") or "")
                     msg = content.replace(old, new, 1)
                     return msg
+        except StopRequested:
+            # 停止信号不得降级为原 content 返回（吞成局部失败会让上层把
+            # 半成品当正常产物继续走完报告阶段）。原样上抛走异常保存分支。
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 error_msg = (
@@ -349,6 +353,10 @@ class ReportPartsMixin:
                 else:
                     return dict(rs_success=True, result=llm_output.get("content"))
 
+        except StopRequested:
+            # 停止信号不得降级为 (rs_success=False, "") 返回（会驱动上层
+            # 重试/降级继续跑完报告阶段）。原样上抛走异常保存分支。
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 error_msg = (
@@ -425,6 +433,9 @@ class ReportPartsMixin:
                 ),
                 1,
             )
+        except StopRequested:
+            # 停止信号不得降级为 fallback sidecar 返回。原样上抛走异常保存分支。
+            raise
         except Exception as error:
             warning = (
                 f"section {section_idx} sidecar generation failed before retry: {error}; "
@@ -465,6 +476,10 @@ class ReportPartsMixin:
                     risk_points=self._normalize_sidecar_list(payload, "risk_points", section_idx),
                 )
                 return dict(sidecar=sidecar, summary=sidecar.chapter_summary, warning="")
+            except StopRequested:
+                # 停止信号不得进入 sidecar 重试循环（会继续调用 LLM 跑完
+                # retry_num 次再降级返回）。原样上抛走异常保存分支。
+                raise
             except Exception as error:
                 last_error = str(error)
                 if response_received:
@@ -567,6 +582,11 @@ class ReportPartsMixin:
                             EFFECT_SUB_REPORT_TAG,
                             current_inputs.get("section_idx", 1),
                         )
+            except StopRequested:
+                # 用户停止不降级为"使用原内容继续"（visualization_insertion
+                # 的停止穿透会被本分支吞掉，图"正常完成"并清除 checkpoint），
+                # 直接上抛走异常保存分支。
+                raise
             except Exception as e:
                 logger.warning(
                     "%s [write_subsection_reports] section_idx: [%s] "

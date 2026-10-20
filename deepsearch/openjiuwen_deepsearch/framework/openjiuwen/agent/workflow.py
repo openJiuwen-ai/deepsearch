@@ -118,6 +118,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
     STOP_REQUESTED_MARKER,
     StopRequested,
+    is_stop_requested,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent import WorkflowControllerConfig
 from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent.workflow_agent import WorkflowAgent
@@ -1000,6 +1001,23 @@ class DeepresearchAgent(BaseAgent):
             _zero_scholarly_search_secrets(session_agent_config)
 
             if is_all_end:
+                if is_stop_requested():
+                    # 观测告警（reviewer 核实 2026-10-21：此处兜底无效）：流
+                    # 正常结束但停止标志仍置位，说明存在停止吞没点把
+                    # StopRequested 降级成了数据、图"正常完成"走完。而图引擎
+                    # 在 CompiledGraph._invoke 内部的 post_workflow_execute 正常
+                    # 完成分支中已清除 workflow checkpoint（persistence.py
+                    # clear：_graph_state.delete + _workflow_storage.clear），
+                    # 本层跳过 release 也保不住已被删除的快照——终检兜底
+                    # 无法实现 checkpoint 保留。故此处只发 warning 供定位残余
+                    # 吞没点（各链路补齐穿透后预期永不触发），资源清理一律
+                    # 按正常完成路径执行。
+                    logger.warning(
+                        "[DeepResearchAgent.run] Stream completed but stop flag set "
+                        "(stop swallowed as data somewhere; engine already cleared "
+                        "checkpoint, resume would restart). "
+                        "Please investigate stop-swallowing path."
+                    )
                 zero_secret(
                     session_agent_config.get("web_search_engine_config", {}).get(
                         "search_api_key", bytearray("", encoding="utf-8")
@@ -1690,7 +1708,21 @@ class DeepSearchAgent(BaseAgent):
                 },
             )
             init_state_result = parse_and_validate_init_state_result(init_result)
+        except StopRequested:
+            # 用户停止不包装为 AGENT_INIT_STATE_ERROR：包装会遮蔽停止标记
+            # （str 不含 STOP_REQUESTED_MARKER），外层按标记识别的兜底失效、
+            # 误走 release_session 删快照。直接上抛保留停止语义。
+            raise
         except Exception as e:
+            # 停止识别不能只依赖 isinstance：init_state_1 子工作流节点抛出的
+            # StopRequested 会被 openjiuwen vertex 层包装成 BaseError[100054]
+            # （reason=str(e) 保留停止标记但类型丢失，链路无解包），此处必须
+            # 同步按标记识别重抛，否则重包装为 AGENT_INIT_STATE_ERROR 会遮蔽
+            # 标记，口径与 DeepresearchAgent.run 的标记识别一致。
+            if STOP_REQUESTED_MARKER in str(e) or isinstance(
+                getattr(e, "__cause__", None), StopRequested
+            ):
+                raise
             last_exception = e
             logger.error(f"[DeepSearchAgent] init_state error, failed all {max_tries} attempts: {e}")
 

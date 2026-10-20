@@ -50,6 +50,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_temporal_scope_prompt_context,
     build_exclusion_prompt_context,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    StopRequested,
+    gather_with_stop,
+)
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
     get_current_time,
@@ -207,21 +211,25 @@ class Reporter(
         abstract_context = self._build_reporter_compact_context("abstract")
         conclusion_context = self._build_reporter_compact_context("conclusion")
         sub_reports_content = sub_report_res.get("sub_reports_content")
-        abstract_task = asyncio.create_task(
-            self.generate_abstract(abstract_context or sub_reports_content)
-        )
-        conclusion_task = asyncio.create_task(
-            self.generate_conclusion(conclusion_context or sub_reports_content)
-        )
-
+        # 摘要/结论并行生成。gather_with_stop：任一任务抛 StopRequested 时，
+        # 先取消并等待孤儿任务退出再重抛，避免停止后仍有后台任务在 checkpoint
+        # 落盘后继续写 session 状态污染恢复快照。
         try:
-            abstract = await abstract_task
-            conclusion = await conclusion_task
+            abstract, conclusion = await gather_with_stop(
+                self.generate_abstract(abstract_context or sub_reports_content),
+                self.generate_conclusion(conclusion_context or sub_reports_content),
+            )
         except RetryError as retry_err:
             logger.error(
                 f"[generate_report] Report generation failed after retries: {retry_err}"
             )
             return False, _format_report_error(retry_err)
+        except StopRequested:
+            # 用户停止不允许降级为 (False, error) 数据返回——那会让图引擎按
+            # "正常完成"清除 checkpoint，续跑回 stage1 重头开始。必须原样
+            # 上抛走异常保存分支（写入 reporter pending_node），resume 时从
+            # 本节点续跑。
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 logger.error(
@@ -568,6 +576,11 @@ class Reporter(
                 current_inputs["visualization_result"] = visualization_result[
                     "visualization_content"
                 ]
+            except StopRequested:
+                # 用户停止不降级为 visualization_result=[] 跳过可视化继续写
+                # 报告（visualization.py 内部的停止穿透会被本分支吞掉，图
+                # "正常完成"并清除 checkpoint），直接上抛走异常保存分支。
+                raise
             except Exception as e:
                 logger.warning(
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}] "
@@ -800,6 +813,11 @@ class Reporter(
             if not pp_ok:
                 return dict(success=False, result=pp_err)
             return dict(success=True, result="success")
+        except StopRequested:
+            # 停止信号不得降级为 retry 反馈数据（会驱动重试循环继续跑完整个
+            # 报告阶段，图引擎按正常完成清 checkpoint）。原样上抛走异常保存
+            # 分支，resume 时从本节点续跑。
+            raise
         except Exception as e:
             current_inputs["sub_report_content"] = ""
             error_detail = (
