@@ -3,6 +3,7 @@ from unittest.mock import Mock, AsyncMock, patch
 
 import pytest
 
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerResult, create_plan_tool
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Plan, StepType
@@ -79,6 +80,41 @@ functioncall_result = {
 
 # 测试类
 class TestPlanner:
+    def test_planner_prompt_separates_stable_system_from_query_and_date(self):
+        messages = build_prompt_messages(
+            "planner",
+            {"query": "测试查询", "current_date": "2026-09-14"},
+        )
+
+        assert "测试查询" not in messages[0]["content"]
+        assert "2026-09-14" not in messages[0]["content"]
+        assert "测试查询" in messages[1]["content"]
+        assert "2026-09-14" in messages[1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_generate_plan_preserves_prior_messages_and_current_query(self, setup_planner):
+        prior = [{"role": "user", "content": "已有研究任务"}]
+        current_inputs = {
+            "messages": prior,
+            "query": "当前章节研究问题",
+            "language": "zh-CN",
+            "max_step_num": 3,
+            "plan_executed_num": 0,
+            "max_plan_executed_num": 3,
+        }
+
+        with patch(
+            "openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            return_value=functioncall_response,
+        ) as invoke:
+            await setup_planner.generate_plan(current_inputs)
+
+        prompt = invoke.await_args.kwargs["messages"]
+        assert prompt[1] is prior[0]
+        assert prompt[-1]["role"] == "user"
+        assert "当前章节研究问题" in prompt[-1]["content"]
+
     @pytest.fixture
     def mock_llm(self):
         return Mock()

@@ -70,6 +70,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 ## 文档入口
 
 - [查询理解](./algorithm/query-understanding.md)
+- [用户素材](./algorithm/user-materials.md)
 - [资料采集](./algorithm/research-collector.md)
 - [DeepSearch 搜索智能体](./algorithm/search-agent.md)
 - [报告生成](./algorithm/report-generation.md)
@@ -83,6 +84,8 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [用户反馈处理](./algorithm/user-feedback-processor.md)
 - [Agent 工厂与运行模式](./framework/agent-factory.md)
 - [报告研究主工作流](./framework/research-workflow.md)
+- [运行时 Metadata 注入器机制](./framework/metadata-injectors.md)
+- [Brief 大纲升级专业版报告](./framework/brief-outline-upgrade.md)
 - [DeepSearch 搜索子工作流](./framework/deepsearch-sub-workflows.md)
 - [章节推理与写作子工作流](./framework/section-reasoning-writing-sub-workflows.md)
 - [信息采集子图](./framework/info-collector-subgraph.md)
@@ -93,6 +96,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [LLM 模型槽位适配](./framework/llm-model-adaptation.md)
 - [搜索工具注册与运行时 API 工具](./framework/search-tool-registration.md)
 - [DeepSearch 网页抓取 Provider 注册](./framework/web-fetch-provider-registry.md)
+- [MCP 工具集成](./framework/mcp-integration.md)
 - [LLM 运行时封装](./llm/llm-runtime.md)
 - [LLM 调用辅助](./utils/llm-invocation-utils.md)
 - [日志与接口记录](./utils/logging.md)

@@ -80,6 +80,15 @@ class StatusCode(Enum):
         "Embedding dimension is not matched with the model, dimension: {dimension}, "
         "model: {model}, API HTTP status code: {status_code}.",
     )
+    PARAM_CHECK_ERROR_UPGRADE_METADATA_INVALID = (
+        200030,
+        "Parameter validation failed, upgrade metadata is invalid: {e}",
+    )
+    PARAM_CHECK_ERROR_UPGRADE_EXECUTION_METHOD_CONFLICT = (
+        200031,
+        "Upgrade run requires execution method '{required}', but got '{actual}'; "
+        "the workflow graph is fixed at agent construction and cannot switch at runtime",
+    )
 
     FILE_NOT_FOUND_ERROR_PROMPT = (200100, "Prompt file {name}.md not found.")
     APPLY_SYSTEM_PROMPT_FAILED = (200101, "Applying system prompt template with {name}.md failed")

@@ -47,10 +47,10 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_summary.md`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_report_summary/`
 
 主要测试：
 

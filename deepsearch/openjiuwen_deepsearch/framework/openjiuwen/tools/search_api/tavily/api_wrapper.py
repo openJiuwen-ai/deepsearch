@@ -99,7 +99,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         verify = self._get_ssl_verify_config()
 
         # Execute HTTP request
-        response = requests.post(api_url, json=params, verify=verify)
+        response = requests.post(api_url, json=params, verify=verify, timeout=30)
         response.raise_for_status()  # Raise exception for non-2xx status codes
 
         # Return parsed JSON response

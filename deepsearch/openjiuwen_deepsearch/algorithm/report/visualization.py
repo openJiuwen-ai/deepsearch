@@ -7,7 +7,7 @@ import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import (
     EFFECT_SUB_REPORT_TAG,
     MAX_CONCURRENT_VISUALIZATION_TASKS,
@@ -176,7 +176,8 @@ class VisualizationMixin:
         self,
         visualization_dict: dict,
         validation_error: str = "",
-        previous_records: str | None = None,
+        *,
+        retry_messages: list | None = None,
     ) -> dict:
         section_idx = visualization_dict.get("section_idx", 1)
         tmp_context = {
@@ -185,29 +186,14 @@ class VisualizationMixin:
             "desired_chart_type": visualization_dict.get("desired_chart_type", ""),
             "origin_content": visualization_dict.get("origin_content", ""),
         }
-        validation_error = (validation_error or "").strip()
-        if validation_error:
-            tmp_context["messages"] = [
-                dict(
-                    role="user",
-                    content=(
-                        "Previously extracted data did not pass validation: "
-                        f"{validation_error}\n"
-                        + (
-                            f"Previous extracted chart JSON: {previous_records}\n"
-                            if previous_records
-                            else ""
-                        )
-                        + "Do NOT reuse, copy, or edit the previous extracted data. "
-                        "Re-extract strictly from origin_content and output a fresh JSON."
-                    ),
-                )
-            ]
+        tmp_context["retry_feedback"] = (validation_error or "").strip()[:500]
 
+        llm_input = retry_messages
         try:
-            llm_input = apply_system_prompt(
-                "sub_section_visualization_content", tmp_context
-            )
+            if llm_input is None:
+                llm_input = build_prompt_messages(
+                    "sub_section_visualization_content", tmp_context
+                )
             if not LogManager.is_sensitive():
                 logger.debug(
                     "%s [generate_sub_section_visualization_content] section_idx: [%s] llm_input is %s",
@@ -248,7 +234,7 @@ class VisualizationMixin:
                 f"{error_msg}",
                 exc_info=True,
             )
-            return dict(rs_success=False, visualization_content=error_msg)
+            return dict(rs_success=False, visualization_content=error_msg, retry_messages=llm_input)
 
     async def _validate_chart_compliance(
         self,
@@ -261,7 +247,7 @@ class VisualizationMixin:
         payload = (extracted_chart_json or "").strip()
         for attempt in range(max_attempt_num):
             try:
-                llm_input = apply_system_prompt(
+                llm_input = build_prompt_messages(
                     "chart_compliance_validate",
                     dict(
                         extracted_chart_json=payload,
@@ -339,7 +325,7 @@ class VisualizationMixin:
         origin_text = (origin_content or "").strip()
         for attempt in range(max_attempt_num):
             try:
-                llm_input = apply_system_prompt(
+                llm_input = build_prompt_messages(
                     "chart_data_traceability_check",
                     dict(
                         extracted_chart_json=payload,
@@ -415,11 +401,15 @@ class VisualizationMixin:
         extract_ok = False
         extracted_obj = None
         validation_error = ""
-        previous_records: str | None = None
+        retry_messages = None
         for i in range(max_attempt_num):
+            retry_options = {"retry_messages": retry_messages} if retry_messages is not None else {}
             visualization_content = await self._extract_data_from_text(
-                visualization_dict, validation_error, previous_records
+                visualization_dict, validation_error, **retry_options
             )
+            retry_messages = visualization_content.get("retry_messages")
+            if retry_messages is not None:
+                continue
             if not LogManager.is_sensitive():
                 logger.debug("%s [process_visualization_task] Extract data: %s.", EFFECT_SUB_REPORT_TAG,
                              visualization_content)
@@ -432,13 +422,7 @@ class VisualizationMixin:
                     "sub_section_visualization_content"
                 ] = raw_payload
             if raw_payload == "{}":
-                validation_error = (
-                    "Previous output was empty JSON. If origin_content contains at "
-                    "least three traceable records for one metric, extract the best "
-                    "valid chart JSON instead of returning {}. Return {} only when "
-                    "no valid chartable dataset exists."
-                )
-                previous_records = raw_payload
+                validation_error = "EMPTY_CHART_JSON"
                 if i < max_attempt_num - 1:
                     logger.warning(
                         "%s [process_visualization_task] section_idx: [%s], "
@@ -456,11 +440,7 @@ class VisualizationMixin:
                 extracted_obj = json.loads(raw_payload)
             except Exception:
                 extracted_obj = None
-                validation_error = (
-                    "Previous output was not valid JSON. Output only one JSON object "
-                    "matching the required visualization schema, with no markdown or "
-                    "extra text."
-                )
+                validation_error = "INVALID_CHART_JSON"
             extract_ok = isinstance(
                 extracted_obj, dict
             ) and validate_visualization_extraction_schema(extracted_obj)
@@ -491,13 +471,7 @@ class VisualizationMixin:
                         if traceability_error
                         else ""
                     )
-                    validation_error += (
-                        "\nYou must only extract complete records where every field"
-                        "(category, value, unit) can be fully traced to the original content."
-                        " Do not invent, fabricate, or infer any data that does not"
-                        " have a clear corresponding description in the source."
-                    )
-                    previous_records = raw_payload or None
+
                     extract_ok = False
                     continue
                 compliance = await self._validate_chart_compliance(
@@ -508,7 +482,6 @@ class VisualizationMixin:
                 )
                 if compliance.get("valid", False):
                     validation_error = ""
-                    previous_records = None
                     break
                 compliance_error = (compliance.get("error_msg", "") or "").strip()
                 validation_error = (
@@ -516,14 +489,7 @@ class VisualizationMixin:
                     if compliance_error
                     else ""
                 )
-                validation_error += (
-                    "\nIf the issue is chart type mismatch, reselect image_type "
-                    "from the chart type rules based on the extracted records; "
-                    "do not rely on downstream code to rewrite image_type."
-                )
-                # Provide previous extracted JSON to help the next extraction fix issues,
-                # but explicitly forbid reuse/copying in the prompt message.
-                previous_records = raw_payload or None
+
                 logger.warning(
                     "%s [process_visualization_task] section_idx: [%s], "
                     "compliance check failed: %s",
@@ -534,11 +500,7 @@ class VisualizationMixin:
                 extract_ok = False
                 continue
             if not extract_ok and not validation_error:
-                validation_error = (
-                    "Previous output did not match the required visualization schema. "
-                    "Keep only traceable records from origin_content and output a "
-                    "single valid chart JSON, or {} if no valid chartable dataset exists."
-                )
+                validation_error = "CHART_SCHEMA_MISMATCH"
             logger.warning(
                 f"{EFFECT_SUB_REPORT_TAG} [process_visualization_task] section_idx: [{section_idx}], "
                 f"Warning: Extract data from text on attempt {i + 1}/{max_attempt_num}. retry ..."
@@ -708,7 +670,7 @@ class VisualizationMixin:
             "language": visualization_dict.get("language", "zh-CN"),
             "records_json": records_json,
         }
-        normalize_input = apply_system_prompt(
+        normalize_input = build_prompt_messages(
             "sub_section_visualization_normalize_units", normalize_context
         )
         for j in range(max_attempt_num):
@@ -906,14 +868,23 @@ class VisualizationMixin:
     def _select_visualization_from_classified_content(
         classified_content_for_visualization,
     ):
+        """筛选满足 data_density 阈值的 fulltext 文档作为图表候选。
+
+        只考虑 fulltext（is_fulltext=True）文档，不考虑段落级内容。
+        优先 dd >= 0.9；若为空则回退 dd >= 0.8。
+        fulltext 不做数量限制（上游已限制 top_n=10）。
+        """
         selected_visualizations = []
         fallback_visualizations = []
         for item in classified_content_for_visualization:
             if not isinstance(item, dict):
+                continue
+            if not item.get("is_fulltext", False):
                 continue
             dd = safe_float(item.get("data_density"), default=-1.0)
             if dd >= 0.9:
                 selected_visualizations.append(item)
             elif dd >= 0.8:
                 fallback_visualizations.append(item)
+
         return selected_visualizations or fallback_visualizations

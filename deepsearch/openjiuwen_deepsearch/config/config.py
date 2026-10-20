@@ -37,8 +37,9 @@ class WebSearchEngineConfig(BaseModel):
         "jina",
         "perplexity",
         "serper",
+        "agc_ainetworking",
     ] = Field(default="tavily",
-                                                                                         description="联网增强引擎名称")
+                                                                                          description="联网增强引擎名称")
     search_api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="联网增强引擎调用密钥")
     search_url: str = Field(default="", description="联网增强引擎调用地址")
     max_web_search_results: int = Field(default=5, ge=1, le=10, description="最大搜索结果数量")
@@ -346,6 +347,16 @@ class SearchWorkflowConfig(BaseModel):
     state_creation_agent: StateCreationAgentConfig = Field(default_factory=StateCreationAgentConfig)
 
 
+class McpServerRuntimeConfig(BaseModel):
+    """MCP server 运行时配置（CLI 直接传入，Server 经 DB 查询后拼装）"""
+    server_name: str = Field(..., description="MCP server 名称")
+    server_url: str = Field(..., description="MCP server URL")
+    transport_type: str = Field(default="streamable_http", description="传输类型")
+    headers: dict = Field(default_factory=dict, description="请求头")
+    timeout: float = Field(default=30.0, description="超时（秒）")
+    type: str = Field(default="search", description="用途类型")
+
+
 class AgentConfig(BaseModel):
     """
     Agent配置类
@@ -365,14 +376,29 @@ class AgentConfig(BaseModel):
         default=None,
         description="报告类型；None 时由意图识别与澄清机制决定",
     )
+    user_materials_enabled: bool = Field(
+        default=False,
+        description="是否启用用户素材（已有信息素材）能力；关闭时即使传入 user_materials 也会被忽略",
+    )
+    user_materials: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="用户提供的原始已有信息素材（UserMaterial dict 列表），由 StartNode 写入 search_context.user_materials；"
+                    "校验、去重、摘要和相关性结果写入 search_context.material_analysis",
+    )
     coverage_rule_block_enable: bool = Field(
         default=True,
         description="子报告大纲阶段规则版覆盖证据（coverage passages）开关，"
                     "关闭后大纲证据仅含条目摘要块",
     )
+    exclusion_constraint_enable: bool = Field(
+        default=False,
+        description="子报告禁引约束总开关（默认关）。开启后启用："
+                    "采集层文献 ID 交集匹配 + 镜像后缀词表、写作层 Excluded Sources 注入、"
+                    "intent 层 include_url/target_papers 去重。关闭时行为等同 baseline",
+    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
-        default=5,
+        default=10,
         ge=1,
         le=OUTLINER_SECTION_NUM_MAX,
         description=f"大纲章节数量，取值范围:[1,{OUTLINER_SECTION_NUM_MAX}]",
@@ -415,6 +441,7 @@ class AgentConfig(BaseModel):
     )
     search_workflow_per_question_params: PerQuestionParams = Field(default_factory=PerQuestionParams)
     search_workflow_milvus_config: MilvusConfig = Field(default_factory=MilvusConfig)
+    mcp_servers: list[McpServerRuntimeConfig] = Field(default_factory=list, description="MCP server 配置列表")
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # 联网增强引擎 QPS 流控配置

@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from openjiuwen.core.context_engine.base import ModelContext
-from openjiuwen.core.foundation.llm.schema.message import UserMessage
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
+    PromptBuildOptions,
+    build_prompt_messages,
+)
 from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_call, \
     process_tool_result, remove_duplicate_items
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
@@ -51,7 +53,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, mcp_tool_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 max_retries = Config().service_config.info_collector_max_retry_num
@@ -180,6 +182,7 @@ class InfoRetrievalNode(BaseNode):
             plan_idx=session.get_global_state("collector_context.plan_idx"),
             step_idx=session.get_global_state("collector_context.step_idx"),
             step_title=step_title,
+            language=session.get_global_state("collector_context.language"),
             research_loop_count=session.get_global_state("collector_context.research_loop_count"),
             max_research_loops=session.get_global_state("collector_context.max_research_loops"),
             search_method=session.get_global_state("config.info_collector_search_method"),
@@ -188,7 +191,18 @@ class InfoRetrievalNode(BaseNode):
             api_tools_config=session.get_global_state("config.api_tools_config") or {},
             research_intent=session.get_global_state("collector_context.research_intent") or {},
             evidence_ledger=session.get_global_state("collector_context.evidence_ledger") or {},
+            exclusion_constraint_enable=bool(
+                session.get_global_state("config.exclusion_constraint_enable")
+            ),
         )
+        mcp_tools = []
+        try:
+            mcp_bundle = mcp_tool_context.get()
+            if mcp_bundle is not None:
+                mcp_tools = mcp_bundle.get_tools_by_type("search")
+        except LookupError:
+            pass
+        state["mcp_tools"] = mcp_tools
         return state
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -215,6 +229,7 @@ class InfoRetrievalNode(BaseNode):
                 "plan_idx": state.get("plan_idx", 0),
                 "step_idx": state.get("step_idx", 0),
                 "step_title": state.get("step_title", ""),
+                "language": state.get("language", "zh-CN"),
                 "max_tool_call_turns_per_query": state.get("max_tool_call_turns_per_query", 2),
                 "search_method": state.get("search_method", "web"),
                 "web_search_engine_name": retrieval_query.primary_engine or state.get("web_search_engine_name", None),
@@ -222,6 +237,12 @@ class InfoRetrievalNode(BaseNode):
                 "local_search_engine_name": state.get("local_search_engine_name", None),
                 "api_tools_config": state.get("api_tools_config", {}),
                 "research_intent": state.get("research_intent", {}),
+                # 禁引约束总开关必须随 sub_state 下传，否则 _collector_main 的
+                # agent_input 读到 False，过滤函数 enable_exclusion 永远 off。
+                "exclusion_constraint_enable": state.get("exclusion_constraint_enable", False),
+                # MCP 工具必须随 sub_state 下传，否则 _collector_main /
+                # _prepare_collector_tool 读到 []，采集模型看不到 mcp{server}__{tool}。
+                "mcp_tools": state.get("mcp_tools", []),
             }
             sub_task = self._run_retrieval_query(sub_state, retrieval_query)
             tasks.append(sub_task)
@@ -513,20 +534,23 @@ class InfoRetrievalNode(BaseNode):
 
         query = state.get("search_query", step_title)
         agent_input = {
-            "messages": [UserMessage(content=f"Now deal with the Query:\n[Query]: {query}\n\n"), ],
+            "messages": [],
             "remaining_steps": None,
             "web_page_search_record": [],
             "local_text_search_record": [],
             "other_tool_record": [],
+            "language": state.get("language", "zh-CN"),
             "research_intent": state.get("research_intent", {}),
+            "exclusion_constraint_enable": state.get("exclusion_constraint_enable", False),
         }
 
-        tool_list, tool_dict = self._prepare_collector_tool(state)
+        tool_list, tool_dict = await self._prepare_collector_tool(state)
 
         # 当 collector_tools 为空且 search_method 为 web/local 时，直接调用对应 search tool
         collector_tools = state.get("api_tools_config", {}).get("collector_tools", [])
+        mcp_tools = state.get("mcp_tools", [])
         search_method = state.get("search_method", "web")
-        if not collector_tools and search_method in ("web", "local"):
+        if not collector_tools and not mcp_tools and search_method in ("web", "local"):
             # 直接调用对应 search tool
             tool_name = f"{search_method}_search_tool"
             if tool_name not in tool_dict:
@@ -907,14 +931,34 @@ class InfoRetrievalNode(BaseNode):
                             f"Collecting info for query: {query} | "
                             f"[InfoRetrievalNode] Current step index: {i + 1}")
             agent_input["remaining_steps"] = max_tool_call_turns_per_query - i
-            tool_prompt = apply_system_prompt("collector", agent_input)
+            prompt_context = {
+                **agent_input,
+                "query": query if i == 0 else "",
+            }
+            prompt_context.pop("messages", None)
+            tool_prompt = build_prompt_messages(
+                "collector",
+                prompt_context,
+                options=PromptBuildOptions(prior_messages=agent_input["messages"]),
+            )
+            current_user = tool_prompt[-1]
 
             response = await self._invoke_llm_with_retry(tool_prompt, tool_list, state)
             tool_calls = response.get("tool_calls", []) if response else []
             executed_tool_call = tool_calls[-1] if tool_calls else None
-            agent_input = await self._process_llm_response(response, agent_input, tool_dict, state)
             if not tool_calls:
                 break
+            if (
+                    not isinstance(executed_tool_call, dict)
+                    or executed_tool_call.get("name") not in tool_dict
+            ):
+                logger.warning(
+                    "section_idx: %s | [InfoRetrievalNode] Collector returned an unavailable tool call.",
+                    section_idx,
+                )
+                break
+            agent_input["messages"].append(current_user)
+            agent_input = await self._process_llm_response(response, agent_input, tool_dict, state)
             if (
                     executed_tool_call.get("name") == "web_search_tool"
                     and "web_search_tool" in tool_dict
@@ -953,7 +997,7 @@ class InfoRetrievalNode(BaseNode):
 
         return doc_infos, source_store.to_dict()
 
-    def _prepare_collector_tool(self, state: dict):
+    async def _prepare_collector_tool(self, state: dict):
         """准备信息收集器工具."""
         search_method = state.get("search_method", "web")
         web_search_tool = create_web_search_tool()
@@ -961,6 +1005,7 @@ class InfoRetrievalNode(BaseNode):
         api_tools = build_runtime_api_tools(
             state.get("api_tools_config", {}).get("collector_tools", []),
         )
+        mcp_tools = state.get("mcp_tools", [])
 
         tool_dict = {}
         tool_list = []
@@ -983,5 +1028,9 @@ class InfoRetrievalNode(BaseNode):
         for api_tool in api_tools:
             tool_list.append(api_tool.card.tool_info())
             tool_dict[api_tool.card.name] = api_tool
+
+        for mcp_tool in mcp_tools:
+            tool_list.append(mcp_tool.card.tool_info())
+            tool_dict[mcp_tool.card.name] = mcp_tool
 
         return tool_list, tool_dict

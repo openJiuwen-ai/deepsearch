@@ -277,6 +277,51 @@ class TestSourceTracer:
         result = SourceTracer.transform_search_record(classified_content)
         assert result == expected_result
 
+    @staticmethod
+    def test_transform_search_record_prefers_non_blank_passage_text():
+        """全局溯源应使用 passage 文本，避免重复传入父文档全文。"""
+        classified_content = [
+            {
+                'url': 'http://example.com/passage',
+                'title': 'Passage',
+                'passage_text': 'Focused passage',
+                'original_content': 'Entire parent document',
+            },
+            {
+                'url': 'http://example.com/blank',
+                'title': 'Blank passage',
+                'passage_text': '  \n',
+                'original_content': 'Fallback document',
+            },
+            {
+                'url': 'http://example.com/passage-only',
+                'title': 'Passage only',
+                'passage_text': 'Standalone passage',
+            },
+        ]
+
+        result = SourceTracer.transform_search_record(classified_content)
+
+        assert result == {
+            'search_record': [
+                {
+                    'url': 'http://example.com/passage',
+                    'title': 'Passage',
+                    'content': 'Focused passage',
+                },
+                {
+                    'url': 'http://example.com/blank',
+                    'title': 'Blank passage',
+                    'content': 'Fallback document',
+                },
+                {
+                    'url': 'http://example.com/passage-only',
+                    'title': 'Passage only',
+                    'content': 'Standalone passage',
+                },
+            ]
+        }
+
     # ========== _filter_meaningful_sentences 测试 ==========
 
     @staticmethod

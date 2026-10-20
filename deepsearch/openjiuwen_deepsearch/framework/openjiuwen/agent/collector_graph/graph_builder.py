@@ -17,7 +17,7 @@ from openjiuwen.core.workflow.components.flow.start_comp import Start
 from openjiuwen.core.workflow.workflow import Workflow
 from pydantic import BaseModel, Field, model_validator
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     build_summary_evidence_pack,
     build_supervisor_evidence_table,
@@ -401,6 +401,7 @@ class StartNode(Start):
             evidence_ledger=target_tracking_ledger,
             report_type=inputs.get("report_type", "professional"),
             research_intent=inputs.get("research_intent") or {},
+            material_evidence=inputs.get("material_evidence") or [],
         )
         session.update_global_state({"collector_context": collector_context.model_dump()})
 
@@ -475,7 +476,7 @@ class GenerateQueryNode(BaseNode):
             engine_name=getattr(_web_config, "search_engine_name", "") or "",
             scholarly_enabled=_scholarly_search_is_available(),
         ))
-        formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
+        formatted_prompt = build_prompt_messages("collector_gen_query", agent_input)
 
         result: SearchQueryList = await self._invoke_llm_with_retry(
             formatted_prompt,
@@ -591,6 +592,7 @@ class SupervisorNode(BaseNode):
         new_doc_infos_current_loop = session.get_global_state("collector_context.new_doc_infos_current_loop")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         research_intent = session.get_global_state("collector_context.research_intent") or {}
+        material_evidence = session.get_global_state("collector_context.material_evidence") or []
         research_loop_count = session.get_global_state("collector_context.research_loop_count")
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
@@ -602,6 +604,7 @@ class SupervisorNode(BaseNode):
                     new_doc_infos_current_loop=new_doc_infos_current_loop,
                     evidence_ledger=evidence_ledger,
                     research_intent=research_intent,
+                    material_evidence=material_evidence,
                     research_loop_count=research_loop_count)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -668,6 +671,14 @@ class SupervisorNode(BaseNode):
             "step_description": step_description,
             "ledger_brief": ledger_brief,
             "evidence_table": evidence_table,
+            "material_evidence": [
+                {
+                    "material_id": item.get("material_id", ""),
+                    "title": item.get("title", ""),
+                    "summary": (item.get("original_content", "") or "")[:1200],
+                }
+                for item in state.get("material_evidence", [])
+            ],
             "max_search_query_count": max_search_query_count,
             "language": state.get("language", "zh-CN"),
             "report_type": report_type,
@@ -678,7 +689,7 @@ class SupervisorNode(BaseNode):
             engine_name=getattr(_web_config, "search_engine_name", "") or "",
             scholarly_enabled=_scholarly_search_is_available(),
         ))
-        formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
+        formatted_prompt = build_prompt_messages("collector_supervisor", agent_input)
 
         result: Reflection = await self._invoke_llm_with_retry(
             formatted_prompt,
@@ -916,7 +927,7 @@ class SummaryNode(BaseNode):
             "ledger_brief": evidence_brief,
             "missing_evidence": current_ledger.missing_evidence,
         }
-        formatted_prompt = apply_system_prompt("collector_final", agent_input)
+        formatted_prompt = build_prompt_messages("collector_final", agent_input)
 
         result: Summary = await self._invoke_llm_with_retry(formatted_prompt, state, doc_infos)
 

@@ -15,6 +15,7 @@ Cache is keyed by ``collection`` name. A hit requires matching
 index to rebuild.
 """
 
+import io
 import json
 import pickle
 import re
@@ -37,16 +38,75 @@ BM25_DIRNAME = "bm25"
 
 _SAFE_COLLECTION_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
+_GRAPH_TYPES_MODULE = "openjiuwen_codesearch.retropus.graph.graph_types"
+
+# Globals a well-formed knowledge-graph dump is allowed to reference. Anything
+# else is rejected, so a tampered ``kg.pkl`` cannot execute arbitrary code.
+_BUILTIN_PICKLE_NAMES = (
+    "bool",
+    "bytes",
+    "dict",
+    "float",
+    "frozenset",
+    "int",
+    "list",
+    "set",
+    "str",
+    "tuple",
+)
+
+_ALLOWED_PICKLE_GLOBALS = frozenset(
+    {("builtins", name) for name in _BUILTIN_PICKLE_NAMES}
+    | {
+        (_GRAPH_TYPES_MODULE, "KnowledgeGraphNode"),
+        (_GRAPH_TYPES_MODULE, "KnowledgeGraphEdge"),
+        (_GRAPH_TYPES_MODULE, "KnowledgeGraphEdgeType"),
+        (_GRAPH_TYPES_MODULE, "FileNode"),
+        (_GRAPH_TYPES_MODULE, "ASTNode"),
+        (_GRAPH_TYPES_MODULE, "TextNode"),
+    }
+)
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """Unpickler that only resolves known-safe globals."""
+
+    def find_class(self, module: str, name: str):
+        if (module, name) not in _ALLOWED_PICKLE_GLOBALS:
+            raise pickle.UnpicklingError(f"forbidden global: {module}.{name}")
+        return super().find_class(module, name)
+
+
+def _load_restricted_pickle(data: bytes):
+    return _RestrictedUnpickler(io.BytesIO(data)).load()
+
 
 def safe_collection_name(collection: str) -> str:
-    """Map a collection name to a single path segment."""
+    """Map a collection name to a single path segment.
+
+    ``"."`` and ``".."`` contain no characters that ``_SAFE_COLLECTION_RE``
+    rewrites, so they would otherwise survive as directory names and let the
+    resolved path escape ``index_dir`` (``index_dir / ".."`` is the *parent*
+    of the index root, which later gets ``shutil.rmtree``'d).
+    """
     cleaned = _SAFE_COLLECTION_RE.sub("_", (collection or "").strip())
+    if cleaned in (".", ".."):
+        return "default"
     return cleaned or "default"
 
 
 def collection_index_dir(index_dir: str | Path, collection: str) -> Path:
-    """Directory that holds one collection's Retropus dump."""
-    return Path(index_dir).expanduser().resolve() / safe_collection_name(collection)
+    """Directory that holds one collection's Retropus dump.
+
+    Always contained in ``index_dir``; raises if it would not be.
+    """
+    root = Path(index_dir).expanduser().resolve()
+    target = root / safe_collection_name(collection)
+    if not target.is_relative_to(root) or target == root:
+        raise ValueError(
+            f"collection name escapes the index root: {collection!r}"
+        )
+    return target
 
 
 def config_fingerprint(config: RetropusSearchAgentConfig) -> dict[str, Any]:
@@ -85,9 +145,12 @@ def dump_knowledge_graph(kg: KnowledgeGraph, path: Path) -> None:
 
 
 def load_knowledge_graph(path: Path) -> KnowledgeGraph:
-    """Rebuild a ``KnowledgeGraph`` from :func:`dump_knowledge_graph` output."""
-    with path.open("rb") as fh:
-        payload = pickle.load(fh)
+    """Rebuild a ``KnowledgeGraph`` from :func:`dump_knowledge_graph` output.
+
+    The dump is read with a restricted unpickler that only resolves the
+    graph value types, so a tampered cache file cannot execute code.
+    """
+    payload = _load_restricted_pickle(path.read_bytes())
 
     kg = KnowledgeGraph(
         max_ast_depth=int(payload["max_ast_depth"]),

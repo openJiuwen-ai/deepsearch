@@ -4,12 +4,13 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition import (
     IntentRecognitionResult,
     MAX_RESEARCH_QUERY_LENGTH,
     _create_emit_intent_tool,
     _default_fallback,
+    _drop_empty_optional_intent_fields,
     _normalize_research_intent,
     _to_str_list,
     classify_and_recognize_intent,
@@ -18,6 +19,13 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     web_search_for_query,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ResearchIntent
+
+
+def _intent_prompt_text() -> str:
+    prompt_dir = Path("openjiuwen_deepsearch/algorithm/prompts/intent_recognition")
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in prompt_dir.glob("*.md")
+    )
 
 
 @pytest.fixture
@@ -85,6 +93,20 @@ async def test_recognize_report_intent_success(sample_tool_response):
     assert result.needs_clarification is False
 
 
+def test_intent_prompt_separates_stable_system_from_query_and_date():
+    messages = build_prompt_messages(
+        "intent_recognition",
+        {"original_query": "测试查询", "current_date": "2026-09-14"},
+    )
+
+    assert messages[0]["role"] == "system"
+    assert "测试查询" not in messages[0]["content"]
+    assert "2026-09-14" not in messages[0]["content"]
+    assert messages[1]["role"] == "user"
+    assert "测试查询" in messages[1]["content"]
+    assert "2026-09-14" in messages[1]["content"]
+
+
 def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
     """意图识别工具的时间范围 schema 暴露并列的 source/content 子对象，仅基础关键字。"""
     tool = _create_emit_intent_tool()
@@ -102,6 +124,17 @@ def test_emit_report_intent_tool_uses_basic_temporal_scope_schema():
         assert "required" not in scope_schema
         assert "anyOf" not in scope_schema
         assert "oneOf" not in scope_schema
+
+
+def test_drop_empty_optional_intent_fields_before_tool_validation():
+    args = _drop_empty_optional_intent_fields({
+        "research_query": "topic",
+        "section_count": "",
+        "source_date_scope": "  ",
+        "content_date_scope": "",
+    })
+
+    assert args == {"research_query": "topic"}
 
 
 def test_target_paper_url_is_preserved_and_added_to_include_url():
@@ -147,7 +180,7 @@ def test_normalize_target_papers_merges_canonical_arxiv_duplicates():
 
 
 def test_intent_prompt_requires_paper_urls():
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+    prompt = _intent_prompt_text()
 
     assert "target_papers" in prompt
     assert "include_url" in prompt
@@ -190,7 +223,7 @@ def test_emit_intent_tool_declares_target_papers_without_search_terms():
 
 
 def test_intent_prompt_defines_target_paper_contract():
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+    prompt = _intent_prompt_text()
 
     assert "target_papers" in prompt
     assert all(identifier in prompt for identifier in ("PMID", "DOI", "arXiv ID"))
@@ -202,7 +235,7 @@ def test_intent_prompt_defines_target_paper_contract():
 
 def test_intent_prompt_defines_temporal_normalization_rules():
     """意图 Prompt 必须使用一致的模糊日期与包含边界规则（中英 token 归一）。"""
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+    prompt = _intent_prompt_text()
 
     # 模糊日期归一：early/mid/end of YEAR → 3/31、6/30、12/31
     assert "3/31" in prompt
@@ -221,7 +254,7 @@ def test_intent_prompt_defines_temporal_normalization_rules():
 
 def test_intent_prompt_defines_carrier_vs_subject_rule():
     """意图 Prompt 必须区分载体修饰(→source_date_scope)与主体修饰(→content_date_scope)，且两类可并存、非二选一。"""
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+    prompt = _intent_prompt_text()
     # 载体(carrier)修饰 → source_date_scope
     assert "载体" in prompt
     assert "source_date_scope" in prompt
@@ -236,7 +269,7 @@ def test_intent_prompt_defines_carrier_vs_subject_rule():
 
 def test_intent_prompt_scopes_as_of_snapshot():
     """as-of 快照语义只在用户要求语料按可得性截断时归 source_date。"""
-    prompt = (Path("openjiuwen_deepsearch/algorithm/prompts") / "intent_recognition.md").read_text(encoding="utf-8")
+    prompt = _intent_prompt_text()
     assert "as of" in prompt.lower() or "available as of" in prompt.lower()
     assert "truncat" in prompt.lower()
 
@@ -962,15 +995,33 @@ def test_emit_intent_tool_schema_hides_report_type_when_provided():
 
 
 def test_intent_prompts_suppress_report_type_when_provided():
-    """意图识别 prompt：provided 时完全不渲染 report_type 相关内容；缺省保持现状。"""
-    base_ctx = {"original_query": "AI Agent 趋势", "messages": []}
-    provided = apply_system_prompt("intent_recognition", {**base_ctx, "provided_report_type": "brief"})
-    content = provided[0]["content"]
-    assert "report_type" not in content
+    """已指定类型时，动态 user 明确禁止模型再次输出 report_type。"""
+    base_ctx = {"original_query": "AI Agent 趋势", "current_date": "2026-09-14"}
+    provided = build_prompt_messages(
+        "intent_recognition", {**base_ctx, "provided_report_type": "brief"}
+    )
+    assert "Do not emit a report_type field" in provided[-1]["content"]
 
-    default = apply_system_prompt("intent_recognition", dict(base_ctx))
-    default_content = default[0]["content"]
-    assert "emit `report_type` accordingly" in default_content
+    default = build_prompt_messages("intent_recognition", dict(base_ctx))
+    assert "Do not emit a report_type field" not in default[-1]["content"]
+
+
+def test_intent_prompt_renders_material_guidance_only_when_materials_exist():
+    base_ctx = {"original_query": "AI Agent 趋势"}
+
+    without_materials = build_prompt_messages("intent_recognition", base_ctx)
+    with_materials = build_prompt_messages(
+        "intent_recognition",
+        {**base_ctx, "has_materials": True, "materials_count": 1,
+         "materials_manifest_text": "[M1] Paper", "materials_analysis_text": "[M1] Findings"},
+    )
+
+    assert "## User Materials (when present)" not in with_materials[0]["content"]
+    assert "emit `material_relevance_map`" in with_materials[-1]["content"]
+    assert "emit `material_relevance_map`" not in without_materials[-1]["content"]
+    assert "## User-provided materials" not in without_materials[-1]["content"]
+    assert "[M1] Paper" in with_materials[-1]["content"]
+    assert "[M1] Findings" in with_materials[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -993,7 +1044,7 @@ async def test_classify_and_recognize_intent_passes_provided_report_type(sample_
         })
 
     prompts = mock_invoke.call_args.args[1]
-    assert "report_type" not in prompts[0]["content"]
+    assert "Do not emit a report_type field" in prompts[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -1016,4 +1067,4 @@ async def test_recognize_report_intent_passes_provided_report_type(sample_tool_r
         })
 
     prompts = mock_invoke.call_args.args[1]
-    assert "report_type" not in prompts[0]["content"]
+    assert "Do not emit a report_type field" in prompts[-1]["content"]

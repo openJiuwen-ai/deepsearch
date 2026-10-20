@@ -5,13 +5,21 @@ infer_call_model 模块的单元测试。
 重点覆盖新增的 is_list_of 校验函数，防止 shallow type_check 问题复发。
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
+
+import openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model as infer_call_model_module
 
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
     is_list_of,
     type_check,
     is_equal_length,
+    is_valid_structured_triples,
     is_valid_supplement_triples,
+    normalize_reference_ids,
+    normalize_structured_triple_reference_ids,
+    normalize_supplement_triple_node_ids,
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 
@@ -123,6 +131,51 @@ class TestIsListOfDefaultParam:
         """不传 expected_type 时 str 元素被拒绝。"""
         with pytest.raises(CustomValueException):
             is_list_of(["1", "2"])
+
+
+class TestNormalizeReferenceIds:
+    """Quoted decimal IDs are the only tolerated LLM type coercion."""
+
+    def test_normalizes_decimal_string_ids(self):
+        normalized = normalize_reference_ids(["0", "12", 3])
+
+        assert normalized == [0, 12, 3]
+        is_list_of(normalized, int)
+
+    def test_keeps_invalid_values_for_strict_validation(self):
+        normalized = normalize_reference_ids(["-1", "1.0", "id-1", True])
+
+        assert normalized == ["-1", "1.0", "id-1", True]
+        with pytest.raises(CustomValueException):
+            is_list_of(normalized, int)
+
+    @pytest.mark.asyncio
+    async def test_call_model_normalizes_before_strict_validation(self, monkeypatch):
+        """Quoted IDs are normalized before the list[int] contract is enforced."""
+        monkeypatch.setattr(infer_call_model_module, "build_prompt_messages", lambda *_: [])
+        monkeypatch.setattr(
+            infer_call_model_module,
+            "llm_context",
+            type("LlmContext", (), {"get": staticmethod(lambda: {"test-model": object()})})(),
+        )
+        monkeypatch.setattr(
+            infer_call_model_module,
+            "ainvoke_llm_with_stats",
+            AsyncMock(return_value={"content": '["0", "1"]'}),
+        )
+
+        result = await infer_call_model_module.call_model(
+            "test-model",
+            "infer_validate_prompt",
+            {},
+            {
+                "normalizer": normalize_reference_ids,
+                "detection_func": is_list_of,
+                "args": int,
+            },
+        )
+
+        assert result == [0, 1]
 
 
 class TestIsValidSupplementTriplesValid:
@@ -261,3 +314,48 @@ class TestCallModelStopPropagation:
 
                 # 立即上抛，不进入重试循环
                 assert mock_ainvoke.call_count == 1
+
+
+def test_normalize_supplement_triple_numeric_string_ids():
+    result = [[["0", "12"], "related", "5"]]
+    normalized = normalize_supplement_triple_node_ids(result)
+    assert normalized == [[[0, 12], "related", 5]]
+    is_valid_supplement_triples(normalized)
+
+
+def test_normalize_supplement_triple_keeps_non_numeric_values_for_validation():
+    result = [[["node-0"], "related", "tail"]]
+    normalized = normalize_supplement_triple_node_ids(result)
+    assert normalized == result
+    with pytest.raises(CustomValueException):
+        is_valid_supplement_triples(normalized)
+
+
+def test_structured_triples_accept_text_conclusions_and_integer_references():
+    is_valid_structured_triples([
+        [[1, 2], "引用", "结论 1"],
+        [["结论 1"], "推理", "最终结论"],
+    ])
+
+
+def test_normalize_structured_triple_quoted_reference_ids_only_in_heads():
+    result = [[["1", "2"], "引用", "2026"]]
+
+    normalized = normalize_structured_triple_reference_ids(result)
+
+    assert normalized == [[[1, 2], "引用", "2026"]]
+    is_valid_structured_triples(normalized)
+
+
+def test_normalize_structured_triple_keeps_textual_premises():
+    result = [[["结论 1"], "推理", "最终结论"]]
+
+    normalized = normalize_structured_triple_reference_ids(result)
+
+    assert normalized == result
+    is_valid_structured_triples(normalized)
+
+
+def test_structured_triples_reject_numeric_tail_id():
+    with pytest.raises(CustomValueException):
+        is_valid_structured_triples([[[1], "引用", 2]])

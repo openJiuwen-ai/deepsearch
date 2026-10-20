@@ -96,12 +96,16 @@ class EditorTeamNode(BaseNode):
         history_reports = session.get_global_state("search_context.history_reports")
         config = session.get_global_state("config")
         session_id = session.get_global_state("search_context.session_id")
+        original_query = session.get_global_state("search_context.original_query") or ""
 
         return dict(language=language, messages=messages, outline=outline, history_outlines=history_outlines,
                     report_template=report_template, history_reports=history_reports, session_id=session_id,
+                    original_query=original_query,
                     config=config,
                     report_type_policy=session.get_global_state("search_context.report_type_policy") or {},
-                    research_intent=session.get_global_state("search_context.research_intent") or {})
+                    research_intent=session.get_global_state("search_context.research_intent") or {},
+                    material_analysis=session.get_global_state("search_context.material_analysis"),
+                    material_usage_mode=session.get_global_state("search_context.material_usage_mode") or "none")
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         # 1. 从上下文中获取大纲，并初始化报告
@@ -201,24 +205,19 @@ class EditorTeamNode(BaseNode):
             section: Section,
             background_knowledge=None,
     ):
-        # 为子图创建section_state
-        messages = [
-            state.get("messages", [])[0],
-            dict(
-                role="user",
-                content=(
-                    f"# Research Requirements\n\n"
-                    f"## Task\n\n"
-                    f"{outline.title}\n\n"
-                    f"## Current Section Title\n\n"
-                    f"{section.title}\n\n"
-                    f"## Current Section Description\n\n"
-                    f"{section.description}"
-                ),
-                name="outliner"
-            )
-        ]
+        # Preserve the existing conversation as prior messages.  Section scope
+        # is carried as structured state and rendered by the planner/reporter's
+        # current user message, so creating another synthetic user turn here
+        # would duplicate the task on every section and planning round.
+        messages = list(state.get("messages") or [])
+        material_bindings = list(getattr(section, "material_bindings", []) or [])
+        bound_material_ids = list(dict.fromkeys(
+            binding.get("material_id")
+            for binding in material_bindings
+            if isinstance(binding, dict) and binding.get("material_id")
+        ))
         section_state = {
+            "original_query": state.get("original_query", ""),
             "language": state.get("language", "zh-CN"),
             "messages": messages,
             "current_outline": outline,
@@ -237,6 +236,11 @@ class EditorTeamNode(BaseNode):
             "report_type_policy": state.get("report_type_policy") or {},
             "research_intent": state.get("research_intent") or {},
             "section_local_contract": self._build_section_local_contract(section),
+            "material_analysis": state.get("material_analysis"),
+            "material_usage_mode": state.get("material_usage_mode", "none"),
+            "material_bindings": material_bindings,
+            "bound_material_ids": bound_material_ids,
+            "use_material_ids": bound_material_ids,
         }
 
         return section_state

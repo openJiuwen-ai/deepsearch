@@ -657,7 +657,6 @@ class TestBuildCitationMapping:
 
         assert result == {}
 
-
 class TestBuildDatasFromChunks:
     """Test cases for _build_datas_from_chunks function."""
 

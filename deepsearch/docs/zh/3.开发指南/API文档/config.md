@@ -59,7 +59,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 
 **字段**：
 
-- **search_engine_name**(Literal["tavily", "google", "xunfei", "petal", "custom", "bocha", "jina", "perplexity", "serper"], 可选)：联网增强引擎名称。默认值：`"tavily"`。
+- **search_engine_name**(Literal["tavily", "google", "xunfei", "petal", "custom", "bocha", "jina", "perplexity", "serper", "agc_ainetworking"], 可选)：联网增强引擎名称。默认值：`"tavily"`。
 - **search_api_key**(bytearray, 可选)：联网增强引擎调用密钥。默认值：`bytearray("", encoding="utf-8")`。
 - **search_url**(str, 可选)：联网增强引擎调用地址。默认值：`""`。对于支持默认公网地址的引擎，可留空由系统自动回退。
 - **max_web_search_results**(int, 可选)：最大搜索结果数量，取值范围：[1, 10]。默认值：`5`。
@@ -74,6 +74,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 - `petal`：使用小艺联网增强 Wrapper。
 - `bocha` / `perplexity`：使用 harness `web_tools` 适配层。
 - `jina`：使用直接 HTTP 调用的 JinaSearchAPIWrapper。
+- `agc_ainetworking`：使用 AGC AI Networking 的 `webSearch` 接口；通过 `WebSearchEngineConfig` 或 HTTP 请求配置时，`max_web_search_results` 的校验上限为 `10`。wrapper 内部的 `[1, 50]` 夹取只约束直接构造 wrapper 的调用，不扩大配置接口的取值范围。完整参数与站点约束见 [AGC AI Networking 联网搜索](../../../feature/framework/agc_ainetworking_search.md)。
 - `custom`：通过 `CustomWebSearchConfig` 动态加载。
 
 **样例**：
@@ -138,10 +139,38 @@ bocha 30
 **补充说明**：
 
 - `tavily` 的 `extension.include_domains` / `extension.exclude_domains` 会透传给 Tavily 检索接口，用于**偏好或排除**指定站点，并非框架侧的硬性白名单。Tavily 在相关结果不足时仍可能返回`include_domains`列表外域名的页面。
+- Google/Serper wrapper（由 `google` / `serper` 引擎名复用）与 Tavily 的内置同步搜索请求固定使用 30 秒超时，以避免网络异常时无限期阻塞；该说明不表示直接调用 Google 官方搜索接口。该超时当前不是 `WebSearchEngineConfig` 的可配置字段。
 - `jina` 的 `search_url` 为空时，会自动回退到 `https://s.jina.ai`；国内网络环境如无法访问该默认地址，可显式配置 `search_url="https://s.jinaai.cn"`，也可填入私有化部署或代理转发地址。
 - `bocha`、`perplexity` 通过 harness `web_tools` 适配层访问搜索能力，默认不抓取网页正文，直接使用搜索 API 返回的摘要答案。如需开启网页正文抓取，可通过 `extension.fetch_webpage=True` 配置。仅当底层 provider 支持地址覆盖时，`search_url` 才会生效。国内网络环境如无法访问 Perplexity 默认服务，需要配置可访问的代理或转发地址，并通过 `search_url` 显式覆盖。
 - `web_search_tool` 返回结果进入 Collector 前会统一归一化为 `title`、`url`、`content`、`type` 等字段；字段别名如 `link`、`source_url`、`snippet`、`summary`、`answer` 会在 Collector 中兼容处理。
 - 搜索 API 返回的摘要答案以及（开启抓取后）预抓取的网页正文都会按 `MAX_COLLECTOR_DOC_CONTENT_LENGTH` 进行裁剪，以限制网页搜索结果对后续链路的上下文占用。
+
+## 学术搜索配置
+
+### `ScholarlySearchConfig`
+
+聚合内置的 PubMed、arXiv 和 Semantic Scholar provider 配置；模型禁止未声明字段。
+
+- **fetch_full_text**(bool, 可选)：是否获取检索结果的全文。默认值：`True`。
+- **max_full_text_results_per_query**(int, 可选)：每个查询最多获取全文的结果数，取值范围 `[0, 10]`。默认值：`1`；`0` 表示不获取全文。
+- **pubmed**(PubMedScholarlyConfig, 可选)：PubMed provider 配置。默认值：`PubMedScholarlyConfig()`。
+- **arxiv**(ArxivScholarlyConfig, 可选)：arXiv provider 配置。默认值：`ArxivScholarlyConfig()`。
+- **semantic_scholar**(SemanticScholarConfig, 可选)：Semantic Scholar provider 配置。默认值：`SemanticScholarConfig()`。
+
+### `ScholarlyProviderConfig`（provider 通用字段）
+
+- **search_api_key**(bytearray, 可选)：provider API 密钥。默认值：空 `bytearray`。
+- **search_url**(str, 可选)：provider 搜索端点。默认值：`""`；非空时必须恰好为该 provider 的官方端点（不接受自定义或代理 URL）。
+- **max_search_results**(int, 可选)：每次查询返回的最大搜索结果数，取值范围 `[1, 10]`。默认值：`1`。
+- **requests_per_second**(float, 必填)：请求速率上限，取值范围 `(0, 10]`；各内置 provider 提供自己的默认值。
+
+### 内置 provider 默认值与专有字段
+
+| Provider | `search_url` 官方端点 | `requests_per_second` 默认值 | 专有字段 |
+| --- | --- | --- | --- |
+| `PubMedScholarlyConfig` | `https://eutils.ncbi.nlm.nih.gov/entrez/eutils` | `1 / 3` | **email**(str，默认 `""`)；**tool**(str，默认 `"openjiuwen-deepsearch"`) |
+| `ArxivScholarlyConfig` | `https://export.arxiv.org/api/query` | `1 / 3` | 无 |
+| `SemanticScholarConfig` | `https://api.semanticscholar.org/graph/v1/paper/search` | `0.5` | 无 |
 
 ## class openjiuwen_deepsearch.config.config.EmbedModelConfig
 ```python
@@ -288,6 +317,53 @@ class openjiuwen_deepsearch.config.config.CustomLocalSearchConfig()
 >>> print(custom_local_config.custom_local_search_file)
 ```
 
+## class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig
+```python
+class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig()
+```
+**McpServerRuntimeConfig** 是单个 MCP（Model Context Protocol）server 的运行时配置类，作为 `AgentConfig.mcp_servers` 列表元素使用。SDK 直接配置或服务端经 DB 查询后拼装为同一形态。
+
+**字段**：
+
+- **server_name**(str, 必填)：MCP server 名称，同一 space 内唯一；运行时作为工具命名空间的一部分，完整工具名格式为 `mcp__{server_name}__{tool}`。
+- **server_url**(str, 必填)：MCP server URL。
+- **transport_type**(str, 可选)：传输类型，实际仅 `sse` 与 `streamable_http` 有效。默认值：`"streamable_http"`。
+- **headers**(dict, 可选)：请求头字典。敏感 header key 的 value 在服务端会加密存储；SDK 直接传入时按原值使用。默认值：`{}`。
+- **timeout**(float, 可选)：连接/读取超时（秒）。默认值：`30.0`。
+- **type**(str, 可选)：MCP server 用途类型，决定工具注入到哪个采集分支；当前固定为 `"search"`。默认值：`"search"`。
+
+**说明**：
+
+- `mcp` 包经核心依赖 `openjiuwen→fastmcp→mcp` 传递引入，`uv sync` 标准安装即包含；如需显式锁定版本可 `uv sync --extra mcp`（约束 `mcp>=1.26,<2.0`）。
+- 配置后，三个 Agent 入口（`DeepresearchAgent`、`DeepSearchAgent`、`SimpleReactSearchAgent`）在 `tool_map == "search_fetch"` 时会连接 MCP servers，将工具以 `mcp__{server_name}__{tool}` 形式注入到信息采集节点 `InfoRetrievalNode`，并在运行结束后关闭连接。
+- 单个 server 连接失败时记 warning 并跳过，不阻塞其他 server；MCP 包未安装时该次运行不接入 MCP 工具，其余流程正常。
+
+**样例**：
+
+```python
+>>> from openjiuwen_deepsearch.config.config import AgentConfig, McpServerRuntimeConfig
+
+>>> # 样例1：配置单个 MCP server
+>>> agent_config = AgentConfig(
+...     mcp_servers=[
+...         McpServerRuntimeConfig(
+...             server_name="custom_search",
+...             server_url="http://localhost:8000/mcp",
+...             transport_type="streamable_http",
+...             headers={"Authorization": "Bearer xxx"},
+...             timeout=30.0,
+...         )
+...     ]
+... )
+>>> print(agent_config.mcp_servers[0].server_name)
+custom_search
+
+>>> # 样例2：默认不接入 MCP server
+>>> agent_config = AgentConfig()
+>>> print(agent_config.mcp_servers)
+[]
+```
+
 ## class openjiuwen_deepsearch.config.config.AgentConfig
 ```python
 class openjiuwen_deepsearch.config.config.AgentConfig()
@@ -299,7 +375,12 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **execute_mode**(Literal["commercial", "general"], 可选)：执行模式，可选值：`["commercial", "general"]`。默认值：`"commercial"`。
 - **execution_method**(Literal["dependency_driving", "parallel", "hybrid"], 可选)：执行方法，`parallel`：并行工作流执行，`dependency_driving`：依赖驱动工作流执行，`hybrid`：混合大纲路由模式，由意图识别节点调用 LLM 选择普通大纲或依赖驱动大纲。默认值：`"parallel"`。
 - **workflow_human_in_the_loop**(bool, 可选)：工作流是否启用人机交互。默认值：`True`。
-- **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 15]。默认值：`10`。
+- **report_type**(Literal["brief", "professional"] | None, 可选)：报告类型；`None` 时由意图识别和澄清流程决定。默认值：`None`。
+- **user_materials_enabled**(bool, 可选)：是否启用用户素材；关闭时 `user_materials` 会被忽略。默认值：`False`。
+- **user_materials**(List[Dict[str, Any]], 可选)：用户提供的素材列表。默认值：`[]`；HTTP 服务应通过 `metadata` 的同名字段传入。素材的数据格式和使用场景见 [用户素材](../../../feature/algorithm/user-materials.md)。
+- **coverage_rule_block_enable**(bool, 可选)：子报告大纲规则版覆盖证据开关。默认值：`True`。
+- **exclusion_constraint_enable**(bool, 可选)：子报告禁引约束总开关。默认值：`False`。
+- **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 15]。SDK `AgentConfig` 与 HTTP 服务 `DeepSearchRequest` 默认值均为 `10`。
 - **outline_interaction_enabled**(bool, 可选)：大纲交互功能开关，开启后用户可对生成的大纲进行多轮修改。默认值：`True`。
 - **outline_interaction_max_rounds**(int, 可选)：大纲交互最大轮次，取值范围：[1, 100]。默认值：`3`。
 - **source_tracer_research_trace_source_switch**(bool, 可选)：溯源功能开关。默认值：`True`。
@@ -309,6 +390,10 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **info_collector_search_method**(Literal["web", "local", "all"], 可选)：搜索方式，`web`：联网增强搜索，`local`：本地搜索工具搜索，`all`：联网增强+本地融合搜索。默认值：`"web"`。
 - **info_collector_webpage_enrich_enable**(bool, 可选)：DeepResearch 信息收集阶段是否启用网页正文增强节点。默认值：`False`。
 - **web_search_engine_config**(WebSearchEngineConfig, 可选)：联网增强引擎配置。默认值：`WebSearchEngineConfig()`。
+- **scholarly_search_enabled**(bool, 可选)：是否启用内置学术搜索 provider。默认值：`False`。
+- **scholarly_search_config**(ScholarlySearchConfig, 可选)：PubMed、arXiv、Semantic Scholar 的配置集合。默认值：`ScholarlySearchConfig()`。
+
+`ScholarlySearchConfig` 聚合 `PubMedScholarlyConfig`、`ArxivScholarlyConfig` 和 `SemanticScholarConfig`；各 provider 支持 `search_api_key`、官方 `search_url`、`max_search_results`（范围 `[1, 10]`）及限速参数。
 - **local_search_engine_config**(LocalSearchEngineConfig, 可选)：本地搜索引擎配置。默认值：`LocalSearchEngineConfig()`。
 - **custom_web_search_config**(CustomWebSearchConfig, 可选)：自定义联网增强引擎配置。默认值：`CustomWebSearchConfig()`。
 - **custom_local_search_config**(CustomLocalSearchConfig, 可选)：自定义本地搜索配置。默认值：`CustomLocalSearchConfig()`。
@@ -317,6 +402,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **search_workflow_per_question_params**(PerQuestionParams, 可选)：search/react 单问题控制参数（时间、并发、工具映射、上限等）。默认值：`PerQuestionParams()`。
 - **search_workflow_milvus_config**(MilvusConfig, 可选)：`retrieve` 工具路径使用的 Milvus/Embedding 配置。默认值：`MilvusConfig()`。
 - **web_fetch_provider_config**(WebFetchProviderConfig, 可选)：显式 DeepSearch 抓取 provider 配置。当前 v1 需设置 `provider_name="jina"` 才能启用 `web_fetch`。默认值：`WebFetchProviderConfig()`。
+- **mcp_servers**(List[McpServerRuntimeConfig], 可选)：MCP（Model Context Protocol）server 配置列表。配置后，三个 Agent 入口（`DeepresearchAgent`、`DeepSearchAgent`、`SimpleReactSearchAgent`）在 `tool_map == "search_fetch"` 时会连接 MCP servers，将工具以 `mcp__{server_name}__{tool}` 形式注入到信息采集节点 `InfoRetrievalNode`。默认值：`[]`。
 - **model_config**(ConfigDict，内部配置)：Pydantic 模型配置；`arbitrary_types_allowed=True`。
 - **web_search_max_qps**(float, 可选)：联网增强引擎最大 QPS，0 表示不限流，支持浮点数如 0.5 表示每 2 秒 1 个请求。默认值：`0`。
 - **user_feedback_processor_enable**(bool, 可选)：是否启用报告生成后的局部优化能力。默认值：`False`。
@@ -412,6 +498,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **workflow_recursion_limit**(int, 可选)：递归限制。默认值：`30`。
 - **workflow_max_gen_question_retry_num**(int, 可选)：最大生成问题执行数量。默认值：`3`。
 - **workflow_feedback_mode**(str, 可选)：用户反馈途径，可选值：`["web", "cmd"]`。默认值：`"web"`。
+- **search_workflow**(SearchWorkflowConfig, 可选)：Search 模式工作流配置。默认值：`SearchWorkflowConfig()`。
 
 ### 大纲节点基础参数
 - **outliner_max_generate_outline_retry_num**(int, 可选)：最大生成大纲重试次数。默认值：`3`。
@@ -425,6 +512,7 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_max_research_loops**(int, 可选)：最大研究循环次数。默认值：`2`。
 - **info_collector_max_tool_call_turns_per_query**(int, 可选)：单个 collector query 最大工具调用轮次。默认值：`2`。
 - **info_collector_max_retry_num**(int, 可选)：信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）。默认值：`3`。
+- **info_collector_allow_programmer**(bool, 可选)：预留字段；当前运行时未接入，设置不会改变信息收集器行为。默认值：`False`。
 - **info_collector_webpage_enrich_max_urls**(int, 可选)：网页正文增强每轮最多抓取并增强的 URL 数量。默认值：`3`。
 - **info_collector_webpage_enrich_fetch_timeout_seconds**(int, 可选)：网页正文增强单个 URL 抓取超时时间，单位秒。默认值：`45`。
 
@@ -432,11 +520,11 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中按覆盖度评分在每个 rationale 下选择的 top-k 段落数量。默认值：`15`。
 - **report_max_generate_retry_num**(int, 可选)：生成内容最大重试次数。默认值：`3`。
 - **visualization_enable**(bool, 可选)：专业版报告插图可视化开关。默认值：`True`。不影响 Brief 报告的图文生成。
-- **coverage_rule_block_enable**(bool, 可选)：子报告大纲阶段规则版覆盖证据（coverage passages）开关。默认值：`True`。关闭后大纲证据仅含条目摘要块。HTTP 服务入口 `DeepSearchRequest.coverage_rule_block_enable` 会透传到 `AgentConfig.coverage_rule_block_enable`。
 
 ### 溯源节点参数
 - **source_tracer_citation_verify_max_concurrency_num**(int, 可选)：溯源校验最大并发数量。默认值：`30`。
-- **source_tracer_citation_verify_batch_size**(int, 可选)：溯源校验批次大小。默认值：`1`。
+- **source_tracer_citation_verify_batch_size**(int, 可选)：溯源校验批次大小，取值范围 `[1, 20]`。默认值：`10`。
+- **source_tracer_domain_source_map_path**(str, 可选)：域名来源映射 JSON 文件名或绝对路径。默认值：`"domain_source_map.json"`。
 
 ### 统计信息参数
 - **stats_info_node_duration**(bool, 可选)：节点持续时间统计。默认值：`False`。

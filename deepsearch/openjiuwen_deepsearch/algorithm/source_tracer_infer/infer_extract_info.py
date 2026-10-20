@@ -46,9 +46,18 @@ class ResearchInferPreprocess():
         for i, section_search_record in enumerate(self.search_records):
             search_record_with_index[i] = []
             for record in section_search_record:
+                # passage 级记录优先用 passage_text（实际提取的段落文本），
+                # 避免同一文档 N 个段落各自携带整篇父文档全文导致 LLM 输入膨胀；
+                # fulltext 级记录无有效 passage_text，回退到 original_content（整篇文档）。
+                passage_text = record.get("passage_text", "")
+                content = (
+                    passage_text
+                    if isinstance(passage_text, str) and passage_text.strip()
+                    else record.get("original_content", "")
+                )
                 search_record_with_index[i].append({"title": record.get("title", ""),
                                                     "url": record.get("url", ""),
-                                                    "content": record.get("original_content", "")
+                                                    "content": content
                                                     })
         self.search_record_with_index = search_record_with_index
 
