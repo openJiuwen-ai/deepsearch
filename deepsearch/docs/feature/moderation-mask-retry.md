@@ -182,6 +182,7 @@ pytest tests/algorithm/prompts/test_evidence_masking.py tests/utils/test_lexicon
 
 性能与语义回归：`pytest tests/utils/test_moderation_matching.py tests/utils/test_moderation_performance.py`。
 使用完整内置词库及 5 篇、每篇 15,000 字符的真实证据抽取链路，仅替换模型网络边界；覆盖冷启动、预热、开关对照、长连续文本、10ms 心跳及取消等待。另用旧正则作固定语义对照，核对最左最长匹配、英文边界和网址候选。
+总耗时作为测试指标记录，不以开发机的固定秒数作为通用 CI 门槛；自动回归保留心跳间隔、取消响应、补救结果及调用预算断言。绝对延迟验收需在统一硬件和采集配置下另行测量。
 
 重点覆盖原有三次／四次预算、非风控错误、两侧切换、开关关闭、零命中继续原有尝试、
 参数及原消息保留、格式纠错后重新掩码、并发与递归隔离、取消清理，
