@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from functools import lru_cache
 from importlib import resources
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from openjiuwen_deepsearch.utils.common_utils.moderation_detection import detect_error
 from openjiuwen_deepsearch.utils.common_utils.lexicon_resource import FORMAT, decode_lexicon
@@ -113,8 +113,9 @@ def _compiled_pattern(terms: frozenset[str]) -> tuple[re.Pattern, frozenset[str]
     for term in sorted((t for t in terms if t), key=lambda t: (-len(t), t)):
         domain = _address_domain(term)
         if domain:
-            parsed = urlsplit(term if "://" in term else "//" + term)
-            if parsed.path not in ("", "/") or parsed.query or parsed.fragment or parsed.username:
+            parsed = _parse_address(term)
+            has_extra_components = any((parsed.query, parsed.fragment, parsed.username))
+            if parsed.path not in ("", "/") or has_extra_components:
                 skipped += 1
             else:
                 domains.add(domain)
@@ -141,10 +142,16 @@ def _text_replacement(match: re.Match) -> tuple[int, int, str]:
     return match.start(), match.end(), MASK_CHAR * (match.end() - match.start())
 
 
+def _parse_address(address: str) -> SplitResult:
+    if "://" not in address:
+        address = urlunsplit(("", address, "", "", ""))
+    return urlsplit(address)
+
+
 def _address_domain(address: str) -> str:
     """Parse without network access; invalid/unsupported addresses stay unchanged."""
     try:
-        parsed = urlsplit(address if "://" in address else "//" + address)
+        parsed = _parse_address(address)
         if parsed.scheme and parsed.scheme.lower() not in {"http", "https"}:
             return ""
         if parsed.username is not None or parsed.password is not None:
@@ -181,7 +188,10 @@ def _trim_address(address: str) -> str:
 
 def _address_candidates(text: str) -> Iterator[tuple[int, int, str]]:
     cursor = 0
-    while match := _ADDRESS.search(text, cursor):
+    while True:
+        match = _ADDRESS.search(text, cursor)
+        if match is None:
+            break
         address = _trim_address(match.group())
         end = match.start() + len(address)
         yield match.start(), end, address

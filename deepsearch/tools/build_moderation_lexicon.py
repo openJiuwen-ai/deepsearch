@@ -3,19 +3,23 @@
 import argparse
 from collections import Counter
 import hashlib
+import importlib.util
 import json
+import logging
 from pathlib import Path
 import re
-import sys
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PACKAGE_ROOT))
-
-from openjiuwen_deepsearch.utils.common_utils.lexicon_resource import (  # noqa: E402
-    FORMAT,
-    decode_lexicon,
-    encode_lexicon,
+_CODEC_SPEC = importlib.util.spec_from_file_location(
+    "moderation_lexicon_codec",
+    PACKAGE_ROOT / "openjiuwen_deepsearch/utils/common_utils/lexicon_resource.py",
 )
+_CODEC = importlib.util.module_from_spec(_CODEC_SPEC)
+_CODEC_SPEC.loader.exec_module(_CODEC)
+FORMAT = _CODEC.FORMAT
+decode_lexicon = _CODEC.decode_lexicon
+encode_lexicon = _CODEC.encode_lexicon
+logger = logging.getLogger(__name__)
 
 DEFAULT_EXCLUSIONS = Path(__file__).with_name("moderation_lexicon_exclusions.json")
 _TEMPORAL_FRAGMENT = re.compile(r"(?:\d+(?:世纪|年代|周年|小时|分钟|年|月|日|号|天|周|秒))+\d*[前后]?\Z")
@@ -59,12 +63,12 @@ def build(
     files = sorted(source.glob("*.txt"))
     if not files:
         raise ValueError("Source directory contains no text lexicons")
-    source_terms = frozenset(
-        term
-        for path in files
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if (term := line.strip()) and len(term) >= 2 and not term.startswith("#")
-    )
+    source_terms = set()
+    for path in files:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            term = line.strip()
+            if len(term) >= 2 and not term.startswith("#"):
+                source_terms.add(term)
     policy, reviewed_terms, reviewed_hashes, policy_hash = load_exclusions(exclusions)
     counts: Counter[str] = Counter()
     kept = set()
@@ -127,7 +131,9 @@ def main():
         default=PACKAGE_ROOT / "openjiuwen_deepsearch/utils/common_utils/data/sensitive_lexicon",
     )
     args = parser.parse_args()
-    print(json.dumps(build(args.source_dir, args.output_dir, source_revision=args.source_revision), ensure_ascii=True))
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    manifest = build(args.source_dir, args.output_dir, source_revision=args.source_revision)
+    logger.info("%s", json.dumps(manifest, ensure_ascii=True))
 
 
 if __name__ == "__main__":

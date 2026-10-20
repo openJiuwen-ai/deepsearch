@@ -1332,9 +1332,9 @@ async def _consume_llm_stream(
         if request.moderation_enabled:
             _raise_if_moderation_response(full_chunk, "stream")
     except Exception as error:
-        if (request.moderation_enabled and received_chunk and request.on_moderation_usage is not None
-                and detect_error(error) is not None):
-            request.on_moderation_usage(latest_usage)
+        if request.moderation_enabled and received_chunk and request.on_moderation_usage is not None:
+            if detect_error(error) is not None:
+                request.on_moderation_usage(latest_usage)
         raise
     return full_chunk
 

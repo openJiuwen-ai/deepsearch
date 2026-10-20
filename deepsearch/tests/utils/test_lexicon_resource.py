@@ -64,11 +64,14 @@ def test_builder_reproduces_resources_without_plaintext_copy(tmp_path):
     outputs = [tmp_path / "one", tmp_path / "two"]
     revision = "A" * 40
     for destination in outputs:
-        subprocess.run(
+        result = subprocess.run(
             [sys.executable, str(builder), "--source-dir", str(source), "--output-dir", str(destination),
              "--source-revision", revision],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, text=True, cwd=tmp_path,
         )
+        logged_manifest = json.loads(result.stderr)
+        assert logged_manifest["source_revision"] == revision.lower()
+        assert logged_manifest["term_count"] == 2
     assert (outputs[0] / "lexicon.bin").read_bytes() == (outputs[1] / "lexicon.bin").read_bytes()
     assert (outputs[0] / "manifest.json").read_bytes() == (outputs[1] / "manifest.json").read_bytes()
     manifest = json.loads((outputs[0] / "manifest.json").read_text())

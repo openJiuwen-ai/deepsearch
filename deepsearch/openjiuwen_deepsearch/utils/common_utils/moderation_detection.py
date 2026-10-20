@@ -163,10 +163,10 @@ def detect_error(error: BaseException | None = None, detail: str = "") -> Modera
             pending.append(context)
     structured = _combine(signals)
     if structured is not None:
+        can_use_text_side = not parse_failure and structured.evidence != "conflicting_side_fields"
         if (
-            structured.side == "unknown" and structured.evidence != "conflicting_side_fields"
+            structured.side == "unknown" and can_use_text_side
             and structured.code in {"data_inspection_failed", "sensitivecontentdetected"}
-            and not parse_failure
         ):
             sides = set().union(*(_message_sides(text) for text in texts))
             if sides:
