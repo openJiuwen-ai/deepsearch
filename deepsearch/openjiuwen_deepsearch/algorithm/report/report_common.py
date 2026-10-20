@@ -7,6 +7,7 @@ import logging
 import re
 
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
+from openjiuwen_deepsearch.utils.common_utils.moderation_content import evidence_spans
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ def build_citation_infos(classified_content: list) -> str:
     stays publication-time-only in those cases.
     """
     infos = ""
+    body_spans = []
     for item in classified_content or []:
         content = item.get("passage_text", "") or item.get("original_content", "")
         scores_str = ""
@@ -114,10 +116,14 @@ def build_citation_infos(classified_content: list) -> str:
                 f"|||content_time: {content_time.get('start', '')}"
                 f"~{content_time.get('end', '')}"
             )
-        infos += (
+        prefix = (
             f"\n[citation:{item.get('index', 1)} begin]publish_time: "
             f"{item.get('doc_time') or ''}{content_time_str}|||"
             f"source: {item.get('title', '')}{scores_str}|||"
-            f"content: {content}[citation:{item.get('index', 1)} end]"
+            f"content: "
         )
-    return infos
+        start = len(infos) + len(prefix)
+        body = str(content)
+        body_spans.append((start, start + len(body)))
+        infos += f"{prefix}{body}[citation:{item.get('index', 1)} end]"
+    return evidence_spans(infos, body_spans)

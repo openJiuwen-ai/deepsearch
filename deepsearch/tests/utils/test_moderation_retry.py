@@ -12,13 +12,17 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats as invoke
 from openjiuwen_deepsearch.utils.common_utils.moderation_mask import RETRY_FEEDBACK_PROMPT
+from openjiuwen_deepsearch.utils.common_utils.moderation_content import evidence_spans
 from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 
 _IMPL = "openjiuwen_deepsearch.utils.common_utils.llm_utils._ainvoke_llm_with_stats_impl"
 _MASK = "openjiuwen_deepsearch.utils.common_utils.moderation_mask"
 _MODEL = "test-moderation-model"
-MESSAGES = [{"role": "system", "content": "敏感系统"}, {"role": "user", "content": "敏感 Sex"}]
+MESSAGES = [
+    {"role": "system", "content": "敏感系统"},
+    {"role": "user", "content": evidence_spans("敏感 Sex", [(0, len("敏感 Sex"))])},
+]
 
 
 def _error(side="Input"):
@@ -169,7 +173,7 @@ async def test_rebuilt_validation_feedback_is_preserved(llm):
     with patch(_IMPL, new=fake):
         await operation()
     assert len(calls) == 3 and calls[2][1]["content"] == "** ***"
-    assert calls[2][-1]["content"] == "repair JSON **"
+    assert calls[2][-1]["content"] == "repair JSON 敏感"
 
 
 @pytest.mark.asyncio
@@ -225,7 +229,7 @@ async def test_nested_scope_and_section_keys_are_isolated(llm, nested):
 
 
 @pytest.mark.asyncio
-async def test_framework_message_objects_and_url_rules(llm):
+async def test_unscoped_framework_message_objects_are_not_guessed(llm):
     from openjiuwen.core.foundation.llm.schema.message import SystemMessage, UserMessage
 
     text = "敏感 Sex https://blocked.example/a https://sussex.ac.uk"
@@ -234,8 +238,19 @@ async def test_framework_message_objects_and_url_rules(llm):
     with patch(_IMPL, new=_recorder(calls, [_error()])):
         await _budget(llm, original)
     assert isinstance(calls[1][1], UserMessage)
-    assert calls[1][1].content == "** *** [URL_REDACTED] https://sussex.ac.uk"
+    assert calls[1][1].content == text
     assert calls[1][0].content == original[0].content and original[1].content == text
+
+
+@pytest.mark.asyncio
+async def test_unscoped_task_keeps_original_three_attempts_without_loading_lexicon(llm):
+    messages = [{"role": "user", "content": "敏感 Sex research task"}]
+    calls, error = [], _error()
+    with patch(_IMPL, new=_recorder(calls, [error] * 3)), patch(f"{_MASK}.get_lexicon") as load:
+        with pytest.raises(CustomValueException) as caught:
+            await _budget(llm, messages)
+    assert caught.value is error and calls == [messages] * 3
+    load.assert_not_called()
 
 
 @pytest.mark.parametrize("side", ["Input", "Output"])
@@ -337,7 +352,8 @@ async def test_recursive_split_inherits_without_sibling_contamination(llm):
     verifier, calls = CitationVerifyResearch(_MODEL), []
 
     async def extract_once(datas, semaphore):
-        return await invoke(llm=llm, messages=[{"role": "user", "content": f"敏感 {datas[0]}:{len(datas)}"}])
+        text = f"敏感 {datas[0]}:{len(datas)}"
+        return await invoke(llm=llm, messages=[{"role": "user", "content": evidence_spans(text, [(0, 2)])}])
 
     async def fake(**kwargs):
         messages = deepcopy(kwargs["messages"])

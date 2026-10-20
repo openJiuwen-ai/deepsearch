@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 from openjiuwen_deepsearch.utils.common_utils.moderation_detection import detect_error
 from openjiuwen_deepsearch.utils.common_utils.lexicon_resource import FORMAT, decode_lexicon
+from openjiuwen_deepsearch.utils.common_utils.moderation_content import MaskableText
 
 logger = logging.getLogger(__name__)
 
@@ -257,10 +258,20 @@ def mask_messages(
     messages: list[Any],
     level: int,
     lexicon_dir: str | None = None,
+    *,
+    evidence_only: bool = False,
 ) -> tuple[list[Any], int, int]:
     """对 messages 掩码。level=1 只掩 user，level=2 掩 user+system。
     返回新的 messages 列表（不原地改）+ 掩码字符数 + 区间数。
+    生产补救使用 evidence_only：仅处理带资料范围的 user 字符串，不猜测原始文本结构。
     """
+    if evidence_only and not any(
+        (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "user"
+        and isinstance(m.get("content") if isinstance(m, dict) else getattr(m, "content", None), MaskableText)
+        for m in messages
+    ):
+        logger.info("moderation-mask-skipped reason=no_evidence_scope")
+        return messages, 0, 0
     terms = get_lexicon(lexicon_dir)
     if not terms:
         return messages, 0, 0
@@ -272,7 +283,15 @@ def mask_messages(
         role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
         content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
         if role in target_roles and isinstance(content, str) and content:
-            masked, nchars, nspans = mask_text(content, terms)
+            if evidence_only:
+                masked, nchars, nspans = content, 0, 0
+                if role == "user" and isinstance(content, MaskableText):
+                    try:
+                        masked, nchars, nspans = content.mask(terms)
+                    except Exception as error:
+                        logger.warning("资料范围无法重建，保留原消息: %s", type(error).__name__)
+            else:
+                masked, nchars, nspans = mask_text(content, terms)
             total_chars += nchars
             total_spans += nspans
             new_msgs.append(

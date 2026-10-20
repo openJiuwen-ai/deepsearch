@@ -14,18 +14,20 @@ from pydantic import BaseModel
 from openjiuwen.core.foundation.llm.model import Model
 from openjiuwen.core.foundation.llm.model_clients.openai_model_client import OpenAIModelClient
 from openjiuwen.core.foundation.llm.schema.config import ModelClientConfig, ModelRequestConfig
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
 from openjiuwen_deepsearch.utils.common_utils.moderation_detection import detect_error
 from openjiuwen_deepsearch.utils.common_utils.moderation_mask import RETRY_FEEDBACK_PROMPT
+from openjiuwen_deepsearch.utils.common_utils.moderation_content import evidence_spans
 from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
 
 
 MODEL = "test-moderation-model"
-MESSAGES = [{"role": "user", "content": "blockedword research"}]
+MESSAGES = [{"role": "user", "content": evidence_spans("blockedword research", [(0, 20)])}]
 
 
 class Answer(BaseModel):
@@ -68,11 +70,11 @@ async def _model(monkeypatch, tmp_path, handler, enabled=True):
 
 
 @moderation_retry_scope
-async def _operation(llm, agent, attempts=3):
+async def _operation(llm, agent, attempts=3, messages=MESSAGES):
     for attempt in range(attempts):
         try:
             return await llm_utils.ainvoke_llm_with_stats(
-                llm=llm, messages=MESSAGES, agent_name=agent, schema=Answer,
+                llm=llm, messages=messages, agent_name=agent, schema=Answer,
             )
         except Exception:
             if attempt == attempts - 1:
@@ -101,6 +103,37 @@ async def test_filter_before_json_parse_uses_existing_next_attempt(monkeypatch, 
     assert calls[0]["messages"][0]["content"] == "blockedword research"
     assert calls[1]["messages"][0]["content"] == "*********** research"
     assert "side=unknown strategy=input_mask" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_real_template_evidence_scope_survives_sdk_without_metadata_leak(monkeypatch, tmp_path, enabled):
+    calls = []
+    payload = {"task": {"step_title": "blockedword task"},
+               "document": {"title": "blockedword title", "url": "https://normal.example",
+                            "key_passages": ["blockedword evidence"]},
+               "webpage_content": "blockedword body", "max_content_length": 100}
+    messages = build_prompt_messages("collector_webpage_enrichment_compress", {
+        "payload": json.dumps(payload, ensure_ascii=False),
+    })
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        if len(calls) == 1:
+            return httpx.Response(400, json={"error": {"code": "data_inspection_failed",
+                                  "message": "Input data may contain inappropriate content"}})
+        return httpx.Response(200, json=_completion())
+
+    async with _model(monkeypatch, tmp_path, handler, enabled=enabled) as llm:
+        result = await _operation(llm, NodeId.FIND_ACTION_SPACE.value, messages=messages)
+    assert result.value == "ok" and len(calls) == 2
+    assert calls[0]["messages"] == messages
+    prepared = json.loads(calls[1]["messages"][-1]["content"])
+    expected = {**payload, "document": {**payload["document"], "key_passages": ["*********** evidence"]},
+                "webpage_content": "*********** body"} if enabled else payload
+    assert prepared == expected
+    assert json.loads(messages[-1]["content"]) == payload
+    assert all(set(message) == {"role", "content"} for call in calls for message in call["messages"])
 
 
 @pytest.mark.asyncio

@@ -126,6 +126,30 @@ def test_bundled_lexicon_does_not_mask_numbers_or_source_ids(text):
     assert moderation_mask.mask_text(text, moderation_mask.get_lexicon()) == (text, 0, 0)
 
 
+@pytest.mark.parametrize("text", [
+    "url URL www WWW wikipedia Wikipedia is IS this BC Bc",
+    "没有 一个 时间 进行 处理 信息 背景 第一 第二 联系 制作 计划",
+    "2020年 1970年 1978年 2013年12月26日 2016年08月17日 2019年7月9日 20周年 20年前",
+])
+def test_bundled_lexicon_preserves_reviewed_false_positives(text):
+    assert moderation_mask.mask_text(text, moderation_mask.get_lexicon()) == (text, 0, 0)
+
+
+def test_bundled_lexicon_keeps_negation():
+    text, _, _ = moderation_mask.mask_text("基本上没有受到挑战", moderation_mask.get_lexicon())
+    assert "没有受到挑战" in text
+
+
+def test_bundled_lexicon_preserves_embedded_url_and_mapping_keys():
+    import json
+
+    original = {"document": {"url": "https://example.invalid/page", "source_ids": {
+        "www": "web_123_p456", "en": {"wikipedia": "web_456_p789"},
+    }}}
+    text, _, _ = moderation_mask.mask_text(json.dumps(original), moderation_mask.get_lexicon())
+    assert json.loads(text) == original
+
+
 def test_get_lexicon_falls_back_to_bundled_on_bad_dir(tmp_path):
     """外部目录无效时退回打包词库。"""
     terms = moderation_mask.get_lexicon("/nonexistent/path/xyz")

@@ -1,13 +1,33 @@
 {
   "format": "dslex-v1-gzip-utf8-lines",
-  "sha256": "8c346c9e7ae0da0a11bd2c091cb5fa4ca294d78e7ed48c9818fb604d9627bb71",
-  "term_count": 49968,
-  "binary_bytes": 302726,
+  "sha256": "3ee6e1eab514c10cf8fc1b8a65de854d3ea062c2042e14b5f8c5f21ce8e45067",
+  "term_count": 49877,
+  "binary_bytes": 302490,
   "source_file_count": 17,
   "source_term_count": 50837,
   "excluded_decimal_count": 869,
-  "filter_policy": "exclude_unicode_decimal_v1",
+  "excluded_temporal_count": 20,
+  "excluded_reviewed_count": 71,
+  "excluded_count": 960,
+  "exclusion_counts_by_reason": {
+    "classification_abbreviations": 2,
+    "decimal": 869,
+    "english_grammar": 2,
+    "english_ordinary_words": 17,
+    "negation_and_quantifiers": 2,
+    "neutral_entities": 12,
+    "reviewed_cross_word_collisions": 4,
+    "reviewed_english_neutral_labels": 3,
+    "reviewed_ordinary_words": 14,
+    "reviewed_year_boundary_collision": 1,
+    "structure_labels": 4,
+    "task_instruction_words": 10,
+    "temporal_fragment": 20
+  },
+  "filter_policy": "exclude_decimal_temporal_reviewed_v2",
+  "exclusion_policy_version": "reviewed_false_positives_v4",
+  "exclusion_policy_sha256": "6f198f89f498e7407c74423bab2490795e59116db1a63aaa53c44132f6c534dc",
   "source_url": "https://github.com/Konsheng/Sensitive-lexicon",
   "source_license": "MIT",
-  "terms_sha256": "3b44612cbf6a0f4f044dcc2c35a2bb54eb4808fc3fb6e7c0a255ac2df398c6ac"
+  "terms_sha256": "1314d18a756539a7c9c893bfaa0c4d999d09e051d0535401a2e33493cb71cc97"
 }

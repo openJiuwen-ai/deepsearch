@@ -17,7 +17,7 @@
 正常成功请求不加载词库。关闭时输入和输出补救均不执行。
 
 原本总共三次尝试的操作仍最多三次，`run_llm` 默认四次仍最多四次。
-首次输入被拦后，下一次尝试掩码 user 文本；首次输出被拦后，下一次尝试追加输出约束。
+首次输入被拦后，下一次尝试只掩码 user 中已标注的资料正文及资料 URL；首次输出被拦后，下一次尝试追加输出约束。
 若剩余尝试仍失败，照常进入原有失败处理；不会因同侧再次被拦提前终止原有循环。
 原来异常后不重试的调用仍不重试，不为补救增加次数。
 
@@ -33,6 +33,8 @@ SDK／提供商内部重试及原有 thinking 开关兼容处理保持不变，�
 - `utils/common_utils/moderation_detection.py`：结构化错误、过滤结束原因及异常链的统一识别。
 - `utils/common_utils/moderation_retry.py`：在既有重试操作内保存补救状态，不发请求。
 - `utils/common_utils/moderation_mask.py`：风控判侧、掩码及输出约束提示。
+- `utils/common_utils/moderation_content.py`、`algorithm/prompts/evidence_masking.py`：资料范围与模板字段契约。
+- `algorithm/prompts/message_builder.py`、`algorithm/report/report_common.py`：构建消息及引用块时保留资料来源范围。
 - `algorithm/` 与 `framework/` 中已有重试操作：只增加状态作用域，保留循环与降级。
 - `utils/common_utils/lexicon_resource.py`、`data/sensitive_lexicon/`：词库资源解码与校验。
 
@@ -41,7 +43,7 @@ SDK／提供商内部重试及原有 thinking 开关兼容处理保持不变，�
 1. 在已有重试操作开始时建立局部状态；首次按原消息调用。
 2. 非风控异常原样抛出，不启用新策略，由原有重试或失败分支处理。
 3. 风控异常同样原样抛出，同时记录下一次已有尝试要应用的策略：
-   输入侧掩码 user 文本，输出侧追加中性生成约束。
+   输入侧掩码 user 中已标注的资料字段，输出侧追加中性生成约束。
 4. 若调用方仍有尝试次数，将策略应用到调用方本轮提供的消息副本再调用。
    即使业务校验重新生成了消息，也保留已有补救策略和本轮纠错反馈。
 5. 输入／输出侧切换时保留已启用的策略。输出约束不重复追加；不默认扩大到 system。
@@ -56,7 +58,7 @@ HTML 章节通过章节 ID 隔离，共用同一外层预算但不共享掩码�
 ## 数据契约与依赖
 
 - `moderation_mask_retry: bool = False`，`moderation_mask_lexicon_dir: str = ""`。
-- 消息支持字典和框架消息对象；只修改 user 的字符串 content，返回新列表和消息副本。
+- 消息支持字典和框架消息对象；只修改 user 字符串 content 中具有资料范围的部分，返回新列表和消息副本。
   system、assistant、tool 及结构化／多模态 content 不在生产掩码范围。
 - 中文及中英混合词保持长词优先字面匹配；英文词条兼容 ASCII 大小写，
   检查英文字母、数字、下划线边界，不自动扩展词形或短语空白。
@@ -67,7 +69,40 @@ HTML 章节通过章节 ID 隔离，共用同一外层预算但不共享掩码�
 - 原始消息、抓取地址和资料存储不改。正常 URL、邮箱、带用户信息、无法解析或
   不支持协议的地址候选保留原样；命中计数为原文替换字符数和合并区间数。
 - 外部目录无效或为空时回退打包词库；词库和匹配器惰性缓存。
-- 构建打包词库时删除纯十进制数字词条（含全角数字），二进制资源不再包含这些条目；manifest 记录清理规则、来源词数与删除数量。运行时不额外过滤，外部自定义词库由提供方清理。中英文和域名匹配规则不变；此改动不代表所有来源 ID 均已受保护，风控通过率需另行验证。
+- 构建打包词库时排除纯十进制数字、纯数字时间片段，以及审核确认的字段标签、普通语法词、否定词、上下文误伤条目和 12 个中性实体独立词条。策略见 `tools/moderation_lexicon_exclusions.json`，manifest 记录策略版本、哈希和分原因排除数量。
+- 排除在构建时完成，不是运行时过滤；外部自定义词库仍由提供方清理。仅按完整词条排除，不批量删除包含这些实体的长词条，也不将这些实体当作运行时白名单。资料正文中的其他词条仍可能误伤，修订后的风控恢复率需另行验证。
+- 已确认的普通英文词、普通叙述词及跨词碰撞条目也按完整词条排除；不增加运行时白名单、分词器或恢复映射。正文的数字序列不变仍不足以证明日期词面及否定表达完整，离线回归需检查这些表达的完整区间与重叠命中词，而不只统计数字。
+
+### 资料范围
+
+模板构建时为字符串 content 附加仅在内存中存在的 `MaskableText` 资料范围，
+JSON 序列化仍是原字符串，不增加请求字段、不改变首次请求文本、不加载词库。
+输入补救通过模板上下文的明确字段重新渲染消息，不从渲染后的标题或分隔符猜范围。
+复制并更新的是指定叶子字段，不递归扫描所有字符串或字典键。
+
+| 模板 | 可掩码资料字段 |
+|---|---|
+| `passages_extractor` | `documents[].content`、`documents[].url` |
+| `collector_supervisor` | `evidence_table[].key_passages[]`、`material_evidence[].summary` |
+| `collector_final` | `evidence_pack.sources[].key_passages[]`、`evidence_pack.sources[].url` |
+| `collector_webpage_enrichment_compress` | JSON payload 的 `existing_content`、`webpage_content`、`document.key_passages[]`、`document.url` |
+| `collector_webpage_enrichment_select` | JSON payload 的 `candidates[].key_passages[]`、`candidates[].url` |
+| `extract_message_prompt` | `datas[].citation_content` |
+| `sub_report_markdown` | `build_citation_infos` 构造时记录的正文区间 |
+
+任务要求、检索词、纠错反馈、资料标题、ID、分数、日期和外层结构字段不在资料范围。
+指定 URL 字段仍按域名规则处理，正常地址不改；正文内命中地址仍整体替换。
+引用块在拼接正文时记录区间，不依赖正文内可能伪造的 citation 分隔符。
+
+未接入范围的模板、直接传入的普通 user 字符串、只有任务的消息及多模态消息保留原样。
+词库不可用、上下文被修改而无法重建原提示、JSON 资料格式不符或范围重建失败时，也不扩大掩码范围。
+这些情况仍消耗原有尝试并按原逻辑失败或降级，不保证能补救发生在任务本身或未接入字段的风控。
+消息经 JSON 存储后再读回会失去内存范围，不能直接用于新策略的端到端重放；
+验证时需使用真实模板上下文重新构造，不能把整条历史 user 字符串标成资料冒充生产行为。
+
+生产通过 `mask_messages(..., evidence_only=True)` 使用上述契约。
+底层 `mask_text` 与默认 `mask_messages` 仍保留全文模式供低层工具及离线对照，
+不代表生产会修改所有 user 文本；`level=2` 也仅供离线对照使用。
 
 第三方词库源自 [Sensitive-lexicon](https://github.com/Konsheng/Sensitive-lexicon)，
 Copyright (c) 2024~2099 Konsheng，MIT License；分发时保留随附版权与许可声明。
@@ -81,8 +116,11 @@ Copyright (c) 2024~2099 Konsheng，MIT License；分发时保留随附版权与�
 python tools/build_moderation_lexicon.py --source-dir /path/to/Sensitive-lexicon/Vocabulary
 ```
 
-生成器不联网、不复制原始词表，同一组词条生成相同字节。
-源码包保留生成工具，wheel 保留运行时资源；外部文本目录仍可加载。
+生成器不联网、不复制原始词表，相同来源与排除策略生成相同字节。
+源码包保留生成工具及排除策略，wheel 保留运行时资源；外部文本目录仍可加载。
+普通词排除忽略大小写；上下文误伤条目可用原始 UTF-8 词面的 SHA-256 标识，避免将该词面重新写入源码，不是运行时哈希匹配。纯时间片段规则不要求日期有效，也不批量删除带事件描述的所有日期词条。
+已复核的普通英文词、中文普通词及中性标签按完整词条排除，不删除包含它们的较长词条。
+例如古埃及神名 `Isis` 与其他语境同形，排除该词会同时排除所有大小写变体；这不是语义消歧，不能保证其他语境的覆盖率不下降。词表变化后的平台放行率与生成质量仍须另行实测。
 
 ## 边界与错误处理
 
@@ -127,7 +165,7 @@ JSON / schema 校验异常可能回显生成正文，不用其中的文本做短
 ## 测试与验证
 
 ```bash
-pytest tests/utils/test_lexicon_resource.py tests/utils/test_moderation_mask.py tests/utils/test_moderation_retry.py tests/utils/test_moderation_detection.py tests/utils/test_moderation_integration.py
+pytest tests/algorithm/prompts/test_evidence_masking.py tests/utils/test_lexicon_resource.py tests/utils/test_moderation_mask.py tests/utils/test_moderation_retry.py tests/utils/test_moderation_detection.py tests/utils/test_moderation_integration.py
 ```
 
 重点覆盖原有三次／四次预算、非风控错误、两侧切换、开关关闭、零命中继续原有尝试、
@@ -136,5 +174,7 @@ pytest tests/utils/test_lexicon_resource.py tests/utils/test_moderation_mask.py 
 使用内存 HTTP transport 驱动真实 OpenAI SDK 和 OpenJiuwen，验证 200/filter、
 部分正文后的流内 error，以及 GLM 顶层判侧字段穿过异常包装后仍可读取。
 这些集成测试不访问真实平台，不使用真实 key。
+资料范围回归覆盖任务与正文同词、JSON 键与 ID 日期保护、引用正文伪造分隔符、
+正常及命中域名地址、原消息及上下文不变、未知范围不处理，以及初始请求序列化不变。
 报告、检索、简报、溯源和工作流的原有非在线测试应同步回归。
 这些测试不证明真实平台救回率、端到端成本或报告质量；须另做在线实验。

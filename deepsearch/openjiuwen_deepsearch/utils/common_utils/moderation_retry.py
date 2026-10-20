@@ -26,7 +26,7 @@ class ModerationRetryPolicy:
 
         prepared = messages
         if self.mask_input:
-            prepared, _, _ = moderation_mask.mask_messages(prepared, 1, lexicon_dir)
+            prepared, _, _ = moderation_mask.mask_messages(prepared, 1, lexicon_dir, evidence_only=True)
         if self.constrain_output:
             already_present = any(
                 (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "user"

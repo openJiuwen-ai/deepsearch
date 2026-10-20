@@ -1,3 +1,4 @@
 include tools/build_moderation_lexicon.py
+include tools/moderation_lexicon_exclusions.json
 recursive-include openjiuwen_deepsearch/utils/common_utils/data/sensitive_lexicon lexicon.bin manifest.json LICENSE
 recursive-exclude openjiuwen_deepsearch/utils/common_utils/data/sensitive_lexicon *.txt
