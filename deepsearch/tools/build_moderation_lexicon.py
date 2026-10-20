@@ -48,7 +48,14 @@ def load_exclusions(path: Path) -> tuple[dict, dict[str, str], dict[str, str], s
     return policy, indexes[0], indexes[1], hashlib.sha256(data).hexdigest()
 
 
-def build(source: Path, destination: Path, exclusions: Path = DEFAULT_EXCLUSIONS) -> dict:
+def build(
+    source: Path, destination: Path, exclusions: Path = DEFAULT_EXCLUSIONS,
+    *, source_revision: str | None = None,
+) -> dict:
+    if source_revision is not None and (
+        not isinstance(source_revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision)
+    ):
+        raise ValueError("Source revision must be a full 40-character Git commit SHA")
     files = sorted(source.glob("*.txt"))
     if not files:
         raise ValueError("Source directory contains no text lexicons")
@@ -98,6 +105,8 @@ def build(source: Path, destination: Path, exclusions: Path = DEFAULT_EXCLUSIONS
         "source_license": "MIT",
         "terms_sha256": hashlib.sha256("\n".join(sorted(terms)).encode("utf-8")).hexdigest(),
     }
+    if source_revision is not None:
+        manifest["source_revision"] = source_revision.lower()
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "lexicon.bin").write_bytes(data)
     (destination / "manifest.json").write_text(
@@ -110,11 +119,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", required=True, type=Path)
     parser.add_argument(
+        "--source-revision",
+        help="Full upstream Git commit SHA matching the source files (verified by the builder operator)",
+    )
+    parser.add_argument(
         "--output-dir", type=Path,
         default=PACKAGE_ROOT / "openjiuwen_deepsearch/utils/common_utils/data/sensitive_lexicon",
     )
     args = parser.parse_args()
-    print(json.dumps(build(args.source_dir, args.output_dir), ensure_ascii=True))
+    print(json.dumps(build(args.source_dir, args.output_dir, source_revision=args.source_revision), ensure_ascii=True))
 
 
 if __name__ == "__main__":

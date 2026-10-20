@@ -113,10 +113,13 @@ Copyright (c) 2024~2099 Konsheng，MIT License；分发时保留随附版权与�
 构建者独立获取授权词表，在 SDK 根目录执行：
 
 ```bash
-python tools/build_moderation_lexicon.py --source-dir /path/to/Sensitive-lexicon/Vocabulary
+python tools/build_moderation_lexicon.py --source-dir /path/to/Sensitive-lexicon/Vocabulary \
+  --source-revision d967c30b053fa40b06c5a0dddf0be493f2dfae46
 ```
 
 生成器不联网、不复制原始词表，相同来源与排除策略生成相同字节。
+`--source-revision` 为可选的上游完整 40 位 commit SHA，写入 manifest 的 `source_revision`；不改变词表二进制或运行时匹配。上例为当前资源的来源版本，换用其他版本时必须相应更新。
+构建者须核实来源文件与该提交一致（没有本地修改）；脚本只校验 SHA 格式，不自动调用 Git 或验证提交内容。未提供时不写该字段，不猜测来源版本。
 源码包保留生成工具及排除策略，wheel 保留运行时资源；外部文本目录仍可加载。
 普通词排除忽略大小写；上下文误伤条目可用原始 UTF-8 词面的 SHA-256 标识，避免将该词面重新写入源码，不是运行时哈希匹配。纯时间片段规则不要求日期有效，也不批量删除带事件描述的所有日期词条。
 已复核的普通英文词、中文普通词及中性标签按完整词条排除，不删除包含它们的较长词条。

@@ -29,5 +29,6 @@
   "exclusion_policy_sha256": "6f198f89f498e7407c74423bab2490795e59116db1a63aaa53c44132f6c534dc",
   "source_url": "https://github.com/Konsheng/Sensitive-lexicon",
   "source_license": "MIT",
-  "terms_sha256": "1314d18a756539a7c9c893bfaa0c4d999d09e051d0535401a2e33493cb71cc97"
+  "terms_sha256": "1314d18a756539a7c9c893bfaa0c4d999d09e051d0535401a2e33493cb71cc97",
+  "source_revision": "d967c30b053fa40b06c5a0dddf0be493f2dfae46"
 }

@@ -62,18 +62,42 @@ def test_builder_reproduces_resources_without_plaintext_copy(tmp_path):
     (source / "sample.txt").write_text("example\nexample\n测试\nx\n# ignored\n24\n509\n２４\n", encoding="utf-8")
     builder = Path(__file__).resolve().parents[2] / "tools/build_moderation_lexicon.py"
     outputs = [tmp_path / "one", tmp_path / "two"]
+    revision = "A" * 40
     for destination in outputs:
         subprocess.run(
-            [sys.executable, str(builder), "--source-dir", str(source), "--output-dir", str(destination)],
+            [sys.executable, str(builder), "--source-dir", str(source), "--output-dir", str(destination),
+             "--source-revision", revision],
             check=True, capture_output=True, text=True,
         )
     assert (outputs[0] / "lexicon.bin").read_bytes() == (outputs[1] / "lexicon.bin").read_bytes()
+    assert (outputs[0] / "manifest.json").read_bytes() == (outputs[1] / "manifest.json").read_bytes()
     manifest = json.loads((outputs[0] / "manifest.json").read_text())
+    assert manifest["source_revision"] == revision.lower()
     assert manifest["term_count"] == 2
     assert manifest["source_term_count"] == 5
     assert manifest["excluded_decimal_count"] == 3
     assert codec.decode_lexicon((outputs[0] / "lexicon.bin").read_bytes(), manifest["sha256"]) == frozenset({"example", "测试"})
     assert set(p.name for p in outputs[0].iterdir()) == {"lexicon.bin", "manifest.json"}
+
+
+def test_source_revision_only_changes_manifest_metadata(tmp_path, builder):
+    source = tmp_path / "input"
+    source.mkdir()
+    (source / "sample.txt").write_text("example\n测试\n", encoding="utf-8")
+    original = builder.build(source, tmp_path / "without")
+    traced = builder.build(source, tmp_path / "with", source_revision="a" * 40)
+    assert "source_revision" not in original
+    assert traced.pop("source_revision") == "a" * 40
+    assert original == traced
+    assert (tmp_path / "without/lexicon.bin").read_bytes() == (tmp_path / "with/lexicon.bin").read_bytes()
+
+
+@pytest.mark.parametrize("revision", ["", "main", "a" * 7, "g" * 40, "a" * 41, 123])
+def test_builder_rejects_invalid_source_revision_before_writing(tmp_path, builder, revision):
+    destination = tmp_path / "output"
+    with pytest.raises(ValueError, match="Source revision"):
+        builder.build(tmp_path, destination, source_revision=revision)
+    assert not destination.exists()
 
 
 def test_builder_filters_reviewed_words_and_temporal_fragments(tmp_path, builder):
@@ -193,6 +217,7 @@ def test_packaged_manifest_matches_loaded_terms():
     terms = moderation_mask._load_lexicon_bundled()
     assert len(terms) == manifest["term_count"] == 49877
     assert manifest["source_term_count"] == 50837
+    assert manifest["source_revision"] == "d967c30b053fa40b06c5a0dddf0be493f2dfae46"
     assert manifest["excluded_decimal_count"] == 869
     assert manifest["excluded_temporal_count"] == 20
     assert manifest["excluded_reviewed_count"] == 71
