@@ -516,7 +516,9 @@ class XYChartMermaidGenerator:
             len(max_tick_text) * cls.MIN_PX_PER_TICK_CHAR + cls.TICK_LABEL_MARGIN_PX,
         )
         tick_area = tick_count * px_per_tick
-        max_weight = max((cls._label_weight_length(l) for l in labels), default=0.0)
+        max_weight = max(
+            (cls._label_weight_length(label) for label in labels), default=0.0
+        )
         label_area = max_weight * 7
         return tick_area + label_area + cls.LEFT_AXIS_MARGIN_PX
 
