@@ -8,8 +8,101 @@ from openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research impo
     CitationCheckerResearch,
     SourceTracerCitationMarker,
 )
-from openjiuwen_deepsearch.common.exception import CustomIndexException
-from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import ensure_source_trace_id
+from openjiuwen_deepsearch.algorithm.source_trace.source_tracer_preprocessors import (
+    generate_origin_report_data,
+)
+
+
+def test_marker_without_id_is_removed_without_consuming_id_bound_source():
+    """A marker without an ID cannot consume a later ID-bound source."""
+    checker = CitationCheckerResearch("mock_model")
+    reserved = "reserved-source"
+    text = {
+        "article": (
+            "旧引用[source_tracer_result][Old](https://example.com/report-2025)"
+            "新引用[source_tracer_result][New](https://example.com/report-2026)"
+            f"<!--source-trace-id:{reserved}-->"
+        )
+    }
+    datas = [{
+        "source_trace_id": reserved,
+        "url": "https://example.com/report-2026",
+        "title": "New",
+        "content": "new evidence",
+        "valid": True,
+        "score": 1,
+    }]
+
+    result_text, result_datas = checker.transform_references(text, datas)
+
+    assert "report-2025" not in result_text
+    assert "report-2026" in result_text
+    assert [item["source_trace_id"] for item in result_datas] == [reserved]
+
+
+def test_filtered_repeated_citation_keeps_later_instance_when_datas_are_reordered():
+    """A filtered early instance must not consume a later repeated citation's data."""
+    generated = generate_origin_report_data(
+        "第一条事实[citation:1]。第二条事实[citation:1]。第三条事实[citation:2]。",
+        [
+            {"index": 1, "title": "来源一", "url": "https://example.com/one", "original_content": "证据一"},
+            {"index": 2, "title": "来源二", "url": "https://example.com/two", "original_content": "证据二"},
+        ],
+    )
+    first, second, third = generated["origin_report_data"]
+    second["valid"] = True
+    third["valid"] = True
+
+    result_text, result_datas = CitationCheckerResearch("mock_model").transform_references(
+        {"article": generated["modified_report"]}, [third, second]
+    )
+
+    assert first["source_trace_id"] not in result_text
+    assert second["source_trace_id"] not in result_text
+    assert third["source_trace_id"] not in result_text
+    assert "第一条事实[checked_citation" not in result_text
+    assert "第二条事实[checked_citation:0]" in result_text
+    assert "第三条事实[checked_citation:1]" in result_text
+    assert [item["source_trace_id"] for item in result_datas] == [
+        second["source_trace_id"], third["source_trace_id"]
+    ]
+
+
+@pytest.mark.parametrize("marker_count,data_count", [(1, 2), (2, 1), (2, 2)])
+@pytest.mark.parametrize("reverse_datas", [False, True])
+def test_duplicate_source_identity_removes_ambiguous_markers_only(
+    marker_count, data_count, reverse_datas
+):
+    """Duplicate identities cannot bind evidence by position, even after filtering."""
+    checker = CitationCheckerResearch("mock_model")
+    duplicate_marker = (
+        "[source_tracer_result][Shared](https://example.com/shared)"
+        "<!--source-trace-id:duplicate-->"
+    )
+    article = "".join(f"Fact {index}{duplicate_marker}." for index in range(marker_count))
+    article += (
+        "Good fact[source_tracer_result][Good](https://example.com/good)"
+        "<!--source-trace-id:unique-->."
+    )
+    datas = [
+        {"source_trace_id": "duplicate", "url": "https://example.com/shared",
+         "title": "Shared", "chunk": f"Evidence {index}", "valid": True, "score": 0.9}
+        for index in range(data_count)
+    ]
+    datas.append({"source_trace_id": "unique", "url": "https://example.com/good",
+                  "title": "Good", "valid": True, "score": 0.9})
+    if reverse_datas:
+        datas.reverse()
+
+    result_text, result_datas = checker.transform_references({"article": article}, datas)
+
+    assert result_text.startswith("".join(f"Fact {index}." for index in range(marker_count)))
+    assert "Good fact[checked_citation:0]" in result_text
+    assert "https://example.com/shared" not in result_text
+    assert "source_tracer_result" not in result_text
+    assert [data["source_trace_id"] for data in result_datas] == ["unique"]
+    assert checker.invalid_citation_counts["ambiguous source identity"] == marker_count
 
 
 def make_source_tracer_marker(start, end, string="mocked string"):
@@ -306,33 +399,45 @@ class TestResearchCitationChecker:
         assert datas[0]['valid'] is False
 
     def test_process_single_citation_index_out_of_range(self):
-        """Test processing a citation with index out of range."""
+        """An unmatched citation is skipped instead of aborting SourceTracer."""
         para = "这是一个测试[source_tracer_result][示例](https://example.com)引用。"
         marker = self.checker._iter_source_tracer_citation_markers(para, self.checker.citation_regex)[0]
         datas = []  # Empty datas
         processed_citation_urls = {}
         data_index = 0
 
-        with pytest.raises(CustomIndexException):
-            self.checker.validate_and_process_single_citation(
-                marker, datas, processed_citation_urls, data_index)
+        assert self.checker.validate_and_process_single_citation(
+            marker, datas, processed_citation_urls, data_index
+        ) == []
+        assert self.checker.invalid_citation_counts["missing source data"] == 1
 
     def test_process_single_paragraph_length_mismatch(self):
-        """Test processing a paragraph with citation length mismatch."""
+        """A validation skip does not turn into a paragraph-level exception."""
         para = "这是一个测试[source_tracer_result][示例](https://example.com)引用。"
-        datas = []
+        datas = [{"url": "https://example.com", "valid": True}]
         data_index = 0
 
-        # Mock to simulate that validate_and_process_single_citation raises an exception
+        # Simulate a validator that skips the marker without deleting data.
         with patch.object(self.checker, 'validate_and_process_single_citation') as mock_process:
-            mock_process.side_effect = CustomIndexException(
-                StatusCode.PARAM_CHECK_ERROR_INDEX_OUT_OF_RANGE.code,
-                "Index out of range"
-            )
+            mock_process.return_value = []
 
-            with pytest.raises(CustomIndexException):
-                self.checker.process_single_paragraph_citations(
-                    para, datas, data_index)
+            result_para, result_index, del_indices = self.checker.process_single_paragraph_citations(
+                para, datas, data_index
+            )
+            assert result_para == para
+            assert result_index == 1
+            assert del_indices == []
+
+    def test_process_single_paragraph_removes_excess_markers_without_data(self):
+        para = "正文[source_tracer_result][示例](https://example.com)结尾"
+
+        result_para, result_index, del_indices = self.checker.process_single_paragraph_citations(
+            para, [], 0
+        )
+
+        assert result_para == "正文结尾"
+        assert result_index == 0
+        assert del_indices == []
 
     @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     def test_preprocess_text_and_datas_with_logging(self, mock_log_manager):
@@ -345,7 +450,7 @@ class TestResearchCitationChecker:
             text, datas)
 
         assert result_text == "这是一个测试文章"
-        assert result_datas == datas
+        assert result_datas == []
 
     def test_replace_inline_citations_with_image(self):
         """Test replacement with image citation."""
@@ -373,6 +478,124 @@ class TestResearchCitationChecker:
         assert "citation_start_offset" not in datas[0]
         assert "citation_end_offset" not in datas[0]
 
+    def test_transform_references_matches_sources_by_id_not_data_position(self):
+        url_a = "https://example.com/a"
+        url_b = "https://example.com/b"
+        text = {
+            "article": (
+                f"B[source_tracer_result][B]({url_b})<!--source-trace-id:id-b--> "
+                f"A[source_tracer_result][A]({url_a})<!--source-trace-id:id-a-->"
+            )
+        }
+        # Deliberately reverse source-data order. Position-based association
+        # would incorrectly invalidate both citations.
+        datas = [
+            {"source_trace_id": "id-a", "url": url_a, "title": "A", "valid": True, "score": 0.9},
+            {"source_trace_id": "id-b", "url": url_b, "title": "B", "valid": True, "score": 0.8},
+        ]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert f"[checked_citation:0][[1]]({url_b})" in result_text
+        assert f"[checked_citation:1][[2]]({url_a})" in result_text
+        assert [item["url"] for item in result_datas] == [url_b, url_a]
+
+    def test_transform_references_removes_only_unmatched_citation(self):
+        known_url = "https://example.com/known"
+        missing_url = "https://example.com/missing"
+        text = {
+            "article": (
+                f"坏引用[source_tracer_result][Missing]({missing_url})<!--source-trace-id:missing-->；"
+                f"好引用[source_tracer_result][Known]({known_url})<!--source-trace-id:known-->"
+            )
+        }
+        datas = [{"source_trace_id": "known", "url": known_url, "title": "Known", "valid": True, "score": 0.9}]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert missing_url not in result_text
+        assert f"[checked_citation:0][[1]]({known_url})" in result_text
+        assert [item["url"] for item in result_datas] == [known_url]
+        assert self.checker.invalid_citation_counts["missing source data"] == 1
+
+    def test_transform_references_removes_markers_when_all_source_data_is_missing(self):
+        text = {
+            "article": (
+                "Body[source_tracer_result][Missing](https://example.com/missing)"
+            )
+        }
+
+        result_text, result_datas = self.checker.transform_references(text, [])
+
+        assert result_text == "Body\n\n"
+        assert result_datas == []
+        assert self.checker.invalid_citation_counts["missing source data"] == 1
+
+    def test_transform_references_prefers_source_trace_id_for_same_url(self):
+        url = "https://example.com/shared"
+        data_a = {
+            "source_trace_id": "source-a",
+            "url": url,
+            "title": "A",
+            "content": "source A content",
+            "valid": True,
+            "score": 0.9,
+        }
+        data_b = {
+            "source_trace_id": "source-b",
+            "url": url,
+            "title": "B",
+            "content": "source B content",
+            "valid": True,
+            "score": 0.8,
+        }
+        text = {
+            "article": (
+                f"B[source_tracer_result][B]({url})<!--source-trace-id:source-b-->。独立正文。"
+                f"A[source_tracer_result][A]({url})<!--source-trace-id:source-a-->"
+            )
+        }
+
+        _result_text, result_datas = self.checker.transform_references(text, [data_a, data_b])
+
+        assert [item["source_trace_id"] for item in result_datas] == ["source-b", "source-a"]
+        assert [item["content"] for item in result_datas] == ["source B content", "source A content"]
+
+    def test_transform_references_uses_unique_ids_for_identical_source_instances(self):
+        url = "https://example.com/shared"
+        data_a = {"url": url, "title": "Shared", "content": "Same", "valid": True, "score": 0.9}
+        data_b = {"url": url, "title": "Shared", "content": "Same", "valid": True, "score": 0.8}
+        source_id_a = ensure_source_trace_id(data_a)
+        source_id_b = ensure_source_trace_id(data_b)
+        text = {
+            "article": (
+                f"B[source_tracer_result][Shared]({url})<!--source-trace-id:{source_id_b}-->"
+                " independent text "
+                f"A[source_tracer_result][Shared]({url})<!--source-trace-id:{source_id_a}-->"
+            )
+        }
+
+        _result_text, result_datas = self.checker.transform_references(text, [data_a, data_b])
+
+        assert source_id_a != source_id_b
+        assert [item["score"] for item in result_datas] == [0.8, 0.9]
+
+    def test_transform_references_removes_marker_without_source_trace_id(self):
+        url = "https://example.com/legacy"
+        text = {"article": f"正文[source_tracer_result][Legacy]({url})"}
+        datas = [{
+            "source_trace_id": "safe--><script>alert(1)</script>",
+            "url": url,
+            "title": "Legacy",
+            "valid": True,
+            "score": 0.9,
+        }]
+
+        result_text, result_datas = self.checker.transform_references(text, datas)
+
+        assert "[source_tracer_result]" not in result_text
+        assert result_datas == []
+
     @patch('openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research.LogManager')
     def test_transform_references_with_logging(self, mock_log_manager):
         """Test transform references with logging enabled."""
@@ -394,11 +617,12 @@ class TestResearchCitationChecker:
             "article": (
                 "混合检索说明[source_tracer_result]"
                 "[Build Smarter RAG with Routing and Hybrid Retrieval\n - Milvus Blog]"
-                f"({url})结束。"
+                f"({url})<!--source-trace-id:multiline-source-->结束。"
             )
         }
         datas = [
             {
+                "source_trace_id": "multiline-source",
                 "url": url,
                 "title": "Build Smarter RAG with Routing and Hybrid Retrieval\n - Milvus Blog",
                 "content": "Content 1",
@@ -420,13 +644,13 @@ class TestResearchCitationChecker:
         url = "https://example.com/a_(b_(c))"
         text = {
             "article": (
-                f"第一处[source_tracer_result][标题A]({url})，"
-                f"第二处[source_tracer_result][标题A]({url})。"
+                f"第一处[source_tracer_result][标题A]({url})<!--source-trace-id:nested-a-->，"
+                f"第二处[source_tracer_result][标题A]({url})<!--source-trace-id:nested-b-->。"
             )
         }
         datas = [
-            {"url": url, "title": "标题A", "content": "Content 1", "valid": True, "score": 0.9},
-            {"url": url, "title": "标题A", "content": "Content 2", "valid": True, "score": 0.8},
+            {"source_trace_id": "nested-a", "url": url, "title": "标题A", "content": "Content 1", "valid": True, "score": 0.9},
+            {"source_trace_id": "nested-b", "url": url, "title": "标题A", "content": "Content 2", "valid": True, "score": 0.8},
         ]
 
         result_text, result_datas = self.checker.transform_references(text, datas)
@@ -446,15 +670,15 @@ class TestResearchCitationChecker:
         url_b = "https://example.com/b"
         text = {
             "article": (
-                f"正文[source_tracer_result][标题A]({url_a})"
-                f"[source_tracer_result][标题B]({url_b})"
-                f"[source_tracer_result][标题A]({url_a})结束。"
+                f"正文[source_tracer_result][标题A]({url_a})<!--source-trace-id:dedup-a1-->"
+                f"[source_tracer_result][标题B]({url_b})<!--source-trace-id:dedup-b-->"
+                f"[source_tracer_result][标题A]({url_a})<!--source-trace-id:dedup-a2-->结束。"
             )
         }
         datas = [
-            {"url": url_a, "title": "标题A", "content": "A1", "valid": True, "score": 0.9},
-            {"url": url_b, "title": "标题B", "content": "B", "valid": True, "score": 0.8},
-            {"url": url_a, "title": "标题A", "content": "A2", "valid": True, "score": 0.7},
+            {"source_trace_id": "dedup-a1", "url": url_a, "title": "标题A", "content": "A1", "valid": True, "score": 0.9},
+            {"source_trace_id": "dedup-b", "url": url_b, "title": "标题B", "content": "B", "valid": True, "score": 0.8},
+            {"source_trace_id": "dedup-a2", "url": url_a, "title": "标题A", "content": "A2", "valid": True, "score": 0.7},
         ]
 
         result_text, result_datas = self.checker.transform_references(text, datas)
@@ -517,11 +741,11 @@ class TestResearchCitationChecker:
     async def test_end_to_end_citation_processing(self):
         """Test end-to-end citation processing with realistic data."""
         text = {
-            'article': "这是一个测试文章，包含[source_tracer_result][示例1](https://example1.com)和[source_tracer_result][示例2](https://example2.com)引用。"}
+            'article': "这是一个测试文章，包含[source_tracer_result][示例1](https://example1.com)<!--source-trace-id:example-1-->和[source_tracer_result][示例2](https://example2.com)<!--source-trace-id:example-2-->引用。"}
         datas = [
-            {'url': 'https://example1.com', 'title': '示例1',
+            {'source_trace_id': 'example-1', 'url': 'https://example1.com', 'title': '示例1',
              'valid': True, 'score': 0.8},
-            {'url': 'https://example2.com', 'title': '示例2',
+            {'source_trace_id': 'example-2', 'url': 'https://example2.com', 'title': '示例2',
              'valid': True, 'score': 0.9}
         ]
 

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import markdown
 
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import SOURCE_TRACE_ID_COMMENT_RE
+
 logger = logging.getLogger(__name__)
 
 TEXT_READ_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk")
@@ -307,7 +309,8 @@ def strip_internal_citation_markers(text: str) -> str:
         str: 清理内部标记后的 Markdown 文本。
     """
     text = CHECKED_CITATION_RE.sub(r"\1", text)
-    return LEGACY_CITATION_RE.sub("", text)
+    text = LEGACY_CITATION_RE.sub("", text)
+    return SOURCE_TRACE_ID_COMMENT_RE.sub("", text)
 
 
 def normalize_reference_lines(text: str) -> str:
