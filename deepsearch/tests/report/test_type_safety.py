@@ -484,6 +484,114 @@ def test_d3_tick_count_matches_d3_array():
 
 
 # =====================================================================
+# _coerce_horizontal_tick_density — upstream tick density cap (bug fix)
+# =====================================================================
+
+def test_coerce_horizontal_tick_density_trigger_input():
+    """触发输入 [100000, 100100, 100200] 修复目标：
+    y_range=300 → d3 ticks=16 (step=20) 重叠；
+    coerce 后 y_range 应放大到使 d3 ticks ≤ 8（y_range=375, step=50, ticks=8）。
+    """
+    y_min, y_max = 99950.0, 100250.0
+    new_min, new_max = XYChartMermaidGenerator._coerce_horizontal_tick_density(y_min, y_max)
+    new_range = new_max - new_min
+    assert new_min == y_min, "y_min 不应下移（数据下界不变）"
+    assert new_max >= y_max, "y_max 只能上移"
+    assert XYChartMermaidGenerator._d3_tick_count(new_range) <= XYChartMermaidGenerator.MAX_HORIZONTAL_TICKS, \
+        f"coerce 后 d3 ticks={XYChartMermaidGenerator._d3_tick_count(new_range)} 仍超 {XYChartMermaidGenerator.MAX_HORIZONTAL_TICKS}"
+
+
+def test_coerce_horizontal_tick_density_already_within_limit():
+    """y_range 已在阈值内时，coerce 应原样返回（如 y_range=7500, ticks=8）。"""
+    y_min, y_max = 0.0, 7500.0
+    new_min, new_max = XYChartMermaidGenerator._coerce_horizontal_tick_density(y_min, y_max)
+    assert (new_min, new_max) == (y_min, y_max)
+
+
+def test_coerce_horizontal_tick_density_zero_range():
+    """y_range=0 时不应死循环，原样返回。"""
+    y_min, y_max = 100.0, 100.0
+    new_min, new_max = XYChartMermaidGenerator._coerce_horizontal_tick_density(y_min, y_max)
+    assert (new_min, new_max) == (y_min, y_max)
+
+
+def test_coerce_horizontal_tick_density_extreme_small_range():
+    """极端小 y_range（1e-9）也不应死循环，有迭代上限保护。"""
+    y_min, y_max = 0.0, 1e-9
+    new_min, new_max = XYChartMermaidGenerator._coerce_horizontal_tick_density(y_min, y_max)
+    assert new_max >= y_max
+
+
+# =====================================================================
+# _min_width_for_ticks — dynamic tick text width + label area (bug fix)
+# =====================================================================
+
+def test_min_width_for_ticks_six_digit_values():
+    """6 位数值（如 100250）应比 4 位数值（如 7500）需要更多 px/tick。
+    6 位: px_per_tick = max(50, 6*8+16) = 64
+    4 位: px_per_tick = max(50, 4*8+16) = 50
+    """
+    w6 = XYChartMermaidGenerator._min_width_for_ticks(
+        300.0, ["协议兼容性与本地联动能力", "主动智能场景覆盖数量", "一站式安装与售后时效"]
+    )
+    w4 = XYChartMermaidGenerator._min_width_for_ticks(
+        7500.0, ["项目甲", "项目乙"]
+    )
+    assert w6 > w4, f"6-digit+long-label case should need more width: w6={w6}, w4={w4}"
+
+
+def test_min_width_for_ticks_grows_with_label_length():
+    """固定 y_range，标签越长 width 越大（验证标签区预留）。"""
+    short_labels = ["甲", "乙", "丙"]
+    long_labels = ["协议兼容性与本地联动能力", "主动智能场景覆盖数量", "一站式安装与售后时效"]
+    w_short = XYChartMermaidGenerator._min_width_for_ticks(300.0, short_labels)
+    w_long = XYChartMermaidGenerator._min_width_for_ticks(300.0, long_labels)
+    assert w_long > w_short, f"longer labels should need more width: short={w_short}, long={w_long}"
+
+
+def test_min_width_for_ticks_zero_range():
+    """y_range=0 返回 0（与原行为一致）。"""
+    assert XYChartMermaidGenerator._min_width_for_ticks(0.0, ["甲", "乙"]) == 0.0
+
+
+# =====================================================================
+# generate_from_json — 触发输入端到端修复验证
+# =====================================================================
+
+def test_trigger_input_no_tick_overlap():
+    """触发输入：3 条六位数值 + 长 CJK 标签 + 同单位"元"。
+    修复目标：
+    - 走 use_horizontal（标签长）
+    - y_range 经 _coerce 后 d3 ticks ≤ 8
+    - width 足以容纳刻度+标签
+    - y_max 不应小于原数据最大值
+    """
+    data = {
+        "image_type": "bar",
+        "unit": "元",
+        "records": [
+            ["协议兼容性与本地联动能力", 100000],
+            ["主动智能场景覆盖数量", 100100],
+            ["一站式安装与售后时效", 100200],
+        ],
+    }
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    assert "chartOrientation: horizontal" in result
+    m = re.search(r'y-axis "[^"]*" (\d+(?:\.\d+)?) --> (\d+(?:\.\d+)?)', result)
+    assert m, f"y-axis not found in: {result}"
+    y_min = float(m.group(1))
+    y_max = float(m.group(2))
+    y_range = y_max - y_min
+    assert XYChartMermaidGenerator._d3_tick_count(y_range) <= XYChartMermaidGenerator.MAX_HORIZONTAL_TICKS, \
+        f"y_range={y_range} d3 ticks={XYChartMermaidGenerator._d3_tick_count(y_range)} 超阈值"
+    m_w = re.search(r"width: (\d+)", result)
+    assert m_w, f"width not found in: {result}"
+    width = int(m_w.group(1))
+    assert width >= 430, f"width={width} 低于基础宽度 430"
+    assert y_max >= 100200, f"y_max={y_max} 小于数据最大值 100200"
+
+
+# =====================================================================
 # generate_from_json — tick density vs width constraint (bug fix)
 # =====================================================================
 

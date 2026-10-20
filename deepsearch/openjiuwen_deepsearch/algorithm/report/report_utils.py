@@ -373,6 +373,10 @@ class XYChartMermaidGenerator:
     )
     STEP_MULTIPLIERS = (1.0, 1.5, 2.0, 2.5, 5.0, 10.0)  # D3-aligned step sizes for fewer, rounder axis ticks
     MIN_PX_PER_TICK = 50  # minimum pixels per D3 tick label on a horizontal value axis
+    MAX_HORIZONTAL_TICKS = 8  # d3 tick count ceiling for horizontal charts
+    MIN_PX_PER_TICK_CHAR = 8  # approx px per char in default mermaid font
+    TICK_LABEL_MARGIN_PX = 16  # padding around tick text
+    LEFT_AXIS_MARGIN_PX = 40  # y-axis line + outer margins
 
     @classmethod
     def _sanitize_label(cls, label: str | None) -> str:
@@ -472,17 +476,49 @@ class XYChartMermaidGenerator:
         return int(y_range // step) + 1
 
     @classmethod
-    def _min_width_for_ticks(cls, y_range: float) -> float:
+    def _coerce_horizontal_tick_density(
+        cls, y_min: float, y_max: float
+    ) -> tuple[float, float]:
+        """Widen y_range so d3 emits at most MAX_HORIZONTAL_TICKS ticks.
+
+        d3's linear.ticks() targets ~10 ticks; for small ranges (e.g. 300)
+        it emits 15+ ticks causing horizontal-axis overlap. We bump y_max
+        until d3's tick count drops below the threshold. d3 step tiers are
+        ~2x apart, so a few 25% bumps land on a sparser tier quickly.
+        """
+        y_range = y_max - y_min
+        if y_range <= 0:
+            return y_min, y_max
+        for _ in range(8):
+            if cls._d3_tick_count(y_range) <= cls.MAX_HORIZONTAL_TICKS:
+                break
+            y_range *= 1.25
+        return y_min, y_min + y_range
+
+    @classmethod
+    def _min_width_for_ticks(
+        cls, y_range: float, labels: list[str]
+    ) -> float:
         """Return the minimum chart width that avoids tick label overlap
         on a horizontal value axis.
 
-        Uses d3-array's real tick-count algorithm (see ``_d3_tick_count``)
-        and requires at least ``MIN_PX_PER_TICK`` pixels per tick label.
+        Accounts for: tick text width (via _format_num digit count),
+        left-side category label area (via _label_weight_length), and
+        fixed axis margins. Uses d3-array's real tick-count algorithm
+        (see ``_d3_tick_count``).
         """
         tick_count = cls._d3_tick_count(y_range)
         if tick_count <= 0:
             return 0.0
-        return tick_count * cls.MIN_PX_PER_TICK
+        max_tick_text = cls._format_num(y_range)
+        px_per_tick = max(
+            cls.MIN_PX_PER_TICK,
+            len(max_tick_text) * cls.MIN_PX_PER_TICK_CHAR + cls.TICK_LABEL_MARGIN_PX,
+        )
+        tick_area = tick_count * px_per_tick
+        max_weight = max((cls._label_weight_length(l) for l in labels), default=0.0)
+        label_area = max_weight * 7
+        return tick_area + label_area + cls.LEFT_AXIS_MARGIN_PX
 
     @classmethod
     def generate_from_json(cls, json_string: str) -> str:
@@ -540,9 +576,11 @@ class XYChartMermaidGenerator:
         # spacing depends on height, not width — widening width there does
         # nothing for tick overlap.
         if use_horizontal:
+            y_min, y_max = cls._coerce_horizontal_tick_density(y_min, y_max)
+            y_max_s = cls._format_num(y_max)
             y_range = y_max - y_min
             if y_range > 0:
-                width = max(width, cls._min_width_for_ticks(y_range))
+                width = max(width, cls._min_width_for_ticks(y_range, x_values))
         # Keep the Mermaid directive itself standard so downstream validators can
         # infer the chart type from the `bar [...]`/`line [...]` series. The
         # horizontal hint uses the official xyChart.chartOrientation key so both
