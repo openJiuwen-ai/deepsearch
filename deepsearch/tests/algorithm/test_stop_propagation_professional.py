@@ -97,7 +97,7 @@ async def test_visualization_extract_stop_not_swallowed_as_failure(monkeypatch):
     """数据提取链停止必须上抛，不得降级为 rs_success=False 的失败返回。"""
     invoke = _stop_mock()
     monkeypatch.setattr(VIZ_MODULE + ".ainvoke_llm_with_stats", invoke)
-    monkeypatch.setattr(VIZ_MODULE + ".apply_system_prompt", lambda *a, **k: [])
+    monkeypatch.setattr(VIZ_MODULE + ".build_prompt_messages", lambda *a, **k: [])
     with pytest.raises(StopRequested):
         await _make_viz()._extract_data_from_text({"section_idx": 1})
     assert invoke.await_count == 1
@@ -108,7 +108,7 @@ async def test_visualization_compliance_stop_not_retried(monkeypatch):
     """合规校验重试循环遇停止必须立即上抛，不得烧完重试预算。"""
     invoke = _stop_mock()
     monkeypatch.setattr(VIZ_MODULE + ".ainvoke_llm_with_stats", invoke)
-    monkeypatch.setattr(VIZ_MODULE + ".apply_system_prompt", lambda *a, **k: [])
+    monkeypatch.setattr(VIZ_MODULE + ".build_prompt_messages", lambda *a, **k: [])
     with pytest.raises(StopRequested):
         await _make_viz()._validate_chart_compliance("{}", 1, "大纲", 3)
     assert invoke.await_count == 1
@@ -119,7 +119,7 @@ async def test_visualization_traceability_stop_not_retried(monkeypatch):
     """溯源校验重试循环遇停止必须立即上抛，不得烧完重试预算。"""
     invoke = _stop_mock()
     monkeypatch.setattr(VIZ_MODULE + ".ainvoke_llm_with_stats", invoke)
-    monkeypatch.setattr(VIZ_MODULE + ".apply_system_prompt", lambda *a, **k: [])
+    monkeypatch.setattr(VIZ_MODULE + ".build_prompt_messages", lambda *a, **k: [])
     with pytest.raises(StopRequested):
         await _make_viz()._validate_chart_traceability("{}", "原文", 1, 3)
     assert invoke.await_count == 1
@@ -131,15 +131,15 @@ async def test_visualization_gather_reraises_stop_before_aggregation(monkeypatch
     不得置空内容吞成"无图表"假完成。"""
     invoke = _stop_mock()
     monkeypatch.setattr(VIZ_MODULE + ".ainvoke_llm_with_stats", invoke)
-    monkeypatch.setattr(VIZ_MODULE + ".apply_system_prompt", lambda *a, **k: [])
+    monkeypatch.setattr(VIZ_MODULE + ".build_prompt_messages", lambda *a, **k: [])
     viz = _make_viz()
     current_inputs = {
         "section_idx": 1,
         "sub_section_outline": "图表大纲",
         "section_task": "1. 测试章节",
         "classified_content": [
-            {"data_density": 0.95, "passage_text": "内容甲"},
-            {"data_density": 0.95, "passage_text": "内容乙"},
+            {"is_fulltext": True, "data_density": 0.95, "passage_text": "内容甲"},
+            {"is_fulltext": True, "data_density": 0.95, "passage_text": "内容乙"},
         ],
     }
     with pytest.raises(StopRequested):
@@ -269,7 +269,7 @@ async def test_webpage_enrichment_select_stop_propagates(monkeypatch):
     """候选选择链停止必须上抛，不得降级为空列表的"正常完成"。"""
     invoke = _stop_mock()
     monkeypatch.setattr(WE_MODULE + ".ainvoke_llm_with_stats", invoke)
-    monkeypatch.setattr(WE_MODULE + ".apply_system_prompt", lambda *a, **k: [])
+    monkeypatch.setattr(WE_MODULE + ".build_prompt_messages", lambda *a, **k: [])
     node = _make_enrichment_node()
     state = {
         "candidates": [{"url": "https://example.com", "doc_id": "d1"}],
@@ -287,7 +287,7 @@ async def test_webpage_enrichment_compress_stop_propagates(monkeypatch):
     """正文压缩链停止必须上抛，不得降级为 None 的"正常完成"。"""
     invoke = _stop_mock()
     monkeypatch.setattr(WE_MODULE + ".ainvoke_llm_with_stats", invoke)
-    monkeypatch.setattr(WE_MODULE + ".apply_system_prompt", lambda *a, **k: [])
+    monkeypatch.setattr(WE_MODULE + ".build_prompt_messages", lambda *a, **k: [])
     node = _make_enrichment_node()
     state = {"section_idx": 1, "step_title": "测试步骤"}
     doc_info = {"query": "查询", "title": "标题", "doc_id": "d1", "url": "https://example.com"}
@@ -448,7 +448,7 @@ async def test_chart_call_model_real_wrapper_stop_propagates_without_retry(monke
     返回 []（产码/占位/采集/VLM 外层的停止透传将全部不可达）。"""
     invoke = _stop_mock()
     monkeypatch.setattr(CG_UTILS_MODULE + ".ainvoke_llm_with_stats", invoke)
-    monkeypatch.setattr(CG_UTILS_MODULE + ".apply_system_prompt", lambda *a, **k: [])
+    monkeypatch.setattr(CG_UTILS_MODULE + ".build_prompt_messages", lambda *a, **k: [])
     monkeypatch.setattr(
         CG_UTILS_MODULE + ".llm_context",
         SimpleNamespace(get=lambda: {"": object()}),

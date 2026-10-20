@@ -25,7 +25,7 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/content_recognition.md`
+- `openjiuwen_deepsearch/algorithm/prompts/content_recognition/`
 
 主要测试：
 

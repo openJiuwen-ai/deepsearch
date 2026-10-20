@@ -12,6 +12,7 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
+    AgcAiNetworkingSearchAPIWrapper,
     XunfeiSearchAPIWrapper,
     TavilySearchAPIWrapper,
     PubMedSearchAPIWrapper,
@@ -42,6 +43,7 @@ from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_
 logger = logging.getLogger(__name__)
 
 search_engine_mapping = {
+    SearchEngine.AGC_AINETWORKING.value: AgcAiNetworkingSearchAPIWrapper,
     SearchEngine.TAVILY.value: TavilySearchAPIWrapper,
     SearchEngine.PUBMED.value: PubMedSearchAPIWrapper,
     SearchEngine.ARXIV.value: ArxivSearchAPIWrapper,
@@ -58,6 +60,7 @@ search_engine_mapping = {
 
 SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES = {
     SearchEngine.TAVILY.value,
+    SearchEngine.AGC_AINETWORKING.value,
 }
 
 
@@ -124,6 +127,28 @@ def apply_web_search_domain_constraints(
             exclude_domains,
             api_wrapper.include_domains,
             api_wrapper.exclude_domains,
+        )
+
+    elif search_engine_name == SearchEngine.AGC_AINETWORKING.value:
+        intent_sites = normalize_domains(include_domains)
+        configured_sites = normalize_domains(getattr(api_wrapper, "sites", None))
+        # 意图识别站点优先,配置站点补充;去重后取前 MAX_SITES_NUM 条
+        merged = intent_sites + [site for site in configured_sites if site not in intent_sites]
+        dropped = merged[20:]
+        if dropped:
+            logger.warning(
+                "apply_web_search_domain_constraints [%s]: %d sites dropped due to limit; dropped=%s",
+                search_engine_name, len(dropped), dropped,
+            )
+        api_wrapper.sites = merged[:20]
+        # exclude_domains ignored: 华为 API 无原生 exclude 参数，由收集器 process_common_search_result 通用后置过滤兜底
+        logger.info(
+            "apply_web_search_domain_constraints [%s]: intent include_domains=%s, "
+            "exclude_domains=%s (ignored: filtered by collector); merged sites=%s",
+            search_engine_name,
+            include_domains,
+            exclude_domains,
+            api_wrapper.sites,
         )
 
     return True

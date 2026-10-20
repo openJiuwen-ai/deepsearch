@@ -486,7 +486,7 @@ class TestCitationVerifyResearch:
         with patch.object(self.verifier, 'call_model', new_callable=AsyncMock) as mock_call_model:
             mock_call_model.return_value = json.dumps(expected_result)
             with patch(
-                    f'{MODULE_PATH}.apply_system_prompt') as mock_prompt:
+                    f'{MODULE_PATH}.build_prompt_messages') as mock_prompt:
                 mock_prompt.return_value = [
                     {"role": "system", "content": "test prompt"}]
 
@@ -510,7 +510,7 @@ class TestCitationVerifyResearch:
                 json.dumps(expected_result)
             ]
             with patch(
-                    f'{MODULE_PATH}.apply_system_prompt') as mock_prompt:
+                    f'{MODULE_PATH}.build_prompt_messages') as mock_prompt:
                 mock_prompt.return_value = [
                     {"role": "system", "content": "test prompt"}]
 
@@ -553,7 +553,7 @@ class TestCitationVerifyResearch:
         with patch.object(self.verifier, 'call_model', new_callable=AsyncMock) as mock_call_model:
             mock_call_model.side_effect = Exception("Always error")
             with patch(
-                    f'{MODULE_PATH}.apply_system_prompt') as mock_prompt:
+                    f'{MODULE_PATH}.build_prompt_messages') as mock_prompt:
                 mock_prompt.return_value = [
                     {"role": "system", "content": "test prompt"}]
 

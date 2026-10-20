@@ -29,16 +29,17 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/infer_validate_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_conclusion_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_filter_inference_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_structured_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_supplement_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/infer_extract_conclusion_prompt.md`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_validate_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_conclusion_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_filter_inference_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_structured_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_supplement_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/infer_extract_conclusion_prompt/`
 
 主要测试：
 
 - `tests/source_tracer_infer/test_infer.py`
+- `tests/source_tracer_infer/test_infer_call_model_validation.py`
 - `tests/source_tracer_infer/test_number_node.py`
 - `tests/source_tracer_infer/test_supplement_graph.py`
 
@@ -62,6 +63,7 @@
 - `llm_model_name`
 - `source_tracer_response`
 - `conclusion_with_records`
+- `all_classified_contents`：按章节组织的证据列表，供 `classify_search_record` 转换为 `{章节索引 → [{title, url, content}]}`。`content` 字段优先取非空白的 `passage_text`（段落级记录的提取文本），缺失或仅含空白时回退到 `original_content`（全文级记录的整篇文档），避免同一文档的 N 个段落各自携带整篇父文档全文导致 LLM 输入膨胀。
 
 输出：
 
@@ -76,6 +78,7 @@
 - 单个结论处理失败时返回空 infer message，不应阻塞其他结论。
 - 结论或搜索记录为空时跳过当前推理。
 - LLM 输出必须经过类型和长度检测。
+- 引用筛选的模型输出契约要求使用 JSON 整数 ID；为防止模型偶发将整数错误加引号，代码会仅将可无损转换的纯十进制字符串（如 `"0"`）归一化为整数，其他非整数值仍会被严格拒绝。
 - 图修补会删除自环、捏造节点和不连通的非关键子图。
 - HTML base64 会做反解校验，失败时抛出异常并跳过当前结论。
 - 敏感日志模式下不输出结论正文、搜索记录或推理文本。

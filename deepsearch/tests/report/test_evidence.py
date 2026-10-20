@@ -60,12 +60,21 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
             async def side_effect(llm, messages, **kwargs):
                 calls.append(messages)
                 if len(calls) == 1:
-                    return {"content": "not a json"}
+                    return {"content": "[]"}
+                if len(calls) == 2:
+                    return {"content": '{"rationales": "invalid"}'}
                 return {"content": '{"rationales": [{"id": "r1", "description": "d", "type": "factual"}]}'}
             mock_ainvoke.side_effect = side_effect
             rationales, last_error = await reporter._generate_section_rationales(current_inputs)
         assert rationales and last_error == ""
-        assert len(calls) == 2
+        assert len(calls) == 3
+        assert all([m["role"] for m in attempt] == ["system", "user"] for attempt in calls)
+        assert calls[0][0] == calls[1][0] == calls[2][0]
+        assert all("企业经营与行业分析" in attempt[-1]["content"] for attempt in calls)
+        assert "not a JSON object" in calls[1][-1]["content"]
+        assert "not a JSON object" not in calls[2][-1]["content"]
+        assert "not a list" in calls[2][-1]["content"]
+        assert '{"rationales": "invalid"}' not in calls[2][-1]["content"]
         first_prompt = "\n".join(m.get("content", "") for m in calls[0])
         assert "<retry_feedback>" not in first_prompt
         feedback_message = calls[1][-1]
@@ -104,7 +113,7 @@ async def test_generate_section_rationales_exhaustion_propagates_last_error():
 
 
 @pytest.mark.asyncio
-async def test_generate_section_rationales_truncates_retry_feedback_but_not_log(caplog):
+async def test_generate_section_rationales_network_retry_reuses_request_and_keeps_error_in_log(caplog):
     token = llm_context.set({"mock_model": object()})
     try:
         reporter = Reporter("mock_model")
@@ -133,7 +142,8 @@ async def test_generate_section_rationales_truncates_retry_feedback_but_not_log(
         assert rationales
         assert len(calls) == 2
         retry_prompt = "\n".join(m.get("content", "") for m in calls[1])
-        assert "<retry_feedback>" in retry_prompt
+        assert calls[1] is calls[0]
+        assert "<retry_feedback>" not in retry_prompt
         assert "x" * 600 not in retry_prompt  # prompt feedback capped at 500
         assert "x" * 600 in caplog.text  # logs keep the full error
     finally:
@@ -174,8 +184,9 @@ async def test_generate_section_rationales_masks_exception_feedback_in_sensitive
         assert len(calls) == 2
         feedback_message = calls[1][-1]
         assert feedback_message["role"] == "user"
-        assert "<retry_feedback>" in feedback_message["content"]
-        assert "LLM call failed" in feedback_message["content"]
+        assert calls[1] is calls[0]
+        assert "<retry_feedback>" not in feedback_message["content"]
+        assert "LLM call failed" not in feedback_message["content"]
         assert "boom-provider-secret" not in feedback_message["content"]
         # logs still carry the full detail for diagnostics
         assert "boom-provider-secret" in caplog.text

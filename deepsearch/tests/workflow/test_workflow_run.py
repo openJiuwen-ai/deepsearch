@@ -1,5 +1,7 @@
 import logging
+import json
 from copy import deepcopy
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -160,7 +162,7 @@ async def _run_agent_with_stream_exc(agent, agent_config, conversation_id, exc):
     的实机链路。stopped/error 两条终态流均打桩,返回 error emit 的 mock
     供调用断言。
     """
-    async def _fake_consume_stream_chunks(**kwargs):
+    async def _fake_consume_stream_chunks(_run_context):
         raise exc
         yield  # pragma: no cover
 
@@ -345,3 +347,74 @@ def test_handle_report_template():
 
     wrong_report_template = []
     res = agent._handle_report_template(wrong_report_template)
+
+
+# 测试用例7: metadata 透传到 workflow inputs
+@pytest.mark.asyncio
+async def test_consume_stream_chunks_passes_metadata_into_runner_inputs(monkeypatch):
+    """metadata 参数应透传到 Runner.run_agent_streaming 的 inputs。"""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent import workflow as workflow_module
+
+    captured = {}
+
+    async def _fake_streaming(*, agent, inputs):
+        captured.update(inputs)
+        if False:  # pragma: no cover - 使函数成为 async generator
+            yield
+
+    monkeypatch.setattr(workflow_module.Runner, "run_agent_streaming", _fake_streaming)
+    agent = workflow_module.DeepresearchAgent()
+    metadata = {"brief_outline": {"title": "T", "sections": []}}
+
+    async for _ in agent._consume_stream_chunks(
+        workflow_module.StreamRunContext(
+            conversation_id="conv-1",
+            message="升级",
+            decoded_template="",
+            interrupt_feedback="",
+            session_agent_config={},
+            metadata=metadata,
+        )
+    ):
+        pass
+
+    assert captured["metadata"] == metadata
+
+
+@pytest.mark.asyncio
+async def test_consume_stream_chunks_emits_interrupt_with_context_conversation_id(monkeypatch):
+    """HITL interaction chunks must be forwarded without relying on an outer local variable."""
+    from openjiuwen_deepsearch.framework.openjiuwen.agent import workflow as workflow_module
+
+    interaction_chunk = SimpleNamespace(
+        type="__interaction__",
+        payload=SimpleNamespace(id="feedback_handler", value="Please confirm."),
+        section_idx="0",
+        plan_idx="0",
+        step_idx="0",
+        created_time="",
+    )
+
+    async def _fake_streaming(*, agent, inputs):
+        yield interaction_chunk
+
+    monkeypatch.setattr(workflow_module.Runner, "run_agent_streaming", _fake_streaming)
+    agent = workflow_module.DeepresearchAgent()
+    outputs = [
+        output
+        async for output in agent._consume_stream_chunks(
+            workflow_module.StreamRunContext(
+                conversation_id="hitl-conversation",
+                message="research",
+                decoded_template="",
+                interrupt_feedback="",
+                session_agent_config={},
+            )
+        )
+    ]
+
+    assert len(outputs) == 1
+    message, is_all_end, final_result_info = outputs[0]
+    assert json.loads(message)["conversation_id"] == "hitl-conversation"
+    assert is_all_end is False
+    assert final_result_info == {}

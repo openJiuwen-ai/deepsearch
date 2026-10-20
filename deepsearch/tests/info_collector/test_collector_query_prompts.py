@@ -1,6 +1,6 @@
 from datetime import date
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ResearchIntent,
     TemporalScope,
@@ -9,7 +9,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 
 
 def _render_prompt(prompt_name: str, context: dict) -> str:
-    messages = apply_system_prompt(prompt_name, context)
+    messages = build_prompt_messages(prompt_name, context)
     return "\n".join(message["content"] for message in messages)
 
 
@@ -28,11 +28,12 @@ def test_collector_gen_query_prompt_allows_source_language_queries():
     )
 
     assert "Query language is not restricted by the report language" in rendered_prompt
-    assert 'Write non-query JSON fields, such as "missing_evidence", in zh-CN' in rendered_prompt
-    assert 'The strings inside "queries" are exempt from this output-language rule' in rendered_prompt
-    assert "Choose English, Chinese, another local language, or mixed-language wording" in rendered_prompt
-    assert "most likely to retrieve authoritative evidence" in rendered_prompt
-    assert "Do not produce more than 3 queries" in rendered_prompt
+    assert "Write non-query JSON fields" in rendered_prompt
+    assert "requested output language" in rendered_prompt
+    assert "The strings inside `queries` are exempt from this output-language rule" in rendered_prompt
+    assert "Choose wording based on which language is most likely to retrieve authoritative evidence" in rendered_prompt
+    assert "most likely to retrieve authoritative" in rendered_prompt
+    assert "Maximum search query count: 3" in rendered_prompt
 
 
 def test_collector_gen_query_prompt_defines_target_paper_locator_contract():
@@ -52,7 +53,7 @@ def test_collector_gen_query_prompt_defines_target_paper_locator_contract():
     )
 
     assert "Target papers" in rendered_prompt
-    assert "PMID > DOI > arXiv ID > full title > implicit fingerprint" in rendered_prompt
+    assert "direct academic URL > PMID > DOI > arXiv ID > full title > implicit fingerprint" in rendered_prompt
     assert "at most one locator query" in rendered_prompt
     assert 'search_engine_names` to `["pubmed"]`' in rendered_prompt
     assert 'search_engine_names` to `["arxiv"]`' in rendered_prompt
@@ -103,14 +104,11 @@ def test_collector_supervisor_prompt_allows_source_language_follow_up_queries():
     )
 
     assert "Query language is not restricted by the report language" in rendered_prompt
-    assert (
-        'Write non-query JSON fields, such as "knowledge_gap", "known_facts", '
-        'and "missing_evidence", in zh-CN'
-    ) in rendered_prompt
-    assert 'The strings inside "next_queries" are exempt from this output-language rule' in rendered_prompt
-    assert "Choose English, Chinese, another local language, or mixed-language wording" in rendered_prompt
-    assert "Do not force all follow-up queries into `zh-CN`" in rendered_prompt
-    assert "Do not produce more than 2 next_queries" in rendered_prompt
+    assert "Write non-query JSON fields" in rendered_prompt
+    assert "requested output language" in rendered_prompt
+    assert "The strings inside `next_queries` are exempt from this output-language rule" in rendered_prompt
+    assert "choose the language most likely to retrieve authoritative material" in rendered_prompt
+    assert "Maximum next-query count: 2" in rendered_prompt
 
 
 def test_collector_supervisor_prompt_keeps_target_paper_failure_non_blocking():
@@ -134,7 +132,7 @@ def test_collector_supervisor_prompt_keeps_target_paper_failure_non_blocking():
     assert "at most one broader follow-up" in rendered_prompt
     assert "must not abort report generation" in rendered_prompt
     assert "Never substitute another paper" in rendered_prompt
-    assert "implicit fingerprint" in rendered_prompt
+    assert "implicit dataset/year/topic fingerprint" in rendered_prompt
 
 
 def test_collector_gen_query_prompt_requires_natural_language_temporal_scope():
@@ -235,8 +233,8 @@ def test_collector_gen_query_prompt_tavily_source_date_omits_constraint_time_phr
     assert "Express this boundary naturally" not in rendered_prompt
 
 
-def test_collector_supervisor_prompt_renders_current_time_without_scope():
-    """无时间约束时，front-matter 的 CURRENT_TIME 变量被实际值替换（非裸字符串），补搜 query 指向当前时间。"""
+def test_collector_supervisor_prompt_renders_current_date_without_scope():
+    """无时间约束时，日期仅在动态 user 中渲染，补搜 query 指向当前日期。"""
     rendered_prompt = _render_prompt(
         "collector_supervisor",
         {
@@ -249,22 +247,21 @@ def test_collector_supervisor_prompt_renders_current_time_without_scope():
             "max_search_query_count": 2,
             "language": "zh-CN",
             "report_type": "professional",
+            "has_temporal_scope": False,
+            "current_date": "2030-01-02",
         },
     )
 
-    # front-matter 的 CURRENT_TIME 被实际值替换，而非留下裸模板变量
-    assert "CURRENT TIME:" in rendered_prompt
-    assert "{{CURRENT_TIME}}" not in rendered_prompt
-    assert "{{ CURRENT_TIME }}" not in rendered_prompt
-    # 无约束分支：补搜 query 指向当前时间
-    assert "most current information is gathered" in rendered_prompt
-    assert "current time is" in rendered_prompt
+    assert "Current date: 2030-01-02" in rendered_prompt
+    assert "CURRENT_TIME" not in rendered_prompt
+    # 无约束分支：补搜 query 指向当前日期
+    assert "most current information available as of 2030-01-02 is gathered" in rendered_prompt
     # 无约束时不应出现时间边界块
     assert "Research Time Boundary" not in rendered_prompt
 
 
-def test_collector_supervisor_prompt_renders_current_time_with_scope():
-    """有时间约束时，front-matter CURRENT_TIME 仍渲染，但补搜走时间边界分支。"""
+def test_collector_supervisor_prompt_renders_current_date_with_scope():
+    """有时间约束时，日期在动态 user 中渲染，但补搜走时间边界分支。"""
     context = {
         "plan_title": "Energy policy",
         "plan_thought": "Collect policy sources.",
@@ -289,9 +286,8 @@ def test_collector_supervisor_prompt_renders_current_time_with_scope():
 
     rendered_prompt = _render_prompt("collector_supervisor", context)
 
-    assert "CURRENT TIME:" in rendered_prompt
-    assert "{{CURRENT_TIME}}" not in rendered_prompt
-    assert "{{ CURRENT_TIME }}" not in rendered_prompt
+    assert "Current date:" in rendered_prompt
+    assert "CURRENT_TIME" not in rendered_prompt
     # 有约束分支：出现时间边界，不出现"most current information"兜底句
     assert "Research Time Boundary" in rendered_prompt
     assert "most current information is gathered" not in rendered_prompt

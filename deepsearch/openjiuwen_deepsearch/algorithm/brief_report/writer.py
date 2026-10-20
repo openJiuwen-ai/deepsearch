@@ -15,7 +15,10 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefWritingRequest,
 )
 from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    format_section_material_bindings,
+)
 from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import _is_context_limit_error as _matches_context_limit
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.config.config import Config
@@ -92,24 +95,19 @@ def _writing_prompt_input(
         )
         for item in documents
     )
-    messages = [
-        {
-            "role": "user",
-            "content": f"Collected Information:\n{collected_information or 'No collected information is available.'}",
-        }
-    ]
     guidance = request.writing_guidance
     section_guidance = next(
         (item.guidance for item in guidance.section_guidance if item.section_id == section.id),
         "",
     ) if guidance else ""
+    writing_guidance = ""
     if guidance and (guidance.report_strategy or section_guidance):
         guidance_lines = ["Internal Writing Guidance (editorial only; not evidence):"]
         if guidance.report_strategy:
             guidance_lines.append(f"报告主线：{guidance.report_strategy}")
         if section_guidance:
             guidance_lines.append(f"本章指引：{section_guidance}")
-        messages.append({"role": "user", "content": "\n".join(guidance_lines)})
+        writing_guidance = "\n".join(guidance_lines)
     return {
         "language": request.language,
         "audience_role": request.audience_role,
@@ -119,7 +117,14 @@ def _writing_prompt_input(
         "current_section_description": section.goal,
         "current_section_format_requirements": "\n".join(format_requirements),
         "current_chapter_outline": _numbered_chapter_outline(section),
-        "messages": messages,
+        "section_material_bindings_text": format_section_material_bindings(
+            section.material_bindings,
+            section.use_material_ids,
+        ),
+        "has_exclusion": request.has_exclusion,
+        "exclusion_instruction": request.exclusion_instruction,
+        "collected_information": collected_information or "No collected information is available.",
+        "writing_guidance": writing_guidance,
     }
 
 
@@ -223,7 +228,7 @@ async def _write_one(
             )
             response = await ainvoke_llm_with_stats(
                 request.llm,
-                apply_system_prompt("brief_sub_reporter", prompt_input),
+                build_prompt_messages("brief_sub_reporter", prompt_input),
                 agent_name=AgentLlmName.BRIEF_SUB_REPORTER.value,
                 need_stream_out=True,
                 # section_total 让消费端(路由器)能区分"首个章节完成"与
@@ -394,7 +399,7 @@ def _summary_prompt_input(
         "audience_role": request.audience_role,
         "tone": request.tone,
         "user_format": request.user_format,
-        "messages": [{"role": "user", "content": f"Main Content:\n{main_content}"}],
+        "main_content": main_content,
     }
 
 
@@ -480,7 +485,7 @@ async def generate_brief_summary(request: BriefSummaryRequest) -> str:
             )
             response = await ainvoke_llm_with_stats(
                 request.llm,
-                apply_system_prompt("brief_reporter", prompt),
+                build_prompt_messages("brief_reporter", prompt),
                 agent_name=AgentLlmName.BRIEF_REPORTER.value,
             )
             raw = str(response.get("content") or "")

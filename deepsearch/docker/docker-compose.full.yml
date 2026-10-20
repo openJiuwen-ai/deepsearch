@@ -68,7 +68,9 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:RELEASE.2024-09-13T14-41-40Z
+    # MinIO 官方分发渠道（Docker Hub minio/minio、quay.io/minio）均已停止匿名拉取，
+    # 改用 Milvus 项目 re-host 的镜像（Milvus 官方 v2.6/v3.0 compose 同款）。
+    image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}

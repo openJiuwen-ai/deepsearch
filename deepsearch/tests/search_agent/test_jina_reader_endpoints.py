@@ -1,15 +1,20 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
+import threading
 from unittest.mock import Mock, patch
 
+import pytest
 import requests
 
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina import api_wrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper import (
     JinaWebFetchProvider,
+    _unreachable_reason,
     build_jina_reader_url,
     resolve_jina_reader_base_urls,
 )
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 
 def test_resolve_jina_reader_base_urls_prefers_china_mirror(monkeypatch):
@@ -80,3 +85,226 @@ def test_web_fetch_falls_back_to_global_reader_endpoint():
         side_effect=fake_get,
     ):
         assert fetch._read_via_jina("https://example.com") == "from-global"
+
+
+def test_web_fetch_logs_summary_when_every_endpoint_rejects_credentials(caplog):
+    """全 base 返 401/403 时必须留下汇总日志。
+
+    回归用：原先只有 RequestException 才设置 last_error，汇总日志因此被跳过；
+    "所有 base 都被拦下"（配错 key / 匿名被 Cloudflare 拦）这种最常见场景反而没有汇总。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    forbidden = Mock(status_code=403, text="Just a moment...")
+
+    def fake_get(url, **kwargs):
+        return forbidden
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        side_effect=fake_get,
+    ), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://example.com") == "[web_fetch] Failed to read page."
+
+    assert "all Jina reader endpoints failed" in caplog.text
+    assert "https://example.com" in caplog.text
+    # 每个 base 的原因都要出现在汇总里
+    for base in fetch._reader_bases:
+        assert base in caplog.text
+
+
+def test_web_fetch_summary_reports_http_status_for_non_auth_failures(caplog):
+    """非鉴权类的 HTTP 失败（如 500）同样要进汇总，且不带 auth rejected 标注。"""
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    server_error = Mock(status_code=500, text="boom")
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        return_value=server_error,
+    ), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://example.com") == "[web_fetch] Failed to read page."
+
+    assert "all Jina reader endpoints failed" in caplog.text
+    assert "HTTP 500" in caplog.text
+    assert "auth rejected" not in caplog.text
+
+
+def test_web_fetch_summary_hides_url_in_sensitive_mode(caplog):
+    """敏感模式下汇总日志不得出现目标 URL 或各 base 的失败详情。
+
+    回归用：汇总日志最初直接打印 target url，而本模块的 logger 不走
+    webpage_enrichment 的 _log_fetch_event 脱敏，会把 URL 落盘。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    forbidden = Mock(status_code=403, text="Just a moment...")
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        return_value=forbidden,
+    ), patch.object(LogManager, "is_sensitive", return_value=True), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://secret.example/private") == "[web_fetch] Failed to read page."
+
+    assert "all Jina reader endpoints failed" in caplog.text
+    assert "secret.example" not in caplog.text
+    assert "auth rejected" not in caplog.text
+
+
+def test_unreachable_reason_keeps_raw_text_only_outside_sensitive_mode():
+    """_unreachable_reason 是这条规则的唯一落点。
+
+    requests 异常的原文含请求地址（reader 地址是 `{base}/{目标 URL}`）。敏感模式下
+    归类成异常类名，非敏感模式下原样返回，调用点不再各自判断。
+    """
+    err = requests.exceptions.ConnectionError(
+        "HTTPSConnectionPool(host='r.jinaai.cn', port=443): Max retries exceeded "
+        "with url: /https://secret.example/private-page"
+    )
+
+    with patch.object(LogManager, "is_sensitive", return_value=True):
+        assert _unreachable_reason(err) == "ConnectionError"
+
+    with patch.object(LogManager, "is_sensitive", return_value=False):
+        assert _unreachable_reason(err) == str(err)
+        assert "secret.example" in _unreachable_reason(err)
+
+
+def test_web_fetch_unreachable_log_hides_exception_text_in_sensitive_mode(caplog):
+    """敏感模式下连接异常的原文不得落盘。
+
+    requests 异常的原文含请求地址，而 reader 地址是 `{base}/{目标 URL}`，
+    形如 "Max retries exceeded with url: /https://secret.example/private-page"。
+    回归用：汇总日志已脱敏，但每个 base 的 unreachable 日志仍在打印 err 原文。
+    401/403 走的是另一个分支，到不了这行，因此原有敏感用例覆盖不到。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    leaked = (
+        "HTTPSConnectionPool(host='r.jinaai.cn', port=443): Max retries exceeded "
+        "with url: /https://secret.example/private-page"
+    )
+
+    def fake_get(url, **kwargs):
+        raise requests.exceptions.ConnectionError(leaked)
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        side_effect=fake_get,
+    ), patch.object(LogManager, "is_sensitive", return_value=True), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://secret.example/private-page") == "[web_fetch] Failed to read page."
+
+    # 失败类别仍要保留，便于排查
+    assert "unreachable" in caplog.text
+    assert "ConnectionError" in caplog.text
+    # 目标地址与异常原文都不能出现
+    assert "secret.example" not in caplog.text
+    assert "Max retries exceeded" not in caplog.text
+
+
+def _racing_get_rejected_first(rejected: Mock, mirror_ok: Mock):
+    """构造一个顺序确定的竞速：被拒的 base 先完成，可用的 base 后完成。
+
+    as_completed 的完成顺序在测试里本来就是不确定的；这里强制"被拒的先回"，
+    才能稳定复现"最快返回的 base 把整次请求短路掉"这一回归。
+    """
+    rejected_done = threading.Event()
+
+    def fake_get(url, **kwargs):
+        if url.startswith("https://r.jina.ai/"):
+            rejected_done.set()
+            return rejected
+        assert rejected_done.wait(timeout=5), "被拒的 base 未先完成，测试失去意义"
+        return mirror_ok
+
+    return fake_get
+
+
+@pytest.mark.parametrize("rejected_status", [401, 403])
+def test_web_fetch_does_not_short_circuit_on_credential_rejection(rejected_status, caplog):
+    """某个 base 返 401/403 时不得结束竞速。
+
+    回归用：原先鉴权失败直接 return，而官方 base 对本机请求回得最快，
+    于是整次请求被它抢先结束，镜像能返回的 200 正文反而拿不到。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    rejected = Mock(status_code=rejected_status, text="Just a moment...")
+    mirror_ok = Mock(status_code=200, text="from-mirror")
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        side_effect=_racing_get_rejected_first(rejected, mirror_ok),
+    ), caplog.at_level("WARNING"):
+        assert fetch._read_via_jina("https://example.com") == "from-mirror"
+
+    assert "all Jina reader endpoints failed" not in caplog.text
+
+
+def test_fetch_page_returns_mirror_content_when_official_endpoint_rejects():
+    """端到端：官方 base 被拒时 fetch_page 仍应拿到镜像正文，且无需重试。"""
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    rejected = Mock(status_code=403, text="Just a moment...")
+    mirror_ok = Mock(status_code=200, text="from-mirror")
+
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.jina.api_wrapper.requests.get",
+        side_effect=_racing_get_rejected_first(rejected, mirror_ok),
+    ) as mock_get:
+        assert fetch.fetch_page("https://example.com") == "from-mirror"
+
+    assert mock_get.call_count == len(fetch._reader_bases)
+
+
+class _FakeClock:
+    """可控时钟：请求本身不耗时，只有 sleep 推进时间。"""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _stalling_get(timeouts: list[tuple[float, float]]):
+    def fake_get(url, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        raise requests.exceptions.ConnectTimeout("blocked")
+
+    return fake_get
+
+
+def test_fetch_page_clamps_request_timeout_and_backoff_to_budget(monkeypatch):
+    """给了预算后，单次请求超时与退避都不得超过剩余预算，预算耗尽即停止重试。
+
+    asyncio.to_thread 的线程不可取消，只能靠把每个阻塞点压进预算让它自己到点结束。
+    """
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    clock = _FakeClock()
+    timeouts: list[tuple[float, float]] = []
+    monkeypatch.setattr(api_wrapper, "time", clock)
+    monkeypatch.setattr(api_wrapper.requests, "get", _stalling_get(timeouts))
+
+    assert fetch.fetch_page("https://example.com", budget=1.0) == "[web_fetch] Failed to read page."
+
+    # 每轮对每个 base 各发一次；第 3 轮开始前预算已耗尽，所以只有 2 轮（不设界时是 3 轮）
+    assert len(timeouts) == 2 * len(fetch._reader_bases)
+    for connect, read in timeouts:
+        assert connect <= 1.0 and read <= 1.0
+    assert sum(clock.sleeps) <= 1.0
+
+
+def test_fetch_page_without_budget_keeps_fixed_schedule(monkeypatch):
+    """不传 budget 时行为不变：固定 3 次重试、固定 (4, 8) 超时、固定退避。"""
+    fetch = JinaWebFetchProvider(api_key="test-key")
+    clock = _FakeClock()
+    timeouts: list[tuple[float, float]] = []
+    monkeypatch.setattr(api_wrapper, "time", clock)
+    monkeypatch.setattr(api_wrapper.requests, "get", _stalling_get(timeouts))
+
+    assert fetch.fetch_page("https://example.com") == "[web_fetch] Failed to read page."
+
+    # 3 轮 × 每个 base 一次，超时始终是固定的 (4, 8)
+    assert len(timeouts) == 3 * len(fetch._reader_bases)
+    assert set(timeouts) == {(4.0, 8.0)}
+    assert clock.sleeps == [0.5, 1.0]

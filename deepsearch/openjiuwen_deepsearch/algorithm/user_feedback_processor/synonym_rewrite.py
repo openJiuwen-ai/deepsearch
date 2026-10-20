@@ -5,7 +5,7 @@ import logging
 
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions import SYNONYM_REWRITE_ACTIONS
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.report_edit_utils import strip_markup_in_range
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.exception import CustomException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
@@ -118,7 +118,7 @@ class SynonymRewriter:
                 "language": language,
                 "user_instruction": user_instruction,
             }
-            messages = apply_system_prompt(prompt_name, context_vars)
+            messages = build_prompt_messages(prompt_name, context_vars)
 
             llm = get_llm_instance(self.llm_model_name)
 

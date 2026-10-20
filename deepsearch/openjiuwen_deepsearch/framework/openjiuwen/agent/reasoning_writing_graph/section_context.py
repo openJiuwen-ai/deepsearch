@@ -13,6 +13,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 
 
 class SectionBaseContext(BaseModel):
+    original_query: str = Field(default="", description="用户输入的原始问题")
     language: str = Field(default="", description="语言")
     messages: list = Field(default=[], description="消息列表")
     section_idx: str = Field(default="", description="章节索引")
@@ -20,9 +21,28 @@ class SectionBaseContext(BaseModel):
     report_type_policy: dict = Field(default_factory=dict, description="报告类型策略")
     research_intent: dict = Field(default_factory=dict, description="结构化报告细节约束")
     section_local_contract: dict = Field(default_factory=dict, description="章节级局部合同约束")
+    material_analysis: Dict | None = Field(
+        default=None,
+        description="用户素材预处理产物（含摘要），规划/撰写时据此引用素材",
+    )
+    material_bindings: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="该章节绑定的用户素材及其证据角色",
+    )
+    bound_material_ids: List[str] = Field(
+        default_factory=list,
+        description="该章节允许规划、检索和写作使用的用户素材 ID",
+    )
+    material_usage_mode: str = Field(
+        default="none",
+        description="用户素材使用策略：none、supplementary 或 required",
+    )
 
 
 class SectionReasoningContext(SectionBaseContext):
+    report_task: str = Field(default="", description="报告任务")
+    section_task: str = Field(default="", description="章节任务")
+    section_description: str = Field(default="", description="章节描述")
     plan_executed_num: int = Field(default=0, description="章节plan执行次数")
     collected_doc_num: int = Field(default=0, description="章节内已收集文档数量")
     plan_background_knowledge: Dict[str, str] = Field(default_factory=dict, description="当前计划的背景知识")

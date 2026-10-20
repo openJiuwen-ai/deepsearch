@@ -21,10 +21,12 @@ def test_select_visualization_selects_high_data_density():
         {
             "title": "high density",
             "data_density": 0.9,
+            "is_fulltext": True,
         },
         {
             "title": "low density",
             "data_density": 0.5,
+            "is_fulltext": True,
         },
     ])
 
@@ -38,14 +40,36 @@ def test_select_visualization_uses_eight_point_fallback_when_no_high_density_doc
         {
             "title": "fallback density",
             "data_density": 0.8,
+            "is_fulltext": True,
         },
         {
             "title": "too sparse",
             "data_density": 0.7,
+            "is_fulltext": True,
         },
     ])
 
     assert [item["title"] for item in selected] == ["fallback density"]
+
+
+def test_select_visualization_only_fulltext_ignores_passages():
+    """只选择 fulltext 文档，忽略段落级内容。"""
+    fulltext_items = [
+        {"title": "ft-0", "data_density": 0.95, "is_fulltext": True},
+        {"title": "ft-1", "data_density": 0.92, "is_fulltext": True},
+    ]
+    passage_items = [
+        {"title": "pg-0", "data_density": 0.99, "is_fulltext": False},
+        {"title": "pg-1", "data_density": 0.98, "is_fulltext": False},
+    ]
+    selected = Reporter._select_visualization_from_classified_content(
+        fulltext_items + passage_items,
+    )
+
+    # 只返回 fulltext，忽略段落
+    assert len(selected) == 2
+    assert all(i["is_fulltext"] for i in selected)
+    assert [i["title"] for i in selected] == ["ft-0", "ft-1"]
 
 
 def test_infer_desired_chart_type_uses_explicit_and_year_sequence_hints_only():
@@ -254,7 +278,8 @@ async def test_generate_content_for_visualization_limits_concurrency():
 
     num_tasks = MAX_CONCURRENT_VISUALIZATION_TASKS + 3  # 8 > 5，超限可观测
     classified_content = [
-        {"title": f"doc-{i}", "data_density": 0.95, "passage_text": f"content {i}"}
+        {"title": f"doc-{i}", "data_density": 0.95,
+         "passage_text": f"content {i}", "is_fulltext": True}
         for i in range(num_tasks)
     ]
     reporter = _visualization_reporter()
@@ -292,7 +317,8 @@ async def test_generate_content_for_visualization_all_tasks_complete():
         )
 
     classified_content = [
-        {"title": f"doc-{i}", "data_density": 0.95, "passage_text": f"content {i}"}
+        {"title": f"doc-{i}", "data_density": 0.95,
+         "passage_text": f"content {i}", "is_fulltext": True}
         for i in range(num_tasks)
     ]
     reporter = _visualization_reporter()
@@ -340,7 +366,8 @@ async def test_generate_content_for_visualization_task_exception_not_blocking():
         return await ok_task(visualization_dict)
 
     classified_content = [
-        {"title": f"doc-{i}", "data_density": 0.95, "passage_text": f"content {i}"}
+        {"title": f"doc-{i}", "data_density": 0.95,
+         "passage_text": f"content {i}", "is_fulltext": True}
         for i in range(num_ok_tasks + 1)
     ]
     reporter = _visualization_reporter()

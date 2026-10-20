@@ -1,9 +1,29 @@
 """Brief 独立工作流使用的强类型数据契约。"""
 
+import re
 from enum import Enum
-from typing import Any
+from typing import Any, Sequence
 
 from pydantic import BaseModel, Field, model_validator
+
+# 章节标题中的常见编号前缀（阿拉伯/全角数字、中文数字、第X章节等），
+# 用于升级场景标题一致性比对前的归一化，剥离 LLM 输出的编号噪声
+_TITLE_NOISE_RE = re.compile(
+    r"^\s*(?:[0-9０-９]+[.、)．）]\s*|[一二三四五六七八九十百]+[、.．]\s*"
+    r"|第[一二三四五六七八九十百0-9０-９]+[章节部分][：:\s]*)+"
+)
+
+
+def normalize_outline_title(title: str) -> str:
+    """归一化章节标题：去首尾空白与常见编号前缀，用于大纲一致性比对。
+
+    Args:
+        title: 原始章节标题。
+
+    Returns:
+        归一化后的标题文本。
+    """
+    return _TITLE_NOISE_RE.sub("", (title or "").strip()).strip()
 
 
 class EvidenceType(str, Enum):
@@ -52,6 +72,9 @@ class BriefSection(BaseModel):
     research_steps: list[BriefResearchStep] = Field(min_length=2, max_length=4)
     output_formats: list[OutputFormat] = Field(default_factory=lambda: [OutputFormat.PARAGRAPH])
     format_note: str = Field(default="", max_length=240)
+    # use_material_ids is derived from material_bindings during outline normalization.
+    use_material_ids: list[str] = Field(default_factory=list)
+    material_bindings: list[dict[str, str]] = Field(default_factory=list)
 
 
 class BriefOutline(BaseModel):
@@ -59,6 +82,21 @@ class BriefOutline(BaseModel):
 
     title: str = Field(min_length=1, max_length=160)
     sections: list[BriefSection] = Field(min_length=2)
+
+    def matches_section_titles(self, section_titles: Sequence[str]) -> bool:
+        """判断给定标题序列与本大纲章节标题一致（数量、顺序与文本，归一化编号噪声后比较）。
+
+        用于 brief 大纲升级场景：LLM 扩写产出的大纲标题序列必须与注入的
+        brief 大纲保持结构一致。
+
+        Args:
+            section_titles: 待比对的标题序列（如扩写后大纲的章节标题列表）。
+
+        Returns:
+            True 表示标题序列一致。
+        """
+        normalized = [normalize_outline_title(t) for t in section_titles]
+        return normalized == [normalize_outline_title(s.title) for s in self.sections]
 
 
 class BriefOutlineRequest(BaseModel):
@@ -72,6 +110,9 @@ class BriefOutlineRequest(BaseModel):
     clarification_questions: str = ""
     user_feedback: str = ""
     report_template: str = ""
+    # build_material_prompt_context 的扁平产物，
+    # 仅在存在素材时由节点填充；generate_brief_outline 原样并入 prompt 上下文。
+    material_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class BriefQuery(BaseModel):
@@ -90,6 +131,8 @@ class BriefQueryRequest(BaseModel):
     research_intent: dict[str, Any] = Field(default_factory=dict)
     executed_queries: list[str] = Field(default_factory=list)
     blocking_gaps: list["BriefStepCoverage"] = Field(default_factory=list)
+    material_first: bool = False
+    material_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class BriefSearchResult(BaseModel):
@@ -232,6 +275,8 @@ class BriefWritingRequest(BaseModel):
     tone: str = ""
     user_format: str = ""
     writing_guidance: BriefWritingGuidance | None = None
+    has_exclusion: bool = False
+    exclusion_instruction: str = ""
 
 
 class BriefWritingEvidence(BaseModel):

@@ -72,6 +72,9 @@ class TestGoogleSearchAPIWrapper:
         # 验证verify参数
         assert call_args[1]['verify'] == "/path/to/cert"
 
+        # 验证同步请求不会无限期阻塞
+        assert call_args[1]['timeout'] == 30
+
         # 验证结果（wrapper 返回 organic 列表）
         assert isinstance(result, list)
         assert len(result) == 1
