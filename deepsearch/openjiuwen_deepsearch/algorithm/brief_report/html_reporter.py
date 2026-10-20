@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.html_charts import (
     TEMPLATE_BLOCK_RE,
     extract_fragment_charts,

@@ -30,7 +30,7 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
-from openjiuwen_deepsearch.utils.common_utils.moderation_detection import Source, detect_error, detect_response
+from openjiuwen_deepsearch.utils.moderation.detection import Source, detect_error, detect_response
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, cancel_context
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
@@ -1705,15 +1705,15 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     if not (isinstance(llm, dict) and llm.get("moderation_mask_retry")) or not isinstance(messages, list):
         return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
 
-    from openjiuwen_deepsearch.utils.common_utils import moderation_mask
-    from openjiuwen_deepsearch.utils.common_utils.moderation_retry import get_moderation_retry_policy
+    from openjiuwen_deepsearch.utils.moderation import mask as moderation_mask
+    from openjiuwen_deepsearch.utils.moderation.retry import get_moderation_retry_policy
 
     agent = invoke_args["agent_name"] or "-"
     policy = get_moderation_retry_policy(llm, agent, request_key)
     if policy is None:
         return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
     policy.attempts += 1
-    current_messages = policy.prepare(messages)
+    current_messages = await policy.prepare_async(messages)
     call_args, call_kwargs = _with_messages(args, kwargs, current_messages)
     try:
         response = await _ainvoke_llm_with_stats_impl(*call_args, **call_kwargs)

@@ -10,8 +10,8 @@ from pydantic import BaseModel, ValidationError
 
 from openjiuwen.core.foundation.llm.schema.message import AssistantMessage
 from openjiuwen.core.foundation.llm.schema.message_chunk import AssistantMessageChunk
-from openjiuwen_deepsearch.utils.common_utils.moderation_detection import detect_error, detect_response
-from openjiuwen_deepsearch.utils.common_utils import moderation_mask
+from openjiuwen_deepsearch.utils.moderation.detection import detect_error, detect_response
+from openjiuwen_deepsearch.utils.moderation import mask as moderation_mask
 
 
 @pytest.mark.parametrize("prefix,side", [

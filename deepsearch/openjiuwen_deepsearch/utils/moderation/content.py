@@ -26,7 +26,7 @@ class MaskableText(str):
 
 def evidence_spans(text: str, spans: Sequence[tuple[int, int]]) -> MaskableText:
     """Mark body spans while the producer still knows their exact boundaries."""
-    from openjiuwen_deepsearch.utils.common_utils.moderation_mask import mask_text
+    from openjiuwen_deepsearch.utils.moderation.mask import mask_text
 
     ranges = tuple(spans)
     cursor = 0

@@ -7,7 +7,7 @@ import logging
 import re
 
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
-from openjiuwen_deepsearch.utils.common_utils.moderation_content import evidence_spans
+from openjiuwen_deepsearch.utils.moderation.content import evidence_spans
 
 logger = logging.getLogger(__name__)
 

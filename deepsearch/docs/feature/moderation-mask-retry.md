@@ -28,15 +28,18 @@ SDK／提供商内部重试及原有 thinking 开关兼容处理保持不变，�
 
 以下相对 `openjiuwen_deepsearch/`：
 
+风控公共实现与内置词表集中在 `utils/moderation/`；模板字段契约和业务调用点仍由各自模块维护。
+
 - `config/config.py`、`llm/llm_wrapper.py`：统一开关配置。
 - `utils/common_utils/llm_utils.py`：公共入口、异常识别与观测日志。
-- `utils/common_utils/moderation_detection.py`：结构化错误、过滤结束原因及异常链的统一识别。
-- `utils/common_utils/moderation_retry.py`：在既有重试操作内保存补救状态，不发请求。
-- `utils/common_utils/moderation_mask.py`：风控判侧、掩码及输出约束提示。
-- `utils/common_utils/moderation_content.py`、`algorithm/prompts/evidence_masking.py`：资料范围与模板字段契约。
+- `utils/moderation/detection.py`：结构化错误、过滤结束原因及异常链的统一识别。
+- `utils/moderation/retry.py`：在既有重试操作内保存补救状态，不发请求。
+- `utils/moderation/mask.py`：风控判侧、掩码及输出约束提示。
+- `utils/moderation/matcher.py`：前缀字典树文本匹配，保留最左最长及英文边界规则。
+- `utils/moderation/content.py`、`algorithm/prompts/evidence_masking.py`：资料范围与模板字段契约。
 - `algorithm/prompts/message_builder.py`、`algorithm/report/report_common.py`：构建消息及引用块时保留资料来源范围。
 - `algorithm/` 与 `framework/` 中已有重试操作：只增加状态作用域，保留循环与降级。
-- `utils/common_utils/lexicon_resource.py`、`data/sensitive_lexicon/`：词库资源解码与校验。
+- `utils/moderation/lexicon_resource.py`、`utils/moderation/data/sensitive_lexicon/`：词库资源解码与校验。
 
 ## 核心流程
 
@@ -69,6 +72,8 @@ HTML 章节通过章节 ID 隔离，共用同一外层预算但不共享掩码�
 - 原始消息、抓取地址和资料存储不改。正常 URL、邮箱、带用户信息、无法解析或
   不支持协议的地址候选保留原样；命中计数为原文替换字符数和合并区间数。
 - 内置词库和匹配器惰性缓存；资源读取或校验失败时保留原消息，继续原有重试或降级。
+- 文本匹配使用前缀字典树，中文等字面词区分大小写，英文规则只折叠 ASCII 大小写并检查单词边界；不构造完整词库的正则交替式。网址先定位候选起点，再以锚定正则识别，避免无网址长文本反复尝试长前缀。
+- 异步模型调用在需要输入补救时，将资料副本构建、词库冷加载和匹配交给工作线程；首次原样调用及纯输出约束不进入该线程路径。Python 匹配循环定期释放 GIL，不在事件循环中同步扫描完整资料。取消等待可立即结束本次调用，但不会强制终止已启动的工作线程；线程只生成副本，不发起模型调用、不修改重试状态或原始资料。
 - 构建打包词库时排除纯十进制数字、纯数字时间片段，以及审核确认的字段标签、普通语法词、否定词、上下文误伤条目和 12 个中性实体独立词条。策略见 `tools/moderation_lexicon_exclusions.json`，manifest 记录策略版本、哈希和分原因排除数量。
 - 排除在构建时完成，不是运行时过滤。仅按完整词条排除，不批量删除包含这些实体的长词条，也不将这些实体当作运行时白名单。资料正文中的其他词条仍可能误伤，修订后的风控恢复率需另行验证。
 - 已确认的普通英文词、普通叙述词及跨词碰撞条目也按完整词条排除；不增加运行时白名单、分词器或恢复映射。正文的数字序列不变仍不足以证明日期词面及否定表达完整，离线回归需检查这些表达的完整区间与重叠命中词，而不只统计数字。
@@ -174,6 +179,9 @@ JSON / schema 校验异常可能回显生成正文，不用其中的文本做短
 ```bash
 pytest tests/algorithm/prompts/test_evidence_masking.py tests/utils/test_lexicon_resource.py tests/utils/test_moderation_mask.py tests/utils/test_moderation_retry.py tests/utils/test_moderation_detection.py tests/utils/test_moderation_integration.py
 ```
+
+性能与语义回归：`pytest tests/utils/test_moderation_matching.py tests/utils/test_moderation_performance.py`。
+使用完整内置词库及 5 篇、每篇 15,000 字符的真实证据抽取链路，仅替换模型网络边界；覆盖冷启动、预热、开关对照、长连续文本、10ms 心跳及取消等待。另用旧正则作固定语义对照，核对最左最长匹配、英文边界和网址候选。
 
 重点覆盖原有三次／四次预算、非风控错误、两侧切换、开关关闭、零命中继续原有尝试、
 参数及原消息保留、格式纠错后重新掩码、并发与递归隔离、取消清理，

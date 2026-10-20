@@ -11,7 +11,7 @@ from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
     PromptBuildOptions,
     build_prompt_messages,

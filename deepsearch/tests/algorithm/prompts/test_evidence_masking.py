@@ -11,8 +11,8 @@ from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
     build_prompt_messages,
 )
 from openjiuwen_deepsearch.algorithm.report.report_common import build_citation_infos
-from openjiuwen_deepsearch.utils.common_utils.moderation_content import MaskableText, evidence_spans
-from openjiuwen_deepsearch.utils.common_utils.moderation_mask import get_lexicon, mask_messages, mask_text
+from openjiuwen_deepsearch.utils.moderation.content import MaskableText, evidence_spans
+from openjiuwen_deepsearch.utils.moderation.mask import get_lexicon, mask_messages, mask_text
 
 
 TERMS = frozenset({"keyword", "美国", "url", "source_ids", "1989", "blocked.example"})
@@ -24,7 +24,7 @@ TASK = "研究美国形象 keyword，保留 1989 与 source_ids、url"
 @pytest.fixture
 def mask():
     def apply(messages):
-        with patch("openjiuwen_deepsearch.utils.common_utils.moderation_mask.get_lexicon", return_value=TERMS):
+        with patch("openjiuwen_deepsearch.utils.moderation.mask.get_lexicon", return_value=TERMS):
             return mask_messages(messages, 1, evidence_only=True)
     return apply
 
@@ -156,14 +156,14 @@ def test_multimodal_unscoped_and_instruction_only_messages_do_not_load_lexicon()
         *build_prompt_messages("passages_extractor", {"documents": [{"content": BODY}]},
                                options=PromptBuildOptions(images=("fake_image",))),
     ]
-    with patch("openjiuwen_deepsearch.utils.common_utils.moderation_mask.get_lexicon") as load:
+    with patch("openjiuwen_deepsearch.utils.moderation.mask.get_lexicon") as load:
         assert mask_messages(messages, 1, evidence_only=True) == (messages, 0, 0)
     load.assert_not_called()
 
 
 def test_metadata_never_appears_in_serialized_request_and_initial_bytes_match():
     context = {"documents": [{"content": BODY}], "section_task": TASK}
-    with patch("openjiuwen_deepsearch.utils.common_utils.moderation_mask.get_lexicon") as load:
+    with patch("openjiuwen_deepsearch.utils.moderation.mask.get_lexicon") as load:
         messages = build_prompt_messages("passages_extractor", context)
         assert isinstance(messages[-1]["content"], MaskableText)
         assert json.loads(json.dumps(messages)) == messages

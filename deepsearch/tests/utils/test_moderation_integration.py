@@ -18,10 +18,10 @@ from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
-from openjiuwen_deepsearch.utils.common_utils.moderation_detection import detect_error
-from openjiuwen_deepsearch.utils.common_utils.moderation_mask import RETRY_FEEDBACK_PROMPT
-from openjiuwen_deepsearch.utils.common_utils.moderation_content import evidence_spans
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.detection import detect_error
+from openjiuwen_deepsearch.utils.moderation.mask import RETRY_FEEDBACK_PROMPT
+from openjiuwen_deepsearch.utils.moderation.content import evidence_spans
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
 
@@ -65,7 +65,7 @@ async def _model(monkeypatch, handler, enabled=True, stats=False):
             model_config=ModelRequestConfig(model_name=MODEL),
         )
         monkeypatch.setattr(
-            "openjiuwen_deepsearch.utils.common_utils.moderation_mask._load_lexicon_bundled",
+            "openjiuwen_deepsearch.utils.moderation.mask._load_lexicon_bundled",
             lambda: frozenset({"blockedword"}),
         )
         yield {"model": model, "model_name": MODEL, "moderation_mask_retry": enabled}

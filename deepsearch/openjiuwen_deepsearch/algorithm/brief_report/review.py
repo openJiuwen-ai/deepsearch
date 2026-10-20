@@ -3,7 +3,7 @@
 import json
 import logging
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.collector import _blocking_gaps
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefEvidenceReview,

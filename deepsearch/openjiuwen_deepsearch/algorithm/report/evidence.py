@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_coverage_passage_block,

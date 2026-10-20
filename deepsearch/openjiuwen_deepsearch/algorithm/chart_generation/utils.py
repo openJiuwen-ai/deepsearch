@@ -7,7 +7,7 @@ import base64
 
 from pydantic import BaseModel, Field
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
     PromptBuildOptions,

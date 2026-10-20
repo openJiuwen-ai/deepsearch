@@ -14,15 +14,17 @@ from __future__ import annotations
 import logging
 import json
 import re
+import string
 from collections.abc import Iterator
 from functools import lru_cache
 from importlib import resources
 from typing import Any
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_detection import detect_error
-from openjiuwen_deepsearch.utils.common_utils.lexicon_resource import FORMAT, decode_lexicon
-from openjiuwen_deepsearch.utils.common_utils.moderation_content import MaskableText
+from openjiuwen_deepsearch.utils.moderation.detection import detect_error
+from openjiuwen_deepsearch.utils.moderation.lexicon_resource import FORMAT, decode_lexicon
+from openjiuwen_deepsearch.utils.moderation.content import MaskableText
+from openjiuwen_deepsearch.utils.moderation.matcher import TextMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,7 @@ MASK_CHAR = "*"
 URL_PLACEHOLDER = "[URL_REDACTED]"
 _HAN = re.compile(r"[\u3400-\u9fff]")
 _DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+_SCHEME_CHARS = frozenset(string.ascii_letters + string.digits + "+.-")
 _ADDRESS = re.compile(
     r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"'`，。；！？]+"
     r"|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
@@ -51,7 +54,7 @@ RETRY_FEEDBACK_PROMPT = (
     "3. 保持事实准确、信息完整，不要因此省略必要内容。"
 )
 
-_LEXICON_DIR_RESOURCE = "openjiuwen_deepsearch.utils.common_utils.data.sensitive_lexicon"
+_LEXICON_DIR_RESOURCE = "openjiuwen_deepsearch.utils.moderation.data.sensitive_lexicon"
 
 
 @lru_cache(maxsize=1)
@@ -105,10 +108,11 @@ def append_retry_feedback(
 
 
 @lru_cache(maxsize=8)
-def _compiled_pattern(terms: frozenset[str]) -> tuple[re.Pattern, frozenset[str]]:
+def _compiled_matchers(terms: frozenset[str]) -> tuple[TextMatcher, frozenset[str]]:
     """Cache separate text rules and normalized domain rules."""
     domains = set()
-    alternatives = []
+    matcher = TextMatcher()
+    text_terms = 0
     skipped = 0
     for term in sorted((t for t in terms if t), key=lambda t: (-len(t), t)):
         domain = _address_domain(term)
@@ -123,23 +127,22 @@ def _compiled_pattern(terms: frozenset[str]) -> tuple[re.Pattern, frozenset[str]
         if "://" in term:
             skipped += 1
             continue
-        escaped = re.escape(term)
-        if _is_english_term(term):
-            escaped = r"(?<![A-Za-z0-9_])(?ai:" + escaped + r")(?![A-Za-z0-9_])"
-        alternatives.append(escaped)
+        matcher.add(term, english=_is_english_term(term))
+        text_terms += 1
     logger.info(
         "moderation matchers text_terms=%d domains=%d skipped_url_terms=%d",
-        len(alternatives), len(domains), skipped,
+        text_terms, len(domains), skipped,
     )
-    return re.compile("|".join(alternatives) if alternatives else r"(?!)"), frozenset(domains)
+    return matcher, frozenset(domains)
 
 
 def _is_english_term(term: str) -> bool:
     return not _HAN.search(term) and bool(re.search(r"[A-Za-z]", term))
 
 
-def _text_replacement(match: re.Match) -> tuple[int, int, str]:
-    return match.start(), match.end(), MASK_CHAR * (match.end() - match.start())
+def _text_replacement(span: tuple[int, int]) -> tuple[int, int, str]:
+    start, end = span
+    return start, end, MASK_CHAR * (end - start)
 
 
 def _parse_address(address: str) -> SplitResult:
@@ -186,12 +189,54 @@ def _trim_address(address: str) -> str:
     return address.rstrip(".,;:!?")
 
 
+def _is_word_char(char: str) -> bool:
+    return char.isalnum() or char == "_"
+
+
+def _address_starts(text: str) -> list[int]:
+    """Locate possible starts in Python before applying the anchored URL regex.
+
+    Unanchored email/scheme alternatives otherwise retry long prefixes at every
+    character, holding the GIL even when the surrounding work is in a thread.
+    """
+    starts = set()
+    scheme_start = email_start = label_start = None
+    for index, char in enumerate(text):
+        word = _is_word_char(char)
+        if char in _SCHEME_CHARS:
+            if scheme_start is None and char in string.ascii_letters:
+                scheme_start = index
+        else:
+            if scheme_start is not None and text.startswith("://", index):
+                starts.add(scheme_start)
+            scheme_start = None
+        if word or char in ".+-":
+            if email_start is None:
+                email_start = index
+        else:
+            if char == "@" and email_start is not None:
+                starts.add(email_start)
+            email_start = None
+        if word or char == "-":
+            if label_start is None:
+                label_start = index
+        else:
+            if char == "." and label_start is not None:
+                previous = text[label_start - 1] if label_start else ""
+                if not previous or not (_is_word_char(previous) or previous in "@./:-"):
+                    starts.add(label_start)
+            label_start = None
+    return sorted(starts)
+
+
 def _address_candidates(text: str) -> Iterator[tuple[int, int, str]]:
     cursor = 0
-    while True:
-        match = _ADDRESS.search(text, cursor)
+    for start in _address_starts(text):
+        if start < cursor:
+            continue
+        match = _ADDRESS.match(text, start)
         if match is None:
-            break
+            continue
         address = _trim_address(match.group())
         end = match.start() + len(address)
         yield match.start(), end, address
@@ -211,13 +256,13 @@ def mask_text(s: str, terms: frozenset[str]) -> tuple[str, int, int]:
     """
     if not s or not terms:
         return s, 0, 0
-    pat, domains = _compiled_pattern(terms)
+    pat, domains = _compiled_matchers(terms)
     replacements = []
     cursor = 0
     for start, end, address in _address_candidates(s):
         replacements.extend(
             _text_replacement(m)
-            for m in pat.finditer(s, cursor, start)
+            for m in pat.find_spans(s, cursor, start)
         )
         host = _address_domain(address)
         if host and _domain_matches(host, domains):
@@ -226,7 +271,7 @@ def mask_text(s: str, terms: frozenset[str]) -> tuple[str, int, int]:
         cursor = end
     replacements.extend(
         _text_replacement(m)
-        for m in pat.finditer(s, cursor)
+        for m in pat.find_spans(s, cursor)
     )
     if not replacements:
         return s, 0, 0

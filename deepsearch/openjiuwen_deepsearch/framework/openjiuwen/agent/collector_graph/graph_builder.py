@@ -17,7 +17,7 @@ from openjiuwen.core.workflow.components.flow.start_comp import Start
 from openjiuwen.core.workflow.workflow import Workflow
 from pydantic import BaseModel, Field, model_validator
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     build_summary_evidence_pack,

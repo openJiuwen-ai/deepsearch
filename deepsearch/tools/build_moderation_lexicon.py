@@ -12,7 +12,7 @@ import re
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 _CODEC_SPEC = importlib.util.spec_from_file_location(
     "moderation_lexicon_codec",
-    PACKAGE_ROOT / "openjiuwen_deepsearch/utils/common_utils/lexicon_resource.py",
+    PACKAGE_ROOT / "openjiuwen_deepsearch/utils/moderation/lexicon_resource.py",
 )
 _CODEC = importlib.util.module_from_spec(_CODEC_SPEC)
 _CODEC_SPEC.loader.exec_module(_CODEC)
@@ -128,7 +128,7 @@ def main():
     )
     parser.add_argument(
         "--output-dir", type=Path,
-        default=PACKAGE_ROOT / "openjiuwen_deepsearch/utils/common_utils/data/sensitive_lexicon",
+        default=PACKAGE_ROOT / "openjiuwen_deepsearch/utils/moderation/data/sensitive_lexicon",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")

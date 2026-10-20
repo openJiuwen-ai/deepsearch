@@ -11,13 +11,13 @@ from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import _run_llm_via_
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats as invoke
-from openjiuwen_deepsearch.utils.common_utils.moderation_mask import RETRY_FEEDBACK_PROMPT
-from openjiuwen_deepsearch.utils.common_utils.moderation_content import evidence_spans
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.mask import RETRY_FEEDBACK_PROMPT
+from openjiuwen_deepsearch.utils.moderation.content import evidence_spans
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 
 _IMPL = "openjiuwen_deepsearch.utils.common_utils.llm_utils._ainvoke_llm_with_stats_impl"
-_MASK = "openjiuwen_deepsearch.utils.common_utils.moderation_mask"
+_MASK = "openjiuwen_deepsearch.utils.moderation.mask"
 _MODEL = "test-moderation-model"
 MESSAGES = [
     {"role": "system", "content": "敏感系统"},
@@ -32,7 +32,7 @@ def _error(side="Input"):
 @pytest.fixture
 def llm(monkeypatch):
     monkeypatch.setattr(
-        "openjiuwen_deepsearch.utils.common_utils.moderation_mask._load_lexicon_bundled",
+        "openjiuwen_deepsearch.utils.moderation.mask._load_lexicon_bundled",
         lambda: frozenset({"敏感", "sex", "blocked.example"}),
     )
     return {"model_name": _MODEL, "moderation_mask_retry": True}

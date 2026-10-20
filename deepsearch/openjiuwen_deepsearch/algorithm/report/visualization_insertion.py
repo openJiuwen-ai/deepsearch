@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import EFFECT_SUB_REPORT_TAG
 from openjiuwen_deepsearch.common.common_constants import CHINESE

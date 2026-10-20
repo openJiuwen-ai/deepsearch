@@ -10,8 +10,8 @@ import sys
 
 import pytest
 
-from openjiuwen_deepsearch.utils.common_utils import lexicon_resource as codec
-from openjiuwen_deepsearch.utils.common_utils import moderation_mask
+from openjiuwen_deepsearch.utils.moderation import lexicon_resource as codec
+from openjiuwen_deepsearch.utils.moderation import mask as moderation_mask
 
 
 @pytest.fixture

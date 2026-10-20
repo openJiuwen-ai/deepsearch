@@ -1,5 +1,6 @@
 """Carry recovery policy across an existing retry loop; never issue requests."""
 
+import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
@@ -22,7 +23,7 @@ class ModerationRetryPolicy:
         )
 
     def prepare(self, messages: list) -> list:
-        from openjiuwen_deepsearch.utils.common_utils import moderation_mask
+        from openjiuwen_deepsearch.utils.moderation import mask as moderation_mask
 
         prepared = messages
         if self.mask_input:
@@ -37,6 +38,17 @@ class ModerationRetryPolicy:
             if not already_present:
                 prepared = moderation_mask.append_retry_feedback(prepared)
         return prepared
+
+    async def prepare_async(self, messages: list) -> list:
+        """Offload input recovery, including cold resource loading and rendering.
+
+        The matcher is Python code, so worker scans release the GIL regularly.
+        Cancelling the await does not stop the worker; it only builds a copy and
+        never invokes the model or mutates retry state.
+        """
+        if self.mask_input:
+            return await asyncio.to_thread(self.prepare, messages)
+        return self.prepare(messages)
 
 
 @dataclass

@@ -56,8 +56,8 @@ include = ["openjiuwen_deepsearch*"]          # 星号通配子目录
 openjiuwen_deepsearch = ["**/*"]  # 递归收录所有文件，包括 .md、.json、.yaml 等
 
 [tool.setuptools.exclude-package-data]
-"openjiuwen_deepsearch.utils.common_utils.data.sensitive_lexicon" = ["*.txt"]
-openjiuwen_deepsearch = ["utils/common_utils/data/sensitive_lexicon/*.txt"]
+"openjiuwen_deepsearch.utils.moderation.data.sensitive_lexicon" = ["*.txt"]
+openjiuwen_deepsearch = ["utils/moderation/data/sensitive_lexicon/*.txt"]
 
 # pytest configuration
 [tool.pytest.ini_options]

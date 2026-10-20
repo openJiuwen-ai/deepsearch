@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_retry import moderation_retry_scope
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.evaluation import evaluate_brief_sections
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefCitationRecord,

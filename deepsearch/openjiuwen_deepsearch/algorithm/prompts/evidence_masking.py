@@ -5,8 +5,8 @@ from typing import Any
 
 from jinja2 import Template
 
-from openjiuwen_deepsearch.utils.common_utils.moderation_content import MaskableText
-from openjiuwen_deepsearch.utils.common_utils.moderation_mask import mask_text
+from openjiuwen_deepsearch.utils.moderation.content import MaskableText
+from openjiuwen_deepsearch.utils.moderation.mask import mask_text
 
 
 # Only known body/URL leaves are eligible. Keys, tasks, titles, IDs and dates
