@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """内容风控掩码工具：普通词等长替换，命中域名的地址整体替换为占位符。
 
-词库从 package data 的 lexicon.bin 读取并校验，可通过 lexicon_dir 指定外部文本目录覆盖。
+词库仅从 package data 的 lexicon.bin 读取并校验。
 首次需要输入掩码时才加载，解析结果和匹配器使用缓存。
 
 第三方词库归属与许可：
@@ -17,7 +17,6 @@ import re
 from collections.abc import Iterator
 from functools import lru_cache
 from importlib import resources
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -77,29 +76,8 @@ def _load_lexicon_bundled() -> frozenset[str]:
         return frozenset()
 
 
-@lru_cache(maxsize=4)
-def _load_lexicon_dir(path: str) -> frozenset[str]:
-    """从外部目录加载词库（按路径缓存）。"""
-    p = Path(path)
-    if not p.is_dir():
-        logger.warning("词库目录不存在或不是目录: %s", path)
-        return frozenset()
-    terms: set[str] = set()
-    for f in sorted(p.glob("*.txt")):
-        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
-            t = line.strip()
-            if t and not t.startswith("#") and len(t) >= 2:
-                terms.add(t)
-    return frozenset(terms)
-
-
-def get_lexicon(lexicon_dir: str | None = None) -> frozenset[str]:
-    """获取词库。lexicon_dir 非空则用外部目录；目录无效或为空时回退到打包词库。"""
-    if lexicon_dir:
-        terms = _load_lexicon_dir(lexicon_dir)
-        if terms:
-            return terms
-        logger.warning("外部词库目录无效或为空，回退到打包词库: %s", lexicon_dir)
+def get_lexicon() -> frozenset[str]:
+    """获取经构建清理并校验的内置词库。"""
     return _load_lexicon_bundled()
 
 
@@ -257,7 +235,6 @@ def mask_text(s: str, terms: frozenset[str]) -> tuple[str, int, int]:
 def mask_messages(
     messages: list[Any],
     level: int,
-    lexicon_dir: str | None = None,
     *,
     evidence_only: bool = False,
 ) -> tuple[list[Any], int, int]:
@@ -272,7 +249,7 @@ def mask_messages(
     ):
         logger.info("moderation-mask-skipped reason=no_evidence_scope")
         return messages, 0, 0
-    terms = get_lexicon(lexicon_dir)
+    terms = get_lexicon()
     if not terms:
         return messages, 0, 0
     new_msgs: list[Any] = []

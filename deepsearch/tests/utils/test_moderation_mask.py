@@ -3,11 +3,12 @@ import pytest
 from openjiuwen_deepsearch.utils.common_utils import moderation_mask
 
 
-def _write_lexicon(tmp_path, terms):
-    """把词写入 tmp_path/lex.txt，返回目录路径字符串。"""
-    f = tmp_path / "lex.txt"
-    f.write_text("\n".join(terms) + "\n", encoding="utf-8")
-    return str(tmp_path)
+@pytest.fixture
+def sample_lexicon(monkeypatch):
+    monkeypatch.setattr(
+        moderation_mask, "_load_lexicon_bundled",
+        lambda: frozenset({"敏感", "sex", "blocked.example"}),
+    )
 
 
 def test_is_moderation_error_detects_input_block():
@@ -40,9 +41,8 @@ def test_is_moderation_error_via_cause_chain():
     assert moderation_mask.is_moderation_error("status code is 400", cause=cause)
 
 
-def test_mask_text_replaces_terms_with_mask_char(tmp_path):
-    lex = _write_lexicon(tmp_path, ["敏感", "禁忌词"])
-    terms = moderation_mask.get_lexicon(lex)
+def test_mask_text_replaces_terms_with_mask_char():
+    terms = frozenset({"敏感", "禁忌词"})
     s = "这是敏感内容，含禁忌词。"
     masked, nchars, nspans = moderation_mask.mask_text(s, terms)
     assert "敏感" not in masked
@@ -52,20 +52,18 @@ def test_mask_text_replaces_terms_with_mask_char(tmp_path):
     assert nspans == 2
 
 
-def test_mask_text_empty_or_no_terms(tmp_path):
-    lex = _write_lexicon(tmp_path, ["x"])
-    assert moderation_mask.mask_text("", moderation_mask.get_lexicon(lex))[0] == ""
+def test_mask_text_empty_or_no_terms():
+    assert moderation_mask.mask_text("", frozenset({"example"}))[0] == ""
     masked, n, _ = moderation_mask.mask_text("abc", frozenset())
     assert masked == "abc" and n == 0
 
 
-def test_mask_messages_level1_user_only(tmp_path):
-    lex = _write_lexicon(tmp_path, ["敏感"])
+def test_mask_messages_level1_user_only(sample_lexicon):
     msgs = [
         {"role": "system", "content": "你是敏感助手"},
         {"role": "user", "content": "讨论敏感话题"},
     ]
-    out, nchars, nspans = moderation_mask.mask_messages(msgs, 1, lex)
+    out, nchars, nspans = moderation_mask.mask_messages(msgs, 1)
     # user 被掩
     assert "敏感" not in out[1]["content"]
     # system 不被掩（level 1）
@@ -73,35 +71,32 @@ def test_mask_messages_level1_user_only(tmp_path):
     assert nchars == 2
 
 
-def test_mask_messages_level2_user_and_system(tmp_path):
-    lex = _write_lexicon(tmp_path, ["敏感"])
+def test_mask_messages_level2_user_and_system(sample_lexicon):
     msgs = [
         {"role": "system", "content": "你是敏感助手"},
         {"role": "user", "content": "讨论敏感话题"},
     ]
-    out, nchars, nspans = moderation_mask.mask_messages(msgs, 2, lex)
+    out, nchars, nspans = moderation_mask.mask_messages(msgs, 2)
     assert "敏感" not in out[0]["content"]
     assert "敏感" not in out[1]["content"]
     assert nchars == 4  # system 2 + user 2
 
 
-def test_mask_messages_preserves_non_target_roles(tmp_path):
-    lex = _write_lexicon(tmp_path, ["敏感"])
+def test_mask_messages_preserves_non_target_roles(sample_lexicon):
     msgs = [
         {"role": "tool", "content": "敏感工具输出"},
         {"role": "user", "content": "敏感"},
     ]
-    out, _, _ = moderation_mask.mask_messages(msgs, 2, lex)
+    out, _, _ = moderation_mask.mask_messages(msgs, 2)
     # tool 角色不被掩
     assert out[0]["content"] == "敏感工具输出"
     # user 被掩
     assert out[1]["content"] == "**"
 
 
-def test_mask_messages_does_not_mutate_input(tmp_path):
-    lex = _write_lexicon(tmp_path, ["敏感"])
+def test_mask_messages_does_not_mutate_input(sample_lexicon):
     msgs = [{"role": "user", "content": "敏感"}]
-    moderation_mask.mask_messages(msgs, 1, lex)
+    moderation_mask.mask_messages(msgs, 1)
     assert msgs[0]["content"] == "敏感"  # 原列表未改
 
 
@@ -150,10 +145,17 @@ def test_bundled_lexicon_preserves_embedded_url_and_mapping_keys():
     assert json.loads(text) == original
 
 
-def test_get_lexicon_falls_back_to_bundled_on_bad_dir(tmp_path):
-    """外部目录无效时退回打包词库。"""
-    terms = moderation_mask.get_lexicon("/nonexistent/path/xyz")
-    assert len(terms) > 0
+def test_get_lexicon_only_uses_bundled_resource(monkeypatch):
+    expected = frozenset({"example"})
+    monkeypatch.setattr(moderation_mask, "_load_lexicon_bundled", lambda: expected)
+    assert moderation_mask.get_lexicon() is expected
+
+
+def test_configuration_does_not_expose_external_lexicon_directory():
+    from openjiuwen_deepsearch.config.config import LLMConfig
+
+    assert "moderation_mask_lexicon_dir" not in LLMConfig.model_fields
+    assert "moderation_mask_lexicon_dir" not in LLMConfig().model_dump()
 
 
 @pytest.mark.parametrize("text", ["sex", "Sex", "SEX", "(Sex)", "性教育Sex相关"])
@@ -243,11 +245,10 @@ def test_idna_domains_are_normalized():
     )
 
 
-def test_domains_from_custom_lexicon_and_message_copies(tmp_path):
-    lex = _write_lexicon(tmp_path, ["blocked.example", "sex", "敏感"])
+def test_bundled_domain_rules_and_message_copies(sample_lexicon):
     text = "敏感 Sex https://blocked.example/a https://sussex.ac.uk"
     messages = [{"role": role, "content": text} for role in ("system", "user", "assistant", "tool")]
-    masked, count, _ = moderation_mask.mask_messages(messages, 1, lex)
+    masked, count, _ = moderation_mask.mask_messages(messages, 1)
     assert masked[1]["content"] == "** *** [URL_REDACTED] https://sussex.ac.uk"
     assert all(message["content"] == text for message in messages)
     assert all(masked[i]["content"] == text for i in (0, 2, 3))

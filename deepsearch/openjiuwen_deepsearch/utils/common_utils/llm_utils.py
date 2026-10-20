@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Sequence, Any, get_args, get_origin
+from typing import Callable, Sequence, Any, get_args, get_origin
 
 import json_repair
 from openjiuwen.core.foundation.llm.schema.message import (
@@ -176,6 +176,8 @@ class _ConsumeLlmStreamRequest:
         stream_id: 当前流 ID。
         stream_meta: 附加流元数据。
         agent_name: 当前 agent 名称。
+        moderation_enabled: 是否检测流中的风控信号。
+        on_moderation_usage: 流被风控中断时，记录最近一次已收到的 usage。
     """
 
     llm: Any
@@ -187,6 +189,7 @@ class _ConsumeLlmStreamRequest:
     stream_meta: dict[str, Any] | None
     agent_name: str
     moderation_enabled: bool = False
+    on_moderation_usage: Callable[[Any], None] | None = None
 
 
 def _normalize_agent_name(agent_name: Any) -> str:
@@ -1244,6 +1247,31 @@ def _resolve_stream_options(llm_model: Any, need_include_usage: bool) -> dict | 
     return merged_options or None
 
 
+def _record_llm_call_usage(usage_metadata: Any, start: float, session_id: str, agent_name: str) -> None:
+    """Record one received response, including filtered responses with usage."""
+    input_tokens, output_tokens, total_tokens = _extract_usage_tokens(usage_metadata)
+    cache_tokens = _extract_cache_tokens(usage_metadata)
+    llm_stat = {
+        "method_name": agent_name,
+        "duration": time.time() - start,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cache_tokens": cache_tokens,
+    }
+    add_workflow_llm_usage(
+        session_id=session_id,
+        token_usage=WorkflowLlmUsageDelta(
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            total_tokens=total_tokens, cache_tokens=cache_tokens,
+        ),
+        agent_name=agent_name,
+    )
+    metrics_logger.info(
+        f"{TIME_LOGGER_TAG} session_id: {session_id_ctx.get()} ------ [LLM CALL STATISTICS]: {llm_stat}"
+    )
+
+
 def _raise_if_moderation_response(response: Any, source: Source) -> None:
     signal = detect_response(response, source)
     if signal is not None:
@@ -1267,36 +1295,47 @@ async def _consume_llm_stream(
         Any: 聚合后的完整响应块。
     """
     full_chunk = None
-    async for chunk in request.llm.stream(**request.stream_kwargs):
-        _raise_if_cancelled()
+    received_chunk = False
+    latest_usage = None
+    try:
+        async for chunk in request.llm.stream(**request.stream_kwargs):
+            _raise_if_cancelled()
+            received_chunk = True
+            # Match the framework's chunk merge: the latest reported usage wins.
+            latest_usage = getattr(chunk, "usage_metadata", None) or latest_usage
+            if request.moderation_enabled:
+                _raise_if_moderation_response(chunk, "stream")
+            if full_chunk is None:
+                full_chunk = chunk
+            else:
+                full_chunk += chunk
+                if len(full_chunk.content) >= MAX_LLM_RESP_LENGTH:
+                    logger.warning(
+                        "[llm_astream] llm response is too long, "
+                        "truncate to %s characters", MAX_LLM_RESP_LENGTH
+                    )
+                    full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
+                    break
+            chunk_content = getattr(chunk, "content", "")
+            if request.can_write_stream and request.need_stream_out and chunk_content:
+                payload = {
+                    "message_id": request.stream_id,
+                    "agent": request.agent_name,
+                    "content": chunk_content,
+                    "message_type": MessageType.MESSAGE_CHUNK.value,
+                    "event": StreamEvent.MESSAGE.value,
+                    "created_time": get_current_time(),
+                }
+                if request.stream_meta:
+                    payload.update(dict(request.stream_meta))
+                await request.session.write_custom_stream(payload)
         if request.moderation_enabled:
-            _raise_if_moderation_response(chunk, "stream")
-        if full_chunk is None:
-            full_chunk = chunk
-        else:
-            full_chunk += chunk
-            if len(full_chunk.content) >= MAX_LLM_RESP_LENGTH:
-                logger.warning(
-                    "[llm_astream] llm response is too long, "
-                    "truncate to %s characters", MAX_LLM_RESP_LENGTH
-                )
-                full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
-                break
-        chunk_content = getattr(chunk, "content", "")
-        if request.can_write_stream and request.need_stream_out and chunk_content:
-            payload = {
-                "message_id": request.stream_id,
-                "agent": request.agent_name,
-                "content": chunk_content,
-                "message_type": MessageType.MESSAGE_CHUNK.value,
-                "event": StreamEvent.MESSAGE.value,
-                "created_time": get_current_time(),
-            }
-            if request.stream_meta:
-                payload.update(dict(request.stream_meta))
-            await request.session.write_custom_stream(payload)
-    if request.moderation_enabled:
-        _raise_if_moderation_response(full_chunk, "stream")
+            _raise_if_moderation_response(full_chunk, "stream")
+    except Exception as error:
+        if (request.moderation_enabled and received_chunk and request.on_moderation_usage is not None
+                and detect_error(error) is not None):
+            request.on_moderation_usage(latest_usage)
+        raise
     return full_chunk
 
 
@@ -1312,6 +1351,7 @@ async def llm_astream(*args, **kwargs):
         need_stream_out (bool): 是否将增量内容写入会话流。
         stream_meta (dict | None): 附加流事件字段。
         stream_options (dict | None): 传入模型 SDK 的流式配置。
+        on_moderation_usage (Callable | None): 记录被风控中断的流已收到的 usage，不继续读流。
 
     Returns:
         Any: 聚合后的完整 LLM 响应块。
@@ -1325,6 +1365,7 @@ async def llm_astream(*args, **kwargs):
     stream_meta = kwargs.get("stream_meta", None)
     stream_options = kwargs.get("stream_options", None)
     moderation_enabled = bool(kwargs.get("moderation_enabled", False))
+    on_moderation_usage = kwargs.get("on_moderation_usage")
 
     _raise_if_cancelled()
     full_chunk = None
@@ -1393,6 +1434,7 @@ async def llm_astream(*args, **kwargs):
                     stream_meta=stream_meta,
                     agent_name=agent_name,
                     moderation_enabled=moderation_enabled,
+                    on_moderation_usage=on_moderation_usage,
                 )),
                 timeout=resolved_timeout.timeout,
             )
@@ -1407,6 +1449,7 @@ async def llm_astream(*args, **kwargs):
                 stream_meta=stream_meta,
                 agent_name=agent_name,
                 moderation_enabled=moderation_enabled,
+                on_moderation_usage=on_moderation_usage,
             ))
     except asyncio.TimeoutError as exc:
         if can_write_stream and need_stream_out:
@@ -1520,6 +1563,10 @@ async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
     if stats_info_llm:
         start = time.time()
 
+    def record_call_usage(usage_metadata):
+        if stats_info_llm:
+            _record_llm_call_usage(usage_metadata, start, session_id, agent_name)
+
     # 真正调用llm处
     messages = transfer_to_jiuwen_messages(messages)
 
@@ -1575,6 +1622,7 @@ async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
                     stream_meta=stream_meta,
                     stream_options=resolved_stream_options,
                     moderation_enabled=bool(llm.get("moderation_mask_retry")),
+                    on_moderation_usage=record_call_usage if stats_info_llm else None,
                 )
         except Exception as e:
             detail = _format_llm_invoke_exception(e)
@@ -1609,6 +1657,7 @@ async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
                 stream_meta=stream_meta,
                 stream_options=_resolve_call_stream_options(target_model, stats_info_llm),
                 moderation_enabled=bool(llm.get("moderation_mask_retry")),
+                on_moderation_usage=record_call_usage if stats_info_llm else None,
             )
 
         try:
@@ -1637,37 +1686,9 @@ async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
             if not fallback_succeeded:
                 raise
 
+    record_call_usage(getattr(response, "usage_metadata", None))
     if llm.get("moderation_mask_retry"):
         _raise_if_moderation_response(response, "response")
-
-    if stats_info_llm:
-        duration = time.time() - start
-
-        # get usage token usage info
-        input_tokens, output_tokens, total_tokens = _extract_usage_tokens(response.usage_metadata)
-        cache_tokens = _extract_cache_tokens(response.usage_metadata)
-
-        llm_stat = {
-            "method_name": agent_name,
-            "duration": duration,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": total_tokens,
-            "cache_tokens": cache_tokens,
-        }
-        add_workflow_llm_usage(
-            session_id=session_id,
-            token_usage=WorkflowLlmUsageDelta(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                cache_tokens=cache_tokens,
-            ),
-            agent_name=agent_name,
-        )
-        metrics_logger.info(
-            f"{TIME_LOGGER_TAG} session_id: {session_id_ctx.get()} ------ [LLM CALL STATISTICS]: {llm_stat}"
-        )
 
     response.content = _extract_json(response.content)
     if schema is not None:
@@ -1692,7 +1713,7 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     if policy is None:
         return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
     policy.attempts += 1
-    current_messages = policy.prepare(messages, llm.get("moderation_mask_lexicon_dir") or "")
+    current_messages = policy.prepare(messages)
     call_args, call_kwargs = _with_messages(args, kwargs, current_messages)
     try:
         response = await _ainvoke_llm_with_stats_impl(*call_args, **call_kwargs)

@@ -30,9 +30,12 @@ def _error(side="Input"):
 
 
 @pytest.fixture
-def llm(tmp_path):
-    (tmp_path / "lex.txt").write_text("敏感\nsex\nblocked.example\n", encoding="utf-8")
-    return {"model_name": _MODEL, "moderation_mask_retry": True, "moderation_mask_lexicon_dir": str(tmp_path)}
+def llm(monkeypatch):
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.utils.common_utils.moderation_mask._load_lexicon_bundled",
+        lambda: frozenset({"敏感", "sex", "blocked.example"}),
+    )
+    return {"model_name": _MODEL, "moderation_mask_retry": True}
 
 
 def _recorder(calls, errors=(), ok=None):
