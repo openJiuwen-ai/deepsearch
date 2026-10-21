@@ -52,6 +52,7 @@ class RetrievalQuery(BaseModel):
     )
     description: str = Field(default="", description="简要说明query为何与搜索任务相关，为何要生成当前query")
     doc_infos: Optional[List[Dict]] = Field(default_factory=list, description="query检索的文档信息")
+    tool: Optional[str] = Field(default=None, description="query-gen 选择的直调工具名（query-兼容 MCP 工具）或 None（走 native）")
 
 
 class Step(BaseModel):
