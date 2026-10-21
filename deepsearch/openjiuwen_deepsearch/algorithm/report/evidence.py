@@ -37,6 +37,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     _resolve_content_date_scope,
     build_section_local_contract_prompt_context,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.date_utils import (
     classify_temporal,
     parse_content_window,
@@ -212,6 +213,10 @@ class EvidenceMixin:
                     messages=llm_input,
                     agent_name=AgentLlmName.SUB_REPORTER_RATIONALE_GENERATOR.value,
                 )
+            except StopRequested:
+                # 停止信号不得进入 rationale 重试循环（会继续调用 LLM 跑完
+                # max_retries 次再降级返回）。原样上抛走异常保存分支。
+                raise
             except Exception as e:
                 last_error = f"LLM call failed: {e}"
                 logger.warning(
@@ -250,6 +255,9 @@ class EvidenceMixin:
                     attempt_num + 1, max_retries,
                 )
                 return rationales, ""
+            except StopRequested:
+                # 停止信号不得降级为解析失败重试反馈。原样上抛走异常保存分支。
+                raise
             except Exception as e:
                 last_error = f"failed to parse LLM output: {e}"
                 retry_feedback = (
@@ -613,6 +621,10 @@ class EvidenceMixin:
                     messages=llm_input,
                     agent_name=AgentLlmName.SUB_REPORTER_PASSAGES_EXTRACTOR.value,
                 )
+            except StopRequested:
+                # 停止信号不得进入 passages 提取重试循环（会继续调用 LLM 跑完
+                # max_retries 次再降级返回）。原样上抛走异常保存分支。
+                raise
             except Exception as e:
                 last_error = f"LLM call failed: {e}"
                 logger.warning(
@@ -650,6 +662,9 @@ class EvidenceMixin:
                     n_docs, n_passages, attempt_num + 1, max_retries,
                 )
                 return data, batch_docs, ""
+            except StopRequested:
+                # 停止信号不得降级为解析失败重试反馈。原样上抛走异常保存分支。
+                raise
             except Exception as e:
                 last_error = f"failed to parse LLM output: {e}"
                 retry_feedback = (

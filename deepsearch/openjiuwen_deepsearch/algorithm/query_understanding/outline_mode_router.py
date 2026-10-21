@@ -6,6 +6,7 @@ import logging
 
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.config.method import ExecutionMethod
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
@@ -66,6 +67,10 @@ async def route_outline_execution_method(question: str, llm_model_name: str) -> 
             tools=None,
         )
         content = (resp.get("content") or "").strip() if isinstance(resp, dict) else ""
+    except StopRequested:
+        # 用户停止不降级为 parallel 默认模式（那会让主图"正常"流转、图
+        # "正常完成"并清除 checkpoint），直接上抛走异常保存分支。
+        raise
     except Exception as e:
         logger.warning(
             "outline mode router LLM call failed, defaulting to parallel: %s",

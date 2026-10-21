@@ -49,6 +49,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_searc
     defer_scholarly_full_text,
     resolve_scholarly_full_text,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
@@ -895,6 +896,11 @@ class InfoRetrievalNode(BaseNode):
                     self.llm, tool_prompt, llm_type="basic",
                     agent_name=AgentLlmName.COLLECTOR_INFO_RETRIEVAL.value, tools=tool_list)
                 break
+            except StopRequested:
+                # 用户停止不降级为 response=None 的正常返回（那会让图"正常
+                # 完成"并清除 checkpoint），直接上抛走异常保存分支。口径同
+                # brief_nodes。
+                raise
             except Exception as e:
                 current_try = retry_idx + 1
                 task_description = "get info for query"

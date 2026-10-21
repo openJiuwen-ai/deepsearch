@@ -91,7 +91,10 @@ from openjiuwen_deepsearch.common.exception import (
     CustomValueException,
 )
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    StopRequested,
+    raise_if_stop_requested,
+)
 from openjiuwen_deepsearch.config.config import (
     Config,
     LocalSearchEngineConfig,
@@ -885,6 +888,12 @@ class ReporterNode(BaseNode):
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         # generate fail
         if not algorithm_output.get("success"):
+            # 节点级停止检查（reviewer 对照实验验证的注入位置）：报告生成失败
+            # 返回 END 之前，若用户已请求停止，必须抛 StopRequested 走异常保存
+            # 分支（写入 reporter pending_node），而不是让图"正常完成"——
+            # 引擎正常完成路径会清除 checkpoint，续跑只能回 stage1 重头开始。
+            # 放在写 error 状态之前：停止时保留节点入口状态，resume 干净续跑。
+            raise_if_stop_requested()
             current_report = session.get_global_state("search_context.current_report")
             if current_report:
                 current_report.report_content = "error: " + algorithm_output.get("report_str")
@@ -2769,6 +2778,11 @@ class FindActionSpaceNode(BaseNode):
                     success=False,
                     error="Failed to find action after all retries",
                 )
+        except StopRequested:
+            # 停止信号不得降级为 (success=False) fallback（那会让 search 图
+            # "正常完成"到 END，引擎清 checkpoint，续跑从头重跑）。原样
+            # 上抛走异常保存分支，resume 时从本节点续跑。
+            raise
         except Exception as e:
             logger.error(
                 "[FindActionSpaceNode] exception (fallback to end): %s",
@@ -3123,6 +3137,11 @@ class RunActionNode(BaseNode):
                 time.time() - action_start_time,
             )
             return self._post_handle(inputs, algorithm_output, session, context)
+        except StopRequested:
+            # 停止信号不得降级为 (success=False, END) fallback（那会让 search
+            # 图"正常完成"，引擎清 checkpoint，续跑从头重跑）。原样上抛走
+            # 异常保存分支，resume 时从本节点续跑。
+            raise
         except Exception as e:
             logger.error(
                 "[RunActionNode] exception (fallback to end): %s",
@@ -3570,6 +3589,11 @@ class ValidateNewStateNode(BaseNode):
 
             result = self._post_handle(inputs, algorithm_output, session, context)
             return result
+        except StopRequested:
+            # 停止信号不得降级为 (success=False, END) fallback（那会让 search
+            # 图"正常完成"，引擎清 checkpoint，续跑从头重跑）。原样上抛走
+            # 异常保存分支，resume 时从本节点续跑。
+            raise
         except Exception as e:
             logger.error(
                 "[ValidateNewStateNode] exception (fallback to end): %s",

@@ -50,6 +50,7 @@ from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
     normalize_pmid,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
@@ -561,6 +562,11 @@ class GenerateQueryNode(BaseNode):
                     schema=SearchQueryList)
                 _validate_query_count(result.queries, max_search_query_count, "queries")
                 break
+            except StopRequested:
+                # 用户停止不降级为 _fallback_search_query_list 的正常返回
+                # （那会让图"正常完成"并清除 checkpoint），直接上抛走异常
+                # 保存分支。口径同 brief_nodes。
+                raise
             except Exception as e:
                 current_try = retry_idx + 1
                 task_description = "generate search query"
@@ -844,6 +850,11 @@ class SupervisorNode(BaseNode):
                     self.llm, formatted_prompt, agent_name=AgentLlmName.COLLECTOR_SUPERVISOR.value, schema=Reflection)
                 _validate_query_count(result.next_queries, max_search_query_count, "next_queries")
                 break
+            except StopRequested:
+                # 用户停止不降级为 Reflection(is_sufficient=True) 的正常返回
+                # （那会误判"信息已充分"直接终结收集、图"正常完成"并清除
+                # checkpoint），直接上抛走异常保存分支。口径同 brief_nodes。
+                raise
             except Exception as e:
                 current_try = retry_idx + 1
                 task_description = "generate reflection"
@@ -954,6 +965,10 @@ class SummaryNode(BaseNode):
                 result = await ainvoke_llm_with_stats(
                     self.llm, formatted_prompt, agent_name=AgentLlmName.COLLECTOR_SUMMARY.value, schema=Summary)
                 break
+            except StopRequested:
+                # 用户停止不降级为空 Summary 的正常返回（那会让图"正常完成"
+                # 并清除 checkpoint），直接上抛走异常保存分支。口径同 brief_nodes。
+                raise
             except Exception as e:
                 current_try = retry_idx + 1
                 task_description = "generate collector summary"
