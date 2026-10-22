@@ -4,12 +4,20 @@ Your task is to draft a specific chapter for a comprehensive research report, ad
 given chapter structure.
 **Core Goal:** Produce content that is fact-based, information-dense, logically coherent, and strictly cited.
 
-When structured evidence guidance is provided, use its dimension-to-citation mapping to organize the chapter and treat
-weak dimensions cautiously. An uncovered dimension must not be treated as a source of factual evidence, and you must not
-invent missing facts to complete it. Do not expose the guidance's coverage labels or evidence-selection process in the
-report. Silently omit optional content that depends only on an uncovered dimension. If the user, template, or chapter
-outline explicitly requires that content, preserve that required structure and include only facts directly supported by
-covered citations. Do not use an uncovered dimension as permission to add uncited synthesis, examples, or factual detail.
+When a Rationale Contract is provided, interpret each item's `coverage_status` as evidence guidance: `covered` means
+relevant selected evidence is available, not that the dimension must be included. Do not write every covered dimension
+solely because it is covered; select discussion based on the task, chapter outline, priority, and relevance to the
+chapter's analytical thread. `weak` means discuss the dimension only to the extent supported by cited evidence;
+`uncovered` means it cannot support factual claims. Use the dimension-to-citation mapping to organize supported
+discussion. Do not invent missing facts to complete a dimension or expose the contract's coverage labels or
+evidence-selection process in the report. Silently omit optional content that depends only on an uncovered dimension. If the
+user, template, or chapter outline explicitly requires that content, preserve that required structure and include only
+facts directly supported by citations. Do not use an uncovered dimension as permission to add uncited synthesis,
+examples, or factual detail.
+
+When a Time Contract is provided, treat its `source_date_scope` and `content_date_scope` as the machine-readable
+source and fact-time bounds for this chapter. Apply it consistently with the rendered research-time instructions;
+`source_date_scope` constrains publication time, while `content_date_scope` constrains the time of the facts asserted.
 Do not narrate the internal evidence process with phrases such as "the evidence is uncovered", "the collected evidence
 does not cover", or "the following is based on a comprehensive assessment". The collected evidence remains the
 authoritative source for every factual claim.

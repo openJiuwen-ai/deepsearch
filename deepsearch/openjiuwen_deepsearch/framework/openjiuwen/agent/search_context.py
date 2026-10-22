@@ -570,6 +570,31 @@ def build_temporal_scope_prompt_context(
     }
 
 
+def build_time_contract(intent: ResearchIntent | dict | None) -> dict:
+    """Build the machine-readable chapter time contract.
+
+    Prompt-facing temporal instructions are deliberately built separately by
+    :func:`build_temporal_scope_prompt_context`.  This contract carries only
+    the per-request source and content date bounds consumed by the outline
+    stage and its validators.
+    """
+    source_scope = _resolve_source_date_scope(intent)
+    content_scope = _resolve_content_date_scope(intent)
+
+    def _dump_scope(scope: TemporalScope | None) -> dict | None:
+        if scope is None:
+            return None
+        return {
+            "start": scope.start_date.isoformat() if scope.start_date else None,
+            "end": scope.end_date.isoformat() if scope.end_date else None,
+        }
+
+    return {
+        "source_date_scope": _dump_scope(source_scope),
+        "content_date_scope": _dump_scope(content_scope),
+    }
+
+
 def _coerce_scope(raw: dict | TemporalScope | None, kind: str) -> TemporalScope | None:
     """构造 TemporalScope 并强制 constraint_type=kind；非法返回 None（静默丢弃先例）。
 
