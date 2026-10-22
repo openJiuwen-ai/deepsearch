@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefOutline,
     BriefOutlineRequest,
@@ -104,6 +105,7 @@ def _normalize_outline_payload(
     }
 
 
+@moderation_retry_scope
 async def generate_brief_outline(llm: object, request: BriefOutlineRequest) -> BriefOutline:
     """生成并校验 Brief 精简大纲。
 

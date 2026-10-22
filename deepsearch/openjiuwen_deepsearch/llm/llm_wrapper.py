@@ -86,6 +86,7 @@ def create_llm_obj(llm_config: LLMConfig, thinking_enabled: Optional[bool] = Non
             thinking_fallback_key=_build_thinking_fallback_key(llm_config),
             thinking_fallback_removed_fields=fallback_removed_fields,
             thinking_fallback_active=False,
+            moderation_mask_retry=llm_config.moderation_mask_retry,
         )
     finally:
         zero_secret(llm_config.api_key)

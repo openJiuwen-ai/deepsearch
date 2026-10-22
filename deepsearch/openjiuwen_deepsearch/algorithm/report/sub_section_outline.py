@@ -2,6 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 import logging
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import EFFECT_SUB_REPORT_TAG
 from openjiuwen_deepsearch.algorithm.report.report_utils import export_outline_without_plans
@@ -167,6 +168,7 @@ class SubSectionOutlineMixin:
                 result["retry_messages"] = llm_input
             return result
 
+    @moderation_retry_scope
     async def _generate_outline_with_retry(
         self, current_inputs: dict, section_idx, max_attempt_num: int
     ) -> tuple[bool, str]:

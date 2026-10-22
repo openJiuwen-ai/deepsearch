@@ -24,6 +24,13 @@ class LLMConfig(BaseModel):
         default=False,
         description="是否在消息中追加 think 标签"
     )
+    moderation_mask_retry: bool = Field(
+        default=False,
+        description=(
+            "是否启用内容风控补救（默认关，恢复效果与质量需实验验证）。"
+            "复用调用方原有重试预算：输入侧仅掩 user 资料字段，输出侧追加提示；不增加尝试次数。"
+        )
+    )
 
 
 class WebSearchEngineConfig(BaseModel):

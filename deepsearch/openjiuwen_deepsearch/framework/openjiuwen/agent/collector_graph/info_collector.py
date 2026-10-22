@@ -11,6 +11,7 @@ from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import (
     PromptBuildOptions,
     build_prompt_messages,
@@ -883,6 +884,7 @@ class InfoRetrievalNode(BaseNode):
             )
         return agent_input
 
+    @moderation_retry_scope
     async def _invoke_llm_with_retry(self, tool_prompt: list, tool_list: list, state: dict):
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")

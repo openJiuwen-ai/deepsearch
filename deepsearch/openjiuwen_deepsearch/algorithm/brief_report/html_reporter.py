@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.html_charts import (
     TEMPLATE_BLOCK_RE,
     extract_fragment_charts,
@@ -431,6 +432,7 @@ async def _generate_section_fragments(
                     _section_messages(chunk, shell_css, language, errors),
                 ),
                 agent_name=AgentLlmName.BRIEF_HTML_REPORTER_SECTION.value,
+                moderation_retry_key=chunk.section_id,
             )
             raw = str(response.get("content") or "")
             fragment = _extract_section_fragment(raw)
@@ -700,6 +702,7 @@ def _assemble_html_report(
     return convert_inline_citations(html_doc, pre)
 
 
+@moderation_retry_scope
 async def generate_brief_html_report(*, llm, markdown: str, language: str) -> str:
     """把 Brief Markdown 转写为自包含 HTML，按 shell/章节粒度重试。
 

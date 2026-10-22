@@ -10,6 +10,7 @@ from tenacity import (
     retry_if_exception_type,
 )
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.markdown_utils import _convert_bold_formula_to_inline_math
@@ -64,6 +65,7 @@ class ReportPartsMixin:
         logger.info(f"Generating report conclusion Done.")
         return conclusion
 
+    @moderation_retry_scope
     async def _generate_with_llm(self, task_type, prompt, content):
         llm_input = build_prompt_messages(
             prompt, {**self.gen_report_context, "main_content": content}
@@ -132,6 +134,7 @@ class ReportPartsMixin:
             return content
         return header + content
 
+    @moderation_retry_scope
     async def _add_sub_report_transaction(self, current_inputs: dict):
         if not LogManager.is_sensitive():
             logger.debug(
@@ -275,6 +278,7 @@ class ReportPartsMixin:
             return ""
         return "\n\n".join(context_parts)
 
+    @moderation_retry_scope
     async def _generate_sub_report_summary(self, current_inputs: dict):
         """generate sub report summary"""
         if not LogManager.is_sensitive():
@@ -391,6 +395,7 @@ class ReportPartsMixin:
             )
         return normalized
 
+    @moderation_retry_scope
     async def _generate_sub_report_sidecar(self, current_inputs: dict) -> dict:
         """Generate a structured reusable summary for one chapter."""
         section_idx = current_inputs.get("section_idx", 1)
