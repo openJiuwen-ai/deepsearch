@@ -49,6 +49,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_research_intent_prompt_context,
     build_section_local_contract_prompt_context,
     build_temporal_scope_prompt_context,
+    build_time_contract,
     build_exclusion_prompt_context,
 )
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
@@ -100,6 +101,24 @@ def _next_classified_content_index(items: list[Any]) -> int:
         if isinstance(item, dict) and isinstance(item.get("index"), int)
     ]
     return max(existing_indexes, default=0) + 1
+
+
+def _build_material_outline_cards(material_evidence: list[dict]) -> list[dict]:
+    """Render user materials into the same outline evidence channel as writing."""
+    cards = []
+    for item in material_evidence:
+        if not isinstance(item, dict) or not isinstance(item.get("index"), int):
+            continue
+        cards.append({
+            "citation_id": item["index"],
+            "evidence_type": "material",
+            "source_title": str(item.get("title") or ""),
+            "publish_time": str(item.get("publish_time") or item.get("doc_time") or ""),
+            "content_time": item.get("content_time"),
+            "rationale_refs": [],
+            "passage_text": str(item.get("passage_text") or item.get("original_content") or ""),
+        })
+    return cards
 
 
 class Reporter(
@@ -472,6 +491,9 @@ class Reporter(
                 current_inputs.get("passages", []),
             )
         rtp = current_inputs.get("report_type_policy") or {}
+        current_inputs.setdefault(
+            "time_contract", build_time_contract(current_inputs.get("research_intent"))
+        )
         if isinstance(rtp, dict):
             current_inputs.setdefault("report_type", rtp.get("report_type", "professional"))
             current_inputs.setdefault("paragraph_style", rtp.get("paragraph_style", "detailed"))
@@ -535,12 +557,35 @@ class Reporter(
                 item["index"] = next_index + offset
             current_inputs["classified_content"] = existing_items + material_evidence
             classified_content = current_inputs["classified_content"]
+            current_inputs.setdefault("outline_evidence_cards", [])
+            current_inputs["outline_evidence_cards"].extend(
+                _build_material_outline_cards(material_evidence)
+            )
+            current_inputs.setdefault("rationale_contract", {"items": []})
             logger.info(
                 "%s [generate_sub_report] section_idx: [%s], merged %d user material evidence item(s).",
                 EFFECT_SUB_REPORT_TAG,
                 section_idx,
                 len(material_evidence),
             )
+        if current_inputs.get("sub_section_core_content_from_background_knowledge"):
+            # Dependency fallback must retain prior-section context even when
+            # user materials also supply citation evidence.
+            background_cards = self._get_background_knowledge_contents(
+                current_inputs.get("sub_report_background_knowledge", [])
+            )
+            if background_cards:
+                current_inputs.setdefault("outline_evidence_cards", []).append({
+                    "citation_id": None,
+                    "evidence_type": "background_knowledge",
+                    "source_title": "Prior section context",
+                    "publish_time": "",
+                    "content_time": None,
+                    "rationale_refs": [],
+                    "outline_excerpt": self._format_background_knowledge_for_prompt(background_cards),
+                    "coverage_passages": [],
+                })
+                current_inputs.setdefault("rationale_contract", {"items": []})
         if not LogManager.is_sensitive():
             logger.debug(
                 "%s [generate_sub_report] section_idx: [%s], sub section content is: [%s], "
@@ -650,6 +695,10 @@ class Reporter(
         Returns:
             成功状态及结果；仅请求调用抛出异常时附带可复用的 retry_messages。
         """
+        current_inputs.setdefault(
+            "time_contract", build_time_contract(current_inputs.get("research_intent"))
+        )
+        current_inputs.setdefault("rationale_contract", {"items": []})
         if LogManager.is_sensitive():
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [write_subsection_reports] Starting section_idx: "

@@ -501,7 +501,16 @@ class ReportPartsMixin:
             "background_knowledge": self._format_background_knowledge_for_prompt(
                 background_knowledge_contents
             ),
-            "structured_evidence_guide": current_inputs.get("structured_evidence_guide", ""),
+            "rationale_contract_json": json.dumps(
+                current_inputs.get("rationale_contract", {"items": []}), ensure_ascii=False
+            ),
+            "time_contract_json": json.dumps(
+                current_inputs.get("time_contract", {
+                    "source_date_scope": None,
+                    "content_date_scope": None,
+                }),
+                ensure_ascii=False,
+            ),
             "references": current_inputs.get("sub_section_references", ""),
             "retry_feedback": self._sub_report_retry_feedback_from_failure(
                 str(current_inputs.get("sub_report_retry_feedback", "") or "")
