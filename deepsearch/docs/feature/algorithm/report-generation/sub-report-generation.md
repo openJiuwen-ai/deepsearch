@@ -21,7 +21,7 @@
 - 所有传入 LLM prompt 的 outline 均经 `export_outline_without_plans` 处理：剥离 `plans`（含 `step_result`/`evaluation` 等收集结果全文），仅保留章节标题、描述、依赖关系等结构骨架，避免超长输入导致模型 token 超限。
 - 子大纲 Prompt 使用 `outline_evidence_cards`，而非旧 `sub_section_core_content`：全文卡提供确定性截取的 `outline_excerpt`、该来源 rationale 选中的原文 `selected_passages` 和规则抽取的 `coverage_passages`，段落卡提供入选的 `passage_text`。完整 `original_content` 只保留给后续子报告写作 Prompt 使用。
 - 子大纲使用 `time_contract` 的 source/content 时间范围；子报告写作从同一 `research_intent` 单独构造既有时间 Prompt 上下文。两个阶段共享 `rationale_contract`，其中以单一 `coverage_status` 提供 rationale 覆盖状态，另含覆盖分、优先级和 citation 导航；阶段差异由各自 Prompt 解释，不在数据中分别重复编码 `heading_policy` 与 `writing_policy`。采集链路的 `key_passages` 不再作为新子大纲的正式输入。
-- 子大纲中的显式年份必须落在 `time_contract.content_date_scope` 内；越界时作为受控校验失败进入重试。
+- 继承的一级章标题原样保留，不因其中年份超出 `time_contract.content_date_scope` 而拒绝章节；后置时间校验仅检查模型生成的二级标题，越界时进入大纲重试。标题不放宽正文的事实时间约束。
 - 标题时间校验支持完整日期、中文年月日、数字年月与缩写年份范围。歧义的 `YYYY-MM` / `YYYY/MM` 在后两位为 `01`—`12` 时优先解释为整月；`2020-21`、`2020–21` 等解释为跨年范围，分隔符必须存在。ISO、IEC、RFC、IEEE、DIN、EN、GB 标准编号（含冒号后的版本年）及 RTX/GTX 型号不作为事实时间；同一标题中的其他年份仍须校验。
 - 全文抽取阶段（`enrich_fulltext_for_section` 为同步调用，非 async），`FullTextEvidence` 会聚合同一 URL 下所有段落的 reliability（取最大值）和 data_density，使全文证据继承段落级的质量评估。
 - 子报告写作严格复用已批准的子大纲标题。单行扁平大纲只允许一个 H1，不得增加子大纲之外的 Markdown 标题；章节要求的结论、建议、启示等内容仍须保留，并使用段落、编号句、列表、表格或加粗引导语表达。
@@ -131,10 +131,16 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 
 全文卡仅通过非空 URL 关联入选段落；URL 为 null、空串或纯空白时不关联段落，也不从无 URL 的段落推导 rationale 关系。卡片自身的原文摘要和按 citation 归属的 coverage passages 仍保留。
 
+全文卡的 `selected_passages` 为对象列表，每项含 `passage_text` 与原段落的 `content_time`（未知为 null）。同一来源不同事实时间分别保留；整篇全文的顶层 `content_time` 仍为 null，不合并或推断全文时间。大纲的显式时间标题可依据对应段落的已知时间，未知段落不借用其他段落时间。此调整复用已有抽取信息，不增加模型调用。
+
+标题时间校验在月份之前识别完整斜杠日期（如 `2023/06/15`）及其范围，按实际日区间校验，月份规则不截取完整日期前缀。四位数字带金额、数量、容量单位或嵌入字母型号时不按裸年份校验；同一标题中独立的年份和显式 `年` 表达仍接受时间范围校验。
+
 无搜索段落而使用前章背景兜底时，背景卡与用户素材卡可同时进入子大纲；背景卡的 citation ID 为 null，只用于章节衔接，不可作为外部引用。写作阶段继续接收同一前章背景。
 
 两个 contract 同时提供给专业版模板化/非模板化子大纲及子报告：证据充分的主要信息维度可辅助组织内容，弱证据要求谨慎表述，未覆盖维度不得作为新增事实的依据；大纲的模型新增显式年份不得超出 content 时间范围。Brief 由独立工作流使用其专有的证据收集、评审和写作契约。
 
 这些 sidecar 只辅助组织已有材料，不替代 `classified_content`、原文和引用编号。覆盖矩阵缺失、稳定文档键不一致或 background-knowledge-only 路径下，系统使用空 rationale contract 和可用的背景 evidence card 保持生成流程。
 
-端到端排查时可在 INFO 日志中搜索 `[structured_evidence]`。`[build]` 只记录状态计数、文档数、字符数和 contract/card 摘要；`[sub_outline]` 与 `[sub_report]` 记录相应 contracts 是否实际出现在 LLM 输入中，子报告还记录 `Collected Evidence` citation block 的数量和边界是否配对。INFO 不输出 rationale、URL 或完整 cards/contracts；`is_sensitive=False` 时只在 build 阶段通过 DEBUG 提供详细诊断。
+排查时使用实际日志中的 `[generate_sub_section_outline]`、`[generate_sub_report]` 和 `[write_subsection_reports]` 定位阶段及失败原因。当前没有 `[structured_evidence]` 或其 `[build]` / `[sub_outline]` / `[sub_report]` 专用日志。核对实际输入时，大纲上下文查看 `outline_evidence_cards`，两阶段 Prompt 查看 `rationale_contract_json` 与 `time_contract_json`；完整模型输入仅在允许输出详细信息的 DEBUG 路径中记录，生产排查应遵守敏感信息日志配置。
+
+`enrich_fulltext_for_section` 返回的 `structured_evidence_guide` 及 `current_inputs` 中的同名字段仅为内部兼容产物；当前子大纲和写作模板均不消费它，不能用它判断模型实际收到的覆盖信息。正式覆盖信号来自 `rationale_contract`。裸四位数字仅在 1900—2100 范围内作为候选年份，范围外的裸数字（如 4090、8080）不硬判为时间；显式日期、年份范围和带“年”的表达不受此候选窗口限制。

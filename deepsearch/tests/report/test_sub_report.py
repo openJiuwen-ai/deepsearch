@@ -1,3 +1,4 @@
+import json
 import logging
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -935,7 +936,7 @@ def test_outline_evidence_cards_preserve_card_types_content_and_rationale_links(
                 {"rationale_id": "r2", "coverage_score": 0.4},
             ],
             "outline_excerpt": "Fulltext body.",
-            "selected_passages": ["Rationale-selected source passage."],
+            "selected_passages": [{"passage_text": "Rationale-selected source passage.", "content_time": None}],
             "coverage_passages": ["Rule-extracted coverage passage."],
         },
     ]
@@ -959,6 +960,41 @@ def test_fulltext_card_without_url_does_not_claim_unidentified_passages(url):
     assert card["selected_passages"] == []
     assert card["outline_excerpt"] == "Own full text."
     assert card["coverage_passages"] == ["Own coverage passage."]
+
+
+@pytest.mark.parametrize("promote", [False, True])
+def test_outline_cards_preserve_individual_fact_times_through_fulltext_promotion(promote):
+    from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import enrich_fulltext_for_section
+
+    texts = ["Market revenue expanded significantly in the first observed year.",
+             "Employment fell across distinct industrial sectors during the second period.",
+             "Undated methodology explains the sampling design and interview protocols."]
+    times = [{"start": "2022-01-01", "end": "2022-12-31"},
+             {"start": "2023-01-01", "end": "2023-12-31"}, None]
+    passages = [{"doc_url": "https://example.org/source", "doc_title": "Source",
+                 "passage_text": text, "content_time": time,
+                 "scores": {"r1": {"coverage": 0.9}}} for text, time in zip(texts, times)]
+    raw = [{"url": "https://example.org/source", "original_content": "\n".join(texts)}] if promote else []
+    result = enrich_fulltext_for_section(
+        passages={"selected": passages, "raw": raw},
+        context={"rationales": [], "coverage_result": {}}, section_idx=1,
+    )
+    cards = _build_outline_evidence_cards(result["classified_content"], {"items": []}, {},
+                                         result["retained_passages"])
+    if promote:
+        assert len(cards) == 1
+        assert cards[0]["content_time"] is None
+        assert cards[0]["selected_passages"] == [
+            {"passage_text": text, "content_time": time} for text, time in zip(texts, times)
+        ]
+    else:
+        assert [card["content_time"] for card in cards] == times
+    rendered = "\n".join(message["content"] for message in build_prompt_messages(
+        "sub_section_outline", {"core_context": json.dumps(cards),
+                                "time_contract_json": "{}", "rationale_contract_json": "{}"}
+    ))
+    assert "2022-01-01" in rendered and "2023-01-01" in rendered
+    assert "passage-level `content_time`" in rendered
 
 
 def test_rationale_contract_citation_ids_are_deduplicated_from_evidence_cards():

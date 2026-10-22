@@ -72,7 +72,8 @@ The following are section-specific format requirements:
 ## Content Selection & Logic (Strictly Adhere)
 Before generating the outline, carefully review the provided **evidence cards**. Each card is an evidence fragment,
 not a complete document; fulltext cards contain an excerpt, rationale-selected passages from that source, and optional
-rule-extracted coverage passages, while passage cards carry selected passage text.
+rule-extracted coverage passages, while passage cards carry selected passage text. Each fulltext selected passage
+has its own `passage_text` and `content_time`; use that time only for the facts in that passage.
 
 **Multi-source synthesis strategy**:
 1. **Cluster** passages by sub-topic before designing subsection titles — multiple passages from different sources

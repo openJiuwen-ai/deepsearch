@@ -185,11 +185,14 @@ def _build_outline_evidence_cards(
         }
         if item.get("is_fulltext"):
             card["outline_excerpt"] = outline_summary_text(str(item.get("original_content") or ""))
-            card["selected_passages"] = list(dict.fromkeys(
-                str(passage.get("passage_text") or "").strip()
-                for passage in related_passages
-                if str(passage.get("passage_text") or "").strip()
-            ))
+            card["selected_passages"] = []
+            for passage in related_passages:
+                text = str(passage.get("passage_text") or "").strip()
+                if not text:
+                    continue
+                entry = {"passage_text": text, "content_time": passage.get("content_time")}
+                if entry not in card["selected_passages"]:
+                    card["selected_passages"].append(entry)
             card["coverage_passages"] = coverage_passages_by_citation.get(citation_id, [])
         else:
             card["passage_text"] = str(item.get("passage_text") or "")
@@ -1228,6 +1231,8 @@ class EvidenceMixin:
         current_inputs["sub_section_core_content"] = fulltext_result["sub_section_core_content"]
         current_inputs["sub_section_core_content_from_background_knowledge"] = False
         current_inputs["sub_section_references"] = fulltext_result["sub_section_references"]
+        # Internal compatibility only; outline/writing prompts consume the
+        # shared rationale_contract, not this legacy rendered guide.
         current_inputs["structured_evidence_guide"] = fulltext_result["structured_evidence_guide"]
         current_inputs["classified_content"] = fulltext_result["classified_content"]
         current_inputs["required_target_citation_indexes"] = fulltext_result.get(

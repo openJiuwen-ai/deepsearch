@@ -79,6 +79,44 @@ def test_outline_year_validation_accepts_abbreviated_range_crossing_century():
     assert _validate_outline_years("1999-00 overview", contract) == (True, "")
 
 
+@pytest.mark.parametrize("title", [
+    "1000亿元产业规模分析", "4096GB容量", "设备ZX4090性能", "Model-4090性能", "5000台设备",
+    "型号4090性能", "Model 4090 performance", "$1000 investment",
+])
+@pytest.mark.asyncio
+async def test_non_time_numbers_pass_preflight_and_generated_outline(title):
+    reporter = Reporter.__new__(Reporter)
+    inputs = {"section_task": "1 " + title, "time_contract": {
+        "content_date_scope": {"start": "2020-01-01", "end": "2025-12-31"}
+    }}
+    outline = f"1 {title}\n1.1 {title}对比"
+    with patch.object(reporter, "_generate_sub_section_outline", new=AsyncMock(
+        return_value={"rs_success": True, "sub_section_outline": outline}
+    )) as generate:
+        success, error = await reporter._generate_outline_with_retry(inputs, 1, 1)
+    assert success, error
+    generate.assert_awaited_once()
+    assert not _validate_outline_years(title + "（2026年）", inputs["time_contract"])[0]
+
+
+@pytest.mark.parametrize(("title", "expected"), [
+    ("2023/06/15政策进展", True), ("2023/6/15政策进展", True),
+    ("2023/06/16政策进展", False), ("2023/06/14政策进展", False),
+    ("2023/06/15至2023/06/15政策进展", True),
+    ("2023/06/16至2023/06/15政策进展", False),
+    ("2023/06/15至2023/06/17政策进展", False),
+])
+def test_slash_dates_are_not_expanded_to_months(title, expected):
+    scope = {"content_date_scope": {"start": "2023-06-15", "end": "2023-06-15"}}
+    assert _validate_outline_years(title, scope)[0] is expected
+
+
+def test_slash_date_range_within_narrow_month_window():
+    scope = {"content_date_scope": {"start": "2023-06-15", "end": "2023-06-20"}}
+    assert _validate_outline_years("2023/06/15-2023/06/20进展", scope) == (True, "")
+    assert not _validate_outline_years("2023/06/15-2023/06/21进展", scope)[0]
+
+
 def test_outline_year_validation_accepts_date_range_matching_partial_scope():
     contract = {
         "content_date_scope": {"start": "2020-06-01", "end": "2021-06-30"}
@@ -122,7 +160,7 @@ def test_identifiers_do_not_create_false_user_time_conflicts(title):
     contract = {"content_date_scope": {"start": "2020-01-01", "end": "2025-12-31"}}
     assert _validate_user_time_constraints({"section_task": title}, contract) == (True, "")
     # Excluding an identifier must not mask an actual out-of-scope year nearby.
-    assert not _validate_user_time_constraints({"section_task": title + " in 2026"}, contract)[0]
+    assert not _validate_outline_years(title + " in 2026", contract)[0]
 
 
 @pytest.mark.parametrize(
@@ -167,7 +205,7 @@ def test_outline_year_validation_handles_year_zero_without_raising():
         "content_date_scope": {"start": "0001-01-01", "end": "9999-12-31"}
     }
 
-    valid, feedback = _validate_outline_years("1. 0000 outlook", contract)
+    valid, feedback = _validate_outline_years("1. 0000年 outlook", contract)
 
     assert not valid
     assert "0000" in feedback
@@ -205,14 +243,14 @@ def test_outline_system_prompt_states_fixed_title_time_rules():
     assert "unknown `content_time`" in system_text
 
 
-def test_user_time_conflict_is_detected_before_outline_retry():
+def test_inherited_title_time_does_not_block_outline_request():
     ok, feedback = _validate_user_time_constraints(
         {"section_task": "1 Review of 2024"},
         {"content_date_scope": {"end": "2023-12-31"}},
     )
 
-    assert not ok
-    assert "user-specified time conflicts" in feedback
+    assert ok
+    assert feedback == ""
 
 
 def test_out_of_scope_year_mentioned_as_exclusion_in_description_is_not_conflict():
@@ -271,7 +309,7 @@ async def test_exclusion_year_in_description_still_allows_outline_generation():
 
 
 @pytest.mark.asyncio
-async def test_user_time_conflict_stops_before_requesting_an_outline():
+async def test_inherited_out_of_scope_title_is_preserved_while_subheading_retries():
     reporter = Reporter.__new__(Reporter)
     inputs = {
         "section_idx": 1,
@@ -280,13 +318,39 @@ async def test_user_time_conflict_stops_before_requesting_an_outline():
         "time_contract": {"content_date_scope": {"end": "2023-12-31"}},
     }
     with patch.object(
-        reporter, "_generate_sub_section_outline", new_callable=AsyncMock
+        reporter, "_generate_sub_section_outline", new=AsyncMock(side_effect=[
+            {"rs_success": True, "sub_section_outline": "1 Review of 2024\n1.1 2024 events"},
+            {"rs_success": True, "sub_section_outline": "1 Review of 2024\n1.1 2023 events"},
+        ])
     ) as generate_outline:
         success, error = await reporter._generate_outline_with_retry(inputs, 1, 2)
 
-    assert not success
-    assert "user-specified time conflicts" in error
-    generate_outline.assert_not_awaited()
+    assert success, error
+    assert generate_outline.await_count == 2
+    assert inputs["sub_section_outline"].startswith("1 Review of 2024\n")
+    assert "outside content_date_scope" in generate_outline.await_args_list[1].args[1]
+
+
+@pytest.mark.parametrize("title", ["4090 performance", "HTTP 2048 buffer", "port 8080 listen"])
+def test_ambiguous_four_digit_identifiers_are_not_years(title):
+    scope = {"content_date_scope": {"start": "2020-01-01", "end": "2025-12-31"}}
+    assert _validate_outline_years(title, scope) == (True, "")
+    assert not _validate_outline_years(title + " 2026年进展", scope)[0]
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_inherited_title_allows_flat_outline():
+    reporter = Reporter.__new__(Reporter)
+    inputs = {"section_task": "1 2024市场展望", "time_contract": {
+        "content_date_scope": {"start": "2020-01-01", "end": "2023-12-31"}
+    }}
+    with patch.object(reporter, "_generate_sub_section_outline", new=AsyncMock(return_value={
+        "rs_success": True, "sub_section_outline": "1 2024市场展望"
+    })) as generate:
+        success, error = await reporter._generate_outline_with_retry(inputs, 1, 1)
+    assert success, error
+    assert inputs["sub_section_outline"] == "1 2024市场展望"
+    generate.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -303,15 +367,15 @@ async def test_generated_out_of_scope_year_retries_then_accepts_valid_outline():
         "_generate_sub_section_outline",
         new_callable=AsyncMock,
         side_effect=[
-            {"rs_success": True, "sub_section_outline": "1 Topic\\n1.1 2024 events"},
-            {"rs_success": True, "sub_section_outline": "1 Topic\\n1.1 2023 events"},
+            {"rs_success": True, "sub_section_outline": "1 Topic\n1.1 2024 events"},
+            {"rs_success": True, "sub_section_outline": "1 Topic\n1.1 2023 events"},
         ],
     ) as generate_outline:
         success, error = await reporter._generate_outline_with_retry(inputs, 1, 2)
 
     assert success
     assert error == ""
-    assert inputs["sub_section_outline"] == "1 Topic\\n1.1 2023 events"
+    assert inputs["sub_section_outline"] == "1 Topic\n1.1 2023 events"
     assert "outside content_date_scope" in generate_outline.await_args_list[1].args[1]
 
 

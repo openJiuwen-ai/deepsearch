@@ -77,15 +77,23 @@ def _validate_outline_years(outline_text: str, time_contract: dict) -> tuple[boo
             chars[match.start():match.end()] = " " * (match.end() - match.start())
         remaining = "".join(chars)
 
+    def _normalize_date(expression: str) -> str:
+        if "/" not in expression:
+            return expression
+        year, month, day = expression.split("/")
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+
+    date_token = r"\d{4}(?:-\d{2}-\d{2}|/\d{1,2}/\d{1,2})"
     date_range_pattern = re.compile(
-        r"(?<!\d)(\d{4}-\d{2}-\d{2})\s*(?:至|到|~|～|–|—|－|to)\s*"
-        r"(\d{4}-\d{2}-\d{2})(?!\d)",
+        rf"(?<!\d)({date_token})\s*(?:至|到|~|～|–|—|－|to|-)\s*"
+        rf"({date_token})(?!\d)",
         re.IGNORECASE,
     )
     # Date ranges are handled before individual dates, so each range is checked
     # as one interval rather than as two unrelated points.
     _mask_matches(date_range_pattern, lambda match: (
-        date.fromisoformat(match.group(1)), date.fromisoformat(match.group(2)),
+        date.fromisoformat(_normalize_date(match.group(1))),
+        date.fromisoformat(_normalize_date(match.group(2))),
     ))
 
     def _parse_chinese_date(expression: str) -> tuple[date, date]:
@@ -113,14 +121,14 @@ def _validate_outline_years(outline_text: str, time_contract: dict) -> tuple[boo
     _mask_matches(chinese_date_pattern, lambda match: _parse_chinese_date(match.group(0)))
 
     def _parse_iso_date(match: re.Match[str]) -> tuple[date, date]:
-        parsed = date.fromisoformat(match.group(1))
+        parsed = date.fromisoformat(_normalize_date(match.group(1)))
         return parsed, parsed
 
-    _mask_matches(re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)"), _parse_iso_date)
+    _mask_matches(re.compile(rf"(?<!\d)({date_token})(?!\d)"), _parse_iso_date)
 
     # Prefer calendar months over abbreviated years for the ambiguous YYYY-MM
     # and YYYY/MM forms. Other range separators are unambiguously year ranges.
-    month_pattern = re.compile(r"(?<!\d)(\d{4})[-/](0[1-9]|1[0-2])(?!\d)")
+    month_pattern = re.compile(r"(?<!\d)(\d{4})[-/](0[1-9]|1[0-2])(?!\d|/\d|-\d)")
 
     def _parse_month(match: re.Match[str]) -> tuple[date, date]:
         year, month = int(match.group(1)), int(match.group(2))
@@ -152,7 +160,30 @@ def _validate_outline_years(outline_text: str, time_contract: dict) -> tuple[boo
 
     year_pattern = re.compile(r"(?<!\d)(\d{4})(?!\d)")
     for match in year_pattern.finditer(remaining):
+        before = remaining[:match.start()]
+        after = remaining[match.end():]
+        # A year suffix is explicit time; units and alphanumeric identifiers
+        # instead describe quantities/models. Preserve nearby independent years.
+        explicit_year = re.match(r"\s*年", after) is not None
+        quantity = re.match(
+            r"\s*(?:[万亿千百]?(?:元|美元|欧元|吨|人|个|台|件|辆|户|家|米|瓦|字节)|"
+            r"[万亿]|%|％|GB|TB|MB|KB|MHz|GHz|kWh|MW|GW|kg|km)", after, re.IGNORECASE,
+        )
+        identifier = re.search(r"[A-Za-z][A-Za-z0-9_.-]*$", before) or re.match(r"[A-Za-z_]", after)
+        identifier_context = re.search(
+            r"(?:型号|编号|货号|model|type|HTTP|port|buffer|part\s*(?:no\.?|number))\s*[:：#-]?\s*$",
+            before, re.IGNORECASE,
+        )
+        currency = re.search(r"(?:[$€£¥￥]|USD|EUR|CNY)\s*$", before, re.IGNORECASE)
+        non_temporal_context = any((quantity, identifier, identifier_context, currency))
+        if not explicit_year and non_temporal_context:
+            continue
         year = int(match.group(1))
+        # Bare four-digit values outside the common calendar window are
+        # ambiguous identifiers, not sufficient evidence of a fact-time claim.
+        # Explicit dates/ranges and the 年 suffix remain unrestricted.
+        if not explicit_year and not 1900 <= year <= 2100:
+            continue
         try:
             intervals.append((match.group(1), date(year, 1, 1), date(year, 12, 31)))
         except ValueError:
@@ -173,17 +204,12 @@ def _validate_outline_years(outline_text: str, time_contract: dict) -> tuple[boo
 
 
 def _validate_user_time_constraints(current_inputs: dict, time_contract: dict) -> tuple[bool, str]:
-    """Reject out-of-scope years in the explicit section title.
+    """Compatibility hook: inherited titles never block chapter generation.
 
-    A natural-language description may mention dates as exclusions, examples,
-    or context. Validate only the title here; generated outline headings are
-    checked separately after the LLM responds.
+    Fact-time constraints govern the body and model-added subheadings, not
+    the authoritative chapter title. Descriptions may also mention exclusions.
     """
-    section_title = str(current_inputs.get("section_task") or "")
-    ok, reason = _validate_outline_years(section_title, time_contract)
-    if ok:
-        return True, ""
-    return False, f"user-specified time conflicts with time contract: {reason}"
+    return True, ""
 
 
 class SubSectionOutlineMixin:
@@ -348,15 +374,6 @@ class SubSectionOutlineMixin:
         time_contract = current_inputs.get("time_contract") or build_time_contract(
             current_inputs.get("research_intent")
         )
-        user_time_ok, user_time_reason = _validate_user_time_constraints(
-            current_inputs, time_contract
-        )
-        if not user_time_ok:
-            logger.error(
-                "%s [generate_sub_report] section_idx: [%s], %s",
-                EFFECT_SUB_REPORT_TAG, section_idx, user_time_reason,
-            )
-            return False, user_time_reason
         for attempt_num in range(max_attempt_num):
             retry_options = {"retry_messages": retry_messages} if retry_messages is not None else {}
             gen_sub_res = await self._generate_sub_section_outline(
@@ -368,7 +385,7 @@ class SubSectionOutlineMixin:
                 ok, reason = self.check_chapter_format(outline_text, section_idx)
                 if ok:
                     ok, reason = _validate_outline_years(
-                        outline_text,
+                        "\n".join(outline_text.splitlines()[1:]),
                         time_contract,
                     )
                     if ok:
