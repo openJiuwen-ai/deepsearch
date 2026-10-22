@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.markdown import sanitize_brief_chapter
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefAssemblyRequest,
@@ -204,6 +205,7 @@ def _shrink_writing_documents(documents: list[dict]) -> list[dict] | None:
     return [{**documents[0], "snippet": shortened}]
 
 
+@moderation_retry_scope
 async def _write_one(
     request: BriefWritingRequest,
     section: BriefSection,
@@ -445,6 +447,7 @@ def _summary_fallback(request: BriefSummaryRequest) -> str:
     )
 
 
+@moderation_retry_scope
 async def generate_brief_summary(request: BriefSummaryRequest) -> str:
     """生成一次顶部核心摘要，失败时用章节首段确定性降级。"""
     gaps = []
