@@ -17,6 +17,7 @@ from openjiuwen.core.workflow.components.flow.start_comp import Start
 from openjiuwen.core.workflow.workflow import Workflow
 from pydantic import BaseModel, Field, model_validator
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     build_summary_evidence_pack,
@@ -665,6 +666,7 @@ class GenerateQueryNode(BaseNode):
 
         return dict()
 
+    @moderation_retry_scope
     async def _invoke_llm_with_retry(
         self,
         formatted_prompt: list,
@@ -969,6 +971,7 @@ class SupervisorNode(BaseNode):
 
         return dict(next_node=NodeId.COLLECTOR_INFO.value)
 
+    @moderation_retry_scope
     async def _invoke_llm_with_retry(
         self,
         formatted_prompt: list,
@@ -1083,6 +1086,7 @@ class SummaryNode(BaseNode):
 
         return dict(next_node=next_node)
 
+    @moderation_retry_scope
     async def _invoke_llm_with_retry(self, formatted_prompt: list, state: dict, doc_infos: list):
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")

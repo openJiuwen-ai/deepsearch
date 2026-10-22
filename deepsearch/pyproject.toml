@@ -32,7 +32,7 @@ dependencies = [
     'seaborn',
     'numpy>=2.4.2',
     'tldextract>=5.0.0',
-    'markdown>=3.7',
+    'markdown>=3.7,<3.11',
     'beautifulsoup4==4.14.3',
     "latex2mathml>=3.78.1",
     "mathml2omml-as==0.1.0",
@@ -54,6 +54,10 @@ include = ["openjiuwen_deepsearch*"]          # 星号通配子目录
 # 2. 如果 openjiuwen_deepsearch 里还有非 .py 文件（yaml、json、模板等），一起打包
 [tool.setuptools.package-data]
 openjiuwen_deepsearch = ["**/*"]  # 递归收录所有文件，包括 .md、.json、.yaml 等
+
+[tool.setuptools.exclude-package-data]
+"openjiuwen_deepsearch.utils.moderation.data.sensitive_lexicon" = ["*.txt"]
+openjiuwen_deepsearch = ["utils/moderation/data/sensitive_lexicon/*.txt"]
 
 # pytest configuration
 [tool.pytest.ini_options]

@@ -3,6 +3,7 @@
 import json
 import logging
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.collector import _blocking_gaps
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefEvidenceReview,
@@ -121,6 +122,7 @@ def _slim_citation_registry(request: BriefReviewRequest) -> list[dict]:
     ]
 
 
+@moderation_retry_scope
 async def review_brief_evidence(request: BriefReviewRequest) -> BriefEvidenceReview:
     """审阅首轮证据，生成编辑指引，并决定是否需要执行唯一一次补搜。"""
     prompt_input = {

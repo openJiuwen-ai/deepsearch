@@ -49,6 +49,12 @@
 - 章节输出通过 `SubReportContent` 写回 `SubReport.content`。
 - `section_local_contract` 来自 `section_focus` 和 `focus_dimensions`，供 planner、collector 和 reporter Prompt 消费。
 - `report_type_policy`、`research_intent`、`audience_role`、`tone` 会从主图传入章节子图。
+- 用户素材按章节边界传递：`EditorTeamNode` 从 `Section.material_bindings` 派生
+  `material_bindings`、`bound_material_ids` 和 `use_material_ids`，并连同
+  `material_analysis`、`material_usage_mode` 传入专业版 `editor_team` 子图。子图的
+  Start `inputs_schema` 必须保留这些字段；`SectionStartNode` 将它们写入
+  `SectionContext`，供 planner、collector 和 `SubReporter` 解析为本章的
+  `classified_content`。未绑定的素材不会作为本章证据合并。
 
 ## 边界与错误处理
 

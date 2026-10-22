@@ -5,6 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_coverage_passage_block,
@@ -154,6 +155,7 @@ class EvidenceMixin:
         - self.strip_leading_number: (from MarkdownProcessorMixin)
     """
 
+    @moderation_retry_scope
     async def _generate_section_rationales(self, current_inputs: dict) -> tuple[list, str]:
         """Generate section information dimensions (rationales).
 
@@ -556,6 +558,7 @@ class EvidenceMixin:
             "dimension_scores": dimension_scores,
         }, ""
 
+    @moderation_retry_scope
     async def _extract_batch(
         self, batch_docs: list, batch_idx: int,
         rationales_text: str, section_ctx: dict,

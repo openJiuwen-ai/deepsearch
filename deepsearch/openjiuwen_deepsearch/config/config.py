@@ -24,6 +24,13 @@ class LLMConfig(BaseModel):
         default=False,
         description="是否在消息中追加 think 标签"
     )
+    moderation_mask_retry: bool = Field(
+        default=False,
+        description=(
+            "是否启用内容风控补救（默认关，恢复效果与质量需实验验证）。"
+            "复用调用方原有重试预算：输入侧仅掩 user 资料字段，输出侧追加提示；不增加尝试次数。"
+        )
+    )
 
 
 class WebSearchEngineConfig(BaseModel):
@@ -519,7 +526,7 @@ class ServiceConfig(BaseModel):
     info_collector_max_retry_num: int = Field(default=3, description="信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）")
     info_collector_allow_programmer: bool = Field(default=False, description="")
     info_collector_webpage_enrich_max_urls: int = Field(
-        default=3,
+        default=5,
         ge=1,
         le=10,
         description="网页正文增强每轮最多抓取并增强的 URL 数量",
