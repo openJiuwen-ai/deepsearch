@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 
 from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.markdown import sanitize_brief_chapter
@@ -297,12 +298,57 @@ async def _write_one(
     raise ValueError(f"brief chapter generation failed for {section.id}: {last_error}") from last_error
 
 
-async def write_brief_chapters(request: BriefWritingRequest) -> list[BriefChapter]:
-    """并行生成章节；单章失败不阻断同批其他章节。"""
+async def write_brief_chapters(
+    request: BriefWritingRequest,
+    *,
+    on_chapter_start: Callable[[BriefSection], None] | None = None,
+    on_chapter_end: Callable[[BriefSection, BriefChapter | None], None] | None = None,
+) -> list[BriefChapter]:
+    """并行生成章节，单章失败不阻断其他章节，可选通知处理进度。
+
+    Args:
+        request: 原章节写作依赖和输入。
+        on_chapter_start: 单章实际开始时调用的可选观察回调。
+        on_chapter_end: 单章结束回调，异常或取消时结果为 None。
+
+    Returns:
+        原规则下按大纲排序的有效章节。
+    """
+    def notify(callback, *args) -> None:
+        """尽力通知观察者，回调失败不改变写作结果。
+
+        Args:
+            callback: 可选回调。
+            args: 对应已有章节及结果。
+        """
+        if callback is not None:
+            try:
+                callback(*args)
+            except Exception:
+                logger.warning("Could not notify Brief chapter observer")
+
+    async def write_one(section: BriefSection, section_idx: int) -> BriefChapter:
+        """观察单章生命周期，保留原写作重试和异常。
+
+        Args:
+            section: 当前章节。
+            section_idx: 原章节序号。
+
+        Returns:
+            原生成结果。
+        """
+        result = None
+        notify(on_chapter_start, section)
+        try:
+            result = await _write_one(request, section, section_idx)
+            return result
+        finally:
+            notify(on_chapter_end, section, result)
+
     logger.info("[BriefWriter] Start chapter batch sections=%d.", len(request.outline.sections))
     results = await asyncio.gather(
         *(
-            _write_one(request, section, section_idx)
+            write_one(section, section_idx)
             for section_idx, section in enumerate(request.outline.sections, start=1)
         ),
         return_exceptions=True,
