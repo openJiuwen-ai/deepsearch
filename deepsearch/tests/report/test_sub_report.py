@@ -594,7 +594,8 @@ async def test_write_subsection_reports_keeps_hierarchical_outline_instruction()
 
 
 @pytest.mark.asyncio
-async def test_write_subsection_reports_prompt_enforces_heading_contract():
+@pytest.mark.parametrize("valid_structure", [True, False])
+async def test_write_subsection_reports_prompt_enforces_heading_contract(valid_structure):
     """The writer prompt must state the same heading rules the validator enforces."""
     token = llm_context.set({"mock_model": object()})
     try:
@@ -620,6 +621,7 @@ async def test_write_subsection_reports_prompt_enforces_heading_contract():
             "sub_report_background_knowledge": [],
             "report_type": "professional",
             "paragraph_style": "detailed",
+            "sub_report_retry_feedback": "error_code: HEADING_STRUCTURE_INVALID\nlocation: markdown_headings",
             "visualization_enable": False,
         }
 
@@ -636,9 +638,14 @@ async def test_write_subsection_reports_prompt_enforces_heading_contract():
                 "content": "# 2 模型介绍\n\n## 2.1 CMSY\n\n内容。\n\n## 2.2 BSM\n\n内容。"
             }
 
+            if not valid_structure:
+                mock_ainvoke.return_value = {"content": "# Chapter\n\n# Other\nBody"}
             result = await reporter._write_subsection_reports(current_inputs)
 
-        assert result["success"] is True
+        assert result["success"] is valid_structure
+        if not valid_structure:
+            assert result["result"].startswith("generated report heading structure invalid:")
+            assert "do not match outline" not in result["result"]
         _, kwargs = mock_ainvoke.call_args
         rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
         # H3 must be a hard ban, matching the validator which silently ignores H3
@@ -648,6 +655,9 @@ async def test_write_subsection_reports_prompt_enforces_heading_contract():
         assert "exactly one" in rendered_prompt
         # Verify formatting section exists
         assert "Formatting & Structure" in rendered_prompt
+        assert "For HEADING_TITLE_EMPTY" in rendered_prompt
+        assert "For HEADING_STRUCTURE_INVALID" in rendered_prompt
+        assert "use exactly one H1 before all H2 headings" in rendered_prompt
     finally:
         llm_context.reset(token)
 
@@ -2350,7 +2360,7 @@ async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(moc
         elif any("professional sub report writer" in msg.get("content", "") for msg in messages):
             report_calls.append(messages)
             if len(report_calls) == 1:
-                return {"content": "# 3 企业经营与行业分析\n\ncontent without subsection headings"}
+                return {"content": "content without markdown headings"}
             return {"content": "# 3 企业经营与行业分析\n\n## 3.1 经营风险评价\nfake content 1"}
         elif any("structured sidecar" in msg.get("content", "") for msg in messages):
             return {"content": '{"chapter_summary":"摘要","key_findings":[],"risk_points":[]}'}
@@ -2407,7 +2417,7 @@ async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(moc
     feedback_message = report_calls[1][-1]
     assert feedback_message["role"] == "user"
     assert "Previous Attempt Feedback" in feedback_message["content"]
-    assert "error_code: HEADING_COUNT_MISMATCH" in feedback_message["content"]
+    assert "error_code: HEADING_MISSING" in feedback_message["content"]
     assert "location: markdown_headings" in feedback_message["content"]
     assert "heading count insufficient" not in feedback_message["content"]
     assert "<retry_feedback>" in feedback_message["content"]
