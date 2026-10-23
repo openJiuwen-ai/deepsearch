@@ -98,7 +98,12 @@ def _captures(name: str, node: Node) -> dict[str, list[Node]]:
 
 
 def _text(node: Node) -> str:
-    return node.text.decode("utf-8") if node.text else ""
+    if not node.text:
+        return ""
+    try:
+        return node.text.decode("utf-8")
+    except UnicodeDecodeError:
+        return node.text.decode("utf-8", errors="replace")
 
 
 def _span(node: Node) -> SourceSpan:
