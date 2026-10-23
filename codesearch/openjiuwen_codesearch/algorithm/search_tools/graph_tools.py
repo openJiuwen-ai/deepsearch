@@ -8,6 +8,7 @@ Never register these into CodeSearch ``build_default_registry``.
 
 import asyncio
 import logging
+import posixpath
 from typing import Any, Dict, List, Optional, Tuple
 
 from openjiuwen_codesearch.algorithm.search_tools.registry import ToolOutcome, ToolSpec
@@ -24,7 +25,11 @@ def normalize_rel_path(path: str) -> str:
             p = p[len(prefix):]
     while p.startswith("./"):
         p = p[2:]
-    return p.lstrip("/")
+    p = posixpath.normpath(p.lstrip("/"))
+    if p in ("", ".") or p == ".." or p.startswith("../"):
+        # A model-supplied path must stay inside the checked-out repository.
+        return ""
+    return p
 
 
 EXPAND_FILE_DEFS_SCHEMA = {
