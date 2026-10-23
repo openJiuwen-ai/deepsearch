@@ -330,3 +330,104 @@ class TestPlanner:
         assert result.plan_success is False
         assert result.plan is None
         assert "steps" in result.error_msg.lower()
+
+
+@pytest.mark.parametrize("prompt_name", ["planner", "dep_driving_planner"])
+def test_planner_prompts_require_step_objects_with_valid_example(prompt_name):
+    messages = build_prompt_messages(prompt_name, {**test_data, "language": "en-US", "max_step_num": 3})
+    system = messages[0]["content"]
+    assert '`"steps": "[...]"` is invalid' in system
+    assert '`"steps": ["collect evidence"]`' in system
+    example = json.loads(system.split("```json\n")[-1].split("```")[0])
+    assert isinstance(example["steps"], list)
+    assert all(isinstance(step, dict) for step in example["steps"])
+    assert all({"type", "title", "description"} <= step.keys() for step in example["steps"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_name", ["planner", "dep_driving_planner"])
+@pytest.mark.parametrize("bad_steps, expected_code", [
+    ('[{"title":"UNTRUSTED_MODEL_TEXT"}]', "PLAN_STEPS_NOT_ARRAY"),
+    (["UNTRUSTED_MODEL_TEXT"], "PLAN_STEP_NOT_OBJECT"),
+    ([], "PLAN_STEPS_EMPTY"),
+    ([{"type": "info_collecting"}], "PLAN_STEP_REQUIRED_FIELD_MISSING"),
+    ([{"type": "info_collecting", "title": [], "description": "Evidence"}], "PLAN_ARGUMENTS_INVALID"),
+    ([{"type": "info_collecting", "title": "A", "description": "A"}] * 2, "PLAN_STEPS_TOO_MANY"),
+])
+async def test_planner_retries_format_errors_with_controlled_feedback(prompt_name, bad_steps, expected_code):
+    from copy import deepcopy
+    from openjiuwen_deepsearch.algorithm.query_understanding.planner import PlannerConfig
+
+    planner = Planner(PlannerConfig(llm=Mock(), prompt=prompt_name, max_retry_num=2))
+    bad = deepcopy(functioncall_response)
+    bad["tool_calls"][0]["args"]["steps"] = bad_steps
+    valid = deepcopy(functioncall_response)
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats",
+        new_callable=AsyncMock, side_effect=[bad, valid],
+    ) as invoke:
+        result = await planner.generate_plan({**test_data, "max_step_num": 1})
+    assert result.plan_success
+    first, second = [call.kwargs["messages"] for call in invoke.await_args_list]
+    assert all("<retry_feedback>" not in msg["content"] for msg in first)
+    assert second[:-1] == first
+    feedback = second[-1]
+    assert feedback["role"] == "user"
+    assert expected_code in feedback["content"]
+    assert "<retry_feedback>" in feedback["content"]
+    assert "UNTRUSTED_MODEL_TEXT" not in feedback["content"]
+    assert "array containing strings" in feedback["content"]
+
+
+@pytest.mark.asyncio
+async def test_planner_transport_retry_preserves_request_without_raw_exception():
+    from openjiuwen_deepsearch.algorithm.query_understanding.planner import PlannerConfig
+
+    planner = Planner(PlannerConfig(llm=Mock(), max_retry_num=2))
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats",
+        new_callable=AsyncMock, side_effect=[RuntimeError("PRIVATE_PROVIDER_ERROR"), functioncall_response],
+    ) as invoke:
+        result = await planner.generate_plan({**test_data, "max_step_num": 1})
+    assert result.plan_success
+    first, second = [call.kwargs["messages"] for call in invoke.await_args_list]
+    assert first is second
+    assert "PRIVATE_PROVIDER_ERROR" not in str(second)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_name", ["planner", "dep_driving_planner"])
+@pytest.mark.parametrize("second_failure", ["format", "timeout"])
+async def test_planner_repeated_failure_feedback_and_request_reuse(prompt_name, second_failure):
+    from copy import deepcopy
+    from openjiuwen_deepsearch.algorithm.query_understanding.planner import PlannerConfig
+
+    planner = Planner(PlannerConfig(llm=Mock(), prompt=prompt_name, max_retry_num=3))
+    invalid_array = deepcopy(functioncall_response)
+    invalid_array["tool_calls"][0]["args"]["steps"] = "UNTRUSTED_MODEL_TEXT"
+    invalid_element = deepcopy(functioncall_response)
+    invalid_element["tool_calls"][0]["args"]["steps"] = ["UNTRUSTED_MODEL_TEXT"]
+    middle = invalid_element if second_failure == "format" else TimeoutError("PRIVATE_PROVIDER_ERROR")
+    with patch(
+        "openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats",
+        new_callable=AsyncMock,
+        side_effect=[invalid_array, middle, deepcopy(functioncall_response)],
+    ) as invoke:
+        result = await planner.generate_plan(test_data)
+
+    assert result.plan_success
+    assert invoke.await_count == 3
+    first, second, third = [call.kwargs["messages"] for call in invoke.await_args_list]
+    assert all("<retry_feedback>" not in msg["content"] for msg in first)
+    assert "PLAN_STEPS_NOT_ARRAY" in second[-1]["content"]
+    assert second[:-1] == first
+    if second_failure == "format":
+        assert third[:-1] == first
+        assert "PLAN_STEP_NOT_OBJECT" in third[-1]["content"]
+        assert "PLAN_STEPS_NOT_ARRAY" not in third[-1]["content"]
+        assert len(third) == len(first) + 1
+    else:
+        assert third is second
+        assert "PLAN_STEPS_NOT_ARRAY" in third[-1]["content"]
+    assert "UNTRUSTED_MODEL_TEXT" not in str([first, second, third])
+    assert "PRIVATE_PROVIDER_ERROR" not in str([first, second, third])

@@ -128,3 +128,10 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 - [DeepSearch 搜索智能体](./search-agent.md)
 - [报告生成](./report-generation.md)
 - [Brief 精简版报告工作流](./brief-report.md)
+
+## Planner 工具参数与重试反馈
+
+- 普通与依赖驱动 Planner 的 system Prompt 均提供完整工具参数示例，要求 `steps` 是对象数组，每项包含 `type`、`title`、`description`。禁止 `"steps": "[...]"` 及数组内的字符串元素；研究未完成时至少提供一个步骤，并遵循步骤数量上限。
+- 格式校验失败时，在下一次调用的消息末尾追加带 `<retry_feedback>` 边界的 user 消息。反馈使用受控问题码和修正说明，区分数组类型错误、步骤元素类型错误、空步骤、步骤数量超限和缺少步骤必填字段；其他参数校验错误提供 schema 修正提示。
+- 每次格式重试只保留最新一次反馈，system Prompt 与原始上下文不变。不回传原始模型内容或异常文本；网络、超时等调用异常复用原请求，不追加格式反馈。现有参数校验仍保留，不自动接受字符串化的 `steps`。
+- 普通与依赖驱动 Planner 均有组合回归测试：连续格式失败时替换旧反馈；格式失败后超时则保留已有反馈并复用同一请求消息列表。
