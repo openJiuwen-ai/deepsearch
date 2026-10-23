@@ -108,7 +108,7 @@ class DeepSearchRequest(BaseModel):
     conversation_id: str = Field(..., description="请求对话ID")
     message: str = Field(..., description="用户请求查询或者人机交互时的反馈")
     workflow_human_in_the_loop: bool = Field(default=True, description="是否启用人机交互")
-    outliner_max_section_num: int = Field(default=10, ge=1, le=15, description="最大规划章节数量，取值范围:[1,15]")
+    outliner_max_section_num: int = Field(default=5, ge=1, le=15, description="最大规划章节数量，取值范围:[1,15]")
     source_tracer_research_trace_source_switch: bool = Field(default=True, description="溯源功能开关")
     source_tracer_generated_citation_switch: bool = Field(default=True, description="新增引用生成开关")
     source_tracer_infer_switch: bool = Field(default=True, description="溯源推理功能开关")
