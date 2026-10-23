@@ -168,7 +168,8 @@ class CodeBlockNode(BaseNode):
     @property
     def signature(self) -> str:
         """Return the first source line as a concise content summary."""
-        return (self.source or self.name).splitlines()[0]
+        lines = (self.source or self.name).splitlines()
+        return lines[0] if lines else ""
 
 
 @dataclass(frozen=True, slots=True)
