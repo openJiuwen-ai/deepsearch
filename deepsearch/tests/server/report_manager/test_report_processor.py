@@ -786,21 +786,25 @@ def test_convert_md_to_docx_normalizes_headings_fonts_and_tables(tmp_path, monke
 
 
 def test_convert_md_to_docx_preserves_short_bold_spans_in_long_chinese_summary(tmp_path):
-    """Validate DOCX export keeps inline bold spans in long Chinese summary paragraphs."""
+    """Validate long-summary DOCX text and bold runs with explicit inline HTML.
+
+    Use unambiguous strong tags to isolate DOCX conversion from the external
+    Markdown emphasis parser; this case does not test double-asterisk parsing.
+    """
     md_path = tmp_path / "report.md"
     docx_path = tmp_path / "report.docx"
     md_path.write_text(
         "# 摘要\n\n"
         "都市年轻职场人群（22-35岁）在职业周期演进与高居住成本制约下呈现显著分化，"
-        "其核心生存图景由**69.6%**企业新招毕业生硕士占比更高、一线城市高达**45.6%**"
-        "的房租负担率及**79.2%**企业离职率低于**10%**的求稳心态共同刻画；该群体深陷"
-        "工作高压（**31.5%**日工作超10小时）、时间剥夺（北京单程通勤**47分钟**）、社交"
-        "萎缩（超三成频繁孤独）与生活品质坍塌（超**90%**受亚健康影响）交织的痛点因果网，"
-        "驱动其行为向情绪补剂常态化（近九成为情绪买单）、社交模块化（**54.4%**有搭子）"
-        "与技术双刃剑（超**56%**日常使用GenAI但超六成担忧失业）三大策略演化；由此催生"
-        "效率工具（**56.1%**愿为AI付费）、情绪价值（四成向AI倾诉）、零糖社交与零家务闭环"
-        "等复合需求，其消费决策呈现极致折叠的精算师特质（比价工具使用率达**78%**）与为情绪"
-        "溢价买单并存，复购核心由体验确证（**77.6%**因使用感好复购）与情绪持续供给驱动。\n",
+        "其核心生存图景由<strong>69.6%</strong>企业新招毕业生硕士占比更高、一线城市高达<strong>45.6%</strong>"
+        "的房租负担率及<strong>79.2%</strong>企业离职率低于<strong>10%</strong>的求稳心态共同刻画；该群体深陷"
+        "工作高压（<strong>31.5%</strong>日工作超10小时）、时间剥夺（北京单程通勤<strong>47分钟</strong>）、社交"
+        "萎缩（超三成频繁孤独）与生活品质坍塌（超<strong>90%</strong>受亚健康影响）交织的痛点因果网，"
+        "驱动其行为向情绪补剂常态化（近九成为情绪买单）、社交模块化（<strong>54.4%</strong>有搭子）"
+        "与技术双刃剑（超<strong>56%</strong>日常使用GenAI但超六成担忧失业）三大策略演化；由此催生"
+        "效率工具（<strong>56.1%</strong>愿为AI付费）、情绪价值（四成向AI倾诉）、零糖社交与零家务闭环"
+        "等复合需求，其消费决策呈现极致折叠的精算师特质（比价工具使用率达<strong>78%</strong>）与为情绪"
+        "溢价买单并存，复购核心由体验确证（<strong>77.6%</strong>因使用感好复购）与情绪持续供给驱动。\n",
         encoding="utf-8",
     )
 
@@ -811,6 +815,9 @@ def test_convert_md_to_docx_preserves_short_bold_spans_in_long_chinese_summary(t
     bold_runs = {run.text for run in summary_paragraph.runs if run.text and run.bold}
 
     assert "**" not in summary_paragraph.text
+    summary_html = md_path.read_text(encoding="utf-8").split("\n\n", 1)[1].strip()
+    expected_summary = BeautifulSoup(summary_html, "html.parser").get_text()
+    assert summary_paragraph.text == expected_summary
     assert {
         "69.6%",
         "45.6%",
