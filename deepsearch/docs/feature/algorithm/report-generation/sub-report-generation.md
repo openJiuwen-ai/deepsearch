@@ -24,8 +24,8 @@
 - 继承的一级章标题原样保留，不因其中年份超出 `time_contract.content_date_scope` 而拒绝章节；后置时间校验仅检查模型生成的二级标题，越界时进入大纲重试。标题不放宽正文的事实时间约束。
 - 标题时间校验支持完整日期、中文年月日、数字年月与缩写年份范围。歧义的 `YYYY-MM` / `YYYY/MM` 在后两位为 `01`—`12` 时优先解释为整月；`2020-21`、`2020–21` 等解释为跨年范围，分隔符必须存在。ISO、IEC、RFC、IEEE、DIN、EN、GB 标准编号（含冒号后的版本年）及 RTX/GTX 型号不作为事实时间；同一标题中的其他年份仍须校验。
 - 全文抽取阶段（`enrich_fulltext_for_section` 为同步调用，非 async），`FullTextEvidence` 会聚合同一 URL 下所有段落的 reliability（取最大值）和 data_density，使全文证据继承段落级的质量评估。
-- 子报告写作严格复用已批准的子大纲标题。单行扁平大纲只允许一个 H1，不得增加子大纲之外的 Markdown 标题；章节要求的结论、建议、启示等内容仍须保留，并使用段落、编号句、列表、表格或加粗引导语表达。
-- professional 写作 Prompt 对标题施加与下游校验一致的硬约束：禁止 H3 及更深标题（深层结构用加粗无序列表表达）、子大纲每一行必须恰好输出为一个 Markdown 标题、禁止子大纲之外的任何 `#`/`##` 标题、标题文字必须逐字复制，并明示"标题不匹配将导致整章校验失败作废"。
+- 子报告写作以已批准的子大纲为指导。单行扁平大纲的写作提示仍要求只使用一个 H1，其他必需内容使用段落、列表、表格或加粗引导语表达。
+- professional 写作 Prompt 禁止 H3 及更深标题，要求优先沿用子大纲标题及顺序并覆盖所有任务要求；允许小幅标题改写或合并相关小节。用户显式指定的标题仍要求保留。
 - professional 写作 Prompt 无条件禁止正文模型直接输出 Mermaid 代码围栏、图表代码或手写图块；章节正文只能输出可溯源的文字和表格，受控图表插入由后续图表管线处理。若模型仍返回 Mermaid/图表源码，章节输出契约会拒绝该草稿并通过有界重试要求模型改写，不对正文做事后删除。
 - 子报告写作只输出当前顶层章节及其二级标题，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
 - 子报告 Prompt 定义冲突解决优先级：fulltext > 高分段落 > 低分段落。fulltext 没有覆盖分但优先级最高，当多来源对同一事实出现冲突时按此优先级采纳。
@@ -70,7 +70,7 @@
 4. LLM 使用章节结构上下文、evidence cards 和两个 contract 生成当前章节的子大纲；`Reporter.check_chapter_format()`（定义于 `markdown_utils.py`）逐行验证标题格式和顺序，随后校验显式年份是否落在 content 时间契约内；非法输出进入重试。
 5. 使用专业版子报告 Prompt，并遵循已批准子大纲的扁平/层级标题契约；Brief 由独立 Brief 工作流处理，不经过本 Reporter 子报告流程。
 6. LLM 按已批准的子大纲生成章节 Markdown。
-7. 标题编号和过深标题被清理，并校验 Markdown 标题与子大纲逐项一致；章节草稿同时校验不含 Mermaid/图表源码，且 Mermaid 语法判断仅针对代码围栏内容，不会因普通正文关键词误判；任一章节校验失败，生成受控重试反馈并重新生成章节。
+7. Chapter headings are cleaned and validated for basic structure rather than exact outline matching. Mermaid/chart source validation, controlled retry feedback, sidecar generation, and references follow the existing pipeline.
 8. 生成或更新 chapter sidecar。
 9. 子报告交给最终报告拼接。
 
@@ -98,7 +98,10 @@
 - 扁平子大纲必须恰好包含一个合法一级标题；层级化子大纲必须先出现一级标题，再出现带非空标题文本的 `n.x` 二级标题。
 - 三级编号检查按行首匹配（如 `2.1.1 标题`）；标题行内出现的点分数字（日期区间 `2010.3.12–2021.2.26`、版本号等）不视为三级编号。
 - 子大纲中的额外说明、Markdown 代码围栏、正文或错序标题不能被静默接受。
-- 正文标题必须与已批准子大纲的层级、顺序和文本一致；层级化子大纲允许生成超出大纲的额外 H2 标题，但扁平子大纲（单行）不允许额外 Markdown 标题；大纲标题不得缺失或错序。
+- 正文标题按结构校验：必须有且仅有一个非空 H1，且出现在所有 H2 之前；提取到的 H1/H2 标题不能为空或重复。不再因与子大纲标题文字、数量或顺序不同而判整章失败；此校验不证明内容覆盖完整。
+- 正文通过 `validate_sub_report_heading_structure(content)` 校验；失败文案前缀为 `generated report heading structure invalid`。旧入口 `validate_sub_report_headings_match_outline(content, sub_section_outline)` 保留兼容，忽略子大纲参数并委托结构校验。
+- 标题提取忽略反引号和波浪线代码围栏中的内容；结束围栏必须与开始围栏同类且长度不少于开始围栏。空标题标记及去除编号后为空的标题仍参与校验并被拒绝。
+- 空标题和 H1 数量、顺序错误分别产生 `HEADING_TITLE_EMPTY`、`HEADING_STRUCTURE_INVALID`，定位为 `markdown_headings`；下一轮写作提示明确要求补全标题或修正 H1/H2 结构，不回放原始模型文本。
 - 重试反馈只允许包含白名单化错误码，例如 `HEADING_COUNT_MISMATCH`、`HEADING_TITLE_MISMATCH`、`OUTLINE_HEADING_MISSING`、`DUPLICATE_SUBSECTION_HEADINGS`、`MERMAID_OUTPUT_FORBIDDEN`、`SUB_REPORT_GENERATION_EXCEPTION`，以及安全的数字位置/计数字段；不把原始失败文本作为下一轮 LLM 指令。
 - 敏感日志模式下不输出完整资料和子报告正文。
 

@@ -94,11 +94,10 @@ for this chapter. The current chapter outline is the primary writing boundary.
 - **Level 2 Heading**: Apply `##` to all **subsequent lines** (the Sub-chapter Titles).
 - If the outline has only one line, write exactly one Markdown heading: the Level 1 heading from that line. Do not invent Level 2 headings. Do not add any Markdown heading that is not present in `current_chapter_outline`. Conclusions, implications, recommendations, and other content required by the current section, `format_requirements`, or the Chapter Writing Directive must still be included. In a flat outline, present that content as prose, bold lead-ins, numbered sentences, lists, or tables as appropriate, not as additional Markdown headings.
 - **Format Rule**: Output must be standard Markdown headers (e.g., `# 1. Title`), **Not** bold text (e.g., `**1. Title**`) or plain text.
-- **Title Preservation**:
-    - You must STRICTLY follow the **text content** of the `current_chapter_outline`.
-    - Copy the Title **words** EXACTLY. Do Not add/remove titles or change the wording.
-    - Every outline heading must appear in your output with matching level and title text. For hierarchical outlines (more than one line), extra H2 headings beyond the outline are allowed; omitting an outline heading will fail validation and be discarded. For flat outlines (single line), no extra Markdown headings are permitted — see the flat outline rule above.
-- Each line of `Current Chapter Outline` must appear in your output as a Markdown heading with matching level and title text. For hierarchical outlines, extra H2 headings are allowed, but every outline heading must be present. For flat outlines, no extra headings are permitted.
+- **Title Guidance**:
+    - Use exactly one non-empty Level 1 chapter heading before any Level 2 headings.
+    - Follow the current chapter outline as writing guidance and prefer its titles and order. Minor wording changes or combining related subsections must not remove required content.
+    - Preserve titles explicitly required by the user. Cover all section requirements even when the subsection count or wording differs from the outline.
 - Do NOT generate H3 (`###`) or deeper headings. If the content logically requires a sub-section, use **unordered list with Bold font** (e.g., `- **header**`) instead of a heading.
 - Avoid Chinese numbering in headings.
 

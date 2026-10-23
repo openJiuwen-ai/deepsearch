@@ -604,12 +604,11 @@ class ReportPartsMixin:
         current_inputs["sub_report_content"] = self.clean_markdown_headers(
             current_inputs["sub_report_content"]
         )
-        ok, reason = self.validate_sub_report_headings_match_outline(
+        ok, reason = self.validate_sub_report_heading_structure(
             current_inputs["sub_report_content"],
-            current_inputs.get("sub_section_outline", ""),
         )
         if not ok:
-            return False, f"generated report headings do not match outline: {reason}"
+            return False, f"generated report heading structure invalid: {reason}"
         sidecar_result = await self._generate_sub_report_sidecar(current_inputs)
         current_inputs["sub_report_chapter_sidecar"] = sidecar_result.get("sidecar")
         current_inputs["sub_report_summary"] = sidecar_result.get("summary", "")
