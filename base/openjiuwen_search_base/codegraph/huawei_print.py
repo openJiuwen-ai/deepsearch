@@ -7,7 +7,10 @@ Logger that mimics print
 
 import logging
 
-logging.basicConfig(format="%(message)s", level=logging.WARNING)
-
 print_logger = logging.getLogger("print")
+if not print_logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    print_logger.addHandler(_handler)
+    print_logger.setLevel(logging.WARNING)
 print_hw = print_logger.warning
