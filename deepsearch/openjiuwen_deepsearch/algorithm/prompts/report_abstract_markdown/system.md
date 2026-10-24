@@ -1,3 +1,4 @@
+
 # Writing Guide: Abstract
 
 As a professional Deep Researcher writer, your task is to generate a single, cohesive, and concise abstract paragraph that synthesizes the key finding from all provided sub-reports. Follow these rules strictly:

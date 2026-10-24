@@ -1,7 +1,6 @@
-﻿from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from openjiuwen.core.foundation.llm.schema.message import UserMessage
 from pydantic import ValidationError
 
 from openjiuwen_deepsearch.config.config import (
@@ -32,9 +31,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_buil
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
     EvidenceLedger,
-    build_ledger_brief,
-    ensure_ledger,
-    merge_ledger_update,
     target_paper_key,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
@@ -567,7 +563,6 @@ async def test_direct_path_applies_shared_tool_call_budget_in_route_order():
     assert [call.args[0]["search_engine_name"] for call in web_tool.invoke.await_args_list] == [
         "jina", "pubmed",
     ]
-
 
 
 @pytest.mark.asyncio

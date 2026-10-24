@@ -7,9 +7,7 @@ import logging
 import pytest
 
 from openjiuwen_deepsearch.algorithm.brief_report.html_content import (
-    BriefHtmlPreprocessResult,
     BriefHtmlSectionChunk,
-    render_references_html,
     preprocess_markdown,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
@@ -22,38 +20,6 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
 
 
 _NOTICE_BASE = "<!DOCTYPE html><html><head></head><body><h1>报告</h1></body></html>"
-
-
-def test_html_reporter_sibling_module_interfaces_are_public():
-    """编排层跨模块复用的 HTML 辅助项必须使用显式公开名称。"""
-    from openjiuwen_deepsearch.algorithm.brief_report import (
-        html_charts,
-        html_content,
-        html_safety,
-    )
-
-    required_interfaces = {
-        html_charts: (
-            "TEMPLATE_BLOCK_RE",
-            "extract_fragment_charts",
-            "normalize_chart_configs",
-            "validate_chart_configs",
-        ),
-        html_content: ("render_references_html", "split_report_markdown"),
-        html_safety: (
-            "HTML_VOID_TAGS",
-            "HtmlStructureScanner",
-            "JAVASCRIPT_URL_RE",
-            "SCRIPT_TAG_RE",
-            "contains_event_attribute",
-            "insert_before",
-            "validate_css_references",
-        ),
-    }
-
-    for module, names in required_interfaces.items():
-        for name in names:
-            assert hasattr(module, name), f"{module.__name__}.{name} must be public"
 
 
 def test_generate_shell_groups_related_context_arguments():
@@ -109,37 +75,6 @@ def test_assemble_html_report_applies_chart_semantic_fallback():
     assert [series["name"] for series in option["series"]] == ["市场规模"]
     assert option["yAxis"] == [{"name": "万亿元"}]
     assert option["legend"]["data"] == ["市场规模"]
-
-
-def test_assemble_html_report_converts_inline_citations_outside_prompt_stages():
-    """引用转换由拼装层确定性完成，shell 与章节模型只需保留原始标记。"""
-    from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import (
-        _assemble_html_report,
-    )
-
-    shell = (
-        "<!DOCTYPE html><html><head><style>.cite-ref{color:#1F5FBF}</style></head><body>"
-        "<p>摘要 [[1]](https://example.com/a)</p>"
-        '<div id="brief-sections"></div><div id="brief-references"></div>'
-        "</body></html>"
-    )
-    fragments = [
-        '<section class="section"><h2>1 范围</h2>'
-        "<p>章节结论 [[1]](https://example.com/a)。</p></section>"
-    ]
-    pre = preprocess_markdown(
-        "# 报告\n\n## 1 范围\n\n"
-        "章节结论 [checked_citation:1][[1]](https://example.com/a)。\n\n"
-        "[1]. [来源甲](https://example.com/a)\n"
-    )
-
-    assembled = _assemble_html_report(shell, fragments, [], pre, "zh-CN")
-    expected = (
-        '<sup class="cite-ref"><a href="https://example.com/a" '
-        'target="_blank" rel="noopener noreferrer">[1]</a></sup>'
-    )
-    assert assembled.count(expected) == 2
-    assert "[[1]](https://example.com/a)" not in assembled
 
 
 def test_assemble_html_report_removes_text_from_css_bar_fill():
@@ -222,7 +157,7 @@ _LLM_SECTION = (
 
 def _pipeline_markdown():
     return (
-        "# 报告\n\n## 1 范围\n\n结论 [checked_citation:1][[1]](https://example.com/a)。\n\n"
+        "# 报告\n\n## 1 范围\n\n结论 [[1]](https://example.com/a)。\n\n"
         "[1]. [来源甲](https://example.com/a)\n"
     )
 
@@ -322,12 +257,7 @@ async def test_generate_brief_html_report_success_returns_injected_html(monkeypa
     assert '<div id="brief-sections"' not in html
     assert "<h2>1 范围</h2>" in html
     assert '<section class="section" id="section-1">' in html
-    assert (
-        '<sup class="cite-ref"><a href="https://example.com/a" '
-        'target="_blank" rel="noopener noreferrer">[1]</a></sup>' in html
-    )
-    assert '<li id="ref-1"><a href="https://example.com/a">来源甲</a></li>' in html
-    assert "<h2>参考文章</h2>" in html
+    assert "<h2>参考文章</h2>" not in html
     assert len(calls) == 2  # 1 shell + 1 章节
     assert module is not None
 
@@ -362,8 +292,8 @@ async def test_generate_brief_html_report_inlines_echarts_only_when_chart_exists
 async def test_generate_brief_html_report_generates_sections_in_parallel(monkeypatch):
     """多章节报告：shell 一次 + 章节并行 N 次，拼装保持章节顺序。"""
     markdown = (
-        "# 报告\n\n## 1 甲\n\n甲内容 [checked_citation:1][[1]](https://example.com/a)。\n\n"
-        "## 2 乙\n\n乙内容 [checked_citation:2][[1]](https://example.com/a)。\n\n"
+        "# 报告\n\n## 1 甲\n\n甲内容 [[1]](https://example.com/a)。\n\n"
+        "## 2 乙\n\n乙内容 [[1]](https://example.com/a)。\n\n"
         "[1]. [来源甲](https://example.com/a)\n"
     )
     calls: list = []
@@ -395,8 +325,8 @@ async def test_generate_brief_html_report_retries_only_failed_sections(monkeypat
     from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
 
     markdown = (
-        "# 报告\n\n## 1 甲\n\n甲内容 [checked_citation:1][[1]](https://example.com/a)。\n\n"
-        "## 2 乙\n\n乙内容 [checked_citation:2][[1]](https://example.com/a)。\n\n"
+        "# 报告\n\n## 1 甲\n\n甲内容 [[1]](https://example.com/a)。\n\n"
+        "## 2 乙\n\n乙内容 [[1]](https://example.com/a)。\n\n"
         "[1]. [来源甲](https://example.com/a)\n"
     )
     section_calls = {"1": 0, "2": 0}
@@ -486,8 +416,8 @@ async def test_generate_brief_html_report_attributes_css_errors_to_failed_sectio
     from openjiuwen_deepsearch.algorithm.brief_report import html_reporter as module
 
     markdown = (
-        "# 报告\n\n## 1 甲\n\n甲内容 [checked_citation:1][[1]](https://example.com/a)。\n\n"
-        "## 2 乙\n\n乙内容 [checked_citation:2][[1]](https://example.com/a)。\n\n"
+        "# 报告\n\n## 1 甲\n\n甲内容 [[1]](https://example.com/a)。\n\n"
+        "## 2 乙\n\n乙内容 [[1]](https://example.com/a)。\n\n"
         "[1]. [来源甲](https://example.com/a)\n"
     )
     section_calls = {"1": 0, "2": 0}
@@ -652,8 +582,7 @@ def test_assemble_html_report_merges_all_chart_configs():
 
     assert assembled.count('class="echarts-chart"') == 4
     assert 'data-chart-id="s2-c2"' in assembled
-    assert "<h2>参考文章</h2>" in assembled
-    assert '<li id="ref-1"><a href="https://example.com/a">来源甲</a></li>' in assembled
+    assert "<h2>参考文章</h2>" not in assembled
     # 合并 template 在 body 闭合前，内容经 HTML 转义
     assert assembled.index("<template") < assembled.rindex("</body>")
     errors, _ = validate_html_report(assembled)

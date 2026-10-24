@@ -27,30 +27,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 
-def test_resolve_target_section_strips_citation_and_infer_markup():
-    processor = NewTaskProcessor(llm_model_name="mock_model")
-    report = (
-        "# 总览\n"
-        "## 第一章\n"
-        "原文[checked_citation: 1][[1]](https://a.com)"
-        "[推理结论](#inference:3)\n"
-        "## 第二章\n"
-        "其他内容"
-    )
-    feedback = {
-        "selected_text": "原文[checked_citation: 1][[1]](https://a.com)[推理结论](#inference:3)",
-        "start_offset": report.index("原文"),
-        "end_offset": report.index("\n## 第二章"),
-        "user_instruction": "补充行业背景",
-    }
-
-    target = processor.resolve_target_section(report_content=report, feedback=feedback)
-
-    assert target.section_title == "第一章"
-    assert target.clean_section_text == "## 第一章\n原文推理结论\n"
-    assert target.clean_selected_text == "原文推理结论"
-
-
 def test_resolve_target_section_keeps_numbered_major_chapter_context():
     """验证 new_task 会保留选区所属的编号大章节上下文。"""
     processor = NewTaskProcessor(llm_model_name="mock_model")
@@ -474,8 +450,8 @@ async def test_run_new_task_merges_new_docs_and_rewrites_entire_section(caplog):
     caplog.set_level(logging.INFO)
     final_result = {
         "response_content": "## 第一章\n旧章节内容\n## 第二章\n其他内容",
-        "citation_messages": {"data": []},
-        "infer_messages": [],
+
+
     }
     feedback = {
         "action": "new_task",
@@ -536,10 +512,6 @@ async def test_run_new_task_merges_new_docs_and_rewrites_entire_section(caplog):
     assert result["used_historical_doc_count"] == 1
     assert result["used_new_doc_count"] == 1
     assert result["incremental_doc_infos"] == [{"title": "文档B", "url": "https://b.com"}]
-    assert result["source_trace_doc_infos"] == [
-        {"title": "文档A", "url": "https://a.com"},
-        {"title": "文档B", "url": "https://b.com"},
-    ]
     assert result["assessment_summary"] == "还缺行业背景"
     assert any("incremental collection started" in record.message for record in caplog.records)
     assert any("incremental collection completed" in record.message for record in caplog.records)
@@ -554,8 +526,8 @@ async def test_run_new_task_keeps_newline_before_next_heading():
     selected_text = "旧章节内容"
     final_result = {
         "response_content": report,
-        "citation_messages": {"data": []},
-        "infer_messages": [],
+
+
     }
     feedback = {
         "action": "new_task",
@@ -623,8 +595,8 @@ async def test_run_new_task_appends_new_subsection_to_numbered_major_chapter(cap
     selected_text = "目标内容"
     final_result = {
         "response_content": report,
-        "citation_messages": {"data": []},
-        "infer_messages": [],
+
+
     }
     feedback = {
         "action": "new_task",
@@ -675,80 +647,6 @@ async def test_run_new_task_appends_new_subsection_to_numbered_major_chapter(cap
 
 
 @pytest.mark.asyncio
-async def test_run_new_task_preserves_major_chapter_markup_before_appending_subsection():
-    """验证 NEW_TASK 新增小节不会清理目标大章节内已有溯源标记。"""
-    processor = NewTaskProcessor(llm_model_name="mock_model")
-    report = (
-        "# 1. 第一大章\n"
-        "## 1.1 已有小节\n"
-        "已有内容[checked_citation: 1][[1]](https://a.com)\n"
-        "推理[结论](#inference:7)\n\n"
-        "## 1.2 目标小节\n"
-        "目标内容[checked_citation: 2][[2]](https://b.com)\n\n"
-        "# 2. 第二大章\n"
-        "其他内容[checked_citation: 3][[3]](https://c.com)"
-    )
-    selected_text = "目标内容[checked_citation: 2][[2]](https://b.com)"
-    final_result = {
-        "response_content": report,
-        "citation_messages": {"data": []},
-        "infer_messages": [],
-    }
-    feedback = {
-        "action": "new_task",
-        "selected_text": selected_text,
-        "start_offset": report.index(selected_text),
-        "end_offset": report.index(selected_text) + len(selected_text),
-        "user_instruction": "新增一个小节分析第二名城市差距",
-    }
-    captured_targets = []
-
-    def fake_collect_section_assets(target, current_outline):
-        captured_targets.append(target)
-        return SectionHistoricalAssets(
-            section_id="1.2",
-            match_mode="title_exact",
-            section_title=target.section_title,
-            current_section_text=target.clean_major_section_text,
-            historical_plans=[],
-            historical_doc_infos=[{"title": "文档A", "url": "https://a.com"}],
-        )
-
-    assessment = NewTaskAssetAssessment(
-        relevant_doc_infos=[{"title": "文档A", "url": "https://a.com"}],
-        is_sufficient=True,
-        missing_aspects=[],
-        reasoning_summary="需要新增独立小节承载新维度",
-        edit_strategy="append_new_subsection",
-        subsection_title="新增分析",
-    )
-
-    with patch.object(processor, "collect_section_assets", side_effect=fake_collect_section_assets):
-        with patch.object(processor, "assess_section_assets", new_callable=AsyncMock, return_value=assessment):
-            with patch.object(
-                processor,
-                "generate_new_subsection_with_assets",
-                new_callable=AsyncMock,
-                return_value="## 1.3 新增分析\n新增小节内容",
-            ):
-                result = await processor.run_new_task(
-                    feedback=feedback,
-                    final_result=final_result,
-                    language="zh-CN",
-                )
-
-    target = captured_targets[0]
-    first_major_chapter = result["new_report"].split("# 2. 第二大章", 1)[0]
-    assert "[checked_citation: 1][[1]](https://a.com)" in first_major_chapter
-    assert "[结论](#inference:7)" in first_major_chapter
-    assert "[checked_citation: 2][[2]](https://b.com)" in first_major_chapter
-    assert "其他内容[checked_citation: 3][[3]](https://c.com)" in result["new_report"]
-    assert "[checked_citation:" not in target.clean_major_section_text
-    assert "(#inference:" not in target.clean_major_section_text
-    assert "## 1.3 新增分析\n新增小节内容\n\n# 2. 第二大章" in result["new_report"]
-
-
-@pytest.mark.asyncio
 async def test_run_new_task_preserves_plain_trace_links_before_appending_subsection():
     """验证 NEW_TASK 新增小节不会清理目标大章节内的双中括号溯源链接。"""
     processor = NewTaskProcessor(llm_model_name="mock_model")
@@ -764,8 +662,8 @@ async def test_run_new_task_preserves_plain_trace_links_before_appending_subsect
     selected_text = "目标内容[[2]](https://b.com)"
     final_result = {
         "response_content": report,
-        "citation_messages": {"data": []},
-        "infer_messages": [],
+
+
     }
     feedback = {
         "action": "new_task",
@@ -833,8 +731,8 @@ async def test_run_new_task_can_modify_existing_subsection_other_than_selection(
     selected_text = "产能内容"
     final_result = {
         "response_content": report,
-        "citation_messages": {"data": []},
-        "infer_messages": [],
+
+
     }
     feedback = {
         "action": "new_task",
@@ -993,86 +891,12 @@ async def test_run_new_task_retargets_assets_when_modifying_another_subsection()
 
 
 @pytest.mark.asyncio
-async def test_run_new_task_modify_existing_subsection_cleans_only_rewritten_subsection_markup():
-    """验证修改已有小节时只清理被改写小节的溯源标记。"""
-    processor = NewTaskProcessor(llm_model_name="mock_model")
-    report = (
-        "# 1. 第一大章\n"
-        "## 1.1 已有小节\n"
-        "已有内容[[1]](https://a.com)\n\n"
-        "## 1.2 目标小节\n"
-        "目标内容[checked_citation: 2][[2]](https://b.com)\n"
-        "推理[结论](#inference:7)\n\n"
-        "# 2. 第二大章\n"
-        "其他内容[[3]](https://c.com)"
-    )
-    selected_text = "目标内容[checked_citation: 2][[2]](https://b.com)"
-    final_result = {
-        "response_content": report,
-        "citation_messages": {"data": []},
-        "infer_messages": [],
-    }
-    feedback = {
-        "action": "new_task",
-        "selected_text": selected_text,
-        "start_offset": report.index(selected_text),
-        "end_offset": report.index(selected_text) + len(selected_text),
-        "user_instruction": "修改目标小节内容",
-    }
-    target = processor.resolve_target_section(report_content=report, feedback=feedback)
-    assets = SectionHistoricalAssets(
-        section_id="1.2",
-        match_mode="title_exact",
-        section_title=target.section_title,
-        current_section_text=target.clean_major_section_text,
-        historical_plans=[],
-        historical_doc_infos=[{"title": "文档A", "url": "https://a.com"}],
-    )
-    assessment = NewTaskAssetAssessment(
-        relevant_doc_infos=[{"title": "文档A", "url": "https://a.com"}],
-        is_sufficient=True,
-        missing_aspects=[],
-        reasoning_summary="需要修改目标小节",
-        edit_strategy="modify_existing_subsection",
-    )
-
-    with patch.object(processor, "collect_section_assets", return_value=assets):
-        with patch.object(processor, "assess_section_assets", new_callable=AsyncMock, return_value=assessment):
-            with patch.object(
-                processor,
-                "rewrite_section_with_assets",
-                new_callable=AsyncMock,
-                return_value="## 1.2 目标小节\n目标新内容\n",
-            ) as mock_rewrite:
-                result = await processor.run_new_task(
-                    feedback=feedback,
-                    final_result=final_result,
-                    language="zh-CN",
-                )
-
-    rewrite_target = mock_rewrite.await_args.kwargs["target"]
-    reconstructed_report = (
-        report[: result["original_start_offset"]]
-        + result["rewritten_text"]
-        + report[result["original_end_offset"] :]
-    )
-    assert "[[1]](https://a.com)" in result["new_report"]
-    assert "[[3]](https://c.com)" in result["new_report"]
-    assert "[checked_citation: 2]" not in result["new_report"]
-    assert "(#inference:7)" not in result["new_report"]
-    assert "[checked_citation: 2]" not in rewrite_target.section_text
-    assert "(#inference:7)" not in rewrite_target.section_text
-    assert result["original_text"] == target.section_text
-    assert reconstructed_report == result["new_report"]
-
-
-@pytest.mark.asyncio
 async def test_run_new_task_raises_when_no_historical_or_incremental_docs_available():
     processor = NewTaskProcessor(llm_model_name="mock_model")
     final_result = {
         "response_content": "## 第一章\n旧章节内容\n## 第二章\n其他内容",
-        "citation_messages": {"data": []},
-        "infer_messages": [],
+
+
     }
     feedback = {
         "action": "new_task",
@@ -1364,8 +1188,8 @@ async def test_run_new_task_skips_incremental_collection_when_historical_assets_
     processor = NewTaskProcessor(llm_model_name="mock_model")
     final_result = {
         "response_content": "## 第一章\n旧章节内容\n## 第二章\n其他内容",
-        "citation_messages": {"data": []},
-        "infer_messages": [],
+
+
     }
     feedback = {
         "action": "new_task",

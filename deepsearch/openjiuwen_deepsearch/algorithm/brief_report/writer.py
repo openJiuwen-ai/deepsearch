@@ -16,7 +16,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefWritingEvidence,
     BriefWritingRequest,
 )
-from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
+from openjiuwen_deepsearch.algorithm.report.report_utils import strip_report_source_links
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
     format_section_material_bindings,
@@ -122,8 +122,8 @@ def _writing_prompt_input(
             section.material_bindings,
             section.use_material_ids,
         ),
-        "has_exclusion": request.has_exclusion,
-        "exclusion_instruction": request.exclusion_instruction,
+
+
         "collected_information": collected_information or "No collected information is available.",
         "writing_guidance": writing_guidance,
     }
@@ -572,17 +572,15 @@ async def generate_brief_summary(request: BriefSummaryRequest) -> str:
 
 
 def assemble_brief_report(request: BriefAssemblyRequest) -> BriefReportAssembly:
-    """拼装完整报告后一次性整理已有引用。"""
+    """拼装完整报告，输出不带来源链接的 Markdown。"""
     chapters = sorted(request.chapters, key=lambda item: request.section_order[item.section_id])
     heading = "## Executive Summary" if request.language == ENGLISH else "## 核心摘要"
-    refs = "## References" if request.language == ENGLISH else "## 参考文章"
     report = "\n\n".join(
         [
             f"# {request.title}",
             heading,
             request.executive_summary.strip(),
             *(c.raw_markdown.strip() for c in chapters),
-            refs,
         ]
     ).strip()
     classified = [item.model_dump() for item in request.citation_registry]
@@ -592,8 +590,6 @@ def assemble_brief_report(request: BriefAssemblyRequest) -> BriefReportAssembly:
         lambda match: match.group(0) if int(match.group(1)) in allowed else "",
         report,
     )
-    traced = SourceTracer({"report": cleaned, "classified_content": classified}).add_source_to_report()
     return BriefReportAssembly(
-        report_content=traced.get("modified_report", ""),
-        merged_trace_source_datas=traced.get("datas", []),
+        report_content=strip_report_source_links(cleaned),
     )

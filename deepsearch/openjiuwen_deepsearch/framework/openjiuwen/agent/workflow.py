@@ -97,8 +97,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     RunActionNode,
     SearchEndNode,
     SearchStartNode,
-    SourceTracerInferNode,
-    SourceTracerNode,
     StartNode,
     ToolNode,
     UserFeedbackProcessorNode,
@@ -160,7 +158,6 @@ def _add_brief_branch(flow: Workflow) -> None:
     flow.add_workflow_comp(NodeId.BRIEF_EVIDENCE_REVIEWER.value, BriefEvidenceReviewNode())
     flow.add_workflow_comp(NodeId.BRIEF_SUB_REPORTER.value, BriefSubReporterNode())
     flow.add_workflow_comp(NodeId.BRIEF_REPORTER.value, BriefReporterNode())
-    flow.add_workflow_comp(NodeId.BRIEF_SOURCE_TRACER.value, SourceTracerNode(NodeId.BRIEF_HTML_REPORTER.value))
     flow.add_workflow_comp(NodeId.BRIEF_HTML_REPORTER.value, BriefHtmlReporterNode())
     for source, targets in (
         (NodeId.BRIEF_OUTLINE.value, [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.END.value]),
@@ -173,8 +170,7 @@ def _add_brief_branch(flow: Workflow) -> None:
             [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.BRIEF_SUB_REPORTER.value, NodeId.END.value],
         ),
         (NodeId.BRIEF_SUB_REPORTER.value, [NodeId.BRIEF_REPORTER.value, NodeId.END.value]),
-        (NodeId.BRIEF_REPORTER.value, [NodeId.BRIEF_SOURCE_TRACER.value, NodeId.END.value]),
-        (NodeId.BRIEF_SOURCE_TRACER.value, [NodeId.BRIEF_HTML_REPORTER.value]),
+        (NodeId.BRIEF_REPORTER.value, [NodeId.BRIEF_HTML_REPORTER.value, NodeId.END.value]),
         (NodeId.BRIEF_HTML_REPORTER.value, [NodeId.END.value]),
     ):
         flow.add_conditional_connection(source, router=init_router(source, targets))
@@ -988,8 +984,6 @@ class DeepresearchAgent(ReportProgressMixin, BaseAgent):
         flow.add_workflow_comp(NodeId.EDITOR_TEAM.value, EditorTeamNode())
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.VLM_CHART_GENERATOR.value, VLMChartGeneratorNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
         _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
@@ -1029,9 +1023,7 @@ class DeepresearchAgent(ReportProgressMixin, BaseAgent):
         flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
         flow.add_conditional_connection(NodeId.EDITOR_TEAM.value, router=editor_team_router)
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
-        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
         flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
 
         return flow
@@ -1148,8 +1140,6 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.DEPENDENCY_EDITOR_TEAM.value, DependencyEditorTeamNode())
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.VLM_CHART_GENERATOR.value, VLMChartGeneratorNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
         _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
@@ -1190,9 +1180,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
         flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
         flow.add_conditional_connection(NodeId.DEPENDENCY_EDITOR_TEAM.value, router=dependency_editor_router)
-        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
         flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
 
         return flow
@@ -1261,8 +1249,6 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.DEPENDENCY_EDITOR_TEAM.value, DependencyEditorTeamNode())
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.VLM_CHART_GENERATOR.value, VLMChartGeneratorNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
         _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
@@ -1313,9 +1299,7 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         flow.add_conditional_connection(NodeId.EDITOR_TEAM.value, router=editor_team_router)
         flow.add_conditional_connection(NodeId.DEPENDENCY_EDITOR_TEAM.value, router=dependency_editor_router)
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
-        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
         flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
 
         return flow

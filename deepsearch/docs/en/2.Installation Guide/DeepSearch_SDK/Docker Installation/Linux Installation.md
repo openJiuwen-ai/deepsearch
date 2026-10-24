@@ -1,4 +1,4 @@
-﻿This guide describes installing DeepSearch on **Linux** using Docker.
+This guide describes installing DeepSearch on **Linux** using Docker.
 
 ## 1. Environment preparation
 
@@ -128,14 +128,12 @@ Alternate host ports:
 
 > Later examples may show only `-p 8000:8000` for brevity. Add `-p 8089:8089` (or use the same Docker network) when using **DeepSearch** mode.
 
-
 #### Database / storage
 
 ##### `DB_TYPE`
 
 * **Purpose**: database type
 * **Values**: `sqlite` / `mysql`
-
 
 ##### MySQL (`DB_TYPE=mysql`)
 

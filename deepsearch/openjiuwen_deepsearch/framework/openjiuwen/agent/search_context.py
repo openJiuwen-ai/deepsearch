@@ -7,7 +7,9 @@ import json
 import logging
 from typing import List, Optional, Dict, Union, Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+
+from openjiuwen_deepsearch.utils.common_utils.report_instruction_utils import normalize_report_format_requirements
 
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import (
     TEMPORAL_SCOPE_SEARCH_ENGINES,
@@ -26,7 +28,7 @@ class Message(BaseModel):
 
 
 class StepType(str, Enum):
-    """  
+    """
     步骤类型枚举
     """
     INFO_COLLECTING = "info_collecting"
@@ -97,6 +99,12 @@ class Section(BaseModel):
     title: str = Field(..., description="章节标题，概括本章节整体目标")
     description: str = Field(..., description="章节研究步骤详细说明，明确指定需要收集的数据或执行的编程步骤")
     format_requirements: List[str] = Field(default_factory=list, description="章节级输出格式要求，例如表格、列名、逐项枚举、字数或样式约束")
+
+    @field_validator("format_requirements", mode="before")
+    @classmethod
+    def normalize_format_requirements(cls, value: object) -> list[str]:
+        return normalize_report_format_requirements(value)
+
     is_core_section: bool = Field(default=False, description="是否为重点章节")
     parent_ids: List[str] = Field(default_factory=list, description="章节执行的依赖章节")
     relationships: List[str] = Field(default_factory=list, description="章节和所依赖章节之间的关系")
@@ -144,7 +152,7 @@ class ChapterSidecar(BaseModel):
 
 class SubReportContent(BaseModel):
     """
-    子报告内容模型：包含子报告的核心内容及其相关溯源信息
+    子报告内容模型：包含正文、写作证据和摘要。
     """
     classified_content: List[Dict] = Field(default_factory=list, description="子章节筛选的文档信息")
     sub_report_content_text: str = Field(default="", description="子报告内容文本")
@@ -153,7 +161,6 @@ class SubReportContent(BaseModel):
         default=None,
         description="子报告结构化 sidecar 汇总信息",
     )
-    sub_report_trace_source_datas: List[Dict] = Field(default_factory=list, description="子报告的溯源信息")
 
 
 class SubReport(BaseModel):
@@ -178,16 +185,9 @@ class Report(BaseModel):
     sub_reports: List[SubReport] = Field(default_factory=list, description="各章节的子报告执行信息")
 
     # report节点的输出
-    report_content: str = Field(default="", description="ReportNode输出的溯源之前的总报告全文内容")
+    report_content: str = Field(default="", description="ReportNode输出的总报告全文内容")
     all_classified_contents: List[List] = Field(default_factory=list,
                                                 description="所有子章节筛选后的文档信息重排序后的内容")
-
-    # 溯源生成节点的输出
-    merged_trace_source_datas: List[Dict] = Field(default_factory=list, description="溯源校验前的溯源信息，用于溯源校验")
-
-    # 溯源校验节点的输出
-    checked_trace_source_report_content: str = Field(default="", description="溯源校验后生成的报告文章内容")
-    checked_trace_source_datas: List[Dict] = Field(default_factory=list, description="最终溯源信息")
 
     # HTML 生成节点的输出
     report_html: str = Field(default="", description="Brief HTML 报告内容，md 中间态保留在 report_content")
@@ -202,8 +202,6 @@ class FinalResult(BaseModel):
         default="text/markdown",
         description="响应内容类型：text/markdown | text/html",
     )
-    citation_messages: dict = Field(default={}, description="引用信息")
-    infer_messages: List[Dict] = Field(default_factory=list, description="溯源推理信息")
     chart_messages: List[Dict] = Field(default_factory=list, description="vlm图表生成信息")
     workflow_llm_token_usage: Dict[str, Any] = Field(
         default_factory=dict,
@@ -282,7 +280,6 @@ class TargetPaper(BaseModel):
     pmid: str = ""
     doi: str = ""
     arxiv_id: str = ""
-    url: str = ""
     dataset: str = ""
     data_year: str = ""
     topic: str = ""
@@ -290,7 +287,7 @@ class TargetPaper(BaseModel):
     @model_validator(mode="after")
     def require_one_clue(self) -> "TargetPaper":
         """Strip clue values and reject an item that carries no usable clue."""
-        field_names = ("title", "pmid", "doi", "arxiv_id", "url", "dataset", "data_year", "topic")
+        field_names = ("title", "pmid", "doi", "arxiv_id", "dataset", "data_year", "topic")
         for field_name in field_names:
             setattr(self, field_name, str(getattr(self, field_name) or "").strip())
         if not any(getattr(self, field_name) for field_name in field_names):
@@ -307,11 +304,7 @@ class ResearchIntent(BaseModel):
     audience_role: Optional[str] = Field(default=None, description="目标读者角色")
     tone: Optional[str] = Field(default=None, description="写作风格，建议使用稳定英文枚举值")
     report_type: Optional[Literal["professional", "brief"]] = Field(default=None, description="报告类型")
-    include_url: List[str] = Field(default_factory=list, description="用户指定包含的链接")
-    exclude_url: List[str] = Field(default_factory=list, description="用户指定排除的链接")
-    exclude_titles: List[str] = Field(default_factory=list, description="用户指定排除的文章标题")
     include_domains: List[str] = Field(default_factory=list, description="用户指定的站点域名")
-    exclude_domains: List[str] = Field(default_factory=list, description="用户排除的站点域名")
     temporal_scope: Optional[TemporalScope] = Field(
         default=None,
         description="[deprecated] 旧单值字段,仅兼容旧序列化 state 的 model_validate 输入路由;"
@@ -423,17 +416,16 @@ def build_research_intent_prompt_context(intent: ResearchIntent | dict | None) -
 
 
 def build_evidence_constraint_prompt_context(
-    intent: ResearchIntent | dict | None, *, exclusion_enabled: bool = False,
+    intent: ResearchIntent | dict | None,
 ) -> dict:
     """生成网页增强选择与压缩共用的研究约束，不解析或猜测新要求。
 
     Args:
         intent: 已由上游提取的研究意图，兼容旧单时间范围字段。
-        exclusion_enabled: 是否沿用现有禁引开关注入来源排除要求。
 
     Returns:
-        仅含非空维度、比较对象与双时间指令的可序列化字典；启用时附加
-        原来源排除指令。无约束或结构无效时返回空字典，不修改原输入。
+        仅含非空维度、比较对象与双时间指令的可序列化字典。
+        无约束或结构无效时返回空字典，不修改原输入。
     """
     try:
         model = intent if isinstance(intent, ResearchIntent) else ResearchIntent.model_validate(deepcopy(intent or {}))
@@ -448,8 +440,6 @@ def build_evidence_constraint_prompt_context(
         "source_date_instruction": temporal["source_date_instruction"],
         "content_date_instruction": temporal["content_date_instruction"],
     }
-    if exclusion_enabled:
-        constraints["exclusion_instruction"] = build_exclusion_prompt_context(model)["exclusion_instruction"]
     return {key: deepcopy(value) for key, value in constraints.items() if value}
 
 
@@ -664,46 +654,6 @@ def build_section_local_contract_prompt_context(contract: SectionLocalContract |
     }
 
 
-def build_exclusion_prompt_context(intent: ResearchIntent | dict | None) -> dict:
-    """把用户"禁止引用某来源（exclude_url/exclude_titles）"转为写作 prompt 可消费的上下文。
-
-    只读 exclude_url / exclude_titles（域名排除由采集层确定性过滤负责）。返回
-    ``has_exclusion`` 与 ``exclusion_instruction`` 两个键；无约束时返回空字段。
-    不输出 blocked authors 段（exclude_authors 已移除，避免 writer 误伤同作者合法论文）。
-    """
-    if intent is None:
-        model = ResearchIntent()
-    elif isinstance(intent, ResearchIntent):
-        model = intent
-    else:
-        model = ResearchIntent.model_validate(intent)
-
-    exclude_urls = [u for u in model.exclude_url if u]
-    exclude_titles = [t for t in model.exclude_titles if t]
-    if not exclude_urls and not exclude_titles:
-        return {"has_exclusion": False, "exclusion_instruction": ""}
-
-    # 列表过长会膨胀 system prompt；取 top-N，超出部分依赖采集层确定性过滤兜底。
-    urls = exclude_urls[:20]
-    titles = exclude_titles[:20]
-
-    parts = [
-        "The following sources are blocked and must NOT appear anywhere in your output — "
-        "never cite them, never mention their titles/URLs, and never quote or paraphrase their content, "
-        "even if they slipped into the Collected Information.",
-        "This is a silent constraint: do NOT restate, explain, or echo this rule in the report; "
-        "just omit these sources without any mention that they were excluded.",
-    ]
-    if urls:
-        urls_text = "\n".join(f"- {u}" for u in urls)
-        parts.append(f"Blocked URLs (primary, match exactly):\n{urls_text}")
-    if titles:
-        titles_text = "\n".join(f"- {t}" for t in titles)
-        parts.append(f"Blocked titles (auxiliary, semantic match):\n{titles_text}")
-
-    return {"has_exclusion": True, "exclusion_instruction": "\n\n".join(parts)}
-
-
 class SearchContext(BaseModel):
     """
     上下文状态模型：工作流运行时的状态上下文
@@ -869,7 +819,7 @@ class Result(BaseModel):
             f"retrieved_evidence_ids={self.retrieved_evidence_ids}"
             ")"
         )
-    
+
     def get_summary(self):
         if self.summary:
             return f"Research Agent's summary: {self.summary}"
@@ -877,8 +827,6 @@ class Result(BaseModel):
             last_entry = self.messages[-1]
             last_msg = last_entry.get("content", str(last_entry)) if isinstance(last_entry, dict) else str(last_entry)
             return f"Research Agent's final message output: {last_msg[:500]}"
-
-
 
 
 class ActionProposal(BaseModel):

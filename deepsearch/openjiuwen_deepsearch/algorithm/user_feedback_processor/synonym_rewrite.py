@@ -4,7 +4,7 @@
 import logging
 
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions import SYNONYM_REWRITE_ACTIONS
-from openjiuwen_deepsearch.algorithm.user_feedback_processor.report_edit_utils import strip_markup_in_range
+from openjiuwen_deepsearch.algorithm.user_feedback_processor.report_edit_utils import strip_citations_in_range
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.exception import CustomException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
@@ -72,7 +72,7 @@ class SynonymRewriter:
             len(report_content),
         )
 
-        stripped_text, _, _ = strip_markup_in_range(report_content, start_offset, end_offset)
+        stripped_text = strip_citations_in_range(report_content, start_offset, end_offset)
 
         removed_markup_len = len(report_content) - len(stripped_text)
         stripped_end = end_offset - removed_markup_len

@@ -31,8 +31,7 @@
 - **Deep Research**: Multi-step, multi-source validated, rigorously reasoned structured research report generation
 - **Deep Search**: Intelligent Q&A based on state-space search with multi-step reasoning and tool calling
 - **Knowledge-augmented hybrid retrieval**: Fusion of local knowledge bases (keyword, vector, graph retrieval) with web-augmented engines
-- **Rich reports with visuals**: Report generation with embedded figures and charts, fully traceable content
-- **Segment-level provenance**: Outputs with validated citations, supporting segment-level traceability and confidence assessment
+- **Rich reports with visuals**: Report generation with embedded figures and charts
 - **Collaborative and interactive**: Natural-language feedback during the planning phase
 
 **Use cases:**

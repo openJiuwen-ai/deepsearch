@@ -1382,7 +1382,7 @@ class EvidenceMixin:
 
         Returns (success, error_message, classified_content).
         On failure, error_message describes the failure and classified_content is [].
-        Sets current_inputs fields: sub_section_core_content, sub_section_references,
+        Sets current_inputs fields: sub_section_core_content,
         structured_evidence_guide, classified_content, required_target_citation_indexes,
         doc_selection_debug.
         """
@@ -1517,7 +1517,6 @@ class EvidenceMixin:
         )
         current_inputs["sub_section_core_content"] = fulltext_result["sub_section_core_content"]
         current_inputs["sub_section_core_content_from_background_knowledge"] = False
-        current_inputs["sub_section_references"] = fulltext_result["sub_section_references"]
         # Internal compatibility only; outline/writing prompts consume the
         # shared rationale_contract, not this legacy rendered guide.
         current_inputs["structured_evidence_guide"] = fulltext_result["structured_evidence_guide"]

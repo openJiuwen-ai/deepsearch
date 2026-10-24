@@ -27,8 +27,6 @@
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/agent_factory.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/agent/main_graph_nodes.py`
 - `openjiuwen_deepsearch/framework/openjiuwen/tools/runtime_api/runtime_api.py`
-- `tests/source_tracer/test_check.py`
-- `tests/source_tracer/test_citation_verify_research.py`
 - `tests/user_feedback_processor/test_rewrite.py`
 - `tests/tools/test_runtime_api.py`
 
@@ -43,7 +41,6 @@
 
 - 错误码为 6 位数字。
 - 前两位表示错误类型：`20` 为公共类型错误，`21` 为具体模块错误。
-- 中间两位表示子类型；公共错误当前覆盖参数校验和文件相关错误，模块错误覆盖 agent、workflow、LLM、tool、节点、查询理解、人机交互、规划、采集、报告、溯源、模板、用户反馈和图表等域。
 - 后两位表示同一子类型下的具体错误编号。
 - `MAGIC_CODE` 当前为制表符，用作 `CustomException.__str__` 的尾部标记。
 - 语言常量为 `CHINESE = "zh-CN"` 和 `ENGLISH = "en"`。
@@ -61,8 +58,6 @@
 ## 测试与验证
 
 - `uv run pytest tests/tools/test_runtime_api.py`
-- `uv run pytest tests/source_tracer/test_check.py`
-- `uv run pytest tests/source_tracer/test_citation_verify_research.py`
 - `uv run pytest tests/user_feedback_processor/test_rewrite.py`
 - 修改参数校验错误码时，补充运行 `uv run pytest tests/server/test_deepsearch_run.py`。
 
@@ -71,5 +66,4 @@
 - [参数校验、安全目录与 URL 处理](../utils/validation-security-url.md)
 - [Runtime API 工具配置](../config/runtime-api-tool-config.md)
 - [搜索工具注册与运行时 API 工具](../framework/search-tool-registration.md)
-- [全局溯源](../algorithm/source-trace.md)
 - [用户反馈处理](../algorithm/user-feedback-processor.md)

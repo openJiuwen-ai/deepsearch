@@ -14,7 +14,6 @@ from pathlib import Path
 
 import markdown
 
-from openjiuwen_deepsearch.algorithm.source_trace.add_source import SOURCE_TRACE_ID_COMMENT_RE
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +56,6 @@ REPORT_CHAPTER_ATTRIBUTE_RE = re.compile(
 )
 SENTENCE_END_RE = re.compile(r"[。！？?!…]$")
 CITATION_RE = re.compile(r"\[\[(\d+)\]\]\((https?://[^\s)]+(?:\([^\s)]+\)[^\s)]*)*)\)")
-CHECKED_CITATION_RE = re.compile(
-    r"\[\s*checked_citation:\s*\d+\s*\](\[\[\d+\]\]\((?:[^()]|\([^()]*\))*\))"
-)
 LEGACY_CITATION_RE = re.compile(r"\[\s*citation:\s*\d+\s*\]")
 REFERENCE_LINE_RE = re.compile(r"^(?P<indent>\s*)\[(\d+)\]\.\s+(.*)$", re.MULTILINE)
 CENTER_CAPTION_RE = re.compile(r'<div\s+style="text-align:\s*center;?">', flags=re.IGNORECASE)
@@ -308,9 +304,8 @@ def strip_internal_citation_markers(text: str) -> str:
     Returns:
         str: 清理内部标记后的 Markdown 文本。
     """
-    text = CHECKED_CITATION_RE.sub(r"\1", text)
     text = LEGACY_CITATION_RE.sub("", text)
-    return SOURCE_TRACE_ID_COMMENT_RE.sub("", text)
+    return text
 
 
 def normalize_reference_lines(text: str) -> str:

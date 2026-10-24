@@ -511,7 +511,6 @@ class ReportPartsMixin:
                 }),
                 ensure_ascii=False,
             ),
-            "references": current_inputs.get("sub_section_references", ""),
             "retry_feedback": self._sub_report_retry_feedback_from_failure(
                 str(current_inputs.get("sub_report_retry_feedback", "") or "")
             ),
@@ -604,20 +603,17 @@ class ReportPartsMixin:
         current_inputs["sub_report_content"] = self.clean_markdown_headers(
             current_inputs["sub_report_content"]
         )
-        ok, reason = self.validate_sub_report_heading_structure(
+        ok, reason = self.validate_sub_report_headings_match_outline(
             current_inputs["sub_report_content"],
+            current_inputs.get("sub_section_outline", ""),
         )
         if not ok:
-            return False, f"generated report heading structure invalid: {reason}"
+            return False, f"generated report headings do not match outline: {reason}"
         sidecar_result = await self._generate_sub_report_sidecar(current_inputs)
         current_inputs["sub_report_chapter_sidecar"] = sidecar_result.get("sidecar")
         current_inputs["sub_report_summary"] = sidecar_result.get("summary", "")
         current_inputs["sub_report_sidecar_warning"] = sidecar_result.get("warning", "")
-        current_inputs["sub_report_content"] = self.add_references(
-            current_inputs["sub_report_content"],
-            current_inputs.get("sub_section_references", []),
-            current_inputs.get("language"),
-        ).strip()
+        current_inputs["sub_report_content"] = current_inputs["sub_report_content"].strip()
 
         # get sub report content
         if not current_inputs.get("sub_report_content", ""):

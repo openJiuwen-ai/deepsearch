@@ -36,17 +36,16 @@ openJiuwen-DeepSearch 当前可以为全部模块配置四个模型：
 - **plan_understanding:** 该模型旨在能理解用户意图，生成任务规划步骤，减少幻觉，配置在IntentRecognition、Outliner、Planner模块。
 - **info_collecting:** 该模型用于信息收集各个步骤，配置在InfoCollector
 - **writing_checking:** 该模型用于准确生成报告及插入图文，配置在Sub_reporter
-- **general:** 该模型为通用模型，综合能力较强，所有模块都可调用该模型 
+- **general:** 该模型为通用模型，综合能力较强，所有模块都可调用该模型
 - **vlm_chart_generating** 该模型为专门处理图表的多模态模型（参考下表），可以接收图表输入，配置在VLMChartGenerator
 
-其中，**general模型必须配置**，其他模型配置可选，其他模型未配置时，默认使用general模型，因此，建议general配置综合能力较强的模型    
+其中，**general模型必须配置**，其他模型配置可选，其他模型未配置时，默认使用general模型，因此，建议general配置综合能力较强的模型
 
 每个模型都支持接入两种类型模型：
  - 硅基流动厂商系列模型，且遵循OpenAI接口格式。`LLMConfig`的`model_type`参数必须赋值为siliconflow。
  - OpenAI格式模型，模型服务按照标准OpenAI格式封装实现。`LLMConfig`的`model_type`参数必须赋值为openai。
 
 `DeepresearchAgent` 在 SDK 内部默认会关闭支持厂商的模型思考模式，对应配置为 `ServiceConfig.llm_thinking_enabled=False`。该配置仅作用于 `DeepresearchAgent` 初始化 LLM 的流程，`DeepSearchAgent` 和 `SimpleReactSearchAgent` 不受影响。若需要开启思考模式，可在 SDK 内部运行配置中设置 `service_config.llm_thinking_enabled=True`；不建议通过 `LLMConfig.extension` 手动维护统一思考开关，以免与内部厂商适配规则冲突。
-
 
 > 说明：用户需要自行前往硅基流动或者OpenAI的官网注册账号，以便获取模型广场中可用模型的api_key、模型名称model_name和模型调用的URL请求地址base_url。
 
@@ -595,12 +594,6 @@ agent_config["user_feedback_processor_enable"] = True
 agent_config["user_feedback_processor_max_interactions"] = 100
 ```
 
-该功能与前置 HITL 不同，它发生在报告和溯源结果已经生成之后。工作流会在内部进入`UserFeedbackProcessorNode`：
-- 首次进入时，系统会先向前端发送完整的`final_result`快照。
-- 后续前端继续使用同一个`conversation_id`，把用户动作作为 JSON 字符串传给`message`。
-- 每次改写成功后，系统会返回局部替换信息和最新的`final_result`，前端可据此增量刷新内容。
-- 当用户发送`finish`或达到最大交互次数时，流程结束。
-
 当前支持的动作如下：
 - `expand`：扩写选中文本。
 - `polish`：润色选中文本。
@@ -692,18 +685,6 @@ async for chunk in agent.run(message=finish_message, conversation_id=conversatio
 #     "selected_text": "完整编辑后报告"
 # }, ensure_ascii=False)
 ```
-
-说明：
-- 局部改写动作要求 `selected_text` 与当前报告中 `[start_offset, end_offset)` 范围内的文本完全一致，否则会返回偏移校验错误。
-- 改写结果会更新 `final_result.response_content`；当 `source_tracer_research_trace_source_switch` 开启时，后端会对变化片段执行差异感知局部溯源，未变化片段保留原引用，新增引用会同步更新 `citation_messages` 并在文末追加参考文献。
-- 后端不再额外维护 offset 映射。
-- `sync` 仅更新 `final_result.response_content`，不消耗 `feedback_interaction_count`，且只有整篇报告内容实际变化时才会追加一条 `search_context.rewrite_history` 记录。
-- 后端仅保留最近 10 条 `sync` 历史；内容未变化的 `sync` 不会新增历史记录。
-- 每次成功的普通局部改写会在 `search_context.rewrite_history` 中追加一条记录，其中包含 `action`、`rewrite_scope`（若有）及偏移等信息，便于排查与审计。
-- `truth_verification` 不更新 `final_result.response_content`，也不写入 `rewrite_history`；流式 `SUMMARY_RESPONSE` 的 `content` 为 JSON，包含 `display_text` 与 `feedback_interaction_count`，并消耗一次 `feedback_interaction_count`。
-- **兼容性**：省略 `rewrite_scope` 时与显式传 `selected_only` 等价；**`action` 不可省略或为空字符串**，若旧版前端仍依赖后端推断动作，需改为显式传入合法 `action`。
-
-
 
 # 更多参考
 

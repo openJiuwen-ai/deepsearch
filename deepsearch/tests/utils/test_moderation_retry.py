@@ -349,34 +349,6 @@ async def test_one_shot_webpage_selection_retains_fallback(llm):
 
 
 @pytest.mark.asyncio
-async def test_recursive_split_inherits_without_sibling_contamination(llm):
-    from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import CitationVerifyResearch
-
-    verifier, calls = CitationVerifyResearch(_MODEL), []
-
-    async def extract_once(datas, semaphore):
-        text = f"敏感 {datas[0]}:{len(datas)}"
-        return await invoke(llm=llm, messages=[{"role": "user", "content": evidence_spans(text, [(0, 2)])}])
-
-    async def fake(**kwargs):
-        messages = deepcopy(kwargs["messages"])
-        calls.append(messages)
-        if len(calls) == 1:
-            raise _error()
-        if "0:2" in messages[0]["content"]:
-            raise _error("Output")
-        return [{"ok": True}]
-
-    with patch.object(verifier, "extract_messages_once", new=extract_once), patch(_IMPL, new=fake):
-        await verifier.extract_messages_with_split_retry(list(range(4)), 1, "root", asyncio.Semaphore(2))
-    assert len(calls) == 5 and all("**" in m[0]["content"] for m in calls[1:])
-    right = next(m for m in calls if "2:2" in m[0]["content"])
-    assert len(right) == 1
-    leaves = [m for m in calls if ":1" in m[0]["content"]]
-    assert len(leaves) == 2 and all(m[-1]["content"] == RETRY_FEEDBACK_PROMPT for m in leaves)
-
-
-@pytest.mark.asyncio
 async def test_cancellation_restores_parent_context(llm):
     calls = []
 

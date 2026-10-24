@@ -1,3 +1,4 @@
+
 # Role and Objective
 
 You are the evidence reviewer and writing planner for a Brief report. Review only the immutable outline and the

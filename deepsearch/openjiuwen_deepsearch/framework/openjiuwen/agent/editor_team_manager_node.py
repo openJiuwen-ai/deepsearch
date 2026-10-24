@@ -374,7 +374,7 @@ class EditorTeamNode(BaseNode):
     def _parse_section_state(self, section_state: dict):
         sub_report_content_obj = section_state.get("sub_report_content", SubReportContent())
         return dict(
-            trace_source_datas=sub_report_content_obj.sub_report_trace_source_datas if sub_report_content_obj else [],
+
             classified_content=sub_report_content_obj.classified_content if sub_report_content_obj else [],
             plans=section_state.get("plans", []),
             sub_report_content=sub_report_content_obj,
@@ -391,7 +391,6 @@ class EditorTeamNode(BaseNode):
         warning_info = ""
         exception_info = ""
 
-        merged_trace_source_datas = []
         all_classified_contents = []
         for section, sub_report, result in zip(sections, sub_reports, task_results):
             section.plans = result.get("plans")
@@ -399,13 +398,11 @@ class EditorTeamNode(BaseNode):
             sub_report.content = result.get("sub_report_content")
             warning_info += '\n'.join(result.get("warning_infos", ""))
             exception_info += '\n'.join(result.get("exception_infos", ""))
-            merged_trace_source_datas.extend(result.get("trace_source_datas", []))
             all_classified_contents.append(result.get("classified_content", []))
 
         outline.sections = sections
         report.sub_reports = sub_reports
         report.all_classified_contents = all_classified_contents
-        report.merged_trace_source_datas = merged_trace_source_datas
         history_outlines.append(outline)
         history_reports.append(report)
         state["outline"] = outline

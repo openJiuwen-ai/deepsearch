@@ -8,24 +8,8 @@ Supported `convert_type` values are `html` and `docx`. `convert_content` is a ba
 
 ## Request Body
 
-```json
-{
-  "final_result": {
-    "response_content": "# Report title",
-    "response_content_type": "text/markdown",
-    "infer_messages": [],
-    "chart_messages": [],
-    "warning_info": "",
-    "exception_info": ""
-  },
-  "convert_type": "html",
-  "enable_html_styling": false
-}
-```
-
 - `final_result.response_content`: required Markdown report body.
 - `final_result.response_content_type`: optional and supports only `text/markdown`; omitted values remain backward-compatible as `text/markdown`. Explicit `text/html` is not exportable and returns a validation error.
-- `final_result.infer_messages`: optional source-tracing assets with `id` and `html_base64`. Report links using `#inference:<id>` become relative links to standalone HTML files in the bundle.
 - `final_result.chart_messages`: optional VLM PNG assets with `chart_id`, `base64`, and optional `chart_title`. `(#insertChart:<chart_id>)` placeholders become image references.
 - `convert_type`: `html` or `docx`.
 - `enable_html_styling`: optional and defaults to `false`; it applies only to HTML.

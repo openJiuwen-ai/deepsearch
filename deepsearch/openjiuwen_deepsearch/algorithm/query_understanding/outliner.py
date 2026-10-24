@@ -67,8 +67,8 @@ def _section_list_description(section_num: int, include_format_requirements: boo
     requirement_location = (
         "Put substantive research scope, time ranges, dimensions, examples, and other "
         "sub-requirements inside the relevant description, not as extra top-level sections. "
-        "Put tables, exact columns, rows, enumeration, length/style constraints, and source-use "
-        "restrictions inside format_requirements. "
+        "Put tables, exact columns, rows, enumeration, and length/style constraints "
+        "inside format_requirements. "
         if include_format_requirements
         else "Put bullets, nested lists, tables, time ranges, dimensions, examples, and other "
         "sub-requirements inside the relevant description, not as extra top-level sections. "
@@ -102,7 +102,7 @@ def _section_description_description(
 ) -> str:
     context = f" {extra_context}" if extra_context else ""
     format_guidance = (
-        "Keep formatting, table, enumeration, column, row, length, and source-use constraints "
+        "Keep formatting, table, enumeration, column, row, and length constraints "
         "in format_requirements instead of copying them here. "
         if include_format_requirements
         else ""
@@ -152,17 +152,9 @@ def _format_requirements_description() -> str:
     return (
         "Output format requirements that apply to this section, extracted from the user request. "
         "Include table requirements, exact column names/order, required row objects, item-by-item "
-        "enumeration, length/style constraints, source restrictions, and deliverable format rules. "
+        "enumeration, length/style constraints, and deliverable format rules. "
         "Use an empty array [] when there are no section-specific format requirements."
     )
-
-
-def _normalize_format_requirements(value) -> list[str]:
-    if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
-    return []
 
 
 def generate_outline(
@@ -173,9 +165,7 @@ def generate_outline(
         Section(
             title=section.get("title", ""),
             description=section.get("description", ""),
-            format_requirements=_normalize_format_requirements(
-                section.get("format_requirements", [])
-            ),
+            format_requirements=section.get("format_requirements", []),
             is_core_section=section.get("is_core_section", False),
             id=section.get("id", ""),
             parent_ids=section.get("parent_ids", []),

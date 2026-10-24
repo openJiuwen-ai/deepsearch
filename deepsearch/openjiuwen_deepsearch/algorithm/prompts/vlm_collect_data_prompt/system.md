@@ -20,10 +20,8 @@ Extract formatted data from `data_sources` based on collection tasks in `tasks`.
     "data": {
       "param_1": number|List[number|str],
       "param_2": number|List[number|str]
-    }|str("NO DATA"),
-    "source_indexes": [int, ...]
+    }|str("NO DATA")
   }
 ]
 ```
 - **`data`**: Extracted chart data
-- **`source_indexes`**: Indices of `data_sources` used for extraction

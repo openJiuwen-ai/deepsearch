@@ -1,3 +1,5 @@
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import _resolve_node_agent_key
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 import asyncio
 import json
 import pytest
@@ -8,7 +10,6 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     _resolve_agent_llm_timeout,
-    _resolve_node_agent_key,
     _install_usage_only_chunk_parser,
     _unify_responnse,
     WorkflowLlmUsageDelta,
@@ -19,7 +20,7 @@ from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     pop_workflow_llm_usage,
     save_workflow_llm_usage_to_session,
 )
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 
 class _DummyModelConfig:
@@ -176,16 +177,6 @@ class _SlowStreamingModel:
         yield _StreamingChunk("b", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
 
 
-def test_resolve_node_agent_key_uses_longest_known_prefix():
-    """验证节点级匹配会选择最长的已知前缀。
-
-    Returns:
-        None.
-    """
-    assert _resolve_node_agent_key("source_tracer_infer_structured_infer") == NodeId.SOURCE_TRACER_INFER.value
-    assert _resolve_node_agent_key("vlm_chart_generatorgenerate_chart_code") == NodeId.VLM_CHART_GENERATOR.value
-
-
 def test_resolve_agent_llm_timeout_prefers_exact_match_over_node_key():
     """验证超时规则优先精确命中 agent_name。
 
@@ -239,12 +230,12 @@ def test_resolve_agent_llm_timeout_preserves_zero_and_clamps_large_rules():
         None.
     """
     fake_session = SimpleNamespace(
-        get_global_state=lambda key: {"default": 999999999, "source_tracer_infer": 0}
+        get_global_state=lambda key: {"default": 999999999, "sub_reporter": 0}
         if key == "config.agent_llm_timeouts"
         else None
     )
 
-    zero_resolved = _resolve_agent_llm_timeout("source_tracer_infer_structured_infer", fake_session)
+    zero_resolved = _resolve_agent_llm_timeout("sub_reporter_outline", fake_session)
     large_resolved = _resolve_agent_llm_timeout("unknown_agent_name", fake_session)
 
     # 0 值被保留，表示关闭业务层超时，回退到底层 SDK 控制
@@ -796,3 +787,13 @@ def test_install_usage_only_chunk_parser_is_safe_for_nested_restore():
 
     restore_inner()
     assert getattr(fake_model._client._parse_stream_chunk, "__func__", None) is getattr(original_parser, "__func__", None)
+
+
+def test_resolve_node_agent_key_uses_longest_known_prefix():
+    """验证节点级匹配会选择最长的已知前缀。
+
+    Returns:
+        None.
+    """
+    assert _resolve_node_agent_key("brief_html_reporter_section") == NodeId.BRIEF_HTML_REPORTER.value
+    assert _resolve_node_agent_key("vlm_chart_generatorgenerate_chart_code") == NodeId.VLM_CHART_GENERATOR.value

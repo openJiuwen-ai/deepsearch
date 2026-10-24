@@ -90,10 +90,6 @@
 8. 压缩 LLM 同时接收已有 `original_content`、新抓取正文与 `required_facts`（从旧关键片段提取、供模型参考的原始事实表达），合并并保留已有可验证事实；表达必须与实体、单位和条件关联，不应机械附加一串数字。浏览器验证、CAPTCHA、访问拒绝、登录、JavaScript 提示、错误页或重定向占位页视为无效抓取内容并被忽略。输出正文保持网页来源语言，不在证据增强阶段按 collector 的 `language` 翻译；面向用户的语言本地化由后续报告生成处理。`target_content_length` 为硬上限减500字符的软目标；必要时可使用到硬上限，`max_content_length` 仅限制 `original_content` 字符数，不限制整个 JSON 或 `key_passages` 的合计长度。程序仍执行最终长度限制，不增加二次压缩调用。
 9. 抓取和结构化压缩成功、最终正文非空后，直接替换旧 `original_content`，不再执行旧事实或锚点保留门禁。集中写回 `new_doc_infos_current_loop`、累计 `doc_infos`、`history_queries[*].doc_infos` 和 `source_store`，然后交给 `SupervisorNode`、`SummaryNode` 和最终报告器使用。
 
-
-
-选择与压缩共用上游 `collector_context.research_intent` 的紧凑 `research_constraints`：必需维度、比较对象、分别表达的来源日期/事实日期指令；仅在既有 `exclusion_constraint_enable` 开启时加入原禁引指令。兼容旧单时间字段，转换不修改运行状态，不新调用模型解析要求。无约束时不凭空添加，结构无效时回退已有任务描述并只记固定告警。压缩约束引导新增证据，不删除或改写必须保留的旧事实来伪造日期合规。Prompt 要求保持同一试验的实体/方法/浓度/温度与同一样本的分母，不根据缩写猜机制；当前题目的答案或评分材料不得当研究主题的事实依据。这些是已有模型调用内的行为约束，不是新增确定性过滤器或完整事实验证。
-
 增强成功后会刷新：
 
 - `original_content`：压缩后的网页正文证据。
@@ -103,10 +99,7 @@
 - `enrichment`：记录 `webpage_fetched`、抓取状态码、抓取后的 URL 和内容来源。`content_source` 取 `harness_webpage_fetch`（harness 直连路；注意该入口自身也可能执行内部 fallback）、`simple_ua`（httpx 直连路）或 `jina_provider`（Jina Reader 路）。
 - `enrichment.content_changed`：标记最终正文是否与旧正文不同（忽略首尾空白）。相同正文仍记录 `webpage_fetched=True`，避免该条目后续再次增强；只记录 `enrichment_unchanged`，不计入正文更新成功事件。不同正文不等同于已经验证新增事实。
 
-
-
 三路抓取失败、压缩调用失败、结构无效或压缩正文为空时，节点保留原 `original_content`、`key_passages`、`source_id`、`content_ref` 和 `source_store`，不会把失败结果标记为已增强。
-
 
 从 1 开始的连续列表序号不作为测量值提取，孤立编号、日期和正文数值继续保护。全大写缩写末尾的小写 s 仅在旧文同时明确使用单数缩写时可视为英语复数（如 VLSA/VLSAs），不随意缩短未知标识或合并不同设备名。
 

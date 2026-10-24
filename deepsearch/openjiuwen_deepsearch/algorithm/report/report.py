@@ -10,7 +10,6 @@ The ``Reporter`` class is split across mixin modules by responsibility:
 - :mod:`evidence` — rationale generation, extractive summarization, scoring
 - :mod:`report_parts` — abstract, conclusion, sidecar, transition generation
 - :mod:`sub_section_outline` — subsection outline generation
-- :mod:`reference_utils` — reference deduplication and renumbering
 - :mod:`retry_feedback` — controlled retry feedback construction
 - :mod:`background_knowledge` — background knowledge extraction and formatting
 
@@ -34,7 +33,7 @@ from openjiuwen_deepsearch.algorithm.report.report_common import (
     _format_sub_report_error,
 )
 from openjiuwen_deepsearch.algorithm.report.report_utils import (
-    ArticlePart,
+    strip_report_source_links,
     MarkdownOutlineRenumber,
     _section_sort_key,
     export_outline_without_plans,
@@ -50,7 +49,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_section_local_contract_prompt_context,
     build_temporal_scope_prompt_context,
     build_time_contract,
-    build_exclusion_prompt_context,
 )
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
@@ -82,11 +80,6 @@ from openjiuwen_deepsearch.algorithm.report.evidence import (
 )
 from openjiuwen_deepsearch.algorithm.report.report_parts import ReportPartsMixin
 from openjiuwen_deepsearch.algorithm.report.sub_section_outline import SubSectionOutlineMixin
-from openjiuwen_deepsearch.algorithm.report.reference_utils import (
-    ReferenceMixin,
-    _deduplicate_and_renumber_ref,  # noqa: F401  re-export for backward compat
-    _replace_citations_and_classified_index,  # noqa: F401  re-export for backward compat
-)
 from openjiuwen_deepsearch.algorithm.report.retry_feedback import RetryFeedbackMixin
 from openjiuwen_deepsearch.algorithm.report.background_knowledge import BackgroundKnowledgeMixin
 
@@ -128,7 +121,6 @@ class Reporter(
     EvidenceMixin,
     ReportPartsMixin,
     SubSectionOutlineMixin,
-    ReferenceMixin,
     RetryFeedbackMixin,
     BackgroundKnowledgeMixin,
 ):
@@ -221,7 +213,7 @@ class Reporter(
             logger.error(f"[generate_report] Error: No sub-reports content found")
             return False, _format_report_error("No sub-reports content found")
         gen_report_context["all_classified_contents"] = sub_report_res.get(
-            "refreshed_all_classified_contents"
+            "all_classified_contents"
         )
 
         abstract_context = self._build_reporter_compact_context("abstract")
@@ -278,10 +270,9 @@ class Reporter(
             f"{self._post_process_abstract(abstract)}\n\n"
             f"{anchored_sub_reports_content}\n\n"
             f"{self._post_process_conclusion(conclusion)}\n\n"
-            f"{ArticlePart.get_title('reference', gen_report_context['language'])}"
-            f"{sub_report_res.get('sub_references')}\n\n"
         )
 
+        report_content = strip_report_source_links(report_content)
         self.gen_report_context["report"] = report_content
         if LogManager.is_sensitive():
             logger.debug("[generate_report] generate success")
@@ -322,7 +313,6 @@ class Reporter(
     async def _process_sub_report(self) -> dict:
         """Process sub reports"""
         sub_reports_content = []
-        sub_references = []
         all_classified_contents = self.gen_report_context.get(
             "all_classified_contents", []
         )
@@ -338,8 +328,8 @@ class Reporter(
             )
             return dict(
                 sub_reports_content="",
-                sub_references="",
-                refreshed_all_classified_contents=[],
+
+                all_classified_contents=[],
             )
 
         # 从 Report.sub_reports 构建 sub_report_content_list
@@ -370,8 +360,8 @@ class Reporter(
             logger.error("All content in sub_reports is empty; use empty content.")
             return dict(
                 sub_reports_content="",
-                sub_references="",
-                refreshed_all_classified_contents=[],
+
+                all_classified_contents=[],
             )
 
         outline_renum = MarkdownOutlineRenumber()
@@ -444,22 +434,21 @@ class Reporter(
             sub_report_content_list[index].content = section_content
             # Split sub-report content and references
             ref_split = re.split(
-                r"#+\s*[0-9.]*\s*(参考文章|References)\s*",
+                r"#+\s*[0-9.]*\s*(参考文章|参考文献|References|Bibliography)\s*",
                 section_content,
                 flags=re.IGNORECASE,
             )
             if len(ref_split) >= 3:
                 content_part = ref_split[0].strip()
-                references = ref_split[2].strip()
-                sub_references.append(references if references else "")
                 sub_reports_content.append(content_part)
             else:
-                sub_references.append("")
                 sub_reports_content.append(section_content.strip())
         logger.info(f"子章节标题重排记录：{outline_renum.history}")
 
-        return self.refresh_reference(
-            sub_reports_content, sub_references, all_classified_contents
+        return dict(
+            sub_reports_content="\n\n".join(sub_reports_content),
+
+            all_classified_contents=all_classified_contents,
         )
 
     async def generate_sub_report(
@@ -523,7 +512,6 @@ class Reporter(
                 )
                 current_inputs["sub_section_core_content"] = background_contents
                 current_inputs["sub_section_core_content_from_background_knowledge"] = True
-                current_inputs["sub_section_references"] = []
                 current_inputs["classified_content"] = []
                 current_inputs["structured_evidence_guide"] = ""
                 classified_content = []
@@ -540,7 +528,6 @@ class Reporter(
                     for item in material_evidence
                 ]
                 current_inputs["sub_section_core_content_from_background_knowledge"] = False
-                current_inputs["sub_section_references"] = []
                 # 素材条目统一由下方合并块写入 classified_content，此处仅清空占位
                 current_inputs["classified_content"] = []
                 current_inputs["structured_evidence_guide"] = ""
@@ -549,7 +536,7 @@ class Reporter(
             ev_ok, ev_err, classified_content = await self._prepare_evidence(current_inputs, raw_passages, section_idx)
             if not ev_ok:
                 return False, _format_sub_report_error(ev_err), "", []
-        # 把素材证据并入 classified_content（编号续接既有条目，供写作引用与溯源）
+        # 把素材证据并入 classified_content（编号续接既有条目，供写作使用）。
         if material_evidence:
             existing_items = current_inputs.get("classified_content") or []
             next_index = _next_classified_content_index(existing_items)
@@ -589,11 +576,10 @@ class Reporter(
         if not LogManager.is_sensitive():
             logger.debug(
                 "%s [generate_sub_report] section_idx: [%s], sub section content is: [%s], "
-                "sub section references: [%s], classified content: [%s]",
+                "classified content: [%s]",
                 EFFECT_SUB_REPORT_TAG,
                 section_idx,
                 current_inputs.get("sub_section_core_content", []),
-                current_inputs.get("sub_section_references", []),
                 current_inputs.get("classified_content", []),
             )
 
@@ -803,13 +789,6 @@ class Reporter(
                     ),
                     **build_temporal_scope_prompt_context(
                         current_inputs.get("research_intent")
-                    ),
-                    # 禁引约束注入受 exclusion_constraint_enable 控制；
-                    # 关闭时不注入 Excluded Sources，writer 对禁引清单无感知（baseline 行为）。
-                    **(
-                        build_exclusion_prompt_context(current_inputs.get("research_intent"))
-                        if current_inputs.get("exclusion_constraint_enable", False)
-                        else {}
                     ),
                 ),
             )

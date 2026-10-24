@@ -17,7 +17,7 @@ commands directly.
 - `openjiuwen_deepsearch/`: SDK and research engine package.
 - `openjiuwen_deepsearch/algorithm/`: core DeepSearch algorithms, including
   prompt templates, query understanding, research collection, report
-  generation, source tracing, source-trace inference, user-feedback editing,
+  generation, user-feedback editing,
   and chart generation.
 - `openjiuwen_deepsearch/framework/openjiuwen/`: orchestration layer built on
   openJiuwen agent-core concepts. Start from `agent/agent_factory.py`,

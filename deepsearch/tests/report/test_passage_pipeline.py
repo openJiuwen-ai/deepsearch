@@ -7,7 +7,7 @@ Covers the test gaps identified in the code review:
 - M2: build_evidence_atom writes scores to base dict
 - M3: filter_passages_by_coverage fallback when all scores below threshold
 - enrich_fulltext_for_section end-to-end (real L1/L2, no mock)
-- build_references / build_core_content_list / build_structured_evidence_guide
+- build_core_content_list / build_structured_evidence_guide
 """
 from unittest.mock import MagicMock
 
@@ -21,7 +21,6 @@ from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     split_passages_by_url,
     build_classified_content,
     build_core_content_list,
-    build_references,
     FullTextEvidence,
     enrich_fulltext_for_section,
 )
@@ -263,34 +262,6 @@ class TestBuildCoreContentList:
         assert "Document 2" in blocks[1]
 
 
-# ---------- build_references ----------
-
-class TestBuildReferences:
-    def test_url_not_deduped(self):
-        """build_references must NOT deduplicate by URL.
-
-        Each classified_content item gets its own reference entry to
-        maintain 1:1 correspondence with citation indices. Deduplication
-        is handled downstream by _deduplicate_and_renumber_ref.
-        """
-        evidences = [
-            FullTextEvidence(url="https://a.com", doc_title="A", original_content="A", citation_index=1),
-        ]
-        passages = [
-            _make_passage(0, url="https://a.com"),  # same URL as fulltext
-            _make_passage(1, url="https://b.com"),
-        ]
-        refs = build_references(evidences, passages)
-        # a.com should appear twice (fulltext + passage), b.com once
-        assert len([r for r in refs if "a.com" in r]) == 2
-        assert len([r for r in refs if "b.com" in r]) == 1
-        assert len(refs) == 3
-
-    def test_empty_inputs(self):
-        refs = build_references([], [])
-        assert refs == []
-
-
 # ---------- build_structured_evidence_guide ----------
 
 class TestStructuredEvidenceGuide:
@@ -509,7 +480,6 @@ class TestEnrichFulltextForSection:
         )
         assert "classified_content" in result
         assert "sub_section_core_content" in result
-        assert "sub_section_references" in result
         assert "structured_evidence_guide" in result
         assert len(result["classified_content"]) > 0
 

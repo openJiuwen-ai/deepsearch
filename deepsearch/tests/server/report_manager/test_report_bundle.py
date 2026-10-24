@@ -6,8 +6,8 @@ from openjiuwen_deepsearch.algorithm.report_export.report_bundle import build_re
 from openjiuwen_deepsearch.common.exception import CustomValueException
 
 
-def test_build_report_bundle_writes_infer_and_chart_assets(tmp_path):
-    """Validate that report bundle assembly writes inference and chart files.
+def test_build_report_bundle_writes_chart_assets(tmp_path):
+    """Validate that report bundle assembly writes chart files.
 
     Args:
         tmp_path: pytest 提供的临时目录。
@@ -16,13 +16,8 @@ def test_build_report_bundle_writes_infer_and_chart_assets(tmp_path):
         None.
     """
     final_result = {
-        "response_content": "正文[结论](#inference:0)\n\n![图表](chart_0.png)",
-        "infer_messages": [
-            {
-                "id": 0,
-                "html_base64": base64.b64encode(b"<html>infer</html>").decode("utf-8"),
-            }
-        ],
+        "response_content": "正文结论\n\n![图表](chart_0.png)",
+
         "chart_messages": [
             {
                 "chart_id": "chart_0",
@@ -36,9 +31,7 @@ def test_build_report_bundle_writes_infer_and_chart_assets(tmp_path):
     bundle = build_report_bundle(final_result, tmp_path)
 
     assert bundle.markdown_path.exists()
-    assert (bundle.root_dir / "infer" / "inference_0.html").exists()
     assert (bundle.root_dir / "charts" / "chart_0.png").exists()
-    assert "infer/inference_0.html" in bundle.markdown_path.read_text(encoding="utf-8")
 
 
 def test_build_report_bundle_rewrites_chart_placeholders(tmp_path):
@@ -52,7 +45,7 @@ def test_build_report_bundle_rewrites_chart_placeholders(tmp_path):
     """
     final_result = {
         "response_content": "(#insertChart:chart_0)\n<font size=2>**图表标题**: 图表说明</font>",
-        "infer_messages": [],
+
         "chart_messages": [
             {
                 "chart_id": "chart_0",
@@ -82,10 +75,10 @@ def test_build_report_bundle_strips_internal_citation_markers(tmp_path):
     """
     final_result = {
         "response_content": (
-            "正文[checked_citation:4][[5]](https://example.com/source)"
+            "正文[[5]](https://example.com/source)"
             "以及旧格式[citation:2]"
         ),
-        "infer_messages": [],
+
         "chart_messages": [],
         "warning_info": "",
         "exception_info": "",
@@ -94,7 +87,6 @@ def test_build_report_bundle_strips_internal_citation_markers(tmp_path):
     bundle = build_report_bundle(final_result, tmp_path)
     markdown_text = bundle.markdown_path.read_text(encoding="utf-8")
 
-    assert "checked_citation" not in markdown_text
     assert "[citation:2]" not in markdown_text
     assert "[[5]](https://example.com/source)" in markdown_text
 
@@ -110,7 +102,7 @@ def test_build_report_bundle_raises_validation_exception_when_response_content_e
     """
     final_result = {
         "response_content": "",
-        "infer_messages": [],
+
         "chart_messages": [],
         "warning_info": "",
         "exception_info": "",
@@ -125,7 +117,7 @@ def test_build_report_bundle_rejects_html_response_content(tmp_path):
     final_result = {
         "response_content": "<!DOCTYPE html><html><body>Brief</body></html>",
         "response_content_type": "text/html",
-        "infer_messages": [],
+
         "chart_messages": [],
     }
 
@@ -144,7 +136,7 @@ def test_build_report_bundle_raises_validation_exception_when_chart_base64_inval
     """
     final_result = {
         "response_content": "(#insertChart:chart_0)",
-        "infer_messages": [],
+
         "chart_messages": [
             {
                 "chart_id": "chart_0",
@@ -171,7 +163,7 @@ def test_build_report_bundle_raises_validation_exception_when_chart_id_is_unsafe
     """
     final_result = {
         "response_content": "(#insertChart:../../../tmp/escape)",
-        "infer_messages": [],
+
         "chart_messages": [
             {
                 "chart_id": "../../../tmp/escape",
@@ -198,7 +190,7 @@ def test_build_report_bundle_raises_validation_exception_when_chart_placeholder_
     """
     final_result = {
         "response_content": "(#insertChart:../../../tmp/escape)",
-        "infer_messages": [],
+
         "chart_messages": [],
         "warning_info": "",
         "exception_info": "",
@@ -219,7 +211,7 @@ def test_build_report_bundle_raises_validation_exception_when_chart_messages_is_
     """
     final_result = {
         "response_content": "正文",
-        "infer_messages": [],
+
         "chart_messages": "not-a-list",
         "warning_info": "",
         "exception_info": "",

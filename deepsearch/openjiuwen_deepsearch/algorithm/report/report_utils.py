@@ -68,15 +68,14 @@ def resolve_current_subsection(current_inputs: dict) -> str:
 
 def _strip_chart_markup(text: str) -> str:
     """Remove report citation/link markup that is unreadable inside Mermaid labels."""
-    cleaned = re.sub(r"\[checked_citation:\d+\]\[\[\d+\]\]\([^)]+\)", "", str(text))
-    cleaned = sanitize_citation_markers(cleaned)
+    cleaned = sanitize_citation_markers(str(text))
     cleaned = re.sub(r"\[\[\d+\]\]\([^)]+\)", "", cleaned)
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
 _CITATION_MARKER_SANITIZE_RE = re.compile(
-    r"[<\[\]()>]?\s*(?<!checked_)citation:\s*\d+\s*[<\[\]()>]?"
+    r"[<\[\]()>]?\s*(?<!\w)citation:\s*\d+\s*[<\[\]()>]?"
 )
 
 
@@ -85,12 +84,30 @@ def sanitize_citation_markers(text: str) -> str:
 
     Tolerates delimiter errors where the model emits ``<``/``>``/``(``/``)``
     instead of matching ``[...]`` brackets, so malformed anchors such as
-    ``<citation:3]`` do not survive as visible text. Preserves
-    ``checked_citation`` markers, which are handled by dedicated strippers.
+    ``<citation:3]`` do not survive as visible text.
 
     Use at citation-stripping points (abstract, conclusion, chart labels).
     """
     return _CITATION_MARKER_SANITIZE_RE.sub("", str(text))
+
+
+def strip_report_source_links(text: str) -> str:
+    """Remove source URLs and citation markers while preserving images and TOC links."""
+    # Split images out before removing URLs so chart assets remain renderable.
+    parts = re.split(r"(!\[[^\]\n]*\]\([^\n]*?\))", text)
+    for index in range(0, len(parts), 2):
+        content = parts[index]
+        content = re.sub(r"\[\[\d+\]\]\(https?://(?:[^\s()]|\([^\s()]*\))*\)", "", content)
+        content = re.sub(
+            r"\[([^\]\n]*)\]\(https?://(?:[^\s()]|\([^\s()]*\))*\)",
+            lambda match: "" if match[1].isdigit() else match[1],
+            content,
+        )
+        content = re.sub(r"(?m)^\s*\[[^\]\n]+\]:\s*https?://\S+.*$", "", content)
+        content = re.sub(r"<https?://[^>\n]+>", "", content)
+        content = re.sub(r"https?://[^\s<>\u3000-\u303f\uff00-\uffef]+", "", content)
+        parts[index] = sanitize_citation_markers(content)
+    return "".join(parts)
 
 
 def _has_cjk(text: str) -> bool:
@@ -182,7 +199,7 @@ def validate_visualization_normalization_schema(
 
 
 class ArticlePart:
-    parts = ["abstract", "conclusion", "reference"]
+    parts = ["abstract", "conclusion"]
     patterns = {
         "abstract": {
             CHINESE: r"摘要",
@@ -192,10 +209,7 @@ class ArticlePart:
             CHINESE: r"结论",
             ENGLISH: r"Conclusion",
         },
-        "reference": {
-            CHINESE: r"参考文章",
-            ENGLISH: r"References",
-        },
+
     }
     not_found_prompts = {
         "abstract": {
@@ -206,16 +220,13 @@ class ArticlePart:
             CHINESE: "# 结论\n\n[未能从生成内容中提取到结论]",
             ENGLISH: "# Conclusion\n\n[No conclusion could be extracted from the generated content]",
         },
-        "reference": {
-            CHINESE: "# 参考文章\n\n[未能从生成内容中提取到参考文章]",
-            ENGLISH: "# Reference Articles\n\n[No reference could be extracted from the generated content]",
-        },
+
     }
     titles = {
         "toc": {CHINESE: "# 目录\n\n", ENGLISH: "# Table of Contents\n\n"},
         "abstract": {CHINESE: "# 摘要\n\n", ENGLISH: "# Abstract\n\n"},
         "conclusion": {CHINESE: "# 结论\n\n", ENGLISH: "# Conclusion\n\n"},
-        "reference": {CHINESE: "# 参考文章\n\n", ENGLISH: "# Reference Articles\n\n"},
+
     }
 
     @classmethod
@@ -367,7 +378,7 @@ class XYChartMermaidGenerator:
     LABEL_WEIGHT_CJK = 2.0
     LABEL_WEIGHT_ASCII = 1.0
     NICE_MULTIPLIERS = (
-        1, 1.1, 1.2, 1.25, 1.5, 1.6, 1.8, 
+        1, 1.1, 1.2, 1.25, 1.5, 1.6, 1.8,
         2, 2.2, 2.5, 3, 3.5,
         4, 4.5, 5, 6, 7, 8, 9, 10, 10.5, 11, 12, 15,
     )

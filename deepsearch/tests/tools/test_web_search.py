@@ -177,7 +177,6 @@ class TestWebSearchDomainConstraints:
     def test_apply_domain_constraints_merges_with_initialized_wrapper_config(self):
         mock_wrapper = Mock()
         mock_wrapper.include_domains = ["configured.com", "shared.com"]
-        mock_wrapper.exclude_domains = ["blocked.com"]
 
         with patch('openjiuwen_deepsearch.framework.openjiuwen.tools.web_search.web_search_context') as mock_ctx:
             mock_ctx.get.return_value = {"tavily": mock_wrapper}
@@ -185,17 +184,15 @@ class TestWebSearchDomainConstraints:
             applied = apply_web_search_domain_constraints(
                 "tavily",
                 include_domains=["intent.com", "shared.com"],
-                exclude_domains=["intent-blocked.com"],
+
             )
 
         assert applied is True
         assert mock_wrapper.include_domains == ["configured.com", "shared.com", "intent.com"]
-        assert mock_wrapper.exclude_domains == ["blocked.com", "intent-blocked.com"]
 
     def test_apply_domain_constraints_ignores_unsupported_wrapper(self):
         mock_wrapper = Mock()
         mock_wrapper.include_domains = []
-        mock_wrapper.exclude_domains = []
 
         with patch('openjiuwen_deepsearch.framework.openjiuwen.tools.web_search.web_search_context') as mock_ctx:
             mock_ctx.get.return_value = {"google": mock_wrapper}
@@ -204,7 +201,6 @@ class TestWebSearchDomainConstraints:
 
         assert applied is False
         assert mock_wrapper.include_domains == []
-        assert mock_wrapper.exclude_domains == []
 
     def test_apply_domain_constraints_agc_ainetworking_merges_sites(self):
         """agc_ainetworking: intent include_domains 合并进 wrapper.sites，归一化(小写/剥www/去重)且 ≤20。"""
@@ -217,11 +213,11 @@ class TestWebSearchDomainConstraints:
             applied = apply_web_search_domain_constraints(
                 "agc_ainetworking",
                 include_domains=["intent.com", "shared.com", "WWW.duplicate.com"],
-                exclude_domains=["ignored.com"],
+
             )
 
         assert applied is True
-        # 归一化: 小写/剥 www/去重; 意图识别站点优先, exclude_domains 被忽略
+        # 归一化: 小写/剥 www/去重; 意图识别站点优先
         assert mock_wrapper.sites == ["intent.com", "shared.com", "duplicate.com", "configured.com"]
         assert len(mock_wrapper.sites) <= 20
 
@@ -237,7 +233,7 @@ class TestWebSearchDomainConstraints:
             applied = apply_web_search_domain_constraints(
                 "agc_ainetworking",
                 include_domains=["intent-new.com"],
-                exclude_domains=["ignored.com"],
+
             )
 
         assert applied is True
@@ -245,15 +241,15 @@ class TestWebSearchDomainConstraints:
         assert mock_wrapper.sites[0] == "intent-new.com"
         assert len(mock_wrapper.sites) == 20
 
-    def test_agc_ainetworking_excludes_filtered_by_collector(self):
-        """excludes闭环: agc_ainetworking 行由 process_common_search_result 通用后置过滤兜底。"""
+    def test_agc_ainetworking_retains_all_source_domains(self):
+        """搜索结果不再按来源域名排除。"""
         from openjiuwen_deepsearch.algorithm.research_collector.collector_function import (
             process_common_search_result,
         )
 
         agent_input = {
             "web_page_search_record": [],
-            "research_intent": {"exclude_domains": ["bad.example.com"]},
+            "research_intent": {},
         }
         tool_content = [
             {"title": "Keep", "url": "https://good.example.com/keep", "content": "keep", "source": "agc_ainetworking"},
@@ -262,14 +258,13 @@ class TestWebSearchDomainConstraints:
 
         result, modified_input = process_common_search_result(agent_input, tool_content)
 
-        assert [item["title"] for item in result] == ["Keep"]
-        assert [item["title"] for item in modified_input["web_page_search_record"]] == ["Keep"]
+        assert [item["title"] for item in result] == ["Keep", "Drop"]
+        assert [item["title"] for item in modified_input["web_page_search_record"]] == ["Keep", "Drop"]
 
     def test_tavily_domain_constraints_unchanged_after_agc_branch(self):
         """tavily 分支不受 agc_ainetworking elif 影响; 两引擎同 context 时互不污染。"""
         tavily_wrapper = Mock()
         tavily_wrapper.include_domains = ["tavily-configured.com"]
-        tavily_wrapper.exclude_domains = ["tavily-blocked.com"]
         agc_wrapper = Mock()
         agc_wrapper.sites = ["agc-configured.com"]
 
@@ -279,19 +274,18 @@ class TestWebSearchDomainConstraints:
             applied_agc = apply_web_search_domain_constraints(
                 "agc_ainetworking",
                 include_domains=["agc-intent.com"],
-                exclude_domains=["agc-ignored.com"],
+
             )
             applied_tavily = apply_web_search_domain_constraints(
                 "tavily",
                 include_domains=["tavily-intent.com"],
-                exclude_domains=["tavily-intent-blocked.com"],
+
             )
 
         assert applied_agc is True
         assert applied_tavily is True
         # agc 调用不影响 tavily wrapper
         assert tavily_wrapper.include_domains == ["tavily-configured.com", "tavily-intent.com"]
-        assert tavily_wrapper.exclude_domains == ["tavily-blocked.com", "tavily-intent-blocked.com"]
         # tavily 调用不影响 agc wrapper (后续 tavily 调用不应改变 agc 之前合并的 sites)
         assert agc_wrapper.sites == ["agc-intent.com", "agc-configured.com"]
 

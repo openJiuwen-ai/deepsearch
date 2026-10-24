@@ -306,82 +306,6 @@ class VisualizationMixin:
         return dict(valid=False, error_msg="")
 
     @moderation_retry_scope
-    async def _validate_chart_traceability(
-        self,
-        extracted_chart_json: str,
-        origin_content: str,
-        section_idx: int,
-        max_attempt_num: int,
-    ) -> dict:
-        """Validate extracted chart data traceability with origin content."""
-        payload = (extracted_chart_json or "").strip()
-        origin_text = (origin_content or "").strip()
-        for attempt in range(max_attempt_num):
-            try:
-                llm_input = build_prompt_messages(
-                    "chart_data_traceability_check",
-                    dict(
-                        extracted_chart_json=payload,
-                        origin_content=origin_text,
-                    ),
-                )
-                llm_output = await ainvoke_llm_with_stats(
-                    llm=self._llm,
-                    messages=llm_input,
-                    agent_name=AgentLlmName.SUB_REPORTER_CHART_TRACEABILITY.value,
-                )
-                if not llm_output or not llm_output.get("content"):
-                    logger.warning(
-                        "%s [validate_chart_traceability] section_idx: [%s] "
-                        "attempt %s/%s error: %s",
-                        EFFECT_SUB_REPORT_TAG,
-                        section_idx,
-                        attempt + 1,
-                        max_attempt_num,
-                        "LLM generated empty traceability content",
-                    )
-                    continue
-                raw = str(llm_output.get("content") or "").strip()
-                result = json.loads(normalize_json_output(raw))
-                if not isinstance(result, dict):
-                    logger.warning(
-                        "%s [validate_chart_traceability] section_idx: [%s] "
-                        "attempt %s/%s error: %s",
-                        EFFECT_SUB_REPORT_TAG,
-                        section_idx,
-                        attempt + 1,
-                        max_attempt_num,
-                        "LLM returned non-object traceability JSON",
-                    )
-                    continue
-                valid = bool(result.get("valid", False))
-                error_msg = str(result.get("error_msg", "") or "").strip()
-                if valid:
-                    return dict(valid=True, error_msg="")
-                return dict(valid=False, error_msg=error_msg)
-            except Exception as e:
-                if isinstance(e, (json.JSONDecodeError, TypeError, ValueError)):
-                    error_msg = (
-                        "LLM returned invalid traceability JSON"
-                        if LogManager.is_sensitive()
-                        else f"LLM returned invalid traceability JSON: {str(e)}"
-                    )
-                elif LogManager.is_sensitive():
-                    error_msg = "chart traceability validation error"
-                else:
-                    error_msg = f"chart traceability validation error: {str(e)}"
-                logger.warning(
-                    "%s [validate_chart_traceability] section_idx: [%s] "
-                    "attempt %s/%s error: %s",
-                    EFFECT_SUB_REPORT_TAG,
-                    section_idx,
-                    attempt + 1,
-                    max_attempt_num,
-                    error_msg,
-                )
-        return dict(valid=False, error_msg="")
-
-    @moderation_retry_scope
     async def _extract_visualization_data(
         self,
         visualization_dict: dict,
@@ -440,31 +364,6 @@ class VisualizationMixin:
                 visualization_content[
                     "sub_section_visualization_content"
                 ] = raw_payload
-                traceability = await self._validate_chart_traceability(
-                    raw_payload,
-                    visualization_dict.get("origin_content", ""),
-                    section_idx,
-                    max_attempt_num,
-                )
-                if not traceability.get("valid", False):
-                    traceability_error = (
-                        traceability.get("error_msg", "") or ""
-                    ).strip()
-                    logger.warning(
-                        "%s [process_visualization_task] section_idx: [%s], "
-                        "traceability check failed: %s",
-                        EFFECT_SUB_REPORT_TAG,
-                        section_idx,
-                        traceability_error,
-                    )
-                    validation_error = (
-                        f"Traceability validation failed: {traceability_error}"
-                        if traceability_error
-                        else ""
-                    )
-
-                    extract_ok = False
-                    continue
                 compliance = await self._validate_chart_compliance(
                     raw_payload,
                     section_idx,

@@ -17,7 +17,7 @@ contextvar，避免节点直接持有全局工具对象。
 - 支持内置 web 引擎：tavily、google、serper、xunfei、petal、bocha、jina、perplexity，以及研究工作流的 secondary 引擎 pubmed、arxiv。
 - 支持内置 local 引擎：openapi、native。
 - 支持通过 `custom_*_search_file` 和 `custom_*_search_func` 注册自定义搜索工具。
-- Tavily 支持把意图识别出的 include/exclude domains 追加到已有配置。
+- Tavily 支持把意图识别出的 include domains 追加到已有配置。
 - DeepResearch 的入口预搜索完成后，Tavily 可按 `source_date` 接收绝对起止日期；`content_date` 不发送原生日期参数。
 - web 搜索的每个 provider HTTP 请求受 `web_search_max_qps` 限流。
 - DeepSearch `search` / `react` 模式会先把活动 web search wrapper 注册到同一个 `web_search_context`，再执行 `web_search` adapter。

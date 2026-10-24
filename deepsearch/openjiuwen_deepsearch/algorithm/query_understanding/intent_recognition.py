@@ -23,7 +23,6 @@ from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
     normalize_pmid,
     normalize_title,
 )
-from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import canonicalize_url
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ReportTypePolicy,
     ResearchIntent,
@@ -32,10 +31,8 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_search
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
-from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
-    exclusion_constraint_context,
     llm_context,
 )
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -123,34 +120,16 @@ def _default_fallback(original_query: str | None) -> IntentRecognitionResult:
         original_query=text,
         research_query=normalize_research_query(stripped),
         research_intent=ResearchIntent(
-            include_url=[paper.url for paper in target_papers if paper.url],
             target_papers=target_papers,
         ),
     )
 
 
 def _extract_explicit_target_papers(query: str) -> list[TargetPaper]:
-    """Recover deterministic academic identifiers and paper URLs when intent LLM is unavailable."""
+    """Recover explicit academic identifiers while ignoring identifiers inside URLs."""
     papers: list[TargetPaper] = []
     seen: set[tuple[str, str]] = set()
-    url_spans: list[tuple[int, int]] = []
-    for match in _HTTP_URL_IN_QUERY_RE.finditer(query or ""):
-        url_spans.append(match.span())
-        url = match.group(0).rstrip(".,;:)")
-        pmid = normalize_pmid(url)
-        arxiv_id = normalize_arxiv_id(url)
-        if not (pmid or arxiv_id):
-            continue
-        key = ("url", url.casefold())
-        if key in seen:
-            continue
-        seen.add(key)
-        payload = {"url": url}
-        if pmid:
-            payload["pmid"] = pmid
-        if arxiv_id:
-            payload["arxiv_id"] = arxiv_id
-        papers.append(TargetPaper(**payload))
+    url_spans = [match.span() for match in _HTTP_URL_IN_QUERY_RE.finditer(query or "")]
     for field_name, pattern in (
         ("pmid", _PMID_IN_QUERY_RE),
         ("doi", _DOI_IN_QUERY_RE),
@@ -241,7 +220,7 @@ def _normalize_target_papers(raw: object) -> list[TargetPaper]:
     """Normalize valid target-paper items and discard malformed LLM output."""
     if not isinstance(raw, list):
         return []
-    field_names = ("title", "pmid", "doi", "arxiv_id", "url", "dataset", "data_year", "topic")
+    field_names = ("title", "pmid", "doi", "arxiv_id", "dataset", "data_year", "topic")
     papers: list[TargetPaper] = []
     identity_to_index: dict[tuple[str, str], int] = {}
     for item in raw:
@@ -255,19 +234,10 @@ def _normalize_target_papers(raw: object) -> list[TargetPaper]:
         paper.pmid = normalize_pmid(paper.pmid)
         paper.doi = normalize_doi(paper.doi)
         paper.arxiv_id = normalize_arxiv_id(paper.arxiv_id)
-        if paper.url:
-            pmid = normalize_pmid(paper.url)
-            arxiv_id = normalize_arxiv_id(paper.url)
-            if pmid and not paper.pmid:
-                paper.pmid = pmid
-            if arxiv_id and not paper.arxiv_id:
-                paper.arxiv_id = arxiv_id
-
         identity_values = (
             ("pmid", paper.pmid),
             ("doi", paper.doi),
             ("arxiv_id", paper.arxiv_id),
-            ("url", canonicalize_url(paper.url) if paper.url else ""),
             ("title", normalize_title(paper.title)),
         )
         identities = []
@@ -325,52 +295,11 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
     ar_raw = data.get("audience_role")
     audience_role = str(ar_raw).strip() if ar_raw is not None and str(ar_raw).strip() else None
 
-    include_url = _dedupe_preserve_order(_to_str_list(data.get("include_url")))
-    exclude_url = _dedupe_preserve_order(_to_str_list(data.get("exclude_url")))
-    exclude_titles = _dedupe_preserve_order(_to_str_list(data.get("exclude_titles")))
     include_domains = _dedupe_preserve_order(
         [str(d).strip() for d in _to_str_list(data.get("include_domains")) if str(d).strip()]
     )
-    exclude_domains = _dedupe_preserve_order(
-        [str(d).strip() for d in _to_str_list(data.get("exclude_domains")) if str(d).strip()]
-    )
-
-    for url in include_url:
-        domain = extract_domain_from_url(url)
-        if domain and domain not in include_domains:
-            include_domains.append(domain)
-    include_domains = _dedupe_preserve_order(include_domains)
 
     target_papers = _normalize_target_papers(data.get("target_papers"))
-    for paper in target_papers:
-        if paper.url and paper.url not in include_url:
-            include_url.append(paper.url)
-
-    # exclude_url 中的 URL 不应同时出现在 include_url / target_papers
-    # （防止 collector 搜索注定被采集层挡掉的被禁源，浪费搜索轮次）
-    # 受 exclusion_constraint_enable 控制：关闭时跳过本去重，退回 baseline 行为。
-    if exclusion_constraint_context.get():
-        exclude_url_set = set(exclude_url)
-        exclude_pmids = set()
-        exclude_dois = set()
-        for u in exclude_url:
-            pmid = normalize_pmid(u)
-            if pmid:
-                exclude_pmids.add(pmid)
-            doi = normalize_doi(u)
-            if doi:
-                exclude_dois.add(doi)
-        include_url = [u for u in include_url if u not in exclude_url_set]
-        filtered_papers = []
-        for p in target_papers:
-            if p.url and p.url in exclude_url_set:
-                continue
-            if p.pmid and p.pmid in exclude_pmids:
-                continue
-            if p.doi and p.doi in exclude_dois:
-                continue
-            filtered_papers.append(p)
-        target_papers = filtered_papers
 
     source_date_scope = _normalize_date_scope(data.get("source_date_scope"), "source_date")
     content_date_scope = _normalize_date_scope(data.get("content_date_scope"), "content_date")
@@ -392,11 +321,7 @@ def _normalize_research_intent(data: dict) -> ResearchIntent:
         audience_role=audience_role,
         tone=tone,
         report_type=report_type,
-        include_url=include_url,
-        exclude_url=exclude_url,
-        exclude_titles=exclude_titles,
         include_domains=include_domains,
-        exclude_domains=exclude_domains,
         source_date_scope=source_date_scope,
         content_date_scope=content_date_scope,
         target_papers=target_papers,
@@ -469,68 +394,9 @@ def _merge_explicit_target_papers(intent: ResearchIntent, original_query: str) -
         *(paper.model_dump() for paper in intent.target_papers),
         *(paper.model_dump() for paper in explicit_papers),
     ])
-    include_url = list(intent.include_url)
-    for paper in target_papers:
-        if paper.url and paper.url not in include_url:
-            include_url.append(paper.url)
-
-    # exclude_url 中的 URL 不应出现在 include_url / target_papers
-    # （_normalize_research_intent 已去重，但 _merge_explicit_target_papers 从
-    # original_query 重新提取了被禁源标识符并加回，需再次去重）
-    # 与 _normalize_research_intent 共用同一个总开关——只开一处等于没开。
-    if exclusion_constraint_context.get():
-        exclude_url_set = set(intent.exclude_url)
-        exclude_pmids = set()
-        exclude_dois = set()
-        for u in intent.exclude_url:
-            pmid = normalize_pmid(u)
-            if pmid:
-                exclude_pmids.add(pmid)
-            doi = normalize_doi(u)
-            if doi:
-                exclude_dois.add(doi)
-        include_url = [u for u in include_url if u not in exclude_url_set]
-        filtered_papers = []
-        for p in target_papers:
-            if p.url and p.url in exclude_url_set:
-                continue
-            if p.pmid and p.pmid in exclude_pmids:
-                continue
-            if p.doi and p.doi in exclude_dois:
-                continue
-            filtered_papers.append(p)
-        target_papers = filtered_papers
-
     return intent.model_copy(update={
         "target_papers": target_papers,
-        "include_url": include_url,
     })
-
-
-def _log_exclude_intent(result: IntentRecognitionResult, original_query: str) -> None:
-    """exclude 字段非空时输出 [EXCLUDE_INTENT] 观测日志.
-
-    遵循 ``LogManager.is_sensitive()`` 脱敏约定：敏感模式下只记录字段计数，
-    不输出 URL、标题、域名或 query 内容；session_id 由日志上下文自动注入。
-    """
-    intent = result.research_intent
-    if not (intent.exclude_url or intent.exclude_domains or intent.exclude_titles):
-        return
-    if LogManager.is_sensitive():
-        logger.info(
-            "[EXCLUDE_INTENT] (redacted) exclude_url=%d exclude_domains=%d exclude_titles=%d",
-            len(intent.exclude_url),
-            len(intent.exclude_domains),
-            len(intent.exclude_titles),
-        )
-        return
-    logger.info(
-        "[EXCLUDE_INTENT] exclude_url=%s exclude_domains=%s exclude_titles=%s query=%s",
-        intent.exclude_url,
-        intent.exclude_domains,
-        intent.exclude_titles,
-        (original_query or "")[:120],
-    )
 
 
 def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFunction:
@@ -602,32 +468,6 @@ def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFu
                         "Omit if unclear after reading context."
                     ),
                 },
-                "include_url": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Full HTTP(S) URLs the user explicitly lists or asks to use / focus on. "
-                        "Do NOT invent URLs; extract exactly as given in the text."
-                    ),
-                },
-                "exclude_url": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Full HTTP(S) URLs the user explicitly asks to avoid. Article-level exclusion "
-                        "ALWAYS goes here, even when multiple forbidden URLs share one domain. "
-                        "Do NOT invent URLs."
-                    ),
-                },
-                "exclude_titles": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Verbatim titles of articles/papers the user explicitly asks to avoid, ignore, "
-                        "or not quote. Extract alongside exclude_url whenever the rule names an article; "
-                        "the same article may appear on mirror sites under different URLs."
-                    ),
-                },
                 "include_domains": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -637,20 +477,11 @@ def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFu
                         "(e.g. 只用维基百科 → wikipedia.org)."
                     ),
                 },
-                "exclude_domains": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Domains to exclude (hostname only, lowercase, no scheme). ONLY when the user "
-                        "explicitly expresses site-level exclusion (e.g. 不要用CSDN的文章). "
-                        "NEVER derive domains from exclude_url; banning N articles on the same domain "
-                        "is NOT site-level exclusion."
-                    ),
-                },
+
                 "target_papers": {
                     "type": "array",
                     "description": (
-                        "Papers explicitly identified by title, URL, PMID, DOI, or arXiv ID, or implicitly "
+                        "Papers explicitly identified by title, PMID, DOI, or arXiv ID, or implicitly "
                         "described by dataset, data year, and discriminative topic clues. Do not invent values."
                     ),
                     "items": {
@@ -661,7 +492,6 @@ def _create_emit_intent_tool(provided_report_type: str | None = None) -> LocalFu
                             "pmid": {"type": "string", "description": "User-supplied PubMed PMID."},
                             "doi": {"type": "string", "description": "User-supplied DOI."},
                             "arxiv_id": {"type": "string", "description": "User-supplied arXiv ID."},
-                            "url": {"type": "string", "description": "User-supplied academic paper URL."},
                             "dataset": {"type": "string", "description": "Named dataset clue."},
                             "data_year": {"type": "string", "description": "Dataset observation year clue."},
                             "topic": {"type": "string", "description": "Discriminative study-topic clue."},
@@ -871,8 +701,6 @@ async def _recognize_intent(
     if not original_query:
         return _default_fallback(original_query)
 
-    # 下发禁引约束总开关，供下方 include_url/target_papers 去重逻辑读取
-    token = exclusion_constraint_context.set(bool(current_inputs.get("exclusion_constraint_enable", False)))
     try:
         result, response = await _invoke_llm_for_intent(IntentInvocation(
             prompt_name="intent_recognition",
@@ -886,7 +714,6 @@ async def _recognize_intent(
             logger.warning("[%s] No tool_calls in LLM response, using fallback.", log_tag)
             return _default_fallback(original_query)
 
-        _log_exclude_intent(result, original_query)
 
         if LogManager.is_sensitive():
             logger.info("[%s] parsed successfully (redacted).", log_tag)
@@ -905,8 +732,6 @@ async def _recognize_intent(
         else:
             logger.warning("[%s] Exception, using fallback: %s", log_tag, exc)
         return _default_fallback(original_query)
-    finally:
-        exclusion_constraint_context.reset(token)
 
 
 async def recognize_report_intent(current_inputs: dict) -> IntentRecognitionResult:

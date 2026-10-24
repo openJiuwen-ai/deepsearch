@@ -275,8 +275,6 @@ class BriefWritingRequest(BaseModel):
     tone: str = ""
     user_format: str = ""
     writing_guidance: BriefWritingGuidance | None = None
-    has_exclusion: bool = False
-    exclusion_instruction: str = ""
 
 
 class BriefWritingEvidence(BaseModel):
@@ -303,9 +301,8 @@ class BriefSummaryRequest(BaseModel):
 
 
 class BriefReportAssembly(BaseModel):
-    """最终 Brief 报告及顺序对齐后的溯源数据。"""
+    """装配完成的 Brief Markdown 报告。"""
     report_content: str
-    merged_trace_source_datas: list[dict[str, Any]]
 
 
 class BriefAssemblyRequest(BaseModel):

@@ -21,7 +21,7 @@ _EVIDENCE_PATHS = {
         ("evidence_pack", "sources", "*", "key_passages", "*"),
         ("evidence_pack", "sources", "*", "url"),
     ),
-    "extract_message_prompt": (("datas", "*", "citation_content"),),
+
 }
 _JSON_PATHS = {
     "collector_webpage_enrichment_compress": (

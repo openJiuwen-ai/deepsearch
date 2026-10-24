@@ -176,6 +176,12 @@ async def resolve_scholarly_full_text(
     candidates = rank_full_text_candidates(row.get("full_text_candidates") or [])
     if not candidates:
         row.setdefault("full_text_status", "unavailable")
+        logger.info(
+            "[ScholarlyFullText] status=%s title=%s url=%s candidate_count=0",
+            row.get("full_text_status", "unavailable"),
+            row.get("title", ""),
+            row.get("url", ""),
+        )
         return row
     attempted = False
     for candidate in candidates:
@@ -212,12 +218,30 @@ async def resolve_scholarly_full_text(
                 "full_text_format": candidate.get("format") or "html",
                 "full_text_truncated": truncated,
             })
+            logger.info(
+                "[ScholarlyFullText] status=available title=%s source_url=%s "
+                "format=%s chars=%d truncated=%s",
+                row.get("title", ""),
+                candidate["url"],
+                row["full_text_format"],
+                len(text),
+                truncated,
+            )
             return row
         except Exception as exc:
-            logger.debug(
-                "Unable to resolve scholarly full-text candidate; error_type=%s",
+            logger.info(
+                "[ScholarlyFullText] candidate_failed title=%s source_url=%s error_type=%s",
+                row.get("title", ""),
+                candidate.get("url", ""),
                 type(exc).__name__,
             )
             continue
     row["full_text_status"] = "failed" if attempted else "unavailable"
+    logger.info(
+        "[ScholarlyFullText] status=%s title=%s url=%s candidate_count=%d",
+        row["full_text_status"],
+        row.get("title", ""),
+        row.get("url", ""),
+        len(candidates),
+    )
     return row

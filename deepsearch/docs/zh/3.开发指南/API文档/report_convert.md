@@ -8,24 +8,8 @@
 
 ## 请求参数
 
-```json
-{
-  "final_result": {
-    "response_content": "# 报告标题",
-    "response_content_type": "text/markdown",
-    "infer_messages": [],
-    "chart_messages": [],
-    "warning_info": "",
-    "exception_info": ""
-  },
-  "convert_type": "html",
-  "enable_html_styling": false
-}
-```
-
 - `final_result.response_content`：必填，报告 Markdown 正文。
 - `final_result.response_content_type`：可选，仅支持 `text/markdown`；省略时为兼容既有请求按 `text/markdown` 处理。显式 `text/html` 不支持导出，接口返回参数校验错误。
-- `final_result.infer_messages`：可选推理图资源。每个可导出元素包含 `id` 和 `html_base64`；正文中 `#inference:<id>` 链接会改写为 ZIP 内独立 HTML 的相对链接。
 - `final_result.chart_messages`：可选 VLM PNG 资源。每个可导出元素包含 `chart_id`、`base64` 和可选 `chart_title`；正文中 `(#insertChart:<chart_id>)` 会改写为图像引用。
 - `convert_type`：`html` 或 `docx`。
 - `enable_html_styling`：可选，默认 `false`。仅 `html` 生效。

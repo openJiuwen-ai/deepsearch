@@ -323,13 +323,12 @@ class DeepSearchAgentManager:
             "user_materials": metadata.get("user_materials") or [],
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,
             "outliner_max_section_num": request.outliner_max_section_num,
-            "source_tracer_research_trace_source_switch": request.source_tracer_research_trace_source_switch,
-            "source_tracer_generated_citation_switch": request.source_tracer_generated_citation_switch,
-            "source_tracer_infer_switch": request.source_tracer_infer_switch,
+
+
             "info_collector_search_method": request.info_collector_search_method,
             "info_collector_webpage_enrich_enable": request.info_collector_webpage_enrich_enable,
             "coverage_rule_block_enable": request.coverage_rule_block_enable,
-            "exclusion_constraint_enable": request.exclusion_constraint_enable,
+
             "llm_config": dict(general=llm_config) if "model_name" in llm_config else llm_config,
             "has_template": has_template,
             # 大纲交互配置

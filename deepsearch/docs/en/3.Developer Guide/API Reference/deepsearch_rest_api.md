@@ -12,7 +12,6 @@ uv run python -m server.telemetry_event_server
 
 If you bind with a wildcard host (for example `--host 0.0.0.0`), the server now uses loopback as the internal telemetry callback base by default. You can still override this explicitly with `--public-base-url`.
 
-
 ### `GET /health`
 Lightweight liveness endpoint (plain text response).
 

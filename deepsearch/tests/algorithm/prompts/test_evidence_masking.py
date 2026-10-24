@@ -61,11 +61,6 @@ def mask():
              {"source_id": "keyword", "query": TASK, "title": TASK, "publish_time": "1989",
               "url": "https://normal.example/keyword", "key_passages": [MASKED_BODY]}]}},
     ),
-    (
-        "extract_message_prompt",
-        {"datas": [{"domain": "keyword.example", "fact": TASK, "citation_content": BODY}]},
-        {"datas": [{"domain": "keyword.example", "fact": TASK, "citation_content": MASKED_BODY}]},
-    ),
 ])
 def test_real_prompt_scopes_mask_only_evidence(prompt, context, expected, mask):
     original_context = deepcopy(context)

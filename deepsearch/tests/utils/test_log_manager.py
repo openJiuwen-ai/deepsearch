@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import logging
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -368,20 +367,6 @@ def test_project_logger_is_allowed_to_write_common_log(clean_logs):
 
     common_log_text = _read_common_log(clean_logs)
     assert "project-warning-should-appear" in common_log_text
-
-
-def test_representative_key_log_can_bypass_truncation(clean_logs):
-    LogManager.init(log_dir=str(clean_logs), level="DEBUG", is_sensitive=False)
-    logger = logging.getLogger(
-        "openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research"
-    )
-    full_result_text = "=============== result text =================:\n" + ("RESULT-" * 900)
-
-    logger.info(full_result_text, extra={"skip_truncation": True})
-    _flush_root_handlers()
-
-    common_log_text = _read_common_log(clean_logs)
-    assert full_result_text in common_log_text
 
 
 def test_exclude_active_run_filter():
@@ -934,3 +919,17 @@ def test_cleanup_preserves_today_dir(clean_logs):
     LogManager._cleanup_old_logs()
 
     assert today_common_dir.exists(), "Today's log dir should not be cleaned"
+
+
+def test_representative_key_log_can_bypass_truncation(clean_logs):
+    LogManager.init(log_dir=str(clean_logs), level="DEBUG", is_sensitive=False)
+    logger = logging.getLogger(
+        "openjiuwen_deepsearch.algorithm.report.report"
+    )
+    full_result_text = "=============== result text =================:\n" + ("RESULT-" * 900)
+
+    logger.info(full_result_text, extra={"skip_truncation": True})
+    _flush_root_handlers()
+
+    common_log_text = _read_common_log(clean_logs)
+    assert full_result_text in common_log_text

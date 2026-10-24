@@ -220,7 +220,7 @@ def test_pre_handle_routes_non_query_runtime_api_to_param_channel():
             "collector_context.max_research_loops": 2,
             "collector_context.research_intent": {},
             "collector_context.evidence_ledger": {},
-            "config.exclusion_constraint_enable": False,
+
         }.get(key)
 
         with patch(

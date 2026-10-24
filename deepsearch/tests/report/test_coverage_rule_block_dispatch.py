@@ -130,7 +130,7 @@ def _stub_selection_methods(reporter):
     return {
         "classified_content": [{"index": 1, "is_fulltext": True}],
         "sub_section_core_content": ["Document 1 key passages:\n- k"],
-        "sub_section_references": ["[1] Doc 1"],
+
         "structured_evidence_guide": "",
         "fulltext_count": 1,
         "remaining_count": 0,

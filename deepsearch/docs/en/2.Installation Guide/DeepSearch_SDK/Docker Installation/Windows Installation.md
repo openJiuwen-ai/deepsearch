@@ -152,7 +152,6 @@ If 8000 is taken:
   -p 9000:8000
   ```
 
-
 #### Database / storage
 
 Use `-e` for DB settings.
@@ -161,7 +160,6 @@ Use `-e` for DB settings.
 
 * **Purpose**: database backend
 * **Values**: `sqlite` / `mysql`
-
 
 ##### MySQL parameters (when `DB_TYPE=mysql`)
 

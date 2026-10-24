@@ -100,7 +100,6 @@ Brief 对应 `report_type=brief`；其余三列对应专业版的 `execution_met
 | `brief_evidence_reviewer` | 审核证据并判断是否补充资料 | ✓ | — | — | — |
 | `brief_sub_reporter` | 生成 Brief 内容单元 | ✓ | — | — | — |
 | `brief_reporter` | 汇总 Brief 报告 | ✓ | — | — | — |
-| `brief_source_tracer` | 处理 Brief 引用溯源 | ✓ | — | — | — |
 | `brief_html_reporter` | 生成 Brief HTML | ✓ | — | — | — |
 | `outline` | 生成专业版大纲 | — | ✓ | ✓ | ✓ |
 | `outline_interaction` | 等待并处理大纲反馈 | — | ✓ | ✓ | ✓ |
@@ -108,8 +107,6 @@ Brief 对应 `report_type=brief`；其余三列对应专业版的 `execution_met
 | `dependency_editor_team` | 按章节依赖研究与写作 | — | — | ✓ | ✓ |
 | `reporter` | 汇总专业版报告 | — | ✓ | ✓ | ✓ |
 | `vlm_chart_generator` | 处理图表生成 | — | ✓ | ✓ | ✓ |
-| `source_tracer` | 处理引用溯源 | — | ✓ | ✓ | ✓ |
-| `source_tracer_infer` | 处理推理链溯源 | — | ✓ | ✓ | ✓ |
 | `user_feedback_processor` | 处理报告反馈 | — | ✓ | ✓ | ✓ |
 | `end` | 汇总本轮结果并结束 | ✓ | ✓ | ✓ | ✓ |
 

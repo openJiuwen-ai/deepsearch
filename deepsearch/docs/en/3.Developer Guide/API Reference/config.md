@@ -101,7 +101,6 @@ tavily ["www.sz.gov.cn", "www.pku.edu.cn"]
 
 **Notes**
 
-- For `tavily`, `extension.include_domains` and `extension.exclude_domains` are forwarded to the Tavily search API to **prefer or exclude** specified sites; this is not a hard allowlist on the framework side. When relevant results are insufficient, Tavily may still return pages whose domains are outside the `include_domains` list.
 - Built-in synchronous search requests for the Google/Serper wrapper (shared by the `google` and `serper` engine ids) and Tavily use a fixed 30-second timeout to avoid blocking indefinitely on network failures. This refers to the wrapper, not a direct call to Google's official Search API; the timeout is not currently configurable through `WebSearchEngineConfig`.
 - `jina` falls back to `https://s.jina.ai` when `search_url` is empty. In China network environments where that endpoint is unreachable, set `search_url="https://s.jinaai.cn"`; you can also set `search_url` for privately deployed or proxy-forwarded endpoints.
 - `bocha` and `perplexity` use the harness `web_tools` adapter layer. By default they do not fetch webpage content and use the search API summary answer directly. To enable webpage fetching, set `extension.fetch_webpage=True`. `search_url` is only honored when the underlying provider supports URL override. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
@@ -239,13 +238,9 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **user_materials_enabled** (bool, optional): Enables user materials; `user_materials` is ignored when disabled. Default value: `False`.
 - **user_materials** (`List[Dict[str, Any]]`, optional): User-provided material entries. Default value: `[]`; HTTP callers provide the same fields in `metadata`. See [User materials](../../../feature/algorithm/user-materials.md) for the data format and usage scenarios.
 - **coverage_rule_block_enable** (bool, optional): Enables rule-based coverage evidence for sub-report outlines. Default value: `True`.
-- **exclusion_constraint_enable** (bool, optional): Master switch for sub-report exclusion constraints. Default value: `False`.
 - **outliner_max_section_num** (int, optional): Maximum number of outline sections. Range: `[1, 15]`. Both SDK `AgentConfig` and HTTP `DeepSearchRequest` default to `10`.
 - **outline_interaction_enabled** (bool, optional): Whether to enable outline interaction. Default value: `True`.
 - **outline_interaction_max_rounds** (int, optional): Maximum number of outline interaction rounds. Range: `[1, 100]`. Default value: `3`.
-- **source_tracer_research_trace_source_switch** (bool, optional): Whether to enable citation tracing. Default value: `True`.
-- **source_tracer_generated_citation_switch** (bool, optional): Whether to generate new citations from search results. When disabled, the system keeps only citations already present in the original report. Default value: `True`.
-- **source_tracer_infer_switch** (bool, optional): Whether to enable provenance reasoning. Default value: `True`.
 - **llm_config** (Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking", "vlm_chart_generating"], LLMConfig], optional): LLM model configuration. Default value: `dict()`.
 - **info_collector_search_method** (Literal["web", "local", "all"], optional): Search method. `web` means web augmentation search, `local` means local search tool, and `all` means hybrid web + local search. Default value: `"web"`.
 - **info_collector_webpage_enrich_enable** (bool, optional): Whether to enable webpage content enrichment during DeepResearch information collection. Default value: `False`.
@@ -410,11 +405,6 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
 - **visualization_enable** (bool, optional): Whether to enable visualization illustrations in Professional reports. Default value: `True`. It does not affect Brief report text-and-visual generation.
 - **professional_report_adaptive_rationales** (bool, optional): Whether to enable requirement checklist mapping and complexity-adaptive rationale generation for Professional reports. Default value: `False`.
-
-### Provenance parameters
-- **source_tracer_citation_verify_max_concurrency_num** (int, optional): Maximum concurrency for citation verification. Default value: `30`.
-- **source_tracer_citation_verify_batch_size** (int, optional): Batch size for citation verification. Range: `[1, 20]`. Default value: `10`.
-- **source_tracer_domain_source_map_path** (str, optional): Domain-source mapping JSON filename or absolute path. Default value: `"domain_source_map.json"`.
 
 ### Statistics parameters
 - **stats_info_node_duration** (bool, optional): Whether to collect node duration statistics. Default value: `False`.

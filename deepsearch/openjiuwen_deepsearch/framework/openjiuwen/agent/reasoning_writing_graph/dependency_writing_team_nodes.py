@@ -16,9 +16,10 @@ from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 
-from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import (SectionEndNode,
-                                                                                                SubReporterNode,
-                                                                                                SubSourceTracerNode)
+from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import (
+    SectionEndNode,
+    SubReporterNode,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.section_context import SectionContext
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import init_router
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
@@ -55,7 +56,6 @@ class SectionWritingStartNode(Start):
         return inputs
 
 
-
 def build_dependency_writing_workflow():
     """创建子图workflow"""
     sub_workflow = Workflow()
@@ -83,11 +83,9 @@ def build_dependency_writing_workflow():
         }
     )
     sub_workflow.add_workflow_comp(NodeId.SUB_REPORTER.value, SubReporterNode())
-    sub_workflow.add_workflow_comp(NodeId.SUB_SOURCE_TRACER.value, SubSourceTracerNode())
     sub_workflow.add_connection(NodeId.START.value, NodeId.SUB_REPORTER.value)
     sub_reporter_router = init_router(NodeId.SUB_REPORTER.value,
-                                      [NodeId.SUB_SOURCE_TRACER.value, NodeId.END.value])
+                                      [NodeId.END.value])
     sub_workflow.add_conditional_connection(NodeId.SUB_REPORTER.value, router=sub_reporter_router)
-    sub_workflow.add_connection(NodeId.SUB_SOURCE_TRACER.value, NodeId.END.value)
     sub_workflow.set_end_comp(NodeId.END.value, SectionEndNode())
     return sub_workflow

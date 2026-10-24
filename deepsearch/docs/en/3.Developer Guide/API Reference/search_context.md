@@ -36,16 +36,6 @@ Section responsibility boundary: **section_focus**, **allowed_dimensions**, **is
 ## `OutlineInteraction`
 Outline HITL record: **feedback**, **interaction_mode** (`revise_comment` / `revise_outline`), **outline_before**.
 
-## `SubReport` / `SubReportContent`
-Sub-report shell: **section_id** (`str | int`, default `"1"`), **section_task**, **background_knowledge** (dependency mode may hold `{"section_id", "content_summary"}` parents), **content** (`SubReportContent` with **classified_content**, **sub_report_content_text**, **sub_report_content_summary**, **sub_report_chapter_sidecar** (`ChapterSidecar`), and **sub_report_trace_source_datas**).
-
-## `Report`
-Aggregated report: **report_task**, **report_template**, **sub_reports**, **report_content**, **all_classified_contents**, **merged_trace_source_datas**, **checked_trace_source_report_content**, **checked_trace_source_datas**, **report_html** (Brief HTML output; the Markdown intermediate result remains in `report_content`).
-
-## `FinalResult`
-**response_content**, **response_content_type** (`text/markdown` or `text/html`), **citation_messages**, **infer_messages**, **chart_messages**, **workflow_llm_token_usage** (workflow-level LLM token totals), **exception_info**, **warning_info**, **metadata**.
-
-- `infer_messages` stores source-tracing graph payloads. Report export reads `html_base64` and writes standalone HTML resources.
 - `chart_messages` stores VLM chart payloads. Report export reads `base64` and writes image resources.
 - `metadata` holds runtime metadata: a brief run writes `brief_outline` / `research_intent` / `language`, which the client can pass back as the `/run` `metadata` parameter to upgrade the brief outline into a professional report. Defaults to an empty dict.
 
@@ -71,11 +61,7 @@ Structured report-generation constraints parsed from the user query.
 - **audience_role**: Target reader role.
 - **tone**: Writing tone as a stable English enum value, such as `formal` or `analytical`.
 - **report_type**: Report type as a stable English enum value: `professional` or `brief`. `professional` means a fuller professional report, while `brief` means a concise report.
-- **include_url**: URLs the user explicitly wants to include. Default value: `[]`.
-- **exclude_url**: URLs the user wants to exclude. Default value: `[]`.
-- **exclude_titles**: Article titles the user wants to exclude. Default value: `[]`.
 - **include_domains**: Site domains specified by the user. Default value: `[]`.
-- **exclude_domains**: Site domains excluded by the user. Default value: `[]`.
 - **source_date_scope**: Optional `TemporalScope` hard constraint on source publication or availability dates.
 - **content_date_scope**: Optional `TemporalScope` soft constraint on the dates of facts, events, research, or data.
 - **target_papers**: Explicitly identified or implicitly described papers (`TargetPaper` entries). Default value: `[]`.
@@ -87,7 +73,7 @@ Structured report-generation constraints parsed from the user query.
 - Outline `section_num`: when the user sets `section_count`, use `min(section_count, OUTLINER_SECTION_NUM_MAX)`; otherwise use `config.outliner_max_section_num`.
 - `audience_role` and `tone` are passed through to outline generation, section planning (Plan), sub-report writing, and final report synthesis.
 - `report_type` is passed through to outline generation, section planning (Plan), information collection, sub-report writing, and final report synthesis.
-- `include_domains` and `exclude_domains` are passed through to the information collection stage.
+
 
 ## `SearchContext`
 **Fields**:

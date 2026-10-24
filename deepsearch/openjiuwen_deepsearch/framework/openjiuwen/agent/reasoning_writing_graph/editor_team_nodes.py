@@ -24,7 +24,6 @@ from openjiuwen_deepsearch.algorithm.query_understanding.planner import Planner,
 from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import deduplicate_doc_infos
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
-from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
 from openjiuwen_deepsearch.common.common_constants import CHINESE
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode, init_router
@@ -523,10 +522,7 @@ class SubReporterNode(BaseNode):
                 if session.get_global_state("config.coverage_rule_block_enable") is None
                 else bool(session.get_global_state("config.coverage_rule_block_enable"))
             ),
-            # 禁引约束总开关，默认关（缺键时也按关处理）
-            exclusion_constraint_enable=bool(
-                session.get_global_state("config.exclusion_constraint_enable")
-            ),
+
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             require_summary_first=rtp.get("require_summary_first", False),
@@ -579,7 +575,7 @@ class SubReporterNode(BaseNode):
             f"classified_content_num:{len(algorithm_output.get('classified_content', []))}"
         )
         if algorithm_output.get("success") and algorithm_output.get("sub_report_content"):
-            next_node = NodeId.SUB_SOURCE_TRACER.value
+            next_node = NodeId.END.value
             logger.info(f"{self.log_prefix} Success to generate sub_report, detail: {detail_msg}, go to {next_node}")
         else:
             msg = algorithm_output.get("msg", "")
@@ -621,144 +617,6 @@ class SubReporterNode(BaseNode):
             session.update_global_state({"section_context.doc_selection_debug": doc_selection_debug})
 
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
-        return dict(next_node=next_node)
-
-
-class SubSourceTracerNode(BaseNode):
-
-    def __init__(self):
-        super().__init__()
-        self.log_prefix = ""
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
-        section_idx = session.get_global_state("section_context.section_idx") or 1
-        self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
-        logger.info(f"{self.log_prefix} Start [{self.__class__.__name__}].")
-        research_trace_source_switch = session.get_global_state("config.source_tracer_research_trace_source_switch")
-        generated_citation_switch = session.get_global_state("config.source_tracer_generated_citation_switch")
-
-        language = session.get_global_state("section_context.language")
-        llm_model_name = adapt_llm_model_name(session, NodeId.SUB_SOURCE_TRACER.value)
-
-        # 获取子报告内容
-        sub_report_content_obj = session.get_global_state("section_context.sub_report_content")
-        if sub_report_content_obj and isinstance(sub_report_content_obj, SubReportContent):
-            report = sub_report_content_obj.sub_report_content_text
-            classified_content = sub_report_content_obj.classified_content
-        else:
-            report = ""
-            classified_content = []
-
-        cc_count = len(classified_content) if isinstance(classified_content, list) else 0
-        cc_sample_keys = (
-            sorted(list(classified_content[0].keys()))
-            if cc_count > 0 and isinstance(classified_content[0], dict) else None
-        )
-        logger.info(
-            "[TRACE_DIAG] SubSourceTracer _pre_handle: classified_content count=%d, sample_keys=%s",
-            cc_count, cc_sample_keys,
-        )
-
-        return dict(
-            report=report,
-            classified_content=classified_content,
-            research_trace_source_switch=research_trace_source_switch,
-            generated_citation_switch=generated_citation_switch,
-            language=language, llm_model_name=llm_model_name, section_idx=section_idx
-        )
-
-    def _skip_trace_source_handle(
-            self, inputs: Input, session: Session,
-            context: ModelContext, current_inputs: dict
-    ) -> dict:
-        """
-        不需要溯源的场景直接跳到后处理
-        """
-        origin_report = current_inputs.get("report", "")
-        algorithm_output = dict(trace_source_datas=[], modified_report=origin_report)
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        current_inputs = self._pre_handle(inputs, session, context)
-        research_trace_source_switch = current_inputs.get("research_trace_source_switch", True)
-        generated_citation_switch = current_inputs.get("generated_citation_switch", True)
-
-        if research_trace_source_switch is False:
-            logger.info(f"{self.log_prefix} research_trace_source_switch is False, skip trace source.")
-            return self._skip_trace_source_handle(inputs, session, context, current_inputs)
-
-        source_tracer = SourceTracer(current_inputs)
-        # 细粒度开关关闭时，仍保留原文已有引用，只跳过基于搜索结果生成新增引用。
-        if generated_citation_switch is not False:
-            # 预检查原文引用覆盖率
-            pre_check_result = source_tracer.pre_check_origin_coverage()
-            logger.info(f"{self.log_prefix} 溯源预检查结果: "
-                        f"need_generate={pre_check_result.get('need_generate')}, "
-                        f"origin_count={pre_check_result.get('origin_count')}, "
-                        f"total_sentences={pre_check_result.get('total_sentences')}, "
-                        f"coverage={pre_check_result.get('coverage'):.4f}, "
-                        f"reason={pre_check_result.get('reason')}")
-
-            if pre_check_result.get("need_generate") is False:
-                logger.info(f"{self.log_prefix} 原文引用覆盖率达标，跳过新增引用生成。"
-                            f"origin_count={pre_check_result.get('origin_count')}, "
-                            f"coverage={pre_check_result.get('coverage'):.4f}")
-            else:
-                await source_tracer.research_trace_source()
-        else:
-            logger.info(
-                f"{self.log_prefix} source_tracer_generated_citation_switch is False, "
-                "skip generated citations and keep origin citations only."
-            )
-        source_tracer_result_dict = source_tracer.add_source_to_report()
-
-        modified_report = source_tracer_result_dict.get("modified_report", "")
-        datas = source_tracer_result_dict.get("datas", [])
-        algorithm_output = dict(
-            modified_report=modified_report,
-            trace_source_datas=datas
-        )
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        trace_source_datas = algorithm_output.get("trace_source_datas", [])
-        modified_report = algorithm_output.get("modified_report", "")
-        bindings = session.get_global_state("section_context.material_bindings") or []
-        bound_ids = {
-            binding.get("material_id") for binding in bindings
-            if isinstance(binding, dict) and binding.get("material_id")
-        }
-        analysis = restore_material_analysis(session.get_global_state("section_context.material_analysis"))
-        if bound_ids and analysis:
-            missing_ids = [
-                item.material_id for item in analysis.items
-                if item.material_id in bound_ids and item.url and item.url not in modified_report
-            ]
-            if missing_ids:
-                warning = "[MATERIAL_CITATION_AUDIT] missing=" + ",".join(missing_ids)
-                logger.error("%s %s", self.log_prefix, warning)
-                _handle_warning_exception_info(session, added_warning=warning)
-
-        # 获取现有的 sub_report_content 对象并更新
-        sub_report_content_obj = session.get_global_state("section_context.sub_report_content")
-        if sub_report_content_obj and isinstance(sub_report_content_obj, SubReportContent):
-            sub_report_content_obj.sub_report_content_text = modified_report
-            sub_report_content_obj.sub_report_trace_source_datas = trace_source_datas
-        else:
-            # 如果不存在，创建新对象
-            sub_report_content_obj = SubReportContent(
-                sub_report_content_text=modified_report,
-                sub_report_trace_source_datas=trace_source_datas
-            )
-
-        session.update_global_state({
-            "section_context.sub_report_content": sub_report_content_obj
-        })
-        next_node = NodeId.END.value
-        logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
-
         return dict(next_node=next_node)
 
 
@@ -941,17 +799,15 @@ def build_editor_team_workflow():
     sub_workflow.add_workflow_comp(NodeId.PLAN_REASONING.value, ResearchPlanReasoningNode())
     sub_workflow.add_workflow_comp(NodeId.INFO_COLLECTOR.value, InfoCollectorNode())
     sub_workflow.add_workflow_comp(NodeId.SUB_REPORTER.value, SubReporterNode())
-    sub_workflow.add_workflow_comp(NodeId.SUB_SOURCE_TRACER.value, SubSourceTracerNode())
     plan_reasoning_router = init_router(NodeId.PLAN_REASONING.value,
                                         [NodeId.INFO_COLLECTOR.value, NodeId.SUB_REPORTER.value,
                                          NodeId.END.value])
     sub_reporter_router = init_router(NodeId.SUB_REPORTER.value,
-                                      [NodeId.SUB_SOURCE_TRACER.value, NodeId.END.value])
+                                      [NodeId.END.value])
     sub_workflow.add_connection(NodeId.START.value, NodeId.PLAN_REASONING.value)
     sub_workflow.add_connection(NodeId.INFO_COLLECTOR.value, NodeId.PLAN_REASONING.value)
     sub_workflow.add_conditional_connection(NodeId.PLAN_REASONING.value, router=plan_reasoning_router)
     sub_workflow.add_conditional_connection(NodeId.SUB_REPORTER.value, router=sub_reporter_router)
-    sub_workflow.add_connection(NodeId.SUB_SOURCE_TRACER.value, NodeId.END.value)
 
     sub_workflow.set_end_comp(NodeId.END.value, SectionEndNode())
 

@@ -123,7 +123,7 @@ Errors use this format: `[error_code]error description: detail`, where `detail` 
 2. `common_warning_*.log` should not contain an `ERROR` that blocks the main workflow. A few `WARN` entries, such as model retries or a single empty search result, usually do not prevent the final report. If an `ERROR` appears in logs, still use `final_result.exception_info` as the final failure signal, and use the log to locate the cause.
 3. In `common_*.log`, look for **`[EndNode] Start EndNode`** and **`Get final result`** with an empty `exception_info`.
 ![Get final result](../../zh/images/FAQ/日志最终报告.png)
-4. Main-path nodes should have completion logs in order, for example: `EntryNode` -> `OutlineNode` / `OutlineInteractionNode` -> `EditorTeamNode` or `DependencyEditorTeamNode` -> `ReporterNode` -> `SourceTracerNode` -> `EndNode`. If provenance reasoning or user feedback is enabled, extra nodes may appear in between.
+
 
 **③ Warnings can still mean success**
 
@@ -172,7 +172,7 @@ Common error code ranges:
 | 211901 | Empty section information collection |
 | 212000 | Sub-report generation |
 | 212001 | Final report `ReporterNode` |
-| 212106 / 212300 | Source tracing / provenance reasoning |
+
 
 **③ Search logs by `conversation_id` / `thread_id`**
 
@@ -226,7 +226,6 @@ reportor — final assembly
 ```
 summary — single search summary
 reflection — search depth for one loop
-citation verify — provenance for one hit
 ```
 
 ### 3.4 Models must support tool / function calling

@@ -46,9 +46,6 @@ from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router imp
     route_outline_execution_method,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
-from openjiuwen_deepsearch.algorithm.research_collector.collector_function import (
-    filter_search_results_by_exclude_urls,
-)
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.search_nodes.find_action import run_find_action_space
@@ -69,11 +66,6 @@ from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     to_json_safe,
 )
 from openjiuwen_deepsearch.algorithm.search_nodes.validate_new_state import run_validations
-from openjiuwen_deepsearch.algorithm.source_trace.checker import (
-    postprocess_by_citation_checker,
-    preprocess_info,
-)
-from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTracerInfer
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor import (
     UserFeedbackProcessor,
 )
@@ -227,13 +219,6 @@ class StartNode(Start):
                 "outline_interaction_max_rounds", 3
             )
             agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 10)
-            agent_config["source_tracer_research_trace_source_switch"] = origin_agent_config.get(
-                "source_tracer_research_trace_source_switch", True
-            )
-            agent_config["source_tracer_generated_citation_switch"] = origin_agent_config.get(
-                "source_tracer_generated_citation_switch", True
-            )
-            agent_config["source_tracer_infer_switch"] = origin_agent_config.get("source_tracer_infer_switch", True)
             agent_config["llm_config"] = origin_agent_config.get("llm_config", {})
             agent_config["info_collector_search_method"] = origin_agent_config.get(
                 "info_collector_search_method", "web"
@@ -270,7 +255,8 @@ class StartNode(Start):
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
             agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
-            agent_config["exclusion_constraint_enable"] = origin_agent_config.get("exclusion_constraint_enable", False)
+
+
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
         service_config["interrupt_feedback"] = inputs.get("interrupt_feedback", "")
@@ -283,7 +269,8 @@ class StartNode(Start):
         next_node = NodeId.INTENT_RECOGNITION.value
         injection = apply_injectors(inputs.get("metadata"), inputs)
         if injection is not None:
-            session.update_global_state(dict(injection.state_updates))
+            state_updates = dict(injection.state_updates)
+            session.update_global_state(state_updates)
             if injection.next_node:
                 next_node = injection.next_node
                 logger.info("[StartNode] Injected metadata change next node, go to %s.", next_node)
@@ -344,9 +331,8 @@ class IntentRecognitionNode(BaseNode):
             web_search_engine_config=session.get_global_state("config.web_search_engine_config"),
             info_collector_search_method=session.get_global_state("config.info_collector_search_method") or "web",
             provided_report_type=session.get_global_state("config.report_type"),
-            exclusion_constraint_enable=bool(
-                session.get_global_state("config.exclusion_constraint_enable")
-            ),
+
+
             user_materials=session.get_global_state("search_context.user_materials") or [],
             material_analysis=session.get_global_state("search_context.material_analysis"),
         )
@@ -434,7 +420,7 @@ class IntentRecognitionNode(BaseNode):
             apply_web_search_domain_constraints(
                 search_engine_name=_web_search_engine_name,
                 include_domains=intent_result.research_intent.include_domains,
-                exclude_domains=intent_result.research_intent.exclude_domains,
+
             )
 
             # 使用 research_query 进行入口预搜索
@@ -531,14 +517,8 @@ class IntentRecognitionNode(BaseNode):
         })
 
         if algorithm_output.entry_search_results:
-            entry_search_results = filter_search_results_by_exclude_urls(
-                algorithm_output.entry_search_results,
-                algorithm_output.research_intent.exclude_url,
-                algorithm_output.research_intent.exclude_titles,
-                enable_exclusion=bool(session.get_global_state("config.exclusion_constraint_enable")),
-            )
             session.update_global_state({
-                "search_context.entry_search_results": entry_search_results,
+                "search_context.entry_search_results": algorithm_output.entry_search_results,
             })
 
         add_debug_log_wrapper(session, NodeDebugData(
@@ -579,12 +559,13 @@ class FeedbackHandlerNode(BaseNode):
         feedback_mode = session.get_global_state("config.workflow_feedback_mode")
         return dict(
             feedback_mode=feedback_mode,
+
             original_query=session.get_global_state("search_context.original_query") or "",
             messages=session.get_global_state("search_context.messages") or [],
             questions=session.get_global_state("search_context.questions") or "",
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
             provided_report_type=session.get_global_state("config.report_type"),
-            exclusion_constraint_enable=bool(session.get_global_state("config.exclusion_constraint_enable")),
+
             material_analysis=session.get_global_state("search_context.material_analysis"),
         )
 
@@ -662,7 +643,8 @@ class FeedbackHandlerNode(BaseNode):
             "messages": messages,
             "llm_model_name": current_inputs.get("llm_model_name"),
             "provided_report_type": current_inputs.get("provided_report_type"),
-            "exclusion_constraint_enable": current_inputs.get("exclusion_constraint_enable", False),
+
+
         }
         # 复用首轮素材分析缓存（按 content_hash 命中），重解析不丢素材上下文
         material_context = build_material_prompt_context(
@@ -690,16 +672,8 @@ class FeedbackHandlerNode(BaseNode):
         if incoming_intent.tone:
             merged_intent.tone = incoming_intent.tone
 
-        merged_intent.include_url = self._merge_unique_items(current_intent.include_url, incoming_intent.include_url)
-        merged_intent.exclude_url = self._merge_unique_items(current_intent.exclude_url, incoming_intent.exclude_url)
-        merged_intent.exclude_titles = self._merge_unique_items(
-            current_intent.exclude_titles, incoming_intent.exclude_titles
-        )
         merged_intent.include_domains = self._merge_unique_items(
             current_intent.include_domains, incoming_intent.include_domains
-        )
-        merged_intent.exclude_domains = self._merge_unique_items(
-            current_intent.exclude_domains, incoming_intent.exclude_domains
         )
 
         target_papers = []
@@ -707,7 +681,7 @@ class FeedbackHandlerNode(BaseNode):
         for paper in [*current_intent.target_papers, *incoming_intent.target_papers]:
             identity = next((
                 f"{field}:{str(getattr(paper, field, '')).strip().casefold()}"
-                for field in ("pmid", "doi", "arxiv_id", "url", "title", "dataset", "data_year", "topic")
+                for field in ("pmid", "doi", "arxiv_id", "title", "dataset", "data_year", "topic")
                 if str(getattr(paper, field, "")).strip()
             ), None)
             if identity is None or identity in seen_target_papers:
@@ -715,10 +689,6 @@ class FeedbackHandlerNode(BaseNode):
             seen_target_papers.add(identity)
             target_papers.append(paper)
         merged_intent.target_papers = target_papers
-        merged_intent.include_url = self._merge_unique_items(
-            merged_intent.include_url,
-            [paper.url for paper in target_papers if paper.url],
-        )
 
         if not session.get_global_state("config.report_type") and incoming_intent.report_type is not None:
             # API 指定（config.report_type 非 None）时反馈不可覆盖；无锁定时保持现有合并行为
@@ -805,7 +775,7 @@ class FeedbackHandlerNode(BaseNode):
             apply_web_search_domain_constraints(
                 search_engine_name=web_search_engine_name,
                 include_domains=merged_intent_dict.get("include_domains", []),
-                exclude_domains=merged_intent_dict.get("exclude_domains", []),
+
             )
             apply_web_search_temporal_scope(
                 search_engine_name=web_search_engine_name,
@@ -1468,168 +1438,6 @@ class DependencyOutlineNode(OutlineNode):
         return NodeId.DEPENDENCY_EDITOR_TEAM.value
 
 
-class SourceTracerNode(BaseNode):
-    def __init__(
-        self,
-        next_node: str = NodeId.SOURCE_TRACER_INFER.value,
-    ) -> None:
-        super().__init__()
-        self.next_node = next_node
-
-    @staticmethod
-    async def build_citation_checker_result(citation_checker_info, datas, llm_model):
-        """
-        构建溯源校验结果
-        """
-        processed_report = citation_checker_info.get("response_content", {})
-        citation_checker_result_str = await postprocess_by_citation_checker(processed_report, datas, llm_model)
-
-        result_dict = dict(check_result=True, citation_checker_result_str=citation_checker_result_str)
-
-        return result_dict
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
-        logger.info(f"[SourceTracerNode] Start SourceTracerNode.")
-        search_mode = session.get_global_state("search_context.search_mode")
-        current_report = session.get_global_state("search_context.current_report")
-        # 从 Report 对象中获取内容
-        report = getattr(current_report, "report_content", "") if current_report else ""
-        merged_trace_source_datas = getattr(current_report, "merged_trace_source_datas", []) if current_report else []
-        all_classified_contents = getattr(current_report, "all_classified_contents", []) if current_report else []
-        language = session.get_global_state("search_context.language")
-
-        research_trace_source_switch = session.get_global_state("config.source_tracer_research_trace_source_switch")
-        llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER.value)
-
-        need_exit = False
-        if (search_mode == "research") and (research_trace_source_switch is False):
-            logger.info(f"[SourceTracerNode] research_trace_source_switch is False, skip trace source.")
-            need_exit = True
-
-        # 封装为本节点的Input对象
-        return dict(
-            need_exit=need_exit,
-            search_mode=search_mode,
-            report=report,
-            merged_trace_source_datas=merged_trace_source_datas,
-            all_classified_contents=all_classified_contents,
-            research_trace_source_switch=research_trace_source_switch,
-            language=language,
-            llm_model_name=llm_model_name,
-        )
-
-    def _skip_trace_source_handle(
-        self, inputs: Input, session: Session, context: ModelContext, current_inputs: dict
-    ) -> dict:
-        """
-        不需要溯源的场景直接跳到后处理
-        """
-        origin_report = current_inputs.get("report", "")
-        search_mode = current_inputs.get("search_mode", "research")
-        algorithm_output = dict(need_exit=True, origin_report=origin_report, search_mode=search_mode)
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        try:
-            current_inputs = self._pre_handle(inputs, session, context)
-
-            if current_inputs.get("need_exit", False):
-                return self._skip_trace_source_handle(inputs, session, context, current_inputs)
-
-            modified_report = current_inputs.get("report", "")
-            datas = current_inputs.get("merged_trace_source_datas", [])
-
-            # 预处理数据结构给溯源验证使用
-            language = current_inputs.get("language", "zh-CN")
-            citation_checker_info = preprocess_info(modified_report, datas, language)
-            need_check = citation_checker_info.get("need_check", True)
-            if need_check is False:
-                return self._skip_trace_source_handle(inputs, session, context, current_inputs)
-
-            # 溯源验证
-            check_result_dict = await self.build_citation_checker_result(
-                citation_checker_info, datas, current_inputs.get("llm_model_name", "")
-            )
-        except CustomException as e:
-            # 溯源异常的情况下，设置check_result为False，让post_handle记录异常信息返回出去
-            if LogManager.is_sensitive():
-                logger.error(f"[SourceTracerNode] trace source failed.")
-            else:
-                logger.error(f"[SourceTracerNode] trace source failed. {str(e)}")
-            check_result_dict = {
-                "check_result": False,
-                "citation_checker_result_str": format_exception_info(StatusCode.SOURCE_TRACER_NODE_ERROR, e),
-            }
-        except Exception as e:
-            if LogManager.is_sensitive():
-                logger.error(f"[SourceTracerNode] trace source failed.")
-            else:
-                logger.error(f"[SourceTracerNode] trace source failed. {str(e)}")
-            check_result_dict = {
-                "check_result": False,
-                "citation_checker_result_str": format_exception_info(StatusCode.SOURCE_TRACER_NODE_ERROR, e),
-            }
-
-        algorithm_output = {"check_result_dict": check_result_dict, "origin_report": current_inputs.get("report", "")}
-        result = self._post_handle(inputs, algorithm_output, session, context)
-
-        return result
-
-    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> dict:
-        origin_report = algorithm_output.get("origin_report", "")
-        check_result_dict = algorithm_output.get("check_result_dict", {})
-        citation_checker_result_str = check_result_dict.get("citation_checker_result_str", "")
-        check_result = check_result_dict.get("check_result", False)
-        if algorithm_output.get("need_exit", False):
-            source_tracer_result = json.dumps(
-                {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False
-            )
-        else:
-            if check_result is True:
-                source_tracer_result = citation_checker_result_str
-            else:
-                source_tracer_result = json.dumps(
-                    {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False
-                )
-                session.update_global_state({"search_context.final_result.exception_info": citation_checker_result_str})
-
-        source_tracer_result_dict = json.loads(source_tracer_result)
-        checked_trace_source_report_content = source_tracer_result_dict.get("checked_trace_source_report_content", "")
-        citation_messages = source_tracer_result_dict.get("citation_messages", {})
-        checked_trace_source_datas = citation_messages.get("data", [])
-
-        current_report = session.get_global_state("search_context.current_report")
-        if not current_report:
-            logger.warning("[SourceTracerNode] current_report is None, skip updating report fields.")
-        else:
-            current_report.checked_trace_source_report_content = checked_trace_source_report_content
-            current_report.checked_trace_source_datas = checked_trace_source_datas
-            session.update_global_state({"search_context.current_report": current_report})
-
-        session.update_global_state(
-            {"search_context.final_result.response_content": checked_trace_source_report_content}
-        )
-        session.update_global_state({"search_context.final_result.citation_messages": citation_messages})
-        # 添加SourceTracerNode debug日志
-        add_debug_log_wrapper(
-            session,
-            NodeDebugData(
-                NodeId.SOURCE_TRACER.value,
-                0,
-                NodeType.MAIN.value,
-                output_content=str(source_tracer_result_dict).replace("\\n", "\n"),
-            ),
-        )
-
-        logger.info(f"[SourceTracerNode] End SourceTracerNode.")
-        logger.info(
-            f"[SourceTracerNode] source_tracer_result: " f"{'*' if LogManager.is_sensitive() else source_tracer_result}"
-        )
-
-        return dict(next_node=self.next_node)
-
-
 class OutlineInteractionNode(BaseNode):
     """大纲交互节点: 接收用户反馈，保存历史，跳转到 OutlineNode 进行优化"""
 
@@ -1678,7 +1486,7 @@ class OutlineInteractionNode(BaseNode):
         apply_web_search_domain_constraints(
             search_engine_name=engine_name,
             include_domains=research_intent.get("include_domains", []),
-            exclude_domains=research_intent.get("exclude_domains", []),
+
         )
         apply_web_search_temporal_scope(
             search_engine_name=engine_name,
@@ -1826,138 +1634,6 @@ class DependencyOutlineInteractionNode(OutlineInteractionNode):
         return result
 
 
-class SourceTracerInferNode(BaseNode):
-    def __init__(self) -> None:
-        super().__init__()
-        self.log_prefix = "[SourceTracerInferNode]"
-
-    @staticmethod
-    async def build_source_tracer_infer_result(infer_infos):
-        """调用溯源推理模块生成溯源推理图
-        Returns:
-            dict = (response, infer_messages, check_infos)
-        """
-        infer = SourceTracerInfer(infer_infos)
-        response, infer_messages, check_infos, error_message = await infer.run()
-        if error_message:
-            raise Exception(error_message)
-        return dict(response=response, infer_messages=infer_messages, check_infos=check_infos)
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
-        logger.info(f"{self.log_prefix} Start SourceTracerInferNode.")
-        search_mode = session.get_global_state("search_context.search_mode")
-        llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER_INFER.value)
-        source_tracer_infer_switch = session.get_global_state("config.source_tracer_infer_switch")
-
-        language = session.get_global_state("search_context.language")
-        current_report = session.get_global_state("search_context.current_report")
-        source_tracer_response = (
-            getattr(current_report, "checked_trace_source_report_content", "") if current_report else ""
-        )
-        all_classified_contents = getattr(current_report, "all_classified_contents", []) if current_report else []
-
-        # 封装本节点的Input对象
-        return dict(
-            source_tracer_infer_switch=source_tracer_infer_switch,
-            search_mode=search_mode,
-            llm_model_name=llm_model_name,
-            language=language,
-            source_tracer_response=source_tracer_response,
-            all_classified_contents=all_classified_contents,
-        )
-
-    def _post_handle(self, inputs, algorithm_output: dict, session: Session, context: ModelContext):
-        infer_success = algorithm_output.get("infer_success", False)
-        source_tracer_infer_switch = algorithm_output.get("source_tracer_infer_switch", False)
-        if not source_tracer_infer_switch:
-            logger.info(f"{self.log_prefix} Skip Infer! Please turn on the source_tracer_infer_switch.")
-        else:
-            if infer_success:
-                logger.info(f"{self.log_prefix} Infer Success!")
-            else:
-                logger.info(f"{self.log_prefix} Infer Fail!")
-        error_msg = algorithm_output.get("error_msg", "")
-        response = algorithm_output.get("response", "")
-        infer_messages = algorithm_output.get("infer_messages", [])
-        scores = algorithm_output.get("scores", [(0, 0)])
-
-        source_tracer_infer_result_dict = dict(response=response, infer_messages=infer_messages, scores=scores)
-
-        session.update_global_state(
-            {
-                "search_context.final_result.response_content": response,
-                "search_context.final_result.infer_messages": infer_messages,
-            }
-        )
-
-        if error_msg:
-            session.update_global_state({"search_context.final_result.exception_info": error_msg})
-
-        # 添加SourceTracerInferNode debug日志
-        add_debug_log_wrapper(
-            session,
-            NodeDebugData(
-                NodeId.SOURCE_TRACER.value,
-                0,
-                NodeType.MAIN.value,
-                output_content=str(source_tracer_infer_result_dict).replace("\\n", "\n"),
-            ),
-        )
-
-        logger.info(f"{self.log_prefix} End SourceTracerInferNode.")
-        logger.info(
-            f"{self.log_prefix} source_tracer_infer_result:"
-            f"{'*' if LogManager.is_sensitive() else source_tracer_infer_result_dict}"
-        )
-
-        return dict(next_node=NodeId.END.value)
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext):
-
-        scores = [(0, 0)]
-        current_inputs = self._pre_handle(inputs, session, context)
-        try:
-            source_tracer_infer_switch = current_inputs.get("source_tracer_infer_switch", False)
-            if not source_tracer_infer_switch:
-                algorithm_output = dict(
-                    source_tracer_infer_switch=source_tracer_infer_switch,
-                    response=current_inputs.get("source_tracer_response", ""),
-                )
-                return self._post_handle(inputs, algorithm_output, session, context)
-
-            # 溯源推理
-            infer_result_dict = await self.build_source_tracer_infer_result(current_inputs)
-
-            # 溯源推理校验
-            check_infos = infer_result_dict.get("check_infos", {})
-            check_infos["llm_model_name"] = current_inputs.get("llm_model_name", "")
-            check_infos["language"] = current_inputs.get("language", "zh")
-
-        except Exception as e:
-            error_msg = f"source_tracer_infer failed."
-            if LogManager.is_sensitive():
-                logger.error(f"{self.log_prefix} {error_msg}")
-            else:
-                logger.error(f"{self.log_prefix} {error_msg} {e}")
-            infer_result_dict = dict(
-                infer_success=False,
-                response=current_inputs.get("source_tracer_response", ""),
-                infer_messages=[],
-                scores=[(0, 0)],
-                error_msg=format_exception_info(StatusCode.SOURCE_TRACER_INFER_ERROR, e, prefix=self.log_prefix),
-                source_tracer_infer_switch=current_inputs.get("source_tracer_infer_switch", False),
-            )
-        else:
-            # 这里添加溯源推理校验模块
-            infer_result_dict["scores"] = scores
-            infer_result_dict["source_tracer_infer_switch"] = current_inputs.get("source_tracer_infer_switch", False)
-            infer_result_dict["infer_success"] = True
-
-        algorithm_output = infer_result_dict
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-
 class UserFeedbackProcessorNode(BaseNode):
     """在报告生成完成后，处理用户对局部文本的迭代改写请求。"""
 
@@ -1990,9 +1666,6 @@ class UserFeedbackProcessorNode(BaseNode):
             final_result=session.get_global_state("search_context.final_result"),
             current_report=session.get_global_state("search_context.current_report"),
             llm_model_name=adapt_llm_model_name(session, NodeId.USER_FEEDBACK_PROCESSOR.value),
-            enable_local_source_trace=(
-                session.get_global_state("config.source_tracer_research_trace_source_switch") is not False
-            ),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -2085,7 +1758,6 @@ class UserFeedbackProcessorNode(BaseNode):
                 feedback=feedback,
                 final_result=final_result,
                 language=current_inputs["language"],
-                enable_local_source_trace=current_inputs["enable_local_source_trace"],
                 current_report=current_inputs.get("current_report"),
             )
         except CustomException as e:
@@ -2137,8 +1809,6 @@ class UserFeedbackProcessorNode(BaseNode):
                     "response_content": action_result["new_report"],
                 }
             )
-        if "citation_messages" in action_result:
-            updated_final_result["citation_messages"] = action_result["citation_messages"]
         if "warning_info" in action_result:
             updated_final_result["warning_info"] = action_result["warning_info"]
         await UserFeedbackProcessor.send_result(
@@ -2238,10 +1908,6 @@ class UserFeedbackProcessorNode(BaseNode):
         current_report_content = current_final_result.get("response_content", "") or ""
         new_report = algorithm_output["new_report"]
         session.update_global_state({"search_context.final_result.response_content": new_report})
-        if "citation_messages" in algorithm_output:
-            session.update_global_state(
-                {"search_context.final_result.citation_messages": algorithm_output["citation_messages"]}
-            )
         if "warning_info" in algorithm_output:
             session.update_global_state({"search_context.final_result.warning_info": algorithm_output["warning_info"]})
         feedback = algorithm_output["feedback"]
@@ -2309,7 +1975,6 @@ class VLMChartGeneratorNode(BaseNode):
         current_report = session.get_global_state("search_context.current_report")
         report_content = getattr(current_report, "report_content", "") if current_report else ""
         all_classified_contents = getattr(current_report, "all_classified_contents", []) if current_report else []
-        merged_trace_source_datas = getattr(current_report, "merged_trace_source_datas", []) if current_report else []
 
         visualization_enable = session.get_global_state("config.visualization_enable")
         return dict(
@@ -2319,7 +1984,7 @@ class VLMChartGeneratorNode(BaseNode):
             vlm_chart_generator_max_iterations=vlm_chart_generator_max_iterations,
             report_content=report_content,
             all_classified_contents=all_classified_contents,
-            trace_source_datas=merged_trace_source_datas,
+
             visualization_enable=visualization_enable,
         )
 
@@ -2328,23 +1993,21 @@ class VLMChartGeneratorNode(BaseNode):
 
         report_content = inputs.get("report_content", "")
         all_classified_contents = inputs.get("all_classified_contents", [])
-        trace_source_datas = inputs.get("trace_source_datas", [])
 
         vlm_chart_generator = VLMChartGenerator(
             llm_model_name=inputs.get("llm_model_name", ""),
             vlm_model_name=inputs.get("vlm_model_name", ""),
             vlm_max_iterations=inputs.get("vlm_chart_generator_max_iterations", 1),
         )
-        chart_messages, modified_report, new_source_trace_datas = await vlm_chart_generator.run(
+        chart_messages, modified_report = await vlm_chart_generator.run(
             report_content=report_content,
             all_classified_contents=all_classified_contents,
-            source_trace_datas=trace_source_datas,
         )
 
         return dict(
             chart_messages=chart_messages,
             modified_report=modified_report,
-            new_source_trace_datas=new_source_trace_datas,
+
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -2400,8 +2063,11 @@ class VLMChartGeneratorNode(BaseNode):
 
         vlm_chart_generator_output = algorithm_output.get("vlm_chart_generator_output", {})
         chart_messages = []
-        modified_report = algorithm_output.get("current_inputs", {}).get("report_content", "")
-        new_source_trace_datas = algorithm_output.get("current_inputs", {}).get("trace_source_datas", [])
+        current_report = session.get_global_state("search_context.current_report")
+        modified_report = (
+            algorithm_output.get("current_inputs", {}).get("report_content")
+            or (getattr(current_report, "report_content", "") if current_report else "")
+        )
 
         if vlm_chart_generator_output.get("skip_node", False):
             logger.info("[VLMChartGeneratorNode] vlm_chart_generator_enable is False, skip VLMChartGeneratorNode.")
@@ -2417,11 +2083,9 @@ class VLMChartGeneratorNode(BaseNode):
             # 排除开关和错误信息后，更新报告内容
             chart_messages = vlm_chart_generator_output.get("chart_messages", [])
             modified_report = vlm_chart_generator_output.get("modified_report", "")
-            new_source_trace_datas = vlm_chart_generator_output.get("new_source_trace_datas", [])
 
             current_report = session.get_global_state("search_context.current_report")
             current_report.report_content = modified_report
-            current_report.merged_trace_source_datas = new_source_trace_datas
             session.update_global_state({"search_context.current_report": current_report})
             session.update_global_state({"search_context.final_result.chart_messages": chart_messages})
 
@@ -2435,7 +2099,7 @@ class VLMChartGeneratorNode(BaseNode):
                     {
                         "chart_messages": chart_messages,
                         "modified_report": modified_report,
-                        "new_source_trace_datas": new_source_trace_datas,
+
                     },
                     ensure_ascii=False,
                 ),
@@ -2444,7 +2108,8 @@ class VLMChartGeneratorNode(BaseNode):
 
         output_str = "*" if LogManager.is_sensitive() else vlm_chart_generator_output
         logger.debug("[VLMChartGeneratorNode] vlm_chart_generator_node result: \n%s", output_str)
-        return dict(next_node=NodeId.SOURCE_TRACER.value)
+        session.update_global_state({"search_context.final_result.response_content": modified_report})
+        return dict(next_node=NodeId.USER_FEEDBACK_PROCESSOR.value)
 
 
 class SearchStartNode(Start):

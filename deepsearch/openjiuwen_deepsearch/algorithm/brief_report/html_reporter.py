@@ -21,9 +21,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_charts import (
 from openjiuwen_deepsearch.algorithm.brief_report.html_content import (
     BriefHtmlPreprocessResult,
     BriefHtmlSectionChunk,
-    render_references_html,
     split_report_markdown,
-    convert_inline_citations,
     preprocess_markdown,
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_safety import (
@@ -684,13 +682,10 @@ def _assemble_html_report(
             "[BriefHtmlReporter] Shell missing #brief-sections mount; insert before </body>."
         )
         html_doc = insert_before(shell, "</body>", f"{sections_html}\n")
-    references_html = render_references_html(pre, language)
     if _MOUNT_REFERENCES_RE.search(html_doc):
         html_doc = _MOUNT_REFERENCES_RE.sub(
-            lambda _match: references_html, html_doc, count=1
+            "", html_doc, count=1
         )
-    elif references_html:
-        html_doc = insert_before(html_doc, "</body>", f"{references_html}\n")
     if configs:
         payload = html.escape(json.dumps(configs, ensure_ascii=True), quote=False)
         html_doc = insert_before(
@@ -699,7 +694,7 @@ def _assemble_html_report(
             f'\n<template id="chart-configs">{payload}</template>\n',
         )
     html_doc = normalize_bar_fill_text(html_doc)
-    return convert_inline_citations(html_doc, pre)
+    return html_doc
 
 
 @moderation_retry_scope
@@ -708,7 +703,7 @@ async def generate_brief_html_report(*, llm, markdown: str, language: str) -> st
 
     Args:
         llm: 用于生成 shell 和章节片段的 LLM 实例。
-        markdown: 溯源校验后的 Brief Markdown 报告。
+        markdown: 装配完成的 Brief Markdown 报告。
         language: 报告输出语言。
 
     Returns:
@@ -728,11 +723,10 @@ async def generate_brief_html_report(*, llm, markdown: str, language: str) -> st
     title, summary_md, sections = split_report_markdown(pre.cleaned_markdown)
     max_attempts = max(1, Config().service_config.report_max_generate_retry_num)
     logger.info(
-        "[BriefHtmlReporter] event=preprocess_done cleaned_chars=%d sections=%d references=%d "
+        "[BriefHtmlReporter] event=preprocess_done cleaned_chars=%d sections=%d "
         "max_attempts=%d duration_ms=%.2f.",
         len(pre.cleaned_markdown),
         len(sections),
-        len(pre.reference_entries),
         max_attempts,
         (time.perf_counter() - preprocess_started) * 1000,
     )
@@ -822,11 +816,10 @@ async def generate_brief_html_report(*, llm, markdown: str, language: str) -> st
         assembled = _assemble_html_report(shell, fragments, configs, pre, language)
         logger.info(
             "[BriefHtmlReporter] event=assembly_done attempt=%d fragments=%d chart_configs=%d "
-            "references=%d chars=%d duration_ms=%.2f.",
+            "chars=%d duration_ms=%.2f.",
             attempt_num + 1,
             len(fragments),
             len(configs),
-            len(pre.reference_entries),
             len(assembled),
             (time.perf_counter() - assembly_started) * 1000,
         )
@@ -870,10 +863,9 @@ async def generate_brief_html_report(*, llm, markdown: str, language: str) -> st
         )
         logger.info(
             "[BriefHtmlReporter] event=html_done status=success attempt=%d sections=%d "
-            "references=%d chart_configs=%d chars=%d duration_ms=%.2f.",
+            "chart_configs=%d chars=%d duration_ms=%.2f.",
             attempt_num + 1,
             len(sections),
-            len(pre.reference_entries),
             len(configs),
             len(result),
             (time.perf_counter() - started) * 1000,

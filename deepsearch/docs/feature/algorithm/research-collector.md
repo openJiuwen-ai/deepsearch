@@ -8,19 +8,14 @@
 
 ## 功能目的
 
-资料采集把搜索、本地检索和运行时工具返回的原始结果整理为后续报告生成可使用的证据。它负责过滤排除域名、保留来源身份、生成稳定 doc/source id、提取关键片段、构造 compact evidence。
+资料采集把搜索、本地检索和运行时工具返回的原始结果整理为后续报告生成可使用的证据。它负责保留来源身份、生成稳定 doc/source id、提取关键片段、构造 compact evidence。
 
 ## 可见行为
 
 - web search、local search 和运行时 API 工具结果会被归一化为记录列表。
-- `exclude_domains`、`exclude_url`、`exclude_titles` 三类排除约束仅作用于 Web 搜索结果（tavily/google/common 三条路径的统一入口），本地知识库检索（local search）结果不在其过滤范围内，行为不变。
-- `exclude_domains` 按命中域名及其子域名过滤；`exclude_url` 按命中禁引链接过滤（归一化 host+path 精确匹配）；`exclude_titles` 按命中禁引标题的来源过滤，使用四层匹配规则拦截同一文献在 Web 上的镜像变体：
   1. **R1 精确匹配**：归一化（转小写、去标点、合并空白）后完全相同。
-  2. **R2 剥后缀精确匹配**：剥离尾部聚合/出版站标记词（如 MDPI、ProQuest、IDEALS 等）后精确匹配。后缀词表分两组：`_BASE_AGGREGATOR_SUFFIX_TOKENS`（常驻，含 proquest/mdpi/researchgate 等）和 `_EXCLUSION_AGGREGATOR_SUFFIX_TOKENS`（pmc/nih/ncbi/pubmed/europepmc，**仅在 `exclusion_constraint_enable` 开启时参与剥离**）——关闭时不剥文献库镜像后缀，标题匹配退回 baseline 行为。
   3. **R3 包含匹配**：被禁标题 ≥30 归一化字符时，做单向包含检查（仅 `blocked in target`，即被禁标题包含在目标标题中，不再反向检查 `target in blocked`）。防误杀保护：当被禁标题是目标标题的严格前缀 **且** 剥后缀后两者不同时跳过（视为不同论文的副标题扩展）；若剥后缀后相同则仍 block（视为同一论文加站点标签）。
   4. **R4 Jaccard 相似度匹配**：词级 Jaccard 相似度 ≥ 70% 视为同一文献变体，同样适用防误杀保护。
-- **文献 ID 交集匹配**（`exclusion_constraint_enable` 开启时新增第三条判据）：从 `exclude_urls` 预解析 doi/pmid/pmcid/arxiv 的 ID 集，与搜索结果 item 的 ID（从 URL 解析 + 从 `doi`/`pmid`/`pmcid`/`arxiv_id` 字段直取）做交集，非空即判定"同一篇"整条剔除。catch PMC 转载、DOI rehost 等 URL/标题都变了的同篇镜像。**关闭时不启用 ID 匹配**，仅靠 URL 精确匹配 + 标题四层规则（baseline 行为）。
-- 过滤函数 `filter_search_results_by_exclude_urls` 的 `enable_exclusion` 参数贯穿 `preprocess_blocked_titles`/`_strip_aggregator_suffix`/`is_title_blocked`/`_is_title_blocked_preprocessed` 全链路；`_get_exclusion_constraint_enable(agent_input)` 从 agent_input 读取开关值。过滤执行时打 `enable_exclusion=on/off` + `removed=N` 日志（含无禁引清单的早退路径），便于排查开关是否生效。
 - 每个文档或证据片段会获得稳定的 `doc_id` / `source_id`，用于后续引用、去重和 source store 回查。
 - jieba 分词在后台线程中初始化，通过 `_jieba_ready` 事件同步就绪状态，避免阻塞主流程的首次工具调用。
 - 采集阶段的说明性结构化字段遵循报告语言；搜索 `queries` 和 `next_queries` 不强制遵循报告语言，可以选择更容易召回权威证据的源语言或混合语言。
@@ -58,7 +53,7 @@
 3. 工具返回结果按来源类型写入 web、本地或其他工具记录。
 4. 证据层生成 `doc_id`、`source_id`、正文 hash 和 `content_ref`。
 5. compact evidence 提取标题、URL、来源、关键片段、发布时间和评分。
-6. 下游报告生成和溯源使用整理后的 `doc_infos`、source store 和搜索记录。
+
 
 ## 数据契约与依赖
 
@@ -68,9 +63,7 @@
 - `agent_input.web_page_search_record`
 - `agent_input.local_text_search_record`
 - `agent_input.other_tool_record`
-- `research_intent.exclude_domains`
-- `research_intent.exclude_url`
-- `research_intent.exclude_titles`
+
 
 关键输出：
 
@@ -103,4 +96,3 @@ uv run pytest tests/info_collector/test_collector_execution_service.py
 - [查询理解](./query-understanding.md)
 - [DeepSearch 搜索智能体](./search-agent.md)
 - [报告生成](./report-generation.md)
-- [全局溯源](./source-trace.md)

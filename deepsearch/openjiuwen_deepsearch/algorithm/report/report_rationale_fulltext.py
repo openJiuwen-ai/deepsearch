@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
 
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_requirement_evidence_diagnostics,
@@ -512,75 +511,6 @@ def build_core_content_list(
     return blocks
 
 
-def _escape_markdown_text(value: object) -> str:
-    """Escape markdown special characters in reference text."""
-    text = str(value or "")
-    text = re.sub(r"[\r\n\t]+", " ", text)
-    return re.sub(r"([\\`*_{}\[\]()#+\-.!|<>])", r"\\\1", text)
-
-
-def _format_reference_link(title_value: object, url_value: object) -> str:
-    """Format a markdown reference link, escaping title and URL."""
-    title = _escape_markdown_text(title_value)
-    url = str(url_value or "").strip()
-    if not url or any(ord(ch) < 32 or ord(ch) == 127 for ch in url):
-        escaped_url = _escape_markdown_text(url)
-        if title and escaped_url:
-            return f"{title} ({escaped_url})"
-        return title or escaped_url
-
-    parsed_url = urlparse(url)
-    scheme = parsed_url.scheme.lower()
-    is_allowed_url = scheme in {"http", "https", "localdataset"} and (
-        bool(parsed_url.netloc) if scheme in {"http", "https"} else bool(parsed_url.netloc or parsed_url.path)
-    )
-    if not is_allowed_url:
-        escaped_url = _escape_markdown_text(url)
-        if title and escaped_url:
-            return f"{title} ({escaped_url})"
-        return title or escaped_url
-
-    escaped_url = url.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    return f"[{title}]({escaped_url})"
-
-
-def build_references(
-    fulltext_evidences: list[FullTextEvidence],
-    remaining_passages: list[dict],
-) -> list[str]:
-    """Build a reference list that mirrors classified_content indices.
-
-    Each item in classified_content (full-text first, then passages) gets
-    its own reference entry, maintaining a 1:1 correspondence between
-    ``[citation:X]`` in the report text and reference ``[X]``. Deduplication
-    of repeated URLs is handled downstream by ``_deduplicate_and_renumber_ref``.
-
-    Args:
-        fulltext_evidences: compressed full-text evidences.
-        remaining_passages: passage-level evidences.
-
-    Returns:
-        List of formatted ``[escaped_title](escaped_url)`` strings, one per
-        evidence item, in the same order as classified_content.
-    """
-    references: list[str] = []
-    for evidence in fulltext_evidences or []:
-        if not isinstance(evidence, FullTextEvidence):
-            continue
-        url = str(evidence.url or "").strip()
-        if url:
-            references.append(_format_reference_link(evidence.doc_title, url))
-    for passage in remaining_passages or []:
-        if not isinstance(passage, dict):
-            continue
-        url = str(passage.get("doc_url") or "").strip()
-        if url:
-            references.append(
-                _format_reference_link(passage.get("doc_title", ""), url)
-            )
-    return references
-
-
 def enrich_fulltext_for_section(
     passages: dict[str, list[dict] | None],
     context: dict,
@@ -595,7 +525,7 @@ def enrich_fulltext_for_section(
     compression, no coverage assessment). Passages from those URLs are
     removed; remaining passages keep their passage-level
     ``reliability``/``data_density``. Builds classified content, core content,
-    references, and a passage-only structured evidence guide (top-3 per
+    and a passage-only structured evidence guide (top-3 per
     rationale by coverage). Full-text items carry no scores.
 
     Args:
@@ -610,7 +540,7 @@ def enrich_fulltext_for_section(
 
     Returns:
         Dict with keys ``classified_content``, ``sub_section_core_content``,
-        ``sub_section_references``, ``structured_evidence_guide`` (passage-only),
+        ``structured_evidence_guide`` (passage-only),
         ``fulltext_count`` and ``remaining_count``. ``retained_passages`` holds
         the final passage evidence, including passages promoted to fulltext,
         for shared rationale contracts and outline cards.
@@ -733,9 +663,6 @@ def enrich_fulltext_for_section(
     sub_section_core_content = build_core_content_list(
         fulltext_evidences, remaining_passages
     )
-    sub_section_references = build_references(
-        fulltext_evidences, remaining_passages
-    )
 
     # Map remaining and removed passages back to coverage_result passage keys
     # using the _passage_key field (set in filter_passages_by_coverage), so
@@ -781,7 +708,6 @@ def enrich_fulltext_for_section(
     return {
         "classified_content": classified_content,
         "sub_section_core_content": sub_section_core_content,
-        "sub_section_references": sub_section_references,
         "structured_evidence_guide": structured_evidence_guide,
         "requirement_evidence_diagnostics": requirement_evidence_diagnostics,
         "fulltext_count": fulltext_count,

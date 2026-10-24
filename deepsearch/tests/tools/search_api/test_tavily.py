@@ -51,7 +51,7 @@ class TestTavilySearchAPIWrapper:
                 max_web_search_results=3,
                 search_depth="basic",
                 include_domains=["example.com"],
-                exclude_domains=["bad.com"],
+
                 include_answer=True,
                 include_raw_content=True,
                 include_images=False,
@@ -126,7 +126,7 @@ class TestTavilySearchAPIWrapper:
                 max_web_search_results=5,
                 search_depth="advanced",
                 include_domains=None,
-                exclude_domains=["bad.com"],
+
                 include_answer=True,
                 include_raw_content=False,
                 include_images=True,
@@ -272,7 +272,7 @@ class TestTavilySearchAPIWrapper:
                 max_web_search_results=5,
                 search_depth="advanced",
                 include_domains=["good.com"],
-                exclude_domains=None,
+
                 include_answer=False,
                 include_raw_content=True,
                 include_images=False,

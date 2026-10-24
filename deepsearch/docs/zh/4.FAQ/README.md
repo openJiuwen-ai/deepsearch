@@ -30,7 +30,6 @@ https://python-standalone.org/mirror/astral-sh/python-build-standalone/
 UV_HTTP_TIMEOUT=300 uv python install <可指定版本>
 ```
 
-
 ### 2. uv 下载python三方包超时报错
 
 **> 报错信息**：
@@ -46,9 +45,8 @@ UV_HTTP_TIMEOUT=300 uv python install <可指定版本>
 UV_INDEX_URL=http://mirrors.aliyun.com/pypi/simple/ uv add <package>
 ```
 
-
 ### 3. uv 下载ssl证书报错（针对未知网址域名）
-  
+
 **> 报错信息**：
 
 	Caused by: client error (Connect)
@@ -116,7 +114,7 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 2. `common_warning_*.log` 中**没有**阻断主流程的 `ERROR`（少量 `WARN` 如模型重试、单条搜索无结果，通常不影响最终成稿）。若日志中出现 `ERROR`，最终仍以 `final_result.exception_info` 判定是否失败，再用日志辅助定位原因。
 3. `common_*.log` 中出现 **`[EndNode] Start EndNode`** 且 **`Get final result`** 中 `exception_info` 为空。
 ![img.png](../images/FAQ/日志最终报告.png)
-4. 主路径关键节点按顺序应有完成类日志，例如：`EntryNode` → `OutlineNode` / `OutlineInteractionNode` → `EditorTeamNode` 或 `DependencyEditorTeamNode` → `ReporterNode` → `SourceTracerNode` → `EndNode`（若开启溯源推理 / 用户反馈，中间还会经过对应节点）。
+
 
 **③ 如何理解「有告警但仍算成功」**
 
@@ -165,7 +163,7 @@ openJiuwen-deepsearch运行日志文件通常位于项目根路径的 **output/l
 | 211901 | 章节信息收集为空 |
 | 212000 | 子报告生成 |
 | 212001 | 总报告 `ReporterNode` |
-| 212106 / 212300 | 溯源 / 溯源推理 |
+
 
 **③ 按 `conversation_id` / `thread_id` 查日志**
 
@@ -199,7 +197,6 @@ final_result.exception_info  →  错误码查表  →  common_warning_*.log 按
 ### 2. 模型返回结果不遵从
 含有 **retry** 字眼，都是模型调用失败或者模型结果不遵从导致的。当遇到这种异常的时候，DS内部有重试机制，重试次数达到阈值才会出现 ERROR 失败，否则是 WARNNING 级别。
 
-
 ### 3. 节点异常影响范围
 部分环节的模型调用重试失败影响不是很大，部分关键节点的重试失败可能有较大影响。可以判断日志的关键字眼来判断是否有影响。
 
@@ -212,18 +209,12 @@ sub_reportor：影响报告某一章节的生成
 reportor：影响最后整个报告的的生成
 ```
 - 影响较小的节点：对报告生成不会产生严重影响的
-```
-summary：某次搜索任务的总结，只影响当次搜索结果
-reflection：某次搜索任务的反思，只影响当次搜索的深度
-citation verify：某条搜索结果的溯源效验
-```
 
 ### 4. 使用的模型限制
 + 由于当前deepsearch服务内的各项节点大量使用了function_call，所以不支持function_call的模型，无法使用deepsearch服务。
 
 ### 5. 模型并发限制
 - 由于deepsearch服务内的信息收集和报告生成等节点允许并发执行，因此推荐使用并发能力较强的模型，例如qwen3-max等。如果使用的模型的并发能力较弱，限流策略和请求速率限制等可能会导致模型调用失败，触发`Allocated quota exceeded`等错误，进而影响报告生成的完整性。
-
 
 ## 四、联网增强引擎相关错误
 ### 1. 引擎直接访问失败
@@ -296,7 +287,6 @@ SEARCH_SERVICE_ALLOW_UNSAFE_URL=true
 服务端 `DeepSearchAgentManager` 对 Agent 实例做进程内缓存时，缓存键由**影响 Agent 构建的请求字段**稳定序列化后哈希得到（会排除 `message`、`conversation_id`、`interrupt_feedback` 等仅与当轮对话/会话标识相关的字段）。其中包含 **`space_id`**、**`local_search_config`（含 `local_search_config_ids`）**、联网检索配置、`llm_config`、工作流与检索相关开关等，因此**同一 `space_id` 下更换知识库或引擎配置也会生成新键**，不会误复用旧 Agent。
 
 **说明**：`space_id` 由调用方在请求中传入。若需防止客户端伪造他人空间，应在网关或鉴权层将 `space_id` 与登录身份或令牌绑定后再转发。
-
 
 ## 七、附录
 包含公共类型错误、业务节点的相关错误码信息：[详细错误码链接](https://gitcode.com/openJiuwen/deepsearch/blob/dev/openjiuwen_deepsearch/common/status_code.py)

@@ -137,6 +137,7 @@ class WebPageEnrichmentNode(BaseNode):
                 self._jina_provider = _provider
             else:
                 self._jina_provider = JinaWebFetchProvider()
+        research_intent = session.get_global_state("collector_context.research_intent") or {}
         return {
             "enabled": enabled,
             "max_urls": session.get_global_state("config.info_collector_webpage_enrich_max_urls") or 5,
@@ -149,8 +150,8 @@ class WebPageEnrichmentNode(BaseNode):
             "step_title": step_title,
             "step_description": session.get_global_state("collector_context.step_description") or "",
             "research_constraints": build_evidence_constraint_prompt_context(
-                session.get_global_state("collector_context.research_intent"),
-                exclusion_enabled=bool(session.get_global_state("config.exclusion_constraint_enable")),
+                research_intent,
+
             ),
             "new_doc_infos_current_loop": (
                 session.get_global_state("collector_context.new_doc_infos_current_loop") or []
@@ -194,11 +195,12 @@ class WebPageEnrichmentNode(BaseNode):
                 operation="select webpage enrichment candidates",
             )
             return []
-        return sanitize_selected_indexes(
+        selected_indexes = sanitize_selected_indexes(
             decision.selected_indexes,
             candidate_count=len(candidates),
-            max_urls=state.get("max_urls", 5),
+            max_urls=max(0, state.get("max_urls", 5)),
         )
+        return selected_indexes
 
     @staticmethod
     def _log_compression_debug(stage: str, state: dict, doc_info: dict, metrics: dict, contents: dict) -> None:

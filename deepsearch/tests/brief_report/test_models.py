@@ -85,5 +85,5 @@ def test_final_result_accepts_html_content_type_and_report_keeps_html_field():
 
     result = FinalResult(response_content="<html></html>", response_content_type="text/html")
     assert result.response_content_type == "text/html"
-    report = Report(report_content="# md", checked_trace_source_report_content="# md")
+    report = Report(report_content="# md")
     assert report.report_html == ""

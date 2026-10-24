@@ -39,7 +39,7 @@ async def test_export_report_html_inlines_mermaid_and_vlm_png() -> None:
             "```\n\n"
             "![VLM 图](#insertChart:chart_1)"
         ),
-        "infer_messages": [],
+
         "chart_messages": [
             {"chart_id": "chart_1", "chart_title": "VLM 图", "base64": _png_base64()}
         ],
@@ -77,7 +77,7 @@ async def test_export_report_docx_embeds_mermaid_png_without_debug_assets() -> N
             "    line [48, 21]\n"
             "```"
         ),
-        "infer_messages": [],
+
         "chart_messages": [],
     }
 

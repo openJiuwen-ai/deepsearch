@@ -397,12 +397,6 @@ class AgentConfig(BaseModel):
         description="子报告大纲阶段规则版覆盖证据（coverage passages）开关，"
                     "关闭后大纲证据仅含条目摘要块",
     )
-    exclusion_constraint_enable: bool = Field(
-        default=False,
-        description="子报告禁引约束总开关（默认关）。开启后启用："
-                    "采集层文献 ID 交集匹配 + 镜像后缀词表、写作层 Excluded Sources 注入、"
-                    "intent 层 include_url/target_papers 去重。关闭时行为等同 baseline",
-    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=10,
@@ -412,9 +406,6 @@ class AgentConfig(BaseModel):
     )
     outline_interaction_enabled: bool = Field(default=True, description="大纲交互开关")
     outline_interaction_max_rounds: int = Field(default=3, ge=1, le=100, description="大纲交互最大轮次")
-    source_tracer_research_trace_source_switch: bool = Field(default=True, description="溯源功能开关")
-    source_tracer_generated_citation_switch: bool = Field(default=True, description="新增引用生成开关")
-    source_tracer_infer_switch: bool = Field(default=True, description="溯源推理功能开关")
     llm_config: Dict[
         Literal["general", "plan_understanding", "info_collecting", "writing_checking",
                 "vlm_chart_generating"], LLMConfig
@@ -460,7 +451,7 @@ class AgentConfig(BaseModel):
     user_feedback_processor_max_interactions: int = Field(default=100, ge=1, le=100, description="最大交互次数")
 
     # 统计性能信息参数
-    stats_info_llm: bool = Field(default=False, description="LLM调用统计")
+    stats_info_llm: bool = Field(default=True, description="LLM调用统计")
 
     # vlm迭代生成图参数
     vlm_chart_generator_enable: bool = Field(default=False, description="vlm迭代生成图开关")
@@ -553,16 +544,9 @@ class ServiceConfig(BaseModel):
         description="专业版报告是否启用需求清单映射与复杂度自适应 rationale",
     )
 
-    # 溯源节点参数
-    source_tracer_citation_verify_max_concurrency_num: int = Field(default=30, description="溯源校验最大并发数量")
-    source_tracer_citation_verify_batch_size: int = Field(default=10, ge=1, le=20, description="溯源校验批次大小")
-    source_tracer_domain_source_map_path: str = Field(
-        default="domain_source_map.json",
-        description="域名来源动态映射表JSON文件名（相对路径解析到可写数据目录，绝对路径直接使用）",
-    )
 
     # 统计性能信息参数
-    stats_info_node_duration: bool = Field(default=False, description="节点持续时间统计")
+    stats_info_node_duration: bool = Field(default=True, description="节点持续时间统计")
     stats_info_search: bool = Field(default=False, description="搜索工具调用统计")
 
     # 大模型超时参数
@@ -573,7 +557,7 @@ class ServiceConfig(BaseModel):
 
     # debug辅助工具参数
     node_debug_enable: bool = Field(default=False, description="节点格式化记录debug日志开关")
-    export_intermediate_results: bool = Field(default=False, description="可视化任务执行中间结果开关")
+    export_intermediate_results: bool = Field(default=True, description="可视化任务执行中间结果开关")
 
 
 class Config(BaseModel):

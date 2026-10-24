@@ -4,7 +4,7 @@ import re
 from unittest.mock import AsyncMock
 import pytest
 from openjiuwen_deepsearch.algorithm.brief_report.models import BriefAssemblyRequest, BriefWritingRequest, BriefOutline, BriefCollectionResult, BriefSummaryRequest, BriefChapter, BriefSectionWritingGuidance, BriefWritingGuidance
-from openjiuwen_deepsearch.algorithm.brief_report.writer import _chapter_validation_error, _summary_prompt_input, _writing_prompt_input, assemble_brief_report, build_writing_evidence, generate_brief_summary, write_brief_chapters
+from openjiuwen_deepsearch.algorithm.brief_report.writer import _chapter_validation_error, _summary_prompt_input, _writing_prompt_input, assemble_brief_report, generate_brief_summary, write_brief_chapters
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import ResearchProgress, update_progress_summary
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import report_progress_context
@@ -186,7 +186,7 @@ def test_assemble_brief_report_uses_english_headings_for_normalized_language():
     )
 
     assert "## Executive Summary" in assembly.report_content
-    assert "## References" in assembly.report_content
+    assert "## References" not in assembly.report_content
 
 
 def test_brief_chapter_prompt_does_not_describe_context_that_is_not_provided():

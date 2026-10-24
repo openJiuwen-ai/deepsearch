@@ -157,9 +157,8 @@ async def test_main_start_node_passes_webpage_enrichment_enable_to_runtime_confi
             "outline_interaction_enabled": True,
             "outline_interaction_max_rounds": 3,
             "outliner_max_section_num": 5,
-            "source_tracer_research_trace_source_switch": True,
-            "source_tracer_generated_citation_switch": True,
-            "source_tracer_infer_switch": True,
+
+
             "llm_config": {},
             "info_collector_search_method": "web",
             "web_search_engine_config": {"search_engine_name": "tavily"},

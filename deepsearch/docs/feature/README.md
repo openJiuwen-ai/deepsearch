@@ -19,7 +19,6 @@ PR 描述、release notes 或专门 changelog。
 - 数据契约
 - 持久化逻辑
 - 报告生成或转换
-- 溯源逻辑
 - 其他用户或调用方可见行为
 
 纯测试、格式化、依赖元数据、注释、无行为/API/配置/契约变化的重构可以不更新
@@ -29,7 +28,6 @@ PR 描述、release notes 或专门 changelog。
 
 Feature 文档按主要代码归属组织：
 
-- `algorithm/`：核心研究算法、报告生成、溯源、用户反馈处理等。
 - `framework/`：Agent 工作流、节点编排、搜索上下文等。
 - `server/`：REST API、后端管理器、报告转换、存储与持久化等。
 - `llm/`：统一 LLM 封装与厂商适配。
@@ -77,8 +75,6 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [时间约束软过滤](./temporal-soft-filter.md)
 - [Brief 精简版报告工作流](./algorithm/brief-report.md)
 - [报告模板生成](./algorithm/report-template.md)
-- [全局溯源](./algorithm/source-trace.md)
-- [推理链溯源](./algorithm/source-tracer-infer.md)
 - [图表生成](./algorithm/chart-generation.md)
 - [Prompt 模板系统](./algorithm/prompt-template-system.md)
 - [用户反馈处理](./algorithm/user-feedback-processor.md)

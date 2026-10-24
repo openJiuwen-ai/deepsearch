@@ -167,7 +167,7 @@ def test_create_section_state():
                       'messages': [{...}],
                       'language': 'zh-CN', 'plan_executed_num': 0, 'current_plan': None,
                       'duplicated_search_queries': {}, 'duplicated_search_items': {}, 'final_report_path': '',
-                      'final_result': {'response_content': '', 'citation_messages': {}, 'exception_info': ''},
+                      'final_result': {'response_content': '',  'exception_info': ''},
                       'report_generated_num': 0, 'report_evaluation': '',
                       'sub_report_content': '', 'evaluation_details': '', 'sub_evaluation_details': '',
                       'sub_report_evaluate_num': 0, 'sub_evaluation_result': '', 'report_template': '', 'questions': '',
@@ -193,9 +193,9 @@ def test_create_section_state():
                                                                                       is_core_section=False)]),
                       'outline_executed_num': 0, 'report_task': '', 'section_task': '', 'section_description': '',
                       'section_idx': 0, 'section_iscore': False, 'sub_section_outline': '',
-                      'sub_section_references': [], 'classified_content': [], 'sub_section_core_content': [],
+                       'classified_content': [], 'sub_section_core_content': [],
                       'search_mode': 'research', 'current_step': None, 'planner_agent_messages': None,
-                      'source_tracer': '', 'trace_source_datas': [], 'merged_trace_source_datas': [],
+
                       'all_classified_contents': [], 'doc_infos': [], 'gathered_info': [],
                        'debug_pre_step': 'outline-c615f84c-d865-41f6-b7c3-354703c51732', 'debug_cur_step': 'outline-c615f84c-d865-41f6-b7c3-354703c51732'}
     search_context["research_intent"] = {
@@ -365,7 +365,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
             audience_role="研发负责人",
             tone="formal",
             include_domains=["example.com"],
-            exclude_domains=["bad.com"],
+
             source_date_scope=TemporalScope(
                 constraint_type="source_date",
                 end_date="2023-12-31",
@@ -423,7 +423,8 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
         "web_search_engine_config": web_search_engine_config,
         "info_collector_search_method": "web",
         "provided_report_type": None,
-        "exclusion_constraint_enable": False,
+
+
         "user_materials": [],
         "material_analysis": None,
     })
@@ -444,7 +445,7 @@ async def test_intent_recognition_node_updates_context_and_routes_to_outline():
     mock_apply_domain_constraints.assert_called_once_with(
         search_engine_name="tavily",
         include_domains=["example.com"],
-        exclude_domains=["bad.com"],
+
     )
     mock_apply_temporal_scope.assert_called_once_with(
         search_engine_name="tavily",
@@ -1075,10 +1076,9 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
                 "audience_role": "投资人",
                 "tone": "analytical",
                 "report_type": "professional",
-                "include_url": [],
-                "exclude_url": [],
+
                 "include_domains": ["example.com"],
-                "exclude_domains": [],
+
             },
             "config.web_search_engine_config": Mock(search_engine_name="tavily"),
             "search_context.messages": [{"role": "user", "content": "低空经济发展趋势"}],
@@ -1095,9 +1095,9 @@ def test_feedback_handler_merges_reparsed_intent_and_updates_report_policy():
             "tone": None,
             "report_type": "brief",
             "include_url": [],
-            "exclude_url": [],
+
             "include_domains": ["gov.cn"],
-            "exclude_domains": [],
+
             "temporal_scope": {
                 "constraint_type": "source_date",
                 "end_date": "2020-12-31",
@@ -1168,7 +1168,6 @@ def test_feedback_handler_merges_target_papers_from_clarification():
     session = Mock()
     session.get_global_state.return_value = {
         "target_papers": [{"pmid": "38132429"}],
-        "include_url": ["https://pubmed.ncbi.nlm.nih.gov/38132429/"],
     }
     node = FeedbackHandlerNode()
 
@@ -1183,7 +1182,7 @@ def test_feedback_handler_merges_target_papers_from_clarification():
 
     assert {paper["pmid"] for paper in merged["target_papers"] if paper["pmid"]} == {"38132429"}
     assert {paper["arxiv_id"] for paper in merged["target_papers"] if paper["arxiv_id"]} == {"1706.03762"}
-    assert "https://arxiv.org/abs/1706.03762v7" in merged["include_url"]
+    assert "include_url" not in merged
 
 
 def test_feedback_handler_preserves_implicit_target_papers():
@@ -1224,51 +1223,6 @@ def test_feedback_handler_merges_task_type_dimensions_and_targets_from_clarifica
     assert merged["comparison_targets"] == ["方案A", "方案B"]
 
 
-def test_feedback_handler_pre_handle_carries_exclusion_constraint_enable():
-    """澄清反馈节点的 _pre_handle 必须从 session 读 exclusion_constraint_enable，
-    否则反馈重解析时去重失效、被禁源被加回 target_papers。"""
-    session = Mock(spec=Session)
-    session.update_global_state = Mock()
-
-    def _get_global_state(key):
-        mapping = {
-            "config.workflow_feedback_mode": "cmd",
-            "search_context.original_query": "测试",
-            "search_context.messages": [{"role": "user", "content": "测试"}],
-            "search_context.questions": "请选择报告类型",
-            "config.report_type": None,
-            "config.exclusion_constraint_enable": True,
-        }
-        return mapping.get(key)
-
-    session.get_global_state.side_effect = _get_global_state
-    node = FeedbackHandlerNode()
-
-    with patch(
-        "openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes.adapt_llm_model_name",
-        return_value="test-model",
-    ):
-        inputs = node._pre_handle(Mock(), session, Mock())
-
-    assert inputs["exclusion_constraint_enable"] is True
-
-
-def test_feedback_handler_reparse_inputs_carries_exclusion_constraint_enable():
-    """_build_intent_reparse_inputs 必须把 exclusion_constraint_enable 透传给重解析参数。"""
-    node = FeedbackHandlerNode()
-    current_inputs = {
-        "original_query": "测试",
-        "messages": [{"role": "user", "content": "测试"}],
-        "llm_model_name": "test-model",
-        "provided_report_type": None,
-        "exclusion_constraint_enable": True,
-    }
-
-    reparse_inputs = node._build_intent_reparse_inputs(current_inputs, "补充信息")
-
-    assert reparse_inputs["exclusion_constraint_enable"] is True
-
-
 def test_outline_accept_reapplies_search_constraints_after_hitl_resume():
     """大纲恢复轮次创建新 wrapper 后，接受大纲必须从 session 重灌搜索约束。"""
     session = Mock(spec=Session)
@@ -1277,7 +1231,7 @@ def test_outline_accept_reapplies_search_constraints_after_hitl_resume():
         "config.web_search_engine_config": Mock(search_engine_name="tavily"),
         "search_context.research_intent": {
             "include_domains": ["example.com"],
-            "exclude_domains": ["bad.example"],
+
             "temporal_scope": {
                 "constraint_type": "source_date",
                 "start_date": "2020-01-01",
@@ -1304,7 +1258,7 @@ def test_outline_accept_reapplies_search_constraints_after_hitl_resume():
     apply_domains.assert_called_once_with(
         search_engine_name="tavily",
         include_domains=["example.com"],
-        exclude_domains=["bad.example"],
+
     )
     # resume 调用点改用 _resolve_source_date_scope(research_intent)；research_intent
     # 是 dict 形旧持久化 state（仅 temporal_scope 旧键），resolver 旧键回退经 _coerce_scope
@@ -2466,7 +2420,12 @@ async def _invoke_start_node(inputs):
 @pytest.mark.asyncio
 async def test_start_node_injects_brief_outline_and_routes_to_outline():
     """metadata 注入：report_type=professional/None 时跳过意图识别，直接路由 outline。"""
-    inputs = _start_node_invoke_inputs(metadata=_upgrade_metadata())
+    metadata = _upgrade_metadata()
+    metadata["research_intent"].update(
+
+
+    )
+    inputs = _start_node_invoke_inputs(metadata=metadata)
 
     result, session = await _invoke_start_node(inputs)
 

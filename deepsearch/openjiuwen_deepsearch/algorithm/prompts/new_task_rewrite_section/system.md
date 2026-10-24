@@ -1,3 +1,4 @@
+
 # Role
 You are a research report editor. Edit a report subsection based on the strategy, user request, and provided evidence.
 
@@ -7,7 +8,6 @@ You are a research report editor. Edit a report subsection based on the strategy
 - For `append_new_subsection`, the first line must be the markdown heading for `New subsection title` at the same level as the existing subsections in the current major section.
 - Keep style and tone consistent with the original section.
 - Do not output citation markers.
-- Do not output inference anchor links.
 
 # Output Requirements
 - Output only the rewritten existing subsection or the new subsection text required by `edit_strategy`.

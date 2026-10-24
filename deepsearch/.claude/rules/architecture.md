@@ -21,7 +21,7 @@ paths:
 ## Layering
 
 - `algorithm/` owns core research logic: query understanding, collection,
-  reporting, source tracing, source-trace inference, user-feedback editing, and
+  reporting, user-feedback editing, and
   chart generation.
 - `framework/openjiuwen/` owns orchestration: agent factory, workflow entry,
   graph nodes, search context, LLM factory, and search tools.
@@ -56,8 +56,6 @@ paths:
 - Report generation and conversion changes usually touch `algorithm/report/`,
   `server/deepsearch/core/manager/report_manager/`, and `tests/report/` or
   `tests/server/report_manager/`.
-- Source tracing changes usually touch `algorithm/source_trace/`,
-  `algorithm/source_tracer_infer/`, and matching tests.
 - User-feedback editing changes usually touch
   `algorithm/user_feedback_processor/`, `framework/openjiuwen/agent/` nodes,
   docs describing frontend actions, and `tests/user_feedback_processor/`.

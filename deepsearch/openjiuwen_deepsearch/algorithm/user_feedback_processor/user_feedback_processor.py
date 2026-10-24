@@ -21,9 +21,6 @@ from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions 
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.supplementary_search import (
     SupplementarySearcher,
 )
-from openjiuwen_deepsearch.algorithm.user_feedback_processor.local_source_trace import (
-    apply_local_source_trace_to_action_result,
-)
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.synonym_rewrite import SynonymRewriter
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.new_task_processor import NewTaskProcessor
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.truth_verification import TruthVerificationProcessor
@@ -808,7 +805,6 @@ class UserFeedbackProcessor:
         feedback: dict,
         final_result,
         language: str,
-        enable_local_source_trace: bool = True,
         current_report=None,
     ) -> dict:
         """根据动作类型路由到具体反馈处理逻辑。
@@ -821,7 +817,6 @@ class UserFeedbackProcessor:
             feedback: 已通过校验的用户反馈字典。
             final_result: 当前报告完整结果，至少包含正文与 metadata。
             language: 当前报告语言。
-            enable_local_source_trace: 是否在改写后执行差异感知局部溯源。
 
         Returns:
             dict: 改写后的结果快照，包含：
@@ -838,52 +833,13 @@ class UserFeedbackProcessor:
         action_mapping = USER_INPUT_ACTION_MAP.get(action)
         flow_name = action_mapping.action_category.value if action_mapping else "unsupported"
         logger.info(
-            "[UserFeedbackProcessor] execute started. action=%s flow=%s rewrite_scope=%s "
-            "enable_local_source_trace=%s report_len=%s",
+            "[UserFeedbackProcessor] execute started. action=%s flow=%s rewrite_scope=%s report_len=%s",
             action,
             flow_name,
             feedback.get("rewrite_scope", ""),
-            enable_local_source_trace,
             len(report_content),
         )
 
-        async def apply_trace_if_enabled(action_result: dict) -> dict:
-            """按开关决定是否执行局部溯源。
-
-            Args:
-                action_result: 子处理器返回的改写结果。
-
-            Returns:
-                开关关闭时返回原始 action_result；开启时返回局部溯源增强后的结果。
-            """
-            if not enable_local_source_trace:
-                logger.info(
-                    "[UserFeedbackProcessor] local source trace skipped. action=%s flow=%s reason=disabled",
-                    action,
-                    flow_name,
-                )
-                return action_result
-            logger.info(
-                "[UserFeedbackProcessor] local source trace stage started. action=%s flow=%s",
-                action,
-                flow_name,
-            )
-            traced_result = await apply_local_source_trace_to_action_result(
-                feedback=feedback,
-                action_result=action_result,
-                final_result=final_result,
-                llm_model_name=self.llm_model_name,
-                language=language,
-            )
-            logger.info(
-                "[UserFeedbackProcessor] local source trace stage completed. action=%s flow=%s "
-                "citation_updated=%s warning_present=%s",
-                action,
-                flow_name,
-                "citation_messages" in traced_result,
-                bool(traced_result.get("warning_info")),
-            )
-            return traced_result
 
         if action == "sync":
             synced_report = feedback["selected_text"]
@@ -909,7 +865,7 @@ class UserFeedbackProcessor:
                 report_content=report_content,
                 language=language,
             )
-            return await apply_trace_if_enabled(action_result)
+            return action_result
 
         if action == "supplementary_search":
             action_result = await self._supplementary_searcher.supplementary_search(
@@ -917,7 +873,7 @@ class UserFeedbackProcessor:
                 final_result=final_result,
                 language=language,
             )
-            return await apply_trace_if_enabled(action_result)
+            return action_result
 
         if action == "new_task":
             action_result = await self._new_task_processor.run_new_task(
@@ -925,7 +881,7 @@ class UserFeedbackProcessor:
                 final_result=final_result,
                 language=language,
             )
-            return await apply_trace_if_enabled(action_result)
+            return action_result
 
         if action == "truth_verification":
             return await self._truth_verifier.truth_verification(

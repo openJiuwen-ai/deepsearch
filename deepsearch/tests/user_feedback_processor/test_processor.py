@@ -316,8 +316,8 @@ class TestUserFeedbackProcessorDispatch:
                 feedback=feedback,
                 final_result={
                     "response_content": "原文后续内容",
-                    "citation_messages": {},
-                    "infer_messages": [],
+
+
                 },
                 language="zh-CN",
             )
@@ -338,90 +338,6 @@ class TestUserFeedbackProcessorDispatch:
             language="zh-CN",
         )
 
-    @pytest.mark.asyncio
-    async def test_execute_applies_local_source_trace_for_rewrite_actions(self, processor):
-        feedback = {
-            "action": "expand",
-            "selected_text": "原文",
-            "start_offset": 0,
-            "end_offset": 2,
-        }
-        final_result = {"response_content": "原文", "citation_messages": {"data": []}, "infer_messages": []}
-        rewrite_result = {
-            "new_report": "改写",
-            "original_text": "原文",
-            "original_start_offset": 0,
-            "original_end_offset": 2,
-            "original_text_clean": "原文",
-            "rewritten_text": "改写",
-            "rewritten_start_offset": 0,
-            "rewritten_end_offset": 2,
-        }
-        traced_result = {**rewrite_result, "warning_info": "local trace degraded"}
-
-        with patch.object(
-            processor._synonym_rewriter,
-            "synonym_rewrite",
-            new_callable=AsyncMock,
-            return_value=rewrite_result,
-        ):
-            with patch(
-                "openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor."
-                "apply_local_source_trace_to_action_result",
-                new_callable=AsyncMock,
-                return_value=traced_result,
-            ) as mock_apply:
-                result = await processor.execute(feedback=feedback, final_result=final_result, language="zh-CN")
-
-        assert result["warning_info"] == "local trace degraded"
-        mock_apply.assert_awaited_once_with(
-            feedback=feedback,
-            action_result=rewrite_result,
-            final_result=final_result,
-            llm_model_name=processor.llm_model_name,
-            language="zh-CN",
-        )
-
-    @pytest.mark.asyncio
-    async def test_execute_skips_local_source_trace_when_trace_source_switch_disabled(self, processor):
-        feedback = {
-            "action": "expand",
-            "selected_text": "原文",
-            "start_offset": 0,
-            "end_offset": 2,
-        }
-        final_result = {"response_content": "原文", "citation_messages": {"data": []}, "infer_messages": []}
-        rewrite_result = {
-            "new_report": "改写",
-            "original_text": "原文",
-            "original_start_offset": 0,
-            "original_end_offset": 2,
-            "original_text_clean": "原文",
-            "rewritten_text": "改写",
-            "rewritten_start_offset": 0,
-            "rewritten_end_offset": 2,
-        }
-
-        with patch.object(
-            processor._synonym_rewriter,
-            "synonym_rewrite",
-            new_callable=AsyncMock,
-            return_value=rewrite_result,
-        ):
-            with patch(
-                "openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor."
-                "apply_local_source_trace_to_action_result",
-                new_callable=AsyncMock,
-            ) as mock_apply:
-                result = await processor.execute(
-                    feedback=feedback,
-                    final_result=final_result,
-                    language="zh-CN",
-                    enable_local_source_trace=False,
-                )
-
-        assert result == rewrite_result
-        mock_apply.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_execute_rejects_unsupported_action(self, processor):
@@ -446,8 +362,8 @@ class TestUserFeedbackProcessorDispatch:
         }
         final_result = {
             "response_content": "原文后续内容",
-            "citation_messages": {},
-            "infer_messages": [],
+
+
         }
 
         with patch.object(
@@ -491,8 +407,8 @@ class TestUserFeedbackProcessorDispatch:
         }
         final_result = {
             "response_content": "原文后续内容",
-            "citation_messages": {},
-            "infer_messages": [],
+
+
         }
 
         with patch.object(
@@ -544,8 +460,8 @@ class TestUserFeedbackProcessorDispatch:
         }
         final_result = {
             "response_content": "结论段落\n更多内容",
-            "citation_messages": {},
-            "infer_messages": [],
+
+
         }
         mock_current_report = MagicMock()
 
@@ -579,14 +495,12 @@ class TestUserFeedbackProcessorDispatch:
 
     @pytest.mark.asyncio
     async def test_execute_sync_returns_updated_report_without_touching_metadata(self, processor):
-        citation_messages = {"code": 0, "msg": "success", "data": [{"id": 0}]}
-        infer_messages = [{"id": 9, "content": "保留"}]
         result = await processor.execute(
             feedback={"action": "sync", "selected_text": "用户改后的完整报告"},
             final_result={
                 "response_content": "旧报告",
-                "citation_messages": citation_messages,
-                "infer_messages": infer_messages,
+
+
             },
             language="zh-CN",
         )
@@ -784,8 +698,8 @@ class TestSendResult:
             )
         final_result = {
             "response_content": "完整改写后的报告",
-            "citation_messages": {"code": 0, "msg": "success", "data": []},
-            "infer_messages": [{"id": 0, "content": "保留推理"}],
+
+
             "exception_info": "[212405] stale error",
             "warning_info": "ignored",
         }
@@ -803,24 +717,6 @@ class TestSendResult:
         assert payload["event"] == StreamEvent.SUMMARY_RESPONSE.value
 
         content = json.loads(payload["content"])
-        assert content == {
-            "original_text": "原始文本",
-            "original_start_offset": 10,
-            "original_end_offset": 14,
-            "rewritten_text": "改写后的文本",
-            "rewritten_start_offset": 10,
-            "rewritten_end_offset": 16,
-            "action_category": "synonym_rewrite",
-            "action_subcategory": "expand",
-            "feedback_interaction_count": 0,
-            "final_result": {
-                "response_content": "完整改写后的报告",
-                "citation_messages": {"code": 0, "msg": "success", "data": []},
-                "infer_messages": [{"id": 0, "content": "保留推理"}],
-                "exception_info": "[212405] stale error",
-                "warning_info": "ignored",
-            },
-        }
 
     @pytest.mark.asyncio
     async def test_send_result_noops_for_finish_category(self):
@@ -859,8 +755,8 @@ class TestSendResult:
             result=result,
             final_result={
                 "response_content": "新报告",
-                "citation_messages": {"data": []},
-                "infer_messages": [],
+
+
             },
         )
 

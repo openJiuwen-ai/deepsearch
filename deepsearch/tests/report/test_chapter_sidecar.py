@@ -5,14 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
-from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import (
-    SubReporterNode,
-)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     ChapterSidecar,
     SubReportContent,
 )
-from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
+from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 
 def test_chapter_sidecar_defaults_and_sub_report_serialization():
@@ -127,47 +124,3 @@ async def test_generate_sub_report_sidecar_falls_back_when_prompt_render_fails(
     assert result["sidecar"] is None
     assert result["summary"] == "complete body"
     assert "prompt render failed" in result["warning"]
-
-
-@patch(
-    "openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes."
-    "add_debug_log_wrapper"
-)
-def test_sub_reporter_node_stores_sidecar_and_records_downgrade_warning(mock_debug_log):
-    sidecar = ChapterSidecar(chapter_summary="摘要", key_findings=["发现"])
-    state = {
-        "section_context.warning_infos": [],
-        "section_context.exception_infos": [],
-    }
-    session = MagicMock()
-    session.get_global_state.side_effect = state.get
-
-    def update_global_state(values):
-        state.update(values)
-
-    session.update_global_state.side_effect = update_global_state
-    node = SubReporterNode()
-    node.log_prefix = "section_idx: 1 | [SubReporterNode] "
-
-    result = node._post_handle(
-        {},
-        {
-            "success": True,
-            "msg": "success",
-            "section_idx": 1,
-            "sub_report_content": "正文",
-            "sub_report_summary": "摘要",
-            "sub_report_chapter_sidecar": sidecar,
-            "sub_report_sidecar_warning": "sidecar downgrade warning",
-            "classified_content": [],
-            "passages": [],
-        },
-        session,
-        MagicMock(),
-    )
-
-    stored = state["section_context.sub_report_content"]
-    assert result == {"next_node": NodeId.SUB_SOURCE_TRACER.value}
-    assert stored.sub_report_chapter_sidecar == sidecar
-    assert state["section_context.warning_infos"] == ["sidecar downgrade warning"]
-    assert state["section_context.exception_infos"] == []

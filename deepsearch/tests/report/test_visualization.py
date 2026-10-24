@@ -102,7 +102,6 @@ async def test_visualization_extraction_retries_empty_json_and_accepts_fenced_js
         {"content": "{}"},
         {"content": f"```json\n{json.dumps(chart_payload)}\n```"},
         {"content": '```json\n{"valid":true,"error_msg":""}\n```'},
-        {"content": '```json\n{"valid":true,"error_msg":""}\n```'},
     ]
 
     with patch(
@@ -131,7 +130,7 @@ async def test_visualization_extraction_retries_empty_json_and_accepts_fenced_js
     assert result["sub_section_visualization_content"] == json.dumps(
         chart_payload, ensure_ascii=False
     )
-    assert mocked_llm.await_count == 4
+    assert mocked_llm.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -151,7 +150,6 @@ async def test_visualization_extraction_retries_chart_type_mismatch():
     }
     llm_responses = [
         {"content": json.dumps(wrong_chart_payload, ensure_ascii=False)},
-        {"content": '{"valid":true,"error_msg":""}'},
         {
             "content": (
                 '{"valid":false,"error_msg":"Bar chart uses time-series '
@@ -159,7 +157,6 @@ async def test_visualization_extraction_retries_chart_type_mismatch():
             )
         },
         {"content": json.dumps(corrected_chart_payload, ensure_ascii=False)},
-        {"content": '{"valid":true,"error_msg":""}'},
         {"content": '{"valid":true,"error_msg":""}'},
     ]
 
@@ -190,7 +187,7 @@ async def test_visualization_extraction_retries_chart_type_mismatch():
     assert extracted == corrected_chart_payload
     assert extracted["image_type"] == "line"
     assert json.loads(result["sub_section_visualization_content"])["image_type"] == "line"
-    assert mocked_llm.await_count == 6
+    assert mocked_llm.await_count == 4
 
 
 @pytest.mark.asyncio

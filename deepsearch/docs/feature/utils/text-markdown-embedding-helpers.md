@@ -9,8 +9,6 @@
 
 ## 功能目的
 
-这些辅助函数为报告处理、溯源、输入校验和 embedding 客户端提供小型、可复用的文本边界处理能力。
-
 ## 可见行为
 
 - 文本工具支持 HTML 转义、Markdown 链接文本转义、中文句子切分、字符串长度校验和截断。
@@ -26,11 +24,10 @@
 - `openjiuwen_deepsearch/utils/common_utils/embedding_utils.py`
 - `openjiuwen_deepsearch/utils/common_utils/url_utils.py`
 - `tests/utils/test_url_utils.py`
-- `tests/source_tracer/test_add_source.py`
+
 
 ## 核心流程
 
-1. 文本进入报告、溯源或日志展示前，按场景调用 HTML 或 Markdown 转义。
 2. 需要切句时，`split_into_sentences` 按中文标点、英文感叹号/问号、分号和换行切分。
 3. Markdown 链接解析从左括号偏移开始扫描，维护括号深度。
 4. 遇到反斜杠转义字符时，跳过下一个字符，避免误判 URL 结束。
@@ -54,10 +51,9 @@
 ## 测试与验证
 
 - `uv run pytest tests/utils/test_url_utils.py`
-- 修改 Markdown URL 边界行为时，补充运行溯源和报告相关测试。
+
 
 ## 相关文档
 
 - [参数校验、安全目录与 URL 处理](./validation-security-url.md)
 - [报告生成](../algorithm/report-generation.md)
-- [全局溯源](../algorithm/source-trace.md)

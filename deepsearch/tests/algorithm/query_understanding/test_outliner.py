@@ -341,7 +341,8 @@ class TestOutliner:
         assert "titled numbered tasks" in sections_description
         assert "one sibling object" in sections_description
         assert "sub-requirements inside the relevant description" in sections_description
-        assert "source-use restrictions inside format_requirements" in sections_description
+        assert "length/style constraints inside format_requirements" in sections_description
+        assert "source-use restrictions" not in sections_description
         assert "under a named/lettered major part are subordinate" in sections_description
         assert "Do not add introduction" in sections_description
         assert "Never serialize section objects" in sections_description

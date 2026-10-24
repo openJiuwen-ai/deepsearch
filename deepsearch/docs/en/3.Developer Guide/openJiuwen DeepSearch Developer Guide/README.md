@@ -465,7 +465,7 @@ agent_config["user_feedback_processor_enable"] = True
 agent_config["user_feedback_processor_max_interactions"] = 100
 ```
 
-Unlike the earlier HITL stage, this feature runs after the report and provenance results have already been generated. The workflow then enters `UserFeedbackProcessorNode`:
+Unlike the earlier HITL stage, this feature runs after the report has already been generated. The workflow then enters `UserFeedbackProcessorNode`:
 - On first entry, the system first sends a full `final_result` snapshot to the frontend.
 - The frontend then continues using the same `conversation_id` and passes user actions to `message` as JSON strings.
 - After each successful rewrite, the system returns partial replacement information together with the latest `final_result`, and the frontend can refresh content incrementally.
@@ -569,16 +569,6 @@ async for chunk in agent.run(message=finish_message, conversation_id=conversatio
 #     ensure_ascii=False,
 # )
 ```
-
-Notes:
-- Local rewrite actions require `selected_text` to exactly match the text in `[start_offset, end_offset)` of the current report, otherwise offset validation fails.
-- Rewrite results update `final_result.response_content`. When `source_tracer_research_trace_source_switch` is enabled, the backend runs diff-aware local source tracing on changed spans; unchanged spans keep their existing citations, and newly traced citations update `citation_messages` and append reference entries at the end of the report.
-- The backend no longer maintains an extra offset mapping.
-- `sync` only updates `final_result.response_content`, does not consume `feedback_interaction_count`, and appends a `search_context.rewrite_history` record only when the full report content actually changes.
-- The backend keeps only the latest 10 `sync` history records; unchanged `sync` requests do not create history entries.
-- Each successful normal local rewrite appends one record to `search_context.rewrite_history`, including `action`, `rewrite_scope` (when present), offsets, and related information for debugging and auditing.
-- `truth_verification` does not update `final_result.response_content` or write `rewrite_history`. The streaming `SUMMARY_RESPONSE` `content` is JSON with `display_text` and `feedback_interaction_count`, and it consumes one `feedback_interaction_count`.
-- **Compatibility**: omitting `rewrite_scope` is equivalent to explicitly sending `selected_only`; **`action` cannot be omitted or be an empty string**. If an older frontend still relies on backend inference, it must be updated to send a valid explicit `action`.
 
 # Further reading
 

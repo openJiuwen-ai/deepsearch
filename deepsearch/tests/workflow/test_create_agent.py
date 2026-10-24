@@ -59,7 +59,7 @@ agent_config = {
     "execute_mode": "commercial",
     "workflow_human_in_the_loop": False,
     "outliner_max_section_num": 5,
-    "source_tracer_research_trace_source_switch": True,
+
     "llm_config": llm_config,
     "info_collector_search_method": "web",
     "web_search_engine_config": web_search_engine_config,
@@ -155,7 +155,6 @@ def test_agent_factory_set_outliner_max_section_num(invalid_value, error_code, e
     ("invalid type", 200009, "Input should be a valid boolean, unable to interpret input"),
 ])
 def test_agent_factory_set_workflow_human_in_the_loop(invalid_value, error_code, error_msg_fragment):
-    '''异常值测试,source_tracer_research_trace_source_switch, has_template测试类似'''
     validate_config_parameter(
         "workflow_human_in_the_loop",
         invalid_value,

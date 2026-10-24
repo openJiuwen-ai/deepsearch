@@ -75,7 +75,7 @@ class SectionContext(SectionBaseContext):
     report_template: str = Field(default="", description="子报告模板")
     sub_report_content: SubReportContent = Field(
         default_factory=SubReportContent,
-        description="子报告内容：包含子报告的内容及其相关溯源信息",
+        description="子报告内容：包含正文、写作证据和摘要",
     )
     sub_report_background_knowledge: List[Dict] = Field(
         default_factory=list,

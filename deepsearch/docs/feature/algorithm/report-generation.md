@@ -4,8 +4,6 @@
 
 本文档覆盖专业版使用的 `openjiuwen_deepsearch/algorithm/report/` 下的报告生成能力，包括子报告生成、信息维度矩阵段落选择、候选文档预筛、Markdown 标题清理、表格标题归一、可视化 Mermaid 片段生成和最终报告拼接。
 
-本文档不覆盖 Brief 的大纲、证据收集、章节/摘要写作；Brief 不再复用本模块的可视化能力（其图表由自包含 HTML 报告内嵌 ECharts 承载），完整流程见 [Brief 精简版报告工作流](./brief-report.md)。本文档也不覆盖报告模板上传解析、服务端报告格式转换、全局溯源后处理和 VLM 图表文件生成。子能力细节见：
-
 - [子报告生成](./report-generation/sub-report-generation.md)
 - [信息维度矩阵段落选择](./report-generation/coverage-matrix-doc-selection.md)
 - [候选文档预筛](./report-generation/doc-prefilter.md)
@@ -14,9 +12,14 @@
 
 ## 功能目的
 
-报告生成将查询理解和资料采集阶段产出的 outline、plans、doc infos 和 classified contents 转换为可展示的 Markdown 报告。它负责控制章节结构、分类资料输入、子报告生成、摘要/结论/参考资料生成和部分可视化内容插入。
+报告生成将查询理解和资料采集阶段产出的 outline、plans、doc infos 和 classified contents 转换为可展示的 Markdown 报告。它负责控制章节结构、分类资料输入、子报告生成、摘要/结论生成和部分可视化内容插入。
 
 ## 可见行为
+
+- 检索不再提取或应用文献排除名单；候选资料仍按相关性、时间范围、去重和质量规则筛选。
+- 不提供专门的禁引文献开关、来源黑名单提取、匹配或过滤功能。`Section.format_requirements` 仅保留非空字符串并清理首尾空白，不解释或删除指令内容；提示词不注入来源黑名单专项规则。用户原文仍作为普通任务上下文传给模型，代码不保证模型会忽略其中的来源偏好或限制。
+- 最终 Markdown 不输出引用标记和来源 URL，也不生成参考文献章节。链接文字、图片和目录锚点保留。
+- 报告完成后直接进入图表生成和用户反馈节点，无引用校验、引用溯源或溯源推理阶段；相关配置开关和算法已移除。
 
 - 报告正文以 Markdown 输出，并清理标题编号和过深标题。
 - 最终报告在标题与摘要之间生成一级目录；目录以无项目符号的独立链接行列出正文一级章节，不展开子标题，也不包含摘要、结论和参考文章。
@@ -29,15 +32,11 @@
 
 ## 关键代码路径
 
-- 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
-  > `report.py` 已按职责拆分为 11 个模块，`report.py` 保留核心 `Reporter` 类（编排调度），其余 mixin 模块包括：
-  > `report_common.py`（常量/正则/错误格式化）、`markdown_utils.py`（Markdown 处理）、`visualization.py`（图表数据抽取与 Mermaid 生成）、`visualization_insertion.py`（图表插入）、`evidence.py`（证据生成/抽取/评分，含证据管线编排 `_prepare_evidence`）、`report_parts.py`（子报告 Prompt 构建 `_build_subsection_prompt`、后处理 `_post_process_subsection`、摘要/结论/sidecar）、`sub_section_outline.py`（子大纲生成 mixin：`_generate_sub_section_outline` / `_generate_outline_with_retry`）、`reference_utils.py`（参考文献去重/重编号）、`retry_feedback.py`（重试反馈）、`background_knowledge.py`（背景知识抽取）。
-- 报告配置：`openjiuwen_deepsearch/algorithm/report/config.py`
-- 文档预筛：`openjiuwen_deepsearch/algorithm/report/doc_prefilter.py`
-- compact doc info：`openjiuwen_deepsearch/algorithm/report/compact_doc_info.py`
-- 全文抽取管线：`openjiuwen_deepsearch/algorithm/report/report_rationale_fulltext.py`
-- 报告工具：`openjiuwen_deepsearch/algorithm/report/report_utils.py`
-- 表格 caption：`openjiuwen_deepsearch/algorithm/report/table_caption_utils.py`
+- 报告编排：`openjiuwen_deepsearch/algorithm/report/report.py`
+- 子报告写作和后处理：`openjiuwen_deepsearch/algorithm/report/report_parts.py`
+- 证据组织：`openjiuwen_deepsearch/algorithm/report/evidence.py`
+- 输出清理：`openjiuwen_deepsearch/algorithm/report/report_utils.py` 的 `strip_report_source_links`
+- 工作流连接与最终正文写回：`openjiuwen_deepsearch/framework/openjiuwen/agent/main_graph_nodes.py`、`workflow.py`
 
 相关 Prompt：
 
@@ -65,7 +64,6 @@
 - `tests/report/test_tools_in_report.py`
 - `tests/report/test_evidence.py`
 - `tests/report/test_markdown_utils.py`
-- `tests/report/test_reference_utils.py`
 - `tests/report/test_sub_section_outline.py`
 - `tests/report/test_visualization.py`
 - `tests/report/test_visualization_insertion.py`
@@ -79,7 +77,6 @@
 4. 子报告 Prompt 根据章节契约、选中文档和历史上下文生成 Markdown。
 5. 报告工具清理标题编号、规范化表格标题，并按报告类型生成摘要、结论或建议。
 6. 可视化内容如需插入，先抽取结构化数据并校验 schema，再生成 Mermaid 或交给图表模块。
-7. 总报告按“标题 → 一级目录 → 摘要 → 正文章节 → 结论 → 参考文章”拼接，再将最终报告、classified contents、sidecar 和引用相关元数据交给后续溯源和前端展示。
 
 ## 数据契约与依赖
 
@@ -94,7 +91,6 @@
 关键输出：
 
 - `response_content`：Markdown 报告正文。
-- `all_classified_contents`：供溯源、用户反馈和图表生成复用的资料集合。
 - 子报告 sidecar：章节摘要、资料映射和局部契约。
 
 ## 边界与错误处理
@@ -128,7 +124,6 @@ uv run pytest tests/report/test_doc_prefilter.py
 - [Markdown 可视化](./report-generation/visualization-markdown.md)
 - [查询理解](./query-understanding.md)
 - [资料采集](./research-collector.md)
-- [全局溯源](./source-trace.md)
 - [图表生成](./chart-generation.md)
 - [报告模板生成](./report-template.md)
 - [Brief 精简版报告工作流](./brief-report.md)

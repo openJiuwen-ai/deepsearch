@@ -16,20 +16,6 @@ openjiuwen_deepsearch/
 
 ## `algorithm/`: domain algorithms
 
-```text
-algorithm/
-├── brief_report/               # Brief reports, material merging, and HTML output
-├── chart_generation/           # Chart generation and sandbox assets
-├── prompts/                    # Prompt templates
-├── query_understanding/        # Intent, materials, outlines, planning, clarification
-├── report/                     # Subreports/reports, evidence, visualization
-├── report_export/, report_style/, report_template/
-├── research_collector/         # Collection, evidence fusion, webpage enrichment
-├── search_agent/, search_index/, search_nodes/, search_tools/
-├── source_trace/, source_tracer_infer/
-└── user_feedback_processor/    # Post-report local edits and supplementary search
-```
-
 The primary `query_understanding/` entry points are `intent_recognition.py`, `material_processing.py`, `outline_mode_router.py`, `interpreter.py`, `outliner.py`, and `planner.py`. This layer produces user-material constraints and section bindings that are consumed by collection and writing.
 
 ## `framework/openjiuwen/`: runtime orchestration
@@ -73,13 +59,6 @@ utils/
 ```
 
 ## Main execution path and development entry points
-
-```text
-workflow.py → main_graph_nodes.py / brief_nodes.py
-→ query_understanding → collector_graph + research_collector
-→ reasoning_writing_graph + report → source_trace / source_tracer_infer
-→ streaming output or a HITL waiting event
-```
 
 - Workflow nodes: `framework/openjiuwen/agent/`.
 - Report algorithms and prompts: `algorithm/report/` and `algorithm/prompts/`.

@@ -1,6 +1,5 @@
 """已有研究约束贯穿网页候选选择与正文压缩。"""
 
-from copy import deepcopy
 import json
 from unittest.mock import Mock
 
@@ -18,21 +17,8 @@ def intent():
         "comparison_targets": ["carbon steel in 1 M HCl"],
         "temporal_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"},
         "content_date_scope": None,
-        "exclude_url": ["https://example.com/excluded"],
+
     }
-
-
-def test_constraints_preserve_legacy_input_and_exclusion_switch():
-    original = intent()
-    snapshot = deepcopy(original)
-    off = build_evidence_constraint_prompt_context(original)
-    on = build_evidence_constraint_prompt_context(original, exclusion_enabled=True)
-    assert "2020-12-31" in off['source_date_instruction']
-    assert off['comparison_targets'] == original['comparison_targets']
-    assert 'exclusion_instruction' not in off
-    assert 'https://example.com/excluded' in on['exclusion_instruction']
-    on['required_dimensions'].clear()
-    assert original == snapshot
 
 
 def test_dual_boundaries_remain_separate_and_invalid_state_does_not_leak(caplog):
@@ -47,7 +33,7 @@ def test_dual_boundaries_remain_separate_and_invalid_state_does_not_leak(caplog)
 
 
 def test_node_and_both_payloads_forward_constraints_and_known_publication_time():
-    values = {"collector_context.research_intent": intent(), "config.exclusion_constraint_enable": True}
+    values = {"collector_context.research_intent": intent()}
     session = Mock()
     session.get_global_state.side_effect = values.get
     state = WebPageEnrichmentNode()._pre_handle({}, session, None)

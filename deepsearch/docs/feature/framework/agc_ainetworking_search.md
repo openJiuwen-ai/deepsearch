@@ -97,10 +97,6 @@ scheme，拒绝 localhost、私网、回环、链路本地、CGNAT 段等非公�
 
 ## 4. 会话级站点行为
 
-`agc_ainetworking` 在 `SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES` 集合中注册，
-因此会话级意图识别输出的 `include_domains` 与 `exclude_domains` 会进入
-`apply_web_search_domain_constraints` 的 `agc_ainetworking` 分支。
-
 ### 4.1 includes（包含站点）
 
 意图识别输出的 `include_domains` 经 `normalize_domains` 归一化后，
@@ -117,21 +113,6 @@ api_wrapper.sites = merged[:20]
 `sites` 统一复用 `normalize_domains` 共享规则：小写化、剥 scheme、
 剥离 `www.` 前缀、去重（与 tavily 一致）。`model_post_init` 中读取
 `extension["sites"]` 时同样走默认归一化。本引擎不重写该函数。
-
-### 4.2 excludes（排除站点）
-
-华为 `webSearch` 接口**未提供原生 `exclude` 参数**，因此 `agc_ainetworking`
-分支在 `apply_web_search_domain_constraints` 中**忽略 `exclude_domains`
-参数**，仅处理 includes，日志中会注明该分工。
-
-excludes 的实际过滤由收集器 `process_common_search_result` 调用
-`filter_search_results_by_exclude_domains` 完成：所有 `source ==
-"agc_ainetworking"` 的归一化行与 `agent_input.research_intent.exclude_domains`
-按归一化域名匹配，命中即被丢弃。该路径零新增代码，复用引擎无关的通用后置过滤。
-
-详见
-[信息采集](../algorithm/research-collector.md)
-与 T4 测试 `tests/tools/test_web_search.py` 中 excludes 闭环验收用例。
 
 ## 5. 响应归一化
 
@@ -184,12 +165,10 @@ DeepSearch 标准行。字段映射如下：
 - **`webSearch/multiLang` 的 `locale` 参数**。多语言检索由 `search_url`
   切换到对应端点实现，请求体**不新增 `locale` 键**。
 - **`freshness` 时间范围接线**。`freshness` 仅作为静态请求字段透传给
-  华为，默认 `noLimit`。**不接 `TEMPORAL_SCOPE_SEARCH_ENGINES` / 
+  华为，默认 `noLimit`。**不接 `TEMPORAL_SCOPE_SEARCH_ENGINES` /
   `apply_web_search_temporal_scope` 机制**，意图识别输出的时间约束
   不会自动转为 `freshness` 取值。需要时间范围时由运维在 `extension`
   中显式配置 `freshness`。
-- **包装器内 exclude 站点过滤**。如第 4.2 节所述，excludes 由收集器
-  通用后置过滤兜底，包装器不重复实现。
 - **`server/` 改动与 DB schema 变更**。服务端透传链完全复用，零改动。
 - **新增第三方依赖**。仅复用 `requests`/`aiohttp`/`pydantic`/`httpx`
   等既有依赖。
@@ -235,9 +214,6 @@ DeepSearch 标准行。字段映射如下：
 - 包装器：`openjiuwen_deepsearch/framework/openjiuwen/tools/search_api/agc_ainetworking/api_wrapper.py`
 - 注册映射与会话级约束：
   `openjiuwen_deepsearch/framework/openjiuwen/tools/web_search.py`
-- 通用 exclude 后置过滤：
-  `openjiuwen_deepsearch/algorithm/research_collector/collector_function.py`
-  （`process_common_search_result` / `filter_search_results_by_exclude_domains`）
 - URL 与域名归一化：
   `openjiuwen_deepsearch/utils/url_utils.py`
   （`normalize_domains` / `validate_search_service_url`）
@@ -245,7 +221,7 @@ DeepSearch 标准行。字段映射如下：
 主要测试：
 
 - `tests/tools/search_api/test_agc_ainetworking.py`
-- `tests/tools/test_web_search.py`（追加 includes 合并用例与 excludes 闭环用例）
+- `tests/tools/test_web_search.py`（includes 合并与搜索结果保留用例）
 
 ## 测试与验证
 
@@ -253,7 +229,7 @@ DeepSearch 标准行。字段映射如下：
 # 包装器单测
 cd deepsearch && uv run pytest tests/tools/search_api/test_agc_ainetworking.py -m "not llm" -v
 
-# 会话级约束与 excludes 闭环
+# 会话级站点配置与搜索结果处理
 cd deepsearch && uv run pytest tests/tools/test_web_search.py -m "not llm" -v
 
 # 静态检查

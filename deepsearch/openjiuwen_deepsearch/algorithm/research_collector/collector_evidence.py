@@ -1404,6 +1404,20 @@ def build_evidence_atom(
     title = str(record.get("title") or "Untitled")
     full_text = str(record.get("full_text") or "")
     use_full_text = record.get("full_text_status") == "available" and bool(full_text.strip())
+    logger.info(
+        "[CollectorEvidence] fulltext_status title=%s url=%s academic_source=%s "
+        "academic_source_id=%s status=%s evidence_type=%s full_text_chars=%d "
+        "content_chars=%d full_text_url=%s",
+        title,
+        url,
+        record.get("academic_source", ""),
+        record.get("academic_source_id", ""),
+        record.get("full_text_status", ""),
+        "full_text" if use_full_text else "abstract",
+        len(full_text.strip()),
+        len(str(record.get("content") or "")),
+        record.get("full_text_url", ""),
+    )
     content = str(full_text if use_full_text else record.get("content") or "")[
         :MAX_COLLECTOR_DOC_CONTENT_LENGTH
     ]

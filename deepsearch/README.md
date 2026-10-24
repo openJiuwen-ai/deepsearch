@@ -26,13 +26,8 @@ openJiuwen-DeepSearch provides deep search and deep research for enterprises and
   - Natural-language feedback during planning.
   - Collaborative revision based on user feedback.
 
-- **Segment-level provenance**
-  - Validated citations in outputs and reports; preview and open sources.
-  - Segment-level traceability and confidence.
-  - Provenance reasoning and visualization for key claims.
-
 - **Rich reports with visuals**
-  - Reports with figures and charts; content remains traceable.
+  - Reports with figures and charts.
   - Markdown output and export to Word, HTML, and other formats.
 
 ## System architecture
@@ -51,8 +46,8 @@ DeepSearch includes a manager, query planning, knowledge retrieval, understandin
 
 **Abbreviations**
 
-- **agent-core**: openJiuwen agent-core  
-- **DeepSearch**: openJiuwen-DeepSearch  
+- **agent-core**: openJiuwen agent-core
+- **DeepSearch**: openJiuwen-DeepSearch
 
 # 📦 Installation
 

@@ -32,9 +32,7 @@ class StatusCode(Enum):
     |      18      |  研究规划模块错误         |  Outline模块异常、Plan模块异常等                                   |
     |      19      |  信息收集模块错误         |  信息获取异常、信息评估等后处理失败等                                 |
     |      20      |  报告撰写模块错误         |  子章节筛选文档失败、子报告生成失败、图表异常、总报告生成失败等            |
-    |      21      |  溯源引用模块错误         |  溯源生成失败、溯源校验失败等                                        |
     |      22      |  模板功能模块错误         |  模板提取失败异常等                                                |
-    |      23      |  溯源推理模块错误         |  溯源推理生成失败等                                                |
     |      24      |  用户反馈处理模块错误      |  UserFeedbackProcessorNode模块异常：改写失败、偏移量不匹配等          |
     |      25      |  vlm迭代图生成模块错误     |  vlm迭代图生成错误，校验失败等                                      |
 
@@ -162,21 +160,11 @@ class StatusCode(Enum):
     SUB_REPORT_GENERATE_ERROR = (212000, "Error when generate sub report, error: {e}")
     REPORT_GENERATE_ERROR = (212001, "Report generate has something wrong, error: {e}")
 
-    SOURCE_TRACER_TRACE_SOURCE_ERROR = (212100, "Source tracer trace source error {e}")
-    SOURCE_TRACER_ADD_SOURCE_ERROR = (212101, "Source tracer add source error {e}")
-    CITATION_CHECKER_DATA_LEN_ERROR = (212102, "Citation checker data len error {e}")
-    CITATION_VERIFIER_DATA_LEN_ERROR = (212103, "Citation verifier data len error {e}")
-    CITATION_VERIFIER_LLM_RESPONSE_ERROR = (212104, "Citation verifier llm response error {e}")
-    CITATION_CHECKER_POST_PROCESS_ERROR = (212105, "Citation checker post process error {e}")
-    SOURCE_TRACER_NODE_ERROR = (212106, "Source tracer node error {e}")
 
     TEMPLATE_NAME_INVALID = (212201, "Invalid template name: {name}. Only Chinese/English letters, numbers,"
                                      "underscores (_), hyphens (-), and dots (.) are allowed.")
     TEMPLATE_GENERATE_ERROR = (212202, "Template generation failed, error: {e}")
 
-    SOURCE_TRACER_INFER_ERROR = (212300, "Source tracer infer error {e}")
-    SOURCE_TRACER_INFER_DATA_TYPE_ERROR = (212301, "Source tracer infer data type error {e}")
-    SOURCE_TRACER_INFER_DATA_LEN_ERROR = (212302, "Source tracer infer data length error {e}")
 
     USER_FEEDBACK_PROCESSOR_DISABLED = (212400, "User feedback processor is disabled")
     USER_FEEDBACK_PROCESSOR_MAX_INTERACTIONS_REACHED = (212401, "Max interaction limit reached: {max_interactions}")

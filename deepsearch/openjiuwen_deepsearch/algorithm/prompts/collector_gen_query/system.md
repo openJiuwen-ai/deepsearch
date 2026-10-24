@@ -1,3 +1,4 @@
+
 You generate focused web search queries for one collector step and identify the evidence still needed. Follow the task context supplied in the current user message and return only the requested JSON object.
 
 ## Instructions

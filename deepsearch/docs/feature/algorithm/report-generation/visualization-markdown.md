@@ -21,6 +21,7 @@ Markdown 可视化用于在报告正文中以 Mermaid 文本图表表达结构�
 - 支持 `bar`、`line`、`pie`、`timeline` 等类型。
 - 非 timeline 图表必须有明确且不混合的单位。
 - 单位归一化输出必须通过 schema 校验后才会继续生成图表。
+- 图表抽取保留结构和合规校验，不额外调用 LLM 对照原文执行逐字段溯源校验。
 - 同一章节可以插入多张 Mermaid 图表；多图来源于章节内多个高数据密度候选资料，而不是正文生成后的二次补图。
 - 插入到报告正文的 Mermaid 图表会带有系统管理的居中图题，并在图题中保留对应 citation。
 - 章节正文写作 Prompt 不允许模型直接输出 Mermaid 代码围栏、图表代码或手写图块；该约束不依赖 `visualization_enable`，正文草稿不会混入未受控 Mermaid。
@@ -37,8 +38,6 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 当前实现不在正文写完后再次扫描草稿正文、生成候选、重跑图表抽取或执行重复数据去重预算控制。
 
 ### 并发控制
-
-可视化数据提取阶段（步骤 2）中，每个候选资料最多触发 4 次 LLM 调用（数据抽取、可溯源校验、合规校验、可选归一化），每轮最多重试 3 次。为避免同一章节内大量并发 LLM 调用超出模型 API 的 TPM（Tokens Per Minute）限制，`_generate_content_for_visualization` 使用 `asyncio.Semaphore` 限制同一 section 内的最大并发 task 数为 `MAX_CONCURRENT_VISUALIZATION_TASKS`（默认 5）。该信号量是 section 内局部信号量，不跨 section 共享。候选选择阶段只考虑全文文档（`is_fulltext=True`），优先 `data_density >= 0.9`，若为空则回退 `>= 0.8`；不做数量限制（上游已限制 top_n=10）。
 
 ## 关键代码路径
 

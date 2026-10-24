@@ -42,7 +42,7 @@
 * 安装完成后，打开 “终端”，输入：`python3 --version`，若安装成功会输出 python 版本号。
 
 * 打开 “终端”，安装 `uv`：
-   
+
    ```bash
    brew install uv
    ```
@@ -70,7 +70,7 @@
   ```
 
 * 安装完成后，打开 “终端”，运行以下命令启动并登录 MySQL：
-   
+
    ```bash
    brew services start mysql
    mysql -u root
@@ -128,7 +128,7 @@
   > **说明**：<br>
   > HOST、BACKEND_PORT分别是DeepSearch服务的API地址和端口号。当环境变量中不填该值时，默认Host为`0.0.0.0`，端口号为`8000`。<br>
   > DB_HOST、DB_PORT 等变量的值可替换为实际数据库信息，DB_USER、DB_PASSWORD 为上文新建的 MySQL 用户与密码。如果密码中包含特殊字符，可参考 [特殊字符转义表](#windows-special-char) 将特殊字符替换为 URL 编码。
-    
+
    ```env
    # 配置API地址和端口号（样例）
    BACKEND_PORT=6000
@@ -138,11 +138,11 @@
    DB_HOST=localhost
    DB_PORT=3306
    DB_USER=your_user_name
-   DB_PASSWORD=your_password  
+   DB_PASSWORD=your_password
    ```
 
   变量说明可参考如下表格。
- 
+
    | 变量名                                   | 变量说明                                                               | 配置样例                                                                      |
    |---------------------------------------|--------------------------------------------------------------------|---------------------------------------------------------------------------|
    | **BACKEND_PORT**                      | DeepSearch服务的API端口号。如果要搭配Studio前端使用，该端口号需要与Studio配置文件.env中的`DEEPSEARCH_AGENT_PORT`一致。       | `6000`                     |
@@ -181,7 +181,7 @@
   > - `redis` 模式：需要先安装并启动 Redis 服务，适用于分布式生产环境；**还须**在 `.env` 中完整配置 `OBS_SERVER`、`OBS_BUCKET`、`OBS_REGION`、`OBS_ACCESS_KEY_ID`、`OBS_SECRET_ACCESS_KEY`，否则服务无法启动。**仅在此模式下**服务端会将知识库文档上传至对象存储，供多实例共享。**多实例时 `DB_TYPE` 必须为 `mysql` 且连接同一 MySQL**（知识库等元数据存于应用数据库；SQLite 为本地文件，进程间不共享）。
 
 * 打开一个 "终端"，在源码根目录下，运行以下命令启动后端服务，并耐心等待：
-   
+
   ```bash
   uv venv
   uv sync --group backend
@@ -208,7 +208,6 @@
   > Docker 安装见 [Docker 方式安装](../Docker方式安装/README.md)。仅 **DeepResearch** 时只需终端 1。
 
   启动成功后，会输出 "Application startup complete"。
-
 
 ## 三、常见问题（FAQ）
 

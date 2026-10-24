@@ -4,31 +4,7 @@
 
 ## 概览
 
-```text
-openjiuwen_deepsearch/
-├── algorithm/                  # 研究、检索、写作和溯源算法
-├── common/                     # 异常、状态码和公共定义
-├── config/                     # Pydantic 配置与运行时 API 工具模型
-├── framework/openjiuwen/       # 工作流编排、节点、工具和 LLM 适配
-├── llm/                        # 统一 LLM 调用封装
-└── utils/                      # 安全、日志、限流、校验和常量工具
-```
-
 ## `algorithm/`：领域算法
-
-```text
-algorithm/
-├── brief_report/               # Brief 报告、素材合并与 HTML 输出
-├── chart_generation/           # 图表生成和沙箱资源
-├── prompts/                    # 提示词模板
-├── query_understanding/        # 意图、素材、大纲、计划与澄清
-├── report/                     # 子报告/总报告、证据和可视化
-├── report_export/、report_style/、report_template/
-├── research_collector/         # 收集、证据融合和网页正文增强
-├── search_agent/、search_index/、search_nodes/、search_tools/
-├── source_trace/、source_tracer_infer/
-└── user_feedback_processor/    # 报告后局部编辑与补充检索
-```
 
 `query_understanding/` 的关键入口为 `intent_recognition.py`、`material_processing.py`、`outline_mode_router.py`、`interpreter.py`、`outliner.py` 和 `planner.py`。用户素材的约束和章节绑定由此产生，供收集和写作阶段消费。
 
@@ -59,13 +35,6 @@ framework/openjiuwen/
 `config/config.py` 定义 `AgentConfig`、`ServiceConfig` 和 provider 配置；`runtime_api_models.py` 定义运行时 HTTP 工具模型。`utils/` 包含 `common_utils/`、`constants_utils/`、`debug_utils/`、`log_utils/`、`rate_limiter_utils/`、`validation_utils/`。
 
 ## 主调用链与开发入口
-
-```text
-workflow.py → main_graph_nodes.py / brief_nodes.py
-→ query_understanding → collector_graph + research_collector
-→ reasoning_writing_graph + report → source_trace / source_tracer_infer
-→ 流式输出或 HITL 等待事件
-```
 
 - 工作流节点：`framework/openjiuwen/agent/`。
 - 报告算法和提示词：`algorithm/report/`、`algorithm/prompts/`。

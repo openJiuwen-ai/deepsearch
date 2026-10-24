@@ -28,6 +28,28 @@ def _intent_prompt_text() -> str:
     )
 
 
+@pytest.mark.parametrize("parse", [_normalize_research_intent, ResearchIntent.model_validate])
+def test_retired_source_exclusions_do_not_enter_research_intent(parse):
+    """Old state or extra tool arguments cannot restore source exclusion behavior."""
+    current = {
+        "include_url": ["https://example.com/paper"],
+        "include_domains": ["example.com"],
+        "target_papers": [{"doi": "10.1000/example"}],
+    }
+    retired = {
+        "exclude_url": ["https://example.com/paper"],
+        "exclude_domains": ["example.com"],
+        "exclusion_constraints": [{"doi": "10.1000/example"}],
+        "exclusion_constraint_enable": True,
+    }
+    intent = parse({**current, **retired})
+    assert intent.model_dump() == parse(current).model_dump()
+    assert "include_url" not in intent.model_dump()
+    assert intent.include_domains == current["include_domains"]
+    assert intent.target_papers[0].doi == "10.1000/example"
+    assert not retired.keys() & _create_emit_intent_tool().card.input_params["properties"].keys()
+
+
 @pytest.fixture
 def sample_tool_response():
     return {
@@ -41,10 +63,9 @@ def sample_tool_response():
                     "audience_role": "研发负责人",
                     "tone": "analytical",
                     "report_type": "professional",
-                    "include_url": ["https://example.com/a", "https://example.com/b"],
-                    "exclude_url": [],
+
                     "include_domains": [],
-                    "exclude_domains": [],
+
                     "source_date_scope": {
                         "end_date": "2024-03-31",
                     },
@@ -84,8 +105,8 @@ async def test_recognize_report_intent_success(sample_tool_response):
     assert result.research_intent.audience_role == "研发负责人"
     assert result.research_intent.tone == "analytical"
     assert result.research_intent.report_type == "professional"
-    assert "https://example.com/a" in result.research_intent.include_url
-    assert "example.com" in result.research_intent.include_domains
+    assert "include_url" not in result.research_intent.model_dump()
+    assert "example.com" not in result.research_intent.include_domains
     assert result.research_intent.source_date_scope.end_date.isoformat() == "2024-03-31"
     # the deprecated temporal_scope field is never populated
     # by normalize; the constraint lives in source_date_scope (asserted above).
@@ -137,25 +158,13 @@ def test_drop_empty_optional_intent_fields_before_tool_validation():
     assert args == {"research_query": "topic"}
 
 
-def test_target_paper_url_is_preserved_and_added_to_include_url():
+def test_target_paper_url_is_ignored():
     intent = _normalize_research_intent({
         "target_papers": [{"url": "https://journal.example.org/article/42"}],
     })
-
-    assert intent.target_papers[0].url == "https://journal.example.org/article/42"
-    assert intent.include_url == ["https://journal.example.org/article/42"]
-
-
-def test_normalize_intent_identifies_arxiv_id_from_target_paper_url():
-    intent = _normalize_research_intent({
-        "target_papers": [{"url": "https://arxiv.org/abs/1706.03762v7"}],
-    })
-
-    assert intent.target_papers[0].url == "https://arxiv.org/abs/1706.03762v7"
-    assert intent.target_papers[0].arxiv_id == "1706.03762"
-
-    tool = _create_emit_intent_tool()
-    assert "url" in tool.card.input_params["properties"]["target_papers"]["items"]["properties"]
+    assert intent.target_papers == []
+    assert "include_url" not in intent.model_dump()
+    assert "url" not in _create_emit_intent_tool().card.input_params["properties"]["target_papers"]["items"]["properties"]
 
 
 def test_normalize_target_papers_merges_canonical_arxiv_duplicates():
@@ -175,16 +184,15 @@ def test_normalize_target_papers_merges_canonical_arxiv_duplicates():
     assert [paper.model_dump(exclude_defaults=True) for paper in intent.target_papers] == [{
         "title": "Attention Is All You Need",
         "arxiv_id": "1706.03762",
-        "url": "https://arxiv.org/abs/1706.03762v7",
     }]
 
 
-def test_intent_prompt_requires_paper_urls():
+def test_intent_prompt_ignores_paper_urls():
     prompt = _intent_prompt_text()
 
     assert "target_papers" in prompt
-    assert "include_url" in prompt
-    assert "paper URL" in prompt
+    assert "include_url" not in prompt
+    assert "Do not extract URLs" in prompt
 
 
 def test_normalize_target_papers_drops_empty_items_and_deduplicates():
@@ -201,11 +209,11 @@ def test_normalize_target_papers_drops_empty_items_and_deduplicates():
 
     assert [paper.model_dump() for paper in intent.target_papers] == [
         {
-                "title": "Paper", "pmid": "38202877", "doi": "", "arxiv_id": "", "url": "",
+                "title": "Paper", "pmid": "38202877", "doi": "", "arxiv_id": "",
             "dataset": "", "data_year": "", "topic": "",
         },
         {
-                "title": "", "pmid": "", "doi": "", "arxiv_id": "", "url": "",
+                "title": "", "pmid": "", "doi": "", "arxiv_id": "",
             "dataset": "MEPS", "data_year": "2019", "topic": "orthodontic treatment",
         },
     ]
@@ -217,7 +225,7 @@ def test_emit_intent_tool_declares_target_papers_without_search_terms():
 
     assert target_schema["type"] == "array"
     assert set(target_schema["items"]["properties"]) == {
-        "title", "pmid", "doi", "arxiv_id", "url", "dataset", "data_year", "topic",
+        "title", "pmid", "doi", "arxiv_id", "dataset", "data_year", "topic",
     }
     assert "search_terms" not in target_schema["items"]["properties"]
 
@@ -362,11 +370,7 @@ async def test_successful_intent_merges_explicit_target_paper_omitted_by_llm():
     ):
         result = await recognize_report_intent({"original_query": query, "llm_model_name": "basic"})
 
-    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [{
-        "url": "https://arxiv.org/abs/1706.03762v7",
-        "arxiv_id": "1706.03762",
-    }]
-    assert "https://arxiv.org/abs/1706.03762v7" in result.research_intent.include_url
+    assert result.research_intent.target_papers == []
     assert "arxiv.org" not in result.research_intent.include_domains
 
 
@@ -384,23 +388,12 @@ def test_default_fallback_preserves_explicit_paper_identifier(query, expected):
     assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [expected]
 
 
-@pytest.mark.parametrize(
-    ("query", "expected"),
-    [
-        (
-            "请使用 https://pubmed.ncbi.nlm.nih.gov/38132429/ 这篇论文",
-            {"url": "https://pubmed.ncbi.nlm.nih.gov/38132429/", "pmid": "38132429"},
-        ),
-        (
-            "请使用 https://arxiv.org/abs/1706.03762v7 这篇论文",
-            {"url": "https://arxiv.org/abs/1706.03762v7", "arxiv_id": "1706.03762"},
-        ),
-    ],
-)
-def test_default_fallback_preserves_and_identifies_academic_paper_url(query, expected):
-    result = _default_fallback(query)
-
-    assert [paper.model_dump(exclude_defaults=True) for paper in result.research_intent.target_papers] == [expected]
+@pytest.mark.parametrize("query", [
+    "??? https://pubmed.ncbi.nlm.nih.gov/38132429/ ????",
+    "??? https://arxiv.org/abs/1706.03762v7 ????",
+])
+def test_default_fallback_ignores_academic_paper_url(query):
+    assert _default_fallback(query).research_intent.target_papers == []
 
 
 @pytest.mark.asyncio
@@ -455,7 +448,7 @@ async def test_normalize_invalid_section_count():
                     "language": "zh-CN",
                     "needs_clarification": False,
                     "section_count": -1,
-                    "include_url": ["https://x.y/z"],
+                    "include_domains": ["x.y"],
                 },
             }
         ]
@@ -843,87 +836,13 @@ def test_to_str_list_non_list_str_none():
     """非 list/str/None 类型返回空列表"""
     assert _to_str_list(123) == []
 
-@pytest.mark.asyncio
-async def test_recognize_report_intent_exclude_url_and_domains_kept_separate():
-    """exclude_url 与 exclude_domains 按 LLM 提取结果各自保留，互不派生。"""
-    response = {
-        "tool_calls": [
-            {
-                "name": "emit_report_intent",
-                "args": {
-                    "research_query": "topic",
-                    "language": "zh-CN",
-                    "needs_clarification": False,
-                    "exclude_url": [
-                        "https://www.mdpi.com/2073-445X/11/9/1529",
-                        "https://www.mdpi.com/2410-3888/8/2/80",
-                    ],
-                },
-                "id": "tc1",
-                "type": "tool_call",
-            }
-        ],
-        "content": "",
-    }
-    with patch(
-        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
-        return_value={"basic": Mock()},
-    ), patch(
-        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
-        new_callable=AsyncMock,
-        return_value=response,
-    ):
-        result = await recognize_report_intent(
-            {"original_query": "不要引用这两篇文章", "llm_model_name": "basic"}
-        )
-
-    assert len(result.research_intent.exclude_url) == 2
-    # 关键断言：exclude_url 的域名不得被派生进 exclude_domains
-    assert result.research_intent.exclude_domains == []
-
-
-@pytest.mark.asyncio
-async def test_recognize_report_intent_emits_exclude_intent_log(caplog):
-    """exclude 字段非空时输出 [EXCLUDE_INTENT] 日志；为空时不输出。"""
-    import logging
-
-    response = {
-        "tool_calls": [
-            {
-                "name": "emit_report_intent",
-                "args": {
-                    "research_query": "topic",
-                    "language": "zh-CN",
-                    "needs_clarification": False,
-                    "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
-                },
-                "id": "tc1",
-                "type": "tool_call",
-            }
-        ],
-        "content": "",
-    }
-    with patch(
-        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_context",
-        return_value={"basic": Mock()},
-    ), patch(
-        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.llm_utils.ainvoke_llm_with_stats",
-        new_callable=AsyncMock,
-        return_value=response,
-    ):
-        with caplog.at_level(logging.INFO):
-            await recognize_report_intent({"original_query": "不要引用某文", "llm_model_name": "basic"})
-
-    assert any("[EXCLUDE_INTENT]" in record.getMessage() for record in caplog.records)
-    assert any("mdpi.com/2073-445X/11/9/1529" in record.getMessage() for record in caplog.records)
-
 
 def _exclude_intent_tool_response(**extra_args):
     args = {
         "research_query": "topic",
         "language": "zh-CN",
         "needs_clarification": False,
-        "exclude_url": ["https://www.mdpi.com/2073-445X/11/9/1529"],
+
     }
     args.update(extra_args)
     return {
@@ -943,43 +862,6 @@ def _patched_llm(response):
         new_callable=AsyncMock,
         return_value=response,
     )
-
-
-@pytest.mark.asyncio
-async def test_classify_and_recognize_intent_emits_exclude_intent_log(caplog):
-    """主工作流路径 classify_and_recognize_intent 也应输出 [EXCLUDE_INTENT] 日志。"""
-    import logging
-
-    p1, p2 = _patched_llm(_exclude_intent_tool_response())
-    with p1, p2:
-        with caplog.at_level(logging.INFO):
-            await classify_and_recognize_intent(
-                {"original_query": "不要引用某文", "llm_model_name": "basic"})
-
-    assert any("[EXCLUDE_INTENT]" in record.getMessage() for record in caplog.records)
-
-
-@pytest.mark.asyncio
-async def test_exclude_intent_log_redacted_in_sensitive_mode(caplog):
-    """敏感模式下 [EXCLUDE_INTENT] 只记录计数，不输出 URL/标题/query。"""
-    import logging
-
-    p1, p2 = _patched_llm(_exclude_intent_tool_response(
-        exclude_titles=["Some Sensitive Paper Title"]))
-    with p1, p2, patch(
-        "openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition.LogManager.is_sensitive",
-        return_value=True,
-    ):
-        with caplog.at_level(logging.INFO):
-            await recognize_report_intent(
-                {"original_query": "不要引用某文", "llm_model_name": "basic"})
-
-    messages = [record.getMessage() for record in caplog.records
-                if "[EXCLUDE_INTENT]" in record.getMessage()]
-    assert messages, "EXCLUDE_INTENT log missing"
-    assert any("redacted" in m for m in messages)
-    assert not any("mdpi.com" in m or "Sensitive Paper" in m or "不要引用某文" in m
-                   for m in messages)
 
 
 def test_emit_intent_tool_schema_hides_report_type_when_provided():

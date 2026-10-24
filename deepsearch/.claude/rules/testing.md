@@ -13,7 +13,6 @@ alwaysApply: false
 - Mirror the source area where practical:
   - `algorithm/query_understanding/` -> `tests/algorithm/query_understanding/`
   - `algorithm/report/` -> `tests/report/`
-  - `algorithm/source_trace/` -> `tests/source_tracer/`
   - `algorithm/user_feedback_processor/` -> `tests/user_feedback_processor/`
   - `server/` -> `tests/server/`
   - `utils/` -> `tests/utils/`

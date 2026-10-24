@@ -1,5 +1,5 @@
 ---
-description: Prompt templates, workflow nodes, tools, report generation, source tracing, and user-feedback rules.
+description: Prompt templates, workflow nodes, tools, report generation, and user-feedback rules.
 language: chinese
 paths:
   - "openjiuwen_deepsearch/algorithm/prompts/**/*.md"

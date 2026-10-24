@@ -8,8 +8,6 @@
 
 ## 功能目的
 
-Prompt 模板系统为 algorithm 层各功能提供统一的 Prompt 文件加载和变量替换能力。它让查询理解、资料采集、DeepSearch、报告生成、溯源、图表和用户反馈处理都能通过文件名引用 Prompt，而不是在代码中内联长提示词。
-
 ## 可见行为
 
 - 调用方通过 Prompt 文件名加载 `algorithm/prompts/` 下的 Markdown 模板。
@@ -31,8 +29,6 @@ Prompt 模板系统为 algorithm 层各功能提供统一的 Prompt 文件加载
 - DeepSearch：`openjiuwen_deepsearch/algorithm/search_nodes/`
 - 报告生成：`openjiuwen_deepsearch/algorithm/report/`
 - 报告模板：`openjiuwen_deepsearch/algorithm/report_template/`
-- 全局溯源：`openjiuwen_deepsearch/algorithm/source_trace/`
-- 推理链溯源：`openjiuwen_deepsearch/algorithm/source_tracer_infer/`
 - 图表生成：`openjiuwen_deepsearch/algorithm/chart_generation/`
 - 用户反馈处理：`openjiuwen_deepsearch/algorithm/user_feedback_processor/`
 
@@ -81,14 +77,6 @@ Prompt 契约至少包含：
 
 修改 Prompt 加载规则或研究任务字段契约时，运行对应模板契约与业务测试：
 
-```bash
-uv run pytest tests/algorithm/prompts
-uv run pytest tests/algorithm/query_understanding
-uv run pytest tests/report
-uv run pytest tests/source_tracer
-uv run pytest tests/user_feedback_processor
-```
-
 如果只修改某个 Prompt 文件，运行对应 feature 文档中列出的测试。
 
 ## 相关文档
@@ -98,7 +86,5 @@ uv run pytest tests/user_feedback_processor
 - [DeepSearch 搜索智能体](./search-agent.md)
 - [报告生成](./report-generation.md)
 - [报告模板生成](./report-template.md)
-- [全局溯源](./source-trace.md)
-- [推理链溯源](./source-tracer-infer.md)
 - [图表生成](./chart-generation.md)
 - [用户反馈处理](./user-feedback-processor.md)

@@ -1,3 +1,4 @@
+
 # Writing Guide Conclusion
 
 As a professional Deep Researcher writer, your task is to generate cohesive, and concise conclusion content that summarize the synthesized findings from the report.  Follow these rules strictly:

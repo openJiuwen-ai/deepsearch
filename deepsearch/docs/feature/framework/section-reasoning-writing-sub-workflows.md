@@ -9,9 +9,6 @@
 
 ## 功能目的
 
-章节子工作流把主图大纲拆成可并发或按依赖执行的章节任务。每个章节独立规划、采集资料、撰写子报告并生成章节级溯源信息，最终汇总为
-`current_report.sub_reports`。
-
 ## 可见行为
 
 - 并行模式下，每个大纲章节都会启动一个 `editor_team` 子图。
@@ -38,7 +35,6 @@
 2. 每个章节创建 `SubReport`，并把章节输入转换成 `SectionContext`。
 3. 并行模式子图执行 `PlanReasoning -> InfoCollector -> PlanReasoning` 循环，资料足够后进入 `SubReporter`。
 4. `SubReporter` 生成章节文本、摘要、sidecar 和分类文档。
-5. `SubSourceTracer` 生成章节级溯源数据，随后 `SectionEndNode` 返回章节状态。
 6. `EditorTeamNode` 合并所有章节结果，更新 `current_report`、历史大纲和历史报告。
 7. 依赖驱动模式先通过 `DependencyPlanReasoningNode` 和 `DependencyInfoCollectorNode` 生成父章节步骤知识，再按层执行写作子图。
 

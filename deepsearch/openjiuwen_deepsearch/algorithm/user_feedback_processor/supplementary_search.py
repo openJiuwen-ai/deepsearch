@@ -11,7 +11,7 @@ from openjiuwen_deepsearch.algorithm.user_feedback_processor.common import (
     resolve_session_collector as _resolve_session_collector,
 )
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.report_edit_utils import (
-    strip_markup_in_range,
+    strip_citations_in_range,
 )
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.section_locator import locate_section
 from openjiuwen_deepsearch.common.exception import CustomValueException
@@ -143,8 +143,8 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
             feedback["end_offset"],
         )
 
-        # 剥离选区内的标记，避免将 checked_citation / inference 标记送入重写链路
-        stripped_selection_report, _, _ = strip_markup_in_range(
+        # 清理选区内的普通引用标记。
+        stripped_selection_report = strip_citations_in_range(
             report_content,
             feedback["start_offset"],
             feedback["end_offset"],
@@ -155,7 +155,7 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
         selected_text_clean = stripped_selection_report[feedback["start_offset"]:cleaned_selected_end]
 
         # 剥离整个章节内的标记，用于构建检索任务的上下文
-        section_stripped, _, _ = strip_markup_in_range(
+        section_stripped = strip_citations_in_range(
             report_content,
             section.section_start_offset,
             section.section_end_offset,
@@ -224,7 +224,7 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
             "section_start_offset": section.section_start_offset,
             "section_end_offset": section.section_end_offset,
             "collector_summary": collection.get("info_summary", ""),
-            "source_trace_doc_infos": collection.get("doc_infos", []),
+
         }
 
     async def _run_selected_and_related(
@@ -255,14 +255,14 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
             feedback["start_offset"],
             feedback["end_offset"],
         )
-        # 剥离整个章节内的标记，避免将 checked_citation / inference 标记送入重写链路
-        stripped_report, _, _ = strip_markup_in_range(
+        # 清理整个章节内的普通引用标记。
+        stripped_report = strip_citations_in_range(
             report_content,
             section.section_start_offset,
             section.section_end_offset,
         )
         # 剥离选区内的标记，用于获取选区纯文本
-        stripped_selection_report, _, _ = strip_markup_in_range(
+        stripped_selection_report = strip_citations_in_range(
             report_content,
             feedback["start_offset"],
             feedback["end_offset"],
@@ -331,7 +331,7 @@ class SupplementarySearcher(UserFeedbackPromptInvoker):
             "section_start_offset": section.section_start_offset,
             "section_end_offset": section.section_end_offset,
             "collector_summary": collection.get("info_summary", ""),
-            "source_trace_doc_infos": collection.get("doc_infos", []),
+
         }
 
     async def _build_research_task(

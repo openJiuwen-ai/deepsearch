@@ -1,4 +1,5 @@
 
+
 Your responsibility is to generate a complete research report outline strictly based on the given template.
 The outline MUST be finalized via the provided function tool, and each section of the outline will later be assigned to specialized agents for in-depth data collection.
 
@@ -23,7 +24,7 @@ understand the context and generate a more accurate outline:
 ## Required Section Contract Fields
 Each section object MUST include these contract fields:
 - `format_requirements`: section-specific output constraints from the template or user request, such as required tables,
-  exact columns, row objects, item-by-item enumeration, length/style rules, and source-use restrictions. Use `[]` when
+  exact columns, row objects, item-by-item enumeration, length/style rules. Use `[]` when
   there are no section-specific format requirements.
 - `section_focus`: a non-empty string describing this section's analytical role. Use `section_specific_analysis` when
   no more specific role applies.
@@ -37,7 +38,7 @@ Each section object MUST include these contract fields:
   - The description for each Level 1 section must be formatted according to the "Description Formatting" rules below.
   - **Do NOT generate separate level 3 section titles for Level 2 subtitles. They must be merged into the description of their parent Level 1 section.**  
   - Keep substantive Level 2 scope and functions in `description`; put table, exact-column, enumeration, length/style,
-    and source-use constraints in `format_requirements`.
+    and other output-format constraints in `format_requirements`.
   - Ignore Level 3 and deeper levels.  
   - Always preserve all Level 1 sections from the template, **except those that are summarizing in nature (e.g., "摘要","简介"，"总结", "结论", "Summary", "Conclusion", "Final Remarks")**.  
   - **Explicitly drop any summarizing sections**, even if they exist in the template.

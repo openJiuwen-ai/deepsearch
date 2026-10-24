@@ -139,7 +139,6 @@ bocha 30
 
 **补充说明**：
 
-- `tavily` 的 `extension.include_domains` / `extension.exclude_domains` 会透传给 Tavily 检索接口，用于**偏好或排除**指定站点，并非框架侧的硬性白名单。Tavily 在相关结果不足时仍可能返回`include_domains`列表外域名的页面。
 - Google/Serper wrapper（由 `google` / `serper` 引擎名复用）与 Tavily 的内置同步搜索请求固定使用 30 秒超时，以避免网络异常时无限期阻塞；该说明不表示直接调用 Google 官方搜索接口。该超时当前不是 `WebSearchEngineConfig` 的可配置字段。
 - `jina` 的 `search_url` 为空时，会自动回退到 `https://s.jina.ai`；国内网络环境如无法访问该默认地址，可显式配置 `search_url="https://s.jinaai.cn"`，也可填入私有化部署或代理转发地址。
 - `bocha`、`perplexity` 通过 harness `web_tools` 适配层访问搜索能力，默认不抓取网页正文，直接使用搜索 API 返回的摘要答案。如需开启网页正文抓取，可通过 `extension.fetch_webpage=True` 配置。仅当底层 provider 支持地址覆盖时，`search_url` 才会生效。国内网络环境如无法访问 Perplexity 默认服务，需要配置可访问的代理或转发地址，并通过 `search_url` 显式覆盖。
@@ -287,7 +286,6 @@ class openjiuwen_deepsearch.config.config.CustomWebSearchConfig()
 >>> print(custom_web_config.custom_web_search_file)
 ```
 
-
 ## class openjiuwen_deepsearch.config.config.CustomLocalSearchConfig
 ```python
 class openjiuwen_deepsearch.config.config.CustomLocalSearchConfig()
@@ -380,13 +378,9 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **user_materials_enabled**(bool, 可选)：是否启用用户素材；关闭时 `user_materials` 会被忽略。默认值：`False`。
 - **user_materials**(List[Dict[str, Any]], 可选)：用户提供的素材列表。默认值：`[]`；HTTP 服务应通过 `metadata` 的同名字段传入。素材的数据格式和使用场景见 [用户素材](../../../feature/algorithm/user-materials.md)。
 - **coverage_rule_block_enable**(bool, 可选)：子报告大纲规则版覆盖证据开关。默认值：`True`。
-- **exclusion_constraint_enable**(bool, 可选)：子报告禁引约束总开关。默认值：`False`。
 - **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 15]。SDK `AgentConfig` 与 HTTP 服务 `DeepSearchRequest` 默认值均为 `10`。
 - **outline_interaction_enabled**(bool, 可选)：大纲交互功能开关，开启后用户可对生成的大纲进行多轮修改。默认值：`True`。
 - **outline_interaction_max_rounds**(int, 可选)：大纲交互最大轮次，取值范围：[1, 100]。默认值：`3`。
-- **source_tracer_research_trace_source_switch**(bool, 可选)：溯源功能开关。默认值：`True`。
-- **source_tracer_generated_citation_switch**(bool, 可选)：新增引用生成开关；关闭时仅保留原文已有引用，不基于搜索结果生成新引用。默认值：`True`。
-- **source_tracer_infer_switch**(bool, 可选)：溯源推理功能开关。默认值：`True`。
 - **llm_config**(Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking", "vlm_chart_generating"], LLMConfig], 可选)：LLM模型配置。默认值：`dict()`。
 - **info_collector_search_method**(Literal["web", "local", "all"], 可选)：搜索方式，`web`：联网增强搜索，`local`：本地搜索工具搜索，`all`：联网增强+本地融合搜索。默认值：`"web"`。
 - **info_collector_webpage_enrich_enable**(bool, 可选)：DeepResearch 信息收集阶段是否启用网页正文增强节点。默认值：`False`。
@@ -419,7 +413,6 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - HTTP 服务入口 `DeepSearchRequest.agent_llm_timeouts` 会透传到 `AgentConfig.agent_llm_timeouts`，并在运行时进入 session 全局配置。
 - 该配置只控制业务层对整次 LLM 流式调用施加的 wall-clock timeout，不替代底层 provider/request 级超时。
 - 当前可配置的 `agent_name` / key 清单详见openjiuwen_deepsearch/utils/constants_utils/node_constants.py的AgentLlmName定义，`default` 用于兜底规则。
-
 
 **样例**：
 
@@ -522,11 +515,6 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **report_max_generate_retry_num**(int, 可选)：生成内容最大重试次数。默认值：`3`。
 - **visualization_enable**(bool, 可选)：专业版报告插图可视化开关。默认值：`True`。不影响 Brief 报告的图文生成。
 - **professional_report_adaptive_rationales**(bool, 可选)：专业版报告是否启用需求清单映射与复杂度自适应 rationale。默认值：`False`。
-
-### 溯源节点参数
-- **source_tracer_citation_verify_max_concurrency_num**(int, 可选)：溯源校验最大并发数量。默认值：`30`。
-- **source_tracer_citation_verify_batch_size**(int, 可选)：溯源校验批次大小，取值范围 `[1, 20]`。默认值：`10`。
-- **source_tracer_domain_source_map_path**(str, 可选)：域名来源映射 JSON 文件名或绝对路径。默认值：`"domain_source_map.json"`。
 
 ### 统计信息参数
 - **stats_info_node_duration**(bool, 可选)：节点持续时间统计。默认值：`False`。

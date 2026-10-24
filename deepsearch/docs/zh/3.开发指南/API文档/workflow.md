@@ -62,28 +62,9 @@ async run(message: Optional[str] = None, conversation_id: Optional[str] = None, 
 - `report_template` 若为 base64 字符串会自动解码，解码失败则回退原文。
 - `metadata` 为可选的运行时元数据（由客户端持有回传、服务端不持久化），如 brief 报告 `final_result.metadata` 的原样回传，用于以 brief 大纲为结构基准升级生成专业版报告（见 [brief 大纲升级](../../../feature/framework/brief-outline-upgrade.md)）。携带 brief 大纲时要求并行执行模式，直连依赖/hybrid Agent 会抛出 `CustomValueException`（错误码 200031）。
 
-  用户提供的研究素材当前通过该运行时通道传入：将
-  `metadata.user_materials_enabled` 设为 `true`，并在
-  `metadata.user_materials` 中提供对象列表。每个对象必须包含非空的
-  `content` 和 `url`；`url` 可为本地绝对文件路径或 HTTP(S) 链接，用于
-  后续去重与引用校验。`material_id`、`title`、`publish_time`、`content_time`
-  为可选字段。全部 `content` 的总长度不得超过 5,000,000 个字符。
-  由于 metadata 不在服务端持久化，任何需要使用素材的运行都必须随请求重复传入。
-  开关为 `false` 或缺省时，`user_materials` 会被忽略。这些键是保留的运行时输入字段，
-  客户端不应将其用于无关元数据。
-
 **返回**：
 - **AsyncGenerator[str]**：流式 JSON 字符串（默认执行、HITL 恢复、大纲交互、报告后局部优化场景）。
 - **dict**：JSON 响应（当 `interrupt_feedback="cancel"` 时）。
-
-**行为说明**：
-- 初始化 LLM 与搜索工具上下文。
-- `native` 本地搜索要求 `knowledge_base_configs` 非空。
-- 将互动事件包装为中断消息输出。
-- 收到 `ALL END` 视为流程完成并清理上下文。
-- 当 `interrupt_feedback="cancel"` 时，接口返回 JSON 响应而非流式输出，用于取消正在运行的任务。取消功能支持单进程和跨进程（Redis 模式）两种场景。
-- 当 `interrupt_feedback` 为 `"revise_comment"` 或 `"revise_outline"` 时，系统会在大纲交互节点处理用户反馈，并重新生成大纲。
-- 当 `agent_config.user_feedback_processor_enable=True` 时，工作流在 `SourceTracerInferNode` 后不会立即结束，而是进入 `UserFeedbackProcessorNode` 进行报告后局部优化交互。
 
 ---
 
@@ -131,7 +112,6 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepresearchInte
 - 主链路复用 `OutlineNode` 和 `OutlineInteractionNode`，不会注册旧方案中的 hybrid 大纲节点。
 - `IntentRecognitionNode` 会调用大纲模式 router LLM，并把结果写入 `search_context.outline_execution_method`。
 - 当路由结果为 `parallel` 时进入 `EditorTeamNode`；当路由结果为 `dependency_driving` 时进入 `DependencyEditorTeamNode`。
-
 
 ## class openjiuwen_deepsearch.framework.openjiuwen.agent.workflow.DeepSearchAgent
 ```python

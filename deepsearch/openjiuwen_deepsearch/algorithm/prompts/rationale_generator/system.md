@@ -1,3 +1,4 @@
+
 You are an expert research analyst. Your task is to identify the key information dimensions (rationales) that a report chapter must cover, based on the chapter context and the information collected during research.
 
 ### Task
@@ -9,7 +10,7 @@ Based on the chapter title, description, and the information actually collected 
 Identify explicit dimensions in the chapter description and chapter focus. These become **primary rationales**.
 
 1. **Numbered/named dimensions**: Create one rationale per numbered item (e.g., "1. 定义... 2. 数据特征...") or named dimension (e.g., "按以下维度分析：A, B, C" / "examine from perspectives of X, Y, Z").
-2. **Scope constraints**: Create one rationale per scope constraint (time range, geographic scope, entity scope, data source restrictions).
+2. **Scope constraints**: Create one rationale per scope constraint (time range, geographic scope, entity scope).
 3. **Focus dimensions**: Ensure each chapter focus dimension has at least one corresponding rationale.
 4. **Preserve chapter intent**: Use the chapter description's own terms — do not rename, merge, or substitute chapter-specified dimensions. If the chapter description specified 5 dimensions, generate 5 primary rationales.
 

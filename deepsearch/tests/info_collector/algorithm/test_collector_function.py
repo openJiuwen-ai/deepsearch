@@ -2,14 +2,23 @@ import pytest
 import json
 from unittest.mock import Mock, AsyncMock, patch
 from openjiuwen_deepsearch.common.common_constants import MAX_SEARCH_CONTENT_LENGTH
-from openjiuwen_deepsearch.algorithm.research_collector.collector_function import \
-    process_tool_call, check_agent_input, handle_single_tool_call, \
-    execute_tool, process_tool_result, web_search_jiuwen, \
-    process_tavily_search_result, process_google_search_result, \
-    process_common_search_result, process_local_search_result, \
-    process_local_search_common, remove_duplicate_items, create_tool_message, \
-    filter_search_results_by_exclude_domains, filter_search_results_by_exclude_urls, \
-    filter_web_records_by_temporal_scope, is_title_blocked, _normalize_web_search_item
+from openjiuwen_deepsearch.algorithm.research_collector.collector_function import (
+    process_tool_call,
+    check_agent_input,
+    handle_single_tool_call,
+    execute_tool,
+    process_tool_result,
+    web_search_jiuwen,
+    process_tavily_search_result,
+    process_google_search_result,
+    process_common_search_result,
+    process_local_search_result,
+    process_local_search_common,
+    remove_duplicate_items,
+    create_tool_message,
+    filter_web_records_by_temporal_scope,
+    _normalize_web_search_item,
+)
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.research_collector.collector_function"
 
@@ -599,50 +608,6 @@ class TestSearchResultProcessing:
         _, modified_input = process_common_search_result(agent_input, tool_content)
         assert "date_metadata" not in modified_input["web_page_search_record"][0]
 
-    def test_filter_search_results_by_exclude_domains(self):
-        """测试按排除域名过滤搜索结果"""
-        items = [
-            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
-            {"title": "Drop", "url": "https://sub.blocked.com/a", "content": "drop"},
-            {"title": "No Url", "content": "keep"},
-        ]
-
-        result = filter_search_results_by_exclude_domains(items, ["blocked.com"])
-
-        assert [item.get("title") for item in result] == ["Keep", "No Url"]
-
-    def test_process_google_search_result_filters_exclude_domains(self):
-        """测试Google搜索结果按排除域名过滤"""
-        agent_input = {
-            "web_page_search_record": [],
-            "research_intent": {"exclude_domains": ["blocked.com"]},
-        }
-        tool_content = [
-            {"title": "Keep", "link": "http://keep.com", "snippet": "Snippet"},
-            {"title": "Drop", "link": "http://blocked.com", "snippet": "Snippet"},
-        ]
-
-        result, modified_input = process_google_search_result(agent_input, tool_content)
-
-        assert [item.get("title") for item in result] == ["Keep"]
-        assert [item.get("title") for item in modified_input["web_page_search_record"]] == ["Keep"]
-
-
-    def test_process_common_search_result_filters_exclude_domains(self):
-        """测试通用搜索结果按排除域名过滤"""
-        agent_input = {
-            "web_page_search_record": [],
-            "research_intent": {"exclude_domains": ["csdn.net"]},
-        }
-        tool_content = [
-            {"title": "Keep", "url": "https://arxiv.org/abs/1234", "content": "paper"},
-            {"title": "Drop", "url": "https://blog.csdn.net/article", "content": "blog"},
-        ]
-
-        result, modified_input = process_common_search_result(agent_input, tool_content)
-
-        assert [item.get("title") for item in result] == ["Keep"]
-        assert [item.get("title") for item in modified_input["web_page_search_record"]] == ["Keep"]
 
     def test_process_common_search_result_field_aliases_and_invalid_items(self):
         """Common search processor should normalize aliases and skip invalid rows."""
@@ -1352,220 +1317,3 @@ class TestProcessLocalSearchCommon:
         # 原有记录应该保持不变
         assert len(agent_input["local_text_search_record"]) == 1
         assert agent_input["local_text_search_record"][0]["title"] == "Existing"
-
-
-class TestFilterSearchResultsByExcludeUrls:
-    """测试按 exclude_url 过滤搜索结果"""
-
-    def test_filter_search_results_by_exclude_urls(self):
-        """测试按排除链接过滤搜索结果"""
-        items = [
-            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
-            {"title": "Drop", "url": "https://www.mdpi.com/2073-445X/11/9/1529", "content": "drop"},
-            {"title": "DropVariant", "url": "http://mdpi.com/2073-445x/11/9/1529/?utm=x", "content": "drop"},
-            {"title": "No Url", "content": "keep"},
-        ]
-
-        result = filter_search_results_by_exclude_urls(
-            items, ["https://www.mdpi.com/2073-445X/11/9/1529"])
-
-        assert [item.get("title") for item in result] == ["Keep", "No Url"]
-
-    def test_filter_search_results_by_exclude_urls_passthrough(self):
-        """空排除列表时原样返回"""
-        items = [{"title": "Keep", "url": "https://keep.com/a"}]
-        assert filter_search_results_by_exclude_urls(items, []) is items
-
-    def test_filter_search_results_by_exclude_urls_field_alias(self):
-        """URL 字段别名（link/source_url）同样被识别"""
-        items = [
-            {"title": "DropLink", "link": "https://www.mdpi.com/2073-445X/11/9/1529"},
-            {"title": "DropSource", "source_url": "https://www.mdpi.com/2073-445X/11/9/1529"},
-            "not-a-dict",
-        ]
-        result = filter_search_results_by_exclude_urls(
-            items, ["https://www.mdpi.com/2073-445X/11/9/1529"])
-        assert result == ["not-a-dict"]
-
-    def test_filter_search_results_by_exclude_urls_catches_mirror_by_pmid(self):
-        """镜像（同 pmid、不同 URL/标题）经文献 ID 匹配 catch，不只靠 URL 精确。
-
-        被禁源 exclude_url 给的是 pubmed URL（提 pmid），但转载镜像可能在 PMC 上
-        （host/path 完全不同、URL 精确匹配失效）。scholarly 结果带 pmid 字段，
-        靠 ID 匹配可 catch 这类镜像。
-        """
-        items = [
-            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
-            # 镜像：PMC 转载，URL/标题都不同于被禁源的 pubmed URL
-            {"title": "Mirror on PMC", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10742803",
-             "content": "mirror", "pmid": "38132429"},
-        ]
-        result = filter_search_results_by_exclude_urls(
-            items, ["https://pubmed.ncbi.nlm.nih.gov/38132429/"], enable_exclusion=True)
-        assert [item.get("title") for item in result] == ["Keep"]
-
-    def test_filter_search_results_by_exclude_urls_catches_mirror_by_doi(self):
-        """镜像（同 doi、不同 URL/标题）经文献 ID 匹配 catch。"""
-        items = [
-            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
-            # 镜像：另一站点转载，URL/标题不同，但 doi 字段 = 被禁源
-            {"title": "Mirror rehost", "url": "https://rehost.example.org/paper-fulltext",
-             "content": "mirror", "doi": "10.3390/dj11120291"},
-        ]
-        result = filter_search_results_by_exclude_urls(
-            items, ["https://doi.org/10.3390/dj11120291"], enable_exclusion=True)
-        assert [item.get("title") for item in result] == ["Keep"]
-
-    def test_filter_search_results_by_exclude_urls_catches_pmc_title_suffix(self):
-        """PMC 镜像标题带 '- PMC' 后缀，应被标题包含匹配 catch（后缀词表含 pmc）。"""
-        items = [
-            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
-            {"title": "Profile of Orthodontic Use across Demographics - PMC",
-             "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10742803",
-             "content": "mirror"},
-        ]
-        result = filter_search_results_by_exclude_urls(
-            items, [], ["Profile of Orthodontic Use across Demographics"], enable_exclusion=True)
-        assert [item.get("title") for item in result] == ["Keep"]
-
-    def test_exclusion_disabled_leaves_pmc_mirror_in_results(self):
-        """默认关（exclusion_constraint_enable=False）：不剥镜像后缀，PMC 镜像不被 catch。
-
-        这是 baseline 行为——`- PMC` 后缀让 title_stripped 与 blocked_stripped 不等，
-        标题匹配失效，镜像留在结果里。
-        """
-        items = [
-            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
-            {"title": "Profile of Orthodontic Use across Demographics - PMC",
-             "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10742803",
-             "content": "mirror"},
-        ]
-        result = filter_search_results_by_exclude_urls(
-            items, [], ["Profile of Orthodontic Use across Demographics"])
-        assert [item.get("title") for item in result] == [
-            "Keep", "Profile of Orthodontic Use across Demographics - PMC"]
-
-    def test_exclusion_disabled_skips_id_match(self):
-        """默认关：不做文献 ID 交集匹配，同 doi 的镜像不被 catch。"""
-        items = [
-            {"title": "Keep", "url": "https://keep.com/a", "content": "keep"},
-            {"title": "Mirror rehost", "url": "https://rehost.example.org/paper-fulltext",
-             "content": "mirror", "doi": "10.3390/dj11120291"},
-        ]
-        result = filter_search_results_by_exclude_urls(
-            items, ["https://doi.org/10.3390/dj11120291"])
-        assert [item.get("title") for item in result] == ["Keep", "Mirror rehost"]
-
-    def test_process_tavily_search_result_filters_exclude_urls(self):
-        """测试Tavily搜索结果按排除链接过滤，同域其他文章不误伤"""
-        agent_input = {
-            "web_page_search_record": [],
-            "research_intent": {
-                "exclude_url": [
-                    "https://www.mdpi.com/2073-445X/11/9/1529",
-                    "https://www.mdpi.com/2410-3888/8/2/80",
-                ],
-            },
-        }
-        tool_content = [
-            {"title": "Keep", "url": "https://www.mdpi.com/2073-445X/11/9/1530", "content": "Content"},
-            {"title": "Drop1", "url": "https://www.mdpi.com/2073-445X/11/9/1529", "content": "Content"},
-            {"title": "Drop2", "url": "https://www.mdpi.com/2410-3888/8/2/80", "content": "Content"},
-        ]
-
-        result, modified_input = process_tavily_search_result(agent_input, tool_content)
-
-        assert [item.get("title") for item in result] == ["Keep"]
-        assert [item.get("title") for item in modified_input["web_page_search_record"]] == ["Keep"]
-
-    def test_process_common_search_result_filters_exclude_urls(self):
-        """测试通用搜索结果按排除链接过滤"""
-        agent_input = {
-            "web_page_search_record": [],
-            "research_intent": {"exclude_url": ["https://pubmed.ncbi.nlm.nih.gov/38202877/"]},
-        }
-        tool_content = [
-            {"title": "Keep", "url": "https://arxiv.org/abs/1234", "content": "paper"},
-            {"title": "Drop", "url": "https://pubmed.ncbi.nlm.nih.gov/38202877/", "content": "paper"},
-        ]
-
-        result, modified_input = process_common_search_result(agent_input, tool_content)
-
-        assert [item.get("title") for item in result] == ["Keep"]
-
-
-class TestIsTitleBlocked:
-    """测试标题匹配：镜像变体命中，相近主题不误伤"""
-
-    BLOCKED = ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory"]
-
-    def test_exact_title_hit(self):
-        assert is_title_blocked(
-            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory",
-            self.BLOCKED)
-
-    def test_html_entity_hit(self):
-        """标题中间的 HTML 实体差异应命中（反转义后精确相等）"""
-        assert is_title_blocked(
-            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory &#40;Review&#41;",
-            ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory (Review)"])
-
-    def test_suffix_mirror_hit(self):
-        """镜像站后缀（| MDPI / - ProQuest / | IDEALS 形态）剥后缀后精确命中"""
-        assert is_title_blocked(
-            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | MDPI",
-            self.BLOCKED)
-        assert is_title_blocked(
-            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory - ProQuest",
-            self.BLOCKED)
-        assert is_title_blocked(
-            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory | IDEALS",
-            self.BLOCKED)
-
-    def test_ideals_suffix_hit(self):
-        """IDEALS 机构知识库后缀剥离后命中"""
-        blocked = ["A Survey of the Story Elements of Isekai Manga"]
-        assert is_title_blocked(
-            "A survey of the story elements of Isekai manga | IDEALS",
-            blocked)
-
-    def test_metadata_wrapping_hit(self):
-        """被禁标题在目标标题中间位置（同一论文加元数据）应命中"""
-        blocked = ["A Survey of the Story Elements of Isekai Manga"]
-        assert is_title_blocked(
-            "[PDF] A Survey of the Story Elements of Isekai Manga Dr. Paul S. Price",
-            blocked)
-
-    def test_same_prefix_different_paper_no_hit(self):
-        """同前缀但不同论文不误伤（被禁标题是候选标题的前缀）"""
-        assert not is_title_blocked("Deep learning for image recognition", ["Deep learning"])
-        # 被禁标题完整，候选为被禁标题+非站点后缀（不同文献的副标题扩展）不误伤
-        assert not is_title_blocked(
-            "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory: A Survey",
-            self.BLOCKED)
-
-    def test_different_paper_no_hit(self):
-        """主题相近的不同论文不误伤"""
-        assert not is_title_blocked("A 45nm 0.5V 8T Column-Interleaved SRAM with on-Chip Reference",
-                                    self.BLOCKED)
-        assert not is_title_blocked("", self.BLOCKED)
-        assert not is_title_blocked("Any title", [])
-
-    def test_filter_by_exclude_titles(self):
-        """URL 不命中但标题命中（PMC 变体形态）"""
-        agent_input = {
-            "web_page_search_record": [],
-            "research_intent": {
-                "exclude_url": ["https://pubmed.ncbi.nlm.nih.gov/38202877/"],
-                "exclude_titles": ["Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory"],
-            },
-        }
-        tool_content = [
-            {"title": "Keep", "url": "https://example.com/other", "content": "Content"},
-            {"title": "Design of High-Speed, Low-Power Sensing Circuits for Nano-Scale Embedded Memory",
-             "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10780789", "content": "Content"},
-        ]
-
-        result, modified_input = process_common_search_result(agent_input, tool_content)
-
-        assert [item.get("title") for item in result] == ["Keep"]

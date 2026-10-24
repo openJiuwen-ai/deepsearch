@@ -25,12 +25,7 @@ listed claim or treat the binding itself as evidence for facts absent from the c
 {{ section_material_bindings_text }}
 </section_material_use_contract>
 {% endif %}
-{% if has_exclusion %}
-<excluded_sources>
-{{ exclusion_instruction }}
-</excluded_sources>
-Honor these excluded-source constraints when selecting evidence and citations.
-{% endif %}
+
 
 {% if audience_role or tone %}
 ## Report Detail Constraints

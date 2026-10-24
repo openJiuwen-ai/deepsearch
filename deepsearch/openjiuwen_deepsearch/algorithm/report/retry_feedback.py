@@ -31,7 +31,6 @@ class RetryFeedbackMixin:
             "SUB_REPORT_CONTENT_EMPTY",
             "MERMAID_OUTPUT_FORBIDDEN",
             "MISSING_SECTION_CONTEXT",
-            "MISSING_REQUIRED_TARGET_CITATIONS",
             "SUB_REPORT_GENERATION_EXCEPTION",
             "SUB_REPORT_RETRY_REQUIRED",
         }
@@ -41,6 +40,7 @@ class RetryFeedbackMixin:
             "expected_heading_count",
             "actual_heading_count",
             "expected_heading_level",
+            "expected_heading_index",
         ):
             value = (fields or {}).get(key)
             if value is None:
@@ -54,18 +54,6 @@ class RetryFeedbackMixin:
                 else str(int(match.group(1)))
             )
             lines.append(f"{key}: {safe_value}")
-        missing_citation_indexes = (fields or {}).get("missing_citation_indexes")
-        if missing_citation_indexes is not None:
-            match = re.fullmatch(
-                r"[1-9]\d*(?:\s*,\s*[1-9]\d*)*",
-                str(missing_citation_indexes).strip(),
-            )
-            if match:
-                safe_indexes = ",".join(
-                    str(int(value.strip()))
-                    for value in match.group(0).split(",")
-                )
-                lines.append(f"missing_citation_indexes: {safe_indexes}")
         return "\n".join(lines)
 
     @classmethod
@@ -82,24 +70,16 @@ class RetryFeedbackMixin:
                 "expected_heading_count",
                 "actual_heading_count",
                 "expected_heading_level",
+                "expected_heading_index",
             ):
                 field_match = re.search(rf"(?m)^\s*{key}:\s*(H?\d+)\s*$", reason)
                 if field_match:
                     fields[key] = field_match.group(1)
             error_code = code_match.group(1)
-            citation_match = re.search(
-                r"(?m)^\s*missing_citation_indexes:\s*"
-                r"([1-9]\d*(?:\s*,\s*[1-9]\d*)*)\s*$",
-                reason,
-            )
-            if citation_match:
-                fields["missing_citation_indexes"] = citation_match.group(1)
             if error_code.startswith("HEADING") or error_code == "DUPLICATE_SUBSECTION_HEADINGS":
                 location = "markdown_headings"
             elif error_code == "MERMAID_OUTPUT_FORBIDDEN":
                 location = "chapter_visualization"
-            elif error_code == "MISSING_REQUIRED_TARGET_CITATIONS":
-                location = "chapter_citations"
             else:
                 location = "chapter"
             return cls._build_sub_report_retry_feedback(error_code, location, fields)
@@ -119,10 +99,12 @@ class RetryFeedbackMixin:
         for pattern, error_code, field_names in heading_patterns:
             match = re.search(pattern, reason, flags=re.IGNORECASE)
             if match:
+                fields = dict(zip(field_names, match.groups()))
+                position = re.search(r"outline position (\d+)", reason)
+                if position:
+                    fields["expected_heading_index"] = position.group(1)
                 return cls._build_sub_report_retry_feedback(
-                    error_code,
-                    "markdown_headings",
-                    dict(zip(field_names, match.groups())),
+                    error_code, "markdown_headings", fields,
                 )
 
         reason_lower = reason.lower()

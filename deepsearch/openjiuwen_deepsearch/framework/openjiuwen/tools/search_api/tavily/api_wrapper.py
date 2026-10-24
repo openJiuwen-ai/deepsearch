@@ -3,7 +3,6 @@
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from functools import cached_property
@@ -38,7 +37,6 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
     topic: str = "general"
     search_depth: str = "advanced"
     include_domains: Optional[List[str]] = None
-    exclude_domains: Optional[List[str]] = None
     include_answer: bool = False
     include_raw_content: bool = False
     include_images: bool = False
@@ -58,8 +56,6 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
             self.search_depth = ext["search_depth"]
         if "include_domains" in ext:
             self.include_domains = ext["include_domains"]
-        if "exclude_domains" in ext:
-            self.exclude_domains = ext["exclude_domains"]
         if "include_answer" in ext:
             self.include_answer = ext["include_answer"]
         if "include_raw_content" in ext:
@@ -211,7 +207,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
             "topic": self.topic,
             "search_depth": self.search_depth,
             "include_domains": [] if self.include_domains is None else self.include_domains,
-            "exclude_domains": [] if self.exclude_domains is None else self.exclude_domains,
+
             "include_answer": self.include_answer,
             "include_raw_content": self.include_raw_content,
             "include_images": self.include_images,

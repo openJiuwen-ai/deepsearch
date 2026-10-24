@@ -92,45 +92,11 @@ class VLMChartGeneratorNode(BaseNode)
 - Writes to `final_result.chart_messages`.
 - Chart generation errors are written to `exception_info`.
 
-### `SourceTracerNode`
-```python
-class SourceTracerNode(BaseNode)
-```
-**SourceTracerNode** handles provenance tracing and verification.
-
-**Functions**:
-- Skip when `source_tracer_research_trace_source_switch` is disabled.
-- Run citation verification after preprocessing and generate citation information.
-- Write results into `final_result.response_content` and `citation_messages`.
-- Insert stable `[checked_citation:id]` markers into the report body and return matching citation metadata, so the frontend can render and continue interaction based on the latest `final_result`.
-- Write failures into `exception_info`.
-
 ### `UserFeedbackProcessorNode`
 ```python
 class UserFeedbackProcessorNode(BaseNode)
 ```
 **UserFeedbackProcessorNode** handles iterative local rewrite requests and selected-content fact verification after report generation is complete.
-
-**Functions**:
-- Decide whether to enable post-report local editing based on `user_feedback_processor_enable`.
-- On first entry, send a full `final_result` snapshot to the frontend and use `search_context.feedback_snapshot_sent` to ensure it is sent only once.
-- Read JSON user feedback and support `expand`, `shorten`, `polish`, `supplementary_search`, `new_task`, `truth_verification`, `sync`, and `finish`.
-- Parse and validate rewrite payload fields such as `action`, `rewrite_scope`, `selected_text`, and offsets.
-- Support both `selected_only` and `selected_and_related` as rewrite scopes for `supplementary_search`.
-- Treat `truth_verification` as read-only: validate the selection, return a JSON verification result in `SUMMARY_RESPONSE`, do not update `final_result.response_content` or `search_context.rewrite_history`, but do consume `feedback_interaction_count`.
-- Return a lightweight ack for `sync`, without consuming `feedback_interaction_count`; successful sync appends a rewrite-history record only when the full report content actually changes.
-- Call `UserFeedbackProcessor` to complete the local rewrite and update `final_result.response_content`.
-- When `source_tracer_research_trace_source_switch` is enabled, normal rewrite, `supplementary_search`, and `new_task` actions run diff-aware local source tracing on changed spans; unchanged spans keep their existing citations, and newly traced citations update `citation_messages` and append reference entries at the end of the report.
-- For normal rewrite, `supplementary_search`, and `new_task` actions, maintain `search_context.feedback_interaction_count` and `search_context.rewrite_history`, including action type, rewrite scope, and actual replacement range.
-- The rewrite path no longer maintains extra frontend offset mappings; `sync` only synchronizes the report body and does not trigger local source tracing.
-- Keep only the latest 10 `sync` history records; unchanged `sync` requests do not create history records.
-- Apply `user_feedback_processor_max_interactions` only to non-`sync` actions; end the flow after receiving `finish`.
-
-### `SourceTracerInferNode`
-```python
-class SourceTracerInferNode(BaseNode):
-```
-Skips if `source_tracer_infer_switch` is off; builds provenance reasoning artifacts → `final_result.infer_messages`; failures → `exception_info`.
 
 ### `EndNode`
 ```python
@@ -141,8 +107,6 @@ When `final_result.response_content` is non-empty, appends an AI-generation noti
 ---
 
 ## Editor-team subgraph (`reasoning_writing_graph/editor_team_nodes.py`)
-
-`SectionStartNode` → `ResearchPlanReasoningNode` → (`InfoCollectorNode` → `ResearchPlanReasoningNode`)* → `SubReporterNode` → `SubSourceTracerNode` → `SectionEndNode`.
 
 ---
 
@@ -160,44 +124,21 @@ When `final_result.response_content` is non-empty, appends an AI-generation noti
 
 ## Dependency writing subgraph (`dependency_writing_team_nodes.py`)
 
-`SectionWritingStartNode` → `SubReporterNode` → `SubSourceTracerNode` → `SectionEndNode`.
-
 ---
 
 ## Execution sketches
 
 ### Parallel main graph
-```
-StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
--> [OutlineInteractionNode -> OutlineNode]* -> EditorTeamNode -> ReporterNode -> SourceTracerNode -> EndNode
--> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
-```
 
 ### Dependency-driven main graph
-```text
-StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> DependencyOutlineNode
--> [DependencyOutlineInteractionNode -> DependencyOutlineNode]*
--> DependencyEditorTeamNode -> ReporterNode -> SourceTracerNode
--> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
-```
 
 `DependencyEditorTeamNode` pipelines dependency layers (“previous writing + current reasoning” in parallel per layer).
 
 ### Hybrid outline-routing main graph
-```text
-StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
--> [OutlineInteractionNode -> OutlineNode]*
--> EditorTeamNode / DependencyEditorTeamNode -> ReporterNode -> SourceTracerNode
--> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
-```
 
 When `execution_method="hybrid"`, `IntentRecognitionNode` calls the outline-mode router LLM and stores the selected branch in `search_context.outline_execution_method`. `OutlineNode` and `OutlineInteractionNode` reuse the normal node classes, then select the normal or dependency-driven outline path and writing team from that session field.
 
 ### Editor-team subgraph
-```
-SectionStartNode -> ResearchPlanReasoningNode -> [InfoCollectorNode -> ResearchPlanReasoningNode]*
--> SubReporterNode -> SubSourceTracerNode -> SectionEndNode
-```
 
 ### Collector subgraph
 ```
@@ -212,6 +153,3 @@ SectionReasoningStartNode -> DependencyPlanReasoningNode -> [DependencyInfoColle
 ```
 
 ### Dependency writing subgraph
-```
-SectionWritingStartNode -> SubReporterNode -> SubSourceTracerNode -> SectionEndNode
-```

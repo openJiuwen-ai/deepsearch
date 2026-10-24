@@ -127,11 +127,11 @@ def test_input_build_includes_research_intent():
                 max_research_loops=3,
                 max_tool_call_turns_per_query=4,
             ),
-            research_intent={"exclude_domains": ["csdn.net"]},
+            research_intent={},
         )
     )
 
-    assert agent_input["research_intent"] == {"exclude_domains": ["csdn.net"]}
+    assert agent_input["research_intent"] == {}
 
 
 @pytest.mark.asyncio

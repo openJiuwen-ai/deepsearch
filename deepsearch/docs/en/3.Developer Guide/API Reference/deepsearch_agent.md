@@ -176,7 +176,6 @@ Same surface as **`BaseAgent.run`**. Validates with `validate_run_agent_params` 
 
 - If the index is built using “Sync to Deepsearch” option from openJiuwen studio, set `collection_name` to `"ds_kb_{kb_id}_chunks"` and `database_name` to `"default"`; omit **`retriever_class`** to use **`KnowledgeBaseRetriever`**.
 
-
 **Basic usage example (DeepSearch Agent API + Milvus retrieve mode):**
 ```python
 import asyncio
@@ -187,7 +186,6 @@ from openjiuwen_deepsearch.algorithm.search_tools.retrieval.retriever import (
 )
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
-
 
 async def main():
     agent_config = Config().agent_config.model_dump()
@@ -225,7 +223,6 @@ async def main():
         agent_config=agent_config,
     ):
         pass
-
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -314,7 +311,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import Agent
 from openjiuwen_deepsearch.utils.log_utils.log_common import RotationConfig
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
-
 async def main():
     query = "who was the president of the former country whose capital is known as the white city?"
 
@@ -373,7 +369,6 @@ async def main():
         print("SearchFinalResult:", json.dumps(payload, indent=2))
 
     print(f"Per-run artifacts written under: {log_dir}/result_{conversation_id}/")
-
 
 if __name__ == "__main__":
     asyncio.run(main())

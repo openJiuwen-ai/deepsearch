@@ -1,3 +1,4 @@
+
 # Role and Objective
 
 You are the search planner for a Brief report. Generate the smallest non-duplicative report-level query set that can

@@ -10,7 +10,7 @@
 
 ## 功能目的
 
-报告研究主工作流把用户 query 转换为结构化意图，并按报告类型进入专业版或 Brief 精简版分支，最终输出溯源后的流式响应，是 `research` 模式的核心编排层。
+将意图识别、大纲交互、章节研究和报告生成组织为可恢复的工作流。专业版报告经图表节点写入最终正文后直接进入用户反馈节点；精简版装配后直接进入 HTML 生成节点。
 
 ## 可见行为
 
@@ -19,10 +19,8 @@
 - `report_template` 支持 base64 文本，解码失败时按明文模板继续。
 - 开启 HITL 时由意图识别 LLM 判断用户输入是否充足（`needs_clarification`），不充足才生成澄清问题并等待反馈，充足则直接生成大纲；关闭 HITL 时一律直接生成大纲。
 - 大纲交互可接受、按评论修改或按用户给定大纲修改。
-- 报告生成后按配置执行 VLM 图表、全局溯源、推理链溯源和用户反馈处理。
 - `dependency_driving` 模式使用依赖驱动大纲和依赖驱动编辑团队。
 - `hybrid` 模式在意图识别节点中调用 LLM 判断本次 query 应走普通大纲还是依赖驱动大纲，并把结果写入 `search_context.outline_execution_method`。
-- `report_type=brief` 时进入自包含的 Brief 支路：报告级采集、证据审阅、至多一次补搜、并行章节写作、核心摘要、报告拼装、最终引用校验和自包含 HTML 报告生成；不会进入专业版 EditorTeam、VLM、推理链溯源或报告后反馈。
 - `final_result.response_content` 非空时，`EndNode` 会依据 `search_context.language` 在正文末尾追加中文或英文的 AI 生成标注；`final_result.response_content_type == "text/html"` 时跳过 markdown AI 声明追加（HTML 声明已由 BRIEF_HTML_REPORTER 插入），不使用 `</html>` 后缀等启发式猜测，professional md 路径行为完全不变。部分失败报告仍保留错误事件与 `exception_info`。
 - 错误会以 `StreamEvent.ERROR` 输出，随后输出 `ALL END`。
 
@@ -49,9 +47,9 @@
 5. hybrid router 的结果写入 `search_context.outline_execution_method`，取值为 `parallel` 或 `dependency_driving`；非 hybrid 模式写入对应的固定执行结果。
 6. HITL 开启时，若意图识别 LLM 判断 `needs_clarification=True`（用户输入不充足）则进入 `GenerateQuestionsNode` 和 `FeedbackHandlerNode`；若 `needs_clarification=False`（输入充足）则跳过澄清。HITL 关闭时一律跳过澄清，按报告类型直接进入 `BriefOutlineNode` 或专业版 `OutlineNode`。
 7. Brief 进入 `BriefOutline → BriefInfoCollector → BriefEvidenceReviewer`；无阻断缺口直接并行写作，有阻断缺口仅返回采集节点补搜一次，随后直接写作。
-8. Brief 的章节完成后，`BriefReporterNode` 生成摘要并确定性拼装报告，再经 `SourceTracerNode(NodeId.BRIEF_HTML_REPORTER)` 校验引用，最后由 `BriefHtmlReporterNode` 把报告转写为自包含 HTML；节点序列为 `BRIEF_REPORTER → BRIEF_SOURCE_TRACER(next=BRIEF_HTML_REPORTER) → BRIEF_HTML_REPORTER → END`。
+8. Brief 在 `BriefReporterNode` 装配 Markdown 后直接进入 `BriefHtmlReporterNode`，输出自包含 HTML。
 9. 专业版 `OutlineNode` 按 `search_context.outline_execution_method` 选择普通或依赖驱动大纲 prompt/tool schema，并可经 `OutlineInteractionNode` 修订。
-10. 专业版的 `parallel` 进入 `EditorTeamNode`，`dependency_driving` 进入 `DependencyEditorTeamNode`；随后由 `ReporterNode`、VLM、全局溯源、推理链溯源和用户反馈处理完成。
+10. 专业版章节写作完成后由 `ReporterNode` 装配总报告，经 `VLMChartGeneratorNode` 发布最终 Markdown，直接进入 `UserFeedbackProcessorNode`。
 11. `EndNode` 为非空报告正文追加 AI 生成标注后，输出 `final_result` 和 `ALL END`；HTML 产物（`response_content_type == "text/html"`）跳过该追加。
 
 ## 数据契约与依赖
@@ -60,7 +58,7 @@
 - workflow 输入 schema 包含 `query`、`thread_id`、`conversation_id`、`report_template`、`interrupt_feedback`、`agent_config`、`metadata`。
 - `agent_config.execution_method=hybrid` 是外部执行模式入口；`search_context.outline_execution_method` 是本次大纲模式的实际路由结果。
 - `outline_mode_router/` 的输出契约只允许 `parallel` 或 `dependency_driving`，不能输出解释、标点或其他文本。
-- `search_context.final_result` 是最终对外响应载体，包含正文、引用、推理链、图表、LLM token 统计、告警、异常和 metadata。
+- `search_context.final_result` 是最终对外响应载体，包含正文、图表、LLM token 统计、告警、异常和 metadata。
 - Brief 的过程状态位于 `search_context.brief_state`；该分支不写入专业版 `current_outline` 或章节 Plan。brief 大纲升级运行（[brief-outline-upgrade.md](brief-outline-upgrade.md)）由注入器写入 `brief_state` 并由专业版 `OutlineNode` 读取。
 - `workflow_feedback_mode=web` 时通过 `session.interact` 进入 openJiuwen 交互恢复链路。
 - `stats_info_llm=True` 时，节点会在中断前保存 token 使用量，结束时由 `EndNode` 汇总。

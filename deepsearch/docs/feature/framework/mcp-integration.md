@@ -70,9 +70,6 @@
 4. **InfoRetrievalNode 读取工具**
    - `_pre_handle` 从 `mcp_tool_context.get()` 读 bundle（`LookupError` 时视为空），调
      `get_tools_by_type("search")` 得到 `mcp_tools`，写入 `state["mcp_tools"]`。
-   - `_do_invoke` 为每条 query 构造 `sub_state` 时**必须**下传 `mcp_tools`（与禁引约束开关同等要求），
-     否则 `_collector_main` / `_prepare_collector_tool` 读到 `[]`，采集模型看不到
-     `mcp__{server}__{tool}`。
    - `_prepare_collector_tool` 把 `mcp_tools` 与 web/local/api tools 合并进 `tool_list` /
      `tool_dict`，统一暴露给采集模型。
 5. **工具调用**

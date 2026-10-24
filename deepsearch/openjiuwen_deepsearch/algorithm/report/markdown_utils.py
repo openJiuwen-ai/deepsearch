@@ -295,8 +295,46 @@ class MarkdownProcessorMixin:
         content: str,
         sub_section_outline: str,
     ) -> tuple[bool, str]:
-        """Compatibility entry point; the outline is not compared."""
-        return cls.validate_sub_report_heading_structure(content)
+        """Ensure every outline heading appears in the generated report in order.
+
+        Extra headings beyond the outline are allowed; missing, mismatched,
+        or out-of-order outline headings cause failure.
+        """
+        ok, reason = cls.validate_sub_report_heading_structure(content)
+        if not ok:
+            return False, reason
+        expected_pairs = cls._extract_outline_heading_pairs(sub_section_outline)
+        actual_pairs = cls._extract_markdown_heading_pairs(content)
+
+        if not expected_pairs:
+            return False, "expected subsection outline headings are empty"
+        if not actual_pairs:
+            return False, "generated report headings are empty"
+
+        if len(actual_pairs) < len(expected_pairs):
+            return (
+                False,
+                f"heading count insufficient: expected at least {len(expected_pairs)}, got {len(actual_pairs)}",
+            )
+
+        search_from = 0
+        for heading_index, (expected_level, expected_title) in enumerate(expected_pairs, start=1):
+            target = (expected_level, expected_title)
+            try:
+                pos = actual_pairs.index(target, search_from)
+            except ValueError:
+                return (
+                    False,
+                    f"outline heading not found: expected H{expected_level} "
+                    f"'{expected_title}' not present in generated report in outline order; "
+                    f"outline position {heading_index}",
+                )
+            search_from = pos + 1
+
+        if len(set(actual_pairs)) != len(actual_pairs):
+            return False, "duplicate headings detected in generated report"
+
+        return True, ""
 
     @staticmethod
     def _extract_level_one_headings(sub_reports_content: str) -> list[dict]:

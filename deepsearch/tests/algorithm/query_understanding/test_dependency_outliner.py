@@ -183,7 +183,6 @@ class TestDepDrivingOutlineTool:
         assert "exact column" in rendered
         assert "required row" in rendered
         assert "item-by-item" in rendered
-        assert "source restriction" in rendered
         assert "[]" in rendered
         assert "description" in rendered
 

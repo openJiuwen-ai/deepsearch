@@ -100,8 +100,9 @@ async def test_summary_receives_user_format_and_citation_bearing_excerpt_after_r
     assert captured["user_format"] == "Use bullets"
     assert "## Heading" in captured["main_content"]
     assert "Fact retained.[citation:1]" in captured["main_content"]
-def test_assembly_orders_summary_then_sections_then_references():
+def test_assembly_orders_summary_then_sections_without_source_links():
     result=assemble_brief_report(BriefAssemblyRequest(title="测试",language="zh-CN",executive_summary="- 核心。[citation:1] 未注册。[citation:9]",chapters=_chapters(),citation_registry=_registry(),section_order={"1":0,"2":1}))
-    assert result.report_content.startswith("# 测试\n\n## 核心摘要") and result.report_content.endswith("## 参考文章")
-    assert result.report_content.count("[来源](https://e/a)") == 3
+    assert result.report_content.startswith("# 测试\n\n## 核心摘要")
+    assert "参考文章" not in result.report_content
+    assert "https://e/a" not in result.report_content
     assert "[citation:9]" not in result.report_content

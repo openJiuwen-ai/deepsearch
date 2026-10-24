@@ -13,7 +13,7 @@ from openjiuwen_deepsearch.algorithm.user_feedback_processor.common import (
     resolve_model_context_collector,
     resolve_session_collector,
 )
-from openjiuwen_deepsearch.algorithm.user_feedback_processor.report_edit_utils import strip_markup_in_range
+from openjiuwen_deepsearch.algorithm.user_feedback_processor.report_edit_utils import strip_citations_in_range
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.section_locator import (
     heading_block_end,
     locate_enclosing_numbered_major_block,
@@ -243,7 +243,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
 
     @staticmethod
     def _strip_markup_from_report_range(report: str, start_offset: int, end_offset: int) -> str:
-        """剥离指定报告区间内的引用/推理标记并返回区间文本。
+        """剥离指定报告区间内的普通引用标记并返回区间文本。
 
         Args:
             report (str): 完整报告正文。
@@ -253,7 +253,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
         Returns:
             str: 剥离 markup 后的区间文本。
         """
-        stripped_report, _, _ = strip_markup_in_range(report, start_offset, end_offset)
+        stripped_report = strip_citations_in_range(report, start_offset, end_offset)
         # strip 后目标区间右边界会左移；用删除长度修正原始 offset。
         delta = len(report) - len(stripped_report)
         return stripped_report[start_offset:end_offset - delta]
@@ -263,7 +263,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
         report_content: str,
         target: NewTaskTargetSection,
     ) -> tuple[str, NewTaskTargetSection]:
-        """剥离目标小章节的溯源标记并重建章节定位信息。
+        """剥离目标小章节的普通引用标记并重建章节定位信息。
 
         Args:
             report_content (str): 当前完整报告正文。
@@ -274,7 +274,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
         """
         range_start = target.section_start_offset
         range_end = target.section_end_offset
-        stripped_report, _, _ = strip_markup_in_range(report_content, range_start, range_end)
+        stripped_report = strip_citations_in_range(report_content, range_start, range_end)
         if stripped_report == report_content:
             return report_content, target
 
@@ -1075,7 +1075,7 @@ class NewTaskProcessor(UserFeedbackPromptInvoker):
             "used_new_doc_count": len(evidence.incremental_doc_infos),
             "incremental_plan": evidence.incremental_plan,
             "incremental_doc_infos": evidence.incremental_doc_infos,
-            "source_trace_doc_infos": evidence.merged_doc_infos,
+
             "missing_aspects": evidence.assessment.missing_aspects,
             "edit_strategy": evidence.assessment.edit_strategy,
             "new_subsection_title": edit_result.new_subsection_title,

@@ -176,56 +176,11 @@ class VLMChartGeneratorNode(BaseNode)
 
 ---
 
-### class SourceTracerNode
-```python
-class SourceTracerNode(BaseNode)
-```
-**SourceTracerNode** 负责溯源与校验。
-
-**功能**：
-- 若 `source_tracer_research_trace_source_switch` 关闭则跳过。
-- 预处理后调用校验逻辑，生成引用信息。
-- 写入 `final_result.response_content` 与 `citation_messages`。
-- 引用结果会在报告正文中写入稳定的 `[checked_citation:id]` 标记，并同步返回对应的 citation metadata，供前端按最新 `final_result` 渲染与后续交互。
-- 校验失败时写入 `exception_info`。
-
-
----
-
 ### class UserFeedbackProcessorNode
 ```python
 class UserFeedbackProcessorNode(BaseNode)
 ```
 **UserFeedbackProcessorNode** 在报告生成完成后，处理用户对局部文本的迭代改写请求，以及选中内容的真实性核验。
-
-**功能**：
-- 根据 `user_feedback_processor_enable` 决定是否启用报告后局部优化。
-- 首次进入时先向前端发送完整的 `final_result` 快照，并通过 `search_context.feedback_snapshot_sent` 保证只发送一次。
-- 读取用户 JSON 反馈，支持 `expand`、`shorten`、`polish`、`supplementary_search`、`new_task`、`truth_verification`、`sync`、`finish`。
-- 对改写类动作解析并校验 `action`、`rewrite_scope`、`selected_text`、偏移量等字段。
-- `supplementary_search` 支持 `selected_only` 与 `selected_and_related` 两种改写范围。
-- `truth_verification` 为只读动作：校验选区后通过 `SUMMARY_RESPONSE` 返回 JSON 核验结果，不更新 `final_result.response_content`，不写入 `search_context.rewrite_history`，但会消耗 `feedback_interaction_count`。
-- `sync` 会以轻量 ack 回传整篇报告更新结果，不消耗 `feedback_interaction_count`；只有整篇报告内容实际变化时才会追加一条 `rewrite_history` 记录。
-- 调用 `UserFeedbackProcessor` 完成局部改写并更新 `final_result.response_content`。
-- 当 `source_tracer_research_trace_source_switch` 开启时，普通 rewrite、`supplementary_search` 和 `new_task` 会对变化片段执行差异感知局部溯源；未变化片段保留原引用，新增引用会同步更新 `citation_messages` 并在文末追加参考文献。
-- 普通 rewrite / supplementary_search / new_task 会维护 `search_context.feedback_interaction_count` 与 `search_context.rewrite_history`，记录动作类型、改写范围和实际替换区间。
-- 改写链路不再额外维护前端偏移映射；`sync` 仅同步正文，不触发局部溯源。
-- `sync` 历史仅保留最近 10 条；内容未变化的 `sync` 不会新增历史记录。
-- 只有非 `sync` 动作会受 `user_feedback_processor_max_interactions` 约束；收到 `finish` 后结束流程。
-
----
-
-### class SourceTracerInferNode
-```python
-class SourceTracerInferNode(BaseNode):
-```
-**SourceTracerInferNode** 负责溯源推理。
-
-**功能**：
-- 若`source_tracer_infer_switch`关闭则跳过。
-- 系统自动选择需要进行溯源推理的报告内容，生成对应的溯源推理图。
-- 写入 `final_result.infer_messages`。
-- 当溯源推理失败时写入`exception_info`。
 
 ---
 
@@ -250,7 +205,6 @@ class EndNode(End)
 - `ResearchPlanReasoningNode`：生成章节计划并决定后续路径。
 - `InfoCollectorNode`：执行信息收集子图。
 - `SubReporterNode`：生成子报告。
-- `SubSourceTracerNode`：对子报告进行溯源标记。
 - `SectionEndNode`：返回子图结果。
 
 ---
@@ -285,7 +239,6 @@ class EndNode(End)
 
 - `SectionWritingStartNode`：初始化 `section_context`。
 - `SubReporterNode`：生成子报告。
-- `SubSourceTracerNode`：对子报告进行溯源标记。
 - `SectionEndNode`：返回子图结果。
 
 ---
@@ -293,40 +246,19 @@ class EndNode(End)
 ## 节点执行流程
 
 ### 主工作流（并行）
-```
-StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
--> [OutlineInteractionNode -> OutlineNode]* -> EditorTeamNode -> ReporterNode -> SourceTracerNode -> EndNode
--> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
-```
 
 说明：`StartNode` 的出边为条件边——普通运行进入 `IntentRecognitionNode`；携带升级 metadata 的运行由注入器接管，直达 `OutlineNode`。
 
 ### 主工作流（依赖驱动）
-```text
-StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> DependencyOutlineNode
--> [DependencyOutlineInteractionNode -> DependencyOutlineNode]*
--> DependencyEditorTeamNode -> ReporterNode -> SourceTracerNode
--> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
-```
 
 说明：`DependencyEditorTeamNode` 会在内部同时编排依赖驱动的推理子图与写作子图，
 按章节依赖层级执行“上一层写作 + 本层推理”的流水线并行调度。
 
 ### 主工作流（混合大纲路由）
-```text
-StartNode -> IntentRecognitionNode -> [GenerateQuestionsNode -> FeedbackHandlerNode] -> OutlineNode
--> [OutlineInteractionNode -> OutlineNode]*
--> EditorTeamNode / DependencyEditorTeamNode -> ReporterNode -> SourceTracerNode
--> SourceTracerInferNode -> UserFeedbackProcessorNode -> EndNode
-```
 
 说明：当 `execution_method="hybrid"` 时，`IntentRecognitionNode` 调用大纲模式 router LLM，并把结果写入 `search_context.outline_execution_method`。`OutlineNode` 与 `OutlineInteractionNode` 复用普通节点实现，再按该字段选择普通大纲/依赖驱动大纲以及后续写作团队。
 
 ### 编辑团队子图
-```
-SectionStartNode -> ResearchPlanReasoningNode -> [InfoCollectorNode -> ResearchPlanReasoningNode]*
--> SubReporterNode -> SubSourceTracerNode -> SectionEndNode
-```
 
 ### 信息收集子图
 ```
@@ -341,6 +273,3 @@ SectionReasoningStartNode -> DependencyPlanReasoningNode -> [DependencyInfoColle
 ```
 
 ### 依赖驱动工作流子报告撰写子图
-```
-SectionWritingStartNode -> SubReporterNode -> SubSourceTracerNode -> SectionEndNode
-```

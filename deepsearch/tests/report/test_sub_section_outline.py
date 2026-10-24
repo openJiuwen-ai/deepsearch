@@ -253,19 +253,6 @@ def test_inherited_title_time_does_not_block_outline_request():
     assert feedback == ""
 
 
-def test_out_of_scope_year_mentioned_as_exclusion_in_description_is_not_conflict():
-    ok, feedback = _validate_user_time_constraints(
-        {
-            "section_task": "Market outlook",
-            "section_description": "Exclude 2024 figures; focus on 2023 and earlier.",
-        },
-        {"content_date_scope": {"start": "2020-01-01", "end": "2023-12-31"}},
-    )
-
-    assert ok
-    assert feedback == ""
-
-
 def test_unrelated_global_outline_year_does_not_block_current_section():
     ok, feedback = _validate_user_time_constraints(
         {
@@ -278,34 +265,6 @@ def test_unrelated_global_outline_year_does_not_block_current_section():
 
     assert ok
     assert feedback == ""
-
-
-@pytest.mark.asyncio
-async def test_exclusion_year_in_description_still_allows_outline_generation():
-    reporter = Reporter.__new__(Reporter)
-    inputs = {
-        "section_idx": 1,
-        "section_task": "1 Market outlook",
-        "section_description": "Exclude 2024 figures; focus on 2023 and earlier.",
-        "time_contract": {
-            "content_date_scope": {"start": "2020-01-01", "end": "2023-12-31"}
-        },
-    }
-    generated_outline = {"rs_success": True, "sub_section_outline": "1 Market outlook"}
-    with (
-        patch.object(
-            reporter,
-            "_generate_sub_section_outline",
-            new=AsyncMock(return_value=generated_outline),
-        ) as generate_outline,
-        patch.object(reporter, "check_chapter_format", return_value=(True, "")),
-    ):
-        success, error = await reporter._generate_outline_with_retry(inputs, 1, 1)
-
-    assert success
-    assert error == ""
-    assert inputs["sub_section_outline"] == "1 Market outlook"
-    generate_outline.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -21,7 +21,6 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 logger = logging.getLogger(__name__)
 
 
-INFERENCE_LINK_RE = re.compile(r"\[([^\]]+)\]\(#inference:(\d+)\)")
 CHART_PLACEHOLDER_RE = re.compile(r"\(#insertChart:([^)]+)\)")
 SAFE_BUNDLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -115,14 +114,14 @@ def _validate_message_list(final_result: dict, field_name: str) -> list[dict]:
     return messages
 
 
-def _validate_final_result(final_result: dict) -> tuple[str, list[dict], list[dict]]:
+def _validate_final_result(final_result: dict) -> tuple[str, list[dict]]:
     """Validate the final_result structure required by bundle export.
 
     Args:
         final_result: 工作流输出的 final_result 字典。
 
     Returns:
-        tuple[str, list[dict], list[dict]]: 报告正文、推理资源列表和图表资源列表。
+        tuple[str, list[dict]]: 报告正文、推理资源列表和图表资源列表。
 
     Raises:
         CustomValueException: final_result 结构不合法时抛出。
@@ -156,27 +155,8 @@ def _validate_final_result(final_result: dict) -> tuple[str, list[dict], list[di
             "report export only supports response_content_type text/markdown",
         )
 
-    infer_messages = _validate_message_list(final_result, "infer_messages")
     chart_messages = _validate_message_list(final_result, "chart_messages")
-    return response_content, infer_messages, chart_messages
-
-
-def _rewrite_inference_links(report_content: str) -> str:
-    """Rewrite internal inference anchors to bundle-local HTML resources.
-
-    Args:
-        report_content: 原始 Markdown 报告正文。
-
-    Returns:
-        str: 重写推理图链接后的 Markdown 内容。
-    """
-
-    def _replace(match: re.Match[str]) -> str:
-        label = match.group(1)
-        infer_id = match.group(2)
-        return f"[{label}](infer/inference_{infer_id}.html)"
-
-    return INFERENCE_LINK_RE.sub(_replace, report_content)
+    return response_content, chart_messages
 
 
 def _rewrite_chart_placeholders(report_content: str, chart_messages: list[dict]) -> str:
@@ -218,28 +198,19 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
         CustomValueException: `response_content` 为空或资源内容非法时抛出。
     """
     start_time = time.perf_counter()
-    response_content, infer_messages, chart_messages = _validate_final_result(final_result)
+    response_content, chart_messages = _validate_final_result(final_result)
     logger.debug(
-        "Building report bundle workspace=%s infer_messages=%s chart_messages=%s response_length=%s",
+        "Building report bundle workspace=%s chart_messages=%s response_length=%s",
         workspace,
-        len(infer_messages),
         len(chart_messages),
         len(response_content),
     )
 
     root_dir = workspace / "report_bundle"
-    infer_dir = root_dir / "infer"
     charts_dir = root_dir / "charts"
-    for path in (root_dir, infer_dir, charts_dir):
+    for path in (root_dir, charts_dir):
         path.mkdir(parents=True, exist_ok=True)
 
-    for item in infer_messages:
-        infer_id = _validate_bundle_id(item.get("id", ""), "infer_messages[].id")
-        html_base64 = item.get("html_base64", "")
-        if not infer_id or not html_base64:
-            continue
-        html_bytes = _decode_base64_payload(html_base64, f"infer_messages[{infer_id}].html_base64")
-        (infer_dir / f"inference_{infer_id}.html").write_bytes(html_bytes)
 
     for item in chart_messages:
         chart_id = _validate_bundle_id(item.get("chart_id", ""), "chart_messages[].chart_id")
@@ -250,13 +221,11 @@ def build_report_bundle(final_result: dict, workspace: Path) -> ReportBundle:
         (charts_dir / f"{chart_id}.png").write_bytes(chart_bytes)
 
     markdown_text = strip_internal_citation_markers(response_content)
-    markdown_text = _rewrite_inference_links(markdown_text)
     markdown_text = _rewrite_chart_placeholders(markdown_text, chart_messages)
     markdown_path = root_dir / "report.md"
-    markdown_path.write_text(markdown_text, encoding="utf-8")
+    markdown_path.write_text(markdown_text, encoding="utf-8", newline="\n")
     logger.info(
-        "Built report bundle infer_assets=%s chart_assets=%s duration_ms=%.2f",
-        len(list(infer_dir.glob("*.html"))),
+        "Built report bundle chart_assets=%s duration_ms=%.2f",
         len(list(charts_dir.glob("*.png"))),
         (time.perf_counter() - start_time) * 1000,
     )

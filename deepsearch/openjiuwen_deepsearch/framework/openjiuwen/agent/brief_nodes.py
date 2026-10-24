@@ -19,7 +19,7 @@ from openjiuwen_deepsearch.algorithm.brief_report.collector import (
 )
 from openjiuwen_deepsearch.algorithm.brief_report.html_reporter import generate_brief_html_report
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
-    BriefAssemblyRequest, BriefChapter, BriefCollectionResult, BriefCollectorRequest,
+    BriefAssemblyRequest, BriefCollectionResult, BriefCollectorRequest,
     BriefEvidenceReview, BriefOutline, BriefOutlineRequest, BriefReviewRequest,
     BriefQuery, BriefQueryRequest, BriefSearchResult, BriefSummaryRequest,
     BriefWorkflowState, BriefWritingRequest,
@@ -36,9 +36,6 @@ from openjiuwen_deepsearch.algorithm.brief_report.writer import (
     assemble_brief_report,
     generate_brief_summary,
     write_brief_chapters,
-)
-from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
-    build_exclusion_prompt_context,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import update_progress_summary
@@ -161,7 +158,7 @@ async def _search_brief_queries(
             "local_text_search_record": [],
             "other_tool_record": [],
             "research_intent": intent.model_dump(),
-            "exclusion_constraint_enable": bool(session.get_global_state("config.exclusion_constraint_enable")),
+
         }
         try:
             processed_results = process_tool_result(
@@ -176,7 +173,7 @@ async def _search_brief_queries(
             batches.append((query, processed_results))
     results = normalize_brief_search_results(
         batches, intent,
-        enable_exclusion=bool(session.get_global_state("config.exclusion_constraint_enable")),
+
     )
     await _stream_brief_search_results(session, results, queries)
     return results
@@ -583,9 +580,6 @@ class BriefSubReporterNode(BaseNode):
             {"outline": state.outline.model_dump(), "collection": state.collection.model_dump()},
         )
         intent = session.get_global_state("search_context.research_intent") or {}
-        exclusion_ctx = {}
-        if session.get_global_state("config.exclusion_constraint_enable"):
-            exclusion_ctx = build_exclusion_prompt_context(intent)
         return {
             "state": state,
             "request": BriefWritingRequest(
@@ -594,8 +588,8 @@ class BriefSubReporterNode(BaseNode):
                 audience_role=intent.get("audience_role", ""), tone=intent.get("tone", ""),
                 user_format=session.get_global_state("search_context.report_template") or "",
                 writing_guidance=state.evidence_review.writing_guidance if state.evidence_review else None,
-                has_exclusion=exclusion_ctx.get("has_exclusion", False),
-                exclusion_instruction=exclusion_ctx.get("exclusion_instruction", ""),
+
+
             ),
         }
 
@@ -730,16 +724,17 @@ class BriefReporterNode(BaseNode):
         current_report = Report(
             report_task=algorithm_output["report_task"],
             report_content=assembly.report_content,
-            merged_trace_source_datas=assembly.merged_trace_source_datas,
+
             all_classified_contents=[[item.model_dump() for item in state.collection.citation_registry]],
         )
         session.update_global_state(
             {
                 "search_context.brief_state": state.model_dump(),
                 "search_context.current_report": current_report,
+                "search_context.final_result.response_content": assembly.report_content,
             }
         )
-        next_node = NodeId.BRIEF_SOURCE_TRACER.value
+        next_node = NodeId.BRIEF_HTML_REPORTER.value
         logger.info(
             "[BriefReporterNode] Generated and assembled report chapters=%d citations=%d.",
             len(state.chapters), len(state.collection.citation_registry),
@@ -754,14 +749,12 @@ class BriefReporterNode(BaseNode):
 
 
 class BriefHtmlReporterNode(BaseNode):
-    """把溯源校验后的 Brief 报告 md 转写为自包含 HTML 并写回最终产物。"""
+    """把 Brief 报告 Markdown 转写为自包含 HTML 并写回最终产物。"""
 
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
         logger.info("[BriefHtmlReporterNode] Start BriefHtmlReporterNode.")
         current_report = session.get_global_state("search_context.current_report")
-        markdown = getattr(current_report, "checked_trace_source_report_content", "") or ""
-        if not markdown:
-            markdown = getattr(current_report, "report_content", "") or ""
+        markdown = getattr(current_report, "report_content", "") or ""
         language = session.get_global_state("search_context.language") or "zh-CN"
         _log_node_detail(
             "BriefHtmlReporterNode", "current_inputs",
@@ -789,7 +782,7 @@ class BriefHtmlReporterNode(BaseNode):
     def _fallback_to_markdown(self, session: Session, exc: Exception) -> Output:
         """HTML 转写重试耗尽后降级保留 markdown 产物，不让报告整体失败。
 
-        HTML 是增值产物：markdown 报告已由 SourceTracer 写入 final_result
+        HTML 是增值产物：markdown 报告已由报告节点写入 final_result
         （response_content_type=text/markdown）。降级与专业版 VLM 图表生成
         失败的处理一致——写 warning_info、正常流转 END，不抛
         REPORT_GENERATE_ERROR。

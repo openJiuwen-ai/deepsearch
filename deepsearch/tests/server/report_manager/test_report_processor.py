@@ -27,7 +27,6 @@ from openjiuwen_deepsearch.algorithm.report_export.mermaid_preprocess import (
 )
 from openjiuwen_deepsearch.algorithm.report_export.report_bundle import build_report_bundle
 from openjiuwen_deepsearch.algorithm.report_export.word_utils import (
-    _normalize_latex_for_omml,
     html_to_doc,
     set_global_styles,
 )
@@ -140,13 +139,12 @@ def test_preprocess_markdown_text_strips_internal_citation_markers():
         None.
     """
     text = (
-        "保留引用[checked_citation:4][[5]](https://example.com/source)\n\n"
+        "保留引用[[5]](https://example.com/source)\n\n"
         "移除旧标记[citation:2]"
     )
 
     processed = preprocess_markdown_text(text)
 
-    assert "checked_citation" not in processed
     assert "[citation:2]" not in processed
     assert '[5]</a>' in processed
 
@@ -568,7 +566,7 @@ def test_report_html_export_renders_mermaid_or_falls_back(tmp_path):
     """
     final_result = {
         "response_content": "# 标题\n\n```mermaid\ngraph TD\nA-->B\n```",
-        "infer_messages": [],
+
         "chart_messages": [],
         "warning_info": "",
         "exception_info": "",
@@ -733,7 +731,7 @@ def test_report_docx_export_creates_docx_file(tmp_path):
     """
     final_result = {
         "response_content": "# Title\n\nPlain text.",
-        "infer_messages": [],
+
         "chart_messages": [],
         "warning_info": "",
         "exception_info": "",

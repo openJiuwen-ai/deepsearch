@@ -42,9 +42,6 @@ def test_sanitize_preserves_non_numeric_citation_text():
     assert sanitize_citation_markers("见[citation:abc]") == "见[citation:abc]"
 
 
-def test_sanitize_preserves_checked_citation_markers():
-    # checked_citation 是另一套标记，由专用剥离器处理，此处不应破坏
-    assert sanitize_citation_markers("[checked_citation:3]") == "[checked_citation:3]"
 
 
 def test_strip_chart_markup_clears_malformed_citation_delimiters():

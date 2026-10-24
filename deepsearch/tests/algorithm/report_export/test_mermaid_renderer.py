@@ -154,7 +154,7 @@ def test_generated_xychart_strips_chart_markup_and_prefers_horizontal_for_crowde
                 "image_type": "bar",
                 "unit": "亿元",
                 "records": [
-                    ["飞驰人生2[checked_citation:1][[1]](https://example.com)", 33.98],
+                    ["飞驰人生2[[1]](https://example.com)", 33.98],
                     ["抓娃娃", 33.27],
                     ["第二十条", 24.54],
                     ["熊出没·逆转时空", 20.06],
@@ -165,7 +165,6 @@ def test_generated_xychart_strips_chart_markup_and_prefers_horizontal_for_crowde
     )
 
     assert "chartOrientation: horizontal" in code
-    assert "checked_citation" not in code
     assert "https://example.com" not in code
     assert "熊出没·逆转时空" in code
 
@@ -201,7 +200,7 @@ def test_generated_timeline_strips_citations_urls_and_truncates_long_events() ->
     long_event = (
         "海外票房（不含中国）预计156亿美元，同比回落7%，较2017-2019年均值低21%，"
         "同时受到供给断层与档期变化影响，北美、欧洲和亚洲多个市场复苏节奏继续分化"
-        "[checked_citation:8][[2]](https://example.com/report)"
+        "[[2]](https://example.com/report)"
     )
     code = TimelineChartMermaidGenerator.generate_from_json(
         json.dumps(
@@ -214,7 +213,6 @@ def test_generated_timeline_strips_citations_urls_and_truncates_long_events() ->
         )
     )
 
-    assert "checked_citation" not in code
     assert "https://example.com" not in code
     assert "..." in code
     event_text = code.split(":", 1)[1].strip()

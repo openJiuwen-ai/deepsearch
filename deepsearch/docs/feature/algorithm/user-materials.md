@@ -2,8 +2,6 @@
 
 ## 接口
 
-在 run 请求的 `metadata` 中传入 `user_materials_enabled: true` 和 `user_materials`。每条素材必须包含非空 `content` 和 `url`；`url` 可为本地绝对文件路径或 HTTP(S) 链接，并作为去重和引用校验的统一来源标识。`material_id`、`title`、`publish_time`、`content_time` 可选。启用时所有素材 `content` 的总长度不得超过 500 万字符；关闭开关时素材会被忽略；系统不依据 URL 或标题抓取正文。
-
 ```json
 {"metadata":{"user_materials_enabled":true,"user_materials":[{"url":"D:\\materials\\paper.pdf","content":"..."}]}}
 ```
@@ -16,7 +14,6 @@
 4. 保留的素材按长度直通、单篇摘要或单篇 map-reduce；摘要按 `content_hash` 跨轮复用，并围绕原始 query 组织事实和结论。
 5. 意图识别的既有 LLM 调用同时输出 `material_relevance_map`：素材与 query 的相关性、可支持的论点、范围/局限和待补研究缺口，不增加额外调用。
 6. 预处理结果写入 `search_context.material_analysis`，直接透传到专业版和 Brief 的提纲、章节规划及报告写作。提纲将每章的素材用途写入 `material_bindings`。
-7. Planner 仅可声明已知的 `use_material_ids`，并优先继承章节绑定；写作阶段将声明素材合并为可溯源证据。
 8. 大纲生成后的素材 ID 会按预处理清单规范化（例如将 `[M1]` 还原为 `M1`）；无效绑定不会静默导致空素材章节，素材覆盖章节会回退注入可用素材。
 9. 用户以明确肯定方式要求“基于/总结所提供素材”时启用 `material_first`；“不要基于提供素材”等否定表达不会启用。Brief 中，用户素材优先进入章节写作证据，网页检索仅补足素材分析未覆盖的主张或研究缺口，不增加 LLM 调用次数；若没有缺口，允许空检索并直接进入素材合并和写作。专业版只有同时满足 `material_first`（即使用策略为 `required`）以及章节绑定素材为 `direct` 或 `partial`、具备可用论点且没有研究缺口时，才允许跳过联网检索。
 10. 日志输出 `[MATERIAL_ROUTE]`，包含每章节声明、解析到的素材数、素材/网页证据数和素材 ID，便于验证素材是否实际进入写作。

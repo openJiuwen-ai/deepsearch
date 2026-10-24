@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
@@ -31,7 +31,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_l
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
     filter_confirmed_target_locators,
 )
-from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine, LocalSearch
 
@@ -404,7 +403,7 @@ class TestInfoCollectorNode:
             "evidence_ledger": {},
             "mcp_tools": [],
             "mcp_param_tools": [],
-            "exclusion_constraint_enable": False,
+
         }
         assert result == expected_state
 

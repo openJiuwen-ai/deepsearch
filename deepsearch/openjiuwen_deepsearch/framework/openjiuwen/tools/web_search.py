@@ -91,12 +91,11 @@ def get_web_search_api_wrapper(search_engine_name: str | None = None):
 def apply_web_search_domain_constraints(
         search_engine_name: str,
         include_domains: list[str] | None = None,
-        exclude_domains: list[str] | None = None,
 ) -> bool:
     """
     将意图识别出的域名约束合并到已初始化的搜索引擎实例.
 
-    仅修改原生支持 include_domains/exclude_domains 的搜索引擎实例。
+    仅修改原生支持 include_domains 的搜索引擎实例。
     实例中的现有值来自初始化配置，因此这里会保留配置域名，并追加 query 中识别出的域名。
     """
     if search_engine_name not in SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES:
@@ -115,18 +114,11 @@ def apply_web_search_domain_constraints(
         merged_include.extend(normalize_domains(include_domains))
         api_wrapper.include_domains = normalize_domains(merged_include)
 
-        merged_exclude = normalize_domains(getattr(api_wrapper, "exclude_domains", None))
-        merged_exclude.extend(normalize_domains(exclude_domains))
-        api_wrapper.exclude_domains = normalize_domains(merged_exclude)
-
         logger.info(
-            "apply_web_search_domain_constraints [%s]: intent include_domains=%s, "
-            "exclude_domains=%s; merged include_domains=%s, exclude_domains=%s",
+            "apply_web_search_domain_constraints [%s]: intent include_domains=%s; merged include_domains=%s",
             search_engine_name,
             include_domains,
-            exclude_domains,
             api_wrapper.include_domains,
-            api_wrapper.exclude_domains,
         )
 
     elif search_engine_name == SearchEngine.AGC_AINETWORKING.value:
@@ -141,13 +133,10 @@ def apply_web_search_domain_constraints(
                 search_engine_name, len(dropped), dropped,
             )
         api_wrapper.sites = merged[:20]
-        # exclude_domains ignored: 华为 API 无原生 exclude 参数，由收集器 process_common_search_result 通用后置过滤兜底
         logger.info(
-            "apply_web_search_domain_constraints [%s]: intent include_domains=%s, "
-            "exclude_domains=%s (ignored: filtered by collector); merged sites=%s",
+            "apply_web_search_domain_constraints [%s]: intent include_domains=%s; merged sites=%s",
             search_engine_name,
             include_domains,
-            exclude_domains,
             api_wrapper.sites,
         )
 

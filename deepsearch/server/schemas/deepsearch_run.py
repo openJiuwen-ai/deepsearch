@@ -145,9 +145,6 @@ class DeepSearchRequest(BaseModel):
     message: str = Field(..., description="用户请求查询或者人机交互时的反馈")
     workflow_human_in_the_loop: bool = Field(default=True, description="是否启用人机交互")
     outliner_max_section_num: int = Field(default=10, ge=1, le=15, description="最大规划章节数量，取值范围:[1,15]")
-    source_tracer_research_trace_source_switch: bool = Field(default=True, description="溯源功能开关")
-    source_tracer_generated_citation_switch: bool = Field(default=True, description="新增引用生成开关")
-    source_tracer_infer_switch: bool = Field(default=True, description="溯源推理功能开关")
     info_collector_search_method: Literal["web", "local", "all"] = Field(default="web",
                                                                          description="搜索方式："
                                                                                      "web: 联网搜索"
@@ -160,12 +157,6 @@ class DeepSearchRequest(BaseModel):
     coverage_rule_block_enable: bool = Field(
         default=True,
         description="是否启用子报告大纲阶段的规则版覆盖证据（coverage passages）",
-    )
-    exclusion_constraint_enable: bool = Field(
-        default=False,
-        description="是否启用子报告禁引约束（采集层文献 ID 匹配与镜像后缀词、"
-                    "写作层 Excluded Sources 注入、intent 层 include_url/target_papers 去重）。"
-                    "默认关闭，关闭时行为等同 baseline",
     )
     llm_config: dict = Field(default_factory=dict, description="LLM配置")
     web_search_config: WebSearchConfig = Field(default=None, description="联网增强引擎配置，和本地知识库配置至少选择一个")
