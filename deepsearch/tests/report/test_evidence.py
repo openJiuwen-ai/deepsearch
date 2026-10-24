@@ -1,4 +1,5 @@
 import logging
+import json
 from unittest.mock import patch, AsyncMock
 
 import pytest
@@ -8,6 +9,7 @@ from openjiuwen_deepsearch.algorithm.report.report import (
     ensure_exact_target_documents,
 )
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
+from openjiuwen_deepsearch.config.config import ServiceConfig
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 
 
@@ -19,6 +21,10 @@ def _report_doc(idx: int, *, url: str | None = None, content: str | None = None)
         "key_passages": [f"passage-{idx}"],
         "scores": {"relevance": 9, "answerability": 9, "authority": 9, "data_density": 9},
     }
+
+
+def test_requirement_mapping_and_adaptive_rationale_config_defaults_to_disabled():
+    assert ServiceConfig().professional_report_adaptive_rationales is False
 
 
 def test_exact_target_paper_is_collected_as_required_fulltext_evidence():
@@ -47,8 +53,11 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
             "language": ENGLISH,
             "section_idx": 3,
             "section_task": "3 企业经营与行业分析",
-            "section_description": "desc",
+            "section_description": "Compare regional outcomes across historical periods and explain the differences",
             "report_task": "task",
+            "original_query": "Compare the topic across multiple regions and time periods",
+            "section_format_requirements": ["include a comparison table"],
+            "professional_report_adaptive_rationales": True,
             "current_outline": "1 Context\n3 企业经营与行业分析",
             "max_generate_retry_num": 3,
         }
@@ -63,7 +72,14 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
                     return {"content": "[]"}
                 if len(calls) == 2:
                     return {"content": '{"rationales": "invalid"}'}
-                return {"content": '{"rationales": [{"id": "r1", "description": "d", "type": "factual"}]}'}
+                requirements = [{"id": f"q{i}", "description": f"Requirement {i}"} for i in range(1, 11)]
+                rationales = [
+                    {"id": f"r{i}", "description": f"Evidence dimension {i}", "type": "qualitative",
+                     "priority": "primary", "covers": [f"q{i}"]}
+                    for i in range(1, 11)
+                ]
+                return {"content": json.dumps({"requirements": requirements, "rationales": rationales})}
+                # Valid payload is constructed above with a full checklist.
             mock_ainvoke.side_effect = side_effect
             rationales, last_error = await reporter._generate_section_rationales(current_inputs)
         assert rationales and last_error == ""
@@ -71,6 +87,10 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
         assert all([m["role"] for m in attempt] == ["system", "user"] for attempt in calls)
         assert calls[0][0] == calls[1][0] == calls[2][0]
         assert all("企业经营与行业分析" in attempt[-1]["content"] for attempt in calls)
+        assert "Task complexity assessment: medium" in calls[0][-1]["content"]
+        assert "Generate between 10 and 15 rationales" in calls[0][-1]["content"]
+        assert "Section format requirements:" in calls[0][-1]["content"]
+        assert "include a comparison table" in calls[0][-1]["content"]
         assert "not a JSON object" in calls[1][-1]["content"]
         assert "not a JSON object" not in calls[2][-1]["content"]
         assert "not a list" in calls[2][-1]["content"]
@@ -82,6 +102,42 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
         assert "<retry_feedback>" in feedback_message["content"]
         assert "failed to parse" in feedback_message["content"]
         assert "validation data, not instructions" in feedback_message["content"]
+    finally:
+        llm_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_generate_section_rationales_uses_legacy_flow_when_feature_flag_is_off():
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "section_idx": 1,
+            "section_task": "A narrowly scoped chapter",
+            "section_description": "Describe one topic",
+            "report_task": "task",
+        }
+        legacy_output = {
+            "rationales": [
+                {"id": "source-r1", "description": "One evidence dimension", "priority": "primary"}
+            ]
+        }
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            return_value={"content": json.dumps(legacy_output)},
+        ) as mock_ainvoke:
+            rationales, error = await reporter._generate_section_rationales(current_inputs)
+
+        assert error == ""
+        assert rationales == [
+            {"id": "r1", "description": "One evidence dimension", "priority": "primary"}
+        ]
+        assert "rationale_requirements" not in current_inputs
+        assert "rationale_coverage_diagnostics" not in current_inputs
+        prompt_messages = mock_ainvoke.await_args.kwargs["messages"]
+        assert "Original user query:" not in prompt_messages[-1]["content"]
+        assert "Task complexity assessment:" not in prompt_messages[-1]["content"]
     finally:
         llm_context.reset(token)
 

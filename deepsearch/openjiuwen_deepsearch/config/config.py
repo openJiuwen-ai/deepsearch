@@ -548,6 +548,10 @@ class ServiceConfig(BaseModel):
     )
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=True, description="报告插入图表开关")
+    professional_report_adaptive_rationales: bool = Field(
+        default=False,
+        description="专业版报告是否启用需求清单映射与复杂度自适应 rationale",
+    )
 
     # 溯源节点参数
     source_tracer_citation_verify_max_concurrency_num: int = Field(default=30, description="溯源校验最大并发数量")
