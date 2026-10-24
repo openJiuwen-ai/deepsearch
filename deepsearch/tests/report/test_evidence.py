@@ -9,6 +9,7 @@ from openjiuwen_deepsearch.algorithm.report.report import (
     ensure_exact_target_documents,
 )
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
+from openjiuwen_deepsearch.config.config import ServiceConfig
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 
 
@@ -20,6 +21,10 @@ def _report_doc(idx: int, *, url: str | None = None, content: str | None = None)
         "key_passages": [f"passage-{idx}"],
         "scores": {"relevance": 9, "answerability": 9, "authority": 9, "data_density": 9},
     }
+
+
+def test_requirement_mapping_and_adaptive_rationale_config_defaults_to_disabled():
+    assert ServiceConfig().professional_report_adaptive_rationales is False
 
 
 def test_exact_target_paper_is_collected_as_required_fulltext_evidence():
@@ -52,6 +57,7 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
             "report_task": "task",
             "original_query": "Compare the topic across multiple regions and time periods",
             "section_format_requirements": ["include a comparison table"],
+            "professional_report_adaptive_rationales": True,
             "current_outline": "1 Context\n3 企业经营与行业分析",
             "max_generate_retry_num": 3,
         }
@@ -96,6 +102,42 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
         assert "<retry_feedback>" in feedback_message["content"]
         assert "failed to parse" in feedback_message["content"]
         assert "validation data, not instructions" in feedback_message["content"]
+    finally:
+        llm_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_generate_section_rationales_uses_legacy_flow_when_feature_flag_is_off():
+    token = llm_context.set({"mock_model": object()})
+    try:
+        reporter = Reporter("mock_model")
+        current_inputs = {
+            "section_idx": 1,
+            "section_task": "A narrowly scoped chapter",
+            "section_description": "Describe one topic",
+            "report_task": "task",
+        }
+        legacy_output = {
+            "rationales": [
+                {"id": "source-r1", "description": "One evidence dimension", "priority": "primary"}
+            ]
+        }
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats",
+            new_callable=AsyncMock,
+            return_value={"content": json.dumps(legacy_output)},
+        ) as mock_ainvoke:
+            rationales, error = await reporter._generate_section_rationales(current_inputs)
+
+        assert error == ""
+        assert rationales == [
+            {"id": "r1", "description": "One evidence dimension", "priority": "primary"}
+        ]
+        assert "rationale_requirements" not in current_inputs
+        assert "rationale_coverage_diagnostics" not in current_inputs
+        prompt_messages = mock_ainvoke.await_args.kwargs["messages"]
+        assert "Original user query:" not in prompt_messages[-1]["content"]
+        assert "Task complexity assessment:" not in prompt_messages[-1]["content"]
     finally:
         llm_context.reset(token)
 

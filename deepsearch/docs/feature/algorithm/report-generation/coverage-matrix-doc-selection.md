@@ -19,6 +19,7 @@
 
 ## 可见行为
 
+- 本文描述的需求清单映射与按复杂度自适应 rationale 数量由 `ServiceConfig.professional_report_adaptive_rationales` 控制，默认关闭；开启后才启用本节新增行为，关闭时沿用原有 5-10 条提示与 rationale 生成流程。
 - 按复杂度自适应生成 rationale：简单任务 5-10 条，中等任务 10-15 条，复杂任务 15-20 条。分级依据是原始 query 的要求密度、独立问题数、枚举项、实体/地区/时期、比较维度和表格字段。
 - rationale 生成优先对齐用户原始 query 意图，不曲解或过度解读。
 - 候选文档按 EXTRACT_BATCH_SIZE=5 分批，每批 LLM 一次调用完成：抽取与 rationale 相关的原文段落 + 评分（coverage 按 rationale；reliability/data_density 按 passage 整体）。

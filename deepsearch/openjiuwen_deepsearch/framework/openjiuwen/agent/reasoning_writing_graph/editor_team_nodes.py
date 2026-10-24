@@ -507,6 +507,11 @@ class SubReporterNode(BaseNode):
             max_generate_retry_num=session.get_global_state("config.report_max_generate_retry_num") or 3,
             classify_doc_infos_res_top_k_num=session.get_global_state(
                 "config.sub_report_classify_doc_infos_res_top_k_num") or 15,
+            professional_report_adaptive_rationales=bool(
+                session.get_global_state(
+                    "config.professional_report_adaptive_rationales"
+                )
+            ),
             llm_model_name=adapt_llm_model_name(session, NodeId.SUB_REPORTER.value),
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],
