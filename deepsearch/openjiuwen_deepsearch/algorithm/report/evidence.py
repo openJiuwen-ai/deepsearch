@@ -293,6 +293,36 @@ def _normalize_rationales(
     return rationales
 
 
+def _normalize_legacy_rationales(rationales: list, max_rationales: int = 15) -> list:
+    """Preserve the pre-v2 rationale normalization path when the feature is off."""
+    if not rationales:
+        return []
+    rationales = [r for r in rationales if isinstance(r, dict)]
+    if not rationales:
+        return []
+    for rationale in rationales:
+        description = rationale.get("description", "")
+        if not isinstance(description, str):
+            description = str(description) if description is not None else ""
+        rationale["description"] = description[:MAX_RATIONALE_DESC_LEN]
+    if len(rationales) > max_rationales:
+        primary = [r for r in rationales if r.get("priority") == "primary"]
+        supplementary = [r for r in rationales if r.get("priority") != "primary"]
+        original_count = len(rationales)
+        rationales = primary[:max_rationales]
+        remaining = max_rationales - len(rationales)
+        if remaining > 0:
+            rationales.extend(supplementary[:remaining])
+        logger.warning(
+            "[generate_rationales] truncated rationales from %s to %s "
+            "(primary kept, supplementary truncated)",
+            original_count, len(rationales),
+        )
+    for index, rationale in enumerate(rationales):
+        rationale["id"] = f"r{index + 1}"
+    return rationales
+
+
 class EvidenceMixin:
     """Evidence extraction and scoring mixin.
 
@@ -316,9 +346,12 @@ class EvidenceMixin:
             or current_inputs.get("query")
             or ""
         ).strip()
-        description = " ".join(str(current_inputs.get(key) or "") for key in (
-            "report_task", "section_task", "section_description", "section_focus"
-        ))
+        description_parts = []
+        for key in ("report_task", "section_task", "section_description", "section_focus"):
+            value = current_inputs.get(key)
+            if value:
+                description_parts.append(str(value))
+        description = " ".join(description_parts)
         text = f"{query}\n{description}".lower()
         list_markers = (
             "分别", "逐项", "逐一", "每个", "各国", "各地区", "比较", "对比",
@@ -395,9 +428,19 @@ class EvidenceMixin:
         focus_dimensions = contract_ctx.get("allowed_dimensions", [])
         step_summaries = current_inputs.get("step_summaries", [])
         section_format_requirements = current_inputs.get("section_format_requirements") or []
-        complexity, rationale_count_range = self._classify_rationale_complexity(
-            {**current_inputs, "section_focus": section_focus, "focus_dimensions": focus_dimensions}
+        requirement_mapping_and_adaptive_rationale_enabled = bool(
+            current_inputs.get(
+                "professional_report_adaptive_rationales", False
+            )
         )
+        if requirement_mapping_and_adaptive_rationale_enabled:
+            complexity, rationale_count_range = self._classify_rationale_complexity(
+                {**current_inputs, "section_focus": section_focus, "focus_dimensions": focus_dimensions}
+            )
+            prompt_name = "rationale_generator"
+        else:
+            complexity, rationale_count_range = "legacy", (5, 10)
+            prompt_name = "rationale_generator_legacy"
 
         tmp_context = {
             "report_task": report_task,
@@ -419,12 +462,12 @@ class EvidenceMixin:
         best_rationales = []
         best_requirements = []
         retry_feedback = ""
-        llm_input = build_prompt_messages("rationale_generator", tmp_context)
+        llm_input = build_prompt_messages(prompt_name, tmp_context)
         rendered_feedback = ""
         for attempt_num in range(max_retries):
             if retry_feedback != rendered_feedback:
                 llm_input = build_prompt_messages(
-                    "rationale_generator", {**tmp_context, "retry_feedback": retry_feedback}
+                    prompt_name, {**tmp_context, "retry_feedback": retry_feedback}
                 )
                 rendered_feedback = retry_feedback
             try:
@@ -456,6 +499,23 @@ class EvidenceMixin:
                 data = json.loads(normalize_json_output(llm_output.get("content", "")))
                 if not isinstance(data, dict):
                     raise ValueError(f"LLM output is not a JSON object, got {type(data).__name__}")
+                if not requirement_mapping_and_adaptive_rationale_enabled:
+                    rationales = data.get("rationales", [])
+                    if not isinstance(rationales, list):
+                        raise ValueError(
+                            f"'rationales' is not a list, got {type(rationales).__name__}"
+                        )
+                    rationales = _normalize_legacy_rationales(rationales, max_rationales=15)
+                    primary_count = sum(1 for r in rationales if r.get("priority") == "primary")
+                    supplementary_count = len(rationales) - primary_count
+                    logger.info(
+                        "%s [generate_rationales] section_idx: [%s] legacy mode generated %s rationales "
+                        "(primary: %s, supplementary: %s) (attempt %s/%s)",
+                        EFFECT_SUB_REPORT_TAG, section_idx, len(rationales), primary_count,
+                        supplementary_count, attempt_num + 1, max_retries,
+                    )
+                    return rationales, ""
+
                 requirements = data.get("requirements", [])
                 if not isinstance(requirements, list):
                     raise ValueError("'requirements' is not a list")
@@ -1269,13 +1329,8 @@ class EvidenceMixin:
             for passage in selected_passages
         ]
 
-        current_inputs["doc_selection_debug"] = {
+        debug_data = {
             "rationales": rationales,
-            "rationale_requirements": current_inputs.get("rationale_requirements", []),
-            "rationale_coverage_diagnostics": current_inputs.get(
-                "rationale_coverage_diagnostics", {}
-            ),
-            "requirement_evidence_diagnostics": {},
             "doc_filter": {
                 "before": len(passages),
                 "after": len(filtered_passages),
@@ -1285,6 +1340,17 @@ class EvidenceMixin:
             "passage_info_map": doc_info_map,
             "selected_passages": selected_summary,
         }
+        if current_inputs.get(
+            "professional_report_adaptive_rationales", False
+        ):
+            debug_data.update({
+                "rationale_requirements": current_inputs.get("rationale_requirements", []),
+                "rationale_coverage_diagnostics": current_inputs.get(
+                    "rationale_coverage_diagnostics", {}
+                ),
+                "requirement_evidence_diagnostics": {},
+            })
+        current_inputs["doc_selection_debug"] = debug_data
 
     async def _prepare_evidence(self, current_inputs: dict, raw_passages: list, section_idx) -> tuple[bool, str, list]:
         """Prepare evidence for sub-report generation.
@@ -1411,7 +1477,13 @@ class EvidenceMixin:
             passages={"selected": selected_passages, "raw": raw_passages},
             context={
                 "rationales": rationales,
-                "requirements": current_inputs.get("rationale_requirements", []),
+                "requirements": (
+                    current_inputs.get("rationale_requirements", [])
+                    if current_inputs.get(
+                        "professional_report_adaptive_rationales", False
+                    )
+                    else []
+                ),
                 "coverage_result": coverage_result,
                 "required_documents": required_target_documents,
             },
@@ -1424,9 +1496,12 @@ class EvidenceMixin:
         # Internal compatibility only; outline/writing prompts consume the
         # shared rationale_contract, not this legacy rendered guide.
         current_inputs["structured_evidence_guide"] = fulltext_result["structured_evidence_guide"]
-        current_inputs.setdefault("doc_selection_debug", {})[
-            "requirement_evidence_diagnostics"
-        ] = fulltext_result.get("requirement_evidence_diagnostics", {})
+        if current_inputs.get(
+            "professional_report_adaptive_rationales", False
+        ):
+            current_inputs.setdefault("doc_selection_debug", {})[
+                "requirement_evidence_diagnostics"
+            ] = fulltext_result.get("requirement_evidence_diagnostics", {})
         current_inputs["classified_content"] = fulltext_result["classified_content"]
         current_inputs["required_target_citation_indexes"] = fulltext_result.get(
             "required_target_citation_indexes", []

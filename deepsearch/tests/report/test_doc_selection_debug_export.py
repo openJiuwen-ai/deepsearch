@@ -62,6 +62,22 @@ def _make_full_debug_data():
 class TestWriteDocSelectionDebug:
     """Test Reporter._write_doc_selection_debug packing logic."""
 
+    def test_legacy_debug_payload_omits_v2_checklist_diagnostics(self):
+        docs = [_doc(0)]
+        current_inputs = {}
+
+        Reporter._write_doc_selection_debug(
+            current_inputs,
+            PassageSelectionContext(
+                [_rationale("r1", "desc")], _coverage_result(docs, {}), docs, docs,
+            ),
+        )
+
+        debug = current_inputs["doc_selection_debug"]
+        assert "rationale_requirements" not in debug
+        assert "rationale_coverage_diagnostics" not in debug
+        assert "requirement_evidence_diagnostics" not in debug
+
     def test_packs_all_7_keys(self):
         """Verify all data keys are present in the packed dict."""
         docs = [_doc(0), _doc(1)]
@@ -70,7 +86,9 @@ class TestWriteDocSelectionDebug:
         coverage = _coverage_result(docs, matrix)
         selected = [docs[0]]
 
-        current_inputs = {}
+        current_inputs = {
+            "professional_report_adaptive_rationales": True
+        }
         Reporter._write_doc_selection_debug(
             current_inputs,
             PassageSelectionContext(rationales, coverage, docs, selected),

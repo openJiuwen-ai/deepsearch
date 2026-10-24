@@ -168,23 +168,21 @@ def build_requirement_evidence_diagnostics(
     items = []
     for requirement in requirements:
         requirement_id = str(requirement.get("id", "") or "")
-        mapped = [
-            rationale
-            for rationale in rationales
-            if isinstance(rationale, dict)
-            and requirement_id in rationale.get("covers", [])
-        ]
-        rationale_ids = [str(rationale.get("id", "")) for rationale in mapped]
-        best_coverage = max(
-            (
-                safe_float(coverage.get(rationale_id, 0.0))
-                for rationale_id in rationale_ids
-                for passage_key in selected_passage_keys
-                for coverage in [coverage_matrix.get(passage_key, {})]
-                if isinstance(coverage, dict)
-            ),
-            default=0.0,
-        )
+        rationale_ids = []
+        for rationale in rationales:
+            if not isinstance(rationale, dict):
+                continue
+            if requirement_id in rationale.get("covers", []):
+                rationale_ids.append(str(rationale.get("id", "")))
+
+        coverage_scores = []
+        for rationale_id in rationale_ids:
+            for passage_key in selected_passage_keys:
+                coverage = coverage_matrix.get(passage_key, {})
+                if not isinstance(coverage, dict):
+                    continue
+                coverage_scores.append(safe_float(coverage.get(rationale_id, 0.0)))
+        best_coverage = max(coverage_scores, default=0.0)
         items.append({
             "requirement_id": requirement_id,
             "description": str(requirement.get("description", "") or ""),
