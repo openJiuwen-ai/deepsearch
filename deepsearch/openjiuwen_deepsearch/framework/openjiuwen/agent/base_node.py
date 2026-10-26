@@ -11,6 +11,7 @@ from openjiuwen.core.workflow.components.flow.branch_router import BranchRouter
 
 from openjiuwen_deepsearch.common.exception import CustomJiuWenBaseException, CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import record_main_node, record_progress_state
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
 from openjiuwen_deepsearch.utils.log_utils.log_metrics import async_time_logger
 
@@ -37,6 +38,8 @@ class BaseNode(WorkflowComponent):
         统一在节点入口设置 ``session_context``，确保下游公共能力
         （如 `ainvoke_llm_with_stats`、流式输出等）能够读取到当前 workflow
         的 session 配置，而不需要每个节点重复手动注入。
+        已启用报告进度观察时，同时记录实际进入的主图节点。
+        节点成功写回状态后，复用已有记录更新资料与章节汇总。
 
         Args:
             inputs: 节点输入。
@@ -47,7 +50,10 @@ class BaseNode(WorkflowComponent):
             Output: 节点执行结果。
         """
         session_context.set(session)
-        return await self._do_invoke(inputs, session, context)
+        record_main_node(session)
+        result = await self._do_invoke(inputs, session, context)
+        record_progress_state(session)
+        return result
 
     def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
         '''从Session上下文中获取必要字段'''
