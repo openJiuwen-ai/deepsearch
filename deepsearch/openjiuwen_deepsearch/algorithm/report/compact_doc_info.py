@@ -57,6 +57,7 @@ def build_structured_evidence_guide(
     *,
     selected_passage_keys: list[str],
     requirements: list[dict[str, Any]] | None = None,
+    requirement_evidence_diagnostics: dict[str, Any] | None = None,
 ) -> str:
     """Build compact writing guidance from existing document-selection results."""
     coverage_matrix = coverage_result.get("coverage_matrix", {})
@@ -65,9 +66,11 @@ def build_structured_evidence_guide(
     if not selected_passages or not rationales or not coverage_matrix:
         if not requirements:
             return ""
-        diagnostics = build_requirement_evidence_diagnostics(
-            rationales, requirements, coverage_result, selected_passage_keys
-        )
+        diagnostics = requirement_evidence_diagnostics
+        if diagnostics is None:
+            diagnostics = build_requirement_evidence_diagnostics(
+                rationales, requirements, coverage_result, selected_passage_keys
+            )
         lines = [
             "Structured evidence guidance:",
             f"Requirement evidence coverage: {diagnostics['requirements_with_evidence']}/"
@@ -141,12 +144,14 @@ def build_structured_evidence_guide(
             )
 
     if requirements:
-        diagnostics = build_requirement_evidence_diagnostics(
-            rationales,
-            requirements,
-            coverage_result,
-            selected_passage_keys,
-        )
+        diagnostics = requirement_evidence_diagnostics
+        if diagnostics is None:
+            diagnostics = build_requirement_evidence_diagnostics(
+                rationales,
+                requirements,
+                coverage_result,
+                selected_passage_keys,
+            )
         lines.append(
             f"Requirement evidence coverage: {diagnostics['requirements_with_evidence']}/"
             f"{diagnostics['requirement_count']} "

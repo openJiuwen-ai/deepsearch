@@ -6,6 +6,7 @@ select_top_urls_by_frequency, split_passages_by_url, build_classified_content.
 
 import pytest
 
+from openjiuwen_deepsearch.algorithm.report import report_rationale_fulltext
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     filter_passages_by_coverage,
     dedup_passages_by_rationale,
@@ -95,6 +96,45 @@ def test_enrich_fulltext_guide_reuses_promoted_fulltext_citation_index():
         "structured_evidence_guide"
     ]
     assert "[citation:]" not in result["structured_evidence_guide"]
+
+
+def test_enrich_fulltext_computes_requirement_diagnostics_once(monkeypatch):
+    passage = {
+        "doc_url": "https://example.com/evidence",
+        "doc_title": "Evidence",
+        "passage_text": "Evidence for q1.",
+        "original_content": "Full evidence text.",
+        "_passage_key": "passage_0",
+    }
+    coverage_result = {
+        "filtered_passages": [passage],
+        "coverage_matrix": {"passage_0": {"r1": 0.9}},
+    }
+    original_builder = report_rationale_fulltext.build_requirement_evidence_diagnostics
+    calls = 0
+
+    def counting_builder(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_builder(*args, **kwargs)
+
+    monkeypatch.setattr(
+        report_rationale_fulltext,
+        "build_requirement_evidence_diagnostics",
+        counting_builder,
+    )
+    result = enrich_fulltext_for_section(
+        passages={"selected": [passage], "raw": [passage]},
+        context={
+            "rationales": [{"id": "r1", "description": "Evidence", "covers": ["q1"]}],
+            "requirements": [{"id": "q1", "description": "Requirement one"}],
+            "coverage_result": coverage_result,
+        },
+        section_idx=1,
+    )
+
+    assert calls == 1
+    assert "[requirement:q1, evidence found" in result["structured_evidence_guide"]
 
 
 # ---------- Fixtures ----------

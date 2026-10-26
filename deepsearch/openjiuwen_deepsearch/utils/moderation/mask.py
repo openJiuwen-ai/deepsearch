@@ -15,7 +15,6 @@ import logging
 import json
 import re
 import string
-import time
 from collections.abc import Iterator
 from functools import lru_cache
 from importlib import resources
@@ -115,13 +114,7 @@ def _compiled_matchers(terms: frozenset[str]) -> tuple[TextMatcher, frozenset[st
     matcher = TextMatcher()
     text_terms = 0
     skipped = 0
-    ordered_terms = sorted((term for term in terms if term), key=lambda term: (-len(term), term))
-    for term_index, term in enumerate(ordered_terms):
-        if term_index and term_index % 1024 == 0:
-            # Matcher compilation runs in a worker thread on async request
-            # paths. Yield the GIL periodically so the event loop remains
-            # responsive even when the process is CPU constrained.
-            time.sleep(0.001)
+    for term in sorted((t for t in terms if t), key=lambda t: (-len(t), t)):
         domain = _address_domain(term)
         if domain:
             parsed = _parse_address(term)

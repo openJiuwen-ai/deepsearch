@@ -78,7 +78,7 @@ class TestWriteDocSelectionDebug:
         assert "rationale_coverage_diagnostics" not in debug
         assert "requirement_evidence_diagnostics" not in debug
 
-    def test_packs_all_7_keys(self):
+    def test_packs_all_debug_keys(self):
         """Verify all data keys are present in the packed dict."""
         docs = [_doc(0), _doc(1)]
         rationales = [_rationale("r1", "desc1")]

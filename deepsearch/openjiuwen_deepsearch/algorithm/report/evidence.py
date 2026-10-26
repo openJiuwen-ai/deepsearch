@@ -638,6 +638,8 @@ class EvidenceMixin:
         """Validate quantity, exact duplicates, and requirement-to-rationale links."""
         errors = []
         _, maximum = count_range
+        # Defensive invariant for callers that bypass _normalize_rationales;
+        # the generation path already truncates to this same maximum.
         if len(rationales) > maximum:
             errors.append(f"rationale count {len(rationales)} exceeds maximum {maximum}")
 

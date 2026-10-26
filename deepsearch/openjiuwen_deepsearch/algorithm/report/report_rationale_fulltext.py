@@ -766,6 +766,7 @@ def enrich_fulltext_for_section(
         coverage_result=coverage_result or {},
         selected_passage_keys=evidence_passage_keys,
         requirements=requirements,
+        requirement_evidence_diagnostics=requirement_evidence_diagnostics,
     )
 
     logger.info(

@@ -79,7 +79,6 @@ async def test_generate_section_rationales_retries_with_failure_feedback():
                     for i in range(1, 11)
                 ]
                 return {"content": json.dumps({"requirements": requirements, "rationales": rationales})}
-                # Valid payload is constructed above with a full checklist.
             mock_ainvoke.side_effect = side_effect
             rationales, last_error = await reporter._generate_section_rationales(current_inputs)
         assert rationales and last_error == ""
