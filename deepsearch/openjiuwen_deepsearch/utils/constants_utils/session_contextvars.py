@@ -9,6 +9,8 @@ llm_context = contextvars.ContextVar("llm")
 web_search_context = contextvars.ContextVar("web_search")
 local_search_context = contextvars.ContextVar("local_search")
 cancel_context = contextvars.ContextVar("cancel_event", default=None)
+# 只保存运行期进度对象，不放入 workflow inputs 或 checkpoint。
+report_progress_context = contextvars.ContextVar("report_progress", default=None)
 # Holds the per-run tool registry (e.g. WebSearch/WebFetch/Retrieve instances).
 # Stored in a ContextVar instead of being passed through workflow inputs because
 # the framework's structured logger calls ``dataclasses.asdict`` on log events,

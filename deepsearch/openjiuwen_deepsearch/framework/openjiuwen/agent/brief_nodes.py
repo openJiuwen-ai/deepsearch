@@ -41,6 +41,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_exclusion_prompt_context,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import update_progress_summary
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report, ResearchIntent
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_result
@@ -604,7 +605,14 @@ class BriefSubReporterNode(BaseNode):
             pre_output = self._pre_handle(inputs, session, context)
             if pre_output.get("skip"):
                 return self._post_handle(inputs, pre_output, session, context)
-            chapters = await write_brief_chapters(pre_output["request"])
+            chapters = await write_brief_chapters(
+                pre_output["request"],
+                on_chapter_start=lambda section: update_progress_summary("start_section", section.id),
+                on_chapter_end=lambda section, chapter: update_progress_summary(
+                    "finish_section", section.id,
+                    chapter is not None and bool(chapter.raw_markdown.strip()),
+                ),
+            )
         except Exception as exc:
             return _finish_brief_node_failure(
                 session,

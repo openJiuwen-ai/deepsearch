@@ -14,6 +14,9 @@ from openjiuwen.core.workflow.components.flow.workflow_comp import SUB_WORKFLOW_
 
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import (
+    observe_section_progress,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.webpage_cache import TaskWebpageFetchCache
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import webpage_fetch_cache_context
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
@@ -304,7 +307,18 @@ class EditorTeamNode(BaseNode):
 
         return section_state
 
+    @observe_section_progress
     async def _run_section_sub_graph_await(self, workflow_session, sub_workflow, input_state):
+        """原样转发单章子图输出并返回章节业务记录。
+
+        Args:
+            workflow_session: 主图会话。
+            sub_workflow: 当前研究或写作子图。
+            input_state: 已有章节输入。
+
+        Returns:
+            已解析的章节结果，供主图汇总和进度观察。
+        """
         section_idx = input_state.get("section_idx", "0")
         # 执行每个子图，得到每个section的结果
         logger.info(
@@ -496,8 +510,19 @@ class DependencyEditorTeamNode(EditorTeamNode):
         return background_knowledge
 
     async def _run_reasoning_await(self, session: Session, sub_workflow, section_state: dict):
-        """跑推理子图并给结果补上 section_idx."""
-        result = await self._run_section_sub_graph_await(session, sub_workflow, section_state)
+        """执行研究子图，不将其结束计为章节写作完成。
+
+        Args:
+            session: 主图会话。
+            sub_workflow: 研究子图。
+            section_state: 原章节输入。
+
+        Returns:
+            带章节标识的研究结果。
+        """
+        result = await self._run_section_sub_graph_await(
+            session, sub_workflow, section_state, reasoning_only=True,
+        )
         result["section_idx"] = section_state.get("section_idx", "0")
         return result
 
