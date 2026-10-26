@@ -13,7 +13,10 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.report.evidence import _normalize_rationales
+from openjiuwen_deepsearch.algorithm.report.evidence import (
+    EvidenceMixin,
+    _normalize_rationales,
+)
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     filter_passages_by_coverage,
@@ -95,6 +98,59 @@ def test_normalize_rationales_handles_non_str_description():
     assert all(isinstance(r["description"], str) for r in result)
 
 
+def test_normalize_rationales_preserves_medium_high_primary_records():
+    """A medium complexity task can retain up to 15 primary rationales."""
+    rationales = [
+        {
+            "id": f"source-{index}",
+            "description": f"Study {index} (20{index:02d})",
+            "priority": "primary",
+        }
+        for index in range(1, 16)
+    ]
+
+    result = _normalize_rationales(rationales)
+
+    assert len(result) == 15
+    assert result[-1]["id"] == "r15"
+    assert all(item["priority"] == "primary" for item in result)
+
+
+def test_classify_rationale_complexity_uses_original_query_requirements():
+    long_but_simple_query = "Explain one topic briefly. " * 80
+    assert len(long_but_simple_query) >= 500
+    assert EvidenceMixin._classify_rationale_complexity({
+        "original_query": long_but_simple_query,
+    }) == ("simple", (5, 10))
+
+    assert EvidenceMixin._classify_rationale_complexity({
+        "original_query": "Compare market trends across historical periods and explain the differences",
+    }) == ("medium", (10, 15))
+
+    assert EvidenceMixin._classify_rationale_complexity({
+        "original_query": "1. First requirement\n2. Second requirement\n3. Third requirement",
+    }) == ("complex", (15, 20))
+
+
+def test_validate_rationale_coverage_finds_missing_and_duplicate_mappings():
+    rationales = [
+        {"id": "r1", "description": "same", "covers": ["q1"]},
+        {"id": "r2", "description": "same", "covers": ["unknown"]},
+    ]
+    requirements = [
+        {"id": "q1", "description": "first requirement"},
+        {"id": "q2", "description": "second requirement"},
+    ]
+
+    errors = EvidenceMixin._validate_rationale_coverage(
+        rationales, requirements, (2, 5)
+    )
+
+    assert any("duplicate rationale descriptions" in error for error in errors)
+    assert any("uncovered requirement IDs: q2" in error for error in errors)
+    assert any("unknown requirement IDs: unknown" in error for error in errors)
+
+
 def test_normalize_rationales_priority_filter_ignores_non_dict():
     """Priority filtering skips non-dict elements without AttributeError."""
     rationales = [
@@ -126,6 +182,54 @@ async def test_generate_rationales_non_list_field():
     # Should trigger ValueError -> retry -> fail after max retries, not silent empty success
     assert rationales == []
     assert error != ""  # error message should be set
+
+
+@pytest.mark.asyncio
+async def test_generate_rationales_retries_duplicate_requirement_ids():
+    reporter = _make_reporter()
+    llm_output = {
+        "content": json.dumps({
+            "requirements": [
+                {"id": "q1", "description": "Region A figures"},
+                {"id": "q1", "description": "Region B figures"},
+            ],
+            "rationales": [{
+                "id": "r1",
+                "description": "Compare regional figures",
+                "covers": ["q1"],
+            }],
+        }),
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats",
+        return_value=llm_output,
+    ) as invoke:
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages",
+            return_value=[{"role": "user", "content": "test"}],
+        ):
+            inputs = {
+                "professional_report_adaptive_rationales": True,
+                "section_idx": 1,
+                "section_task": "Compare figures",
+                "section_description": "Compare two regions",
+                "max_generate_retry_num": 1,
+            }
+            rationales, error = await reporter._generate_section_rationales(inputs)
+
+    assert invoke.await_count == 1
+    assert len(rationales) == 1
+    assert "duplicate requirement IDs: q1" in error
+    requirements = inputs["rationale_requirements"]
+    assert [item["description"] for item in requirements] == [
+        "Region A figures",
+        "Region B figures",
+    ]
+    assert requirements[1]["id"].startswith("q1__duplicate_")
+    assert any(
+        "duplicate requirement IDs: q1" in error
+        for error in inputs["rationale_coverage_diagnostics"]["validation_errors"]
+    )
 
 
 # =====================================================================

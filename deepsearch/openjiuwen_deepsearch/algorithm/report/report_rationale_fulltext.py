@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
+    build_requirement_evidence_diagnostics,
     build_structured_evidence_guide,
     format_key_passage_block,
     normalize_key_passages,
@@ -750,11 +751,22 @@ def enrich_fulltext_for_section(
     for passage in removed_passages:
         removed_passage_keys.append(passage.get("_passage_key", ""))
 
+    evidence_passages = remaining_passages + removed_passages
+    evidence_passage_keys = remaining_passage_keys + removed_passage_keys
+    requirements = context.get("requirements") or []
+    requirement_evidence_diagnostics = build_requirement_evidence_diagnostics(
+        rationales,
+        requirements,
+        coverage_result or {},
+        evidence_passage_keys,
+    )
     structured_evidence_guide = build_structured_evidence_guide(
-        selected_passages=remaining_passages + removed_passages,
+        selected_passages=evidence_passages,
         rationales=rationales,
         coverage_result=coverage_result or {},
-        selected_passage_keys=remaining_passage_keys + removed_passage_keys,
+        selected_passage_keys=evidence_passage_keys,
+        requirements=requirements,
+        requirement_evidence_diagnostics=requirement_evidence_diagnostics,
     )
 
     logger.info(
@@ -771,6 +783,7 @@ def enrich_fulltext_for_section(
         "sub_section_core_content": sub_section_core_content,
         "sub_section_references": sub_section_references,
         "structured_evidence_guide": structured_evidence_guide,
+        "requirement_evidence_diagnostics": requirement_evidence_diagnostics,
         "fulltext_count": fulltext_count,
         "remaining_count": len(remaining_passages),
         "fulltext_evidences": fulltext_evidences,

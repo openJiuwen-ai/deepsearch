@@ -56,13 +56,47 @@ def build_structured_evidence_guide(
     coverage_result: dict[str, Any],
     *,
     selected_passage_keys: list[str],
+    requirements: list[dict[str, Any]] | None = None,
+    requirement_evidence_diagnostics: dict[str, Any] | None = None,
 ) -> str:
     """Build compact writing guidance from existing document-selection results."""
     coverage_matrix = coverage_result.get("coverage_matrix", {})
     if not isinstance(coverage_matrix, dict):
         coverage_matrix = {}
     if not selected_passages or not rationales or not coverage_matrix:
-        return ""
+        if not requirements:
+            return ""
+        diagnostics = requirement_evidence_diagnostics
+        if diagnostics is None:
+            diagnostics = build_requirement_evidence_diagnostics(
+                rationales, requirements, coverage_result, selected_passage_keys
+            )
+        lines = [
+            "Structured evidence guidance:",
+            f"Requirement evidence coverage: {diagnostics['requirements_with_evidence']}/"
+            f"{diagnostics['requirement_count']} requirements have selected evidence "
+            f"(coverage >= 0.30); unable to determine: "
+            f"{diagnostics['requirements_undetermined']}.",
+        ]
+        for item in diagnostics["items"]:
+            rationale_ids = ", ".join(item["rationale_ids"]) or "unmapped"
+            status_labels = {
+                "evidence_found": "evidence found",
+                "evidence_gap": "evidence gap",
+                "undetermined": "unable to determine",
+            }
+            status = status_labels.get(item.get("status"), "unknown status")
+            coverage_text = (
+                f"{item['best_coverage']:.2f}"
+                if item["best_coverage"] is not None
+                else "n/a"
+            )
+            lines.append(
+                f"- [requirement:{item['requirement_id']}, {status}, "
+                f"best_coverage:{coverage_text}, rationales:{rationale_ids}] "
+                f"{item['description']}"
+            )
+        return "\n".join(lines)
     if len(selected_passages) != len(selected_passage_keys):
         logger.warning(
             "Cannot build structured evidence guide: selected passages and stable keys are misaligned"
@@ -109,7 +143,118 @@ def build_structured_evidence_guide(
                 f"  - [citation:{citation_index}] {title} (coverage: {score:.2f})"
             )
 
+    if requirements:
+        diagnostics = requirement_evidence_diagnostics
+        if diagnostics is None:
+            diagnostics = build_requirement_evidence_diagnostics(
+                rationales,
+                requirements,
+                coverage_result,
+                selected_passage_keys,
+            )
+        lines.append(
+            f"Requirement evidence coverage: {diagnostics['requirements_with_evidence']}/"
+            f"{diagnostics['requirement_count']} "
+            "requirements have selected evidence (coverage >= 0.30); "
+            f"unable to determine: {diagnostics['requirements_undetermined']}."
+        )
+        for item in diagnostics["items"]:
+            rationale_ids = ", ".join(item["rationale_ids"]) or "unmapped"
+            status_labels = {
+                "evidence_found": "evidence found",
+                "evidence_gap": "evidence gap",
+                "undetermined": "unable to determine",
+            }
+            status = status_labels.get(item.get("status"), "unknown status")
+            coverage_text = (
+                f"{item['best_coverage']:.2f}"
+                if item["best_coverage"] is not None
+                else "n/a"
+            )
+            lines.append(
+                f"- [requirement:{item['requirement_id']}, {status}, "
+                f"best_coverage:{coverage_text}, rationales:{rationale_ids}] "
+                f"{item['description']}"
+            )
+
     return "\n".join(lines)
+
+
+def build_requirement_evidence_diagnostics(
+    rationales: list[dict[str, Any]],
+    requirements: list[dict[str, Any]],
+    coverage_result: dict[str, Any],
+    selected_passage_keys: list[str],
+    *,
+    evidence_threshold: float = 0.3,
+) -> dict[str, Any]:
+    """Report whether each checklist requirement has selected supporting evidence."""
+    coverage_matrix = coverage_result.get("coverage_matrix", {})
+    if not isinstance(coverage_matrix, dict):
+        coverage_matrix = {}
+    valid_coverage_rows = {}
+    unavailable_keys = []
+    for passage_key in selected_passage_keys:
+        if not isinstance(passage_key, str):
+            unavailable_keys.append(passage_key)
+            continue
+        coverage = coverage_matrix.get(passage_key)
+        if not isinstance(coverage, dict):
+            unavailable_keys.append(passage_key)
+            continue
+        valid_coverage_rows[passage_key] = coverage
+    if unavailable_keys:
+        logger.warning(
+            "Requirement evidence diagnostics cannot evaluate %s selected passage keys",
+            len(unavailable_keys),
+        )
+    items = []
+    for requirement in requirements:
+        requirement_id = str(requirement.get("id", "") or "")
+        rationale_ids = []
+        for rationale in rationales:
+            if not isinstance(rationale, dict):
+                continue
+            if requirement_id in rationale.get("covers", []):
+                rationale_ids.append(str(rationale.get("id", "")))
+
+        coverage_scores = []
+        unavailable_key = False
+        for rationale_id in rationale_ids:
+            for passage_key in selected_passage_keys:
+                if passage_key in unavailable_keys:
+                    unavailable_key = True
+                    continue
+                coverage = valid_coverage_rows[passage_key]
+                coverage_scores.append(safe_float(coverage.get(rationale_id, 0.0)))
+        best_coverage = max(coverage_scores) if coverage_scores else None
+        if best_coverage is not None and best_coverage >= evidence_threshold:
+            status = "evidence_found"
+        elif unavailable_key:
+            status = "undetermined"
+        else:
+            best_coverage = best_coverage if best_coverage is not None else 0.0
+            status = "evidence_gap"
+        items.append({
+            "requirement_id": requirement_id,
+            "description": str(requirement.get("description", "") or ""),
+            "rationale_ids": rationale_ids,
+            "best_coverage": best_coverage,
+            "status": status,
+        })
+    found = sum(item["status"] == "evidence_found" for item in items)
+    undetermined = sum(item["status"] == "undetermined" for item in items)
+    total = len(items)
+    evaluable = total - undetermined
+    return {
+        "requirement_count": total,
+        "requirements_with_evidence": found,
+        "requirements_undetermined": undetermined,
+        "requirements_evaluable": evaluable,
+        "coverage_rate": (found / evaluable) if evaluable else 0.0,
+        "evidence_threshold": evidence_threshold,
+        "items": items,
+    }
 
 
 def build_coverage_passage_block(coverage_sections: list[tuple[int, list[str]]]) -> str:

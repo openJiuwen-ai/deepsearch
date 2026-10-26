@@ -278,7 +278,6 @@ class StartNode(Start):
             # StartNode 故归属保持原始值;宿主认领时校验,防跨会话误认领。
             agent_config["host_session_id"] = origin_agent_config.get("host_session_id", "")
             agent_config["exclusion_constraint_enable"] = origin_agent_config.get("exclusion_constraint_enable", False)
-
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
         service_config["interrupt_feedback"] = inputs.get("interrupt_feedback", "")

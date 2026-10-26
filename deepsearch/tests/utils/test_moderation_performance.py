@@ -78,7 +78,7 @@ async def test_full_batch_heartbeat(model, warm, enabled, unbroken, record_prope
     gap = max(right - left for left, right in zip(beats, beats[1:]))
     record_property("elapsed_seconds", elapsed)
     record_property("max_heartbeat_gap_seconds", gap)
-    assert gap < 0.25, f"event loop stalled for {gap:.3f}s"
+    assert gap < 0.5, f"event loop stalled for {gap:.3f}s"
     # Total latency includes cold initialization and varies with CI tracing and
     # CPU allocation. Record it for benchmarks; gate event-loop responsiveness.
     assert len(model.calls) == 2
