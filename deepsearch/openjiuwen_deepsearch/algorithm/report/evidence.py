@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
@@ -18,6 +19,9 @@ from openjiuwen_deepsearch.algorithm.report.report_common import (
     MAX_CONCURRENT_BATCHES,
     MAX_EXTRACT_DOC_CHARS,
     MAX_RATIONALE_DESC_LEN,
+    MAX_RATIONALES_PER_SECTION,
+    DEFAULT_RATIONALE_COUNT_RANGE,
+    RATIONALE_COUNT_LIMITS,
     SELECTION_COVERAGE_FLOOR,
 )
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
@@ -221,7 +225,7 @@ def ensure_exact_target_documents(
 
 
 def _normalize_rationales(
-    rationales: list, max_rationales: int = 15
+    rationales: list, max_rationales: int = MAX_RATIONALES_PER_SECTION
 ) -> list:
     """Post-process LLM-generated rationales: truncate descriptions, enforce quantity limits.
 
@@ -244,12 +248,28 @@ def _normalize_rationales(
     if not rationales:
         return []
 
-    # Truncate overlong descriptions
+    # Empty labels make coverage impossible to judge. Copy retained entries so
+    # callers' raw LLM payloads are not mutated while IDs are normalized below.
+    normalized = []
     for r in rationales:
         desc = r.get("description", "")
         if not isinstance(desc, str):
             desc = str(desc) if desc is not None else ""
-        r["description"] = desc[:MAX_RATIONALE_DESC_LEN] if len(desc) > MAX_RATIONALE_DESC_LEN else desc
+        desc = desc.strip()
+        if not desc:
+            continue
+        item = dict(r)
+        item["description"] = desc[:MAX_RATIONALE_DESC_LEN]
+        covers = item.get("covers", [])
+        item["covers"] = list(dict.fromkeys(
+            str(requirement_id).strip()
+            for requirement_id in covers
+            if str(requirement_id).strip()
+        )) if isinstance(covers, list) else []
+        normalized.append(item)
+    rationales = normalized
+    if not rationales:
+        return []
 
     # Enforce quantity limit: keep all primary, truncate supplementary
     if len(rationales) > max_rationales:
@@ -273,6 +293,36 @@ def _normalize_rationales(
     return rationales
 
 
+def _normalize_legacy_rationales(rationales: list, max_rationales: int = 15) -> list:
+    """Preserve the pre-v2 rationale normalization path when the feature is off."""
+    if not rationales:
+        return []
+    rationales = [r for r in rationales if isinstance(r, dict)]
+    if not rationales:
+        return []
+    for rationale in rationales:
+        description = rationale.get("description", "")
+        if not isinstance(description, str):
+            description = str(description) if description is not None else ""
+        rationale["description"] = description[:MAX_RATIONALE_DESC_LEN]
+    if len(rationales) > max_rationales:
+        primary = [r for r in rationales if r.get("priority") == "primary"]
+        supplementary = [r for r in rationales if r.get("priority") != "primary"]
+        original_count = len(rationales)
+        rationales = primary[:max_rationales]
+        remaining = max_rationales - len(rationales)
+        if remaining > 0:
+            rationales.extend(supplementary[:remaining])
+        logger.warning(
+            "[generate_rationales] truncated rationales from %s to %s "
+            "(primary kept, supplementary truncated)",
+            original_count, len(rationales),
+        )
+    for index, rationale in enumerate(rationales):
+        rationale["id"] = f"r{index + 1}"
+    return rationales
+
+
 class EvidenceMixin:
     """Evidence extraction and scoring mixin.
 
@@ -280,6 +330,71 @@ class EvidenceMixin:
         - self._llm: LLM instance (from Reporter.__init__)
         - self.strip_leading_number: (from MarkdownProcessorMixin)
     """
+
+    @staticmethod
+    def _classify_rationale_complexity(current_inputs: dict) -> tuple[str, tuple[int, int]]:
+        """Classify task complexity from the original query and requested deliverable.
+
+        The original query is weighted most heavily. Explicit multi-part
+        analysis, long enumerations, multiple dimensions, and comparison axes
+        increase the target rationale budget. Collected summaries are not used
+        to determine complexity, so retrieval gaps cannot make a hard query
+        appear simple.
+        """
+        query = str(
+            current_inputs.get("original_query")
+            or current_inputs.get("query")
+            or ""
+        ).strip()
+        description_parts = []
+        for key in ("report_task", "section_task", "section_description", "section_focus"):
+            value = current_inputs.get(key)
+            if value:
+                description_parts.append(str(value))
+        description = " ".join(description_parts)
+        text = f"{query}\n{description}".lower()
+        list_markers = (
+            "分别", "逐项", "逐一", "每个", "各国", "各地区", "比较", "对比",
+            "表格", "汇总", "研究成果", "核心问题", "维度", "方面", "年份",
+            "历史演变", "市场差异", "影响", "机制", "方法差异", "至少",
+            "请提供", "请列出", "create a table", "for each", "respectively",
+            "each", "compare", "comparison", "table", "timeline", "across",
+            "dimensions", "across countries", "historical evolution", "analyze",
+            "historical periods", "explain", "list all", "including",
+        )
+        marker_count = sum(1 for marker in set(list_markers) if marker in text)
+        numbered_items = len(re.findall(
+            r"(?m)(?:^|\n)\s*(?:\d{1,2}[.、)]|[一二三四五六七八九十]+[、.])",
+            text,
+        ))
+        explicit_requirements = len(current_inputs.get("section_format_requirements") or [])
+        focus_dimensions = current_inputs.get("focus_dimensions") or []
+        focus_count = len(focus_dimensions) if isinstance(focus_dimensions, list) else 0
+        # Length is deliberately not a complexity signal: benchmark prompts are
+        # verbose by construction, while a short request can still have many
+        # independent deliverables.
+        signal_count = (
+            min(marker_count, 6)
+            + min(numbered_items, 5) * 2
+            + min(explicit_requirements, 5)
+            + min(focus_count, 4)
+        )
+
+        if numbered_items >= 3 or signal_count >= 7:
+            complexity = "complex"
+        elif numbered_items >= 1 or signal_count >= 3:
+            complexity = "medium"
+        else:
+            complexity = "simple"
+        count_range = (
+            DEFAULT_RATIONALE_COUNT_RANGE
+            if complexity == "simple"
+            else (
+                RATIONALE_COUNT_LIMITS[complexity] - 5,
+                RATIONALE_COUNT_LIMITS[complexity],
+            )
+        )
+        return complexity, count_range
 
     @moderation_retry_scope
     async def _generate_section_rationales(self, current_inputs: dict) -> tuple[list, str]:
@@ -312,26 +427,47 @@ class EvidenceMixin:
         section_focus = contract_ctx.get("section_focus", "")
         focus_dimensions = contract_ctx.get("allowed_dimensions", [])
         step_summaries = current_inputs.get("step_summaries", [])
+        section_format_requirements = current_inputs.get("section_format_requirements") or []
+        requirement_mapping_and_adaptive_rationale_enabled = bool(
+            current_inputs.get(
+                "professional_report_adaptive_rationales", False
+            )
+        )
+        if requirement_mapping_and_adaptive_rationale_enabled:
+            complexity, rationale_count_range = self._classify_rationale_complexity(
+                {**current_inputs, "section_focus": section_focus, "focus_dimensions": focus_dimensions}
+            )
+            prompt_name = "rationale_generator"
+        else:
+            complexity, rationale_count_range = "legacy", (5, 10)
+            prompt_name = "rationale_generator_legacy"
 
         tmp_context = {
             "report_task": report_task,
             "overall_outline": overall_outline,
+            "original_query": current_inputs.get("original_query") or current_inputs.get("query", ""),
             "section_task": section_task,
             "section_description": section_description,
             "section_focus": section_focus,
             "focus_dimensions": focus_dimensions,
+            "section_format_requirements": section_format_requirements,
             "step_summaries": step_summaries,
+            "task_complexity": complexity,
+            "rationale_count_min": rationale_count_range[0],
+            "rationale_count_max": rationale_count_range[1],
         }
 
         max_retries = current_inputs.get("max_generate_retry_num", 3)
         last_error = None
+        best_rationales = []
+        best_requirements = []
         retry_feedback = ""
-        llm_input = build_prompt_messages("rationale_generator", tmp_context)
+        llm_input = build_prompt_messages(prompt_name, tmp_context)
         rendered_feedback = ""
         for attempt_num in range(max_retries):
             if retry_feedback != rendered_feedback:
                 llm_input = build_prompt_messages(
-                    "rationale_generator", {**tmp_context, "retry_feedback": retry_feedback}
+                    prompt_name, {**tmp_context, "retry_feedback": retry_feedback}
                 )
                 rendered_feedback = retry_feedback
             try:
@@ -363,21 +499,114 @@ class EvidenceMixin:
                 data = json.loads(normalize_json_output(llm_output.get("content", "")))
                 if not isinstance(data, dict):
                     raise ValueError(f"LLM output is not a JSON object, got {type(data).__name__}")
+                if not requirement_mapping_and_adaptive_rationale_enabled:
+                    rationales = data.get("rationales", [])
+                    if not isinstance(rationales, list):
+                        raise ValueError(
+                            f"'rationales' is not a list, got {type(rationales).__name__}"
+                        )
+                    rationales = _normalize_legacy_rationales(rationales, max_rationales=15)
+                    primary_count = sum(1 for r in rationales if r.get("priority") == "primary")
+                    supplementary_count = len(rationales) - primary_count
+                    logger.info(
+                        "%s [generate_rationales] section_idx: [%s] legacy mode generated %s rationales "
+                        "(primary: %s, supplementary: %s) (attempt %s/%s)",
+                        EFFECT_SUB_REPORT_TAG, section_idx, len(rationales), primary_count,
+                        supplementary_count, attempt_num + 1, max_retries,
+                    )
+                    return rationales, ""
+
+                requirements = data.get("requirements", [])
+                if not isinstance(requirements, list):
+                    raise ValueError("'requirements' is not a list")
+                normalized_requirements = []
+                seen_requirement_ids = set()
+                provided_requirement_ids = {
+                    str(requirement.get("id") or "").strip()
+                    for requirement in requirements
+                    if isinstance(requirement, dict)
+                }
+                duplicate_requirement_ids = set()
+                duplicate_id_counts = {}
+                for index, requirement in enumerate(requirements, start=1):
+                    if not isinstance(requirement, dict):
+                        continue
+                    requirement_id = str(requirement.get("id") or f"q{index}").strip()
+                    description = str(requirement.get("description") or "").strip()
+                    if not requirement_id or not description:
+                        continue
+                    normalized_id = requirement_id
+                    if requirement_id in seen_requirement_ids:
+                        duplicate_requirement_ids.add(requirement_id)
+                        duplicate_index = duplicate_id_counts.get(requirement_id, 1) + 1
+                        normalized_id = f"{requirement_id}__duplicate_{duplicate_index}"
+                        while normalized_id in seen_requirement_ids or normalized_id in provided_requirement_ids:
+                            duplicate_index += 1
+                            normalized_id = f"{requirement_id}__duplicate_{duplicate_index}"
+                        duplicate_id_counts[requirement_id] = duplicate_index
+                    else:
+                        duplicate_id_counts[requirement_id] = 1
+                    seen_requirement_ids.add(normalized_id)
+                    normalized_requirements.append({"id": normalized_id, "description": description})
+
                 rationales = data.get("rationales", [])
                 if not isinstance(rationales, list):
                     raise ValueError(f"'rationales' is not a list, got {type(rationales).__name__}")
                 # Post-process: truncate overlong descriptions and enforce quantity limits
-                rationales = _normalize_rationales(rationales, max_rationales=15)
+                rationales = _normalize_rationales(
+                    rationales, max_rationales=rationale_count_range[1]
+                )
+                best_rationales = rationales
+                best_requirements = normalized_requirements
+                validation_errors = self._validate_rationale_coverage(
+                    rationales, normalized_requirements, rationale_count_range
+                )
+                if duplicate_requirement_ids:
+                    duplicate_error = (
+                        "duplicate requirement IDs: "
+                        + ", ".join(sorted(duplicate_requirement_ids))
+                    )
+                    validation_errors.insert(0, duplicate_error)
+                current_inputs["rationale_requirements"] = normalized_requirements
+                current_inputs["rationale_coverage_diagnostics"] = {
+                    "requirement_count": len(normalized_requirements),
+                    "mapped_requirement_count": len({
+                        requirement_id
+                        for rationale in rationales
+                        for requirement_id in rationale.get("covers", [])
+                    }),
+                    "rationale_count": len(rationales),
+                    "below_minimum": len(rationales) < rationale_count_range[0],
+                    "validation_errors": validation_errors,
+                }
+                if validation_errors:
+                    last_error = "; ".join(validation_errors)
+                    retry_feedback = last_error[:500]
+                    logger.warning(
+                        "%s [generate_rationales] section_idx: [%s] validation failed: %s",
+                        EFFECT_SUB_REPORT_TAG, section_idx, last_error,
+                    )
+                    if attempt_num < max_retries - 1:
+                        continue
+                    logger.warning(
+                        "%s [generate_rationales] section_idx: [%s] using last usable rationale set "
+                        "after validation retries were exhausted",
+                        EFFECT_SUB_REPORT_TAG, section_idx,
+                    )
+                else:
+                    last_error = ""
                 primary_count = sum(1 for r in rationales if r.get("priority") == "primary")
                 supplementary_count = len(rationales) - primary_count
                 logger.info(
-                    "%s [generate_rationales] section_idx: [%s] generated %s rationales "
+                    "%s [generate_rationales] section_idx: [%s] complexity=%s target_range=%s-%s "
+                    "generated %s rationales "
                     "(primary: %s, supplementary: %s) (attempt %s/%s)",
                     EFFECT_SUB_REPORT_TAG, section_idx,
+                    complexity, rationale_count_range[0], rationale_count_range[1],
                     len(rationales), primary_count, supplementary_count,
                     attempt_num + 1, max_retries,
                 )
-                return rationales, ""
+                return rationales, last_error or ""
             except Exception as e:
                 last_error = f"failed to parse LLM output: {e}"
                 retry_feedback = (
@@ -397,7 +626,47 @@ class EvidenceMixin:
             EFFECT_SUB_REPORT_TAG, section_idx,
             max_retries, last_error,
         )
+        if best_rationales:
+            current_inputs["rationale_requirements"] = best_requirements
+            return best_rationales, (last_error or "rationale validation failed")
         return [], (last_error or "unknown rationale error")
+
+    @staticmethod
+    def _validate_rationale_coverage(
+        rationales: list[dict], requirements: list[dict], count_range: tuple[int, int]
+    ) -> list[str]:
+        """Validate quantity, exact duplicates, and requirement-to-rationale links."""
+        errors = []
+        _, maximum = count_range
+        # Defensive invariant for callers that bypass _normalize_rationales;
+        # the generation path already truncates to this same maximum.
+        if len(rationales) > maximum:
+            errors.append(f"rationale count {len(rationales)} exceeds maximum {maximum}")
+
+        descriptions = [" ".join(r.get("description", "").casefold().split()) for r in rationales]
+        if len(descriptions) != len(set(descriptions)):
+            errors.append("duplicate rationale descriptions; merge duplicates and cover distinct needs")
+
+        requirement_ids = {item["id"] for item in requirements}
+        mapped_ids = set()
+        invalid_ids = set()
+        for rationale in rationales:
+            covers = rationale.get("covers", [])
+            if not covers:
+                errors.append(f"rationale {rationale.get('id', '')} has no requirement mapping")
+            for requirement_id in covers:
+                if requirement_id in requirement_ids:
+                    mapped_ids.add(requirement_id)
+                else:
+                    invalid_ids.add(requirement_id)
+        missing = requirement_ids - mapped_ids
+        if missing:
+            errors.append("uncovered requirement IDs: " + ", ".join(sorted(missing)))
+        if invalid_ids:
+            errors.append("unknown requirement IDs: " + ", ".join(sorted(invalid_ids)))
+        if not requirements:
+            errors.append("requirements checklist is empty")
+        return errors
 
     @staticmethod
     async def _gather_with_limit(tasks: list, limit: int) -> list:
@@ -1085,7 +1354,7 @@ class EvidenceMixin:
             for passage in selected_passages
         ]
 
-        current_inputs["doc_selection_debug"] = {
+        debug_data = {
             "rationales": rationales,
             "doc_filter": {
                 "before": len(passages),
@@ -1096,6 +1365,17 @@ class EvidenceMixin:
             "passage_info_map": doc_info_map,
             "selected_passages": selected_summary,
         }
+        if current_inputs.get(
+            "professional_report_adaptive_rationales", False
+        ):
+            debug_data.update({
+                "rationale_requirements": current_inputs.get("rationale_requirements", []),
+                "rationale_coverage_diagnostics": current_inputs.get(
+                    "rationale_coverage_diagnostics", {}
+                ),
+                "requirement_evidence_diagnostics": {},
+            })
+        current_inputs["doc_selection_debug"] = debug_data
 
     async def _prepare_evidence(self, current_inputs: dict, raw_passages: list, section_idx) -> tuple[bool, str, list]:
         """Prepare evidence for sub-report generation.
@@ -1222,6 +1502,13 @@ class EvidenceMixin:
             passages={"selected": selected_passages, "raw": raw_passages},
             context={
                 "rationales": rationales,
+                "requirements": (
+                    current_inputs.get("rationale_requirements", [])
+                    if current_inputs.get(
+                        "professional_report_adaptive_rationales", False
+                    )
+                    else []
+                ),
                 "coverage_result": coverage_result,
                 "required_documents": required_target_documents,
             },
@@ -1234,6 +1521,12 @@ class EvidenceMixin:
         # Internal compatibility only; outline/writing prompts consume the
         # shared rationale_contract, not this legacy rendered guide.
         current_inputs["structured_evidence_guide"] = fulltext_result["structured_evidence_guide"]
+        if current_inputs.get(
+            "professional_report_adaptive_rationales", False
+        ):
+            current_inputs.setdefault("doc_selection_debug", {})[
+                "requirement_evidence_diagnostics"
+            ] = fulltext_result.get("requirement_evidence_diagnostics", {})
         current_inputs["classified_content"] = fulltext_result["classified_content"]
         current_inputs["required_target_citation_indexes"] = fulltext_result.get(
             "required_target_citation_indexes", []

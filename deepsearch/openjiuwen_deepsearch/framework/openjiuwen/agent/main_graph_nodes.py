@@ -271,7 +271,6 @@ class StartNode(Start):
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
             agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
             agent_config["exclusion_constraint_enable"] = origin_agent_config.get("exclusion_constraint_enable", False)
-
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
         service_config["interrupt_feedback"] = inputs.get("interrupt_feedback", "")

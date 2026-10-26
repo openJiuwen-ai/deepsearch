@@ -60,6 +60,15 @@ FENCED_BLOCK_PATTERN = re.compile(
 # Maximum characters allowed in a rationale description.
 MAX_RATIONALE_DESC_LEN = 200
 
+# Upper bounds used by the adaptive rationale-count policy.
+RATIONALE_COUNT_LIMITS = {
+    "simple": 10,
+    "medium": 15,
+    "complex": 20,
+}
+DEFAULT_RATIONALE_COUNT_RANGE = (5, 10)
+MAX_RATIONALES_PER_SECTION = RATIONALE_COUNT_LIMITS["complex"]
+
 #: content_date 选材的时序分权重上限（排序键 = 覆盖分 + 权重×时效分，
 #: 实际权重 = 该值 × 候选池有日期段落占比，信号越少自动趋零）；
 #: 数值即时间分能反超的覆盖度差距上限。
