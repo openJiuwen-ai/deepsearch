@@ -380,7 +380,6 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **user_materials**(List[Dict[str, Any]], 可选)：用户提供的素材列表。默认值：`[]`；HTTP 服务应通过 `metadata` 的同名字段传入。素材的数据格式和使用场景见 [用户素材](../../../feature/algorithm/user-materials.md)。
 - **coverage_rule_block_enable**(bool, 可选)：子报告大纲规则版覆盖证据开关。默认值：`True`。
 - **exclusion_constraint_enable**(bool, 可选)：子报告禁引约束总开关。默认值：`False`。
-- **professional_report_adaptive_rationales**(bool, 可选)：专业版报告自适应 rationale 的请求级覆盖；未设置时使用 ServiceConfig 配置。
 - **outliner_max_section_num**(int, 可选)：最大规划章节数量，取值范围：[1, 15]。SDK `AgentConfig` 与 HTTP 服务 `DeepSearchRequest` 默认值均为 `10`。
 - **outline_interaction_enabled**(bool, 可选)：大纲交互功能开关，开启后用户可对生成的大纲进行多轮修改。默认值：`True`。
 - **outline_interaction_max_rounds**(int, 可选)：大纲交互最大轮次，取值范围：[1, 100]。默认值：`3`。

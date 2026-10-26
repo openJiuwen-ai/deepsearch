@@ -403,10 +403,6 @@ class AgentConfig(BaseModel):
                     "采集层文献 ID 交集匹配 + 镜像后缀词表、写作层 Excluded Sources 注入、"
                     "intent 层 include_url/target_papers 去重。关闭时行为等同 baseline",
     )
-    professional_report_adaptive_rationales: Optional[bool] = Field(
-        default=None,
-        description="专业版报告自适应 rationale 的请求级覆盖；未设置时使用 ServiceConfig 默认值",
-    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=10,
