@@ -552,6 +552,7 @@ class EvidenceMixin:
                         for requirement_id in rationale.get("covers", [])
                     }),
                     "rationale_count": len(rationales),
+                    "below_minimum": len(rationales) < rationale_count_range[0],
                     "validation_errors": validation_errors,
                 }
                 if validation_errors:
@@ -612,9 +613,7 @@ class EvidenceMixin:
     ) -> list[str]:
         """Validate quantity, exact duplicates, and requirement-to-rationale links."""
         errors = []
-        minimum, maximum = count_range
-        if len(rationales) < minimum:
-            errors.append(f"rationale count {len(rationales)} is below minimum {minimum}")
+        _, maximum = count_range
         if len(rationales) > maximum:
             errors.append(f"rationale count {len(rationales)} exceeds maximum {maximum}")
 

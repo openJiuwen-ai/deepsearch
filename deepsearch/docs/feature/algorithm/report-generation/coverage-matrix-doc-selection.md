@@ -58,7 +58,7 @@
 
 ## 核心流程
 
-1. **rationale 生成**：先根据原始 query 和章节交付要求判断复杂度，再生成对应区间数量：简单 5-10、中等 10-15、复杂 15-20。LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败；重试时上一轮失败原因以 `<retry_feedback>` user 消息注入下一次调用，重试耗尽后 `last_error` 随返回值传播到上游错误消息。
+1. **rationale 生成**：仅当 `professional_report_adaptive_rationales` 开启时，才根据原始 query 和章节交付要求判断复杂度，并以简单 5-10、中等 10-15、复杂 15-20 作为目标区间；关闭时沿用旧的 5-10 条提示与生成流程。LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败。数量低于目标下限只记录诊断，不单独触发重试；超过上限、重复描述或需求映射校验失败仍会重试。其他校验错误重试耗尽后，若已有可用 rationale 集合则保留最后一组并继续章节流程；只有没有可用集合时才进入章节错误路径。
 2. **段落抽取+打分**：`_extract_and_score_documents` 将原始文档分批（EXTRACT_BATCH_SIZE=5），并发上限 5 批，每批并行送 LLM 抽取相关段落并评分。`coverage` 按 passage×rationale 评估；`reliability`、`data_density` 按 passage 整体评估一次（LLM 在 passage 顶层输出）。`coverage_matrix` 直接存 coverage 供 top-k 排序使用。维度分存储在 `dimension_scores`（结构为 `{passage_key: {rationale_id: {coverage, reliability, data_density}}}`，其中 reliability/data_density 为 passage 级整体值镜像到每个 rationale 条目），passage dict 顶层通过 `scores` 键携带每个 rationale 的 coverage/reliability/data_density，同时携带 passage 级 `reliability`/`data_density` 供图表可视化选择直接读取。每批 LLM 调用按 `max_generate_retry_num` 重试，覆盖异常/空内容/JSON 解析失败；部分批次失败时跳过失败批次继续合并，失败批次及原因记入 warning 日志，不影响其他批次。
 3. **按维度 top-k 选择**：`_select_by_rationale_coverage` 对每个 rationale 独立选 top_k 个段落，排序键 = 覆盖分 + `effective_weight` × 时效分，其中 `effective_weight = CONTENT_DATE_TIMELINESS_WEIGHT × known_ratio`（`known_ratio` = 候选池中四档非 unknown 的段落占比，有日期信号越多权重越接近上限）。content_date 约束下，按段落的 `content_time` 与约束区间判四档 compliant/partial/violation/unknown，对应 +1.0/-0.3/-1.0/0.0（部分重叠少扣、完全不符多扣、信息不足不奖不罚）；`known_ratio` 低（候选池普遍无日期）时 `effective_weight` 自动趋零、退化为纯覆盖分排序，避免在噪声上排序并挤压覆盖度；source_date 或无约束时 `timeliness_weight` 为 0，退化为纯覆盖分降序。保留门要求段落最大覆盖度 ≥ 0.15（`SELECTION_COVERAGE_FLOOR`，与下游 L1 的 `filter_passages_by_coverage` 默认阈值对齐：选出的段落必然活过 L1，时间加权的提升不会被 L1 撤销，低于门槛的段落也不再占 top-k 座位——混合池中对非时间路径同样严格不差；全池低于门槛时退回 `score>0` 老门兜底，对应 L1 的 top-5 兜底语义），门槛只看原始覆盖分（时效惩罚不会变相硬删合规段落），跨 rationale 按对象身份去重。**并集补回（union-restore）**：content_date 加权生效时，每个 rationale 另回放一份纯覆盖分 top-k 基线（独立去重轨迹、含同一地板门），被时间加权挤掉的成员中**仅 unknown 档**（判不出日期、时效分 0）补回池子——护住"没日期不罚"的无辜高覆盖段落，避免挤占导致普通维度失分；violation/partial 档不补回，扣分保留（观测日志 `restored=` 记录补回数）；补回按"每 rationale 交付 ≤ `FULLTEXT_TOP_K_PER_RATIONALE`（15）"封顶，使下游 L2 的 top-15 纯覆盖度截断对单 rationale 新增交付不触发（以 top_k ≤ 15 为前提；默认 top_k=15 时饱和 rationale 不触发补回）。
 4. **L1/L2 过滤**：`filter_passages_by_coverage` 移除最大覆盖度低于阈值（默认 0.15）的段落，当全部段落低于阈值时降级保留按最大覆盖度排序的 top-5 作为兜底；`dedup_passages_by_rationale` 对高度相似的段落去重（n-gram Jaccard > 0.70，中文按字符 unigram、拉丁文按词级 bigram+trigram 计算集合），每个 rationale 保留 top-15；per-rationale 去重后再执行一次全局近重复扫描，跨 rationale 移除重复段落，保留总覆盖度更高者。
@@ -97,7 +97,8 @@ Prompt 输入变量：
 
 ## 边界与错误处理
 
-- rationale 生成重试 `max_generate_retry_num` 次后仍失败才返回空列表，并携带最后一次失败原因（`last_error`）传播到上游错误消息（截断 500 字符，敏感模式下省略明细），章节走错误路径。
+- 仅当没有任何可用 rationale 集合时，rationale 生成才返回空列表并让章节走错误路径；若数量不足但其他校验通过，保留该集合继续流程，并在 `rationale_coverage_diagnostics.below_minimum` 标记未达到目标下限。其他校验错误重试耗尽后，如果已有可用集合则保留最后一组继续章节流程；没有可用集合时才返回空列表和最后错误原因（截断 500 字符，敏感模式下省略明细）。
+- 需求证据诊断遇到非法 passage key、coverage matrix 中缺失的 key 或非字典 coverage 行时，将该需求标记为 `undetermined`（无法判定），不把未知覆盖度当作 0.0 和 `evidence_gap`；没有选中段落且无 key 错误时仍报告 `evidence_gap`。
 - 抽取+打分 LLM 返回空内容、JSON 解析失败或调用异常时，每批重试 `max_generate_retry_num` 次后仍失败才返回空 dict，并携带该批次失败原因；部分批次失败时跳过失败批次继续合并，失败批次及原因记入 warning 日志，不影响其他批次。
 - **filtered_passages 为空时降级（不丢章）**：当 `_extract_and_score_documents` 合并后 `filtered_passages` 为空时（不仅限于全部批次失败，也包括所有批次返回空段落的情况），将原始文档截断为 500 字作为 passage，包含 `"data_density": 0.0` 字段，空覆盖矩阵，合并后的批次错误原因记录 warning；`generate_sub_report` 检测到该降级结果后跳过打分选文，直接用截断后的候选文档继续写作。
 - LLM 返回的 `rationale_scores` 中非数值类型被降级为 0.0，避免 float 崩溃。

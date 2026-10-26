@@ -72,14 +72,25 @@ def build_structured_evidence_guide(
             "Structured evidence guidance:",
             f"Requirement evidence coverage: {diagnostics['requirements_with_evidence']}/"
             f"{diagnostics['requirement_count']} requirements have selected evidence "
-            "(coverage >= 0.30).",
+            f"(coverage >= 0.30); unable to determine: "
+            f"{diagnostics['requirements_undetermined']}.",
         ]
         for item in diagnostics["items"]:
             rationale_ids = ", ".join(item["rationale_ids"]) or "unmapped"
-            status = "evidence found" if item["status"] == "evidence_found" else "evidence gap"
+            status_labels = {
+                "evidence_found": "evidence found",
+                "evidence_gap": "evidence gap",
+                "undetermined": "unable to determine",
+            }
+            status = status_labels.get(item.get("status"), "unknown status")
+            coverage_text = (
+                f"{item['best_coverage']:.2f}"
+                if item["best_coverage"] is not None
+                else "n/a"
+            )
             lines.append(
                 f"- [requirement:{item['requirement_id']}, {status}, "
-                f"best_coverage:{item['best_coverage']:.2f}, rationales:{rationale_ids}] "
+                f"best_coverage:{coverage_text}, rationales:{rationale_ids}] "
                 f"{item['description']}"
             )
         return "\n".join(lines)
@@ -139,14 +150,25 @@ def build_structured_evidence_guide(
         lines.append(
             f"Requirement evidence coverage: {diagnostics['requirements_with_evidence']}/"
             f"{diagnostics['requirement_count']} "
-            "requirements have selected evidence (coverage >= 0.30)."
+            "requirements have selected evidence (coverage >= 0.30); "
+            f"unable to determine: {diagnostics['requirements_undetermined']}."
         )
         for item in diagnostics["items"]:
             rationale_ids = ", ".join(item["rationale_ids"]) or "unmapped"
-            status = "evidence found" if item["status"] == "evidence_found" else "evidence gap"
+            status_labels = {
+                "evidence_found": "evidence found",
+                "evidence_gap": "evidence gap",
+                "undetermined": "unable to determine",
+            }
+            status = status_labels.get(item.get("status"), "unknown status")
+            coverage_text = (
+                f"{item['best_coverage']:.2f}"
+                if item["best_coverage"] is not None
+                else "n/a"
+            )
             lines.append(
                 f"- [requirement:{item['requirement_id']}, {status}, "
-                f"best_coverage:{item['best_coverage']:.2f}, rationales:{rationale_ids}] "
+                f"best_coverage:{coverage_text}, rationales:{rationale_ids}] "
                 f"{item['description']}"
             )
 
@@ -165,6 +187,22 @@ def build_requirement_evidence_diagnostics(
     coverage_matrix = coverage_result.get("coverage_matrix", {})
     if not isinstance(coverage_matrix, dict):
         coverage_matrix = {}
+    valid_coverage_rows = {}
+    unavailable_keys = []
+    for passage_key in selected_passage_keys:
+        if not isinstance(passage_key, str):
+            unavailable_keys.append(passage_key)
+            continue
+        coverage = coverage_matrix.get(passage_key)
+        if not isinstance(coverage, dict):
+            unavailable_keys.append(passage_key)
+            continue
+        valid_coverage_rows[passage_key] = coverage
+    if unavailable_keys:
+        logger.warning(
+            "Requirement evidence diagnostics cannot evaluate %s selected passage keys",
+            len(unavailable_keys),
+        )
     items = []
     for requirement in requirements:
         requirement_id = str(requirement.get("id", "") or "")
@@ -176,26 +214,39 @@ def build_requirement_evidence_diagnostics(
                 rationale_ids.append(str(rationale.get("id", "")))
 
         coverage_scores = []
+        unavailable_key = False
         for rationale_id in rationale_ids:
             for passage_key in selected_passage_keys:
-                coverage = coverage_matrix.get(passage_key, {})
-                if not isinstance(coverage, dict):
+                if passage_key in unavailable_keys:
+                    unavailable_key = True
                     continue
+                coverage = valid_coverage_rows[passage_key]
                 coverage_scores.append(safe_float(coverage.get(rationale_id, 0.0)))
-        best_coverage = max(coverage_scores, default=0.0)
+        best_coverage = max(coverage_scores) if coverage_scores else None
+        if best_coverage is not None and best_coverage >= evidence_threshold:
+            status = "evidence_found"
+        elif unavailable_key:
+            status = "undetermined"
+        else:
+            best_coverage = best_coverage if best_coverage is not None else 0.0
+            status = "evidence_gap"
         items.append({
             "requirement_id": requirement_id,
             "description": str(requirement.get("description", "") or ""),
             "rationale_ids": rationale_ids,
             "best_coverage": best_coverage,
-            "status": "evidence_found" if best_coverage >= evidence_threshold else "evidence_gap",
+            "status": status,
         })
     found = sum(item["status"] == "evidence_found" for item in items)
+    undetermined = sum(item["status"] == "undetermined" for item in items)
     total = len(items)
+    evaluable = total - undetermined
     return {
         "requirement_count": total,
         "requirements_with_evidence": found,
-        "coverage_rate": (found / total) if total else 0.0,
+        "requirements_undetermined": undetermined,
+        "requirements_evaluable": evaluable,
+        "coverage_rate": (found / evaluable) if evaluable else 0.0,
         "evidence_threshold": evidence_threshold,
         "items": items,
     }
