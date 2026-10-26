@@ -57,6 +57,33 @@ def test_start_node_passes_exclusion_constraint_enable_to_session_config():
         assert merged_config["exclusion_constraint_enable"] is expected
 
 
+def test_adaptive_rationales_agent_override_survives_service_config_merge():
+    assert AgentConfig.model_validate({
+        "professional_report_adaptive_rationales": True,
+    }).professional_report_adaptive_rationales is True
+
+    node = StartNode()
+    session = MagicMock(spec=Session)
+    context = MagicMock(spec=ModelContext)
+    inputs = {
+        "agent_config": {
+            "llm_config": {},
+            "web_search_engine_config": {"search_engine_name": "tavily"},
+            "local_search_engine_config": {"search_engine_name": "openapi"},
+            "professional_report_adaptive_rationales": True,
+        },
+        "thread_id": "thread-rationales",
+        "interrupt_feedback": "",
+    }
+
+    import asyncio
+
+    asyncio.run(node.invoke(inputs, session, context))
+
+    merged_config = session.update_global_state.call_args.args[0]["config"]
+    assert merged_config["professional_report_adaptive_rationales"] is True
+
+
 def test_sub_reporter_node_dispatches_exclusion_constraint_enable():
     """经真实 SubReporterNode._pre_handle 后，开关正确下发到 current_inputs。
 

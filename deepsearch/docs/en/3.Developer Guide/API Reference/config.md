@@ -239,6 +239,7 @@ class openjiuwen_deepsearch.config.config.AgentConfig()
 - **user_materials** (`List[Dict[str, Any]]`, optional): User-provided material entries. Default value: `[]`; HTTP callers provide the same fields in `metadata`. See [User materials](../../../feature/algorithm/user-materials.md) for the data format and usage scenarios.
 - **coverage_rule_block_enable** (bool, optional): Enables rule-based coverage evidence for sub-report outlines. Default value: `True`.
 - **exclusion_constraint_enable** (bool, optional): Master switch for sub-report exclusion constraints. Default value: `False`.
+- **professional_report_adaptive_rationales** (bool, optional): Per-request override for adaptive rationale generation in Professional reports. If omitted, uses the `ServiceConfig` value.
 - **outliner_max_section_num** (int, optional): Maximum number of outline sections. Range: `[1, 15]`. Both SDK `AgentConfig` and HTTP `DeepSearchRequest` default to `10`.
 - **outline_interaction_enabled** (bool, optional): Whether to enable outline interaction. Default value: `True`.
 - **outline_interaction_max_rounds** (int, optional): Maximum number of outline interaction rounds. Range: `[1, 100]`. Default value: `3`.

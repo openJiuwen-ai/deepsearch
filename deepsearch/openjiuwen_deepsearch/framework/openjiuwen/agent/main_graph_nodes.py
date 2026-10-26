@@ -271,6 +271,9 @@ class StartNode(Start):
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
             agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
             agent_config["exclusion_constraint_enable"] = origin_agent_config.get("exclusion_constraint_enable", False)
+            agent_config["professional_report_adaptive_rationales"] = origin_agent_config.get(
+                "professional_report_adaptive_rationales"
+            )
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -279,6 +282,9 @@ class StartNode(Start):
         if agent_config.get("vlm_chart_generator_enable", False):
             service_config["visualization_enable"] = False
         merge_config = agent_config | service_config
+        rationale_override = origin_agent_config.get("professional_report_adaptive_rationales")
+        if rationale_override is not None:
+            merge_config["professional_report_adaptive_rationales"] = bool(rationale_override)
         session.update_global_state({"config": merge_config})
 
         next_node = NodeId.INTENT_RECOGNITION.value

@@ -184,6 +184,54 @@ async def test_generate_rationales_non_list_field():
     assert error != ""  # error message should be set
 
 
+@pytest.mark.asyncio
+async def test_generate_rationales_retries_duplicate_requirement_ids():
+    reporter = _make_reporter()
+    llm_output = {
+        "content": json.dumps({
+            "requirements": [
+                {"id": "q1", "description": "Region A figures"},
+                {"id": "q1", "description": "Region B figures"},
+            ],
+            "rationales": [{
+                "id": "r1",
+                "description": "Compare regional figures",
+                "covers": ["q1"],
+            }],
+        }),
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats",
+        return_value=llm_output,
+    ) as invoke:
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages",
+            return_value=[{"role": "user", "content": "test"}],
+        ):
+            inputs = {
+                "professional_report_adaptive_rationales": True,
+                "section_idx": 1,
+                "section_task": "Compare figures",
+                "section_description": "Compare two regions",
+                "max_generate_retry_num": 1,
+            }
+            rationales, error = await reporter._generate_section_rationales(inputs)
+
+    assert invoke.await_count == 1
+    assert len(rationales) == 1
+    assert "duplicate requirement IDs: q1" in error
+    requirements = inputs["rationale_requirements"]
+    assert [item["description"] for item in requirements] == [
+        "Region A figures",
+        "Region B figures",
+    ]
+    assert requirements[1]["id"].startswith("q1__duplicate_")
+    assert any(
+        "duplicate requirement IDs: q1" in error
+        for error in inputs["rationale_coverage_diagnostics"]["validation_errors"]
+    )
+
+
 # =====================================================================
 # _select_by_rationale_coverage — string scores, non-dict rationales
 

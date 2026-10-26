@@ -521,15 +521,33 @@ class EvidenceMixin:
                     raise ValueError("'requirements' is not a list")
                 normalized_requirements = []
                 seen_requirement_ids = set()
+                provided_requirement_ids = {
+                    str(requirement.get("id") or "").strip()
+                    for requirement in requirements
+                    if isinstance(requirement, dict)
+                }
+                duplicate_requirement_ids = set()
+                duplicate_id_counts = {}
                 for index, requirement in enumerate(requirements, start=1):
                     if not isinstance(requirement, dict):
                         continue
                     requirement_id = str(requirement.get("id") or f"q{index}").strip()
                     description = str(requirement.get("description") or "").strip()
-                    if not requirement_id or not description or requirement_id in seen_requirement_ids:
+                    if not requirement_id or not description:
                         continue
-                    seen_requirement_ids.add(requirement_id)
-                    normalized_requirements.append({"id": requirement_id, "description": description})
+                    normalized_id = requirement_id
+                    if requirement_id in seen_requirement_ids:
+                        duplicate_requirement_ids.add(requirement_id)
+                        duplicate_index = duplicate_id_counts.get(requirement_id, 1) + 1
+                        normalized_id = f"{requirement_id}__duplicate_{duplicate_index}"
+                        while normalized_id in seen_requirement_ids or normalized_id in provided_requirement_ids:
+                            duplicate_index += 1
+                            normalized_id = f"{requirement_id}__duplicate_{duplicate_index}"
+                        duplicate_id_counts[requirement_id] = duplicate_index
+                    else:
+                        duplicate_id_counts[requirement_id] = 1
+                    seen_requirement_ids.add(normalized_id)
+                    normalized_requirements.append({"id": normalized_id, "description": description})
 
                 rationales = data.get("rationales", [])
                 if not isinstance(rationales, list):
@@ -543,6 +561,12 @@ class EvidenceMixin:
                 validation_errors = self._validate_rationale_coverage(
                     rationales, normalized_requirements, rationale_count_range
                 )
+                if duplicate_requirement_ids:
+                    duplicate_error = (
+                        "duplicate requirement IDs: "
+                        + ", ".join(sorted(duplicate_requirement_ids))
+                    )
+                    validation_errors.insert(0, duplicate_error)
                 current_inputs["rationale_requirements"] = normalized_requirements
                 current_inputs["rationale_coverage_diagnostics"] = {
                     "requirement_count": len(normalized_requirements),
