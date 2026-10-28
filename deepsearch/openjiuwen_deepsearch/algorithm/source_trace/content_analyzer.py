@@ -7,7 +7,6 @@ import difflib
 from typing import List
 
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -48,11 +47,6 @@ async def recognize_content_to_cite(modified_report: str, similarity_threshold: 
         result_sentences_list = validate_and_enhance_sentences(
             llm_result, modified_report, similarity_threshold)
 
-    except StopRequested:
-        # 用户停止不降级为空列表（source_tracer 对空结果直接正常返回，
-        # SourceTracerNode 的节点级停止穿透将收不到异常，图"正常完成"并
-        # 清除 checkpoint），直接上抛走异常保存分支。
-        raise
     except Exception as e:
         if LogManager.is_sensitive():
             logger.error(f"[recognize_content_to_cite] LLM调用过程中发生错误")

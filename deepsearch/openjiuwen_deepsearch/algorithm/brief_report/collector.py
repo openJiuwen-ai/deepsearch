@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Any
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.evaluation import evaluate_brief_sections
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefCitationRecord,
@@ -22,7 +23,6 @@ from openjiuwen_deepsearch.algorithm.brief_report.search import build_section_ca
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import build_material_evidence_items
 from openjiuwen_deepsearch.config.config import Config
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_research_intent_prompt_context,
     build_temporal_scope_prompt_context,
@@ -35,6 +35,7 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 logger = logging.getLogger(__name__)
 
 
+@moderation_retry_scope
 async def generate_brief_queries(llm: object, request: BriefQueryRequest) -> list[BriefQuery]:
     """一次生成报告级正式 Query 或全部阻断缺口的补充 Query。
 
@@ -74,10 +75,6 @@ async def generate_brief_queries(llm: object, request: BriefQueryRequest) -> lis
                     return []
                 raise ValueError("brief query payload contains no valid query after cleaning")
             return queries
-        except StopRequested:
-            # 用户停止不参与重试预算,直接上抛(否则重试循环会反复撞
-            # 停止检查点空转直到预算耗尽)。
-            raise
         except Exception as exc:
             last_error = exc
             logger.warning(

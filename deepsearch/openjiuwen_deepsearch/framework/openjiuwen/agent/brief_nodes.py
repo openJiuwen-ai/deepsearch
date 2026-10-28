@@ -41,7 +41,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_exclusion_prompt_context,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import update_progress_summary
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Report, ResearchIntent
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_result
@@ -306,10 +306,6 @@ class BriefOutlineNode(BaseNode):
                 outline.model_dump_json(),
                 NodeId.BRIEF_OUTLINE.value,
             )
-        except StopRequested:
-            # 用户停止不降级为"正常失败收尾"(那会让图"正常完成"并清除
-            # checkpoint),直接上抛走异常保存分支,resume 时从本节点续跑。
-            raise
         except Exception as exc:
             return _finish_brief_node_failure(
                 session,
@@ -450,10 +446,6 @@ class BriefInfoCollectorNode(BaseNode):
                 request.outline,
                 restore_material_analysis(session.get_global_state("search_context.material_analysis")),
             )
-        except StopRequested:
-            # 用户停止不降级为"正常失败收尾",直接上抛走异常保存分支,
-            # resume 时从本节点续跑。
-            raise
         except Exception as exc:
             return _finish_brief_node_failure(
                 session,
@@ -538,10 +530,6 @@ class BriefEvidenceReviewNode(BaseNode):
                 ),
                 NodeId.BRIEF_EVIDENCE_REVIEWER.value,
             )
-        except StopRequested:
-            # 用户停止不降级为"正常失败收尾",直接上抛走异常保存分支,
-            # resume 时从本节点续跑。
-            raise
         except Exception as exc:
             return _finish_brief_node_failure(
                 session,
@@ -617,11 +605,14 @@ class BriefSubReporterNode(BaseNode):
             pre_output = self._pre_handle(inputs, session, context)
             if pre_output.get("skip"):
                 return self._post_handle(inputs, pre_output, session, context)
-            chapters = await write_brief_chapters(pre_output["request"])
-        except StopRequested:
-            # 用户停止不降级为"正常失败收尾",直接上抛走异常保存分支,
-            # resume 时从本节点续跑。
-            raise
+            chapters = await write_brief_chapters(
+                pre_output["request"],
+                on_chapter_start=lambda section: update_progress_summary("start_section", section.id),
+                on_chapter_end=lambda section, chapter: update_progress_summary(
+                    "finish_section", section.id,
+                    chapter is not None and bool(chapter.raw_markdown.strip()),
+                ),
+            )
         except Exception as exc:
             return _finish_brief_node_failure(
                 session,
@@ -713,10 +704,6 @@ class BriefReporterNode(BaseNode):
                     section_order={section.id: index for index, section in enumerate(state.outline.sections)},
                 )
             )
-        except StopRequested:
-            # 用户停止不降级为"正常失败收尾",直接上抛走异常保存分支,
-            # resume 时从本节点续跑。
-            raise
         except Exception as exc:
             return _finish_brief_node_failure(
                 session,
@@ -795,11 +782,6 @@ class BriefHtmlReporterNode(BaseNode):
                 markdown=pre_output["markdown"],
                 language=pre_output["language"],
             )
-        except StopRequested:
-            # 用户停止不降级为 markdown 保留产物(那会让图"正常完成"并
-            # 清除 checkpoint),直接上抛走异常保存分支,resume 时从本
-            # 节点续跑。
-            raise
         except Exception as exc:
             return self._fallback_to_markdown(session, exc)
         return self._post_handle(inputs, {**pre_output, "html": html}, session, context)

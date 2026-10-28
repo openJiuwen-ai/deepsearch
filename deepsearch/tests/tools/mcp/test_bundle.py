@@ -65,6 +65,80 @@ async def test_bundle_single_server_failure_does_not_block():
     assert len(bundle.get_tools_by_type("search")) == 1
 
 
+def _tool_with_schema(name, schema):
+    """构造带 input_params 的工具 mock，模拟 build_mcp_local_functions 输出。"""
+    return SimpleNamespace(card=SimpleNamespace(name=name, input_params=schema))
+
+
+@pytest.mark.asyncio
+async def test_bundle_splits_search_tools_by_query_compatibility():
+    """type=search 的工具按 inputSchema 是否仅需 query 分流到 search / search_param。"""
+    bundle = McpToolBundle()
+    servers = [
+        {"server_name": "srv1", "server_url": "https://mcp1.com/sse", "transport_type": "sse", "type": "search"},
+    ]
+    # query-only 必填 → search；带额外必填 → search_param；无 required → search
+    tools = [
+        _tool_with_schema("compat_query_only", {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        }),
+        _tool_with_schema("compat_no_required", {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        }),
+        _tool_with_schema("incompat_extra_required", {
+            "type": "object",
+            "properties": {"query": {"type": "string"}, "db": {"type": "string"}},
+            "required": ["query", "db"],
+        }),
+    ]
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.mcp.bundle.McpClient"
+    ) as mock_client_cls, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.mcp.bundle.build_mcp_local_functions"
+    ) as mock_build:
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.close = AsyncMock()
+        mock_client_cls.return_value = mock_client
+        mock_build.return_value = tools
+
+        await bundle.connect_and_build_tools(servers)
+
+    compat = bundle.get_tools_by_type("search")
+    param = bundle.get_tools_by_type("search_param")
+    assert {t.card.name for t in compat} == {"compat_query_only", "compat_no_required"}
+    assert {t.card.name for t in param} == {"incompat_extra_required"}
+
+
+@pytest.mark.asyncio
+async def test_bundle_non_search_type_not_split():
+    """非 search type 的工具不做 query 兼容性分流，原样归入其 type。"""
+    bundle = McpToolBundle()
+    servers = [
+        {"server_name": "srv1", "server_url": "https://mcp1.com/sse", "transport_type": "sse", "type": "fetch"},
+    ]
+    tools = [_tool_with_schema("fetch_tool", {"type": "object", "required": ["url"]})]
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.mcp.bundle.McpClient"
+    ) as mock_client_cls, patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.tools.mcp.bundle.build_mcp_local_functions"
+    ) as mock_build:
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.close = AsyncMock()
+        mock_client_cls.return_value = mock_client
+        mock_build.return_value = tools
+
+        await bundle.connect_and_build_tools(servers)
+
+    assert len(bundle.get_tools_by_type("fetch")) == 1
+    assert bundle.get_tools_by_type("search") == []
+    assert bundle.get_tools_by_type("search_param") == []
+
+
 @pytest.mark.asyncio
 async def test_bundle_close_all_clears_state():
     bundle = McpToolBundle()

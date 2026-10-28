@@ -84,6 +84,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [用户反馈处理](./algorithm/user-feedback-processor.md)
 - [Agent 工厂与运行模式](./framework/agent-factory.md)
 - [报告研究主工作流](./framework/research-workflow.md)
+- [报告进度查询](framework/report-progress.md)：主图节点与活跃状态采集、SDK/HTTP 查询、Redis 共享进度。
 - [运行时 Metadata 注入器机制](./framework/metadata-injectors.md)
 - [Brief 大纲升级专业版报告](./framework/brief-outline-upgrade.md)
 - [DeepSearch 搜索子工作流](./framework/deepsearch-sub-workflows.md)
@@ -92,7 +93,6 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [节点基类与会话上下文](./framework/base-node-and-session-context.md)
 - [搜索上下文与数据契约](./framework/search-context.md)
 - [WorkflowAgent 封装](./framework/workflow-agent.md)
-- [优雅停止与断点恢复](./framework/graceful-stop-and-resume.md)
 - [LLM 模型槽位适配](./framework/llm-model-adaptation.md)
 - [搜索工具注册与运行时 API 工具](./framework/search-tool-registration.md)
 - [DeepSearch 网页抓取 Provider 注册](./framework/web-fetch-provider-registry.md)

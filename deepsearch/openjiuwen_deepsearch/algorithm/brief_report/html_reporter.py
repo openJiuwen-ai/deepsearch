@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.html_charts import (
     TEMPLATE_BLOCK_RE,
     extract_fragment_charts,
@@ -39,7 +40,6 @@ from openjiuwen_deepsearch.algorithm.brief_report.html_safety import (
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.config.config import Config
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
@@ -432,6 +432,7 @@ async def _generate_section_fragments(
                     _section_messages(chunk, shell_css, language, errors),
                 ),
                 agent_name=AgentLlmName.BRIEF_HTML_REPORTER_SECTION.value,
+                moderation_retry_key=chunk.section_id,
             )
             raw = str(response.get("content") or "")
             fragment = _extract_section_fragment(raw)
@@ -482,10 +483,6 @@ async def _generate_section_fragments(
     generated: dict[str, tuple[str, list[dict]]] = {}
     section_errors: list[str] = []
     for chunk, result in zip(sections, results, strict=True):
-        if isinstance(result, StopRequested):
-            # 用户停止是 Exception 子类,不能被当作普通章节失败吞进
-            # section_errors 重试循环(空转重试后仍可能被节点层降级)。
-            raise result
         if isinstance(result, Exception):
             section_errors.append(f"section {chunk.section_id}: {result}")
             continue
@@ -705,6 +702,7 @@ def _assemble_html_report(
     return convert_inline_citations(html_doc, pre)
 
 
+@moderation_retry_scope
 async def generate_brief_html_report(*, llm, markdown: str, language: str) -> str:
     """把 Brief Markdown 转写为自包含 HTML，按 shell/章节粒度重试。
 

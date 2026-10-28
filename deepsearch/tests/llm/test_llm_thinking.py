@@ -1,7 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
-import copy
 import logging
 import traceback
 
@@ -502,84 +501,3 @@ async def test_ainvoke_llm_with_stats_stream_fallback_failure_preserves_tracebac
 
     assert primary_model.calls == 1
     assert fallback_model.calls == 2
-
-
-@pytest.mark.parametrize("thinking_enabled", [None, False, True])
-@pytest.mark.parametrize("model_name", ["glm5.3", "glm-5.3-test", "glm_5.3_test", "ZHIPU/GLM-5.3-Flash"])
-def test_glm53_always_enables_low_thinking(monkeypatch, thinking_enabled, model_name):
-    captured = []
-
-    class DummyFactory:
-        def get_model(self, params):
-            captured.append(params)
-            return object()
-
-    monkeypatch.setattr(llm_wrapper, "LLMModelFactory", lambda: DummyFactory())
-    extension = {
-        "thinking": {"type": "disabled"},
-        "enable_thinking": False,
-        "reasoning_effort": "high",
-        "extra_body": {
-            "thinking": {"type": "disabled"},
-            "reasoning_effort": "high",
-            "chat_template_kwargs": {"enable_thinking": False, "other": 1},
-            "other": 2,
-        },
-    }
-    original_extension = copy.deepcopy(extension)
-    config = _llm_config(
-        base_url="https://api.modelarts-maas.com/modelarts-infer-v2-test/v2",
-        model_name=model_name,
-        extension=extension,
-    )
-
-    result = llm_wrapper.create_llm_obj(config, thinking_enabled=thinking_enabled)
-
-    assert captured[0].extension == {
-        "reasoning_effort": "low",
-        "extra_body": {
-            "thinking": {"type": "enabled"},
-            "chat_template_kwargs": {"other": 1},
-            "other": 2,
-        },
-    }
-    assert config.extension == original_extension
-    assert extension == original_extension
-    assert len(captured) == 1
-    assert result["thinking_fallback_model"] is None
-    assert result["thinking_fallback_removed_fields"] == []
-
-
-@pytest.mark.parametrize(
-    "base_url, model_type, expected",
-    [
-        ("https://api.modelarts-maas.com/openai/v1", "openai",
-         {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}}),
-        ("https://api.modelarts-maas.com/v1", "openai",
-         {"extra_body": {"thinking": {"type": "enabled"}}}),
-        ("https://example.com/v1", "openai",
-         {"extra_body": {"thinking": {"type": "enabled"}}}),
-        ("https://dashscope.aliyuncs.com/compatible-mode/v1", "openai",
-         {"extra_body": {"enable_thinking": True}}),
-        ("https://api.siliconflow.cn/v1", "siliconflow", {"enable_thinking": True}),
-    ],
-)
-def test_glm53_keeps_provider_thinking_fields(base_url, model_type, expected):
-    config = _llm_config(base_url=base_url, model_type=model_type, model_name="glm-5.3-test")
-    expected = {**expected, "reasoning_effort": "low"}
-
-    assert merge_thinking_extension(config, False) == expected
-    assert build_thinking_fallback_extension(config, config.extension) == (expected, [])
-
-
-@pytest.mark.parametrize("model_name", ["glm-5.2-test", "glm-5.30-test", "other-glm5.3"])
-def test_glm53_policy_does_not_change_other_models(model_name):
-    config = _llm_config(
-        base_url="https://api.modelarts-maas.com/v2",
-        model_name=model_name,
-        extension={"reasoning_effort": "high"},
-    )
-
-    assert merge_thinking_extension(config, False) == {
-        "reasoning_effort": "high", "extra_body": {"thinking": {"type": "disabled"}}
-    }
