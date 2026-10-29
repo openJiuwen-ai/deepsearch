@@ -18,6 +18,7 @@ class openjiuwen_deepsearch.config.config.LLMConfig()
 - **timeout**(int, 可选)：请求超时时间（秒）。默认值：`600`。
 - **max_tries**(int, 可选)：单次调用最大重试次数。默认值：`4`。
 - **append_think_tags_to_messages**(bool, 可选)：是否在消息中追加 think 标签。默认值：`False`。
+- **moderation_mask_retry**(bool, 可选)：是否启用内容风控补救。默认值：`False`；设置 `LLMConfig(moderation_mask_retry=True)` 开启。识别到输入风控错误后，在已有的下一次尝试中仅掩码 user 消息中已标注的资料正文与资料 URL；输出风控错误则追加输出约束。复用调用方原有重试预算，不增加尝试次数：原本不重试的调用仍不重试，`run_llm` 默认最多四次应用层尝试；SDK／提供商内部重试另行计数。恢复效果与内容质量需实验验证，不保证通过审核，也不改变厂商审核策略。详见[模型输入输出风控优化](../../../feature/moderation-mask-retry.md)。
 
 **样例**：
 

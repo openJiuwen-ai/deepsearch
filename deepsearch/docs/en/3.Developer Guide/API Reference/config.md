@@ -18,6 +18,7 @@ class openjiuwen_deepsearch.config.config.LLMConfig()
 - **timeout** (int, optional): Request timeout in seconds. Default `600`.
 - **max_tries** (int, optional): Maximum retry attempts for one LLM call. Default `4`.
 - **append_think_tags_to_messages** (bool, optional): Whether to append think tags into messages. Default `False`.
+- **moderation_mask_retry** (bool, optional): Enable content moderation recovery. Default `False`; enable with `LLMConfig(moderation_mask_retry=True)`. After a recognized input moderation error, the next existing attempt masks only annotated source text and source URLs in user messages; output moderation errors add output constraints. This reuses the caller's existing retry budget without adding attempts: calls without retries still do not retry, and `run_llm` defaults to at most four application-level attempts. SDK/provider internal retries are counted separately. Recovery effectiveness and content quality require experimental validation; this does not guarantee approval or change provider moderation policies. See [Moderation mask retry](../../../feature/moderation-mask-retry.md).
 
 **Examples**
 
