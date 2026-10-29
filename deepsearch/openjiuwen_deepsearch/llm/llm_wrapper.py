@@ -9,7 +9,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_model_factory import LLMModelFactory, LLMModelParams
 from openjiuwen_deepsearch.config.config import Config, LLMConfig
-from openjiuwen_deepsearch.llm.llm_request_adapter import build_thinking_fallback_extension, merge_thinking_extension
+from openjiuwen_deepsearch.llm.llm_request_adapter import (
+    build_thinking_fallback_extension,
+    is_glm53_model,
+    merge_thinking_extension,
+)
 from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret
 from openjiuwen_deepsearch.utils.validation_utils.param_validation import validate_llm_obj_params
 
@@ -45,10 +49,10 @@ def create_llm_obj(llm_config: LLMConfig, thinking_enabled: Optional[bool] = Non
     try:
         validate_llm_obj_params(llm_config)
         # thinking_enabled 是三态语义：None 表示保持原始 extension，不注入思考开关；
-        # True/False 表示按厂商规则显式开启/关闭思考模式。
+        # True/False 表示按厂商规则显式开启/关闭思考模式；GLM-5.3 始终开启并使用 low。
         merged_extension = (
             llm_config.extension
-            if thinking_enabled is None
+            if thinking_enabled is None and not is_glm53_model(llm_config)
             else merge_thinking_extension(llm_config, thinking_enabled)
         )
         api_key = bytes(llm_config.api_key).decode('utf-8')
