@@ -194,7 +194,9 @@ def finalize(ctx: CodeSearchRunContext, termination: Termination) -> CodeSearchR
         logger.warning(
             "Agentic loop ended (%s). Returning fallback snippets from working memory.", termination
         )
-        fallback_ids = list(ctx.working_memory.saved.keys())[: ctx.top_k]
+        # 降级路径没有智能体主动挑选的片段：按检索相关性（命中次数/最好名次/BM25 分）
+        # 排序后再截断 top_k，避免按写入顺序返回不相关片段。
+        fallback_ids = ctx.working_memory.ranked_saved_ids()[: ctx.top_k]
         for sid in fallback_ids:
             ranges = ctx.working_memory.saved[sid]
             ctx.memory.add_ranges(ctx.working_memory.cache[sid], ranges)
