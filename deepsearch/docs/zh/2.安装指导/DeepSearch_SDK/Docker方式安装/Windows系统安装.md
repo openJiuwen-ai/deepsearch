@@ -114,14 +114,16 @@ Windows 上运行 Docker Desktop 推荐使用 WSL 2（Windows Subsystem for Linu
 
 * 推荐启动命令如下（SQLite；含 8089 映射，适用于 **DeepSearch** 模式 `search_mode=search`）：
 
-  ```
+以下 `docker run` 示例请在 **Git Bash**（随 Git for Windows 安装）或 **WSL** 中执行，使用 Bash 反斜杠（`\`）续行；不要直接粘贴到 PowerShell 或命令提示符。
+
+  ```bash
   docker run \
     -p 8000:8000 \
     -p 8089:8089 \
     -e LLM_SSL_VERIFY=False \
     -e TOOL_SSL_VERIFY=False \
-    -e EMBEDDING_SSL_VERIFY=False \ 
-    -e DB_TYPE=sqlite \ 
+    -e EMBEDDING_SSL_VERIFY=False \
+    -e DB_TYPE=sqlite \
     swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.11
   ```
 

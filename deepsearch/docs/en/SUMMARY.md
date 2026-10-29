@@ -21,6 +21,7 @@
     - [config](./3.Developer%20Guide/API%20Reference/config.md)
     - [main_nodes](./3.Developer%20Guide/API%20Reference/main_nodes.md)
     - [report_convert](./3.Developer%20Guide/API%20Reference/report_convert.md)
+    - [SDK report progress](./3.Developer%20Guide/API%20Reference/research_progress.md)
     - [search_context](./3.Developer%20Guide/API%20Reference/search_context.md)
     - [deepsearch_agent](./3.Developer%20Guide/API%20Reference/deepsearch_agent.md)
     - [deepsearch_rest_api](./3.Developer%20Guide/API%20Reference/deepsearch_rest_api.md)
