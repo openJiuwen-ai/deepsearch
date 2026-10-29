@@ -97,14 +97,16 @@ On Windows 10 2004+ (build 19041+) or Windows 11, run:
 
 Recommended SQLite run (includes 8089 for **DeepSearch** mode, `search_mode=search`):
 
-  ```
+Run the following `docker run` examples in **Git Bash** (installed with Git for Windows) or **WSL**. They use Bash line continuation (`\`); do not paste them into PowerShell or Command Prompt.
+
+  ```bash
   docker run \
     -p 8000:8000 \
     -p 8089:8089 \
     -e LLM_SSL_VERIFY=False \
     -e TOOL_SSL_VERIFY=False \
-    -e EMBEDDING_SSL_VERIFY=False \ 
-    -e DB_TYPE=sqlite \ 
+    -e EMBEDDING_SSL_VERIFY=False \
+    -e DB_TYPE=sqlite \
     swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.11
   ```
 

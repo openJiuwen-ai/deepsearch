@@ -98,8 +98,8 @@
     -p 8089:8089 \
     -e LLM_SSL_VERIFY=False \
     -e TOOL_SSL_VERIFY=False \
-    -e EMBEDDING_SSL_VERIFY=False \ 
-    -e DB_TYPE=sqlite \ 
+    -e EMBEDDING_SSL_VERIFY=False \
+    -e DB_TYPE=sqlite \
     swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.11
   ```
 
