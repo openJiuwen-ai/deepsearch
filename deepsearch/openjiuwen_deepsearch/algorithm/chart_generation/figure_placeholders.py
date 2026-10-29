@@ -19,10 +19,6 @@ from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmN
 from openjiuwen_deepsearch.algorithm.chart_generation.utils import call_model, CallModelInput
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
-    StopRequested,
-    raise_if_stop_requested_in_results,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +64,6 @@ class FigurePlaceholderGenerator:
             report_content_rm = self._remove_table(report_content)
             sections = self._split_report_by_h1(report_content_rm)
             gen_chart_tasks = await self.generate_chart_tasks(sections)
-        except StopRequested:
-            # 停止穿透:不得包装成业务异常,否则 workflow 层标记识别失效。
-            raise
         except Exception as e:
             error_msg = f"[CHART GENERATION] Chart Task Generator Error: {repr(e)}"
             logger.error(error_msg)
@@ -253,9 +246,6 @@ class FigurePlaceholderGenerator:
             tasks.append(task)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        # 停止分流:return_exceptions 会把 StopRequested 压平成结果项,
-        # 先于下方通用分流重抛,防止停止被吞成局部失败/异常对象入表。
-        raise_if_stop_requested_in_results(results)
         if len(results) != len(sections):
             # 一级标题结果数量与章节数量不符，将导致图表信息错位，抛出异常
             error_msg = f"Error processing sections_report: {len(results)} != {len(sections)}"
@@ -288,9 +278,6 @@ class FigurePlaceholderGenerator:
             tasks.append(task)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        # 停止分流:return_exceptions 会把 StopRequested 压平成结果项,
-        # 先于下方通用分流重抛,防止停止被吞成局部失败/异常对象入表。
-        raise_if_stop_requested_in_results(results)
         if len(results) != len(sections):
             # 生成的结果章节数量不符不会导致异常，但需要记录日志
             logger.error(f"Error processing sections_h1: {len(results)} != {len(sections)}")
@@ -346,9 +333,6 @@ class FigurePlaceholderGenerator:
 
             # 解析LLM响应, 将定位锚点和图表生成信息记录并返回
             return self._parse_llm_response(response, sub_anchor_msg, section)
-        except StopRequested:
-            # 停止穿透:吞掉停止会返回 None,被上层当作"无占位"假完成。
-            raise
         except Exception as e:
             logger.error(
                 f"[CHART GENERATION] Error calling LLM for section {section_title}: {e}"

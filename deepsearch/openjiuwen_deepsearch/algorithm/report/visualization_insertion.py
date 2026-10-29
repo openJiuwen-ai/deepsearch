@@ -7,10 +7,10 @@ import re
 from dataclasses import dataclass
 from typing import Dict
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import EFFECT_SUB_REPORT_TAG
 from openjiuwen_deepsearch.common.common_constants import CHINESE
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
@@ -150,6 +150,7 @@ class VisualizationInsertionMixin:
                 indices.append(index)
         return indices
 
+    @moderation_retry_scope
     async def _request_visualization_insert_plan(
         self, context: VisualizationInsertPlanContext
     ) -> dict:
@@ -173,11 +174,6 @@ class VisualizationInsertionMixin:
                     agent_name=AgentLlmName.SUB_REPORTER.value,
                     need_stream_out=False,
                 )
-            except StopRequested:
-                # 停止信号不得降级为 (rs_success=False, 原报告) 返回（那会让
-                # 上层把未插图的报告当正常产物走完报告阶段）。原样上抛走
-                # 异常保存分支，resume 时从本节点续跑。
-                raise
             except Exception as e:
                 logger.error(
                     "%s LLM error when inserting visualization for section [%s]: %s",
@@ -462,10 +458,6 @@ class VisualizationInsertionMixin:
                 )
             )
             return dict(rs_success=True, result=rendered)
-        except StopRequested:
-            # 停止信号不得降级为 (rs_success=False, 原报告) 返回。原样上抛
-            # 走异常保存分支。
-            raise
         except Exception as e:
             logger.error(
                 f"{EFFECT_SUB_REPORT_TAG} Unexpected error when inserting visualization for the section "

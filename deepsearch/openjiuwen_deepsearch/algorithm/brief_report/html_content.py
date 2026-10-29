@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import SOURCE_TRACE_ID_COMMENT_RE
 from openjiuwen_deepsearch.utils.common_utils.markdown_url_utils import extract_markdown_url
 
 
@@ -103,6 +104,10 @@ def preprocess_markdown(markdown: str) -> BriefHtmlPreprocessResult:
         if parsed is None:
             continue
         url, end = parsed
+        if fixed_number is None:
+            source_trace_id_comment = SOURCE_TRACE_ID_COMMENT_RE.match(markdown, end)
+            if source_trace_id_comment is not None:
+                end = source_trace_id_comment.end()
         if fixed_number is not None:
             number = fixed_number
         elif url in url_to_number:

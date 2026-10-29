@@ -20,7 +20,6 @@ from openjiuwen_deepsearch.common.status_code import StatusCode, format_exceptio
 from openjiuwen_deepsearch.framework.openjiuwen.tools.runtime_api import build_runtime_api_tools, \
     merge_runtime_api_tools
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import (
     ainvoke_llm_with_stats,
     normalize_json_output,
@@ -668,11 +667,6 @@ class Outliner:
                 )
                 break
 
-        except StopRequested:
-            # 用户停止不降级为 error_msg 数据返回（那会让 OutlineNode 旧大纲
-            # 兜底后"正常"流转、图"正常完成"并清除 checkpoint），直接上抛
-            # 走异常保存分支。
-            raise
         except Exception as e:
             error_msg = format_exception_info(StatusCode.OUTLINER_GENERATE_ERROR, e)
             if LogManager.is_sensitive():

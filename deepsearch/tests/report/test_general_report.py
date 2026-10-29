@@ -321,8 +321,8 @@ def test_validate_sub_report_headings_match_outline_accepts_interspersed_extra_h
     assert reason == ""
 
 
-def test_validate_sub_report_headings_match_outline_rejects_missing_heading():
-    """Missing an outline heading should fail even when extra headings exist."""
+def test_validate_sub_report_headings_match_outline_accepts_changed_heading():
+    """Changed subsection titles do not invalidate an otherwise structured chapter."""
     outline = """2 市场细分结构
 2.1 车型级别与价格带分布
 2.2 消费场景演变"""
@@ -337,12 +337,12 @@ def test_validate_sub_report_headings_match_outline_rejects_missing_heading():
 
     ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
 
-    assert ok is False
-    assert "not present" in reason.lower()
+    assert ok is True
+    assert reason == ""
 
 
-def test_validate_sub_report_headings_match_outline_rejects_out_of_order():
-    """Out-of-order outline headings must fail even when all headings exist."""
+def test_validate_sub_report_headings_match_outline_accepts_out_of_order():
+    """Subsection order is writing guidance rather than a hard validation gate."""
     outline = """2 市场细分结构
 2.1 车型级别与价格带分布
 2.2 消费场景演变"""
@@ -357,8 +357,8 @@ def test_validate_sub_report_headings_match_outline_rejects_out_of_order():
 
     ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
 
-    assert ok is False
-    assert "not present" in reason.lower()
+    assert ok is True
+    assert reason == ""
 
 
 def test_clean_markdown_headers_preserves_year_prefixed_titles():
@@ -627,3 +627,60 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     assert '# 1. 企业基本情况分析 <a id' not in report_content
     assert "# 1. 企业基本情况分析" in report_content
     assert "1.1 基础信息" not in report_content[toc_start:abstract_start]
+
+
+def test_relaxed_chapter_heading_structure():
+    outline = "1 McKinsey\n1.1 Overview\n1.2 Business"
+    assert Reporter.validate_sub_report_headings_match_outline(
+        "# McKinsey & Company\n\nCombined chapter content.", outline
+    ) == (True, "")
+    for content in ("", "Prose only", "## Overview", "# First\n# Second", "# 1. "):
+        ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+        assert not ok, content
+        assert reason
+
+
+@pytest.mark.parametrize("fence", ["```python", "~~~~python"])
+def test_heading_validation_ignores_fenced_headings(fence):
+    marker = fence.rstrip("python")
+    content = f"# Chapter\n\n{fence}\n# comment\n##\n{marker}\n\n## Detail\nBody"
+    cleaned = Reporter.clean_markdown_headers(content)
+    assert Reporter.validate_sub_report_headings_match_outline(cleaned, "1 Chapter") == (True, "")
+
+
+def test_heading_validation_does_not_close_fence_with_wrong_marker():
+    content = "# Chapter\n````text\n```\n# example\n~~~~\n##\n````\n## Detail\nBody"
+    assert Reporter.validate_sub_report_headings_match_outline(content, "1 Chapter") == (True, "")
+
+
+@pytest.mark.parametrize("heading", ["#", "##", "##   ", "## 1.1 ", "## ###"])
+def test_heading_validation_rejects_empty_titles_after_cleanup(heading):
+    content = Reporter.clean_markdown_headers(f"# Chapter\n{heading}\nBody")
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, "1 Chapter")
+    assert not ok
+    assert reason == "generated report contains empty heading titles"
+
+
+@pytest.mark.parametrize("content, code", [
+    ("# Chapter\n# Other", "HEADING_STRUCTURE_INVALID"),
+    ("## Detail\n# Chapter", "HEADING_STRUCTURE_INVALID"),
+    ("# Chapter\n##", "HEADING_TITLE_EMPTY"),
+    ("", "SUB_REPORT_CONTENT_EMPTY"),
+])
+def test_heading_validation_produces_actionable_retry_feedback(content, code):
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, "1 Chapter")
+    assert not ok
+    feedback = Reporter._sub_report_retry_feedback_from_failure(reason)
+    assert f"error_code: {code}" in feedback
+    location = "chapter" if code == "SUB_REPORT_CONTENT_EMPTY" else "markdown_headings"
+    assert f"location: {location}" in feedback
+    assert Reporter._sub_report_retry_feedback_from_failure(feedback) == feedback
+
+
+@pytest.mark.parametrize("content", ["# Chapter\n## Detail\nBody", "", "## Detail", "# Chapter\n##", "# Chapter\n# Other"])
+def test_heading_structure_legacy_entry_point_is_compatible(content):
+    expected = Reporter.validate_sub_report_heading_structure(content)
+    for outline in ("", "1 Unrelated\n1.1 Outline"):
+        assert Reporter.validate_sub_report_headings_match_outline(
+            content=content, sub_section_outline=outline,
+        ) == expected

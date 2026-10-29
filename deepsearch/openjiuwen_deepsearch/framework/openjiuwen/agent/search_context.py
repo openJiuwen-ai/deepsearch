@@ -1,12 +1,13 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 from enum import Enum
+from copy import deepcopy
 from datetime import date
 import json
 import logging
 from typing import List, Optional, Dict, Union, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import (
     TEMPORAL_SCOPE_SEARCH_ENGINES,
@@ -52,6 +53,7 @@ class RetrievalQuery(BaseModel):
     )
     description: str = Field(default="", description="简要说明query为何与搜索任务相关，为何要生成当前query")
     doc_infos: Optional[List[Dict]] = Field(default_factory=list, description="query检索的文档信息")
+    tool: Optional[str] = Field(default=None, description="query-gen 选择的直调工具名（query-兼容 MCP 工具）或 None（走 native）")
 
 
 class Step(BaseModel):
@@ -420,6 +422,37 @@ def build_research_intent_prompt_context(intent: ResearchIntent | dict | None) -
     }
 
 
+def build_evidence_constraint_prompt_context(
+    intent: ResearchIntent | dict | None, *, exclusion_enabled: bool = False,
+) -> dict:
+    """生成网页增强选择与压缩共用的研究约束，不解析或猜测新要求。
+
+    Args:
+        intent: 已由上游提取的研究意图，兼容旧单时间范围字段。
+        exclusion_enabled: 是否沿用现有禁引开关注入来源排除要求。
+
+    Returns:
+        仅含非空维度、比较对象与双时间指令的可序列化字典；启用时附加
+        原来源排除指令。无约束或结构无效时返回空字典，不修改原输入。
+    """
+    try:
+        model = intent if isinstance(intent, ResearchIntent) else ResearchIntent.model_validate(deepcopy(intent or {}))
+    except ValidationError:
+        # 不打印可能含来源、用户内容或凭据的无效状态。
+        logger.warning("invalid evidence research constraints; using existing task context")
+        return {}
+    temporal = build_temporal_scope_prompt_context(model)
+    constraints = {
+        "required_dimensions": model.required_dimensions,
+        "comparison_targets": model.comparison_targets,
+        "source_date_instruction": temporal["source_date_instruction"],
+        "content_date_instruction": temporal["content_date_instruction"],
+    }
+    if exclusion_enabled:
+        constraints["exclusion_instruction"] = build_exclusion_prompt_context(model)["exclusion_instruction"]
+    return {key: deepcopy(value) for key, value in constraints.items() if value}
+
+
 def resolve_temporal_embed_in_query(
     engine_name: str | None,
     source_date_scope: "TemporalScope | None",
@@ -535,6 +568,31 @@ def build_temporal_scope_prompt_context(
         "temporal_scope_instruction": " ".join(parts),  # 兼容旧 Prompt 拼接字段
         "temporal_embed_in_query": embed,
         "temporal_query_instruction": query_instruction,
+    }
+
+
+def build_time_contract(intent: ResearchIntent | dict | None) -> dict:
+    """Build the machine-readable chapter time contract.
+
+    Prompt-facing temporal instructions are deliberately built separately by
+    :func:`build_temporal_scope_prompt_context`.  This contract carries only
+    the per-request source and content date bounds consumed by the outline
+    stage and its validators.
+    """
+    source_scope = _resolve_source_date_scope(intent)
+    content_scope = _resolve_content_date_scope(intent)
+
+    def _dump_scope(scope: TemporalScope | None) -> dict | None:
+        if scope is None:
+            return None
+        return {
+            "start": scope.start_date.isoformat() if scope.start_date else None,
+            "end": scope.end_date.isoformat() if scope.end_date else None,
+        }
+
+    return {
+        "source_date_scope": _dump_scope(source_scope),
+        "content_date_scope": _dump_scope(content_scope),
     }
 
 

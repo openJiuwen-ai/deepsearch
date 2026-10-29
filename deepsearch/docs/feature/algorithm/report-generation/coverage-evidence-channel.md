@@ -3,8 +3,9 @@
 ## 维护范围
 
 本文档覆盖子报告大纲阶段的**覆盖证据（Coverage Evidence）通道**：从原文中按客观信息密度
-规则抽取的、与关键词检索无关的事实段落，作为大纲生成的补充证据输入。与已有的
-`key_passages`（相关性检索）并行，属于"方案 B"的工程实现。
+规则抽取的、与关键词检索无关的事实段落，作为大纲生成的补充证据输入。阶段一中，它写入
+对应全文 `outline_evidence_cards` 的 `coverage_passages` 字段；`key_passages` 仍属于采集
+链路，但不再是新子大纲的正式输入。
 
 路径：`openjiuwen_deepsearch/algorithm/report/evidence.py::_append_rule_coverage_to_core`、
 `openjiuwen_deepsearch/algorithm/research_collector/collector_evidence.py`、
@@ -25,46 +26,43 @@ Prompt `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline/`。
 子报告章节的生成分大纲与写作两个阶段，各阶段输入的 channel 构成如下：
 
 **大纲阶段**（`_generate_sub_section_outline`，prompt：`sub_section_outline/`）：
-- 章节结构上下文：章节标题/描述/格式要求、全局大纲、section_local_contract、
-  research_intent、背景知识特例（`sub_section_core_content_from_background_knowledge`）；
-- `sub_section_core_content`（顺序拼接，不交错）：
-  1. 条目摘要块（`build_core_content_list`）：fulltext 条目渲染清洗后原文前 500 字符
-     （`outline_summary_text`），passage 条目渲染被选中的段落；
-  2. 规则版 coverage 聚合块（`===== COVERAGE PASSAGES =====`，本 PR 范畴）；
-- `structured_evidence_guide`（维度级覆盖状态表，rationale 链路产出）。
+- 章节结构上下文：章节标题/描述/格式要求、全局大纲、section_local_contract、research_intent、背景知识特例；
+- `outline_evidence_cards`：全文卡含清洗后原文前 500 字符的 `outline_excerpt`
+  （`outline_summary_text`）、该来源按 rationale 选中的 `selected_passages` 及规则抽取的
+  `coverage_passages`，段落卡含被选中的 `passage_text`；
+- `time_contract`（source/content 时间范围）和 `rationale_contract`
+  （维度优先级、覆盖状态和 citation 导航）。
 
 **写作阶段**（`write_subsection_reports`，prompt：`sub_report_markdown/`）：
 - `classified_content`（写作主证据）：fulltext 条目整篇原文 + passage 条目选中段，
   经 `build_citation_infos` 渲染为 `[citation:X]` 块；
 - 本章提纲（大纲阶段产物，写作边界）、章节格式要求、背景知识等上下文。
+- 子大纲使用 `time_contract` 与 `rationale_contract`；写作复用 `rationale_contract`，并从同一
+  `research_intent` 单独构造时间 Prompt 上下文。写作不重复渲染 coverage passage，因为全文
+  `original_content` 已是事实主证据。
 
 LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划，未在本 PR 落地。
 
 ## 可见行为
 
-与 `structured_evidence_guide`（维度级覆盖信号）并存，但定位为**段落级**补充。
+coverage passage 与 `rationale_contract`（维度级覆盖信号）并存，但定位为**全文卡内的段落级**补充。
 
-- `_append_rule_coverage_to_core` 为每个全文证据额外抽取覆盖证据，去重后聚合成一个
-  `===== COVERAGE PASSAGES =====` 块，追加到 `core_content_list` 末尾（key 块在前、
-  coverage 块在后、不交错）。
-- 纯叙述、无事实特征的文档不产生覆盖证据；所有文档都无有效事实时不追加该块。
-- 运行开关：`Config.agent_config.coverage_rule_block_enable`（默认 `True`，经请求配置统一下发，与 `visualization_enable` 等报告开关同风格）。置 `False` 时大纲证据仅含条目摘要块，可单独回滚。
+- `_append_rule_coverage_to_core` 为每个全文证据额外抽取 coverage passages，并按 citation
+  归属写入对应 evidence card；不再聚合成 `===== COVERAGE PASSAGES =====` 块或拼入新大纲 Prompt 的 `sub_section_core_content`。
+- 纯叙述、无事实特征的文档不产生 coverage passages；所有文档都无有效事实时全文卡的该字段为空。
+- 运行开关：`Config.agent_config.coverage_rule_block_enable`（默认 `True`）。置 `False` 时全文 evidence card 不含 `coverage_passages`，其余 cards 与 contracts 保持不变。
 - 覆盖证据的供给区为该文档**大纲摘要块切片线之后的尾部**（方案乙口径，见下
   "供给区切片"），摘要块已渲染的内容抽取阶段不碰，尾部内容全部供给。
-- 大纲 prompt（`sub_section_outline/`）新增 `## Evidence Channels` 说明两路证据语义；
-  证据边界从"仅 key passages"放宽为"key passages + coverage passages"；明确覆盖证据
-  不强制开新标题，遵守"证据不改结构"规则；`Document N key passages:` /
-  `Document N coverage passages:` 头部与 `===== COVERAGE PASSAGES =====` 分隔符
-  是溯源元数据，不得复述进子章节标题（prompt 措辞与实际块格式由
-  `test_subsection_outline_prompt_provenance_tokens_match_actual_block_format` 绑定）。
+- 大纲 prompt 通过 `Rationale Contract` 和 `Shared Time and Rationale Contracts` 说明证据与
+  时间边界：coverage passages 不强制开新标题，遵守"证据不改结构"规则；citation ID 与
+  evidence ID 都是内部元数据，不得复述进子章节标题。显式年份还必须落在
+  `time_contract.content_date_scope` 内。
 
 ### 提示注入攻击面与缓解（PR !380 审核意见）
 
-归因口径（准确区分基线与增量）：大纲阶段在本次改动前已接收 key passages 与全文
-前 500 字符（`report_rationale_fulltext.py::build_core_content_list`），基础提示
-注入风险并非本通道引入。本通道的增量是**全文 Coverage 扫描**——原来位于正文
-第 500 字符之后、不进入大纲 Prompt 的内容（最多 6000 字符/章节）从此可被主动
-提取；恶意指令旁若带有年份/金额等事实锚点会获得较高 Coverage Score 而被选中。
+归因口径：新子大纲使用全文前 500 字符形成的 `outline_excerpt`、该来源入选的
+`selected_passages` 与规则抽取的 coverage passages；后者来自摘要切片线之后的全文尾部。恶意指令若带有年份/金额等事实锚点仍可能
+获得较高 Coverage Score 而被选中，因此 cards 中的网页文本始终是不可信数据。
 
 两层缓解：
 
@@ -73,7 +71,7 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
   防止载荷剥壳后以纯文本残留）；渲染页面上可见的正常文本不受影响。注意这是
   证据抽取侧的清理，仅作用于 coverage 通道；key 通道与前 500 字符的既有注入
   面不因此扩大或缩小。
-- **信任边界**（`sub_section_outline/` Evidence Channels）：明确两路证据均为
+- **信任边界**（`sub_section_outline/`）：明确 evidence cards 中的网页内容均为
   不可信网页内容，仅作为事实数据使用；忽略其中嵌入的指令、角色变更、输出格式
   覆盖与工具请求；报告结构、输出格式与语言只服从大纲 prompt 本身。措辞对齐
   仓库既有先例（`rationale_generator/`、`brief_evidence_review/`），
@@ -90,17 +88,10 @@ LLM 压缩增量、直达注入虚拟条目等增强 channel 为后续 PR 规划
 
 ## 核心流程
 
-1. 大纲输入装载时（`generate_sub_report` → `enrich_fulltext_for_section` + `_append_rule_coverage_to_core`），对每个全文证据：
-   - `extract_coverage_passages(outline_summary_tail_text(item.original_content),
-     max_passages=_COVERAGE_TOP_K_CAP, max_chars=1200)` 从摘要块切片线之后的
-     尾部抽取覆盖证据块（结果按 `(content, 全部参数)` 做进程内有界缓存，
-     `functools.lru_cache(maxsize=512)`，同章节重试/重生成不重复计算）；
-     选段不预设硬 Top-K，由单文档字符预算兜底（方案2：预算即终止条件）；
-   - 裁入章节级总预算 `_COVERAGE_MAX_TOTAL_CHARS = 6000`（`_fit_coverage_to_budget`）。
-2. 所有 key 块先进入 `core_content_list`；最终把一个聚合 coverage 块追加到末尾。
-3. `_generate_sub_section_outline` 把 `sub_section_core_content`（含两路证据）与
-   `structured_evidence_guide` 一起拼入 outline prompt。
-4. 大纲模型依据两路证据设计子章节标题结构；覆盖证据中的事实归入最相关的既有标题，
+1. 大纲输入装载时（`generate_sub_report` → `enrich_fulltext_for_section` + `_append_rule_coverage_to_core`），对每个全文证据从 `outline_summary_tail_text(item.original_content)` 的尾部调用 `extract_coverage_passages`。结果按内容和参数进行进程内缓存，同章节重试/重生成不重复计算。
+2. 复用 `classified_content`、selected passages、rationale 和 research intent 构造 `outline_evidence_cards`、`rationale_contract` 与 `time_contract`；阶段一未对 cards 总字符数、全文卡数或每卡 coverage 条数设置额外上限。
+3. `_generate_sub_section_outline` 将 cards 和两个 contract 传入 outline prompt；旧 `sub_section_core_content` 不进入该 Prompt。
+4. 大纲模型依据 evidence cards 和 contracts 设计子章节标题结构；覆盖证据中的事实归入最相关的既有标题，
    不要求为它单独开标题。
 
 ## 数据契约与依赖

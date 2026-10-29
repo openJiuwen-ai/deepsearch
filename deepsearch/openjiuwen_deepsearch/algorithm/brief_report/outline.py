@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefOutline,
     BriefOutlineRequest,
@@ -15,7 +16,6 @@ from openjiuwen_deepsearch.algorithm.query_understanding.material_processing imp
     normalize_material_bindings,
 )
 from openjiuwen_deepsearch.config.config import Config
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_research_intent_prompt_context,
     build_temporal_scope_prompt_context,
@@ -105,6 +105,7 @@ def _normalize_outline_payload(
     }
 
 
+@moderation_retry_scope
 async def generate_brief_outline(llm: object, request: BriefOutlineRequest) -> BriefOutline:
     """生成并校验 Brief 精简大纲。
 
@@ -146,10 +147,6 @@ async def generate_brief_outline(llm: object, request: BriefOutlineRequest) -> B
             # Prompt 不限制最大章节数；清洗后仍有二章时按既有失败边界继续，
             # 不为可修复字段额外消耗一次 LLM 调用。
             return BriefOutline.model_validate(normalized)
-        except StopRequested:
-            # 用户停止不参与重试预算,直接上抛(否则重试循环会反复撞
-            # 停止检查点空转直到预算耗尽)。
-            raise
         except Exception as exc:  # LLM 适配器异常需按既有大纲重试预算处理。
             last_error = exc
     raise ValueError(f"brief outline generation failed: {last_error}") from last_error
