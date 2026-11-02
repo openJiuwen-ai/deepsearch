@@ -10,18 +10,31 @@ Medical Knowledge Base Adapter for openJiuwen DeepSearch
 - 支持引用溯源（片段级引用）
 """
 from __future__ import annotations
-import sys
-import os
-from typing import Optional
 
-# 将 medical-ai-innovation 加入路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-from medical_ai_innovation.knowledge_base.schemas import (
-    Guideline, GuidelineSection, GuidelineClause, RetrievalResult, AnswerWithCitations
-)
-from medical_ai_innovation.knowledge_base.kb_engine import KnowledgeBaseEngine
-from medical_ai_innovation.knowledge_base.rag_pipeline import RAGPipeline
+try:
+    from medical_ai_innovation.knowledge_base.schemas import (
+        Guideline, RetrievalResult, AnswerWithCitations
+    )
+    from medical_ai_innovation.knowledge_base.kb_engine import KnowledgeBaseEngine
+    from medical_ai_innovation.knowledge_base.rag_pipeline import RAGPipeline
+except ImportError as exc:
+    raise ImportError(
+        "无法导入 medical_ai_innovation。请二选一："
+        "1) 先执行 `pip install medical-ai-innovation`；"
+        "2) 开发模式：将包含 medical_ai_innovation 包的目录加入 PYTHONPATH 后重启进程。"
+    ) from exc
+
+
+# 本模块对外暴露的公共 API（schema 类型供 DeepSearch 框架及使用者引用）
+__all__ = [
+    "MedicalKnowledgeBasePlugin",
+    "Guideline",
+    "RetrievalResult",
+    "AnswerWithCitations",
+    "KnowledgeBaseEngine",
+    "RAGPipeline",
+]
 
 
 class MedicalKnowledgeBasePlugin:
@@ -74,20 +87,24 @@ class MedicalKnowledgeBasePlugin:
             include_version_compare=include_version_compare,
         )
 
+        citations = []
+        for r in (result.citations or []):
+            clause = r.clause
+            if not clause:
+                continue
+            citations.append({
+                "content": clause.content or "",
+                "source": f"{clause.guideline_id or ''} | {clause.clause_num or ''} {clause.title or ''}",
+                "score": getattr(r, "score", 0.0) or 0.0,
+                "method": getattr(r, "method", "") or "",
+                "evidence_level": clause.evidence_level or "",
+                "recommendation": clause.recommendation or "",
+            })
+
         return {
-            "answer": result.answer,
-            "citations": [
-                {
-                    "content": r.clause.content,
-                    "source": f"{r.clause.guideline_id} | {r.clause.clause_num} {r.clause.title}",
-                    "score": r.score,
-                    "method": r.method,
-                    "evidence_level": r.clause.evidence_level,
-                    "recommendation": r.clause.recommendation,
-                }
-                for r in result.citations
-            ],
-            "total_found": len(result.citations),
+            "answer": result.answer or "",
+            "citations": citations,
+            "total_found": len(result.citations or []),
             "plugin": "medical_kb",
             "retrieval_methods": result.retrieval_methods,
         }
@@ -109,8 +126,8 @@ class MedicalKnowledgeBasePlugin:
 
     def load_demo_guidelines(self):
         """加载内置示例指南（糖尿病+高血压）"""
-        from medical_ai_innovation.knowledge_base.cli import _build_demo_guidelines
-        self.load_guidelines(_build_demo_guidelines())
+        from medical_ai_innovation.knowledge_base.demo_data import get_demo_guidelines
+        self.load_guidelines(get_demo_guidelines())
 
     def get_guideline_list(self) -> list[dict]:
         """获取已加载的指南列表"""
@@ -144,39 +161,3 @@ class MedicalKnowledgeBasePlugin:
             "guidelines_count": len(self.engine.guidelines),
             "knowledge_base": "中国2型糖尿病防治指南(2024版/2020版), 中国高血压防治指南(2024版)",
         }
-
-
-# ========== 命令行测试 ==========
-
-def main():
-    """测试插件"""
-    print("🩺 Medical Knowledge Base Plugin for DeepSearch")
-    print("=" * 50)
-
-    plugin = MedicalKnowledgeBasePlugin()
-    plugin.load_demo_guidelines()
-
-    print(f"📚 已加载 {plugin.get_stats()['guidelines']} 部指南")
-    print()
-
-    while True:
-        try:
-            q = input("🧑 请输入医疗问题 (输入 /quit 退出): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            break
-
-        if not q:
-            continue
-        if q.lower() in ("/quit", "/exit"):
-            break
-
-        result = plugin.search(q, include_version_compare=True)
-        print(f"\n🤖 {result['answer'][:300]}...\n")
-        print(f"📚 引用 {result['total_found']} 条")
-        for i, c in enumerate(result["citations"][:3], 1):
-            print(f"  [{i}] {c['source']} (score: {c['score']})")
-        print()
-
-
-if __name__ == "__main__":
-    main()

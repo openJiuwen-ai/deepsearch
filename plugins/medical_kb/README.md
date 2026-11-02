@@ -13,17 +13,16 @@
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
+# 安装依赖
 pip install medical-ai-innovation
-
-# 2. 测试插件
-python -m medical_kb
 ```
+
+> 开发模式（本地源码）：将包含 `medical_ai_innovation` 包的目录加入 `PYTHONPATH` 即可，无需修改代码。
 
 ## 使用方法
 
 ```python
-from medical_kb import MedicalKnowledgeBasePlugin
+from plugins.medical_kb import MedicalKnowledgeBasePlugin
 
 # 初始化插件
 plugin = MedicalKnowledgeBasePlugin()
