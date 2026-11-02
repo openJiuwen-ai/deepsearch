@@ -397,6 +397,10 @@ class AgentConfig(BaseModel):
         description="子报告大纲阶段规则版覆盖证据（coverage passages）开关，"
                     "关闭后大纲证据仅含条目摘要块",
     )
+    exclusion_constraint_enable: bool = Field(
+        default=False,
+        description="Whether exclusion constraints are enabled for report evidence selection.",
+    )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
         default=10,

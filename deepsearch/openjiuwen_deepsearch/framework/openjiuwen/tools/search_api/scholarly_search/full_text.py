@@ -230,9 +230,8 @@ async def resolve_scholarly_full_text(
             return row
         except Exception as exc:
             logger.info(
-                "[ScholarlyFullText] candidate_failed title=%s source_url=%s error_type=%s",
+                "[ScholarlyFullText] candidate_failed title=%s error_type=%s",
                 row.get("title", ""),
-                candidate.get("url", ""),
                 type(exc).__name__,
             )
             continue

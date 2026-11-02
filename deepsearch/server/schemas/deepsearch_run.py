@@ -158,6 +158,10 @@ class DeepSearchRequest(BaseModel):
         default=True,
         description="是否启用子报告大纲阶段的规则版覆盖证据（coverage passages）",
     )
+    exclusion_constraint_enable: bool = Field(
+        default=False,
+        description="是否启用报告证据筛选中的排除约束",
+    )
     llm_config: dict = Field(default_factory=dict, description="LLM配置")
     web_search_config: WebSearchConfig = Field(default=None, description="联网增强引擎配置，和本地知识库配置至少选择一个")
     local_search_config: LocalSearchConfig = Field(default=None,

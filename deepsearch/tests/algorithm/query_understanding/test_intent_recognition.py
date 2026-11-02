@@ -209,11 +209,11 @@ def test_normalize_target_papers_drops_empty_items_and_deduplicates():
 
     assert [paper.model_dump() for paper in intent.target_papers] == [
         {
-                "title": "Paper", "pmid": "38202877", "doi": "", "arxiv_id": "",
+                "title": "Paper", "pmid": "38202877", "doi": "", "arxiv_id": "", "url": "",
             "dataset": "", "data_year": "", "topic": "",
         },
         {
-                "title": "", "pmid": "", "doi": "", "arxiv_id": "",
+                "title": "", "pmid": "", "doi": "", "arxiv_id": "", "url": "",
             "dataset": "MEPS", "data_year": "2019", "topic": "orthodontic treatment",
         },
     ]

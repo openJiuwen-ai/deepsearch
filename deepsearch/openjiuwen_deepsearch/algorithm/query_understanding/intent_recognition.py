@@ -220,6 +220,8 @@ def _normalize_target_papers(raw: object) -> list[TargetPaper]:
     """Normalize valid target-paper items and discard malformed LLM output."""
     if not isinstance(raw, list):
         return []
+    # URLs are not accepted as intent-recognition clues. They may be used by
+    # downstream collector context when explicitly supplied from other paths.
     field_names = ("title", "pmid", "doi", "arxiv_id", "dataset", "data_year", "topic")
     papers: list[TargetPaper] = []
     identity_to_index: dict[tuple[str, str], int] = {}

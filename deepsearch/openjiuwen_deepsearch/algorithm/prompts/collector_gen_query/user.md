@@ -22,7 +22,7 @@ Task description:
 
 - Treat these values as user constraints, not as already verified evidence.
 - Generate a locator query only when the paper, its dataset, methods, or findings directly support this isolated collector step. Unrelated steps must not search for it.
-- For each relevant paper, use this locator priority exactly: PMID > DOI > arXiv ID > full title > implicit fingerprint.
+- For each relevant paper, use this locator priority exactly: direct academic URL > PMID > DOI > arXiv ID > full title > implicit fingerprint.
 - Generate at most one locator query for a relevant paper in the initial round, within the existing `{{ max_search_query_count }}` limit. Do not emit separate PMID, DOI, and title queries for the same paper.
 - Set `search_engine_names` to `["pubmed"]` for a PMID or biomedical target and set `search_engine_names` to `["arxiv"]` for an arXiv ID or a clear AI/CS/mathematics/statistics/physics target. Use `[]` when DOI or title domain cannot be determined safely.
 - Write vertical locator queries in English academic terminology. Preserve exact identifiers and full titles.

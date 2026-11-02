@@ -255,6 +255,9 @@ class StartNode(Start):
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
             agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
+            agent_config["exclusion_constraint_enable"] = origin_agent_config.get(
+                "exclusion_constraint_enable", False
+            )
 
 
         service_config = Config().service_config.model_dump()

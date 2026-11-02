@@ -280,6 +280,7 @@ class TargetPaper(BaseModel):
     pmid: str = ""
     doi: str = ""
     arxiv_id: str = ""
+    url: str = ""
     dataset: str = ""
     data_year: str = ""
     topic: str = ""
@@ -287,7 +288,7 @@ class TargetPaper(BaseModel):
     @model_validator(mode="after")
     def require_one_clue(self) -> "TargetPaper":
         """Strip clue values and reject an item that carries no usable clue."""
-        field_names = ("title", "pmid", "doi", "arxiv_id", "dataset", "data_year", "topic")
+        field_names = ("title", "pmid", "doi", "arxiv_id", "url", "dataset", "data_year", "topic")
         for field_name in field_names:
             setattr(self, field_name, str(getattr(self, field_name) or "").strip())
         if not any(getattr(self, field_name) for field_name in field_names):
