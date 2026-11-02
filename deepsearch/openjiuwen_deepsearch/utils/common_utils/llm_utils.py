@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Sequence, Any, get_args, get_origin
+from typing import Callable, Sequence, Any, get_args, get_origin
 
 import json_repair
 from openjiuwen.core.foundation.llm.schema.message import (
@@ -30,6 +30,7 @@ from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
+from openjiuwen_deepsearch.utils.moderation.detection import Source, detect_error, detect_response
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, cancel_context
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
@@ -85,6 +86,23 @@ _THINKING_SWITCH_UNSUPPORTED_MARKERS = (
     "not support",
     "unsupported",
 )
+
+
+@dataclass(frozen=True)
+class WorkflowLlmUsageDelta:
+    """表示一次 LLM 调用要累加的 token 用量。
+
+    Attributes:
+        input_tokens: 本次调用的输入 token 数。
+        output_tokens: 本次调用的输出 token 数。
+        total_tokens: 本次调用的总 token 数。
+        cache_tokens: 缓存读取 token 数；None 表示未提供缓存统计。
+    """
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cache_tokens: int | None = None
 
 
 def _clamp_agent_llm_timeout(timeout: Any) -> int:
@@ -158,6 +176,8 @@ class _ConsumeLlmStreamRequest:
         stream_id: 当前流 ID。
         stream_meta: 附加流元数据。
         agent_name: 当前 agent 名称。
+        moderation_enabled: 是否检测流中的风控信号。
+        on_moderation_usage: 流被风控中断时，记录最近一次已收到的 usage。
     """
 
     llm: Any
@@ -168,6 +188,8 @@ class _ConsumeLlmStreamRequest:
     stream_id: str | None
     stream_meta: dict[str, Any] | None
     agent_name: str
+    moderation_enabled: bool = False
+    on_moderation_usage: Callable[[Any], None] | None = None
 
 
 def _normalize_agent_name(agent_name: Any) -> str:
@@ -319,6 +341,7 @@ def _merge_agent_name_usage_list(agent_usage_list: Any) -> list[dict[str, Any]]:
         current_usage["output_tokens"] += _to_non_negative_int(usage_item.get("output_tokens", 0))
         current_usage["total_tokens"] += _to_non_negative_int(usage_item.get("total_tokens", 0))
         current_usage["llm_call_count"] += _to_non_negative_int(usage_item.get("llm_call_count", 0))
+        _merge_cache_usage(current_usage, usage_item)
     return list(merged_usage.values())
 
 
@@ -348,13 +371,15 @@ def normalize_workflow_llm_usage(usage: Any) -> dict[str, Any]:
     """
     if not isinstance(usage, dict):
         return _build_empty_workflow_llm_usage()
-    return {
+    normalized = {
         "input_tokens": _to_non_negative_int(usage.get("input_tokens", 0)),
         "output_tokens": _to_non_negative_int(usage.get("output_tokens", 0)),
         "total_tokens": _to_non_negative_int(usage.get("total_tokens", 0)),
         "llm_call_count": _to_non_negative_int(usage.get("llm_call_count", 0)),
         "agent_name_token_usage": _merge_agent_name_usage_list(usage.get("agent_name_token_usage", [])),
     }
+    _merge_cache_usage(normalized, usage)
+    return normalized
 
 
 def is_workflow_llm_usage_empty(usage: dict[str, Any]) -> bool:
@@ -372,6 +397,7 @@ def is_workflow_llm_usage_empty(usage: dict[str, Any]) -> bool:
         and normalized_usage["output_tokens"] == 0
         and normalized_usage["total_tokens"] == 0
         and normalized_usage["llm_call_count"] == 0
+        and normalized_usage.get("cache_tokens", 0) == 0
         and len(normalized_usage["agent_name_token_usage"]) == 0
     )
 
@@ -457,28 +483,28 @@ def save_workflow_llm_usage_to_session(session: Any, session_id: str) -> dict[st
 
 def add_workflow_llm_usage(
     session_id: str,
-    input_tokens: int,
-    output_tokens: int,
-    total_tokens: int,
+    token_usage: WorkflowLlmUsageDelta,
     agent_name: str = "",
 ) -> None:
     """累加指定 workflow 的 LLM token 消耗。
 
     Args:
         session_id (str): workflow 对应会话 ID。
-        input_tokens (int): 本次调用输入 token 数。
-        output_tokens (int): 本次调用输出 token 数。
-        total_tokens (int): 本次调用总 token 数。
+        token_usage: 本次调用的输入、输出、总量及可选缓存 token 数。
         agent_name (str): 本次调用的 agent 名称。
     """
     if not session_id or session_id == "-":
         return
 
     usage = _WORKFLOW_LLM_USAGE.setdefault(session_id, _build_empty_workflow_llm_usage())
-    usage["input_tokens"] += _to_non_negative_int(input_tokens)
-    usage["output_tokens"] += _to_non_negative_int(output_tokens)
-    usage["total_tokens"] += _to_non_negative_int(total_tokens)
+    usage["input_tokens"] += _to_non_negative_int(token_usage.input_tokens)
+    usage["output_tokens"] += _to_non_negative_int(token_usage.output_tokens)
+    usage["total_tokens"] += _to_non_negative_int(token_usage.total_tokens)
     usage["llm_call_count"] += 1
+    cache_usage = {} if token_usage.cache_tokens is None else {
+        "cache_tokens": token_usage.cache_tokens,
+    }
+    _merge_cache_usage(usage, cache_usage)
     if agent_name:
         normalized_name = _normalize_agent_name(agent_name)
         agent_usage_list = usage.setdefault("agent_name_token_usage", [])
@@ -493,10 +519,27 @@ def add_workflow_llm_usage(
         if target_usage is None:
             target_usage = _build_empty_agent_name_usage(normalized_name)
             agent_usage_list.append(target_usage)
-        target_usage["input_tokens"] += _to_non_negative_int(input_tokens)
-        target_usage["output_tokens"] += _to_non_negative_int(output_tokens)
-        target_usage["total_tokens"] += _to_non_negative_int(total_tokens)
+        target_usage["input_tokens"] += _to_non_negative_int(token_usage.input_tokens)
+        target_usage["output_tokens"] += _to_non_negative_int(token_usage.output_tokens)
+        target_usage["total_tokens"] += _to_non_negative_int(token_usage.total_tokens)
         target_usage["llm_call_count"] += 1
+        _merge_cache_usage(target_usage, cache_usage)
+
+
+def _merge_cache_usage(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """累加可用的缓存统计，同时保留旧快照的缺失状态。
+
+    Args:
+        target: 接收累计值的统计字典。
+        source: 包含缓存 token 的统计字典。
+    """
+    if source.get("cache_tokens") is None:
+        return
+    target["cache_tokens"] = target.get("cache_tokens", 0) + _to_non_negative_int(source["cache_tokens"])
+    # 将后续字段移至缓存量之后，统一原始累计值和快照归一化的打印顺序。
+    for key in ("llm_call_count", "agent_name_token_usage"):
+        if key in target:
+            target[key] = target.pop(key)
 
 
 def get_workflow_llm_usage(session_id: str) -> dict[str, Any]:
@@ -611,6 +654,34 @@ def _extract_usage_tokens(usage_payload: Any) -> tuple[int, int, int]:
     return input_tokens, output_tokens, total_tokens
 
 
+def _extract_cache_tokens(usage_payload: Any) -> int | None:
+    """提取供应商或 SDK 的缓存读取 token 数。
+
+    Args:
+        usage_payload: 原始 usage 或 SDK 归一化的 usage 元数据。
+
+    Returns:
+        缓存读取 token 数；缺失或无效时返回 None，不计入缓存写入量。
+    """
+    usage = _to_dict_safe(usage_payload)
+    usage = {**_to_dict_safe(usage.get("token_usage")), **usage}
+    candidates = [
+        usage.get("prompt_cache_hit_tokens"),
+        _to_dict_safe(usage.get("prompt_tokens_details")).get("cached_tokens"),
+        _to_dict_safe(usage.get("input_tokens_details")).get("cached_tokens"),
+        _to_dict_safe(usage.get("input_token_details")).get("cache_read"),
+        usage.get("cache_read_input_tokens"),
+        usage.get("cache_tokens"),
+    ]
+    for value in candidates:
+        if value is not None:
+            try:
+                return max(int(value), 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+    return None
+
+
 def _is_llm_stats_enabled() -> bool:
     """判断当前调用是否开启 LLM 调用统计。
 
@@ -711,6 +782,19 @@ def normalize_json_output(input_data: str) -> str:
         else:
             logger.error(f"JSON normalization error.")
         return input_data.strip()
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """Convert a value to float, handling string numbers from LLM output.
+
+    LLM JSON responses may return numeric values as strings (e.g. "0.9"
+    instead of 0.9). This helper safely converts them and falls back to
+    ``default`` on failure.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _extract_json(text: str) -> str:
@@ -1067,6 +1151,7 @@ def _build_usage_only_chunk(raw_chunk: Any, model_name: str) -> AssistantMessage
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cache_tokens=_extract_cache_tokens(usage_payload) or 0,
         ),
         finish_reason="null",
     )
@@ -1100,8 +1185,12 @@ def _install_usage_only_chunk_parser(llm_model: Any) -> Any:
         model_name = getattr(getattr(llm_model, "model_config", None), "model_name", "")
 
         def _patched_parser(raw_chunk: Any):
+            """保留原始 usage 中的缓存量，再补偿 usage-only chunk。"""
             parsed_chunk = original_parser(raw_chunk)
             if parsed_chunk is not None:
+                cache_tokens = _extract_cache_tokens(_extract_usage_payload_from_stream_chunk(raw_chunk))
+                if cache_tokens is not None and parsed_chunk.usage_metadata is not None:
+                    parsed_chunk.usage_metadata.cache_tokens = cache_tokens
                 return parsed_chunk
             return _build_usage_only_chunk(raw_chunk, model_name=model_name)
 
@@ -1158,6 +1247,42 @@ def _resolve_stream_options(llm_model: Any, need_include_usage: bool) -> dict | 
     return merged_options or None
 
 
+def _record_llm_call_usage(usage_metadata: Any, start: float, session_id: str, agent_name: str) -> None:
+    """Record one received response, including filtered responses with usage."""
+    input_tokens, output_tokens, total_tokens = _extract_usage_tokens(usage_metadata)
+    cache_tokens = _extract_cache_tokens(usage_metadata)
+    llm_stat = {
+        "method_name": agent_name,
+        "duration": time.time() - start,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cache_tokens": cache_tokens,
+    }
+    add_workflow_llm_usage(
+        session_id=session_id,
+        token_usage=WorkflowLlmUsageDelta(
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            total_tokens=total_tokens, cache_tokens=cache_tokens,
+        ),
+        agent_name=agent_name,
+    )
+    metrics_logger.info(
+        f"{TIME_LOGGER_TAG} session_id: {session_id_ctx.get()} ------ [LLM CALL STATISTICS]: {llm_stat}"
+    )
+
+
+def _raise_if_moderation_response(response: Any, source: Source) -> None:
+    signal = detect_response(response, source)
+    if signal is not None:
+        error = CustomValueException(
+            StatusCode.LLM_CALL_FAILED.code,
+            StatusCode.LLM_CALL_FAILED.errmsg.format(e=f"moderation detected: {signal.code}"),
+        )
+        error.moderation_signal = signal
+        raise error
+
+
 async def _consume_llm_stream(
     request: _ConsumeLlmStreamRequest,
 ) -> Any:
@@ -1170,32 +1295,47 @@ async def _consume_llm_stream(
         Any: 聚合后的完整响应块。
     """
     full_chunk = None
-    async for chunk in request.llm.stream(**request.stream_kwargs):
-        _raise_if_cancelled()
-        if full_chunk is None:
-            full_chunk = chunk
-        else:
-            full_chunk += chunk
-            if len(full_chunk.content) >= MAX_LLM_RESP_LENGTH:
-                logger.warning(
-                    "[llm_astream] llm response is too long, "
-                    "truncate to %s characters", MAX_LLM_RESP_LENGTH
-                )
-                full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
-                break
-        chunk_content = getattr(chunk, "content", "")
-        if request.can_write_stream and request.need_stream_out and chunk_content:
-            payload = {
-                "message_id": request.stream_id,
-                "agent": request.agent_name,
-                "content": chunk_content,
-                "message_type": MessageType.MESSAGE_CHUNK.value,
-                "event": StreamEvent.MESSAGE.value,
-                "created_time": get_current_time(),
-            }
-            if request.stream_meta:
-                payload.update(dict(request.stream_meta))
-            await request.session.write_custom_stream(payload)
+    received_chunk = False
+    latest_usage = None
+    try:
+        async for chunk in request.llm.stream(**request.stream_kwargs):
+            _raise_if_cancelled()
+            received_chunk = True
+            # Match the framework's chunk merge: the latest reported usage wins.
+            latest_usage = getattr(chunk, "usage_metadata", None) or latest_usage
+            if request.moderation_enabled:
+                _raise_if_moderation_response(chunk, "stream")
+            if full_chunk is None:
+                full_chunk = chunk
+            else:
+                full_chunk += chunk
+                if len(full_chunk.content) >= MAX_LLM_RESP_LENGTH:
+                    logger.warning(
+                        "[llm_astream] llm response is too long, "
+                        "truncate to %s characters", MAX_LLM_RESP_LENGTH
+                    )
+                    full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
+                    break
+            chunk_content = getattr(chunk, "content", "")
+            if request.can_write_stream and request.need_stream_out and chunk_content:
+                payload = {
+                    "message_id": request.stream_id,
+                    "agent": request.agent_name,
+                    "content": chunk_content,
+                    "message_type": MessageType.MESSAGE_CHUNK.value,
+                    "event": StreamEvent.MESSAGE.value,
+                    "created_time": get_current_time(),
+                }
+                if request.stream_meta:
+                    payload.update(dict(request.stream_meta))
+                await request.session.write_custom_stream(payload)
+        if request.moderation_enabled:
+            _raise_if_moderation_response(full_chunk, "stream")
+    except Exception as error:
+        if request.moderation_enabled and received_chunk and request.on_moderation_usage is not None:
+            if detect_error(error) is not None:
+                request.on_moderation_usage(latest_usage)
+        raise
     return full_chunk
 
 
@@ -1211,6 +1351,7 @@ async def llm_astream(*args, **kwargs):
         need_stream_out (bool): 是否将增量内容写入会话流。
         stream_meta (dict | None): 附加流事件字段。
         stream_options (dict | None): 传入模型 SDK 的流式配置。
+        on_moderation_usage (Callable | None): 记录被风控中断的流已收到的 usage，不继续读流。
 
     Returns:
         Any: 聚合后的完整 LLM 响应块。
@@ -1223,6 +1364,8 @@ async def llm_astream(*args, **kwargs):
     need_stream_out = kwargs.get("need_stream_out", False)
     stream_meta = kwargs.get("stream_meta", None)
     stream_options = kwargs.get("stream_options", None)
+    moderation_enabled = bool(kwargs.get("moderation_enabled", False))
+    on_moderation_usage = kwargs.get("on_moderation_usage")
 
     _raise_if_cancelled()
     full_chunk = None
@@ -1290,6 +1433,8 @@ async def llm_astream(*args, **kwargs):
                     stream_id=stream_id,
                     stream_meta=stream_meta,
                     agent_name=agent_name,
+                    moderation_enabled=moderation_enabled,
+                    on_moderation_usage=on_moderation_usage,
                 )),
                 timeout=resolved_timeout.timeout,
             )
@@ -1303,6 +1448,8 @@ async def llm_astream(*args, **kwargs):
                 stream_id=stream_id,
                 stream_meta=stream_meta,
                 agent_name=agent_name,
+                moderation_enabled=moderation_enabled,
+                on_moderation_usage=on_moderation_usage,
             ))
     except asyncio.TimeoutError as exc:
         if can_write_stream and need_stream_out:
@@ -1357,8 +1504,11 @@ def _parse_invoke_llm_args(args, kwargs) -> dict:
     }
 
 
-async def ainvoke_llm_with_stats(*args, **kwargs):
-    """调用 LLM 并按配置记录调用统计。
+async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
+    """调用 LLM 并按配置记录统计，保留既有 thinking 兼容处理。
+
+    公共入口 `ainvoke_llm_with_stats` 只为调用方下一轮重试准备风控策略，
+    不在此调用之外增加独立的风控重试循环。
 
     Args:
         llm (dict): LLM 配置字典，包含 model 与 model_name。
@@ -1412,6 +1562,10 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     start = None
     if stats_info_llm:
         start = time.time()
+
+    def record_call_usage(usage_metadata):
+        if stats_info_llm:
+            _record_llm_call_usage(usage_metadata, start, session_id, agent_name)
 
     # 真正调用llm处
     messages = transfer_to_jiuwen_messages(messages)
@@ -1467,6 +1621,8 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
                     need_stream_out=False,
                     stream_meta=stream_meta,
                     stream_options=resolved_stream_options,
+                    moderation_enabled=bool(llm.get("moderation_mask_retry")),
+                    on_moderation_usage=record_call_usage if stats_info_llm else None,
                 )
         except Exception as e:
             detail = _format_llm_invoke_exception(e)
@@ -1500,6 +1656,8 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
                 need_stream_out=need_stream_out,
                 stream_meta=stream_meta,
                 stream_options=_resolve_call_stream_options(target_model, stats_info_llm),
+                moderation_enabled=bool(llm.get("moderation_mask_retry")),
+                on_moderation_usage=record_call_usage if stats_info_llm else None,
             )
 
         try:
@@ -1528,34 +1686,70 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
             if not fallback_succeeded:
                 raise
 
-    if stats_info_llm:
-        duration = time.time() - start
-
-        # get usage token usage info
-        input_tokens, output_tokens, total_tokens = _extract_usage_tokens(response.usage_metadata)
-
-        llm_stat = {
-            "method_name": agent_name,
-            "duration": duration,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": total_tokens
-        }
-        add_workflow_llm_usage(
-            session_id=session_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-            agent_name=agent_name,
-        )
-        metrics_logger.info(
-            f"{TIME_LOGGER_TAG} session_id: {session_id_ctx.get()} ------ [LLM CALL STATISTICS]: {llm_stat}"
-        )
+    record_call_usage(getattr(response, "usage_metadata", None))
+    if llm.get("moderation_mask_retry"):
+        _raise_if_moderation_response(response, "response")
 
     response.content = _extract_json(response.content)
     if schema is not None:
         return _model_validate_repaired_json(schema, response.content)
     return _unify_responnse(response)
+
+
+async def ainvoke_llm_with_stats(*args, **kwargs):
+    """Invoke once; recovery changes only the next caller-owned attempt."""
+    request_key = kwargs.pop("moderation_retry_key", None)
+    invoke_args = _parse_invoke_llm_args(args, kwargs)
+    llm = invoke_args["llm"]
+    messages = invoke_args["messages"]
+    if not (isinstance(llm, dict) and llm.get("moderation_mask_retry")) or not isinstance(messages, list):
+        return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
+
+    from openjiuwen_deepsearch.utils.moderation import mask as moderation_mask
+    from openjiuwen_deepsearch.utils.moderation.retry import get_moderation_retry_policy
+
+    agent = invoke_args["agent_name"] or "-"
+    policy = get_moderation_retry_policy(llm, agent, request_key)
+    if policy is None:
+        return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
+    policy.attempts += 1
+    current_messages = await policy.prepare_async(messages)
+    call_args, call_kwargs = _with_messages(args, kwargs, current_messages)
+    try:
+        response = await _ainvoke_llm_with_stats_impl(*call_args, **call_kwargs)
+    except Exception as error:
+        signal = detect_error(error)
+        if signal is not None:
+            if signal.side == moderation_mask.SIDE_OUTPUT:
+                policy.constrain_output = True
+                strategy = "output_constraint"
+            else:
+                policy.mask_input = True
+                strategy = "input_mask"
+            policy.pending_recovery = True
+            logger.info(
+                "moderation-blocked call_id=%s attempt=%d side=%s strategy=%s code=%s "
+                "source=%s evidence=%s agent=%s recovery_policy_recorded=true%s",
+                policy.call_id, policy.attempts, signal.side, strategy, signal.code,
+                signal.source, signal.evidence, agent, format_llm_log_correlation_suffix(),
+            )
+        raise
+    if policy.pending_recovery:
+        logger.info(
+            "moderation-recovered call_id=%s attempts=%d agent=%s%s",
+            policy.call_id, policy.attempts, agent, format_llm_log_correlation_suffix(),
+        )
+        policy.pending_recovery = False
+    return response
+
+
+def _with_messages(args: tuple, kwargs: dict, messages: list) -> tuple[tuple, dict]:
+    """返回一份把 messages 替换为指定值的 (args, kwargs)，其余参数原样保留。"""
+    if "messages" in kwargs:
+        return args, {**kwargs, "messages": messages}
+    if len(args) > 1:
+        return (*args[:1], messages, *args[2:]), kwargs
+    return args, {**kwargs, "messages": messages}
 
 
 def _unify_responnse(response):
@@ -1568,7 +1762,17 @@ def _unify_responnse(response):
             if func and func.get("arguments"):
                 if not tool_call.get("args"):
                     arguments = normalize_json_output(func.get("arguments"))
-                    parsed_args = json.loads(arguments)
+                    try:
+                        parsed_args = json.loads(arguments)
+                    except (json.JSONDecodeError, TypeError) as exc:
+                        logger.warning("[LLM] failed to parse tool_call arguments, fallback to empty dict: %s", exc)
+                        parsed_args = {}
+                    if not isinstance(parsed_args, dict):
+                        logger.warning(
+                            "[LLM] tool_call arguments is not a dict: %s, fallback to empty dict",
+                            type(parsed_args).__name__,
+                        )
+                        parsed_args = {}
                     new_response.get("tool_calls")[idx]["args"] = parsed_args
                 else:
                     parsed_args = tool_call.get("args")

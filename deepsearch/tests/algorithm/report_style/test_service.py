@@ -16,7 +16,7 @@ from openjiuwen_deepsearch.algorithm.report_export.models import ReportExportRes
 
 FINAL_RESULT = {
     "response_content": "# 标题\n\n# 摘要\n\n这是完整摘要。\n\n# 正文\n\n报告正文。",
-    "infer_messages": [],
+
     "chart_messages": [],
 }
 LLM = {"model_name": "style-model", "model": object()}
@@ -66,7 +66,7 @@ async def test_stylize_report_injects_arbitrary_css_without_changing_markdown(mo
 
     with zipfile.ZipFile(io.BytesIO(base64.b64decode(result.convert_content))) as archive:
         assert archive.read("report_bundle/report.md").decode() == FINAL_RESULT["response_content"]
-        html = archive.read("report_bundle/report.html").decode()
+        html = archive.read("report_bundle/report.html").decode().replace("\r\n", "\n")
     assert 'id="report-style-generated"' in html
     assert generated_css in html
     assert result.style_applied is True
@@ -89,7 +89,7 @@ async def test_stylize_report_appends_cover_title_contrast_safeguard(monkeypatch
 
     result = await service.stylize_report(FINAL_RESULT, LLM)
 
-    html = _read_report_html(result.convert_content)
+    html = _read_report_html(result.convert_content).replace("\r\n", "\n")
     assert ".report-cover > h1 {\n    color: #ffffff !important;\n}" in html
     assert result.style_applied is True
 
@@ -145,7 +145,7 @@ async def test_stylize_report_inlines_vlm_png_and_keeps_bundle_asset(monkeypatch
     """样式化 HTML 内嵌 VLM PNG，同时 bundle 保留原资源。"""
     final_result = {
         "response_content": "# 标题\n\n(#insertChart:chart_1)",
-        "infer_messages": [],
+
         "chart_messages": [
             {"chart_id": "chart_1", "chart_title": "销量", "base64": PNG_B64}
         ],

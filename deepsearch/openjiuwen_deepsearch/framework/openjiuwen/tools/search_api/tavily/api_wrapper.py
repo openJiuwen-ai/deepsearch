@@ -2,9 +2,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 import json
-import os
+import logging
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from functools import cached_property
 from typing import Any, Generic, TypeVar, List, Dict, Union, Optional
 import httpx
 import requests
@@ -15,8 +16,11 @@ from openjiuwen_deepsearch.common.common_constants import (
     MAX_URL_LENGTH,
     MAX_SEARCH_CONTENT_LENGTH,
 )
+from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_search_service_url
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TAVILY_SEARCH_URL = "https://api.tavily.com"
 
@@ -33,7 +37,6 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
     topic: str = "general"
     search_depth: str = "advanced"
     include_domains: Optional[List[str]] = None
-    exclude_domains: Optional[List[str]] = None
     include_answer: bool = False
     include_raw_content: bool = False
     include_images: bool = False
@@ -53,14 +56,15 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
             self.search_depth = ext["search_depth"]
         if "include_domains" in ext:
             self.include_domains = ext["include_domains"]
-        if "exclude_domains" in ext:
-            self.exclude_domains = ext["exclude_domains"]
         if "include_answer" in ext:
             self.include_answer = ext["include_answer"]
         if "include_raw_content" in ext:
             self.include_raw_content = ext["include_raw_content"]
         if "include_images" in ext:
             self.include_images = ext["include_images"]
+
+        # 预解析 search_url 以避免在 async 路径中首次触发同步 DNS 解析
+        _ = self._resolved_search_url
 
     @staticmethod
     async def _execute_async_http_request(
@@ -83,7 +87,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         """Run query through Tavily Search API and return raw result."""
 
         # Build API endpoint URL
-        api_url = f"{self._resolved_search_url()}/search"
+        api_url = f"{self._resolved_search_url}/search"
 
         params = self._build_search_params(query=query)
 
@@ -91,7 +95,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         verify = self._get_ssl_verify_config()
 
         # Execute HTTP request
-        response = requests.post(api_url, json=params, verify=verify)
+        response = requests.post(api_url, json=params, verify=verify, timeout=30)
         response.raise_for_status()  # Raise exception for non-2xx status codes
 
         # Return parsed JSON response
@@ -105,7 +109,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
     async def raw_search_results_async(self, query: str) -> Dict:
         """Run query through Tavily Search API asynchronously."""
 
-        request_url = f"{self._resolved_search_url()}/search"
+        request_url = f"{self._resolved_search_url}/search"
 
         request_params = self._build_search_params(query=query)
 
@@ -203,7 +207,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
             "topic": self.topic,
             "search_depth": self.search_depth,
             "include_domains": [] if self.include_domains is None else self.include_domains,
-            "exclude_domains": [] if self.exclude_domains is None else self.exclude_domains,
+
             "include_answer": self.include_answer,
             "include_raw_content": self.include_raw_content,
             "include_images": self.include_images,
@@ -221,6 +225,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         )
         return ssl_cert if ssl_verify else False
 
+    @cached_property
     def _resolved_search_url(self) -> str:
         """Return configured URL or Tavily's public default URL."""
         if self.search_url is None:
@@ -230,4 +235,7 @@ class TavilySearchAPIWrapper(BaseModel, Generic[T]):
         else:
             configured = str(self.search_url)
         configured = (configured or "").strip().rstrip("/")
-        return configured or DEFAULT_TAVILY_SEARCH_URL
+        if not configured:
+            return DEFAULT_TAVILY_SEARCH_URL
+        validate_search_service_url(configured)
+        return configured

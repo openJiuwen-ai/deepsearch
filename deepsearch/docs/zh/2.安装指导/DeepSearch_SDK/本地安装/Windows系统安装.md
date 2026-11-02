@@ -70,7 +70,7 @@
 * 将 MySQL 的 bin 目录添加至系统环境变量（MySQL 的默认 bin 路径：`C:\Program Files\MySQL\MySQL Server 8.4\bin`）
 
 * 安装完成后，打开 “PowerShell”，登录 MySQL（输入安装时设置的 root 密码）：
-   
+
   ```bash
   mysql -u root -p
   ```
@@ -140,11 +140,11 @@
    DB_HOST=localhost
    DB_PORT=3306
    DB_USER=your_user_name
-   DB_PASSWORD=your_password  
+   DB_PASSWORD=your_password
    ```
 
   变量说明可参考如下表格。
- 
+
    | 变量名                                   | 变量说明                                                               | 配置样例                                                                      |
    |---------------------------------------|--------------------------------------------------------------------|---------------------------------------------------------------------------|
    | **BACKEND_PORT**                      | DeepSearch服务的API端口号。如果要搭配Studio前端使用，该端口号需要与Studio配置文件.env中的`DEEPSEARCH_AGENT_PORT`一致。       | `6000`                     |
@@ -183,7 +183,7 @@
   > - `redis` 模式：需要先安装并启动 Redis 服务，适用于分布式生产环境；**还须**在 `.env` 中完整配置 `OBS_SERVER`、`OBS_BUCKET`、`OBS_REGION`、`OBS_ACCESS_KEY_ID`、`OBS_SECRET_ACCESS_KEY`，否则服务无法启动。**仅在此模式下**服务端会将知识库文档上传至对象存储，供多实例共享。**多实例时 `DB_TYPE` 必须为 `mysql` 且连接同一 MySQL**（知识库等元数据存于应用数据库；SQLite 为本地文件，进程间不共享）。
 
 * 在源码根目录下打开 "PowerShell"，运行以下命令启动后端服务，并耐心等待：
-   
+
   ```bash
   uv venv
   uv sync --group backend
@@ -207,7 +207,6 @@
   ```
 
   > Docker 安装见 [Docker 方式安装](../Docker方式安装/README.md)。仅 **DeepResearch**（`search_mode=research`）时终端 1 即可。
-
 
 ## 三、常见问题（FAQ）
 

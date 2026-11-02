@@ -29,7 +29,7 @@ def _request(*, export_format: ReportFormat = ReportFormat.HTML, styling: bool =
         ReportConvertReq: 可用于 manager 测试的请求对象。
     """
     return ReportConvertReq(
-        final_result={"response_content": "正文", "infer_messages": [], "chart_messages": []},
+        final_result={"response_content": "正文",  "chart_messages": []},
         convert_type=export_format,
         enable_html_styling=styling,
     )

@@ -90,10 +90,9 @@ async def report_convert(req: ReportConvertReq) -> ReportConvertRes:
     start_time = time.perf_counter()
     final_result = req.final_result if isinstance(req.final_result, dict) else {}
     logger.info(
-        "Starting report convert convert_type=%s html_styling=%s infer_messages=%s chart_messages=%s",
+        "Starting report convert convert_type=%s html_styling=%s chart_messages=%s",
         req.convert_type.value,
         req.enable_html_styling,
-        len(final_result.get("infer_messages") or []),
         len(final_result.get("chart_messages") or []),
     )
     try:

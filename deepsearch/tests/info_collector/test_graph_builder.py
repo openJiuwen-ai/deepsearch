@@ -1,4 +1,5 @@
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -7,11 +8,13 @@ from openjiuwen.core.workflow.workflow import Workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import SearchQueryList, \
     Reflection, Summary, CollectorContext, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, \
     GraphEndNode, SearchQueryItem, build_info_collector_sub_graph, get_research_record, llm_context, \
-    _validate_query_count
+    _validate_query_count, normalize_search_query_item, \
+    _runtime_api_tool_descriptions, _runtime_api_tool_names
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import EvidenceLedger
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import mcp_tool_context
 
 module_prefix = "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder"
 
@@ -35,6 +38,78 @@ class TestSearchQueryList:
 
         assert query_list.queries == ["test query 1", "test query 2"]
         assert query_list.missing_evidence == ["需要测试证据"]
+
+
+class TestSearchQueryItemTool:
+    """测试 SearchQueryItem.tool 字段与防御性过滤。"""
+
+    def test_tool_field_defaults_none(self):
+        item = SearchQueryItem(query="q")
+        assert item.tool is None
+
+    def test_tool_field_accepts_value(self):
+        item = SearchQueryItem(query="q", tool="mcp__srv__tool")
+        assert item.tool == "mcp__srv__tool"
+
+    def test_normalize_drops_tool_not_in_available(self):
+        """LLM 给的 tool 不在可用列表 → 置 None（LLM 输出不可信，防御式消费）。"""
+        item = SearchQueryItem(query="q", tool="mcp__unknown__tool")
+        normalized = normalize_search_query_item(item, available_tool_names={"mcp__srv__real"})
+        assert normalized.tool is None
+
+    def test_normalize_keeps_tool_in_available(self):
+        item = SearchQueryItem(query="q", tool="mcp__srv__real")
+        normalized = normalize_search_query_item(item, available_tool_names={"mcp__srv__real"})
+        assert normalized.tool == "mcp__srv__real"
+
+    def test_normalize_plain_string_no_available_keeps_none(self):
+        """纯字符串 query、无可用工具列表时 tool 保持 None。"""
+        normalized = normalize_search_query_item("plain query", available_tool_names=None)
+        assert normalized.tool is None
+
+
+class TestRuntimeApiToolQueryCompatFilter:
+    """runtime API 工具按 inputSchema query 兼容性分流的测试。"""
+
+    @staticmethod
+    def _make_api_tools_config():
+        return {
+            "collector_tools": [
+                {
+                    "name": "query_only_tool",
+                    "description": "只需要 query 的工具",
+                    "base_url": "https://example.com",
+                    "path": "/search",
+                    "http_method": "get",
+                    "request_params": [
+                        {"name": "query", "required": True, "send_method": "query", "param_type": 1},
+                    ],
+                },
+                {
+                    "name": "keywords_required_tool",
+                    "description": "需要 keywords 等非 query 必填参数的工具",
+                    "base_url": "https://example.com",
+                    "path": "/search",
+                    "http_method": "get",
+                    "request_params": [
+                        {"name": "keywords", "required": True, "send_method": "query", "param_type": 1},
+                        {"name": "query", "required": True, "send_method": "query", "param_type": 1},
+                    ],
+                },
+            ],
+        }
+
+    def test_descriptions_only_returns_query_compatible_tools(self):
+        descriptions = _runtime_api_tool_descriptions(self._make_api_tools_config())
+        names = [d["name"] for d in descriptions]
+        assert "query_only_tool" in names
+        assert "keywords_required_tool" not in names
+
+    def test_names_only_returns_query_compatible_tools(self):
+        names = _runtime_api_tool_names(self._make_api_tools_config())
+        assert names is not None
+        assert "query_only_tool" in names
+        assert "keywords_required_tool" not in names
 
 
 class TestReflection:
@@ -140,6 +215,7 @@ class TestStartNode:
             "max_search_query_count": 3,
             "max_research_loops": 2,
             "max_tool_call_turns_per_query": 4,
+            "material_evidence": [{"material_id": "M1", "original_content": "material fact"}],
         }
 
         result = await start_node.invoke(inputs, mock_session, mock_context)
@@ -159,6 +235,9 @@ class TestStartNode:
         assert collector_context.max_search_query_count == 3
         assert collector_context.max_tool_call_turns_per_query == 4
         assert collector_context.evidence_ledger == {}
+        assert collector_context.material_evidence == [
+            {"material_id": "M1", "original_content": "material fact"}
+        ]
 
     @pytest.mark.asyncio
     async def test_start_node_does_not_inherit_input_ledger(self, start_node, mock_session, mock_context):
@@ -176,6 +255,29 @@ class TestStartNode:
         call_args = mock_session.update_global_state.call_args[0][0]
         collector_context = CollectorContext(**call_args["collector_context"])
         assert collector_context.evidence_ledger == {}
+
+    @pytest.mark.asyncio
+    async def test_start_node_inherits_only_target_tracking_ledger(
+        self, start_node, mock_session, mock_context
+    ):
+        inputs = {
+            "evidence_ledger": {
+                "known_facts": ["old fact"],
+                "missing_evidence": ["old missing"],
+                "attempted_queries": ["old query"],
+                "target_paper_attempts": {"arxiv-target": 1},
+                "confirmed_target_papers": ["confirmed-target"],
+            }
+        }
+
+        await start_node.invoke(inputs, mock_session, mock_context)
+
+        call_args = mock_session.update_global_state.call_args[0][0]
+        collector_context = CollectorContext(**call_args["collector_context"])
+        assert collector_context.evidence_ledger == {
+            "target_paper_attempts": {"arxiv-target": 1},
+            "confirmed_target_papers": ["confirmed-target"],
+        }
 
     @pytest.mark.asyncio
     async def test_start_node_rejects_none_tool_call_turns(self, start_node, mock_session, mock_context):
@@ -222,7 +324,8 @@ class TestGenerateQueryNode:
             "collector_context.step_description": "步骤描述",
             "collector_context.evidence_ledger": {},
             "collector_context.research_intent": {
-                "temporal_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"}
+                "content_date_scope": {"constraint_type": "content_date", "end_date": "2020-12-31"},
+                "target_papers": [{"pmid": "38202877", "title": "A Full Paper Title"}],
             },
         }
         return state_map.get(key)
@@ -247,7 +350,7 @@ class TestGenerateQueryNode:
 
         try:
             with patch.object(generate_query_node, '_invoke_llm_with_retry') as mock_llm, \
-                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.build_prompt_messages") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 queries = ["查询1", "查询2", "查询3", "查询4"]
                 missing_evidence = ["需要验证的证据"]
@@ -259,7 +362,10 @@ class TestGenerateQueryNode:
 
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
-                search_queries = [RetrievalQuery(query=query) for query in queries]
+                search_queries = [
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=query, primary_engine="petal") for query in queries],
+                ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries
                 })
@@ -271,6 +377,9 @@ class TestGenerateQueryNode:
                 agent_input = mock_apply_prompt.call_args.args[1]
                 assert agent_input["max_search_query_count"] == 5
                 assert "number_queries" not in agent_input
+                assert agent_input["has_target_papers"] is True
+                assert agent_input["target_papers"][0]["pmid"] == "38202877"
+                assert '"pmid": "38202877"' in agent_input["target_papers_text"]
 
                 # 验证返回结果
                 assert result == {}
@@ -297,7 +406,10 @@ class TestGenerateQueryNode:
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 result = await generate_query_node.invoke(inputs, mock_session, mock_context)
 
-                fallback_queries = [RetrievalQuery(query=f"缺口{i}") for i in range(1, 6)]
+                fallback_queries = [
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=f"缺口{i}", primary_engine="petal") for i in range(1, 5)],
+                ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": fallback_queries
                 })
@@ -327,7 +439,10 @@ class TestGenerateQueryNode:
                 await generate_query_node.invoke(inputs, mock_session, mock_context)
 
                 # 验证使用了默认查询
-                search_queries = [RetrievalQuery(query=query) for query in queries]
+                search_queries = [
+                    RetrievalQuery(query="38202877", primary_engine="petal"),
+                    *[RetrievalQuery(query=query, primary_engine="petal") for query in queries],
+                ]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries
                 })
@@ -393,7 +508,7 @@ class TestSupervisorNode:
                 "attempted_queries": ["已查 query"],
             },
             "collector_context.research_intent": {
-                "temporal_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
+                "source_date_scope": {"constraint_type": "source_date", "end_date": "2020-12-31"}
             },
         }
         return state_map.get(key)
@@ -412,7 +527,7 @@ class TestSupervisorNode:
 
         try:
             with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
-                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.build_prompt_messages") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 mock_apply_prompt.return_value = []
                 mock_llm.return_value = Reflection(
@@ -471,11 +586,11 @@ class TestSupervisorNode:
 
                 result = await supervisor_node.invoke(inputs, mock_session, mock_context)
 
-                # 验证下一个节点是 INFO_COLLECTOR
+                # 验证下一个节点是 INFO_RETRIEVAL（反思结果进入下一轮检索循环）
                 assert result["next_node"] == "collector_info_retrieval"
 
                 # 验证查询被更新
-                search_queries = [RetrievalQuery(query=query) for query in next_queries]
+                search_queries = [RetrievalQuery(query=query, primary_engine="petal") for query in next_queries]
                 mock_session.update_global_state.assert_any_call({
                     "collector_context.search_queries": search_queries,
                 })
@@ -502,7 +617,7 @@ class TestSupervisorNode:
 
         try:
             with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
-                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.build_prompt_messages") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 next_queries = ["跟进1", "跟进2", "跟进3", "跟进4"]
                 mock_apply_prompt.return_value = []
@@ -519,7 +634,9 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query=query) for query in next_queries],
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query=query, primary_engine="petal") for query in next_queries
+                    ],
                 })
                 agent_input = mock_apply_prompt.call_args.args[1]
                 assert agent_input["max_search_query_count"] == 5
@@ -638,7 +755,9 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query="需要官方口径")]
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query="需要官方口径", primary_engine="petal")
+                    ]
                 })
         finally:
             llm_context.reset(token)
@@ -667,10 +786,56 @@ class TestSupervisorNode:
 
                 assert result["next_node"] == "collector_info_retrieval"
                 mock_session.update_global_state.assert_any_call({
-                    "collector_context.search_queries": [RetrievalQuery(query="需要更多市场数据")]
+                    "collector_context.search_queries": [
+                        RetrievalQuery(query="需要更多市场数据", primary_engine="petal")
+                    ]
                 })
         finally:
             llm_context.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_supervisor_node_passes_tool_hint_to_next_retrieval_loop(
+        self, supervisor_node, mock_session, mock_context
+    ):
+        """反思 LLM 在 next_queries 中选定的 tool 应透传到下一轮检索，且 continue 路由到 InfoRetrievalNode。"""
+        mock_bundle = MagicMock()
+        mock_bundle.get_tools_by_type.return_value = [
+            SimpleNamespace(card=SimpleNamespace(name="mcp__srv__real", description="real tool")),
+        ]
+        token_bundle = mcp_tool_context.set(mock_bundle)
+        mock_llm_dict = MagicMock()
+        mock_llm_dict.get.return_value = MagicMock()
+        token_llm = llm_context.set(mock_llm_dict)
+
+        try:
+            with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
+                mock_llm.return_value = Reflection(
+                    is_sufficient=False,
+                    should_continue=True,
+                    knowledge_gap="需要 pubmed 证据",
+                    next_queries=[
+                        SearchQueryItem(query="PubMed clinical trial 2024", tool="mcp__srv__real"),
+                    ],
+                    known_facts=[],
+                    missing_evidence=["需要 pubmed 证据"],
+                )
+
+                result = await supervisor_node.invoke({}, mock_session, mock_context)
+
+                assert result["next_node"] == "collector_info_retrieval"
+                mock_session.update_global_state.assert_any_call({
+                    "collector_context.search_queries": [
+                        RetrievalQuery(
+                            query="PubMed clinical trial 2024",
+                            primary_engine="petal",
+                            tool="mcp__srv__real",
+                        ),
+                    ],
+                })
+        finally:
+            mcp_tool_context.reset(token_bundle)
+            llm_context.reset(token_llm)
 
     @pytest.mark.parametrize(
         "current_loop_docs, expected_evidence_table",
@@ -733,7 +898,7 @@ class TestSupervisorNode:
         try:
             with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
                     patch(f"{module_prefix}.adapt_llm_model_name"), \
-                    patch(f"{module_prefix}.apply_system_prompt", side_effect=capture_prompt):
+                    patch(f"{module_prefix}.build_prompt_messages", side_effect=capture_prompt):
                 mock_llm.return_value = Reflection(
                     is_sufficient=False,
                     knowledge_gap="仍缺信息",
@@ -763,15 +928,25 @@ def test_validate_query_count_accepts_structured_query_items():
 
 def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
     """collector_gen_query prompt should require retrieval steps to use 1..max_search_query_count queries."""
-    prompt = open("openjiuwen_deepsearch/algorithm/prompts/collector_gen_query.md", encoding="utf-8").read()
+    prompt = "\n".join(
+        open(
+            path,
+            encoding="utf-8",
+        ).read()
+        for path in (
+            "openjiuwen_deepsearch/algorithm/prompts/collector_gen_query/system.md",
+            "openjiuwen_deepsearch/algorithm/prompts/collector_gen_query/user.md",
+        )
+    )
 
     assert '"missing_evidence"' in prompt
     assert '"queries"' in prompt
-    assert "1..{{ max_search_query_count }}" in prompt
+    assert "1..N queries" in prompt
     assert "Return `queries: []` only when the current step explicitly does not require external retrieval." in prompt
     assert "Separate display language from retrieval language" in prompt
-    assert "Keep `missing_evidence` in `{{ language }}`" in prompt
-    assert 'search_engine_name` set to `"pubmed"` or `"arxiv"`' in prompt
+    assert "Output language: {{ language }}" in prompt
+    assert '`search_engine_names`' in prompt
+    assert '`["pubmed", "arxiv", "semantic_scholar"]`' in prompt
     assert "write `query` in English using academic terms" in prompt
     assert "{{ max_search_query_count }}" in prompt
     assert "{{ number_queries }}" not in prompt
@@ -782,7 +957,16 @@ def test_collector_query_prompt_contract_uses_dynamic_max_query_count():
 
 def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
     """collector_supervisor prompt should mention ledger fields used by the runtime loop."""
-    prompt = open("openjiuwen_deepsearch/algorithm/prompts/collector_supervisor.md", encoding="utf-8").read()
+    prompt = "\n".join(
+        open(
+            path,
+            encoding="utf-8",
+        ).read()
+        for path in (
+            "openjiuwen_deepsearch/algorithm/prompts/collector_supervisor/system.md",
+            "openjiuwen_deepsearch/algorithm/prompts/collector_supervisor/user.md",
+        )
+    )
 
     assert "known_facts" in prompt
     assert "newly confirmed facts" in prompt
@@ -798,7 +982,7 @@ def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
     assert "{{ doc_infos }}" not in prompt
     assert "approximately satisfies" in prompt
     assert "partially covered" in prompt
-    assert "directly resolve or narrow" in prompt
+    assert "directly resolves, partially resolves, narrows" in prompt
     assert "Evidence Boundary Policy" in prompt
     assert "necessary for a reliable step-level conclusion" in prompt
     assert "non-critical limitations" in prompt
@@ -815,7 +999,7 @@ def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
     assert "number_queries" not in prompt
     assert "initial_search_query_count" not in prompt
     assert "latest gathered information is mostly duplicate" in prompt
-    assert "should_continue\" is false, \"next_queries\" must be []" in prompt
+    assert "`next_queries`" in prompt
     assert "{{ ledger_brief }}" in prompt
     assert "{{ ledger }}" not in prompt
     assert "Ledger object" not in prompt
@@ -823,7 +1007,16 @@ def test_collector_supervisor_prompt_contract_mentions_ledger_fields():
 
 def test_collector_summary_prompt_contract_mentions_unresolved_gaps():
     """collector_final prompt should tell summary to surface unresolved evidence gaps."""
-    prompt = open("openjiuwen_deepsearch/algorithm/prompts/collector_final.md", encoding="utf-8").read()
+    prompt = "\n".join(
+        open(
+            path,
+            encoding="utf-8",
+        ).read()
+        for path in (
+            "openjiuwen_deepsearch/algorithm/prompts/collector_final/system.md",
+            "openjiuwen_deepsearch/algorithm/prompts/collector_final/user.md",
+        )
+    )
 
     assert "Unresolved evidence gaps" in prompt
     assert "{{ ledger_brief }}" in prompt
@@ -889,7 +1082,7 @@ class TestSummaryNode:
 
         try:
             with patch.object(summary_node, '_invoke_llm_with_retry') as mock_llm, \
-                    patch(f"{module_prefix}.apply_system_prompt") as mock_apply_prompt, \
+                    patch(f"{module_prefix}.build_prompt_messages") as mock_apply_prompt, \
                     patch(f"{module_prefix}.adapt_llm_model_name"):
                 mock_apply_prompt.return_value = []
                 mock_llm.return_value = Summary(
@@ -928,7 +1121,7 @@ class TestSummaryNode:
         try:
             with patch.object(summary_node, '_invoke_llm_with_retry') as mock_llm, \
                     patch(f"{module_prefix}.adapt_llm_model_name"), \
-                    patch(f"{module_prefix}.apply_system_prompt", side_effect=capture_prompt):
+                    patch(f"{module_prefix}.build_prompt_messages", side_effect=capture_prompt):
                 mock_llm.return_value = Summary(
                     need_programmer=False,
                     programmer_task="",
@@ -989,6 +1182,14 @@ def test_build_info_collector_sub_graph():
     """测试子图构建"""
     collector_graph = build_info_collector_sub_graph()
     assert isinstance(collector_graph, Workflow)
+
+
+def test_info_collector_graph_maps_evidence_ledger_start_input():
+    collector_graph = build_info_collector_sub_graph()
+    spec = collector_graph._internal._workflow_spec
+    inputs_schema = spec.comp_configs[NodeId.START.value].io_configs.inputs_schema
+
+    assert inputs_schema["evidence_ledger"] == "${evidence_ledger}"
 
 
 def test_service_config_uses_relaxed_collector_loop_defaults():

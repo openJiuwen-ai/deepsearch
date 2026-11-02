@@ -3,7 +3,37 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from pydantic import BaseModel, Field, ValidationError
+
+
+MAX_TARGET_PAPER_ATTEMPTS = 3
+
+
+def target_paper_key(paper: dict) -> str:
+    """Return a canonical key containing no session path separators."""
+    from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import canonicalize_url
+    from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
+        normalize_arxiv_id,
+        normalize_doi,
+        normalize_pmid,
+        normalize_title,
+    )
+
+    payload = {
+        "pmid": normalize_pmid(paper.get("pmid") or paper.get("url")),
+        "doi": normalize_doi(paper.get("doi") or paper.get("url")),
+        "arxiv_id": normalize_arxiv_id(paper.get("arxiv_id") or paper.get("url")),
+        "url": canonicalize_url(str(paper.get("url") or "")),
+        "title": normalize_title(paper.get("title")),
+        "dataset": str(paper.get("dataset") or "").strip().casefold(),
+        "data_year": str(paper.get("data_year") or "").strip().casefold(),
+        "topic": str(paper.get("topic") or "").strip().casefold(),
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return "tp_" + hashlib.sha256(encoded).hexdigest()
 
 
 class EvidenceLedger(BaseModel):
@@ -12,6 +42,8 @@ class EvidenceLedger(BaseModel):
     known_facts: list[str] = Field(default_factory=list)
     missing_evidence: list[str] = Field(default_factory=list)
     attempted_queries: list[str] = Field(default_factory=list)
+    target_paper_attempts: dict[str, int] = Field(default_factory=dict)
+    confirmed_target_papers: list[str] = Field(default_factory=list)
 
 
 def _clean_items(items: list[str]) -> list[str]:
@@ -48,6 +80,12 @@ def ensure_ledger(value: dict | EvidenceLedger | None) -> EvidenceLedger:
         known_facts=_clean_items(ledger.known_facts),
         missing_evidence=_clean_items(ledger.missing_evidence),
         attempted_queries=_clean_items(ledger.attempted_queries),
+        target_paper_attempts={
+            str(key): max(0, int(value))
+            for key, value in ledger.target_paper_attempts.items()
+            if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+        },
+        confirmed_target_papers=_clean_items(ledger.confirmed_target_papers),
     )
 
 
@@ -79,6 +117,10 @@ def merge_ledger_update(
         known_facts=_clean_items(current.known_facts + update.known_facts),
         missing_evidence=_clean_items(missing_evidence),
         attempted_queries=_clean_items(current.attempted_queries + update.attempted_queries),
+        target_paper_attempts={**current.target_paper_attempts, **update.target_paper_attempts},
+        confirmed_target_papers=_clean_items(
+            current.confirmed_target_papers + update.confirmed_target_papers
+        ),
     )
 
 
@@ -89,7 +131,27 @@ def append_attempted_queries(current: EvidenceLedger, queries: list[str]) -> Evi
         known_facts=current.known_facts,
         missing_evidence=current.missing_evidence,
         attempted_queries=_clean_items(current.attempted_queries + queries),
+        target_paper_attempts=current.target_paper_attempts,
+        confirmed_target_papers=current.confirmed_target_papers,
     )
+
+
+def target_papers_still_searchable(
+    papers: list[dict] | None, ledger: EvidenceLedger | dict | None
+) -> list[dict]:
+    """Exclude confirmed and exhausted target-paper constraints from locator prompts."""
+    ledger = ensure_ledger(ledger)
+    searchable_papers = []
+    for paper in papers or []:
+        if not isinstance(paper, dict):
+            continue
+        paper_key = target_paper_key(paper)
+        if paper_key in ledger.confirmed_target_papers:
+            continue
+        if ledger.target_paper_attempts.get(paper_key, 0) >= MAX_TARGET_PAPER_ATTEMPTS:
+            continue
+        searchable_papers.append(paper)
+    return searchable_papers
 
 
 def build_ledger_brief(ledger: EvidenceLedger | dict | None) -> str:

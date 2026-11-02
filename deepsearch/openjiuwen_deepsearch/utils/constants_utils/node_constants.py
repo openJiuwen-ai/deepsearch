@@ -18,17 +18,20 @@ class NodeId(enum.Enum):
     REPORTER = "reporter"
     EVALUATOR = "evaluator"
     HUMAN_EVALUATOR = "human_evaluator"
-    SOURCE_TRACER = "source_tracer"
-    SOURCE_TRACER_INFER = "source_tracer_infer"
     USER_FEEDBACK_PROCESSOR = "user_feedback_processor"
     DEPENDENCY_EDITOR_TEAM = "dependency_editor_team"
     VLM_CHART_GENERATOR = "vlm_chart_generator"
+    BRIEF_OUTLINE = "brief_outline"
+    BRIEF_INFO_COLLECTOR = "brief_info_collector"
+    BRIEF_EVIDENCE_REVIEWER = "brief_evidence_reviewer"
+    BRIEF_SUB_REPORTER = "brief_sub_reporter"
+    BRIEF_REPORTER = "brief_reporter"
+    BRIEF_HTML_REPORTER = "brief_html_reporter"
 
     # 子图
     INFO_COLLECTOR = "info_collector"
     PLAN_REASONING = "plan_reasoning"
     SUB_EVALUATOR = "sub_evaluator"
-    SUB_SOURCE_TRACER = "sub_source_tracer"
     SUB_REPORTER = "sub_reporter"
     SEARCH_INFO_COLLECTOR = "search_info_collector"
     SEARCH_PLAN_REASONING = "search_plan_reasoning"
@@ -51,7 +54,6 @@ class NodeId(enum.Enum):
     COLLECTOR_SUMMARY = "collector_summary"
     COLLECTOR_PROGRAMMER = "collector_programmer"
     COLLECTOR_END = "collector_end"
-    DOC_EVALUATOR = "doc_evaluator"
     INFO_EVALUATOR = "info_evaluator"
     INFO_ORAGNIZER = "info_organizer"
 
@@ -81,7 +83,16 @@ class AgentLlmName(enum.Enum):
     GENERATE_QUESTIONS = NodeId.GENERATE_QUESTIONS.value
     OUTLINE = NodeId.OUTLINE.value
     PLAN_REASONING = NodeId.PLAN_REASONING.value
-    DOC_EVALUATOR = NodeId.DOC_EVALUATOR.value
+
+    BRIEF_OUTLINE = NodeId.BRIEF_OUTLINE.value
+    BRIEF_COLLECTOR_QUERY_GENERATION = "brief_collector_query_generation"
+    BRIEF_DOC_EVALUATOR = "brief_doc_evaluator"
+    BRIEF_EVIDENCE_REVIEWER = NodeId.BRIEF_EVIDENCE_REVIEWER.value
+    BRIEF_SUB_REPORTER = NodeId.BRIEF_SUB_REPORTER.value
+    BRIEF_REPORTER = NodeId.BRIEF_REPORTER.value
+    BRIEF_HTML_REPORTER = NodeId.BRIEF_HTML_REPORTER.value
+    BRIEF_HTML_REPORTER_SHELL = "brief_html_reporter_shell"
+    BRIEF_HTML_REPORTER_SECTION = "brief_html_reporter_section"
 
     REPORTER_ABSTRACT = "reporter_abstract"
     REPORTER_CONCLUSION = "reporter_conclusion"
@@ -89,25 +100,14 @@ class AgentLlmName(enum.Enum):
 
     SUB_REPORTER = NodeId.SUB_REPORTER.value
     SUB_REPORTER_RATIONALE_GENERATOR = "sub_reporter_rationale_generator"
-    SUB_REPORTER_COVERAGE_MATRIX_EVALUATOR = "sub_reporter_coverage_matrix_evaluator"
+    SUB_REPORTER_PASSAGES_EXTRACTOR = "sub_reporter_passages_extractor"
     SUB_REPORTER_OUTLINE = "sub_reporter_outline"
     SUB_REPORTER_VISUALIZATION_CONTENT = "sub_reporter_visualization_content"
     SUB_REPORTER_CHART_COMPLIANCE = "sub_reporter_chart_compliance"
-    SUB_REPORTER_CHART_TRACEABILITY = "sub_reporter_chart_traceability"
     SUB_REPORTER_VISUALIZATION_NORMALIZE = "sub_reporter_visualization_normalize"
     SUB_REPORTER_SUMMARY = "sub_reporter_summary"
     SUB_REPORTER_SIDECAR = "sub_reporter_sidecar"
 
-    SOURCE_TRACER_CONTENT_RECOGNITION = "source_tracer_content_recognition"
-    SOURCE_TRACER_SOURCE_MATCHING = "source_tracer_source_matching"
-    SOURCE_TRACER_EXTRACT_MESSAGES = "source_tracer_extract_messages"
-    SOURCE_TRACER_INFER = NodeId.SOURCE_TRACER_INFER.value
-    SOURCE_TRACER_INFER_EXTRACT_CONCLUSION = "source_tracer_infer_extract_conclusion"
-    SOURCE_TRACER_INFER_EXTRACT_REFERENCE = "source_tracer_infer_extract_reference"
-    SOURCE_TRACER_INFER_INFER = "source_tracer_infer_infer"
-    SOURCE_TRACER_INFER_FILTER_INVALID_INFER = "source_tracer_infer_filter_invalid_infer"
-    SOURCE_TRACER_INFER_STRUCTURED_INFER = "source_tracer_infer_structured_infer"
-    SOURCE_TRACER_INFER_SUPPLEMENT_GRAPH = "source_tracer_infer_supplement_graph"
 
     USER_FEEDBACK_PROCESSOR_SYNONYM_REWRITER = "user_feedback_processor_synonym_rewriter"
     USER_FEEDBACK_PROCESSOR_SUPPLEMENTARY_SEARCH_TASK = "user_feedback_processor_supplementary_search_task"

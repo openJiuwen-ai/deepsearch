@@ -40,13 +40,12 @@ class FigurePlaceholderGenerator:
                   ) -> Dict[int, List[Dict[str, Any]]]:
         """运行图表占位符生成器"""
         """
-        1. 移除报告中的溯源信息
-        2. 移除报告中的表格
-        3. 按一级标题划分报告
-        4. 以二级标题拆分一级章节
-        5. 先预定位图片插入点，让图片选择预定位范围内的坐标进行插入
-        6. 选出插入锚点，输出图表生成信息序列
-        
+        1. 移除报告中的表格
+        2. 按一级标题划分报告
+        3. 以二级标题拆分一级章节
+        4. 先预定位图片插入点，让图片选择预定位范围内的坐标进行插入
+        5. 选出插入锚点，输出图表生成信息序列
+
         Args:
             report_content: 报告内容
         Returns:
@@ -58,7 +57,7 @@ class FigurePlaceholderGenerator:
                 - 图表所在二级章节内容
                 - 图表所在一级章节索引
                 - 图表前文
-        
+
         """
         try:
             report_content_rm = self._remove_table(report_content)
@@ -137,18 +136,38 @@ class FigurePlaceholderGenerator:
             )
             current_index += 1
 
-        # 过滤报告标题，摘要、结论章节章节
-        sections = sections[2:-2]
+        # 过滤报告标题及非正文 H1。目录是报告正文中的额外 H1，不能依赖
+        # 固定位置切片，否则会把摘要当成正文首章并使章节索引整体偏移。
+        excluded_titles = {
+            "目录",
+            "table of contents",
+            "contents",
+            "摘要",
+            "abstract",
+            "结论",
+            "conclusion",
+            "参考文章",
+            "参考文献",
+            "reference articles",
+            "references",
+        }
+        report_sections = []
+        for section in sections[1:]:
+            normalized_title = re.sub(r"\s+", " ", section["title"]).strip().casefold()
+            if normalized_title not in excluded_titles:
+                report_sections.append(section)
+        for index, section in enumerate(report_sections, start=1):
+            section["index"] = index
 
-        logger.info(f"Split report into {len(sections)} sections by H1")
-        return sections
+        logger.info(f"Split report into {len(report_sections)} sections by H1")
+        return report_sections
 
     @staticmethod
     def _split_section_by_h2(section: Dict) -> List[Dict[str, str]]:
         """以二级标题拆分一级章节"""
         section_content = section.get("content", "")
         index = section.get("index", -1)
-        
+
         h2_pattern = re.compile(r"^(#{2}\s+.+)$", re.MULTILINE)
 
         sub_sections = []
@@ -158,8 +177,8 @@ class FigurePlaceholderGenerator:
 
         if not h2_matches:
             # 没有二级标题，将整个章节作为一个块
-            sub_section = {"index": index, "index_h2": 0, 
-                           "title": section.get("title", ""), 
+            sub_section = {"index": index, "index_h2": 0,
+                           "title": section.get("title", ""),
                            "content": section.get("content", "")}
             return [sub_section]
 
@@ -218,7 +237,7 @@ class FigurePlaceholderGenerator:
         for section in sections:
             # 每个一级章节包含多个二级章节
             sub_sections_h1.append(self._split_section_by_h2(section))
-            
+
         # 并行处理每个一级章节
         tasks = []
         for sec_h1 in sub_sections_h1:
@@ -263,13 +282,19 @@ class FigurePlaceholderGenerator:
             logger.error(f"Error processing sections_h1: {len(results)} != {len(sections)}")
         h1_tasks = []
         for result in results:
-            h1_tasks.extend(result)
+            if isinstance(result, Exception):
+                logger.warning("[CHART GENERATION] section task failed: %s", result)
+                continue
+            if isinstance(result, list):
+                h1_tasks.extend(result)
+            else:
+                logger.warning("[CHART GENERATION] skip non-list result: %r (type=%s)", result, type(result).__name__)
         # 为每个一级章节下的图表生成唯一的图表id
         chart_id_in_section = 0
         for task in h1_tasks:
             chart_id_in_section += 1
             task["chart_id_in_section"] = chart_id_in_section
-        
+
         return h1_tasks
 
     async def _process_section_h2(self, section: Dict[str, str]
@@ -292,15 +317,15 @@ class FigurePlaceholderGenerator:
         section_title = section["title"]
         section_content = section["content"]
 
-        """图表修改： 这一步首先将section按照换行符划分成段，将段序列输入llm识别需要添加图表的段, 
+        """图表修改： 这一步首先将section按照换行符划分成段，将段序列输入llm识别需要添加图表的段,
         输出与段个数和顺序对应的json sheama：[图表描述/图表类型/数据收集任务集]，如果不生成图表则返回空占位序列"""
         section_with_anchor, sub_anchor_msg = self._position_anchor(section_content)
 
         try:
             call_model_input = CallModelInput(
-                model_name=self._llm_model, 
-                prompt="vlm_find_insert_point_prompt", 
-                user_input={"section_contents": section_with_anchor}, 
+                model_name=self._llm_model,
+                prompt="vlm_find_insert_point_prompt",
+                user_input={"section_contents": section_with_anchor},
                 agent_name=AgentLlmName.VLM_CHART_GENERATOR_FIND_INSERT_POINT.value
                 )
             response = await call_model(call_model_input)

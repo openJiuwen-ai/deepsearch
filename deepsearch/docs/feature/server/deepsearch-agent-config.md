@@ -19,6 +19,7 @@ Agent 配置组装把前端/HTTP 请求转换为 `AgentFactory` 可校验的配�
 - `llm_config` 可以是单模型形态，也可以是按槽位嵌套形态；单模型会包成 `general`。
 - `info_collector_search_method` 不是 `local` 时必须提供 web 搜索配置；不是 `web` 时必须提供 local 搜索配置。
 - `info_collector_webpage_enrich_enable` 从请求透传到 Agent 配置，用于控制 DeepResearch 信息采集阶段是否启用网页正文增强节点。
+- `coverage_rule_block_enable` 从请求透传到 Agent 配置，用于控制子报告大纲阶段是否启用规则版覆盖证据块。
 - `template_id>0` 会标记 `has_template=True`，运行上下文会加载模板正文。
 - 请求中的 `tools` 会同时转换为 query understanding 和 collector 的 runtime API 工具配置。
 
@@ -34,7 +35,6 @@ Agent 配置组装把前端/HTTP 请求转换为 `AgentFactory` 可校验的配�
 
 ## 核心流程
 
-1. `build_agent_config` 读取请求基础字段，写入 search mode、execution method、HITL、溯源、用户反馈、LLM 统计、图表开关和网页正文增强开关。
 2. 读取 web 搜索引擎记录，解密 API key，生成 `web_search_engine_config`。
 3. 读取 local 知识库记录，校验所有 `local_search_config_ids` 属于当前 `space_id`。
 4. 从知识库 config 中提取 embedding 配置，并为每个知识库生成 native local search 的 `knowledge_base_configs`。
@@ -51,6 +51,9 @@ Agent 配置组装把前端/HTTP 请求转换为 `AgentFactory` 可校验的配�
 - Milvus URI 由 `MILVUS_HOST` 和 `MILVUS_PORT` 组成，token 来自 `MILVUS_TOKEN`。
 - web search API key 从数据库读取后以 `bytearray` 传入 framework。
 - `DeepSearchRequest.info_collector_webpage_enrich_enable` 默认 `False`，透传为 `AgentConfig.info_collector_webpage_enrich_enable`。
+- `DeepSearchRequest.coverage_rule_block_enable` 默认 `True`，透传为 `AgentConfig.coverage_rule_block_enable`。
+- `DeepSearchRequest.report_type` 默认 `None`，透传为 `AgentConfig.report_type`，由 StartNode 写入会话 `config.report_type` 供意图识别消费；它是运行期策略而非 Agent 构建参数，缓存键排除该字段（与 `message`、`interrupt_feedback` 同类）。
+- `DeepSearchRequest.metadata` 为每次运行不同的注入数据（如 brief 大纲升级），不参与 Agent 构建，缓存键同样排除，同一会话升级运行复用既有 Agent 实例（见 [brief-outline-upgrade.md](../framework/brief-outline-upgrade.md)）。
 
 ## 边界与错误处理
 

@@ -12,11 +12,18 @@ from openjiuwen.core.workflow.components.flow.start_comp import Start
 from openjiuwen.core.workflow.components.flow.workflow_comp import SUB_WORKFLOW_COMPONENT
 from openjiuwen.core.workflow.workflow import Workflow
 
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    build_section_material_coverage,
+    build_material_evidence_items,
+    build_material_prompt_context,
+    extract_material_ids,
+    format_section_material_bindings,
+    restore_material_analysis,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.planner import Planner, PlannerConfig
 from openjiuwen_deepsearch.algorithm.report.config import ReportStyle, ReportFormat
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import deduplicate_doc_infos
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
-from openjiuwen_deepsearch.algorithm.source_trace.source_tracer import SourceTracer
 from openjiuwen_deepsearch.common.common_constants import CHINESE
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode, init_router
@@ -108,7 +115,27 @@ class SectionStartNode(Start):
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
 
         # 初始化section_context
+        history_plans = inputs.get("history_plans") or []
+        # 从 history_plans 中统计已收集的 doc_info 数量
+        collected_doc_num = 0
+        for plan in history_plans:
+            steps = plan.steps if hasattr(plan, "steps") else plan.get("steps", [])
+            for step in steps:
+                queries = (
+                    step.retrieval_queries
+                    if hasattr(step, "retrieval_queries")
+                    else step.get("retrieval_queries", [])
+                ) or []
+                for query in queries:
+                    doc_infos = (
+                        query.doc_infos
+                        if hasattr(query, "doc_infos")
+                        else query.get("doc_infos", [])
+                    ) or []
+                    collected_doc_num += len(doc_infos)
+
         section_context = SectionContext(
+            original_query=inputs.get("original_query", ""),
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
             section_idx=inputs.get("section_idx", '1'),
@@ -123,6 +150,12 @@ class SectionStartNode(Start):
             report_type_policy=inputs.get("report_type_policy") or {},
             research_intent=inputs.get("research_intent") or {},
             section_local_contract=inputs.get("section_local_contract") or {},
+            material_analysis=inputs.get("material_analysis"),
+            material_bindings=inputs.get("material_bindings") or [],
+            bound_material_ids=inputs.get("bound_material_ids") or [],
+            material_usage_mode=inputs.get("material_usage_mode", "none"),
+            history_plans=history_plans,
+            collected_doc_num=collected_doc_num,
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(),
@@ -151,6 +184,17 @@ class BasePlanReasoningNode(BaseNode):
         research_intent = session.get_global_state("section_context.research_intent") or {}
         section_local_contract = session.get_global_state("section_context.section_local_contract") or {}
         current_inputs = {
+            "original_query": session.get_global_state("section_context.original_query") or "",
+            "query": (
+                session.get_global_state("section_context.section_task")
+                or session.get_global_state("section_context.original_query")
+                or ""
+            ),
+            "report_task": session.get_global_state("section_context.report_task") or "",
+            "section_task": session.get_global_state("section_context.section_task") or "",
+            "section_description": session.get_global_state(
+                "section_context.section_description"
+            ) or "",
             "section_idx": section_idx,
             "language": session.get_global_state("section_context.language"),
             "messages": session.get_global_state("section_context.messages"),
@@ -179,6 +223,42 @@ class BasePlanReasoningNode(BaseNode):
         current_inputs.update(
             build_research_intent_prompt_context(research_intent)
         )
+        # 注入已在 IntentRecognition 节点完成筛选的素材清单。
+        material_analysis = restore_material_analysis(
+            session.get_global_state("section_context.material_analysis")
+        )
+        material_context = build_material_prompt_context(
+            material_analysis,
+            include_analysis=False,
+        )
+        if material_context.get("has_materials"):
+            current_inputs.update(material_context)
+            # 供 generate_plan 工具 schema 生成 use_material_ids 字段及其合法性校验
+            binding_ids = [
+                binding.get("material_id")
+                for binding in session.get_global_state("section_context.material_bindings") or []
+                if isinstance(binding, dict) and binding.get("material_id")
+            ]
+            bound_ids = session.get_global_state("section_context.bound_material_ids") or binding_ids
+            bound_ids = list(dict.fromkeys(bound_ids))
+            current_inputs["use_material_ids"] = bound_ids or extract_material_ids(material_context)
+            current_inputs["bound_material_ids"] = bound_ids
+            bindings = session.get_global_state("section_context.material_bindings") or []
+            coverage = build_section_material_coverage(material_analysis, bindings)
+            current_inputs["section_material_bindings_text"] = format_section_material_bindings(
+                bindings, bound_ids or None
+            )
+            current_inputs["section_material_coverage_text"] = coverage["text"]
+            current_inputs["material_coverage_sufficient"] = coverage["is_sufficient"]
+            current_inputs["material_usage_mode"] = (
+                session.get_global_state("section_context.material_usage_mode") or "supplementary"
+            )
+            current_inputs["material_first"] = current_inputs["material_usage_mode"] == "required"
+            bound_evidence = build_material_evidence_items(material_analysis, bound_ids)
+            current_inputs["bound_materials_analysis_text"] = "\n\n".join(
+                f"[{item['material_id']}] {item['title']}\n{item['original_content'][:1200]}"
+                for item in bound_evidence
+            )
         return current_inputs
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -226,6 +306,19 @@ class BasePlanReasoningNode(BaseNode):
 
         # 执行planner
         planner_result = await planner.generate_plan(current_input)
+
+        # For an explicit material-first request, a complete deterministic
+        # coverage review is sufficient evidence.  Do not spend web budget
+        # merely because the planner defaults to further collection.
+        should_skip_web = planner_result.plan_success and planner_result.plan is not None
+        if should_skip_web:
+            should_skip_web = bool(
+                current_input.get("material_first")
+                and current_input.get("material_coverage_sufficient")
+            )
+        if should_skip_web:
+            planner_result.plan.is_research_completed = True
+            planner_result.plan.steps = []
 
         # 手动流式输出plan结果
         if planner_result.plan_success:
@@ -374,6 +467,21 @@ class SubReporterNode(BaseNode):
         rtp = session.get_global_state("section_context.report_type_policy") or {}
         research_intent = session.get_global_state("section_context.research_intent") or {}
         section_local_contract = session.get_global_state("section_context.section_local_contract") or {}
+        # 收集规划阶段声明引用的素材 ID（去重），供写作证据合并
+        use_material_ids: list = []
+        for plan in session.get_global_state("section_context.history_plans") or []:
+            plan_ids = (
+                plan.use_material_ids if hasattr(plan, "use_material_ids")
+                else (plan.get("use_material_ids") or [] if isinstance(plan, dict) else [])
+            ) or []
+            use_material_ids.extend(plan_ids)
+        if not use_material_ids:
+            use_material_ids.extend(
+                binding.get("material_id")
+                for binding in session.get_global_state("section_context.material_bindings") or []
+                if isinstance(binding, dict) and binding.get("material_id")
+            )
+        use_material_ids = list(dict.fromkeys(use_material_ids))
 
         return dict(
             thread_id=session.get_global_state("section_context.session_id"),
@@ -383,6 +491,7 @@ class SubReporterNode(BaseNode):
             report_format=session.get_global_state("section_context.report_format") or ReportFormat.MARKDOWN,
             report_style=session.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
             section_idx=section_idx,  # 章节序号,
+            original_query=session.get_global_state("section_context.original_query") or "",
             report_task=session.get_global_state("section_context.report_task"),  # 总报告标题
             section_task=session.get_global_state("section_context.section_task"),  # 当前章节标题
             section_iscore=session.get_global_state("section_context.section_iscore") or False,  # 是否核心章节
@@ -390,17 +499,30 @@ class SubReporterNode(BaseNode):
             section_format_requirements=session.get_global_state(
                 "section_context.section_format_requirements"
             ) or [],
-            doc_infos=_collect_doc_infos(session.get_global_state("section_context.history_plans")),
+            passages=_collect_doc_infos(session.get_global_state("section_context.history_plans")),
             step_summaries=_collect_step_summaries(session.get_global_state("section_context.history_plans")),
             current_outline=session.get_global_state("section_context.current_outline")
             if session.get_global_state("section_context.current_outline") else "",
             max_generate_retry_num=session.get_global_state("config.report_max_generate_retry_num") or 3,
             classify_doc_infos_res_top_k_num=session.get_global_state(
-                "config.sub_report_classify_doc_infos_res_top_k_num") or 20,
+                "config.sub_report_classify_doc_infos_res_top_k_num") or 15,
+            professional_report_adaptive_rationales=bool(
+                session.get_global_state(
+                    "config.professional_report_adaptive_rationales"
+                )
+            ),
             llm_model_name=adapt_llm_model_name(session, NodeId.SUB_REPORTER.value),
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],
             visualization_enable=session.get_global_state("config.visualization_enable"),
+            # 会话缺键时 get_global_state 返回 None，归一回默认开启，
+            # 避免消费端 .get(key, True) 命中键存在值 None 而误关闭。
+            coverage_rule_block_enable=(
+                True
+                if session.get_global_state("config.coverage_rule_block_enable") is None
+                else bool(session.get_global_state("config.coverage_rule_block_enable"))
+            ),
+
             report_type=rtp.get("report_type", "professional"),
             paragraph_style=rtp.get("paragraph_style", "detailed"),
             require_summary_first=rtp.get("require_summary_first", False),
@@ -409,6 +531,9 @@ class SubReporterNode(BaseNode):
             tone=research_intent.get("tone", ""),
             research_intent=research_intent,
             section_local_contract=section_local_contract,
+            use_material_ids=use_material_ids,
+            material_bindings=session.get_global_state("section_context.material_bindings") or [],
+            material_analysis=session.get_global_state("section_context.material_analysis"),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -418,7 +543,22 @@ class SubReporterNode(BaseNode):
                     f"{'*' if LogManager.is_sensitive() else updating_state.get('current_outline')}")
 
         reporter = Reporter(updating_state.get('llm_model_name'))
-        success, msg, sub_report_content, classified_content = await reporter.generate_sub_report(updating_state)
+        try:
+            success, msg, sub_report_content, classified_content = await reporter.generate_sub_report(updating_state)
+        except (TypeError, ValueError, AttributeError, KeyError) as e:
+            # Last-resort guard: LLM-returned data may contain unexpected types
+            # that escape inner try/except blocks. Fail this section gracefully
+            # instead of crashing the entire session.
+            logger.error(
+                f"{self.log_prefix} generate_sub_report raised {type(e).__name__}: {e}. "
+                f"Section will be marked as failed.",
+                exc_info=True,
+            )
+            success, msg, sub_report_content, classified_content = (
+                False,
+                format_exception_info(StatusCode.SUB_REPORT_GENERATE_ERROR, e),
+                "", [],
+            )
 
         algorithm_output = dict(success=success, msg=msg,
                                 classified_content=classified_content,
@@ -429,13 +569,13 @@ class SubReporterNode(BaseNode):
         return self._post_handle(inputs, updating_state, session, context)
 
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        doc_infos = algorithm_output.get("doc_infos") or []
+        passages = algorithm_output.get("passages") or []
         detail_msg = (
-            f"{algorithm_output.get('msg')}, doc_infos_num:{len(doc_infos)}, "
+            f"{algorithm_output.get('msg')}, passages_num:{len(passages)}, "
             f"classified_content_num:{len(algorithm_output.get('classified_content', []))}"
         )
         if algorithm_output.get("success") and algorithm_output.get("sub_report_content"):
-            next_node = NodeId.SUB_SOURCE_TRACER.value
+            next_node = NodeId.END.value
             logger.info(f"{self.log_prefix} Success to generate sub_report, detail: {detail_msg}, go to {next_node}")
         else:
             msg = algorithm_output.get("msg", "")
@@ -452,7 +592,7 @@ class SubReporterNode(BaseNode):
             section_idx=algorithm_output.get("section_idx"),
             report_task=algorithm_output.get("report_task"),
             section_task=algorithm_output.get("section_task"),
-            doc_infos=doc_infos,
+            passages=passages,
         )
         sub_report_content = SubReportContent(
             classified_content=algorithm_output.get("classified_content", []),
@@ -477,119 +617,6 @@ class SubReporterNode(BaseNode):
             session.update_global_state({"section_context.doc_selection_debug": doc_selection_debug})
 
         logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
-        return dict(next_node=next_node)
-
-
-class SubSourceTracerNode(BaseNode):
-
-    def __init__(self):
-        super().__init__()
-        self.log_prefix = ""
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext):
-        section_idx = session.get_global_state("section_context.section_idx") or 1
-        self.log_prefix = f"section_idx: {section_idx} | [{self.__class__.__name__}] "
-        logger.info(f"{self.log_prefix} Start [{self.__class__.__name__}].")
-        research_trace_source_switch = session.get_global_state("config.source_tracer_research_trace_source_switch")
-        generated_citation_switch = session.get_global_state("config.source_tracer_generated_citation_switch")
-
-        language = session.get_global_state("section_context.language")
-        llm_model_name = adapt_llm_model_name(session, NodeId.SUB_SOURCE_TRACER.value)
-
-        # 获取子报告内容
-        sub_report_content_obj = session.get_global_state("section_context.sub_report_content")
-        if sub_report_content_obj and isinstance(sub_report_content_obj, SubReportContent):
-            report = sub_report_content_obj.sub_report_content_text
-            classified_content = sub_report_content_obj.classified_content
-        else:
-            report = ""
-            classified_content = []
-
-        return dict(
-            report=report,
-            classified_content=classified_content,
-            research_trace_source_switch=research_trace_source_switch,
-            generated_citation_switch=generated_citation_switch,
-            language=language, llm_model_name=llm_model_name, section_idx=section_idx
-        )
-
-    def _skip_trace_source_handle(
-            self, inputs: Input, session: Session,
-            context: ModelContext, current_inputs: dict
-    ) -> dict:
-        """
-        不需要溯源的场景直接跳到后处理
-        """
-        origin_report = current_inputs.get("report", "")
-        algorithm_output = dict(trace_source_datas=[], modified_report=origin_report)
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        current_inputs = self._pre_handle(inputs, session, context)
-        research_trace_source_switch = current_inputs.get("research_trace_source_switch", True)
-        generated_citation_switch = current_inputs.get("generated_citation_switch", True)
-
-        if research_trace_source_switch is False:
-            logger.info(f"{self.log_prefix} research_trace_source_switch is False, skip trace source.")
-            return self._skip_trace_source_handle(inputs, session, context, current_inputs)
-
-        source_tracer = SourceTracer(current_inputs)
-        # 细粒度开关关闭时，仍保留原文已有引用，只跳过基于搜索结果生成新增引用。
-        if generated_citation_switch is not False:
-            # 预检查原文引用覆盖率
-            pre_check_result = source_tracer.pre_check_origin_coverage()
-            logger.info(f"{self.log_prefix} 溯源预检查结果: "
-                        f"need_generate={pre_check_result.get('need_generate')}, "
-                        f"origin_count={pre_check_result.get('origin_count')}, "
-                        f"total_sentences={pre_check_result.get('total_sentences')}, "
-                        f"coverage={pre_check_result.get('coverage'):.4f}, "
-                        f"reason={pre_check_result.get('reason')}")
-
-            if pre_check_result.get("need_generate") is False:
-                logger.info(f"{self.log_prefix} 原文引用覆盖率达标，跳过新增引用生成。"
-                            f"origin_count={pre_check_result.get('origin_count')}, "
-                            f"coverage={pre_check_result.get('coverage'):.4f}")
-            else:
-                await source_tracer.research_trace_source()
-        else:
-            logger.info(
-                f"{self.log_prefix} source_tracer_generated_citation_switch is False, "
-                "skip generated citations and keep origin citations only."
-            )
-        source_tracer_result_dict = source_tracer.add_source_to_report()
-
-        modified_report = source_tracer_result_dict.get("modified_report", "")
-        datas = source_tracer_result_dict.get("datas", [])
-        algorithm_output = dict(
-            modified_report=modified_report,
-            trace_source_datas=datas
-        )
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
-        trace_source_datas = algorithm_output.get("trace_source_datas", [])
-        modified_report = algorithm_output.get("modified_report", "")
-
-        # 获取现有的 sub_report_content 对象并更新
-        sub_report_content_obj = session.get_global_state("section_context.sub_report_content")
-        if sub_report_content_obj and isinstance(sub_report_content_obj, SubReportContent):
-            sub_report_content_obj.sub_report_content_text = modified_report
-            sub_report_content_obj.sub_report_trace_source_datas = trace_source_datas
-        else:
-            # 如果不存在，创建新对象
-            sub_report_content_obj = SubReportContent(
-                sub_report_content_text=modified_report,
-                sub_report_trace_source_datas=trace_source_datas
-            )
-
-        session.update_global_state({
-            "section_context.sub_report_content": sub_report_content_obj
-        })
-        next_node = NodeId.END.value
-        logger.info(f"{self.log_prefix} End {self.__class__.__name__}.")
-
         return dict(next_node=next_node)
 
 
@@ -745,6 +772,7 @@ def build_editor_team_workflow():
         NodeId.START.value,
         SectionStartNode(),
         inputs_schema={
+            "original_query": "${original_query}",
             "language": "${language}",
             "messages": "${messages}",
             "section_idx": "${section_idx}",
@@ -759,23 +787,27 @@ def build_editor_team_workflow():
             "report_type_policy": "${report_type_policy}",
             "research_intent": "${research_intent}",
             "section_local_contract": "${section_local_contract}",
+            "history_plans": "${history_plans}",
+            "material_analysis": "${material_analysis}",
+            "material_usage_mode": "${material_usage_mode}",
+            "material_bindings": "${material_bindings}",
+            "bound_material_ids": "${bound_material_ids}",
+            "use_material_ids": "${use_material_ids}",
         }
     )
 
     sub_workflow.add_workflow_comp(NodeId.PLAN_REASONING.value, ResearchPlanReasoningNode())
     sub_workflow.add_workflow_comp(NodeId.INFO_COLLECTOR.value, InfoCollectorNode())
     sub_workflow.add_workflow_comp(NodeId.SUB_REPORTER.value, SubReporterNode())
-    sub_workflow.add_workflow_comp(NodeId.SUB_SOURCE_TRACER.value, SubSourceTracerNode())
     plan_reasoning_router = init_router(NodeId.PLAN_REASONING.value,
                                         [NodeId.INFO_COLLECTOR.value, NodeId.SUB_REPORTER.value,
                                          NodeId.END.value])
     sub_reporter_router = init_router(NodeId.SUB_REPORTER.value,
-                                      [NodeId.SUB_SOURCE_TRACER.value, NodeId.END.value])
+                                      [NodeId.END.value])
     sub_workflow.add_connection(NodeId.START.value, NodeId.PLAN_REASONING.value)
     sub_workflow.add_connection(NodeId.INFO_COLLECTOR.value, NodeId.PLAN_REASONING.value)
     sub_workflow.add_conditional_connection(NodeId.PLAN_REASONING.value, router=plan_reasoning_router)
     sub_workflow.add_conditional_connection(NodeId.SUB_REPORTER.value, router=sub_reporter_router)
-    sub_workflow.add_connection(NodeId.SUB_SOURCE_TRACER.value, NodeId.END.value)
 
     sub_workflow.set_end_comp(NodeId.END.value, SectionEndNode())
 

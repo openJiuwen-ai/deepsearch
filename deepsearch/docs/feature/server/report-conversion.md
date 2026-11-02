@@ -39,7 +39,6 @@
 ## 数据契约与边界
 
 - `final_result.response_content` 为必填非空 Markdown。
-- `infer_messages` 元素可包含 `id` 与 `html_base64`；`chart_messages` 元素可包含 `chart_id`、`chart_title` 与 PNG `base64`。
 - `ReportFormat` 只表示 HTTP 格式枚举，不再构造 server 处理器。
 - HTML 默认保留基础外壳和 CSS；开启美化后使用语义化结构、LLM CSS 注入及 fallback 语义。
 - DOCX 保留公式、表格、引用、图片和页面宽度适配；它使用仓库内置字体作为 Mermaid PNG 的内部默认实现，字体不可用时局部回退源码，转换过程不写入临时 HTML 文件。

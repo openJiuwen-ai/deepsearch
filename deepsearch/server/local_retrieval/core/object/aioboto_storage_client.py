@@ -38,6 +38,7 @@ class AioBotoClient(BaseObjectStorageClient):
         secret_access_key = secret_access_key or os.getenv("OBS_SECRET_ACCESS_KEY")
         server = server or os.getenv("OBS_SERVER")
         region_name = region_name or os.getenv("OBS_REGION")
+        addressing_style = os.getenv("OBS_ADDRESSING_STYLE", "virtual")
 
         self._session = aioboto3.Session(
             aws_access_key_id=access_key_id,
@@ -51,7 +52,7 @@ class AioBotoClient(BaseObjectStorageClient):
             config=Config(
                 signature_version="s3v4",
                 s3={
-                    "addressing_style": "virtual",
+                    "addressing_style": addressing_style,
                     "payload_signing_enabled": False,
                 },
             ),

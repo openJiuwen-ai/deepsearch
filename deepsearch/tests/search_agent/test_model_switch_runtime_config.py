@@ -11,10 +11,26 @@ from openjiuwen.core.session.constants import WORKFLOW_EXECUTE_TIMEOUT_ENV_KEY
 
 from openjiuwen_deepsearch.config.config import AgentConfig, PerQuestionParams, SearchWorkflowConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Result, SearchFinalResult
+from openjiuwen_deepsearch.framework.openjiuwen.agent import workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepSearchAgent
 from openjiuwen_deepsearch.utils.common_utils.security_utils import zero_secret as clear_secret
 
 pytestmark = pytest.mark.integration
+
+
+def test_zero_scholarly_search_secrets_skips_empty_default_keys(monkeypatch):
+    cleared = []
+    monkeypatch.setattr(workflow, "zero_secret", cleared.append)
+    config = AgentConfig()
+
+    workflow._zero_scholarly_search_secrets(config)
+    assert cleared == []
+
+    secret = bytearray(b"secret")
+    config.scholarly_search_config.pubmed.search_api_key = secret
+    workflow._zero_scholarly_search_secrets(config)
+
+    assert cleared == [secret]
 
 
 @pytest.mark.parametrize("field", ["jina_api_key", "serper_api_key"])

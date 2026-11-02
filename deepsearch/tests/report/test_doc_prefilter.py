@@ -5,11 +5,8 @@ import pytest
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import build_content_dedup_hash
 from openjiuwen_deepsearch.algorithm.report.doc_prefilter import (
     build_normalized_content_key,
-    build_balanced_doc_batches,
     deduplicate_doc_infos,
-    extract_doc_score,
     normalize_url_for_dedup,
-    prefilter_doc_infos_for_classification,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import _collect_doc_infos
 
@@ -59,14 +56,79 @@ def test_normalize_url_for_dedup_keeps_meaningful_root_query_params():
     assert normalize_url_for_dedup("https://example.com/?id=1") != normalize_url_for_dedup("https://example.com/?id=2")
 
 
-def test_deduplicate_doc_infos_keeps_high_score_for_same_url_and_same_content():
-    low_score = _doc(1, url="https://example.com/a?utm_source=x", content="同一 正文", relevance=0)
-    high_score = _doc(2, url="https://www.example.com/a#frag", content="同一　正文", relevance=9)
+def test_deduplicate_doc_infos_keeps_first_seen_for_same_url_and_same_content():
+    first = _doc(1, url="https://example.com/a?utm_source=x", content="同一 正文")
+    second = _doc(2, url="https://www.example.com/a#frag", content="同一　正文")
 
-    result = deduplicate_doc_infos([low_score, high_score])
+    result = deduplicate_doc_infos([first, second])
 
     assert len(result) == 1
-    assert result[0]["title"] == "doc-2"
+    assert result[0]["title"] == "doc-1"
+
+
+def test_deduplicate_doc_infos_does_not_add_empty_provenance_to_ordinary_docs():
+    first = {"title": "Document", "url": "https://example.com/a"}
+    duplicate = {"title": "Document", "url": "https://example.com/a", "extra": "later"}
+
+    result = deduplicate_doc_infos([first, duplicate])
+
+    assert result == [first]
+    assert "matched_sources" not in result[0]
+    assert "source_ids" not in result[0]
+
+
+def test_deduplicate_doc_infos_preserves_academic_provenance_from_discarded_duplicate():
+    academic = _doc(1, url="https://example.com/paper", content="same content", relevance=1)
+    academic.update({
+        "academic_source": "pubmed",
+        "academic_source_id": "38132429",
+        "pmcid": "PMC10740908",
+        "evidence_content_type": "full_text",
+    })
+    tavily = _doc(2, url="https://example.com/paper", content="same content", relevance=9)
+    tavily["evidence_content_type"] = "abstract"
+
+    result = deduplicate_doc_infos([academic, tavily])
+
+    assert len(result) == 1
+    assert result[0]["title"] == "doc-1"
+    assert result[0]["academic_source"] == "pubmed"
+    assert result[0]["academic_source_id"] == "38132429"
+    assert result[0]["pmcid"] == "PMC10740908"
+    assert result[0]["evidence_content_type"] == "full_text"
+
+
+def test_deduplicate_doc_infos_unions_multi_source_provenance():
+    first = _doc(1, url="https://doi.org/10.1000/example", content="same", relevance=9)
+    first.update({
+        "academic_source": "semantic_scholar",
+        "academic_source_id": "S1",
+        "matched_sources": ["semantic_scholar"],
+        "source_ids": {"semantic_scholar": "S1"},
+        "doi": "10.1000/example",
+    })
+    second = _doc(2, url=first["url"], content="same", relevance=1)
+    second.update({
+        "academic_source": "pubmed",
+        "academic_source_id": "123",
+        "matched_sources": ["pubmed", "arxiv"],
+        "source_ids": {"pubmed": "123", "arxiv": "2401.00001"},
+        "pmid": "123",
+        "pmcid": "PMC123",
+        "arxiv_id": "2401.00001",
+    })
+
+    result = deduplicate_doc_infos([first, second])
+
+    assert result[0]["matched_sources"] == [
+        "semantic_scholar", "pubmed", "arxiv"
+    ]
+    assert result[0]["source_ids"] == {
+        "semantic_scholar": "S1", "pubmed": "123", "arxiv": "2401.00001"
+    }
+    assert result[0]["pmid"] == "123"
+    assert result[0]["pmcid"] == "PMC123"
+    assert result[0]["arxiv_id"] == "2401.00001"
 
 
 def test_deduplicate_doc_infos_keeps_same_url_with_different_content():
@@ -93,74 +155,6 @@ def test_normalized_content_key_reuses_collector_content_hash():
     doc = _doc(1, content="Ａ  B\r\nC")
 
     assert build_normalized_content_key(doc) == build_content_dedup_hash("A B C")
-
-
-def test_extract_doc_score_prefers_scores_and_normalizes_legacy_fields():
-    doc = {
-        "scores": {"relevance": 8, "answerability": 6, "authority": 4, "data_density": 2},
-        "evaluation_scores": {"relevance": 1, "answerability": 1, "authority": 1, "data_density": 1},
-        "task_relevance": "该篇文章的内容与当前任务的相关性得分：1",
-    }
-
-    score = extract_doc_score(doc)
-
-    assert score.relevance == 0.8
-    assert score.answerability == 0.6
-    assert score.authority == 0.4
-    assert score.data_density == 0.2
-
-    decimal_ten_point_score = extract_doc_score({"scores": {"relevance": 0.8}})
-
-    assert decimal_ten_point_score.relevance == 0.08
-
-
-def test_extract_doc_score_ignores_legacy_text_score_fields():
-    score = extract_doc_score({
-        "source_authority": "该篇文章的信息来源权威性和可信度得分：10",
-        "task_relevance": "该篇文章的内容与当前任务的相关性得分：10",
-        "information_richness": "该篇文章的信息丰富程度与可答性得分：10",
-        "data_density": "该篇文章的数据丰富和密集程度得分：10",
-    })
-
-    assert score.relevance == 0
-    assert score.answerability == 0
-    assert score.authority == 0
-    assert score.data_density == 0
-
-
-def test_prefilter_limits_to_topk_multiplier_and_preserves_step_coverage():
-    docs = []
-    for idx in range(80):
-        doc = _doc(idx, step_idx=idx % 3, relevance=idx % 10)
-        doc["plan_idx"] = idx % 2
-        doc["step_id"] = str(idx % 3)
-        docs.append(doc)
-
-    result = prefilter_doc_infos_for_classification(
-        docs,
-        result_top_k=10,
-        prefilter_multiplier=5,
-    )
-
-    assert len(result.doc_infos) == 50
-    assert {(doc["plan_idx"], doc["step_idx"]) for doc in result.doc_infos} == {
-        (0, 0),
-        (0, 1),
-        (0, 2),
-        (1, 0),
-        (1, 1),
-        (1, 2),
-    }
-    assert result.candidate_limit == 50
-    assert result.step_bucket_count == 6
-
-
-def test_build_balanced_doc_batches_splits_evenly():
-    docs = [{"idx": idx} for idx in range(70)]
-
-    batches = build_balanced_doc_batches(docs, 60)
-
-    assert [len(batch) for batch in batches] == [35, 35]
 
 
 def test_collect_doc_infos_adds_step_metadata_and_keeps_same_url_different_content():

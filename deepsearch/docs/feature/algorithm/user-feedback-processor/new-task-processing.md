@@ -18,8 +18,6 @@
 - 在目标大章节下追加新小节。
 - 在资料不足时先执行增量采集再改写。
 
-返回结果包含更新后的完整报告、原始区间、改写区间、证据资料和增量研究信息。开启局部溯源时，改写结果继续更新 citation。
-
 ## 关键代码路径
 
 - Action 映射：`openjiuwen_deepsearch/algorithm/user_feedback_processor/action_definitions.py`
@@ -28,8 +26,8 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/new_task_assessment.md`
-- `openjiuwen_deepsearch/algorithm/prompts/new_task_rewrite_section.md`
+- `openjiuwen_deepsearch/algorithm/prompts/new_task_assessment/`
+- `openjiuwen_deepsearch/algorithm/prompts/new_task_rewrite_section/`
 
 主要测试：
 
@@ -47,7 +45,7 @@
 6. `_apply_new_task_edit_strategy` 选择修改已有小节或追加新小节。
 7. 处理器校验改写结果的标题层级、章节标题和边界。
 8. `_build_new_task_result` 返回更新后的报告、区间、证据和增量研究信息。
-9. 如果启用局部溯源，结果继续进入局部溯源阶段。
+
 
 ## 数据契约与依赖
 
@@ -96,14 +94,9 @@ uv run pytest tests/user_feedback_processor/test_history.py
 
 如果改动影响 citation 更新，还应运行：
 
-```bash
-uv run pytest tests/user_feedback_processor/test_local_source_trace.py
-```
-
 ## 相关文档
 
 - [用户反馈处理总览](../user-feedback-processor.md)
 - [同义改写](./synonym-rewrite.md)
 - [补充检索与改写](./supplementary-search.md)
 - [真实性核验](./truth-verification.md)
-- [局部溯源](./local-source-trace.md)

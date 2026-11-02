@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import asdict
 from typing import List, Any, Literal, Sequence
 
 from openjiuwen.core.context_engine.base import ModelContext
@@ -14,34 +15,51 @@ from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
 from openjiuwen.core.workflow.workflow import Workflow
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     build_summary_evidence_pack,
     build_supervisor_evidence_table,
 )
-from openjiuwen_deepsearch.config.config import ServiceConfig
+from openjiuwen_deepsearch.config.config import ScholarlySearchConfig, ServiceConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode, init_router
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.collector_context import CollectorContext
-from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import InfoRetrievalNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector import (
+    InfoRetrievalNode,
+    filter_confirmed_target_locators,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment import WebPageEnrichmentNode
+from openjiuwen_deepsearch.framework.openjiuwen.tools import build_runtime_api_tools
+from openjiuwen_deepsearch.framework.openjiuwen.tools.mcp.bundle import is_query_compatible
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
     EvidenceLedger,
     build_ledger_brief,
     ensure_ledger,
     merge_ledger_update,
+    target_papers_still_searchable,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     RetrievalQuery,
+    build_target_papers_prompt_context,
     build_temporal_scope_prompt_context,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
+    FullTextConfig,
+)
+from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
+    normalize_arxiv_id,
+    normalize_pmid,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import MessageType, StreamEvent, get_current_time
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
+from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, web_search_context, \
+    mcp_tool_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -51,10 +69,27 @@ max_retries = ServiceConfig().info_collector_max_retry_num
 
 class SearchQueryItem(BaseModel):
     query: str = Field(description="Search query text.")
-    search_engine_name: Literal["", "pubmed", "arxiv"] = Field(
-        default="",
-        description="Secondary vertical search engine for this query.",
+    search_engine_names: list[Literal["pubmed", "arxiv", "semantic_scholar"]] | None = Field(
+        default=None,
+        description="Ordered scholarly engines used to fan out this query.",
     )
+    tool: str | None = Field(
+        default=None,
+        description="query-gen 选择的直调工具名（query-兼容 MCP 工具）或 native。"
+                    "不在可用工具列表时由 normalize 置 None。",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def convert_legacy_singular_engine(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "search_engine_names" in value:
+            return value
+        if "search_engine_name" not in value:
+            return value
+        normalized = dict(value)
+        legacy_engine = str(normalized.pop("search_engine_name") or "").strip()
+        normalized["search_engine_names"] = [legacy_engine] if legacy_engine else []
+        return normalized
 
 
 class SearchQueryList(BaseModel):
@@ -89,8 +124,12 @@ class Reflection(BaseModel):
     knowledge_gap: str = Field(
         description="A description of what information is missing or needs clarification."
     )
-    next_queries: List[str] = Field(
-        description="A list of follow-up queries to address the knowledge gap."
+    next_queries: List[str | SearchQueryItem] = Field(
+        default_factory=list,
+        description="Follow-up queries to address the knowledge gap. Each item may be a plain "
+                    "string or a {query, tool, search_engine_names} object when query-compatible "
+                    "MCP search tools are available; the supervisor LLM picks `tool` in the same "
+                    "reflection call so no extra LLM invocation is added to the workflow.",
     )
     known_facts: List[str] = Field(
         default_factory=list,
@@ -147,10 +186,20 @@ def _validate_query_count(
 
 
 def route_secondary_search_engine_for_query(query: str) -> str:
-    """Choose a query-level vertical search engine only for clear academic domains."""
+    """Backward-compatible first scholarly engine for a query."""
+    engines = route_secondary_search_engines_for_query(query)
+    if "pubmed" in engines:
+        return "pubmed"
+    if "arxiv" in engines:
+        return "arxiv"
+    return engines[0] if engines else ""
+
+
+def route_secondary_search_engines_for_query(query: str) -> list[str]:
+    """Choose an ordered set of scholarly engines for one academic query."""
     text = (query or "").lower()
     if not text:
-        return ""
+        return []
 
     def has_keyword(keywords: tuple[str, ...]) -> bool:
         for keyword in keywords:
@@ -186,26 +235,216 @@ def route_secondary_search_engine_for_query(query: str) -> str:
     arxiv_domain_keywords += (
         "algorithms", "neural networks", "transformers",
     )
-    if has_keyword(pubmed_keywords):
-        return "pubmed"
-    if has_keyword(arxiv_source_keywords) or has_keyword(arxiv_domain_keywords) or has_keyword(arxiv_short_tokens):
-        return "arxiv"
-    return ""
+    explicit = []
+    for name, keywords in (
+        ("pubmed", ("pubmed",)),
+        ("arxiv", ("arxiv",)),
+        ("semantic_scholar", ("semantic scholar", "semanticscholar")),
+    ):
+        if has_keyword(keywords):
+            explicit.append(name)
+    if explicit:
+        return explicit
+
+    medical = has_keyword(pubmed_keywords)
+    technical = (
+        has_keyword(arxiv_source_keywords)
+        or has_keyword(arxiv_domain_keywords)
+        or has_keyword(arxiv_short_tokens)
+    )
+    academic = medical or technical or has_keyword((
+        "academic", "scholarly", "peer reviewed", "paper", "journal", "citation",
+        "research study", "systematic review", "meta analysis", "学术", "论文", "文献", "研究",
+    ))
+    if not academic:
+        return []
+    engines = []
+    if medical:
+        engines.append("pubmed")
+    if technical:
+        engines.append("arxiv")
+    engines.append("semantic_scholar")
+    return engines
 
 
-def normalize_search_query_item(item: str | SearchQueryItem) -> SearchQueryItem:
+def normalize_search_query_item(
+        item: str | SearchQueryItem,
+        *,
+        enable_scholarly_search: bool = True,
+        available_tool_names: set[str] | None = None,
+) -> SearchQueryItem:
+    def _validated_tool(raw: str | None) -> str | None:
+        if not raw:
+            return None
+        if available_tool_names is None:
+            return None
+        return raw if raw in available_tool_names else None
+
     if isinstance(item, SearchQueryItem):
         query = item.query
-        if "search_engine_name" in item.model_fields_set:
-            secondary_engine = item.search_engine_name
+        tool = _validated_tool(item.tool)
+        if not enable_scholarly_search:
+            return SearchQueryItem(query=query, search_engine_names=[], tool=tool)
+        elif "search_engine_names" in item.model_fields_set and item.search_engine_names is not None:
+            engines = list(dict.fromkeys(item.search_engine_names))[:4]
         else:
-            secondary_engine = route_secondary_search_engine_for_query(query)
-        return SearchQueryItem(query=query, search_engine_name=secondary_engine)
+            engines = route_secondary_search_engines_for_query(query)
+        pmid = normalize_pmid(query)
+        if pmid and "pubmed.ncbi.nlm.nih.gov" in query.casefold():
+            return SearchQueryItem(query=pmid, search_engine_names=["pubmed"], tool=tool)
+        arxiv_id = normalize_arxiv_id(query)
+        if arxiv_id and "arxiv.org" in query.casefold():
+            return SearchQueryItem(query=arxiv_id, search_engine_names=["arxiv"], tool=tool)
+        return SearchQueryItem(
+            query=query,
+            search_engine_names=engines,
+            tool=tool,
+        )
     query = str(item)
+    engines = route_secondary_search_engines_for_query(query) if enable_scholarly_search else []
     return SearchQueryItem(
         query=query,
-        search_engine_name=route_secondary_search_engine_for_query(query),
+        search_engine_names=engines,
     )
+
+
+def _scholarly_search_is_available() -> bool:
+    try:
+        engines = web_search_context.get()
+    except LookupError:
+        return False
+    return any(name in engines for name in ("pubmed", "arxiv", "semantic_scholar"))
+
+
+def _available_mcp_query_tool_names() -> set[str] | None:
+    """返回 query-兼容 MCP 搜索工具名集合；无 bundle 时返回 None（不校验 tool）。"""
+    try:
+        bundle = mcp_tool_context.get()
+    except LookupError:
+        return None
+    if bundle is None:
+        return None
+    tools = bundle.get_tools_by_type("search")
+    names: set[str] = set()
+    for tool in tools or []:
+        name = getattr(getattr(tool, "card", None), "name", None)
+        if name:
+            names.add(name)
+    return names or None
+
+
+def _mcp_query_tool_descriptions() -> list[dict]:
+    """构造 query-兼容 MCP 工具的 {name, description} 清单，用于注入 gen_query prompt。"""
+    try:
+        bundle = mcp_tool_context.get()
+    except LookupError:
+        return []
+    if bundle is None:
+        return []
+    tools = bundle.get_tools_by_type("search")
+    descriptions = []
+    for tool in tools or []:
+        card = getattr(tool, "card", None)
+        if card is None:
+            continue
+        name = getattr(card, "name", "")
+        desc = getattr(card, "description", "") or ""
+        if name:
+            descriptions.append({"name": name, "description": desc})
+    return descriptions
+
+
+def _runtime_api_tool_descriptions(api_tools_config: dict | None) -> list[dict]:
+    """构造 query-兼容 runtime API 工具的 {name, description} 清单，用于注入 gen_query/supervisor prompt。
+
+    需要 query 以外必填参数的 runtime API 工具不进入 query 直调候选，
+    由 InfoRetrievalNode._pre_handle 分流到参数生成通道。
+    """
+    if not isinstance(api_tools_config, dict):
+        return []
+    tools = build_runtime_api_tools(api_tools_config.get("collector_tools") or [])
+    descriptions = []
+    for tool in tools:
+        card = getattr(tool, "card", None)
+        if card is None:
+            continue
+        if not is_query_compatible(getattr(card, "input_params", None)):
+            continue
+        name = getattr(card, "name", "")
+        desc = getattr(card, "description", "") or ""
+        if name:
+            descriptions.append({"name": name, "description": desc})
+    return descriptions
+
+
+def _runtime_api_tool_names(api_tools_config: dict | None) -> set[str] | None:
+    """返回 query-兼容 runtime API 工具名集合；无配置时返回 None。"""
+    if not isinstance(api_tools_config, dict):
+        return None
+    tools = build_runtime_api_tools(api_tools_config.get("collector_tools") or [])
+    names: set[str] = set()
+    for tool in tools:
+        card = getattr(tool, "card", None)
+        if card is None:
+            continue
+        if not is_query_compatible(getattr(card, "input_params", None)):
+            continue
+        name = getattr(card, "name", "")
+        if name:
+            names.add(name)
+    return names or None
+
+
+def build_retrieval_queries(
+        items: Sequence[SearchQueryItem],
+        *,
+        primary_engine: str,
+        max_queries: int,
+        scholarly_config: ScholarlySearchConfig | dict | None = None,
+) -> list[RetrievalQuery]:
+    effective_config = ScholarlySearchConfig.model_validate(scholarly_config or {})
+    full_text_config = asdict(FullTextConfig(enabled=effective_config.fetch_full_text))
+    queries: list[RetrievalQuery] = []
+    for item in items[:max(0, max_queries)]:
+        engines = item.search_engine_names or []
+        secondary_engines = list(dict.fromkeys(
+            engine for engine in engines if engine and engine != primary_engine
+        ))
+        queries.append(RetrievalQuery(
+            query=item.query,
+            primary_engine=primary_engine,
+            secondary_engines=secondary_engines,
+            max_full_text_results=effective_config.max_full_text_results_per_query,
+            scholarly_full_text_config=full_text_config if secondary_engines else {},
+            tool=item.tool,
+        ))
+    return queries
+
+
+def build_target_paper_locator_items(
+    research_intent: dict | None,
+    evidence_ledger: EvidenceLedger | dict | None,
+) -> list[SearchQueryItem]:
+    """Build deterministic locator queries for unresolved target papers."""
+    target_papers = (
+        research_intent.get("target_papers", [])
+        if isinstance(research_intent, dict)
+        else []
+    )
+    items: list[SearchQueryItem] = []
+    for target in target_papers_still_searchable(target_papers, evidence_ledger):
+        pmid = normalize_pmid(target.get("pmid") or target.get("url"))
+        if pmid:
+            items.append(SearchQueryItem(query=pmid, search_engine_name="pubmed"))
+            continue
+        arxiv_id = normalize_arxiv_id(target.get("arxiv_id") or target.get("url"))
+        if arxiv_id:
+            items.append(SearchQueryItem(query=arxiv_id, search_engine_name="arxiv"))
+            continue
+        title = str(target.get("title") or "").strip()
+        if title:
+            items.append(SearchQueryItem(query=title, search_engine_name=""))
+    return items
 
 
 def _fallback_search_query_list(
@@ -241,6 +480,13 @@ class StartNode(Start):
     async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """Invoke method of StartNode."""
         # 初始化 collector_context
+        input_ledger = ensure_ledger(inputs.get("evidence_ledger"))
+        target_tracking_ledger = {
+            "target_paper_attempts": input_ledger.target_paper_attempts,
+            "confirmed_target_papers": input_ledger.confirmed_target_papers,
+        }
+        if not any(target_tracking_ledger.values()):
+            target_tracking_ledger = {}
         collector_context = CollectorContext(
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
@@ -255,9 +501,10 @@ class StartNode(Start):
             max_search_query_count=inputs.get("max_search_query_count", 5),
             max_research_loops=inputs.get("max_research_loops", 2),
             max_tool_call_turns_per_query=inputs.get("max_tool_call_turns_per_query", 2),
-            evidence_ledger={},
+            evidence_ledger=target_tracking_ledger,
             report_type=inputs.get("report_type", "professional"),
             research_intent=inputs.get("research_intent") or {},
+            material_evidence=inputs.get("material_evidence") or [],
         )
         session.update_global_state({"collector_context": collector_context.model_dump()})
 
@@ -281,6 +528,7 @@ class GenerateQueryNode(BaseNode):
         language = session.get_global_state("collector_context.language")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         research_intent = session.get_global_state("collector_context.research_intent") or {}
+        api_tools_config = session.get_global_state("config.api_tools_config") or {}
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
@@ -288,7 +536,7 @@ class GenerateQueryNode(BaseNode):
                     step_description=step_description,
                     max_search_query_count=max_search_query_count,
                     language=language, evidence_ledger=evidence_ledger,
-                    research_intent=research_intent)
+                    research_intent=research_intent, api_tools_config=api_tools_config)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """根据研究记录生成当前采集轮次的检索 query。
@@ -323,8 +571,24 @@ class GenerateQueryNode(BaseNode):
             "language": language,
             "report_type": report_type,
         }
-        agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
-        formatted_prompt = apply_system_prompt("collector_gen_query", agent_input)
+        agent_input.update(build_target_papers_prompt_context(
+            state.get("research_intent"), state.get("evidence_ledger")
+        ))
+        _web_config = session.get_global_state("config.web_search_engine_config")
+        agent_input.update(build_temporal_scope_prompt_context(
+            state.get("research_intent"),
+            engine_name=getattr(_web_config, "search_engine_name", "") or "",
+            scholarly_enabled=_scholarly_search_is_available(),
+        ))
+        mcp_tools_for_prompt = _mcp_query_tool_descriptions()
+        runtime_api_tools_for_prompt = _runtime_api_tool_descriptions(state.get("api_tools_config"))
+        all_query_tools = mcp_tools_for_prompt + runtime_api_tools_for_prompt
+        if all_query_tools:
+            agent_input["has_mcp_query_tools"] = True
+            agent_input["mcp_query_tools"] = all_query_tools
+        else:
+            agent_input["has_mcp_query_tools"] = False
+        formatted_prompt = build_prompt_messages("collector_gen_query", agent_input)
 
         result: SearchQueryList = await self._invoke_llm_with_retry(
             formatted_prompt,
@@ -347,12 +611,51 @@ class GenerateQueryNode(BaseNode):
         return node_output
 
     def _post_handle(self, inputs: Input, algorithm_output: SearchQueryList, session: Session, context: ModelContext):
-        query_items = [normalize_search_query_item(query) for query in algorithm_output.queries]
-        search_queries = [RetrievalQuery(
-            query=item.query,
-            search_engine_name=item.search_engine_name,
-        ) for item in query_items]
         current_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
+        research_intent = session.get_global_state("collector_context.research_intent") or {}
+        scholarly_search_enabled = _scholarly_search_is_available()
+        available_tool_names = _available_mcp_query_tool_names()
+        runtime_api_names = _runtime_api_tool_names(session.get_global_state("config.api_tools_config"))
+        if available_tool_names is None and runtime_api_names:
+            available_tool_names = runtime_api_names
+        elif available_tool_names is not None and runtime_api_names:
+            available_tool_names = available_tool_names | runtime_api_names
+        locator_items = [
+            normalize_search_query_item(
+                item,
+                enable_scholarly_search=scholarly_search_enabled,
+                available_tool_names=available_tool_names,
+            )
+            for item in build_target_paper_locator_items(research_intent, current_ledger)
+        ]
+        generated_items = [
+            normalize_search_query_item(
+                query,
+                enable_scholarly_search=scholarly_search_enabled,
+                available_tool_names=available_tool_names,
+            )
+            for query in algorithm_output.queries
+        ]
+        query_items: list[SearchQueryItem] = []
+        seen_queries: set[tuple[tuple[str, ...], str]] = set()
+        for item in locator_items + generated_items:
+            key = (tuple(item.search_engine_names or []), item.query.strip().casefold())
+            if not item.query.strip() or key in seen_queries:
+                continue
+            seen_queries.add(key)
+            query_items.append(item)
+        max_search_query_count = session.get_global_state("collector_context.max_search_query_count") or 5
+        web_config = session.get_global_state("config.web_search_engine_config")
+        scholarly_config = session.get_global_state("config.scholarly_search_config")
+        primary_engine = web_config.search_engine_name if web_config else SearchEngine.PETAL.value
+        search_queries = build_retrieval_queries(
+            query_items,
+            primary_engine=primary_engine,
+            max_queries=max_search_query_count,
+            scholarly_config=scholarly_config,
+        )
+        target_papers = research_intent.get("target_papers", []) if isinstance(research_intent, dict) else []
+        search_queries = filter_confirmed_target_locators(search_queries, target_papers, current_ledger)
         ledger_update = EvidenceLedger(missing_evidence=algorithm_output.missing_evidence)
         updated_ledger = merge_ledger_update(current_ledger, ledger_update)
 
@@ -363,6 +666,7 @@ class GenerateQueryNode(BaseNode):
 
         return dict()
 
+    @moderation_retry_scope
     async def _invoke_llm_with_retry(
         self,
         formatted_prompt: list,
@@ -409,7 +713,9 @@ class SupervisorNode(BaseNode):
         new_doc_infos_current_loop = session.get_global_state("collector_context.new_doc_infos_current_loop")
         evidence_ledger = session.get_global_state("collector_context.evidence_ledger")
         research_intent = session.get_global_state("collector_context.research_intent") or {}
+        material_evidence = session.get_global_state("collector_context.material_evidence") or []
         research_loop_count = session.get_global_state("collector_context.research_loop_count")
+        api_tools_config = session.get_global_state("config.api_tools_config") or {}
         llm_model_name = adapt_llm_model_name(session, NodeId.INFO_COLLECTOR.value)
         self.llm = llm_context.get().get(llm_model_name)
 
@@ -420,7 +726,9 @@ class SupervisorNode(BaseNode):
                     new_doc_infos_current_loop=new_doc_infos_current_loop,
                     evidence_ledger=evidence_ledger,
                     research_intent=research_intent,
-                    research_loop_count=research_loop_count)
+                    material_evidence=material_evidence,
+                    research_loop_count=research_loop_count,
+                    api_tools_config=api_tools_config)
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         """根据 compact evidence table 判断信息是否充分并生成后续 query。
@@ -486,12 +794,33 @@ class SupervisorNode(BaseNode):
             "step_description": step_description,
             "ledger_brief": ledger_brief,
             "evidence_table": evidence_table,
+            "material_evidence": [
+                {
+                    "material_id": item.get("material_id", ""),
+                    "title": item.get("title", ""),
+                    "summary": (item.get("original_content", "") or "")[:1200],
+                }
+                for item in state.get("material_evidence", [])
+            ],
             "max_search_query_count": max_search_query_count,
             "language": state.get("language", "zh-CN"),
             "report_type": report_type,
         }
-        agent_input.update(build_temporal_scope_prompt_context(state.get("research_intent")))
-        formatted_prompt = apply_system_prompt("collector_supervisor", agent_input)
+        _web_config = session.get_global_state("config.web_search_engine_config")
+        agent_input.update(build_temporal_scope_prompt_context(
+            state.get("research_intent"),
+            engine_name=getattr(_web_config, "search_engine_name", "") or "",
+            scholarly_enabled=_scholarly_search_is_available(),
+        ))
+        mcp_tools_for_prompt = _mcp_query_tool_descriptions()
+        runtime_api_tools_for_prompt = _runtime_api_tool_descriptions(state.get("api_tools_config"))
+        all_query_tools = mcp_tools_for_prompt + runtime_api_tools_for_prompt
+        if all_query_tools:
+            agent_input["has_mcp_query_tools"] = True
+            agent_input["mcp_query_tools"] = all_query_tools
+        else:
+            agent_input["has_mcp_query_tools"] = False
+        formatted_prompt = build_prompt_messages("collector_supervisor", agent_input)
 
         result: Reflection = await self._invoke_llm_with_retry(
             formatted_prompt,
@@ -568,10 +897,30 @@ class SupervisorNode(BaseNode):
                 next_queries = [updated_ledger.missing_evidence[0]]
             elif reflection.knowledge_gap:
                 next_queries = [reflection.knowledge_gap]
-        search_queries = [RetrievalQuery(
-            query=query,
-            search_engine_name=route_secondary_search_engine_for_query(query),
-        ) for query in next_queries]
+        scholarly_search_enabled = _scholarly_search_is_available()
+        available_tool_names = _available_mcp_query_tool_names()
+        runtime_api_names = _runtime_api_tool_names(session.get_global_state("config.api_tools_config"))
+        if available_tool_names is None and runtime_api_names:
+            available_tool_names = runtime_api_names
+        elif available_tool_names is not None and runtime_api_names:
+            available_tool_names = available_tool_names | runtime_api_names
+        query_items = [
+            normalize_search_query_item(
+                query,
+                enable_scholarly_search=scholarly_search_enabled,
+                available_tool_names=available_tool_names,
+            )
+            for query in next_queries
+        ]
+        web_config = session.get_global_state("config.web_search_engine_config")
+        scholarly_config = session.get_global_state("config.scholarly_search_config")
+        primary_engine = web_config.search_engine_name if web_config else SearchEngine.PETAL.value
+        search_queries = build_retrieval_queries(
+            query_items,
+            primary_engine=primary_engine,
+            max_queries=max(1, len(next_queries)),
+            scholarly_config=scholarly_config,
+        )
         session.update_global_state({"collector_context.search_queries": search_queries})
 
         stop_reason = "continue"
@@ -622,6 +971,7 @@ class SupervisorNode(BaseNode):
 
         return dict(next_node=NodeId.COLLECTOR_INFO.value)
 
+    @moderation_retry_scope
     async def _invoke_llm_with_retry(
         self,
         formatted_prompt: list,
@@ -719,7 +1069,7 @@ class SummaryNode(BaseNode):
             "ledger_brief": evidence_brief,
             "missing_evidence": current_ledger.missing_evidence,
         }
-        formatted_prompt = apply_system_prompt("collector_final", agent_input)
+        formatted_prompt = build_prompt_messages("collector_final", agent_input)
 
         result: Summary = await self._invoke_llm_with_retry(formatted_prompt, state, doc_infos)
 
@@ -736,6 +1086,7 @@ class SummaryNode(BaseNode):
 
         return dict(next_node=next_node)
 
+    @moderation_retry_scope
     async def _invoke_llm_with_retry(self, formatted_prompt: list, state: dict, doc_infos: list):
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")
@@ -841,6 +1192,7 @@ def build_info_collector_sub_graph() -> Workflow:
             "max_tool_call_turns_per_query": "${max_tool_call_turns_per_query}",
             "report_type": "${report_type}",
             "research_intent": "${research_intent}",
+            "evidence_ledger": "${evidence_ledger}",
         }
     )
     sub_workflow.add_workflow_comp(NodeId.COLLECTOR_QUERY_GEN.value, GenerateQueryNode())

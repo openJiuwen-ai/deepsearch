@@ -1,0 +1,895 @@
+"""Tests for LLM output type-safety guards in the report pipeline.
+
+Covers edge cases where LLM returns malformed types (non-dict JSON,
+string numbers, None passages, non-list containers, etc.) that would
+cause TypeError/AttributeError crashes without the defensive guards
+added in evidence.py, report_rationale_fulltext.py, compact_doc_info.py,
+report_utils.py, and report.py.
+"""
+
+import json
+import re
+from unittest.mock import patch, MagicMock
+
+import pytest
+
+from openjiuwen_deepsearch.algorithm.report.evidence import (
+    EvidenceMixin,
+    _normalize_rationales,
+)
+from openjiuwen_deepsearch.algorithm.report.report import Reporter
+from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
+    filter_passages_by_coverage,
+    dedup_passages_by_rationale,
+)
+from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
+    build_structured_evidence_guide,
+)
+from openjiuwen_deepsearch.algorithm.report.report_utils import (
+    XYChartMermaidGenerator,
+    PieChartMermaidGenerator,
+    TimelineChartMermaidGenerator,
+)
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+
+
+# ---------- helpers ----------
+
+def _make_reporter():
+    with patch.object(Reporter, "__init__", lambda self, name: None):
+        reporter = Reporter.__new__(Reporter)
+        reporter._llm = MagicMock()
+        return reporter
+
+
+def _doc(idx, title=None, url=None):
+    return {
+        "doc_title": title or f"doc-{idx}",
+        "doc_url": url or f"https://example.com/{idx}",
+        "passage_text": f"passage-{idx}",
+    }
+
+
+def _rationale(rid, desc):
+    return {"id": rid, "description": desc, "type": "factual"}
+
+
+def _raw_doc(idx, content=None):
+    return {
+        "doc_id": f"doc-{idx}",
+        "title": f"article-{idx}",
+        "url": f"https://example.com/{idx}",
+        "source": "example.com",
+        "publish_time": "2025-01-01",
+        "doc_time": "2025-01-01",
+        "original_content": content or f"This is the content of article {idx}. " * 20,
+    }
+
+
+# =====================================================================
+# _normalize_rationales — non-dict elements, non-str descriptions
+# =====================================================================
+
+def test_normalize_rationales_skips_non_dict_elements():
+    """Non-dict rationale elements (int, str, None) are filtered out, not passed through."""
+    rationales = [
+        {"id": "r1", "description": "valid", "type": "factual"},
+        42,
+        "not a dict",
+        None,
+        {"id": "r2", "description": "also valid", "type": "factual"},
+    ]
+    result = _normalize_rationales(rationales, max_rationales=15)
+    # Non-dict elements must be removed, not kept in the list
+    assert all(isinstance(r, dict) for r in result)
+    assert len(result) == 2
+    # IDs are renumbered sequentially (r1, r2 — no gaps from removed elements)
+    ids = [r.get("id") for r in result]
+    assert ids == ["r1", "r2"]
+
+
+def test_normalize_rationales_handles_non_str_description():
+    """Non-str description (int, None) is coerced to str, not crashed on."""
+    rationales = [
+        {"id": "r1", "description": 12345, "type": "factual"},
+        {"id": "r2", "description": None, "type": "factual"},
+    ]
+    result = _normalize_rationales(rationales, max_rationales=15)
+    assert all(isinstance(r["description"], str) for r in result)
+
+
+def test_normalize_rationales_preserves_medium_high_primary_records():
+    """A medium complexity task can retain up to 15 primary rationales."""
+    rationales = [
+        {
+            "id": f"source-{index}",
+            "description": f"Study {index} (20{index:02d})",
+            "priority": "primary",
+        }
+        for index in range(1, 16)
+    ]
+
+    result = _normalize_rationales(rationales)
+
+    assert len(result) == 15
+    assert result[-1]["id"] == "r15"
+    assert all(item["priority"] == "primary" for item in result)
+
+
+def test_classify_rationale_complexity_uses_original_query_requirements():
+    long_but_simple_query = "Explain one topic briefly. " * 80
+    assert len(long_but_simple_query) >= 500
+    assert EvidenceMixin._classify_rationale_complexity({
+        "original_query": long_but_simple_query,
+    }) == ("simple", (5, 10))
+
+    assert EvidenceMixin._classify_rationale_complexity({
+        "original_query": "Compare market trends across historical periods and explain the differences",
+    }) == ("medium", (10, 15))
+
+    assert EvidenceMixin._classify_rationale_complexity({
+        "original_query": "1. First requirement\n2. Second requirement\n3. Third requirement",
+    }) == ("complex", (15, 20))
+
+
+def test_validate_rationale_coverage_finds_missing_and_duplicate_mappings():
+    rationales = [
+        {"id": "r1", "description": "same", "covers": ["q1"]},
+        {"id": "r2", "description": "same", "covers": ["unknown"]},
+    ]
+    requirements = [
+        {"id": "q1", "description": "first requirement"},
+        {"id": "q2", "description": "second requirement"},
+    ]
+
+    errors = EvidenceMixin._validate_rationale_coverage(
+        rationales, requirements, (2, 5)
+    )
+
+    assert any("duplicate rationale descriptions" in error for error in errors)
+    assert any("uncovered requirement IDs: q2" in error for error in errors)
+    assert any("unknown requirement IDs: unknown" in error for error in errors)
+
+
+def test_normalize_rationales_priority_filter_ignores_non_dict():
+    """Priority filtering skips non-dict elements without AttributeError."""
+    rationales = [
+        {"id": "r1", "description": "primary one", "priority": "primary"},
+        "garbage",
+        {"id": "r2", "description": "extra", "priority": "supplementary"},
+    ]
+    # max_rationales=1 forces priority filtering path
+    result = _normalize_rationales(rationales, max_rationales=1)
+    assert len(result) == 1
+    assert result[0]["id"] == "r1"
+
+
+@pytest.mark.asyncio
+async def test_generate_rationales_non_list_field():
+    """LLM returning rationales as a non-list (string) triggers retry, not silent empty."""
+    reporter = _make_reporter()
+    mock_llm_result = MagicMock()
+    # rationales is a string, not a list
+    mock_llm_result.get.return_value = '{"rationales": "not a list"}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            rationales, error = await reporter._generate_section_rationales(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+            )
+
+    # Should trigger ValueError -> retry -> fail after max retries, not silent empty success
+    assert rationales == []
+    assert error != ""  # error message should be set
+
+
+@pytest.mark.asyncio
+async def test_generate_rationales_retries_duplicate_requirement_ids():
+    reporter = _make_reporter()
+    llm_output = {
+        "content": json.dumps({
+            "requirements": [
+                {"id": "q1", "description": "Region A figures"},
+                {"id": "q1", "description": "Region B figures"},
+            ],
+            "rationales": [{
+                "id": "r1",
+                "description": "Compare regional figures",
+                "covers": ["q1"],
+            }],
+        }),
+    }
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats",
+        return_value=llm_output,
+    ) as invoke:
+        with patch(
+            "openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages",
+            return_value=[{"role": "user", "content": "test"}],
+        ):
+            inputs = {
+                "professional_report_adaptive_rationales": True,
+                "section_idx": 1,
+                "section_task": "Compare figures",
+                "section_description": "Compare two regions",
+                "max_generate_retry_num": 1,
+            }
+            rationales, error = await reporter._generate_section_rationales(inputs)
+
+    assert invoke.await_count == 1
+    assert len(rationales) == 1
+    assert "duplicate requirement IDs: q1" in error
+    requirements = inputs["rationale_requirements"]
+    assert [item["description"] for item in requirements] == [
+        "Region A figures",
+        "Region B figures",
+    ]
+    assert requirements[1]["id"].startswith("q1__duplicate_")
+    assert any(
+        "duplicate requirement IDs: q1" in error
+        for error in inputs["rationale_coverage_diagnostics"]["validation_errors"]
+    )
+
+
+# =====================================================================
+# _select_by_rationale_coverage — string scores, non-dict rationales
+
+def test_select_by_rationale_coverage_string_scores():
+    """String-type coverage scores in coverage_matrix are handled via safe_float."""
+    reporter = _make_reporter()
+    docs = [_doc(0, "high"), _doc(1, "low")]
+    rationales = [_rationale("r1", "test")]
+    coverage_result = {
+        "filtered_passages": docs,
+        "coverage_matrix": {
+            "passage_0": {"r1": "0.9"},  # string instead of float
+            "passage_1": {"r1": "0.1"},
+        },
+    }
+
+    selected, stats = Reporter._select_by_rationale_coverage(
+        docs, rationales, coverage_result, top_k=2,
+    )
+    assert len(selected) >= 1
+    # High-coverage doc should be first
+    assert selected[0]["doc_title"] == "high"
+
+
+def test_select_by_rationale_coverage_bad_string_scores():
+    """Non-numeric string scores (e.g. 'high') are safely converted to 0.0."""
+    reporter = _make_reporter()
+    docs = [_doc(0, "bad"), _doc(1, "good")]
+    rationales = [_rationale("r1", "test")]
+    coverage_result = {
+        "filtered_passages": docs,
+        "coverage_matrix": {
+            "passage_0": {"r1": "not_a_number"},  # safe_float → 0.0
+            "passage_1": {"r1": 0.8},
+        },
+    }
+
+    selected, stats = Reporter._select_by_rationale_coverage(
+        docs, rationales, coverage_result, top_k=2,
+    )
+    assert len(selected) >= 1
+
+
+def test_select_by_rationale_coverage_non_dict_rationale_elements():
+    """Non-dict rationale elements are filtered, not crashed on."""
+    docs = [_doc(0, "test")]
+    rationales = [
+        {"id": "r1", "description": "valid"},
+        42,  # non-dict element
+        "garbage",
+    ]
+    coverage_result = {
+        "filtered_passages": docs,
+        "coverage_matrix": {"passage_0": {"r1": 0.9}},
+    }
+
+    selected, stats = Reporter._select_by_rationale_coverage(
+        docs, rationales, coverage_result, top_k=1,
+    )
+    assert len(selected) == 1
+
+
+# =====================================================================
+# _extract_and_score_documents — non-list documents/passages, None passages
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_extract_and_score_non_list_documents():
+    """LLM returning documents as a dict (not list) doesn't crash."""
+    reporter = _make_reporter()
+    raw_docs = [_raw_doc(0, content="test content")]
+
+    mock_llm_result = MagicMock()
+    # documents is a dict, not a list
+    mock_llm_result.get.return_value = '{"documents": {"key": "value"}}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    # Should not crash; degraded path returns empty coverage_matrix
+    assert result["coverage_matrix"] == {}
+
+
+@pytest.mark.asyncio
+async def test_extract_and_score_non_list_passages():
+    """LLM returning passages as None for a doc doesn't crash the batch."""
+    reporter = _make_reporter()
+    raw_docs = [_raw_doc(0, content="test content")]
+
+    mock_llm_result = MagicMock()
+    # passages is null (key exists, value is None)
+    mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": null}]}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    # Should not crash; no passages extracted
+    assert result["coverage_matrix"] == {}
+
+
+@pytest.mark.asyncio
+async def test_extract_and_score_non_dict_doc_result():
+    """LLM returning a non-dict doc_result (int) is skipped, not crashed on."""
+    reporter = _make_reporter()
+    raw_docs = [_raw_doc(0, content="test content")]
+
+    mock_llm_result = MagicMock()
+    # documents contains a non-dict element (int)
+    mock_llm_result.get.return_value = '{"documents": [42, {"doc_index": 0, "passages": [{"text": "valid", "rationale_ids": ["r1"], "scores": {"r1": {"coverage": 0.9}}}]}]}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    assert error == ""
+    # The valid doc's passage should be extracted
+    assert "passage_0" in result["coverage_matrix"]
+
+
+@pytest.mark.asyncio
+async def test_extract_and_score_llm_returns_json_array():
+    """LLM returning a JSON array (not object) triggers retry, not crash."""
+    reporter = _make_reporter()
+    raw_docs = [_raw_doc(0, content="test content")]
+
+    mock_llm_result = MagicMock()
+    # LLM returns a JSON array instead of an object
+    mock_llm_result.get.return_value = '[1, 2, 3]'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    # Should degrade gracefully
+    assert result["coverage_matrix"] == {}
+
+
+# =====================================================================
+# filter_passages_by_coverage — non-dict coverage_result/coverage_matrix
+# =====================================================================
+
+def test_filter_passages_by_coverage_non_dict_coverage_result():
+    """coverage_result as a list (not dict) returns original passages."""
+    passages = [_doc(0, "test")]
+    result = filter_passages_by_coverage(passages, [_rationale("r1", "test")], [1, 2, 3])
+    assert result == passages
+
+
+def test_filter_passages_by_coverage_non_dict_coverage_matrix():
+    """coverage_matrix as a list (not dict) returns original passages."""
+    passages = [_doc(0, "test")]
+    coverage_result = {"coverage_matrix": ["not", "a", "dict"], "filtered_passages": passages}
+    result = filter_passages_by_coverage(passages, [_rationale("r1", "test")], coverage_result)
+    assert result == passages
+
+
+def test_filter_passages_by_coverage_string_scores():
+    """String-type scores in coverage_matrix are converted via safe_float."""
+    passages = [_doc(0, "high"), _doc(1, "low")]
+    coverage_result = {
+        "filtered_passages": passages,
+        "coverage_matrix": {
+            "passage_0": {"r1": "0.9"},
+            "passage_1": {"r1": "0.1"},
+        },
+    }
+    result = filter_passages_by_coverage(passages, [_rationale("r1", "test")], coverage_result)
+    # High-coverage passage should be kept
+    assert len(result) >= 1
+    assert result[0]["doc_title"] == "high"
+
+
+# =====================================================================
+# dedup_passages_by_rationale — non-dict coverage_matrix
+# =====================================================================
+
+def test_dedup_passages_non_dict_coverage_matrix():
+    """dedup with coverage_matrix as a list doesn't crash."""
+    passages = [
+        {"_passage_key": "passage_0", "doc_title": "a", "passage_text": "content a"},
+        {"_passage_key": "passage_1", "doc_title": "b", "passage_text": "content b"},
+    ]
+    coverage_result = {"coverage_matrix": ["list", "not", "dict"], "filtered_passages": passages}
+    # Should not crash; dedup proceeds with empty coverage_matrix
+    result = dedup_passages_by_rationale(passages, [_rationale("r1", "test")], coverage_result)
+    assert len(result) >= 1
+
+
+# =====================================================================
+# build_structured_evidence_guide — non-dict coverage_matrix
+# =====================================================================
+
+def test_build_structured_evidence_guide_non_dict_coverage_matrix():
+    """Non-dict coverage_matrix returns empty string, not crash."""
+    passage = {"index": 1, "doc_title": "test", "key_passages": ["text"]}
+    rationales = [_rationale("r1", "test")]
+    coverage_result = {"coverage_matrix": ["list", "not", "dict"], "filtered_passages": [passage]}
+
+    guide = build_structured_evidence_guide(
+        [passage], rationales, coverage_result,
+        selected_passage_keys=["passage_0"],
+    )
+    assert guide == ""
+
+
+# =====================================================================
+# Chart generators — non-dict JSON, non-str unit, non-list records
+# =====================================================================
+
+def test_xy_chart_generator_non_dict_json():
+    """XYChart with JSON array (not object) raises ValueError, not AttributeError."""
+    with pytest.raises(ValueError, match="bar/line chart"):
+        XYChartMermaidGenerator.generate_from_json("[1, 2, 3]")
+
+
+def test_xy_chart_generator_non_str_unit():
+    """XYChart with non-str unit (int) doesn't crash on .strip()."""
+    data = {"image_type": "bar", "unit": 123, "records": [["a", 10], ["b", 20]]}
+    # Should not crash; unit is coerced to str
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    assert "xychart-beta" in result
+
+
+def test_xy_chart_generator_non_list_records():
+    """XYChart with non-list records (int) raises ValueError, not TypeError."""
+    data = {"image_type": "bar", "unit": "个", "records": 42}
+    with pytest.raises(ValueError, match="records are required"):
+        XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+
+
+def test_pie_chart_generator_non_dict_json():
+    """PieChart with JSON array raises ValueError, not AttributeError."""
+    with pytest.raises(ValueError, match="pie chart"):
+        PieChartMermaidGenerator.generate_from_json('"not a dict"')
+
+
+def test_pie_chart_generator_non_str_unit():
+    """PieChart with non-str unit (int) doesn't crash on .strip()."""
+    data = {"image_type": "pie", "unit": 100, "records": [["a", 10], ["b", 20]]}
+    result = PieChartMermaidGenerator.generate_from_json(json.dumps(data))
+    assert "pie" in result
+
+
+def test_timeline_chart_generator_non_dict_json():
+    """Timeline with JSON scalar raises ValueError, not AttributeError."""
+    with pytest.raises(ValueError, match="timeline"):
+        TimelineChartMermaidGenerator.generate_from_json('42')
+
+
+# =====================================================================
+# _should_use_horizontal — long CJK labels force horizontal (bug fix)
+# =====================================================================
+
+def test_long_cjk_labels_force_horizontal():
+    """Three long CJK labels (each ≥10 chars, weight ≥20) must use
+    horizontal orientation to avoid x-axis label overlap.
+
+    Regression: '协议兼容性与本地联动能力' (12 CJK, weight 24) kept
+    vertical orientation because total weight 64 ≤ 80 and per-label
+    limit 80/3 ≈ 26.7 > 24.  In a 430 px / 3-column vertical chart,
+    a 12-char label (≈168 px) exceeds the 143 px per-column space.
+    """
+    labels = [
+        "协议兼容性与本地联动能力",
+        "主动智能场景覆盖数量",
+        "一站式安装与售后时效",
+    ]
+    assert XYChartMermaidGenerator._should_use_horizontal(labels, 3) is True
+
+
+def test_short_labels_stay_vertical():
+    """Short labels (weight ≤ 20) with count < 4 stay vertical."""
+    labels = ["产品性能", "设计美学", "品牌口碑"]
+    assert XYChartMermaidGenerator._should_use_horizontal(labels, 3) is False
+
+
+# =====================================================================
+# _nice_step — D3-aligned multipliers (bug fix)
+# =====================================================================
+
+def test_nice_step_uses_d3_aligned_multipliers():
+    """_nice_step must use D3-aligned multipliers (1, 1.5, 2, 2.5, 5, 10)
+    to produce y-axis ranges that render with fewer ticks.
+
+    Regression: _nice_step(1029.8) returned 1100 (multiplier 1.1 from
+    NICE_MULTIPLIERS), leading to y_max=6600 and 14 D3 ticks at 500
+    intervals in a 500 px chart.  With D3-aligned multipliers, it
+    returns 1500, leading to y_max=7500 and ≤ 8 ticks.
+    """
+    assert XYChartMermaidGenerator._nice_step(1029.8) == 1500
+    assert XYChartMermaidGenerator._nice_step(110) == 150
+    assert XYChartMermaidGenerator._nice_step(17.37) == 20
+
+
+def test_large_bar_values_avoid_tick_overlap():
+    """End-to-end: bar [2999, 3999, 4999, 5999] must produce a y-axis
+    max that avoids tick overlap in a 500 px chart.
+
+    Old y_max=6600 → 14 D3 ticks at 500 intervals (36 px/tick, overlap).
+    New y_max=7500 → 6-8 D3 ticks (63-83 px/tick, no overlap).
+    """
+    data = {
+        "image_type": "bar",
+        "unit": "元",
+        "records": [
+            ["两居智慧入门套餐", 2999],
+            ["两居智慧进阶套餐", 3999],
+            ["三居智慧旗舰套餐", 4999],
+            ["凌云E3套系", 5999],
+        ],
+    }
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    m = re.search(r'y-axis "[^"]*" 0 --> (\d+(?:\.\d+)?)', result)
+    assert m, f"y-axis not found in: {result}"
+    y_max = float(m.group(1))
+    assert y_max == 7500, f"expected y_max=7500 (≤8 ticks), got y_max={y_max}"
+
+
+# =====================================================================
+# _d3_tick_count — d3-array tick-step algorithm (bug fix)
+# =====================================================================
+
+def test_d3_tick_count_matches_d3_array():
+    """_d3_tick_count must match d3-array's linear.ticks() step selection.
+
+    d3 uses √50/√10/√2 error thresholds from {1, 2, 5, 10} × 10ⁿ, NOT a
+    (1, 2, 2.5, 5, 10) multiplier scan. Counter-examples the old scan
+    underestimated, all on STEP_MULTIPLIERS-produced y_max shapes:
+      y_range=10000 → old scan: 2, d3 actual: 11
+      y_range=2500  → old scan: 3, d3 actual: 13
+      y_range=5000  → old scan: 6, d3 actual: 11
+    """
+    assert XYChartMermaidGenerator._d3_tick_count(10000) == 11
+    assert XYChartMermaidGenerator._d3_tick_count(2500) == 13
+    assert XYChartMermaidGenerator._d3_tick_count(5000) == 11
+
+
+# =====================================================================
+# _coerce_tick_density — upstream tick density cap (bug fix)
+# =====================================================================
+
+def test_coerce_tick_density_trigger_input():
+    """触发输入 [100000, 100100, 100200] 修复目标：
+    y_range=300 → d3 ticks=16 (step=20) 重叠；
+    coerce 后 y_range 应放大到使 d3 ticks ≤ 8（y_range=375, step=50, ticks=8）。
+    """
+    y_min, y_max = 99950.0, 100250.0
+    new_min, new_max = XYChartMermaidGenerator._coerce_tick_density(y_min, y_max)
+    new_range = new_max - new_min
+    assert new_min == y_min, "y_min 不应下移（数据下界不变）"
+    assert new_max >= y_max, "y_max 只能上移"
+    assert XYChartMermaidGenerator._d3_tick_count(new_range) <= XYChartMermaidGenerator.MAX_TICKS, \
+        f"coerce 后 d3 ticks={XYChartMermaidGenerator._d3_tick_count(new_range)} 仍超 {XYChartMermaidGenerator.MAX_TICKS}"
+
+
+def test_coerce_tick_density_already_within_limit():
+    """y_range 已在阈值内时，coerce 应原样返回（如 y_range=7500, ticks=8）。"""
+    y_min, y_max = 0.0, 7500.0
+    new_min, new_max = XYChartMermaidGenerator._coerce_tick_density(y_min, y_max)
+    assert (new_min, new_max) == (y_min, y_max)
+
+
+def test_coerce_tick_density_zero_range():
+    """y_range=0 时不应死循环，原样返回。"""
+    y_min, y_max = 100.0, 100.0
+    new_min, new_max = XYChartMermaidGenerator._coerce_tick_density(y_min, y_max)
+    assert (new_min, new_max) == (y_min, y_max)
+
+
+def test_coerce_tick_density_extreme_small_range():
+    """极端小 y_range（1e-9）也不应死循环，有迭代上限保护。"""
+    y_min, y_max = 0.0, 1e-9
+    _, new_max = XYChartMermaidGenerator._coerce_tick_density(y_min, y_max)
+    assert new_max >= y_max
+
+
+# =====================================================================
+# _min_width_for_ticks — dynamic tick text width + label area (bug fix)
+# =====================================================================
+
+def test_min_width_for_ticks_six_digit_values():
+    """非零起点六位数场景验证 px_per_tick 按刻度值位数估算：
+    6 位（y_max=100325）: px_per_tick = max(50, 6*8+16) = 64
+    4 位（y_max=7500）  : px_per_tick = max(50, 4*8+16) = 50
+    """
+    w6 = XYChartMermaidGenerator._min_width_for_ticks(
+        99950.0, 100325.0,
+        ["协议兼容性与本地联动能力", "主动智能场景覆盖数量", "一站式安装与售后时效"]
+    )
+    w4 = XYChartMermaidGenerator._min_width_for_ticks(
+        0.0, 7500.0, ["项目甲", "项目乙"]
+    )
+    assert w6 > w4, f"6-digit+long-label case should need more width: w6={w6}, w4={w4}"
+
+
+def test_min_width_for_ticks_grows_with_label_length():
+    """固定 y_range，标签越长 width 越大（验证标签区预留）。"""
+    short_labels = ["甲", "乙", "丙"]
+    long_labels = ["协议兼容性与本地联动能力", "主动智能场景覆盖数量", "一站式安装与售后时效"]
+    w_short = XYChartMermaidGenerator._min_width_for_ticks(0.0, 300.0, short_labels)
+    w_long = XYChartMermaidGenerator._min_width_for_ticks(0.0, 300.0, long_labels)
+    assert w_long > w_short, f"longer labels should need more width: short={w_short}, long={w_long}"
+
+
+def test_min_width_for_ticks_zero_range():
+    """y_range=0 返回 0（与原行为一致）。"""
+    assert XYChartMermaidGenerator._min_width_for_ticks(0.0, 0.0, ["甲", "乙"]) == 0.0
+
+
+# =====================================================================
+# generate_from_json — 触发输入端到端修复验证
+# =====================================================================
+
+def test_trigger_input_no_tick_overlap():
+    """触发输入：3 条六位数值 + 长 CJK 标签 + 同单位"元"。
+    修复目标：
+    - 走 use_horizontal（标签长）
+    - y_range 经 _coerce 后 d3 ticks ≤ 8
+    - width 足以容纳刻度+标签
+    - y_max 不应小于原数据最大值
+    """
+    data = {
+        "image_type": "bar",
+        "unit": "元",
+        "records": [
+            ["协议兼容性与本地联动能力", 100000],
+            ["主动智能场景覆盖数量", 100100],
+            ["一站式安装与售后时效", 100200],
+        ],
+    }
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    assert "chartOrientation: horizontal" in result
+    m = re.search(r'y-axis "[^"]*" (\d+(?:\.\d+)?) --> (\d+(?:\.\d+)?)', result)
+    assert m, f"y-axis not found in: {result}"
+    y_min = float(m.group(1))
+    y_max = float(m.group(2))
+    y_range = y_max - y_min
+    assert XYChartMermaidGenerator._d3_tick_count(y_range) <= XYChartMermaidGenerator.MAX_TICKS, \
+        f"y_range={y_range} d3 ticks={XYChartMermaidGenerator._d3_tick_count(y_range)} 超阈值"
+    m_w = re.search(r"width: (\d+)", result)
+    assert m_w, f"width not found in: {result}"
+    width = int(m_w.group(1))
+    assert width >= 430, f"width={width} 低于基础宽度 430"
+    assert y_max >= 100200, f"y_max={y_max} 小于数据最大值 100200"
+
+
+# =====================================================================
+# generate_from_json — tick density vs width constraint (bug fix)
+# =====================================================================
+
+def test_tick_density_forces_wider_chart_horizontal():
+    """Horizontal chart with large value range must widen width to avoid
+    tick label overlap on the horizontal value axis.
+
+    Long labels (weight > 20 each) force use_horizontal. y_range=7500 →
+    D3 picks 1000-step → 8 ticks → width must be ≥ 8 × 50 = 400 px.
+    """
+    data = {
+        "image_type": "bar",
+        "unit": "元",
+        "records": [
+            ["超长标签名称测试用例一", 2999],
+            ["超长标签名称测试用例二", 5999],
+        ],
+    }
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    assert "chartOrientation: horizontal" in result
+    m = re.search(r"width: (\d+)", result)
+    assert m, f"width not found in: {result}"
+    width = int(m.group(1))
+    assert width >= 400, f"width={width} causes tick overlap (need ≥400 for 8 ticks)"
+
+
+def test_vertical_chart_not_widened_for_ticks():
+    """Vertical chart must NOT widen width for tick density — the value
+    axis is vertical (d3 axisLeft), so tick spacing depends on height,
+    not width. Width widening only applies when use_horizontal is True.
+
+    Regression guard for the direction-mismatch bug: previously all
+    charts had width widened, including vertical charts where it has no
+    effect on the vertical value-axis tick spacing.
+    """
+    data = {
+        "image_type": "bar",
+        "unit": "元",
+        "records": [
+            ["项目甲", 2999],
+            ["项目乙", 5999],
+        ],
+    }
+    result = XYChartMermaidGenerator.generate_from_json(json.dumps(data))
+    assert "chartOrientation: horizontal" not in result
+    m = re.search(r"width: (\d+)", result)
+    assert m, f"width not found in: {result}"
+    width = int(m.group(1))
+    assert width == 360, f"vertical chart width should stay at WIDTH_MIN(360), got {width}"
+
+
+# =====================================================================
+# _compute_y_range — string values in list
+# =====================================================================
+
+def test_compute_y_range_with_string_values():
+    """String numbers in values list are converted via safe_float, no crash."""
+    vmin, vmax = XYChartMermaidGenerator._compute_y_range(["10.5", "20.3", "15.0"], "bar")
+    # Function applies nice-number padding; just verify no crash and vmin <= vmax
+    assert vmin <= vmax
+    assert isinstance(vmin, float)
+    assert isinstance(vmax, float)
+
+
+def test_compute_y_range_with_mixed_types():
+    """Mixed str/float/bad values don't crash; bad_value → 0.0 via safe_float."""
+    vmin, vmax = XYChartMermaidGenerator._compute_y_range(["10.5", 20.3, "bad_value"], "bar")
+    assert vmin <= vmax
+    assert isinstance(vmin, (int, float))
+    assert isinstance(vmax, (int, float))
+
+
+def test_compute_y_range_empty_list():
+    """Empty values list returns default range."""
+    vmin, vmax = XYChartMermaidGenerator._compute_y_range([], "bar")
+    assert vmin == 0.0
+    assert vmax == 1.0
+
+
+# =====================================================================
+# report.py — non-int max_generate_retry_num
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_generate_sub_report_string_retry_num():
+    """Non-int max_generate_retry_num (string, None, 0, non-numeric) is handled
+    without crash, exercising the actual guard at report.py:499."""
+    reporter = _make_reporter()
+    captured = []
+
+    async def _mock_outline(self, inputs, section_idx, max_attempt_num):
+        captured.append(max_attempt_num)
+        return False, "test error"
+
+    bg = [{"text": "background knowledge content"}]
+    with patch.object(Reporter, "_get_background_knowledge_contents",
+                      return_value=bg):
+        with patch.object(Reporter, "_generate_outline_with_retry", new=_mock_outline):
+            # String "3" → int("3") = 3
+            await reporter.generate_sub_report(
+                {"section_idx": 1, "max_generate_retry_num": "3",
+                 "sub_report_background_knowledge": bg})
+            assert captured[-1] == 3
+
+            # None → default 3
+            await reporter.generate_sub_report(
+                {"section_idx": 2, "max_generate_retry_num": None,
+                 "sub_report_background_knowledge": bg})
+            assert captured[-1] == 3
+
+            # 0 → max(int(0), 1) = 1 (not 3, since `or` is no longer used)
+            await reporter.generate_sub_report(
+                {"section_idx": 3, "max_generate_retry_num": 0,
+                 "sub_report_background_knowledge": bg})
+            assert captured[-1] == 1
+
+            # Non-numeric string "abc" → ValueError → fallback 3
+            await reporter.generate_sub_report(
+                {"section_idx": 4, "max_generate_retry_num": "abc",
+                 "sub_report_background_knowledge": bg})
+            assert captured[-1] == 3
+
+
+# =====================================================================
+# LLM content .strip() guards — non-str content doesn't crash
+# =====================================================================
+
+def test_str_strip_guard_on_non_str_llm_content():
+    """str() wrapping before .strip() prevents AttributeError on non-str LLM content.
+
+    The pattern `str(llm_output.get("content") or "").strip()` is used at:
+    - visualization.py:229, 277, 352, 411, 707
+    - visualization_insertion.py:201, 399
+    - report_parts.py:210
+    This test verifies the guard pattern works on various non-str types.
+    """
+    # int content
+    assert str(12345 or "").strip() == "12345"
+    # None content
+    assert str(None or "").strip() == ""
+    # list content (truthy, non-str)
+    assert str([1, 2] or "").strip() == "[1, 2]"
+    # dict content (truthy, non-str)
+    assert str({"a": 1} or "").strip() == "{'a': 1}"
+    # float content
+    assert str(3.14 or "").strip() == "3.14"
+    # bool content
+    assert str(True or "").strip() == "True"
+
+
+# =====================================================================
+# evidence.py _extract_batch — non-list documents/passages in logging
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_extract_batch_non_list_documents_logging():
+    """_extract_batch with documents as int doesn't crash len() in logging path."""
+    reporter = _make_reporter()
+    raw_docs = [_raw_doc(0, content="test content")]
+
+    mock_llm_result = MagicMock()
+    # documents is an int, not a list
+    mock_llm_result.get.return_value = '{"documents": 42}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    # Should not crash; degraded path returns empty coverage_matrix
+    assert result["coverage_matrix"] == {}
+
+
+@pytest.mark.asyncio
+async def test_extract_batch_non_list_passages_in_logging():
+    """_extract_batch with passages as string doesn't crash len() in logging path."""
+    reporter = _make_reporter()
+    raw_docs = [_raw_doc(0, content="test content")]
+
+    mock_llm_result = MagicMock()
+    # documents has a doc with passages as a string (truthy, non-list)
+    mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": "not a list"}]}'
+
+    with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+            result, error = await reporter._extract_and_score_documents(
+                {"section_idx": 1, "section_task": "test", "section_description": "",
+                 "max_generate_retry_num": 1},
+                raw_docs, [_rationale("r1", "test")],
+            )
+
+    # Should not crash; passages is not a list, so no passages extracted
+    assert result["coverage_matrix"] == {}

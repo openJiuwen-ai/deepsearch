@@ -24,7 +24,7 @@
 
     ```
     docker version
-    docker-compose version
+    docker compose version
     ```
 
 ### 安装 MySQL（可选组件）
@@ -46,7 +46,7 @@
   ```
 
 * 安装完成后，运行以下命令登录 MySQL：
-   
+
   ```bash
   sudo mysql -u root
   ```
@@ -72,14 +72,14 @@
 
   ```
   # 下载 x86_64 架构版本包：
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.9
-  
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.11
+
   # 下载 ARM64 架构版本包：
-  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.9
+  docker pull swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.11
   ```
 
-* **本地构建镜像**：若无法拉取 SWR 或需与仓库源码一致，在 DeepSearch **源码根目录**执行  
-  `docker build -t deepsearch-full -f docker/Dockerfile .`  
+* **本地构建镜像**：若无法拉取 SWR 或需与仓库源码一致，在 DeepSearch **源码根目录**执行
+  `docker build -t deepsearch-full -f docker/Dockerfile .`
   其中 `deepsearch-full` 仅为示例标签（`-t` 可改为任意名称），须与 `docker run` 最后一行镜像名一致。容器启动时会同时运行主 API（8000）与 Telemetry（8089），详见 [Docker 安装总览](./README.md#镜像内的两个-http-服务)。
 
 ### 2. 启动 DeepSearch 服务（以 x86_64 架构为例）
@@ -92,9 +92,9 @@
     -p 8089:8089 \
     -e LLM_SSL_VERIFY=False \
     -e TOOL_SSL_VERIFY=False \
-    -e EMBEDDING_SSL_VERIFY=False \ 
-    -e DB_TYPE=sqlite \ 
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.9
+    -e EMBEDDING_SSL_VERIFY=False \
+    -e DB_TYPE=sqlite \
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.11
   ```
 
   若仅使用 **DeepResearch** 模式（`search_mode=research`）或知识库等主 API 能力，可只映射 `-p 8000:8000`。
@@ -146,7 +146,6 @@
 
   > **说明**：下文部分 `docker run` 示例仅写出 `-p 8000:8000` 以简化数据库/Milvus 等参数展示。需要使用 **DeepSearch** 模式时，请增加 `-p 8089:8089`，或在同一 Docker 网络内访问容器 8089。
 
-
 #### 数据库 / 存储配置
 
   数据库相关参数通过环境变量传入（`-e`），用于控制数据存储方式及连接信息。
@@ -155,7 +154,6 @@
 
   * **作用**：选择数据库类型
   * **可选值**：`sqlite` / `mysql`
-
 
   ##### MySQL 相关参数（`DB_TYPE=mysql` 时生效）
 
@@ -182,7 +180,7 @@
     -e DB_USER=your_user_name \
     -e DB_PASSWORD=your_password \
     -e DEEPSEARCH_DB_NAME=openjiuwen_deepsearch \
-    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.9
+    swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.11
   ```
 
   ##### SQLite 相关参数（`DB_TYPE=sqlite` 时生效）
@@ -251,11 +249,11 @@
 
   **镜像说明**：
 
-  - **官方镜像**：从华为云 SWR 拉取，启动命令最后一行使用已 `docker pull` 的完整镜像名，例如  
-    `swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.9`（ARM64）或  
-    `swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.9`（x86_64）。拉取失败多为网络或权限问题，可检查代理、镜像加速或改用本地构建。
-  - **本地构建 `deepsearch-full`**：在 DeepSearch **源码仓库根目录**执行  
-    `docker build -t deepsearch-full -f docker/Dockerfile .`  
+  - **官方镜像**：从华为云 SWR 拉取，启动命令最后一行使用已 `docker pull` 的完整镜像名，例如
+    `swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-arm64:0.1.11`（ARM64）或
+    `swr.cn-north-4.myhuaweicloud.com/openjiuwen/deepsearch-studio-server-amd64:0.1.11`（x86_64）。拉取失败多为网络或权限问题，可检查代理、镜像加速或改用本地构建。
+  - **本地构建 `deepsearch-full`**：在 DeepSearch **源码仓库根目录**执行
+    `docker build -t deepsearch-full -f docker/Dockerfile .`
     其中 `deepsearch-full` 仅为示例标签（`-t` 可改为任意名称）。
 
   下文示例以 **`deepsearch-full`** 为例；使用官方镜像时，将每条命令**最后一行**替换为对应的 SWR 镜像地址。Linux 上访问宿主机上的 MySQL / Milvus / Redis 时，每条 `docker run` 建议保留 `--add-host=host.docker.internal:host-gateway`。请先单独启动 **Milvus** 与（若使用 redis 模式）**Redis**，并保证端口可从 DeepSearch 容器访问（配置方式见上文「Milvus（知识库向量索引）」与「Redis 模式相关参数」）。

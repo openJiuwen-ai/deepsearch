@@ -313,6 +313,10 @@ class TestLocalDatasetAPIWrapper:
             # 验证返回列表
             assert len(result) == 5
 
+            # 验证 ClientSession 启用 trust_env，读取运行环境代理配置
+            _, session_kwargs = mock_client_session.call_args
+            assert session_kwargs["trust_env"] is True
+
     @pytest.mark.asyncio
     async def test_async_search_api_results_with_sensitive_client_error(self):
         """测试异步搜索客户端错误"""

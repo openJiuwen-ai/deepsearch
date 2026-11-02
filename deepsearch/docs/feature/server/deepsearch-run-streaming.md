@@ -2,7 +2,7 @@
 
 ## 维护范围
 
-本文档覆盖 `/api/v1/agent/deepsearch/run/` 的 DeepSearch 运行入口、SSE 输出、HITL 续跑、取消处理、本地任务状态和 Redis 跨进程取消。
+本文档覆盖 `/api/v1/agent/deepsearch/run/` 与 `/api/v1/agent/deepsearch/run_brief/` 的 DeepSearch 运行入口、SSE 输出、HITL 续跑、取消处理、本地任务状态和 Redis 跨进程取消。
 
 不覆盖 Agent 配置组装细节；见相关文档。
 
@@ -13,6 +13,8 @@ DeepSearch 运行接口把前端请求转为可流式消费的研究任务。它
 ## 可见行为
 
 - 普通请求返回 `text/event-stream`，流内容来自 `agent.run(...)`。
+- `report_type` 缺省为 `None`（由意图识别节点判定，保留澄清机制）；显式传 `brief` / `professional` 时报告类型被 API 锁定，意图识别不再输出该字段，且仅首轮生效、后续反馈轮不可覆盖。
+- `/run_brief/` 是 `/run/` 的薄封装：强制 `report_type="brief"`（忽略调用方传值）；取消、流式与异常映射完整复用 `run()`。
 - `interrupt_feedback=cancel` 不启动新 SSE 流，而是触发取消逻辑并返回 JSON 状态。
 - 取消成功可能返回 `cancelling`；本进程没有活动任务但 Redis 转发成功时返回 `forwarded`。
 - Agent 输出 `waiting_user_input` 时，consumer 会结束当前响应但保留 cancel event，允许后续继续或取消。
@@ -42,6 +44,12 @@ DeepSearch 运行接口把前端请求转为可流式消费的研究任务。它
 ## 数据契约与依赖
 
 - `DeepSearchRequest.conversation_id` 只能包含 ASCII 字母、数字、下划线和连字符，长度 1 到 128。
+- `DeepSearchRequest.report_type` 为 `Literal["brief", "professional"] | None`，缺省 `None`；非法值由 pydantic 校验拒绝（HTTP 422）。`report_type` 不参与 Agent 缓存键，同一会话切换类型不会新建 Agent 实例。
+- `DeepSearchRequest.metadata` 为可选的运行时元数据（`dict | None`，缺省 `None`），由客户端持有回传、服务端不持久化。当前支持 brief 报告 `final_result.metadata` 的原样回传，用于 brief 大纲升级专业版报告（见 [brief-outline-upgrade.md](../framework/brief-outline-upgrade.md)）。相关行为：
+  - 结构校验只看结构（由 SDK `metadata_injectors` 注册表维护），非法返回 HTTP 400，与 `report_type` 无关。
+  - 按匹配注入器声明的 `force_execution_method` 在 Agent 构建前覆盖 `execution_method`（升级运行强制 `parallel`）。
+  - 不参与 Agent 缓存键，同一会话升级运行复用既有 Agent 实例。
+  - 仅 `search_mode=research` 时透传到 `run_kwargs`，search/react 模式忽略该字段。
 - `interrupt_feedback` 支持空值、`accepted`、`cancel`、`revise_outline`、`revise_comment`。
 - 任务 key 为 `<space_id>:<conversation_id>`。
 - 本地运行状态存放在 `_running_tasks`、`_cancel_events`、`_cancel_event_timestamps`、`_running_agents` 和 `_resume_requested_events`。
@@ -52,7 +60,8 @@ DeepSearch 运行接口把前端请求转为可流式消费的研究任务。它
 
 - Web/local 搜索配置异常会分别映射为 HTTP 400。
 - 模板不存在映射为 HTTP 404。
-- 其他未分类异常映射为 HTTP 500。
+- metadata 结构非法映射为 HTTP 400（入口校验，优先于 Agent 构建）。
+- 其他未分类异常映射为 HTTP 500；内部已构造好的 `HTTPException` 状态码原样透传。
 - consumer 被取消时会取消 producer task，但不会把 HTTP 断连强行视为业务取消。
 - 取消路径会尝试停止 openJiuwen controller 的 task queue 和 processing handler。
 - HITL 等待时不清理 checkpointer，确保后续输入可恢复会话。
@@ -66,6 +75,7 @@ DeepSearch 运行接口把前端请求转为可流式消费的研究任务。它
 ## 相关文档
 
 - [DeepSearch Agent 配置组装](./deepsearch-agent-config.md)
+- [用户素材](../algorithm/user-materials.md)
 - [Server 应用运行时](./fastapi-app-runtime.md)
 - [Agent 工厂与运行模式](../framework/agent-factory.md)
 - [报告研究主工作流](../framework/research-workflow.md)

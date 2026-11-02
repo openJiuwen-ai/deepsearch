@@ -1,12 +1,14 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
 __all__ = [
+    "AgcAiNetworkingSearchAPIWrapper",
     "XunfeiSearchAPIWrapper",
     "PetalSearchAPIWrapper",
     "GoogleSearchAPIWrapper",
     "TavilySearchAPIWrapper",
     "PubMedSearchAPIWrapper",
     "ArxivSearchAPIWrapper",
+    "SemanticScholarSearchAPIWrapper",
     "HarnessWebSearchAPIWrapper",
     "BochaSearchAPIWrapper",
     "JinaSearchAPIWrapper",
@@ -16,6 +18,8 @@ __all__ = [
     "load_external_search_tools",
 ]
 
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.agc_ainetworking.api_wrapper import \
+    AgcAiNetworkingSearchAPIWrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.external_tool.tool import load_external_search_tools
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.local_search_api.api_wrapper import \
     LocalDatasetAPIWrapper
@@ -32,6 +36,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrap
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search import (
     ArxivSearchAPIWrapper,
     PubMedSearchAPIWrapper,
+    SemanticScholarSearchAPIWrapper,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper import TavilySearchAPIWrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.xunfei.api_wrapper import XunfeiSearchAPIWrapper

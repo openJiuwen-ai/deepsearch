@@ -13,7 +13,7 @@ from openjiuwen_deepsearch.algorithm.user_feedback_processor.common import (
     resolve_session_collector as _resolve_session_collector,
 )
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.report_edit_utils import (
-    strip_markup_in_range,
+    strip_citations_in_range,
 )
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.section_locator import (
     heading_block_end,
@@ -261,6 +261,18 @@ class TruthVerificationProcessor(UserFeedbackPromptInvoker):
                 "need_more_search": True,
             }
 
+        if not isinstance(data, dict):
+            logger.warning(
+                "[TruthVerificationProcessor] assessment JSON is not a dict, fallback to insufficient. data_type=%s",
+                type(data).__name__,
+            )
+            return {
+                "display_text": _insufficient_evidence_fallback_text(language),
+                "conclusion": "insufficient_evidence",
+                "evidences": [],
+                "need_more_search": True,
+            }
+
         conclusion = data.get("conclusion", "")
         if conclusion not in _ALLOWED_CONCLUSIONS:
             logger.warning(
@@ -406,7 +418,7 @@ class TruthVerificationProcessor(UserFeedbackPromptInvoker):
             language: str,
     ) -> dict:
         report_content = final_result.get("response_content", "") or ""
-        stripped_report, _, _ = strip_markup_in_range(
+        stripped_report = strip_citations_in_range(
             report_content,
             feedback["start_offset"],
             feedback["end_offset"],

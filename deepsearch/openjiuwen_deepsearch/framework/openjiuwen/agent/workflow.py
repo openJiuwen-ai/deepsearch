@@ -52,6 +52,7 @@ from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     _save_and_return_search_final_result,
     to_dict_safe,
     to_json_safe,
+    redact_urls_in_text,
 )
 from openjiuwen_deepsearch.algorithm.search_tools.retriever_tool import RetrieveTool
 from openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool import WebFetch
@@ -73,6 +74,10 @@ from openjiuwen_deepsearch.config.config import (
     WebSearchEngineConfig,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import init_router
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import (
+    ReportProgressMixin,
+    observe_report_progress,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import (
     DependencyEditorTeamNode,
     EditorTeamNode,
@@ -92,13 +97,19 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import (
     RunActionNode,
     SearchEndNode,
     SearchStartNode,
-    SourceTracerInferNode,
-    SourceTracerNode,
     StartNode,
     ToolNode,
     UserFeedbackProcessorNode,
     ValidateNewStateNode,
     VLMChartGeneratorNode,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.agent.brief_nodes import (
+    BriefEvidenceReviewNode,
+    BriefHtmlReporterNode,
+    BriefInfoCollectorNode,
+    BriefOutlineNode,
+    BriefReporterNode,
+    BriefSubReporterNode,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Action,
@@ -127,14 +138,42 @@ from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
     get_current_time,
 )
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
-from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
+from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
+    SCHOLARLY_PROVIDER_NAMES,
+)
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
+    mcp_tool_context,
     session_context,
     tool_context,
     web_search_context,
 )
+
+
+def _add_brief_branch(flow: Workflow) -> None:
+    """向任意研究主图注册相同且独立的 Brief 支路。"""
+    flow.add_workflow_comp(NodeId.BRIEF_OUTLINE.value, BriefOutlineNode())
+    flow.add_workflow_comp(NodeId.BRIEF_INFO_COLLECTOR.value, BriefInfoCollectorNode())
+    flow.add_workflow_comp(NodeId.BRIEF_EVIDENCE_REVIEWER.value, BriefEvidenceReviewNode())
+    flow.add_workflow_comp(NodeId.BRIEF_SUB_REPORTER.value, BriefSubReporterNode())
+    flow.add_workflow_comp(NodeId.BRIEF_REPORTER.value, BriefReporterNode())
+    flow.add_workflow_comp(NodeId.BRIEF_HTML_REPORTER.value, BriefHtmlReporterNode())
+    for source, targets in (
+        (NodeId.BRIEF_OUTLINE.value, [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.END.value]),
+        (
+            NodeId.BRIEF_INFO_COLLECTOR.value,
+            [NodeId.BRIEF_EVIDENCE_REVIEWER.value, NodeId.BRIEF_SUB_REPORTER.value, NodeId.END.value],
+        ),
+        (
+            NodeId.BRIEF_EVIDENCE_REVIEWER.value,
+            [NodeId.BRIEF_INFO_COLLECTOR.value, NodeId.BRIEF_SUB_REPORTER.value, NodeId.END.value],
+        ),
+        (NodeId.BRIEF_SUB_REPORTER.value, [NodeId.BRIEF_REPORTER.value, NodeId.END.value]),
+        (NodeId.BRIEF_REPORTER.value, [NodeId.BRIEF_HTML_REPORTER.value, NodeId.END.value]),
+        (NodeId.BRIEF_HTML_REPORTER.value, [NodeId.END.value]),
+    ):
+        flow.add_conditional_connection(source, router=init_router(source, targets))
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
 from openjiuwen_deepsearch.utils.log_utils.log_interface import record_interface_log
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -172,6 +211,44 @@ def _build_retrieve_tool(milvus_cfg: MilvusConfig) -> RetrieveTool:
 logger = logging.getLogger(__name__)
 
 
+def _zero_scholarly_search_secrets(config: AgentConfig | dict | None) -> None:
+    """Zero mutable scholarly provider keys held by a config model or dump."""
+    if config is None:
+        return
+    scholarly = (
+        config.get("scholarly_search_config")
+        if isinstance(config, dict)
+        else getattr(config, "scholarly_search_config", None)
+    )
+    if scholarly is None:
+        return
+    for provider_name in SCHOLARLY_PROVIDER_NAMES:
+        provider = (
+            scholarly.get(provider_name)
+            if isinstance(scholarly, dict)
+            else getattr(scholarly, provider_name, None)
+        )
+        secret = (
+            provider.get("search_api_key")
+            if isinstance(provider, dict)
+            else getattr(provider, "search_api_key", None)
+        )
+        if isinstance(secret, bytearray) and secret:
+            zero_secret(secret)
+
+
+def _zero_active_scholarly_wrapper_secrets() -> None:
+    """Zero provider-key copies owned by wrappers before resetting their context."""
+    try:
+        engines = web_search_context.get() or {}
+    except LookupError:
+        return
+    for provider_name in SCHOLARLY_PROVIDER_NAMES:
+        secret = getattr(engines.get(provider_name), "search_api_key", None)
+        if isinstance(secret, bytearray) and secret:
+            zero_secret(secret)
+
+
 def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
     """Build a redacted copy of agent_config for workflow logging boundaries."""
     return anonymize_config_for_logging(copy.deepcopy(to_dict_safe(agent_config)))
@@ -179,22 +256,30 @@ def _redact_agent_config_for_workflow_inputs(agent_config: Any) -> dict:
 
 def _initialize_web_search_context_from_agent_config(
     agent_config: AgentConfig,
-    *,
-    include_academic_engines: bool = False,
 ):
     """Instantiate the active engine and optional research-only academic engines for a run."""
     custom_web = agent_config.custom_web_search_config
     web_search_config = agent_config.web_search_engine_config
     web_engine_name, web_mapping = DeepresearchAgent.register_web_search_tool(custom_web, web_search_config)
     web_engine_configs = {web_engine_name: web_search_config.model_dump()}
-    if include_academic_engines:
-        for engine_name in (SearchEngine.PUBMED.value, SearchEngine.ARXIV.value):
+    if agent_config.scholarly_search_enabled:
+        scholarly_config = agent_config.scholarly_search_config
+        for engine_name in SCHOLARLY_PROVIDER_NAMES:
             if engine_name not in web_mapping or engine_name in web_engine_configs:
                 continue
-            academic_config = web_search_config.model_dump()
-            academic_config["search_engine_name"] = engine_name
-            academic_config["search_url"] = ""
-            academic_config["search_api_key"] = bytearray()
+            provider_config = getattr(scholarly_config, engine_name)
+            academic_config = {
+                "search_engine_name": engine_name,
+                "search_url": provider_config.search_url,
+                "search_api_key": provider_config.search_api_key,
+                "max_web_search_results": provider_config.max_search_results,
+                "requests_per_second": provider_config.requests_per_second,
+            }
+            if engine_name == "pubmed":
+                academic_config.update(
+                    email=provider_config.email,
+                    tool=provider_config.tool,
+                )
             web_engine_configs[engine_name] = academic_config
     web_search_token = web_search_context.set(
         {
@@ -204,6 +289,52 @@ def _initialize_web_search_context_from_agent_config(
     )
     qps_rate_limiter.set_max_qps(agent_config.web_search_max_qps)
     return web_search_token
+
+
+async def _initialize_mcp_context_from_agent_config(agent_config: AgentConfig):
+    """连接 MCP servers 并注册到 contextvar。返回 token 供 finally reset。
+
+    MCP 客户端依赖为可选依赖（pyproject [mcp]），故在此延迟导入；
+    无配置或未装 mcp 包时直接返回 None,不抛异常。
+    """
+    mcp_servers = getattr(agent_config, "mcp_servers", None) or []
+    if not mcp_servers:
+        return None
+    try:
+        from openjiuwen_deepsearch.framework.openjiuwen.tools.mcp import McpToolBundle
+    except ImportError:
+        logger.warning("[MCP] mcp package not installed; skipping MCP tools")
+        return None
+    servers_dict_list = [
+        s.model_dump() if hasattr(s, "model_dump") else s
+        for s in mcp_servers
+    ]
+    bundle = McpToolBundle()
+    try:
+        await bundle.connect_and_build_tools(servers_dict_list)
+    except Exception as e:
+        logger.warning("[MCP] Failed to initialize MCP tools: %s", redact_urls_in_text(str(e)))
+        await bundle.close_all()
+        return None
+    return mcp_tool_context.set(bundle)
+
+
+async def _close_mcp_bundle(mcp_token) -> None:
+    """关闭并重置 MCP contextvar。token 为 None 时直接返回。
+
+    供 DeepresearchAgent / SimpleReactSearchAgent 的各 except / finally 分支复用,
+    确保 MCP 连接在成功、失败、取消三条路径上都被关闭。
+    """
+    if mcp_token is None:
+        return
+    try:
+        bundle = mcp_tool_context.get()
+        if bundle is not None:
+            await bundle.close_all()
+    except Exception as e:
+        logger.warning("[MCP] Failed to close MCP bundle during cleanup: %s", e)
+    finally:
+        mcp_tool_context.reset(mcp_token)
 
 
 def _build_search_fetch_tools(agent_config: AgentConfig):
@@ -235,6 +366,28 @@ class DeepSearchRunContext:
     fail_count: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+
+
+@dataclass
+class StreamRunContext:
+    """一次流式运行的调用上下文。
+
+    Attributes:
+        conversation_id: 会话 ID，同时作为 workflow thread_id。
+        message: 用户输入消息或反馈内容。
+        decoded_template: 解码后的报告模板。
+        interrupt_feedback: 交互中断反馈标识。
+        session_agent_config: 本次运行的 Agent 配置字典。
+        metadata: 运行时元数据（如 brief 升级注入的 brief_outline /
+            research_intent / language）。
+    """
+
+    conversation_id: str
+    message: str
+    decoded_template: str
+    interrupt_feedback: str
+    session_agent_config: dict
+    metadata: Optional[dict] = None
 
 
 class BaseAgent:
@@ -325,12 +478,12 @@ class BaseAgent:
             )
 
 
-class DeepresearchAgent(BaseAgent):
-    """
-    Deepresearch agent: 生成报告 Agent，通用模型，并行执行任务，不带模板
-    """
+class DeepresearchAgent(ReportProgressMixin, BaseAgent):
+    """执行报告工作流，并提供所属报告的本地进度查询。"""
 
     def __init__(self):
+        """初始化报告工作流配置及本地进度索引。"""
+        self._init_report_progress()
         self.research_name = self._get_default_research_name()
         self.version = "1"
         self.agent = None
@@ -353,6 +506,9 @@ class DeepresearchAgent(BaseAgent):
             "agent_config": {
                 "type": "object",
             },
+            "metadata": {
+                "type": "object",
+            },
         }
         self.startnode_input_schema = {
             "query": "${query}",
@@ -361,6 +517,7 @@ class DeepresearchAgent(BaseAgent):
             "report_template": "${report_template}",
             "interrupt_feedback": "${interrupt_feedback}",
             "agent_config": "${agent_config}",
+            "metadata": "${metadata}",
         }
 
         self.research_workflow = None
@@ -513,6 +670,7 @@ class DeepresearchAgent(BaseAgent):
         if llm_token is not None:
             llm_context.reset(llm_token)
         if web_search_token is not None:
+            _zero_active_scholarly_wrapper_secrets()
             web_search_context.reset(web_search_token)
         if local_search_token is not None:
             local_search_context.reset(local_search_token)
@@ -560,35 +718,44 @@ class DeepresearchAgent(BaseAgent):
             return json.dumps({"interrupt_feedback": interrupt_feedback, "feedback": message}), is_report_feedback
         return message, is_report_feedback
 
-    async def _consume_stream_chunks(
-        self,
-        conversation_id: str,
-        message: str,
-        decoded_template: str,
-        interrupt_feedback: str,
-        session_agent_config: dict,
-    ):
+    async def _consume_stream_chunks(self, run_context: StreamRunContext):
+        """消费 Runner 流式输出并转发为本 agent 的流式消息。
+
+        Args:
+            run_context: 一次流式运行的调用上下文。
+
+        Yields:
+            tuple[str, bool, dict]: 序列化消息、是否全部结束、最终结果信息。
+        """
         is_all_end = False
         final_result_info = {}
         filter_dup_flag = False
-        stream_query, is_report_feedback = self._prepare_stream_query(message, interrupt_feedback)
-        workflow_agent_config = _redact_agent_config_for_workflow_inputs(session_agent_config)
+        stream_query, is_report_feedback = self._prepare_stream_query(
+            run_context.message, run_context.interrupt_feedback
+        )
+        workflow_agent_config = _redact_agent_config_for_workflow_inputs(run_context.session_agent_config)
+        scholarly_config = workflow_agent_config.get("scholarly_search_config", {})
+        for provider_name in SCHOLARLY_PROVIDER_NAMES:
+            provider_config = scholarly_config.get(provider_name)
+            if isinstance(provider_config, dict):
+                provider_config["search_api_key"] = bytearray()
 
         async for chunk in Runner.run_agent_streaming(
             agent=self.agent,
             inputs={
                 "query": stream_query,
-                "thread_id": conversation_id,
-                "conversation_id": conversation_id,
-                "report_template": decoded_template,
-                "interrupt_feedback": interrupt_feedback,
+                "thread_id": run_context.conversation_id,
+                "conversation_id": run_context.conversation_id,
+                "report_template": run_context.decoded_template,
+                "interrupt_feedback": run_context.interrupt_feedback,
                 "resume_interaction": is_report_feedback,
                 "agent_config": workflow_agent_config,
+                "metadata": run_context.metadata,
             },
         ):
             if getattr(chunk, "type", "") == "__interaction__":
                 filter_dup_flag = False
-                yield self._build_interrupt_message(conversation_id, chunk), is_all_end, final_result_info
+                yield self._build_interrupt_message(run_context.conversation_id, chunk), is_all_end, final_result_info
                 continue
             if filter_dup_flag:
                 continue
@@ -602,8 +769,13 @@ class DeepresearchAgent(BaseAgent):
                     final_result_info = endnode_info
                 if getattr(chunk, "content", "") == "ALL END":
                     is_all_end = True
-                yield self._build_output_message(conversation_id, chunk), is_all_end, final_result_info
+                yield (
+                    self._build_output_message(run_context.conversation_id, chunk),
+                    is_all_end,
+                    final_result_info,
+                )
 
+    @observe_report_progress
     async def run(
         self,
         message: Optional[str] = None,
@@ -611,6 +783,7 @@ class DeepresearchAgent(BaseAgent):
         agent_config: Optional[dict] = None,
         report_template: str = "",
         interrupt_feedback: str = "",
+        metadata: Optional[dict] = None,
     ):
         """执行一次 workflow 并以流式方式返回消息。
 
@@ -620,6 +793,7 @@ class DeepresearchAgent(BaseAgent):
             agent_config: 本次运行的 Agent 配置字典。
             report_template: 报告模板（支持 base64 或明文）。
             interrupt_feedback: 交互中断反馈标识。
+            metadata: 运行时元数据（如 brief 升级注入的 brief_outline/research_intent/language）。
 
         Yields:
             str: JSON 序列化后的流式事件消息。
@@ -634,6 +808,8 @@ class DeepresearchAgent(BaseAgent):
         llm_token = None
         web_search_token = None
         local_search_token = None
+        mcp_token = None
+        session_agent_config = None
 
         try:
             session_agent_config = AgentConfig.model_validate(agent_config)
@@ -653,11 +829,18 @@ class DeepresearchAgent(BaseAgent):
 
             web_search_token, local_search_token = self._initialize_tools(session_agent_config)
             await self._aopen_local_search_engines()
+            mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
         except CustomValueException:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             raise
         except ValidationError as e:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             if LogManager.is_sensitive():
                 raise CustomValueException(
                     StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR_NO_PRINT.code,
@@ -667,6 +850,12 @@ class DeepresearchAgent(BaseAgent):
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.code,
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(e)),
             ) from e
+        except Exception:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
+            self._reset_context_tokens(llm_token, web_search_token, local_search_token)
+            _zero_scholarly_search_secrets(session_agent_config)
+            raise
 
         token = session_id_ctx.set(conversation_id)
         stats_info_llm_enabled = bool(session_agent_config.stats_info_llm)
@@ -679,11 +868,14 @@ class DeepresearchAgent(BaseAgent):
         try:
             session_agent_config = session_agent_config.model_dump()
             async for payload, stream_end, stream_info in self._consume_stream_chunks(
-                conversation_id=conversation_id,
-                message=message,
-                decoded_template=decoded_template,
-                interrupt_feedback=interrupt_feedback,
-                session_agent_config=session_agent_config,
+                StreamRunContext(
+                    conversation_id=conversation_id,
+                    message=message,
+                    decoded_template=decoded_template,
+                    interrupt_feedback=interrupt_feedback,
+                    session_agent_config=session_agent_config,
+                    metadata=metadata,
+                )
             ):
                 is_all_end = stream_end
                 final_result_info = stream_info
@@ -746,6 +938,11 @@ class DeepresearchAgent(BaseAgent):
             finally:
                 self._reset_context_tokens(llm_token, web_search_token, local_search_token)
 
+            # MCP 连接在成功/失败/取消三条路径都必须关闭；token 已在 except 分支重置为 None。
+            await _close_mcp_bundle(mcp_token)
+
+            _zero_scholarly_search_secrets(session_agent_config)
+
             if is_all_end:
                 zero_secret(
                     session_agent_config.get("web_search_engine_config", {}).get(
@@ -787,18 +984,20 @@ class DeepresearchAgent(BaseAgent):
         flow.add_workflow_comp(NodeId.EDITOR_TEAM.value, EditorTeamNode())
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.VLM_CHART_GENERATOR.value, VLMChartGeneratorNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
-        flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
+        start_router = init_router(
+            NodeId.START.value, [NodeId.INTENT_RECOGNITION.value, NodeId.OUTLINE.value]
+        )
+        flow.add_conditional_connection(NodeId.START.value, router=start_router)
 
         # 添加条件边
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -810,7 +1009,9 @@ class DeepresearchAgent(BaseAgent):
             NodeId.OUTLINE_INTERACTION.value, [NodeId.OUTLINE.value, NodeId.EDITOR_TEAM.value, NodeId.END.value]
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
         user_feedback_processor_router = init_router(
             NodeId.USER_FEEDBACK_PROCESSOR.value, [NodeId.USER_FEEDBACK_PROCESSOR.value, NodeId.END.value]
@@ -822,9 +1023,7 @@ class DeepresearchAgent(BaseAgent):
         flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
         flow.add_conditional_connection(NodeId.EDITOR_TEAM.value, router=editor_team_router)
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
-        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
         flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
 
         return flow
@@ -874,7 +1073,6 @@ class DeepresearchAgent(BaseAgent):
         local_engine_name, local_mapping = self._register_local_search_tool(custom_local, local_search_config)
         web_search_token = _initialize_web_search_context_from_agent_config(
             agent_config,
-            include_academic_engines=True,
         )
         local_search_token = local_search_context.set(
             {local_engine_name: local_mapping[local_engine_name](**local_search_config.model_dump())}
@@ -942,9 +1140,8 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.DEPENDENCY_EDITOR_TEAM.value, DependencyEditorTeamNode())
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.VLM_CHART_GENERATOR.value, VLMChartGeneratorNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边 add_connection
@@ -953,7 +1150,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         # 添加条件边
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -967,7 +1164,9 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
             [NodeId.OUTLINE.value, NodeId.DEPENDENCY_EDITOR_TEAM.value, NodeId.END.value],
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         dependency_editor_router = init_router(
             NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]
         )
@@ -981,9 +1180,7 @@ class DeepresearchDependencyAgent(DeepresearchAgent):
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
         flow.add_conditional_connection(NodeId.REPORTER.value, router=reporter_router)
         flow.add_conditional_connection(NodeId.DEPENDENCY_EDITOR_TEAM.value, router=dependency_editor_router)
-        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
         flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
 
         return flow
@@ -1025,8 +1222,10 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         """
         构建 hybrid research workflow。
 
-        该 workflow 复用普通 OutlineNode 和 OutlineInteractionNode，同时注册普通写作团队与依赖驱动写作团队。
-        大纲模式由 IntentRecognitionNode 写入 session，后续节点按该结果选择 prompt、tool schema 和写作分支。
+        该 workflow 复用普通 OutlineNode 和 OutlineInteractionNode，同时注册普通写作团队与依赖驱动
+        写作团队。
+        大纲模式由 IntentRecognitionNode 写入 session，后续节点按该结果选择 prompt、tool schema
+        和写作分支。
         """
         _id = self.research_name
         name = self.research_name
@@ -1050,16 +1249,15 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         flow.add_workflow_comp(NodeId.DEPENDENCY_EDITOR_TEAM.value, DependencyEditorTeamNode())
         flow.add_workflow_comp(NodeId.REPORTER.value, ReporterNode())
         flow.add_workflow_comp(NodeId.VLM_CHART_GENERATOR.value, VLMChartGeneratorNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER.value, SourceTracerNode())
-        flow.add_workflow_comp(NodeId.SOURCE_TRACER_INFER.value, SourceTracerInferNode())
         flow.add_workflow_comp(NodeId.USER_FEEDBACK_PROCESSOR.value, UserFeedbackProcessorNode())
+        _add_brief_branch(flow)
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
 
         intent_recognition_router = init_router(
             NodeId.INTENT_RECOGNITION.value,
-            [NodeId.OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
+            [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.GENERATE_QUESTIONS.value, NodeId.END.value],
         )
         generate_questions_router = init_router(
             NodeId.GENERATE_QUESTIONS.value, [NodeId.FEEDBACK_HANDLER.value, NodeId.END.value]
@@ -1083,7 +1281,9 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
             ],
         )
         reporter_router = init_router(NodeId.REPORTER.value, [NodeId.END.value, NodeId.VLM_CHART_GENERATOR.value])
-        feedback_handler_router = init_router(NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.END.value])
+        feedback_handler_router = init_router(
+            NodeId.FEEDBACK_HANDLER.value, [NodeId.OUTLINE.value, NodeId.BRIEF_OUTLINE.value, NodeId.END.value]
+        )
         editor_team_router = init_router(NodeId.EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value])
         dependency_editor_router = init_router(
             NodeId.DEPENDENCY_EDITOR_TEAM.value, [NodeId.REPORTER.value, NodeId.END.value]
@@ -1099,9 +1299,7 @@ class DeepresearchIntentHybridAgent(DeepresearchAgent):
         flow.add_conditional_connection(NodeId.EDITOR_TEAM.value, router=editor_team_router)
         flow.add_conditional_connection(NodeId.DEPENDENCY_EDITOR_TEAM.value, router=dependency_editor_router)
         flow.add_conditional_connection(NodeId.OUTLINE_INTERACTION.value, router=outline_interaction_router)
-        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.SOURCE_TRACER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER.value, NodeId.SOURCE_TRACER_INFER.value)
-        flow.add_connection(NodeId.SOURCE_TRACER_INFER.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
+        flow.add_connection(NodeId.VLM_CHART_GENERATOR.value, NodeId.USER_FEEDBACK_PROCESSOR.value)
         flow.add_conditional_connection(NodeId.USER_FEEDBACK_PROCESSOR.value, router=user_feedback_processor_router)
 
         return flow
@@ -1351,7 +1549,7 @@ class DeepSearchAgent(BaseAgent):
         return agent
 
     @classmethod
-    def _get_shared_agent(cls):
+    def get_shared_agent(cls):
         if cls._workflow_agent is None:
             with cls._workflow_agent_lock:
                 if cls._workflow_agent is None:
@@ -1359,7 +1557,7 @@ class DeepSearchAgent(BaseAgent):
         return cls._workflow_agent
 
     def _build_agent(self):
-        self.agent = self._get_shared_agent()
+        self.agent = self.get_shared_agent()
         return self.agent
 
     async def _cancel_running_tasks(
@@ -1799,13 +1997,17 @@ class DeepSearchAgent(BaseAgent):
 
         llm_token = None
         web_search_token = None
+        mcp_token = None
         tool_token = None
         workflow_session_token = None
         session_agent_config: AgentConfig | None = None
         run_context: DeepSearchRunContext | None = None
         try:
             session_agent_config = AgentConfig.model_validate(agent_config_for_model).model_copy(deep=True)
-            logger.info(f"[DeepSearchAgent] agent_config: {session_agent_config}")
+            logger.info(
+                "[DeepSearchAgent] agent_config: %s",
+                _redact_agent_config_for_workflow_inputs(session_agent_config),
+            )
 
             try:
                 search_config = SearchWorkflowConfig.model_validate(
@@ -1853,6 +2055,7 @@ class DeepSearchAgent(BaseAgent):
             tool_class: list[Any] = []
             if per_question_params.tool_map == "search_fetch":
                 tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
+                mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class.append(_build_retrieve_tool(milvus_cfg))
@@ -1917,7 +2120,13 @@ class DeepSearchAgent(BaseAgent):
             if llm_token is not None:
                 llm_context.reset(llm_token)
             if web_search_token is not None:
+                _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            if mcp_token is not None:
+                bundle = mcp_tool_context.get()
+                if bundle is not None:
+                    await bundle.close_all()
+                mcp_tool_context.reset(mcp_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
             # The run context owns a deep copy, so clear both per-run configurations.
@@ -1926,6 +2135,7 @@ class DeepSearchAgent(BaseAgent):
                 run_context.agent_config if run_context is not None else None,
             ):
                 if cleanup_agent_config is not None:
+                    _zero_scholarly_search_secrets(cleanup_agent_config)
                     zero_secret(cleanup_agent_config.web_fetch_provider_config.api_key)
                     zero_secret(cleanup_agent_config.web_search_engine_config.search_api_key)
 
@@ -1975,6 +2185,7 @@ class SimpleReactSearchAgent(BaseAgent):
         llm_registry = {general.model_name: create_llm_obj(general.model_copy(deep=True))}
 
         web_search_token = None
+        mcp_token = None
         llm_token = llm_context.set(llm_registry)
         try:
             per_question_params: PerQuestionParams = (
@@ -1982,6 +2193,7 @@ class SimpleReactSearchAgent(BaseAgent):
             )
             if per_question_params.tool_map == "search_fetch":
                 tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
+                mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class = [_build_retrieve_tool(milvus_cfg)]
@@ -2194,7 +2406,10 @@ class SimpleReactSearchAgent(BaseAgent):
         finally:
             llm_context.reset(llm_token)
             if web_search_token is not None:
+                _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            await _close_mcp_bundle(mcp_token)
+            _zero_scholarly_search_secrets(session_agent_config)
             zero_secret(session_agent_config.web_fetch_provider_config.api_key)
             zero_secret(session_agent_config.web_search_engine_config.search_api_key)
 

@@ -2,14 +2,81 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 """测试依赖驱动 Planner 工具"""
 
+from unittest.mock import AsyncMock, Mock
+
 import pytest
+from openjiuwen.core.session.node import Session
 
 from openjiuwen_deepsearch.algorithm.query_understanding.planner import (
     create_plan_tool,
+    Planner,
+    PlannerConfig,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import EditorTeamNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.dependency_reasoning_team_nodes import (
     DependencyPlanReasoningNode,
+    SectionReasoningStartNode,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline, Section
+
+
+@pytest.mark.asyncio
+async def test_section_description_reaches_dependency_planner_user_message(monkeypatch):
+    description = "仅比较华东地区、2024年的企业采购成本，不讨论个人消费价格"
+    section = Section(id="1", title="采购成本比较", description=description)
+    outline = Outline(title="企业采购研究报告", thought="", sections=[section])
+    section_state = EditorTeamNode()._create_section_state_from_state(
+        {
+            "original_query": "研究企业采购成本",
+            "messages": [{"role": "user", "content": "研究企业采购成本"}],
+            "config": {
+                "planner_max_step_num": 3,
+                "planner_max_retry_num": 1,
+                "workflow_max_plan_executed_num": 3,
+                "llm_config": {"general": {"model_name": "basic"}},
+            },
+        },
+        outline,
+        section,
+    )
+    runtime_state = {}
+
+    def get_global_state(path):
+        value = runtime_state
+        for key in path.split("."):
+            value = value.get(key) if isinstance(value, dict) else None
+        return value
+
+    session = Mock(spec=Session)
+    session.update_global_state.side_effect = runtime_state.update
+    session.get_global_state.side_effect = get_global_state
+    await SectionReasoningStartNode().invoke(section_state, session, None)
+    node = DependencyPlanReasoningNode()
+    current_inputs = node._pre_handle({}, session, None)
+    llm_invoke = AsyncMock(return_value={
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": "plan-1",
+            "name": "generate_plan",
+            "args": {
+                "language": "zh-CN", "title": "采购成本计划", "thought": "",
+                "is_research_completed": True, "steps": [],
+            },
+        }],
+    })
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.algorithm.query_understanding.planner.ainvoke_llm_with_stats",
+        llm_invoke,
+    )
+    planner = Planner(PlannerConfig(llm=Mock(), prompt=node.prompt, max_retry_num=1))
+    await planner.generate_plan(current_inputs)
+
+    messages = llm_invoke.await_args.kwargs["messages"]
+    assert messages[-1]["role"] == "user"
+    assert "采购成本比较" in messages[-1]["content"]
+    assert description in messages[-1]["content"]
+    assert description not in messages[0]["content"]
 
 
 class TestDependencyPlannerTool:

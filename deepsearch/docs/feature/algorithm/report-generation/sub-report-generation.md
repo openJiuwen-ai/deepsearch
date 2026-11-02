@@ -2,7 +2,7 @@
 
 ## 维护范围
 
-本文档覆盖报告生成中的子报告生成能力，包括章节契约、资料分类输入、子报告 Markdown 生成、brief/professional 差异和 sidecar 生成。
+本文档覆盖专业版报告生成中的子报告能力，包括章节契约、资料分类输入、子报告 Markdown 生成和 sidecar 生成。Brief 使用独立的报告级证据与写作流程，见 [Brief 精简版报告工作流](../brief-report.md)。
 
 本文档不覆盖候选文档预筛、信息维度矩阵文档选择、表格 caption 和最终服务端格式转换。
 
@@ -13,19 +13,21 @@
 ## 可见行为
 
 - 每个章节会生成独立子报告。
-- brief 报告和 professional 报告使用不同 Prompt 或不同段落策略。
 - 子报告标题会被清理编号，过深标题会被降级为列表项。
 - 子大纲生成只面向当前顶层章节；用户在当前 outline、章节标题或章节描述中指定的 subsection titles 会被精确保留。
 - `focus_dimensions` 只定义当前章节的研究范围，子大纲生成器不会机械地为每个维度创建一个 H2；多个维度可以在一个连贯的扁平章节中呈现。
 - 聚焦、简洁且不需要独立比较轴、类别、阶段、机制、对象、问题或步骤的章节，可以生成仅含一级标题的扁平子大纲；需要显式内部结构时仍生成连续编号的二级标题。
 - 子大纲的每个非空行必须是第一行一级标题或后续二级标题。说明文字、代码围栏、正文、空标题、错序标题和其他章节标题均视为非法输出，并触发子大纲重试。
 - 所有传入 LLM prompt 的 outline 均经 `export_outline_without_plans` 处理：剥离 `plans`（含 `step_result`/`evaluation` 等收集结果全文），仅保留章节标题、描述、依赖关系等结构骨架，避免超长输入导致模型 token 超限。
-- key passages 只约束模型新增的具体事实、指标、案例、公司名和命名示例，不用于重命名或泛化用户指定的 subsection titles。
-- 子报告写作严格复用已批准的子大纲标题。单行扁平大纲只允许一个 H1，不得增加子大纲之外的 Markdown 标题；章节要求的结论、建议、启示等内容仍须保留，并使用段落、编号句、列表、表格或加粗引导语表达。
-- professional 写作 Prompt 对标题施加与下游校验一致的硬约束：禁止 H3 及更深标题（深层结构用加粗无序列表表达）、子大纲每一行必须恰好输出为一个 Markdown 标题、禁止子大纲之外的任何 `#`/`##` 标题、标题文字必须逐字复制，并明示"标题不匹配将导致整章校验失败作废"。
-- professional 和 brief 写作 Prompt 都遵循相同的扁平标题契约，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
-- professional 和 brief 写作 Prompt 都无条件禁止正文模型直接输出 Mermaid 代码围栏、图表代码或手写图块；章节正文只能输出可溯源的文字和表格，受控图表插入由后续图表管线处理。若模型仍返回 Mermaid/图表源码，章节输出契约会拒绝该草稿并通过有界重试要求模型改写，不对正文做事后删除。
-- 子报告写作只输出当前顶层章节及其二级标题，并保留 `format_requirements` 中的表格、列名、逐项枚举、来源限制和覆盖要求。
+- 子大纲 Prompt 使用 `outline_evidence_cards`，而非旧 `sub_section_core_content`：全文卡提供确定性截取的 `outline_excerpt`、该来源 rationale 选中的原文 `selected_passages` 和规则抽取的 `coverage_passages`，段落卡提供入选的 `passage_text`。完整 `original_content` 只保留给后续子报告写作 Prompt 使用。
+- 子大纲使用 `time_contract` 的 source/content 时间范围；子报告写作从同一 `research_intent` 单独构造既有时间 Prompt 上下文。两个阶段共享 `rationale_contract`，其中以单一 `coverage_status` 提供 rationale 覆盖状态，另含覆盖分、优先级和 citation 导航；阶段差异由各自 Prompt 解释，不在数据中分别重复编码 `heading_policy` 与 `writing_policy`。采集链路的 `key_passages` 不再作为新子大纲的正式输入。
+- 继承的一级章标题原样保留，不因其中年份超出 `time_contract.content_date_scope` 而拒绝章节；后置时间校验仅检查模型生成的二级标题，越界时进入大纲重试。标题不放宽正文的事实时间约束。
+- 标题时间校验支持完整日期、中文年月日、数字年月与缩写年份范围。歧义的 `YYYY-MM` / `YYYY/MM` 在后两位为 `01`—`12` 时优先解释为整月；`2020-21`、`2020–21` 等解释为跨年范围，分隔符必须存在。ISO、IEC、RFC、IEEE、DIN、EN、GB 标准编号（含冒号后的版本年）及 RTX/GTX 型号不作为事实时间；同一标题中的其他年份仍须校验。
+- 全文抽取阶段（`enrich_fulltext_for_section` 为同步调用，非 async），`FullTextEvidence` 会聚合同一 URL 下所有段落的 reliability（取最大值）和 data_density，使全文证据继承段落级的质量评估。
+- 子报告写作以已批准的子大纲为指导。单行扁平大纲的写作提示仍要求只使用一个 H1，其他必需内容使用段落、列表、表格或加粗引导语表达。
+- Professional writing preserves every approved outline heading, level, and order; renaming, merging, omitting, and reordering headings are rejected. H3 and deeper headings remain forbidden by the prompt.
+- 子报告写作只输出当前顶层章节及其二级标题，并保留 `format_requirements` 中的表格、列名、逐项枚举和覆盖要求。
+- 子报告 Prompt 定义冲突解决优先级：fulltext > 高分段落 > 低分段落。fulltext 没有覆盖分但优先级最高，当多来源对同一事实出现冲突时按此优先级采纳。
 - 子报告失败重试只向下一轮 Prompt 传递受控错误码、位置和计数字段；不会回放模型生成标题、provider 异常或本地校验原始文本。
 - 普通与依赖驱动写作路径都会把 `section_format_requirements` 和 `section_local_contract` 写入
   `SectionContext`。依赖写作工作流不得在开始节点边界将这两个字段退化为 `[]` 或 `{}`，下游
@@ -39,32 +41,35 @@
 ## 关键代码路径
 
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
+  > `report.py` 已按职责拆分为 11 个模块。子报告生成逻辑分布在：`report.py`（核心编排：`generate_sub_report`、`_write_subsection_reports`、`_write_with_retry` 等）、`evidence.py`（证据生成/抽取/评分/`PassageSelectionContext`，含证据管线编排 `_prepare_evidence`）、`sub_section_outline.py`（子大纲生成/重试：`_generate_sub_section_outline` / `_generate_outline_with_retry`）、`report_parts.py`（子报告 Prompt 构建 `_build_subsection_prompt`、后处理 `_post_process_subsection`、摘要/结论/sidecar/过渡）、`visualization.py`（可视化数据提取/Mermaid 代码生成：`_generate_content_for_visualization`）、`visualization_insertion.py`（图表插入：`_insert_visualization`）。
 - 报告配置：`openjiuwen_deepsearch/algorithm/report/config.py`
 - compact doc info：`openjiuwen_deepsearch/algorithm/report/compact_doc_info.py`
+- 全文抽取管线：`openjiuwen_deepsearch/algorithm/report/report_rationale_fulltext.py`（URL 频次选择、分类内容构建）
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_brief_markdown.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_report_summary.md`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_report_markdown/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_outline/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_report_sidecar/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_report_summary/`
 
 主要测试：
 
 - `tests/report/test_sub_report.py`
 - `tests/report/test_general_report.py`
 - `tests/report/test_chapter_sidecar.py`
+- `tests/report/test_evidence.py`
+- `tests/report/test_sub_section_outline.py`
 
 ## 核心流程
 
 1. Reporter 读取 outline section、章节计划和 classified contents。
 2. 构建章节局部契约和资料摘要。
-3. LLM 生成当前章节的子大纲；`Reporter.check_chapter_format()` 逐行验证标题格式和顺序，非法输出进入重试。
-4. 信息维度矩阵文档选择：rationale 生成 → n-gram 粗筛 → 覆盖矩阵评估 → 贪心子模选择 → elbow 截断 → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。
-5. 根据报告类型选择 professional 或 brief 子报告 Prompt，两者共享扁平/层级标题契约。
+3. 信息维度矩阵文档选择：rationale 生成 → 抽取式总结+打分 → 按维度 top-k 段落选择（0 分段落不参与选择） → L1/L2 过滤 → 全文抽取（同步调用） → 覆盖校验（详见 [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)）。随后基于已有数据构造 `outline_evidence_cards`、`time_contract` 与 `rationale_contract`，不增加 LLM 调用。
+4. LLM 使用章节结构上下文、evidence cards 和两个 contract 生成当前章节的子大纲；`Reporter.check_chapter_format()`（定义于 `markdown_utils.py`）逐行验证标题格式和顺序，随后校验显式年份是否落在 content 时间契约内；非法输出进入重试。
+5. 使用专业版子报告 Prompt，并遵循已批准子大纲的扁平/层级标题契约；Brief 由独立 Brief 工作流处理，不经过本 Reporter 子报告流程。
 6. LLM 按已批准的子大纲生成章节 Markdown。
-7. 标题编号和过深标题被清理，并校验 Markdown 标题与子大纲逐项一致；章节草稿同时校验不含 Mermaid/图表源码，且 Mermaid 语法判断仅针对代码围栏内容，不会因普通正文关键词误判；任一章节校验失败，生成受控重试反馈并重新生成章节。
+7. Clean heading numbering, validate H1/H2 structure, then match every approved outline heading by title, level, and order. Validation failures enter the writing retry loop; successful drafts continue through sidecar and reference processing.
 8. 生成或更新 chapter sidecar。
 9. 子报告交给最终报告拼接。
 
@@ -76,7 +81,7 @@
 
 - `Outline` / `Section`。
 - 章节 `Plan`。
-- `classified_content`。
+- `classified_content`、`outline_evidence_cards`、`time_contract`、`rationale_contract`。
 - `ResearchIntent`。
 - section local contract。
 
@@ -92,8 +97,11 @@
 - 扁平子大纲必须恰好包含一个合法一级标题；层级化子大纲必须先出现一级标题，再出现带非空标题文本的 `n.x` 二级标题。
 - 三级编号检查按行首匹配（如 `2.1.1 标题`）；标题行内出现的点分数字（日期区间 `2010.3.12–2021.2.26`、版本号等）不视为三级编号。
 - 子大纲中的额外说明、Markdown 代码围栏、正文或错序标题不能被静默接受。
-- 正文标题必须与已批准子大纲的数量、层级、顺序和文本一致，不能破坏整体报告层级。
-- 重试反馈只允许包含白名单化错误码，例如 `HEADING_COUNT_MISMATCH`、`HEADING_LEVEL_MISMATCH`、`HEADING_TITLE_MISMATCH`、`MERMAID_OUTPUT_FORBIDDEN`、`SUB_REPORT_GENERATION_EXCEPTION`，以及安全的数字位置/计数字段；不把原始失败文本作为下一轮 LLM 指令。
+- Each normalized outline heading must appear at the same level and in the same order in the body. Numbering and whitespace are normalized. As before e58a660c, extra nonduplicate H2 headings are allowed if all outline headings remain in order; the flat-outline prompt still forbids extra headings.
+- Body validation uses `validate_sub_report_headings_match_outline(content, sub_section_outline)` after structural validation. The failure prefix is `generated report headings do not match outline`.
+- 标题提取忽略反引号和波浪线代码围栏中的内容；结束围栏必须与开始围栏同类且长度不少于开始围栏。空标题标记及去除编号后为空的标题仍参与校验并被拒绝。
+- 空标题和 H1 数量、顺序错误分别产生 `HEADING_TITLE_EMPTY`、`HEADING_STRUCTURE_INVALID`，定位为 `markdown_headings`；下一轮写作提示明确要求补全标题或修正 H1/H2 结构，不回放原始模型文本。
+- 重试反馈只允许包含白名单化错误码，例如 `HEADING_COUNT_MISMATCH`、`HEADING_TITLE_MISMATCH`、`OUTLINE_HEADING_MISSING`、`DUPLICATE_SUBSECTION_HEADINGS`、`MERMAID_OUTPUT_FORBIDDEN`、`SUB_REPORT_GENERATION_EXCEPTION`，以及安全的数字位置/计数字段；不把原始失败文本作为下一轮 LLM 指令。 Heading mismatch feedback also includes `expected_heading_index`, a 1-based outline line number; subsequent attempts use the original outline to locate and restore that heading without replaying generated titles or provider errors.
 - 敏感日志模式下不输出完整资料和子报告正文。
 
 ## 测试与验证
@@ -104,6 +112,8 @@
 uv run pytest tests/report/test_sub_report.py
 uv run pytest tests/report/test_chapter_sidecar.py
 uv run pytest tests/report/test_tools_in_report.py
+uv run pytest tests/report/test_evidence.py
+uv run pytest tests/report/test_sub_section_outline.py
 uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.py
 ```
 
@@ -113,3 +123,26 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 - [候选文档预筛](./doc-prefilter.md)
 - [信息维度矩阵文档选择](./coverage-matrix-doc-selection.md)
 - [Prompt 模板系统](../prompt-template-system.md)
+- [Brief 精简版报告工作流](../brief-report.md)
+
+## 结构化证据辅助
+
+文档选择完成后，Reporter 使用已有的 rationale、入选段落、`classified_content` 和覆盖矩阵构造三个机器可读 sidecar，不增加 LLM 调用：`rationale_contract` 以 `coverage_status` 提供维度覆盖状态，并含覆盖分、优先级和 citation 导航；大纲与写作 Prompt 分别解释该状态对阶段行为的指导，不再通过 `heading_policy`、`writing_policy` 重复表达。写作阶段的 `covered` 表示有相关证据可用，不代表必须逐项写入；是否纳入正文由任务、章节大纲、优先级及与章节主线的相关性共同决定。`time_contract` 仅提供 source/content 时间范围；子大纲 system Prompt 负责固定的标题时间规则；`outline_evidence_cards` 为子大纲提供与最终写作证据对齐的紧凑视图。全文卡包含确定性摘要和对应 `coverage_passages`，段落卡包含入选 `passage_text`；写作继续使用 `classified_content` 中的完整证据和由同一 `research_intent` 构造的时间 Prompt 上下文。
+
+覆盖状态、分数及全文卡的段落关联统一使用 `enrich_fulltext_for_section` 返回的 `retained_passages`：它包含 L1/L2 过滤与去重后保留的段落，以及被提升为 fulltext 的对应段落；已被过滤或去重删除的段落不再影响合同评分。被提升为 fulltext 的段落仍参与 rationale 覆盖计算，并通过 URL 与全文 evidence card 关联，避免相应维度被误标为"未覆盖"。
+
+全文卡仅通过非空 URL 关联入选段落；URL 为 null、空串或纯空白时不关联段落，也不从无 URL 的段落推导 rationale 关系。卡片自身的原文摘要和按 citation 归属的 coverage passages 仍保留。
+
+全文卡的 `selected_passages` 为对象列表，每项含 `passage_text` 与原段落的 `content_time`（未知为 null）。同一来源不同事实时间分别保留；整篇全文的顶层 `content_time` 仍为 null，不合并或推断全文时间。大纲的显式时间标题可依据对应段落的已知时间，未知段落不借用其他段落时间。此调整复用已有抽取信息，不增加模型调用。
+
+标题时间校验在月份之前识别完整斜杠日期（如 `2023/06/15`）及其范围，按实际日区间校验，月份规则不截取完整日期前缀。四位数字带金额、数量、容量单位或嵌入字母型号时不按裸年份校验；同一标题中独立的年份和显式 `年` 表达仍接受时间范围校验。
+
+无搜索段落而使用前章背景兜底时，背景卡与用户素材卡可同时进入子大纲；背景卡的 citation ID 为 null，只用于章节衔接，不可作为外部引用。写作阶段继续接收同一前章背景。
+
+两个 contract 同时提供给专业版模板化/非模板化子大纲及子报告：证据充分的主要信息维度可辅助组织内容，弱证据要求谨慎表述，未覆盖维度不得作为新增事实的依据；大纲的模型新增显式年份不得超出 content 时间范围。Brief 由独立工作流使用其专有的证据收集、评审和写作契约。
+
+这些 sidecar 只辅助组织已有材料，不替代 `classified_content`、原文和引用编号。覆盖矩阵缺失、稳定文档键不一致或 background-knowledge-only 路径下，系统使用空 rationale contract 和可用的背景 evidence card 保持生成流程。
+
+排查时使用实际日志中的 `[generate_sub_section_outline]`、`[generate_sub_report]` 和 `[write_subsection_reports]` 定位阶段及失败原因。当前没有 `[structured_evidence]` 或其 `[build]` / `[sub_outline]` / `[sub_report]` 专用日志。核对实际输入时，大纲上下文查看 `outline_evidence_cards`，两阶段 Prompt 查看 `rationale_contract_json` 与 `time_contract_json`；完整模型输入仅在允许输出详细信息的 DEBUG 路径中记录，生产排查应遵守敏感信息日志配置。
+
+`enrich_fulltext_for_section` 返回的 `structured_evidence_guide` 及 `current_inputs` 中的同名字段仅为内部兼容产物；当前子大纲和写作模板均不消费它，不能用它判断模型实际收到的覆盖信息。正式覆盖信号来自 `rationale_contract`。裸四位数字仅在 1900—2100 范围内作为候选年份，范围外的裸数字（如 4090、8080）不硬判为时间；显式日期、年份范围和带“年”的表达不受此候选窗口限制。

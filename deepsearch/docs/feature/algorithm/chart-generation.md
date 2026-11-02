@@ -8,16 +8,14 @@
 
 ## 功能目的
 
-图表生成用于在报告生成和溯源后，根据报告内容与 classified contents 生成真实图片图表，并把图表占位符、说明和来源引用插入报告。它让报告可以从纯文本升级为带可渲染图表的结果。
-
 ## 可见行为
 
 - 系统先识别适合插入图表的段落锚点。
+- 按一级标题切分报告时，目录、摘要、结论和参考文章等非正文部分会按标题语义排除，正文章节索引保持连续。
 - 再从 `all_classified_contents` 中收集图表数据。
 - LLM 生成 Python 绘图代码，沙箱执行后产生图表文件。
 - 如果配置了 VLM 迭代，图表会经过多模态反馈优化；没有可用 VLM 时可降级跳过迭代。
 - 报告中插入 `(#insertChart:<chart_id>)` 占位符和图表说明。
-- 图表相关来源会插入 source trace data，并追加到图表说明后。
 
 ## 关键代码路径
 
@@ -31,28 +29,27 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/vlm_find_insert_point_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/vlm_collect_data_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/vlm_generate_chart_code_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/vlm_iterate_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/chart_compliance_validate.md`
-- `openjiuwen_deepsearch/algorithm/prompts/chart_data_traceability_check.md`
+- `openjiuwen_deepsearch/algorithm/prompts/vlm_find_insert_point_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/vlm_collect_data_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/vlm_generate_chart_code_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/vlm_iterate_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/chart_compliance_validate/`
 
 主要测试：
 
 - `tests/algorithm/chart_generation/test_chart_generator_semaphore.py`
-- `tests/source_tracer/test_chart_citation.py`
+
 
 ## 核心流程
 
-1. `VLMChartGenerator.run` 校验报告正文、classified contents 和 source trace data。
+1. `VLMChartGenerator.run` 校验报告正文和 classified contents。
 2. 如开启 VLM 迭代但未配置 VLM，会测试普通 LLM 是否支持多模态；不支持则关闭迭代。
 3. `FigurePlaceholderGenerator` 识别图表插入锚点和任务。
 4. `ChartDataCollector` 根据任务和资料收集结构化图表数据。
 5. `ChartGenerator` 生成绘图代码，并在沙箱内执行。
 6. 图表生成使用全局和单章节双层并发限制，避免任务扇出耗尽资源。
-7. `InsertChartNode` 把占位符、图表说明和来源引用插入报告。
-8. 输出 `chart_messages`、修改后的报告和新的 source trace data。
+7. `InsertChartNode` 把占位符和图表说明插入报告。
+8. 输出 `chart_messages` 和修改后的报告。
 
 ## 数据契约与依赖
 
@@ -60,13 +57,13 @@
 
 - `report_content`
 - `all_classified_contents`
-- `source_trace_datas`
+
 
 输出：
 
 - `chart_messages`：`chart_id`、`chart_title`、`description`、`base64`。
 - `modified_report`
-- `new_source_trace_datas`
+
 
 运行依赖：
 
@@ -86,13 +83,7 @@
 
 推荐命令：
 
-```bash
-uv run pytest tests/algorithm/chart_generation
-uv run pytest tests/source_tracer/test_chart_citation.py
-```
-
 ## 相关文档
 
 - [报告生成](./report-generation.md)
-- [全局溯源](./source-trace.md)
 - [Prompt 模板系统](./prompt-template-system.md)

@@ -6,23 +6,19 @@
 
 - 前端 action 到后端处理器的统一映射与分发。
 - 同义改写、补充检索、新增任务、真实性核验、整篇同步和完成动作的总览。
-- 选区 offset、报告 markup、局部溯源、结果下发和历史更新相关的共享契约。
 
-本文档不覆盖前端 UI 交互实现、完整报告生成流程、通用信息采集算法内部实现、全局溯源算法内部实现。子能力细节见：
 
 - [同义改写](./user-feedback-processor/synonym-rewrite.md)
 - [补充检索与改写](./user-feedback-processor/supplementary-search.md)
 - [真实性核验](./user-feedback-processor/truth-verification.md)
 - [新增任务处理](./user-feedback-processor/new-task-processing.md)
-- [局部溯源](./user-feedback-processor/local-source-trace.md)
+
 
 `sync` 和 `finish` 是轻量会话控制动作，目前只在本文档总览中说明，不单独拆分子文档。
 
 ## 功能目的
 
 用户反馈处理用于在报告生成完成后，接收前端针对报告内容的二次操作请求，并将这些请求转换为后端可执行的动作。它让用户可以对已生成报告进行局部改写、补充检索后改写、新增任务扩展、真实性核验、整篇同步和完成交互。
-
-该能力的主要调用方是工作流节点和前端报告编辑交互。算法层负责解析 action、校验选区、调用对应子处理器、生成新的报告快照，并在需要时对改写结果执行局部溯源。
 
 ## 可见行为
 
@@ -34,8 +30,6 @@
 - 新增任务处理：由 `new_task` 触发，根据用户新增任务补充报告内容。
 - 真实性核验：由 `truth_verification` 触发，对选中段落做真实性核验，返回核验结论和证据摘要。
 - 会话控制：包含 `sync` 和 `finish`，分别用于同步前端整篇报告内容和结束反馈交互流程。
-
-改写类动作会返回更新后的完整报告、原始替换区间、清理 markup 后的原始文本、改写文本和改写后 offset。开启局部溯源时，改写结果还会经过差异感知的 citation 更新。
 
 ## 关键代码路径
 
@@ -51,7 +45,7 @@
 - `openjiuwen_deepsearch/algorithm/user_feedback_processor/supplementary_search.py`
 - `openjiuwen_deepsearch/algorithm/user_feedback_processor/new_task_processor.py`
 - `openjiuwen_deepsearch/algorithm/user_feedback_processor/truth_verification.py`
-- `openjiuwen_deepsearch/algorithm/user_feedback_processor/local_source_trace.py`
+
 
 共享工具：
 
@@ -74,7 +68,6 @@
 5. `execute` 读取 `feedback["action"]`，通过 `USER_INPUT_ACTION_MAP` 识别动作大类。
 6. `execute` 分发到同义改写、补充检索、新增任务、真实性核验或同步分支。
 7. 改写类动作返回 `new_report`、替换区间、改写文本和 offset。
-8. 开启 `enable_local_source_trace` 时，改写结果进入 `apply_local_source_trace_to_action_result` 更新 citation。
 9. `build_stream_result` 将 action 结果转换为前端流式输出需要的结构。
 10. `send_result` 按动作大类调用对应发送函数，将结果写回会话或下发给前端。
 
@@ -112,7 +105,6 @@ Prompt 契约只记录输入输出约定，不复制 Prompt 全文：
 - offset 必须落在当前报告正文范围内，且与 `selected_text` 对应。
 - 改写前会剥离选区内 citation / inference 等 markup，避免模型改写结构化引用标记。
 - `truth_verification` 的待核验段落为空时，应按无效参数处理。
-- 局部溯源可通过 `enable_local_source_trace` 关闭；关闭时改写结果直接返回。
 - 追加参考文献时使用 append-only 策略，避免重排既有引用编号。
 - 敏感日志开关开启时，不应记录原文、改写文本或用户指令等敏感内容。
 
@@ -121,15 +113,6 @@ Prompt 契约只记录输入输出约定，不复制 Prompt 全文：
 ## 测试与验证
 
 修改用户反馈处理能力时，优先运行相关子能力测试：
-
-```bash
-uv run pytest tests/user_feedback_processor/test_processor.py
-uv run pytest tests/user_feedback_processor/test_rewrite.py
-uv run pytest tests/user_feedback_processor/test_supplementary_search.py
-uv run pytest tests/user_feedback_processor/test_new_task_processor.py
-uv run pytest tests/user_feedback_processor/test_truth_verification.py
-uv run pytest tests/user_feedback_processor/test_local_source_trace.py
-```
 
 如果改动影响 offset、markup 剥离、章节定位或历史记录，还应运行：
 
@@ -147,16 +130,11 @@ uv run pytest tests/user_feedback_processor/test_workflow_integration.py
 
 纯文档更新可使用以下命令检查关键路径和链接文本是否保留：
 
-```bash
-rg -n "USER_INPUT_ACTION_MAP|UserFeedbackProcessor|enable_local_source_trace|test_processor.py" docs/feature/algorithm/user-feedback-processor.md
-```
-
 ## 相关文档
 
 - [同义改写](./user-feedback-processor/synonym-rewrite.md)
 - [补充检索与改写](./user-feedback-processor/supplementary-search.md)
 - [真实性核验](./user-feedback-processor/truth-verification.md)
 - [新增任务处理](./user-feedback-processor/new-task-processing.md)
-- [局部溯源](./user-feedback-processor/local-source-trace.md)
-- [开发指南](../../zh/4.开发指南/README.md)
-- [目录结构](../../zh/4.开发指南/directory_structure.md)
+- [开发指南](../../zh/3.开发指南/README.md)
+- [目录结构](../../zh/3.开发指南/directory_structure.md)
