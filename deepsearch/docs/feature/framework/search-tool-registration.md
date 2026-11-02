@@ -14,7 +14,7 @@ contextvar，避免节点直接持有全局工具对象。
 ## 可见行为
 
 - Agent 运行开始时根据 `AgentConfig` 初始化 web/local 搜索引擎实例。
-- 支持内置 web 引擎：tavily、google、serper、xunfei、petal、bocha、jina、perplexity，以及研究工作流的 secondary 引擎 pubmed、arxiv。
+- 支持内置 web 引擎：tavily、google、serper、serpbase、xunfei、petal、bocha、jina、perplexity，以及研究工作流的 secondary 引擎 pubmed、arxiv。
 - 支持内置 local 引擎：openapi、native。
 - 支持通过 `custom_*_search_file` 和 `custom_*_search_func` 注册自定义搜索工具。
 - Tavily 支持把意图识别出的 include/exclude domains 追加到已有配置。

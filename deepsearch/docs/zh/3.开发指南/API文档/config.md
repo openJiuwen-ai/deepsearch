@@ -59,7 +59,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 
 **字段**：
 
-- **search_engine_name**(Literal["tavily", "google", "xunfei", "petal", "custom", "bocha", "jina", "perplexity", "serper", "agc_ainetworking"], 可选)：联网增强引擎名称。默认值：`"tavily"`。
+- **search_engine_name**(Literal["tavily", "google", "xunfei", "petal", "custom", "bocha", "jina", "perplexity", "serper", "serpbase", "agc_ainetworking"], 可选)：联网增强引擎名称。默认值：`"tavily"`。
 - **search_api_key**(bytearray, 可选)：联网增强引擎调用密钥。默认值：`bytearray("", encoding="utf-8")`。
 - **search_url**(str, 可选)：联网增强引擎调用地址。默认值：`""`。对于支持默认公网地址的引擎，可留空由系统自动回退。
 - **max_web_search_results**(int, 可选)：最大搜索结果数量，取值范围：[1, 10]。默认值：`5`。
@@ -69,6 +69,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 **内置引擎说明**：
 
 - `google` / `serper`：复用 GoogleSearchAPIWrapper。
+- `serpbase`：使用 SerpBase Google 网页搜索 Wrapper（密钥通过 `X-API-Key` 请求头传递，默认地址 `https://api.serpbase.dev`）。
 - `tavily`：使用 TavilySearchAPIWrapper。
 - `xunfei`：使用讯飞搜索 Wrapper。
 - `petal`：使用小艺联网增强 Wrapper。

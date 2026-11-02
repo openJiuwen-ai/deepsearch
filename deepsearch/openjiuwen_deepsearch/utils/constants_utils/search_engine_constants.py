@@ -15,6 +15,7 @@ class SearchEngine(enum.Enum):
     JINA = "jina"
     PERPLEXITY = "perplexity"
     SERPER = "serper"
+    SERPBASE = "serpbase"
     AGC_AINETWORKING = "agc_ainetworking"
 
 

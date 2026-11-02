@@ -43,7 +43,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 
 **Fields**
 
-- **search_engine_name** (`Literal["tavily","google","xunfei","petal","custom","bocha","jina","perplexity","serper","agc_ainetworking"]`, optional): Engine id. Default `"tavily"`.
+- **search_engine_name** (`Literal["tavily","google","xunfei","petal","custom","bocha","jina","perplexity","serper","serpbase","agc_ainetworking"]`, optional): Engine id. Default `"tavily"`.
 - **search_api_key** (bytearray, optional): API key. Default empty.
 - **search_url** (str, optional): Endpoint URL. Default `""`. Public engines may leave this empty and use built-in defaults.
 - **max_web_search_results** (int, optional): Max hits, 1–10. Default `5`.
@@ -53,6 +53,7 @@ class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
 **Built-in engine notes**
 
 - `google` / `serper`: routed to the Google/Serper wrapper.
+- `serpbase`: SerpBase Google web search wrapper (key in the `X-API-Key` header, default endpoint `https://api.serpbase.dev`).
 - `tavily`: Tavily wrapper.
 - `xunfei`: iFlytek wrapper.
 - `petal`: Petal web augmentation wrapper.

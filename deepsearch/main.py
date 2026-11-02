@@ -44,6 +44,7 @@ RESEARCH_ENGINES_ALLOWING_EMPTY_SEARCH_URL = {
     "jina",
     "perplexity",
     "serper",
+    "serpbase",
     "agc_ainetworking",
 }
 

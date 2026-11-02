@@ -37,6 +37,7 @@ class WebSearchEngineConfig(BaseModel):
         "jina",
         "perplexity",
         "serper",
+        "serpbase",
         "agc_ainetworking",
     ] = Field(default="tavily",
                                                                                           description="联网增强引擎名称")

@@ -52,7 +52,7 @@ framework/openjiuwen/
     └── search_api/             # Web, local, and scholarly search providers
 ```
 
-`search_api/` includes `agc_ainetworking`, `harness_web_search`, `jina`, `petal`, `serper`, `tavily`, `xunfei`, and `scholarly_search/` (PubMed, arXiv, Semantic Scholar, and full-text retrieval). External and local adapters are under `framework/openjiuwen/tools/search_api/`: `external_tool/`, `local_search_api/`, and `native_local_search_api/`.
+`search_api/` includes `agc_ainetworking`, `harness_web_search`, `jina`, `petal`, `serper`, `serpbase`, `tavily`, `xunfei`, and `scholarly_search/` (PubMed, arXiv, Semantic Scholar, and full-text retrieval). External and local adapters are under `framework/openjiuwen/tools/search_api/`: `external_tool/`, `local_search_api/`, and `native_local_search_api/`.
 
 ## Configuration and utilities
 
