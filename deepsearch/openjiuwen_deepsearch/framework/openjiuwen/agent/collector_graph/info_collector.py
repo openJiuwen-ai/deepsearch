@@ -8,39 +8,98 @@ from dataclasses import dataclass
 from typing import Any
 
 from openjiuwen.core.context_engine.base import ModelContext
-from openjiuwen.core.foundation.llm.schema.message import UserMessage
 from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
-from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_call, \
-    process_tool_result, remove_duplicate_items
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
+from openjiuwen_deepsearch.algorithm.research_collector.collector_function import process_tool_result, \
+    remove_duplicate_items
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     CollectorSourceStore,
-    build_evaluation_documents,
     build_evidence_atom,
-    normalize_doc_info_scores_and_time,
-    normalize_scores,
+    canonicalize_url,
 )
-from openjiuwen_deepsearch.algorithm.research_collector.doc_evaluation import run_doc_evaluation
+from openjiuwen_deepsearch.algorithm.research_collector.target_paper import (
+    find_exact_target_paper_facts,
+    normalize_arxiv_id,
+    normalize_doi,
+    normalize_pmid,
+    normalize_title,
+)
+from openjiuwen_deepsearch.algorithm.research_collector.scholarly_fusion import fuse_scholarly_records
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import (
+    EvidenceLedger,
     append_attempted_queries,
     ensure_ledger,
+    merge_ledger_update,
+    target_paper_key,
+    target_papers_still_searchable,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import adapt_llm_model_name
 from openjiuwen_deepsearch.framework.openjiuwen.tools import create_web_search_tool, create_local_search_tool, \
     build_runtime_api_tools
-from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log
+from openjiuwen_deepsearch.framework.openjiuwen.tools.mcp.bundle import is_query_compatible
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.full_text import (
+    FullTextConfig,
+    defer_scholarly_full_text,
+    resolve_scholarly_full_text,
+)
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, record_llm_retry_log, \
+    normalize_json_output
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import LocalSearch, SearchEngine
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
-from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, mcp_tool_context
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 max_retries = Config().service_config.info_collector_max_retry_num
 logger = logging.getLogger(__name__)
+
+
+def _is_target_locator_query(query: str, target: dict) -> bool:
+    """Count an attempt only when this round actually issued a target locator query."""
+    text = str(query or "").strip()
+    normalized_query = text.casefold()
+    for value, normalize in (
+        (target.get("pmid"), normalize_pmid),
+        (target.get("doi"), normalize_doi),
+        (target.get("arxiv_id"), normalize_arxiv_id),
+    ):
+        identifier = normalize(value)
+        if identifier and identifier in normalized_query:
+            return True
+    title = normalize_title(target.get("title"))
+    if title and normalize_title(text) == title:
+        return True
+    target_url = canonicalize_url(str(target.get("url") or ""))
+    return bool(target_url and target_url == canonicalize_url(text))
+
+
+def filter_confirmed_target_locators(
+    retrieval_queries: list[RetrievalQuery],
+    target_papers: list[dict],
+    evidence_ledger: EvidenceLedger | dict | None,
+) -> list[RetrievalQuery]:
+    """Skip exact locator queries for target papers already confirmed."""
+    ledger = ensure_ledger(evidence_ledger)
+    confirmed = set(ledger.confirmed_target_papers)
+    filtered_queries = []
+    for retrieval_query in retrieval_queries:
+        is_confirmed_locator = False
+        for target in target_papers:
+            if not isinstance(target, dict):
+                continue
+            if target_paper_key(target) not in confirmed:
+                continue
+            if _is_target_locator_query(retrieval_query.query, target):
+                is_confirmed_locator = True
+                break
+        if not is_confirmed_locator:
+            filtered_queries.append(retrieval_query)
+    return filtered_queries
 
 
 @dataclass(frozen=True)
@@ -49,18 +108,7 @@ class DirectSearchRequest:
     tool_name: str
     query: str
     search_engine_name: str
-    fallback_to_default: bool = True
     retry_on_error: bool = True
-
-
-@dataclass(frozen=True)
-class VerticalSearchFallbackLog:
-    section_idx: int
-    step_title: str
-    search_engine_name: str
-    default_search_engine_name: str
-    query: str
-    reason: str
 
 
 @dataclass(frozen=True)
@@ -133,6 +181,7 @@ class InfoRetrievalNode(BaseNode):
             plan_idx=session.get_global_state("collector_context.plan_idx"),
             step_idx=session.get_global_state("collector_context.step_idx"),
             step_title=step_title,
+            language=session.get_global_state("collector_context.language"),
             research_loop_count=session.get_global_state("collector_context.research_loop_count"),
             max_research_loops=session.get_global_state("collector_context.max_research_loops"),
             search_method=session.get_global_state("config.info_collector_search_method"),
@@ -140,35 +189,219 @@ class InfoRetrievalNode(BaseNode):
             local_search_engine_name=local_search_engine_name,
             api_tools_config=session.get_global_state("config.api_tools_config") or {},
             research_intent=session.get_global_state("collector_context.research_intent") or {},
+            evidence_ledger=session.get_global_state("collector_context.evidence_ledger") or {},
+
         )
+        mcp_tools = []
+        mcp_param_tools = []
+        try:
+            mcp_bundle = mcp_tool_context.get()
+            if mcp_bundle is not None:
+                # getter 返回 bundle 内部 list 本身；bundle 在 agent.run 期间被多个采集循环复用。
+                # 必须浅拷贝，否则下方 append runtime API 工具会污染 bundle 内部 list，
+                # 导致后续采集循环取回已追加的列表并再次追加同一工具。
+                mcp_tools = list(mcp_bundle.get_tools_by_type("search"))
+                mcp_param_tools = list(mcp_bundle.get_tools_by_type("search_param"))
+        except LookupError:
+            pass
+        runtime_api_tools = build_runtime_api_tools(
+            (state.get("api_tools_config") or {}).get("collector_tools") or []
+        )
+        for tool in runtime_api_tools:
+            schema = getattr(getattr(tool, "card", None), "input_params", None)
+            if is_query_compatible(schema):
+                mcp_tools.append(tool)
+            else:
+                mcp_param_tools.append(tool)
+        state["mcp_tools"] = mcp_tools
+        state["mcp_param_tools"] = mcp_param_tools
         return state
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         state = self._pre_handle(inputs, session, context)
         session_context.set(session)
 
+        research_intent = state.get("research_intent") or {}
+        target_papers = (
+            research_intent.get("target_papers", [])
+            if isinstance(research_intent, dict)
+            else getattr(research_intent, "target_papers", [])
+        )
+        search_queries = filter_confirmed_target_locators(
+            state.get("search_queries", []),
+            target_papers,
+            state.get("evidence_ledger"),
+        )
+        session.update_global_state({"collector_context.search_queries": search_queries})
+        mcp_param_assignments = await self._resolve_mcp_param_tool_assignments(
+            state, search_queries
+        )
         tasks = []
-        for retrieval_query in state.get("search_queries", []):
+        for retrieval_query in search_queries:
             sub_state = {
                 "search_query": retrieval_query.query,
                 "section_idx": state.get("section_idx", 0),
                 "plan_idx": state.get("plan_idx", 0),
                 "step_idx": state.get("step_idx", 0),
                 "step_title": state.get("step_title", ""),
+                "language": state.get("language", "zh-CN"),
                 "max_tool_call_turns_per_query": state.get("max_tool_call_turns_per_query", 2),
                 "search_method": state.get("search_method", "web"),
-                "web_search_engine_name": state.get("web_search_engine_name", None),
-                "secondary_web_search_engine_name": getattr(retrieval_query, "search_engine_name", ""),
+                "web_search_engine_name": retrieval_query.primary_engine or state.get("web_search_engine_name", None),
+                "retrieval_query": retrieval_query,
                 "local_search_engine_name": state.get("local_search_engine_name", None),
                 "api_tools_config": state.get("api_tools_config", {}),
                 "research_intent": state.get("research_intent", {}),
+
+                # MCP 工具必须随 sub_state 下传，否则 _collector_main /
+                # _prepare_collector_tool 读到 []，采集模型看不到 mcp{server}__{tool}。
+                "mcp_tools": state.get("mcp_tools", []),
+                "mcp_param_tools": state.get("mcp_param_tools", []),
+                "mcp_param_assignments": mcp_param_assignments.get(retrieval_query.query, []),
             }
-            sub_task = self._collector_main(sub_state)
+            sub_task = self._run_retrieval_query(sub_state, retrieval_query)
             tasks.append(sub_task)
         tasks_results = await asyncio.gather(*tasks)
 
         node_output = self._post_handle(inputs, tasks_results, session, context)
         return node_output
+
+    async def _resolve_mcp_param_tool_assignments(
+        self, state: dict, search_queries: list
+    ) -> dict:
+        """query-不兼容 MCP 工具的批量参数生成：所有 query 一次 LLM 调用产出 {query: [{tool, args}]}。
+
+        无 search_param 工具或无 query 时返回 {}（happy-path 不产生任何 LLM 调用）。
+        LLM 输出不可信：tool 名必须在校验集合内，args 必须是 dict，否则跳过该项。
+        """
+        result: dict[str, list] = {}
+        param_tools = state.get("mcp_param_tools", []) or []
+        if not param_tools or not search_queries:
+            return result
+        valid_names = {
+            getattr(getattr(t, "card", None), "name", None) for t in param_tools
+        }
+        valid_names.discard(None)
+        if not valid_names:
+            return result
+        tool_specs = [
+            {
+                "name": getattr(t.card, "name", ""),
+                "description": getattr(t.card, "description", "") or "",
+                "input_schema": getattr(t.card, "input_params", {}) or {},
+            }
+            for t in param_tools
+        ]
+        prompt_context = {
+            "queries": [getattr(q, "query", str(q)) for q in search_queries],
+            "tools": tool_specs,
+            "language": state.get("language", "zh-CN"),
+        }
+        tool_prompt = build_prompt_messages("collector_mcp_param", prompt_context)
+        response = None
+        try:
+            response = await ainvoke_llm_with_stats(
+                self.llm, tool_prompt, llm_type="basic",
+                agent_name=AgentLlmName.COLLECTOR_INFO_RETRIEVAL.value,
+            )
+        except Exception as e:
+            record_llm_retry_log(
+                current_try=1, max_retries=max_retries,
+                section_idx=state.get("section_idx", 0),
+                step_title=state.get("step_title", ""),
+                operation="batch resolve mcp param tool assignments",
+                error=e, extra_info="",
+            )
+            return result
+        if not isinstance(response, dict):
+            return result
+        content = response.get("content")
+        if not isinstance(content, str):
+            return result
+        try:
+            payload = json.loads(normalize_json_output(content))
+        except (TypeError, ValueError):
+            return result
+        if not isinstance(payload, dict):
+            return result
+        assignments = payload.get("assignments")
+        if not isinstance(assignments, list):
+            return result
+        for entry in assignments:
+            if not isinstance(entry, dict):
+                continue
+            query = entry.get("query")
+            tool = entry.get("tool")
+            args = entry.get("args")
+            if not isinstance(query, str) or not isinstance(tool, str):
+                continue
+            if tool not in valid_names or not isinstance(args, dict):
+                continue
+            result.setdefault(query, []).append({"tool": tool, "args": args})
+        total_assignments = sum(len(v) for v in result.values())
+        logger.info(
+            f"section_idx: {state.get('section_idx', 0)} | "
+            f"[InfoRetrievalNode] MCP param assignments resolved: "
+            f"{len(result)} queries, {total_assignments} tool calls"
+        )
+        return result
+
+    async def _run_retrieval_query(self, sub_state: dict, query: RetrievalQuery) -> dict:
+        with defer_scholarly_full_text(bool(query.secondary_engines)):
+            result = await self._collector_main(sub_state)
+        if query.secondary_engines:
+            result["doc_infos"] = fuse_scholarly_records(result.get("doc_infos", []))
+            await self._resolve_query_full_text(query, result)
+            self._rebuild_full_text_evidence(query, result)
+        return result
+
+    @staticmethod
+    async def _resolve_query_full_text(query: RetrievalQuery, result: dict) -> None:
+        if not query.scholarly_full_text_config:
+            return
+        config = FullTextConfig(**query.scholarly_full_text_config)
+        if not config.enabled:
+            return
+        max_results = query.max_full_text_results
+        if max_results <= 0:
+            return
+        eligible_documents = [
+            document for document in result.get("doc_infos", [])
+            if document.get("full_text_candidates")
+        ]
+        for document in eligible_documents[:max_results]:
+            if document.get("full_text_status") != "available":
+                await resolve_scholarly_full_text(
+                    document, config=config
+                )
+
+    @staticmethod
+    def _rebuild_full_text_evidence(query: RetrievalQuery, result: dict) -> None:
+        source_store = CollectorSourceStore.from_dict(result.get("source_store"))
+        refreshed_documents = []
+        for document in result.get("doc_infos", []):
+            if document.get("full_text_status") != "available" or not str(document.get("full_text") or "").strip():
+                refreshed_documents.append(document)
+                continue
+            previous_scores = document.get("scores")
+            previous_publish_time = document.get("publish_time")
+            record = {
+                **document,
+                "content": document.get("content") or document.get("original_content") or "",
+            }
+            _, rebuilt = build_evidence_atom(
+                record=record,
+                query=query.query,
+                source_store=source_store,
+            )
+            refreshed = {**document, **rebuilt}
+            refreshed["scores"] = previous_scores if isinstance(previous_scores, dict) else {}
+            if previous_publish_time:
+                refreshed["publish_time"] = previous_publish_time
+                refreshed["doc_time"] = previous_publish_time
+            refreshed_documents.append(refreshed)
+        result["doc_infos"] = refreshed_documents
+        result["source_store"] = source_store.to_dict()
 
     def _post_handle(self, inputs: Input, algorithm_output: list, session: Session, context: ModelContext):
         """合并子查询采集结果并更新 collector session 状态。
@@ -237,12 +470,120 @@ class InfoRetrievalNode(BaseNode):
 
         doc_infos = remove_duplicate_items(doc_infos)
         updated_ledger = append_attempted_queries(current_ledger, attempted_queries)
+        research_intent = session.get_global_state("collector_context.research_intent") or {}
+        if isinstance(research_intent, dict):
+            target_papers = research_intent.get("target_papers", [])
+        else:
+            target_papers = getattr(research_intent, "target_papers", [])
+        academic_documents = []
+        for document in new_doc_infos:
+            if not isinstance(document, dict):
+                continue
+            has_academic_metadata = (
+                bool(document.get("academic_source"))
+                or bool(document.get("academic_source_id"))
+                or bool(document.get("doi"))
+            )
+            if has_academic_metadata:
+                academic_documents.append(document)
+        if target_papers:
+            if LogManager.is_sensitive():
+                logger.info(
+                    "section_idx: %s | [TARGET_PAPER_METADATA] academic_doc_count=%s "
+                    "has_academic_source_id_count=%s has_doi_count=%s",
+                    section_idx,
+                    len(academic_documents),
+                    sum(bool(document.get("academic_source_id")) for document in academic_documents),
+                    sum(bool(document.get("doi")) for document in academic_documents),
+                )
+            else:
+                metadata_records = [
+                    {
+                        key: str(document.get(key) or "").strip()
+                        for key in ("academic_source", "academic_source_id", "doi", "title")
+                    }
+                    for document in academic_documents
+                ]
+                logger.info(
+                    "section_idx: %s | [TARGET_PAPER_METADATA] academic_doc_count=%s records=%s",
+                    section_idx,
+                    len(academic_documents),
+                    json.dumps(metadata_records, ensure_ascii=False),
+                )
+        target_paper_facts = find_exact_target_paper_facts(target_papers, new_doc_infos)
+        searchable_targets = target_papers_still_searchable(target_papers, current_ledger)
+        issued_target_queries = {
+            target_paper_key(target)
+            for target in searchable_targets
+            if any(_is_target_locator_query(query, target) for query in attempted_queries)
+        }
+        matched_target_keys = [
+            target_paper_key(target)
+            for target in searchable_targets
+            if find_exact_target_paper_facts([target], new_doc_infos)
+        ]
+        if issued_target_queries:
+            updated_ledger = merge_ledger_update(
+                updated_ledger,
+                EvidenceLedger(target_paper_attempts={
+                    target_paper_key(target): current_ledger.target_paper_attempts.get(
+                        target_paper_key(target), 0
+                    ) + 1
+                    for target in searchable_targets
+                    if target_paper_key(target) in issued_target_queries
+                }),
+            )
+        if matched_target_keys:
+            updated_ledger = merge_ledger_update(
+                updated_ledger,
+                EvidenceLedger(confirmed_target_papers=matched_target_keys),
+            )
+        if target_papers:
+            matched = str(bool(target_paper_facts)).lower()
+            if LogManager.is_sensitive():
+                logger.info(
+                    "section_idx: %s | [TARGET_PAPER_MATCH] matched=%s match_count=%s",
+                    section_idx,
+                    matched,
+                    len(target_paper_facts),
+                )
+            else:
+                logger.info(
+                    "section_idx: %s | [TARGET_PAPER_MATCH] matched=%s match_count=%s facts=%s",
+                    section_idx,
+                    matched,
+                    len(target_paper_facts),
+                    json.dumps(target_paper_facts, ensure_ascii=False),
+                )
+        if target_paper_facts:
+            updated_ledger = merge_ledger_update(
+                updated_ledger,
+                EvidenceLedger(known_facts=target_paper_facts),
+            )
 
         session.update_global_state({"collector_context.history_queries": history_queries})
         session.update_global_state({"collector_context.new_doc_infos_current_loop": new_doc_infos})
         session.update_global_state({"collector_context.doc_infos": doc_infos})
         session.update_global_state({"collector_context.evidence_ledger": updated_ledger.model_dump()})
         session.update_global_state({"collector_context.source_store": source_store})
+        if target_papers:
+            persisted_ledger = ensure_ledger(session.get_global_state("collector_context.evidence_ledger"))
+            merged = bool(target_paper_facts) and all(
+                fact in updated_ledger.known_facts for fact in target_paper_facts
+            )
+            persisted = bool(target_paper_facts) and all(
+                fact in persisted_ledger.known_facts for fact in target_paper_facts
+            )
+            logger.info(
+                "section_idx: %s | [TARGET_PAPER_LEDGER] matched_fact_count=%s "
+                "known_fact_count_before=%s known_fact_count_after=%s merged=%s persisted=%s",
+                section_idx,
+                len(target_paper_facts),
+                len(current_ledger.known_facts),
+                len(updated_ledger.known_facts),
+                str(merged).lower(),
+                str(persisted).lower(),
+            )
         if LogManager.is_sensitive():
             logger.info("section_idx: %s | [InfoRetrievalNode] End InfoRetrievalNode.", section_idx)
             logger.info(
@@ -288,104 +629,117 @@ class InfoRetrievalNode(BaseNode):
 
         query = state.get("search_query", step_title)
         agent_input = {
-            "messages": [UserMessage(content=f"Now deal with the Query:\n[Query]: {query}\n\n"), ],
+            "messages": [],
             "remaining_steps": None,
             "web_page_search_record": [],
             "local_text_search_record": [],
             "other_tool_record": [],
+            "language": state.get("language", "zh-CN"),
             "research_intent": state.get("research_intent", {}),
+
         }
 
-        tool_list, tool_dict = self._prepare_collector_tool(state)
+        tool_list, tool_dict = await self._prepare_collector_tool(state)
 
-        # 当 collector_tools 为空且 search_method 为 web/local 时，直接调用对应 search tool
+        # query-gen 直调路径：tool 提示命中 MCP 工具时直调该工具；
+        # 否则按 search_method 直调 native 工具（web 扇出 / local 重试 / all 两者皆调）。
+        # 不再有 LLM 工具循环——采集阶段 LLM 调用次数与未配置 MCP 时相同。
         collector_tools = state.get("api_tools_config", {}).get("collector_tools", [])
         search_method = state.get("search_method", "web")
-        if not collector_tools and search_method in ("web", "local"):
-            # 直接调用对应 search tool
-            tool_name = f"{search_method}_search_tool"
-            if tool_name not in tool_dict:
-                if LogManager.is_sensitive():
-                    logger.error(f"section_idx: {section_idx} | "
-                                 f"[InfoRetrievalNode] Direct call: tool '{tool_name}' not found in tool_dict")
-                else:
-                    logger.error(f"section_idx: {section_idx} | step title: {step_title} | "
-                                 f"[InfoRetrievalNode] Direct call: tool '{tool_name}' not found in tool_dict")
-                processed_results = []
+        retrieval_query = state.get("retrieval_query")
+        tool_hint = getattr(retrieval_query, "tool", None)
+        processed_results = []
+
+        if tool_hint and tool_hint in tool_dict and tool_hint not in ("web_search_tool", "local_search_tool"):
+            if LogManager.is_sensitive():
+                logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] Dispatch route=mcp_direct")
             else:
-                processed_results = []
-                if search_method == "web":
-                    engine_names = self._web_search_engines_for_query(state)
-                    default_search_engine_name = str(
-                        state.get("web_search_engine_name") or SearchEngine.PETAL.value
-                    ).strip()
-                    fallback_to_default = default_search_engine_name not in engine_names
-                    raw_results = await asyncio.gather(*[
-                        self._direct_search_with_retry(
-                            DirectSearchRequest(
-                                tool=tool_dict[tool_name],
-                                tool_name=tool_name,
-                                query=query,
-                                search_engine_name=engine_name,
-                                fallback_to_default=fallback_to_default,
-                                retry_on_error=engine_name == default_search_engine_name,
-                            ),
-                            state,
-                        )
-                        for engine_name in engine_names
-                    ])
-                    for tool_result_raw in raw_results:
-                        if not tool_result_raw:
-                            continue
-                        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
-                        processed_results.extend(process_tool_result(tool_name, tool_result_json, agent_input))
-                    if LogManager.is_sensitive():
-                        logger.info(f"section_idx: {section_idx} | "
-                                    f"[InfoRetrievalNode] Direct web calls completed, engines: {len(engine_names)}")
-                    else:
-                        logger.info(f"section_idx: {section_idx} | step title: {step_title} | "
-                                    f"[InfoRetrievalNode] Direct web calls for {engine_names}, results: "
-                                    f"{len(processed_results)}")
-                else:
-                    for retry_idx in range(max_retries):
-                        try:
-                            search_engine_name = state.get(f"{search_method}_search_engine_name")
-                            tool_call_args = {"query": query, "search_engine_name": search_engine_name}
-                            tool_result_raw = await tool_dict[tool_name].invoke(tool_call_args)
-
-                            if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
-                                error_msg = tool_result_raw.get("error", "")
-                                current_try = retry_idx + 1
-                                record_llm_retry_log(
-                                    current_try=current_try, max_retries=max_retries,
-                                    section_idx=section_idx, step_title=step_title,
-                                    operation=f"direct call search tool '{tool_name}' returned error",
-                                    error=error_msg, extra_info=query,
-                                )
-                                if current_try < max_retries:
-                                    continue
-                                processed_results = []
-                                break
-
-                            tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
-                            processed_results = process_tool_result(tool_name, tool_result_json, agent_input)
-                            break
-
-                        except Exception as e:
-                            current_try = retry_idx + 1
-                            record_llm_retry_log(
-                                current_try=current_try, max_retries=max_retries,
-                                section_idx=section_idx, step_title=step_title,
-                                operation=f"direct call search tool '{tool_name}'",
-                                error=e, extra_info=query,
-                            )
-                            if current_try < max_retries:
-                                continue
-                            processed_results = []
+                logger.info(
+                    f"section_idx: {section_idx} | step title: {step_title} | "
+                    f"[InfoRetrievalNode] Dispatch route=mcp_direct tool='{tool_hint}'"
+                )
+            mcp_tool_result = await self._direct_invoke_mcp_tool(
+                tool_dict[tool_hint], tool_hint, query, section_idx, step_title,
+            )
+            # MCP builder 在 CallToolResult.isError=True 时返回 {"error": ...}；
+            # 该 dict 为真值，必须显式排除，否则错误正文会被 process_tool_result
+            # 记入 other_tool_record，最终被无差别包装为正式证据。
+            if mcp_tool_result and not (
+                isinstance(mcp_tool_result, dict) and mcp_tool_result.get("error")
+            ):
+                tool_result_json = json.dumps(mcp_tool_result, ensure_ascii=False, indent=4)
+                processed_results = process_tool_result(tool_hint, tool_result_json, agent_input)
+            elif isinstance(mcp_tool_result, dict) and mcp_tool_result.get("error"):
+                logger.warning(
+                    "section_idx: %s | step title: %s | [InfoRetrievalNode] "
+                    "MCP direct call returned explicit error, skipped from evidence: tool='%s'",
+                    section_idx, step_title, tool_hint,
+                )
+            # MCP 直调后补跑学术引擎（secondary web search），避免丢失 PubMed/arXiv 等证据源。
+            secondary_results = await self._run_secondary_web_search_for_direct_path(
+                state, tool_dict, query, agent_input,
+            )
+            processed_results.extend(secondary_results)
         else:
-            # MCP/custom tools 或多工具复杂路由走 LLM tool-calling
-            state, agent_input = await self._collector_llm(state, agent_input, tool_list, tool_dict)
-            agent_input = await self._run_secondary_web_search_if_needed(state, agent_input, tool_dict)
+            if LogManager.is_sensitive():
+                logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] Dispatch route=native")
+            else:
+                logger.info(
+                    f"section_idx: {section_idx} | step title: {step_title} | "
+                    f"[InfoRetrievalNode] Dispatch route=native search_method='{search_method}'"
+                )
+            processed_results = await self._direct_call_native_tools(
+                state, tool_dict, query, agent_input,
+            )
+
+        mcp_param_assignments = state.get("mcp_param_assignments", []) or []
+        max_param_calls = max(0, int(state.get("max_tool_call_turns_per_query", 2)))
+        param_call_count = 0
+        for assignment in mcp_param_assignments:
+            if param_call_count >= max_param_calls:
+                break
+            if not isinstance(assignment, dict):
+                continue
+            assigned_tool = assignment.get("tool")
+            assigned_args = assignment.get("args")
+            if not isinstance(assigned_args, dict) or assigned_tool not in tool_dict:
+                continue
+            param_call_count += 1
+            try:
+                param_result = await tool_dict[assigned_tool].invoke(assigned_args)
+            except Exception as e:
+                record_llm_retry_log(
+                    current_try=1, max_retries=max_retries,
+                    section_idx=section_idx, step_title=step_title,
+                    operation=f"direct call MCP param tool '{assigned_tool}'",
+                    error=e, extra_info=query,
+                )
+                continue
+            if param_result and not (
+                isinstance(param_result, dict) and param_result.get("error")
+            ):
+                if LogManager.is_sensitive():
+                    logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] MCP param direct call succeeded")
+                else:
+                    logger.info(
+                        f"section_idx: {section_idx} | step title: {step_title} | "
+                        f"[InfoRetrievalNode] MCP param direct call succeeded: tool='{assigned_tool}'"
+                    )
+                tool_result_json = json.dumps(param_result, ensure_ascii=False, indent=4)
+                processed_results.extend(process_tool_result(assigned_tool, tool_result_json, agent_input))
+            elif isinstance(param_result, dict) and param_result.get("error"):
+                logger.warning(
+                    "section_idx: %s | step title: %s | [InfoRetrievalNode] "
+                    "MCP param direct call returned explicit error, skipped from evidence: tool='%s'",
+                    section_idx, step_title, assigned_tool,
+                )
+
+        if collector_tools:
+            logger.warning(
+                "section_idx: %s | [InfoRetrievalNode] api_tools_config.collector_tools present but "
+                "no tool_hint matched; tools=%s",
+                section_idx, [t.get("name") for t in collector_tools if isinstance(t, dict)],
+            )
 
         web_record, local_record = [], []
         if len(agent_input["web_page_search_record"]) > 0:
@@ -393,18 +747,22 @@ class InfoRetrievalNode(BaseNode):
         if len(agent_input["local_text_search_record"]) > 0:
             local_record = remove_duplicate_items(agent_input["local_text_search_record"])
 
-        doc_infos, scored_result, source_store = await self._structure_result(web_record, local_record, query)
+        for record in agent_input.get("other_tool_record", []):
+            web_record.append({
+                "title": str(record.get("tool_name") or "Untitled"),
+                "url": "",
+                "content": str(record.get("content") or ""),
+            })
+
+        doc_infos, source_store = await self._structure_result(web_record, local_record, query)
 
         if LogManager.is_sensitive():
             logger.info(f"section_idx: {section_idx} | "
-                        f"[InfoRetrievalNode] Gathered {len(doc_infos)} items of information. | "
-                        f"Starting to Update doc_infos after post process.")
+                        f"[InfoRetrievalNode] Gathered {len(doc_infos)} items of information.")
         else:
             logger.info(f"section_idx: {section_idx} | step title {step_title} | "
                         f"[InfoRetrievalNode] Collecting info for query: {query} | "
-                        f"Gathered {len(doc_infos)} items of information. | "
-                        f"Starting to Updating doc_infos after post process.")
-        doc_infos = self._process_post_process_result(scored_result, doc_infos, section_idx)
+                        f"Gathered {len(doc_infos)} items of information.")
 
         return {
             "messages": agent_input["messages"],
@@ -415,12 +773,153 @@ class InfoRetrievalNode(BaseNode):
             "search_query": query,
         }
 
+    async def _run_secondary_web_search_for_direct_path(
+            self,
+            state: dict,
+            tool_dict: dict,
+            query: str,
+            agent_input: dict,
+    ) -> list:
+        """MCP 直调后补跑学术引擎，避免丢失 PubMed/arXiv 等证据源。"""
+        secondary_results: list = []
+        retrieval_query = state.get("retrieval_query")
+        secondary_engines = list(getattr(retrieval_query, "secondary_engines", []) or [])
+        if not secondary_engines:
+            return secondary_results
+        tool_name = "web_search_tool"
+        if tool_name not in tool_dict:
+            return secondary_results
+        max_tool_calls = max(0, int(state.get("max_tool_call_turns_per_query", 2)))
+        engine_names = list(dict.fromkeys(secondary_engines))[:max_tool_calls]
+        if not engine_names:
+            return secondary_results
+        raw_results = await asyncio.gather(*[
+            self._direct_search_with_retry(
+                DirectSearchRequest(
+                    tool=tool_dict[tool_name],
+                    tool_name=tool_name,
+                    query=query,
+                    search_engine_name=engine_name,
+                    retry_on_error=True,
+                ),
+                state,
+            )
+            for engine_name in engine_names
+        ])
+        for tool_result_raw in raw_results:
+            if not tool_result_raw:
+                continue
+            tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+            secondary_results.extend(process_tool_result(tool_name, tool_result_json, agent_input))
+        return secondary_results
+
     @staticmethod
-    def _web_search_engines_for_query(state: dict) -> list[str]:
-        engines = [
-            state.get("web_search_engine_name") or SearchEngine.PETAL.value,
-            state.get("secondary_web_search_engine_name") or "",
-        ]
+    async def _direct_invoke_mcp_tool(tool, tool_name: str, query: str, section_idx, step_title):
+        """直调 query-兼容 MCP 工具，参数为 {query}。失败返回 None，由 Supervisor 循环兜底。"""
+        try:
+            result = await tool.invoke({"query": query})
+            if LogManager.is_sensitive():
+                logger.info(f"section_idx: {section_idx} | [InfoRetrievalNode] MCP direct call succeeded")
+            else:
+                logger.info(
+                    f"section_idx: {section_idx} | step title: {step_title} | "
+                    f"[InfoRetrievalNode] MCP direct call succeeded: tool='{tool_name}'"
+                )
+            return result
+        except Exception as e:
+            record_llm_retry_log(
+                current_try=1, max_retries=max_retries,
+                section_idx=section_idx, step_title=step_title,
+                operation=f"direct call MCP tool '{tool_name}'",
+                error=e, extra_info=query,
+            )
+            return None
+
+    async def _direct_call_native_tools(
+        self, state: dict, tool_dict: dict, query: str, agent_input: dict,
+    ) -> list:
+        """按 search_method 直调 native 搜索工具：web 扇出 / local 重试 / all 两者。"""
+        section_idx = state.get("section_idx", 0)
+        step_title = state.get("step_title", "")
+        search_method = state.get("search_method", "web")
+        results: list = []
+        methods = ["web", "local"] if search_method == "all" else [search_method]
+        for method in methods:
+            tool_name = f"{method}_search_tool"
+            if tool_name not in tool_dict:
+                if LogManager.is_sensitive():
+                    logger.error(f"section_idx: {section_idx} | "
+                                 f"[InfoRetrievalNode] Direct call: tool '{tool_name}' not found in tool_dict")
+                else:
+                    logger.error(f"section_idx: {section_idx} | step title {step_title} | "
+                                 f"[InfoRetrievalNode] Direct call: tool '{tool_name}' not found in tool_dict")
+                continue
+            if method == "web":
+                max_tool_calls = max(0, int(state.get("max_tool_call_turns_per_query", 2)))
+                engine_names = self._engine_names_for_state(state)[:max_tool_calls]
+                raw_results = await asyncio.gather(*[
+                    self._direct_search_with_retry(
+                        DirectSearchRequest(
+                            tool=tool_dict[tool_name],
+                            tool_name=tool_name,
+                            query=query,
+                            search_engine_name=engine_name,
+                            retry_on_error=True,
+                        ),
+                        state,
+                    )
+                    for engine_name in engine_names
+                ])
+                for tool_result_raw in raw_results:
+                    if not tool_result_raw:
+                        continue
+                    tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+                    results.extend(process_tool_result(tool_name, tool_result_json, agent_input))
+                if LogManager.is_sensitive():
+                    logger.info(f"section_idx: {section_idx} | "
+                                f"[InfoRetrievalNode] Direct web calls completed, engines: {len(engine_names)}")
+                else:
+                    logger.info(f"section_idx: {section_idx} | step title: {step_title} | "
+                                f"[InfoRetrievalNode] Direct web calls for {engine_names}, results: "
+                                f"{len(results)}")
+            else:
+                for retry_idx in range(max_retries):
+                    try:
+                        search_engine_name = state.get(f"{method}_search_engine_name")
+                        tool_call_args = {"query": query, "search_engine_name": search_engine_name}
+                        tool_result_raw = await tool_dict[tool_name].invoke(tool_call_args)
+
+                        if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
+                            error_msg = tool_result_raw.get("error", "")
+                            current_try = retry_idx + 1
+                            record_llm_retry_log(
+                                current_try=current_try, max_retries=max_retries,
+                                section_idx=section_idx, step_title=step_title,
+                                operation=f"direct call search tool '{tool_name}' returned error",
+                                error=error_msg, extra_info=query,
+                            )
+                            if current_try < max_retries:
+                                continue
+                            break
+
+                        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
+                        results.extend(process_tool_result(tool_name, tool_result_json, agent_input))
+                        break
+                    except Exception as e:
+                        current_try = retry_idx + 1
+                        record_llm_retry_log(
+                            current_try=current_try, max_retries=max_retries,
+                            section_idx=section_idx, step_title=step_title,
+                            operation=f"direct call search tool '{tool_name}'",
+                            error=e, extra_info=query,
+                        )
+                        if current_try >= max_retries:
+                            break
+        return results
+
+    @staticmethod
+    def _engine_names_for_query(retrieval_query: RetrievalQuery) -> list[str]:
+        engines = [retrieval_query.primary_engine, *retrieval_query.secondary_engines]
         result = []
         for engine in engines:
             engine = str(engine or "").strip()
@@ -428,23 +927,15 @@ class InfoRetrievalNode(BaseNode):
                 result.append(engine)
         return result
 
-    @staticmethod
-    def _agent_called_tool(agent_input: dict, tool_name: str) -> bool:
-        for message in agent_input.get("messages", []):
-            if isinstance(message, dict):
-                message_name = message.get("name")
-                tool_calls = message.get("tool_calls", [])
-            else:
-                message_name = getattr(message, "name", None)
-                tool_calls = getattr(message, "tool_calls", [])
-            if message_name == tool_name:
-                return True
-            if not isinstance(tool_calls, list):
-                continue
-            for tool_call in tool_calls:
-                if isinstance(tool_call, dict) and tool_call.get("name") == tool_name:
-                    return True
-        return False
+    @classmethod
+    def _engine_names_for_state(cls, state: dict) -> list[str]:
+        retrieval_query = state.get("retrieval_query")
+        if retrieval_query is None:
+            retrieval_query = RetrievalQuery(
+                query=state.get("search_query", ""),
+                primary_engine=state.get("web_search_engine_name") or SearchEngine.PETAL.value,
+            )
+        return cls._engine_names_for_query(retrieval_query)
 
     async def _direct_search_with_retry(
             self,
@@ -453,61 +944,19 @@ class InfoRetrievalNode(BaseNode):
     ):
         section_idx = state.get("section_idx", 0)
         step_title = state.get("step_title", "")
-        default_search_engine_name = str(
-            state.get("web_search_engine_name") or SearchEngine.PETAL.value
-        ).strip()
         retry_direct_search = object()
 
-        async def handle_search_failure(error: Any, reason: str, current_try: int):
-            should_fallback_to_default = self._should_fallback_to_default_search(
-                request.search_engine_name,
-                default_search_engine_name,
-            )
+        async def handle_search_failure(
+                error: Any,
+                reason: str,
+                current_try: int,
+                retryable: bool = True,
+        ):
             operation = f"direct call search tool '{request.tool_name}'"
             if reason == "returned_error":
                 operation = f"{operation} returned error"
 
-            if request.fallback_to_default and should_fallback_to_default:
-                self._log_vertical_search_fallback(
-                    VerticalSearchFallbackLog(
-                        section_idx=section_idx,
-                        step_title=step_title,
-                        search_engine_name=request.search_engine_name,
-                        default_search_engine_name=default_search_engine_name,
-                        query=request.query,
-                        reason=reason,
-                    )
-                )
-                fallback_operation = (
-                    f"{operation}, fallback to default search engine "
-                    f"'{default_search_engine_name}'"
-                )
-                if reason == "exception":
-                    fallback_operation = (
-                        f"{operation} failed, fallback to default search engine "
-                        f"'{default_search_engine_name}'"
-                    )
-                self._log_vertical_search_failure_detail(
-                    VerticalSearchFailureDetailLog(
-                        section_idx=section_idx,
-                        step_title=step_title,
-                        operation=fallback_operation,
-                        error=error,
-                        extra_info=f"{request.search_engine_name}: {request.query}",
-                        level=logging.WARNING,
-                    )
-                )
-                return await self._direct_search_with_retry(
-                    DirectSearchRequest(
-                        tool=request.tool,
-                        tool_name=request.tool_name,
-                        query=request.query,
-                        search_engine_name=default_search_engine_name,
-                    ),
-                    state,
-                )
-
-            if not request.retry_on_error and should_fallback_to_default:
+            if not request.retry_on_error:
                 self._log_vertical_search_failed_fast(
                     section_idx,
                     step_title,
@@ -519,14 +968,14 @@ class InfoRetrievalNode(BaseNode):
 
             record_llm_retry_log(
                 current_try=current_try,
-                max_retries=max_retries if request.retry_on_error else current_try,
+                max_retries=max_retries if request.retry_on_error and retryable else current_try,
                 section_idx=section_idx,
                 step_title=step_title,
                 operation=operation,
                 error=error,
                 extra_info=f"{request.search_engine_name}: {request.query}",
             )
-            if request.retry_on_error and current_try < max_retries:
+            if request.retry_on_error and retryable and current_try < max_retries:
                 return retry_direct_search
             return None
 
@@ -539,7 +988,12 @@ class InfoRetrievalNode(BaseNode):
                 })
                 if isinstance(tool_result_raw, dict) and tool_result_raw.get("error"):
                     error_msg = tool_result_raw.get("error", "")
-                    failure_result = await handle_search_failure(error_msg, "returned_error", current_try)
+                    failure_result = await handle_search_failure(
+                        error_msg,
+                        "returned_error",
+                        current_try,
+                        retryable=tool_result_raw.get("retryable", True) is not False,
+                    )
                     if failure_result is retry_direct_search:
                         continue
                     return failure_result
@@ -549,16 +1003,6 @@ class InfoRetrievalNode(BaseNode):
                 if failure_result is retry_direct_search:
                     continue
                 return failure_result
-
-    @staticmethod
-    def _should_fallback_to_default_search(search_engine_name: str, default_search_engine_name: str) -> bool:
-        search_engine_name = str(search_engine_name or "").strip()
-        default_search_engine_name = str(default_search_engine_name or "").strip()
-        return bool(
-            search_engine_name
-            and default_search_engine_name
-            and search_engine_name != default_search_engine_name
-        )
 
     @staticmethod
     def _log_vertical_search_failed_fast(
@@ -611,148 +1055,8 @@ class InfoRetrievalNode(BaseNode):
                 exc_info=isinstance(failure_log.error, BaseException),
             )
 
-    @staticmethod
-    def _log_vertical_search_fallback(
-            fallback_log: VerticalSearchFallbackLog,
-    ) -> None:
-        if LogManager.is_sensitive():
-            logger.info(
-                "section_idx: %s | [InfoRetrievalNode] Vertical search fallback to default. "
-                "engine=%s default_engine=%s reason=%s",
-                fallback_log.section_idx,
-                fallback_log.search_engine_name,
-                fallback_log.default_search_engine_name,
-                fallback_log.reason,
-            )
-        else:
-            logger.info(
-                "section_idx: %s | step title: %s | [InfoRetrievalNode] Vertical search fallback to default. "
-                "engine=%s default_engine=%s query=%s reason=%s",
-                fallback_log.section_idx,
-                fallback_log.step_title,
-                fallback_log.search_engine_name,
-                fallback_log.default_search_engine_name,
-                fallback_log.query,
-                fallback_log.reason,
-            )
-
-    async def _run_secondary_web_search_if_needed(
-            self,
-            state: dict,
-            agent_input: dict,
-            tool_dict: dict,
-    ) -> dict:
-        secondary_engine = str(state.get("secondary_web_search_engine_name") or "").strip()
-        primary_engine = str(state.get("web_search_engine_name") or SearchEngine.PETAL.value).strip()
-        if not secondary_engine or secondary_engine == primary_engine:
-            return agent_input
-
-        tool_name = "web_search_tool"
-        if tool_name not in tool_dict:
-            return agent_input
-
-        query = state.get("search_query", state.get("step_title", ""))
-        fallback_to_default = not self._agent_called_tool(agent_input, tool_name)
-        tool_result_raw = await self._direct_search_with_retry(
-            DirectSearchRequest(
-                tool=tool_dict[tool_name],
-                tool_name=tool_name,
-                query=query,
-                search_engine_name=secondary_engine,
-                fallback_to_default=fallback_to_default,
-                retry_on_error=False,
-            ),
-            state,
-        )
-        if not tool_result_raw:
-            return agent_input
-
-        tool_result_json = json.dumps(tool_result_raw, ensure_ascii=False, indent=4)
-        process_tool_result(tool_name, tool_result_json, agent_input)
-        if LogManager.is_sensitive():
-            logger.info(
-                "section_idx: %s | [InfoRetrievalNode] Secondary web search completed.",
-                state.get("section_idx", 0),
-            )
-        else:
-            logger.info(
-                "section_idx: %s | step title: %s | [InfoRetrievalNode] Secondary web search completed. "
-                "engine=%s",
-                state.get("section_idx", 0),
-                state.get("step_title", ""),
-                secondary_engine,
-            )
-        return agent_input
-
-    async def _invoke_llm_with_retry(self, tool_prompt: list, tool_list: list, state: dict):
-        section_idx = state.get("section_idx", 0)
-        step_title = state.get("step_title", "")
-        query = state.get("search_query", step_title)
-
-        response = None
-        for retry_idx in range(max_retries):
-            try:
-                response = await ainvoke_llm_with_stats(
-                    self.llm, tool_prompt, llm_type="basic",
-                    agent_name=AgentLlmName.COLLECTOR_INFO_RETRIEVAL.value, tools=tool_list)
-                break
-            except Exception as e:
-                current_try = retry_idx + 1
-                task_description = "get info for query"
-                record_llm_retry_log(current_try, max_retries, section_idx, step_title,
-                                     error=e, operation=task_description, extra_info=query)
-
-        return response
-
-    async def _process_llm_response(self, response: any, agent_input: dict, tool_dict: dict, state: dict):
-        step_info = dict(
-            section_idx=state.get("section_idx", 0),
-            step_title=state.get("step_title", ""),
-            query=state.get("search_query", ""),
-            web_search_engine_name=state.get("web_search_engine_name"),
-            local_search_engine_name=state.get("local_search_engine_name"),
-        )
-        if response and response.get("tool_calls", []):
-            agent_input = await process_tool_call(response, agent_input, tool_dict, step_info)
-
-        return agent_input
-
-    async def _collector_llm(self, state: dict, agent_input: dict, tool_list: list, tool_dict: dict):
-        section_idx = state.get("section_idx", 0)
-        step_title = state.get("step_title", "")
-        query = state.get("search_query", step_title)
-        max_tool_call_turns_per_query = state.get("max_tool_call_turns_per_query", 2)
-
-        for i in range(max_tool_call_turns_per_query):
-            if LogManager.is_sensitive():
-                logger.info(f"section_idx: {section_idx} |"
-                            f"[InfoRetrievalNode] Current step index: {i + 1}")
-            else:
-                logger.info(f"section_idx: {section_idx} | step title {step_title} | "
-                            f"Collecting info for query: {query} | "
-                            f"[InfoRetrievalNode] Current step index: {i + 1}")
-            agent_input["remaining_steps"] = max_tool_call_turns_per_query - i
-            tool_prompt = apply_system_prompt("collector", agent_input)
-
-            response = await self._invoke_llm_with_retry(tool_prompt, tool_list, state)
-            agent_input = await self._process_llm_response(response, agent_input, tool_dict, state)
-            if response is None or not response.get("tool_calls", []):
-                break
-            if i + 1 == max_tool_call_turns_per_query:
-                if LogManager.is_sensitive():
-                    logger.info(f"section_idx: {section_idx} | "
-                                f"[InfoRetrievalNode] | [COLLECTOR TOOL CALL] reach max tool call turns "
-                                f"{max_tool_call_turns_per_query}")
-                else:
-                    logger.info(f"section_idx: {section_idx} | step title {step_title} | "
-                                f"Collecting info for query: {query} | [InfoRetrievalNode] | "
-                                f"[COLLECTOR TOOL CALL] reach max tool call turns limit "
-                                f"{max_tool_call_turns_per_query}")
-
-        return state, agent_input
-
     async def _structure_result(self, web_record: list, local_record: list, query: str):
-        """把工具记录转换为 doc_infos、评分结果和 source store。
+        """把工具记录转换为 doc_infos 和 source store。
 
         Args:
             web_record: Web 搜索记录列表。
@@ -760,7 +1064,7 @@ class InfoRetrievalNode(BaseNode):
             query: 当前检索 query。
 
         Returns:
-            `(doc_infos, scored_result, source_store)` 三元组。
+            `(doc_infos, source_store)` 二元组。
         """
         source_store = CollectorSourceStore()
         doc_infos = []
@@ -769,67 +1073,9 @@ class InfoRetrievalNode(BaseNode):
             _, doc_info = build_evidence_atom(record=record, query=query, source_store=source_store)
             doc_infos.append(doc_info)
 
-        if len(doc_infos) != 0:
-            scored_result = await run_doc_evaluation(
-                query=query,
-                documents=build_evaluation_documents(doc_infos),
-                llm=self.llm
-            )
-        else:
-            scored_result = []
+        return doc_infos, source_store.to_dict()
 
-        return doc_infos, scored_result, source_store.to_dict()
-
-    def _process_post_process_result(self, scored_result: list[dict], doc_infos: list, section_idx: int):
-        """把 evaluator 结果合并回 doc_infos。
-
-        Args:
-            scored_result: evaluator 输出的评分结果。
-            doc_infos: 当前 query 生成的兼容 doc_infos。
-            section_idx: 当前章节索引，用于日志。
-
-        Returns:
-            已补齐结构化 scores 和兼容期字段的 doc_infos。
-        """
-        seen_indexes = set()
-        for idx, scored in enumerate(scored_result):
-            if not isinstance(scored, dict):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result is not a dict (type={type(scored).__name__}), skipping index:{idx}")
-                continue
-            if "content" in scored:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result contains deprecated content index, skipping index:{idx}")
-                continue
-            if "document_index" not in scored:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result missing document_index, skipping index:{idx}")
-                continue
-            try:
-                index = int(scored.get("document_index"))
-            except (TypeError, ValueError):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Invalid score result document_index, skipping index:{idx}")
-                continue
-            if index < 0 or index >= len(doc_infos):
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Score result document_index:{index} is out of range, skipping")
-                continue
-            if index in seen_indexes:
-                logger.warning(f"section_idx: {section_idx} | [InfoRetrievalNode] "
-                               f"Duplicate score result document_index:{index}, skipping")
-                continue
-
-            scores = normalize_scores(scored.get("scores"))
-            publish_time = scored.get("publish_time") or scored.get("doc_time") or "未提供时间信息"
-            doc_infos[index]["scores"] = scores
-            doc_infos[index]["publish_time"] = publish_time
-            normalize_doc_info_scores_and_time(doc_infos[index])
-            seen_indexes.add(index)
-
-        return doc_infos
-
-    def _prepare_collector_tool(self, state: dict):
+    async def _prepare_collector_tool(self, state: dict):
         """准备信息收集器工具."""
         search_method = state.get("search_method", "web")
         web_search_tool = create_web_search_tool()
@@ -837,6 +1083,8 @@ class InfoRetrievalNode(BaseNode):
         api_tools = build_runtime_api_tools(
             state.get("api_tools_config", {}).get("collector_tools", []),
         )
+        mcp_tools = state.get("mcp_tools", [])
+        mcp_param_tools = state.get("mcp_param_tools", [])
 
         tool_dict = {}
         tool_list = []
@@ -859,5 +1107,13 @@ class InfoRetrievalNode(BaseNode):
         for api_tool in api_tools:
             tool_list.append(api_tool.card.tool_info())
             tool_dict[api_tool.card.name] = api_tool
+
+        for mcp_tool in mcp_tools:
+            tool_list.append(mcp_tool.card.tool_info())
+            tool_dict[mcp_tool.card.name] = mcp_tool
+
+        for mcp_param_tool in mcp_param_tools:
+            tool_list.append(mcp_param_tool.card.tool_info())
+            tool_dict[mcp_param_tool.card.name] = mcp_param_tool
 
         return tool_list, tool_dict

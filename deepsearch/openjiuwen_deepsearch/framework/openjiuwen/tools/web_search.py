@@ -12,10 +12,12 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import TemporalScope
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
+    AgcAiNetworkingSearchAPIWrapper,
     XunfeiSearchAPIWrapper,
     TavilySearchAPIWrapper,
     PubMedSearchAPIWrapper,
     ArxivSearchAPIWrapper,
+    SemanticScholarSearchAPIWrapper,
     GoogleSearchAPIWrapper,
     PetalSearchAPIWrapper,
     BochaSearchAPIWrapper,
@@ -23,8 +25,17 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
     PerplexitySearchAPIWrapper,
     load_external_search_tools
 )
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search.common import (
+    RETRYABLE_HTTP_STATUSES,
+    http_status_code,
+    is_transient_connection_error,
+)
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import web_search_context
-from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import SearchEngine
+from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import SCHOLARLY_PROVIDER_NAMES
+from openjiuwen_deepsearch.utils.constants_utils.search_engine_constants import (
+    SearchEngine,
+    TEMPORAL_SCOPE_SEARCH_ENGINES,
+)
 from openjiuwen_deepsearch.utils.common_utils.url_utils import normalize_domains
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_limit_async
@@ -32,9 +43,11 @@ from openjiuwen_deepsearch.utils.rate_limiter_utils.qps_limiter import qps_rate_
 logger = logging.getLogger(__name__)
 
 search_engine_mapping = {
+    SearchEngine.AGC_AINETWORKING.value: AgcAiNetworkingSearchAPIWrapper,
     SearchEngine.TAVILY.value: TavilySearchAPIWrapper,
     SearchEngine.PUBMED.value: PubMedSearchAPIWrapper,
     SearchEngine.ARXIV.value: ArxivSearchAPIWrapper,
+    SearchEngine.SEMANTIC_SCHOLAR.value: SemanticScholarSearchAPIWrapper,
     SearchEngine.GOOGLE.value: GoogleSearchAPIWrapper,
     SearchEngine.XUNFEI.value: XunfeiSearchAPIWrapper,
     SearchEngine.PETAL.value: PetalSearchAPIWrapper,
@@ -47,10 +60,7 @@ search_engine_mapping = {
 
 SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES = {
     SearchEngine.TAVILY.value,
-}
-
-TEMPORAL_SCOPE_SEARCH_ENGINES = {
-    SearchEngine.TAVILY.value,
+    SearchEngine.AGC_AINETWORKING.value,
 }
 
 
@@ -81,12 +91,11 @@ def get_web_search_api_wrapper(search_engine_name: str | None = None):
 def apply_web_search_domain_constraints(
         search_engine_name: str,
         include_domains: list[str] | None = None,
-        exclude_domains: list[str] | None = None,
 ) -> bool:
     """
     将意图识别出的域名约束合并到已初始化的搜索引擎实例.
 
-    仅修改原生支持 include_domains/exclude_domains 的搜索引擎实例。
+    仅修改原生支持 include_domains 的搜索引擎实例。
     实例中的现有值来自初始化配置，因此这里会保留配置域名，并追加 query 中识别出的域名。
     """
     if search_engine_name not in SITE_DOMAIN_CONSTRAINT_SEARCH_ENGINES:
@@ -105,18 +114,30 @@ def apply_web_search_domain_constraints(
         merged_include.extend(normalize_domains(include_domains))
         api_wrapper.include_domains = normalize_domains(merged_include)
 
-        merged_exclude = normalize_domains(getattr(api_wrapper, "exclude_domains", None))
-        merged_exclude.extend(normalize_domains(exclude_domains))
-        api_wrapper.exclude_domains = normalize_domains(merged_exclude)
-
         logger.info(
-            "apply_web_search_domain_constraints [%s]: intent include_domains=%s, "
-            "exclude_domains=%s; merged include_domains=%s, exclude_domains=%s",
+            "apply_web_search_domain_constraints [%s]: intent include_domains=%s; merged include_domains=%s",
             search_engine_name,
             include_domains,
-            exclude_domains,
             api_wrapper.include_domains,
-            api_wrapper.exclude_domains,
+        )
+
+    elif search_engine_name == SearchEngine.AGC_AINETWORKING.value:
+        intent_sites = normalize_domains(include_domains)
+        configured_sites = normalize_domains(getattr(api_wrapper, "sites", None))
+        # 意图识别站点优先,配置站点补充;去重后取前 MAX_SITES_NUM 条
+        merged = intent_sites + [site for site in configured_sites if site not in intent_sites]
+        dropped = merged[20:]
+        if dropped:
+            logger.warning(
+                "apply_web_search_domain_constraints [%s]: %d sites dropped due to limit; dropped=%s",
+                search_engine_name, len(dropped), dropped,
+            )
+        api_wrapper.sites = merged[:20]
+        logger.info(
+            "apply_web_search_domain_constraints [%s]: intent include_domains=%s; merged sites=%s",
+            search_engine_name,
+            include_domains,
+            api_wrapper.sites,
         )
 
     return True
@@ -202,9 +223,14 @@ async def run_web_search(query: str, search_engine_name: str):
             logger.error(f"Error when run web search {resolved_name}")
         else:
             logger.exception(f"Error when run web search {resolved_name}: {e}")
+        retryable = resolved_name not in SCHOLARLY_PROVIDER_NAMES and (
+            is_transient_connection_error(e)
+            or http_status_code(e) in RETRYABLE_HTTP_STATUSES
+        )
         return dict(search_engine=resolved_name,
                     search_results=[],
-                    error=f"Error when run web search {resolved_name}: {e}")
+                    error=f"Error when run web search {resolved_name}: {e}",
+                    retryable=retryable)
     return dict(search_engine=resolved_name, search_results=result)
 
 

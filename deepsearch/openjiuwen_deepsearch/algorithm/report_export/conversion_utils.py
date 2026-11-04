@@ -14,6 +14,7 @@ from pathlib import Path
 
 import markdown
 
+
 logger = logging.getLogger(__name__)
 
 TEXT_READ_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk")
@@ -42,11 +43,19 @@ INDENTED_HTML_BLOCK_END_RE = re.compile(
 )
 MARKDOWN_TABLE_ROW_RE = re.compile(r"^[ \t]{0,3}\|")
 MARKDOWN_TABLE_DELIMITER_RE = re.compile(r":?-{1,}:?")
+REPORT_TOC_LINK_RE = re.compile(
+    r"^[ \t]*(?:[-+*][ \t]+)?\[(?P<title>.+?)\]\(\s*#chapter-(?P<index>\d+)\s*\)[ \t]*$",
+    flags=re.MULTILINE,
+)
+REPORT_CHAPTER_ANCHOR_RE = re.compile(
+    r'<a\b(?=[^>]*\bid\s*=\s*["\']chapter-\d+["\'])[^>]*>\s*</a>',
+    flags=re.IGNORECASE,
+)
+REPORT_CHAPTER_ATTRIBUTE_RE = re.compile(
+    r"[ \t]+\{#chapter-\d+\}(?=[ \t]*(?:\r?\n|$))"
+)
 SENTENCE_END_RE = re.compile(r"[。！？?!…]$")
 CITATION_RE = re.compile(r"\[\[(\d+)\]\]\((https?://[^\s)]+(?:\([^\s)]+\)[^\s)]*)*)\)")
-CHECKED_CITATION_RE = re.compile(
-    r"\[\s*checked_citation:\s*\d+\s*\](\[\[\d+\]\]\((?:[^()]|\([^()]*\))*\))"
-)
 LEGACY_CITATION_RE = re.compile(r"\[\s*citation:\s*\d+\s*\]")
 REFERENCE_LINE_RE = re.compile(r"^(?P<indent>\s*)\[(\d+)\]\.\s+(.*)$", re.MULTILINE)
 CENTER_CAPTION_RE = re.compile(r'<div\s+style="text-align:\s*center;?">', flags=re.IGNORECASE)
@@ -181,6 +190,88 @@ def normalize_whitespace(text: str) -> str:
     return text.replace("\u00a0", " ").replace("\u3000", " ")
 
 
+def add_report_chapter_ids(markdown_text: str) -> str:
+    """Add stable chapter IDs while preparing Markdown for export.
+
+    Report generation keeps the Markdown document format-neutral. Exporters
+    call this helper after reading the finished report and before rendering it
+    to HTML, DOCX, or another format. IDs are assigned only to H1 headings
+    referenced by the native report TOC.
+
+    Args:
+        markdown_text: Completed report Markdown containing ``#chapter-N`` TOC
+            links.
+
+    Returns:
+        Markdown with ``{#chapter-N}`` attributes added to matching chapter
+        headings.
+    """
+    normalized = REPORT_CHAPTER_ANCHOR_RE.sub("", markdown_text or "")
+    normalized = REPORT_CHAPTER_ATTRIBUTE_RE.sub("", normalized)
+    toc_entries = list(REPORT_TOC_LINK_RE.finditer(normalized))
+    if not toc_entries:
+        return normalized
+
+    headings: list[dict[str, int | str]] = []
+    fence_char = ""
+    fence_length = 0
+    offset = 0
+    for line in normalized.splitlines(keepends=True):
+        content_line = line.rstrip("\r\n")
+        if fence_char:
+            closing_fence = re.match(
+                r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$", content_line
+            )
+            if closing_fence:
+                marker = closing_fence.group(1)
+                if marker[0] == fence_char and len(marker) >= fence_length:
+                    fence_char = ""
+                    fence_length = 0
+            offset += len(line)
+            continue
+
+        opening_fence = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", content_line)
+        if opening_fence:
+            marker = opening_fence.group(1)
+            fence_char = marker[0]
+            fence_length = len(marker)
+            offset += len(line)
+            continue
+
+        heading_match = re.match(
+            r"^[ \t]{0,3}#[ \t]+(?P<title>.+?)\s*$", content_line
+        )
+        if heading_match:
+            title = heading_match.group("title")
+            title = re.sub(r"[ \t]+#+[ \t]*$", "", title).strip()
+            if title:
+                headings.append(
+                    {
+                        "title": title,
+                        "attribute_offset": offset + heading_match.end("title"),
+                    }
+                )
+        offset += len(line)
+
+    insertions: list[tuple[int, str]] = []
+    heading_cursor = 0
+    for toc_entry in toc_entries:
+        toc_title = toc_entry.group("title").strip()
+        while heading_cursor < len(headings):
+            heading = headings[heading_cursor]
+            heading_cursor += 1
+            if heading["title"] == toc_title:
+                chapter_index = toc_entry.group("index")
+                insertions.append(
+                    (int(heading["attribute_offset"]), f" {{#chapter-{chapter_index}}}")
+                )
+                break
+
+    for offset, attribute in reversed(insertions):
+        normalized = normalized[:offset] + attribute + normalized[offset:]
+    return normalized
+
+
 def replace_citations(text: str) -> str:
     """Convert citation markdown into HTML superscript links.
 
@@ -213,8 +304,8 @@ def strip_internal_citation_markers(text: str) -> str:
     Returns:
         str: 清理内部标记后的 Markdown 文本。
     """
-    text = CHECKED_CITATION_RE.sub(r"\1", text)
-    return LEGACY_CITATION_RE.sub("", text)
+    text = LEGACY_CITATION_RE.sub("", text)
+    return text
 
 
 def normalize_reference_lines(text: str) -> str:

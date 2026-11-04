@@ -37,6 +37,28 @@ def test_decorate_report_html_wraps_cover_abstract_sections_and_data_blocks():
     assert soup.select_one(".table-wrap.report-table") is not None
 
 
+def test_decorate_report_html_keeps_abstract_after_toc_before_report_sections():
+    """目录先于摘要时，摘要位于目录之后和正文首章之前。"""
+    html = (
+        '<html><body><h1>报告标题</h1><h1>目录</h1>'
+        '<p><a href="#chapter-1">1. 市场</a></p>'
+        '<h1>摘要</h1><p>摘要内容</p>'
+        '<a id="chapter-1"></a><h1>1. 市场</h1><p>正文</p></body></html>'
+    )
+
+    result = decorate_report_html(html)
+    soup = BeautifulSoup(result, "html.parser")
+    shell = soup.select_one("main.report-shell")
+    abstract = soup.select_one("section.report-abstract")
+    content = soup.select_one("div.report-content")
+
+    sections = content.find_all(recursive=False)
+    assert sections[0].find("h1").get_text(strip=True) == "目录"
+    assert sections[1] is abstract
+    assert sections[2].find("h1").get_text(strip=True) == "1. 市场"
+    assert abstract.get_text(" ", strip=True) == "摘要 摘要内容"
+
+
 def test_decorate_report_html_marks_content_figures_and_keeps_resource_attributes():
     """为内容、图表标记语义类且不改写资源属性。"""
     html = (

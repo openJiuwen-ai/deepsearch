@@ -1,0 +1,2 @@
+# ECharts 资源的 SHA-256 固定为 LF 字节序列，禁止 Git 在检出时转换换行符。
+deepsearch/openjiuwen_deepsearch/algorithm/brief_report/assets/echarts.min.js -text

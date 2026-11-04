@@ -14,7 +14,24 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     SubReportContent,
     build_research_intent_prompt_context,
 )
-from openjiuwen_deepsearch.common.common_constants import CHINESE
+from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
+
+
+@pytest.mark.asyncio
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+async def test_abstract_network_retry_reuses_request_snapshot(mock_llm_cls):
+    reporter = Reporter("basic")
+    reporter.gen_report_context = {"language": ENGLISH}
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats",
+        new=AsyncMock(side_effect=[RuntimeError("network error"), {"content": "summary"}]),
+    ) as invoke:
+        assert await reporter.generate_abstract("Grounded chapter content") == "summary"
+    first, second = [call.kwargs["messages"] for call in invoke.await_args_list]
+    assert first is second
+    assert [message["role"] for message in second] == ["system", "user"]
+    assert "Grounded chapter content" in second[-1]["content"]
+    assert "network error" not in second[-1]["content"]
 
 
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
@@ -95,8 +112,8 @@ async def test_generate_report_falls_back_to_full_content_when_compact_context_i
     }
     sub_report_result = {
         "sub_reports_content": "完整拼接正文",
-        "sub_references": "",
-        "refreshed_all_classified_contents": [],
+
+        "all_classified_contents": [],
     }
 
     with patch.object(reporter, "_set_context_variables", return_value=True):
@@ -254,6 +271,96 @@ def test_validate_sub_report_headings_match_outline_rejects_duplicated_h2_block(
     assert "duplicate" in reason.lower() or "expected" in reason.lower()
 
 
+def test_validate_sub_report_headings_match_outline_accepts_extra_headings():
+    """Extra H2 headings beyond the outline are allowed as long as all
+    outline headings are present."""
+    outline = """2 市场细分结构
+2.1 车型级别与价格带分布
+2.2 消费场景演变"""
+    content = """# 2 市场细分结构
+
+## 2.1 车型级别与价格带分布
+正文一
+
+## 2.2 消费场景演变
+正文二
+
+## 2.3 新能源趋势
+额外正文
+
+## 2.4 政策影响
+额外正文
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is True
+    assert reason == ""
+
+
+def test_validate_sub_report_headings_match_outline_accepts_interspersed_extra_headings():
+    """Extra H2 headings interspersed between outline headings are allowed."""
+    outline = """2 市场细分结构
+2.1 车型级别与价格带分布
+2.2 消费场景演变"""
+    content = """# 2 市场细分结构
+
+## 2.1 车型级别与价格带分布
+正文一
+
+## 2.1.1 额外视角
+额外正文
+
+## 2.2 消费场景演变
+正文二
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is True
+    assert reason == ""
+
+
+def test_validate_sub_report_headings_match_outline_rejects_changed_heading():
+    """Changed subsection titles must fail outline matching."""
+    outline = """2 市场细分结构
+2.1 车型级别与价格带分布
+2.2 消费场景演变"""
+    content = """# 2 市场细分结构
+
+## 2.1 车型级别与价格带分布
+正文一
+
+## 2.3 新能源趋势
+额外正文
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is False
+    assert "outline heading not found" in reason
+
+
+def test_validate_sub_report_headings_match_outline_rejects_out_of_order():
+    """Subsection order must match the approved outline."""
+    outline = """2 市场细分结构
+2.1 车型级别与价格带分布
+2.2 消费场景演变"""
+    content = """# 2 市场细分结构
+
+## 2.2 消费场景演变
+正文一
+
+## 2.1 车型级别与价格带分布
+正文二
+"""
+
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+
+    assert ok is False
+    assert "outline heading not found" in reason
+
+
 def test_clean_markdown_headers_preserves_year_prefixed_titles():
     content = """# 2025年中美欧AI PC市场规模与增长动能对比基准
 
@@ -323,8 +430,116 @@ def test_clean_markdown_headers_still_strips_real_section_numbers():
     assert "## 中美欧AI PC出货量与渗透率量化对标" in cleaned
 
 
+def test_build_table_of_contents_only_lists_real_level_one_chapters():
+    sub_reports_content = """# 1. 第一章
+
+## 1.1 二级标题
+
+```mermaid
+# Mermaid 中的文本不是章节
+```
+
+~~~markdown
+# 代码块中的文本也不是章节
+~~~
+
+# 2. 第二章 ###
+"""
+
+    table_of_contents = Reporter._build_table_of_contents(
+        sub_reports_content,
+        CHINESE,
+    )
+
+    assert table_of_contents == "# 目录\n\n[1. 第一章](#chapter-1)\n\n[2. 第二章](#chapter-2)"
+
+
+def test_build_table_of_contents_uses_english_title():
+    table_of_contents = Reporter._build_table_of_contents(
+        "# 1. Market Overview\n\n## 1.1 Details",
+        ENGLISH,
+    )
+
+    assert table_of_contents == "# Table of Contents\n\n[1. Market Overview](#chapter-1)"
+
+
+def test_add_chapter_anchor_ids_inserts_anchor_line_after_each_h1():
+    content = "# 1. 第一章\n\n正文\n\n# 2. 第二章\n"
+    anchored = Reporter._add_chapter_anchor_ids(content)
+
+    assert '# 1. 第一章\n<a id="chapter-1"></a>' in anchored
+    assert '# 2. 第二章\n<a id="chapter-2"></a>' in anchored
+    assert anchored.count('<a id="chapter-') == 2
+    assert "# 1. 第一章" in anchored
+    # 标题行本身不包含锚点 HTML
+    assert '# 1. 第一章 <a id' not in anchored
+
+
+def test_add_chapter_anchor_ids_ignores_fenced_headings():
+    content = """```markdown
+# 不是章节
+```
+
+# 1. 第一章
+
+```python
+# 也不是章节
+```
+"""
+    anchored = Reporter._add_chapter_anchor_ids(content)
+
+    assert '# 1. 第一章\n<a id="chapter-1"></a>' in anchored
+    assert anchored.count('<a id="chapter-') == 1
+    assert "# 不是章节" in anchored
+
+
+def test_add_chapter_anchor_ids_preserves_crlf_and_handles_no_heading():
+    assert Reporter._add_chapter_anchor_ids("") == ""
+    assert Reporter._add_chapter_anchor_ids("plain text") == "plain text"
+    content = "# 1. First\r\n\r\nbody\r\n"
+    anchored = Reporter._add_chapter_anchor_ids(content)
+    assert anchored == '# 1. First\r\n<a id="chapter-1"></a>\r\n\r\nbody\r\n'
+
+
+def test_add_chapter_anchor_ids_is_idempotent():
+    content = "# 1. 第一章\n\n正文\n\n# 2. 第二章\n"
+    once = Reporter._add_chapter_anchor_ids(content)
+    twice = Reporter._add_chapter_anchor_ids(once)
+    assert once == twice
+    assert twice.count('<a id="chapter-1"') == 1
+    assert twice.count('<a id="chapter-2"') == 1
+
+
+def test_add_chapter_anchor_ids_handles_h1_without_trailing_newline():
+    """最后一个 H1 无尾随换行时，锚点仍应在独立行，不污染标题文本。"""
+    content = "# 1. 第一章\n\n正文\n\n# 2. 第二章"
+    anchored = Reporter._add_chapter_anchor_ids(content)
+
+    assert '# 2. 第二章\n<a id="chapter-2"></a>' in anchored
+    assert '# 2. 第二章 <a id' not in anchored
+    # 幂等
+    twice = Reporter._add_chapter_anchor_ids(anchored)
+    assert twice == anchored
+    assert twice.count('<a id="chapter-2"') == 1
+
+
+def test_extract_level_one_headings_ignores_fenced_headings():
+    content = """# 1. 第一章
+
+```markdown
+# 不是章节
+```
+
+# 2. 第二章
+"""
+
+    headings = Reporter._extract_level_one_headings(content)
+
+    assert [heading["title"] for heading in headings] == ["1. 第一章", "2. 第二章"]
+
+
 @pytest.mark.asyncio
-@patch("openjiuwen_deepsearch.algorithm.report.report.ainvoke_llm_with_stats", new_callable=AsyncMock)
+@patch("openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats", new_callable=AsyncMock)
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     # 设置 mock 返回值
@@ -382,6 +597,7 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
 
                         ## 1.1 基础信息
                         XX公司成立于2000年7月3日[citation:1][citation:2]。
+                        [公司资料](https://example.com/company) [[3]](https://example.com/source)
 
                         ## 参考文章
                         [1] [环保持续|产品科技 - XX有限公司](http://fake_html_1)
@@ -399,3 +615,79 @@ async def test_generate_report(mock_llm_cls, mock_ainvoke_llm):
     success, report_str = await reporter.generate_report(current_inputs)
 
     assert success is True
+    report_content = current_inputs["report"]
+    assert "参考文章" not in report_content
+    assert "# References" not in report_content
+    assert "[环保持续|产品科技" not in report_content
+    assert "公司资料" in report_content
+    assert "https://example.com" not in report_content
+    assert "[citation:" not in report_content
+    toc_start = report_content.index("# 目录")
+    abstract_start = report_content.index("# 摘要")
+    chapter_start = report_content.index("# 1. 企业基本情况分析")
+    assert report_content.startswith("# XX有限公司尽职调查报告\n\n# 目录")
+    assert toc_start < abstract_start < chapter_start
+    assert "[1. 企业基本情况分析](#chapter-1)" in report_content[toc_start:abstract_start]
+    assert "\n- [" not in report_content[toc_start:abstract_start]
+    assert '<a id="chapter-1"></a>' in report_content
+    assert report_content.index('<a id="chapter-1"></a>') > chapter_start
+    assert '# 1. 企业基本情况分析 <a id' not in report_content
+    assert "# 1. 企业基本情况分析" in report_content
+    assert "1.1 基础信息" not in report_content[toc_start:abstract_start]
+
+
+def test_strict_chapter_heading_structure():
+    outline = "1 McKinsey\n1.1 Overview\n1.2 Business"
+    assert Reporter.validate_sub_report_headings_match_outline(
+        "# McKinsey & Company\n\nCombined chapter content.", outline
+    )[0] is False
+    for content in ("", "Prose only", "## Overview", "# First\n# Second", "# 1. "):
+        ok, reason = Reporter.validate_sub_report_headings_match_outline(content, outline)
+        assert not ok, content
+        assert reason
+
+
+@pytest.mark.parametrize("fence", ["```python", "~~~~python"])
+def test_heading_validation_ignores_fenced_headings(fence):
+    marker = fence.rstrip("python")
+    content = f"# Chapter\n\n{fence}\n# comment\n##\n{marker}\n\n## Detail\nBody"
+    cleaned = Reporter.clean_markdown_headers(content)
+    assert Reporter.validate_sub_report_headings_match_outline(cleaned, "1 Chapter") == (True, "")
+
+
+def test_heading_validation_does_not_close_fence_with_wrong_marker():
+    content = "# Chapter\n````text\n```\n# example\n~~~~\n##\n````\n## Detail\nBody"
+    assert Reporter.validate_sub_report_headings_match_outline(content, "1 Chapter") == (True, "")
+
+
+@pytest.mark.parametrize("heading", ["#", "##", "##   ", "## 1.1 ", "## ###"])
+def test_heading_validation_rejects_empty_titles_after_cleanup(heading):
+    content = Reporter.clean_markdown_headers(f"# Chapter\n{heading}\nBody")
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, "1 Chapter")
+    assert not ok
+    assert reason == "generated report contains empty heading titles"
+
+
+@pytest.mark.parametrize("content, code", [
+    ("# Chapter\n# Other", "HEADING_STRUCTURE_INVALID"),
+    ("## Detail\n# Chapter", "HEADING_STRUCTURE_INVALID"),
+    ("# Chapter\n##", "HEADING_TITLE_EMPTY"),
+    ("", "SUB_REPORT_CONTENT_EMPTY"),
+])
+def test_heading_validation_produces_actionable_retry_feedback(content, code):
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(content, "1 Chapter")
+    assert not ok
+    feedback = Reporter._sub_report_retry_feedback_from_failure(reason)
+    assert f"error_code: {code}" in feedback
+    location = "chapter" if code == "SUB_REPORT_CONTENT_EMPTY" else "markdown_headings"
+    assert f"location: {location}" in feedback
+    assert Reporter._sub_report_retry_feedback_from_failure(feedback) == feedback
+
+
+@pytest.mark.parametrize("outline", ["", "1 Unrelated\n1.1 Outline"])
+def test_heading_matching_requires_nonempty_matching_outline(outline):
+    ok, reason = Reporter.validate_sub_report_headings_match_outline(
+        "# Chapter\n## Detail\nBody", outline,
+    )
+    assert not ok
+    assert reason

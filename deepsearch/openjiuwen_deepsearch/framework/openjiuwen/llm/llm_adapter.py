@@ -17,7 +17,7 @@ class LlmConfigCategory(enum.Enum):
     # 3. 简单模型，用于任务收集信息
     INFO_COLLECTING = "info_collecting"
 
-    # 4. 编程、数学能力较强模型，用于准确生成报告及图文渲染，校验溯源
+    # 4. 编程、数学能力较强模型，用于准确生成报告及图文渲染
     WRITING_CHECKING = "writing_checking"
 
     # 5. 多模态模型，用于处理报告图表迭代生成
@@ -31,6 +31,12 @@ NODE_LLM_MAPPING = {
     NodeId.INFO_COLLECTOR.value: LlmConfigCategory.INFO_COLLECTING.value,
     NodeId.SUB_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
     NodeId.VLM_CHART_GENERATOR.value: LlmConfigCategory.VLM_CHART_GENERATING.value,
+    NodeId.BRIEF_OUTLINE.value: LlmConfigCategory.PLAN_UNDERSTANDING.value,
+    NodeId.BRIEF_INFO_COLLECTOR.value: LlmConfigCategory.INFO_COLLECTING.value,
+    NodeId.BRIEF_EVIDENCE_REVIEWER.value: LlmConfigCategory.INFO_COLLECTING.value,
+    NodeId.BRIEF_SUB_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
+    NodeId.BRIEF_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
+    NodeId.BRIEF_HTML_REPORTER.value: LlmConfigCategory.WRITING_CHECKING.value,
 }
 
 

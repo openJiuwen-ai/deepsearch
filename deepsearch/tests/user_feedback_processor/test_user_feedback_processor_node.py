@@ -4,11 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from openjiuwen_deepsearch.algorithm.user_feedback_processor.action_definitions import (
-    UserFeedbackActionCategory,
-    SynonymRewriteActionSubcategory,
-    UserFeedbackRewriteStreamResult,
-)
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.config.config import AgentConfig
@@ -47,16 +42,8 @@ def make_mock_session(config_overrides=None, search_context_overrides=None):
 
     report = Report(
         id="test",
-        checked_trace_source_report_content="这是一段测试报告[[1]](https://a.com)内容结束",
-        checked_trace_source_datas=[
-            {
-                "url": "https://a.com",
-                "valid": True,
-                "reference_index": 1,
-                "citation_start_offset": 8,
-                "citation_end_offset": 28,
-            }
-        ],
+        report_content="这是一段测试报告[[1]](https://a.com)内容结束",
+
     )
 
     search_context = {
@@ -66,20 +53,9 @@ def make_mock_session(config_overrides=None, search_context_overrides=None):
         "feedback_snapshot_sent": False,
         "rewrite_history": [],
         "final_result": {
-            "response_content": report.checked_trace_source_report_content,
-            "citation_messages": {
-                "code": 0,
-                "msg": "success",
-                "data": [
-                    {
-                        "id": 0,
-                        "reference_index": 1,
-                        "citation_start_offset": 8,
-                        "citation_end_offset": 28,
-                    }
-                ],
-            },
-            "infer_messages": [],
+            "response_content": report.report_content,
+
+
         },
     }
     if search_context_overrides:
@@ -122,20 +98,6 @@ class TestUserFeedbackProcessorNode:
         result = node._pre_handle(None, session, None)
         assert result["disabled"] is True
 
-    def test_pre_handle_enabled(self, node):
-        session = make_mock_session()
-        result = node._pre_handle(None, session, None)
-        assert result["disabled"] is False
-        assert result["max_interactions"] == 100
-        assert result["feedback_snapshot_sent"] is False
-        assert result["enable_local_source_trace"] is True
-        assert "max_text_length" not in result
-
-    def test_pre_handle_disables_local_source_trace_when_trace_source_switch_is_false(self, node):
-        session = make_mock_session(config_overrides={"source_tracer_research_trace_source_switch": False})
-        result = node._pre_handle(None, session, None)
-
-        assert result["enable_local_source_trace"] is False
 
     @pytest.mark.asyncio
     async def test_do_invoke_disabled_goes_to_end(self, node):
@@ -340,163 +302,6 @@ class TestUserFeedbackProcessorNode:
             )
         })
 
-    @pytest.mark.asyncio
-    async def test_do_invoke_rewrite_success_updates_session_state(self, node):
-        session = make_mock_session(search_context_overrides={
-            "final_result": {
-                "response_content": "这是一段测试报告[[1]](https://a.com)内容结束",
-                "citation_messages": {
-                    "code": 0,
-                    "msg": "success",
-                    "data": [
-                        {
-                            "id": 0,
-                            "reference_index": 1,
-                            "citation_start_offset": 8,
-                            "citation_end_offset": 28,
-                        }
-                    ],
-                },
-                "infer_messages": [],
-                "exception_info": "[212405] Rewrite failed: old error\t",
-            }
-        })
-        feedback = {
-            "action": "expand",
-            "selected_text": "这是一段",
-            "start_offset": 0,
-            "end_offset": 4,
-            "user_instruction": "",
-        }
-        session.interact.return_value = json.dumps(feedback)
-
-        execute_return = {
-            "new_report": "扩写后的测试报告内容",
-            "original_text": "这是一段",
-            "original_start_offset": 0,
-            "original_end_offset": 4,
-            "original_text_clean": "这是一段",
-            "rewritten_text": "扩写后的测试报告内容",
-            "rewritten_start_offset": 0,
-            "rewritten_end_offset": 10,
-            "citation_messages": {
-                "code": 0,
-                "msg": "success",
-                "data": [
-                    {
-                        "id": 0,
-                        "reference_index": 1,
-                        "citation_start_offset": 8,
-                        "citation_end_offset": 28,
-                    },
-                    {
-                        "id": 2,
-                        "reference_index": 2,
-                        "title": "新来源",
-                        "url": "https://new.com",
-                    },
-                ],
-            },
-            "warning_info": "local trace degraded",
-        }
-
-        with patch(f"{ALGO_CLASS_PATH}.execute", new_callable=AsyncMock, return_value=execute_return) as mock_execute:
-            with patch(f"{ALGO_CLASS_PATH}.send_result", new_callable=AsyncMock) as mock_send_result:
-                with patch(f"{NODE_MODULE_PATH}.add_debug_log_wrapper"):
-                    result = await node._do_invoke(None, session, None)
-
-        assert result["next_node"] == NodeId.USER_FEEDBACK_PROCESSOR.value
-        assert mock_execute.await_args.kwargs["enable_local_source_trace"] is True
-        mock_send_result.assert_awaited_once()
-        kwargs = mock_send_result.await_args.kwargs
-        assert kwargs["session"] is session
-        assert kwargs["feedback"] == {**feedback, "rewrite_scope": "selected_only"}
-        assert kwargs["result"] == UserFeedbackRewriteStreamResult(
-            original_text=execute_return["original_text"],
-            original_start_offset=execute_return["original_start_offset"],
-            original_end_offset=execute_return["original_end_offset"],
-            rewritten_text=execute_return["rewritten_text"],
-            rewritten_start_offset=execute_return["rewritten_start_offset"],
-            rewritten_end_offset=execute_return["rewritten_end_offset"],
-            action_category=UserFeedbackActionCategory.SYNONYM_REWRITE,
-            action_subcategory=SynonymRewriteActionSubcategory.EXPAND,
-        )
-        assert kwargs["final_result"]["response_content"] == execute_return["new_report"]
-        assert kwargs["final_result"]["citation_messages"] == execute_return["citation_messages"]
-        assert kwargs["final_result"]["warning_info"] == "local trace degraded"
-        assert kwargs["final_result"]["infer_messages"] == []
-
-        session.update_global_state.assert_any_call(
-            {"search_context.final_result.response_content": execute_return["new_report"]}
-        )
-        session.update_global_state.assert_any_call(
-            {"search_context.final_result.citation_messages": execute_return["citation_messages"]}
-        )
-        session.update_global_state.assert_any_call(
-            {"search_context.final_result.warning_info": "local trace degraded"}
-        )
-        session.update_global_state.assert_any_call({"search_context.feedback_interaction_count": 1})
-
-        rewrite_history_updates = [
-            call.args[0]
-            for call in session.update_global_state.call_args_list
-            if "search_context.rewrite_history" in call.args[0]
-        ]
-        assert rewrite_history_updates
-        assert rewrite_history_updates[-1]["search_context.rewrite_history"] == [
-            {
-                "action": "expand",
-                "rewrite_scope": "selected_only",
-                "selected_text": "这是一段",
-                "selected_text_clean": "这是一段",
-                "original_start_offset": 0,
-                "original_end_offset": 4,
-                "rewritten_text": execute_return["rewritten_text"],
-                "rewritten_start_offset": 0,
-                "rewritten_end_offset": execute_return["rewritten_end_offset"],
-                "user_instruction": "",
-            }
-        ]
-
-    @pytest.mark.asyncio
-    async def test_do_invoke_passes_disabled_local_source_trace_switch_to_processor(self, node):
-        session = make_mock_session(
-            config_overrides={"source_tracer_research_trace_source_switch": False},
-            search_context_overrides={
-                "feedback_snapshot_sent": True,
-                "final_result": {
-                    "response_content": "这是一段测试报告内容结束",
-                    "citation_messages": {"data": []},
-                    "infer_messages": [],
-                },
-            },
-        )
-        feedback = {
-            "action": "expand",
-            "selected_text": "这是一段",
-            "start_offset": 0,
-            "end_offset": 4,
-            "user_instruction": "",
-        }
-        session.interact.return_value = json.dumps(feedback)
-        execute_return = {
-            "new_report": "扩写后的测试报告内容",
-            "original_text": "这是一段",
-            "original_start_offset": 0,
-            "original_end_offset": 4,
-            "original_text_clean": "这是一段",
-            "rewritten_text": "扩写后的测试报告内容",
-            "rewritten_start_offset": 0,
-            "rewritten_end_offset": 10,
-        }
-
-        with patch(f"{ALGO_CLASS_PATH}.execute", new_callable=AsyncMock, return_value=execute_return) as mock_execute:
-            with patch(f"{ALGO_CLASS_PATH}.send_result", new_callable=AsyncMock):
-                with patch(f"{NODE_MODULE_PATH}.add_debug_log_wrapper"):
-                    result = await node._do_invoke(None, session, None)
-
-        assert result["next_node"] == NodeId.USER_FEEDBACK_PROCESSOR.value
-        assert mock_execute.await_args.kwargs["enable_local_source_trace"] is False
 
     @pytest.mark.asyncio
     async def test_do_invoke_truth_verification_read_only_does_not_update_report_or_history(self, node):
@@ -543,19 +348,8 @@ class TestUserFeedbackProcessorNode:
         session = make_mock_session(search_context_overrides={
             "final_result": {
                 "response_content": "这是一段测试报告[[1]](https://a.com)内容结束",
-                "citation_messages": {
-                    "code": 0,
-                    "msg": "success",
-                    "data": [
-                        {
-                            "id": 0,
-                            "reference_index": 1,
-                            "citation_start_offset": 8,
-                            "citation_end_offset": 28,
-                        }
-                    ],
-                },
-                "infer_messages": [],
+
+
                 "exception_info": "[212405] Rewrite failed: stale error",
             }
         })
@@ -755,8 +549,8 @@ class TestUserFeedbackProcessorNode:
             "feedback_snapshot_sent": True,
             "final_result": {
                 "response_content": "完整编辑后报告",
-                "citation_messages": {"data": []},
-                "infer_messages": [],
+
+
             },
         })
         feedback_payload = {
@@ -824,8 +618,8 @@ class TestUserFeedbackProcessorNode:
             "rewrite_history": existing_history,
             "final_result": {
                 "response_content": "旧完整报告",
-                "citation_messages": {"data": []},
-                "infer_messages": [],
+
+
             },
         })
         feedback_payload = {
@@ -919,8 +713,8 @@ class TestUserFeedbackProcessorNode:
         session = make_mock_session(search_context_overrides={
             "final_result": {
                 "response_content": "## 第一章\n这是一段测试报告内容结束",
-                "citation_messages": {"data": []},
-                "infer_messages": [],
+
+
             }
         })
         feedback_payload = {

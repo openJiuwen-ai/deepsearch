@@ -26,6 +26,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.se
     SectionReasoningContext,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message, Step, Plan
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import collector_progress_scope
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import init_router
 from openjiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType, NodeDebugData
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
@@ -52,13 +53,18 @@ class SectionReasoningStartNode(Start):
 
         # 初始化section_context和config
         section_context = SectionReasoningContext(
+            original_query=inputs.get("original_query", ""),
             language=inputs.get("language", "zh-CN"),
             messages=inputs.get("messages", []),
             section_idx=inputs.get("section_idx", '1'),
+            report_task=inputs.get("report_task", ""),
+            section_task=inputs.get("section_task", ""),
+            section_description=inputs.get("section_description", ""),
             plan_background_knowledge=plan_background_knowledge,
             step_background_knowledge=step_background_knowledge,
             report_type_policy=inputs.get("report_type_policy") or {},
             research_intent=inputs.get("research_intent") or {},
+            section_local_contract=inputs.get("section_local_contract") or {},
         )
         config = inputs.get("config")
         session.update_global_state({"section_context": section_context.model_dump(),
@@ -160,6 +166,16 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
         return current_inputs
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        """并行采集依赖已就绪的步骤，并在运行期关联完整进度标识。
+
+        Args:
+            inputs: 原节点输入。
+            session: 当前章节会话。
+            context: 模型上下文。
+
+        Returns:
+            原有采集结果写回后的路由信息。
+        """
         section_state = self._pre_handle(inputs, session, context)
         kb_display = '*' if LogManager.is_sensitive() else section_state.get('plan_background_knowledge')
         logger.info(f"{self.log_prefix} | plan background knowledge is: {kb_display}")
@@ -182,9 +198,12 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
 
                 collector_inputs = self._build_collector_input(current_plan, step, section_state)
                 plan_executed_steps.append(step)
-                task = asyncio.create_task(
-                    self._run_dependency_collector_graph(collector_inputs, session, context)
-                )
+                # 采集输入仍使用原短编号；观察用完整标识随任务上下文传递，避免主图回写后重复统计。
+                with collector_progress_scope(str(section_state.get("section_idx", "1")),
+                                              str(current_plan.id), str(step.id)):
+                    task = asyncio.create_task(
+                        self._run_dependency_collector_graph(collector_inputs, session, context)
+                    )
                 async_collecting_list.append(task)
 
         # 并行执行收集任务
@@ -469,13 +488,18 @@ def build_dependency_reasoning_workflow():
         NodeId.START.value,
         SectionReasoningStartNode(),
         inputs_schema={
+            "original_query": "${original_query}",
             "language": "${language}",
             "messages": "${messages}",
             "section_idx": "${section_idx}",
             "parent_section_steps": "${parent_section_steps}",
             "config": "${config}",
+            "report_task": "${report_task}",
+            "section_task": "${section_task}",
+            "section_description": "${section_description}",
             "report_type_policy": "${report_type_policy}",
             "research_intent": "${research_intent}",
+            "section_local_contract": "${section_local_contract}",
         }
     )
 

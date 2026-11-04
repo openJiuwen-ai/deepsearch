@@ -115,7 +115,7 @@ This guide describes a **local** install of DeepSearch on **macOS**.
   uv run python -m server.telemetry_event_server
   ```
 
-  > If you see `No module named 'greenlet'`, see the [FAQ](../../../5.FAQ/README.md).
+  > If you see `No module named 'greenlet'`, see the [FAQ](../../../4.FAQ/README.md).
 
   Docker installs: see [Docker installation](../Docker%20Installation/README.md). **DeepResearch** only needs terminal 1.
 

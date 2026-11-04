@@ -19,7 +19,6 @@ PR 描述、release notes 或专门 changelog。
 - 数据契约
 - 持久化逻辑
 - 报告生成或转换
-- 溯源逻辑
 - 其他用户或调用方可见行为
 
 纯测试、格式化、依赖元数据、注释、无行为/API/配置/契约变化的重构可以不更新
@@ -29,7 +28,6 @@ PR 描述、release notes 或专门 changelog。
 
 Feature 文档按主要代码归属组织：
 
-- `algorithm/`：核心研究算法、报告生成、溯源、用户反馈处理等。
 - `framework/`：Agent 工作流、节点编排、搜索上下文等。
 - `server/`：REST API、后端管理器、报告转换、存储与持久化等。
 - `llm/`：统一 LLM 封装与厂商适配。
@@ -70,17 +68,21 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 ## 文档入口
 
 - [查询理解](./algorithm/query-understanding.md)
+- [用户素材](./algorithm/user-materials.md)
 - [资料采集](./algorithm/research-collector.md)
 - [DeepSearch 搜索智能体](./algorithm/search-agent.md)
 - [报告生成](./algorithm/report-generation.md)
+- [时间约束软过滤](./temporal-soft-filter.md)
+- [Brief 精简版报告工作流](./algorithm/brief-report.md)
 - [报告模板生成](./algorithm/report-template.md)
-- [全局溯源](./algorithm/source-trace.md)
-- [推理链溯源](./algorithm/source-tracer-infer.md)
 - [图表生成](./algorithm/chart-generation.md)
 - [Prompt 模板系统](./algorithm/prompt-template-system.md)
 - [用户反馈处理](./algorithm/user-feedback-processor.md)
 - [Agent 工厂与运行模式](./framework/agent-factory.md)
 - [报告研究主工作流](./framework/research-workflow.md)
+- [报告进度查询](framework/report-progress.md)：主图节点与活跃状态采集、SDK/HTTP 查询、Redis 共享进度。
+- [运行时 Metadata 注入器机制](./framework/metadata-injectors.md)
+- [Brief 大纲升级专业版报告](./framework/brief-outline-upgrade.md)
 - [DeepSearch 搜索子工作流](./framework/deepsearch-sub-workflows.md)
 - [章节推理与写作子工作流](./framework/section-reasoning-writing-sub-workflows.md)
 - [信息采集子图](./framework/info-collector-subgraph.md)
@@ -90,6 +92,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [LLM 模型槽位适配](./framework/llm-model-adaptation.md)
 - [搜索工具注册与运行时 API 工具](./framework/search-tool-registration.md)
 - [DeepSearch 网页抓取 Provider 注册](./framework/web-fetch-provider-registry.md)
+- [MCP 工具集成](./framework/mcp-integration.md)
 - [LLM 运行时封装](./llm/llm-runtime.md)
 - [LLM 调用辅助](./utils/llm-invocation-utils.md)
 - [日志与接口记录](./utils/logging.md)
@@ -107,6 +110,7 @@ Feature 文档不设置硬性字数限制，但应保持高信息密度。文档
 - [DeepSearch 运行与 SSE 流](./server/deepsearch-run-streaming.md)
 - [DeepSearch Agent 配置组装](./server/deepsearch-agent-config.md)
 - [Server 报告转换](./server/report-conversion.md)
+- [LaTeX → OMML 转换](./latex_to_omml_conversion.md)
 - [知识库管理](./server/knowledge-base.md)
 - [模板与联网搜索引擎管理](./server/template-and-web-search-engine-management.md)
 - [Server 持久化与存储](./server/persistence-and-storage.md)

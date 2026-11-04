@@ -1,0 +1,168 @@
+# -*- coding: UTF-8 -*-
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+import logging
+import re
+
+logger = logging.getLogger(__name__)
+
+
+class RetryFeedbackMixin:
+    """Controlled retry feedback construction mixin.
+
+    Dependencies (provided by Reporter or other mixins):
+        - self.gen_report_context: report context dict (from Reporter.__init__)
+    """
+
+    @staticmethod
+    def _build_sub_report_retry_feedback(
+        error_code: str,
+        location: str,
+        fields: dict | None = None,
+    ) -> str:
+        """Build controlled retry feedback without echoing model/provider text."""
+        allowed_codes = {
+            "HEADING_COUNT_MISMATCH",
+            "HEADING_TITLE_MISMATCH",
+            "HEADING_MISSING",
+            "HEADING_TITLE_EMPTY",
+            "HEADING_STRUCTURE_INVALID",
+            "OUTLINE_HEADING_MISSING",
+            "DUPLICATE_SUBSECTION_HEADINGS",
+            "SUB_REPORT_CONTENT_EMPTY",
+            "MERMAID_OUTPUT_FORBIDDEN",
+            "MISSING_SECTION_CONTEXT",
+            "SUB_REPORT_GENERATION_EXCEPTION",
+            "SUB_REPORT_RETRY_REQUIRED",
+        }
+        error_code = error_code if error_code in allowed_codes else "SUB_REPORT_RETRY_REQUIRED"
+        lines = [f"error_code: {error_code}", f"location: {location}"]
+        for key in (
+            "expected_heading_count",
+            "actual_heading_count",
+            "expected_heading_level",
+            "expected_heading_index",
+        ):
+            value = (fields or {}).get(key)
+            if value is None:
+                continue
+            match = re.match(r"^H?(\d+)$", str(value).strip(), flags=re.IGNORECASE)
+            if not match:
+                continue
+            safe_value = (
+                f"H{int(match.group(1))}"
+                if key.endswith("_level")
+                else str(int(match.group(1)))
+            )
+            lines.append(f"{key}: {safe_value}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _sub_report_retry_feedback_from_failure(cls, failure_reason: str) -> str:
+        """Convert raw failure text into a prompt-safe retry hint."""
+        reason = str(failure_reason or "").strip()
+        if not reason:
+            return ""
+
+        code_match = re.search(r"(?m)^\s*error_code:\s*([A-Z0-9_]+)\s*$", reason)
+        if code_match:
+            fields = {}
+            for key in (
+                "expected_heading_count",
+                "actual_heading_count",
+                "expected_heading_level",
+                "expected_heading_index",
+            ):
+                field_match = re.search(rf"(?m)^\s*{key}:\s*(H?\d+)\s*$", reason)
+                if field_match:
+                    fields[key] = field_match.group(1)
+            error_code = code_match.group(1)
+            if error_code.startswith("HEADING") or error_code == "DUPLICATE_SUBSECTION_HEADINGS":
+                location = "markdown_headings"
+            elif error_code == "MERMAID_OUTPUT_FORBIDDEN":
+                location = "chapter_visualization"
+            else:
+                location = "chapter"
+            return cls._build_sub_report_retry_feedback(error_code, location, fields)
+
+        heading_patterns = [
+            (
+                r"heading count insufficient:\s*expected at least\s*(\d+),\s*got\s*(\d+)",
+                "HEADING_COUNT_MISMATCH",
+                ("expected_heading_count", "actual_heading_count"),
+            ),
+            (
+                r"outline heading not found:\s*expected\s*H?(\d+)\s+'[^']*'",
+                "HEADING_TITLE_MISMATCH",
+                ("expected_heading_level",),
+            ),
+        ]
+        for pattern, error_code, field_names in heading_patterns:
+            match = re.search(pattern, reason, flags=re.IGNORECASE)
+            if match:
+                fields = dict(zip(field_names, match.groups()))
+                position = re.search(r"outline position (\d+)", reason)
+                if position:
+                    fields["expected_heading_index"] = position.group(1)
+                return cls._build_sub_report_retry_feedback(
+                    error_code, "markdown_headings", fields,
+                )
+
+        reason_lower = reason.lower()
+        if "generated report contains empty heading titles" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "HEADING_TITLE_EMPTY", "markdown_headings",
+            )
+        if "generated report must start with exactly one h1 before h2 headings" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "HEADING_STRUCTURE_INVALID", "markdown_headings",
+            )
+        if "generated report content is empty" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "SUB_REPORT_CONTENT_EMPTY", "chapter",
+            )
+        if "generated report headings are empty" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "HEADING_MISSING",
+                "markdown_headings",
+            )
+        if "expected subsection outline headings are empty" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "OUTLINE_HEADING_MISSING",
+                "markdown_headings",
+            )
+        if "duplicate headings" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "DUPLICATE_SUBSECTION_HEADINGS",
+                "markdown_headings",
+            )
+        if (
+            "no sub report content found" in reason_lower
+            or "sub report content is blank" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "SUB_REPORT_CONTENT_EMPTY",
+                "chapter",
+            )
+        if "mermaid" in reason_lower or "chart source" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "MERMAID_OUTPUT_FORBIDDEN",
+                "chapter_visualization",
+            )
+        if (
+            "missing 'section_task'" in reason_lower
+            or "missing 'section_task' or sub section outline" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "MISSING_SECTION_CONTEXT",
+                "chapter_context",
+            )
+        if (
+            "error generating section" in reason_lower
+            or "llm returned empty content" in reason_lower
+        ):
+            return cls._build_sub_report_retry_feedback(
+                "SUB_REPORT_GENERATION_EXCEPTION",
+                "chapter_generation",
+            )
+
+        return cls._build_sub_report_retry_feedback("SUB_REPORT_RETRY_REQUIRED", "chapter")

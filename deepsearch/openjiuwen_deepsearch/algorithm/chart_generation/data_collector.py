@@ -11,7 +11,7 @@
 
 import asyncio
 import logging
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Any
 
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.algorithm.chart_generation.utils import call_model, is_equal_length, CallModelInput
@@ -36,12 +36,12 @@ class ChartDataCollector:
         self._all_data_source_with_index = None  # 信息源
         self._meta_collect_tasks = None # 图表信息收集任务
         self._log_prefix = "[ChartDataCollector]"
-        
+
     async def run(self, meta_collect_tasks: Dict[int, List[Dict[str, Any]]],
                   all_classified_contents: List[List[Dict[str, Any]]],
                   ) -> Dict[int, List[Dict[str, Any]]]:
         """运行图表数据收集器
-        
+
         Args:
             meta_collect_tasks: 图表信息收集任务
             all_classified_contents: 初始信息源，序列元素表示每个一级章节依赖参考
@@ -110,7 +110,7 @@ class ChartDataCollector:
     def _organize_collection_task(self) -> Dict[int, Dict[str, List[Dict[str, Any]]]]:
         """
         将图表数据收集任务分批
-        
+
         Returns:
             Dict[int, Dict[str, Any]]: 按一级章节索引分组的信息收集任务
                 - collection_tasks: 信息收集任务序列
@@ -121,7 +121,7 @@ class ChartDataCollector:
             if index not in self._all_data_source_with_index:
                 error_msg = f"{self._log_prefix} Section index {index} not found in classified data"
                 logger.warning(error_msg)
-                raise CustomValueException(StatusCode.CHART_DATA_COLLECTION_ERROR.code, 
+                raise CustomValueException(StatusCode.CHART_DATA_COLLECTION_ERROR.code,
                                            StatusCode.CHART_DATA_COLLECTION_ERROR.errmsg.format(e=error_msg))
             data_sources = []
             source_index_in_sec = 0
@@ -137,7 +137,7 @@ class ChartDataCollector:
                 cur_task["collection_tasks"] = task.get("collection_tasks", [])
                 cur_section_tasks.append(cur_task)
             collect_tasks[index] = {"collection_tasks": cur_section_tasks, "data_sources": data_sources}
-                
+
         return collect_tasks
 
     async def _collect_data_for_figures(
@@ -153,7 +153,7 @@ class ChartDataCollector:
 
         # 创建异步任务
         tasks = []
-        
+
         # 异步执行每个一级章节下的图表收集任务
         for section_index, task_data in collect_tasks.items():
             tasks.append(self._collect_section_chart_data(task_data, section_index))
@@ -166,11 +166,11 @@ class ChartDataCollector:
 
         return all_chart_data
 
-    def _post_process_section_data(self, 
+    def _post_process_section_data(self,
                                    all_section_data: List[List[Dict[str, Any]]]
                                    ) -> Dict[int, List[Dict[str, Any]]]:
         """将所有章节数据分别汇总到各自的meta_collect_tasks中
-        
+
         Args:
             all_section_data: 收集得到的所有章节下图表收集任务对应的数据
 
@@ -186,7 +186,6 @@ class ChartDataCollector:
                   - section_index: 一级章节索引，从1开始
                   - anchor_match_para: 图表锚点匹配前文内容
                   - data: 图表数据
-                  - source_datas: 数据来源序列
         """
         try:
             if len(all_section_data) != len(self._meta_collect_tasks):
@@ -209,11 +208,10 @@ class ChartDataCollector:
             raise CustomValueException(StatusCode.CHART_DATA_COLLECTION_ERROR.code,
                                        StatusCode.CHART_DATA_COLLECTION_ERROR.errmsg.format(e=error_msg)) from e
         return meta_chart_infos
-            
-        
+
 
     async def _collect_section_chart_data(
-        self, section_collect_tasks: Dict[str, List[Dict[str, Any]]], 
+        self, section_collect_tasks: Dict[str, List[Dict[str, Any]]],
         section_index: int
     ) -> List[Dict[str, Any]]:
         """
@@ -226,7 +224,7 @@ class ChartDataCollector:
         Returns:
             List[Dict[str, Any]]: 单个章节的数据列表
         """
-        
+
         # 任务分批
         cur_section_tasks = section_collect_tasks.get("collection_tasks", [])
         data_sources = section_collect_tasks.get("data_sources", [])
@@ -237,19 +235,19 @@ class ChartDataCollector:
             logger.warning(f"No data sources for section {section_index}")
             return []
         # 同一章节下的任务共享同一信息源
-        section_tasks_batch = [cur_section_tasks[i:i + self._batch_size] 
+        section_tasks_batch = [cur_section_tasks[i:i + self._batch_size]
                                for i in range(0, len(cur_section_tasks), self._batch_size)]
-        
+
         tasks = []
         for batch_tasks in section_tasks_batch:
             tasks.append(self._collect_batch_tasks(batch_tasks, data_sources))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 将数据源溯源信息添加到结果中
+        # 仅保留用于图表绘制的数据。
         section_datas = []
         for result in results:
-            section_datas.extend(self._add_section_source_info(result, section_index))
+            section_datas.extend(self._normalize_section_data(result))
 
         if len(section_datas) != len(cur_section_tasks):
             error_msg = f"{self._log_prefix} Number of section data {len(section_datas)} " \
@@ -259,43 +257,25 @@ class ChartDataCollector:
 
         return section_datas
 
-    def _add_section_source_info(self, 
-                                 result: List[Dict[str, Any]], 
-                                 section_index: int) -> List[Dict[str, Any]]:
-        """
-        将数据源溯源信息添加到结果中
+    @staticmethod
+    def _normalize_section_data(result: object) -> list[dict]:
+        """Keep valid chart data without attaching source metadata."""
+        if not isinstance(result, list):
+            return []
+        normalized = []
+        for item in result:
+            data = item.get("data") if isinstance(item, dict) else None
+            valid_data = (
+                isinstance(data, dict) and bool(data)
+                or isinstance(data, str) and bool(data.strip()) and "NO DATA" not in data
+            )
+            if not valid_data:
+                normalized.append({})
+            else:
+                normalized.append({"data": data})
+        return normalized
 
-        Args:
-            result: 批次收集的数据列表
-            section_index: 章节索引
-        """
-        section_data = []
-        data_sources = self._all_data_source_with_index[section_index]
-        data_sources_length = len(data_sources)
-        for result_item in result:
-            try:
-                if "NO DATA" in result_item.get("data", "NO DATA"):
-                    section_data.append({})
-                    continue
-            
-                if not result_item.get("source_indexes", []):
-                    section_data.append({})
-                    continue
-                source_indexes = result_item.get("source_indexes", [])
-                new_result_item = {}
-                new_result_item["source_datas"] = []
-                new_result_item["data"] = result_item.get("data", "NO DATA")
-                for source_index in source_indexes:
-                    if 0 <= source_index < data_sources_length:
-                        data_source = data_sources[source_index]
-                        new_result_item["source_datas"].append(data_source) # 保存相应溯源的所有信息
-                section_data.append(new_result_item)
-            except Exception as e:
-                logger.warning(f"{self._log_prefix} Error adding section source info: {e}")
-                section_data.append({})
-        return section_data
-
-    async def _collect_batch_tasks(self, batch_tasks: Dict[str, List[Dict[str, Any]]], 
+    async def _collect_batch_tasks(self, batch_tasks: Dict[str, List[Dict[str, Any]]],
                                    data_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         收集一批任务的数据
@@ -307,19 +287,19 @@ class ChartDataCollector:
         Returns:
             List[Dict[str, Any]]: 批次收集的数据列表
         """
-        
+
         try:
             detection_func_and_args = {
                 "detection_func": is_equal_length,
                 "args": len(batch_tasks)
             }
             call_model_input = CallModelInput(
-                model_name=self._llm_name, 
-                prompt="vlm_collect_data_prompt", 
+                model_name=self._llm_name,
+                prompt="vlm_collect_data_prompt",
                 user_input={"tasks": batch_tasks, "data_sources": data_sources},
                 agent_name=AgentLlmName.VLM_CHART_GENERATOR_COLLECT_DATA_FOR_CHART.value
                 )
-            results = await call_model(call_model_input, 
+            results = await call_model(call_model_input,
                                        detection_func_and_args=detection_func_and_args)
             if not results:
                 raise ValueError(f"No results for batch tasks: {batch_tasks}")

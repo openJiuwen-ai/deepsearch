@@ -41,3 +41,4 @@ Extends `.claude/rules/code-style.md`.
 - New broad `except Exception` blocks that swallow errors.
 - Logging with f-strings when values may be expensive or sensitive.
 - Writing runtime artifacts to the repository root from tests or library code.
+- Using bare `float()` or `.strip()` on values derived from LLM JSON output without `safe_float()` / `isinstance` / `str()` guards — LLM may return string numbers, `None`, or unexpected container types that cause `TypeError`/`AttributeError` deep in the pipeline.

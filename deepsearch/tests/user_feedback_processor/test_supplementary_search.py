@@ -10,24 +10,12 @@ from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmN
 
 @pytest.mark.asyncio
 async def test_supplementary_search_selected_only_replaces_only_span_and_preserves_metadata():
-    report = "# 标题\n\n## 第二章\n前缀选中内容[checked_citation:0][[1]](https://a.com)后缀\n"
-    selected_text = "选中内容[checked_citation:0][[1]](https://a.com)"
+    report = "# 标题\n\n## 第二章\n前缀选中内容[[1]](https://a.com)后缀\n"
+    selected_text = "选中内容[[1]](https://a.com)"
     start_offset = report.index("选中内容")
     end_offset = start_offset + len(selected_text)
     citation_start_offset = report.index("[[1]]")
     citation_end_offset = citation_start_offset + len("[[1]](https://a.com)")
-    original_citation_messages = {
-        "data": [
-            {
-                "id": 0,
-                "reference_index": 1,
-                "url": "https://a.com",
-                "citation_start_offset": citation_start_offset,
-                "citation_end_offset": citation_end_offset,
-            }
-        ]
-    }
-    original_infer_messages = [{"id": 3, "content": "保留推理"}]
     collection_doc_infos = [{"title": "补搜来源", "url": "https://new.com", "original_content": "补搜正文"}]
 
     searcher = SupplementarySearcher(llm_model_name="mock")
@@ -57,8 +45,8 @@ async def test_supplementary_search_selected_only_replaces_only_span_and_preserv
             },
             final_result={
                 "response_content": report,
-                "citation_messages": original_citation_messages,
-                "infer_messages": original_infer_messages,
+
+
             },
             language="zh-CN",
         )
@@ -66,29 +54,16 @@ async def test_supplementary_search_selected_only_replaces_only_span_and_preserv
     mock_rewrite_only.assert_awaited_once()
     assert result["new_report"] == "# 标题\n\n## 第二章\n前缀选中内容已补充后缀\n"
     assert result["rewritten_text"] == "选中内容已补充"
-    assert result["source_trace_doc_infos"] == collection_doc_infos
 
 
 @pytest.mark.asyncio
 async def test_supplementary_search_selected_and_related_preserves_metadata():
-    report = "# 标题\n\n## 第二章\n这里是选中内容[checked_citation:0][[1]](https://a.com)\n更多内容\n"
-    selected_text = "选中内容[checked_citation:0][[1]](https://a.com)"
+    report = "# 标题\n\n## 第二章\n这里是选中内容[[1]](https://a.com)\n更多内容\n"
+    selected_text = "选中内容[[1]](https://a.com)"
     start_offset = report.index("选中内容")
     end_offset = start_offset + len(selected_text)
     citation_start_offset = report.index("[[1]]")
     citation_end_offset = citation_start_offset + len("[[1]](https://a.com)")
-    original_citation_messages = {
-        "data": [
-            {
-                "id": 0,
-                "reference_index": 1,
-                "url": "https://a.com",
-                "citation_start_offset": citation_start_offset,
-                "citation_end_offset": citation_end_offset,
-            }
-        ]
-    }
-    original_infer_messages = []
     collection_doc_infos = [{"title": "补搜来源", "url": "https://new.com", "original_content": "补搜正文"}]
 
     searcher = SupplementarySearcher(llm_model_name="mock")
@@ -119,8 +94,8 @@ async def test_supplementary_search_selected_and_related_preserves_metadata():
             },
             final_result={
                 "response_content": report,
-                "citation_messages": original_citation_messages,
-                "infer_messages": original_infer_messages,
+
+
             },
             language="zh-CN",
         )
@@ -128,7 +103,6 @@ async def test_supplementary_search_selected_and_related_preserves_metadata():
     mock_rewrite_related.assert_awaited_once()
     assert result["new_report"] == "# 标题\n\n## 第二章\n新章节内容"
     assert result["rewritten_text"] == "## 第二章\n新章节内容"
-    assert result["source_trace_doc_infos"] == collection_doc_infos
 
 
 @pytest.mark.asyncio
@@ -174,8 +148,8 @@ async def test_supplementary_search_selected_and_related_keeps_newline_before_ne
             },
             final_result={
                 "response_content": report,
-                "citation_messages": {"data": []},
-                "infer_messages": [],
+
+
             },
             language="zh-CN",
         )

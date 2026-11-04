@@ -14,6 +14,7 @@ from typing import Literal
 
 from openjiuwen_deepsearch.algorithm.report_export.conversion_utils import (
     MERMAID_BLOCK_RE,
+    add_report_chapter_ids,
     inline_chart_images,
     preprocess_markdown_text,
     read_text_with_fallback,
@@ -510,9 +511,11 @@ def convert_md_to_html(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     md_content = read_text_with_fallback(input_path)
     md_content = preprocess_markdown(md_content, options)
+    md_content = add_report_chapter_ids(md_content)
+    html_content = render_markdown_html_fragment(md_content)
     full_html = HTML_TEMPLATE.format(
         title=html.escape(options.title, quote=True),
-        content=render_markdown_html_fragment(md_content),
+        content=html_content,
         variant_css=STYLED_CSS_OVERLAY if options.page_variant == "styled" else "",
     )
     if options.page_variant == "styled":

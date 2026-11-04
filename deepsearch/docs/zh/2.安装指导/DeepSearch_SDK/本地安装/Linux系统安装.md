@@ -13,10 +13,10 @@
     > **注意**：Ubuntu 官方与主流软件源已停止支持 Ubuntu 20.04 (Focal) 及以下版本系统。
   * EulerOS：Huawei Cloud EulerOS 2.0及以上
 
-* 软件（安装方法详见下文）	 
-  * Git 2.40及以上 
+* 软件（安装方法详见下文）
+  * Git 2.40及以上
   * Python 3.11及以上，3.14以下
-  * uv 0.5.0及以上 
+  * uv 0.5.0及以上
   * MySQL 8.0及以上
 
 ## 二、安装方法
@@ -53,7 +53,6 @@
   ```
 
   > **注意**：若安装失败，请参考 <a href="https://uv.doczh.com/getting-started/installation/#_1" target="_blank" rel="nofollow noopener noreferrer"> uv 官方指导</a> 。
-  
 
 ##### 1.3. 安装 MySQL（可选组件）
 
@@ -78,7 +77,7 @@
   ```
 
 * 安装完成后，运行以下命令登录 MySQL：
-   
+
   ```bash
   sudo mysql -u root
   ```
@@ -147,7 +146,7 @@
    DB_HOST=localhost
    DB_PORT=3306
    DB_USER=your_user_name
-   DB_PASSWORD=your_password 
+   DB_PASSWORD=your_password
    ```
 
   变量说明可参考如下表格。
@@ -190,7 +189,7 @@
   > - `redis` 模式：需要先安装并启动 Redis 服务，适用于分布式生产环境；**还须**在 `.env` 中完整配置 `OBS_SERVER`、`OBS_BUCKET`、`OBS_REGION`、`OBS_ACCESS_KEY_ID`、`OBS_SECRET_ACCESS_KEY`，否则服务无法启动。**仅在此模式下**服务端会将知识库文档上传至对象存储，供多实例共享。**多实例时 `DB_TYPE` 必须为 `mysql` 且连接同一 MySQL**（知识库等元数据存于应用数据库；SQLite 为本地文件，进程间不共享）。
 
 * 在源码根目录下，运行以下命令启动后端服务，并耐心等待：
-   
+
   ```bash
   uv venv
   uv sync --group backend
@@ -215,7 +214,6 @@
   ```
 
   > Docker 安装时两个进程由官方镜像 `CMD` 一并启动，详见 [Docker 方式安装](../Docker方式安装/README.md)。
-
 
 ## 三、常见问题（FAQ）
 #linux-special-char

@@ -1,0 +1,444 @@
+# `openjiuwen_deepsearch.config.config`
+
+## `LLMConfig`
+```python
+class openjiuwen_deepsearch.config.config.LLMConfig()
+```
+**LLMConfig** holds LLM endpoint and call settings.
+
+**Fields**
+
+- **model_name** (str, optional): Model id. Default `""`.
+- **model_type** (`Literal["openai", "siliconflow"]`, optional): Backend type. Default `"openai"`.
+- **base_url** (str, optional): API base URL. Default `""`.
+- **api_key** (bytearray, optional): API key. Default empty `bytearray`.
+- **hyper_parameters** (dict, optional): Extra generation parameters. Default `{}`.
+- **extension** (dict, optional): Provider-specific extras. Default `{}`.
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
+- **timeout** (int, optional): Request timeout in seconds. Default `600`.
+- **max_tries** (int, optional): Maximum retry attempts for one LLM call. Default `4`.
+- **append_think_tags_to_messages** (bool, optional): Whether to append think tags into messages. Default `False`.
+- **moderation_mask_retry** (bool, optional): Enable content moderation recovery. Default `False`; enable with `LLMConfig(moderation_mask_retry=True)`. After a recognized input moderation error, the next existing attempt masks only annotated source text and source URLs in user messages; output moderation errors add output constraints. This reuses the caller's existing retry budget without adding attempts: calls without retries still do not retry, and `run_llm` defaults to at most four application-level attempts. SDK/provider internal retries are counted separately. Recovery effectiveness and content quality require experimental validation; this does not guarantee approval or change provider moderation policies. See [Moderation mask retry](../../../feature/moderation-mask-retry.md).
+
+**Examples**
+
+```python
+>>> from openjiuwen_deepsearch.config.config import LLMConfig
+>>> llm_config = LLMConfig(
+...     model_name="gpt-4",
+...     model_type="openai",
+...     base_url="https://api.openai.com/v1",
+...     api_key=bytearray("your_api_key", encoding="utf-8"),
+... )
+>>> llm_config = LLMConfig()
+>>> llm_config = LLMConfig(
+...     extension={"extra_headers": {...}},  # e.g. OpenAI extra_headers / extra_body
+... )
+```
+
+## `WebSearchEngineConfig`
+```python
+class openjiuwen_deepsearch.config.config.WebSearchEngineConfig()
+```
+**WebSearchEngineConfig** configures the web augmentation / search engine.
+
+**Fields**
+
+- **search_engine_name** (`Literal["tavily","google","xunfei","petal","custom","bocha","jina","perplexity","serper","agc_ainetworking"]`, optional): Engine id. Default `"tavily"`.
+- **search_api_key** (bytearray, optional): API key. Default empty.
+- **search_url** (str, optional): Endpoint URL. Default `""`. Public engines may leave this empty and use built-in defaults.
+- **max_web_search_results** (int, optional): Max hits, 1–10. Default `5`.
+- **extension** (dict, optional): Engine-specific options. Default `{}`.
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
+
+**Built-in engine notes**
+
+- `google` / `serper`: routed to the Google/Serper wrapper.
+- `tavily`: Tavily wrapper.
+- `xunfei`: iFlytek wrapper.
+- `petal`: Petal web augmentation wrapper.
+- `bocha` / `perplexity`: harness `web_tools` adapter wrappers.
+- `jina`: direct HTTP wrapper for Jina Search.
+- `agc_ainetworking`: AGC AI Networking `webSearch`; when configured through `WebSearchEngineConfig` or HTTP, validation caps `max_web_search_results` at `10`. The wrapper's internal `[1, 50]` clamp applies only to direct wrapper construction and does not expand the configuration interface's range. See [AGC AI Networking search](../../../feature/framework/agc_ainetworking_search.md) for parameters and site constraints.
+- `custom`: dynamically loaded external search tool.
+
+**Examples**
+
+```python
+>>> from openjiuwen_deepsearch.config.config import WebSearchEngineConfig
+
+>>> # Example 1: configure tavily with include_domains
+>>> web_search_config = WebSearchEngineConfig(
+...     search_engine_name="tavily",
+...     search_api_key=bytearray("your_api_key", encoding="utf-8"),
+...     max_web_search_results=8,
+...     extension={
+...         "include_domains": ["www.sz.gov.cn", "www.pku.edu.cn"]
+...     }
+... )
+>>> print(web_search_config.search_engine_name, web_search_config.extension["include_domains"])
+tavily ["www.sz.gov.cn", "www.pku.edu.cn"]
+
+>>> # Example 2: configure jina with default search_url and locale options
+>>> web_search_config = WebSearchEngineConfig(
+...     search_engine_name="jina",
+...     search_api_key=bytearray("your_jina_key", encoding="utf-8"),
+...     search_url="",
+...     extension={
+...         "gl": "us",
+...         "hl": "en",
+...         "location": "San Francisco",
+...         "page": 2,
+...     },
+... )
+>>> # Example 3: configure bocha with harness extension options
+>>> web_search_config = WebSearchEngineConfig(
+...     search_engine_name="bocha",
+...     search_api_key=bytearray("your_bocha_key", encoding="utf-8"),
+...     extension={"timeout_seconds": 30, "fetch_webpage": True},
+... )
+```
+
+**Notes**
+
+- Built-in synchronous search requests for the Google/Serper wrapper (shared by the `google` and `serper` engine ids) and Tavily use a fixed 30-second timeout to avoid blocking indefinitely on network failures. This refers to the wrapper, not a direct call to Google's official Search API; the timeout is not currently configurable through `WebSearchEngineConfig`.
+- `jina` falls back to `https://s.jina.ai` when `search_url` is empty. In China network environments where that endpoint is unreachable, set `search_url="https://s.jinaai.cn"`; you can also set `search_url` for privately deployed or proxy-forwarded endpoints.
+- `bocha` and `perplexity` use the harness `web_tools` adapter layer. By default they do not fetch webpage content and use the search API summary answer directly. To enable webpage fetching, set `extension.fetch_webpage=True`. `search_url` is only honored when the underlying provider supports URL override. In China network environments where the default Perplexity service is unreachable, configure an accessible proxy or forwarding endpoint and explicitly set it through `search_url`.
+- Search results are normalized before collector-side storage so aliases like `link`, `source_url`, `snippet`, `summary`, and `answer` are mapped into the common `title` / `url` / `content` / `type` shape.
+- The search API summary answer and (when fetching is enabled) prefetched webpage content are both bounded by `MAX_COLLECTOR_DOC_CONTENT_LENGTH` to prevent oversized search payloads from reaching downstream LLM evaluation unchanged.
+
+## Scholarly search configuration
+
+### `ScholarlySearchConfig`
+
+Aggregates the built-in PubMed, arXiv, and Semantic Scholar provider configurations. The model rejects undeclared fields.
+
+- **fetch_full_text** (bool, optional): Whether to retrieve full text for search results. Default value: `True`.
+- **max_full_text_results_per_query** (int, optional): Maximum results for which full text is retrieved per query. Range: `[0, 10]`. Default value: `1`; `0` disables full-text retrieval.
+- **pubmed** (`PubMedScholarlyConfig`, optional): PubMed provider configuration. Default value: `PubMedScholarlyConfig()`.
+- **arxiv** (`ArxivScholarlyConfig`, optional): arXiv provider configuration. Default value: `ArxivScholarlyConfig()`.
+- **semantic_scholar** (`SemanticScholarConfig`, optional): Semantic Scholar provider configuration. Default value: `SemanticScholarConfig()`.
+
+### `ScholarlyProviderConfig` (common provider fields)
+
+- **search_api_key** (bytearray, optional): Provider API key. Default value: an empty `bytearray`.
+- **search_url** (str, optional): Provider search endpoint. Default value: `""`; when non-empty, it must exactly match that provider's official endpoint—custom and proxy URLs are rejected.
+- **max_search_results** (int, optional): Maximum results returned per query. Range: `[1, 10]`. Default value: `1`.
+- **requests_per_second** (float, required): Request-rate limit. Range: `(0, 10]`; each built-in provider supplies its own default.
+
+### Built-in provider defaults and dedicated fields
+
+| Provider | Official `search_url` | Default `requests_per_second` | Dedicated fields |
+| --- | --- | --- | --- |
+| `PubMedScholarlyConfig` | `https://eutils.ncbi.nlm.nih.gov/entrez/eutils` | `1 / 3` | **email** (str, default `""`); **tool** (str, default `"openjiuwen-deepsearch"`) |
+| `ArxivScholarlyConfig` | `https://export.arxiv.org/api/query` | `1 / 3` | None |
+| `SemanticScholarConfig` | `https://api.semanticscholar.org/graph/v1/paper/search` | `0.5` | None |
+
+## `EmbedModelConfig`
+```python
+class openjiuwen_deepsearch.config.config.EmbedModelConfig()
+```
+**EmbedModelConfig** configures embedding for native local KB.
+
+**Fields**: **model_name**, **api_key**, **base_url**, **max_batch_size** (required); **timeout** (default `60`); **max_retries** (default `3`).
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
+
+## `VectorStoreConfig`
+```python
+class openjiuwen_deepsearch.config.config.VectorStoreConfig()
+```
+**VectorStoreConfig**: **uri**, **token**, **collection_name** (all required).
+
+## `NativeKnowledgeBaseConfig`
+```python
+class openjiuwen_deepsearch.config.config.NativeKnowledgeBaseConfig()
+```
+**NativeKnowledgeBaseConfig**: **id** (required); **index_type** (default `"vector"`); **embed_model_config**; **vector_store**.
+
+## `LocalSearchEngineConfig`
+```python
+class openjiuwen_deepsearch.config.config.LocalSearchEngineConfig()
+```
+**LocalSearchEngineConfig** configures local / KB search.
+
+**Fields**
+
+- **search_engine_name** (`openapi` / `custom` / `native`, optional). Default `openapi`.
+- **search_api_key**, **search_url**, **search_datasets**, **extension**.
+- **max_local_search_results** (1–10, default `5`).
+- **recall_threshold** (default `0.5`).
+- **search_mode** (`doc` semantic / `keyword` / `mix`, default `doc`).
+- **knowledge_base_type** (`internal` / `external`, default `internal`).
+- **source** (`KooSearch` / `LakeSearch`, default `KooSearch`).
+- **knowledge_base_configs** (`List[NativeKnowledgeBaseConfig]`, default `[]`).
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
+
+## `CustomWebSearchConfig` / `CustomLocalSearchConfig`
+Custom tool hooks: **custom_*_file**, **custom_*_func**, **extension** (defaults empty).
+
+## `McpServerRuntimeConfig`
+```python
+class openjiuwen_deepsearch.config.config.McpServerRuntimeConfig()
+```
+**McpServerRuntimeConfig** configures a single MCP (Model Context Protocol) server. Used as an element of `AgentConfig.mcp_servers`. SDK users configure it directly; the server assembles the same shape after DB lookup.
+
+**Fields**:
+
+- **server_name** (str, required): MCP server name, unique within a space; part of the runtime tool namespace. The complete tool-name format is `mcp__{server_name}__{tool}`.
+- **server_url** (str, required): MCP server URL.
+- **transport_type** (str, optional): Transport type; only `sse` and `streamable_http` are effective. Default value: `"streamable_http"`.
+- **headers** (dict, optional): Request headers. Sensitive header values are encrypted at the server side; when the SDK passes them directly, they are used as-is. Default value: `{}`.
+- **timeout** (float, optional): Connect/read timeout in seconds. Default value: `30.0`.
+- **type** (str, optional): MCP server purpose type, selecting which collector branch the tools are injected into; currently fixed to `"search"`. Default value: `"search"`.
+
+**Notes**:
+
+- The `mcp` package is transitively pulled in via the core dependency `openjiuwen→fastmcp→mcp`; a standard `uv sync` already includes it. To pin the version explicitly, run `uv sync --extra mcp` (constrains `mcp>=1.26,<2.0`).
+- When configured, the three agent entries (`DeepresearchAgent`, `DeepSearchAgent`, `SimpleReactSearchAgent`) connect to the MCP servers when `tool_map == "search_fetch"` and inject tools into the information collection node `InfoRetrievalNode` as `mcp__{server_name}__{tool}`; connections are closed when the run ends.
+- If a single server fails to connect, a warning is logged and that server is skipped without blocking other servers; if the `mcp` package is not installed, the run proceeds without MCP tools while everything else works normally.
+
+**Example**:
+
+```python
+>>> from openjiuwen_deepsearch.config.config import AgentConfig, McpServerRuntimeConfig
+
+>>> # Example 1: configure a single MCP server
+>>> agent_config = AgentConfig(
+...     mcp_servers=[
+...         McpServerRuntimeConfig(
+...             server_name="custom_search",
+...             server_url="http://localhost:8000/mcp",
+...             transport_type="streamable_http",
+...             headers={"Authorization": "Bearer xxx"},
+...             timeout=30.0,
+...         )
+...     ]
+... )
+>>> print(agent_config.mcp_servers[0].server_name)
+custom_search
+
+>>> # Example 2: no MCP server by default
+>>> agent_config = AgentConfig()
+>>> print(agent_config.mcp_servers)
+[]
+```
+
+## `AgentConfig`
+```python
+class openjiuwen_deepsearch.config.config.AgentConfig()
+```
+**AgentConfig** is the user-facing agent/runtime toggle set.
+
+**Fields**:
+
+- **execute_mode** (Literal["commercial", "general"], optional): Execution mode. Default value: `"commercial"`.
+- **execution_method** (Literal["dependency_driving", "parallel", "hybrid"], optional): Execution method. `parallel` runs the parallel research workflow, `dependency_driving` runs the dependency-driven workflow, and `hybrid` lets `IntentRecognitionNode` call an LLM router to choose the outline branch for the current query. Default value: `"parallel"`.
+- **workflow_human_in_the_loop** (bool, optional): Whether to enable HITL before planning. Default value: `True`.
+- **report_type** (`Literal["brief", "professional"] | None`, optional): Report type; `None` delegates selection to intent recognition and clarification. Default value: `None`.
+- **user_materials_enabled** (bool, optional): Enables user materials; `user_materials` is ignored when disabled. Default value: `False`.
+- **user_materials** (`List[Dict[str, Any]]`, optional): User-provided material entries. Default value: `[]`; HTTP callers provide the same fields in `metadata`. See [User materials](../../../feature/algorithm/user-materials.md) for the data format and usage scenarios.
+- **coverage_rule_block_enable** (bool, optional): Enables rule-based coverage evidence for sub-report outlines. Default value: `True`.
+- **outliner_max_section_num** (int, optional): Maximum number of outline sections. Range: `[1, 15]`. Both SDK `AgentConfig` and HTTP `DeepSearchRequest` default to `10`.
+- **outline_interaction_enabled** (bool, optional): Whether to enable outline interaction. Default value: `True`.
+- **outline_interaction_max_rounds** (int, optional): Maximum number of outline interaction rounds. Range: `[1, 100]`. Default value: `3`.
+- **llm_config** (Dict[Literal["general", "plan_understanding", "info_collecting", "writing_checking", "vlm_chart_generating"], LLMConfig], optional): LLM model configuration. Default value: `dict()`.
+- **info_collector_search_method** (Literal["web", "local", "all"], optional): Search method. `web` means web augmentation search, `local` means local search tool, and `all` means hybrid web + local search. Default value: `"web"`.
+- **info_collector_webpage_enrich_enable** (bool, optional): Whether to enable webpage content enrichment during DeepResearch information collection. Default value: `False`.
+- **web_search_engine_config** (WebSearchEngineConfig, optional): Web augmentation engine configuration. Default value: `WebSearchEngineConfig()`.
+- **scholarly_search_enabled** (bool, optional): Enables built-in scholarly providers. Default value: `False`.
+- **scholarly_search_config** (ScholarlySearchConfig, optional): Aggregated configuration for PubMed, arXiv, and Semantic Scholar. Default value: `ScholarlySearchConfig()`.
+
+`ScholarlySearchConfig` aggregates `PubMedScholarlyConfig`, `ArxivScholarlyConfig`, and `SemanticScholarConfig`; each provider supports `search_api_key`, its official `search_url`, `max_search_results` (range `[1, 10]`), and rate limiting.
+- **local_search_engine_config** (LocalSearchEngineConfig, optional): Local search engine configuration. Default value: `LocalSearchEngineConfig()`.
+- **custom_web_search_config** (CustomWebSearchConfig, optional): Custom web augmentation engine configuration. Default value: `CustomWebSearchConfig()`.
+- **custom_local_search_config** (CustomLocalSearchConfig, optional): Custom local search configuration. Default value: `CustomLocalSearchConfig()`.
+- **search_mode** (`Literal["research", "search", "react"]`, optional): Agent operating mode. `research` for report generation workflow, `search` for DeepSearch graph, `react` for simple ReAct + search tools. Default value: `"research"`.
+- **enable_question_router** (bool, optional): When `True` and `search_mode="search"`, route simple questions to `react` and complex ones to DeepSearch. Default value: `False`.
+- **search_workflow_per_question_params** (`PerQuestionParams`, optional): Per-question control knobs for search/react runs (time, workers, tool map, limits, etc.). Default value: `PerQuestionParams()`.
+- **search_workflow_milvus_config** (`MilvusConfig`, optional): Milvus/embedder settings used when retrieval tool path is selected. Default value: `MilvusConfig()`.
+- **web_fetch_provider_config** (`WebFetchProviderConfig`, optional): Explicit DeepSearch fetch-provider config. Current v1 requires `provider_name="jina"` to enable `web_fetch`. Default value: `WebFetchProviderConfig()`.
+- **mcp_servers** (`List[McpServerRuntimeConfig]`, optional): MCP (Model Context Protocol) server config list. When configured, the three agent entries (`DeepresearchAgent`, `DeepSearchAgent`, `SimpleReactSearchAgent`) connect to the MCP servers when `tool_map == "search_fetch"` and inject tools into `InfoRetrievalNode` as `mcp__{server_name}__{tool}`. Default value: `[]`.
+- **model_config** (`ConfigDict`, internal): Pydantic model config; `arbitrary_types_allowed=True`.
+- **web_search_max_qps** (float, optional): Maximum QPS for the web augmentation engine. `0` means no rate limit. Floating-point values such as `0.5` are supported and mean one request every 2 seconds. Default value: `0`.
+- **user_feedback_processor_enable** (bool, optional): Whether to enable post-report local optimization. Default value: `False`.
+- **user_feedback_processor_max_interactions** (int, optional): Maximum number of local optimization interactions. Default value: `100`. Allowed range: `1~100`.
+- **stats_info_llm** (bool, optional): Whether to collect LLM call statistics. Default value: `False`.
+- **api_tools_config** (`ApiToolsConfig`): runtime HTTP API tools injected for function calling outside built-in tools.
+- **vlm_chart_generator_enable** (bool, optional): VLM iterative chart generation toggle; mutually exclusive with `visualization_enable`.
+- **vlm_chart_generator_max_iterations** (int, optional): Max iterations for VLM chart optimization. Default `1`, range 1–3. Higher values increase latency.
+- **agent_llm_timeouts** (`Dict[str, int]`, optional): business-layer wall-clock timeout rules for full LLM calls, matched by exact `agent_name`, then node-level prefix key, then `default`. The feature is active only when the dict is non-empty and contains `default`; a matched value of `0` disables the outer wall-clock timeout for that rule. Default value: `dict()`.
+
+**Notes**:
+
+- `DeepSearchRequest.agent_llm_timeouts` is passed through into `AgentConfig.agent_llm_timeouts` and then merged into runtime session config.
+- This setting controls the outer business-layer timeout for the whole streaming call; it does not replace provider/request-level timeout handling.
+- For the current configurable `agent_name` / key list, see the `AgentLlmName` definition in `openjiuwen_deepsearch/utils/constants_utils/node_constants.py`; `default` is the fallback rule.
+
+**Example**:
+
+```python
+>>> from openjiuwen_deepsearch.config.config import AgentConfig, LLMConfig, WebSearchEngineConfig
+>>> agent_config = AgentConfig(
+...     execute_mode="general",
+...     execution_method="parallel",
+...     llm_config={"general": LLMConfig(model_name="gpt-4", model_type="openai"),
+...                 "plan_understanding": LLMConfig(model_name="qwen3-max", model_type="openai")},
+...     web_search_engine_config=WebSearchEngineConfig(search_engine_name="petal"),
+...     info_collector_search_method="all",
+... )
+```
+
+## `ApiToolsConfig`
+```python
+class openjiuwen_deepsearch.config.runtime_api_models.ApiToolsConfig()
+```
+**ApiToolsConfig** describes runtime HTTP tools injected into the workflow via **`AgentConfig.api_tools_config`**.
+
+**Fields**
+
+- **query_understanding_tools** (`List[RuntimeApiToolConfig]`, optional): tools used in planner/outliner stages.
+- **collector_tools** (`List[RuntimeApiToolConfig]`, optional): tools used in collector stages.
+
+If tools are passed from the HTTP API with **`DeepSearchRequest.tools`**, the server normalizes them and fills both lists with the same normalized tool definitions.
+
+## `RuntimeApiToolConfig`
+```python
+class openjiuwen_deepsearch.config.runtime_api_models.RuntimeApiToolConfig()
+```
+**RuntimeApiToolConfig** defines how one HTTP API tool is exposed to model function calling.
+
+**Key fields**
+
+- **tool_id**, **name**, **description**: tool identity and display metadata.
+- **base_url**, **path**, **http_method**: request target and HTTP verb (`path` can also be a full URL).
+- **headers**: default request headers.
+- **request_params**: parameter list with routing (`send_method`: `header` / `query` / `body` / `none`), required flag, type, and default.
+- **response_wrapper**: optional response shape adapter (for example `search_result` in collector flows).
+- **response_params**: compatibility field retained in config; not used for the current response mapping pipeline.
+
+**Example: configurable runtime function-call tool**
+
+```python
+from openjiuwen_deepsearch.config.config import AgentConfig
+from openjiuwen_deepsearch.config.runtime_api_models import (
+    ApiToolsConfig,
+    RuntimeApiToolConfig,
+    RuntimeApiToolParamConfig,
+)
+
+company_profile_tool = RuntimeApiToolConfig(
+    tool_id="company_profile",
+    name="company_profile",
+    description="Fetch company profile by ticker symbol.",
+    base_url="https://api.example.com",
+    path="/v1/company/profile",
+    http_method="get",
+    request_params=[
+        RuntimeApiToolParamConfig(
+            key="symbol",
+            description="Ticker symbol, e.g. AAPL",
+            required=True,
+            send_method="query",
+            param_type="string",
+        ),
+        RuntimeApiToolParamConfig(
+            key="x-api-key",
+            description="API key for upstream service",
+            required=False,
+            send_method="header",
+            default_value="",
+            param_type="string",
+        ),
+    ],
+    response_wrapper="search_result",
+)
+
+agent_config = AgentConfig(
+    api_tools_config=ApiToolsConfig(
+        query_understanding_tools=[company_profile_tool],
+        collector_tools=[company_profile_tool],
+    )
+)
+```
+
+## `ServiceConfig`
+```python
+class openjiuwen_deepsearch.config.config.ServiceConfig()
+```
+**ServiceConfig** holds SDK/service defaults (timeouts, retries, telemetry).
+
+**Fields**:
+
+### Basic service settings
+- **service_allow_origins** (List[str], optional): Allowed IP/CORS origin range. Default value: `[]`.
+
+### Template parameters
+- **template_max_generate_retry_num** (int, optional): Maximum retry count for template generation. Default value: `3`.
+
+### Workflow parameters
+- **workflow_execution_timeout** (int, optional): Workflow execution timeout in seconds. Default value: `7200`.
+- **workflow_sub_graph_execution_timeout** (int, optional): Subgraph execution timeout. Default value: `6000`.
+- **workflow_max_plan_executed_num** (int, optional): Maximum number of executed plans. Default value: `2`.
+- **workflow_recursion_limit** (int, optional): Recursion limit. Default value: `30`.
+- **workflow_max_gen_question_retry_num** (int, optional): Maximum retry count for question generation. Default value: `3`.
+- **workflow_feedback_mode** (str, optional): User feedback channel. Available values: `["web", "cmd"]`. Default value: `"web"`.
+- **search_workflow** (SearchWorkflowConfig, optional): Search-mode workflow configuration. Default value: `SearchWorkflowConfig()`.
+
+### Outline node parameters
+- **outliner_max_generate_outline_retry_num** (int, optional): Maximum retry count for outline generation. Default value: `3`.
+
+### Planner node parameters
+- **planner_max_step_num** (int, optional): Maximum number of planner steps. Default value: `3`.
+- **planner_max_retry_num** (int, optional): Maximum retry count. Default value: `3`.
+
+### Information collection parameters
+- **info_collector_max_search_query_count** (int, optional): Maximum number of search queries in one collector loop. Default value: `5`.
+- **info_collector_max_research_loops** (int, optional): Maximum number of research loops. Default value: `2`.
+- **info_collector_max_tool_call_turns_per_query** (int, optional): Maximum tool-call turns for each collector query. Default value: `2`.
+- **info_collector_max_retry_num** (int, optional): Maximum retry count for search tool calls during information collection (e.g. Tavily web search). Default value: `3`.
+- **info_collector_allow_programmer** (bool, optional): Reserved field; it is not consumed by the current runtime, so setting it does not change collector behavior. Default value: `False`.
+- **info_collector_webpage_enrich_max_urls** (int, optional): Maximum number of URLs to fetch and enrich per collector loop. Default value: `5`.
+- **info_collector_webpage_enrich_fetch_timeout_seconds** (int, optional): Timeout in seconds for fetching one webpage during webpage enrichment. Default value: `45`.
+
+### Reporting parameters
+- **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k passages selected per rationale by coverage score in a sub-report (_select_by_rationale_coverage). Default value: `15`.
+- **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
+- **visualization_enable** (bool, optional): Whether to enable visualization illustrations in Professional reports. Default value: `True`. It does not affect Brief report text-and-visual generation.
+- **professional_report_adaptive_rationales** (bool, optional): Whether to enable requirement checklist mapping and complexity-adaptive rationale generation for Professional reports. Default value: `False`.
+
+### Statistics parameters
+- **stats_info_node_duration** (bool, optional): Whether to collect node duration statistics. Default value: `False`.
+- **stats_info_search** (bool, optional): Whether to collect search tool call statistics. Default value: `False`.
+
+### LLM timeout parameter
+- **llm_timeout** (int, optional): provider/request-level LLM call timeout in seconds. Default value: `300`.
+
+**Notes**:
+
+- `service_config.llm_timeout` is still passed to the underlying LLM client.
+- If `agent_llm_timeouts` is also configured, DeepSearch adds an outer wall-clock timeout around the whole streaming call; when that outer timeout is hit, it raises `LLM_WALL_CLOCK_TIMEOUT` (`211204`).
+
+### LLM thinking mode parameter
+- **llm_thinking_enabled** (bool, optional): whether to enable model thinking mode. Default value: `False`. This SDK-internal setting is applied only when `DeepresearchAgent` initializes LLMs and injects provider-specific thinking on/off parameters for supported providers; `DeepSearchAgent`, `SimpleReactSearchAgent`, and REST API requests do not use this field.
+
+**Notes**:
+
+- `service_config.llm_thinking_enabled` is not an `LLMConfig` field and is not exposed as a REST API request parameter. For providers that do not support a thinking switch, the runtime only logs a warning and keeps the original extension parameters.
+- If thinking-related fields are manually configured in `LLMConfig.extension`, the internal unified thinking switch overrides those fields and writes a warning log.
+
+### Debug parameters
+- **node_debug_enable** (bool, optional): Whether to enable formatted node debug logs. Default value: `False`.
+- **export_intermediate_results** (bool, optional): Whether to export intermediate workflow results for visualization. Default value: `False`.
+
+## `Config`
+```python
+class openjiuwen_deepsearch.config.config.Config()
+```
+**Config** bundles **agent_config** (`AgentConfig()`) and **service_config** (`ServiceConfig()`).
+
+```python
+>>> from openjiuwen_deepsearch.config.config import Config, AgentConfig, ServiceConfig
+>>> Config(agent_config=AgentConfig(execute_mode="general"),
+...        service_config=ServiceConfig(workflow_execution_timeout=3600))
+>>> Config()
+```

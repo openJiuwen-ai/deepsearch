@@ -89,7 +89,7 @@ Install dependencies first, then clone and configure.
   git clone https://gitcode.com/openJiuwen/deepsearch.git
   cd deepsearch
   ```
-  
+
 ##### 2.2. Start DeepSearch
 
 * In repo root, PowerShell:
@@ -100,7 +100,7 @@ Install dependencies first, then clone and configure.
 
 * Edit `.env` (do not wipe unrelated keys):
 
-  > **Note**: `HOST` and `BACKEND_PORT` are the API bind address and port. If unset, default host is `0.0.0.0` and port `8000`.  
+  > **Note**: `HOST` and `BACKEND_PORT` are the API bind address and port. If unset, default host is `0.0.0.0` and port `8000`.
   > Set `DB_*` to your MySQL instance. If the password has special characters, URL-encode them per the [special character table](#windows-special-char).
 
   ```env
@@ -112,7 +112,7 @@ Install dependencies first, then clone and configure.
    DB_HOST=localhost
    DB_PORT=3306
    DB_USER=your_user_name
-   DB_PASSWORD=your_password  
+   DB_PASSWORD=your_password
    ```
 
   | Variable | Description | Example |
@@ -147,9 +147,9 @@ Install dependencies first, then clone and configure.
   | **OBS_REGION** | Region name | empty |
   | **OBS_BUCKET** | Bucket name | empty |
 
-  > **Checkpointer** holds workflow session state (pause/resume/persist).  
-  > - `in_memory`: dev/test; not distributed; KB uploads stay on server disk; no OBS.  
-  > - `persistence`: single-node prod; writable DB dir; KB still local; no OBS.  
+  > **Checkpointer** holds workflow session state (pause/resume/persist).
+  > - `in_memory`: dev/test; not distributed; KB uploads stay on server disk; no OBS.
+  > - `persistence`: single-node prod; writable DB dir; KB still local; no OBS.
   > - `redis`: distributed; **must** set `OBS_SERVER`, `OBS_BUCKET`, `OBS_REGION`, `OBS_ACCESS_KEY_ID`, `OBS_SECRET_ACCESS_KEY` or the service will not start. **Only then** KB files go to object storage for multi-instance. **Multi-instance requires `DB_TYPE=mysql` on one shared MySQL** (metadata in app DB; SQLite files are not shared across processes).
 
 * In repo root:

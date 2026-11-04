@@ -17,8 +17,6 @@
 - `selected_only`：只替换用户选中的文本。
 - `selected_and_related`：定位包含选区的最小章节块，并改写该章节内容。
 
-返回结果会包含更新后的完整报告、原始替换区间、改写文本、改写 offset、章节区间和采集摘要。`selected_only` 的替换区间等于用户选区；`selected_and_related` 的替换区间是包含选区的最小章节块。开启局部溯源时，改写结果继续更新 citation。
-
 ## 关键代码路径
 
 - Action 映射：`openjiuwen_deepsearch/algorithm/user_feedback_processor/action_definitions.py`
@@ -29,9 +27,9 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_task.md`
-- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_rewrite_selected_only.md`
-- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_rewrite_selected_and_related.md`
+- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_task/`
+- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_rewrite_selected_only/`
+- `openjiuwen_deepsearch/algorithm/prompts/supplementary_search_rewrite_selected_and_related/`
 
 主要测试：
 
@@ -48,7 +46,7 @@
 5. `_run_collection` 调用采集执行服务获取补充资料。
 6. 根据 scope 调用 selected-only 或 selected-and-related Prompt 生成改写内容。
 7. 处理器拼接 `new_report`，返回改写范围、采集摘要和补充资料信息。
-8. 如果启用局部溯源，结果继续进入局部溯源阶段。
+
 
 ## 数据契约与依赖
 
@@ -77,7 +75,7 @@ Prompt 契约：
 - 工作流 session 中的采集配置。
 - 当前 collector model context。
 - `CollectorExecutionService`。
-- 局部溯源链路。
+
 
 ## 边界与错误处理
 
@@ -99,14 +97,9 @@ uv run pytest tests/user_feedback_processor/test_section_locator.py
 
 如果改动影响 citation 更新，还应运行：
 
-```bash
-uv run pytest tests/user_feedback_processor/test_local_source_trace.py
-```
-
 ## 相关文档
 
 - [用户反馈处理总览](../user-feedback-processor.md)
 - [同义改写](./synonym-rewrite.md)
 - [真实性核验](./truth-verification.md)
 - [新增任务处理](./new-task-processing.md)
-- [局部溯源](./local-source-trace.md)

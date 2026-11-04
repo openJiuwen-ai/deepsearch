@@ -1,5 +1,8 @@
 # Markdown 可视化
 
+> 注：Brief 报告不再复用本 Mermaid 图表链路；brief 的图表由 BRIEF_HTML_REPORTER 生成的自包含
+> HTML（内嵌 ECharts）承载，本链路仅适用于 professional 报告。
+
 ## 维护范围
 
 本文档覆盖报告生成中的 Markdown Mermaid 可视化能力，包括从检索后的章节资料中选择可视化候选、抽取图表数据、校验抽取 schema、单位归一化、生成 Mermaid 片段，以及把 Mermaid 图表插入到子报告正文中。
@@ -18,6 +21,7 @@ Markdown 可视化用于在报告正文中以 Mermaid 文本图表表达结构�
 - 支持 `bar`、`line`、`pie`、`timeline` 等类型。
 - 非 timeline 图表必须有明确且不混合的单位。
 - 单位归一化输出必须通过 schema 校验后才会继续生成图表。
+- 图表抽取保留结构和合规校验，不额外调用 LLM 对照原文执行逐字段溯源校验。
 - 同一章节可以插入多张 Mermaid 图表；多图来源于章节内多个高数据密度候选资料，而不是正文生成后的二次补图。
 - 插入到报告正文的 Mermaid 图表会带有系统管理的居中图题，并在图题中保留对应 citation。
 - 章节正文写作 Prompt 不允许模型直接输出 Mermaid 代码围栏、图表代码或手写图块；该约束不依赖 `visualization_enable`，正文草稿不会混入未受控 Mermaid。
@@ -33,29 +37,35 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 
 当前实现不在正文写完后再次扫描草稿正文、生成候选、重跑图表抽取或执行重复数据去重预算控制。
 
+### 并发控制
+
 ## 关键代码路径
 
 - 报告工具：`openjiuwen_deepsearch/algorithm/report/report_utils.py`
 - 报告生成主体：`openjiuwen_deepsearch/algorithm/report/report.py`
+- 可视化生成：`openjiuwen_deepsearch/algorithm/report/visualization.py`（图表数据抽取与 Mermaid 生成 mixin）
+- 可视化插入：`openjiuwen_deepsearch/algorithm/report/visualization_insertion.py`（图表插入 mixin）
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_content.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_normalize_units.md`
-- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_mermaid.md`
-- `openjiuwen_deepsearch/algorithm/prompts/insert_visualization.md`
-- `openjiuwen_deepsearch/algorithm/prompts/chart_compliance_validate.md`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_content/`
+- `openjiuwen_deepsearch/algorithm/prompts/sub_section_visualization_normalize_units/`
+- `openjiuwen_deepsearch/algorithm/prompts/insert_visualization/`
+- `openjiuwen_deepsearch/algorithm/prompts/chart_compliance_validate/`
 
 主要测试：
 
 - `tests/report/test_general_report.py`
 - `tests/report/test_tools_in_report.py`
 - `tests/report/test_sub_report.py`
+- `tests/report/test_visualization.py`
+- `tests/report/test_visualization_insertion.py`
+- `tests/report/test_type_safety.py`
 - `tests/algorithm/report_export/test_mermaid_renderer.py`
 
 ## 核心流程
 
-1. 报告生成阶段根据 `classified_content` 的数据密度选择适合可视化的章节资料。
+1. 报告生成阶段根据 `classified_content` 的数据密度选择适合可视化的全文文档（`is_fulltext=True`）。`data_density` 是 `classified_content` 条目的顶级字段（不在 `"scores"` 键内）；全文条目也携带从 passage 聚合的 `data_density`。段落级内容不参与图表候选选择。
 2. 根据章节标题和章节大纲推断期望图型；该结果只作为软约束，不能覆盖真实数据形态。
 3. LLM 从候选原始资料中抽取图表标题、类型、records 和单位。
 4. 抽取结果通过 schema 校验；混合单位、空 records、字段缺失等结果会被拒绝。
@@ -102,6 +112,8 @@ Markdown 可视化会触发多轮 LLM 调用，因此当前实现只保留正文
 uv run pytest tests/report/test_general_report.py
 uv run pytest tests/report/test_tools_in_report.py
 uv run pytest tests/report/test_sub_report.py
+uv run pytest tests/report/test_visualization.py
+uv run pytest tests/report/test_visualization_insertion.py
 uv run pytest tests/algorithm/report_export/test_mermaid_renderer.py
 ```
 

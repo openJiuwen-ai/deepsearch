@@ -1,12 +1,12 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-import asyncio
 import copy
 import json
 import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Any
 
@@ -16,7 +16,10 @@ from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import record_main_node
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
+from openjiuwen_deepsearch.algorithm.brief_report.models import BriefOutline, BriefWorkflowState
 from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
 from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     anonymize_config_for_logging,
@@ -30,13 +33,19 @@ from openjiuwen_deepsearch.algorithm.query_understanding.intent_recognition impo
     resolve_report_type_policy,
     web_search_for_query,
 )
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    apply_material_relevance_map,
+    build_fallback_material_relevance_map,
+    build_material_prompt_context,
+    is_material_first_request,
+    prepare_material_analysis,
+    restore_material_analysis,
+    resolve_material_usage_mode,
+)
 from openjiuwen_deepsearch.algorithm.query_understanding.outline_mode_router import (
     route_outline_execution_method,
 )
 from openjiuwen_deepsearch.algorithm.query_understanding.outliner import Outliner
-from openjiuwen_deepsearch.algorithm.research_collector.collector_function import (
-    filter_search_results_by_exclude_urls,
-)
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat, ReportStyle
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.algorithm.search_nodes.find_action import run_find_action_space
@@ -57,11 +66,6 @@ from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     to_json_safe,
 )
 from openjiuwen_deepsearch.algorithm.search_nodes.validate_new_state import run_validations
-from openjiuwen_deepsearch.algorithm.source_trace.checker import (
-    postprocess_by_citation_checker,
-    preprocess_info,
-)
-from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTracerInfer
 from openjiuwen_deepsearch.algorithm.user_feedback_processor.user_feedback_processor import (
     UserFeedbackProcessor,
 )
@@ -100,8 +104,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     SearchContext,
     State,
     ValidationResult,
+    _resolve_source_date_scope,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name, 
+from openjiuwen_deepsearch.framework.openjiuwen.agent.metadata_injectors import apply_injectors
+from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import (adapt_llm_model_name,
                                                                         adapt_vlm_model_name)
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import (
     apply_web_search_domain_constraints,
@@ -167,8 +173,7 @@ class StartNode(Start):
     """
 
     async def invoke(self, inputs: Input, session: Session, context: ModelContext):
-        """
-        入口初始化节点
+        """初始化报告上下文并记录主图起始节点。
 
         Args:
             inputs: 节点入参
@@ -176,6 +181,7 @@ class StartNode(Start):
             context: 全局上下文
         """
 
+        record_main_node(session)
         # 初始化search_context
         original_query = inputs.get("query", "")
         search_context = SearchContext(
@@ -185,6 +191,18 @@ class StartNode(Start):
             search_mode=inputs.get("search_mode", "research"),
             report_template=inputs.get("report_template", ""),
         )
+
+        # StartNode 只转存原始素材；校验、去重、相关性过滤和摘要均在 IntentRecognitionNode 执行。
+        _origin_agent_config = inputs.get("agent_config", {}) or {}
+        _materials_enabled = bool(_origin_agent_config.get("user_materials_enabled", False))
+        _raw_materials = _origin_agent_config.get("user_materials") or []
+        if _raw_materials and not _materials_enabled:
+            logger.warning(
+                "[StartNode] user_materials provided (%d items) but user_materials_enabled is false, ignored.",
+                len(_raw_materials),
+            )
+        elif _raw_materials:
+            search_context.user_materials = list(_raw_materials)
 
         session.update_global_state({"search_context": search_context.model_dump()})
 
@@ -200,20 +218,19 @@ class StartNode(Start):
             agent_config["outline_interaction_max_rounds"] = origin_agent_config.get(
                 "outline_interaction_max_rounds", 3
             )
-            agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 5)
-            agent_config["source_tracer_research_trace_source_switch"] = origin_agent_config.get(
-                "source_tracer_research_trace_source_switch", True
-            )
-            agent_config["source_tracer_generated_citation_switch"] = origin_agent_config.get(
-                "source_tracer_generated_citation_switch", True
-            )
-            agent_config["source_tracer_infer_switch"] = origin_agent_config.get("source_tracer_infer_switch", True)
+            agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 10)
             agent_config["llm_config"] = origin_agent_config.get("llm_config", {})
             agent_config["info_collector_search_method"] = origin_agent_config.get(
                 "info_collector_search_method", "web"
             )
             agent_config["info_collector_webpage_enrich_enable"] = origin_agent_config.get(
                 "info_collector_webpage_enrich_enable", False
+            )
+            agent_config["scholarly_search_enabled"] = origin_agent_config.get(
+                "scholarly_search_enabled", False
+            )
+            agent_config["scholarly_search_config"] = copy.deepcopy(
+                origin_agent_config.get("scholarly_search_config", {})
             )
             agent_config["web_search_engine_config"] = WebSearchEngineConfig(
                 search_engine_name=origin_agent_config.get("web_search_engine_config", {}).get("search_engine_name", "")
@@ -236,6 +253,12 @@ class StartNode(Start):
                 "vlm_chart_generator_max_iterations", 1
             )
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
+            agent_config["report_type"] = origin_agent_config.get("report_type", None)
+            agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
+            agent_config["exclusion_constraint_enable"] = origin_agent_config.get(
+                "exclusion_constraint_enable", False
+            )
+
 
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
@@ -245,6 +268,24 @@ class StartNode(Start):
             service_config["visualization_enable"] = False
         merge_config = agent_config | service_config
         session.update_global_state({"config": merge_config})
+
+        next_node = NodeId.INTENT_RECOGNITION.value
+        injection = apply_injectors(inputs.get("metadata"), inputs)
+        if injection is not None:
+            state_updates = dict(injection.state_updates)
+            session.update_global_state(state_updates)
+            if injection.next_node:
+                next_node = injection.next_node
+                logger.info("[StartNode] Injected metadata change next node, go to %s.", next_node)
+        return dict(next_node=next_node)
+
+
+@dataclass
+class IntentPostHandleMaterialState:
+    """Material routing values produced during intent recognition."""
+
+    analysis: Any = None
+    usage_mode: str | None = None
 
 
 class IntentRecognitionNode(BaseNode):
@@ -292,13 +333,85 @@ class IntentRecognitionNode(BaseNode):
             human_in_the_loop=session.get_global_state("config.workflow_human_in_the_loop"),
             web_search_engine_config=session.get_global_state("config.web_search_engine_config"),
             info_collector_search_method=session.get_global_state("config.info_collector_search_method") or "web",
+            provided_report_type=session.get_global_state("config.report_type"),
+
+
+            user_materials=session.get_global_state("search_context.user_materials") or [],
+            material_analysis=session.get_global_state("search_context.material_analysis"),
+        )
+
+    async def _prepare_material_context(self, current_inputs: dict, session: Session) -> tuple[dict, Any]:
+        """素材预处理：校验/去重/摘要（带跨轮 content_hash 缓存），产物落 state。
+
+        Returns:
+            意图识别 prompt 可直接消费的素材上下文（含清单区/分析区）；
+            一个二元组：意图识别 prompt 上下文与本轮内存中的素材分析产物。
+            未启用或无素材时分别为空 dict 和 None。
+        """
+        raw_materials = current_inputs.get("user_materials") or []
+        if not raw_materials:
+            return {}, None
+        previous_analysis = restore_material_analysis(current_inputs.get("material_analysis"))
+        analysis = await prepare_material_analysis(
+            raw_materials,
+            llm_model_name=current_inputs.get("llm_model_name") or "",
+            query=current_inputs.get("original_query") or "",
+            previous_items=previous_analysis.items if previous_analysis else None,
+        )
+        session.update_global_state({
+            "search_context.material_analysis": analysis.model_dump(),
+        })
+        logger.info(
+            "[IntentRecognitionNode] materials prepared: items=%d cached_reuse=%s downgraded=%d",
+            len(analysis.items),
+            bool(previous_analysis),
+            len(analysis.downgraded_ids),
+        )
+        material_context = build_material_prompt_context(analysis)
+        # 无素材时返回空 dict（build 产物为含键 empty dict，truthy）。
+        return (
+            material_context if material_context.get("has_materials") else {},
+            analysis,
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         current_inputs = self._pre_handle(inputs, session, context)
 
+        # 素材预处理：摘要管线（带跨轮缓存），产物落 state 并注入意图识别 prompt
+        material_context, material_analysis = await self._prepare_material_context(current_inputs, session)
+        if material_context:
+            current_inputs["material_context"] = material_context
+
         # 执行意图识别
         intent_result = await classify_and_recognize_intent(current_inputs)
+        # 本节点内刚 update_global_state 的值不保证能够立即由 session 读回；
+        # 优先使用预处理阶段保留在内存中的分析结果，避免把有素材误判为无素材。
+        if material_analysis is None:
+            material_analysis = restore_material_analysis(
+                session.get_global_state("search_context.material_analysis")
+            )
+        material_usage_mode = resolve_material_usage_mode(
+            current_inputs.get("original_query") or "",
+            bool(material_analysis and material_analysis.items),
+        )
+        if material_analysis and not intent_result.material_relevance_map:
+            intent_result.material_relevance_map = build_fallback_material_relevance_map(
+                material_analysis,
+                current_inputs.get("original_query") or "",
+                material_usage_mode,
+            )
+            logger.warning(
+                "[MATERIAL_ROUTE] intent omitted relevance map; generated %d fallback records.",
+                len(intent_result.material_relevance_map),
+            )
+        if material_analysis and intent_result.material_relevance_map:
+            material_analysis = apply_material_relevance_map(
+                material_analysis,
+                intent_result.material_relevance_map,
+            )
+            session.update_global_state({
+                "search_context.material_analysis": material_analysis.model_dump(),
+            })
         await self._resolve_outline_execution_method(current_inputs, session)
 
         # 检查搜索模式：仅在 web 或 all 模式下执行网络搜索
@@ -310,7 +423,7 @@ class IntentRecognitionNode(BaseNode):
             apply_web_search_domain_constraints(
                 search_engine_name=_web_search_engine_name,
                 include_domains=intent_result.research_intent.include_domains,
-                exclude_domains=intent_result.research_intent.exclude_domains,
+
             )
 
             # 使用 research_query 进行入口预搜索
@@ -342,16 +455,34 @@ class IntentRecognitionNode(BaseNode):
             intent_result.entry_search_results = web_search_output.get("search_results", [])
             apply_web_search_temporal_scope(
                 search_engine_name=web_search_engine_name,
-                temporal_scope=intent_result.research_intent.temporal_scope,
+                temporal_scope=_resolve_source_date_scope(intent_result.research_intent),
             )
         else:
             # 纯本地模式：跳过网络搜索，使用空结果
             logger.info("[IntentRecognitionNode] Local-only mode, skipping web search.")
             intent_result.entry_search_results = []
 
-        return self._post_handle(inputs, intent_result, session, context)
+        return self._post_handle(
+            inputs,
+            intent_result,
+            session,
+            context,
+            IntentPostHandleMaterialState(
+                analysis=material_analysis,
+                usage_mode=material_usage_mode,
+            ),
+        )
 
-    def _post_handle(self, inputs: Input, algorithm_output: Any, session: Session, context: ModelContext):
+    def _post_handle(
+        self,
+        inputs: Input,
+        algorithm_output: Any,
+        session: Session,
+        context: ModelContext,
+        material_state: IntentPostHandleMaterialState | None = None,
+    ):
+        material_analysis = material_state.analysis if material_state else None
+        material_usage_mode = material_state.usage_mode if material_state else None
         original_q = algorithm_output.original_query
 
         lang = (algorithm_output.lang or "zh-CN").lower()
@@ -359,6 +490,11 @@ class IntentRecognitionNode(BaseNode):
             lang = CHINESE
         if "en" in lang or "english" in lang or "英文" in lang:
             lang = ENGLISH
+
+        provided_report_type = session.get_global_state("config.report_type")
+        if provided_report_type:
+            # 双保险：即使 LLM 意外输出 report_type，也以 API 入参为准
+            algorithm_output.research_intent.report_type = provided_report_type
 
         report_type = algorithm_output.research_intent.report_type
         report_policy = resolve_report_type_policy(report_type)
@@ -373,16 +509,19 @@ class IntentRecognitionNode(BaseNode):
             "search_context.research_intent": algorithm_output.research_intent.model_dump(),
             "search_context.report_type_policy": report_policy.model_dump(),
             "search_context.language": lang,
+            "search_context.material_usage_mode": material_usage_mode
+            if material_usage_mode is not None
+            else resolve_material_usage_mode(
+                original_q,
+                bool(material_analysis and material_analysis.items)
+                if material_analysis is not None
+                else bool(session.get_global_state("search_context.material_analysis")),
+            ),
         })
 
         if algorithm_output.entry_search_results:
-            entry_search_results = filter_search_results_by_exclude_urls(
-                algorithm_output.entry_search_results,
-                algorithm_output.research_intent.exclude_url,
-                algorithm_output.research_intent.exclude_titles,
-            )
             session.update_global_state({
-                "search_context.entry_search_results": entry_search_results,
+                "search_context.entry_search_results": algorithm_output.entry_search_results,
             })
 
         add_debug_log_wrapper(session, NodeDebugData(
@@ -393,10 +532,24 @@ class IntentRecognitionNode(BaseNode):
         ))
 
         human_in_the_loop = session.get_global_state("config.workflow_human_in_the_loop")
-        next_node = NodeId.GENERATE_QUESTIONS.value if human_in_the_loop else NodeId.OUTLINE.value
+        if human_in_the_loop:
+            needs_clarification = algorithm_output.needs_clarification
+        else:
+            needs_clarification = False
+        next_node = (
+            NodeId.GENERATE_QUESTIONS.value
+            if needs_clarification
+            else (NodeId.BRIEF_OUTLINE.value if report_policy.report_type == "brief" else NodeId.OUTLINE.value)
+        )
 
+        logger.info(
+            "[IntentRecognitionNode] clarification_triggered=%s human_in_the_loop=%s "
+            "llm_needs_clarification=%s report_type=%s next_node=%s",
+            needs_clarification, human_in_the_loop,
+            algorithm_output.needs_clarification, report_type, next_node,
+        )
         logger.info("[IntentRecognitionNode] End IntentRecognitionNode, next_node=%s", next_node)
-        return dict(language=lang, human_in_the_loop=human_in_the_loop, next_node=next_node)
+        return dict(language=lang, next_node=next_node)
 
 
 class FeedbackHandlerNode(BaseNode):
@@ -409,10 +562,14 @@ class FeedbackHandlerNode(BaseNode):
         feedback_mode = session.get_global_state("config.workflow_feedback_mode")
         return dict(
             feedback_mode=feedback_mode,
+
             original_query=session.get_global_state("search_context.original_query") or "",
             messages=session.get_global_state("search_context.messages") or [],
             questions=session.get_global_state("search_context.questions") or "",
             llm_model_name=adapt_llm_model_name(session, NodeId.INTENT_RECOGNITION.value),
+            provided_report_type=session.get_global_state("config.report_type"),
+
+            material_analysis=session.get_global_state("search_context.material_analysis"),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -427,18 +584,16 @@ class FeedbackHandlerNode(BaseNode):
         else:
             standardized_feedback = truncate_string(user_feedback, max_length=MAX_QUERY_LENGTH)
             if not standardized_feedback:
-                logger.error("[FeedbackHandlerNode] Invalid feedback, length or type is invalid")
-                error_detail = user_feedback or "empty"
-                standardized_feedback = "Invalid feedback, length is 0 or type is invalid"
+                logger.info("[FeedbackHandlerNode] Empty feedback, skipping reparse and proceeding to outline.")
+                standardized_feedback = ""
 
         algorithm_output = dict(user_feedback=standardized_feedback)
         if error_detail:
             algorithm_output["error_detail"] = error_detail
         if standardized_feedback not in {
             "Invalid feedback_mode",
-            "Invalid feedback, length is 0 or type is invalid",
             FINISH_TASK_FEEDBACK,
-        }:
+        } and standardized_feedback:
             intent_inputs = self._build_intent_reparse_inputs(current_inputs, standardized_feedback)
             reparsed_intent = await recognize_report_intent(intent_inputs)
             algorithm_output["reparsed_intent"] = reparsed_intent.model_dump()
@@ -486,17 +641,33 @@ class FeedbackHandlerNode(BaseNode):
             user_feedback=user_feedback,
         )
 
-        return {
+        intent_inputs = {
             "original_query": current_inputs.get("original_query", ""),
             "messages": messages,
             "llm_model_name": current_inputs.get("llm_model_name"),
+            "provided_report_type": current_inputs.get("provided_report_type"),
+
+
         }
+        # 复用首轮素材分析缓存（按 content_hash 命中），重解析不丢素材上下文
+        material_context = build_material_prompt_context(
+            restore_material_analysis(current_inputs.get("material_analysis"))
+        )
+        if material_context.get("has_materials"):
+            intent_inputs["material_context"] = material_context
+        return intent_inputs
 
     def _merge_reparsed_intent(self, session: Session, reparsed_intent: dict) -> dict:
         current_intent = ResearchIntent.model_validate(session.get_global_state("search_context.research_intent") or {})
         incoming_intent = ResearchIntent.model_validate(reparsed_intent.get("research_intent") or {})
 
         merged_intent = current_intent.model_copy(deep=True)
+        if incoming_intent.task_type:
+            merged_intent.task_type = incoming_intent.task_type
+        if incoming_intent.required_dimensions:
+            merged_intent.required_dimensions = incoming_intent.required_dimensions
+        if incoming_intent.comparison_targets:
+            merged_intent.comparison_targets = incoming_intent.comparison_targets
         if incoming_intent.section_count is not None:
             merged_intent.section_count = incoming_intent.section_count
         if incoming_intent.audience_role:
@@ -504,22 +675,31 @@ class FeedbackHandlerNode(BaseNode):
         if incoming_intent.tone:
             merged_intent.tone = incoming_intent.tone
 
-        merged_intent.include_url = self._merge_unique_items(current_intent.include_url, incoming_intent.include_url)
-        merged_intent.exclude_url = self._merge_unique_items(current_intent.exclude_url, incoming_intent.exclude_url)
-        merged_intent.exclude_titles = self._merge_unique_items(
-            current_intent.exclude_titles, incoming_intent.exclude_titles
-        )
         merged_intent.include_domains = self._merge_unique_items(
             current_intent.include_domains, incoming_intent.include_domains
         )
-        merged_intent.exclude_domains = self._merge_unique_items(
-            current_intent.exclude_domains, incoming_intent.exclude_domains
-        )
 
-        if incoming_intent.report_type is not None:
+        target_papers = []
+        seen_target_papers = set()
+        for paper in [*current_intent.target_papers, *incoming_intent.target_papers]:
+            identity = next((
+                f"{field}:{str(getattr(paper, field, '')).strip().casefold()}"
+                for field in ("pmid", "doi", "arxiv_id", "title", "dataset", "data_year", "topic")
+                if str(getattr(paper, field, "")).strip()
+            ), None)
+            if identity is None or identity in seen_target_papers:
+                continue
+            seen_target_papers.add(identity)
+            target_papers.append(paper)
+        merged_intent.target_papers = target_papers
+
+        if not session.get_global_state("config.report_type") and incoming_intent.report_type is not None:
+            # API 指定（config.report_type 非 None）时反馈不可覆盖；无锁定时保持现有合并行为
             merged_intent.report_type = incoming_intent.report_type
-        if incoming_intent.temporal_scope is not None:
-            merged_intent.temporal_scope = incoming_intent.temporal_scope
+        if incoming_intent.source_date_scope is not None:
+            merged_intent.source_date_scope = incoming_intent.source_date_scope
+        if incoming_intent.content_date_scope is not None:
+            merged_intent.content_date_scope = incoming_intent.content_date_scope
 
         return merged_intent.model_dump()
 
@@ -574,23 +754,6 @@ class FeedbackHandlerNode(BaseNode):
                 ),
             )
             return dict(next_node=NodeId.END.value)
-        if user_feedback == "Invalid feedback, length is 0 or type is invalid":
-            exception_info = format_exception_info(
-                StatusCode.FEEDBACK_HANDLER_INVALID_FEEDBACK_ERROR,
-                algorithm_output.get("error_detail", ""),
-            )
-            session.update_global_state({"search_context.final_result.exception_info": exception_info})
-            # 添加FeedbackHandlerNode debug日志
-            add_debug_log_wrapper(
-                session,
-                NodeDebugData(
-                    NodeId.FEEDBACK_HANDLER.value,
-                    0,
-                    NodeType.MAIN.value,
-                    output_content=str(exception_info).replace("\\n", "\n"),
-                ),
-            )
-            return dict(next_node=NodeId.END.value)
         if user_feedback == FINISH_TASK_FEEDBACK:
             logger.info(f"[FeedbackHandlerNode] user feedback is FINISH TASK, we will try to finish workflow.")
             # 这里是正常走到结束的，不需要填充exception_info
@@ -615,18 +778,21 @@ class FeedbackHandlerNode(BaseNode):
             apply_web_search_domain_constraints(
                 search_engine_name=web_search_engine_name,
                 include_domains=merged_intent_dict.get("include_domains", []),
-                exclude_domains=merged_intent_dict.get("exclude_domains", []),
+
             )
             apply_web_search_temporal_scope(
                 search_engine_name=web_search_engine_name,
-                temporal_scope=merged_intent_dict.get("temporal_scope"),
+                temporal_scope=_resolve_source_date_scope(merged_intent_dict),
             )
 
         add_debug_log_wrapper(
             session, NodeDebugData(NodeId.FEEDBACK_HANDLER.value, 0, NodeType.MAIN.value, output_content=user_feedback)
         )
         logger.info(f"[FeedbackHandlerNode] End FeedbackHandlerNode.")
-        return dict(next_node=NodeId.OUTLINE.value)
+        policy = session.get_global_state("search_context.report_type_policy") or {}
+        return dict(
+            next_node=NodeId.BRIEF_OUTLINE.value if policy.get("report_type") == "brief" else NodeId.OUTLINE.value
+        )
 
 
 class ReporterNode(BaseNode):
@@ -742,10 +908,13 @@ class EndNode(End):
         Returns:
             Output: 包含序列化后的 `final_result` 字段。
         """
+        record_main_node(session)
         logger.info(f"[EndNode] Start EndNode.")
         final_result = session.get_global_state("search_context.final_result") or {}
         response_content = final_result.get("response_content", "") or ""
-        if response_content:
+        content_type = final_result.get("response_content_type", "") or ""
+        # HTML 产物的 AI 声明已由 HTML 生成节点注入，追加 md 声明会破坏文档结构。
+        if response_content and content_type != "text/html":
             final_result = dict(final_result)
             language = session.get_global_state("search_context.language")
             ai_generated_notice = (
@@ -757,6 +926,7 @@ class EndNode(End):
                 response_content = f"{response_content}\n\n---\n\n{ai_generated_notice}"
                 final_result["response_content"] = response_content
                 session.update_global_state({"search_context.final_result.response_content": response_content})
+
         stats_info_llm = bool(session.get_global_state("config.stats_info_llm"))
         if stats_info_llm:
             session_id = session.get_global_state("config.thread_id")
@@ -831,13 +1001,19 @@ class GenerateQuestionsNode(BaseNode):
         report_type = research_intent.get("report_type")
         max_gen_question_retry_num = session.get_global_state("config.workflow_max_gen_question_retry_num")
         llm_model_name = adapt_llm_model_name(session, NodeId.GENERATE_QUESTIONS.value)
+        logger.info(
+            "[GenerateQuestionsNode] input: language=%s query=%s report_type=%s entry_search_results_count=%d",
+            language, "**" if LogManager.is_sensitive() else query, report_type, len(entry_search_results),
+        )
         return dict(language=language, query=query, entry_search_results=entry_search_results,
                     max_gen_question_retry_num=max_gen_question_retry_num,
                     llm_model_name=llm_model_name,
                     report_type=report_type)
 
+    @moderation_retry_scope
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
+
         current_inputs = self._pre_handle(inputs, session, context)
         current_executed_num = 0
         max_gen_question_retry_num = current_inputs.get("max_gen_question_retry_num", 5)
@@ -893,6 +1069,10 @@ class GenerateQuestionsNode(BaseNode):
 
         questions_text = algorithm_output.get("result")
         session.update_global_state({"search_context.questions": questions_text})
+        logger.info(
+            "[GenerateQuestionsNode] output questions: %s",
+            "**" if LogManager.is_sensitive() else questions_text,
+        )
         add_debug_log_wrapper(
             session,
             NodeDebugData(
@@ -916,6 +1096,7 @@ class OutlineNode(BaseNode):
         logger.info(f"{self.log_prefix} Start {self.__class__.__name__}.")
         language = session.get_global_state("search_context.language")
         messages = session.get_global_state("search_context.messages")
+        original_query = session.get_global_state("search_context.original_query") or ""
         questions = session.get_global_state("search_context.questions")
         user_feedback = session.get_global_state("search_context.user_feedback")
         configured_section_num = session.get_global_state("config.outliner_max_section_num")
@@ -954,14 +1135,29 @@ class OutlineNode(BaseNode):
         entry_search_results = session.get_global_state("search_context.entry_search_results") or []
         rtp = session.get_global_state("search_context.report_type_policy") or {}
         research_intent = session.get_global_state("search_context.research_intent") or {}
+
+        # Brief 大纲注入检测：brief_state 携带 outline 视为升级运行。
+        # brief_state 仅由注入器写入（BriefWorkflowState.model_dump），类型安全
+        # 由写入方保证，读取时无需容错降级
+        injected_brief_outline = None
+        brief_state = session.get_global_state("search_context.brief_state")
+        if brief_state:
+            injected_brief_outline = BriefWorkflowState.model_validate(brief_state).outline
+
         requested_section_num = research_intent.get("section_count")
-        if requested_section_num:
+        if injected_brief_outline is not None and not outline_interaction_mode:
+            # 注入场景首版生成：章节数以 brief 大纲为准，不做 max 截断。
+            # 交互轮不受此约束（brief 结构仅作用于首版），否则工具 schema 的
+            # Target count 会把用户增删章节的诉求隐性拉回 brief 章节数
+            section_num = len(injected_brief_outline.sections)
+        elif requested_section_num:
             section_num = min(int(requested_section_num), OUTLINER_SECTION_NUM_MAX)
         else:
             section_num = configured_section_num
         audience_role = research_intent.get("audience_role") or ""
         tone = research_intent.get("tone") or ""
         result = dict(
+            original_query=original_query,
             messages=messages,
             user_feedback=user_feedback,
             questions=questions,
@@ -983,8 +1179,22 @@ class OutlineNode(BaseNode):
             require_methodology_and_risk=rtp.get("require_methodology_and_risk", False),
             audience_role=audience_role,
             tone=tone,
+            brief_outline=(
+                injected_brief_outline.model_dump_json() if injected_brief_outline is not None else ""
+            ),
         )
         result.update(build_research_intent_prompt_context(research_intent))
+        # 仅把已在 IntentRecognition 节点完成筛选的素材清单透传给大纲。
+        material_analysis = restore_material_analysis(
+            session.get_global_state("search_context.material_analysis")
+        )
+        material_context = build_material_prompt_context(material_analysis, include_analysis=False)
+        if material_context.get("has_materials"):
+            result.update(material_context)
+            result["material_first"] = is_material_first_request(
+                session.get_global_state("search_context.original_query") or "",
+                True,
+            )
         return result
 
     def _get_with_dep_driving(self, current_inputs: dict) -> bool:
@@ -1012,6 +1222,14 @@ class OutlineNode(BaseNode):
         Returns:
             prompt 名称、是否启用 dependency_driving 工具 schema，以及本轮实际执行的大纲模式。
         """
+        if current_inputs.get("brief_outline"):
+            # 注入场景：brief 大纲无依赖结构，强制普通大纲工具（PARALLEL）。
+            # 首轮忽略报告模板（brief 结构优先）；交互轮回跳的 prompt 选择与
+            # 普通运行完全一致（复用 _select_prompt_name 的交互分流与
+            # user_outline 解析），交互不受 brief 结构约束。
+            if not current_inputs.get("outline_interaction_mode"):
+                return "outliner", False, ExecutionMethod.PARALLEL.value
+            return self._select_prompt_name(current_inputs), False, ExecutionMethod.PARALLEL.value
         prompt_name = self._select_prompt_name(current_inputs)
         if prompt_name in {"outliner_template", "outliner_user_revised"}:
             return prompt_name, False, ExecutionMethod.PARALLEL.value
@@ -1038,10 +1256,10 @@ class OutlineNode(BaseNode):
             selected_method: 本轮实际执行的大纲模式。
         """
         current_method = current_inputs.get("outline_execution_method")
-        if current_method not in {ExecutionMethod.PARALLEL.value, ExecutionMethod.DEPENDENCY_DRIVING.value}:
-            return
         if current_method == selected_method:
             return
+        # current_method 为空（如注入场景跳过意图识别）时同样写回，
+        # 否则 dependency workflow 的大纲后路由仍会按默认依赖驱动走。
         current_inputs["outline_execution_method"] = selected_method
         session.update_global_state({"search_context.outline_execution_method": selected_method})
         logger.info(
@@ -1051,9 +1269,11 @@ class OutlineNode(BaseNode):
             selected_method,
         )
 
+    @moderation_retry_scope
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
+
         prompt_name, with_dep_driving, selected_method = self._select_prompt_and_dep_driving(current_inputs)
         self._sync_outline_execution_method(current_inputs, session, selected_method)
         outliner = Outliner(llm_model_name=current_inputs.get("llm_model_name"), prompt_name=prompt_name)
@@ -1089,6 +1309,25 @@ class OutlineNode(BaseNode):
             algorithm_output = await outliner.generate_outline(current_inputs)
             success_flag = algorithm_output.get("success_flag")
             error_msg = algorithm_output.get("error_msg")
+            if (
+                success_flag
+                and current_inputs.get("brief_outline")
+                and not current_inputs.get("outline_interaction_mode")
+            ):
+                # 结构一致性约束由 prompt 中的权威结构块承担，此处仅观测首版生成的漂移：
+                # 硬校验会导致同输入无效重试、首轮升级无兜底中止、交互轮用户标题修订被静默回滚；
+                # 交互轮用户可任意改结构，比对 brief 只会产生误导性噪声日志，故跳过。
+                # success_flag = bool(outline)，此时 current_outline 必非 None；
+                # brief_outline 来自 _pre_handle 注入器写入的合法序列化结果
+                outline_candidate = algorithm_output.get("current_outline")
+                parsed_brief = BriefOutline.model_validate_json(current_inputs["brief_outline"])
+                if not parsed_brief.matches_section_titles([s.title for s in outline_candidate.sections]):
+                    logger.warning(
+                        f"{self.log_prefix} Injected brief outline title drifted "
+                        f"(expected={[s.title for s in parsed_brief.sections]}, "
+                        f"actual={[s.title for s in outline_candidate.sections]}); "
+                        f"proceeding without retry."
+                    )
 
         if success_flag:
             outline: Outline = algorithm_output.get("current_outline")
@@ -1202,164 +1441,6 @@ class DependencyOutlineNode(OutlineNode):
         return NodeId.DEPENDENCY_EDITOR_TEAM.value
 
 
-class SourceTracerNode(BaseNode):
-    def __init__(self) -> None:
-        super().__init__()
-
-    @staticmethod
-    async def build_citation_checker_result(citation_checker_info, datas, llm_model):
-        """
-        构建溯源校验结果
-        """
-        processed_report = citation_checker_info.get("response_content", {})
-        citation_checker_result_str = await postprocess_by_citation_checker(processed_report, datas, llm_model)
-
-        result_dict = dict(check_result=True, citation_checker_result_str=citation_checker_result_str)
-
-        return result_dict
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
-        logger.info(f"[SourceTracerNode] Start SourceTracerNode.")
-        search_mode = session.get_global_state("search_context.search_mode")
-        current_report = session.get_global_state("search_context.current_report")
-        # 从 Report 对象中获取内容
-        report = getattr(current_report, "report_content", "") if current_report else ""
-        merged_trace_source_datas = getattr(current_report, "merged_trace_source_datas", []) if current_report else []
-        all_classified_contents = getattr(current_report, "all_classified_contents", []) if current_report else []
-        language = session.get_global_state("search_context.language")
-
-        research_trace_source_switch = session.get_global_state("config.source_tracer_research_trace_source_switch")
-        llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER.value)
-
-        need_exit = False
-        if (search_mode == "research") and (research_trace_source_switch is False):
-            logger.info(f"[SourceTracerNode] research_trace_source_switch is False, skip trace source.")
-            need_exit = True
-
-        # 封装为本节点的Input对象
-        return dict(
-            need_exit=need_exit,
-            search_mode=search_mode,
-            report=report,
-            merged_trace_source_datas=merged_trace_source_datas,
-            all_classified_contents=all_classified_contents,
-            research_trace_source_switch=research_trace_source_switch,
-            language=language,
-            llm_model_name=llm_model_name,
-        )
-
-    def _skip_trace_source_handle(
-        self, inputs: Input, session: Session, context: ModelContext, current_inputs: dict
-    ) -> dict:
-        """
-        不需要溯源的场景直接跳到后处理
-        """
-        origin_report = current_inputs.get("report", "")
-        search_mode = current_inputs.get("search_mode", "research")
-        algorithm_output = dict(need_exit=True, origin_report=origin_report, search_mode=search_mode)
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
-        try:
-            current_inputs = self._pre_handle(inputs, session, context)
-
-            if current_inputs.get("need_exit", False):
-                return self._skip_trace_source_handle(inputs, session, context, current_inputs)
-
-            modified_report = current_inputs.get("report", "")
-            datas = current_inputs.get("merged_trace_source_datas", [])
-
-            # 预处理数据结构给溯源验证使用
-            language = current_inputs.get("language", "zh-CN")
-            citation_checker_info = preprocess_info(modified_report, datas, language)
-            need_check = citation_checker_info.get("need_check", True)
-            if need_check is False:
-                return self._skip_trace_source_handle(inputs, session, context, current_inputs)
-
-            # 溯源验证
-            check_result_dict = await self.build_citation_checker_result(
-                citation_checker_info, datas, current_inputs.get("llm_model_name", "")
-            )
-        except CustomException as e:
-            # 溯源异常的情况下，设置check_result为False，让post_handle记录异常信息返回出去
-            if LogManager.is_sensitive():
-                logger.error(f"[SourceTracerNode] trace source failed.")
-            else:
-                logger.error(f"[SourceTracerNode] trace source failed. {str(e)}")
-            check_result_dict = {
-                "check_result": False,
-                "citation_checker_result_str": format_exception_info(StatusCode.SOURCE_TRACER_NODE_ERROR, e),
-            }
-        except Exception as e:
-            if LogManager.is_sensitive():
-                logger.error(f"[SourceTracerNode] trace source failed.")
-            else:
-                logger.error(f"[SourceTracerNode] trace source failed. {str(e)}")
-            check_result_dict = {
-                "check_result": False,
-                "citation_checker_result_str": format_exception_info(StatusCode.SOURCE_TRACER_NODE_ERROR, e),
-            }
-
-        algorithm_output = {"check_result_dict": check_result_dict, "origin_report": current_inputs.get("report", "")}
-        result = self._post_handle(inputs, algorithm_output, session, context)
-
-        return result
-
-    def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext) -> dict:
-        origin_report = algorithm_output.get("origin_report", "")
-        check_result_dict = algorithm_output.get("check_result_dict", {})
-        citation_checker_result_str = check_result_dict.get("citation_checker_result_str", "")
-        check_result = check_result_dict.get("check_result", False)
-        if algorithm_output.get("need_exit", False):
-            source_tracer_result = json.dumps(
-                {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False
-            )
-        else:
-            if check_result is True:
-                source_tracer_result = citation_checker_result_str
-            else:
-                source_tracer_result = json.dumps(
-                    {"checked_trace_source_report_content": origin_report, "citation_messages": {}}, ensure_ascii=False
-                )
-                session.update_global_state({"search_context.final_result.exception_info": citation_checker_result_str})
-
-        source_tracer_result_dict = json.loads(source_tracer_result)
-        checked_trace_source_report_content = source_tracer_result_dict.get("checked_trace_source_report_content", "")
-        citation_messages = source_tracer_result_dict.get("citation_messages", {})
-        checked_trace_source_datas = citation_messages.get("data", [])
-
-        current_report = session.get_global_state("search_context.current_report")
-        if not current_report:
-            logger.warning("[SourceTracerNode] current_report is None, skip updating report fields.")
-        else:
-            current_report.checked_trace_source_report_content = checked_trace_source_report_content
-            current_report.checked_trace_source_datas = checked_trace_source_datas
-            session.update_global_state({"search_context.current_report": current_report})
-
-        session.update_global_state(
-            {"search_context.final_result.response_content": checked_trace_source_report_content}
-        )
-        session.update_global_state({"search_context.final_result.citation_messages": citation_messages})
-        # 添加SourceTracerNode debug日志
-        add_debug_log_wrapper(
-            session,
-            NodeDebugData(
-                NodeId.SOURCE_TRACER.value,
-                0,
-                NodeType.MAIN.value,
-                output_content=str(source_tracer_result_dict).replace("\\n", "\n"),
-            ),
-        )
-
-        logger.info(f"[SourceTracerNode] End SourceTracerNode.")
-        logger.info(
-            f"[SourceTracerNode] source_tracer_result: " f"{'*' if LogManager.is_sensitive() else source_tracer_result}"
-        )
-
-        return dict(next_node=NodeId.SOURCE_TRACER_INFER.value)
-
-
 class OutlineInteractionNode(BaseNode):
     """大纲交互节点: 接收用户反馈，保存历史，跳转到 OutlineNode 进行优化"""
 
@@ -1408,11 +1489,11 @@ class OutlineInteractionNode(BaseNode):
         apply_web_search_domain_constraints(
             search_engine_name=engine_name,
             include_domains=research_intent.get("include_domains", []),
-            exclude_domains=research_intent.get("exclude_domains", []),
+
         )
         apply_web_search_temporal_scope(
             search_engine_name=engine_name,
-            temporal_scope=research_intent.get("temporal_scope"),
+            temporal_scope=_resolve_source_date_scope(research_intent),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -1556,138 +1637,6 @@ class DependencyOutlineInteractionNode(OutlineInteractionNode):
         return result
 
 
-class SourceTracerInferNode(BaseNode):
-    def __init__(self) -> None:
-        super().__init__()
-        self.log_prefix = "[SourceTracerInferNode]"
-
-    @staticmethod
-    async def build_source_tracer_infer_result(infer_infos):
-        """调用溯源推理模块生成溯源推理图
-        Returns:
-            dict = (response, infer_messages, check_infos)
-        """
-        infer = SourceTracerInfer(infer_infos)
-        response, infer_messages, check_infos, error_message = await infer.run()
-        if error_message:
-            raise Exception(error_message)
-        return dict(response=response, infer_messages=infer_messages, check_infos=check_infos)
-
-    def _pre_handle(self, inputs: Input, session: Session, context: ModelContext) -> dict:
-        logger.info(f"{self.log_prefix} Start SourceTracerInferNode.")
-        search_mode = session.get_global_state("search_context.search_mode")
-        llm_model_name = adapt_llm_model_name(session, NodeId.SOURCE_TRACER_INFER.value)
-        source_tracer_infer_switch = session.get_global_state("config.source_tracer_infer_switch")
-
-        language = session.get_global_state("search_context.language")
-        current_report = session.get_global_state("search_context.current_report")
-        source_tracer_response = (
-            getattr(current_report, "checked_trace_source_report_content", "") if current_report else ""
-        )
-        all_classified_contents = getattr(current_report, "all_classified_contents", []) if current_report else []
-
-        # 封装本节点的Input对象
-        return dict(
-            source_tracer_infer_switch=source_tracer_infer_switch,
-            search_mode=search_mode,
-            llm_model_name=llm_model_name,
-            language=language,
-            source_tracer_response=source_tracer_response,
-            all_classified_contents=all_classified_contents,
-        )
-
-    def _post_handle(self, inputs, algorithm_output: dict, session: Session, context: ModelContext):
-        infer_success = algorithm_output.get("infer_success", False)
-        source_tracer_infer_switch = algorithm_output.get("source_tracer_infer_switch", False)
-        if not source_tracer_infer_switch:
-            logger.info(f"{self.log_prefix} Skip Infer! Please turn on the source_tracer_infer_switch.")
-        else:
-            if infer_success:
-                logger.info(f"{self.log_prefix} Infer Success!")
-            else:
-                logger.info(f"{self.log_prefix} Infer Fail!")
-        error_msg = algorithm_output.get("error_msg", "")
-        response = algorithm_output.get("response", "")
-        infer_messages = algorithm_output.get("infer_messages", [])
-        scores = algorithm_output.get("scores", [(0, 0)])
-
-        source_tracer_infer_result_dict = dict(response=response, infer_messages=infer_messages, scores=scores)
-
-        session.update_global_state(
-            {
-                "search_context.final_result.response_content": response,
-                "search_context.final_result.infer_messages": infer_messages,
-            }
-        )
-
-        if error_msg:
-            session.update_global_state({"search_context.final_result.exception_info": error_msg})
-
-        # 添加SourceTracerInferNode debug日志
-        add_debug_log_wrapper(
-            session,
-            NodeDebugData(
-                NodeId.SOURCE_TRACER.value,
-                0,
-                NodeType.MAIN.value,
-                output_content=str(source_tracer_infer_result_dict).replace("\\n", "\n"),
-            ),
-        )
-
-        logger.info(f"{self.log_prefix} End SourceTracerInferNode.")
-        logger.info(
-            f"{self.log_prefix} source_tracer_infer_result:"
-            f"{'*' if LogManager.is_sensitive() else source_tracer_infer_result_dict}"
-        )
-
-        return dict(next_node=NodeId.END.value)
-
-    async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext):
-
-        scores = [(0, 0)]
-        current_inputs = self._pre_handle(inputs, session, context)
-        try:
-            source_tracer_infer_switch = current_inputs.get("source_tracer_infer_switch", False)
-            if not source_tracer_infer_switch:
-                algorithm_output = dict(
-                    source_tracer_infer_switch=source_tracer_infer_switch,
-                    response=current_inputs.get("source_tracer_response", ""),
-                )
-                return self._post_handle(inputs, algorithm_output, session, context)
-
-            # 溯源推理
-            infer_result_dict = await self.build_source_tracer_infer_result(current_inputs)
-
-            # 溯源推理校验
-            check_infos = infer_result_dict.get("check_infos", {})
-            check_infos["llm_model_name"] = current_inputs.get("llm_model_name", "")
-            check_infos["language"] = current_inputs.get("language", "zh")
-
-        except Exception as e:
-            error_msg = f"source_tracer_infer failed."
-            if LogManager.is_sensitive():
-                logger.error(f"{self.log_prefix} {error_msg}")
-            else:
-                logger.error(f"{self.log_prefix} {error_msg} {e}")
-            infer_result_dict = dict(
-                infer_success=False,
-                response=current_inputs.get("source_tracer_response", ""),
-                infer_messages=[],
-                scores=[(0, 0)],
-                error_msg=format_exception_info(StatusCode.SOURCE_TRACER_INFER_ERROR, e, prefix=self.log_prefix),
-                source_tracer_infer_switch=current_inputs.get("source_tracer_infer_switch", False),
-            )
-        else:
-            # 这里添加溯源推理校验模块
-            infer_result_dict["scores"] = scores
-            infer_result_dict["source_tracer_infer_switch"] = current_inputs.get("source_tracer_infer_switch", False)
-            infer_result_dict["infer_success"] = True
-
-        algorithm_output = infer_result_dict
-        result = self._post_handle(inputs, algorithm_output, session, context)
-        return result
-
-
 class UserFeedbackProcessorNode(BaseNode):
     """在报告生成完成后，处理用户对局部文本的迭代改写请求。"""
 
@@ -1720,9 +1669,6 @@ class UserFeedbackProcessorNode(BaseNode):
             final_result=session.get_global_state("search_context.final_result"),
             current_report=session.get_global_state("search_context.current_report"),
             llm_model_name=adapt_llm_model_name(session, NodeId.USER_FEEDBACK_PROCESSOR.value),
-            enable_local_source_trace=(
-                session.get_global_state("config.source_tracer_research_trace_source_switch") is not False
-            ),
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -1815,7 +1761,6 @@ class UserFeedbackProcessorNode(BaseNode):
                 feedback=feedback,
                 final_result=final_result,
                 language=current_inputs["language"],
-                enable_local_source_trace=current_inputs["enable_local_source_trace"],
                 current_report=current_inputs.get("current_report"),
             )
         except CustomException as e:
@@ -1867,8 +1812,6 @@ class UserFeedbackProcessorNode(BaseNode):
                     "response_content": action_result["new_report"],
                 }
             )
-        if "citation_messages" in action_result:
-            updated_final_result["citation_messages"] = action_result["citation_messages"]
         if "warning_info" in action_result:
             updated_final_result["warning_info"] = action_result["warning_info"]
         await UserFeedbackProcessor.send_result(
@@ -1968,10 +1911,6 @@ class UserFeedbackProcessorNode(BaseNode):
         current_report_content = current_final_result.get("response_content", "") or ""
         new_report = algorithm_output["new_report"]
         session.update_global_state({"search_context.final_result.response_content": new_report})
-        if "citation_messages" in algorithm_output:
-            session.update_global_state(
-                {"search_context.final_result.citation_messages": algorithm_output["citation_messages"]}
-            )
         if "warning_info" in algorithm_output:
             session.update_global_state({"search_context.final_result.warning_info": algorithm_output["warning_info"]})
         feedback = algorithm_output["feedback"]
@@ -2039,7 +1978,6 @@ class VLMChartGeneratorNode(BaseNode):
         current_report = session.get_global_state("search_context.current_report")
         report_content = getattr(current_report, "report_content", "") if current_report else ""
         all_classified_contents = getattr(current_report, "all_classified_contents", []) if current_report else []
-        merged_trace_source_datas = getattr(current_report, "merged_trace_source_datas", []) if current_report else []
 
         visualization_enable = session.get_global_state("config.visualization_enable")
         return dict(
@@ -2049,7 +1987,7 @@ class VLMChartGeneratorNode(BaseNode):
             vlm_chart_generator_max_iterations=vlm_chart_generator_max_iterations,
             report_content=report_content,
             all_classified_contents=all_classified_contents,
-            trace_source_datas=merged_trace_source_datas,
+
             visualization_enable=visualization_enable,
         )
 
@@ -2058,23 +1996,21 @@ class VLMChartGeneratorNode(BaseNode):
 
         report_content = inputs.get("report_content", "")
         all_classified_contents = inputs.get("all_classified_contents", [])
-        trace_source_datas = inputs.get("trace_source_datas", [])
 
         vlm_chart_generator = VLMChartGenerator(
             llm_model_name=inputs.get("llm_model_name", ""),
             vlm_model_name=inputs.get("vlm_model_name", ""),
             vlm_max_iterations=inputs.get("vlm_chart_generator_max_iterations", 1),
         )
-        chart_messages, modified_report, new_source_trace_datas = await vlm_chart_generator.run(
+        chart_messages, modified_report = await vlm_chart_generator.run(
             report_content=report_content,
             all_classified_contents=all_classified_contents,
-            source_trace_datas=trace_source_datas,
         )
 
         return dict(
             chart_messages=chart_messages,
             modified_report=modified_report,
-            new_source_trace_datas=new_source_trace_datas,
+
         )
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
@@ -2130,8 +2066,11 @@ class VLMChartGeneratorNode(BaseNode):
 
         vlm_chart_generator_output = algorithm_output.get("vlm_chart_generator_output", {})
         chart_messages = []
-        modified_report = algorithm_output.get("current_inputs", {}).get("report_content", "")
-        new_source_trace_datas = algorithm_output.get("current_inputs", {}).get("trace_source_datas", [])
+        current_report = session.get_global_state("search_context.current_report")
+        modified_report = (
+            algorithm_output.get("current_inputs", {}).get("report_content")
+            or (getattr(current_report, "report_content", "") if current_report else "")
+        )
 
         if vlm_chart_generator_output.get("skip_node", False):
             logger.info("[VLMChartGeneratorNode] vlm_chart_generator_enable is False, skip VLMChartGeneratorNode.")
@@ -2147,11 +2086,9 @@ class VLMChartGeneratorNode(BaseNode):
             # 排除开关和错误信息后，更新报告内容
             chart_messages = vlm_chart_generator_output.get("chart_messages", [])
             modified_report = vlm_chart_generator_output.get("modified_report", "")
-            new_source_trace_datas = vlm_chart_generator_output.get("new_source_trace_datas", [])
 
             current_report = session.get_global_state("search_context.current_report")
             current_report.report_content = modified_report
-            current_report.merged_trace_source_datas = new_source_trace_datas
             session.update_global_state({"search_context.current_report": current_report})
             session.update_global_state({"search_context.final_result.chart_messages": chart_messages})
 
@@ -2165,7 +2102,7 @@ class VLMChartGeneratorNode(BaseNode):
                     {
                         "chart_messages": chart_messages,
                         "modified_report": modified_report,
-                        "new_source_trace_datas": new_source_trace_datas,
+
                     },
                     ensure_ascii=False,
                 ),
@@ -2174,7 +2111,8 @@ class VLMChartGeneratorNode(BaseNode):
 
         output_str = "*" if LogManager.is_sensitive() else vlm_chart_generator_output
         logger.debug("[VLMChartGeneratorNode] vlm_chart_generator_node result: \n%s", output_str)
-        return dict(next_node=NodeId.SOURCE_TRACER.value)
+        session.update_global_state({"search_context.final_result.response_content": modified_report})
+        return dict(next_node=NodeId.USER_FEEDBACK_PROCESSOR.value)
 
 
 class SearchStartNode(Start):
@@ -2205,7 +2143,7 @@ class SearchStartNode(Start):
         logger.info(
             "[SearchStartNode] resolved workflow_name=%s, agent_config=%s",
             workflow_name,
-            "***" if LogManager.is_sensitive() else origin_agent_config,
+            "***" if LogManager.is_sensitive() else anonymize_config_for_logging(origin_agent_config),
         )
         llm_config = origin_agent_config.get("llm_config", {}).get("general", {})
         retrieval_settings = origin_agent_config.get("retrieval_settings", {})

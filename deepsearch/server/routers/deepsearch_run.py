@@ -7,13 +7,25 @@ import time
 from dataclasses import dataclass
 from typing import Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.metadata_injectors import (
+    resolve_forced_execution_method,
+    validate_metadata,
+)
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import cancel_context
+from openjiuwen_deepsearch.utils.log_utils.log_common import run_id_ctx
+from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
+from openjiuwen_deepsearch.utils.validation_utils.param_validation import SAFE_CONVERSATION_ID_PATTERN
 from server.core.cancel_bus import publish_remote_cancel, register_cancel_handler
 from server.core.database import get_db
+from server.core.report_progress_registry import (
+    ProgressRegistration, ProgressStorageUnavailable, observe_http_progress, report_progress_registry,
+)
 from server.deepsearch.common.exception.exceptions import (
     LocalSearchEngineConfigGetException,
     ReportTemplateNotFoundException,
@@ -21,7 +33,7 @@ from server.deepsearch.common.exception.exceptions import (
     WebSearchEngineConfigGetException,
 )
 from server.deepsearch.core.manager.agent import DeepSearchAgentManager
-from server.schemas.deepsearch_run import DeepSearchRequest
+from server.schemas.deepsearch_run import DeepSearchRequest, ResearchProgressResponse
 
 logger = logging.getLogger(__name__)
 run_router = APIRouter()
@@ -48,7 +60,12 @@ def _clear_cancel_state(task_key: str) -> None:
 
 
 def _clear_task_state(task_key: str) -> None:
-    """清理任务相关全部全局字典项（含 cancel 与 running），避免泄漏。"""
+    """清理原运行状态及其进度记录。
+
+    Args:
+        task_key: 空间与会话组成的任务键。
+    """
+    report_progress_registry.discard(task_key)
     _clear_cancel_state(task_key)
     _running_tasks.pop(task_key, None)
     _running_agents.pop(task_key, None)
@@ -56,7 +73,18 @@ def _clear_task_state(task_key: str) -> None:
 
 @dataclass
 class StreamContext:
-    """流式任务上下文，封装 _produce_stream 所需的参数。"""
+    """封装输出任务参数和可选的只读进度记录。
+
+    Attributes:
+        queue: SSE 输出消息队列。
+        agent: 执行 Agent。
+        run_kwargs: 原运行接口参数。
+        space_id: 空间标识。
+        conversation_id: 会话标识。
+        cancel_event: 原有取消事件。
+        resume_requested: 原有继续执行通知。
+        progress_registration: 研究报告进度记录，其他模式为空。
+    """
     queue: asyncio.Queue
     agent: object
     run_kwargs: dict
@@ -64,6 +92,37 @@ class StreamContext:
     conversation_id: str
     cancel_event: asyncio.Event
     resume_requested: asyncio.Event
+    progress_registration: ProgressRegistration | None = None
+
+
+@run_router.get("/progress", response_model=ResearchProgressResponse)
+async def get_report_progress(
+    space_id: str = Query(..., min_length=1),
+    conversation_id: str = Query(..., min_length=1, max_length=128,
+                                 pattern=SAFE_CONVERSATION_ID_PATTERN.pattern),
+):
+    """查询活跃研究报告，不执行报告或读取 checkpoint。
+
+    Args:
+        space_id: 空间标识。
+        conversation_id: 原报告会话标识。
+
+    Returns:
+        最近采集或同步的状态、资料条目数和章节进度。
+
+    Raises:
+        HTTPException: 无记录时为 404，Redis 不可用时为 503。
+    """
+    try:
+        snapshot = await report_progress_registry.get_progress(space_id, conversation_id)
+    except ProgressStorageUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if snapshot is None:
+        detail = "No active report found" if report_progress_registry.enabled else (
+            "No active report owned by this process"
+        )
+        raise HTTPException(status_code=404, detail=detail)
+    return snapshot
 
 
 def _build_cancel_message(conversation_id: str) -> str:
@@ -118,6 +177,10 @@ async def _handle_remote_cancel(space_id: str, conversation_id: str):
     - WAITING_USER_INPUT：工作流等待用户输入（不中断连接时不清理 checkpointer）；
     - CANCELLED：用户/系统显式取消，会话资源应被释放；
     - COMPLETED：正常 ALL END，随后在工作流内部或上层进行会话释放。
+
+    Args:
+        space_id: 原取消总线传入的空间标识。
+        conversation_id: 原取消总线传入的会话标识。
     """
     task_key = f"{space_id}:{conversation_id}"
     cancel_event = _cancel_events.get(task_key)
@@ -134,6 +197,7 @@ async def _handle_remote_cancel(space_id: str, conversation_id: str):
         cancel_event.set()
         logger.debug("Set cancel_event for task %s (from remote cancel)", task_key)
 
+    report_progress_registry.mark_cancelling(space_id, conversation_id)
     # 取消正在运行的任务
     if task and not task.done():
         task.cancel()
@@ -184,6 +248,9 @@ async def _wrapped_agent_run(agent, run_kwargs, space_id: str, conversation_id: 
     - 在 INPUT_REQUIRED 场景下，不会在此处触发 checkpointer 清理，以支持后续恢复。
     """
     token = cancel_context.set(cancel_event)
+    # per-run 日志生命周期: 创建独立日志文件,通过 RunIdFilter 实现并发隔离
+    run_id = LogManager.new_run()
+    run_token = run_id_ctx.set(run_id) if run_id else None
     agent_gen = agent.run(**run_kwargs)
     try:
         async for chunk in agent_gen:
@@ -226,6 +293,10 @@ async def _wrapped_agent_run(agent, run_kwargs, space_id: str, conversation_id: 
                 str(cleanup_err),
             )
     finally:
+        if run_token is not None:
+            run_id_ctx.reset(run_token)
+        if run_id:
+            LogManager.end_run(run_id)
         try:
             await agent_gen.aclose()
         except asyncio.CancelledError:
@@ -237,9 +308,9 @@ async def _wrapped_agent_run(agent, run_kwargs, space_id: str, conversation_id: 
         cancel_context.reset(token)
 
 
+@observe_http_progress
 async def _produce_stream(ctx: StreamContext):
-    """
-    从 agent.run() 生成流式输出并推送到队列。
+    """从 agent.run() 生成流式输出并推送到队列。
 
     Args:
         ctx: 流式任务上下文，包含队列、agent、运行参数、会话标识和取消事件。
@@ -252,6 +323,9 @@ async def _produce_stream(ctx: StreamContext):
         ctx.conversation_id,
     )
     try:
+        # 准备期间也可能被取消，必须由同一异常处理和 finally 结束 SSE 队列。
+        if ctx.progress_registration is not None:
+            await report_progress_registry.prepare(ctx.progress_registration)
         async for chunk in _wrapped_agent_run(
             agent=ctx.agent,
             run_kwargs=ctx.run_kwargs,
@@ -365,11 +439,18 @@ async def _handle_cancel_request(request: DeepSearchRequest) -> dict:
     - status="forwarded": 本进程无活动任务，已通过 Redis 总线转发到其他 worker/实例；
     - status="no_active_task_or_forward_failed": 本进程无活动任务，且未能转发
       （通常发生在非 redis 模式，或 Redis 发布失败时）。
+
+    Args:
+        request: 原运行接口的取消请求。
+
+    Returns:
+        保持原格式的取消处理结果。
     """
     task_key = f"{request.space_id}:{request.conversation_id}"
     cancel_event = _cancel_events.get(task_key)
     task = _running_tasks.get(task_key)
     cached_agent = _running_agents.get(task_key)
+    progress_registration = report_progress_registry.mark_cancelling(request.space_id, request.conversation_id)
 
     # 本地状态判定：
     # - has_local_state: 当前进程是否记录过该会话（包括仅有 cancel_event 的挂起会话）；
@@ -410,6 +491,9 @@ async def _handle_cancel_request(request: DeepSearchRequest) -> dict:
                     task_key,
                     str(cleanup_err),
                 )
+            finally:
+                # 等待期间断连后已无 producer 收尾，仅关闭取消时捕获的本轮进度。
+                await report_progress_registry.close(progress_registration)
             # 保留 cancel_event，用户按 Enter 后 _canceled_consumer 会 pop
             _cancel_event_timestamps[task_key] = time.monotonic()
             _maybe_schedule_capacity_cleanup()
@@ -489,6 +573,44 @@ def _maybe_schedule_capacity_cleanup():
         pass
 
 
+def _validate_upgrade_metadata(request: DeepSearchRequest) -> None:
+    """校验 metadata 注入数据结构；非法时返回 400。
+
+    校验只看结构（由 SDK 的 metadata_injectors 注册表统一维护），不感知
+    report_type 等请求上下文：传了 metadata 且结构非法一律快速失败。
+    report_type 条件下的忽略契约属于运行期消费逻辑，由注入器在 inject
+    阶段判断，server 不参与。
+    """
+    if not request.metadata:
+        return
+    try:
+        validate_metadata(request.metadata)
+    except CustomValueException as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+def _force_execution_method_for_metadata(request: DeepSearchRequest) -> None:
+    """按 metadata 注入器声明强制覆盖执行模式。
+
+    执行模式决定 Agent 类（即 workflow 图），在 Agent 构建前覆盖；
+    注入器未声明 force_execution_method 时不做任何改动。
+
+    Args:
+        request: DeepSearch 运行请求，就地改写 execution_method。
+    """
+    if not request.metadata:
+        return
+    forced = resolve_forced_execution_method(request.metadata)
+    if forced and forced != request.execution_method:
+        logger.info(
+            "Overriding execution_method from %s to %s for metadata run conversation_id=%s",
+            request.execution_method,
+            forced,
+            request.conversation_id,
+        )
+        request.execution_method = forced
+
+
 def _prepare_stream_context(
     request: DeepSearchRequest,
     db: Session,
@@ -522,6 +644,8 @@ def _prepare_stream_context(
             request.llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
 
     request = DeepSearchRequest.model_validate(request)
+    _validate_upgrade_metadata(request)
+    _force_execution_method_for_metadata(request)
 
     agent_config = agent_manager.build_agent_config(request, db)
     # 同一份 agent_config 既用于获取/创建 Agent，也用于后续 agent.run，避免重复构建。
@@ -548,6 +672,9 @@ def _prepare_stream_context(
         "agent_config": agent_config,
         "interrupt_feedback": request.interrupt_feedback,
     }
+    if request.metadata and request.search_mode == "research":
+        # 仅 research 模式透传 metadata；search/react 模式的 run 签名不接受该参数。
+        run_kwargs["metadata"] = request.metadata
     logger.info(
         "Prepared DeepSearch stream context space_id=%s conversation_id=%s "
         "has_template=%s agent_class=%s",
@@ -577,6 +704,14 @@ def _create_streaming_response(
     注意：
     - 假定 Agent 和 run_kwargs 已由 _prepare_stream_context 构建完成，不负责配置/模板加载。
     - 会话级资源（checkpointer）的清理由取消路径或工作流自身控制，此处仅管理本地状态字典。
+
+    Args:
+        request: 原报告运行请求。
+        agent: 已构建的执行 Agent。
+        run_kwargs: 原 SDK 运行参数。
+
+    Returns:
+        包含原报告输出和可选进度观察的 SSE 响应。
     """
     task_key = f"{request.space_id}:{request.conversation_id}"
     logger.info(
@@ -606,6 +741,10 @@ def _create_streaming_response(
 
         return EventSourceResponse(_canceled_consumer(), media_type="text/event-stream")
 
+    progress_registration = None
+    if request.search_mode == "research" and isinstance(agent, DeepresearchAgent):
+        progress_registration = report_progress_registry.register(request.space_id, request.conversation_id)
+
     # 复用现有的 cancel_event 或创建新的。若为「继续」请求（已有未 set 的 cancel_event），唤醒旧流结束。
     cancel_event = existing_cancel_event if existing_cancel_event else asyncio.Event()
     old_resume = _resume_requested_events.pop(task_key, None)
@@ -624,6 +763,7 @@ def _create_streaming_response(
         conversation_id=request.conversation_id,
         cancel_event=cancel_event,
         resume_requested=resume_requested,
+        progress_registration=progress_registration,
     )
     producer_task = asyncio.create_task(_produce_stream(stream_ctx))
     _running_tasks[task_key] = producer_task
@@ -639,6 +779,11 @@ def _create_streaming_response(
     )
 
     async def _consumer():
+        """转发原消息，并在连接结束后处理本轮引用。
+
+        Yields:
+            原报告输出消息。
+        """
         waiting_user_input = False
         try:
             while True:
@@ -698,6 +843,8 @@ def _create_streaming_response(
                 _running_agents.pop(task_key, None)
                 _cancel_event_timestamps[task_key] = time.monotonic()
                 _maybe_schedule_capacity_cleanup()
+            if not waiting_user_input:
+                await report_progress_registry.close(progress_registration)
             logger.info(
                 "Closed DeepSearch SSE consumer task_key=%s waiting_user_input=%s running_tasks=%s",
                 task_key,
@@ -760,6 +907,26 @@ async def run(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except (WebSearchEngineConfigGetException, LocalSearchEngineConfigGetException) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        # 透传内部已构造好的 HTTP 状态码（如 metadata 校验 400），避免被下方兜底重包装为 500
+        raise
     except Exception as e:
         logger.error("Error during DeepSearch run: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+brief_run_router = APIRouter()
+
+
+@brief_run_router.post("/")
+async def run_brief(
+        request: DeepSearchRequest,
+        db: Session = Depends(get_db)
+):
+    """薄封装：等价于 /run 且 report_type 固定为 brief。
+
+    - 调用方传入的 report_type 一律忽略，强制为 brief；
+    - 其余逻辑（取消、流式、异常映射）完整复用 run()。
+    """
+    request.report_type = "brief"
+    return await run(request, db)

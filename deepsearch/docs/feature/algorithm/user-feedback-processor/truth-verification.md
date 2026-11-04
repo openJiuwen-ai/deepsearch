@@ -4,8 +4,6 @@
 
 本文档覆盖 `user_feedback_processor` 中的 `truth_verification` action，包括待核验段落提取、章节资料匹配、证据评估、必要时补充检索以及前端核验结果下发。
 
-本文档不覆盖全局报告溯源、通用 collector 内部实现，也不覆盖报告正文改写类 action。
-
 ## 功能目的
 
 真实性核验用于在用户选中报告中的某段内容后，评估该段内容是否有当前章节资料支持，并向前端返回核验结论、展示文本和证据摘要。它不直接改写报告正文。
@@ -25,8 +23,8 @@ a返回给前端的结果是核验展示文本，不是替换报告正文的改�
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/truth_verification_assessment.md`
-- `openjiuwen_deepsearch/algorithm/prompts/truth_verification_search_task.md`
+- `openjiuwen_deepsearch/algorithm/prompts/truth_verification_assessment/`
+- `openjiuwen_deepsearch/algorithm/prompts/truth_verification_search_task/`
 
 主要测试：
 

@@ -12,6 +12,9 @@ from openjiuwen.core.session.checkpointer import CheckpointerFactory
 from sqlalchemy.orm import Session
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
+from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
+    SCHOLARLY_PROVIDER_NAMES,
+)
 from server.core.database import get_db
 from server.core.manager.model_manager.utils import SecurityUtils
 from server.deepsearch.common.exception.exceptions import (
@@ -19,14 +22,22 @@ from server.deepsearch.common.exception.exceptions import (
     SearchEngineConfigException,
     WebSearchEngineConfigGetException,
     WebSearchEngineNotFoundException, LocalSearchEngineConfigGetException,
+    McpServerNotFoundException,
 )
+from server.deepsearch.core.manager.repositories.mcp_server_repository import McpServerRepository
 from server.deepsearch.core.manager.repositories.report_template_repository import ReportTemplateRepository
 from server.deepsearch.core.manager.repositories.web_search_engine_repository import \
     WebSearchEngineRepository
 from server.local_retrieval.core.manager.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
-from server.schemas.deepsearch_run import DeepSearchRequest, WebSearchConfig, LocalSearchConfig, RuntimeApiToolRequest
+from server.schemas.deepsearch_run import (
+    DeepSearchRequest,
+    WebSearchConfig,
+    LocalSearchConfig,
+    RuntimeApiToolRequest,
+    McpServerConfig,
+)
 from server.schemas.knowledge_base import KnowledgeBaseGet
 
 logger = logging.getLogger(__name__)
@@ -103,11 +114,16 @@ class DeepSearchAgentManager:
     @staticmethod
     def _compute_agent_cache_key(request: DeepSearchRequest) -> str:
         """
-        生成 Agent 缓存键。排除仅影响单次对话内容的字段（message、conversation_id），
-        保留与 build_agent_config 相关的全部字段（含 space_id、local_search_config_ids、
-        web_search_config_id、LLM 与各开关），保证换知识库/引擎后不会误复用旧 Agent。
+        生成 Agent 缓存键。排除仅影响单次对话内容的字段（message、interrupt_feedback），
+        以及运行期策略字段（report_type，不参与 Agent 构建），保留与 build_agent_config
+        相关的全部字段（含 space_id、local_search_config_ids、web_search_config_id、
+        LLM 与各开关），保证换知识库/引擎后不会误复用旧 Agent。
+        metadata 为每次运行不同的注入数据（brief 大纲升级），不参与 Agent 构建，
+        同样排除，避免同一会话升级运行时缓存键漂移。
         """
-        payload = request.model_dump(exclude={"message", "interrupt_feedback"})
+        payload = request.model_dump(
+            exclude={"message", "interrupt_feedback", "report_type", "metadata"}
+        )
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
@@ -297,17 +313,23 @@ class DeepSearchAgentManager:
         if isinstance(template_id, int) and template_id > 0:
             has_template = True
 
+        metadata = request.metadata or {}
         res = {
             "search_mode": request.search_mode,
             "execute_mode": "commercial",
             "execution_method": request.execution_method,
+            "report_type": request.report_type,
+            "user_materials_enabled": bool(metadata.get("user_materials_enabled", False)),
+            "user_materials": metadata.get("user_materials") or [],
             "workflow_human_in_the_loop": request.workflow_human_in_the_loop,
             "outliner_max_section_num": request.outliner_max_section_num,
-            "source_tracer_research_trace_source_switch": request.source_tracer_research_trace_source_switch,
-            "source_tracer_generated_citation_switch": request.source_tracer_generated_citation_switch,
-            "source_tracer_infer_switch": request.source_tracer_infer_switch,
+
+
             "info_collector_search_method": request.info_collector_search_method,
             "info_collector_webpage_enrich_enable": request.info_collector_webpage_enrich_enable,
+            "coverage_rule_block_enable": request.coverage_rule_block_enable,
+            "exclusion_constraint_enable": request.exclusion_constraint_enable,
+
             "llm_config": dict(general=llm_config) if "model_name" in llm_config else llm_config,
             "has_template": has_template,
             # 大纲交互配置
@@ -327,12 +349,26 @@ class DeepSearchAgentManager:
             res["web_search_engine_config"] = self._load_web_search_config(
                 space_id, request.web_search_config, db
             )
+            res["scholarly_search_enabled"] = request.web_search_config.scholarly_search_enabled
+            scholarly_search_config = (
+                request.web_search_config.scholarly_search_config.model_dump()
+            )
+            for provider_name in SCHOLARLY_PROVIDER_NAMES:
+                provider_config = scholarly_search_config.get(provider_name)
+                if not isinstance(provider_config, dict):
+                    continue
+                search_api_key = provider_config.get("search_api_key")
+                if isinstance(search_api_key, str):
+                    provider_config["search_api_key"] = bytearray(search_api_key, encoding="utf-8")
+            res["scholarly_search_config"] = scholarly_search_config
         if request.local_search_config:
             res["local_search_engine_config"] = self._load_local_search_config(
                 space_id, request.local_search_config, db
             )
         if request.tools:
             res["api_tools_config"] = self._build_api_tools_config(request.tools)
+        if request.mcp_servers:
+            res["mcp_servers"] = self._load_mcp_config(space_id, request.mcp_servers, db)
         logger.info(
             "Built agent config conversation_id=%s execution_method=%s search_mode=%s "
             "outline_interaction_enabled=%s human_in_the_loop=%s",
@@ -466,3 +502,26 @@ class DeepSearchAgentManager:
         except Exception as e:
             logger.error("Failed to load local search config: %s", str(e))
             raise LocalSearchEngineConfigGetException(f"Failed to build config: {str(e)}") from e
+
+    @staticmethod
+    def _load_mcp_config(space_id: str, mcp_configs: list[McpServerConfig], db: Session) -> list[dict]:
+        """查库加载 MCP server 配置列表。"""
+        repo = McpServerRepository(db)
+        servers = []
+        for cfg in mcp_configs:
+            detail = repo.get_server_detail_by_id(space_id, cfg.mcp_server_id)
+            if not detail:
+                raise McpServerNotFoundException(
+                    f"MCP server {cfg.mcp_server_id} not found under space {space_id}."
+                )
+            if detail.is_active is False:
+                continue
+            servers.append({
+                "server_name": detail.server_name,
+                "server_url": detail.server_url,
+                "transport_type": detail.transport_type,
+                "headers": detail.headers or {},
+                "timeout": detail.timeout,
+                "type": cfg.type,
+            })
+        return servers

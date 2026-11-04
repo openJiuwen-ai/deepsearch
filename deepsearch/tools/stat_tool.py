@@ -95,7 +95,6 @@ editor_team_nodes = [
     "InfoCollectorNode",
     "ResearchPlanReasoningNode",
     "SubReporterNode",
-    "SubSourceTracerNode"
 ]
 
 
@@ -165,9 +164,6 @@ mapping = {
     "plan_reasoning_agent": ("PlanReasoningNode", "EditorTeamNode"),
     "reporter_abstract": ("ReporterNode", "None"),
     "reporter_conclusion": ("ReporterNode", "None"),
-    "source_tracer_content_recognition": ("SubSourceTracerNode", "EditorTeamNode"),
-    "source_tracer_extract_messages": ("SourceTracerNode", "None"),
-    "source_tracer_source_matching": ("SourceTracerNode/SubSourceTracerNode", "None/EditorTeamNode"),
     "sub_reporter": ("SubReporterNode", "EditorTeamNode"),
     "sub_reporter_classify_doc_infos": ("SubReporterNode", "EditorTeamNode"),
     "sub_reporter_outline": ("SubReporterNode", "EditorTeamNode"),

@@ -8,15 +8,13 @@
 
 ## 功能目的
 
-运行配置为 SDK、server 和 framework 层提供统一的 Pydantic 契约，把模型、搜索、报告、溯源、用户反馈、图表生成、超时、统计和调试开关集中成可校验的输入。
-
 ## 可见行为
 
 - `AgentFactory.create_agent` 会先校验 `agent_config` 必填字段，再用 `AgentConfig.model_validate` 做类型、枚举和范围校验。
 - `search_mode` 决定运行研究报告、DeepSearch 搜索图或简单 ReAct 搜索；`search_mode=research` 时再由 `execution_method` 决定并行、依赖驱动或混合大纲路由研究工作流。
 - `llm_config` 按模型槽位传入，运行时至少需要 `general` 槽位；部分节点可使用 `plan_understanding`、`info_collecting`、`writing_checking` 或 `vlm_chart_generating`。
+- Brief 不新增模型或 Token 配置：大纲复用 `plan_understanding`，Query/评估/证据审阅复用 `info_collecting`，章节和摘要复用 `writing_checking`；缺少专用槽位时仍回退 `general`。
 - `StartNode` 只把本次运行需要的 `agent_config` 字段合并进 session，再叠加默认 `ServiceConfig`，形成节点读取的 `config` 全局状态。
-- `ServiceConfig` 提供 SDK 内部默认参数，包括 workflow 超时、重试次数、采集循环、报告生成、溯源并发、LLM 默认超时、thinking 模式、节点调试和中间结果导出。
 - `ServiceConfig.info_collector_max_search_query_count` 控制单轮 query 生成硬上限；
   `ServiceConfig.info_collector_max_research_loops` 控制信息采集 research loop 硬上限；
   `ServiceConfig.info_collector_max_tool_call_turns_per_query` 控制单个检索 query 内的工具调用轮次，三者独立生效。
@@ -54,16 +52,17 @@
 - `AgentConfig.execution_method` 取值为 `parallel`、`dependency_driving` 或 `hybrid`，只在 `search_mode=research` 时选择研究工作流实现；`hybrid` 会在意图识别阶段调用 LLM 生成 `search_context.outline_execution_method`。
 - `AgentConfig.search_mode` 取值为 `research`、`search`、`react`。
 - `AgentConfig.info_collector_webpage_enrich_enable` 控制信息采集阶段是否启用网页正文增强节点，默认 `False`。
-- `WebSearchEngineConfig.search_engine_name` 支持 tavily、google、xunfei、petal、custom、bocha、jina、perplexity、serper。
+- `WebSearchEngineConfig.search_engine_name` 支持 tavily、google、xunfei、petal、custom、bocha、jina、perplexity、serper、agc_ainetworking。
 - `WebFetchProviderConfig` 通过 `AgentConfig.web_fetch_provider_config` 显式选择 DeepSearch 网页抓取 provider；当前有效 `provider_name` 为 `jina`。
 - 顶层 `jina_api_key` / `serper_api_key` 已退役；传入时 `AgentConfig` 校验失败，应改用 `web_fetch_provider_config` 与 `web_search_engine_config`。
 - `LocalSearchEngineConfig.search_engine_name` 支持 openapi、custom、native；native 模式依赖 `knowledge_base_configs`。
 - web/local 最大搜索结果数均限制在 1 到 10。
-- `outliner_max_section_num` 范围为 1 到 `OUTLINER_SECTION_NUM_MAX`，当前最大值为 15。
+- `outliner_max_section_num` 默认值为 10，范围为 1 到 `OUTLINER_SECTION_NUM_MAX`，当前最大值为 15。
 - `outline_interaction_max_rounds` 和 `user_feedback_processor_max_interactions` 范围为 1 到 100。
 - `vlm_chart_generator_max_iterations` 范围为 1 到 3。
-- `ServiceConfig.info_collector_webpage_enrich_max_urls` 默认 3，限制单轮最多增强的 URL 数量。
+- `ServiceConfig.info_collector_webpage_enrich_max_urls` 默认 5，限制单轮最多增强的 URL 数量。
 - `ServiceConfig.info_collector_webpage_enrich_fetch_timeout_seconds` 默认 45，限制单个 URL 抓取超时时间。
+
 
 ## 边界与错误处理
 
@@ -90,4 +89,5 @@
 - [Agent 工厂与运行模式](../framework/agent-factory.md)
 - [报告研究主工作流](../framework/research-workflow.md)
 - [LLM 运行时封装](../llm/llm-runtime.md)
+- [Brief 精简版报告工作流](../algorithm/brief-report.md)
 - [参数校验、安全目录与 URL 处理](../utils/validation-security-url.md)

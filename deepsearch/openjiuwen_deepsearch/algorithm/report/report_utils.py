@@ -1,21 +1,113 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 import json
+import logging
 import math
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Tuple
 
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
+from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Outline
+from openjiuwen_deepsearch.utils.common_utils.llm_utils import safe_float
+
+logger = logging.getLogger(__name__)
+
+
+def export_outline_without_plans(outline: Outline | dict):
+    """导出不包含执行计划信息的大纲结构。"""
+    if not outline or not isinstance(outline, (Outline, dict)):
+        logger.warning(
+            "export_outline_without_plans: unsupported outline type or empty outline."
+        )
+        return outline
+
+    is_dict = isinstance(outline, dict)
+    obj = Outline.model_validate(outline) if is_dict else outline
+
+    data = obj.model_dump(exclude={"sections": {"__all__": {"plans", "doc_selection_debug"}}})
+
+    return data if is_dict else Outline.model_validate(data)
+
+
+def _section_sort_key(section_id) -> tuple[int, int | str]:
+    """Keep report sections ordered numerically when section ids are strings."""
+    text = str(section_id).strip()
+    if text.isdigit():
+        return 0, int(text)
+    return 1, text
+
+
+def resolve_current_subsection(current_inputs: dict) -> str:
+    """Resolve the ``current_subsection`` prompt parameter from the chapter outline.
+
+    If ``current_inputs`` already carries an explicit ``current_subsection``,
+    return it. Otherwise derive a default from the chapter outline: when the
+    outline has more than one non-blank line, instruct the LLM to follow each
+    Level 2 heading; otherwise keep the Level 1-only outline.
+    """
+    current_chapter_outline = current_inputs.get("sub_section_outline", "")
+    outline_lines = [
+        line.strip()
+        for line in current_chapter_outline.splitlines()
+        if line.strip()
+    ]
+    default_current_subsection = (
+        "Full current chapter; follow each Level 2 heading in the current chapter outline."
+        if len(outline_lines) > 1
+        else (
+            "Full current chapter; keep the Level 1-only outline. "
+            "Do not add Level 2 or deeper headings."
+        )
+    )
+    return current_inputs.get(
+        "current_subsection",
+        default_current_subsection,
+    )
 
 
 def _strip_chart_markup(text: str) -> str:
     """Remove report citation/link markup that is unreadable inside Mermaid labels."""
-    cleaned = re.sub(r"\[checked_citation:\d+\]\[\[\d+\]\]\([^)]+\)", "", str(text))
-    cleaned = re.sub(r"\[citation:\d+\]", "", cleaned)
+    cleaned = sanitize_citation_markers(str(text))
     cleaned = re.sub(r"\[\[\d+\]\]\([^)]+\)", "", cleaned)
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+_CITATION_MARKER_SANITIZE_RE = re.compile(
+    r"[<\[\]()>]?\s*(?<!\w)citation:\s*\d+\s*[<\[\]()>]?"
+)
+
+
+def sanitize_citation_markers(text: str) -> str:
+    """Strip citation anchors including malformed delimiters.
+
+    Tolerates delimiter errors where the model emits ``<``/``>``/``(``/``)``
+    instead of matching ``[...]`` brackets, so malformed anchors such as
+    ``<citation:3]`` do not survive as visible text.
+
+    Use at citation-stripping points (abstract, conclusion, chart labels).
+    """
+    return _CITATION_MARKER_SANITIZE_RE.sub("", str(text))
+
+
+def strip_report_source_links(text: str) -> str:
+    """Remove source URLs and citation markers while preserving images and TOC links."""
+    # Split images out before removing URLs so chart assets remain renderable.
+    parts = re.split(r"(!\[[^\]\n]*\]\([^\n]*?\))", text)
+    for index in range(0, len(parts), 2):
+        content = parts[index]
+        content = re.sub(r"\[\[\d+\]\]\(https?://(?:[^\s()]|\([^\s()]*\))*\)", "", content)
+        content = re.sub(
+            r"\[([^\]\n]*)\]\(https?://(?:[^\s()]|\([^\s()]*\))*\)",
+            lambda match: "" if match[1].isdigit() else match[1],
+            content,
+        )
+        content = re.sub(r"(?m)^\s*\[[^\]\n]+\]:\s*https?://\S+.*$", "", content)
+        content = re.sub(r"<https?://[^>\n]+>", "", content)
+        content = re.sub(r"https?://[^\s<>\u3000-\u303f\uff00-\uffef]+", "", content)
+        parts[index] = sanitize_citation_markers(content)
+    return "".join(parts)
 
 
 def _has_cjk(text: str) -> bool:
@@ -107,7 +199,7 @@ def validate_visualization_normalization_schema(
 
 
 class ArticlePart:
-    parts = ["abstract", "conclusion", "reference"]
+    parts = ["abstract", "conclusion"]
     patterns = {
         "abstract": {
             CHINESE: r"摘要",
@@ -117,10 +209,7 @@ class ArticlePart:
             CHINESE: r"结论",
             ENGLISH: r"Conclusion",
         },
-        "reference": {
-            CHINESE: r"参考文章",
-            ENGLISH: r"References",
-        },
+
     }
     not_found_prompts = {
         "abstract": {
@@ -131,15 +220,13 @@ class ArticlePart:
             CHINESE: "# 结论\n\n[未能从生成内容中提取到结论]",
             ENGLISH: "# Conclusion\n\n[No conclusion could be extracted from the generated content]",
         },
-        "reference": {
-            CHINESE: "# 参考文章\n\n[未能从生成内容中提取到参考文章]",
-            ENGLISH: "# Reference Articles\n\n[No reference could be extracted from the generated content]",
-        },
+
     }
     titles = {
+        "toc": {CHINESE: "# 目录\n\n", ENGLISH: "# Table of Contents\n\n"},
         "abstract": {CHINESE: "# 摘要\n\n", ENGLISH: "# Abstract\n\n"},
         "conclusion": {CHINESE: "# 结论\n\n", ENGLISH: "# Conclusion\n\n"},
-        "reference": {CHINESE: "# 参考文章\n\n", ENGLISH: "# Reference Articles\n\n"},
+
     }
 
     @classmethod
@@ -287,13 +374,20 @@ class XYChartMermaidGenerator:
     BAR_ZERO_GAP_RATIO = 2.5  # include zero if gap to zero is not too large
     # Horizontal bar decision parameters (avoid label overlap)
     HORIZONTAL_TOTAL_LABEL_LIMIT = 80.0
+    LABEL_MAX_WEIGHT_VERTICAL = 20.0  # single-label weight threshold above which vertical orientation is unsafe
     LABEL_WEIGHT_CJK = 2.0
     LABEL_WEIGHT_ASCII = 1.0
     NICE_MULTIPLIERS = (
-        1, 1.1, 1.2, 1.25, 1.5, 1.6, 1.8, 
+        1, 1.1, 1.2, 1.25, 1.5, 1.6, 1.8,
         2, 2.2, 2.5, 3, 3.5,
         4, 4.5, 5, 6, 7, 8, 9, 10, 10.5, 11, 12, 15,
     )
+    STEP_MULTIPLIERS = (1.0, 1.5, 2.0, 2.5, 5.0, 10.0)  # D3-aligned step sizes for fewer, rounder axis ticks
+    MIN_PX_PER_TICK = 50  # minimum pixels per D3 tick label on a horizontal value axis
+    MAX_TICKS = 8  # d3 tick count ceiling for horizontal charts
+    MIN_PX_PER_TICK_CHAR = 8  # approx px per char in default mermaid font
+    TICK_LABEL_MARGIN_PX = 16  # padding around tick text
+    LEFT_AXIS_MARGIN_PX = 40  # y-axis line + outer margins
 
     @classmethod
     def _sanitize_label(cls, label: str | None) -> str:
@@ -322,6 +416,8 @@ class XYChartMermaidGenerator:
         if count >= 6:
             return True
         if count >= 4 and max_len >= 14:
+            return True
+        if max_len > cls.LABEL_MAX_WEIGHT_VERTICAL:
             return True
         per_label_limit = cls.HORIZONTAL_TOTAL_LABEL_LIMIT / max(count, 1)
         return not (
@@ -362,11 +458,89 @@ class XYChartMermaidGenerator:
         if target_step <= 0:
             return 1.0
         exp = 10 ** math.floor(math.log10(target_step))
-        for m in cls.NICE_MULTIPLIERS:
+        for m in cls.STEP_MULTIPLIERS:
             candidate = m * exp
             if candidate >= target_step:
                 return candidate
         return 10 * exp
+
+    @classmethod
+    def _d3_tick_count(cls, y_range: float) -> int:
+        """Replicate d3-array's ``linear.ticks()`` step selection (count=10).
+
+        d3 picks the step from {1, 2, 5, 10} × 10ⁿ using √50 / √10 / √2
+        error thresholds, then emits ``floor(range/step) + 1`` ticks.
+        """
+        if y_range <= 0:
+            return 0
+        step0 = y_range / 10.0
+        step1 = 10 ** math.floor(math.log10(step0))
+        error = step0 / step1
+        if error >= math.sqrt(50):
+            step = step1 * 10
+        elif error >= math.sqrt(10):
+            step = step1 * 5
+        elif error >= math.sqrt(2):
+            step = step1 * 2
+        else:
+            step = step1
+        return int(y_range // step) + 1
+
+    @classmethod
+    def _coerce_tick_density(
+        cls, y_min: float, y_max: float
+    ) -> tuple[float, float]:
+        """Widen y_range so d3 emits at most MAX_TICKS ticks.
+
+        d3's linear.ticks() targets ~10 ticks but can emit 15+ for small
+        ranges (e.g. 300 → 16 ticks), crowding both horizontal (width-
+        bounded) and vertical (height-bounded) axes. We bump y_max until
+        d3's tick count drops below the threshold. d3 step tiers are ~2x
+        apart, so a few 25% bumps land on a sparser tier quickly.
+        """
+        y_range = y_max - y_min
+        if y_range <= 0:
+            return y_min, y_max
+        for _ in range(8):
+            if cls._d3_tick_count(y_range) <= cls.MAX_TICKS:
+                break
+            y_range *= 1.25
+        return y_min, y_min + y_range
+
+    @classmethod
+    def _min_width_for_ticks(
+        cls, y_min: float, y_max: float, labels: list[str]
+    ) -> float:
+        """Return the minimum chart width that avoids tick label overlap
+        on a horizontal value axis.
+
+        Accounts for: tick text width (estimated from the longer of y_min
+        and y_max, since actual tick values span that range — not the axis
+        span), left-side category label area (via _label_weight_length), and
+        fixed axis margins. Uses d3-array's real tick-count algorithm (see
+        ``_d3_tick_count``).
+        """
+        y_range = y_max - y_min
+        tick_count = cls._d3_tick_count(y_range)
+        if tick_count <= 0:
+            return 0.0
+        # Tick labels span y_min..y_max, not just y_range; size px_per_tick
+        # by the longer formatted endpoint so non-zero-baseline large
+        # numbers (e.g. 999999950..1000000325) get enough width per tick.
+        max_tick_text_len = max(
+            len(cls._format_num(y_min)),
+            len(cls._format_num(y_max)),
+        )
+        px_per_tick = max(
+            cls.MIN_PX_PER_TICK,
+            max_tick_text_len * cls.MIN_PX_PER_TICK_CHAR + cls.TICK_LABEL_MARGIN_PX,
+        )
+        tick_area = tick_count * px_per_tick
+        max_weight = max(
+            (cls._label_weight_length(label) for label in labels), default=0.0
+        )
+        label_area = max_weight * 7
+        return tick_area + label_area + cls.LEFT_AXIS_MARGIN_PX
 
     @classmethod
     def generate_from_json(cls, json_string: str) -> str:
@@ -374,16 +548,16 @@ class XYChartMermaidGenerator:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") not in ("bar", "line"):
+        if not isinstance(data, dict) or data.get("image_type") not in ("bar", "line"):
             raise ValueError("input must be a bar/line chart visualization JSON")
 
         chart_type = data.get("image_type")  # "bar" or "line"
-        raw_unit = (data.get("unit") or "").strip()
+        raw_unit = str(data.get("unit") or "").strip()
         if cls._detect_mixed_unit(raw_unit):
             raise ValueError("mixed units are not allowed for a single chart")
 
         records = data.get("records", [])
-        if not records or len(records) < 2:
+        if not isinstance(records, list) or len(records) < 2:
             raise ValueError("records are required")
 
         x_values: list[str] = []
@@ -406,8 +580,6 @@ class XYChartMermaidGenerator:
         unit_title = raw_unit or "Value"
         x_axis = ", ".join(f'"{c}"' for c in x_values)
         series_values = ", ".join(cls._format_num(v) for v in display_values)
-        y_min_s = cls._format_num(y_min)
-        y_max_s = cls._format_num(y_max)
 
         count = len(x_values)
         width = max(
@@ -418,18 +590,36 @@ class XYChartMermaidGenerator:
         use_horizontal = (
             chart_type == "bar" and cls._should_use_horizontal(x_values, count)
         )
+        # Coerce tick density for all charts: d3 can emit 15+ ticks for small
+        # ranges (e.g. 300 → 16), crowding both horizontal (width-bounded) and
+        # vertical (height-bounded) axes. Bump y_max until d3's tick count
+        # drops below MAX_TICKS.
+        y_min, y_max = cls._coerce_tick_density(y_min, y_max)
+        y_min_s = cls._format_num(y_min)
+        y_max_s = cls._format_num(y_max)
+        # Widen width only for horizontal charts: the value axis runs along
+        # the horizontal direction, so tick density is bounded by width.
+        # Vertical charts have a vertical value axis (d3 axisLeft) whose tick
+        # spacing depends on height, not width — widening width there does
+        # nothing for tick overlap.
+        if use_horizontal:
+            y_range = y_max - y_min
+            if y_range > 0:
+                width = max(width, cls._min_width_for_ticks(y_min, y_max, x_values))
         # Keep the Mermaid directive itself standard so downstream validators can
         # infer the chart type from the `bar [...]`/`line [...]` series. The
-        # horizontal rendering hint is preserved in frontmatter for exporters.
+        # horizontal hint uses the official xyChart.chartOrientation key so both
+        # built-in exporters and external Mermaid renderers honor it.
         chart_orientation = "xychart-beta"
 
         lines = [
             "---",
             "config:",
-            f"    horizontal: {'true' if use_horizontal else 'false'}",
-            f"    width: {width}",
-            f"    height: {cls.HEIGHT}",
-            "    showDataLabel: true",
+            "    xyChart:",
+            *(["        chartOrientation: horizontal"] if use_horizontal else []),
+            f"        width: {width}",
+            f"        height: {cls.HEIGHT}",
+            "        showDataLabel: true",
             "    themeVariables:",
             "        xyChart:",
             "            plotColorPalette: '#7c3aed'",
@@ -491,8 +681,11 @@ class XYChartMermaidGenerator:
     ) -> tuple[float, float]:
         if not values:
             return 0.0, 1.0
-        vmin = min(values)
-        vmax = max(values)
+        # Defensive: LLM-returned chart values may be strings or other non-numeric
+        # types. Convert via safe_float to prevent TypeError in min/max/subtraction.
+        cleaned = [safe_float(x) for x in values]
+        vmin = min(cleaned)
+        vmax = max(cleaned)
         if vmax == 0 and vmin == 0:
             return 0.0, 1.0
 
@@ -620,10 +813,10 @@ class PieChartMermaidGenerator:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") != "pie":
+        if not isinstance(data, dict) or data.get("image_type") != "pie":
             raise ValueError("input must be a pie chart visualization JSON")
 
-        unit = (data.get("unit") or "").strip()
+        unit = str(data.get("unit") or "").strip()
         percent_mode = bool(unit and ("%" in unit or "百分比" in unit))
         records = data.get("records", [])
         if not isinstance(records, list) or len(records) < 2:
@@ -711,7 +904,7 @@ class TimelineChartMermaidGenerator:
         if not json_string:
             raise ValueError("empty input")
         data = json.loads(json_string)
-        if not data or data.get("image_type") != "timeline":
+        if not isinstance(data, dict) or data.get("image_type") != "timeline":
             raise ValueError("input must be a timeline visualization JSON")
 
         records = data.get("records", [])
