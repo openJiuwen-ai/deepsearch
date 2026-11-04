@@ -16,8 +16,8 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 logger = logging.getLogger(__name__)
 
 
-def test_agent_config_default_outliner_max_section_num_is_ten():
-    assert AgentConfig().outliner_max_section_num == 10
+def test_agent_config_default_outliner_max_section_num_is_five():
+    assert AgentConfig().outliner_max_section_num == 5
 
 llm_config = {
     "general": {

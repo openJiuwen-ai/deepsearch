@@ -8,9 +8,9 @@ from tenacity import (
     AsyncRetrying,
     stop_after_attempt,
     retry_if_exception_type,
+    retry_if_not_exception_type,
 )
 
-from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.markdown_utils import _convert_bold_formula_to_inline_math
@@ -27,6 +27,7 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import ChapterSidecar
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
@@ -65,7 +66,6 @@ class ReportPartsMixin:
         logger.info(f"Generating report conclusion Done.")
         return conclusion
 
-    @moderation_retry_scope
     async def _generate_with_llm(self, task_type, prompt, content):
         llm_input = build_prompt_messages(
             prompt, {**self.gen_report_context, "main_content": content}
@@ -83,7 +83,8 @@ class ReportPartsMixin:
             raise KeyError(f"Unsupported report task type: {task_type}")
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(Config().service_config.report_max_generate_retry_num),
-            retry=retry_if_exception_type(Exception),
+            # 用户停止需直接向上传播，保留停止时的快照供后续恢复。
+            retry=retry_if_exception_type(Exception) & retry_if_not_exception_type(StopRequested),
             after=after_log(logger, logging.WARNING),
         ):
             with attempt:
@@ -134,7 +135,6 @@ class ReportPartsMixin:
             return content
         return header + content
 
-    @moderation_retry_scope
     async def _add_sub_report_transaction(self, current_inputs: dict):
         if not LogManager.is_sensitive():
             logger.debug(
@@ -204,6 +204,10 @@ class ReportPartsMixin:
                     new = old + "\n" + str(llm_output.get("content") or "")
                     msg = content.replace(old, new, 1)
                     return msg
+        except StopRequested:
+            # 停止信号不得降级为原 content 返回（吞成局部失败会让上层把
+            # 半成品当正常产物继续走完报告阶段）。原样上抛走异常保存分支。
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 error_msg = (
@@ -278,7 +282,6 @@ class ReportPartsMixin:
             return ""
         return "\n\n".join(context_parts)
 
-    @moderation_retry_scope
     async def _generate_sub_report_summary(self, current_inputs: dict):
         """generate sub report summary"""
         if not LogManager.is_sensitive():
@@ -350,6 +353,10 @@ class ReportPartsMixin:
                 else:
                     return dict(rs_success=True, result=llm_output.get("content"))
 
+        except StopRequested:
+            # 停止信号不得降级为 (rs_success=False, "") 返回（会驱动上层
+            # 重试/降级继续跑完报告阶段）。原样上抛走异常保存分支。
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 error_msg = (
@@ -395,7 +402,6 @@ class ReportPartsMixin:
             )
         return normalized
 
-    @moderation_retry_scope
     async def _generate_sub_report_sidecar(self, current_inputs: dict) -> dict:
         """Generate a structured reusable summary for one chapter."""
         section_idx = current_inputs.get("section_idx", 1)
@@ -427,6 +433,9 @@ class ReportPartsMixin:
                 ),
                 1,
             )
+        except StopRequested:
+            # 停止信号不得降级为 fallback sidecar 返回。原样上抛走异常保存分支。
+            raise
         except Exception as error:
             warning = (
                 f"section {section_idx} sidecar generation failed before retry: {error}; "
@@ -467,6 +476,10 @@ class ReportPartsMixin:
                     risk_points=self._normalize_sidecar_list(payload, "risk_points", section_idx),
                 )
                 return dict(sidecar=sidecar, summary=sidecar.chapter_summary, warning="")
+            except StopRequested:
+                # 停止信号不得进入 sidecar 重试循环（会继续调用 LLM 跑完
+                # retry_num 次再降级返回）。原样上抛走异常保存分支。
+                raise
             except Exception as error:
                 last_error = str(error)
                 if response_received:
@@ -501,16 +514,7 @@ class ReportPartsMixin:
             "background_knowledge": self._format_background_knowledge_for_prompt(
                 background_knowledge_contents
             ),
-            "rationale_contract_json": json.dumps(
-                current_inputs.get("rationale_contract", {"items": []}), ensure_ascii=False
-            ),
-            "time_contract_json": json.dumps(
-                current_inputs.get("time_contract", {
-                    "source_date_scope": None,
-                    "content_date_scope": None,
-                }),
-                ensure_ascii=False,
-            ),
+            "structured_evidence_guide": current_inputs.get("structured_evidence_guide", ""),
             "references": current_inputs.get("sub_section_references", ""),
             "retry_feedback": self._sub_report_retry_feedback_from_failure(
                 str(current_inputs.get("sub_report_retry_feedback", "") or "")
@@ -578,6 +582,11 @@ class ReportPartsMixin:
                             EFFECT_SUB_REPORT_TAG,
                             current_inputs.get("section_idx", 1),
                         )
+            except StopRequested:
+                # 用户停止不降级为"使用原内容继续"（visualization_insertion
+                # 的停止穿透会被本分支吞掉，图"正常完成"并清除 checkpoint），
+                # 直接上抛走异常保存分支。
+                raise
             except Exception as e:
                 logger.warning(
                     "%s [write_subsection_reports] section_idx: [%s] "
@@ -604,11 +613,12 @@ class ReportPartsMixin:
         current_inputs["sub_report_content"] = self.clean_markdown_headers(
             current_inputs["sub_report_content"]
         )
-        ok, reason = self.validate_sub_report_heading_structure(
+        ok, reason = self.validate_sub_report_headings_match_outline(
             current_inputs["sub_report_content"],
+            current_inputs.get("sub_section_outline", ""),
         )
         if not ok:
-            return False, f"generated report heading structure invalid: {reason}"
+            return False, f"generated report headings do not match outline: {reason}"
         sidecar_result = await self._generate_sub_report_sidecar(current_inputs)
         current_inputs["sub_report_chapter_sidecar"] = sidecar_result.get("sidecar")
         current_inputs["sub_report_summary"] = sidecar_result.get("summary", "")

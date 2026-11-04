@@ -25,6 +25,7 @@ class StreamEvent(enum.Enum):
     WAITING_USER_INPUT = "waiting_user_input"
     USER_INPUT_ENDED = "user_input_ended"
     ERROR = "error"
+    STOPPED = "stopped"
 
 
 async def custom_stream_output(session, stream_id, stream_content, agent_name, stream_meta: dict | None = None):
