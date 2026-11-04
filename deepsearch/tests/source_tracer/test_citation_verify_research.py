@@ -11,6 +11,7 @@ from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research impor
 )
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research"
@@ -741,3 +742,73 @@ class TestCitationVerifyResearch:
 
         assert self.verifier.datas[0]["valid"] is False
         assert self.verifier.datas[0]["invalid_reason"] == "parse"
+
+
+class TestStopRequestedPropagation:
+    """用户停止（StopRequested）必须穿透批处理/重试/降级逻辑原样上抛。
+
+    事故背景：停止被 except Exception 转成可重试失败后降级为占位结果，
+    节点"正常完成"导致 checkpoint 被清除，resume 只能全新起跑。
+    """
+
+    def setup_method(self):
+        self.verifier = CitationVerifyResearch("mock_model")
+
+    @pytest.mark.asyncio
+    async def test_split_retry_propagates_stop_requested(self):
+        """extract_messages_with_split_retry 不重试、不降级占位结果。"""
+        semaphore = asyncio.Semaphore(2)
+        with patch.object(self.verifier, 'extract_messages_once',
+                          new_callable=AsyncMock) as mock_once:
+            mock_once.side_effect = StopRequested(
+                "deepresearch task stopped by user")
+
+            with pytest.raises(StopRequested):
+                await self.verifier.extract_messages_with_split_retry(
+                    [{"domain": "a", "citation_content": "c", "fact": "f"}],
+                    attempt=1, lineage="root", semaphore=semaphore)
+
+            # 立即上抛，不进入重试循环
+            assert mock_once.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_process_batch_propagates_stop_requested(self):
+        """process_batch 不写降级占位结果，批次状态保持未完成。"""
+        state = {"results": [None], "running_tasks": set(),
+                 "completed_count": 0, "started_count": 0}
+        context = BatchContext(
+            batch_state=state,
+            process_func=AsyncMock(
+                side_effect=StopRequested("deepresearch task stopped by user")),
+            error_result_func=lambda batch: [{"extract_failed_reason": "invocation"}],
+            semaphore=asyncio.Semaphore(1),
+            log_prefix="TEST",
+        )
+
+        with pytest.raises(StopRequested):
+            await self.verifier.process_batch(0, [{"item": 1}], context)
+
+        assert state["results"][0] is None
+        assert state["completed_count"] == 0
+        assert 0 not in state["running_tasks"]
+
+    @pytest.mark.asyncio
+    async def test_execute_batch_tasks_stop_waits_all_batches(self):
+        """execute_batch_tasks 遇停止先等全部批次退出再上抛（无孤儿任务）。"""
+        stop = StopRequested("deepresearch task stopped by user")
+
+        async def process_func(batch):
+            raise stop
+
+        batches = [(0, ["a"]), (1, ["b"]), (2, ["c"])]
+        batch_state = {"results": [None] * 3, "running_tasks": set(),
+                       "completed_count": 0, "started_count": 0}
+
+        with pytest.raises(StopRequested):
+            await self.verifier.execute_batch_tasks(
+                batches, batch_state, process_func,
+                lambda batch: [], log_prefix="TEST")
+
+        # gather_with_stop 保证重抛前全部批次已退出
+        assert batch_state["running_tasks"] == set()
+        assert batch_state["completed_count"] == 0
