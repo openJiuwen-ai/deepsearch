@@ -1,3 +1,4 @@
+import json
 import logging
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -10,9 +11,15 @@ from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     format_key_passage_block,
     normalize_key_passages,
 )
-from openjiuwen_deepsearch.algorithm.report.evidence import _fit_coverage_to_budget
+from openjiuwen_deepsearch.algorithm.report.evidence import (
+    _attach_rationale_citation_ids,
+    _build_outline_evidence_cards,
+    _build_rationale_contract,
+    _fit_coverage_to_budget,
+)
 from openjiuwen_deepsearch.algorithm.report.report import (
     Reporter,
+    _build_material_outline_cards,
     _next_classified_content_index,
 )
 from openjiuwen_deepsearch.algorithm.report.table_caption_utils import ensure_markdown_table_captions
@@ -29,6 +36,26 @@ def test_next_classified_content_index_uses_existing_maximum_not_item_count():
         "invalid",
     ]) == 8
     assert _next_classified_content_index([]) == 1
+
+
+def test_material_evidence_is_rendered_as_outline_card():
+    cards = _build_material_outline_cards([{
+        "index": 3,
+        "title": "User source",
+        "publish_time": "2024-01-01",
+        "content_time": "2023-01-01~2023-12-31",
+        "passage_text": "Material evidence.",
+    }])
+
+    assert cards == [{
+        "citation_id": 3,
+        "evidence_type": "material",
+        "source_title": "User source",
+        "publish_time": "2024-01-01",
+        "content_time": "2023-01-01~2023-12-31",
+        "rationale_refs": [],
+        "passage_text": "Material evidence.",
+    }]
 
 @pytest.mark.parametrize("failure", ["network", "empty", "network_then_empty", "postprocess", "validation"])
 @pytest.mark.asyncio
@@ -567,7 +594,8 @@ async def test_write_subsection_reports_keeps_hierarchical_outline_instruction()
 
 
 @pytest.mark.asyncio
-async def test_write_subsection_reports_prompt_enforces_heading_contract():
+@pytest.mark.parametrize("valid_structure", [True, False])
+async def test_write_subsection_reports_prompt_enforces_heading_contract(valid_structure):
     """The writer prompt must state the same heading rules the validator enforces."""
     token = llm_context.set({"mock_model": object()})
     try:
@@ -593,6 +621,7 @@ async def test_write_subsection_reports_prompt_enforces_heading_contract():
             "sub_report_background_knowledge": [],
             "report_type": "professional",
             "paragraph_style": "detailed",
+            "sub_report_retry_feedback": "error_code: HEADING_STRUCTURE_INVALID\nlocation: markdown_headings",
             "visualization_enable": False,
         }
 
@@ -609,9 +638,14 @@ async def test_write_subsection_reports_prompt_enforces_heading_contract():
                 "content": "# 2 模型介绍\n\n## 2.1 CMSY\n\n内容。\n\n## 2.2 BSM\n\n内容。"
             }
 
+            if not valid_structure:
+                mock_ainvoke.return_value = {"content": "# Chapter\n\n# Other\nBody"}
             result = await reporter._write_subsection_reports(current_inputs)
 
-        assert result["success"] is True
+        assert result["success"] is valid_structure
+        if not valid_structure:
+            assert result["result"].startswith("generated report heading structure invalid:")
+            assert "do not match outline" not in result["result"]
         _, kwargs = mock_ainvoke.call_args
         rendered_prompt = "\n".join(message["content"] for message in kwargs["messages"])
         # H3 must be a hard ban, matching the validator which silently ignores H3
@@ -621,6 +655,9 @@ async def test_write_subsection_reports_prompt_enforces_heading_contract():
         assert "exactly one" in rendered_prompt
         # Verify formatting section exists
         assert "Formatting & Structure" in rendered_prompt
+        assert "For HEADING_TITLE_EMPTY" in rendered_prompt
+        assert "For HEADING_STRUCTURE_INVALID" in rendered_prompt
+        assert "use exactly one H1 before all H2 headings" in rendered_prompt
     finally:
         llm_context.reset(token)
 
@@ -743,15 +780,272 @@ def test_subreport_prompts_share_structured_evidence_semantics():
     normalized_prompt = " ".join(prompt_text.split())
 
     assert "dimension-to-citation mapping" in normalized_prompt
-    assert "must not be treated as a source of factual evidence" in normalized_prompt
-    assert "Do not expose the guidance's coverage labels or evidence-selection process" in normalized_prompt
+    assert "`uncovered` means it cannot support factual claims" in normalized_prompt
+    assert "expose the contract's coverage labels or evidence-selection process" in normalized_prompt
     assert "Silently omit optional content that depends only on an uncovered dimension" in normalized_prompt
     assert "preserve that required structure" in normalized_prompt
-    assert "directly supported by covered citations" in normalized_prompt
+    assert "directly supported by citations" in normalized_prompt
     assert "Do not use an uncovered dimension as permission to add uncited synthesis" in normalized_prompt
     assert "Do not narrate the internal evidence process" in normalized_prompt
     assert "remaining evidence limitation" not in normalized_prompt
     assert "collected evidence remains the authoritative source" in normalized_prompt.lower()
+    assert "coverage_status" in normalized_prompt
+    assert "not that the dimension must be included" in normalized_prompt
+    assert "Do not write every covered dimension solely because it is covered" in normalized_prompt
+    assert "based on the task, chapter outline, priority, and relevance" in normalized_prompt
+
+
+def test_rationale_contract_has_one_shared_coverage_status():
+    contract = _build_rationale_contract(
+        [
+            {"id": "covered", "description": "Strong", "priority": "primary"},
+            {"id": "weak", "description": "Some", "priority": "supplementary"},
+            {"id": "uncovered", "description": "None"},
+        ],
+        [
+            {"scores": {"covered": {"coverage": 0.8}}},
+            {"scores": {"weak": {"coverage": 0.4}}},
+        ],
+    )
+
+    assert [item["coverage_status"] for item in contract["items"]] == ["covered", "weak", "uncovered"]
+    assert all("heading_policy" not in item and "writing_policy" not in item for item in contract["items"])
+    assert all("status" not in item for item in contract["items"])
+
+
+@pytest.mark.parametrize("promote_to_fulltext", [False, True])
+@pytest.mark.asyncio
+async def test_prepared_contract_uses_final_evidence_after_deduplication(promote_to_fulltext):
+    reporter = Reporter.__new__(Reporter)
+    rationales = [{"id": "R1"}, {"id": "R2"}]
+    text = "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda."
+    passages = [
+        {"doc_url": "https://example.org/a", "doc_title": "A", "passage_text": text,
+         "scores": {"R1": {"coverage": 0.9}, "R2": {"coverage": 0}}},
+        {"doc_url": "https://example.org/b", "doc_title": "B", "passage_text": text,
+         "scores": {"R1": {"coverage": 0.1}, "R2": {"coverage": 0.95}}},
+    ]
+    coverage = {"filtered_passages": passages, "coverage_matrix": {
+        "passage_0": {"R1": 0.9, "R2": 0}, "passage_1": {"R1": 0.1, "R2": 0.95},
+    }}
+    inputs = {"coverage_rule_block_enable": False}
+    raw = [{"url": passages[1]["doc_url"], "original_content": text}] if promote_to_fulltext else []
+    with (
+        patch.object(reporter, "_generate_section_rationales", new=AsyncMock(return_value=(rationales, ""))),
+        patch.object(reporter, "_extract_and_score_documents", new=AsyncMock(return_value=(coverage, ""))),
+        patch.object(reporter, "_select_by_rationale_coverage", return_value=(passages, [])),
+    ):
+        success, _, _ = await reporter._prepare_evidence(inputs, raw, 1)
+
+    assert success
+    r1, r2 = inputs["rationale_contract"]["items"]
+    assert (r1["coverage_status"], r1["coverage_score"], r1["citation_ids"]) == ("uncovered", 0.1, [1])
+    assert (r2["coverage_status"], r2["coverage_score"]) == ("covered", 0.95)
+    card, = inputs["outline_evidence_cards"]
+    assert card["source_title"] == "B"
+    assert card["rationale_refs"][0]["coverage_score"] == 0.1
+    assert card["evidence_type"] == ("fulltext" if promote_to_fulltext else "passage")
+
+
+@pytest.mark.parametrize("with_material", [False, True])
+@pytest.mark.asyncio
+async def test_background_fallback_reaches_outline_with_or_without_material(with_material):
+    reporter = Reporter.__new__(Reporter)
+    summary = "Prior chapter identified the decisive supply constraint."
+    inputs = {
+        "section_idx": 2, "section_task": "2 Conclusions", "passages": [],
+        "sub_report_background_knowledge": [{"section_id": 1, "content_summary": summary}],
+    }
+    materials = [{"material_id": "M1", "title": "Supporting source",
+                  "original_content": "Material evidence", "passage_text": "Material evidence"}] if with_material else []
+    with (
+        patch("openjiuwen_deepsearch.algorithm.report.report.resolve_material_evidence", return_value=materials),
+        patch.object(reporter, "_generate_outline_with_retry", new=AsyncMock(return_value=(False, "stop"))),
+    ):
+        await reporter.generate_sub_report(inputs)
+
+    cards = inputs["outline_evidence_cards"]
+    background, = [card for card in cards if card["evidence_type"] == "background_knowledge"]
+    assert summary in background["outline_excerpt"]
+    assert background["citation_id"] is None
+    assert "Never cite it" in background["outline_excerpt"]
+    assert len(cards) == (2 if with_material else 1)
+    if with_material:
+        assert cards[0]["evidence_type"] == "material"
+        assert cards[0]["citation_id"] == inputs["classified_content"][0]["index"]
+
+
+@pytest.mark.parametrize(
+    ("score", "expected_status"),
+    [(0.6, "covered"), (0.599, "weak"), (0.3, "weak"), (0.299, "uncovered"), (0.0, "uncovered")],
+)
+def test_rationale_coverage_status_threshold_boundaries(score, expected_status):
+    contract = _build_rationale_contract(
+        [{"id": "r1"}],
+        [{"scores": {"r1": {"coverage": score}}}],
+    )
+
+    assert contract["items"][0]["coverage_status"] == expected_status
+
+
+def test_outline_evidence_cards_preserve_card_types_content_and_rationale_links():
+    classified_content = [
+        {
+            "index": 1,
+            "title": "Selected passage",
+            "doc_time": "2024-01-01",
+            "content_time": {"start": "2023-01-01", "end": "2023-12-31"},
+            "passage_text": "Selected passage text.",
+            "scores": {"r1": {"coverage": 0.8}},
+        },
+        {
+            "index": 2,
+            "title": "Fulltext source",
+            "url": "https://example.org/fulltext",
+            "doc_time": "2024-02-01",
+            "is_fulltext": True,
+            "original_content": "Fulltext body.",
+        },
+    ]
+    rationale_contract = {"items": [{"rationale_id": "r1"}, {"rationale_id": "r2"}]}
+    selected_passages = [{
+        "doc_url": "https://example.org/fulltext",
+        "passage_text": "Rationale-selected source passage.",
+        "scores": {"r1": {"coverage": 0.7}, "r2": {"coverage": 0.4}},
+    }, {
+        "doc_url": "https://example.org/other",
+        "passage_text": "Passage from another source.",
+        "scores": {"r1": {"coverage": 0.9}},
+    }]
+
+    cards = _build_outline_evidence_cards(
+        classified_content,
+        rationale_contract,
+        {2: ["Rule-extracted coverage passage."]},
+        selected_passages,
+    )
+
+    assert cards == [
+        {
+            "citation_id": 1,
+            "evidence_type": "passage",
+            "source_title": "Selected passage",
+            "publish_time": "2024-01-01",
+            "content_time": {"start": "2023-01-01", "end": "2023-12-31"},
+            "rationale_refs": [{"rationale_id": "r1", "coverage_score": 0.8}],
+            "passage_text": "Selected passage text.",
+        },
+        {
+            "citation_id": 2,
+            "evidence_type": "fulltext",
+            "source_title": "Fulltext source",
+            "publish_time": "2024-02-01",
+            "content_time": None,
+            "rationale_refs": [
+                {"rationale_id": "r1", "coverage_score": 0.7},
+                {"rationale_id": "r2", "coverage_score": 0.4},
+            ],
+            "outline_excerpt": "Fulltext body.",
+            "selected_passages": [{"passage_text": "Rationale-selected source passage.", "content_time": None}],
+            "coverage_passages": ["Rule-extracted coverage passage."],
+        },
+    ]
+
+
+@pytest.mark.parametrize("url", [None, "", "   "])
+def test_fulltext_card_without_url_does_not_claim_unidentified_passages(url):
+    cards = _build_outline_evidence_cards(
+        [{"index": 1, "is_fulltext": True, "url": url, "original_content": "Own full text."}],
+        {"items": [{"rationale_id": "r1"}]},
+        {1: ["Own coverage passage."]},
+        [
+            {"doc_url": missing_url, "passage_text": "Unrelated passage.",
+             "scores": {"r1": {"coverage": 0.9}}}
+            for missing_url in [None, "", "   "]
+        ],
+    )
+
+    card, = cards
+    assert card["rationale_refs"] == []
+    assert card["selected_passages"] == []
+    assert card["outline_excerpt"] == "Own full text."
+    assert card["coverage_passages"] == ["Own coverage passage."]
+
+
+@pytest.mark.parametrize("promote", [False, True])
+def test_outline_cards_preserve_individual_fact_times_through_fulltext_promotion(promote):
+    from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import enrich_fulltext_for_section
+
+    texts = ["Market revenue expanded significantly in the first observed year.",
+             "Employment fell across distinct industrial sectors during the second period.",
+             "Undated methodology explains the sampling design and interview protocols."]
+    times = [{"start": "2022-01-01", "end": "2022-12-31"},
+             {"start": "2023-01-01", "end": "2023-12-31"}, None]
+    passages = [{"doc_url": "https://example.org/source", "doc_title": "Source",
+                 "passage_text": text, "content_time": time,
+                 "scores": {"r1": {"coverage": 0.9}}} for text, time in zip(texts, times)]
+    raw = [{"url": "https://example.org/source", "original_content": "\n".join(texts)}] if promote else []
+    result = enrich_fulltext_for_section(
+        passages={"selected": passages, "raw": raw},
+        context={"rationales": [], "coverage_result": {}}, section_idx=1,
+    )
+    cards = _build_outline_evidence_cards(result["classified_content"], {"items": []}, {},
+                                         result["retained_passages"])
+    if promote:
+        assert len(cards) == 1
+        assert cards[0]["content_time"] is None
+        assert cards[0]["selected_passages"] == [
+            {"passage_text": text, "content_time": time} for text, time in zip(texts, times)
+        ]
+    else:
+        assert [card["content_time"] for card in cards] == times
+    rendered = "\n".join(message["content"] for message in build_prompt_messages(
+        "sub_section_outline", {"core_context": json.dumps(cards),
+                                "time_contract_json": "{}", "rationale_contract_json": "{}"}
+    ))
+    assert "2022-01-01" in rendered and "2023-01-01" in rendered
+    assert "passage-level `content_time`" in rendered
+
+
+def test_rationale_contract_citation_ids_are_deduplicated_from_evidence_cards():
+    contract = {"items": [{"rationale_id": "r1"}, {"rationale_id": "r2"}]}
+    cards = [
+        {"citation_id": 1, "rationale_refs": [{"rationale_id": "r1"}]},
+        {"citation_id": 1, "rationale_refs": [{"rationale_id": "r1"}]},
+        {"citation_id": 2, "rationale_refs": [{"rationale_id": "r2"}, {"rationale_id": "unknown"}]},
+    ]
+
+    _attach_rationale_citation_ids(contract, cards)
+
+    assert contract["items"] == [
+        {"rationale_id": "r1", "citation_ids": [1]},
+        {"rationale_id": "r2", "citation_ids": [2]},
+    ]
+
+
+def test_subreport_context_exposes_the_shared_time_contract():
+    reporter = Reporter.__new__(Reporter)
+    time_contract = {
+        "source_date_scope": {"start": "2023-01-01", "end": "2023-12-31"},
+        "content_date_scope": {"start": "2022-01-01", "end": "2022-12-31"},
+    }
+
+    rationale_contract = {"items": [{"rationale_id": "r1", "citation_ids": [3]}]}
+    context = reporter._build_subsection_context(
+        {"time_contract": time_contract, "rationale_contract": rationale_contract}, []
+    )
+    rendered = "\n".join(message["content"] for message in build_prompt_messages(
+        "sub_report_markdown", context
+    ))
+
+    assert context["time_contract_json"] == (
+        '{"source_date_scope": {"start": "2023-01-01", "end": "2023-12-31"}, '
+        '"content_date_scope": {"start": "2022-01-01", "end": "2022-12-31"}}'
+    )
+    assert "# Time Contract" in rendered
+    assert "2022-01-01" in rendered
+    assert "# Rationale Contract" in rendered
+    assert '"citation_ids": [3]' in rendered
 
 
 def test_format_key_passage_block_only_outputs_passages():
@@ -2066,7 +2360,7 @@ async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(moc
         elif any("professional sub report writer" in msg.get("content", "") for msg in messages):
             report_calls.append(messages)
             if len(report_calls) == 1:
-                return {"content": "# 3 企业经营与行业分析\n\ncontent without subsection headings"}
+                return {"content": "content without markdown headings"}
             return {"content": "# 3 企业经营与行业分析\n\n## 3.1 经营风险评价\nfake content 1"}
         elif any("structured sidecar" in msg.get("content", "") for msg in messages):
             return {"content": '{"chapter_summary":"摘要","key_findings":[],"risk_points":[]}'}
@@ -2123,7 +2417,7 @@ async def test_generate_sub_report_masks_retry_reason_in_sensitive_mode_logs(moc
     feedback_message = report_calls[1][-1]
     assert feedback_message["role"] == "user"
     assert "Previous Attempt Feedback" in feedback_message["content"]
-    assert "error_code: HEADING_COUNT_MISMATCH" in feedback_message["content"]
+    assert "error_code: HEADING_MISSING" in feedback_message["content"]
     assert "location: markdown_headings" in feedback_message["content"]
     assert "heading count insufficient" not in feedback_message["content"]
     assert "<retry_feedback>" in feedback_message["content"]
@@ -2205,15 +2499,15 @@ def test_subsection_outline_prompt_mentions_coverage_channels(has_template):
     prompt_text = "\n".join(message["content"] for message in rendered)
     normalized_prompt = " ".join(prompt_text.split())
 
-    assert "key passages" in normalized_prompt.lower()
-    assert "coverage passages" in normalized_prompt.lower()
-    assert "relevance signal" in normalized_prompt
-    assert "completeness signal" in normalized_prompt
+    assert "evidence cards" in normalized_prompt.lower()
+    assert "outline_excerpt" in normalized_prompt
+    assert "selected_passages" in normalized_prompt
+    assert "coverage_passages" in normalized_prompt
     assert "do not by themselves require a new subsection" in normalized_prompt
     assert "evidence never creates" in normalized_prompt.lower()
 
 
-def test_subsection_outline_prompt_provenance_tokens_match_actual_block_format():
+def test_subsection_outline_prompt_describes_evidence_card_format():
     """Prompt 描述的溯源元数据标记必须与代码实际产出的块格式一致。
 
     双向绑定：代码侧断言 build_coverage_passage_block / format_key_passage_block
@@ -2221,14 +2515,6 @@ def test_subsection_outline_prompt_provenance_tokens_match_actual_block_format()
     任一侧格式漂移都会失败，防止 prompt 与实现脱节（PR !380 审核意见：
     prompt 描述了不存在的行内 [doc:N] 标记）。
     """
-    coverage_block = build_coverage_passage_block([(1, ["sample coverage passage"])])
-    key_block = format_key_passage_block({"key_passages": ["sample key passage"]}, 2)
-
-    # 代码实际产出的溯源标记。
-    assert "===== COVERAGE PASSAGES =====" in coverage_block
-    assert "Document 1 coverage passages:" in coverage_block
-    assert "Document 2 key passages:" in key_block
-
     rendered = build_prompt_messages(
         "sub_section_outline",
         {
@@ -2241,11 +2527,11 @@ def test_subsection_outline_prompt_provenance_tokens_match_actual_block_format()
     )
     prompt_text = "\n".join(message["content"] for message in rendered)
 
-    # Prompt 的 provenance 说明必须覆盖同样的标记（含 key 通道头部）。
-    assert "Document N key passages:" in prompt_text
-    assert "Document N coverage passages:" in prompt_text
-    assert "===== COVERAGE PASSAGES =====" in prompt_text
-    assert "provenance metadata" in prompt_text
+    assert "Outline Evidence Cards" in prompt_text
+    assert "outline_excerpt" in prompt_text
+    assert "selected_passages" in prompt_text
+    assert "coverage_passages" in prompt_text
+    assert "Citation IDs are internal metadata" in prompt_text
 
 
 @pytest.mark.parametrize("has_template", [False, True])

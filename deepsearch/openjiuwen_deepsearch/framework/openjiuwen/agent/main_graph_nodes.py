@@ -16,7 +16,9 @@ from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import record_main_node
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.models import BriefOutline, BriefWorkflowState
 from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
 from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
@@ -91,10 +93,6 @@ from openjiuwen_deepsearch.common.exception import (
     CustomValueException,
 )
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
-    StopRequested,
-    raise_if_stop_requested,
-)
 from openjiuwen_deepsearch.config.config import (
     Config,
     LocalSearchEngineConfig,
@@ -183,8 +181,7 @@ class StartNode(Start):
     """
 
     async def invoke(self, inputs: Input, session: Session, context: ModelContext):
-        """
-        入口初始化节点
+        """初始化报告上下文并记录主图起始节点。
 
         Args:
             inputs: 节点入参
@@ -192,6 +189,7 @@ class StartNode(Start):
             context: 全局上下文
         """
 
+        record_main_node(session)
         # 初始化search_context
         original_query = inputs.get("query", "")
         search_context = SearchContext(
@@ -228,7 +226,7 @@ class StartNode(Start):
             agent_config["outline_interaction_max_rounds"] = origin_agent_config.get(
                 "outline_interaction_max_rounds", 3
             )
-            agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 5)
+            agent_config["outliner_max_section_num"] = origin_agent_config.get("outliner_max_section_num", 10)
             agent_config["source_tracer_research_trace_source_switch"] = origin_agent_config.get(
                 "source_tracer_research_trace_source_switch", True
             )
@@ -272,11 +270,7 @@ class StartNode(Start):
             agent_config["agent_llm_timeouts"] = origin_agent_config.get("agent_llm_timeouts", {})
             agent_config["report_type"] = origin_agent_config.get("report_type", None)
             agent_config["coverage_rule_block_enable"] = origin_agent_config.get("coverage_rule_block_enable", True)
-            # 宿主会话归属标识:写入会话 config 随快照落盘,resume 不重跑
-            # StartNode 故归属保持原始值;宿主认领时校验,防跨会话误认领。
-            agent_config["host_session_id"] = origin_agent_config.get("host_session_id", "")
             agent_config["exclusion_constraint_enable"] = origin_agent_config.get("exclusion_constraint_enable", False)
-
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
         service_config["interrupt_feedback"] = inputs.get("interrupt_feedback", "")
@@ -888,12 +882,6 @@ class ReporterNode(BaseNode):
     def _post_handle(self, inputs: Input, algorithm_output: dict, session: Session, context: ModelContext):
         # generate fail
         if not algorithm_output.get("success"):
-            # 节点级停止检查（reviewer 对照实验验证的注入位置）：报告生成失败
-            # 返回 END 之前，若用户已请求停止，必须抛 StopRequested 走异常保存
-            # 分支（写入 reporter pending_node），而不是让图"正常完成"——
-            # 引擎正常完成路径会清除 checkpoint，续跑只能回 stage1 重头开始。
-            # 放在写 error 状态之前：停止时保留节点入口状态，resume 干净续跑。
-            raise_if_stop_requested()
             current_report = session.get_global_state("search_context.current_report")
             if current_report:
                 current_report.report_content = "error: " + algorithm_output.get("report_str")
@@ -947,6 +935,7 @@ class EndNode(End):
         Returns:
             Output: 包含序列化后的 `final_result` 字段。
         """
+        record_main_node(session)
         logger.info(f"[EndNode] Start EndNode.")
         final_result = session.get_global_state("search_context.final_result") or {}
         response_content = final_result.get("response_content", "") or ""
@@ -1048,6 +1037,7 @@ class GenerateQuestionsNode(BaseNode):
                     llm_model_name=llm_model_name,
                     report_type=report_type)
 
+    @moderation_retry_scope
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
 
@@ -1306,6 +1296,7 @@ class OutlineNode(BaseNode):
             selected_method,
         )
 
+    @moderation_retry_scope
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)
@@ -1560,11 +1551,6 @@ class SourceTracerNode(BaseNode):
             check_result_dict = await self.build_citation_checker_result(
                 citation_checker_info, datas, current_inputs.get("llm_model_name", "")
             )
-        except StopRequested:
-            # 用户停止不降级为 check_result=False 的正常返回（那会让图
-            # "正常完成"并清除 checkpoint），直接上抛走异常保存分支，
-            # resume 时从本节点续跑。
-            raise
         except CustomException as e:
             # 溯源异常的情况下，设置check_result为False，让post_handle记录异常信息返回出去
             if LogManager.is_sensitive():
@@ -1947,10 +1933,6 @@ class SourceTracerInferNode(BaseNode):
             check_infos["llm_model_name"] = current_inputs.get("llm_model_name", "")
             check_infos["language"] = current_inputs.get("language", "zh")
 
-        except StopRequested:
-            # 用户停止不降级为 infer_success=False 的正常返回（那会让图
-            # "正常完成"并清除 checkpoint），直接上抛走异常保存分支。
-            raise
         except Exception as e:
             error_msg = f"source_tracer_infer failed."
             if LogManager.is_sensitive():
@@ -2388,11 +2370,6 @@ class VLMChartGeneratorNode(BaseNode):
 
             vlm_chart_generator_output = await self._run_vlm_chart_generator_handle(current_inputs)
 
-        except StopRequested:
-            # 用户停止不降级为 error_msg 的正常返回（本节点通用 Exception
-            # 分支会把停止吞成图表失败、转 source_tracer 继续跑完并清除
-            # checkpoint），直接上抛走异常保存分支，resume 时从本节点续跑。
-            raise
         except CustomException as e:
             if LogManager.is_sensitive():
                 logger.error(f"[VLMChartGeneratorNode] vlm_chart_generator failed.")
@@ -2778,11 +2755,6 @@ class FindActionSpaceNode(BaseNode):
                     success=False,
                     error="Failed to find action after all retries",
                 )
-        except StopRequested:
-            # 停止信号不得降级为 (success=False) fallback（那会让 search 图
-            # "正常完成"到 END，引擎清 checkpoint，续跑从头重跑）。原样
-            # 上抛走异常保存分支，resume 时从本节点续跑。
-            raise
         except Exception as e:
             logger.error(
                 "[FindActionSpaceNode] exception (fallback to end): %s",
@@ -3137,11 +3109,6 @@ class RunActionNode(BaseNode):
                 time.time() - action_start_time,
             )
             return self._post_handle(inputs, algorithm_output, session, context)
-        except StopRequested:
-            # 停止信号不得降级为 (success=False, END) fallback（那会让 search
-            # 图"正常完成"，引擎清 checkpoint，续跑从头重跑）。原样上抛走
-            # 异常保存分支，resume 时从本节点续跑。
-            raise
         except Exception as e:
             logger.error(
                 "[RunActionNode] exception (fallback to end): %s",
@@ -3589,11 +3556,6 @@ class ValidateNewStateNode(BaseNode):
 
             result = self._post_handle(inputs, algorithm_output, session, context)
             return result
-        except StopRequested:
-            # 停止信号不得降级为 (success=False, END) fallback（那会让 search
-            # 图"正常完成"，引擎清 checkpoint，续跑从头重跑）。原样上抛走
-            # 异常保存分支，resume 时从本节点续跑。
-            raise
         except Exception as e:
             logger.error(
                 "[ValidateNewStateNode] exception (fallback to end): %s",

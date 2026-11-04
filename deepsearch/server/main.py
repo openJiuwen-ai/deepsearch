@@ -15,6 +15,7 @@ from server.core.cancel_bus import start_cancel_listener, stop_cancel_listener
 from server.core.database import Base, engine
 from server.core.db_sync import run_database_sync
 from server.core.request_logging import add_request_logging_middleware
+from server.core.report_progress_registry import report_progress_registry
 from server.core.runner_init import init_runner, shutdown_runner
 from server.deepsearch.core.models.mcp_server_model import McpServerModel
 from server.deepsearch.core.models.report_template import ReportTemplateDB
@@ -39,7 +40,14 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 @asynccontextmanager
 async def lifespan_func(input_app: FastAPI):
-    """管理应用启动与关闭阶段的初始化和资源清理。"""
+    """管理应用初始化及关闭时的执行、取消监听和进度发布资源。
+
+    Args:
+        input_app: 当前 FastAPI 应用。
+
+    Yields:
+        应用运行阶段，退出后关闭服务资源。
+    """
     # Startup
     logger.info("🚀 Starting openJiuwen-DeepSearch Server...")
     await init_runner()
@@ -86,7 +94,8 @@ async def lifespan_func(input_app: FastAPI):
 
     # Shutdown
     logger.info("🛑 Shutting down openJiuwen-DeepSearch Server...")
-    # 先停止取消监听，再关闭 Runner
+    # 先停止进度发布与取消监听，再关闭 Runner。
+    await report_progress_registry.shutdown()
     await stop_cancel_listener()
     await shutdown_runner()
     logger.info("✅ openJiuwen-DeepSearch Server shutdown completed")

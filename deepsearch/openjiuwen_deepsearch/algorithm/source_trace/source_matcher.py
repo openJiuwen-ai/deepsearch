@@ -6,7 +6,6 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -160,11 +159,6 @@ async def call_llm_for_trace(source_type: str, search_record: Dict[str, Any],
         # 解析并处理结果
         return parse_trace_response(llm_result, source_type)
 
-    except StopRequested:
-        # 用户停止不降级为空列表（source_tracer 对空结果直接正常返回，
-        # SourceTracerNode 的节点级停止穿透将收不到异常，图"正常完成"并
-        # 清除 checkpoint），直接上抛走异常保存分支。
-        raise
     except Exception as e:
         # 调用大模型获取引用语句的异常在此处抑制，返回空列表出去，不影响后续流程
         if LogManager.is_sensitive():

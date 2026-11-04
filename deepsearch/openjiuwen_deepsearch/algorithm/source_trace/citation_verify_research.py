@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import re
 import difflib
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.source_trace.domain_source_mapping import lookup_source, save_mapping
 from openjiuwen_deepsearch.algorithm.source_trace.source_match_algo import classify_and_match
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
@@ -22,10 +23,6 @@ from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output, safe_float
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
-    StopRequested,
-    gather_with_stop,
-)
 
 logger = logging.getLogger(__name__)
 MAX_LLM_RETRY_TIMES = 3
@@ -220,10 +217,6 @@ class CitationVerifyResearch:
             state["results"][batch_idx] = result
             state["completed_count"] += 1
             logger.info(f"[{log_prefix}]: 批次 {batch_idx + 1} 处理完成")
-        except StopRequested:
-            # 用户停止不做批次级降级（占位结果会让节点"正常完成"进而
-            # 清除 checkpoint），直接上抛由 gather_with_stop 统一收口。
-            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 logger.warning(f"[{log_prefix}]: 批次 {batch_idx + 1} 处理失败")
@@ -308,9 +301,7 @@ class CitationVerifyResearch:
                 self.process_batch(batch_idx, batch, context))
             tasks.append(task)
 
-        # StopRequested 放行后需先取消并等待全部剩余批次退出再重抛，
-        # 避免孤儿批次在 checkpoint 落盘后继续写 session 状态污染快照。
-        await gather_with_stop(*tasks)
+        await asyncio.gather(*tasks)
         logger.info(f"[CITATION VERIFY]: {log_prefix} {len(batches)} 批次处理完成")
 
     async def process_batches_with_concurrency(self, data: list, batch_size: int,
@@ -599,6 +590,7 @@ class CitationVerifyResearch:
         return await self.extract_messages_with_split_retry(
             handle_datas, attempt=1, lineage="root", semaphore=semaphore)
 
+    @moderation_retry_scope
     async def extract_messages_with_split_retry(
             self, handle_datas: list, attempt: int, lineage: str,
             semaphore: asyncio.Semaphore) -> list:
@@ -616,10 +608,6 @@ class CitationVerifyResearch:
         """
         try:
             return await self.extract_messages_once(handle_datas, semaphore)
-        except StopRequested:
-            # 用户停止不重试、不降级：立即向上传播，让 pregel 走异常保存
-            # 分支落盘 __error__ 快照，resume 时从 source_tracer 续跑。
-            raise
         except CitationVerificationAttemptError as error:
             failure = error
         except Exception as error:
@@ -644,9 +632,7 @@ class CitationVerifyResearch:
                 handle_datas, attempt + 1, f"{lineage}.retry", semaphore)
 
         midpoint = len(handle_datas) // 2
-        # gather_with_stop:二分重试的裸 gather 在停止时会孤儿化另一分支,
-        # 继续烧 LLM 重试;同文件 :311 主入口同口径。
-        left_results, right_results = await gather_with_stop(
+        left_results, right_results = await asyncio.gather(
             self.extract_messages_with_split_retry(
                 handle_datas[:midpoint], attempt + 1, f"{lineage}.L", semaphore),
             self.extract_messages_with_split_retry(

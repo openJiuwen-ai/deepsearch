@@ -8,15 +8,20 @@ import re
 from openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research import CitationCheckerResearch
 from openjiuwen_deepsearch.common.exception import CustomException
 from openjiuwen_deepsearch.common.status_code import StatusCode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
+_REFERENCE_SECTION_TITLES = frozenset({
+    "参考文章", "参考文献", "参考资料", "references", "reference articles",
+})
+_SOURCE_TRACER_RESULT_MARKER_RE = re.compile(
+    r"(?<!\\)\[source_tracer_result\](?:!)?\[.*?\]\(", re.DOTALL
+)
 
 
 def remove_last_section(markdown_text):
     """
-    删除Markdown文本中最后一个标题及其后面的所有内容
+    仅删除最后一个已识别的参考文献标题之后的内容。
 
     参数:
         markdown_text (str): Markdown格式的文本
@@ -32,8 +37,11 @@ def remove_last_section(markdown_text):
     if not headings:
         return markdown_text  # 如果没有标题，返回原文本
 
-    # 获取最后一个标题的位置
-    last_heading_end = headings[-1][1]
+    last_heading_start, last_heading_end = headings[-1]
+    heading = markdown_text[last_heading_start:last_heading_end]
+    heading_title = re.sub(r"^#{1,6}\s+", "", heading).strip().lower()
+    if heading_title not in _REFERENCE_SECTION_TITLES:
+        return markdown_text
 
     # 截取到最后一个标题之前的内容
     return markdown_text[:last_heading_end]
@@ -58,10 +66,16 @@ def preprocess_info(report: str, datas: list, language: str) -> dict:
             "CitationChecker: empty report, skipped citation check.")
         return dict(need_check=False)
 
-    if len(datas) == 0:
+    if len(datas) == 0 and not _SOURCE_TRACER_RESULT_MARKER_RE.search(report):
         logger.warning(
             "CitationChecker: empty datas means no inline citation in the text, skipped citation check.")
         return dict(need_check=False)
+
+    if len(datas) == 0:
+        logger.warning(
+            "CitationChecker: empty datas but source markers remain in the text, "
+            "continue citation check to remove unmatched markers."
+        )
 
     report = remove_last_section(report)
 
@@ -94,10 +108,6 @@ async def postprocess_by_citation_checker(report: dict, datas: list, llm_model: 
     try:
         citation_checker = CitationCheckerResearch(llm_model)
         citation_checker_result_str = await citation_checker.checker(report, datas)
-    except StopRequested:
-        # 用户停止不包装：包装成 CustomException 会丢失异常类型，导致
-        # 节点层 except StopRequested 接不住而再次被降级为正常返回。
-        raise
     except CustomException as e:
         logger.error(f'[CITATION CHECKER]: citation checker error: {e}')
         raise e

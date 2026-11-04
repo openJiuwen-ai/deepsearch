@@ -24,6 +24,13 @@ class LLMConfig(BaseModel):
         default=False,
         description="是否在消息中追加 think 标签"
     )
+    moderation_mask_retry: bool = Field(
+        default=False,
+        description=(
+            "是否启用内容风控补救（默认关，恢复效果与质量需实验验证）。"
+            "复用调用方原有重试预算：输入侧仅掩 user 资料字段，输出侧追加提示；不增加尝试次数。"
+        )
+    )
 
 
 class WebSearchEngineConfig(BaseModel):
@@ -398,7 +405,7 @@ class AgentConfig(BaseModel):
     )
     workflow_human_in_the_loop: bool = Field(default=True, description="工作流是否启用人机交互")
     outliner_max_section_num: int = Field(
-        default=5,
+        default=10,
         ge=1,
         le=OUTLINER_SECTION_NUM_MAX,
         description=f"大纲章节数量，取值范围:[1,{OUTLINER_SECTION_NUM_MAX}]",
@@ -461,11 +468,6 @@ class AgentConfig(BaseModel):
 
     agent_llm_timeouts: Dict[str, int] = Field(default_factory=dict, description="按 agent 配置的 LLM 总超时时间")
 
-    # 宿主会话归属标识:由宿主(jiuwenswarm)注入,标识本研究会话的创建者。
-    # StartNode 将其写入会话 config 并随快照落盘;宿主认领(probe/扫库)
-    # 时校验归属,不匹配则拒绝续跑,防止跨会话/跨用户误认领陈旧快照。
-    host_session_id: str = Field(default="", description="宿主会话ID,用于快照归属校验")
-
     @model_validator(mode="before")
     @classmethod
     def _reject_retired_search_fetch_keys(cls, data: Any) -> Any:
@@ -510,12 +512,12 @@ class ServiceConfig(BaseModel):
     outliner_max_generate_outline_retry_num: int = Field(default=3, description="最大生成大纲重试次数")
 
     # 规划节点基础参数
-    planner_max_step_num: int = Field(default=2, description="最大步骤数量")
+    planner_max_step_num: int = Field(default=3, description="最大步骤数量")
     planner_max_retry_num: int = Field(default=3, description="最大重试次数")
 
     # 信息收集节点参数
     info_collector_max_search_query_count: int = Field(
-        default=2,
+        default=5,
         ge=0,
         description="单轮最大搜索查询数量",
     )
@@ -524,7 +526,7 @@ class ServiceConfig(BaseModel):
     info_collector_max_retry_num: int = Field(default=3, description="信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）")
     info_collector_allow_programmer: bool = Field(default=False, description="")
     info_collector_webpage_enrich_max_urls: int = Field(
-        default=3,
+        default=5,
         ge=1,
         le=10,
         description="网页正文增强每轮最多抓取并增强的 URL 数量",
@@ -546,6 +548,10 @@ class ServiceConfig(BaseModel):
     )
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=True, description="报告插入图表开关")
+    professional_report_adaptive_rationales: bool = Field(
+        default=False,
+        description="专业版报告是否启用需求清单映射与复杂度自适应 rationale",
+    )
 
     # 溯源节点参数
     source_tracer_citation_verify_max_concurrency_num: int = Field(default=30, description="溯源校验最大并发数量")

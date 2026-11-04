@@ -7,6 +7,7 @@ import logging
 import re
 
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
+from openjiuwen_deepsearch.utils.moderation.content import evidence_spans
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,15 @@ FENCED_BLOCK_PATTERN = re.compile(
 # Maximum characters allowed in a rationale description.
 MAX_RATIONALE_DESC_LEN = 200
 
+# Upper bounds used by the adaptive rationale-count policy.
+RATIONALE_COUNT_LIMITS = {
+    "simple": 10,
+    "medium": 15,
+    "complex": 20,
+}
+DEFAULT_RATIONALE_COUNT_RANGE = (5, 10)
+MAX_RATIONALES_PER_SECTION = RATIONALE_COUNT_LIMITS["complex"]
+
 #: content_date 选材的时序分权重上限（排序键 = 覆盖分 + 权重×时效分，
 #: 实际权重 = 该值 × 候选池有日期段落占比，信号越少自动趋零）；
 #: 数值即时间分能反超的覆盖度差距上限。
@@ -102,6 +112,7 @@ def build_citation_infos(classified_content: list) -> str:
     stays publication-time-only in those cases.
     """
     infos = ""
+    body_spans = []
     for item in classified_content or []:
         content = item.get("passage_text", "") or item.get("original_content", "")
         scores_str = ""
@@ -114,10 +125,14 @@ def build_citation_infos(classified_content: list) -> str:
                 f"|||content_time: {content_time.get('start', '')}"
                 f"~{content_time.get('end', '')}"
             )
-        infos += (
+        prefix = (
             f"\n[citation:{item.get('index', 1)} begin]publish_time: "
             f"{item.get('doc_time') or ''}{content_time_str}|||"
             f"source: {item.get('title', '')}{scores_str}|||"
-            f"content: {content}[citation:{item.get('index', 1)} end]"
+            f"content: "
         )
-    return infos
+        start = len(infos) + len(prefix)
+        body = str(content)
+        body_spans.append((start, start + len(body)))
+        infos += f"{prefix}{body}[citation:{item.get('index', 1)} end]"
+    return evidence_spans(infos, body_spans)

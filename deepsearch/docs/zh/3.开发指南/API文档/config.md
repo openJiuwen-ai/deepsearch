@@ -513,13 +513,14 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_max_tool_call_turns_per_query**(int, 可选)：单个 collector query 最大工具调用轮次。默认值：`2`。
 - **info_collector_max_retry_num**(int, 可选)：信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）。默认值：`3`。
 - **info_collector_allow_programmer**(bool, 可选)：预留字段；当前运行时未接入，设置不会改变信息收集器行为。默认值：`False`。
-- **info_collector_webpage_enrich_max_urls**(int, 可选)：网页正文增强每轮最多抓取并增强的 URL 数量。默认值：`3`。
+- **info_collector_webpage_enrich_max_urls**(int, 可选)：网页正文增强每轮最多抓取并增强的 URL 数量。默认值：`5`。
 - **info_collector_webpage_enrich_fetch_timeout_seconds**(int, 可选)：网页正文增强单个 URL 抓取超时时间，单位秒。默认值：`45`。
 
 ### 报告节点参数
 - **sub_report_classify_doc_infos_res_top_k_num**(int, 可选)：子报告中按覆盖度评分在每个 rationale 下选择的 top-k 段落数量。默认值：`15`。
 - **report_max_generate_retry_num**(int, 可选)：生成内容最大重试次数。默认值：`3`。
 - **visualization_enable**(bool, 可选)：专业版报告插图可视化开关。默认值：`True`。不影响 Brief 报告的图文生成。
+- **professional_report_adaptive_rationales**(bool, 可选)：专业版报告是否启用需求清单映射与复杂度自适应 rationale。默认值：`False`。
 
 ### 溯源节点参数
 - **source_tracer_citation_verify_max_concurrency_num**(int, 可选)：溯源校验最大并发数量。默认值：`30`。

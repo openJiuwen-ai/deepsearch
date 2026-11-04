@@ -6,12 +6,12 @@ from dataclasses import dataclass, field
 from typing import Any, List, Dict, NamedTuple, Set
 import copy
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
@@ -228,6 +228,7 @@ def is_valid_supplement_triples(result, target=3):
                                         format(e=error_msg))
 
 
+@moderation_retry_scope
 async def call_model(model_name: str, prompt: str, user_input: dict, 
                      detection_func_and_args: dict = None, 
                      agent_name: str = AgentLlmName.SOURCE_TRACER_INFER.value):
@@ -262,9 +263,6 @@ async def call_model(model_name: str, prompt: str, user_input: dict,
                 else:
                     detection_func(llm_result)
             return llm_result
-        except StopRequested:
-            # 用户停止不重试、不降级为空结果，立即向上传播。
-            raise
         except CustomValueException as e:
             retries += 1
             logger.warning(f'[SOURCE TRACER INFER] retry: {retries}/{MAX_LLM_RETRY_TIMES}, '

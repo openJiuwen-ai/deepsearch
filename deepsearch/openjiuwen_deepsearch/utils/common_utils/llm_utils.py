@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Sequence, Any, get_args, get_origin
+from typing import Callable, Sequence, Any, get_args, get_origin
 
 import json_repair
 from openjiuwen.core.foundation.llm.schema.message import (
@@ -29,8 +29,8 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested, raise_if_stop_requested
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
+from openjiuwen_deepsearch.utils.moderation.detection import Source, detect_error, detect_response
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, cancel_context
 from openjiuwen_deepsearch.utils.log_utils.log_common import session_id_ctx
@@ -176,6 +176,8 @@ class _ConsumeLlmStreamRequest:
         stream_id: 当前流 ID。
         stream_meta: 附加流元数据。
         agent_name: 当前 agent 名称。
+        moderation_enabled: 是否检测流中的风控信号。
+        on_moderation_usage: 流被风控中断时，记录最近一次已收到的 usage。
     """
 
     llm: Any
@@ -186,6 +188,8 @@ class _ConsumeLlmStreamRequest:
     stream_id: str | None
     stream_meta: dict[str, Any] | None
     agent_name: str
+    moderation_enabled: bool = False
+    on_moderation_usage: Callable[[Any], None] | None = None
 
 
 def _normalize_agent_name(agent_name: Any) -> str:
@@ -957,30 +961,10 @@ def llm_error_chain_blob(exc: BaseException | None, *, max_depth: int = 8) -> st
 
 
 async def _call_model_method(method, primary_kwargs: dict):
-    """Invoke sync or async model methods without losing awaitables.
-
-    停止感知：invoke 等待期（thinking 模式可达分钟级）以固定间隔轮询停止
-    标志，命中即抛 StopRequested（普通 Exception，走异常保存分支保留
-    checkpoint）。sync 方法经 asyncio.to_thread 运行在线程池，无法中断：
-    停止传播时该线程成为孤儿（只读不写共享状态，结果被丢弃，进程退出
-    兜底回收）；async 方法直接取消并等待退出。
-    """
-    call = asyncio.ensure_future(
-        _call_model_method_raw(method, primary_kwargs))
-    try:
-        while True:
-            done, _ = await asyncio.wait({call}, timeout=_STOP_POLL_INTERVAL)
-            if done:
-                return call.result()
-            raise_if_stop_requested()
-    except BaseException:
-        await _cancel_pending_task(call)
-        raise
-
-
-async def _call_model_method_raw(method, primary_kwargs: dict):
+    """Invoke sync or async model methods without losing awaitables."""
     if inspect.iscoroutinefunction(method):
         return await method(**primary_kwargs)
+
     return await asyncio.to_thread(method, **primary_kwargs)
 
 
@@ -1263,36 +1247,46 @@ def _resolve_stream_options(llm_model: Any, need_include_usage: bool) -> dict | 
     return merged_options or None
 
 
-# 用户停止轮询间隔（秒）：LLM 调用等待期（流式 chunk 间隙/TTFT、非流式
-# invoke）内以该间隔检查停止标志，保证停止→StopRequested 异常延迟为秒级，
-# 在宿主 30s 硬杀窗口内可靠完成「停止→异常→快照落盘」闭环。
-_STOP_POLL_INTERVAL = 2.0
-# 停止传播时取消后台任务的宽限等待（秒）：等待 __anext__/to_thread 任务
-# 收到取消并完成清理；超时则放弃等待（孤儿由进程退出兜底）。
-_STOP_CANCEL_GRACE = 5.0
+def _record_llm_call_usage(usage_metadata: Any, start: float, session_id: str, agent_name: str) -> None:
+    """Record one received response, including filtered responses with usage."""
+    input_tokens, output_tokens, total_tokens = _extract_usage_tokens(usage_metadata)
+    cache_tokens = _extract_cache_tokens(usage_metadata)
+    llm_stat = {
+        "method_name": agent_name,
+        "duration": time.time() - start,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cache_tokens": cache_tokens,
+    }
+    add_workflow_llm_usage(
+        session_id=session_id,
+        token_usage=WorkflowLlmUsageDelta(
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            total_tokens=total_tokens, cache_tokens=cache_tokens,
+        ),
+        agent_name=agent_name,
+    )
+    metrics_logger.info(
+        f"{TIME_LOGGER_TAG} session_id: {session_id_ctx.get()} ------ [LLM CALL STATISTICS]: {llm_stat}"
+    )
 
 
-async def _cancel_pending_task(task: "asyncio.Future") -> None:
-    """取消并短暂等待后台任务退出（停止/异常传播的兜底清理）。"""
-    if task.done():
-        return
-    task.cancel()
-    await asyncio.wait({task}, timeout=_STOP_CANCEL_GRACE)
+def _raise_if_moderation_response(response: Any, source: Source) -> None:
+    signal = detect_response(response, source)
+    if signal is not None:
+        error = CustomValueException(
+            StatusCode.LLM_CALL_FAILED.code,
+            StatusCode.LLM_CALL_FAILED.errmsg.format(e=f"moderation detected: {signal.code}"),
+        )
+        error.moderation_signal = signal
+        raise error
 
 
-async def _drain_llm_stream(request: _ConsumeLlmStreamRequest) -> Any:
-    """在单个长驻消费 task 内驱动整个流并聚合完整结果。
-
-    停止感知（持续输出主检查点）：每轮迭代消费 chunk 前调用
-    ``raise_if_stop_requested``。高频 chunk 到达（间隔远小于轮询周期）时
-    不能只依赖等待期轮询兜底——旧实现下持续输出期间停止检测完全失效，
-    流会跑完并假完成，若为本节点最后一次 LLM 调用将触发快照清理。
-
-    ContextVar 生命周期：整个 ``async for`` 运行在同一 task context 内。
-    流生成器首轮迭代中写入的 ContextVar（如 LLM 调用追踪 ID）在后续
-    chunk 间保持有效；旧实现逐 chunk 用独立 ``ensure_future`` 驱动
-    ``__anext__``，每轮从外层消费协程复制旧上下文，跨 yield 的生成器
-    内部状态（调用 ID 等）在第二轮起丢失。
+async def _consume_llm_stream(
+    request: _ConsumeLlmStreamRequest,
+) -> Any:
+    """消费流式 LLM 输出并聚合完整结果。
 
     Args:
         request: 流消费阶段的具名上下文参数。
@@ -1301,70 +1295,48 @@ async def _drain_llm_stream(request: _ConsumeLlmStreamRequest) -> Any:
         Any: 聚合后的完整响应块。
     """
     full_chunk = None
-    stream = request.llm.stream(**request.stream_kwargs)
-    async for chunk in stream:
-        # chunk 到达即查停止：持续输出场景的主检查点（秒级命中）。
-        raise_if_stop_requested()
-        _raise_if_cancelled()
-        if full_chunk is None:
-            full_chunk = chunk
-        else:
-            full_chunk += chunk
-            if len(full_chunk.content) >= MAX_LLM_RESP_LENGTH:
-                logger.warning(
-                    "[llm_astream] llm response is too long, "
-                    "truncate to %s characters", MAX_LLM_RESP_LENGTH
-                )
-                full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
-                break
-        chunk_content = getattr(chunk, "content", "")
-        if request.can_write_stream and request.need_stream_out and chunk_content:
-            payload = {
-                "message_id": request.stream_id,
-                "agent": request.agent_name,
-                "content": chunk_content,
-                "message_type": MessageType.MESSAGE_CHUNK.value,
-                "event": StreamEvent.MESSAGE.value,
-                "created_time": get_current_time(),
-            }
-            if request.stream_meta:
-                payload.update(dict(request.stream_meta))
-            await request.session.write_custom_stream(payload)
-    # 正常返回前最后检查一次停止：停止已置位时本次调用不再产出结果，
-    # 交由上层节点边界统一走停止分支，防最后一次 LLM 调用假完成清快照。
-    raise_if_stop_requested()
-    return full_chunk
-
-
-async def _consume_llm_stream(
-    request: _ConsumeLlmStreamRequest,
-) -> Any:
-    """消费流式 LLM 输出并聚合完整结果（外层停止轮询壳）。
-
-    停止感知：流驱动整体运行在单个消费 task（``_drain_llm_stream``）内，
-    本协程以固定间隔轮询停止标志；等待期（thinking 模式下首 token 延迟
-    可达分钟级、chunk 间隙）命中即取消消费 task 并抛 StopRequested（普通
-    Exception，走 agent-core 异常保存分支保留 checkpoint）。持续输出场景
-    由消费 task 内每个 chunk 前的检查点覆盖，与本层轮询互为补充。
-
-    Args:
-        request: 流消费阶段的具名上下文参数。
-
-    Returns:
-        Any: 聚合后的完整响应块。
-    """
-    consumer = asyncio.ensure_future(_drain_llm_stream(request))
+    received_chunk = False
+    latest_usage = None
     try:
-        while True:
-            done, _ = await asyncio.wait({consumer}, timeout=_STOP_POLL_INTERVAL)
-            if done:
-                break
-            # chunk 间隙/TTFT 等待期内的用户停止检查（秒级响应）。
-            raise_if_stop_requested()
-        return consumer.result()
-    except BaseException:
-        await _cancel_pending_task(consumer)
+        async for chunk in request.llm.stream(**request.stream_kwargs):
+            _raise_if_cancelled()
+            received_chunk = True
+            # Match the framework's chunk merge: the latest reported usage wins.
+            latest_usage = getattr(chunk, "usage_metadata", None) or latest_usage
+            if request.moderation_enabled:
+                _raise_if_moderation_response(chunk, "stream")
+            if full_chunk is None:
+                full_chunk = chunk
+            else:
+                full_chunk += chunk
+                if len(full_chunk.content) >= MAX_LLM_RESP_LENGTH:
+                    logger.warning(
+                        "[llm_astream] llm response is too long, "
+                        "truncate to %s characters", MAX_LLM_RESP_LENGTH
+                    )
+                    full_chunk.content = full_chunk.content[:MAX_LLM_RESP_LENGTH]
+                    break
+            chunk_content = getattr(chunk, "content", "")
+            if request.can_write_stream and request.need_stream_out and chunk_content:
+                payload = {
+                    "message_id": request.stream_id,
+                    "agent": request.agent_name,
+                    "content": chunk_content,
+                    "message_type": MessageType.MESSAGE_CHUNK.value,
+                    "event": StreamEvent.MESSAGE.value,
+                    "created_time": get_current_time(),
+                }
+                if request.stream_meta:
+                    payload.update(dict(request.stream_meta))
+                await request.session.write_custom_stream(payload)
+        if request.moderation_enabled:
+            _raise_if_moderation_response(full_chunk, "stream")
+    except Exception as error:
+        if request.moderation_enabled and received_chunk and request.on_moderation_usage is not None:
+            if detect_error(error) is not None:
+                request.on_moderation_usage(latest_usage)
         raise
+    return full_chunk
 
 
 async def llm_astream(*args, **kwargs):
@@ -1379,6 +1351,7 @@ async def llm_astream(*args, **kwargs):
         need_stream_out (bool): 是否将增量内容写入会话流。
         stream_meta (dict | None): 附加流事件字段。
         stream_options (dict | None): 传入模型 SDK 的流式配置。
+        on_moderation_usage (Callable | None): 记录被风控中断的流已收到的 usage，不继续读流。
 
     Returns:
         Any: 聚合后的完整 LLM 响应块。
@@ -1391,10 +1364,10 @@ async def llm_astream(*args, **kwargs):
     need_stream_out = kwargs.get("need_stream_out", False)
     stream_meta = kwargs.get("stream_meta", None)
     stream_options = kwargs.get("stream_options", None)
+    moderation_enabled = bool(kwargs.get("moderation_enabled", False))
+    on_moderation_usage = kwargs.get("on_moderation_usage")
 
     _raise_if_cancelled()
-    # 用户停止检查：普通 Exception 走保存分支（见 ainvoke_llm_with_stats 处注释）。
-    raise_if_stop_requested()
     full_chunk = None
     can_write_stream = True
     session = None
@@ -1460,6 +1433,8 @@ async def llm_astream(*args, **kwargs):
                     stream_id=stream_id,
                     stream_meta=stream_meta,
                     agent_name=agent_name,
+                    moderation_enabled=moderation_enabled,
+                    on_moderation_usage=on_moderation_usage,
                 )),
                 timeout=resolved_timeout.timeout,
             )
@@ -1473,6 +1448,8 @@ async def llm_astream(*args, **kwargs):
                 stream_id=stream_id,
                 stream_meta=stream_meta,
                 agent_name=agent_name,
+                moderation_enabled=moderation_enabled,
+                on_moderation_usage=on_moderation_usage,
             ))
     except asyncio.TimeoutError as exc:
         if can_write_stream and need_stream_out:
@@ -1527,8 +1504,11 @@ def _parse_invoke_llm_args(args, kwargs) -> dict:
     }
 
 
-async def ainvoke_llm_with_stats(*args, **kwargs):
-    """调用 LLM 并按配置记录调用统计。
+async def _ainvoke_llm_with_stats_impl(*args, **kwargs):
+    """调用 LLM 并按配置记录统计，保留既有 thinking 兼容处理。
+
+    公共入口 `ainvoke_llm_with_stats` 只为调用方下一轮重试准备风控策略，
+    不在此调用之外增加独立的风控重试循环。
 
     Args:
         llm (dict): LLM 配置字典，包含 model 与 model_name。
@@ -1553,9 +1533,6 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     stream_meta = invoke_args["stream_meta"]
 
     _raise_if_cancelled()
-    # 用户停止（普通 Exception）：走 agent-core 异常保存分支，保留 checkpoint。
-    # 与 _raise_if_cancelled（CancelledError → 清除分支）语义相反，勿混淆。
-    raise_if_stop_requested()
     if not llm:
         raise CustomValueException(
             error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,
@@ -1585,6 +1562,10 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     start = None
     if stats_info_llm:
         start = time.time()
+
+    def record_call_usage(usage_metadata):
+        if stats_info_llm:
+            _record_llm_call_usage(usage_metadata, start, session_id, agent_name)
 
     # 真正调用llm处
     messages = transfer_to_jiuwen_messages(messages)
@@ -1640,12 +1621,9 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
                     need_stream_out=False,
                     stream_meta=stream_meta,
                     stream_options=resolved_stream_options,
+                    moderation_enabled=bool(llm.get("moderation_mask_retry")),
+                    on_moderation_usage=record_call_usage if stats_info_llm else None,
                 )
-        except StopRequested:
-            # 用户停止原样上抛：一旦包装成 LLM_CALL_FAILED，下游按类型识别
-            # StopRequested 的分支（agent run 跳过 release、harness 停止
-            # 快照 probe 识别）将全部失效，停止语义退化为普通 LLM 失败。
-            raise
         except Exception as e:
             detail = _format_llm_invoke_exception(e)
             corr = format_llm_log_correlation_suffix()
@@ -1678,13 +1656,12 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
                 need_stream_out=need_stream_out,
                 stream_meta=stream_meta,
                 stream_options=_resolve_call_stream_options(target_model, stats_info_llm),
+                moderation_enabled=bool(llm.get("moderation_mask_retry")),
+                on_moderation_usage=record_call_usage if stats_info_llm else None,
             )
 
         try:
             response = await _invoke_stream_model(llm_model)
-        except StopRequested:
-            # 用户停止不触发 thinking fallback 重试：停止必须立即传播落盘。
-            raise
         except Exception as e:
             fallback_succeeded = False
             if not _has_available_inactive_thinking_fallback(llm):
@@ -1709,39 +1686,70 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
             if not fallback_succeeded:
                 raise
 
-    if stats_info_llm:
-        duration = time.time() - start
-
-        # get usage token usage info
-        input_tokens, output_tokens, total_tokens = _extract_usage_tokens(response.usage_metadata)
-        cache_tokens = _extract_cache_tokens(response.usage_metadata)
-
-        llm_stat = {
-            "method_name": agent_name,
-            "duration": duration,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": total_tokens,
-            "cache_tokens": cache_tokens,
-        }
-        add_workflow_llm_usage(
-            session_id=session_id,
-            token_usage=WorkflowLlmUsageDelta(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                cache_tokens=cache_tokens,
-            ),
-            agent_name=agent_name,
-        )
-        metrics_logger.info(
-            f"{TIME_LOGGER_TAG} session_id: {session_id_ctx.get()} ------ [LLM CALL STATISTICS]: {llm_stat}"
-        )
+    record_call_usage(getattr(response, "usage_metadata", None))
+    if llm.get("moderation_mask_retry"):
+        _raise_if_moderation_response(response, "response")
 
     response.content = _extract_json(response.content)
     if schema is not None:
         return _model_validate_repaired_json(schema, response.content)
     return _unify_responnse(response)
+
+
+async def ainvoke_llm_with_stats(*args, **kwargs):
+    """Invoke once; recovery changes only the next caller-owned attempt."""
+    request_key = kwargs.pop("moderation_retry_key", None)
+    invoke_args = _parse_invoke_llm_args(args, kwargs)
+    llm = invoke_args["llm"]
+    messages = invoke_args["messages"]
+    if not (isinstance(llm, dict) and llm.get("moderation_mask_retry")) or not isinstance(messages, list):
+        return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
+
+    from openjiuwen_deepsearch.utils.moderation import mask as moderation_mask
+    from openjiuwen_deepsearch.utils.moderation.retry import get_moderation_retry_policy
+
+    agent = invoke_args["agent_name"] or "-"
+    policy = get_moderation_retry_policy(llm, agent, request_key)
+    if policy is None:
+        return await _ainvoke_llm_with_stats_impl(*args, **kwargs)
+    policy.attempts += 1
+    current_messages = await policy.prepare_async(messages)
+    call_args, call_kwargs = _with_messages(args, kwargs, current_messages)
+    try:
+        response = await _ainvoke_llm_with_stats_impl(*call_args, **call_kwargs)
+    except Exception as error:
+        signal = detect_error(error)
+        if signal is not None:
+            if signal.side == moderation_mask.SIDE_OUTPUT:
+                policy.constrain_output = True
+                strategy = "output_constraint"
+            else:
+                policy.mask_input = True
+                strategy = "input_mask"
+            policy.pending_recovery = True
+            logger.info(
+                "moderation-blocked call_id=%s attempt=%d side=%s strategy=%s code=%s "
+                "source=%s evidence=%s agent=%s recovery_policy_recorded=true%s",
+                policy.call_id, policy.attempts, signal.side, strategy, signal.code,
+                signal.source, signal.evidence, agent, format_llm_log_correlation_suffix(),
+            )
+        raise
+    if policy.pending_recovery:
+        logger.info(
+            "moderation-recovered call_id=%s attempts=%d agent=%s%s",
+            policy.call_id, policy.attempts, agent, format_llm_log_correlation_suffix(),
+        )
+        policy.pending_recovery = False
+    return response
+
+
+def _with_messages(args: tuple, kwargs: dict, messages: list) -> tuple[tuple, dict]:
+    """返回一份把 messages 替换为指定值的 (args, kwargs)，其余参数原样保留。"""
+    if "messages" in kwargs:
+        return args, {**kwargs, "messages": messages}
+    if len(args) > 1:
+        return (*args[:1], messages, *args[2:]), kwargs
+    return args, {**kwargs, "messages": messages}
 
 
 def _unify_responnse(response):

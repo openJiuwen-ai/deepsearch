@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup, Comment, NavigableString
 from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_LINE_SPACING
@@ -618,6 +618,11 @@ def _process_inline(
     context: HtmlToDocContext,
 ):
     """递归处理段落内的所有 inline 节点"""
+
+    # Internal HTML comments (including source trace IDs) must never become
+    # visible text in exported DOCX files.
+    if isinstance(node, Comment):
+        return
 
     # 纯文本
     if isinstance(node, NavigableString):

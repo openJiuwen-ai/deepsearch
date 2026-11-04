@@ -3,6 +3,7 @@
 import json
 import logging
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.collector import _blocking_gaps
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefEvidenceReview,
@@ -14,7 +15,6 @@ from openjiuwen_deepsearch.algorithm.brief_report.models import (
 )
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.config.config import Config
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats, normalize_json_output
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -122,6 +122,7 @@ def _slim_citation_registry(request: BriefReviewRequest) -> list[dict]:
     ]
 
 
+@moderation_retry_scope
 async def review_brief_evidence(request: BriefReviewRequest) -> BriefEvidenceReview:
     """审阅首轮证据，生成编辑指引，并决定是否需要执行唯一一次补搜。"""
     prompt_input = {
@@ -148,10 +149,6 @@ async def review_brief_evidence(request: BriefReviewRequest) -> BriefEvidenceRev
                 raise ValueError("brief evidence review response must be an object")
             payload = json.loads(normalize_json_output(str(response.get("content", ""))))
             return _validate_review_output(request, payload)
-        except StopRequested:
-            # 用户停止不参与重试预算,也不能走 _fallback_review 降级为
-            # "正常返回"(那会让图"正常完成"并清除 checkpoint),直接上抛。
-            raise
         except Exception as exc:
             logger.warning(
                 "[BriefEvidenceReviewer] Evidence review attempt failed; attempt=%d/%d error=%s. %s",

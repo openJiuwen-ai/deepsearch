@@ -8,17 +8,18 @@ import pytest
 
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph import webpage_enrichment as webpage_enrichment_module
 from openjiuwen_deepsearch.algorithm.research_collector import webpage_enrichment as webpage_enrichment_algorithm
-from openjiuwen_deepsearch.config.config import AgentConfig, ServiceConfig
-from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
-from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment import (
-    SIMPLE_UA_PDF_MAX_PAGES,
+from openjiuwen_deepsearch.algorithm.research_collector.webpage_enrichment import (
     WebPageEnrichmentDecision,
-    WebPageEnrichmentNode,
     WebPageEvidenceContent,
     build_enrichment_candidates,
     find_matching_doc_index,
     sanitize_selected_indexes,
-    truncate_raw_content_for_compression,
+)
+from openjiuwen_deepsearch.config.config import AgentConfig, ServiceConfig
+from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
+from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment import (
+    SIMPLE_UA_PDF_MAX_PAGES,
+    WebPageEnrichmentNode,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import StartNode as MainStartNode
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import _collect_doc_infos
@@ -138,7 +139,7 @@ def test_webpage_enrichment_service_config_defaults():
     """网页正文增强运行限制使用 service_config 默认值。"""
     config = ServiceConfig()
 
-    assert config.info_collector_webpage_enrich_max_urls == 3
+    assert config.info_collector_webpage_enrich_max_urls == 5
     assert config.info_collector_webpage_enrich_fetch_timeout_seconds == 45
 
 
@@ -371,7 +372,7 @@ def test_truncate_raw_content_for_compression_uses_ten_times_collector_limit():
     """进入压缩 LLM 的 raw content 使用 collector 上限的 10 倍。"""
     raw = "A" * (MAX_COLLECTOR_DOC_CONTENT_LENGTH * 10 + 1)
 
-    result = truncate_raw_content_for_compression(raw)
+    result = webpage_enrichment_algorithm.truncate_raw_content_for_compression(raw)
 
     assert len(result) == MAX_COLLECTOR_DOC_CONTENT_LENGTH * 10
 
@@ -1019,96 +1020,9 @@ async def test_compress_prompt_merges_content_and_isolates_untrusted_input():
     assert "language" not in user_payload
 
 
-def test_quality_guard_rejects_loss_of_existing_quantitative_facts():
-    """压缩结果丢失旧关键片段中的数字和设备标识时应拒绝替换。"""
-    original_doc = {
-        "original_content": (
-            "UBFC-rPPG uses a Logitech C920 at 30fps and 640x480. "
-            "CMS50E records ground truth PPG. Dataset 2 shares 42 videos."
-        ),
-        "key_passages": [
-            "Logitech C920 at 30fps and 640x480; CMS50E records ground truth PPG; 42 videos are shared."
-        ],
-        "query": "dataset metadata",
-        "title": "UBFC-rPPG",
-    }
-    degraded = WebPageEvidenceContent(
-        original_content="UBFC-rPPG uses a webcam and includes a realistic mathematical game.",
-        key_passages=["UBFC-rPPG includes a realistic mathematical game."],
-    )
-
-    should_replace, reason = webpage_enrichment_module.should_replace_original_content(original_doc, degraded)
-
-    assert should_replace is False
-    assert reason.startswith("missing_fact_anchors:")
-
-
-def test_quality_guard_accepts_reworded_descriptive_content():
-    """没有确定性事实丢失时，不应因描述改写而拒绝增强。"""
-    original_doc = {
-        "original_content": "The dataset supports contactless pulse estimation in realistic conditions.",
-        "key_passages": ["The dataset supports contactless pulse estimation in realistic conditions."],
-    }
-    reworded = WebPageEvidenceContent(
-        original_content="该数据集可用于真实环境下的非接触式脉搏测量。",
-        key_passages=["该数据集支持非接触式脉搏测量。"],
-    )
-
-    should_replace, reason = webpage_enrichment_module.should_replace_original_content(original_doc, reworded)
-
-    assert should_replace is True
-    assert reason == "quality_guard_passed"
-
-
-def test_quality_guard_ignores_fact_anchor_spacing_differences():
-    """事实锚点匹配应忽略单位周围的空格差异。"""
-    original_doc = {
-        "original_content": "Videos were captured at 30 FPS.",
-        "key_passages": ["Videos were captured at 30 FPS."],
-    }
-    reformatted = WebPageEvidenceContent(
-        original_content="The capture rate was 30fps.",
-        key_passages=["The capture rate was 30fps."],
-    )
-
-    should_replace, reason = webpage_enrichment_module.should_replace_original_content(original_doc, reformatted)
-
-    assert should_replace is True
-    assert reason == "quality_guard_passed"
-
-
-def test_quality_rejection_log_context_preserves_non_sensitive_details(caplog):
-    """具名质量拒绝上下文应保留非敏感日志的定位信息。"""
-    node = ExposedWebPageEnrichmentNode()
-    context = webpage_enrichment_module.QualityRejectionLogContext(
-        section_idx=2,
-        step_title="collect metadata",
-        original_doc={
-            "doc_id": "doc-1",
-            "url": "https://example.com/source",
-            "original_content": "old evidence",
-        },
-        quality_reason="missing_fact_anchors:42videos",
-        fetched={"content": "new webpage evidence"},
-        evidence=WebPageEvidenceContent(original_content="compressed evidence", key_passages=[]),
-    )
-    caplog.set_level(
-        "INFO",
-        logger="openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment",
-    )
-
-    with patch.object(LogManager, "is_sensitive", return_value=False):
-        node._log_quality_rejection(context)
-
-    assert "step_title: collect metadata" in caplog.text
-    assert "doc_id=doc-1" in caplog.text
-    assert "url=https://example.com/source" in caplog.text
-    assert "reason=missing_fact_anchors:42videos" in caplog.text
-
-
 @pytest.mark.asyncio
-async def test_quality_guard_preserves_original_identity_when_enrichment_degrades(caplog):
-    """质量门禁拒绝增强时应完整保留旧正文和 source identity。"""
+async def test_successful_compression_replaces_old_facts_and_synchronizes_sources(caplog):
+    """压缩成功即替换正文，并同步全部文档与来源引用。"""
     node = ExposedWebPageEnrichmentNode()
     original_doc = {
         "doc_id": "doc-a",
@@ -1149,57 +1063,14 @@ async def test_quality_guard_preserves_original_identity_when_enrichment_degrade
 
     updates = await node.enrich_selected_candidates(state, [0])
 
-    assert updates["new_doc_infos_current_loop"][0] == original_doc
-    assert updates["doc_infos"][0] == original_doc
-    assert updates["source_store"] == {"source-old": original_doc["original_content"]}
-    assert "enrichment skipped by quality guard" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_sensitive_quality_guard_log_redacts_url_and_fact_anchors(caplog):
-    """敏感模式下质量拒绝日志不得泄露 URL 或正文派生事实。"""
-    node = ExposedWebPageEnrichmentNode()
-    secret_url = "https://secret.example/private"
-    original_doc = {
-        "doc_id": "doc-a",
-        "source_id": "source-old",
-        "url": secret_url,
-        "query": "dataset metadata",
-        "original_content": "CMS50E records PPG for 42 videos at 30fps.",
-        "key_passages": ["CMS50E records PPG for 42 videos at 30fps."],
-    }
-
-    async def fake_fetch(url: str, timeout_seconds: int, minimum_content_length: int) -> dict:
-        del timeout_seconds, minimum_content_length
-        return {"url": url, "status_code": 200, "content": "valid raw content " * 20}
-
-    async def fake_compress(state: dict, doc_info: dict, fetched: dict) -> WebPageEvidenceContent:
-        del state, doc_info, fetched
-        return WebPageEvidenceContent(original_content="The dataset uses a webcam.", key_passages=[])
-
-    node._fetch_webpage = fake_fetch
-    node._compress_content = fake_compress
-    caplog.set_level(
-        "INFO",
-        logger="openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.webpage_enrichment",
-    )
-    state = {
-        "fetch_timeout_seconds": 45,
-        "section_idx": 0,
-        "step_title": "步骤",
-        "candidates": [{"candidate_index": 0, "doc_index": 0, "url": secret_url, "scores": {}}],
-        "new_doc_infos_current_loop": [original_doc],
-        "doc_infos": [dict(original_doc)],
-        "source_store": {"source-old": original_doc["original_content"]},
-    }
-
-    with patch.object(LogManager, "is_sensitive", return_value=True):
-        await node.enrich_selected_candidates(state, [0])
-
-    assert secret_url not in caplog.text
-    assert "cms50e" not in caplog.text.lower()
-    assert "42videos" not in caplog.text.lower()
-    assert "quality_guard_rejected" in caplog.text
+    updated = updates["new_doc_infos_current_loop"][0]
+    assert updated["original_content"] == "The dataset uses a webcam."
+    assert updated["enrichment"]["webpage_fetched"] is True
+    assert updated["doc_id"] == original_doc["doc_id"]
+    assert updated["source_id"] != original_doc["source_id"]
+    assert updates["doc_infos"][0] == updated
+    assert updates["source_store"][updated["source_id"]] == updated["original_content"]
+    assert original_doc["original_content"] == "CMS50E records PPG for 42 videos at 30fps."
 
 
 @pytest.mark.asyncio
@@ -1258,7 +1129,6 @@ async def test_enrichment_debug_log_omits_full_content(caplog):
     assert "before_len=" in caplog.text
     assert "after_len=" in caplog.text
     assert observed_minimum_lengths == [len(before_content)]
-
 
 
 def test_find_matching_doc_index_uses_version_safe_identity_fallbacks():

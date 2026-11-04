@@ -17,10 +17,6 @@ from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmN
 from openjiuwen_deepsearch.algorithm.chart_generation.utils import call_model, is_equal_length, CallModelInput
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
-    StopRequested,
-    raise_if_stop_requested_in_results,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +71,6 @@ class ChartDataCollector:
             collect_tasks = self._organize_collection_task()
             # 异步收集所有图表的数据
             all_chart_data = await self._collect_data_for_figures(collect_tasks)
-        except StopRequested:
-            # 停止穿透:不得包装成业务异常,否则 workflow 层标记识别失效。
-            raise
         except Exception as e:
             error_msg = f"{self._log_prefix} Error running chart data collector: {e}"
             logger.error(error_msg)
@@ -166,8 +159,6 @@ class ChartDataCollector:
             tasks.append(self._collect_section_chart_data(task_data, section_index))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        # 停止分流:先于汇总重抛,防止 StopRequested 流入后处理被包装降级。
-        raise_if_stop_requested_in_results(results)
 
         # 汇总结果
         # 按章节划分
@@ -254,9 +245,6 @@ class ChartDataCollector:
             tasks.append(self._collect_batch_tasks(batch_tasks, data_sources))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        # 停止分流:先于溯源信息处理重抛,防止 StopRequested 流入
-        # _add_section_source_info 触发 AttributeError 被吞。
-        raise_if_stop_requested_in_results(results)
 
         # 将数据源溯源信息添加到结果中
         section_datas = []
@@ -346,13 +334,10 @@ class ChartDataCollector:
                 user_input={"tasks": batch_tasks, "data_sources": data_sources},
                 agent_name=AgentLlmName.VLM_CHART_GENERATOR_COLLECT_DATA_FOR_CHART.value
                 )
-            results = await call_model(call_model_input,
+            results = await call_model(call_model_input, 
                                        detection_func_and_args=detection_func_and_args)
             if not results:
                 raise ValueError(f"No results for batch tasks: {batch_tasks}")
-        except StopRequested:
-            # 停止穿透:批次收集 LLM 链吞掉停止会返回空数据假完成。
-            raise
         except Exception as e:
             logger.warning(f"{self._log_prefix} Error collecting data for batch tasks: {e}")
             return [{} for _ in range(len(batch_tasks))]

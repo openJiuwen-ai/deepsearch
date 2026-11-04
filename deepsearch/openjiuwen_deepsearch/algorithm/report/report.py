@@ -26,6 +26,7 @@ from typing import Any
 
 from tenacity import RetryError
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report_common import (
     EFFECT_SUB_REPORT_TAG,
@@ -48,11 +49,8 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     build_research_intent_prompt_context,
     build_section_local_contract_prompt_context,
     build_temporal_scope_prompt_context,
+    build_time_contract,
     build_exclusion_prompt_context,
-)
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
-    StopRequested,
-    gather_with_stop,
 )
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import (
@@ -103,6 +101,24 @@ def _next_classified_content_index(items: list[Any]) -> int:
         if isinstance(item, dict) and isinstance(item.get("index"), int)
     ]
     return max(existing_indexes, default=0) + 1
+
+
+def _build_material_outline_cards(material_evidence: list[dict]) -> list[dict]:
+    """Render user materials into the same outline evidence channel as writing."""
+    cards = []
+    for item in material_evidence:
+        if not isinstance(item, dict) or not isinstance(item.get("index"), int):
+            continue
+        cards.append({
+            "citation_id": item["index"],
+            "evidence_type": "material",
+            "source_title": str(item.get("title") or ""),
+            "publish_time": str(item.get("publish_time") or item.get("doc_time") or ""),
+            "content_time": item.get("content_time"),
+            "rationale_refs": [],
+            "passage_text": str(item.get("passage_text") or item.get("original_content") or ""),
+        })
+    return cards
 
 
 class Reporter(
@@ -211,25 +227,21 @@ class Reporter(
         abstract_context = self._build_reporter_compact_context("abstract")
         conclusion_context = self._build_reporter_compact_context("conclusion")
         sub_reports_content = sub_report_res.get("sub_reports_content")
-        # 摘要/结论并行生成。gather_with_stop：任一任务抛 StopRequested 时，
-        # 先取消并等待孤儿任务退出再重抛，避免停止后仍有后台任务在 checkpoint
-        # 落盘后继续写 session 状态污染恢复快照。
+        abstract_task = asyncio.create_task(
+            self.generate_abstract(abstract_context or sub_reports_content)
+        )
+        conclusion_task = asyncio.create_task(
+            self.generate_conclusion(conclusion_context or sub_reports_content)
+        )
+
         try:
-            abstract, conclusion = await gather_with_stop(
-                self.generate_abstract(abstract_context or sub_reports_content),
-                self.generate_conclusion(conclusion_context or sub_reports_content),
-            )
+            abstract = await abstract_task
+            conclusion = await conclusion_task
         except RetryError as retry_err:
             logger.error(
                 f"[generate_report] Report generation failed after retries: {retry_err}"
             )
             return False, _format_report_error(retry_err)
-        except StopRequested:
-            # 用户停止不允许降级为 (False, error) 数据返回——那会让图引擎按
-            # "正常完成"清除 checkpoint，续跑回 stage1 重头开始。必须原样
-            # 上抛走异常保存分支（写入 reporter pending_node），resume 时从
-            # 本节点续跑。
-            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 logger.error(
@@ -479,6 +491,9 @@ class Reporter(
                 current_inputs.get("passages", []),
             )
         rtp = current_inputs.get("report_type_policy") or {}
+        current_inputs.setdefault(
+            "time_contract", build_time_contract(current_inputs.get("research_intent"))
+        )
         if isinstance(rtp, dict):
             current_inputs.setdefault("report_type", rtp.get("report_type", "professional"))
             current_inputs.setdefault("paragraph_style", rtp.get("paragraph_style", "detailed"))
@@ -542,12 +557,35 @@ class Reporter(
                 item["index"] = next_index + offset
             current_inputs["classified_content"] = existing_items + material_evidence
             classified_content = current_inputs["classified_content"]
+            current_inputs.setdefault("outline_evidence_cards", [])
+            current_inputs["outline_evidence_cards"].extend(
+                _build_material_outline_cards(material_evidence)
+            )
+            current_inputs.setdefault("rationale_contract", {"items": []})
             logger.info(
                 "%s [generate_sub_report] section_idx: [%s], merged %d user material evidence item(s).",
                 EFFECT_SUB_REPORT_TAG,
                 section_idx,
                 len(material_evidence),
             )
+        if current_inputs.get("sub_section_core_content_from_background_knowledge"):
+            # Dependency fallback must retain prior-section context even when
+            # user materials also supply citation evidence.
+            background_cards = self._get_background_knowledge_contents(
+                current_inputs.get("sub_report_background_knowledge", [])
+            )
+            if background_cards:
+                current_inputs.setdefault("outline_evidence_cards", []).append({
+                    "citation_id": None,
+                    "evidence_type": "background_knowledge",
+                    "source_title": "Prior section context",
+                    "publish_time": "",
+                    "content_time": None,
+                    "rationale_refs": [],
+                    "outline_excerpt": self._format_background_knowledge_for_prompt(background_cards),
+                    "coverage_passages": [],
+                })
+                current_inputs.setdefault("rationale_contract", {"items": []})
         if not LogManager.is_sensitive():
             logger.debug(
                 "%s [generate_sub_report] section_idx: [%s], sub section content is: [%s], "
@@ -576,11 +614,6 @@ class Reporter(
                 current_inputs["visualization_result"] = visualization_result[
                     "visualization_content"
                 ]
-            except StopRequested:
-                # 用户停止不降级为 visualization_result=[] 跳过可视化继续写
-                # 报告（visualization.py 内部的停止穿透会被本分支吞掉，图
-                # "正常完成"并清除 checkpoint），直接上抛走异常保存分支。
-                raise
             except Exception as e:
                 logger.warning(
                     f"{EFFECT_SUB_REPORT_TAG} [generate_sub_report] section_idx: [{section_idx}] "
@@ -590,6 +623,7 @@ class Reporter(
 
         return await self._write_with_retry(current_inputs, max_attempt_num, section_idx, classified_content)
 
+    @moderation_retry_scope
     async def _write_with_retry(
         self, current_inputs: dict, max_attempt_num: int, section_idx, classified_content: list
     ) -> tuple[bool, str, str, list]:
@@ -661,6 +695,10 @@ class Reporter(
         Returns:
             成功状态及结果；仅请求调用抛出异常时附带可复用的 retry_messages。
         """
+        current_inputs.setdefault(
+            "time_contract", build_time_contract(current_inputs.get("research_intent"))
+        )
+        current_inputs.setdefault("rationale_contract", {"items": []})
         if LogManager.is_sensitive():
             logger.info(
                 f"{EFFECT_SUB_REPORT_TAG} [write_subsection_reports] Starting section_idx: "
@@ -813,11 +851,6 @@ class Reporter(
             if not pp_ok:
                 return dict(success=False, result=pp_err)
             return dict(success=True, result="success")
-        except StopRequested:
-            # 停止信号不得降级为 retry 反馈数据（会驱动重试循环继续跑完整个
-            # 报告阶段，图引擎按正常完成清 checkpoint）。原样上抛走异常保存
-            # 分支，resume 时从本节点续跑。
-            raise
         except Exception as e:
             current_inputs["sub_report_content"] = ""
             error_detail = (

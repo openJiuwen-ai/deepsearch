@@ -747,22 +747,3 @@ class TestSourceTracerInfer:
 
             assert len(infer_messages) == 0  # Should be filtered out
             assert len(checker_infos["graph_infos"]) == 0
-
-    @pytest.mark.asyncio
-    async def test_run_propagates_stop_requested(self):
-        """用户停止不得被转成 error_message 返回（那会丢失异常类型，被
-        节点层降级为正常返回进而清除 checkpoint），必须原样上抛。"""
-        from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
-
-        self.source_tracer_infer.conclusion_with_records = [
-            {"conclusion": ["test"], "search_records": [{"content": "test"}]}
-        ]
-
-        with patch.object(
-            self.source_tracer_infer, "async_run", new_callable=AsyncMock
-        ) as mock_async_run:
-            mock_async_run.side_effect = StopRequested(
-                "deepresearch task stopped by user")
-
-            with pytest.raises(StopRequested):
-                await self.source_tracer_infer.run()

@@ -74,6 +74,10 @@ from openjiuwen_deepsearch.config.config import (
     WebSearchEngineConfig,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import init_router
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import (
+    ReportProgressMixin,
+    observe_report_progress,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import (
     DependencyEditorTeamNode,
     EditorTeamNode,
@@ -114,11 +118,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     Result,
     SearchFinalResult,
     State,
-)
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
-    STOP_REQUESTED_MARKER,
-    StopRequested,
-    is_stop_requested,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent import WorkflowControllerConfig
 from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent.workflow_agent import WorkflowAgent
@@ -483,12 +482,12 @@ class BaseAgent:
             )
 
 
-class DeepresearchAgent(BaseAgent):
-    """
-    Deepresearch agent: 生成报告 Agent，通用模型，并行执行任务，不带模板
-    """
+class DeepresearchAgent(ReportProgressMixin, BaseAgent):
+    """执行报告工作流，并提供所属报告的本地进度查询。"""
 
     def __init__(self):
+        """初始化报告工作流配置及本地进度索引。"""
+        self._init_report_progress()
         self.research_name = self._get_default_research_name()
         self.version = "1"
         self.agent = None
@@ -717,29 +716,6 @@ class DeepresearchAgent(BaseAgent):
             logger.warning("[DeepResearchAgent.run] Failed to emit error stream event: %s", stream_err)
 
     @staticmethod
-    def _build_stream_stopped_payload(conversation_id: str):
-        return {
-            "conversation_id": conversation_id,
-            "message_id": str(uuid.uuid4()),
-            "agent": NodeId.FRAMEWORK.value,
-            "role": "assistant",
-            "content": json.dumps({"stopped": True}, ensure_ascii=False),
-            "message_type": MessageType.MESSAGE_CHUNK.value,
-            "event": StreamEvent.STOPPED.value,
-            "created_time": get_current_time(),
-        }
-
-    @staticmethod
-    async def _emit_stopped_and_end_stream(conversation_id: str):
-        try:
-            yield json.dumps(
-                DeepresearchAgent._build_stream_stopped_payload(conversation_id), ensure_ascii=False
-            )
-            yield json.dumps(DeepresearchAgent._build_stream_end_payload(conversation_id), ensure_ascii=False)
-        except Exception as stream_err:
-            logger.warning("[DeepResearchAgent.run] Failed to emit stopped stream event: %s", stream_err)
-
-    @staticmethod
     def _prepare_stream_query(message: str, interrupt_feedback: str):
         is_report_feedback = _is_report_feedback_payload(message)
         if interrupt_feedback and not is_report_feedback:
@@ -803,6 +779,7 @@ class DeepresearchAgent(BaseAgent):
                     final_result_info,
                 )
 
+    @observe_report_progress
     async def run(
         self,
         message: Optional[str] = None,
@@ -830,10 +807,6 @@ class DeepresearchAgent(BaseAgent):
         """
         validate_run_agent_params(message, conversation_id, report_template, interrupt_feedback)
         validate_agent_required_field(agent_config)
-        # 注意: 不要在这里 clear_stop()。runner 是单次运行进程,标志出厂即清;
-        # boot 窗口内到达的停止请求是本轮真实停止,清掉会导致停止信号丢失
-        # (实测: 16:50 停止帧在 checkpoint_restore 前到达,被入口清除后
-        #  子代理空转至 30s 超时硬杀)。
 
         start_time = time.time()
         llm_token = None
@@ -912,65 +885,39 @@ class DeepresearchAgent(BaseAgent):
                 final_result_info = stream_info
                 yield payload
         except Exception as e:
-            # 停止识别不能只依赖 isinstance：实机链路中 pregel vertex 层会
-            # 把节点异常包装成 [100054] 组件异常（reason 含停止标记），
-            # isinstance(StopRequested) 永远不命中 → 误判普通错误 → 走
-            # release_session 分支 delete_by_prefix 刚落盘的停止快照，
-            # probe 落空后扫库兜底命中陈旧对象（实机事故 2026-10-13）。
-            # 按标记识别与父进程 tools.py 的 _is_stop_requested_exception
-            # 口径一致（跨进程降级为 RuntimeError 后同样只能按标记识别）。
-            if isinstance(e, StopRequested) or STOP_REQUESTED_MARKER in str(e):
-                # 用户停止：checkpoint 已由 agent-core 异常保存分支落盘
-                # （graph._invoke except Exception → post_workflow_execute 保存）。
-                # 此处必须跳过 release_session/_release_checkpointer_session，
-                # 否则快照被 delete_by_prefix 清除，续跑将回退到上一个交互确认点。
-                # 代价：停止后不再续跑的会话快照将永久存留（checkpointer 无
-                # TTL/GC，kv_store 表无时间戳列），依赖 reset/续跑成功清理；
-                # 服务端长驻部署需关注 checkpointer.db 体积增长（TTL/GC
-                # 已列入 backlog，方案见 2026-10-15 评审：时间戳 sidecar 键
-                # + scan-claim 顺带清扫）。
-                logger.info(
-                    "[DeepResearchAgent.run] Session stopped by user; checkpoint preserved."
-                )
-                async for payload in self._emit_stopped_and_end_stream(conversation_id):
-                    yield payload
-                if stats_info_llm_enabled:
-                    pop_workflow_llm_usage(conversation_id)
-                session_id_ctx.reset(token)
+            if not LogManager.is_sensitive() or isinstance(e, CustomValueException):
+                logger.error(f"[DeepResearchAgent.run] Session closed with error: {e}")
+                final_result_info = {
+                    "exception_info": format_exception_info(StatusCode.WORKFLOW_RUN_ERROR, e)
+                }
             else:
-                if not LogManager.is_sensitive() or isinstance(e, CustomValueException):
-                    logger.error(f"[DeepResearchAgent.run] Session closed with error: {e}")
-                    final_result_info = {
-                        "exception_info": format_exception_info(StatusCode.WORKFLOW_RUN_ERROR, e)
-                    }
-                else:
-                    logger.error(f"[DeepResearchAgent.run] Session closed with error.")
-                    final_result_info = {
-                        "exception_info": format_exception_info(
-                            StatusCode.WORKFLOW_RUN_ERROR, "Session closed with error."
-                        )
-                    }
-                if stats_info_llm_enabled:
-                    try:
-                        current_session = session_context.get()
-                    except Exception:
-                        current_session = None
-                    workflow_usage = get_effective_workflow_llm_usage(
-                        session_id=conversation_id,
-                        session=current_session,
+                logger.error(f"[DeepResearchAgent.run] Session closed with error.")
+                final_result_info = {
+                    "exception_info": format_exception_info(
+                        StatusCode.WORKFLOW_RUN_ERROR, "Session closed with error."
                     )
-                    if not is_workflow_llm_usage_empty(workflow_usage):
-                        final_result_info["workflow_llm_token_usage"] = workflow_usage
+                }
+            if stats_info_llm_enabled:
+                try:
+                    current_session = session_context.get()
+                except Exception:
+                    current_session = None
+                workflow_usage = get_effective_workflow_llm_usage(
+                    session_id=conversation_id,
+                    session=current_session,
+                )
+                if not is_workflow_llm_usage_empty(workflow_usage):
+                    final_result_info["workflow_llm_token_usage"] = workflow_usage
 
-                async for payload in self._emit_error_and_end_stream(conversation_id, final_result_info):
-                    yield payload
+            async for payload in self._emit_error_and_end_stream(conversation_id, final_result_info):
+                yield payload
 
-                if stats_info_llm_enabled:
-                    pop_workflow_llm_usage(conversation_id)
+            if stats_info_llm_enabled:
+                pop_workflow_llm_usage(conversation_id)
 
-                await self.agent.release_session(conversation_id)
-                await self._release_checkpointer_session(conversation_id)
-                session_id_ctx.reset(token)
+            await self.agent.release_session(conversation_id)
+            await self._release_checkpointer_session(conversation_id)
+            session_id_ctx.reset(token)
         finally:
             metrics_logger.info(
                 f"{TIME_LOGGER_TAG} thread_id: {conversation_id} ------ [DeepResearchAgent[0].run]"
@@ -1001,23 +948,6 @@ class DeepresearchAgent(BaseAgent):
             _zero_scholarly_search_secrets(session_agent_config)
 
             if is_all_end:
-                if is_stop_requested():
-                    # 观测告警（reviewer 核实 2026-10-21：此处兜底无效）：流
-                    # 正常结束但停止标志仍置位，说明存在停止吞没点把
-                    # StopRequested 降级成了数据、图"正常完成"走完。而图引擎
-                    # 在 CompiledGraph._invoke 内部的 post_workflow_execute 正常
-                    # 完成分支中已清除 workflow checkpoint（persistence.py
-                    # clear：_graph_state.delete + _workflow_storage.clear），
-                    # 本层跳过 release 也保不住已被删除的快照——终检兜底
-                    # 无法实现 checkpoint 保留。故此处只发 warning 供定位残余
-                    # 吞没点（各链路补齐穿透后预期永不触发），资源清理一律
-                    # 按正常完成路径执行。
-                    logger.warning(
-                        "[DeepResearchAgent.run] Stream completed but stop flag set "
-                        "(stop swallowed as data somewhere; engine already cleared "
-                        "checkpoint, resume would restart). "
-                        "Please investigate stop-swallowing path."
-                    )
                 zero_secret(
                     session_agent_config.get("web_search_engine_config", {}).get(
                         "search_api_key", bytearray("", encoding="utf-8")
@@ -1708,21 +1638,7 @@ class DeepSearchAgent(BaseAgent):
                 },
             )
             init_state_result = parse_and_validate_init_state_result(init_result)
-        except StopRequested:
-            # 用户停止不包装为 AGENT_INIT_STATE_ERROR：包装会遮蔽停止标记
-            # （str 不含 STOP_REQUESTED_MARKER），外层按标记识别的兜底失效、
-            # 误走 release_session 删快照。直接上抛保留停止语义。
-            raise
         except Exception as e:
-            # 停止识别不能只依赖 isinstance：init_state_1 子工作流节点抛出的
-            # StopRequested 会被 openjiuwen vertex 层包装成 BaseError[100054]
-            # （reason=str(e) 保留停止标记但类型丢失，链路无解包），此处必须
-            # 同步按标记识别重抛，否则重包装为 AGENT_INIT_STATE_ERROR 会遮蔽
-            # 标记，口径与 DeepresearchAgent.run 的标记识别一致。
-            if STOP_REQUESTED_MARKER in str(e) or isinstance(
-                getattr(e, "__cause__", None), StopRequested
-            ):
-                raise
             last_exception = e
             logger.error(f"[DeepSearchAgent] init_state error, failed all {max_tries} attempts: {e}")
 

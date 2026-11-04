@@ -3,7 +3,9 @@
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.markdown import sanitize_brief_chapter
 from openjiuwen_deepsearch.algorithm.brief_report.models import (
     BriefAssemblyRequest,
@@ -22,7 +24,6 @@ from openjiuwen_deepsearch.algorithm.query_understanding.material_processing imp
 from openjiuwen_deepsearch.algorithm.search_nodes.llm_utils import _is_context_limit_error as _matches_context_limit
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.config.config import Config
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -204,6 +205,7 @@ def _shrink_writing_documents(documents: list[dict]) -> list[dict] | None:
     return [{**documents[0], "snippet": shortened}]
 
 
+@moderation_retry_scope
 async def _write_one(
     request: BriefWritingRequest,
     section: BriefSection,
@@ -231,13 +233,7 @@ async def _write_one(
                 build_prompt_messages("brief_sub_reporter", prompt_input),
                 agent_name=AgentLlmName.BRIEF_SUB_REPORTER.value,
                 need_stream_out=True,
-                # section_total 让消费端(路由器)能区分"首个章节完成"与
-                # "全部章节完成",对齐专业版进度口径(全部完成才进入报告交付)。
-                stream_meta={
-                    "section_id": section.id,
-                    "section_idx": str(section_idx),
-                    "section_total": str(len(request.outline.sections)),
-                },
+                stream_meta={"section_id": section.id, "section_idx": str(section_idx)},
             )
             raw = str(response.get("content") or "").strip()
             validation_error = _chapter_validation_error(raw)
@@ -258,9 +254,6 @@ async def _write_one(
                 section.id, _response_preview(clean),
             )
             return BriefChapter(section_id=section.id, raw_markdown=clean)
-        except StopRequested:
-            # 用户停止不参与单章重试预算,直接上抛。
-            raise
         except Exception as exc:
             last_error = exc
             validation = ""
@@ -305,12 +298,57 @@ async def _write_one(
     raise ValueError(f"brief chapter generation failed for {section.id}: {last_error}") from last_error
 
 
-async def write_brief_chapters(request: BriefWritingRequest) -> list[BriefChapter]:
-    """并行生成章节；单章失败不阻断同批其他章节。"""
+async def write_brief_chapters(
+    request: BriefWritingRequest,
+    *,
+    on_chapter_start: Callable[[BriefSection], None] | None = None,
+    on_chapter_end: Callable[[BriefSection, BriefChapter | None], None] | None = None,
+) -> list[BriefChapter]:
+    """并行生成章节，单章失败不阻断其他章节，可选通知处理进度。
+
+    Args:
+        request: 原章节写作依赖和输入。
+        on_chapter_start: 单章实际开始时调用的可选观察回调。
+        on_chapter_end: 单章结束回调，异常或取消时结果为 None。
+
+    Returns:
+        原规则下按大纲排序的有效章节。
+    """
+    def notify(callback, *args) -> None:
+        """尽力通知观察者，回调失败不改变写作结果。
+
+        Args:
+            callback: 可选回调。
+            args: 对应已有章节及结果。
+        """
+        if callback is not None:
+            try:
+                callback(*args)
+            except Exception:
+                logger.warning("Could not notify Brief chapter observer")
+
+    async def write_one(section: BriefSection, section_idx: int) -> BriefChapter:
+        """观察单章生命周期，保留原写作重试和异常。
+
+        Args:
+            section: 当前章节。
+            section_idx: 原章节序号。
+
+        Returns:
+            原生成结果。
+        """
+        result = None
+        notify(on_chapter_start, section)
+        try:
+            result = await _write_one(request, section, section_idx)
+            return result
+        finally:
+            notify(on_chapter_end, section, result)
+
     logger.info("[BriefWriter] Start chapter batch sections=%d.", len(request.outline.sections))
     results = await asyncio.gather(
         *(
-            _write_one(request, section, section_idx)
+            write_one(section, section_idx)
             for section_idx, section in enumerate(request.outline.sections, start=1)
         ),
         return_exceptions=True,
@@ -321,9 +359,6 @@ async def write_brief_chapters(request: BriefWritingRequest) -> list[BriefChapte
             chapters.append(result)
             continue
         if isinstance(result, asyncio.CancelledError):
-            raise result
-        if isinstance(result, StopRequested):
-            # 用户停止是 Exception 子类,不能被当作"单章失败继续"吞掉。
             raise result
         if isinstance(result, Exception):
             logger.error(
@@ -445,6 +480,7 @@ def _summary_fallback(request: BriefSummaryRequest) -> str:
     )
 
 
+@moderation_retry_scope
 async def generate_brief_summary(request: BriefSummaryRequest) -> str:
     """生成一次顶部核心摘要，失败时用章节首段确定性降级。"""
     gaps = []
@@ -507,10 +543,6 @@ async def generate_brief_summary(request: BriefSummaryRequest) -> str:
                 )
                 return summary
             raise ValueError("empty executive_summary")
-        except StopRequested:
-            # 用户停止不参与重试预算,也不能走 _summary_fallback 降级为
-            # "正常返回",直接上抛。
-            raise
         except Exception as exc:
             detail = "<detail masked>" if LogManager.is_sensitive() else str(exc)
             logger.warning(

@@ -1,5 +1,6 @@
 # -*- coding: UTF-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+import asyncio
 import logging
 import uuid
 
@@ -13,10 +14,11 @@ from openjiuwen.core.workflow.components.flow.workflow_comp import SUB_WORKFLOW_
 
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import BaseNode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
-    gather_with_stop,
-    raise_if_stop_requested,
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import (
+    observe_section_progress,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.tools.fetch_api.webpage_cache import TaskWebpageFetchCache
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import webpage_fetch_cache_context
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import \
     build_editor_team_workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.dependency_reasoning_team_nodes import \
@@ -45,6 +47,56 @@ class EditorTeamNode(BaseNode):
     def __init__(self):
         super().__init__()
         self.log_prefix = ""
+
+    async def invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        """仅在首次章节执行阶段共享正文，退出节点时关闭缓存。
+
+        普通与依赖编辑团队共用该入口；缓存不进入会话状态，不跨HITL暂停
+        保留，也不传递给后续报告反馈补搜。
+
+        Args:
+            inputs: 原编辑团队节点输入。
+            session: 本次研究工作流会话。
+            context: 原模型上下文。
+
+        Returns:
+            原编辑团队执行结果与后续节点路由。
+        """
+        enabled = bool(session.get_global_state("config.info_collector_webpage_enrich_enable"))
+        cache = TaskWebpageFetchCache() if enabled else None
+        token = webpage_fetch_cache_context.set(cache)
+        try:
+            return await super().invoke(inputs, session, context)
+        finally:
+            try:
+                if cache is not None:
+                    await cache.close()
+            finally:
+                webpage_fetch_cache_context.reset(token)
+
+    @staticmethod
+    async def _gather_section_tasks(tasks: list) -> list:
+        """并发执行章节，失败或取消时先结束其他章节再释放共享资源。
+
+        Args:
+            tasks: 当前批次的章节协程或任务，顺序与结果对应。
+
+        Returns:
+            原顺序的章节结果列表。
+
+        Raises:
+            BaseException: 清理在途章节后重新抛出原异常或取消信号。
+        """
+        pending = [asyncio.ensure_future(task) for task in tasks]
+        try:
+            return await asyncio.gather(*pending)
+        except BaseException:
+            # gather遇到单章异常不会自动取消其他章，须先收尾再关闭正文缓存。
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            raise
 
     @staticmethod
     def dedupe_preserve_order(items: list[str]) -> list[str]:
@@ -108,6 +160,16 @@ class EditorTeamNode(BaseNode):
                     material_usage_mode=session.get_global_state("search_context.material_usage_mode") or "none")
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        """并发执行普通章节子图并汇总报告状态。
+
+        Args:
+            inputs: 原编辑团队输入。
+            session: 主工作流会话。
+            context: 模型上下文。
+
+        Returns:
+            更新报告状态后的节点路由。
+        """
         # 1. 从上下文中获取大纲，并初始化报告
         state = self._pre_handle(inputs, session, context)
         logger.info(f"{self.log_prefix} current_inputs: {'*' if LogManager.is_sensitive() else state}")
@@ -151,7 +213,7 @@ class EditorTeamNode(BaseNode):
                 self._run_section_sub_graph_await(
                     session, sub_workflow, section_state)
             )
-        tasks_results = await gather_with_stop(*tasks)
+        tasks_results = await self._gather_section_tasks(tasks)
 
         # 3. 填充结果字段，并更新在state中
         state = self._update_state(state, sections, sub_reports, tasks_results)
@@ -245,9 +307,18 @@ class EditorTeamNode(BaseNode):
 
         return section_state
 
+    @observe_section_progress
     async def _run_section_sub_graph_await(self, workflow_session, sub_workflow, input_state):
-        # 停止检查：开新章节子图前拦截，避免停止后仍启动长耗时子图。
-        raise_if_stop_requested()
+        """原样转发单章子图输出并返回章节业务记录。
+
+        Args:
+            workflow_session: 主图会话。
+            sub_workflow: 当前研究或写作子图。
+            input_state: 已有章节输入。
+
+        Returns:
+            已解析的章节结果，供主图汇总和进度观察。
+        """
         section_idx = input_state.get("section_idx", "0")
         # 执行每个子图，得到每个section的结果
         logger.info(
@@ -439,14 +510,35 @@ class DependencyEditorTeamNode(EditorTeamNode):
         return background_knowledge
 
     async def _run_reasoning_await(self, session: Session, sub_workflow, section_state: dict):
-        """跑推理子图并给结果补上 section_idx."""
-        result = await self._run_section_sub_graph_await(session, sub_workflow, section_state)
+        """执行研究子图，不将其结束计为章节写作完成。
+
+        Args:
+            session: 主图会话。
+            sub_workflow: 研究子图。
+            section_state: 原章节输入。
+
+        Returns:
+            带章节标识的研究结果。
+        """
+        result = await self._run_section_sub_graph_await(
+            session, sub_workflow, section_state, reasoning_only=True,
+        )
         result["section_idx"] = section_state.get("section_idx", "0")
         return result
 
     async def _do_invoke(
             self, inputs: Input, session: Session, context: ModelContext
     ) -> Output:
+        """按依赖层执行章节采集和写作并汇总报告状态。
+
+        Args:
+            inputs: 原依赖编辑团队输入。
+            session: 主工作流会话。
+            context: 模型上下文。
+
+        Returns:
+            更新报告状态后的节点路由。
+        """
         state = self._pre_handle(inputs, session, context)
         logger.info(f"{self.log_prefix} current_inputs: {'*' if LogManager.is_sensitive() else state}")
         current_outline = state.get("outline")
@@ -514,7 +606,7 @@ class DependencyEditorTeamNode(EditorTeamNode):
                         )
                     )
                 if tasks:
-                    current_results = await gather_with_stop(*tasks)
+                    current_results = await self._gather_section_tasks(tasks)
                     for i, section_id in enumerate(valid_ids_level0):
                         if i < len(current_results):
                             reasoning_results[section_id] = current_results[i]
@@ -562,7 +654,7 @@ class DependencyEditorTeamNode(EditorTeamNode):
                     )
                 all_tasks = writing_tasks + reasoning_tasks
                 if all_tasks:
-                    results = await gather_with_stop(*all_tasks)
+                    results = await self._gather_section_tasks(all_tasks)
                     n_w = len(writing_tasks)
                     for i, section_id in enumerate(valid_writing_ids):
                         if i < n_w:
@@ -594,7 +686,7 @@ class DependencyEditorTeamNode(EditorTeamNode):
                 )
             )
         if last_level_tasks:
-            last_level_results = await gather_with_stop(*last_level_tasks)
+            last_level_results = await self._gather_section_tasks(last_level_tasks)
             for i, section_id in enumerate(valid_section_ids):
                 if i < len(last_level_results):
                     writing_results[section_id] = last_level_results[i]

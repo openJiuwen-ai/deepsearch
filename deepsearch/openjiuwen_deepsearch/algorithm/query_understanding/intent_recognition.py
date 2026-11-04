@@ -30,7 +30,6 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     TargetPaper,
     TemporalScope,
 )
-from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.framework.openjiuwen.tools.web_search import run_web_search
 from openjiuwen_deepsearch.utils.common_utils import llm_utils
 from openjiuwen_deepsearch.utils.common_utils.url_utils import extract_domain_from_url
@@ -900,11 +899,6 @@ async def _recognize_intent(
             )
         return result
 
-    except StopRequested:
-        # 用户停止不降级为 _default_fallback 数据返回（那会让意图识别节点
-        # "正常"流转、图"正常完成"并清除 checkpoint），直接上抛走异常保存
-        # 分支。
-        raise
     except Exception as exc:
         if LogManager.is_sensitive():
             logger.warning("[%s] Exception, using fallback.", log_tag)
