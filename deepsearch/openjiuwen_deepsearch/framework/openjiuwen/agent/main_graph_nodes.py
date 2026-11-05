@@ -16,7 +16,9 @@ from openjiuwen.core.graph.executable import Input, Output
 from openjiuwen.core.session.node import Session
 from openjiuwen.core.workflow.components.flow.end_comp import End
 from openjiuwen.core.workflow.components.flow.start_comp import Start
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import record_main_node
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.brief_report.models import BriefOutline, BriefWorkflowState
 from openjiuwen_deepsearch.algorithm.chart_generation.vlm_chart_generator import VLMChartGenerator
 from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
@@ -183,8 +185,7 @@ class StartNode(Start):
     """
 
     async def invoke(self, inputs: Input, session: Session, context: ModelContext):
-        """
-        入口初始化节点
+        """初始化报告上下文并记录主图起始节点。
 
         Args:
             inputs: 节点入参
@@ -192,6 +193,7 @@ class StartNode(Start):
             context: 全局上下文
         """
 
+        record_main_node(session)
         # 初始化search_context
         original_query = inputs.get("query", "")
         search_context = SearchContext(
@@ -276,7 +278,6 @@ class StartNode(Start):
             # StartNode 故归属保持原始值;宿主认领时校验,防跨会话误认领。
             agent_config["host_session_id"] = origin_agent_config.get("host_session_id", "")
             agent_config["exclusion_constraint_enable"] = origin_agent_config.get("exclusion_constraint_enable", False)
-
         service_config = Config().service_config.model_dump()
         service_config["thread_id"] = inputs.get("thread_id", "")
         service_config["interrupt_feedback"] = inputs.get("interrupt_feedback", "")
@@ -947,6 +948,7 @@ class EndNode(End):
         Returns:
             Output: 包含序列化后的 `final_result` 字段。
         """
+        record_main_node(session)
         logger.info(f"[EndNode] Start EndNode.")
         final_result = session.get_global_state("search_context.final_result") or {}
         response_content = final_result.get("response_content", "") or ""
@@ -1048,6 +1050,7 @@ class GenerateQuestionsNode(BaseNode):
                     llm_model_name=llm_model_name,
                     report_type=report_type)
 
+    @moderation_retry_scope
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
 
@@ -1306,6 +1309,7 @@ class OutlineNode(BaseNode):
             selected_method,
         )
 
+    @moderation_retry_scope
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
         session_context.set(session)
         current_inputs = self._pre_handle(inputs, session, context)

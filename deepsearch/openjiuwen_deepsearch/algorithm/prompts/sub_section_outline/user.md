@@ -8,7 +8,6 @@ description: {{ section_description }}
 format_requirements: {{ section_format_requirements }}
 </current_section>
 
-
 {% if section_focus or has_allowed_dimensions or is_final_decision_section or task_type or has_required_dimensions or has_comparison_targets or section_iscore %}
 ## Chapter Writing Directive
 
@@ -55,10 +54,10 @@ format_requirements: {{ section_format_requirements }}
 - Only generate **one** Level 1 heading, which must match the section title: {{ section_title }}
 - If subchapter headings are needed, they must be Level 2 only, numbered as {{section_idx}}.1, {{ section_idx }}.2, etc.
 - Do not generate multiple Level 1 headings. The outline must reflect a single cohesive section structure.
-- Use the key passages and coverage passages as the evidence boundary only for concrete wording introduced by the model in subsection titles.
-- Do not introduce concrete facts, metrics, cases, company names, or named examples that are not supported by the key passages or coverage passages.
+- Use the evidence cards as the evidence boundary only for concrete wording introduced by the model in subsection titles.
+- Do not introduce concrete facts, metrics, cases, company names, or named examples that are not supported by the evidence cards.
   This restriction does not authorize renaming or generalizing user-specified subsection titles.
-- When section_description suggests a direction that lacks support in the key passages and optional coverage passages, use a more general subsection title only
+- When section_description suggests a direction that lacks support in the evidence cards, use a more general subsection title only
   if that concrete direction was inferred or added by the model. If the direction comes from user-specified structure,
   preserve it exactly.
 
@@ -71,9 +70,10 @@ The following are section-specific format requirements:
 {% else %}
 
 ## Content Selection & Logic (Strictly Adhere)
-Before generating the outline, carefully review the provided **section content**. The content consists of key passages
-and optional coverage passages extracted from multiple independent documents. Each passage is an atomic evidence
-fragment, not a complete document.
+Before generating the outline, carefully review the provided **evidence cards**. Each card is an evidence fragment,
+not a complete document; fulltext cards contain an excerpt, rationale-selected passages from that source, and optional
+rule-extracted coverage passages, while passage cards carry selected passage text. Each fulltext selected passage
+has its own `passage_text` and `content_time`; use that time only for the facts in that passage.
 
 **Multi-source synthesis strategy**:
 1. **Cluster** passages by sub-topic before designing subsection titles — multiple passages from different sources
@@ -91,14 +91,14 @@ Select segments as the basis for the outline by prioritizing:
 	3. **Stronger relevance** (direct alignment with user query)
 	4. **Timeliness** (if user's query is time-sensitive, prioritize recent/updated content)
 	5. **Source diversity** (prefer sub-topics backed by multiple independent sources over those backed by a single passage)
-The section content is mainly made of key passages, with optional coverage passages. Treat both as the evidence boundary for concrete subsection titles.
+Treat the evidence cards, including optional coverage passages, as the evidence boundary for concrete subsection titles.
 
 ## Constraint Checklist
 - **Relevance:** Focus ONLY on relevance to the section title. Do not add unrelated sections just for the sake of length.
 - **Flow:** The subsections must flow logically and not be disjointed to ensure readability.
 - **No Redundancy:** Ensure logical clarity with no repetition between chapters.
 - **Evidence Boundary:** Do not introduce concrete facts, metrics, cases, company names, or named examples that are not
-  supported by the key passages or coverage passages. This boundary applies only to model-added concrete wording and
+  supported by the evidence cards. This boundary applies only to model-added concrete wording and
   must not override user-specified subsection titles or concrete directions inherited from user-specified structure.
 - **Boundary:** Use the section-local contract as the primary scope boundary. Do not restate another top-level chapter's main job.
 
@@ -133,13 +133,14 @@ Hierarchical outline:
 ...
 
 
-Section id is {{section_idx}}, Section title is {{section_title}}, Report task is {{report_task}},
-{% if core_from_background %}{{ core_context }}{% else %}Collected information is {{ core_context }}{% endif %}
+Section id is {{section_idx}}, Section title is {{section_title}}, Report task is {{report_task}}.
+# Outline Evidence Cards
+{{ core_context }}
+# Time Contract
+{{ time_contract_json }}
+# Rationale Contract
+{{ rationale_contract_json }}
 Section description is {{section_description}}, Section format requirements are {{section_format_requirements}}.
-{% if structured_evidence_guide %}
-# Structured Evidence Guidance
-{{ structured_evidence_guide }}
-{% endif %}
 
 {% if retry_feedback %}
 <retry_feedback>

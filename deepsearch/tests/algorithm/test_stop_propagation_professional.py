@@ -753,7 +753,7 @@ async def test_summary_node_retry_stop_not_swallowed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_info_retrieval_retry_stop_not_swallowed(monkeypatch):
-    """InfoRetrievalNode retry 循环遇停止必须上抛，不得降级为 None 继续。"""
+    """MCP 批量参数生成遇停止必须上抛，不得降级为空结果。"""
     invoke = _stop_mock()
     monkeypatch.setattr(IC_MODULE + ".ainvoke_llm_with_stats", invoke)
 
@@ -764,7 +764,11 @@ async def test_info_retrieval_retry_stop_not_swallowed(monkeypatch):
     node = InfoRetrievalNode()
     node.llm = object()
     with pytest.raises(StopRequested):
-        await node._invoke_llm_with_retry([], [], {"section_idx": 1, "step_title": "t"})
+        await node._resolve_mcp_param_tool_assignments(
+            {"section_idx": 1, "step_title": "t", "mcp_param_tools": [
+                SimpleNamespace(card=SimpleNamespace(name="custom", description="custom", input_params={}))
+            ]}, [SimpleNamespace(query="query")],
+        )
     assert invoke.await_count == 1
 
 
@@ -1167,7 +1171,7 @@ async def test_sub_section_outline_stop_not_swallowed(monkeypatch):
     current_inputs = {
         "section_idx": 1,
         "section_task": "1. 测试章节",
-        "sub_section_core_content": [{"content": "核心信息"}],
+        "outline_evidence_cards": [{"content": "核心信息"}],
     }
     with pytest.raises(StopRequested):
         await mixin._generate_sub_section_outline(current_inputs)

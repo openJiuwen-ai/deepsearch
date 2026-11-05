@@ -11,6 +11,7 @@ from tenacity import (
     retry_if_not_exception_type,
 )
 
+from openjiuwen_deepsearch.utils.moderation.retry import moderation_retry_scope
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.config import ReportFormat
 from openjiuwen_deepsearch.algorithm.report.markdown_utils import _convert_bold_formula_to_inline_math
@@ -66,6 +67,7 @@ class ReportPartsMixin:
         logger.info(f"Generating report conclusion Done.")
         return conclusion
 
+    @moderation_retry_scope
     async def _generate_with_llm(self, task_type, prompt, content):
         llm_input = build_prompt_messages(
             prompt, {**self.gen_report_context, "main_content": content}
@@ -135,6 +137,7 @@ class ReportPartsMixin:
             return content
         return header + content
 
+    @moderation_retry_scope
     async def _add_sub_report_transaction(self, current_inputs: dict):
         if not LogManager.is_sensitive():
             logger.debug(
@@ -282,6 +285,7 @@ class ReportPartsMixin:
             return ""
         return "\n\n".join(context_parts)
 
+    @moderation_retry_scope
     async def _generate_sub_report_summary(self, current_inputs: dict):
         """generate sub report summary"""
         if not LogManager.is_sensitive():
@@ -402,6 +406,7 @@ class ReportPartsMixin:
             )
         return normalized
 
+    @moderation_retry_scope
     async def _generate_sub_report_sidecar(self, current_inputs: dict) -> dict:
         """Generate a structured reusable summary for one chapter."""
         section_idx = current_inputs.get("section_idx", 1)
@@ -514,7 +519,16 @@ class ReportPartsMixin:
             "background_knowledge": self._format_background_knowledge_for_prompt(
                 background_knowledge_contents
             ),
-            "structured_evidence_guide": current_inputs.get("structured_evidence_guide", ""),
+            "rationale_contract_json": json.dumps(
+                current_inputs.get("rationale_contract", {"items": []}), ensure_ascii=False
+            ),
+            "time_contract_json": json.dumps(
+                current_inputs.get("time_contract", {
+                    "source_date_scope": None,
+                    "content_date_scope": None,
+                }),
+                ensure_ascii=False,
+            ),
             "references": current_inputs.get("sub_section_references", ""),
             "retry_feedback": self._sub_report_retry_feedback_from_failure(
                 str(current_inputs.get("sub_report_retry_feedback", "") or "")
@@ -613,12 +627,11 @@ class ReportPartsMixin:
         current_inputs["sub_report_content"] = self.clean_markdown_headers(
             current_inputs["sub_report_content"]
         )
-        ok, reason = self.validate_sub_report_headings_match_outline(
+        ok, reason = self.validate_sub_report_heading_structure(
             current_inputs["sub_report_content"],
-            current_inputs.get("sub_section_outline", ""),
         )
         if not ok:
-            return False, f"generated report headings do not match outline: {reason}"
+            return False, f"generated report heading structure invalid: {reason}"
         sidecar_result = await self._generate_sub_report_sidecar(current_inputs)
         current_inputs["sub_report_chapter_sidecar"] = sidecar_result.get("sidecar")
         current_inputs["sub_report_summary"] = sidecar_result.get("summary", "")

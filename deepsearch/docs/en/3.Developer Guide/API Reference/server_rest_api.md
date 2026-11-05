@@ -18,6 +18,68 @@ The response is an SSE JSON event stream. `event="waiting_user_input"` is a HITL
 
 The request, SSE, HITL, and error contract match `/run/`, but the server always sets `report_type` to `brief` and ignores a caller-supplied report type.
 
+## Report progress: `GET /api/v1/agent/deepsearch/run/progress`
+
+Required query parameters: nonempty `space_id` and `conversation_id` (1–128 ASCII letters, digits, underscores or hyphens).
+No body or model credentials are needed. The endpoint observes active reports under `search_mode=research`, including Brief and all three professional execution modes.
+
+```json
+{
+  "conversation_id": "report-1",
+  "status": "running",
+  "node_id": "editor_team",
+  "updated_at": "2026-10-22T14:30:00+08:00",
+  "collected_info_count": 36,
+  "total_sections": 5,
+  "completed_sections": 2,
+  "processing_sections": [
+    {
+      "section_id": "3",
+      "title": "市场规模与竞争格局"
+    },
+    {
+      "section_id": "4",
+      "title": "技术发展趋势"
+    }
+  ]
+}
+```
+
+`status` is `running`, `waiting_user_input` or `cancelling` (cancellation cleanup in progress). `node_id` is the most recently entered main-graph node,
+or `null` during initialization. Chapter subgraphs do not overwrite it. `updated_at` is the latest node/status update time, in the executing worker's local timezone,
+matching its business logs. It uses ISO 8601 with an explicit offset and is not a heartbeat.
+Nodes may repeat or revisit earlier positions. No percentage or remaining-time estimate is returned.
+Professional `parallel` reports use `editor_team`; `dependency_driving` uses `dependency_editor_team`;
+`hybrid` selects between them through routing. Brief reports use dedicated `brief_*` nodes.
+See the complete [node_id list by mode](../../../feature/framework/report-progress.md#node_id).
+The list is not a fixed execution order; clients should tolerate newly added nodes.
+
+Additional summary fields:
+
+| Field | Meaning |
+| --- | --- |
+| `collected_info_count` | Result entries in existing collection records; not globally deduplicated across queries or sections |
+| `total_sections` | Current outline section count, or `None` before the outline is available (`null` in HTTP) |
+| `completed_sections` | Sections that returned normally with nonempty content; failed exits and empty results are excluded |
+| `processing_sections` | Up to five sections being processed, containing only `section_id` and `title`; an immutable tuple in the SDK and an array in HTTP |
+
+Counts reuse existing business records: professional reports sum query-result entries by section, plan and step;
+Brief uses `collection_context.search_results`. These counts do not represent citations, user materials or full-text reads.
+Updating the same business record replaces its previous count instead of accumulating notifications or retries.
+Continuing after interaction restores summaries from the existing outline, plans, report and Brief state, including on another worker.
+Changing the outline version discards the previous version's observations. Dependency research alone does not complete a section;
+writing must finish. Brief sections update individually as they finish.
+Section IDs are limited to 128 characters and titles to 160; only the first five processing sections in outline order are shown.
+Summary-only changes do not update `updated_at`, whose node/status meaning is unchanged.
+
+HTTP 200 returns status and collection/section summaries; 404 means no active record; 422 indicates invalid parameters; 503 means Redis is unavailable or its record is corrupt.
+Waiting reports remain queryable after an SSE disconnect. Records are removed once the report finishes; no history is kept.
+Redis workers share snapshots with a 30-second TTL. Changes are coalesced at most once per second; unchanged records are only renewed every five seconds by default. Queries may return 404 before the initial asynchronous publication.
+Publishing failures do not block execution; expired or superseded records are not recreated by the old publisher. Other backends query only the local process.
+Redis deployments wait up to two seconds before execution to prepare a progress round. If allocation cannot be confirmed, execution and SDK-local observation continue, but shared publishing is disabled for that round. Publication failures after confirmed allocation are retried; late initial publications from older rounds cannot overwrite newer snapshots or recreate removed ones.
+Queries only read progress; they do not execute reports, change task state, or renew shared records.
+See [SDK progress](research_progress.md) and [feature boundaries](../../../feature/framework/report-progress.md).
+
 ## Web-search engines: `/api/v1/agent/deepsearch/web_search/`
 
 | Method | Path | Key request fields | Success response |

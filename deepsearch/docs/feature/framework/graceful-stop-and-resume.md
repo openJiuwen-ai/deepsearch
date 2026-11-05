@@ -84,6 +84,13 @@ HITL 交互中断（既有能力，与用户停止共用恢复机制但非本文
 - VLMChartGeneratorNode 等节点的通用 `except Exception` 分支前必须有
   `except StopRequested: raise`，否则停止被吞成 error_msg 假完成。
 
+## 与网页增强、风控重试和进度查询协作
+
+- 首次章节执行共享网页正文缓存；章节失败或停止时，先取消并等待同批章节退出，再关闭缓存并恢复缓存上下文。
+- LLM 流式消费保留风控检测和用量统计，同时检查持续输出与等待期间的停止信号；停止不进入风控或 thinking fallback 重试。
+- MCP 参数生成、query 直调和参数直调遇到 `StopRequested` 时原样上抛，不降级为空结果或跳过工具。
+- 章节进度观察与停止检查同时生效，观察器不改变停止异常传播和 checkpoint 保留逻辑。
+
 ## 测试与验证
 
 ```bash

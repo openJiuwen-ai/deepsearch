@@ -583,6 +583,7 @@ def process_tool_result(tool_name: str, tool_content: Any, agent_input: dict) ->
                 "content": tool_content,
             }
             agent_input["other_tool_record"].append(result_dict)
+            tool_result = []
 
     return tool_result
 
