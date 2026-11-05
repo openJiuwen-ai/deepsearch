@@ -1,4 +1,5 @@
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -7,11 +8,13 @@ from openjiuwen.core.workflow.workflow import Workflow
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder import SearchQueryList, \
     Reflection, Summary, CollectorContext, StartNode, GenerateQueryNode, SupervisorNode, SummaryNode, \
     GraphEndNode, SearchQueryItem, build_info_collector_sub_graph, get_research_record, llm_context, \
-    _validate_query_count
+    _validate_query_count, normalize_search_query_item, \
+    _runtime_api_tool_descriptions, _runtime_api_tool_names
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import RetrievalQuery
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import EvidenceLedger
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import NodeId
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import mcp_tool_context
 
 module_prefix = "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_builder"
 
@@ -35,6 +38,78 @@ class TestSearchQueryList:
 
         assert query_list.queries == ["test query 1", "test query 2"]
         assert query_list.missing_evidence == ["需要测试证据"]
+
+
+class TestSearchQueryItemTool:
+    """测试 SearchQueryItem.tool 字段与防御性过滤。"""
+
+    def test_tool_field_defaults_none(self):
+        item = SearchQueryItem(query="q")
+        assert item.tool is None
+
+    def test_tool_field_accepts_value(self):
+        item = SearchQueryItem(query="q", tool="mcp__srv__tool")
+        assert item.tool == "mcp__srv__tool"
+
+    def test_normalize_drops_tool_not_in_available(self):
+        """LLM 给的 tool 不在可用列表 → 置 None（LLM 输出不可信，防御式消费）。"""
+        item = SearchQueryItem(query="q", tool="mcp__unknown__tool")
+        normalized = normalize_search_query_item(item, available_tool_names={"mcp__srv__real"})
+        assert normalized.tool is None
+
+    def test_normalize_keeps_tool_in_available(self):
+        item = SearchQueryItem(query="q", tool="mcp__srv__real")
+        normalized = normalize_search_query_item(item, available_tool_names={"mcp__srv__real"})
+        assert normalized.tool == "mcp__srv__real"
+
+    def test_normalize_plain_string_no_available_keeps_none(self):
+        """纯字符串 query、无可用工具列表时 tool 保持 None。"""
+        normalized = normalize_search_query_item("plain query", available_tool_names=None)
+        assert normalized.tool is None
+
+
+class TestRuntimeApiToolQueryCompatFilter:
+    """runtime API 工具按 inputSchema query 兼容性分流的测试。"""
+
+    @staticmethod
+    def _make_api_tools_config():
+        return {
+            "collector_tools": [
+                {
+                    "name": "query_only_tool",
+                    "description": "只需要 query 的工具",
+                    "base_url": "https://example.com",
+                    "path": "/search",
+                    "http_method": "get",
+                    "request_params": [
+                        {"name": "query", "required": True, "send_method": "query", "param_type": 1},
+                    ],
+                },
+                {
+                    "name": "keywords_required_tool",
+                    "description": "需要 keywords 等非 query 必填参数的工具",
+                    "base_url": "https://example.com",
+                    "path": "/search",
+                    "http_method": "get",
+                    "request_params": [
+                        {"name": "keywords", "required": True, "send_method": "query", "param_type": 1},
+                        {"name": "query", "required": True, "send_method": "query", "param_type": 1},
+                    ],
+                },
+            ],
+        }
+
+    def test_descriptions_only_returns_query_compatible_tools(self):
+        descriptions = _runtime_api_tool_descriptions(self._make_api_tools_config())
+        names = [d["name"] for d in descriptions]
+        assert "query_only_tool" in names
+        assert "keywords_required_tool" not in names
+
+    def test_names_only_returns_query_compatible_tools(self):
+        names = _runtime_api_tool_names(self._make_api_tools_config())
+        assert names is not None
+        assert "query_only_tool" in names
+        assert "keywords_required_tool" not in names
 
 
 class TestReflection:
@@ -511,7 +586,7 @@ class TestSupervisorNode:
 
                 result = await supervisor_node.invoke(inputs, mock_session, mock_context)
 
-                # 验证下一个节点是 INFO_COLLECTOR
+                # 验证下一个节点是 INFO_RETRIEVAL（反思结果进入下一轮检索循环）
                 assert result["next_node"] == "collector_info_retrieval"
 
                 # 验证查询被更新
@@ -717,6 +792,50 @@ class TestSupervisorNode:
                 })
         finally:
             llm_context.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_supervisor_node_passes_tool_hint_to_next_retrieval_loop(
+        self, supervisor_node, mock_session, mock_context
+    ):
+        """反思 LLM 在 next_queries 中选定的 tool 应透传到下一轮检索，且 continue 路由到 InfoRetrievalNode。"""
+        mock_bundle = MagicMock()
+        mock_bundle.get_tools_by_type.return_value = [
+            SimpleNamespace(card=SimpleNamespace(name="mcp__srv__real", description="real tool")),
+        ]
+        token_bundle = mcp_tool_context.set(mock_bundle)
+        mock_llm_dict = MagicMock()
+        mock_llm_dict.get.return_value = MagicMock()
+        token_llm = llm_context.set(mock_llm_dict)
+
+        try:
+            with patch.object(supervisor_node, '_invoke_llm_with_retry') as mock_llm, \
+                    patch(f"{module_prefix}.adapt_llm_model_name"):
+                mock_llm.return_value = Reflection(
+                    is_sufficient=False,
+                    should_continue=True,
+                    knowledge_gap="需要 pubmed 证据",
+                    next_queries=[
+                        SearchQueryItem(query="PubMed clinical trial 2024", tool="mcp__srv__real"),
+                    ],
+                    known_facts=[],
+                    missing_evidence=["需要 pubmed 证据"],
+                )
+
+                result = await supervisor_node.invoke({}, mock_session, mock_context)
+
+                assert result["next_node"] == "collector_info_retrieval"
+                mock_session.update_global_state.assert_any_call({
+                    "collector_context.search_queries": [
+                        RetrievalQuery(
+                            query="PubMed clinical trial 2024",
+                            primary_engine="petal",
+                            tool="mcp__srv__real",
+                        ),
+                    ],
+                })
+        finally:
+            mcp_tool_context.reset(token_bundle)
+            llm_context.reset(token_llm)
 
     @pytest.mark.parametrize(
         "current_loop_docs, expected_evidence_table",

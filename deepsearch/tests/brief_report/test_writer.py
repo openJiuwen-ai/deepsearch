@@ -6,11 +6,75 @@ import pytest
 from openjiuwen_deepsearch.algorithm.brief_report.models import BriefAssemblyRequest, BriefWritingRequest, BriefOutline, BriefCollectionResult, BriefSummaryRequest, BriefChapter, BriefSectionWritingGuidance, BriefWritingGuidance
 from openjiuwen_deepsearch.algorithm.brief_report.writer import _chapter_validation_error, _summary_prompt_input, _writing_prompt_input, assemble_brief_report, build_writing_evidence, generate_brief_summary, write_brief_chapters
 from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import ResearchProgress, update_progress_summary
+from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import report_progress_context
 
 def _request():
     outline=BriefOutline.model_validate({"title":"x","sections":[{"id":str(i),"title":f"章节 {i}","goal":"目标","research_steps":[{"id":f"{i}-1","requirement":"指标"},{"id":f"{i}-2","requirement":"差异"}]} for i in range(1,4)]})
     collection=BriefCollectionResult.model_validate({"citation_registry":[{"source_id":f"s{i}","index":i,"title":"来源","url":f"https://e/{i}","original_content":"证据"} for i in range(1,4)],"section_evidence":{str(i):{"selected_docs":[{"source_id":f"s{i}","step_ids":[f"{i}-1",f"{i}-2"],"evaluation_rank":1}],"coverage":[{"step_id":f"{i}-1","status":"covered","reason":"d"},{"step_id":f"{i}-2","status":"covered","reason":"d"}]} for i in range(1,4)}})
     return BriefWritingRequest(llm=object(),outline=outline,collection=collection)
+
+
+@pytest.mark.asyncio
+async def test_progress_reports_individual_chapters_before_batch_finishes(monkeypatch):
+    request = _request()
+    progress = ResearchProgress("brief")
+    progress.update_summary("set_outline", request.outline, brief=True)
+    token = report_progress_context.set(progress)
+    started, one_finished, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    starts = 0
+
+    async def write_one(request, section, section_idx):
+        nonlocal starts
+        starts += 1
+        if starts == 3:
+            started.set()
+        if section.id != "1":
+            await release.wait()
+        if section.id == "3":
+            raise ValueError("chapter failed")
+        return BriefChapter(section_id=section.id, raw_markdown="有效章节正文")
+
+    def chapter_end(section, chapter):
+        update_progress_summary("finish_section", section.id, chapter is not None)
+        if section.id == "1":
+            one_finished.set()
+
+    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.writer._write_one", write_one)
+    task = asyncio.create_task(write_brief_chapters(
+        request,
+        on_chapter_start=lambda section: update_progress_summary("start_section", section.id),
+        on_chapter_end=chapter_end,
+    ))
+    try:
+        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.wait_for(one_finished.wait(), 5)
+        assert progress.snapshot().completed_sections == 1
+        assert [section.section_id for section in progress.snapshot().processing_sections] == ["2", "3"]
+        assert not task.done()
+        release.set()
+        chapters = await asyncio.wait_for(task, 5)
+        assert [chapter.section_id for chapter in chapters] == ["1", "2"]
+        assert progress.snapshot().completed_sections == 2
+        assert not progress.snapshot().processing_sections
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        report_progress_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_broken_progress_callback_does_not_change_brief_results(monkeypatch):
+    monkeypatch.setattr(
+        "openjiuwen_deepsearch.algorithm.brief_report.writer.ainvoke_llm_with_stats",
+        AsyncMock(return_value={"content": "正文。[citation:1]"}),
+    )
+
+    def broken(*args):
+        raise RuntimeError("observation failed")
+
+    chapters = await write_brief_chapters(_request(), on_chapter_start=broken, on_chapter_end=broken)
+    assert len(chapters) == 3
 
 
 def test_brief_sub_reporter_keeps_research_steps_internal_and_generates_reader_facing_subheadings():

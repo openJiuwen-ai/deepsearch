@@ -219,3 +219,40 @@ class TestSourceTracerNode:
                         args, kwargs = mock_post_handle.call_args
                         algorithm_output = args[1]
                         assert algorithm_output["check_result_dict"]["check_result"] is False
+
+    @pytest.mark.asyncio
+    async def test_empty_datas_with_source_marker_is_cleaned_before_final_response(
+        self, source_tracer_node, mock_session
+    ):
+        """Do not skip citation cleanup merely because all source data was filtered out."""
+        report = "Fact [source_tracer_result][Source](https://example.com)"
+        cleaned_report = "Fact "
+        current_report = Report(id="test_report_id", report_content=report)
+        mock_session.get_global_state.side_effect = (
+            lambda key: current_report if key == "search_context.current_report" else None
+        )
+        checker_result = json.dumps({
+            "checked_trace_source_report_content": cleaned_report,
+            "citation_messages": {},
+        })
+
+        with patch.object(source_tracer_node, "pre_handle", return_value={
+            "need_exit": False,
+            "report": report,
+            "merged_trace_source_datas": [],
+            "language": "zh-CN",
+            "llm_model_name": "mock_model",
+        }), patch.object(
+            SourceTracerNode,
+            "build_citation_checker_result",
+            new_callable=AsyncMock,
+            return_value={"check_result": True, "citation_checker_result_str": checker_result},
+        ) as mock_build, patch(f"{MODULE_PATH}.add_debug_log_wrapper"):
+            result = await source_tracer_node.do_invoke(None, mock_session, None)
+
+        mock_build.assert_awaited_once()
+        assert current_report.checked_trace_source_report_content == cleaned_report
+        mock_session.update_global_state.assert_any_call(
+            {"search_context.final_result.response_content": cleaned_report}
+        )
+        assert result["next_node"] == NodeId.SOURCE_TRACER_INFER.value

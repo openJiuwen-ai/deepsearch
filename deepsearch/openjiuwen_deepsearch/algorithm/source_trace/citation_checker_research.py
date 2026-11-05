@@ -4,12 +4,15 @@
 import json
 import logging
 import re
-from collections import OrderedDict
+from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
 
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import (
+    SOURCE_TRACE_ID_COMMENT_CAPTURE_RE,
+    ensure_source_trace_id,
+    format_source_trace_id_comment,
+)
 from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import CitationVerifyResearch
-from openjiuwen_deepsearch.common.exception import CustomIndexException, CustomValueException
-from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.utils.common_utils.markdown_url_utils import extract_markdown_url
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 from openjiuwen_deepsearch.utils.common_utils.url_utils import (
@@ -46,6 +49,7 @@ class SourceTracerCitationMarker:
     image_marker: str | None
     title: str
     paren_url: str
+    source_trace_id: str | None = None
     string: str = ""
 
 
@@ -79,6 +83,11 @@ class CitationCheckerResearch:
             if parsed_url is None:
                 continue
             url, end = parsed_url
+            source_trace_id = None
+            id_match = SOURCE_TRACE_ID_COMMENT_CAPTURE_RE.match(text, end)
+            if id_match:
+                source_trace_id = id_match.group(1)
+                end = id_match.end()
 
             markers.append(
                 SourceTracerCitationMarker(
@@ -87,6 +96,7 @@ class CitationCheckerResearch:
                     image_marker="!" if match.group("prefix_image") or match.group("suffix_image") else None,
                     title=match.group("title"),
                     paren_url=url,
+                    source_trace_id=source_trace_id,
                     string=text,
                 )
             )
@@ -170,7 +180,9 @@ class CitationCheckerResearch:
                 # 对标题进行Markdown转义
                 safe_title = escape_markdown_link_text(info.get("title", ""))
                 safe_url = info.get("url", "")
+                source_trace_id = ensure_source_trace_id(info)
                 temp_str += f'[source_tracer_result][{safe_title}]({safe_url})'
+                temp_str += format_source_trace_id_comment(source_trace_id)
                 new_parts.append(temp_str)
             last_pos = marker.raw_end
             datas[index]["citation_range"] = (marker.raw_start, marker.raw_end)
@@ -413,11 +425,21 @@ class CitationCheckerResearch:
         url = marker.paren_url
         url = url.strip()
 
-        # 检查data_index是否有效
+        # ``datas`` is reconciled with source markers before validation. Keep a
+        # defensive guard so one malformed marker cannot fail SourceTracer.
         if data_index >= len(datas):
-            raise CustomIndexException(StatusCode.PARAM_CHECK_ERROR_INDEX_OUT_OF_RANGE.code,
-                                       StatusCode.PARAM_CHECK_ERROR_INDEX_OUT_OF_RANGE.errmsg.
-                                       format(content_idx=data_index))
+            invalid_reason = "missing source data"
+            self.invalid_citation_counts[invalid_reason] = (
+                self.invalid_citation_counts.get(invalid_reason, 0) + 1
+            )
+            logger.warning(
+                "[CITATION CHECKER]: skip citation without matching source data: "
+                "marker url=%r, data index=%d, data count=%d",
+                url,
+                data_index,
+                len(datas),
+            )
+            return []
 
         current_data = datas[data_index]
         if not LogManager.is_sensitive():
@@ -463,6 +485,32 @@ class CitationCheckerResearch:
         if not markers:
             return para, processing_data_index, []
 
+        # This method is normally called after reconciliation. Keep it safe
+        # when used independently as well: remove markers for which no data
+        # can exist before rebuilding the paragraph with positional offsets.
+        available_data_count = max(0, len(datas) - processing_data_index)
+        if len(markers) > available_data_count:
+            unmatched_markers = markers[available_data_count:]
+            invalid_reason = "missing source data"
+            self.invalid_citation_counts[invalid_reason] = (
+                self.invalid_citation_counts.get(invalid_reason, 0) + len(unmatched_markers)
+            )
+            parts = []
+            cursor = 0
+            for marker in unmatched_markers:
+                parts.append(para[cursor:marker.raw_start])
+                cursor = marker.raw_end
+            parts.append(para[cursor:])
+            para = "".join(parts)
+            markers = self._iter_source_tracer_citation_markers(para, self.citation_regex)
+            logger.warning(
+                "[CITATION CHECKER]: removed %d citation(s) without source data "
+                "while processing a paragraph.",
+                len(unmatched_markers),
+            )
+            if not markers:
+                return para, processing_data_index, []
+
         # 处理引用
         processed_citation_urls = OrderedDict()  # 记录已处理的url及其最佳引用
         cur_para_data_index = processing_data_index  # 记录当前段落开始时的data_index
@@ -474,16 +522,6 @@ class CitationCheckerResearch:
                 marker, datas, processed_citation_urls, processing_data_index)
             del_indices.extend(single_match_del_indices)
             processing_data_index += 1
-
-        # 验证引用数量匹配
-        if len(markers) != processing_data_index - cur_para_data_index:
-            error_msg = "[CITATION CHECKER]: the length of matches is error."
-            error_msg += "Not equal to count of citation in the para: \n"
-            if not LogManager.is_sensitive():
-                error_msg += f"markers: {markers} \n para: {para}"
-            raise CustomValueException(StatusCode.CITATION_CHECKER_DATA_LEN_ERROR.code,
-                                       StatusCode.CITATION_CHECKER_DATA_LEN_ERROR.errmsg.
-                                       format(e=error_msg))
 
         # 重建段落
         processed_para = self.rebuild_paragraph_with_valid_citations(
@@ -560,6 +598,7 @@ class CitationCheckerResearch:
         markdown_text = text.get('article', "")
         markdown_text = self.normalize_source_tracer_titles(markdown_text)
         self.normalize_datas_titles(datas)
+        markdown_text, datas = self.reconcile_citations_by_source_identity(markdown_text, datas)
         markdown_text, datas = self.deduplicate_citations(markdown_text, datas)
         if LogManager.is_sensitive():
             logger.info(f"[CITATION CHECKER]: preprocess text and datas success.")
@@ -574,7 +613,11 @@ class CitationCheckerResearch:
         def replace_title(marker):
             image_marker = "!" if marker.image_marker else ""
             title = _normalize_citation_title(marker.title)
-            return f"[source_tracer_result]{image_marker}[{title}]({marker.paren_url})"
+            source_id_suffix = (
+                format_source_trace_id_comment(marker.source_trace_id)
+                if marker.source_trace_id else ""
+            )
+            return f"[source_tracer_result]{image_marker}[{title}]({marker.paren_url}){source_id_suffix}"
 
         parts = []
         cursor = 0
@@ -591,6 +634,73 @@ class CitationCheckerResearch:
         for data in datas:
             if isinstance(data, dict) and "title" in data:
                 data["title"] = _normalize_citation_title(data.get("title", ""))
+
+    def reconcile_citations_by_source_identity(self, markdown_text, datas):
+        """Reconcile placeholders with data through source identity, not order.
+
+        Source data may be filtered after the report has been edited.  Binding
+        the N-th placeholder to ``datas[N]`` then shifts every later citation.
+        New markers carry a stable ``source_trace_id`` in a trailing HTML
+        comment. Markers without a valid identity are removed: URL is used
+        only after association for consistency and safety validation. Each
+        matching data item is consumed once, so repeated URLs are no longer
+        coupled to their position in ``datas``.
+
+        A placeholder that has no matching source is an invalid individual
+        citation: remove it and continue with the remainder of the report.
+        """
+        markers = self._iter_source_tracer_citation_markers(markdown_text, self.citation_regex)
+        available_indices = set(range(len(datas)))
+        marker_id_counts = Counter(marker.source_trace_id for marker in markers if marker.source_trace_id)
+        data_indices_by_source_id = defaultdict(list)
+        for index, data in enumerate(datas):
+            source_trace_id = data.get("source_trace_id")
+            if source_trace_id:
+                data_indices_by_source_id[str(source_trace_id)].append(index)
+
+        reconciled_datas = []
+        parts = []
+        cursor = 0
+
+        for marker in markers:
+            marker_url = marker.paren_url.strip()
+            indices = data_indices_by_source_id.get(marker.source_trace_id, [])
+            ambiguous_identity = bool(marker.source_trace_id) and (
+                marker_id_counts[marker.source_trace_id] > 1 or len(indices) > 1
+            )
+            matched_index = (
+                indices[0] if not ambiguous_identity and len(indices) == 1 else None
+            )
+
+            parts.append(markdown_text[cursor:marker.raw_start])
+            cursor = marker.raw_end
+            if matched_index is None:
+                invalid_reason = "ambiguous source identity" if ambiguous_identity else "missing source data"
+                self.invalid_citation_counts[invalid_reason] = (
+                    self.invalid_citation_counts.get(invalid_reason, 0) + 1
+                )
+                logger.warning(
+                    "[CITATION CHECKER]: remove citation: reason=%s, "
+                    "source_trace_id=%r, marker url=%r, remaining data count=%d",
+                    invalid_reason,
+                    marker.source_trace_id,
+                    marker_url,
+                    len(available_indices),
+                )
+                continue
+
+            available_indices.remove(matched_index)
+            reconciled_datas.append(datas[matched_index])
+            parts.append(markdown_text[marker.raw_start:marker.raw_end])
+
+        parts.append(markdown_text[cursor:])
+        if available_indices:
+            logger.warning(
+                "[CITATION CHECKER]: discard %d unreferenced source data item(s) "
+                "after source-identity reconciliation.",
+                len(available_indices),
+            )
+        return "".join(parts), reconciled_datas
 
     def replace_inline_citations(self, markdown_text, datas):
         """将行内溯源标记替换为带稳定 id 的 checked citation。

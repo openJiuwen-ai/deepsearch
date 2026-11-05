@@ -11,8 +11,34 @@ from openjiuwen_deepsearch.algorithm.source_trace.add_source import (
     _merge_source_infos,
     _filter_valid_references,
     remove_trailing_spaces_and_punctuation,
-    _escape_html_special_chars
+    _escape_html_special_chars,
+    ensure_source_trace_id,
 )
+
+
+def test_ensure_source_trace_id_replaces_unsafe_existing_value():
+    """An external source ID must not be able to terminate the HTML comment."""
+    source_data = {
+        "source_trace_id": "safe--><script>alert(1)</script>",
+        "url": "https://example.com/source",
+        "title": "Example source",
+    }
+
+    source_trace_id = ensure_source_trace_id(source_data)
+
+    assert source_trace_id == source_data["source_trace_id"]
+    assert len(source_trace_id) == 32
+    assert source_trace_id.isalnum()
+
+
+def test_ensure_source_trace_id_is_unique_for_identical_source_instances():
+    source_data_a = {"url": "https://example.com/source", "title": "Example source"}
+    source_data_b = {"url": "https://example.com/source", "title": "Example source"}
+
+    source_id_a = ensure_source_trace_id(source_data_a)
+    source_id_b = ensure_source_trace_id(source_data_b)
+
+    assert source_id_a != source_id_b
 
 
 class TestSourceReferenceProcessor:
@@ -296,6 +322,8 @@ class TestMergeSourceInfos:
 
         assert "[source_tracer_result][Source 1](http://source1.com)" in result
         assert "[source_tracer_result][Source 2](http://source2.com)" in result
+        assert "<!--source-trace-id:" in result
+        assert ref_infos[0]["source_trace_id"] != ref_infos[1]["source_trace_id"]
 
     def test_merge_source_infos_with_title_only(self):
         """Test merging source infos with title only."""

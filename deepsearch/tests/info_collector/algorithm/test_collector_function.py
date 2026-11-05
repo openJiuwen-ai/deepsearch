@@ -414,7 +414,12 @@ class TestProcessToolResult:
             assert result == ["result"]
 
     def test_process_other_tool(self):
-        """测试其他工具结果处理"""
+        """测试其他工具结果处理——非搜索格式工具结果必须返回 list，不可返回 dict。
+
+        回归：MCP param 工具（如 tavily_research）返回非标准搜索格式时，
+        process_tool_result 的 else 分支曾返回 dict，导致调用方
+        processed_results.extend(dict) 触发 AttributeError 崩溃整个 session。
+        """
         tool_content = '{"key": "value"}'
 
         result = process_tool_result(
@@ -423,9 +428,8 @@ class TestProcessToolResult:
             self.agent_input
         )
 
-        # 验证结果被正确解析
-        expected_result = json.loads(tool_content)
-        assert result == expected_result
+        assert isinstance(result, list)
+        assert result == []
 
         # 验证记录被添加到other_tool_record
         assert len(self.agent_input["other_tool_record"]) == 1

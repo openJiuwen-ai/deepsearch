@@ -26,6 +26,42 @@ _CONVERSATION_ID_SCHEMA_ERR = (
 MAX_USER_MATERIALS_TOTAL_CHARS = 5_000_000
 
 
+class ProcessingSectionResponse(BaseModel):
+    """有界的处理中章节元数据。
+
+    Attributes:
+        section_id: 原章节标识的展示值。
+        title: 章节标题的展示值。
+    """
+
+    section_id: str = Field(max_length=128)
+    title: str = Field(max_length=160)
+
+
+class ResearchProgressResponse(BaseModel):
+    """活跃报告的当前状态和主图节点。
+
+    Attributes:
+        conversation_id: 会话标识。
+        status: 执行、交互等待或取消收尾状态。
+        node_id: 原始主图节点名称，初始化时为空。
+        updated_at: 最近变化的执行进程本地时间，ISO 8601 格式并保留时区偏移量。
+        collected_info_count: 已收集的检索结果条目数，不保证跨章节去重。
+        total_sections: 当前大纲章节数，尚无大纲时为空。
+        completed_sections: 成功产出有效内容的章节数。
+        processing_sections: 最多五个处理中的章节，不含正文。
+    """
+
+    conversation_id: str
+    status: Literal["running", "waiting_user_input", "cancelling"]
+    node_id: str | None
+    updated_at: str
+    collected_info_count: int = Field(default=0, ge=0)
+    total_sections: int | None = Field(default=None, ge=0)
+    completed_sections: int = Field(default=0, ge=0)
+    processing_sections: list[ProcessingSectionResponse] = Field(default_factory=list, max_length=5)
+
+
 class PubMedScholarlyRequestConfig(PubMedScholarlyConfig):
     search_api_key: str = ""
 

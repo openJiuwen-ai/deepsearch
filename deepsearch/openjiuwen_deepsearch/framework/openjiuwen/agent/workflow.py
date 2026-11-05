@@ -74,6 +74,10 @@ from openjiuwen_deepsearch.config.config import (
     WebSearchEngineConfig,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import init_router
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import (
+    ReportProgressMixin,
+    observe_report_progress,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.editor_team_manager_node import (
     DependencyEditorTeamNode,
     EditorTeamNode,
@@ -478,12 +482,12 @@ class BaseAgent:
             )
 
 
-class DeepresearchAgent(BaseAgent):
-    """
-    Deepresearch agent: 生成报告 Agent，通用模型，并行执行任务，不带模板
-    """
+class DeepresearchAgent(ReportProgressMixin, BaseAgent):
+    """执行报告工作流，并提供所属报告的本地进度查询。"""
 
     def __init__(self):
+        """初始化报告工作流配置及本地进度索引。"""
+        self._init_report_progress()
         self.research_name = self._get_default_research_name()
         self.version = "1"
         self.agent = None
@@ -775,6 +779,7 @@ class DeepresearchAgent(BaseAgent):
                     final_result_info,
                 )
 
+    @observe_report_progress
     async def run(
         self,
         message: Optional[str] = None,
