@@ -244,3 +244,47 @@ def test_pre_handle_routes_non_query_runtime_api_to_param_channel():
         assert "keywords_required_tool" not in mcp_tool_names
     finally:
         mcp_tool_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_mcp_parameter_generation_propagates_stop_requested():
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
+
+    node = InfoRetrievalNode()
+    node.llm = {}
+    tool = SimpleNamespace(card=SimpleNamespace(name="custom", description="custom", input_params={}))
+    with patch(
+        "openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.info_collector.ainvoke_llm_with_stats",
+        new_callable=AsyncMock, side_effect=StopRequested("stopped"),
+    ):
+        with pytest.raises(StopRequested):
+            await node._resolve_mcp_param_tool_assignments(
+                {"mcp_param_tools": [tool]}, [SimpleNamespace(query="query")],
+            )
+
+
+@pytest.mark.asyncio
+async def test_mcp_direct_call_propagates_stop_requested():
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
+
+    tool = SimpleNamespace(invoke=AsyncMock(side_effect=StopRequested("stopped")))
+    with pytest.raises(StopRequested):
+        await InfoRetrievalNode._direct_invoke_mcp_tool(tool, "custom", "query", 0, "section")
+
+
+@pytest.mark.asyncio
+async def test_mcp_parameter_call_propagates_stop_requested():
+    from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
+
+    node = InfoRetrievalNode()
+    tool = SimpleNamespace(invoke=AsyncMock(side_effect=StopRequested("stopped")))
+    with patch.object(node, "_prepare_collector_tool", new_callable=AsyncMock,
+                      return_value=([], {"custom": tool})), patch.object(
+        node, "_direct_call_native_tools", new_callable=AsyncMock, return_value=[],
+    ):
+        with pytest.raises(StopRequested):
+            await node._collector_main({
+                "search_query": "query",
+                "max_tool_call_turns_per_query": 2,
+                "mcp_param_assignments": [{"tool": "custom", "args": {"keywords": "query"}}],
+            })
