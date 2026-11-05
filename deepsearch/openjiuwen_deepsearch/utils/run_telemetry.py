@@ -198,6 +198,8 @@ def message_contents_for_telemetry(msgs: List[Dict[str, Any]]) -> List[Dict[str,
     if n <= 3:
         return [_message_content_entry(i + 1, msgs[i]) for i in range(n)]
     return [
+        _message_content_entry(1, msgs[0]),
+        _message_content_entry(2, msgs[1]),
         _message_content_entry(n, msgs[-1]),
     ]
 
