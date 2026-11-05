@@ -202,6 +202,7 @@ class FinalResult(BaseModel):
         default="text/markdown",
         description="响应内容类型：text/markdown | text/html",
     )
+    response_markdown: str = Field(default="", description="Brief 报告的 Markdown 正文，其他情况为空")
     citation_messages: dict = Field(default={}, description="引用信息")
     infer_messages: List[Dict] = Field(default_factory=list, description="溯源推理信息")
     chart_messages: List[Dict] = Field(default_factory=list, description="vlm图表生成信息")

@@ -1,3 +1,5 @@
+import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -6,6 +8,24 @@ from pydantic import ValidationError
 
 from server.routers import deepsearch_run
 from server.schemas.deepsearch_run import DeepSearchRequest, MAX_USER_MATERIALS_TOTAL_CHARS
+
+
+@pytest.mark.asyncio
+async def test_server_stream_preserves_brief_markdown(monkeypatch):
+    result = {"response_content": "<html></html>", "response_content_type": "text/html",
+              "response_markdown": "# Brief", "exception_info": ""}
+    message = json.dumps({"event": "summary_response", "content": json.dumps(result)})
+
+    class FakeAgent:
+        async def run(self, **kwargs):
+            yield message
+
+    monkeypatch.setattr(deepsearch_run.LogManager, "new_run", lambda: None)
+    chunks = [chunk async for chunk in deepsearch_run._wrapped_agent_run(
+        FakeAgent(), {}, "space", "conversation", asyncio.Event()
+    )]
+    assert len(chunks) == 1
+    assert json.loads(json.loads(chunks[0])["content"])["response_markdown"] == "# Brief"
 
 
 def _build_request() -> DeepSearchRequest:

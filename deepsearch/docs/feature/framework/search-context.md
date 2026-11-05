@@ -41,6 +41,7 @@
 ## 数据契约与依赖
 
 - `FinalResult.response_content` 是最终正文。
+- `FinalResult.response_markdown` 是 Brief 的完整 Markdown 正文，默认空字符串；`response_content_type` 仅描述 `response_content`。
 - `FinalResult.citation_messages` 保存全局溯源引用数据。
 - `FinalResult.infer_messages` 保存推理链溯源信息。
 - `FinalResult.chart_messages` 保存 VLM 图表生成信息。

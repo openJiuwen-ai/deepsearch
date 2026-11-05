@@ -13,6 +13,7 @@ DeepSearch 运行接口把前端请求转为可流式消费的研究任务。它
 ## 可见行为
 
 - 普通请求返回 `text/event-stream`，流内容来自 `agent.run(...)`。
+- Brief 最终结果包含 `response_markdown`，与现有主响应一起通过最终事件透传；`response_content_type` 只描述主响应。
 - `report_type` 缺省为 `None`（由意图识别节点判定，保留澄清机制）；显式传 `brief` / `professional` 时报告类型被 API 锁定，意图识别不再输出该字段，且仅首轮生效、后续反馈轮不可覆盖。
 - `/run_brief/` 是 `/run/` 的薄封装：强制 `report_type="brief"`（忽略调用方传值）；取消、流式与异常映射完整复用 `run()`。
 - `interrupt_feedback=cancel` 不启动新 SSE 流，而是触发取消逻辑并返回 JSON 状态。
