@@ -114,7 +114,9 @@ async def _run(args: argparse.Namespace) -> int:
         logger.error("Error: %s", result.error)
     for i, hit in enumerate(result.hits, 1):
         logger.info("%2d. %s (L%d-L%d)", i, hit.file_path, hit.start_line, hit.end_line)
-    return 0
+    # error 非空表示这次检索是 fail-fast（如 INDEX_NOT_READY / LLM_ERROR）：结果已回显，
+    # 但退出码必须非零，否则脚本/CI 会把失败当成功。
+    return 1 if result.error else 0
 
 
 def main() -> None:
