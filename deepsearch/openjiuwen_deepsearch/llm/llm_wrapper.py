@@ -56,6 +56,11 @@ def create_llm_obj(llm_config: LLMConfig, thinking_enabled: Optional[bool] = Non
             else merge_thinking_extension(llm_config, thinking_enabled)
         )
         api_key = bytes(llm_config.api_key).decode('utf-8')
+        custom_headers = {}
+        if llm_config.x_officeace_client is not None:
+            custom_headers["x-officeace-client"] = llm_config.x_officeace_client
+        if llm_config.x_officeace_message_meta is not None:
+            custom_headers["x-officeace-message-meta"] = llm_config.x_officeace_message_meta
         factory = LLMModelFactory()
         model_params = LLMModelParams(
             model_provider=llm_config.model_type,
@@ -63,7 +68,8 @@ def create_llm_obj(llm_config: LLMConfig, thinking_enabled: Optional[bool] = Non
             api_base=llm_config.base_url,
             timeout=Config().service_config.llm_timeout,
             hyper_parameters=llm_config.hyper_parameters,
-            extension=merged_extension
+            extension=merged_extension,
+            custom_headers=custom_headers or None,
         )
         model = factory.get_model(model_params)
         fallback_model = None
@@ -79,7 +85,8 @@ def create_llm_obj(llm_config: LLMConfig, thinking_enabled: Optional[bool] = Non
                     api_base=llm_config.base_url,
                     timeout=Config().service_config.llm_timeout,
                     hyper_parameters=llm_config.hyper_parameters,
-                    extension=fallback_extension
+                    extension=fallback_extension,
+                    custom_headers=custom_headers or None,
                 )
                 fallback_model = factory.get_model(fallback_params)
         model_name = llm_config.model_name

@@ -13,10 +13,17 @@ class LLMConfig(BaseModel):
     model_type: Literal["openai", "siliconflow"] = Field(default="openai", description="模型类型")
     base_url: str = Field(default="", description="模型服务地址")
     api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="模型调用密钥")
+    x_officeace_client: Optional[str] = Field(
+        default=None, alias="x-officeace-client", description="LLM HTTP 请求头 x-officeace-client"
+    )
+    x_officeace_message_meta: Optional[str] = Field(
+        default=None, alias="x-officeace-message-meta", description="LLM HTTP 请求头 x-officeace-message-meta"
+    )
     hyper_parameters: dict = Field(default_factory=dict, description="模型调用超参数设置，根据具体模型接口设置")
     extension: dict = Field(default_factory=dict, description="模型扩展配置项，根据具体模型接口设置")
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
+        populate_by_name=True,
     )
     timeout: int = Field(default=600, description="请求超时时间（秒）")
     max_tries: int = Field(default=4, description="最大重试次数")
