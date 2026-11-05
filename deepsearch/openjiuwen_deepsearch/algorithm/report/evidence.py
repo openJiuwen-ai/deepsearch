@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.compact_doc_info import (
     build_coverage_passage_block,
 )
@@ -31,13 +31,13 @@ from openjiuwen_deepsearch.algorithm.report.report_rationale_fulltext import (
     get_required_document_content,
 )
 from openjiuwen_deepsearch.algorithm.report.report_utils import export_outline_without_plans
-from openjiuwen_deepsearch.algorithm.report.retry_feedback import _append_retry_feedback_message
 from openjiuwen_deepsearch.algorithm.research_collector.target_paper import find_exact_target_paper_facts
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     TemporalScope,
     _resolve_content_date_scope,
     build_section_local_contract_prompt_context,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.date_utils import (
     classify_temporal,
     parse_content_window,
@@ -168,8 +168,7 @@ class EvidenceMixin:
         Returns:
             (rationale list, last_error). On success the error string is "";
             after retry exhaustion the list is [] and last_error carries the
-            final failure detail. Each retry appends the previous failure as a
-            data-bounded retry_feedback user message after the system prompt.
+            final failure detail. Validation retries render the latest failure in the current user message.
         """
         section_idx = current_inputs.get("section_idx", 1)
         section_task = self.strip_leading_number(current_inputs.get("section_task", ""))
@@ -187,49 +186,39 @@ class EvidenceMixin:
         focus_dimensions = contract_ctx.get("allowed_dimensions", [])
         step_summaries = current_inputs.get("step_summaries", [])
 
-        step_summaries_text = "\n".join(
-            f"  - Step {s.get('plan_idx', '')}-{s.get('step_idx', '')}: {s.get('title', '')}\n"
-            f"    Description: {s.get('description', '')}\n"
-            f"    Collected: {s.get('step_result', '')}\n"
-            f"    Evaluation: {s.get('evaluation', '')}"
-            for s in step_summaries
-        ) if step_summaries else "  No step summaries available."
-
-        focus_dimensions_text = ", ".join(focus_dimensions) if focus_dimensions else "None specified"
-
-        # Build user message with data (including untrusted step summaries)
-        # separated from system prompt to prevent prompt injection.
-        user_content = (
-            f"Report task: {report_task}\n"
-            f"Overall outline: {overall_outline}\n\n"
-            f"Chapter title: {section_task}\n"
-            f"Chapter description: {section_description}\n"
-            f"Chapter focus: {section_focus}\n"
-            f"Focus dimensions: {focus_dimensions_text}\n"
-            f"Research step summaries:\n{step_summaries_text}\n\n"
-            "Generate rationales for this chapter."
-        )
         tmp_context = {
-            "messages": [dict(role="user", content=user_content)],
+            "report_task": report_task,
+            "overall_outline": overall_outline,
+            "section_task": section_task,
+            "section_description": section_description,
+            "section_focus": section_focus,
+            "focus_dimensions": focus_dimensions,
+            "step_summaries": step_summaries,
         }
 
         max_retries = current_inputs.get("max_generate_retry_num", 3)
         last_error = None
         retry_feedback = ""
+        llm_input = build_prompt_messages("rationale_generator", tmp_context)
+        rendered_feedback = ""
         for attempt_num in range(max_retries):
-            llm_input = apply_system_prompt("rationale_generator", tmp_context)
-            _append_retry_feedback_message(llm_input, retry_feedback)
+            if retry_feedback != rendered_feedback:
+                llm_input = build_prompt_messages(
+                    "rationale_generator", {**tmp_context, "retry_feedback": retry_feedback}
+                )
+                rendered_feedback = retry_feedback
             try:
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
                     agent_name=AgentLlmName.SUB_REPORTER_RATIONALE_GENERATOR.value,
                 )
+            except StopRequested:
+                # 停止信号不得进入 rationale 重试循环（会继续调用 LLM 跑完
+                # max_retries 次再降级返回）。原样上抛走异常保存分支。
+                raise
             except Exception as e:
                 last_error = f"LLM call failed: {e}"
-                retry_feedback = (
-                    "LLM call failed" if LogManager.is_sensitive() else (last_error or "")[:500]
-                )
                 logger.warning(
                     "%s [generate_rationales] section_idx: [%s] attempt %s/%s %s",
                     EFFECT_SUB_REPORT_TAG, section_idx,
@@ -266,6 +255,9 @@ class EvidenceMixin:
                     attempt_num + 1, max_retries,
                 )
                 return rationales, ""
+            except StopRequested:
+                # 停止信号不得降级为解析失败重试反馈。原样上抛走异常保存分支。
+                raise
             except Exception as e:
                 last_error = f"failed to parse LLM output: {e}"
                 retry_feedback = (
@@ -587,58 +579,54 @@ class EvidenceMixin:
         Returns:
             (parsed_result_dict, batch_docs, last_error) tuple. On success the
             error string is ""; on failure parsed_result is an empty dict and
-            last_error carries the final failure detail. Each retry appends the
-            previous failure as a data-bounded retry_feedback user message.
+            last_error carries the final failure detail. Validation retries render the
+            latest failure in the current data-bounded retry_feedback user message.
         """
         section_task = section_ctx.get("section_task", "")
         section_description = section_ctx.get("section_description", "")
         section_idx = section_ctx.get("section_idx", -1)
 
         # Build document text for LLM input (untrusted data in user message)
-        doc_parts = []
-        for i, passage in enumerate(batch_docs):
-            title = passage.get("title", "") or passage.get("doc_title", "")
-            url = passage.get("url", "") or passage.get("doc_url", "")
+        documents = []
+        for passage in batch_docs:
             content = str(passage.get("original_content", "") or passage.get("passage_text", "") or "")
-            if len(content) > MAX_EXTRACT_DOC_CHARS:
-                content = content[:MAX_EXTRACT_DOC_CHARS]
-            doc_parts.append(
-                f"Document {i}:\nTitle: {title}\nURL: {url}\n"
-                f"publish_time: {passage.get('publish_time', '')}\n"
-                f"Content: {content}"
-            )
-        docs_text = "\n\n".join(doc_parts)
-
-        user_content = (
-            f"Chapter title: {section_task}\n"
-            f"Chapter description: {section_description}\n\n"
-            f"Information dimensions (rationales):\n{rationales_text}\n\n"
-            f"Documents:\n{docs_text}\n\n"
-            "Extract relevant passages from the documents above and score "
-            "rationale coverage. Output ONLY a JSON object."
-        )
+            documents.append({
+                "title": passage.get("title", "") or passage.get("doc_title", ""),
+                "url": passage.get("url", "") or passage.get("doc_url", ""),
+                "publish_time": passage.get("publish_time", ""),
+                "content": content[:MAX_EXTRACT_DOC_CHARS],
+            })
         tmp_context = {
-            "messages": [dict(role="user", content=user_content)],
+            "section_task": section_task,
+            "section_description": section_description,
+            "rationales_text": rationales_text,
+            "documents": documents,
             "extract_content_time": section_ctx.get("extract_content_time", False),
         }
 
         max_retries = section_ctx.get("max_retries", 3)
         last_error = None
         retry_feedback = ""
+        llm_input = build_prompt_messages("passages_extractor", tmp_context)
+        rendered_feedback = ""
         for attempt_num in range(max_retries):
-            llm_input = apply_system_prompt("passages_extractor", tmp_context)
-            _append_retry_feedback_message(llm_input, retry_feedback)
+            if retry_feedback != rendered_feedback:
+                llm_input = build_prompt_messages(
+                    "passages_extractor", {**tmp_context, "retry_feedback": retry_feedback}
+                )
+                rendered_feedback = retry_feedback
             try:
                 llm_output = await ainvoke_llm_with_stats(
                     llm=self._llm,
                     messages=llm_input,
                     agent_name=AgentLlmName.SUB_REPORTER_PASSAGES_EXTRACTOR.value,
                 )
+            except StopRequested:
+                # 停止信号不得进入 passages 提取重试循环（会继续调用 LLM 跑完
+                # max_retries 次再降级返回）。原样上抛走异常保存分支。
+                raise
             except Exception as e:
                 last_error = f"LLM call failed: {e}"
-                retry_feedback = (
-                    "LLM call failed" if LogManager.is_sensitive() else (last_error or "")[:500]
-                )
                 logger.warning(
                     "%s [extract_score] section_idx: [%s] batch %s: attempt %s/%s %s",
                     EFFECT_SUB_REPORT_TAG, section_idx, batch_idx,
@@ -674,6 +662,9 @@ class EvidenceMixin:
                     n_docs, n_passages, attempt_num + 1, max_retries,
                 )
                 return data, batch_docs, ""
+            except StopRequested:
+                # 停止信号不得降级为解析失败重试反馈。原样上抛走异常保存分支。
+                raise
             except Exception as e:
                 last_error = f"failed to parse LLM output: {e}"
                 retry_feedback = (

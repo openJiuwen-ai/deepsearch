@@ -24,5 +24,6 @@
     - [search_context](./3.开发指南/API文档/search_context.md)
     - [deepsearch_agent](./3.开发指南/API文档/deepsearch_agent.md)
     - [deepsearch_rest_api](./3.开发指南/API文档/deepsearch_rest_api.md)
+    - [server_rest_api](./3.开发指南/API文档/server_rest_api.md)
     - [workflow](./3.开发指南/API文档/workflow.md)
 - [4.FAQ](./4.FAQ/README.md)

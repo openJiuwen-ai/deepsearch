@@ -127,12 +127,15 @@ def _merge_result(existing: BriefSearchResult, incoming: BriefSearchResult) -> N
 def normalize_brief_search_results(
     query_batches: list[tuple[BriefQuery, list[dict[str, Any]]]],
     intent: ResearchIntent,
+    *,
+    enable_exclusion: bool = False,
 ) -> list[BriefSearchResult]:
     """标准化既有搜索工具结果，并按 canonical URL 合并摘要和路由关系。
 
     Args:
         query_batches: 已由框架搜索工具执行的 Query 与对应原始结果列表。
         intent: 用户的显式排除和时间约束。
+        enable_exclusion: 禁引约束总开关，透传给 exclude 过滤（默认关）。
 
     Returns:
         过滤、去重并保留章节路由关系后的搜索结果。
@@ -142,7 +145,9 @@ def normalize_brief_search_results(
         if not isinstance(raw_batch, list):
             continue
         filtered = filter_search_results_by_exclude_domains(raw_batch, intent.exclude_domains)
-        filtered = filter_search_results_by_exclude_urls(filtered, intent.exclude_url, intent.exclude_titles)
+        filtered = filter_search_results_by_exclude_urls(
+            filtered, intent.exclude_url, intent.exclude_titles,
+            enable_exclusion=enable_exclusion)
         filtered = filter_web_records_by_temporal_scope(filtered, _resolve_source_date_scope(intent))
         for rank, raw in enumerate(filtered, start=1):
             if not isinstance(raw, dict) or _is_explicit_low_quality_page(raw):

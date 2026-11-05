@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from unittest.mock import AsyncMock
 
 import pytest
@@ -137,10 +138,13 @@ async def test_context_limit_recursively_splits_candidates_before_retrying(monke
     attempted_sizes = []
 
     async def invoke(_llm, messages, **_kwargs):
-        attempted_sizes.append(len(messages["candidates"]))
-        if len(messages["candidates"]) > 1:
+        candidates = json.loads(re.search(
+            r"<candidates>(.*?)</candidates>", messages[-1]["content"], re.DOTALL,
+        ).group(1))
+        attempted_sizes.append(len(candidates))
+        if len(candidates) > 1:
             raise RuntimeError("context_length_exceeded")
-        candidate = messages["candidates"][0]
+        candidate = candidates[0]
         return {"content": json.dumps({
             "selected_docs": [{
                 "source_id": candidate["source_id"], "step_ids": ["1-1"],
@@ -149,7 +153,6 @@ async def test_context_limit_recursively_splits_candidates_before_retrying(monke
             "coverage": [{"step_id": "1-1", "status": "covered", "reason": "证据"}],
         })}
 
-    monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.evaluation.apply_system_prompt", lambda _name, payload: payload)
     monkeypatch.setattr("openjiuwen_deepsearch.algorithm.brief_report.evaluation.ainvoke_llm_with_stats", invoke)
     outline = _outline().model_copy(update={"sections": [_outline().sections[0]]})
     candidates = {"1": [

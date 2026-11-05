@@ -219,3 +219,36 @@ class TestSourceTracerNode:
                         args, kwargs = mock_post_handle.call_args
                         algorithm_output = args[1]
                         assert algorithm_output["check_result_dict"]["check_result"] is False
+
+    @pytest.mark.asyncio
+    async def test_do_invoke_propagates_stop_requested(self, source_tracer_node, mock_session):
+        """用户停止必须原样上抛，不得降级为 check_result=False 的正常返回
+        （否则图会"正常完成"并清除 checkpoint，resume 只能全新起跑）。"""
+        from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
+
+        def get_global_state_side_effect(key):
+            if key == "search_context":
+                return {"search_mode": "research", "current_report": None,
+                        "merged_trace_source_datas": [], "all_classified_contents": [],
+                        "language": "zh-CN"}
+            return None
+
+        mock_session.get_global_state.side_effect = get_global_state_side_effect
+
+        with patch.object(source_tracer_node, 'pre_handle') as mock_pre_handle:
+            with patch(f'{MODULE_PATH}.preprocess_info') as mock_preprocess:
+                with patch.object(SourceTracerNode, 'build_citation_checker_result',
+                                  new_callable=AsyncMock) as mock_build_citation:
+                    with patch.object(source_tracer_node, 'post_handle') as mock_post_handle:
+                        mock_pre_handle.return_value = {
+                            "need_exit": False, "report": "test", "language": "zh-CN"}
+                        mock_preprocess.return_value = {
+                            "need_check": True, "response_content": {"article": "a"}}
+                        mock_build_citation.side_effect = StopRequested(
+                            "deepresearch task stopped by user")
+
+                        with pytest.raises(StopRequested):
+                            await source_tracer_node.do_invoke(None, mock_session, None)
+
+                        # 不得走降级返回路径
+                        mock_post_handle.assert_not_called()

@@ -142,7 +142,7 @@ class GoogleSearchAPIWrapper(BaseModel, Generic[T]):
         verify: Union[str, bool],
     ) -> List[Dict]:
         """Execute synchronous search request."""
-        response = requests.post(url, headers=headers, json=params, verify=verify)
+        response = requests.post(url, headers=headers, json=params, verify=verify, timeout=30)
         if response.status_code != 200:
             logger.error(f"Request search failed! Status code: {response.status_code}")
             response.raise_for_status()

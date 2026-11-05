@@ -67,6 +67,7 @@ class TestTavilySearchAPIWrapper:
         assert call_args[0][0] == "http://api.example.com/search"
         assert call_args[1]["json"]["query"] == "test query"
         assert call_args[1]["json"]["max_results"] == 3
+        assert call_args[1]["timeout"] == 30
 
     @patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper.requests.post")
     @patch("openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.tavily.api_wrapper.SslUtils.get_ssl_config")

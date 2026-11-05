@@ -16,6 +16,7 @@ from server.core.database import Base, engine
 from server.core.db_sync import run_database_sync
 from server.core.request_logging import add_request_logging_middleware
 from server.core.runner_init import init_runner, shutdown_runner
+from server.deepsearch.core.models.mcp_server_model import McpServerModel
 from server.deepsearch.core.models.report_template import ReportTemplateDB
 from server.deepsearch.core.models.web_search_engine_model import WebSearchEngineModel
 from server.local_retrieval.models.knowledge_base import KnowledgeBaseDB
@@ -48,6 +49,7 @@ async def lifespan_func(input_app: FastAPI):
     target_tables = [
         # Deepsearch table
         WebSearchEngineModel.__table__,
+        McpServerModel.__table__,  # 新增
         ReportTemplateDB.__table__,
         # Local retrieval table
         KnowledgeBaseDB.__table__,

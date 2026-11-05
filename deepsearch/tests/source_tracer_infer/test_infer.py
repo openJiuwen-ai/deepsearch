@@ -7,10 +7,29 @@ import pytest
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer import SourceTracerInfer
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
     GraphInfo,
+    normalize_reference_ids,
 )
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info import (
     ResearchInferPreprocess,
 )
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
+
+
+def test_infer_prompt_keeps_runtime_inputs_out_of_system():
+    messages = build_prompt_messages(
+        "infer_validate_prompt",
+        {
+            "statement": "runtime statement",
+            "references": [{"id": 0, "content": "runtime reference"}],
+            "language": "en-US",
+        },
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert "runtime statement" not in messages[0]["content"]
+    assert "runtime reference" not in messages[0]["content"]
+    assert "runtime statement" in messages[1]["content"]
+    assert "runtime reference" in messages[1]["content"]
 
 
 @pytest.mark.asyncio
@@ -93,6 +112,96 @@ def test_split_markdown_titles_clean_with_chapter_anchors():
     assert body_titles == ["1. First Chapter", "2. Second Chapter"]
     for section in sections:
         assert "<a id" not in section["title"]
+
+
+def test_classify_search_record_prefers_passage_text():
+    """passage 级记录应优先用 passage_text，避免整篇父文档全文重复膨胀。"""
+    search_records = [
+        [
+            {
+                "title": "Doc A",
+                "url": "https://example.com/a",
+                "passage_text": "short passage excerpt",
+                "original_content": "entire document content " * 500,
+            },
+        ],
+    ]
+    preprocess = ResearchInferPreprocess({
+        "source_tracer_response": "",
+        "all_classified_contents": search_records,
+    })
+    preprocess.classify_search_record()
+    record = preprocess.search_record_with_index[0][0]
+    assert record["content"] == "short passage excerpt"
+    assert record["title"] == "Doc A"
+    assert record["url"] == "https://example.com/a"
+
+
+def test_classify_search_record_falls_back_to_original_content():
+    """fulltext 级记录无 passage_text，应回退到 original_content（整篇文档）。"""
+    full_content = "full document content"
+    search_records = [
+        [
+            {
+                "title": "Doc B",
+                "url": "https://example.com/b",
+                "original_content": full_content,
+            },
+        ],
+    ]
+    preprocess = ResearchInferPreprocess({
+        "source_tracer_response": "",
+        "all_classified_contents": search_records,
+    })
+    preprocess.classify_search_record()
+    record = preprocess.search_record_with_index[0][0]
+    assert record["content"] == full_content
+
+
+def test_classify_search_record_falls_back_for_blank_passage_text():
+    """仅含空白的 passage_text 不是有效段落，应回退到全文。"""
+    preprocess = ResearchInferPreprocess({
+        "source_tracer_response": "",
+        "all_classified_contents": [[{
+            "title": "Doc B",
+            "url": "https://example.com/b",
+            "passage_text": "  \n\t",
+            "original_content": "full document content",
+        }]],
+    })
+
+    preprocess.classify_search_record()
+
+    assert preprocess.search_record_with_index[0][0]["content"] == "full document content"
+
+
+def test_classify_search_record_mixed_passage_and_fulltext():
+    """同一章节混合 passage 和 fulltext 记录时各自取正确字段。"""
+    passage_text = "passage excerpt"
+    fulltext_content = "full document body"
+    search_records = [
+        [
+            {
+                "title": "Passage Doc",
+                "url": "https://example.com/p",
+                "passage_text": passage_text,
+                "original_content": "should not be used",
+            },
+            {
+                "title": "Fulltext Doc",
+                "url": "https://example.com/f",
+                "original_content": fulltext_content,
+            },
+        ],
+    ]
+    preprocess = ResearchInferPreprocess({
+        "source_tracer_response": "",
+        "all_classified_contents": search_records,
+    })
+    preprocess.classify_search_record()
+    records = preprocess.search_record_with_index[0]
+    assert records[0]["content"] == passage_text
+    assert records[1]["content"] == fulltext_content
 
 
 class TestSourceTracerInfer:
@@ -194,6 +303,8 @@ class TestSourceTracerInfer:
             assert len(result["reference"]) == 2
             assert result["reference"][0]["id"] == 0
             assert result["reference"][0]["content"] == "test content 1"
+            detection_config = mock_call_model.await_args.kwargs["detection_func_and_args"]
+            assert detection_config["normalizer"] is normalize_reference_ids
 
     @pytest.mark.asyncio
     async def test_extract_reference_invalid_index(self):
@@ -636,3 +747,22 @@ class TestSourceTracerInfer:
 
             assert len(infer_messages) == 0  # Should be filtered out
             assert len(checker_infos["graph_infos"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_run_propagates_stop_requested(self):
+        """用户停止不得被转成 error_message 返回（那会丢失异常类型，被
+        节点层降级为正常返回进而清除 checkpoint），必须原样上抛。"""
+        from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
+
+        self.source_tracer_infer.conclusion_with_records = [
+            {"conclusion": ["test"], "search_records": [{"content": "test"}]}
+        ]
+
+        with patch.object(
+            self.source_tracer_infer, "async_run", new_callable=AsyncMock
+        ) as mock_async_run:
+            mock_async_run.side_effect = StopRequested(
+                "deepresearch task stopped by user")
+
+            with pytest.raises(StopRequested):
+                await self.source_tracer_infer.run()

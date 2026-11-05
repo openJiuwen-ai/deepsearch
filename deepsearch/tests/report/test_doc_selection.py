@@ -201,7 +201,7 @@ async def test_extract_and_score_produces_passages():
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "持有56-73只股票的建议来自TWSD模型。", "rationale_ids": ["r1"], "reliability": 0.8, "data_density": 0.7, "scores": {"r1": {"coverage": 1.0}}}]}]}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -230,7 +230,7 @@ async def test_extract_and_score_degrades_on_total_failure():
     raw_docs = [_raw_doc(0, content="A" * 1000)]
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", side_effect=Exception("LLM down")):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -256,7 +256,7 @@ async def test_extract_and_score_skips_malformed_scores():
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "test", "rationale_ids": ["r1"], "reliability": null, "data_density": 0.5, "scores": {"r1": {"coverage": "bad"}}}]}]}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -284,7 +284,7 @@ async def test_extract_and_score_string_number_scores():
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "test", "rationale_ids": ["r1"], "reliability": "0.8", "data_density": "0.7", "scores": {"r1": {"coverage": "0.9", "reliability": "0.8", "data_density": "0.7"}}}]}]}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -312,7 +312,7 @@ async def test_extract_and_score_preserves_parent_doc_metadata():
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": [{"text": "Diversification requires 30-50 stocks.", "rationale_ids": ["r1"], "reliability": 0.8, "data_density": 0.7, "scores": {"r1": {"coverage": 0.9}}}]}]}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -428,15 +428,13 @@ async def test_extract_and_score_truncates_long_content():
 
     captured_content = {}
 
-    def capture_apply_system_prompt(name, ctx):
+    def capture_build_prompt_messages(name, ctx):
         # Capture the user content sent to LLM
-        messages = ctx.get("messages", [])
-        if messages:
-            captured_content["text"] = messages[0].get("content", "")
+        captured_content["text"] = "\n".join(doc["content"] for doc in ctx["documents"])
         return [{"role": "user", "content": "test"}]
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=capture_apply_system_prompt):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=capture_build_prompt_messages):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -447,15 +445,7 @@ async def test_extract_and_score_truncates_long_content():
     # Verify the content sent to LLM was truncated
     assert "text" in captured_content
     sent_text = captured_content["text"]
-    # The content portion should not exceed MAX_EXTRACT_DOC_CHARS
-    # Find the content after "Content: " in the document block
-    content_start = sent_text.find("Content: ")
-    assert content_start != -1, "Document content should be present in LLM input"
-    content_part = sent_text[content_start + len("Content: "):]
-    # The content is followed by "\n\n" and trailing instruction text, so split there
-    doc_content = content_part.split("\n\n")[0]
-    # The content should be truncated to exactly MAX_EXTRACT_DOC_CHARS
-    assert len(doc_content) == MAX_EXTRACT_DOC_CHARS
+    assert sent_text == "X" * MAX_EXTRACT_DOC_CHARS
 
 
 @pytest.mark.asyncio
@@ -468,7 +458,7 @@ async def test_extract_and_score_degraded_truncates_long_content():
     raw_docs = [_raw_doc(0, "降级长文档", content=long_content)]
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", side_effect=Exception("LLM down")):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},

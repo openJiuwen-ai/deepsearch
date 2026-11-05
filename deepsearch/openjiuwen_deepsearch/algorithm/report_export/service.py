@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report_export.docx_export import convert_md_to_docx
 from openjiuwen_deepsearch.algorithm.report_export.html_export import ConvertOptions, convert_md_to_html
 from openjiuwen_deepsearch.algorithm.report_export.models import ReportExportResult
@@ -54,7 +54,7 @@ async def _apply_html_style(baseline_html: str, markdown: str, llm: dict) -> tup
     try:
         context = build_style_context(markdown)
         style_phase = "apply_prompt"
-        messages = apply_system_prompt("report_style_css", context.to_prompt_dict())
+        messages = build_prompt_messages("report_style_css", context.to_prompt_dict())
         style_phase = "invoke_llm"
         response = await ainvoke_llm_with_stats(llm=llm, messages=messages, llm_type="basic")
         style_phase = "extract_css_response"

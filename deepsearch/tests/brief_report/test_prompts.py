@@ -4,7 +4,76 @@ from pathlib import Path
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
+
+
+@pytest.mark.parametrize(
+    ("prompt_name", "context", "uses_current_date"),
+    [
+        (
+            "brief_outliner",
+            {
+                "query": "比较两个方案并给出建议",
+                "language": "zh-CN",
+                "audience_role": "业务负责人",
+                "tone": "直接",
+                "task_type": "comparison",
+                "required_dimensions": ["成本", "风险"],
+                "comparison_targets": ["方案 A", "方案 B"],
+                "has_temporal_scope": False,
+                "clarification_questions": "",
+                "user_feedback": "",
+                "report_template": "保留成本和风险比较表",
+            },
+            True,
+        ),
+        (
+            "brief_collector_query_generation",
+            {
+                "outline": {"title": "报告", "sections": []},
+                "task_type": "comparison",
+                "required_dimensions": ["成本"],
+                "comparison_targets": ["方案 A", "方案 B"],
+                "has_temporal_scope": False,
+                "executed_queries": ["已执行查询"],
+                "blocking_gaps": [],
+                "user_query": "比较两个方案",
+            },
+            True,
+        ),
+        (
+            "brief_doc_evaluator",
+            {
+                "section": {"id": "1", "title": "比较", "research_steps": []},
+                "candidates": [],
+            },
+            True,
+        ),
+        ("brief_evidence_review", {"outline": {}, "section_evidence": {}, "citation_registry": []}, False),
+        ("brief_sub_reporter", {"language": "zh-CN"}, False),
+        ("brief_reporter", {"language": "zh-CN"}, False),
+        ("brief_html_reporter", {"language": "zh-CN"}, False),
+        ("brief_html_section", {"language": "zh-CN"}, False),
+    ],
+)
+def test_brief_prompts_keep_system_stable_and_dynamic_data_in_user(
+    prompt_name, context, uses_current_date,
+):
+    """动态 Brief 输入只进入 user，且日期只出现在允许的三个 user 模板。"""
+    messages = build_prompt_messages(
+        prompt_name,
+        {**context, "current_date": "2026-09-15"},
+    )
+
+    assert messages[0]["role"] == "system"
+    assert "2026-09-15" not in messages[0]["content"]
+    assert messages[-1]["role"] == "user"
+    assert ("2026-09-15" in messages[-1]["content"]) is uses_current_date
+    later_messages = build_prompt_messages(
+        prompt_name,
+        {**context, "current_date": "2026-09-16"},
+    )
+    assert later_messages[0]["content"] == messages[0]["content"]
 
 
 @pytest.mark.parametrize(
@@ -94,7 +163,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
             "brief_html_reporter",
             {
                 "language": "zh-CN",
-                "messages": [{"role": "user", "content": "Report title: 报告"}],
+                "request_content": "Report title: 报告",
             },
             [
                 "single-file",
@@ -106,7 +175,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
             "brief_html_section",
             {
                 "language": "zh-CN",
-                "messages": [{"role": "user", "content": "Section Markdown:\n## 1 范围"}],
+                "request_content": "Section Markdown:\n## 1 范围",
             },
             [
                 "Content Fidelity",
@@ -120,7 +189,7 @@ from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
 )
 def test_brief_workflow_prompts_preserve_migrated_quality_contract(template_name, context, required_rules):
     """独立节点可改变输入结构，但不得丢失原 Brief 的核心写作和证据约束。"""
-    prompt = apply_system_prompt(template_name, context)[0]["content"]
+    prompt = "\n".join(message["content"] for message in build_prompt_messages(template_name, context))
     normalized_prompt = " ".join(prompt.split())
 
     for rule in required_rules:
@@ -130,8 +199,8 @@ def test_brief_workflow_prompts_preserve_migrated_quality_contract(template_name
 def test_brief_html_prompts_share_common_contract_template():
     """HTML shell 与章节 Prompt 应通过同一个公共契约模板复用规则。"""
     prompts_dir = Path(__file__).resolve().parents[2] / "openjiuwen_deepsearch/algorithm/prompts"
-    common_path = prompts_dir / "brief_html_common.md"
-    include = '{% include "brief_html_common.md" %}'
+    common_path = prompts_dir / "brief_html_common/system.md"
+    include = '{% include "brief_html_common/system.md" %}'
 
     assert common_path.is_file()
     common_source = common_path.read_text(encoding="utf-8")
@@ -139,13 +208,13 @@ def test_brief_html_prompts_share_common_contract_template():
     assert "Citation Contract" not in common_source
 
     for template_name in ("brief_html_reporter", "brief_html_section"):
-        source = (prompts_dir / f"{template_name}.md").read_text(encoding="utf-8")
+        source = (prompts_dir / template_name / "system.md").read_text(encoding="utf-8")
         assert include in source
-        rendered = apply_system_prompt(
+        rendered = build_prompt_messages(
             template_name,
             {
                 "language": "zh-CN",
-                "messages": [{"role": "user", "content": "context"}],
+                "request_content": "context",
             },
         )[0]["content"]
         assert "Shared HTML Contract" in rendered
@@ -156,11 +225,11 @@ def test_brief_html_prompts_share_common_contract_template():
 
 def test_brief_html_section_prompt_keeps_text_outside_css_bar_fill():
     """CSS 填充条只能承载视觉，不应让模型把可读文字放进薄条里。"""
-    rendered = apply_system_prompt(
+    rendered = build_prompt_messages(
         "brief_html_section",
         {
             "language": "zh-CN",
-            "messages": [{"role": "user", "content": "Section Markdown:\n## 1 对比"}],
+            "request_content": "Section Markdown:\n## 1 对比",
         },
     )[0]["content"]
     normalized_prompt = " ".join(rendered.split())

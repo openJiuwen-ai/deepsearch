@@ -17,6 +17,23 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
 from openjiuwen_deepsearch.common.common_constants import CHINESE, ENGLISH
 
 
+@pytest.mark.asyncio
+@patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
+async def test_abstract_network_retry_reuses_request_snapshot(mock_llm_cls):
+    reporter = Reporter("basic")
+    reporter.gen_report_context = {"language": ENGLISH}
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.report_parts.ainvoke_llm_with_stats",
+        new=AsyncMock(side_effect=[RuntimeError("network error"), {"content": "summary"}]),
+    ) as invoke:
+        assert await reporter.generate_abstract("Grounded chapter content") == "summary"
+    first, second = [call.kwargs["messages"] for call in invoke.await_args_list]
+    assert first is second
+    assert [message["role"] for message in second] == ["system", "user"]
+    assert "Grounded chapter content" in second[-1]["content"]
+    assert "network error" not in second[-1]["content"]
+
+
 @patch("openjiuwen_deepsearch.algorithm.report.report.llm_context", new_callable=MagicMock)
 def test_build_reporter_compact_context_selects_fields_by_target(mock_llm_cls):
     reporter = Reporter("basic")

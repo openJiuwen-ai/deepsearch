@@ -28,8 +28,8 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/new_task_assessment.md`
-- `openjiuwen_deepsearch/algorithm/prompts/new_task_rewrite_section.md`
+- `openjiuwen_deepsearch/algorithm/prompts/new_task_assessment/`
+- `openjiuwen_deepsearch/algorithm/prompts/new_task_rewrite_section/`
 
 主要测试：
 

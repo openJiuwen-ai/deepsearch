@@ -8,6 +8,7 @@ import re
 from openjiuwen_deepsearch.algorithm.source_trace.citation_checker_research import CitationCheckerResearch
 from openjiuwen_deepsearch.common.exception import CustomException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,10 @@ async def postprocess_by_citation_checker(report: dict, datas: list, llm_model: 
     try:
         citation_checker = CitationCheckerResearch(llm_model)
         citation_checker_result_str = await citation_checker.checker(report, datas)
+    except StopRequested:
+        # 用户停止不包装：包装成 CustomException 会丢失异常类型，导致
+        # 节点层 except StopRequested 接不住而再次被降级为正常返回。
+        raise
     except CustomException as e:
         logger.error(f'[CITATION CHECKER]: citation checker error: {e}')
         raise e

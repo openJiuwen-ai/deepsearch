@@ -13,6 +13,10 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.graph_buil
     build_info_collector_sub_graph,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.collector_graph.evidence_ledger import ensure_ledger
+from openjiuwen_deepsearch.algorithm.query_understanding.material_processing import (
+    build_material_evidence_items,
+    restore_material_analysis,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message, Plan, Step, StepType
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -163,6 +167,7 @@ class CollectorInputBuildParams:
     build_config: CollectorInputBuildConfig
     report_type: str | None = None
     research_intent: dict = field(default_factory=dict)
+    material_evidence: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -234,6 +239,11 @@ class CollectorExecutionService:
             "target_paper_attempts": section_ledger.target_paper_attempts,
             "confirmed_target_papers": section_ledger.confirmed_target_papers,
         }
+        material_analysis = restore_material_analysis(
+            session.get_global_state("section_context.material_analysis")
+        )
+        bound_material_ids = session.get_global_state("section_context.bound_material_ids") or []
+        material_evidence = build_material_evidence_items(material_analysis, bound_material_ids)
 
         for idx, step in enumerate(plan.steps):
             step.id = f"{idx + 1}"
@@ -249,6 +259,7 @@ class CollectorExecutionService:
                     build_config=build_config,
                     report_type=report_type,
                     research_intent=research_intent,
+                    material_evidence=material_evidence,
                 )
             )
             sub_inputs["evidence_ledger"] = target_tracking_ledger
@@ -350,4 +361,5 @@ class CollectorExecutionService:
             "max_tool_call_turns_per_query": build_config.max_tool_call_turns_per_query,
             "report_type": params.report_type or "professional",
             "research_intent": params.research_intent or {},
+            "material_evidence": params.material_evidence,
         }

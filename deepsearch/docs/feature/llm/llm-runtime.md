@@ -15,8 +15,9 @@ LLM 运行时封装把仓库内的 `LLMConfig` 转换成 openJiuwen 可调用的
 ## 可见行为
 
 - `create_llm_obj` 返回 dict，包含主模型、模型名、思考 fallback 模型和 fallback 状态字段。
-- 默认调用 `create_llm_obj(llm_config)` 时不注入思考开关，保留用户原始 `extension`。
+- 除 GLM-5.3 外，默认调用 `create_llm_obj(llm_config)` 时不注入思考开关，保留用户原始 `extension`。
 - 显式传入 `thinking_enabled=True/False` 时，按厂商规则合并思考开关字段。
+- GLM-5.3 始终开启思考，使用 `reasoning_effort="low"`；覆盖显式关闭、默认值和原有 effort。其他模型不受影响。
 - `llm_thinking_enabled` 的默认值来自 `Config().service_config.llm_thinking_enabled`，当前默认关闭。
 - 当关闭思考模式的参数被厂商拒绝时，调用层可切换到不带思考开关的 fallback model，并在同一 session 后续调用中复用该 fallback。
 - 创建模型对象后会清理 `llm_config.api_key` 中的 `bytearray` secret。
@@ -36,10 +37,10 @@ LLM 运行时封装把仓库内的 `LLMConfig` 转换成 openJiuwen 可调用的
 
 1. 调用方把 `LLMConfig` 传给 `create_llm_obj`。
 2. `validate_llm_obj_params` 校验模型配置。
-3. 如果 `thinking_enabled` 为 `None`，直接使用原始 `extension`。
+3. 优先识别 GLM-5.3，复制并清理冲突的思考字段，按厂商规则开启思考并设置 low effort；其他模型在 `thinking_enabled=None` 时直接使用原始 `extension`。
 4. 如果 `thinking_enabled` 为布尔值，`merge_thinking_extension` 根据厂商规则复制并改写 `extension`。
 5. `LLMModelFactory.get_model` 使用 provider、api key、base URL、超时、超参和 extension 创建主模型。
-6. 当 `thinking_enabled=False` 且当前厂商规则会移除或注入思考字段时，同时创建 fallback model。
+6. 当 `thinking_enabled=False` 且当前厂商规则会移除或注入思考字段时，同时创建 fallback model；GLM-5.3 不创建移除思考参数的 fallback。
 7. `ainvoke_llm_with_stats` 捕获“思考开关不支持”类错误后，激活 fallback model 并重试一次。
 8. 激活后的 fallback key 会写入当前 workflow session，后续同 key LLM dict 直接使用 fallback model。
 
@@ -59,7 +60,10 @@ LLM 运行时封装把仓库内的 `LLMConfig` 转换成 openJiuwen 可调用的
 
 ## 边界与错误处理
 
-- 未匹配或不支持的厂商规则不会改写原始 `extension`，只记录 warning。
+- GLM-5.3 名称匹配不区分大小写，接受 `glm5.3`、`glm-5.3`、`glm_5.3` 及 `-`/`_` 后缀，可带以 `/` 分隔的厂商前缀；不匹配 `glm-5.30` 或 `glm-5.2`。
+- GLM-5.3 保留无关 extension 字段，清理旧思考开关和嵌套 `extra_body.reasoning_effort`，在顶层写入 `reasoning_effort="low"`。华为 MaaS 标准 v1/v2 使用 `extra_body.thinking.type="enabled"`，OpenAI 兼容路径使用 `extra_body.chat_template_kwargs.enable_thinking=true`；未知厂商使用 thinking-type 形态。
+- GLM-5.3 不通过移除思考参数重试，以免退回服务端默认 effort；不支持该请求格式时直接暴露调用错误。客户端参数不能保证服务端支持 low，也不保证固定耗时。
+- 其他模型未匹配或不支持的厂商规则不会改写原始 `extension`，只记录 warning。
 - 已存在的思考开关字段会在支持规则下被清理，并由 `llm_thinking_enabled` 重新写入，避免同一请求中出现冲突字段。
 - fallback extension 只继承用户原始 extension 中与思考开关无关的字段，不继承主请求临时注入字段。
 - fallback 响应失败时保留原始异常链，便于定位第一次失败和 fallback 失败。

@@ -50,7 +50,8 @@ class SourceTracer:
         """将子报告生成过程中使用的top-K文章信息转换为溯源模块使用的搜索记录格式。
 
         Args:
-            classified_content (list): 子报告生成过程中使用的子报告生成过程中使用的top-K文章信息，每个元素为包含url、title和original_content的字典
+            classified_content (list): 子报告生成过程中使用的top-K证据信息，
+                每个元素包含url、title，以及passage_text或original_content
 
         Returns:
             dict: 溯源模块使用的搜索记录，格式为{'search_record': [{'url': str, 'title': str, 'content': str}, ...]}
@@ -60,13 +61,18 @@ class SourceTracer:
         filtered_content = []
         for item in classified_content:
             if isinstance(item, dict):
-                # 检查是否同时拥有url、title、original_content三个字段
-                if "url" in item and "title" in item and "original_content" in item:
+                has_content = "passage_text" in item or "original_content" in item
+                if "url" in item and "title" in item and has_content:
+                    passage_text = item.get("passage_text", "")
+                    content = (
+                        passage_text
+                        if isinstance(passage_text, str) and passage_text.strip()
+                        else item.get("original_content", "")
+                    )
                     filtered_item = {
                         "url": item["url"],
                         "title": item["title"],
-                        # 将original_content改为content，方便后续识别使用
-                        "content": item["original_content"]
+                        "content": content
                     }
                     filtered_content.append(filtered_item)
 

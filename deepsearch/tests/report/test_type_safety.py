@@ -116,7 +116,7 @@ async def test_generate_rationales_non_list_field():
     mock_llm_result.get.return_value = '{"rationales": "not a list"}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             rationales, error = await reporter._generate_section_rationales(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -204,7 +204,7 @@ async def test_extract_and_score_non_list_documents():
     mock_llm_result.get.return_value = '{"documents": {"key": "value"}}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -226,7 +226,7 @@ async def test_extract_and_score_non_list_passages():
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": null}]}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -248,7 +248,7 @@ async def test_extract_and_score_non_dict_doc_result():
     mock_llm_result.get.return_value = '{"documents": [42, {"doc_index": 0, "passages": [{"text": "valid", "rationale_ids": ["r1"], "scores": {"r1": {"coverage": 0.9}}}]}]}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -271,7 +271,7 @@ async def test_extract_and_score_llm_returns_json_array():
     mock_llm_result.get.return_value = '[1, 2, 3]'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -508,7 +508,7 @@ async def test_extract_batch_non_list_documents_logging():
     mock_llm_result.get.return_value = '{"documents": 42}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},
@@ -530,7 +530,7 @@ async def test_extract_batch_non_list_passages_in_logging():
     mock_llm_result.get.return_value = '{"documents": [{"doc_index": 0, "passages": "not a list"}]}'
 
     with patch("openjiuwen_deepsearch.algorithm.report.evidence.ainvoke_llm_with_stats", return_value=mock_llm_result):
-        with patch("openjiuwen_deepsearch.algorithm.report.evidence.apply_system_prompt", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
+        with patch("openjiuwen_deepsearch.algorithm.report.evidence.build_prompt_messages", side_effect=lambda name, ctx: [{"role": "user", "content": "test"}]):
             result, error = await reporter._extract_and_score_documents(
                 {"section_idx": 1, "section_task": "test", "section_description": "",
                  "max_generate_retry_num": 1},

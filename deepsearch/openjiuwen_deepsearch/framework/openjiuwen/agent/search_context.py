@@ -81,6 +81,10 @@ class Plan(BaseModel):
     is_research_completed: bool = Field(..., description="是否已完成信息收集工作")
     steps: List[Step] = Field(default_factory=list, description="info_collecting类型的步骤")
     background_knowledge: Optional[Dict[str, str]] = Field(default_factory=dict, description="plan执行所需要的背景知识")
+    use_material_ids: List[str] = Field(
+        default_factory=list,
+        description="规划阶段确认引用的用户素材ID（material_analysis.items[].material_id），报告撰写时并入 classified_content",
+    )
 
 
 class Section(BaseModel):
@@ -103,6 +107,10 @@ class Section(BaseModel):
         ),
     )
     focus_dimensions: List[str] = Field(default_factory=list, description="该章节应主展开的 2-4 个分析维度，其他章节不应深入展开这些维度")
+    material_bindings: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="章节使用的用户素材：material_id、role 与 claims_to_use",
+    )
     doc_selection_debug: Optional[Dict] = Field(
         default=None,
         description=(
@@ -201,6 +209,10 @@ class FinalResult(BaseModel):
     )
     warning_info: str = Field(default="", description="主图WorkFlow执行过程中的告警信息")
     exception_info: str = Field(default="", description="主图WorkFlow异常退出时的异常信息")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="附加元数据：如 brief 升级专业版所需的 brief_outline/research_intent/language",
+    )
 
 
 class OutlineInteraction(BaseModel):
@@ -316,7 +328,7 @@ class ResearchIntent(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _route_legacy_temporal_scope(cls, data):
+    def _route_legacy_fields(cls, data):
         if isinstance(data, BaseModel):
             data = data.model_dump()
         if not isinstance(data, dict):
@@ -594,6 +606,46 @@ def build_section_local_contract_prompt_context(contract: SectionLocalContract |
     }
 
 
+def build_exclusion_prompt_context(intent: ResearchIntent | dict | None) -> dict:
+    """把用户"禁止引用某来源（exclude_url/exclude_titles）"转为写作 prompt 可消费的上下文。
+
+    只读 exclude_url / exclude_titles（域名排除由采集层确定性过滤负责）。返回
+    ``has_exclusion`` 与 ``exclusion_instruction`` 两个键；无约束时返回空字段。
+    不输出 blocked authors 段（exclude_authors 已移除，避免 writer 误伤同作者合法论文）。
+    """
+    if intent is None:
+        model = ResearchIntent()
+    elif isinstance(intent, ResearchIntent):
+        model = intent
+    else:
+        model = ResearchIntent.model_validate(intent)
+
+    exclude_urls = [u for u in model.exclude_url if u]
+    exclude_titles = [t for t in model.exclude_titles if t]
+    if not exclude_urls and not exclude_titles:
+        return {"has_exclusion": False, "exclusion_instruction": ""}
+
+    # 列表过长会膨胀 system prompt；取 top-N，超出部分依赖采集层确定性过滤兜底。
+    urls = exclude_urls[:20]
+    titles = exclude_titles[:20]
+
+    parts = [
+        "The following sources are blocked and must NOT appear anywhere in your output — "
+        "never cite them, never mention their titles/URLs, and never quote or paraphrase their content, "
+        "even if they slipped into the Collected Information.",
+        "This is a silent constraint: do NOT restate, explain, or echo this rule in the report; "
+        "just omit these sources without any mention that they were excluded.",
+    ]
+    if urls:
+        urls_text = "\n".join(f"- {u}" for u in urls)
+        parts.append(f"Blocked URLs (primary, match exactly):\n{urls_text}")
+    if titles:
+        titles_text = "\n".join(f"- {t}" for t in titles)
+        parts.append(f"Blocked titles (auxiliary, semantic match):\n{titles_text}")
+
+    return {"has_exclusion": True, "exclusion_instruction": "\n\n".join(parts)}
+
+
 class SearchContext(BaseModel):
     """
     上下文状态模型：工作流运行时的状态上下文
@@ -608,13 +660,21 @@ class SearchContext(BaseModel):
     )
     brief_state: Dict[str, Any] | None = Field(
         default=None,
-        description="独立 Brief 工作流的序列化状态；专业版保持为空。",
+        description=("Brief 工作流的序列化状态"),
     )
     messages: List[Message] = Field(default_factory=list, description="对话消息列表")
     language: str = Field(default="zh-CN", description="语言")
     report_template: str = Field(default="", description="模板内容")
     search_mode: str = Field(default="research", description="搜索类型，research 或 search 对应研究或深搜模式")
     entry_search_results: List[Dict] = Field(default_factory=list, description="Entry节点预搜索结果")
+    user_materials: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="原始用户素材（UserMaterial dict 列表），由 StartNode 写入；预处理后的素材由 material_analysis 供后续节点消费",
+    )
+    material_analysis: Dict[str, Any] | None = Field(
+        default=None,
+        description="素材预处理产物（MaterialAnalysis.model_dump），含 manifest+摘要，多轮复用缓存",
+    )
 
     # 2、feedback相关参数
     questions: str = Field(default="", description="系统基于用户问题提出的问题")

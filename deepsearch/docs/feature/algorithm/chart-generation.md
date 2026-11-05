@@ -32,12 +32,12 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/vlm_find_insert_point_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/vlm_collect_data_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/vlm_generate_chart_code_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/vlm_iterate_prompt.md`
-- `openjiuwen_deepsearch/algorithm/prompts/chart_compliance_validate.md`
-- `openjiuwen_deepsearch/algorithm/prompts/chart_data_traceability_check.md`
+- `openjiuwen_deepsearch/algorithm/prompts/vlm_find_insert_point_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/vlm_collect_data_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/vlm_generate_chart_code_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/vlm_iterate_prompt/`
+- `openjiuwen_deepsearch/algorithm/prompts/chart_compliance_validate/`
+- `openjiuwen_deepsearch/algorithm/prompts/chart_data_traceability_check/`
 
 主要测试：
 

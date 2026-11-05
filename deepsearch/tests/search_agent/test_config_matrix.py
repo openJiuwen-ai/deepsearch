@@ -14,7 +14,7 @@ from openjiuwen_deepsearch.config.config import (
     SemanticScholarConfig,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import SearchStartNode
-from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent
+from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import DeepresearchAgent, StreamRunContext
 
 pytestmark = pytest.mark.unit
 
@@ -235,17 +235,19 @@ async def test_stream_workflow_config_keeps_valid_scholarly_key_types() -> None:
         side_effect=fake_run_agent_streaming,
     ):
         async for _ in agent._consume_stream_chunks(
-            conversation_id="conversation-1",
-            message="query",
-            decoded_template="",
-            interrupt_feedback="",
-            session_agent_config={
-                "scholarly_search_config": {
-                    "fetch_full_text": False,
-                    "max_full_text_results_per_query": 2,
-                    "pubmed": {"search_api_key": bytearray(b"secret")},
+            StreamRunContext(
+                conversation_id="conversation-1",
+                message="query",
+                decoded_template="",
+                interrupt_feedback="",
+                session_agent_config={
+                    "scholarly_search_config": {
+                        "fetch_full_text": False,
+                        "max_full_text_results_per_query": 2,
+                        "pubmed": {"search_api_key": bytearray(b"secret")},
+                    },
                 },
-            },
+            )
         ):
             pass
 

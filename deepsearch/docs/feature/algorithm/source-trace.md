@@ -38,8 +38,8 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/content_recognition.md`
-- `openjiuwen_deepsearch/algorithm/prompts/source_matching.md`
+- `openjiuwen_deepsearch/algorithm/prompts/content_recognition/`
+- `openjiuwen_deepsearch/algorithm/prompts/source_matching/`
 
 主要测试：
 
@@ -70,7 +70,9 @@
 关键输入：
 
 - `report`
-- `classified_content`
+- `classified_content`：段落级证据优先使用非空白的 `passage_text`
+  生成搜索记录；字段缺失、仅含空白或全文级证据则使用
+  `original_content`。
 - `llm_model_name`
 
 关键中间数据：

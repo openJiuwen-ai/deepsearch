@@ -11,10 +11,20 @@ from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_extract_info impo
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.number_node import NumberNode
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.supplement_graph import SupplementGraph
 from openjiuwen_deepsearch.algorithm.source_tracer_infer.generate_html import GenerateHTML
-from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (call_model, is_list_of,
-                                                                                  is_equal_length,
-                                                                                  is_valid_supplement_triples,
-                                                                                  type_check, GraphInfo)
+from openjiuwen_deepsearch.algorithm.source_tracer_infer.infer_call_model import (
+    GraphInfo,
+    call_model,
+    is_equal_length,
+    is_list_of,
+    is_valid_structured_triples,
+    normalize_reference_ids,
+    normalize_structured_triple_reference_ids,
+    type_check,
+)
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    StopRequested,
+    gather_with_stop,
+)
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 
 logger = logging.getLogger(__name__)
@@ -53,9 +63,11 @@ class SourceTracerInfer:
             checked_infer_graphs = []
             final_conclusion_info = []
             task = [self.async_run(
-                {"conclusion": item.get("conclusion", []), 
+                {"conclusion": item.get("conclusion", []),
                  "search_records": item.get("search_records", [])}) for item in self.conclusion_with_records]
-            results = await asyncio.gather(*task)
+            # StopRequested 放行后先取消并等待全部结论任务退出再重抛，
+            # 避免孤儿任务在 checkpoint 落盘后继续运行污染快照。
+            results = await gather_with_stop(*task)
             for index, (infer_message, checked_infer_graph) in enumerate(results):
                 if infer_message.get("html_base64", ""):
                     infer_message["id"] = index
@@ -69,6 +81,11 @@ class SourceTracerInfer:
             self.checker_infos["graph_infos"] = checked_infer_graphs
             self.checker_infos["search_records"] = [info.get("search_records", []) for info in final_conclusion_info]
 
+        except StopRequested:
+            # 用户停止不转 error_message 返回（那会丢失异常类型，被节点
+            # 层降级为正常返回进而清除 checkpoint），直接抛出走异常保存
+            # 分支，resume 时从本节点续跑。
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 logger.error(f"[SOURCE TRACER INFER] run error: **")
@@ -113,6 +130,9 @@ class SourceTracerInfer:
             infer_message["conclusion"] = inferences.get("conclusion", "")
             infer_message["inference"] = inferences.get("inference", "")
             infer_message["html_base64"] = self._encode_html_to_base64(html_content)
+        except StopRequested:
+            # 用户停止不做单结论级降级，上抛由 gather_with_stop 统一收口。
+            raise
         except Exception as e:
             if LogManager.is_sensitive():
                 error_msg = f"run error: **"
@@ -175,7 +195,11 @@ class SourceTracerInfer:
 
         records = [{"id": index, "content": record.get("content", "")} for index, record in enumerate(search_records)]
         handle_datas = {"statement": conclusions[0], "references": records}  # 不包含最后一个主要结论
-        detection_func_and_args = {"detection_func": is_list_of, "args": int}
+        detection_func_and_args = {
+            "normalizer": normalize_reference_ids,
+            "detection_func": is_list_of,
+            "args": int,
+        }
         results = await call_model(self.model_name, "infer_validate_prompt", handle_datas, 
                                    detection_func_and_args=detection_func_and_args, 
                                    agent_name=AgentLlmName.SOURCE_TRACER_INFER_EXTRACT_REFERENCE.value)
@@ -269,7 +293,11 @@ class SourceTracerInfer:
         结构化inference，提取结构化参考材料的关系
         """
         logger.info(f"[SOURCE TRACER INFER] structured_infer starting...")
-        detection_func_and_args = {"detection_func": is_valid_supplement_triples, "args": 3} # 需要添加检测函数，检测输出的每个结构为三元组
+        detection_func_and_args = {
+            "normalizer": normalize_structured_triple_reference_ids,
+            "detection_func": is_valid_structured_triples,
+            "args": 3,
+        }
         result = await call_model(self.model_name, "infer_structured_prompt", inference, 
                                   detection_func_and_args=detection_func_and_args, 
                                   agent_name=AgentLlmName.SOURCE_TRACER_INFER_STRUCTURED_INFER.value)

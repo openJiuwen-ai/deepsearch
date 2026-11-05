@@ -42,6 +42,30 @@ class TestResearchCitationChecker:
         assert hasattr(checker, 'citation_verifier')
         assert checker.citation_verifier is not None
 
+    def test_keeps_local_path_user_material_citation(self):
+        checker = CitationCheckerResearch("mock_model")
+        local_path = r"D:\materials\paper.pdf"
+        datas = [{"url": local_path, "source_type": "user_material", "valid": True}]
+
+        url, is_valid = checker.validate_url_match(local_path, datas, 0)
+
+        assert url == local_path
+        assert is_valid is True
+
+    def test_rejects_unsafe_user_material_url(self):
+        checker = CitationCheckerResearch("mock_model")
+        datas = [{
+            "url": "javascript:alert(1)",
+            "source_type": "user_material",
+            "valid": True,
+        }]
+
+        url, is_valid = checker.validate_url_match("javascript:alert(1)", datas, 0)
+
+        assert url == ""
+        assert is_valid is False
+        assert datas[0]["valid"] is False
+
     def test_source_tracer_citation_marker_uses_fields_not_match_methods(self):
         """source tracer 引用标记应使用字段表达位置和内容。"""
         marker = SourceTracerCitationMarker(

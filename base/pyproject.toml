@@ -17,7 +17,9 @@ prerelease = "allow"
 [project.optional-dependencies]
 # 与消费方相同的分组模式：核心零重依赖，按需启用。
 # 已验证该版本同时提供 foundation.llm 与 workflow/Runner 两组 API
-workflow = ["openjiuwen", "certifi"]  # certifi 为 SSL 默认 CA 包
+# openjiuwen 的异步 SQLAlchemy 存储在导入时需要 greenlet；将其作为 workflow
+# extra 的显式依赖，确保使用工作流的下游项目在测试收集和运行时均可导入。
+workflow = ["openjiuwen", "certifi", "greenlet"]  # certifi 为 SSL 默认 CA 包
 milvus = ["pymilvus>=2.4,<3"]  # 已验证组合：客户端 2.6.x + 服务端 v2.6.18；≥2.5 才有 BM25 Function
 embed = ["aiohttp>=3.9"]
 

@@ -96,7 +96,7 @@ class TestSynonymRewriter:
 
     @pytest.mark.asyncio
     async def test_generate_synonym_rewrite_text_calls_llm_wrapper(self, synonym_rewriter):
-        with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.apply_system_prompt") as mock_prompt:
+        with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.build_prompt_messages") as mock_prompt:
             mock_prompt.return_value = [{"role": "system", "content": "prompt"}]
             with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.get_llm_instance", return_value=object()):
                 with patch(
@@ -118,7 +118,7 @@ class TestSynonymRewriter:
 
     @pytest.mark.asyncio
     async def test_generate_synonym_rewrite_text_wraps_unknown_exception(self, synonym_rewriter):
-        with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.apply_system_prompt", return_value=[{"role": "system", "content": "prompt"}]):
+        with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.build_prompt_messages", return_value=[{"role": "system", "content": "prompt"}]):
             with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.get_llm_instance", return_value=object()):
                 with patch(
                     f"{SYNONYM_REWRITER_MODULE_PATH}.ainvoke_llm_with_stats",
@@ -209,7 +209,7 @@ class TestRewriteFlow:
             "user_instruction": "补充技术细节",
         }
 
-        with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.apply_system_prompt", return_value=[{"role": "system", "content": "prompt"}]):
+        with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.build_prompt_messages", return_value=[{"role": "system", "content": "prompt"}]):
             with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.get_llm_instance", return_value=object()):
                 with patch(
                     f"{SYNONYM_REWRITER_MODULE_PATH}.ainvoke_llm_with_stats",
@@ -246,7 +246,7 @@ class TestRewriteFlow:
         citation_marker_3 = "[checked_citation:1][[3]](https://c.com)"
         citation_marker_4 = "[checked_citation:2][[4]](https://d.com)"
 
-        with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.apply_system_prompt", return_value=[{"role": "system", "content": "prompt"}]):
+        with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.build_prompt_messages", return_value=[{"role": "system", "content": "prompt"}]):
             with patch(f"{SYNONYM_REWRITER_MODULE_PATH}.get_llm_instance", return_value=object()):
                 with patch(
                     f"{SYNONYM_REWRITER_MODULE_PATH}.ainvoke_llm_with_stats",

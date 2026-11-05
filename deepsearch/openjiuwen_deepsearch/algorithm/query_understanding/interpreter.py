@@ -3,8 +3,9 @@
 
 import logging
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.common.status_code import StatusCode, format_exception_info
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import ainvoke_llm_with_stats
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
@@ -31,7 +32,10 @@ async def query_interpreter(current_inputs: dict) -> dict:
         current_inputs.get("report_type"),
         len(current_inputs.get("entry_search_results") or []),
     )
-    prompt = apply_system_prompt("generate_questions", current_inputs)
+    prompt = build_prompt_messages(
+        "generate_questions",
+        {key: value for key, value in current_inputs.items() if key != "messages"},
+    )
     try:
         llm = llm_context.get().get(current_inputs.get("llm_model_name"))
         response = await ainvoke_llm_with_stats(llm, prompt, llm_type="basic",
@@ -42,6 +46,11 @@ async def query_interpreter(current_inputs: dict) -> dict:
             logger.info("[query_interpreter] got output (redacted).")
         content = response.get("content", "") if isinstance(response, dict) else ""
         return dict(result=content)
+    except StopRequested:
+        # 用户停止不降级为 exception_info 数据返回（那会让 GenerateQuestions
+        # 节点"正常"流转到 END、图"正常完成"并清除 checkpoint），直接上抛
+        # 走异常保存分支。
+        raise
     except Exception as e:
         err_msg = format_exception_info(StatusCode.INTERPRETATION_GENERATE_ERROR, e)
         if LogManager.is_sensitive():

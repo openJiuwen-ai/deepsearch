@@ -174,7 +174,7 @@ async def test_content_time_none_without_temporal_scope(monkeypatch):
 @pytest.mark.asyncio
 async def test_extract_batch_propagates_extract_content_time_to_prompt(monkeypatch):
     """_extract_batch must pass extract_content_time in tmp_context to
-    apply_system_prompt('passages_extractor', ...). Regression guard for
+    build_prompt_messages('passages_extractor', ...). Regression guard for
     the flag being accidentally moved to _generate_section_rationales."""
     import json
 
@@ -185,7 +185,7 @@ async def test_extract_batch_propagates_extract_content_time_to_prompt(monkeypat
 
     captured_tmp_context: list = []
 
-    def _fake_apply_system_prompt(name, ctx):
+    def _fake_build_prompt_messages(name, ctx):
         if name == "passages_extractor":
             captured_tmp_context.append(dict(ctx))
         return ctx.get("messages", [])
@@ -193,7 +193,7 @@ async def test_extract_batch_propagates_extract_content_time_to_prompt(monkeypat
     async def _fake_ainvoke(*args, **kwargs):
         return {"content": json.dumps(_llm_doc_result())}
 
-    monkeypatch.setattr(evidence_mod, "apply_system_prompt", _fake_apply_system_prompt)
+    monkeypatch.setattr(evidence_mod, "build_prompt_messages", _fake_build_prompt_messages)
     monkeypatch.setattr(evidence_mod, "ainvoke_llm_with_stats", _fake_ainvoke)
 
     section_ctx_true = {

@@ -17,6 +17,23 @@ logger = logging.getLogger(__name__)
 
 # 安全相关的URL scheme白名单
 SAFE_URL_SCHEMES = frozenset(['http', 'https'])
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r'^[a-zA-Z]:[\\/]')
+_UNC_PATH_RE = re.compile(r'^\\\\[^\\/]+[\\/]+[^\\/]+')
+
+
+def is_local_file_path(value: str) -> bool:
+    """Return whether *value* is an absolute local file path.
+
+    Material sources may originate on the service host and therefore need not
+    have a public HTTP URL. Do not require the path to exist here: request
+    validation can run on a different host from the file producer.
+    """
+    path = str(value or "").strip()
+    return bool(
+        (path.startswith("/") and not path.startswith("//"))
+        or _WINDOWS_ABSOLUTE_PATH_RE.match(path)
+        or _UNC_PATH_RE.match(path)
+    )
 
 
 def validate_and_sanitize_url(url: str) -> str:

@@ -29,6 +29,7 @@ from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
 from openjiuwen_deepsearch.config.config import Config
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import StopRequested, raise_if_stop_requested
 from openjiuwen_deepsearch.utils.common_utils.stream_utils import get_current_time, MessageType, StreamEvent
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName, NodeId
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import session_context, cancel_context
@@ -85,6 +86,23 @@ _THINKING_SWITCH_UNSUPPORTED_MARKERS = (
     "not support",
     "unsupported",
 )
+
+
+@dataclass(frozen=True)
+class WorkflowLlmUsageDelta:
+    """表示一次 LLM 调用要累加的 token 用量。
+
+    Attributes:
+        input_tokens: 本次调用的输入 token 数。
+        output_tokens: 本次调用的输出 token 数。
+        total_tokens: 本次调用的总 token 数。
+        cache_tokens: 缓存读取 token 数；None 表示未提供缓存统计。
+    """
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cache_tokens: int | None = None
 
 
 def _clamp_agent_llm_timeout(timeout: Any) -> int:
@@ -319,6 +337,7 @@ def _merge_agent_name_usage_list(agent_usage_list: Any) -> list[dict[str, Any]]:
         current_usage["output_tokens"] += _to_non_negative_int(usage_item.get("output_tokens", 0))
         current_usage["total_tokens"] += _to_non_negative_int(usage_item.get("total_tokens", 0))
         current_usage["llm_call_count"] += _to_non_negative_int(usage_item.get("llm_call_count", 0))
+        _merge_cache_usage(current_usage, usage_item)
     return list(merged_usage.values())
 
 
@@ -348,13 +367,15 @@ def normalize_workflow_llm_usage(usage: Any) -> dict[str, Any]:
     """
     if not isinstance(usage, dict):
         return _build_empty_workflow_llm_usage()
-    return {
+    normalized = {
         "input_tokens": _to_non_negative_int(usage.get("input_tokens", 0)),
         "output_tokens": _to_non_negative_int(usage.get("output_tokens", 0)),
         "total_tokens": _to_non_negative_int(usage.get("total_tokens", 0)),
         "llm_call_count": _to_non_negative_int(usage.get("llm_call_count", 0)),
         "agent_name_token_usage": _merge_agent_name_usage_list(usage.get("agent_name_token_usage", [])),
     }
+    _merge_cache_usage(normalized, usage)
+    return normalized
 
 
 def is_workflow_llm_usage_empty(usage: dict[str, Any]) -> bool:
@@ -372,6 +393,7 @@ def is_workflow_llm_usage_empty(usage: dict[str, Any]) -> bool:
         and normalized_usage["output_tokens"] == 0
         and normalized_usage["total_tokens"] == 0
         and normalized_usage["llm_call_count"] == 0
+        and normalized_usage.get("cache_tokens", 0) == 0
         and len(normalized_usage["agent_name_token_usage"]) == 0
     )
 
@@ -457,28 +479,28 @@ def save_workflow_llm_usage_to_session(session: Any, session_id: str) -> dict[st
 
 def add_workflow_llm_usage(
     session_id: str,
-    input_tokens: int,
-    output_tokens: int,
-    total_tokens: int,
+    token_usage: WorkflowLlmUsageDelta,
     agent_name: str = "",
 ) -> None:
     """累加指定 workflow 的 LLM token 消耗。
 
     Args:
         session_id (str): workflow 对应会话 ID。
-        input_tokens (int): 本次调用输入 token 数。
-        output_tokens (int): 本次调用输出 token 数。
-        total_tokens (int): 本次调用总 token 数。
+        token_usage: 本次调用的输入、输出、总量及可选缓存 token 数。
         agent_name (str): 本次调用的 agent 名称。
     """
     if not session_id or session_id == "-":
         return
 
     usage = _WORKFLOW_LLM_USAGE.setdefault(session_id, _build_empty_workflow_llm_usage())
-    usage["input_tokens"] += _to_non_negative_int(input_tokens)
-    usage["output_tokens"] += _to_non_negative_int(output_tokens)
-    usage["total_tokens"] += _to_non_negative_int(total_tokens)
+    usage["input_tokens"] += _to_non_negative_int(token_usage.input_tokens)
+    usage["output_tokens"] += _to_non_negative_int(token_usage.output_tokens)
+    usage["total_tokens"] += _to_non_negative_int(token_usage.total_tokens)
     usage["llm_call_count"] += 1
+    cache_usage = {} if token_usage.cache_tokens is None else {
+        "cache_tokens": token_usage.cache_tokens,
+    }
+    _merge_cache_usage(usage, cache_usage)
     if agent_name:
         normalized_name = _normalize_agent_name(agent_name)
         agent_usage_list = usage.setdefault("agent_name_token_usage", [])
@@ -493,10 +515,27 @@ def add_workflow_llm_usage(
         if target_usage is None:
             target_usage = _build_empty_agent_name_usage(normalized_name)
             agent_usage_list.append(target_usage)
-        target_usage["input_tokens"] += _to_non_negative_int(input_tokens)
-        target_usage["output_tokens"] += _to_non_negative_int(output_tokens)
-        target_usage["total_tokens"] += _to_non_negative_int(total_tokens)
+        target_usage["input_tokens"] += _to_non_negative_int(token_usage.input_tokens)
+        target_usage["output_tokens"] += _to_non_negative_int(token_usage.output_tokens)
+        target_usage["total_tokens"] += _to_non_negative_int(token_usage.total_tokens)
         target_usage["llm_call_count"] += 1
+        _merge_cache_usage(target_usage, cache_usage)
+
+
+def _merge_cache_usage(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """累加可用的缓存统计，同时保留旧快照的缺失状态。
+
+    Args:
+        target: 接收累计值的统计字典。
+        source: 包含缓存 token 的统计字典。
+    """
+    if source.get("cache_tokens") is None:
+        return
+    target["cache_tokens"] = target.get("cache_tokens", 0) + _to_non_negative_int(source["cache_tokens"])
+    # 将后续字段移至缓存量之后，统一原始累计值和快照归一化的打印顺序。
+    for key in ("llm_call_count", "agent_name_token_usage"):
+        if key in target:
+            target[key] = target.pop(key)
 
 
 def get_workflow_llm_usage(session_id: str) -> dict[str, Any]:
@@ -609,6 +648,34 @@ def _extract_usage_tokens(usage_payload: Any) -> tuple[int, int, int]:
         total_tokens = input_tokens + output_tokens
     total_tokens = _to_non_negative_int(total_tokens, default=input_tokens + output_tokens)
     return input_tokens, output_tokens, total_tokens
+
+
+def _extract_cache_tokens(usage_payload: Any) -> int | None:
+    """提取供应商或 SDK 的缓存读取 token 数。
+
+    Args:
+        usage_payload: 原始 usage 或 SDK 归一化的 usage 元数据。
+
+    Returns:
+        缓存读取 token 数；缺失或无效时返回 None，不计入缓存写入量。
+    """
+    usage = _to_dict_safe(usage_payload)
+    usage = {**_to_dict_safe(usage.get("token_usage")), **usage}
+    candidates = [
+        usage.get("prompt_cache_hit_tokens"),
+        _to_dict_safe(usage.get("prompt_tokens_details")).get("cached_tokens"),
+        _to_dict_safe(usage.get("input_tokens_details")).get("cached_tokens"),
+        _to_dict_safe(usage.get("input_token_details")).get("cache_read"),
+        usage.get("cache_read_input_tokens"),
+        usage.get("cache_tokens"),
+    ]
+    for value in candidates:
+        if value is not None:
+            try:
+                return max(int(value), 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+    return None
 
 
 def _is_llm_stats_enabled() -> bool:
@@ -890,10 +957,30 @@ def llm_error_chain_blob(exc: BaseException | None, *, max_depth: int = 8) -> st
 
 
 async def _call_model_method(method, primary_kwargs: dict):
-    """Invoke sync or async model methods without losing awaitables."""
+    """Invoke sync or async model methods without losing awaitables.
+
+    停止感知：invoke 等待期（thinking 模式可达分钟级）以固定间隔轮询停止
+    标志，命中即抛 StopRequested（普通 Exception，走异常保存分支保留
+    checkpoint）。sync 方法经 asyncio.to_thread 运行在线程池，无法中断：
+    停止传播时该线程成为孤儿（只读不写共享状态，结果被丢弃，进程退出
+    兜底回收）；async 方法直接取消并等待退出。
+    """
+    call = asyncio.ensure_future(
+        _call_model_method_raw(method, primary_kwargs))
+    try:
+        while True:
+            done, _ = await asyncio.wait({call}, timeout=_STOP_POLL_INTERVAL)
+            if done:
+                return call.result()
+            raise_if_stop_requested()
+    except BaseException:
+        await _cancel_pending_task(call)
+        raise
+
+
+async def _call_model_method_raw(method, primary_kwargs: dict):
     if inspect.iscoroutinefunction(method):
         return await method(**primary_kwargs)
-
     return await asyncio.to_thread(method, **primary_kwargs)
 
 
@@ -1080,6 +1167,7 @@ def _build_usage_only_chunk(raw_chunk: Any, model_name: str) -> AssistantMessage
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cache_tokens=_extract_cache_tokens(usage_payload) or 0,
         ),
         finish_reason="null",
     )
@@ -1113,8 +1201,12 @@ def _install_usage_only_chunk_parser(llm_model: Any) -> Any:
         model_name = getattr(getattr(llm_model, "model_config", None), "model_name", "")
 
         def _patched_parser(raw_chunk: Any):
+            """保留原始 usage 中的缓存量，再补偿 usage-only chunk。"""
             parsed_chunk = original_parser(raw_chunk)
             if parsed_chunk is not None:
+                cache_tokens = _extract_cache_tokens(_extract_usage_payload_from_stream_chunk(raw_chunk))
+                if cache_tokens is not None and parsed_chunk.usage_metadata is not None:
+                    parsed_chunk.usage_metadata.cache_tokens = cache_tokens
                 return parsed_chunk
             return _build_usage_only_chunk(raw_chunk, model_name=model_name)
 
@@ -1171,10 +1263,36 @@ def _resolve_stream_options(llm_model: Any, need_include_usage: bool) -> dict | 
     return merged_options or None
 
 
-async def _consume_llm_stream(
-    request: _ConsumeLlmStreamRequest,
-) -> Any:
-    """消费流式 LLM 输出并聚合完整结果。
+# 用户停止轮询间隔（秒）：LLM 调用等待期（流式 chunk 间隙/TTFT、非流式
+# invoke）内以该间隔检查停止标志，保证停止→StopRequested 异常延迟为秒级，
+# 在宿主 30s 硬杀窗口内可靠完成「停止→异常→快照落盘」闭环。
+_STOP_POLL_INTERVAL = 2.0
+# 停止传播时取消后台任务的宽限等待（秒）：等待 __anext__/to_thread 任务
+# 收到取消并完成清理；超时则放弃等待（孤儿由进程退出兜底）。
+_STOP_CANCEL_GRACE = 5.0
+
+
+async def _cancel_pending_task(task: "asyncio.Future") -> None:
+    """取消并短暂等待后台任务退出（停止/异常传播的兜底清理）。"""
+    if task.done():
+        return
+    task.cancel()
+    await asyncio.wait({task}, timeout=_STOP_CANCEL_GRACE)
+
+
+async def _drain_llm_stream(request: _ConsumeLlmStreamRequest) -> Any:
+    """在单个长驻消费 task 内驱动整个流并聚合完整结果。
+
+    停止感知（持续输出主检查点）：每轮迭代消费 chunk 前调用
+    ``raise_if_stop_requested``。高频 chunk 到达（间隔远小于轮询周期）时
+    不能只依赖等待期轮询兜底——旧实现下持续输出期间停止检测完全失效，
+    流会跑完并假完成，若为本节点最后一次 LLM 调用将触发快照清理。
+
+    ContextVar 生命周期：整个 ``async for`` 运行在同一 task context 内。
+    流生成器首轮迭代中写入的 ContextVar（如 LLM 调用追踪 ID）在后续
+    chunk 间保持有效；旧实现逐 chunk 用独立 ``ensure_future`` 驱动
+    ``__anext__``，每轮从外层消费协程复制旧上下文，跨 yield 的生成器
+    内部状态（调用 ID 等）在第二轮起丢失。
 
     Args:
         request: 流消费阶段的具名上下文参数。
@@ -1183,7 +1301,10 @@ async def _consume_llm_stream(
         Any: 聚合后的完整响应块。
     """
     full_chunk = None
-    async for chunk in request.llm.stream(**request.stream_kwargs):
+    stream = request.llm.stream(**request.stream_kwargs)
+    async for chunk in stream:
+        # chunk 到达即查停止：持续输出场景的主检查点（秒级命中）。
+        raise_if_stop_requested()
         _raise_if_cancelled()
         if full_chunk is None:
             full_chunk = chunk
@@ -1209,7 +1330,41 @@ async def _consume_llm_stream(
             if request.stream_meta:
                 payload.update(dict(request.stream_meta))
             await request.session.write_custom_stream(payload)
+    # 正常返回前最后检查一次停止：停止已置位时本次调用不再产出结果，
+    # 交由上层节点边界统一走停止分支，防最后一次 LLM 调用假完成清快照。
+    raise_if_stop_requested()
     return full_chunk
+
+
+async def _consume_llm_stream(
+    request: _ConsumeLlmStreamRequest,
+) -> Any:
+    """消费流式 LLM 输出并聚合完整结果（外层停止轮询壳）。
+
+    停止感知：流驱动整体运行在单个消费 task（``_drain_llm_stream``）内，
+    本协程以固定间隔轮询停止标志；等待期（thinking 模式下首 token 延迟
+    可达分钟级、chunk 间隙）命中即取消消费 task 并抛 StopRequested（普通
+    Exception，走 agent-core 异常保存分支保留 checkpoint）。持续输出场景
+    由消费 task 内每个 chunk 前的检查点覆盖，与本层轮询互为补充。
+
+    Args:
+        request: 流消费阶段的具名上下文参数。
+
+    Returns:
+        Any: 聚合后的完整响应块。
+    """
+    consumer = asyncio.ensure_future(_drain_llm_stream(request))
+    try:
+        while True:
+            done, _ = await asyncio.wait({consumer}, timeout=_STOP_POLL_INTERVAL)
+            if done:
+                break
+            # chunk 间隙/TTFT 等待期内的用户停止检查（秒级响应）。
+            raise_if_stop_requested()
+        return consumer.result()
+    except BaseException:
+        await _cancel_pending_task(consumer)
+        raise
 
 
 async def llm_astream(*args, **kwargs):
@@ -1238,6 +1393,8 @@ async def llm_astream(*args, **kwargs):
     stream_options = kwargs.get("stream_options", None)
 
     _raise_if_cancelled()
+    # 用户停止检查：普通 Exception 走保存分支（见 ainvoke_llm_with_stats 处注释）。
+    raise_if_stop_requested()
     full_chunk = None
     can_write_stream = True
     session = None
@@ -1396,6 +1553,9 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
     stream_meta = invoke_args["stream_meta"]
 
     _raise_if_cancelled()
+    # 用户停止（普通 Exception）：走 agent-core 异常保存分支，保留 checkpoint。
+    # 与 _raise_if_cancelled（CancelledError → 清除分支）语义相反，勿混淆。
+    raise_if_stop_requested()
     if not llm:
         raise CustomValueException(
             error_code=StatusCode.LLM_INSTANCE_NONE_ERROR.code,
@@ -1481,6 +1641,11 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
                     stream_meta=stream_meta,
                     stream_options=resolved_stream_options,
                 )
+        except StopRequested:
+            # 用户停止原样上抛：一旦包装成 LLM_CALL_FAILED，下游按类型识别
+            # StopRequested 的分支（agent run 跳过 release、harness 停止
+            # 快照 probe 识别）将全部失效，停止语义退化为普通 LLM 失败。
+            raise
         except Exception as e:
             detail = _format_llm_invoke_exception(e)
             corr = format_llm_log_correlation_suffix()
@@ -1517,6 +1682,9 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
 
         try:
             response = await _invoke_stream_model(llm_model)
+        except StopRequested:
+            # 用户停止不触发 thinking fallback 重试：停止必须立即传播落盘。
+            raise
         except Exception as e:
             fallback_succeeded = False
             if not _has_available_inactive_thinking_fallback(llm):
@@ -1546,19 +1714,24 @@ async def ainvoke_llm_with_stats(*args, **kwargs):
 
         # get usage token usage info
         input_tokens, output_tokens, total_tokens = _extract_usage_tokens(response.usage_metadata)
+        cache_tokens = _extract_cache_tokens(response.usage_metadata)
 
         llm_stat = {
             "method_name": agent_name,
             "duration": duration,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": total_tokens
+            "total_tokens": total_tokens,
+            "cache_tokens": cache_tokens,
         }
         add_workflow_llm_usage(
             session_id=session_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
+            token_usage=WorkflowLlmUsageDelta(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cache_tokens=cache_tokens,
+            ),
             agent_name=agent_name,
         )
         metrics_logger.info(

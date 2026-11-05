@@ -205,6 +205,7 @@ def _mock_getaddrinfo(*addresses):
 
 
 def test_validate_runtime_request_url_blocks_dns_to_non_public_ip(monkeypatch):
+    monkeypatch.delenv("RUNTIME_API_ALLOW_UNSAFE_URL", raising=False)
     monkeypatch.setattr(socket, "getaddrinfo", _mock_getaddrinfo("169.254.169.254"))
 
     with pytest.raises(CustomValueException):

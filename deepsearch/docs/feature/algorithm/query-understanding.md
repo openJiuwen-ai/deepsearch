@@ -14,13 +14,16 @@
 
 - 意图识别会输出 `IntentRecognitionResult`，其中包含 `original_query`、`research_query`、`research_intent`、`lang`、`needs_clarification` 和可选入口搜索结果。`needs_clarification` 由 LLM 判断用户输入是否充足：当 `workflow_human_in_the_loop=True` 时，仅 `needs_clarification=True` 才进入问题澄清流程；`workflow_human_in_the_loop=False` 时忽略该字段，一律不澄清。LLM 未输出该字段或意图识别调用失败时，`needs_clarification` 默认为 `False`（不澄清）。
 - 意图识别会提取用户指定的来源排除约束：文章级排除进入 `exclude_url`（链接）与 `exclude_titles`（标题，逐字提取，用于识别同文献镜像变体），站点级排除才进入 `exclude_domains`；禁引的 URL 即使同属一个域名也不得归纳为整域排除。提取结果非空时输出 `[EXCLUDE_INTENT]` 观测日志（敏感模式下只记字段计数）。
+- **禁引源去重**（`exclusion_constraint_enable` 开启时）：`_normalize_research_intent` 把与 `exclude_url` 重叠的项从 `include_url` / `target_papers` 移除，按 url 精确 + pmid + doi 三维匹配，防止 collector 去搜注定被采集层挡掉的被禁源、浪费搜索轮次。`_merge_explicit_target_papers` 在 `return` 前做同样的三维去重，堵住该函数从 `original_query` 重新提取被禁源标识符并加回 `target_papers` 的第二出口。两处去重均受 `exclusion_constraint_context` ContextVar 控制（`_recognize_intent` 下发开关值）；关闭时不去重，退回 baseline 行为。
 - 入口预搜索（web 模式）结果在写入 `search_context.entry_search_results` 前会按 `exclude_url`/`exclude_titles` 过滤（与本地知识库检索无关），过滤后的结果供大纲与问题生成消费；纯本地模式无入口预搜索，不受影响。
 - 报告类型只接受明确的 `professional` 或 `brief`；未知值保持为空，由下游澄清或默认策略处理。
 - API 已指定 `report_type`（`config.report_type` 非 `None`）时三层抑制：意图识别工具 schema 移除 `report_type` 字段、意图 Prompt 完全不渲染相关指令、意图识别节点用 API 值覆盖 LLM 意外输出；反馈轮重解析同样被抑制，锁定值不可被用户反馈覆盖。
 - `brief` 只在意图识别后改变主图路由：它使用独立的 Brief 大纲和报告级证据工作流，不生成专业版 `Outline` 或章节 `Plan`。入口预搜索仍按当前搜索方式执行，但其结果不直接并入 Brief 证据集合。
 - 大纲生成要求章节标题不带编号，并在代码侧修复章节 ID、依赖关系和 parent/relationship 一致性。
 - 用户显式指定顶层结构时，大纲生成按用户给出的主要章节数量、标题和顺序组织，不为了默认章节数、brief 摘要或维度覆盖规则额外新增顶层章节。
+- 普通专业版初始大纲在用户未指定顶层结构时以 `section_num` 为目标章节数；未提供反馈时不向模型渲染反馈块。普通与依赖驱动的交互式大纲均以 `max_section_num` 为章节数上限，允许按反馈增删或调整章节但不得超过上限。用户直接修订大纲时，章节标题、描述和思考字段均使用指定语言。
 - 计划生成按章节生成信息采集步骤，依赖驱动模式会保留 step id、parent ids 和关系描述。
+- 依赖驱动规划将章节标题和非空 `section_description` 渲染到当前 user 消息中，保留章节描述中的研究范围与排除项；这些动态内容不进入 system 消息，也不额外构造历史消息。
 - 用户明确提出资料或事实时间范围时，同一次意图识别 LLM 调用会输出 `source_date_scope` 和/或
   `content_date_scope` 两个可选子对象（同一 query 两类可并存）。`source_date_scope` 限制资料发表时间，
   `content_date_scope` 限制事实或数据时间；日期边界均为包含关系。
@@ -41,13 +44,15 @@
 
 相关 Prompt：
 
-- `openjiuwen_deepsearch/algorithm/prompts/intent_recognition.md`
-- `openjiuwen_deepsearch/algorithm/prompts/query_rewrite.md`
-- `openjiuwen_deepsearch/algorithm/prompts/outliner.md`
-- `openjiuwen_deepsearch/algorithm/prompts/outliner_interaction.md`
-- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_outliner.md`
-- `openjiuwen_deepsearch/algorithm/prompts/planner.md`
-- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_planner.md`
+- `openjiuwen_deepsearch/algorithm/prompts/intent_recognition/`
+- `openjiuwen_deepsearch/algorithm/prompts/query_rewrite/`
+- `openjiuwen_deepsearch/algorithm/prompts/outliner/`
+- `openjiuwen_deepsearch/algorithm/prompts/outliner_interaction/`
+- `openjiuwen_deepsearch/algorithm/prompts/outliner_user_revised/`
+- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_outliner/`
+- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_outliner_interaction/`
+- `openjiuwen_deepsearch/algorithm/prompts/planner/`
+- `openjiuwen_deepsearch/algorithm/prompts/dep_driving_planner/`
 
 主要测试：
 
@@ -118,6 +123,7 @@ uv run pytest tests/algorithm/query_understanding/test_research_intent_contract.
 ## 相关文档
 
 - [Prompt 模板系统](./prompt-template-system.md)
+- [用户素材](./user-materials.md)
 - [资料采集](./research-collector.md)
 - [DeepSearch 搜索智能体](./search-agent.md)
 - [报告生成](./report-generation.md)

@@ -76,6 +76,7 @@ openJiuwen-DeepSearch 当前支持以下内置联网增强引擎，均通过 `we
 - `bocha`：通过 harness `web_tools` 适配的博查搜索。
 - `jina`：直接接入 Jina Search API，默认地址为 `https://s.jina.ai`。
 - `perplexity`：通过 harness `web_tools` 适配的 Perplexity 搜索。
+- `agc_ainetworking`：AGC AI Networking 的 `webSearch` 接口。
 - `custom`：加载外部自定义联网搜索工具。
 
 不同引擎的接入方式与配置重点如下：
@@ -83,6 +84,7 @@ openJiuwen-DeepSearch 当前支持以下内置联网增强引擎，均通过 `we
 - `jina` 使用项目内置的直接 HTTP API Wrapper；当 `search_url` 为空时，会自动回退到 `https://s.jina.ai`。国内网络环境如无法访问该默认地址，可显式将 `search_url` 配置为 `https://s.jinaai.cn`。可通过 `extension` 传入 `gl`、`hl`、`location`、`page` 等查询参数。
 - `bocha`、`perplexity` 使用 harness `web_tools` 适配层；默认不抓取网页正文，直接使用搜索 API 返回的摘要答案作为 content。如需抓取网页正文，可通过 `extension.fetch_webpage=True` 开启。支持通过 `extension.timeout_seconds` 控制调用超时。仅当底层 provider 支持 URL 覆盖时，`search_url` 才会生效。国内网络环境如无法访问 Perplexity 默认服务，需要配置可访问的代理或转发地址，并通过 `search_url` 显式覆盖。
 - `serper` 在研究态 `web_search_tool` 中映射到 Google/Serper Wrapper，便于与服务端配置名称保持一致。
+- `agc_ainetworking` 使用 AGC AI Networking 的 `webSearch` 接口；其参数和站点约束见[AGC AI Networking 联网搜索](../../../feature/framework/agc_ainetworking_search.md)。
 - `tavily`、`google/serper`、`xunfei`、`petal` 保持原有接入方式，其中公共引擎允许 `search_url=""`，此时使用内置默认地址或 provider 默认行为。
 
 搜索结果进入 Collector 链路前，系统还会执行统一的内容裁剪与归一化：
@@ -192,6 +194,12 @@ import uuid
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 from openjiuwen_deepsearch.framework.openjiuwen.agent.workflow import parse_endnode_content
 
+# 可选：让本次查询报告使用用户提供的素材。
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/background", "content": "用户提供的背景资料正文"}
+]
+
 agent_factory = AgentFactory()
 agent = agent_factory.create_agent(agent_config)
 
@@ -258,6 +266,12 @@ async for chunk in agent.run(message=message, conversation_id=str(uuid.uuid4()),
 import base64
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 
+# 可选：模板约束与用户素材可同时使用；在创建 Agent 前配置素材。
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/template-source", "content": "应按模板分析的已有资料"}
+]
+
 # 提供入参
 file_path = "用户提供的模板文件名，以md后缀结尾"
 file_stream = base64.b64encode(read_file_safely(file_path)).decode("utf-8")  # "用户提供的模板文件内容的base64编码"
@@ -311,6 +325,12 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
 import base64
 from openjiuwen_deepsearch.framework.openjiuwen.agent.agent_factory import AgentFactory
 
+# 可选：样例报告用于提取结构，用户素材则作为本次研究的额外事实来源。
+agent_config["user_materials_enabled"] = True
+agent_config["user_materials"] = [
+    {"url": "https://example.com/report-source", "content": "补充到样例报告结构中的最新资料"}
+]
+
 # 提供入参
 file_path = "用户提供的样例报告文件的文件名，以md/docx/pdf/html后缀结尾"
 file_stream = base64.b64encode(read_file_safely(file_path)).decode("utf-8")  # "用户提供的样例报告文件内容的base64编码"
@@ -347,6 +367,22 @@ async for chunk in agent.run(message=message, conversation_id=conversation_id, a
     if report_result:  # 获取最终研究报告内容
         logger.debug("[Final Report is: %s]", report_result)
 ```
+
+# 报告类型与用户素材
+
+`report_type` 可取 `brief`、`professional`，也可不传或传 `null`；后两种情况下由意图识别与澄清流程决定报告类型。也可使用 `POST /api/v1/agent/deepsearch/run_brief/` 强制生成 Brief 报告。用户素材通过服务端请求的 `metadata` 传入，启用后会参与意图识别、章节规划和报告写作：
+
+```json
+{
+  "report_type": "professional",
+  "metadata": {
+    "user_materials_enabled": true,
+    "user_materials": [{"url": "https://example.com/source", "content": "已有材料正文"}]
+  }
+}
+```
+
+每条素材必须有非空 `url` 和 `content`；`url` 可以是绝对本地路径或 HTTP(S) 链接。完整约束见 [用户素材](../../../feature/algorithm/user-materials.md)，HTTP 流式/HITL 契约见 [运行接口](../../../feature/server/deepsearch-run-streaming.md)。
 
 # 人机交互
 
@@ -496,7 +532,7 @@ SDK 层通过 `agent_config` 接收这些参数。
 
 **知识库与对象存储**：仅当服务端环境为 `CHECKPOINTER_TYPE=redis`（分布式）时，上传的知识库文件会写入配置的对象存储以便多实例一致访问；`in_memory` / `persistence` 时文件只落在服务端本地磁盘，不使用 OBS。多实例时应用数据库须为 MySQL 且各实例共用同一库，否则知识库元数据无法在实例间一致（服务端会拒绝 `redis` + `sqlite` 的配置组合）。
 
-服务端对 Agent 的缓存键由 **`DeepSearchRequest` 中参与构建 Agent 的字段**（排除 `message`、`conversation_id`、`interrupt_feedback`）经稳定 JSON 序列化后取哈希得到，其中包含 **`space_id`**、**`local_search_config`（含知识库 ID 列表）**、联网检索与 `llm_config`、各类开关等；因此不仅不同空间不会共用同一 Agent，**同一空间下更换本地知识库或检索相关配置也不会误命中旧缓存**。
+服务端对 Agent 的缓存键由 **`DeepSearchRequest` 中参与构建 Agent 的字段**（排除 `message`、`interrupt_feedback`、`report_type`、`metadata` 等每次运行不同或不参与构建的字段）经稳定 JSON 序列化后取哈希得到，其中包含 **`space_id`**、**`local_search_config`（含知识库 ID 列表）**、联网检索与 `llm_config`、各类开关等；因此不仅不同空间不会共用同一 Agent，**同一空间下更换本地知识库或检索相关配置也不会误命中旧缓存**。`execution_method` 参与缓存键，同一会话混跑不同执行模式会各自缓存 Agent 实例。
 
 若部署在公网或多人共用同一后端，**不应**仅依赖请求体中的 `space_id` 作为唯一信任来源，应在网关或鉴权层校验调用方是否有权使用该空间。
 
@@ -674,4 +710,4 @@ async for chunk in agent.run(message=finish_message, conversation_id=conversatio
 ---
 
  - 开发指南的完整示例代码，详见：https://gitcode.com/openJiuwen/deepsearch/blob/dev/main.py
- - 更多关于openJiuwen-DeepSearch的API介绍，详见：https://gitcode.com/openJiuwen/deepsearch/tree/dev/docs/zh/4.%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97
+ - 更多关于openJiuwen-DeepSearch的API介绍，详见：https://gitcode.com/openJiuwen/deepsearch/tree/dev/docs/zh/3.%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97

@@ -52,6 +52,7 @@ from openjiuwen_deepsearch.algorithm.search_nodes.utils import (
     _save_and_return_search_final_result,
     to_dict_safe,
     to_json_safe,
+    redact_urls_in_text,
 )
 from openjiuwen_deepsearch.algorithm.search_tools.retriever_tool import RetrieveTool
 from openjiuwen_deepsearch.algorithm.search_tools.web_fetch_tool import WebFetch
@@ -114,6 +115,11 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import (
     SearchFinalResult,
     State,
 )
+from openjiuwen_deepsearch.framework.openjiuwen.agent.stop_control import (
+    STOP_REQUESTED_MARKER,
+    StopRequested,
+    is_stop_requested,
+)
 from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent import WorkflowControllerConfig
 from openjiuwen_deepsearch.framework.openjiuwen.core.workflow_agent.workflow_agent import WorkflowAgent
 from openjiuwen_deepsearch.framework.openjiuwen.llm.llm_adapter import LlmConfigCategory
@@ -141,6 +147,7 @@ from openjiuwen_deepsearch.utils.constants_utils.scholarly_constants import (
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import (
     llm_context,
     local_search_context,
+    mcp_tool_context,
     session_context,
     tool_context,
     web_search_context,
@@ -289,6 +296,52 @@ def _initialize_web_search_context_from_agent_config(
     return web_search_token
 
 
+async def _initialize_mcp_context_from_agent_config(agent_config: AgentConfig):
+    """连接 MCP servers 并注册到 contextvar。返回 token 供 finally reset。
+
+    MCP 客户端依赖为可选依赖（pyproject [mcp]），故在此延迟导入；
+    无配置或未装 mcp 包时直接返回 None,不抛异常。
+    """
+    mcp_servers = getattr(agent_config, "mcp_servers", None) or []
+    if not mcp_servers:
+        return None
+    try:
+        from openjiuwen_deepsearch.framework.openjiuwen.tools.mcp import McpToolBundle
+    except ImportError:
+        logger.warning("[MCP] mcp package not installed; skipping MCP tools")
+        return None
+    servers_dict_list = [
+        s.model_dump() if hasattr(s, "model_dump") else s
+        for s in mcp_servers
+    ]
+    bundle = McpToolBundle()
+    try:
+        await bundle.connect_and_build_tools(servers_dict_list)
+    except Exception as e:
+        logger.warning("[MCP] Failed to initialize MCP tools: %s", redact_urls_in_text(str(e)))
+        await bundle.close_all()
+        return None
+    return mcp_tool_context.set(bundle)
+
+
+async def _close_mcp_bundle(mcp_token) -> None:
+    """关闭并重置 MCP contextvar。token 为 None 时直接返回。
+
+    供 DeepresearchAgent / SimpleReactSearchAgent 的各 except / finally 分支复用,
+    确保 MCP 连接在成功、失败、取消三条路径上都被关闭。
+    """
+    if mcp_token is None:
+        return
+    try:
+        bundle = mcp_tool_context.get()
+        if bundle is not None:
+            await bundle.close_all()
+    except Exception as e:
+        logger.warning("[MCP] Failed to close MCP bundle during cleanup: %s", e)
+    finally:
+        mcp_tool_context.reset(mcp_token)
+
+
 def _build_search_fetch_tools(agent_config: AgentConfig):
     """Build DeepSearch search/fetch tools after the active search engine is registered."""
     web_search_token = _initialize_web_search_context_from_agent_config(agent_config)
@@ -318,6 +371,28 @@ class DeepSearchRunContext:
     fail_count: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+
+
+@dataclass
+class StreamRunContext:
+    """一次流式运行的调用上下文。
+
+    Attributes:
+        conversation_id: 会话 ID，同时作为 workflow thread_id。
+        message: 用户输入消息或反馈内容。
+        decoded_template: 解码后的报告模板。
+        interrupt_feedback: 交互中断反馈标识。
+        session_agent_config: 本次运行的 Agent 配置字典。
+        metadata: 运行时元数据（如 brief 升级注入的 brief_outline /
+            research_intent / language）。
+    """
+
+    conversation_id: str
+    message: str
+    decoded_template: str
+    interrupt_feedback: str
+    session_agent_config: dict
+    metadata: Optional[dict] = None
 
 
 class BaseAgent:
@@ -436,6 +511,9 @@ class DeepresearchAgent(BaseAgent):
             "agent_config": {
                 "type": "object",
             },
+            "metadata": {
+                "type": "object",
+            },
         }
         self.startnode_input_schema = {
             "query": "${query}",
@@ -444,6 +522,7 @@ class DeepresearchAgent(BaseAgent):
             "report_template": "${report_template}",
             "interrupt_feedback": "${interrupt_feedback}",
             "agent_config": "${agent_config}",
+            "metadata": "${metadata}",
         }
 
         self.research_workflow = None
@@ -638,25 +717,51 @@ class DeepresearchAgent(BaseAgent):
             logger.warning("[DeepResearchAgent.run] Failed to emit error stream event: %s", stream_err)
 
     @staticmethod
+    def _build_stream_stopped_payload(conversation_id: str):
+        return {
+            "conversation_id": conversation_id,
+            "message_id": str(uuid.uuid4()),
+            "agent": NodeId.FRAMEWORK.value,
+            "role": "assistant",
+            "content": json.dumps({"stopped": True}, ensure_ascii=False),
+            "message_type": MessageType.MESSAGE_CHUNK.value,
+            "event": StreamEvent.STOPPED.value,
+            "created_time": get_current_time(),
+        }
+
+    @staticmethod
+    async def _emit_stopped_and_end_stream(conversation_id: str):
+        try:
+            yield json.dumps(
+                DeepresearchAgent._build_stream_stopped_payload(conversation_id), ensure_ascii=False
+            )
+            yield json.dumps(DeepresearchAgent._build_stream_end_payload(conversation_id), ensure_ascii=False)
+        except Exception as stream_err:
+            logger.warning("[DeepResearchAgent.run] Failed to emit stopped stream event: %s", stream_err)
+
+    @staticmethod
     def _prepare_stream_query(message: str, interrupt_feedback: str):
         is_report_feedback = _is_report_feedback_payload(message)
         if interrupt_feedback and not is_report_feedback:
             return json.dumps({"interrupt_feedback": interrupt_feedback, "feedback": message}), is_report_feedback
         return message, is_report_feedback
 
-    async def _consume_stream_chunks(
-        self,
-        conversation_id: str,
-        message: str,
-        decoded_template: str,
-        interrupt_feedback: str,
-        session_agent_config: dict,
-    ):
+    async def _consume_stream_chunks(self, run_context: StreamRunContext):
+        """消费 Runner 流式输出并转发为本 agent 的流式消息。
+
+        Args:
+            run_context: 一次流式运行的调用上下文。
+
+        Yields:
+            tuple[str, bool, dict]: 序列化消息、是否全部结束、最终结果信息。
+        """
         is_all_end = False
         final_result_info = {}
         filter_dup_flag = False
-        stream_query, is_report_feedback = self._prepare_stream_query(message, interrupt_feedback)
-        workflow_agent_config = _redact_agent_config_for_workflow_inputs(session_agent_config)
+        stream_query, is_report_feedback = self._prepare_stream_query(
+            run_context.message, run_context.interrupt_feedback
+        )
+        workflow_agent_config = _redact_agent_config_for_workflow_inputs(run_context.session_agent_config)
         scholarly_config = workflow_agent_config.get("scholarly_search_config", {})
         for provider_name in SCHOLARLY_PROVIDER_NAMES:
             provider_config = scholarly_config.get(provider_name)
@@ -667,17 +772,18 @@ class DeepresearchAgent(BaseAgent):
             agent=self.agent,
             inputs={
                 "query": stream_query,
-                "thread_id": conversation_id,
-                "conversation_id": conversation_id,
-                "report_template": decoded_template,
-                "interrupt_feedback": interrupt_feedback,
+                "thread_id": run_context.conversation_id,
+                "conversation_id": run_context.conversation_id,
+                "report_template": run_context.decoded_template,
+                "interrupt_feedback": run_context.interrupt_feedback,
                 "resume_interaction": is_report_feedback,
                 "agent_config": workflow_agent_config,
+                "metadata": run_context.metadata,
             },
         ):
             if getattr(chunk, "type", "") == "__interaction__":
                 filter_dup_flag = False
-                yield self._build_interrupt_message(conversation_id, chunk), is_all_end, final_result_info
+                yield self._build_interrupt_message(run_context.conversation_id, chunk), is_all_end, final_result_info
                 continue
             if filter_dup_flag:
                 continue
@@ -691,7 +797,11 @@ class DeepresearchAgent(BaseAgent):
                     final_result_info = endnode_info
                 if getattr(chunk, "content", "") == "ALL END":
                     is_all_end = True
-                yield self._build_output_message(conversation_id, chunk), is_all_end, final_result_info
+                yield (
+                    self._build_output_message(run_context.conversation_id, chunk),
+                    is_all_end,
+                    final_result_info,
+                )
 
     async def run(
         self,
@@ -700,6 +810,7 @@ class DeepresearchAgent(BaseAgent):
         agent_config: Optional[dict] = None,
         report_template: str = "",
         interrupt_feedback: str = "",
+        metadata: Optional[dict] = None,
     ):
         """执行一次 workflow 并以流式方式返回消息。
 
@@ -709,6 +820,7 @@ class DeepresearchAgent(BaseAgent):
             agent_config: 本次运行的 Agent 配置字典。
             report_template: 报告模板（支持 base64 或明文）。
             interrupt_feedback: 交互中断反馈标识。
+            metadata: 运行时元数据（如 brief 升级注入的 brief_outline/research_intent/language）。
 
         Yields:
             str: JSON 序列化后的流式事件消息。
@@ -718,11 +830,16 @@ class DeepresearchAgent(BaseAgent):
         """
         validate_run_agent_params(message, conversation_id, report_template, interrupt_feedback)
         validate_agent_required_field(agent_config)
+        # 注意: 不要在这里 clear_stop()。runner 是单次运行进程,标志出厂即清;
+        # boot 窗口内到达的停止请求是本轮真实停止,清掉会导致停止信号丢失
+        # (实测: 16:50 停止帧在 checkpoint_restore 前到达,被入口清除后
+        #  子代理空转至 30s 超时硬杀)。
 
         start_time = time.time()
         llm_token = None
         web_search_token = None
         local_search_token = None
+        mcp_token = None
         session_agent_config = None
 
         try:
@@ -743,11 +860,16 @@ class DeepresearchAgent(BaseAgent):
 
             web_search_token, local_search_token = self._initialize_tools(session_agent_config)
             await self._aopen_local_search_engines()
+            mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
         except CustomValueException:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
             _zero_scholarly_search_secrets(session_agent_config)
             raise
         except ValidationError as e:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
             _zero_scholarly_search_secrets(session_agent_config)
             if LogManager.is_sensitive():
@@ -760,6 +882,8 @@ class DeepresearchAgent(BaseAgent):
                 StatusCode.PARAM_CHECK_ERROR_REQUEST_PARAM_ERROR.errmsg.format(e=str(e)),
             ) from e
         except Exception:
+            await _close_mcp_bundle(mcp_token)
+            mcp_token = None
             self._reset_context_tokens(llm_token, web_search_token, local_search_token)
             _zero_scholarly_search_secrets(session_agent_config)
             raise
@@ -775,49 +899,78 @@ class DeepresearchAgent(BaseAgent):
         try:
             session_agent_config = session_agent_config.model_dump()
             async for payload, stream_end, stream_info in self._consume_stream_chunks(
-                conversation_id=conversation_id,
-                message=message,
-                decoded_template=decoded_template,
-                interrupt_feedback=interrupt_feedback,
-                session_agent_config=session_agent_config,
+                StreamRunContext(
+                    conversation_id=conversation_id,
+                    message=message,
+                    decoded_template=decoded_template,
+                    interrupt_feedback=interrupt_feedback,
+                    session_agent_config=session_agent_config,
+                    metadata=metadata,
+                )
             ):
                 is_all_end = stream_end
                 final_result_info = stream_info
                 yield payload
         except Exception as e:
-            if not LogManager.is_sensitive() or isinstance(e, CustomValueException):
-                logger.error(f"[DeepResearchAgent.run] Session closed with error: {e}")
-                final_result_info = {
-                    "exception_info": format_exception_info(StatusCode.WORKFLOW_RUN_ERROR, e)
-                }
-            else:
-                logger.error(f"[DeepResearchAgent.run] Session closed with error.")
-                final_result_info = {
-                    "exception_info": format_exception_info(
-                        StatusCode.WORKFLOW_RUN_ERROR, "Session closed with error."
-                    )
-                }
-            if stats_info_llm_enabled:
-                try:
-                    current_session = session_context.get()
-                except Exception:
-                    current_session = None
-                workflow_usage = get_effective_workflow_llm_usage(
-                    session_id=conversation_id,
-                    session=current_session,
+            # 停止识别不能只依赖 isinstance：实机链路中 pregel vertex 层会
+            # 把节点异常包装成 [100054] 组件异常（reason 含停止标记），
+            # isinstance(StopRequested) 永远不命中 → 误判普通错误 → 走
+            # release_session 分支 delete_by_prefix 刚落盘的停止快照，
+            # probe 落空后扫库兜底命中陈旧对象（实机事故 2026-10-13）。
+            # 按标记识别与父进程 tools.py 的 _is_stop_requested_exception
+            # 口径一致（跨进程降级为 RuntimeError 后同样只能按标记识别）。
+            if isinstance(e, StopRequested) or STOP_REQUESTED_MARKER in str(e):
+                # 用户停止：checkpoint 已由 agent-core 异常保存分支落盘
+                # （graph._invoke except Exception → post_workflow_execute 保存）。
+                # 此处必须跳过 release_session/_release_checkpointer_session，
+                # 否则快照被 delete_by_prefix 清除，续跑将回退到上一个交互确认点。
+                # 代价：停止后不再续跑的会话快照将永久存留（checkpointer 无
+                # TTL/GC，kv_store 表无时间戳列），依赖 reset/续跑成功清理；
+                # 服务端长驻部署需关注 checkpointer.db 体积增长（TTL/GC
+                # 已列入 backlog，方案见 2026-10-15 评审：时间戳 sidecar 键
+                # + scan-claim 顺带清扫）。
+                logger.info(
+                    "[DeepResearchAgent.run] Session stopped by user; checkpoint preserved."
                 )
-                if not is_workflow_llm_usage_empty(workflow_usage):
-                    final_result_info["workflow_llm_token_usage"] = workflow_usage
+                async for payload in self._emit_stopped_and_end_stream(conversation_id):
+                    yield payload
+                if stats_info_llm_enabled:
+                    pop_workflow_llm_usage(conversation_id)
+                session_id_ctx.reset(token)
+            else:
+                if not LogManager.is_sensitive() or isinstance(e, CustomValueException):
+                    logger.error(f"[DeepResearchAgent.run] Session closed with error: {e}")
+                    final_result_info = {
+                        "exception_info": format_exception_info(StatusCode.WORKFLOW_RUN_ERROR, e)
+                    }
+                else:
+                    logger.error(f"[DeepResearchAgent.run] Session closed with error.")
+                    final_result_info = {
+                        "exception_info": format_exception_info(
+                            StatusCode.WORKFLOW_RUN_ERROR, "Session closed with error."
+                        )
+                    }
+                if stats_info_llm_enabled:
+                    try:
+                        current_session = session_context.get()
+                    except Exception:
+                        current_session = None
+                    workflow_usage = get_effective_workflow_llm_usage(
+                        session_id=conversation_id,
+                        session=current_session,
+                    )
+                    if not is_workflow_llm_usage_empty(workflow_usage):
+                        final_result_info["workflow_llm_token_usage"] = workflow_usage
 
-            async for payload in self._emit_error_and_end_stream(conversation_id, final_result_info):
-                yield payload
+                async for payload in self._emit_error_and_end_stream(conversation_id, final_result_info):
+                    yield payload
 
-            if stats_info_llm_enabled:
-                pop_workflow_llm_usage(conversation_id)
+                if stats_info_llm_enabled:
+                    pop_workflow_llm_usage(conversation_id)
 
-            await self.agent.release_session(conversation_id)
-            await self._release_checkpointer_session(conversation_id)
-            session_id_ctx.reset(token)
+                await self.agent.release_session(conversation_id)
+                await self._release_checkpointer_session(conversation_id)
+                session_id_ctx.reset(token)
         finally:
             metrics_logger.info(
                 f"{TIME_LOGGER_TAG} thread_id: {conversation_id} ------ [DeepResearchAgent[0].run]"
@@ -842,9 +995,29 @@ class DeepresearchAgent(BaseAgent):
             finally:
                 self._reset_context_tokens(llm_token, web_search_token, local_search_token)
 
+            # MCP 连接在成功/失败/取消三条路径都必须关闭；token 已在 except 分支重置为 None。
+            await _close_mcp_bundle(mcp_token)
+
             _zero_scholarly_search_secrets(session_agent_config)
 
             if is_all_end:
+                if is_stop_requested():
+                    # 观测告警（reviewer 核实 2026-10-21：此处兜底无效）：流
+                    # 正常结束但停止标志仍置位，说明存在停止吞没点把
+                    # StopRequested 降级成了数据、图"正常完成"走完。而图引擎
+                    # 在 CompiledGraph._invoke 内部的 post_workflow_execute 正常
+                    # 完成分支中已清除 workflow checkpoint（persistence.py
+                    # clear：_graph_state.delete + _workflow_storage.clear），
+                    # 本层跳过 release 也保不住已被删除的快照——终检兜底
+                    # 无法实现 checkpoint 保留。故此处只发 warning 供定位残余
+                    # 吞没点（各链路补齐穿透后预期永不触发），资源清理一律
+                    # 按正常完成路径执行。
+                    logger.warning(
+                        "[DeepResearchAgent.run] Stream completed but stop flag set "
+                        "(stop swallowed as data somewhere; engine already cleared "
+                        "checkpoint, resume would restart). "
+                        "Please investigate stop-swallowing path."
+                    )
                 zero_secret(
                     session_agent_config.get("web_search_engine_config", {}).get(
                         "search_api_key", bytearray("", encoding="utf-8")
@@ -892,7 +1065,10 @@ class DeepresearchAgent(BaseAgent):
         flow.set_end_comp(NodeId.END.value, EndNode())
 
         # 添加边
-        flow.add_connection(NodeId.START.value, NodeId.INTENT_RECOGNITION.value)
+        start_router = init_router(
+            NodeId.START.value, [NodeId.INTENT_RECOGNITION.value, NodeId.OUTLINE.value]
+        )
+        flow.add_conditional_connection(NodeId.START.value, router=start_router)
 
         # 添加条件边
         intent_recognition_router = init_router(
@@ -1532,7 +1708,21 @@ class DeepSearchAgent(BaseAgent):
                 },
             )
             init_state_result = parse_and_validate_init_state_result(init_result)
+        except StopRequested:
+            # 用户停止不包装为 AGENT_INIT_STATE_ERROR：包装会遮蔽停止标记
+            # （str 不含 STOP_REQUESTED_MARKER），外层按标记识别的兜底失效、
+            # 误走 release_session 删快照。直接上抛保留停止语义。
+            raise
         except Exception as e:
+            # 停止识别不能只依赖 isinstance：init_state_1 子工作流节点抛出的
+            # StopRequested 会被 openjiuwen vertex 层包装成 BaseError[100054]
+            # （reason=str(e) 保留停止标记但类型丢失，链路无解包），此处必须
+            # 同步按标记识别重抛，否则重包装为 AGENT_INIT_STATE_ERROR 会遮蔽
+            # 标记，口径与 DeepresearchAgent.run 的标记识别一致。
+            if STOP_REQUESTED_MARKER in str(e) or isinstance(
+                getattr(e, "__cause__", None), StopRequested
+            ):
+                raise
             last_exception = e
             logger.error(f"[DeepSearchAgent] init_state error, failed all {max_tries} attempts: {e}")
 
@@ -1907,6 +2097,7 @@ class DeepSearchAgent(BaseAgent):
 
         llm_token = None
         web_search_token = None
+        mcp_token = None
         tool_token = None
         workflow_session_token = None
         session_agent_config: AgentConfig | None = None
@@ -1964,6 +2155,7 @@ class DeepSearchAgent(BaseAgent):
             tool_class: list[Any] = []
             if per_question_params.tool_map == "search_fetch":
                 tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
+                mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class.append(_build_retrieve_tool(milvus_cfg))
@@ -2030,6 +2222,11 @@ class DeepSearchAgent(BaseAgent):
             if web_search_token is not None:
                 _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            if mcp_token is not None:
+                bundle = mcp_tool_context.get()
+                if bundle is not None:
+                    await bundle.close_all()
+                mcp_tool_context.reset(mcp_token)
             if tool_token is not None:
                 tool_context.reset(tool_token)
             # The run context owns a deep copy, so clear both per-run configurations.
@@ -2088,6 +2285,7 @@ class SimpleReactSearchAgent(BaseAgent):
         llm_registry = {general.model_name: create_llm_obj(general.model_copy(deep=True))}
 
         web_search_token = None
+        mcp_token = None
         llm_token = llm_context.set(llm_registry)
         try:
             per_question_params: PerQuestionParams = (
@@ -2095,6 +2293,7 @@ class SimpleReactSearchAgent(BaseAgent):
             )
             if per_question_params.tool_map == "search_fetch":
                 tool_class, web_search_token = _build_search_fetch_tools(session_agent_config)
+                mcp_token = await _initialize_mcp_context_from_agent_config(session_agent_config)
             elif per_question_params.tool_map == "retrieve":
                 milvus_cfg = session_agent_config.search_workflow_milvus_config
                 tool_class = [_build_retrieve_tool(milvus_cfg)]
@@ -2309,6 +2508,7 @@ class SimpleReactSearchAgent(BaseAgent):
             if web_search_token is not None:
                 _zero_active_scholarly_wrapper_secrets()
                 web_search_context.reset(web_search_token)
+            await _close_mcp_bundle(mcp_token)
             _zero_scholarly_search_secrets(session_agent_config)
             zero_secret(session_agent_config.web_fetch_provider_config.api_key)
             zero_secret(session_agent_config.web_search_engine_config.search_api_key)

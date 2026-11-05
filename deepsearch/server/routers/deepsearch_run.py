@@ -11,6 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from openjiuwen_deepsearch.common.exception import CustomValueException
+from openjiuwen_deepsearch.framework.openjiuwen.agent.metadata_injectors import (
+    resolve_forced_execution_method,
+    validate_metadata,
+)
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import cancel_context
 from openjiuwen_deepsearch.utils.log_utils.log_common import run_id_ctx
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
@@ -498,6 +503,44 @@ def _maybe_schedule_capacity_cleanup():
         pass
 
 
+def _validate_upgrade_metadata(request: DeepSearchRequest) -> None:
+    """校验 metadata 注入数据结构；非法时返回 400。
+
+    校验只看结构（由 SDK 的 metadata_injectors 注册表统一维护），不感知
+    report_type 等请求上下文：传了 metadata 且结构非法一律快速失败。
+    report_type 条件下的忽略契约属于运行期消费逻辑，由注入器在 inject
+    阶段判断，server 不参与。
+    """
+    if not request.metadata:
+        return
+    try:
+        validate_metadata(request.metadata)
+    except CustomValueException as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+def _force_execution_method_for_metadata(request: DeepSearchRequest) -> None:
+    """按 metadata 注入器声明强制覆盖执行模式。
+
+    执行模式决定 Agent 类（即 workflow 图），在 Agent 构建前覆盖；
+    注入器未声明 force_execution_method 时不做任何改动。
+
+    Args:
+        request: DeepSearch 运行请求，就地改写 execution_method。
+    """
+    if not request.metadata:
+        return
+    forced = resolve_forced_execution_method(request.metadata)
+    if forced and forced != request.execution_method:
+        logger.info(
+            "Overriding execution_method from %s to %s for metadata run conversation_id=%s",
+            request.execution_method,
+            forced,
+            request.conversation_id,
+        )
+        request.execution_method = forced
+
+
 def _prepare_stream_context(
     request: DeepSearchRequest,
     db: Session,
@@ -531,6 +574,8 @@ def _prepare_stream_context(
             request.llm_config["api_key"] = bytearray(api_key, encoding="utf-8")
 
     request = DeepSearchRequest.model_validate(request)
+    _validate_upgrade_metadata(request)
+    _force_execution_method_for_metadata(request)
 
     agent_config = agent_manager.build_agent_config(request, db)
     # 同一份 agent_config 既用于获取/创建 Agent，也用于后续 agent.run，避免重复构建。
@@ -557,6 +602,9 @@ def _prepare_stream_context(
         "agent_config": agent_config,
         "interrupt_feedback": request.interrupt_feedback,
     }
+    if request.metadata and request.search_mode == "research":
+        # 仅 research 模式透传 metadata；search/react 模式的 run 签名不接受该参数。
+        run_kwargs["metadata"] = request.metadata
     logger.info(
         "Prepared DeepSearch stream context space_id=%s conversation_id=%s "
         "has_template=%s agent_class=%s",
@@ -769,6 +817,9 @@ async def run(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except (WebSearchEngineConfigGetException, LocalSearchEngineConfigGetException) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        # 透传内部已构造好的 HTTP 状态码（如 metadata 校验 400），避免被下方兜底重包装为 500
+        raise
     except Exception as e:
         logger.error("Error during DeepSearch run: %s", str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e

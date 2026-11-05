@@ -3,11 +3,51 @@ from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from openjiuwen_deepsearch.algorithm.prompts.template import apply_system_prompt
+from openjiuwen_deepsearch.algorithm.prompts.message_builder import build_prompt_messages
 from openjiuwen_deepsearch.algorithm.report.report import Reporter
 from openjiuwen_deepsearch.common.common_constants import ENGLISH
 from openjiuwen_deepsearch.utils.constants_utils.node_constants import AgentLlmName
 from openjiuwen_deepsearch.utils.constants_utils.session_contextvars import llm_context
+
+
+@pytest.mark.asyncio
+async def test_outline_network_retry_reuses_current_request():
+    reporter = Reporter.__new__(Reporter)
+    reporter._llm = object()
+    inputs = {"section_idx": 1, "section_task": "1 Topic", "sub_section_core_content": ["evidence"]}
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.sub_section_outline.ainvoke_llm_with_stats",
+        new=AsyncMock(side_effect=[RuntimeError("network error"), {"content": "1 Topic"}]),
+    ) as invoke:
+        success, _ = await reporter._generate_outline_with_retry(inputs, 1, 2)
+    assert success
+    first, second = [call.kwargs["messages"] for call in invoke.await_args_list]
+    assert first is second
+    assert "network error" not in second[-1]["content"]
+
+
+@pytest.mark.parametrize("network_first", [False, True])
+@pytest.mark.asyncio
+async def test_outline_empty_response_rebuilds_request_with_feedback(network_first):
+    reporter = Reporter.__new__(Reporter)
+    reporter._llm = object()
+    inputs = {"section_idx": 1, "section_task": "1 Topic", "sub_section_core_content": ["evidence"]}
+    responses = [{"content": ""}, {"content": "1 Topic"}]
+    if network_first:
+        responses.insert(0, RuntimeError("network error"))
+    with patch(
+        "openjiuwen_deepsearch.algorithm.report.sub_section_outline.ainvoke_llm_with_stats",
+        new=AsyncMock(side_effect=responses),
+    ) as invoke:
+        success, _ = await reporter._generate_outline_with_retry(inputs, 1, len(responses))
+    assert success
+    requests = [call.kwargs["messages"] for call in invoke.await_args_list]
+    if network_first:
+        assert requests[0] is requests[1]
+    assert requests[-1] is not requests[-2]
+    assert "<retry_feedback>" in requests[-1][-1]["content"]
+    assert "LLM returned empty content" in requests[-1][-1]["content"]
+    assert "network error" not in requests[-1][-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -85,10 +125,10 @@ async def test_generate_sub_section_outline_calls_llm_with_preservation_context(
 
 @pytest.mark.parametrize("has_template", [False, True])
 def test_subsection_outline_prompt_explains_structured_evidence_for_all_routes(has_template):
-    rendered = apply_system_prompt(
+    rendered = build_prompt_messages(
         "sub_section_outline",
         {
-            "messages": [{"role": "user", "content": "Structured evidence guidance"}],
+            "structured_evidence_guide": "Structured evidence guidance",
             "has_template": has_template,
             "section_idx": 1,
             "section_title": "Section",

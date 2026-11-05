@@ -466,17 +466,17 @@ def _build_citation_mapping(classified_content: List) -> Dict:
             continue
         title = _normalize_citation_title(content.get("title", ""))
         url = content.get("url", "")
-        content = content.get("original_content", "")
+        original_content = content.get("original_content", "")
 
         # 如果该index已存在，则把content补充在原content后
         if index in citation_mapping:
-            citation_mapping[index]["content"] += content
+            citation_mapping[index]["content"] += original_content
         else:
             # 否则创建新的entry
             citation_mapping[index] = {
                 "title": title,
                 "url": url,
-                "content": content
+                "content": original_content,
             }
 
     return citation_mapping
