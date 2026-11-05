@@ -254,6 +254,14 @@ def _discover_files(
     files: list[Path] = []
 
     for child in root.iterdir():
+        if child.is_symlink():
+            # Do not follow symlinks: a directory link can escape *root* (the
+            # exported graph would contain files outside the requested tree,
+            # and build_file_records() later fails with ValueError because the
+            # path is not relative to root) and a link cycle recurses until the
+            # OS returns ELOOP.  codesearch's discover_python_files() follows
+            # the same skip-symlinks policy.
+            continue
         if child.is_dir():
             if child.name.startswith(".") or child.name in _EXCLUDED_DIRS:
                 continue
