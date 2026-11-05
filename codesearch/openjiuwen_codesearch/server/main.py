@@ -20,6 +20,11 @@ from openjiuwen_codesearch.server.routers.api import api_router, shutdown_retrie
 
 logger = logging.getLogger(__name__)
 
+# uvicorn accepts exactly these names (uvicorn.config.LOG_LEVELS).
+_UVICORN_LOG_LEVELS = frozenset(
+    {"critical", "error", "warning", "info", "debug", "trace"}
+)
+
 
 def create_app() -> FastAPI:
     application = FastAPI(
@@ -51,13 +56,30 @@ def _warn_if_index_roots_unset() -> None:
     )
 
 
+def _uvicorn_log_level(raw: str) -> str:
+    """Return a uvicorn-compatible level name; fall back to ``info``.
+
+    ``uvicorn.Config`` looks the level up in a fixed dict and raises
+    ``KeyError`` for anything else, so a typo in ``CODESEARCH_LOG_LEVEL``
+    crashes the server start with a traceback from uvicorn internals.
+    """
+    name = (raw or "").strip().lower()
+    if name in _UVICORN_LOG_LEVELS:
+        return name
+    logger.warning(
+        "Invalid CODESEARCH_LOG_LEVEL=%r; falling back to 'info'", raw
+    )
+    return "info"
+
+
 def main() -> None:
     import uvicorn
 
-    logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
+    log_level = _uvicorn_log_level(settings.log_level)
+    logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO))
     _warn_if_index_roots_unset()
     logger.info("Health check: http://%s:%d/api/health", settings.host, settings.port)
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level=settings.log_level.lower())
+    uvicorn.run(app, host=settings.host, port=settings.port, log_level=log_level)
 
 
 if __name__ == "__main__":
