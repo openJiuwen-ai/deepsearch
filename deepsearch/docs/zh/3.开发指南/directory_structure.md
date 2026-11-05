@@ -52,7 +52,7 @@ framework/openjiuwen/
     └── search_api/             # 联网、本地和学术搜索 provider
 ```
 
-`search_api/` 包括 `agc_ainetworking`、`harness_web_search`、`jina`、`petal`、`serper`、`tavily`、`xunfei` 和 `scholarly_search/`（PubMed、arXiv、Semantic Scholar、全文获取）；外部及本地适配位于 `framework/openjiuwen/tools/search_api/` 下的 `external_tool/`、`local_search_api/`、`native_local_search_api/`。
+`search_api/` 包括 `agc_ainetworking`、`harness_web_search`、`jina`、`petal`、`serper`、`serpbase`、`tavily`、`xunfei` 和 `scholarly_search/`（PubMed、arXiv、Semantic Scholar、全文获取）；外部及本地适配位于 `framework/openjiuwen/tools/search_api/` 下的 `external_tool/`、`local_search_api/`、`native_local_search_api/`。
 
 ## 配置与工具
 

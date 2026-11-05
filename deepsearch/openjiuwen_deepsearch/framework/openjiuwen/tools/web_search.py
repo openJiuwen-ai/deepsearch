@@ -19,6 +19,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api import (
     ArxivSearchAPIWrapper,
     SemanticScholarSearchAPIWrapper,
     GoogleSearchAPIWrapper,
+    SerpBaseSearchAPIWrapper,
     PetalSearchAPIWrapper,
     BochaSearchAPIWrapper,
     JinaSearchAPIWrapper,
@@ -55,6 +56,7 @@ search_engine_mapping = {
     SearchEngine.JINA.value: JinaSearchAPIWrapper,
     SearchEngine.PERPLEXITY.value: PerplexitySearchAPIWrapper,
     SearchEngine.SERPER.value: GoogleSearchAPIWrapper,
+    SearchEngine.SERPBASE.value: SerpBaseSearchAPIWrapper,
 }
 
 

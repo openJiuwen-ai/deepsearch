@@ -5,6 +5,7 @@ __all__ = [
     "XunfeiSearchAPIWrapper",
     "PetalSearchAPIWrapper",
     "GoogleSearchAPIWrapper",
+    "SerpBaseSearchAPIWrapper",
     "TavilySearchAPIWrapper",
     "PubMedSearchAPIWrapper",
     "ArxivSearchAPIWrapper",
@@ -33,6 +34,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.harness_web_sea
 )
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.jina.api_wrapper import JinaSearchAPIWrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serper.api_wrapper import GoogleSearchAPIWrapper
+from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.serpbase.api_wrapper import SerpBaseSearchAPIWrapper
 from openjiuwen_deepsearch.framework.openjiuwen.tools.search_api.scholarly_search import (
     ArxivSearchAPIWrapper,
     PubMedSearchAPIWrapper,
