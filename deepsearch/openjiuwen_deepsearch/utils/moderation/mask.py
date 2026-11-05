@@ -169,7 +169,7 @@ def _address_domain(address: str) -> str:
         if not re.fullmatch(r"[a-z]{2,}|xn--[a-z0-9-]+", labels[-1]):
             return ""
         return host
-    except (ValueError, UnicodeError):
+    except ValueError:
         return ""
 
 
