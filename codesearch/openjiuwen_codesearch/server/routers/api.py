@@ -231,6 +231,7 @@ async def search(req: SearchRequest) -> SearchResponse:
             )
             for h in result.hits
         ],
+        error=result.error,
     )
 
 

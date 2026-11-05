@@ -36,6 +36,9 @@ class SearchResponse(BaseModel):
     total_input_tokens: int
     total_output_tokens: int
     hits: list[HitModel]
+    # 失败/降级终止（index_not_ready、llm_error 等）的 SDK 错误说明；
+    # 空串表示正常完成。HTTP 状态仍是 200 —— 终止原因由 termination 表达。
+    error: str = ""
 
 
 class IndexRequest(BaseModel):
