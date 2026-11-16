@@ -1,0 +1,18 @@
+{
+  "version": "reviewed_false_positives_v4",
+  "terms": {
+    "structure_labels": ["url", "www", "wikipedia"],
+    "english_grammar": ["is", "this"],
+    "english_ordinary_words": ["making", "system", "test", "way", "paper", "undergo", "simple"],
+    "reviewed_english_neutral_labels": ["isis", "muslim"],
+    "negation_and_quantifiers": ["没有", "一个"],
+    "task_instruction_words": ["时间", "进行", "处理", "信息", "背景", "第一", "第二", "联系", "制作", "计划"],
+    "classification_abbreviations": ["bc"],
+    "neutral_entities": ["美国", "日本", "俄国", "俄罗斯", "朝鲜", "台湾", "香港", "北京", "华盛顿", "亚洲", "非洲", "联合国"],
+    "reviewed_ordinary_words": ["社会", "国家", "文化", "代表", "未来", "其他", "希望", "安全", "近年", "管理", "支持", "第一次", "第四", "手机"],
+    "reviewed_cross_word_collisions": ["学历", "代开", "不是国", "是中国"]
+  },
+  "sha256": {
+    "reviewed_year_boundary_collision": ["bf04898b71b7ebe3faf15f9558fb59b9d456baa3330b12602525f5e2c0b102f2"]
+  }
+}

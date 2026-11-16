@@ -15,6 +15,10 @@ import copy
 
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import (
+    ensure_source_trace_id,
+    format_source_trace_id_comment,
+)
 from openjiuwen_deepsearch.utils.common_utils.text_utils import (
     escape_html_text,
     escape_markdown_link_text,
@@ -99,7 +103,13 @@ class InsertChartNode:
         chart_title = chart.get("chart_title", "")
         description = chart.get("description", "")
         chart_id = chart.get("chart_id", "")
-        source_datas = chart.get("source_datas", [])
+        # Each chart insertion owns its source instances. Reusing chart input
+        # objects would reuse an ID when the same source is cited twice.
+        source_datas = [
+            copy.deepcopy(source_data)
+            for source_data in chart.get("source_datas", [])
+            if validate_and_sanitize_url(source_data.get("url", ""))
+        ]
 
         # 对图表标题和描述进行HTML转义，防止HTML/Markdown注入
         safe_chart_title = escape_html_text(chart_title)
@@ -109,7 +119,7 @@ class InsertChartNode:
         insertion = f"{placeholder}\n<font size=2>**{safe_chart_title}**: {safe_description}</font>"
 
         # 将新插入的溯源信息插入到source_trace_datas对应位置中
-        if self._insert_source_trace_data(report_content, chart):
+        if self._insert_source_trace_data(report_content, chart, source_datas):
             # 统计vlm生成图模块共插入了多少条溯源信息
             self._inser_source_tracer_count += len(source_datas)
             # 溯源信息成功插入datas, 在报告中插入溯源信息
@@ -121,7 +131,11 @@ class InsertChartNode:
 
                 # 如果URL验证失败，使用一个占位链接文本（不插入实际链接）
                 if safe_url:
-                    insertion += f"[source_tracer_result][{safe_link_title}]({safe_url})"
+                    source_trace_id = ensure_source_trace_id(source_data)
+                    insertion += (
+                        f"[source_tracer_result][{safe_link_title}]({safe_url})"
+                        f"{format_source_trace_id_comment(source_trace_id)}"
+                    )
             logger.debug("%s Inserted source trace data, the figure id is %s",
                         self._log_prefix, chart.get('chart_id', ''))
         else:
@@ -143,7 +157,7 @@ class InsertChartNode:
 
     def _insert_source_trace_data(
         self, report_content: str,
-        chart: Dict[str, Any]) -> bool:
+        chart: Dict[str, Any], source_datas: List[Dict[str, Any]]) -> bool:
         """
         在报告中找到source_trace_datas对应位置并插入溯源信息
 
@@ -157,7 +171,6 @@ class InsertChartNode:
                 return False
             
             anchor_text = chart.get("anchor_match_para", "")
-            source_datas = chart.get("source_datas", [])
             
             # 获取anchor_text之前的内容中包含的溯源标识符个数
             source_tracer_pattern = r'\[source_tracer_result\]\[.*?\]\(.*?\)'
@@ -179,6 +192,7 @@ class InsertChartNode:
             insert_source_traces = []
             for source_data in source_datas:
                 pos_offset += 1
+                source_trace_id = ensure_source_trace_id(source_data)
                 chart_source_data = {
                     "name": "",
                     "url": source_data.get("url", ""),
@@ -190,6 +204,7 @@ class InsertChartNode:
                     "chunk": chart.get("description", ""),
                     "score": chart.get("score", 0) / 100, # 后续分数应用于溯源模块，分制对齐
                     "id": "",
+                    "source_trace_id": source_trace_id,
                     "_sentence_position": sentence_position + pos_offset, # 符合datas中位置递增变化即可
                     "is_vlm_chart": True,
                 }

@@ -243,13 +243,51 @@ class MarkdownProcessorMixin:
     @classmethod
     def _extract_markdown_heading_pairs(cls, content: str) -> list[tuple[int, str]]:
         pairs: list[tuple[int, str]] = []
+        fence_char = ""
+        fence_length = 0
         for line in content.splitlines():
-            match = re.match(r"^\s*(#{1,2})\s+(.+?)\s*$", line)
+            if fence_char:
+                closing = re.match(r"^\s{0,3}(`{3,}|~{3,})\s*$", line)
+                if closing:
+                    marker = closing.group(1)
+                    if marker[0] == fence_char and len(marker) >= fence_length:
+                        fence_char = ""
+                        fence_length = 0
+                continue
+            opening = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
+            if opening:
+                marker = opening.group(1)
+                fence_char, fence_length = marker[0], len(marker)
+                continue
+            # Keep empty headings so the validator can reject them explicitly.
+            match = re.match(r"^ {0,3}(#{1,2})(?:[ \t]+(.*?)|[ \t]*)$", line)
             if not match:
                 continue
             level = len(match.group(1))
-            pairs.append((level, cls._normalize_heading_title(match.group(2))))
+            title = re.sub(r"(?:^|[ \t]+)#+[ \t]*$", "", match.group(2) or "")
+            pairs.append((level, cls._normalize_heading_title(title)))
         return pairs
+
+    @classmethod
+    def validate_sub_report_heading_structure(
+        cls,
+        content: str,
+    ) -> tuple[bool, str]:
+        """Validate H1/H2 structure independently of the writing outline."""
+        if not content or not content.strip():
+            return False, "generated report content is empty"
+        actual_pairs = cls._extract_markdown_heading_pairs(content)
+        if not actual_pairs:
+            return False, "generated report headings are empty"
+        if any(not title for _, title in actual_pairs):
+            return False, "generated report contains empty heading titles"
+        if actual_pairs[0][0] != 1 or sum(level == 1 for level, _ in actual_pairs) != 1:
+            return False, "generated report must start with exactly one H1 before H2 headings"
+
+        if len(set(actual_pairs)) != len(actual_pairs):
+            return False, "duplicate headings detected in generated report"
+
+        return True, ""
 
     @classmethod
     def validate_sub_report_headings_match_outline(
@@ -257,42 +295,8 @@ class MarkdownProcessorMixin:
         content: str,
         sub_section_outline: str,
     ) -> tuple[bool, str]:
-        """Ensure every outline heading appears in the generated report in order.
-
-        Extra headings beyond the outline are allowed; missing, mismatched,
-        or out-of-order outline headings cause failure.
-        """
-        expected_pairs = cls._extract_outline_heading_pairs(sub_section_outline)
-        actual_pairs = cls._extract_markdown_heading_pairs(content)
-
-        if not expected_pairs:
-            return False, "expected subsection outline headings are empty"
-        if not actual_pairs:
-            return False, "generated report headings are empty"
-
-        if len(actual_pairs) < len(expected_pairs):
-            return (
-                False,
-                f"heading count insufficient: expected at least {len(expected_pairs)}, got {len(actual_pairs)}",
-            )
-
-        search_from = 0
-        for expected_level, expected_title in expected_pairs:
-            target = (expected_level, expected_title)
-            try:
-                pos = actual_pairs.index(target, search_from)
-            except ValueError:
-                return (
-                    False,
-                    f"outline heading not found: expected H{expected_level} "
-                    f"'{expected_title}' not present in generated report",
-                )
-            search_from = pos + 1
-
-        if len(set(actual_pairs)) != len(actual_pairs):
-            return False, "duplicate headings detected in generated report"
-
-        return True, ""
+        """Compatibility entry point; the outline is not compared."""
+        return cls.validate_sub_report_heading_structure(content)
 
     @staticmethod
     def _extract_level_one_headings(sub_reports_content: str) -> list[dict]:

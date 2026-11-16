@@ -12,9 +12,9 @@
 
 ## 可见行为
 
-- 匹配到的来源会以 `[source_tracer_result][title](url)` 形式插入正文。
+- 匹配到的来源会以 `[source_tracer_result][title](url)<!--source-trace-id:{source_trace_id}-->` 形式插入正文；每次引用出现都使用独立的 `source_trace_id`。
 - 参考文献区会被追加或重建。
-- source data 会合并去重，并保留来源标题、URL、正文片段和 reference index。
+- 对应的 source data 会写入同一个 `source_trace_id`，并保留来源标题、URL、正文片段和 reference index；校验阶段以该 ID 而不是 data 列表位置关联标记与 data。
 - URL 需要通过 scheme 校验后才可插入。
 
 ## 关键代码路径
@@ -31,8 +31,8 @@
 ## 核心流程
 
 1. `SourceReferenceProcessor` 根据匹配结果从 search record 中提取来源信息。
-2. 引用信息插入到对应句子后。
-3. source data item 被收集和合并。
+2. 引用信息及其独立的 `source_trace_id` 插入到对应句子后。
+3. 带有同一 `source_trace_id` 的 source data item 被收集和合并。
 4. 旧 Markdown 引用或 source tracer 引用在需要时被清理。
 5. 参考文献区根据有效 data items 生成。
 6. 结果交给 citation checker 进一步验证。

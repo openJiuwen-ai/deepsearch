@@ -213,6 +213,7 @@ class openjiuwen_deepsearch.framework.openjiuwen.agent.search_context.FinalResul
 **字段**：
 - **response_content**(str)：响应内容。
 - **response_content_type**(str)：响应内容类型，`text/markdown` 或 `text/html`。默认值：`text/markdown`。
+- **response_markdown**(str)：Brief 的完整 Markdown 报告，含引用和 AI 声明；其他情况默认为空。`response_content_type` 仅描述 `response_content`。
 - **citation_messages**(dict)：引用信息。
 - **infer_messages**(list): 溯源推理信息。报告导出时会读取其中的 `html_base64`，并写出为独立 HTML 资源。
 - **chart_messages**(list): vlm迭代生成图信息。报告导出时会读取其中的 `base64`，并写出为图片资源。

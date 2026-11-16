@@ -13,16 +13,30 @@ class LLMConfig(BaseModel):
     model_type: Literal["openai", "siliconflow"] = Field(default="openai", description="模型类型")
     base_url: str = Field(default="", description="模型服务地址")
     api_key: bytearray = Field(default=bytearray("", encoding="utf-8"), description="模型调用密钥")
+    x_officeace_client: Optional[str] = Field(
+        default=None, alias="x-officeace-client", description="LLM HTTP 请求头 x-officeace-client"
+    )
+    x_officeace_message_meta: Optional[str] = Field(
+        default=None, alias="x-officeace-message-meta", description="LLM HTTP 请求头 x-officeace-message-meta"
+    )
     hyper_parameters: dict = Field(default_factory=dict, description="模型调用超参数设置，根据具体模型接口设置")
     extension: dict = Field(default_factory=dict, description="模型扩展配置项，根据具体模型接口设置")
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
+        populate_by_name=True,
     )
     timeout: int = Field(default=600, description="请求超时时间（秒）")
     max_tries: int = Field(default=4, description="最大重试次数")
     append_think_tags_to_messages: bool = Field(
         default=False,
         description="是否在消息中追加 think 标签"
+    )
+    moderation_mask_retry: bool = Field(
+        default=False,
+        description=(
+            "是否启用内容风控补救（默认关，恢复效果与质量需实验验证）。"
+            "复用调用方原有重试预算：输入侧仅掩 user 资料字段，输出侧追加提示；不增加尝试次数。"
+        )
     )
 
 
@@ -524,7 +538,7 @@ class ServiceConfig(BaseModel):
     info_collector_max_retry_num: int = Field(default=3, description="信息收集阶段搜索工具调用失败后的最大重试次数（如 Tavily 联网搜索）")
     info_collector_allow_programmer: bool = Field(default=False, description="")
     info_collector_webpage_enrich_max_urls: int = Field(
-        default=3,
+        default=5,
         ge=1,
         le=10,
         description="网页正文增强每轮最多抓取并增强的 URL 数量",
@@ -546,6 +560,10 @@ class ServiceConfig(BaseModel):
     )
     report_max_generate_retry_num: int = Field(default=3, description="生成内容最大重试次数")
     visualization_enable: bool = Field(default=True, description="报告插入图表开关")
+    professional_report_adaptive_rationales: bool = Field(
+        default=False,
+        description="专业版报告是否启用需求清单映射与复杂度自适应 rationale",
+    )
 
     # 溯源节点参数
     source_tracer_citation_verify_max_concurrency_num: int = Field(default=30, description="溯源校验最大并发数量")

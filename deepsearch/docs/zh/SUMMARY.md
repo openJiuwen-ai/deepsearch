@@ -21,6 +21,7 @@
     - [config](./3.开发指南/API文档/config.md)
     - [main_nodes](./3.开发指南/API文档/main_nodes.md)
     - [report_convert](./3.开发指南/API文档/report_convert.md)
+    - [SDK 报告进度查询](./3.开发指南/API文档/research_progress.md)
     - [search_context](./3.开发指南/API文档/search_context.md)
     - [deepsearch_agent](./3.开发指南/API文档/deepsearch_agent.md)
     - [deepsearch_rest_api](./3.开发指南/API文档/deepsearch_rest_api.md)

@@ -24,6 +24,8 @@ class RetryFeedbackMixin:
             "HEADING_COUNT_MISMATCH",
             "HEADING_TITLE_MISMATCH",
             "HEADING_MISSING",
+            "HEADING_TITLE_EMPTY",
+            "HEADING_STRUCTURE_INVALID",
             "OUTLINE_HEADING_MISSING",
             "DUPLICATE_SUBSECTION_HEADINGS",
             "SUB_REPORT_CONTENT_EMPTY",
@@ -124,6 +126,18 @@ class RetryFeedbackMixin:
                 )
 
         reason_lower = reason.lower()
+        if "generated report contains empty heading titles" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "HEADING_TITLE_EMPTY", "markdown_headings",
+            )
+        if "generated report must start with exactly one h1 before h2 headings" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "HEADING_STRUCTURE_INVALID", "markdown_headings",
+            )
+        if "generated report content is empty" in reason_lower:
+            return cls._build_sub_report_retry_feedback(
+                "SUB_REPORT_CONTENT_EMPTY", "chapter",
+            )
         if "generated report headings are empty" in reason_lower:
             return cls._build_sub_report_retry_feedback(
                 "HEADING_MISSING",

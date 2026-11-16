@@ -492,6 +492,7 @@ class SubReporterNode(BaseNode):
             report_format=session.get_global_state("section_context.report_format") or ReportFormat.MARKDOWN,
             report_style=session.get_global_state("config.report_style") or ReportStyle.SCHOLARLY.value,
             section_idx=section_idx,  # 章节序号,
+            original_query=session.get_global_state("section_context.original_query") or "",
             report_task=session.get_global_state("section_context.report_task"),  # 总报告标题
             section_task=session.get_global_state("section_context.section_task"),  # 当前章节标题
             section_iscore=session.get_global_state("section_context.section_iscore") or False,  # 是否核心章节
@@ -506,6 +507,11 @@ class SubReporterNode(BaseNode):
             max_generate_retry_num=session.get_global_state("config.report_max_generate_retry_num") or 3,
             classify_doc_infos_res_top_k_num=session.get_global_state(
                 "config.sub_report_classify_doc_infos_res_top_k_num") or 15,
+            professional_report_adaptive_rationales=bool(
+                session.get_global_state(
+                    "config.professional_report_adaptive_rationales"
+                )
+            ),
             llm_model_name=adapt_llm_model_name(session, NodeId.SUB_REPORTER.value),
             sub_report_background_knowledge=session.get_global_state(
                 "section_context.sub_report_background_knowledge") or [],

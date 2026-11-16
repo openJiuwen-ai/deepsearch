@@ -18,6 +18,7 @@ class openjiuwen_deepsearch.config.config.LLMConfig()
 - **timeout** (int, optional): Request timeout in seconds. Default `600`.
 - **max_tries** (int, optional): Maximum retry attempts for one LLM call. Default `4`.
 - **append_think_tags_to_messages** (bool, optional): Whether to append think tags into messages. Default `False`.
+- **moderation_mask_retry** (bool, optional): Enable content moderation recovery. Default `False`; enable with `LLMConfig(moderation_mask_retry=True)`. After a recognized input moderation error, the next existing attempt masks only annotated source text and source URLs in user messages; output moderation errors add output constraints. This reuses the caller's existing retry budget without adding attempts: calls without retries still do not retry, and `run_llm` defaults to at most four application-level attempts. SDK/provider internal retries are counted separately. Recovery effectiveness and content quality require experimental validation; this does not guarantee approval or change provider moderation policies. See [Moderation mask retry](../../../feature/moderation-mask-retry.md).
 
 **Examples**
 
@@ -401,13 +402,14 @@ class openjiuwen_deepsearch.config.config.ServiceConfig()
 - **info_collector_max_tool_call_turns_per_query** (int, optional): Maximum tool-call turns for each collector query. Default value: `2`.
 - **info_collector_max_retry_num** (int, optional): Maximum retry count for search tool calls during information collection (e.g. Tavily web search). Default value: `3`.
 - **info_collector_allow_programmer** (bool, optional): Reserved field; it is not consumed by the current runtime, so setting it does not change collector behavior. Default value: `False`.
-- **info_collector_webpage_enrich_max_urls** (int, optional): Maximum number of URLs to fetch and enrich per collector loop. Default value: `3`.
+- **info_collector_webpage_enrich_max_urls** (int, optional): Maximum number of URLs to fetch and enrich per collector loop. Default value: `5`.
 - **info_collector_webpage_enrich_fetch_timeout_seconds** (int, optional): Timeout in seconds for fetching one webpage during webpage enrichment. Default value: `45`.
 
 ### Reporting parameters
 - **sub_report_classify_doc_infos_res_top_k_num** (int, optional): Top-k passages selected per rationale by coverage score in a sub-report (_select_by_rationale_coverage). Default value: `15`.
 - **report_max_generate_retry_num** (int, optional): Maximum retry count for content generation. Default value: `3`.
 - **visualization_enable** (bool, optional): Whether to enable visualization illustrations in Professional reports. Default value: `True`. It does not affect Brief report text-and-visual generation.
+- **professional_report_adaptive_rationales** (bool, optional): Whether to enable requirement checklist mapping and complexity-adaptive rationale generation for Professional reports. Default value: `False`.
 
 ### Provenance parameters
 - **source_tracer_citation_verify_max_concurrency_num** (int, optional): Maximum concurrency for citation verification. Default value: `30`.

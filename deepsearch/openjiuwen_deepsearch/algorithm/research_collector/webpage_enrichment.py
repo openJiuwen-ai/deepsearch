@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -14,23 +13,18 @@ from pydantic import BaseModel, Field
 from openjiuwen_deepsearch.algorithm.research_collector.collector_evidence import (
     build_content_ref,
     canonicalize_url,
-    extract_key_passages,
     generate_source_id,
 )
 from openjiuwen_deepsearch.common.common_constants import MAX_COLLECTOR_DOC_CONTENT_LENGTH
+from openjiuwen_deepsearch.algorithm.research_collector.enrichment_quality import (
+    required_fact_anchors,
+    required_description_contexts,
+)
 
 #: 抓取正文默认超时秒数。
 DEFAULT_FETCH_TIMEOUT_SECONDS = 45
 #: 抓取正文最低字符数门槛。
 MIN_FETCHED_CONTENT_LENGTH = 200
-
-_NUMERIC_FACT_PATTERN = re.compile(
-    r"(?<![\w.])\d+(?:[.,]\d+)*(?:\s*(?:%|fps|hz|khz|mhz|bpm|mmhg|ms|min|minutes?|videos?|subjects?))?",
-    re.IGNORECASE,
-)
-_TECHNICAL_IDENTIFIER_PATTERN = re.compile(
-    r"\b(?:[A-Z]{2,}[A-Za-z0-9_-]*|[A-Za-z]+\d[A-Za-z0-9_-]*|[A-Za-z0-9]+-[A-Za-z0-9_-]+)\b"
-)
 
 
 class WebPageEnrichmentDecision(BaseModel):
@@ -155,6 +149,7 @@ def _build_candidate(index: int, doc_info: dict[str, Any], url: str) -> dict[str
         "title": doc_info.get("title", ""),
         "source": doc_info.get("source", ""),
         "query": doc_info.get("query", ""),
+        "publish_time": str(doc_info.get("doc_time") or doc_info.get("publish_time") or ""),
         "key_passages": doc_info.get("key_passages", []),
     }
     if doc_info.get("scores"):
@@ -224,7 +219,7 @@ def build_selection_prompt_candidates(candidates: list[dict]) -> list[dict]:
     Returns:
         移除内部 `doc_index` 后的候选列表。
     """
-    visible_keys = ("candidate_index", "url", "title", "source", "query", "key_passages")
+    visible_keys = ("candidate_index", "url", "title", "source", "query", "key_passages", "publish_time")
     return [
         {key: candidate.get(key, "") for key in visible_keys if key in candidate}
         for candidate in candidates or []
@@ -239,9 +234,9 @@ def _build_task_payload(state: dict[str, Any]) -> dict[str, Any]:
         state: 网页增强节点运行状态。
 
     Returns:
-        只包含任务描述的 JSON 可序列化字典。
+        包含任务描述和已有研究约束的 JSON 可序列化字典。
     """
-    return {
+    payload = {
         "task": {
             "plan_title": state.get("plan_title", ""),
             "plan_thought": state.get("plan_thought", ""),
@@ -249,6 +244,10 @@ def _build_task_payload(state: dict[str, Any]) -> dict[str, Any]:
             "step_description": state.get("step_description", ""),
         },
     }
+    constraints = state.get("research_constraints")
+    if isinstance(constraints, dict) and constraints:
+        payload["research_constraints"] = constraints
+    return payload
 
 
 def build_selection_user_payload(state: dict[str, Any], candidates: list[dict]) -> dict[str, Any]:
@@ -263,7 +262,7 @@ def build_selection_user_payload(state: dict[str, Any], candidates: list[dict]) 
     """
     payload = _build_task_payload(state)
     payload.update({
-        "max_urls": state.get("max_urls", 3),
+        "max_urls": state.get("max_urls", 5),
         "candidates": build_selection_prompt_candidates(candidates),
     })
     return payload
@@ -282,19 +281,29 @@ def build_compression_user_payload(
         fetched: 网页抓取结果。
 
     Returns:
-        包含任务、旧证据、抓取正文和输出上限的 JSON 数据。
+        包含任务、旧证据、抓取正文、必保留表达、软目标与硬上限的JSON数据。
     """
     payload = _build_task_payload(state)
+    anchors = required_fact_anchors(doc_info)
     payload.update({
         "document": {
             "query": doc_info.get("query", ""),
             "title": doc_info.get("title", ""),
             "url": doc_info.get("url", ""),
+            "publish_time": str(doc_info.get("doc_time") or doc_info.get("publish_time") or ""),
             "key_passages": doc_info.get("key_passages", []),
         },
         "existing_content": str(doc_info.get("original_content") or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH],
-        "webpage_content": truncate_raw_content_for_compression(str(fetched.get("content") or "")),
+        "webpage_content": truncate_raw_content_for_compression(
+            str(fetched.get("primary_content", fetched.get("content")) or "")
+        ),
+        "webpage_content_scope": "primary_article" if fetched.get("excluded_content_chars") else "unpartitioned",
         "max_content_length": MAX_COLLECTOR_DOC_CONTENT_LENGTH,
+        "target_content_length": max(1, MAX_COLLECTOR_DOC_CONTENT_LENGTH - 500),
+        "required_facts": list(dict.fromkeys(
+            anchor.text for anchor in anchors if anchor.kind != "description"
+        )),
+        "required_descriptions": required_description_contexts(doc_info, anchors),
     })
     return payload
 
@@ -336,98 +345,6 @@ def truncate_raw_content_for_compression(content: str) -> str:
         最多 `MAX_COLLECTOR_DOC_CONTENT_LENGTH * 10` 字符的正文。
     """
     return str(content or "")[:MAX_COLLECTOR_DOC_CONTENT_LENGTH * 10]
-
-
-def _normalize_quality_text(value: Any) -> str:
-    """规范化质量门禁使用的文本。
-
-    Args:
-        value: 待规范化值。
-
-    Returns:
-        经过大小写和连续空白归一化的文本。
-    """
-    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
-
-
-def _normalize_fact_text(value: Any) -> str:
-    """规范化用于事实锚点匹配的文本。
-
-    Args:
-        value: 待规范化值。
-
-    Returns:
-        移除空格和标点并统一大小写后的文本。
-    """
-    return re.sub(r"[\W_]+", "", str(value or "").casefold())
-
-
-def _extract_fact_anchors(text: str) -> set[str]:
-    """提取应在增强后继续保留的数字和技术标识。
-
-    Args:
-        text: 旧证据关键片段。
-
-    Returns:
-        规范化后的数字、单位值和技术标识集合。
-    """
-    anchors = {
-        _normalize_fact_text(match.group(0))
-        for pattern in (_NUMERIC_FACT_PATTERN, _TECHNICAL_IDENTIFIER_PATTERN)
-        for match in pattern.finditer(text or "")
-    }
-    return {anchor for anchor in anchors if anchor}
-
-
-def should_replace_original_content(
-    original_doc: dict,
-    evidence: WebPageEvidenceContent,
-) -> tuple[bool, str]:
-    """判断增强结果是否足以替换旧正文。
-
-    质量门禁要求旧关键片段中的数字和技术标识继续出现在新证据中。
-    旧文为空时直接接受有效新正文，避免阻碍原本没有摘要的搜索结果增强。
-
-    Args:
-        original_doc: 增强前的 doc_info。
-        evidence: 压缩 LLM 生成的新证据。
-
-    Returns:
-        `(是否替换, 原因)`；拒绝时原因可用于日志定位。
-    """
-    original_content = str(original_doc.get("original_content") or "").strip()
-    enriched_content = str(evidence.original_content or "").strip()
-    if not enriched_content:
-        return False, "empty_enriched_content"
-    if not original_content:
-        return True, "no_existing_content"
-
-    normalized_enriched = _normalize_quality_text(enriched_content)
-    if _normalize_quality_text(original_content) in normalized_enriched:
-        return True, "existing_content_preserved"
-    normalized_fact_enriched = _normalize_fact_text(enriched_content)
-
-    passages = [
-        str(passage or "").strip()
-        for passage in (original_doc.get("key_passages") or [])
-        if str(passage or "").strip()
-    ]
-    if not passages:
-        passages = extract_key_passages(
-            content=original_content,
-            query=str(original_doc.get("query") or ""),
-            title=str(original_doc.get("title") or ""),
-        )
-
-    missing_anchors: set[str] = set()
-    for passage in passages:
-        for anchor in _extract_fact_anchors(passage):
-            if anchor not in normalized_fact_enriched:
-                missing_anchors.add(anchor)
-
-    if missing_anchors:
-        return False, f"missing_fact_anchors:{','.join(sorted(missing_anchors))}"
-    return True, "quality_guard_passed"
 
 
 def capture_doc_identity(doc_info: dict) -> dict[str, str]:
@@ -556,6 +473,7 @@ def apply_enrichment_to_doc(
     enrichment = dict(updated.get("enrichment") or {})
     enrichment.update({
         "webpage_fetched": True,
+        "content_changed": evidence.original_content.strip() != str(doc_info.get("original_content") or "").strip(),
         "fetch_status_code": fetched.get("status_code", ""),
         "fetched_url": fetched.get("url", ""),
         "content_source": fetched.get("fetch_method", "harness_webpage_fetch"),

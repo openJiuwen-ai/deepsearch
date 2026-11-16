@@ -52,6 +52,14 @@ The evidence table intentionally contains key_passages and scores instead of ful
 - The total number of topical keywords should not exceed 5.
 - Do not force follow-up queries into the report language when another language is more likely to retrieve authoritative material.
 
+## Tool selection
+- When `mcp_query_tools` is provided in the user payload, each `next_queries` item MAY be an object with a `tool` field selecting one query-compatible search tool for direct invocation in the next retrieval loop.
+- `tool` must be exactly one name from the `mcp_query_tools` list, or `"native"` to use the configured web/local search tool.
+- Omit `tool` (or set it to `"native"`) when the query is general web evidence or when no search tool fits the evidence need.
+- Prefer a specialized tool only when its description clearly matches the query's domain (e.g. a medical evidence follow-up with a pubmed tool available).
+- Choose based on evidence-source fit: select a specialized tool only when its description clearly matches the follow-up query's evidence source domain; otherwise use `"native"`. Do not assume selecting a tool changes the number of LLM calls — both paths invoke tools directly.
+- `next_queries` items may also remain plain strings; mix strings and objects as needed. The reflection output language and Evidence Boundary Policy take precedence over tool selection.
+
 ## Output Format
 - Return a JSON object with exactly these keys:
   - `is_sufficient`: true or false.
@@ -59,7 +67,10 @@ The evidence table intentionally contains key_passages and scores instead of ful
   - `knowledge_gap`: concise blocking or non-critical limitations, or `""`.
   - `known_facts`: newly confirmed facts from this reflection only.
   - `missing_evidence`: remaining blocking verifiable requirements.
-  - `next_queries`: follow-up queries, or `[]` if sufficient or not worth continuing.
+  - `next_queries`: follow-up queries, or `[]` if sufficient or not worth continuing. Each item is either a plain string or an object with:
+    - `query`: A search query with at most 5 topical keywords; an applicable time phrase is excluded from this limit.
+    - `tool`: (optional) One MCP tool name from `mcp_query_tools`, or `"native"`. Omit when `mcp_query_tools` is absent.
+    - `search_engine_names`: (optional) An ordered list containing zero or more of `semantic_scholar`, `pubmed`, and `arxiv`.
 - Return a complete valid JSON object only: no explanations, rationale, markdown fences, or extra keys.
 
 ## Example
@@ -69,5 +80,8 @@ The evidence table intentionally contains key_passages and scores instead of ful
     "knowledge_gap": "still missing comparable 2024 market size data",
     "known_facts": ["newly confirmed fact from current loop documents"],
     "missing_evidence": ["specific verifiable evidence requirement"],
-    "next_queries": ["Tesla market size 2024"]
+    "next_queries": [
+        {"query": "Tesla market size 2024", "tool": "native"},
+        "Tesla vehicle delivery 2024 quarterly"
+    ]
 }

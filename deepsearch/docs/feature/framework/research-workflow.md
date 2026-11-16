@@ -24,6 +24,7 @@
 - `hybrid` 模式在意图识别节点中调用 LLM 判断本次 query 应走普通大纲还是依赖驱动大纲，并把结果写入 `search_context.outline_execution_method`。
 - `report_type=brief` 时进入自包含的 Brief 支路：报告级采集、证据审阅、至多一次补搜、并行章节写作、核心摘要、报告拼装、最终引用校验和自包含 HTML 报告生成；不会进入专业版 EditorTeam、VLM、推理链溯源或报告后反馈。
 - `final_result.response_content` 非空时，`EndNode` 会依据 `search_context.language` 在正文末尾追加中文或英文的 AI 生成标注；`final_result.response_content_type == "text/html"` 时跳过 markdown AI 声明追加（HTML 声明已由 BRIEF_HTML_REPORTER 插入），不使用 `</html>` 后缀等启发式猜测，professional md 路径行为完全不变。部分失败报告仍保留错误事件与 `exception_info`。
+- Brief 的 `EndNode` 还会整理并返回 `response_markdown`，保留引用并追加 Markdown AI 声明；Professional 的该字段为空。
 - 错误会以 `StreamEvent.ERROR` 输出，随后输出 `ALL END`。
 
 ## 关键代码路径

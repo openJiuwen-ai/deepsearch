@@ -7,13 +7,15 @@ StartNode 白名单 → 会话 config → 各节点 _pre_handle 一路下发到�
 任何一环断链都会让"按需开启"失效——该开的没开，或该关的开了。
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from openjiuwen.core.context_engine.base import ModelContext
 from openjiuwen.core.session.node import Session
 
-from openjiuwen_deepsearch.config.config import AgentConfig
+from openjiuwen_deepsearch.config.config import AgentConfig, ServiceConfig
 from openjiuwen_deepsearch.framework.openjiuwen.agent.main_graph_nodes import StartNode
+from openjiuwen_deepsearch.framework.openjiuwen.agent import main_graph_nodes
 from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.editor_team_nodes import (
     SubReporterNode,
 )
@@ -55,6 +57,39 @@ def test_start_node_passes_exclusion_constraint_enable_to_session_config():
 
         merged_config = session.update_global_state.call_args.args[0]["config"]
         assert merged_config["exclusion_constraint_enable"] is expected
+
+
+def test_adaptive_rationales_is_configured_only_by_service_config(monkeypatch):
+    import asyncio
+
+    for service_value, agent_value in [(True, False), (False, True)]:
+        service_config = ServiceConfig(
+            professional_report_adaptive_rationales=service_value
+        )
+        monkeypatch.setattr(
+            main_graph_nodes,
+            "Config",
+            lambda: SimpleNamespace(service_config=service_config),
+        )
+        node = StartNode()
+        session = MagicMock(spec=Session)
+        context = MagicMock(spec=ModelContext)
+        inputs = {
+            "agent_config": {
+                "llm_config": {},
+                "web_search_engine_config": {"search_engine_name": "tavily"},
+                "local_search_engine_config": {"search_engine_name": "openapi"},
+                "professional_report_adaptive_rationales": agent_value,
+            },
+            "thread_id": "thread-rationales",
+            "interrupt_feedback": "",
+        }
+
+        asyncio.run(node.invoke(inputs, session, context))
+
+        merged_config = session.update_global_state.call_args.args[0]["config"]
+        assert merged_config["professional_report_adaptive_rationales"] is service_value
+        assert not hasattr(AgentConfig(), "professional_report_adaptive_rationales")
 
 
 def test_sub_reporter_node_dispatches_exclusion_constraint_enable():

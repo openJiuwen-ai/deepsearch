@@ -5,6 +5,10 @@ import logging
 import re
 from typing import List, Dict, Any, Optional, Tuple
 
+from openjiuwen_deepsearch.algorithm.source_trace.add_source import (
+    ensure_source_trace_id,
+    format_source_trace_id_comment,
+)
 from openjiuwen_deepsearch.utils.common_utils.text_utils import split_into_sentences
 from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
@@ -376,12 +380,18 @@ def _process_citation_match(match, report: str, citation_pattern: str, citation_
         "_sentence_position": citation_start_after_replace,
         "_is_origin_data": True
     }
+    # A citation number can occur more than once, so every occurrence needs
+    # a distinct data-instance identity.
+    source_trace_id = ensure_source_trace_id(chunk_info)
 
     # 生成替换文本
     if citation_num in citation_mapping:
         mapping = citation_mapping[citation_num]
         if mapping:
-            replacement_text = f"[source_tracer_result][{mapping['title']}]({mapping['url']})"
+            replacement_text = (
+                f"[source_tracer_result][{mapping['title']}]({mapping['url']})"
+                f"{format_source_trace_id_comment(source_trace_id)}"
+            )
         else:
             logger.warning(f"{citation_num} 不存在mapping")
             replacement_text = ""
@@ -495,6 +505,9 @@ def _build_datas_from_chunks(citation_chunks: List, citation_mapping: Dict) -> L
     datas = []
 
     for chunk_info in citation_chunks:
+        # Keep this helper robust for callers that construct chunks directly.
+        # The normal replacement path already assigns the ID per occurrence.
+        source_trace_id = ensure_source_trace_id(chunk_info)
         citation_num = chunk_info.get("citation_num", 0)
 
         # 检查该citation是否在mapping中
@@ -512,6 +525,7 @@ def _build_datas_from_chunks(citation_chunks: List, citation_mapping: Dict) -> L
                 "url": url,
                 "title": title,
                 "content": content,
+                "source_trace_id": source_trace_id,
                 "chunk": chunk,
                 "_sentence_position": sentence_position,
                 "_is_origin_data": True

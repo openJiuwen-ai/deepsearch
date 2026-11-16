@@ -3,6 +3,7 @@
 
 import logging
 import re
+import uuid
 from typing import List, Dict, Any, Tuple
 
 from openjiuwen_deepsearch.utils.common_utils.markdown_url_utils import extract_markdown_url
@@ -12,6 +13,34 @@ from openjiuwen_deepsearch.utils.common_utils.url_utils import validate_and_sani
 logger = logging.getLogger(__name__)
 _SOURCE_TRACER_LINK_PREFIX_RE = re.compile(r"\s*!?\[source_tracer_result\]!?\[[^\]]*]\(")
 _MARKDOWN_LINK_PREFIX_RE = re.compile(r"\s*!?\[[^\]]*]\(")
+SOURCE_TRACE_ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
+SOURCE_TRACE_ID_COMMENT_RE = re.compile(rf"<!--source-trace-id:{SOURCE_TRACE_ID_PATTERN}-->")
+SOURCE_TRACE_ID_COMMENT_CAPTURE_RE = re.compile(
+    rf"<!--source-trace-id:({SOURCE_TRACE_ID_PATTERN})-->"
+)
+_SOURCE_TRACE_ID_RE = re.compile(rf"^{SOURCE_TRACE_ID_PATTERN}$")
+
+
+def ensure_source_trace_id(data: Dict[str, Any]) -> str:
+    """Return a stable, unique identifier for one source-data instance.
+
+    ``id`` is assigned later for frontend citation rendering, so it cannot be
+    used to bind an intermediate source marker to its data item.
+    """
+    source_trace_id = data.get("source_trace_id")
+    if isinstance(source_trace_id, str) and _SOURCE_TRACE_ID_RE.fullmatch(source_trace_id):
+        return source_trace_id
+
+    source_trace_id = uuid.uuid4().hex
+    data["source_trace_id"] = source_trace_id
+    return source_trace_id
+
+
+def format_source_trace_id_comment(source_trace_id: str) -> str:
+    """Build an internal marker after validating its identifier."""
+    if not _SOURCE_TRACE_ID_RE.fullmatch(source_trace_id):
+        raise ValueError("invalid source trace id")
+    return f"<!--source-trace-id:{source_trace_id}-->"
 
 
 class SourceReferenceProcessor:
@@ -155,7 +184,9 @@ def _strip_source_tracer_references(text: str) -> str:
     Returns:
         移除 source_tracer_result 引用后的文本。
     """
-    return _strip_links_by_prefix(text, _SOURCE_TRACER_LINK_PREFIX_RE)
+    return SOURCE_TRACE_ID_COMMENT_RE.sub(
+        "", _strip_links_by_prefix(text, _SOURCE_TRACER_LINK_PREFIX_RE)
+    )
 
 
 def _strip_markdown_references(text: str) -> str:
@@ -340,6 +371,7 @@ def _merge_source_infos(ref_infos: List[Dict[str, Any]]) -> str:
     all_source_info = ""
 
     for ref_info in ref_infos:
+        source_trace_id = ensure_source_trace_id(ref_info)
         origin_title = ref_info.get("title", "")
         title = _escape_html_special_chars(origin_title)
         ref_info["title"] = title
@@ -351,9 +383,9 @@ def _merge_source_infos(ref_infos: List[Dict[str, Any]]) -> str:
 
         # 根据标题和URL构建引用信息
         if title and url:
-            source_info = f"[source_tracer_result][{title}]({url})"
+            source_info = f"[source_tracer_result][{title}]({url}){format_source_trace_id_comment(source_trace_id)}"
         elif title:
-            source_info = f"[source_tracer_result][{title}]({title})"
+            source_info = f"[source_tracer_result][{title}]({title}){format_source_trace_id_comment(source_trace_id)}"
         else:
             continue
 

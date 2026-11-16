@@ -14,8 +14,82 @@ from unittest.mock import patch, AsyncMock
 from openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research import (
     CitationVerifyResearch,
 )
+from openjiuwen_deepsearch.algorithm.chart_generation.insert_chart import InsertChartNode
 
 MODULE_PATH = "openjiuwen_deepsearch.algorithm.source_trace.citation_verify_research"
+
+
+class TestChartSourceTraceInsertion:
+    """Chart source markers and data must keep the same stable identity."""
+
+    def test_chart_source_marker_and_data_share_source_trace_id(self):
+        node = InsertChartNode(output_dir="")
+        chart = {
+            "anchor_match_para": "Chart anchor",
+            "chart_id": "chart-1",
+            "chart_title": "Chart title",
+            "description": "Chart description",
+            "score": 80,
+            "source_datas": [{
+                "url": "https://example.com/chart-source",
+                "title": "Chart source",
+                "original_content": "Chart source content",
+            }],
+        }
+
+        report, source_trace_datas = node.run(
+            report_content="Chart anchor",
+            charts_info={"section-1": [chart]},
+            source_trace_datas=[{
+                "_sentence_position": 0,
+                "url": "https://example.com/existing",
+            }],
+        )
+
+        inserted_source = source_trace_datas[0]
+        source_trace_id = inserted_source["source_trace_id"]
+        assert f"<!--source-trace-id:{source_trace_id}-->" in report
+        assert "source_trace_id" not in chart["source_datas"][0]
+
+    def test_charts_sharing_one_source_get_distinct_source_trace_ids(self):
+        """Each chart insertion owns a distinct ID even with a shared input source."""
+        node = InsertChartNode(output_dir="")
+        shared_sources = [{
+            "url": "https://example.com/shared-source",
+            "title": "Shared source",
+            "original_content": "Shared evidence",
+        }]
+        charts_info = {"section-1": [
+            {
+                "anchor_match_para": "First anchor",
+                "chart_id": "chart-1",
+                "chart_title": "First chart",
+                "description": "First description",
+                "score": 80,
+                "source_datas": shared_sources,
+            },
+            {
+                "anchor_match_para": "Second anchor",
+                "chart_id": "chart-2",
+                "chart_title": "Second chart",
+                "description": "Second description",
+                "score": 90,
+                "source_datas": shared_sources,
+            },
+        ]}
+
+        report, source_trace_datas = node.run(
+            report_content="First anchor\nSecond anchor",
+            charts_info=charts_info,
+            source_trace_datas=[{"_sentence_position": 0, "url": "https://example.com/existing"}],
+        )
+
+        chart_datas = [data for data in source_trace_datas if data.get("is_vlm_chart")]
+        chart_ids = [data["source_trace_id"] for data in chart_datas]
+        assert len(chart_ids) == 2
+        assert chart_ids[0] != chart_ids[1]
+        assert all(f"<!--source-trace-id:{source_id}-->" in report for source_id in chart_ids)
+        assert "source_trace_id" not in shared_sources[0]
 
 
 class TestChartCitationLlmPath:

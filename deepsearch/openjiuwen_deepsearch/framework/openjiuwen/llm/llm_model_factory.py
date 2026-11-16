@@ -15,6 +15,7 @@ class LLMModelParams:
     timeout: Optional[int] = None
     hyper_parameters: Optional[dict] = field(default=None)
     extension: Optional[dict] = field(default=None)
+    custom_headers: Optional[dict[str, str]] = field(default=None)
 
 
 class LLMModelFactory:
@@ -45,6 +46,7 @@ class LLMModelFactory:
             api_base=params.api_base,
             timeout=params.timeout,
             client_provider=actual_provider,
-            verify_ssl=os.getenv("LLM_SSL_VERIFY", "true").lower() == "true"
+            verify_ssl=os.getenv("LLM_SSL_VERIFY", "true").lower() == "true",
+            custom_headers=params.custom_headers,
         )
         return Model(model_client_config=client_config, model_config=request_config)

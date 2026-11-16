@@ -45,3 +45,12 @@ Ledger brief:
 Treat this as already available evidence. Only request follow-up web searches for claims, validation, or gaps that it
 does not cover; do not mark the step insufficient merely because a fact is absent from the web evidence table.
 {% endif %}
+{% if has_mcp_query_tools %}
+## Available search tools
+{% for tool in mcp_query_tools %}
+- `{{ tool.name }}`: {{ tool.description }}
+{% endfor %}
+When generating `next_queries`, you MAY emit an object with `tool` set to one of the above names to route that query
+directly to the tool in the next retrieval loop, or use `"native"` for the configured web/local search. Omit `tool`
+(or use a plain string) when unsure. Choosing a tool skips the per-query LLM tool-calling loop; choose conservatively.
+{% endif %}

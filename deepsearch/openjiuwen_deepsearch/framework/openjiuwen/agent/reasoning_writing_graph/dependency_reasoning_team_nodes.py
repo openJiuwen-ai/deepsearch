@@ -26,6 +26,7 @@ from openjiuwen_deepsearch.framework.openjiuwen.agent.reasoning_writing_graph.se
     SectionReasoningContext,
 )
 from openjiuwen_deepsearch.framework.openjiuwen.agent.search_context import Message, Step, Plan
+from openjiuwen_deepsearch.framework.openjiuwen.agent.report_progress import collector_progress_scope
 from openjiuwen_deepsearch.framework.openjiuwen.agent.base_node import init_router
 from openjiuwen_deepsearch.utils.debug_utils.node_debug import add_debug_log_wrapper, NodeType, NodeDebugData
 from openjiuwen_deepsearch.utils.common_utils.llm_utils import messages_to_json
@@ -165,6 +166,16 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
         return current_inputs
 
     async def _do_invoke(self, inputs: Input, session: Session, context: ModelContext) -> Output:
+        """并行采集依赖已就绪的步骤，并在运行期关联完整进度标识。
+
+        Args:
+            inputs: 原节点输入。
+            session: 当前章节会话。
+            context: 模型上下文。
+
+        Returns:
+            原有采集结果写回后的路由信息。
+        """
         section_state = self._pre_handle(inputs, session, context)
         kb_display = '*' if LogManager.is_sensitive() else section_state.get('plan_background_knowledge')
         logger.info(f"{self.log_prefix} | plan background knowledge is: {kb_display}")
@@ -187,9 +198,12 @@ class DependencyInfoCollectorNode(InfoCollectorNode):
 
                 collector_inputs = self._build_collector_input(current_plan, step, section_state)
                 plan_executed_steps.append(step)
-                task = asyncio.create_task(
-                    self._run_dependency_collector_graph(collector_inputs, session, context)
-                )
+                # 采集输入仍使用原短编号；观察用完整标识随任务上下文传递，避免主图回写后重复统计。
+                with collector_progress_scope(str(section_state.get("section_idx", "1")),
+                                              str(current_plan.id), str(step.id)):
+                    task = asyncio.create_task(
+                        self._run_dependency_collector_graph(collector_inputs, session, context)
+                    )
                 async_collecting_list.append(task)
 
         # 并行执行收集任务

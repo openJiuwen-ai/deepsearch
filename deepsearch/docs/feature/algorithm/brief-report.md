@@ -24,6 +24,7 @@ Brief 面向需要快速获得有引用、可决策结论的场景。它以报�
 - 正文写作不输出 Mermaid；Brief 不进入 `VLMChartGeneratorNode`。`visualization_enable` 对 Brief 不生效，仅控制专业版报告的既有图表流程。
 - 最终使用共享 `SourceTracerNode` 做引用校验和前端 citation 数据整理，但该节点的下一跳是 `BriefHtmlReporter`，不会进入 `SourceTracerInferNode` 或报告后用户反馈链。
 - `BriefHtmlReporter` 把溯源校验后的报告 md 转写为单文件自包含 HTML 报告（内嵌 ECharts，零 script 安全架构）；此时产物 `final_result.response_content` 为 HTML，`response_content_type` 为 `text/html`。
+- `EndNode` 同时在 `final_result.response_markdown` 返回转写 HTML 前的完整 Markdown，规范化引用、分隔相邻参考文章并附加 AI 声明。HTML 失败降级时该字段仍可用；其中不包含 HTML 阶段生成的图表。
 
 ## 关键代码路径
 
@@ -32,6 +33,9 @@ Brief 面向需要快速获得有引用、可决策结论的场景。它以报�
 - 入口路由：`openjiuwen_deepsearch/framework/openjiuwen/agent/main_graph_nodes.py`
 - 模型槽位：`openjiuwen_deepsearch/framework/openjiuwen/llm/llm_adapter.py`
 - 数据状态：`openjiuwen_deepsearch/framework/openjiuwen/agent/search_context.py`
+- 最终结果整理：`openjiuwen_deepsearch/framework/openjiuwen/agent/brief_result.py`、`openjiuwen_deepsearch/algorithm/brief_report/markdown.py`
+
+最终结果的会话读取与写回由 framework 负责；Markdown 的来源优先级、引用规范化和声明由 algorithm 负责。
 
 相关 Prompt：
 

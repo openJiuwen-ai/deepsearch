@@ -21,6 +21,29 @@ LLM 运行时封装把仓库内的 `LLMConfig` 转换成 openJiuwen 可调用的
 - `llm_thinking_enabled` 的默认值来自 `Config().service_config.llm_thinking_enabled`，当前默认关闭。
 - 当关闭思考模式的参数被厂商拒绝时，调用层可切换到不带思考开关的 fallback model，并在同一 session 后续调用中复用该 fallback。
 - 创建模型对象后会清理 `llm_config.api_key` 中的 `bytearray` secret。
+- 调用方可在 `LLMConfig` 的 `api_key` 附近设置可选字符串 `x_officeace_client` 和 `x_officeace_message_meta`，分别作为 HTTP 请求头 `x-officeace-client` 和 `x-officeace-message-meta` 发送。也接受同名带连字符的配置键。未提供的字段不发送；值不自动生成或解析，不写入模型请求体。主模型与 thinking fallback 使用相同配置，普通、流式及重试请求沿用客户端请求头。
+
+```python
+llm_config = LLMConfig(
+    model_name="your-model",
+    base_url="https://your-gateway/v1",
+    api_key=bytearray(b"your-api-key"),
+    x_officeace_client="miniprogram|vivo|trial",
+    x_officeace_message_meta="scen|sessionId|invokationId|message",
+)
+```
+
+对应的 HTTP 请求头示例：
+
+```http
+x-officeace-client: miniprogram|vivo|trial
+x-officeace-message-meta: scen|sessionId|invokationId|message
+```
+
+- `x-officeace-client`：按 `客户端|手机型号|套餐` 传入，后两项可省略，例如 `miniprogram` 或 `miniprogram|vivo`。
+- `x-officeace-message-meta`：按 `scen|sessionId|invokationId|message` 传入。
+
+上述字符串由调用方提供，SDK 原样传递，不拆分或拼装，并在创建该模型对象时确定；若归属信息变化，应使用对应的新配置创建模型对象。本功能只传递请求头，统计由接收请求的网关处理，不影响搜索请求。
 
 ## 关键代码路径
 

@@ -44,6 +44,19 @@ class TestNeedPreprocessSearchRecord:
         result = _need_preprocess_search_record(search_record)
         assert result is False
 
+
+def test_repeated_citation_number_has_distinct_source_trace_instances():
+    """Repeated source numbers must not share one source-data identity."""
+    result = generate_origin_report_data(
+        "第一处结论[citation:1]。第二处结论[citation:1]。",
+        [{"index": 1, "title": "Source", "url": "https://example.com", "original_content": "evidence"}],
+    )
+
+    datas = result["origin_report_data"]
+    assert len(datas) == 2
+    assert datas[0]["source_trace_id"] != datas[1]["source_trace_id"]
+    assert result["modified_report"].count("<!--source-trace-id:") == 2
+
     def test_need_preprocess_search_record_missing_keys(self):
         """Test when search record keys are missing."""
         search_record = {"other_key": "value"}
@@ -732,7 +745,10 @@ class TestProcessCitationMatch:
             match, report, citation_pattern, citation_mapping, position_offset)
 
         # 验证返回值
-        assert replacement_text == "[source_tracer_result][Test Title](https://example.com)"
+        assert replacement_text.startswith(
+            "[source_tracer_result][Test Title](https://example.com)"
+        )
+        assert "<!--source-trace-id:" in replacement_text
         assert chunk_info["citation_num"] == 1
         assert chunk_info["chunk"] == "Sample chunk text"
         assert "Test Title" in replacement_text

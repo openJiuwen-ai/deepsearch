@@ -89,6 +89,7 @@ def test_sub_reporter_node_pre_handle_dispatches_coverage_rule_block_enable(
         "config.report_max_generate_retry_num": 3,
         "config.sub_report_classify_doc_infos_res_top_k_num": 15,
         "config.visualization_enable": False,
+        "config.professional_report_adaptive_rationales": True,
         "config.coverage_rule_block_enable": session_value,
         "config.llm_config": {"general": {"model_name": "mock_model"}},
     }
@@ -97,6 +98,9 @@ def test_sub_reporter_node_pre_handle_dispatches_coverage_rule_block_enable(
     current_inputs = node._pre_handle({}, session, context)
 
     assert current_inputs["coverage_rule_block_enable"] is expected
+    assert current_inputs[
+        "professional_report_adaptive_rationales"
+    ] is True
 
 
 def _stub_selection_methods(reporter):

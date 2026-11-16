@@ -43,7 +43,7 @@ Sub-report shell: **section_id** (`str | int`, default `"1"`), **section_task**,
 Aggregated report: **report_task**, **report_template**, **sub_reports**, **report_content**, **all_classified_contents**, **merged_trace_source_datas**, **checked_trace_source_report_content**, **checked_trace_source_datas**, **report_html** (Brief HTML output; the Markdown intermediate result remains in `report_content`).
 
 ## `FinalResult`
-**response_content**, **response_content_type** (`text/markdown` or `text/html`), **citation_messages**, **infer_messages**, **chart_messages**, **workflow_llm_token_usage** (workflow-level LLM token totals), **exception_info**, **warning_info**, **metadata**.
+**response_content**, **response_content_type** (`text/markdown` or `text/html`, describing `response_content`), **response_markdown** (complete Brief Markdown with citations and an AI notice; empty otherwise), **citation_messages**, **infer_messages**, **chart_messages**, **workflow_llm_token_usage** (workflow-level LLM token totals), **exception_info**, **warning_info**, **metadata**.
 
 - `infer_messages` stores source-tracing graph payloads. Report export reads `html_base64` and writes standalone HTML resources.
 - `chart_messages` stores VLM chart payloads. Report export reads `base64` and writes image resources.

@@ -13,6 +13,7 @@ from jinja2 import Environment, FileSystemLoader, TemplateNotFound, meta, select
 
 from openjiuwen_deepsearch.common.exception import CustomValueException
 from openjiuwen_deepsearch.common.status_code import StatusCode
+from openjiuwen_deepsearch.algorithm.prompts.evidence_masking import scoped_prompt_text
 
 
 PROMPT_ROOT = Path(__file__).resolve().parent
@@ -75,9 +76,11 @@ def build_prompt_messages(
         user_variables = _template_variables(environment, user_name, recursive=True)
         if "current_date" in user_variables and "current_date" not in render_context:
             render_context["current_date"] = datetime.now(timezone.utc).date().isoformat()
-        user_text = environment.get_template(user_name).render(**render_context)
+        user_template = environment.get_template(user_name)
+        user_text = user_template.render(**render_context)
         content: Any = (
-            _multimodal_content(user_text, options.images) if options.images else user_text
+            _multimodal_content(user_text, options.images) if options.images
+            else scoped_prompt_text(prompt_name, user_template, render_context, user_text)
         )
         return [*messages, {"role": "user", "content": content}]
     except CustomValueException:
