@@ -10,46 +10,52 @@ from openjiuwen_deepsearch.utils.log_utils.log_manager import LogManager
 
 logger = logging.getLogger(__name__)
 
+_REF_LINE_RE = re.compile(r"^\[(\d+)\]\s*(.*)$")
+_CITATION_RE = re.compile(r"\[citation:(\d+)\]")
+
+
+def _deduplicate_and_renumber_refs(
+    ref_blocks: list[str],
+) -> tuple[str, dict[str, int]]:
+    """去重引用并重编号，按段落返回 ``{段落号-原编号: 新编号}``。
+
+    ``ref_blocks`` 必须按正文段落顺序给出每个段落的引用块，段落号直接取
+    1-based 下标。调用方本就是这个顺序，不需要（也不应该）再从文本里用
+    "空行/``[1]``"反推段落边界：那种启发式在引用块内出现空行、或某段引用
+    不是从 ``[1]`` 起编号时会整体漂移，导致 ``ref_map`` 的键与消费端按
+    ``f"{i + 1}-{index}"`` 拼出的键对不上，整段引用都不会被重编号。
+    """
+    seen: dict[str, int] = {}
+    renumbered: list[str] = []
+    mapping: dict[str, int] = {}
+    next_index = 1
+
+    for paragraph_no, block in enumerate(ref_blocks, start=1):
+        if not block:
+            continue
+        for line in block.splitlines():
+            match = _REF_LINE_RE.match(line.strip())
+            if match is None:
+                continue
+            content = match.group(2).strip()
+            if not content:
+                continue
+            if content not in seen:
+                seen[content] = next_index
+                renumbered.append(f"[{next_index}] {content}")
+                next_index += 1
+            mapping[f"{paragraph_no}-{match.group(1)}"] = seen[content]
+
+    return "\n\n".join(renumbered), mapping
+
 
 def _deduplicate_and_renumber_ref(raw_text: str) -> tuple[str, dict[str, int]]:
-    lines = raw_text.splitlines()
-    seen = {}
-    result = []
-    mapping = {}
-    index = 1
-    paragraph_id = 0
+    """单段文本入口，保留给旧调用方；新代码请用 :func:`_deduplicate_and_renumber_refs`。
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            paragraph_id += 1  # empty line is one section too
-            continue
-
-        # test if new section（start with [1]）
-        if re.match(r"^\[1\]", line):
-            ref_index = 1
-            paragraph_id += 1
-        else:
-            # get original ref no
-            match = re.match(r"^\[(\d+)\]", line)
-            if match:
-                ref_index = int(match.group(1))
-            else:
-                continue
-
-        # remove original no
-        content = re.sub(r"^\[\d+\]\s*", "", line).strip()
-
-        key = f"{paragraph_id}-{ref_index}"
-        # add ref content to non-duplicate array
-        if content not in seen:
-            seen[content] = index
-            result.append(f"[{index}] {content}")
-            index += 1
-
-        mapping[key] = seen[content]
-
-    return "\n\n".join(result), mapping
+    空行分隔的多个引用块按顺序当作多个段落，段落号不再随空行数漂移。
+    """
+    blocks = [b for b in re.split(r"\n\s*\n", raw_text.strip())] if raw_text.strip() else []
+    return _deduplicate_and_renumber_refs(blocks)
 
 
 def _replace_citations_and_classified_index(
@@ -64,6 +70,9 @@ def _replace_citations_and_classified_index(
     updated_classified_contents: list[list[dict]] = []
 
     for i, para in enumerate(paragraphs):
+        if i >= len(classified_contents):
+            updated_paragraphs.append(para)
+            continue
         sub_classified_contents = classified_contents[i]
         if not sub_classified_contents:
             updated_paragraphs.append(para)
@@ -76,15 +85,16 @@ def _replace_citations_and_classified_index(
             for item in sub_classified_contents
         }
 
-        # Replace citations in the loop without a closure
-        updated_para = para
-        for original_index, final_index in index_map.items():
-            if final_index is not None:
-                updated_para = re.sub(
-                    rf"\[citation:{original_index}\]",
-                    f"[citation:{final_index}]",
-                    updated_para,
-                )
+        # 单次替换：逐条 re.sub 会把上一轮刚换好的编号当成原文编号再换一次
+        # （1->2、2->3 时 [citation:1] 会被连换两次）。
+        updated_para = _CITATION_RE.sub(
+            lambda m: (
+                f"[citation:{index_map[m.group(1)]}]"
+                if index_map.get(m.group(1)) is not None
+                else m.group(0)
+            ),
+            para,
+        )
         updated_paragraphs.append(updated_para)
 
         # Update index field in reference entries
@@ -126,8 +136,8 @@ class ReferenceMixin:
         refreshed_references = ""
         raw_references = "\n".join(sub_references) if sub_references else ""
         if raw_references:
-            refreshed_references, ref_map = _deduplicate_and_renumber_ref(
-                raw_references
+            refreshed_references, ref_map = _deduplicate_and_renumber_refs(
+                sub_references
             )
             if not LogManager.is_sensitive():
                 logger.info("refreshed_references: [%s]", refreshed_references)

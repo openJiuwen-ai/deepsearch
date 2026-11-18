@@ -85,6 +85,7 @@ from openjiuwen_deepsearch.algorithm.report.sub_section_outline import SubSectio
 from openjiuwen_deepsearch.algorithm.report.reference_utils import (
     ReferenceMixin,
     _deduplicate_and_renumber_ref,  # noqa: F401  re-export for backward compat
+    _deduplicate_and_renumber_refs,  # noqa: F401  re-export for backward compat
     _replace_citations_and_classified_index,  # noqa: F401  re-export for backward compat
 )
 from openjiuwen_deepsearch.algorithm.report.retry_feedback import RetryFeedbackMixin
