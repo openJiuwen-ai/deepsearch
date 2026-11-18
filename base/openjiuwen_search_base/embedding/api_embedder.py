@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import sqlite3
-from typing import Awaitable, Callable, Optional
+from contextlib import contextmanager
+from typing import Awaitable, Callable, Iterator, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -61,7 +62,7 @@ class ApiEmbedder:
         os.makedirs(settings.cache_dir, exist_ok=True)
         safe_model_name = settings.model.replace("/", "_")
         self._cache_db_path = os.path.join(settings.cache_dir, f"_emb_{safe_model_name}.db")
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS cache (text_hash TEXT PRIMARY KEY, embedding TEXT)"
             )
@@ -72,6 +73,20 @@ class ApiEmbedder:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        """提交并**关闭**连接。
+
+        ``with sqlite3.connect(...) as conn`` 只是事务上下文：正常退出时 commit，
+        但不会 close，长驻索引进程会随每次调用泄漏文件句柄。
+        """
+        conn = self._connect()
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
     async def close(self) -> None:
         """释放持久连接（服务化/长驻进程的生命周期收口）。"""
@@ -90,7 +105,7 @@ class ApiEmbedder:
         embeddings: list = [None] * len(chunks)
         missing_indices: list[int] = []
         missing_chunks: list[str] = []
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.cursor()
             for i, chunk in enumerate(chunks):
                 cursor.execute(
@@ -105,7 +120,7 @@ class ApiEmbedder:
         return embeddings, missing_indices, missing_chunks
 
     def _save_cached(self, chunks: list[str], indices: list[int], vectors: list) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             for idx, emb in zip(indices, vectors):
                 conn.execute(
                     "INSERT OR IGNORE INTO cache (text_hash, embedding) VALUES (?, ?)",
@@ -137,6 +152,21 @@ class ApiEmbedder:
                 body = await resp.text()
             return status, body
 
+    @staticmethod
+    def _ordered_embeddings(items: list) -> list:
+        """按响应里的 ``index`` 还原向量顺序。
+
+        OpenAI 兼容服务（vLLM、部分自建代理）允许 ``data`` 乱序返回，只保证每条
+        带 ``index``；直接按数组顺序 zip 会把向量错配到别的文本上，且不会报错。
+        缺失/非整型的 ``index`` 退回数组顺序，保持与旧行为一致。
+        """
+        entries = []
+        for position, item in enumerate(items):
+            index = item.get("index", position)
+            entries.append((index if isinstance(index, int) else position, position, item))
+        entries.sort(key=lambda entry: (entry[0], entry[1]))
+        return [entry[2]["embedding"] for entry in entries]
+
     async def async_encode(self, chunks: list[str], is_query: bool = False) -> list[list[float]]:
         # 先构造实际发送文本（前缀+截断），缓存查/存一律以它为键；
         # sqlite 读写走线程，不占事件循环
@@ -160,7 +190,7 @@ class ApiEmbedder:
             except Exception as e:  # 网络异常与非 200 同路径重试
                 status, body = -1, str(e)
             if status == 200 and isinstance(body, dict) and "data" in body:
-                vectors = [item["embedding"] for item in body["data"]]
+                vectors = self._ordered_embeddings(body["data"])
                 if len(vectors) == len(missing_prepared):
                     await asyncio.to_thread(self._save_cached, prepared, missing_indices, vectors)
                     for idx, emb in zip(missing_indices, vectors):
