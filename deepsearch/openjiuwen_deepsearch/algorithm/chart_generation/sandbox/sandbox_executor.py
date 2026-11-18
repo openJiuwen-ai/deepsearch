@@ -8,10 +8,12 @@
 安全机制：
 1. 进程隔离  — 代码在独立子进程中运行，崩溃 / 内存泄漏不影响主进程
 2. 模块限制  — import hook 拦截危险模块（subprocess, shutil, ctypes 等）
-3. 写入限制  — 仅允许向工作目录及系统临时目录写入文件
+3. 写入限制  — 仅允许向工作目录及系统临时目录写入文件；覆盖 open / io.open /
+               os.open / os.remove 等删除改名类 os.* 接口（不只拦 builtins.open）
 4. 读取限制  — 仅允许读取工作目录、临时目录、系统库目录等安全白名单路径
                禁止读取 /etc、/root、/home 等系统敏感路径
-5. 系统调用限制 — 禁用 os.system, os.popen 等可执行外部命令的函数
+5. 系统调用限制 — 禁用 os.system, os.popen, os.startfile, os.posix_spawn, os.fork
+               等可执行外部命令的接口
 6. 超时控制  — 执行超时自动 SIGKILL 终止子进程
 7. HMAC 验证  — 使用 HMAC 签名验证结果文件完整性，防止子进程伪造输出
                文件路径由父进程预先确定，不从子进程 stdout 解析
@@ -142,7 +144,7 @@ _FONT_CANDIDATES = [
 # Worker script — 在隔离子进程中执行，通过 stdin 注入
 # ────────────────────────────────────────────────────────────────
 _WORKER_SCRIPT = r'''
-import sys, os, json, builtins, traceback, tempfile, importlib, hashlib, hmac
+import sys, os, io, json, builtins, traceback, tempfile, importlib, hashlib, hmac
 
 _cfg = json.loads(os.environ["_SANDBOX_CFG"])
 _working_dir = os.path.abspath(_cfg["working_dir"])
@@ -152,6 +154,25 @@ _font_path   = _cfg.get("font_path", "")
 _code_path   = _cfg["code_path"]
 _chart_result_path = _cfg.get("chart_result_path", "")
 _hmac_secret = _cfg.get("hmac_secret", "")
+
+
+def _is_restricted(name):
+    """判断模块名是否被限制。
+
+    _restricted 里既有顶层包名（socket），也有子模块名（asyncio.subprocess、
+    urllib.request）。只比较 name.split(".")[0] 会让子模块条目永远匹配不上，
+    例如 import asyncio.subprocess 可以拿到 create_subprocess_shell。
+    这里按点分段前缀逐个比较。
+    """
+    parts = _name_parts(name)
+    for _i in range(1, len(parts) + 1):
+        if ".".join(parts[:_i]) in _restricted:
+            return True
+    return False
+
+
+def _name_parts(name):
+    return [p for p in str(name).split(".") if p]
 
 # ════════════════════════════════════════════════════════════════
 # Phase 1: 在无任何限制的环境下预加载所有受信任的科学计算库
@@ -200,7 +221,7 @@ except Exception:
 _orig_import = builtins.__import__
 
 def _safe_import(name, *args, **kwargs):
-    if name.split(".")[0] in _restricted:
+    if _is_restricted(name):
         raise ImportError(f"Importing '{name}' is not allowed in the code sandbox.")
     return _orig_import(name, *args, **kwargs)
 
@@ -209,7 +230,7 @@ builtins.__import__ = _safe_import
 _orig_import_module = importlib.import_module
 
 def _safe_import_module(name, package=None):
-    if name.split(".")[0] in _restricted:
+    if _is_restricted(name):
         raise ImportError(f"Importing '{name}' is not allowed in the code sandbox.")
     return _orig_import_module(name, package)
 
@@ -228,17 +249,17 @@ for _mod_name in ['ctypes', '_ctypes', 'subprocess', 'shutil', 'pickle', 'marsha
 class _SafeModulesDict(dict):
     """安全的 sys.modules 包装器，阻止访问危险模块"""
     def __getitem__(self, key):
-        if key.split('.')[0] in _restricted:
+        if _is_restricted(key):
             raise ImportError(f"Access to module '{key}' is blocked in sandbox.")
         return super().__getitem__(key)
 
     def get(self, key, default=None):
-        if key.split('.')[0] in _restricted:
+        if _is_restricted(key):
             return default  # 返回 None 而不是模块
         return super().get(key, default)
 
     def __contains__(self, key):
-        if key.split('.')[0] in _restricted:
+        if _is_restricted(key):
             return False  # 隐藏危险模块的存在
         return super().__contains__(key)
 
@@ -372,40 +393,122 @@ if _font_path and os.path.isfile(_font_path):
     if _font_dir not in _read_dirs:
         _read_dirs.append(_font_dir)
 
+_high_risk_paths = [
+    "/etc", "/root", "/home", "/var/log", "/var/lib",
+    "/proc", "/sys", "/dev", "/run", "/opt",
+    "/usr/share", "/usr/local/etc",
+]
+
+
+def _is_under(_abs, _dirs):
+    return any(_abs == d or _abs.startswith(d + os.sep) for d in _dirs)
+
+
+def _deny_read(_abs, file):
+    for _risk in _high_risk_paths:
+        if _abs.startswith(_risk + "/") or _abs == _risk:
+            raise PermissionError(
+                f"Reading system path '{file}' is not allowed in sandbox. "
+                f"Possible security violation detected."
+            )
+    raise PermissionError(
+        f"Reading '{file}' is not allowed. "
+        f"Sandbox reads restricted to safe directories."
+    )
+
+
+def _check_write(file, what="Writing"):
+    """写入/删除类操作统一校验：只允许工作目录与临时目录。"""
+    _abs = os.path.abspath(str(file))
+    if not _is_under(_abs, _write_dirs):
+        raise PermissionError(
+            f"{what} to '{file}' is not allowed. "
+            f"Sandbox writes restricted to: {_write_dirs}"
+        )
+    return _abs
+
+
 def _safe_open(file, mode="r", *a, **kw):
     _abs = os.path.abspath(str(file))
     # 写入限制：只允许写入工作目录和临时目录
     if any(m in mode for m in ("w", "a", "x", "+")):
-        if not any(_abs == d or _abs.startswith(d + os.sep) for d in _write_dirs):
-            raise PermissionError(
-                f"Writing to '{file}' is not allowed. "
-                f"Sandbox writes restricted to: {_write_dirs}"
-            )
+        _check_write(file)
     # 读取限制：只允许读取安全白名单路径
     # 防止恶意代码读取服务账号可访问的任意敏感文件
-    elif mode in ("r", "rb", "rt") or "r" in mode:
+    elif "r" in mode:
         # 允许读取不存在的文件（后续操作会自然报错）
         # 但禁止读取敏感路径下的文件
-        if not any(_abs == d or _abs.startswith(d + os.sep) for d in _read_dirs):
-            # 检查是否是系统配置文件等高敏感路径
-            _high_risk_paths = [
-                "/etc", "/root", "/home", "/var/log", "/var/lib",
-                "/proc", "/sys", "/dev", "/run", "/opt",
-                "/usr/share", "/usr/local/etc",
-            ]
-            for _risk in _high_risk_paths:
-                if _abs.startswith(_risk + "/") or _abs == _risk:
-                    raise PermissionError(
-                        f"Reading system path '{file}' is not allowed in sandbox. "
-                        f"Possible security violation detected."
-                    )
-            raise PermissionError(
-                f"Reading '{file}' is not allowed. "
-                f"Sandbox reads restricted to safe directories."
-            )
+        if not _is_under(_abs, _read_dirs):
+            _deny_read(_abs, file)
     return _orig_open(file, mode, *a, **kw)
 
+
 builtins.open = _safe_open
+# pathlib.Path.open / Path.read_text / Path.write_text 都走 io.open，
+# 只包 builtins.open 会留下 os.open + io.open 两条绕过路径。
+io.open = _safe_open
+
+_orig_os_open = _os.open
+_WRITE_FLAGS = (
+    getattr(_os, "O_WRONLY", 0) | getattr(_os, "O_RDWR", 0)
+    | getattr(_os, "O_CREAT", 0) | getattr(_os, "O_APPEND", 0)
+    | getattr(_os, "O_TRUNC", 0)
+)
+
+
+def _safe_os_open(path, flags, mode=0o777, *, dir_fd=None):
+    """os.open 必须和 open 走同一套读写策略。
+
+    builtins.open 只是 Python 层的一层包装：此前 os.open 完全没被拦截，可以
+    以任意方式打开任意路径（读敏感文件、在仓库外写文件）。
+    dir_fd 会把相对路径解析到别的目录，直接拒绝。
+    """
+    if dir_fd is not None:
+        raise PermissionError("os.open(dir_fd=...) is not allowed in the sandbox.")
+    if flags & _WRITE_FLAGS:
+        _check_write(path)
+    elif not _is_under(os.path.abspath(str(path)), _read_dirs):
+        _deny_read(os.path.abspath(str(path)), path)
+    return _orig_os_open(path, flags, mode)
+
+
+_os.open = _safe_os_open
+
+# 删除/改名/建目录等写操作同样受写入白名单约束：
+# 否则 os.remove / os.rename 可以删掉或覆盖任意文件。
+_WRITE_PATH_OPS = {
+    "remove": (0,),
+    "unlink": (0,),
+    "rmdir": (0,),
+    "removedirs": (0,),
+    "mkdir": (0,),
+    "makedirs": (0,),
+    "truncate": (0,),
+    "chmod": (0,),
+    "utime": (0,),
+    "rename": (0, 1),
+    "renames": (0, 1),
+    "replace": (0, 1),
+    "symlink": (1,),
+    "link": (0, 1),
+}
+
+
+def _make_write_guard(_fn_name, _orig_fn, _indexes):
+    def _guarded(*a, **kw):
+        for _i in _indexes:
+            if len(a) > _i:
+                _check_write(a[_i], what=_fn_name)
+        return _orig_fn(*a, **kw)
+
+    _guarded.__name__ = _fn_name
+    return _guarded
+
+
+for _fn_name, _indexes in _WRITE_PATH_OPS.items():
+    _orig_fn = getattr(_os, _fn_name, None)
+    if _orig_fn is not None:
+        setattr(_os, _fn_name, _make_write_guard(_fn_name, _orig_fn, _indexes))
 
 # ── Dangerous os functions ──────────────────────────────────────
 for _fn_name in (
@@ -415,6 +518,9 @@ for _fn_name in (
     "spawnl", "spawnle", "spawnlp", "spawnlpe",
     "spawnv", "spawnve", "spawnvp", "spawnvpe",
     "kill", "killpg",
+    # 进程/程序启动：startfile 用系统默认程序打开目标（等于执行任意程序），
+    # posix_spawn/fork 绕开 exec* 系列把命令跑起来
+    "startfile", "posix_spawn", "posix_spawnp", "fork", "forkpty",
 ):
     if hasattr(_os, _fn_name):
         def _blocked(*a, _n=_fn_name, **kw):
