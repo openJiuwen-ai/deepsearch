@@ -3,10 +3,10 @@
 import builtins as _builtins_mod
 import re
 from functools import cached_property
-from pathlib import Path
 
 from ...custom_types import ModuleInfo
 from .. import LanguageHooks
+from .._common import module_path
 
 _GENERIC_RE = re.compile(r"(\w+)\[(.+)]$")
 
@@ -106,7 +106,7 @@ class PythonHooks(LanguageHooks):
         if "__init__.py" not in file_names:
             return []
         name = folder_rel.replace("/", ".") if folder_rel else "."
-        path = str(Path(root) / folder_rel) if folder_rel else root
+        path = module_path(root, folder_rel)
         return [ModuleInfo(name=name, language="python", path=path)]
 
     _SUBSCRIPT_CONTAINERS: frozenset[str] = frozenset(

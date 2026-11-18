@@ -136,6 +136,18 @@ class TestParseFile:
         assert r.node_type == NodeType.FILE
         assert r.language == "python"
 
+    @staticmethod
+    def test_crlf_source_is_normalised_to_lf():
+        r = _parse_bytes(b"def greet():\r\n    return 'hi'\r\n", suffix=".py")
+        greet = next(c for c in r.children if c.name == "greet")
+        assert "\r" not in (greet.source or "")
+        assert greet.source == "def greet():\n    return 'hi'"
+
+    @staticmethod
+    def test_crlf_txt_source_is_normalised_to_lf():
+        r = _parse_bytes(b"hello world\r\n", suffix=".txt")
+        assert r.source == "hello world\n"
+
 
 class TestParseFiles:
     @staticmethod

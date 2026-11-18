@@ -2,10 +2,10 @@
 
 import re
 from functools import cached_property
-from pathlib import Path
 
 from ...custom_types import ModuleInfo
 from .. import LanguageHooks
+from .._common import module_path
 
 _JAVA_GENERIC_RE = re.compile(r"(\w+)<(.+)>$")
 
@@ -211,7 +211,7 @@ class JavaHooks(LanguageHooks):
         if not java_files:
             return []
         name = folder_rel.replace("/", ".") if folder_rel else "."
-        path = str(Path(root) / folder_rel) if folder_rel else root
+        path = module_path(root, folder_rel)
         return [ModuleInfo(name=name, language="java", path=path)]
 
     def unwrap_receiver_type(self, annotation: str, subscript_depth: int) -> str | None:

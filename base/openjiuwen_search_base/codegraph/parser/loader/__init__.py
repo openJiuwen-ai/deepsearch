@@ -62,6 +62,12 @@ async def parse_file(
     elif best_match.encoding not in ("utf_8", "ascii"):
         source = str(best_match).encode(encoding="utf-8")
 
+    # Normalise line endings: source text is compared against ``"\n"`` and used
+    # for span/line bookkeeping, so CRLF files (Windows checkouts) must not leak
+    # ``\r`` into the parsers.
+    if b"\r" in source:
+        source = source.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
     return await parser.parse(path, source)
 
 

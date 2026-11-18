@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ...custom_types import ModuleInfo
 from .. import LanguageHooks
+from .._common import module_path
 
 GO_BUILTINS: frozenset[str] = frozenset(
     {
@@ -205,5 +206,5 @@ class GoHooks(LanguageHooks):
         if not any(n.endswith(".go") for n in file_names):
             return []
         name = folder_rel.replace("/", ".") if folder_rel else Path(root).name
-        path = str(Path(root) / folder_rel) if folder_rel else root
+        path = module_path(root, folder_rel)
         return [ModuleInfo(name=name, language="go", path=path)]

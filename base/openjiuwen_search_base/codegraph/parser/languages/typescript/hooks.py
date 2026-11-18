@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ...custom_types import ModuleInfo
 from .. import LanguageHooks
+from .._common import module_path
 
 _TS_GENERIC_RE = re.compile(r"(\w+)<(.+)>$")
 
@@ -147,7 +148,7 @@ class TsHooks(LanguageHooks):
         if not self.package_init_files & file_names:
             return []
         name = Path(folder_rel).as_posix() if folder_rel else "."
-        path = str(Path(root) / folder_rel) if folder_rel else root
+        path = module_path(root, folder_rel)
         return [ModuleInfo(name=name, language="typescript", path=path)]
 
 
