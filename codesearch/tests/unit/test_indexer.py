@@ -11,6 +11,8 @@ from openjiuwen_codesearch.indexing.indexer import (
     reconcile_existing,
 )
 
+import pytest
+
 from tests.conftest import run
 
 
@@ -108,8 +110,27 @@ class TestBuildChunkRecords:
         assert record["text_trigram"] == ""
 
 
+def _symlinks_supported() -> bool:
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "target.txt"
+        target.write_text("x", encoding="utf-8")
+        link = Path(tmp) / "link.txt"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            return False
+        return True
+
+
 class TestDiscoverPythonFiles:
     @staticmethod
+    @pytest.mark.skipif(
+        not _symlinks_supported(),
+        reason="当前环境不支持创建符号链接（Windows 需要开发者模式/管理员权限）",
+    )
     def test_symlink_loop_and_outside_link_not_followed(tmp_path):
         from openjiuwen_codesearch.indexing.indexer import discover_python_files
 
